@@ -88,7 +88,7 @@ describe("contract-drift layer 1 (always-on)", () => {
     // code still refused, and the codex-support manifest would have promised
     // users a version the transport rejected on sight.
     //
-    // TASK.173 (owner decision, 2026-08-29): the floor is gone, so there is
+    // (owner decision, 2026-08-29): the floor is gone, so there is
     // only one boundary left to prove — the ceiling. An arbitrarily old
     // version is accepted by version number alone (it may still fail later,
     // on the wire, for reasons unrelated to this check).
@@ -155,8 +155,8 @@ describe("contract-drift layer 1 (always-on)", () => {
     expect(Object.keys(pinned.methods.serverNotifications)).toContain("turn/started");
   });
 
-  it("the pinned windowsSandbox family matches protocol.ts constants (Taskana 4139)", () => {
-    // TASK.185 / Taskana 4139: Windows sandbox is a SEPARATE protocol family
+  it("the pinned windowsSandbox family matches protocol.ts constants", () => {
+    // /Windows sandbox is a SEPARATE protocol family
     // (not sandbox policy fields). readiness is probe-only; setupStart is
     // deliberately NOT pinned (never sent). The refs are v2/-scoped because
     // the 0.144.3 schema declares the whole family under definitions.v2.
@@ -169,7 +169,7 @@ describe("contract-drift layer 1 (always-on)", () => {
     });
   });
 
-  it("the committed 0.144.3 reference schema re-extracts to exactly the pinned contract (offline layer-2 stand-in, Taskana 4139)", () => {
+  it("the committed 0.144.3 reference schema re-extracts to exactly the pinned contract (offline layer-2 stand-in)", () => {
     // Layer 2 needs a live binary; this offline stand-in holds the SAME
     // invariant — extractor(schema) === pin — against the committed 0.144.3
     // reference schema the pin was regenerated from, so a hand-edit of
@@ -499,7 +499,7 @@ describe.skipIf(!process.env.ANYCODE_CODEX_DRIFT_BIN)("contract-drift layer 2 (e
     // instead of silently deep-equaling on type shape alone (a binary that
     // happens to keep our CONSUMED subset's shape unchanged while being
     // genuinely above the reviewed ceiling must not pass). There is no floor
-    // (TASK.173) to fail this probe from the other side.
+    // to fail this probe from the other side.
     const rawVersion = execFileSync(bin, ["--version"], { timeout: 10_000, stdio: "pipe" }).toString("utf8").trim();
     const version = parseCodexVersion(rawVersion);
     expect(version, `unrecognized \`${bin} --version\` output: ${JSON.stringify(rawVersion)}`).not.toBeNull();

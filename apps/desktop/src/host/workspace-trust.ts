@@ -1,5 +1,5 @@
 /**
- * Host boot trust decision (Taskana 4736). Computed ONCE at boot, before any
+ * Host boot trust decision. Computed ONCE at boot, before any
  * engine, hook, LSP or MCP wiring: `projectTrusted` gates every project-level
  * spawn declaration. An undecided or changed folder boots untrusted and yields
  * a `workspace_trust_required` message for the UI (replayed on every ui_ready
@@ -42,13 +42,13 @@ export interface EstablishHostWorkspaceTrustOptions {
   home: string;
   env: NodeJS.ProcessEnv;
   /**
-   * Taskana 4739: injected realpath for key canonicalisation (symlink and
+   * injected realpath for key canonicalisation (symlink and
    * target share one trust record). Production callers pass `node:fs`'s
    * realpathSync; absent = legacy resolve-only behaviour.
    */
   realpathSync?: (path: string) => string;
   /**
-   * Taskana 4736 xfix D4: true for a CHILD tab's boot (args.child present).
+   * xfix D4: true for a CHILD tab's boot (args.child present).
    * A child shares its parent's workspace, so the parent's trust record (and
    * its once-approval, which main stamps into the child's fork env the same
    * way) already answers the question; a child surface has no satisfiable
@@ -87,7 +87,7 @@ function toHostTrust(workspace: string, trust: WorkspaceTrustResult, childSurfac
   if (trust.state !== "unknown" && trust.state !== "changed") {
     return { projectTrusted: trust.projectTrusted };
   }
-  // Taskana 4736 xfix D4: a child surface cannot answer the question — the
+  // xfix D4: a child surface cannot answer the question — the
   // parent's record/once-approval (same workspace, same fork env stamp)
   // decides, and no unsatisfiable dialog is reported for the child to show.
   if (childSurface) {

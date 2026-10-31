@@ -511,7 +511,7 @@ describe("host subagent model-override wiring", () => {
   it("passes resolveChildModelPort into withSubagents, or the runner rejects every Agent(model:) call", async () => {
     const source = await readHostSource();
 
-    // Anchored on the profiles THUNK Taskana 4704 wired (`profiles: () => {`
+    // Anchored on the profiles THUNK wired (`profiles: () => {`
     // — the host now derives settings role personas inside the thunk, so a
     // live rescan AND a settings change are both visible to the runner) so
     // the doc comment near the top of index.ts — which also spells
@@ -548,7 +548,7 @@ describe("host subagent model-override wiring", () => {
     expect(options).toContain("resolveChildModelPort");
   });
 
-  it("TASK.192: assigns config.sessionSubagents before the actual withWorkflows call", async () => {
+  it("assigns config.sessionSubagents before the actual withWorkflows call", async () => {
     const source = await readHostSource();
 
     // Anchored on the REAL call — /const loop = new AgentLoop(\s*withWorkflows\(/
@@ -571,7 +571,7 @@ describe("host subagent model-override wiring", () => {
 
     // A second, independent factory would drift from the live provider/key on
     // the next `/model` switch; both sites must read one closure.
-    // TASK.198 срез C: the mid-session switch now calls `.setPort()` on
+    // срез C: the mid-session switch now calls `.setPort()` on
     // `switchableModelPort` (the INNER SwitchableModelPort), not on
     // `modelPort` (the OUTER media-projection decorator, which has no
     // `setPort` method at all) — same `modelPortFactory` closure either way.
@@ -580,7 +580,7 @@ describe("host subagent model-override wiring", () => {
     expect(source).toContain("switchableModelPort.setPort(modelPortFactory(id))");
   });
 
-  it("Taskana 4131: threads envConfig.exploreModel into withSubagents when set", async () => {
+  it("threads envConfig.exploreModel into withSubagents when set", async () => {
     const source = await readHostSource();
     const callStart = source.indexOf("withSubagents(config, {");
     let idx = callStart;
@@ -605,7 +605,7 @@ describe("host subagent model-override wiring", () => {
     expect(options).toContain("exploreModel: envConfig.exploreModel");
   });
 
-  it("Taskana 4704 F1: the child port's getPermissionMode is self-contained (no Session bounce -> no infinite recursion)", async () => {
+  it("F1: the child port's getPermissionMode is self-contained (no Session bounce -> no infinite recursion)", async () => {
     const source = await readHostSource();
 
     // The recursive shape this guards against: the port's getPermissionMode
@@ -630,7 +630,7 @@ describe("host subagent model-override wiring", () => {
     expect(cellSource).toContain('return pre === "plan" ? "build" : pre;');
   });
 
-  it("Taskana 4704 F2: withSubagents threads the host's resolveRoleRouteImpl into the runner", async () => {
+  it("F2: withSubagents threads the host's resolveRoleRouteImpl into the runner", async () => {
     const source = await readHostSource();
     const callStart = source.indexOf("withSubagents(config, {");
     let idx = callStart;
@@ -658,7 +658,7 @@ describe("host subagent model-override wiring", () => {
     expect(runnerSource).toContain("resolveRoleRoute: opts?.resolveRoleRoute ?? ((agentType: string) => null)");
   });
 
-  it("Taskana 4704 F5: the respawn notice rides the FAILED child's id; a refused respawn reports honestly", async () => {
+  it("F5: the respawn notice rides the FAILED child's id; a refused respawn reports honestly", async () => {
     const reports: Array<{ id: string; text: string; meta: { status: string; durationMs: number } }> = [];
     const run = vi.fn()
       .mockResolvedValueOnce({ background: { childSessionId: "child" } })
@@ -1009,7 +1009,7 @@ describe("host boot context-window resolution shape (design slice-6.4-cut.md §2
     return bootContextWindow !== undefined ? { context: { contextWindowTokens: bootContextWindow } } : {};
   }
 
-  // TASK.142 changed this: an unknown model no longer omits `context` — it
+  // changed this: an unknown model no longer omits `context` — it
   // resolves the explicit assumed fallback (8192), so the boot window is a real
   // number and the degraded budget engages instead of the 200k default.
   it("model absent from the matched entry (anthropic catalog + test-model) -> spread yields the ASSUMED 8192 window, never no context", () => {
@@ -1036,7 +1036,7 @@ describe("host boot context-window resolution shape (design slice-6.4-cut.md §2
     expect(spread).toEqual({ context: { contextWindowTokens: 50_000 } });
   });
 
-  // TASK.142: the override is model-bound, so booting on ANOTHER model must not
+  // the override is model-bound, so booting on ANOTHER model must not
   // inherit it — the host's 4th arg is what makes that hold at boot.
   it("a matching bound override applies; a mismatched one does not (boot on B with A's pair)", () => {
     expect(bootContextSpread("https://api.z.ai/api/anthropic", "glm-4.7", 50_000, "glm-4.7")).toEqual({
@@ -1083,9 +1083,9 @@ describe("host boot reasoning-effort support shape", () => {
     });
   });
 
-  // ── Taskana 4118: live caps supplement the catalog at boot ──
+  // ── live caps supplement the catalog at boot ──
 
-  it("Taskana 4118: an unknown model + live {reasoning, [max,high]} maps to [max, high] (source order)", () => {
+  it("an unknown model + live {reasoning, [max,high]} maps to [max, high] (source order)", () => {
     expect(
       bootReasoningOptions("https://openrouter.ai/api/v1", "or/foreign-model", {
         reasoning: true,
@@ -1094,7 +1094,7 @@ describe("host boot reasoning-effort support shape", () => {
     ).toEqual({ reasoningSupported: true, availableEffortLevels: ["max", "high"] });
   });
 
-  it("Taskana 4118: live does not override a catalog-known model (D-Priority)", () => {
+  it("live does not override a catalog-known model (D-Priority)", () => {
     expect(
       bootReasoningOptions("https://api.z.ai/api/anthropic", "glm-5.2", {
         reasoning: true,
@@ -1104,7 +1104,7 @@ describe("host boot reasoning-effort support shape", () => {
   });
 });
 
-describe("host boot ceiling-supervision wiring shape (TASK.124 remainder, owner rule 2026-08-22)", () => {
+describe("host boot ceiling-supervision wiring shape (remainder, owner rule 2026-08-22)", () => {
   /**
    * Reproduces the SHAPE of index.ts's `ceiling` spread inside the core
    * AgentLoopConfig literal (index.ts, right after `permissionBroker: broker,`):
@@ -1115,7 +1115,7 @@ describe("host boot ceiling-supervision wiring shape (TASK.124 remainder, owner 
    * (`args.child`) and the durable authority (`sessionMeta.parentSessionId`),
    * deliberately MORE INCLUSIVE than `args.child` alone so it can never
    * mistake a genuine child for a root. `IpcPermissionBroker` is real too, so
-   * `supervisedRoot()` is proven against the ACTUAL TASK.138 latch mechanics,
+   * `supervisedRoot()` is proven against the ACTUAL latch mechanics,
    * not a stand-in.
    */
   function bootCeilingSpread(
@@ -1161,7 +1161,7 @@ describe("host boot ceiling-supervision wiring shape (TASK.124 remainder, owner 
     expect(bootCeilingSpread(rootArgs, meta({ parentSessionId: "parent-9" }), broker)).toEqual({});
   });
 
-  it("the root predicate tracks the broker's LIVE isUnattended latch: true while attended, false once the TASK.138 latch arms", async () => {
+  it("the root predicate tracks the broker's LIVE isUnattended latch: true while attended, false once the latch arms", async () => {
     vi.useFakeTimers();
     try {
       const broker = new IpcPermissionBroker(() => {}, 120_000);
@@ -1169,7 +1169,7 @@ describe("host boot ceiling-supervision wiring shape (TASK.124 remainder, owner 
 
       expect(spread.ceiling.supervisedRoot()).toBe(true);
 
-      // Arm the real TASK.138 latch the way it arms in production: one
+      // Arm the real latch the way it arms in production: one
       // unanswered ask expires. Same recipe as permission-broker.test.ts's
       // own "unattended latch" suite.
       const pending = broker.requestPermission(request);
@@ -1406,7 +1406,7 @@ describe("host set_model re-budget recipe (slice P7.15 · F14, design §2.1)", (
 
   it("re-budgets window/maxOutput/context and collapses effort on a non-reasoning model", () => {
     const out = makeSwitcher()("glm-4.6", "high");
-    // glm-4.6: 200k window, not reasoning-capable. TASK.113: maxOutput is now
+    // glm-4.6: 200k window, not reasoning-capable. maxOutput is now
     // the docs.z.ai spec-box 128K (was understated 32K before the refresh).
     expect(out.setContextWindowCalls).toEqual([200_000]);
     expect(out.config.context).toEqual({ contextWindowTokens: 200_000 });
@@ -1429,7 +1429,7 @@ describe("host set_model re-budget recipe (slice P7.15 · F14, design §2.1)", (
     expect(out.result.availableEffortLevels).toEqual(["off", "high", "max"]);
   });
 
-  // TASK.142: the switch is where a connection-global window would have leaked
+  // the switch is where a connection-global window would have leaked
   // A -> B. With the pair, A keeps its override, B ignores it, and switching back
   // to A reuses the boot pair.
   it("live A -> B -> A: only A's binding honours the override; B resolves its own catalog window", () => {
@@ -1459,7 +1459,7 @@ describe("host set_model re-budget recipe (slice P7.15 · F14, design §2.1)", (
     expect(switchModel("glm-4.6", "high").setContextWindowCalls).toEqual([50_000, 50_000]);
   });
 
-  // TASK.142: the same pair must reach `Agent(model: B)` children — the child's
+  // the same pair must reach `Agent(model: B)` children — the child's
   // window follows ITS model, so a parent bound to A cannot leak onto B.
   it("child-settings wiring (Agent(model: B)) re-resolves B's window from the shared pair", () => {
     const settingsForChild = buildChildModelSettingsResolver({
@@ -1478,13 +1478,13 @@ describe("host set_model re-budget recipe (slice P7.15 · F14, design §2.1)", (
 });
 
 /**
- * Design TASK.40 §2(f): bootCodexSession's Git bridge + shell-capability
+ * Design §2(f): bootCodexSession's Git bridge + shell-capability
  * wiring. index.ts itself is not importable (see file header) — this pins
  * the SHAPE of the `codexGitEnabled`/`shell` computation as a local pure
  * mirror of index.ts's `bootCodexSession`, same idiom as every other
  * describe block in this file.
  */
-describe("host Codex boot shell/git wiring shape (design TASK.40 §2(f))", () => {
+describe("host Codex boot shell/git wiring shape (design §2(f))", () => {
   /** Mirrors bootCodexSession's `codexGitEnabled`/`shell` computation verbatim. */
   function computeCodexShell(isGitRepo: boolean, hasRunBinary: boolean): ShellCapabilitiesProjection {
     const gitEnabled = isGitRepo && hasRunBinary;
@@ -1510,7 +1510,7 @@ describe("host Codex boot shell/git wiring shape (design TASK.40 §2(f))", () =>
 });
 
 /**
- * Taskana 4682 rework — the child-temp-dir SHAPE of bootCodexSession's boot
+ * rework — the child-temp-dir SHAPE of bootCodexSession's boot
  * site, mirrored over the REAL helpers (resolveChildTempDir /
  * ensureChildTempDir / removeChildTempDir / buildCodexChildEnv) with the same
  * "reproduce the seam's shape, don't import index.ts" idiom as every other
@@ -1519,7 +1519,7 @@ describe("host Codex boot shell/git wiring shape (design TASK.40 §2(f))", () =>
  * the engine selection (writableRoots); an OWNER boot derives NOTHING — no
  * dir, no env override, no selection key.
  */
-describe("host Codex boot private temp dir shape (Taskana 4682 rework)", () => {
+describe("host Codex boot private temp dir shape (rework)", () => {
   /** Mirrors bootCodexSession's derivation + selection spread verbatim. */
   function bootCodexTmpShape(
     args: { sessionId?: string; child?: { parentSessionId: string } },
@@ -1581,7 +1581,7 @@ describe("host Codex boot private temp dir shape (Taskana 4682 rework)", () => {
 });
 
 /**
- * Cross-review F2 (Taskana 4682): the private temp dir was created at the TOP
+ * Cross-review F2: the private temp dir was created at the TOP
  * of bootCodexSession but the `try {` guard only started AFTER the whole
  * connect phase (`startCodexEngine` — app-server spawn, trust preflights,
  * `--version` round-trip — the single most likely failure site of the boot).
@@ -1594,7 +1594,7 @@ describe("host Codex boot private temp dir shape (Taskana 4682 rework)", () => {
  * (the "read the real source" idiom of the model-override suite) so the
  * production call site cannot silently drift back.
  */
-describe("host Codex boot private temp dir leak guard (cross-review F2, Taskana 4682)", () => {
+describe("host Codex boot private temp dir leak guard (cross-review F2)", () => {
   /**
    * Mirrors bootCodexSession's ordering with injectable steps: the dir must be
    * ENSURED immediately before the guarded window opens, and a throw from ANY
@@ -2164,7 +2164,7 @@ describe("host preview_console outbound wiring shape (slice 96-D, cut §2.4)", (
   });
 });
 
-describe("Claude engine-child history flush write primitive (TASK.102 S4, cut §4.4)", () => {
+describe("Claude engine-child history flush write primitive (S4, cut §4.4)", () => {
   /**
    * A healthy engine child that is steered at the wrong instant reports
    * FAILURE and loses a turn: claudeFlushHistory (index.ts:1111-1132) is a
@@ -2237,9 +2237,9 @@ describe("Claude engine-child history flush write primitive (TASK.102 S4, cut §
   });
 });
 
-describe("Codex engine-child history flush write primitive (TASK.143)", () => {
+describe("Codex engine-child history flush write primitive", () => {
   /**
-   * TASK.143 lifts TASK.102 S4-codex-cut: `codexFlushHistory` (index.ts, next
+   * lifts S4-codex-cut: `codexFlushHistory` (index.ts, next
    * to `claudeFlushHistory` above) now reads `connected.engine.
    * readTranscript()` — a FRESH `thread/read` re-run through the resume
    * projection, on demand — instead of the frozen `historyItems()` boot
@@ -2266,12 +2266,12 @@ describe("Codex engine-child history flush write primitive (TASK.143)", () => {
   }
 
   interface FakeCodexEngine {
-    /** Frozen at construction — the TASK.102 S4-codex-cut defect: a flush that read THIS instead of readTranscript() would persist a stale/empty transcript forever. */
+    /** Frozen at construction — the S4-codex-cut defect: a flush that read THIS instead of readTranscript() would persist a stale/empty transcript forever. */
     historyItems(): readonly HistoryItem[];
     readTranscript(): Promise<readonly HistoryItem[]>;
   }
 
-  /** Mirrors codexFlushHistory's write step verbatim (index.ts, TASK.143). */
+  /** Mirrors codexFlushHistory's write step verbatim (index.ts). */
   async function codexFlushHistoryShape(
     engine: FakeCodexEngine,
     persistence: SqlitePersistenceAdapter,
@@ -2283,7 +2283,7 @@ describe("Codex engine-child history flush write primitive (TASK.143)", () => {
     await sink.flushChecked();
   }
 
-  it("persists what readTranscript() returns, NOT the frozen boot-time historyItems() — the exact TASK.102 S4-codex-cut defect this closes", async () => {
+  it("persists what readTranscript() returns, NOT the frozen boot-time historyItems() — the exact S4-codex-cut defect this closes", async () => {
     const dbPath = join(dbDir, "anycode.sqlite");
     const persistence = new SqlitePersistenceAdapter(dbPath);
     try {
@@ -2356,14 +2356,14 @@ describe("Codex engine-child history flush write primitive (TASK.143)", () => {
 });
 
 /**
- * TASK.198 срез C: `parseRecognizerEnv`/`recognizerEndpointFromFields`
+ * срез C: `parseRecognizerEnv`/`recognizerEndpointFromFields`
  * (index.ts's own env-var-name literal mirror of main/host-env.ts's
  * ANYCODE_RECOGNIZER_* family). index.ts is not importable (see file
  * header) — reproduced verbatim, same idiom as every other describe block
  * in this file.
  */
-describe("host recognizer env parsing (TASK.198 срез C)", () => {
-  // Live-run fix (task150-output-ceiling session, TASK.198 follow-up):
+describe("host recognizer env parsing (срез C)", () => {
+  // Live-run fix (task150-output-ceiling session, follow-up):
   // `recognizerEndpointFromFields` is the ONE construction point both
   // `parseRecognizerEnv` (the boot-env snapshot below) AND main's live
   // RECOGNIZER_CONFIG_CHANGED push (index.ts's parentPort message handler,
@@ -2451,7 +2451,7 @@ describe("host recognizer env parsing (TASK.198 срез C)", () => {
     expect("providerName" in endpoint).toBe(false);
   });
 
-  // RED-PROOF (live-run fix, TASK.198 follow-up): a resolved model with a
+  // RED-PROOF (live-run fix, follow-up): a resolved model with a
   // BLANK baseUrl used to default to `baseUrl: ""` and still count as
   // "configured" — this is exactly the live-run defect: `InspectImage`
   // registered and then failed twice with "Invalid Anthropic base URL: ''
@@ -2463,7 +2463,7 @@ describe("host recognizer env parsing (TASK.198 срез C)", () => {
     expect(parseRecognizerEnv({ ANYCODE_RECOGNIZER_MODEL: "vision-model", ANYCODE_RECOGNIZER_BASE_URL: "   " })).toBeNull();
   });
 
-  // RED-PROOF (live-run fix, TASK.198 follow-up, second finding): the
+  // RED-PROOF (live-run fix, follow-up, second finding): the
   // transport cast (`fields.transport as RecognizerEndpoint["transport"]`)
   // was UNCHECKED — any garbage string was declared a valid transport and
   // the compiler approved it. Core's own `loadEnvConfig` validates the same
@@ -2524,7 +2524,7 @@ describe("host recognizer env parsing (TASK.198 срез C)", () => {
 });
 
 /**
- * TASK.198 срез C (plan §8): `VisionTelemetryModelPort` (index.ts's own
+ * срез C (plan §8): `VisionTelemetryModelPort` (index.ts's own
  * usage-telemetry wrap around a recognizer's `AiSdkModelPort`). Not
  * importable (see file header) — reproduced verbatim.
  */
@@ -2549,7 +2549,7 @@ class VisionTelemetryModelPort implements ModelPort {
   }
 }
 
-describe("host VisionTelemetryModelPort (TASK.198 срез C, plan §8)", () => {
+describe("host VisionTelemetryModelPort (срез C, plan §8)", () => {
   function fakePort(events: ModelStreamEvent[]): ModelPort {
     return {
       modelId: "vision-model",
@@ -2588,7 +2588,7 @@ describe("host VisionTelemetryModelPort (TASK.198 срез C, plan §8)", () => 
 });
 
 /**
- * TASK.198 срез C (plan §8, `agentType:"vision"` envelope): reproduces
+ * срез C (plan §8, `agentType:"vision"` envelope): reproduces
  * `recognizerPortFactory`'s own envelope-construction body — the piece
  * `VisionTelemetryModelPort` above deliberately does NOT know about (it only
  * calls the injected `report(usage)`). This is the "телеметрия vision-
@@ -2596,10 +2596,10 @@ describe("host VisionTelemetryModelPort (TASK.198 срез C, plan §8)", () => 
  * in the session's jsonl with the SAME `t:"usage"` shape
  * telemetry/records.ts's own whitelist projects for a normal turn, stamped
  * `sub:{agentType:"vision", model}` — the exact envelope
- * `buildSubagentTelemetryTap` uses for inline subagents (TASK.160), applied
+ * `buildSubagentTelemetryTap` uses for inline subagents, applied
  * here to a one-shot recognizer call instead of a nested AgentLoop run.
  */
-describe("host recognizer telemetry envelope (TASK.198 срез C, plan §8)", () => {
+describe("host recognizer telemetry envelope (срез C, plan §8)", () => {
   function recordedFor(endpoint: RecognizerEndpoint, usage: TokenUsage, session: string): unknown {
     return {
       v: 1,
@@ -2653,14 +2653,14 @@ describe("host recognizer telemetry envelope (TASK.198 срез C, plan §8)", (
 });
 
 /**
- * TASK.198 срез C (plan §5): `recomputeInspectImageRegistration`'s gate +
+ * срез C (plan §5): `recomputeInspectImageRegistration`'s gate +
  * the tool-instance-lifetime discipline the coordinator flagged (build the
  * tool factory EXACTLY ONCE for the host's whole life; only its
  * REGISTRATION toggles). Uses the REAL ToolRegistry/createInspectImageTool/
  * buildSystemPrompt (all importable core exports) — only the gate/recompute
  * closure itself is reproduced (index.ts is not importable).
  */
-describe("host InspectImage registration gate + instance lifetime (TASK.198 срез C, plan §5)", () => {
+describe("host InspectImage registration gate + instance lifetime (срез C, plan §5)", () => {
   function makeHarness(opts?: { portFactory?: (endpoint: RecognizerEndpoint) => ModelPort }) {
     const registry = createDefaultToolRegistry();
     let recognizerConfigured = false;
@@ -2813,7 +2813,7 @@ describe("host InspectImage registration gate + instance lifetime (TASK.198 ср
 });
 
 /**
- * TASK.198 срез C (plan §3): the ONE external media-projection decorator
+ * срез C (plan §3): the ONE external media-projection decorator
  * around the SwitchableModelPort — both `createMediaProjectionPort` and
  * `SwitchableModelPort` are real, importable core exports, so this
  * exercises the ACTUAL composition index.ts builds (`modelPort =
@@ -2821,7 +2821,7 @@ describe("host InspectImage registration gate + instance lifetime (TASK.198 ср
  * reproduction — only the "which object does index.ts call .setPort() on"
  * wiring choice is host-specific and worth pinning here.
  */
-describe("host media-projection decorator composition (TASK.198 срез C, plan §3)", () => {
+describe("host media-projection decorator composition (срез C, plan §3)", () => {
   function scriptedPort(id: string): ModelPort {
     return {
       modelId: id,
@@ -2868,7 +2868,7 @@ describe("host media-projection decorator composition (TASK.198 срез C, plan
   });
 });
 
-// ── TASK.207: degraded-host port bind sends `fatal` immediately ───────────
+// ── degraded-host port bind sends `fatal` immediately ───────────
 //
 // index.ts is not importable in a test (module-scope process.parentPort, see
 // the file-header comment) — same constraint as every describe block above.
@@ -2877,11 +2877,11 @@ describe("host media-projection decorator composition (TASK.198 срез C, plan
 // only greps for a substring): it extracts the REAL degraded-mode `else`
 // block's source text — the exact code index.ts's port-bind handler executes
 // when boot() failed — and runs it for real via `new Function` against fake
-// outbound/wire doubles. A revert of the TASK.207 fix (back to "surface the
+// outbound/wire doubles. A revert of the fix (back to "surface the
 // init failure on the first inbound message") changes what gets extracted and
 // executed, so these tests exercise the actual fix, not a hand-written
 // stand-in that would stay green regardless of what index.ts says.
-describe("host degraded-mode port bind — immediate fatal (TASK.207, GitHub #4)", () => {
+describe("host degraded-mode port bind — immediate fatal (GitHub #4)", () => {
   async function readHostSource(): Promise<string> {
     return readFile(new URL("./index.ts", import.meta.url), "utf8");
   }
@@ -3000,7 +3000,7 @@ describe("host degraded-mode port bind — immediate fatal (TASK.207, GitHub #4)
   });
 });
 
-describe("per-model context window production wiring (TASK.142: pin the REAL call sites, not a copy)", () => {
+describe("per-model context window production wiring (pin the REAL call sites, not a copy)", () => {
   /**
    * The shape-mirroring idiom cannot catch a MISSING option — a hand-copied
    * recipe (or a direct `buildChildModelSettingsResolver(...)` call written by
@@ -3066,7 +3066,7 @@ describe("per-model context window production wiring (TASK.142: pin the REAL cal
       contextWindowTokens: 50_000,
       contextWindowModel: "glm-5.2",
     };
-    // Taskana 4118: the production block now closes over a `liveCapsFor`
+    // the production block now closes over a `liveCapsFor`
     // binding (undefined map ⇒ catalog-only, the pre-4118 shape).
     const liveCapsFor = (_id: string) => undefined as never;
     const connectionModelSettings = (await import("./connection-model-settings.js")).createConnectionModelSettings({
@@ -3096,13 +3096,13 @@ describe("per-model context window production wiring (TASK.142: pin the REAL cal
   });
 });
 
-// ── Taskana 4088 (TASK.69): the per-send image-modality closure shape ──
+// ── the per-send image-modality closure shape ──
 // 4088-on-4118 integration: the live-modality facts ride 4118's
 // LiveModelCapabilities map (`imageInput?: true` per model) instead of a
 // comma-separated env list; the lookup closure and its additive-only
 // semantics are unchanged.
 
-describe("host imageInputEnabled closure (Taskana 4088: live-modality rung, per-send honesty)", () => {
+describe("host imageInputEnabled closure (live-modality rung, per-send honesty)", () => {
   /**
    * index.ts is not importable from a test (process.parentPort at module
    * scope — the file-header idiom), so this pins the two load-bearing halves
@@ -3172,7 +3172,7 @@ describe("host imageInputEnabled closure (Taskana 4088: live-modality rung, per-
 
   it("an absent live fact reads as NO fact (undefined), never as 'blind every model'", () => {
     // No caps map entry: the lookup must be undefined-per-model so
-    // a catalog-TRUE model keeps its verdict (the TASK.197 asymmetry).
+    // a catalog-TRUE model keeps its verdict (the asymmetry).
     const liveCaps: Record<string, LiveModelCapabilities> = {};
     const imageModalityLookup: ImageModalityLookup = (id) =>
       liveCaps[id]?.imageInput === true ? true : undefined;
@@ -3192,7 +3192,7 @@ describe("host imageInputEnabled closure (Taskana 4088: live-modality rung, per-
 
 
 /**
- * Taskana 4764 — the SHAPE of bootClaudeSession's and bootCodexSession's
+ * the SHAPE of bootClaudeSession's and bootCodexSession's
  * bridge blocks, mirrored with the same "reproduce the seam's shape over the
  * real helpers, don't import index.ts" idiom as the 4682 block above. Pins
  * the owner invariants: the doors are built for EVERY non-child boot (the
@@ -3200,7 +3200,7 @@ describe("host imageInputEnabled closure (Taskana 4088: live-modality rung, per-
  * the agent-prompt stay behind the catalog switch; a child boot gets no
  * bridge at all.
  */
-describe("host boot bridge shapes (Taskana 4764)", () => {
+describe("host boot bridge shapes", () => {
   it("C11: an empty agent catalog still builds the Claude door (10 browser names), with NO child port and NO agentBridgePrompt", () => {
     const browser = createEngineBrowserBridge({ preview: {} as never, fullAccess: () => false, broker: {} as never, cwd: "/work" });
     const names = new Set(browser.specs.map((spec) => `mcp__anycode__${spec.claudeName}`));

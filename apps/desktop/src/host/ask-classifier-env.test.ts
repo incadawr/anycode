@@ -1,5 +1,5 @@
 /**
- * Taskana 4702 Stage 1: the host-side reader for ANYCODE_PERMISSION_CLASSIFIER.
+ * Stage 1: the host-side reader for ANYCODE_PERMISSION_CLASSIFIER.
  * Pins the fail-closed contract: unset, empty, garbage JSON, a disabled record,
  * an invalid shape, or an empty command all yield NO classifier (off), never a
  * partial one. A valid enabled record yields a command classifier with the
@@ -9,7 +9,7 @@
 import { describe, expect, it } from "vitest";
 import { parseAskClassifierEnv, parseAskClassifierEnvKind } from "./ask-classifier-env.js";
 
-describe("parseAskClassifierEnv (Taskana 4702)", () => {
+describe("parseAskClassifierEnv", () => {
   it.each([
     ["unset", undefined],
     ["empty", ""],
@@ -40,7 +40,7 @@ describe("parseAskClassifierEnv (Taskana 4702)", () => {
   });
 });
 
-describe("parseAskClassifierEnvKind (Taskana 4730)", () => {
+describe("parseAskClassifierEnvKind", () => {
   it("kind model parses shape-only: no classifier is built", () => {
     const parsed = parseAskClassifierEnvKind(
       JSON.stringify({ enabled: true, kind: "model", connectionId: "c1", model: "m1", timeoutMs: 8000 }),

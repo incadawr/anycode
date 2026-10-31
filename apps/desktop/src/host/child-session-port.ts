@@ -1,6 +1,6 @@
 import { childSessionLimitMessage } from "../shared/session-limits.js";
 /**
- * Host-side RPC client for `SessionSubagentPort` (TASK.102 CUT-S2 §2.6.1):
+ * Host-side RPC client for `SessionSubagentPort` (CUT-S2 §2.6.1):
  * the parent root host's half of the `Agent tier:"session"` wire. Turns one
  * `SessionSubagentPort.run()` call into a `ChildSpawnRequest`/`ChildRunCancel`
  * pair sent over `process.parentPort`, correlating main's `ChildRunEvent`
@@ -10,7 +10,7 @@ import { childSessionLimitMessage } from "../shared/session-limits.js";
  * credential broker (host/index.ts:348-377): this module never touches
  * `process.parentPort` directly, so it is fully testable with fakes.
  *
- * Taskana 4153 / TASK.216 wire: the control plane now carries a THIRD op —
+ * / wire: the control plane now carries a THIRD op —
  * `ChildRunSend` (`send` below) — which delivers a follow-up to one
  * of the parent's OWN still-running children. It shares the requestId
  * namespace and waiter map with `run()`, but nothing else: it never spawns,
@@ -67,7 +67,7 @@ import { childSessionLimitMessage } from "../shared/session-limits.js";
  *    cancel-addressing and concurrent-run disambiguation) — the two ids must
  *    never be collapsed into one again.
  *
- * TASK.145 срез 1 (`req.detach`): the ONE deliberate exception to the
+ * срез 1 (`req.detach`): the ONE deliberate exception to the
  * sync-join contract above. A detached run's `run()` promise settles at
  * `accepted` (admit) instead of `terminal` — the tool call that spawned it
  * returns immediately, telling the model the child is now running in the
@@ -87,7 +87,7 @@ import { childSessionLimitMessage } from "../shared/session-limits.js";
  *    happened, so there is nothing to detach FROM — the tool call fails
  *    exactly like a sync one would.
  *
- * TASK.145 срез 3 (revises срез 1's original abort-listener choice): `opts.
+ * срез 3 (revises срез 1's original abort-listener choice): `opts.
  * signal`'s abort listener is now REMOVED at the moment a detached run
  * admits, not left armed past it. Срез 1 kept it armed on the reasoning that
  * "жизненный цикл наследуются от sync-яруса" — cancelling the parent's turn
@@ -155,7 +155,7 @@ import {
 const MALFORMED_SPAWN_ID_MESSAGE = "Agent: the child session failed to start (malformed spawn tool-call id).";
 
 /**
- * Review finding F8 (TASK.102 CUT-S2, post-§10.5): `parseChildSpawnRequest`
+ * Review finding F8 (CUT-S2, post-§10.5): `parseChildSpawnRequest`
  * (shared/child-sessions.ts) caps FIVE more fields besides `spawnToolCallId`
  * — `agentType`/`description`/`prompt`/`model`/`provider` — and is just as
  * fail-closed-and-silent about all of them (violation -> `null` -> main drops
@@ -175,7 +175,7 @@ const MALFORMED_DESCRIPTION_MESSAGE = "Agent: the child session failed to start 
 const MALFORMED_PROMPT_MESSAGE = "Agent: the child session failed to start (malformed prompt).";
 const MALFORMED_MODEL_MESSAGE = "Agent: the child session failed to start (malformed model).";
 const MALFORMED_PROVIDER_MESSAGE = "Agent: the child session failed to start (malformed provider).";
-// Taskana 4269: a profile-declared exact connection id, and the refusal for
+// a profile-declared exact connection id, and the refusal for
 // carrying both connection selectors on one spawn (two ways to name the same
 // connection — ambiguous, so refused before anything is posted; the caller
 // gets this message instead of hanging until the start deadline).
@@ -187,7 +187,7 @@ const MALFORMED_RESUME_MESSAGE = "Agent: the child session failed to start (malf
 const MALFORMED_MAX_TURNS_MESSAGE = "Agent: the child session failed to start (malformed turn budget).";
 
 /**
- * Taskana 4153 / TASK.216 wire: the RPC timeout bounding a `send`
+ * wire: the RPC timeout bounding a `send`
  * call. Unlike `run()` (no client-side timeout by design — the file header's
  * sync-join contract), a send is a bounded request/reply pair: exactly one
  * `sent` XOR `rejected` ack must come back for it, and a main that neither
@@ -197,15 +197,15 @@ const MALFORMED_MAX_TURNS_MESSAGE = "Agent: the child session failed to start (m
  */
 const CHILD_SEND_RPC_TIMEOUT_MS = 30_000;
 export { CHILD_SEND_RPC_TIMEOUT_MS };
-/** Taskana 4153: pre-flight refusal text for a malformed send (id or text) — same rationale as MALFORMED_SPAWN_ID_MESSAGE. */
+/** pre-flight refusal text for a malformed send (id or text) — same rationale as MALFORMED_SPAWN_ID_MESSAGE. */
 const MALFORMED_SEND_MESSAGE = "Agent: malformed child session id or text.";
-/** Taskana 4153: the send completed before it started (opts.signal already aborted) — same shape as run()'s F9 early return. */
+/** the send completed before it started (opts.signal already aborted) — same shape as run()'s F9 early return. */
 const SEND_ABORTED_MESSAGE = "Agent: aborted before send.";
-/** Taskana 4153: main never answered the send — delivery genuinely unknown, never silently "ok". */
+/** main never answered the send — delivery genuinely unknown, never silently "ok". */
 const SEND_TIMEOUT_MESSAGE = "Agent: main did not answer the send; delivery unknown.";
 
 /**
- * Taskana 4153: maps a `rejected` ack's `spawn_failed` reason + message onto
+ * maps a `rejected` ack's `spawn_failed` reason + message onto
  * the coarse `SessionSubagentSendResult` reason union the core handler
  * presents. Main mints one text per refusal family (not yours / not running
  * / engine child / unreachable host); keyword matching is deliberately
@@ -264,7 +264,7 @@ function findSpawnRequestShapeError(req: SessionSubagentRequest): string | null 
   if (req.provider !== undefined && !isValidFreeText(req.provider, CHILD_PROVIDER_MAX_CHARS)) {
     return MALFORMED_PROVIDER_MESSAGE;
   }
-  // Taskana 4269: same shape cap as `provider`; both at once is refused with its
+  // same shape cap as `provider`; both at once is refused with its
   // own message (nothing is posted — see the caller).
   if (req.connectionId !== undefined && !isValidFreeText(req.connectionId, CHILD_PROVIDER_MAX_CHARS)) {
     return MALFORMED_CONNECTION_MESSAGE;
@@ -278,7 +278,7 @@ function findSpawnRequestShapeError(req: SessionSubagentRequest): string | null 
   if (req.resumeChildSessionId !== undefined && (!isValidChildId(req.resumeChildSessionId) || req.engine !== undefined)) {
     return MALFORMED_RESUME_MESSAGE;
   }
-  // TASK.180: mirrors parseChildSpawnRequest's budget check — a defined
+  // mirrors parseChildSpawnRequest's budget check — a defined
   // maxTurns must be a safe integer within 1..CHILD_MAX_TURNS_CEILING.
   if (
     req.maxTurns !== undefined &&
@@ -290,7 +290,7 @@ function findSpawnRequestShapeError(req: SessionSubagentRequest): string | null 
 }
 
 /**
- * TASK.145 срез 1: the admit-time `finalText` for a detached run — the ONLY
+ * срез 1: the admit-time `finalText` for a detached run — the ONLY
  * text the model ever sees for this call, since a detached call never waits
  * for the child's own finalText. `status:"completed"` on the outcome this
  * feeds (see the "accepted" case below) is honest under the SAME reading
@@ -327,7 +327,7 @@ function joinBudgetHandoffMessage(childSessionId: string): string {
 }
 
 /**
- * TASK.145 срез 3: one live detached (background) child, as tracked by this
+ * срез 3: one live detached (background) child, as tracked by this
  * port's own in-memory registry — surfaced host-side so `session.ts` can
  * answer "how many children are running in the background" and let the
  * renderer (a later slice's job, not this one) cancel one by id. Deliberately
@@ -386,9 +386,9 @@ export interface CreateChildSessionPortOptions {
   /** Injectable request-id generator (tests only); defaults to randomUUID. */
   createRequestId?: () => string;
   /**
-   * TASK.145 срез 1: invoked when a DETACHED run's `terminal` ChildRunEvent
+   * срез 1: invoked when a DETACHED run's `terminal` ChildRunEvent
    * arrives — strictly AFTER this same run's `run()` promise already
-   * resolved at `accepted` (see the file header's TASK.145 addendum), so the
+   * resolved at `accepted` (see the file header's addendum), so the
    * terminal can no longer settle it. `req` is the ORIGINAL request (the
    * outcome alone carries no `agentType`/`description`), letting the caller
    * build a delivery notification without this port knowing anything about
@@ -398,7 +398,7 @@ export interface CreateChildSessionPortOptions {
    */
   onDetachedTerminal?: (outcome: SessionSubagentOutcome, req: SessionSubagentRequest) => void;
   /**
-   * TASK.148 slice 2: invoked when a DETACHED run's stall clock fires — the
+   * slice 2: invoked when a DETACHED run's stall clock fires — the
    * ONE case slice 1 deliberately left uncovered (the parent is not blocked
    * waiting on this child, so it can actually read and act on a notice,
    * unlike the sync tier where a stall report only ever reaches the caller's
@@ -416,13 +416,13 @@ export interface CreateChildSessionPortOptions {
    */
   onDetachedStall?: (report: SubagentStallReport, req: SessionSubagentRequest, childSessionId: string) => void;
   /**
-   * Taskana 4821: a detached child raised an approval ask (attention event with
+   * a detached child raised an approval ask (attention event with
    * the ask's identity). Nobody watches a detached child's tab, so the host
    * surfaces it to the parent instead of letting the ask silently expire.
    */
   onDetachedApproval?: (ask: { toolName: string; subject: string }, req: SessionSubagentRequest, childSessionId: string) => void;
   /**
-   * Review F1 (Taskana 4821): a detached child's approval ask — one this port
+   * Review F1: a detached child's approval ask — one this port
    * reported through `onDetachedApproval` — has SETTLED (attention
    * waiting=false after waiting=true: answered in the child's tab, expired,
    * or force-denied by turn cancel/disconnect/shutdown). The host uses this
@@ -435,7 +435,7 @@ export interface CreateChildSessionPortOptions {
    */
   onDetachedApprovalSettled?: (req: SessionSubagentRequest, childSessionId: string) => void;
   /**
-   * Taskana 4820: invoked when a DETACHED run's progress crosses the
+   * invoked when a DETACHED run's progress crosses the
    * approaching-turn-budget margin (10% of `req.maxTurns`, min 1 turn) — the
    * ONE advance warning the parent gets before the child is stopped at its
    * cap. Fires at most ONCE per run (latched per waiter). `info` carries the
@@ -452,7 +452,7 @@ export interface CreateChildSessionPortOptions {
     childSessionId: string,
   ) => void;
   /**
-   * Silence threshold for this port's stall clock (TASK.148 slice 1/2).
+   * Silence threshold for this port's stall clock (slice 1/2).
    * SUBAGENT_STALL_TIMEOUT_MS when omitted — same resolution precedence as
    * the inline tier's `parent.subagentStallTimeoutMs ?? SUBAGENT_STALL_TIMEOUT_MS`
    * (subagents/runner.ts). Shared by BOTH the sync and detached paths (slice
@@ -465,7 +465,7 @@ export interface CreateChildSessionPortOptions {
    */
   syncJoinBudgetMs?: number;
   /**
-   * Taskana 4704 §2.8/§3.6: cap on THIS parent's simultaneously-live detached
+   * §2.8/§3.6: cap on THIS parent's simultaneously-live detached
    * children, enforced at the detach ADMIT as an honest refusal (no queueing
    * — queueing risks unbounded hidden state, §9-Q5). Read at admit time (a
    * live cell, not a snapshot) so settings changes land on the next spawn.
@@ -479,7 +479,7 @@ export interface CreateChildSessionPortOptions {
 }
 
 /**
- * TASK.145 срез 3: the port's own return type widens `SessionSubagentPort`
+ * срез 3: the port's own return type widens `SessionSubagentPort`
  * (`run` alone) with the background-children surface — never part of the
  * frozen `SessionSubagentPort` core interface itself (core has no concept of
  * "background", only the host does; see `ports/session-subagent.ts`'s own
@@ -491,7 +491,7 @@ export interface ChildSessionPort extends SessionSubagentPort {
   /** Every currently-live detached child this port has admitted and not yet seen a terminal for. */
   listBackgroundChildren(): BackgroundChildSnapshot[];
   /**
-   * Taskana 4153 / TASK.216 wire: delivers a follow-up `text` to the
+   * wire: delivers a follow-up `text` to the
    * parent's OWN STILL-RUNNING child (`childSessionId`, from that run's
    * "accepted" event), over the additive `ChildRunSend` parentPort op —
    * completely independent of any `run()` waiter: the original sync-join
@@ -501,7 +501,7 @@ export interface ChildSessionPort extends SessionSubagentPort {
    * an oversized text BEFORE anything is sent (main's parser would silently
    * drop it otherwise — same rationale as `findSpawnRequestShapeError`).
    *
-   * Cross-review Finding 1 (Taskana 4153): this is now the INTERFACE method
+   * Cross-review Finding 1: this is now the INTERFACE method
    * name — `SessionSubagentPort.send`, what core's Agent handler calls. It
    * was originally exposed as `sendToChild`, which silently satisfied the
    * then-optional `send?` interface member and left every production
@@ -522,7 +522,7 @@ export interface ChildSessionPort extends SessionSubagentPort {
    * `true` but sends no second `ChildRunCancel`.
    */
   cancelBackgroundChild(childSessionId: string): boolean;
-  /** Cancels every currently-live detached child (TASK.145 срез 3 §3: an explicit sweep, not a side effect of aborting a turn). */
+  /** Cancels every currently-live detached child (срез 3 §3: an explicit sweep, not a side effect of aborting a turn). */
   cancelAllBackgroundChildren(): void;
   /** Subscribes to registry changes (a child admitted or reaching its terminal). Returns an unsubscribe fn, mirroring `lsp.onStatusChange`. */
   onBackgroundChildrenChanged(listener: () => void): () => void;
@@ -533,7 +533,7 @@ interface Waiter {
   onEvent(event: ChildRunEvent): void;
 }
 
-/** TASK.145 срез 3: one registry row — the detach waiter's `requestId` (for cancel-addressing) plus the public snapshot and its own cancel-idempotency flag. */
+/** срез 3: one registry row — the detach waiter's `requestId` (for cancel-addressing) plus the public snapshot and its own cancel-idempotency flag. */
 interface BackgroundChildEntry {
   requestId: string;
   snapshot: BackgroundChildSnapshot;
@@ -554,13 +554,13 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
   const createRequestId = options.createRequestId ?? randomUUID;
   const stallTimeoutMs = options.stallTimeoutMs ?? SUBAGENT_STALL_TIMEOUT_MS;
   const waiters = new Map<string, Waiter>();
-  // TASK.145 срез 3: registry of live detached children, keyed by
+  // срез 3: registry of live detached children, keyed by
   // childSessionId (the id `cancelBackgroundChild`/the renderer's future list
   // both address by) — populated at admit, removed at terminal, see the two
   // `req.detach === true` branches below.
   const backgroundChildren = new Map<string, BackgroundChildEntry>();
   const backgroundChildrenListeners = new Set<() => void>();
-  // Taskana 4704 cross-review F6: detach admits that passed the cap check but
+  // cross-review F6: detach admits that passed the cap check but
   // whose "accepted" event has not arrived yet. The registry above is keyed by
   // childSessionId, which is only known at accept — N parallel detached run()
   // calls in one assistant turn all passed the old `backgroundChildren.size`
@@ -631,7 +631,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
       });
     }
 
-    // Taskana 4704 §2.8/§3.6: the parallel-children cap. A detach ADMIT that
+    // §2.8/§3.6: the parallel-children cap. A detach ADMIT that
     // would exceed this parent's live-detached count is refused HONESTLY,
     // here in the port (never queued — queueing risks unbounded hidden
     // state, §9-Q5). Only detach requests consume slots; sync-join spawns
@@ -689,9 +689,9 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
 
     const requestId = createRequestId();
 
-    // TASK.145 срез 1: the child's own id, known only once "accepted"
+    // срез 1: the child's own id, known only once "accepted"
     // arrives (the detach branch below sets it). Read by a DETACHED run's
-    // onStall closure (TASK.148 slice 2) — declared here, ahead of both the
+    // onStall closure (slice 2) — declared here, ahead of both the
     // clock and the promise executor, so the same mutable binding is visible
     // to whichever of the two assigns/reads it first.
     let detachedChildSessionId: string | undefined;
@@ -701,11 +701,11 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
     // ever reported as settled.
     let detachedAskPending = false;
 
-    // Taskana 4820: latched once this run's approaching-turn-budget notice
+    // latched once this run's approaching-turn-budget notice
     // has fired — the warning is once per run, never per progress event.
     let turnBudgetNotified = false;
 
-    // Taskana 4820 review F1: the child's EFFECTIVE turn cap this latch warns
+    // review F1: the child's EFFECTIVE turn cap this latch warns
     // against — the request's own budget, else the child host's resolved cap
     // carried on the `accepted` event, else core's DEFAULT_MAX_TURNS (the
     // SAME constant the child's own resolveChildMaxTurns/agent-loop fall
@@ -754,7 +754,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
       }
     }
 
-    // TASK.148 slice 1/2: constructed for BOTH tiers now. A non-detached
+    // slice 1/2: constructed for BOTH tiers now. A non-detached
     // run's notice still bridges to opts.onProgress (unchanged from slice
     // 1). A DETACHED run's notice can no longer reach opts.onProgress (that
     // call's own closure already returned at admit, same reason
@@ -895,7 +895,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
         onEvent: (event) => {
           switch (event.kind) {
             case "accepted": {
-              // TASK.145 срез 1: a detached run settles `run()` HERE, at
+              // срез 1: a detached run settles `run()` HERE, at
               // admit — not at terminal. No `subagent_start` progress is
               // emitted (file header: nothing downstream needs a live card
               // for a call that already returned; agent.ts's own header
@@ -905,7 +905,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               // eventual `terminal` still reaches this `onEvent` and is
               // routed to `onDetachedTerminal` below.
               //
-              // TASK.145 срез 3: the abort listener IS removed here, though
+              // срез 3: the abort listener IS removed here, though
               // (file header's срез-3 addendum) — a detach is an exit from
               // the turn, so cancelling the parent's turn after this point
               // must NOT cascade into this child. Registered into the
@@ -928,7 +928,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                 enterBackground("requested");
                 return;
               }
-              // TASK.102 CUT-S4 §3.1: `engine` rides verbatim from the
+              // CUT-S4 §3.1: `engine` rides verbatim from the
               // REQUEST (never from main's `accepted` event, which carries
               // no engine field) — the card's chip reflects what this run
               // asked to boot, exactly like agentType/description above.
@@ -973,12 +973,12 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               return;
             }
             case "progress": {
-              // Sign of life (TASK.148 slice 1/2): silence is measured
+              // Sign of life (slice 1/2): silence is measured
               // against the cadence of these coarse events, exactly like the
               // inline tier's tool_result/turn_end boundary — no new wire
               // message. Fed BEFORE the detach early-return below: a
               // detached run's clock still needs to see this, even though
-              // (TASK.145 срез 1, unchanged) its own tool call already
+              // (срез 1, unchanged) its own tool call already
               // returned at admit, so no live card exists for opts.onProgress
               // to update.
               stallClock.noteProgress(event.lastTool);
@@ -991,7 +991,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                   toolCalls: event.toolCalls,
                   ...(lastTool !== undefined ? { lastTool } : {}),
                 });
-                // Taskana 4820: a detached run's progress is the only place
+                // a detached run's progress is the only place
                 // the parent can learn its child is about to hit its turn
                 // cap. Checked inside the detach branch (a sync-join parent
                 // is blocked inside the Agent call and cannot act on a
@@ -1071,7 +1071,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               return;
             }
             case "attention": {
-              // Waiting for a human is NOT silence (TASK.148 slice 1/2): this
+              // Waiting for a human is NOT silence (slice 1/2): this
               // is the real PUSHED event the session tier has that the inline
               // tier does not (the child's own broker, tapChildPermissions) —
               // no polling needed here, unlike runner.ts. Fed BEFORE the
@@ -1131,7 +1131,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               terminalSeen = true;
               if (acceptedEvent) statusStore.update(acceptedEvent.childSessionId, { state: event.status === "completed" ? "completed" : "failed", turns: event.turns, toolCalls: event.toolCalls, endedAt: Date.now(), currentTool: undefined });
               clearJoinTimer();
-              // TASK.240: the cancel cause lives only in this host's registry
+              // the cancel cause lives only in this host's registry
               // row, which the detached branch below deletes — read it NOW,
               // while the row still exists, so a user stop reaches the parent.
               const userCancelled =
@@ -1151,13 +1151,13 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                 ...(event.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: event.finalTurnFinishReason } : {}),
                 ...(event.declaredDoneAtCeiling === true ? { declaredDoneAtCeiling: true } : {}),
                 ...(event.ceiling !== undefined ? { ceiling: event.ceiling } : {}),
-                // R2 (Taskana 4704): the safe error descriptor rides through
+                // R2: the safe error descriptor rides through
                 // so the parent host's respawn classifier never sees the
                 // child's free model text.
                 ...(event.errorDescriptor !== undefined ? { errorDescriptor: event.errorDescriptor } : {}),
                 ...(userCancelled ? { cancelledBy: "user" as const } : {}),
               };
-              // TASK.145 срез 1: this run's `run()` promise already settled
+              // срез 1: this run's `run()` promise already settled
               // at admit (above) — this terminal can no longer resolve it.
               // No `subagent_end` progress either (symmetry with the other
               // three cases above: no live card exists to close out). Clean
@@ -1165,7 +1165,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               // life, the one point a detached waiter still needs its own
               // teardown that `finish()` would otherwise have done.
               //
-              // TASK.145 срез 3: also the true end of this child's life in
+              // срез 3: also the true end of this child's life in
               // the background-children registry — removed here (whether the
               // terminal followed an explicit `cancelBackgroundChild` or the
               // child simply finished on its own), and the abort-listener
@@ -1185,7 +1185,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                   finish(outcome);
                   return;
                 }
-                // TASK.148 slice 2: this waiter's own stall clock stops here
+                // slice 2: this waiter's own stall clock stops here
                 // too — the true end of its life for a detached run, same as
                 // every other teardown step on this branch (`finish()` never
                 // runs for a detached waiter once handed off, so nothing else
@@ -1220,7 +1220,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                 // the end progress — the ONLY source of subagent_end, which
                 // the UI budget line and telemetry read. Mirrors runner.ts.
                 ...(event.ceiling !== undefined ? { ceiling: event.ceiling } : {}),
-                // Child-fact model attribution (TASK.219): the terminal's
+                // Child-fact model attribution: the terminal's
                 // `model` is the child host's ACTIVE session model (never
                 // req.model nor the parent's pre-boot accepted label);
                 // `responseModel` is the child's dedicated-port claim when it
@@ -1234,7 +1234,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               return;
             }
             case "sent": {
-              // Taskana 4153: ack for a ChildRunSend — a run() waiter shares
+              // ack for a ChildRunSend — a run() waiter shares
               // the requestId namespace but never sees this kind (send
               // deletes its own waiter the moment the ack lands, and main
               // never relays a send's ack into a run's lifecycle). Reachable
@@ -1271,12 +1271,12 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
         ...(req.connectionId !== undefined ? { connectionId: req.connectionId } : {}),
         ...(req.model !== undefined ? { model: req.model } : {}),
         ...(req.effort !== undefined ? { effort: req.effort } : {}),
-        // TASK.102 CUT-S4 §3.1: verbatim passthrough, absent = core (the
+        // CUT-S4 §3.1: verbatim passthrough, absent = core (the
         // wire's own byte-compatible default — shared/child-sessions.ts's
         // file header).
         ...(req.engine !== undefined ? { engine: req.engine } : {}),
         ...(req.resumeChildSessionId !== undefined ? { resumeChildSessionId: req.resumeChildSessionId } : {}),
-        // TASK.180: the turn budget rides only the CREATING spawn — a
+        // the turn budget rides only the CREATING spawn — a
         // resume request (resumeChildSessionId set) never re-imposes a budget.
         ...(req.resumeChildSessionId === undefined && req.maxTurns !== undefined ? { maxTurns: req.maxTurns } : {}),
         // GitHub #17 slice B: the detach flag rides the wire so
@@ -1290,7 +1290,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
   }
 
   /**
-   * Taskana 4153 / TASK.216 wire: `ChildSessionPort.send` — see the
+   * wire: `ChildSessionPort.send` — see the
    * interface's own doc. Mirrors `run()`'s waiter pattern (one
    * `Map<requestId, waiter>` entry, resolved by the inbound `sent`/
    * `rejected` ack with that requestId), but bounded by
@@ -1319,7 +1319,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
         opts?.signal?.removeEventListener("abort", onAbort);
         resolve(result);
       };
-      // Cross-review Finding 2 (Taskana 4153): run() observes a MID-FLIGHT
+      // Cross-review Finding 2: run() observes a MID-FLIGHT
       // abort through an abort listener; the send waiter must too, or a
       // parent-turn cancel leaves it lingering until the 30s RPC timeout
       // with a misleading "delivery unknown". Aborting settles the call
@@ -1350,12 +1350,12 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
     });
   }
 
-  /** TASK.145 срез 3, `ChildSessionPort.listBackgroundChildren` — see that interface's own doc. */
+  /** срез 3, `ChildSessionPort.listBackgroundChildren` — see that interface's own doc. */
   function listBackgroundChildren(): BackgroundChildSnapshot[] {
     return [...backgroundChildren.values()].map((entry) => entry.snapshot);
   }
 
-  /** TASK.145 срез 3, `ChildSessionPort.cancelBackgroundChild` — see that interface's own doc. */
+  /** срез 3, `ChildSessionPort.cancelBackgroundChild` — see that interface's own doc. */
   function cancelBackgroundChild(childSessionId: string): boolean {
     return requestBackgroundChildCancel(childSessionId, "user");
   }
@@ -1373,14 +1373,14 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
     return true;
   }
 
-  /** TASK.145 срез 3, `ChildSessionPort.cancelAllBackgroundChildren` — see that interface's own doc. */
+  /** срез 3, `ChildSessionPort.cancelAllBackgroundChildren` — see that interface's own doc. */
   function cancelAllBackgroundChildren(): void {
     for (const childSessionId of [...backgroundChildren.keys()]) {
       requestBackgroundChildCancel(childSessionId, "shutdown");
     }
   }
 
-  /** TASK.145 срез 3, `ChildSessionPort.onBackgroundChildrenChanged` — see that interface's own doc. */
+  /** срез 3, `ChildSessionPort.onBackgroundChildrenChanged` — see that interface's own doc. */
   function onBackgroundChildrenChanged(listener: () => void): () => void {
     backgroundChildrenListeners.add(listener);
     return () => {

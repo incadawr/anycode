@@ -1,5 +1,5 @@
 /**
- * TASK.182 / Taskana 4136 — MCP forward serializer + diagnostic tests.
+ * MCP forward serializer + diagnostic tests.
  * Pins the grammar and skip rules for BOTH engine serializers against
  * core-resolved specs (stdio+http, env/headers, disabled entries and project
  * shadowing are exercised end-to-end through the real core loader in

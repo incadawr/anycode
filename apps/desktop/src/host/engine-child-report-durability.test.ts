@@ -1,5 +1,5 @@
 /**
- * Taskana 4123 follow-up: integration tests for
+ * follow-up: integration tests for
  * `attachEngineChildReportDurability` — the codex/claude boots' pending
  * detached-child report durability. Each engine's wiring shape is reproduced
  * EXACTLY as host/index.ts builds it (index.ts itself is not importable —
@@ -103,7 +103,7 @@ interface Run {
 }
 
 for (const engine of ["codex", "claude"] as const) {
-  describe(`attachEngineChildReportDurability — ${engine} root session (Taskana 4123 follow-up)`, () => {
+  describe(`attachEngineChildReportDurability — ${engine} root session (follow-up)`, () => {
     /** Restart #1: run with a pending report; Restart #2: fresh queue+attach, then the ui_ready resend. */
     async function restartCycle(adapter: SqlitePersistenceAdapter, ackBeforeRestart: boolean): Promise<{ first: Run; second: Run }> {
       // ── run 1 (pre-restart): a detached child's report is queued; a renderer
@@ -206,7 +206,7 @@ for (const engine of ["codex", "claude"] as const) {
   });
 }
 
-describe("attachEngineChildReportDurability — save failures never escape the fire-and-forget onChange (Taskana 4123 cross-review)", () => {
+describe("attachEngineChildReportDurability — save failures never escape the fire-and-forget onChange (cross-review)", () => {
   it("a rejecting saveJson inside onChange is caught and logged, the attach survives, and a later successful save still persists", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const adapter = await makeAdapter();

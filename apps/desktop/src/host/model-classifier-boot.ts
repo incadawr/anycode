@@ -1,5 +1,5 @@
 /**
- * Taskana 4730 xfix D4: HONEST connection pinning for the model-kind ask
+ * xfix D4: HONEST connection pinning for the model-kind ask
  * classifier (`kind:"model"` in the permissions settings' classifier record).
  *
  * The pre-fix wiring resolved a `connectionId`+`model` record by calling the

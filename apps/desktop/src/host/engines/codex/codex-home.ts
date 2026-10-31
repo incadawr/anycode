@@ -1,6 +1,6 @@
 /**
  * Profile CODEX_HOME resolution for the host's app-server spawn (codex-profiles
- * cut §2.6, amendment §A1.2/§A2, TASK.50).
+ * cut §2.6, amendment §A1.2/§A2).
  *
  * Main resolves a renderer-picked profile id against ITS registry and hands the
  * host READY argv values (`--codex-profile` / `--codex-home` /
@@ -32,7 +32,7 @@ import { isAbsolute, join, relative } from "node:path";
 const PROFILE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
 /**
- * Taskana 4682 rework: one path segment naming a PRIVATE per-child temp dir
+ * rework: one path segment naming a PRIVATE per-child temp dir
  * under `~/.anycode/tmp/`. The child session id is a host-generated UUID (a
  * `randomUUID()` bridge row id), never user input — but the value is treated
  * as untrusted anyway (fail-closed, the same posture as a profile id): any
@@ -244,7 +244,7 @@ function assertAuthLink(home: string, target: string): string | null {
 }
 
 /**
- * Taskana 4682 rework: a codex CHILD's private temp dir path,
+ * rework: a codex CHILD's private temp dir path,
  * `~/.anycode/tmp/<childSessionId>`. Derived from the SAME home-resolution
  * inputs the managed profile tree above uses (the caller passes
  * `resolveCodexProfilesHomeOverride(process.env) ?? homedir()` at the boot
@@ -272,7 +272,7 @@ export function resolveChildTempDir(childSessionId: string, homeDir: string = ho
  * foreign tree, exactly the redirection the profile home guard refuses.
  */
 export function ensureChildTempDir(dir: string): void {
-  // Cross-review F1 (Taskana 4682): lstat the PARENT (~/.anycode/tmp) too, not
+  // Cross-review F1: lstat the PARENT (~/.anycode/tmp) too, not
   // just the leaf. Recursive mkdir happily follows a symlinked parent and
   // creates <child-id> inside the link's target without any error, so a
   // leaf-only check can never fire there — the child's TMPDIR writes (and the

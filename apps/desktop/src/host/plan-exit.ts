@@ -1,5 +1,5 @@
 /**
- * Desktop plan-exit contract (TASK.27) — the host-side mirror of the CLI's
+ * Desktop plan-exit contract — the host-side mirror of the CLI's
  * two-line wiring (cli/main.ts's `registry.register(exitPlanModeTool)` plus the
  * `planExitMode`/`onModeChange` pair in its AgentLoopConfig).
  *

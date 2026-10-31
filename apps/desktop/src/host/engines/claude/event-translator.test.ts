@@ -291,7 +291,7 @@ describe("ClaudeTurnTranslator — translation table on W0 fixtures (cut §1.4 D
   });
 });
 
-describe("ClaudeTurnTranslator — TASK.226 срез S4: takePresentation attaches the MCP bridge's durable card snapshot", () => {
+describe("ClaudeTurnTranslator — срез S4: takePresentation attaches the MCP bridge's durable card snapshot", () => {
   function toolResultFrame(toolUseId: string, content: string, isError = false) {
     return {
       type: "user",
@@ -538,7 +538,7 @@ describe("ClaudeTurnTranslator — terminal reasons are exhaustively mapped, and
   });
 });
 
-// TASK.180: the typed `error_max_turns` RESULT SUBTYPE (protocol.ts:199).
+// the typed `error_max_turns` RESULT SUBTYPE (protocol.ts:199).
 // terminal_reason is canonical (cut §1.4): a capped result CARRYING
 // terminal_reason:"max_turns" terminalizes as bounded-out loop_end:"max_turns"
 // even though the frame's subtype is an error one; a SUBTYPE-ONLY
@@ -546,7 +546,7 @@ describe("ClaudeTurnTranslator — terminal reasons are exhaustively mapped, and
 // honest named ERROR terminal — never a success. This complements the existing
 // terminal_reason:max_turns rows above and engine-children's child-runner
 // mapping (num_turns -> outcome.turns).
-describe("result subtype error_max_turns (TASK.180)", () => {
+describe("result subtype error_max_turns", () => {
   function cappedResult(fields: Record<string, unknown> = {}): ClaudeStreamMessage {
     return {
       type: "result",
@@ -589,7 +589,7 @@ describe("result subtype error_max_turns (TASK.180)", () => {
 });
 
 /**
- * Taskana 4820 review F2/F4: model rounds. The translator sees exactly one
+ * review F2/F4: model rounds. The translator sees exactly one
  * `message_start` per assistant message; turn_start/turn_end fire once per
  * runTurn, so the loop_end `turns` ordinal undercounted multi-round turns
  * (a 40-round claude runTurn reported "1") and the child's live progress
@@ -599,7 +599,7 @@ describe("result subtype error_max_turns (TASK.180)", () => {
  * loop_end with the CLI's own `num_turns` when the result carries it (the
  * authoritative round count), else the message_start tally.
  */
-describe("ClaudeTurnTranslator — model rounds (Taskana 4820 F2/F4)", () => {
+describe("ClaudeTurnTranslator — model rounds (F2/F4)", () => {
   function messageStart(id: string): ClaudeStreamMessage {
     return {
       type: "stream_event",
@@ -658,10 +658,10 @@ describe("ClaudeTurnTranslator — model rounds (Taskana 4820 F2/F4)", () => {
 });
 
 
-// Taskana 4764 C6: the door's browser tools are canonicalized at the
+// C6: the door's browser tools are canonicalized at the
 // projection seam — the transcript shows BrowserClick, not
 // mcp__anycode__browser_click; every other tool name is untouched.
-describe("ClaudeTurnTranslator — Taskana 4764 browser tool names (C6)", () => {
+describe("ClaudeTurnTranslator — browser tool names (C6)", () => {
   function assistantToolUse(id: string, name: string): ClaudeStreamMessage {
     return {
       type: "assistant",

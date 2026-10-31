@@ -1,5 +1,5 @@
 /**
- * TASK.182 / Taskana 4136: controlled diagnostics for engine MCP forwarding.
+ * /controlled diagnostics for engine MCP forwarding.
  *
  * The serializers (claude/mcp-forward.ts, codex/mcp-thread-config.ts) and the
  * boot helper (mcp-forward-boot.ts) NEVER forward raw loader problems, zod /

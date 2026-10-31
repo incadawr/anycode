@@ -1,5 +1,5 @@
 /**
- * TASK.4721: the desktop host's turn-budget history — the one place core's
+ * the desktop host's turn-budget history — the one place core's
  * learned base budget is fed from and read back.
  *
  * Storage is a JSONL append log at `<home>/.anycode/turn-budget-history.jsonl`
@@ -169,7 +169,7 @@ export interface SessionBudgetRequest {
 }
 
 /**
- * Session-tier stamping (TASK.4721): a learned base budget becomes the child's
+ * Session-tier stamping: a learned base budget becomes the child's
  * `maxTurns` ONLY when adaptive is on and nothing more specific was given: no
  * explicit request maxTurns, no `tools.subagentMaxTurns` setting, and no engine
  * child (a foreign CLI cannot enforce a turn budget). Returns the SAME object

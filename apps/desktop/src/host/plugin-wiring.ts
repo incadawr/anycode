@@ -1,5 +1,5 @@
 /**
- * Host wiring for the plugin runtime (Taskana 4732 xfix C1/C2/H1(a)): the ONE
+ * Host wiring for the plugin runtime (xfix C1/C2/H1(a)): the ONE
  * place that turns settings + the builtin name sets into the discovery options
  * host/index.ts hands to `discoverExtensions`. Kept pure so the wiring is
  * unit-testable without booting the host.

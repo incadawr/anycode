@@ -1,5 +1,5 @@
 /**
- * Taskana 4707 review: the host's builtin-skill composition, and the wiring
+ * review: the host's builtin-skill composition, and the wiring
  * that keeps host/index.ts calling it. Removing either fails a test here.
  */
 import { readFileSync } from "node:fs";
@@ -29,7 +29,7 @@ describe("buildHostBuiltinSkills", () => {
     ]);
   });
 
-  // Test 37 (Taskana 4759): control-browser is present iff the preview capability is, and never duplicated.
+  // Test 37: control-browser is present iff the preview capability is, and never duplicated.
   it("control-browser is present iff previewAvailable, with a unique name", () => {
     const off = buildHostBuiltinSkills({ worktreeAvailable: false, previewAvailable: false, anycodeSetupDocs: DOCS });
     expect(names(off)).not.toContain("control-browser");

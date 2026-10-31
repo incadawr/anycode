@@ -1,5 +1,5 @@
 /**
- * TASK.27 — the atomicity guard for the desktop plan-exit contract.
+ * the atomicity guard for the desktop plan-exit contract.
  *
  * The bug this closes was exactly a split wiring: the CLI registered
  * `exitPlanModeTool` AND set `AgentLoopConfig.planExitMode`, the desktop host

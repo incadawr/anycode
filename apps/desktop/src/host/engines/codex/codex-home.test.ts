@@ -160,7 +160,7 @@ describe("assertCodexProfileHome — auth.json symlink guard (amendment §A1.2)"
     expect(readlinkSync(join(home, "auth.json"))).toBe(join(home, "somewhere-else"));
   });
 
-  it("REFUSES a regular file where the symlink should be, and NEVER deletes or reads it (TASK.50 DoD)", () => {
+  it("REFUSES a regular file where the symlink should be, and NEVER deletes or reads it (DoD)", () => {
     const { home, target } = managedWithTarget();
     mkdirSync(home, { recursive: true, mode: 0o700 });
     // codex may have refreshed tokens via tmp+rename, breaking the link — the
@@ -245,10 +245,10 @@ describe("resolveCodexProfilesHomeOverride (W4-F0b host lever, Fable ruling iter
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Taskana 4682 rework — a codex CHILD's private temp dir (~/.anycode/tmp/<id>).
+// rework — a codex CHILD's private temp dir (~/.anycode/tmp/<id>).
 // Same scratch-only discipline as every block above: freshDir trees only.
 // ─────────────────────────────────────────────────────────────────────────────
-describe("resolveChildTempDir / ensureChildTempDir / removeChildTempDir (Taskana 4682)", () => {
+describe("resolveChildTempDir / ensureChildTempDir / removeChildTempDir", () => {
   it("derives the dir ONLY from the child session id under <home>/.anycode/tmp", () => {
     expect(resolveChildTempDir("018f1e2d-3c4b-5a6e-7f8a-9b0c1d2e3f4a", "/Users/someone")).toBe(
       join("/Users/someone", ".anycode", "tmp", "018f1e2d-3c4b-5a6e-7f8a-9b0c1d2e3f4a"),

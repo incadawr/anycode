@@ -123,7 +123,7 @@ import type { EngineId } from "./engines/session-engine.js";
 export const REPLAY_BUFFER_CAP = 5_000;
 
 /**
- * TASK.117 checkpoint: bound on `session_checkpoint.countedSteps`. A finish
+ * checkpoint: bound on `session_checkpoint.countedSteps`. A finish
  * older than the replay ring's capacity can never replay again, so carrying
  * more keys than the ring could hold is pure wire weight. Slightly above
  * REPLAY_BUFFER_CAP to cover handshakes/status sends interleaved between
@@ -135,7 +135,7 @@ const CHECKPOINT_COUNTED_STEPS_MAX = REPLAY_BUFFER_CAP + 512;
 export const SESSION_HISTORY_MAX_ITEMS = 500;
 
 /**
- * TASK.117 (2026-10-04 product defect): grace window between the CURRENT UI
+ * (2026-10-04 product defect): grace window between the CURRENT UI
  * port's close and the fail-closed denyAll("ui disconnected"). A renderer
  * reload closes the old port and main re-posts a fresh one on
  * did-finish-load (deliverAllTabPorts) — AFTER the close is observed — so
@@ -148,7 +148,7 @@ export const SESSION_HISTORY_MAX_ITEMS = 500;
 export const UI_RECONNECT_GRACE_MS = 5_000;
 
 /**
- * A manual compaction (TASK.146, `onCompact`) runs BETWEEN turns — no real
+ * A manual compaction (`onCompact`) runs BETWEEN turns — no real
  * turn is ever opened for it (`this.turnId` is left untouched), but the
  * wire's `agent_event` envelope still requires a `turnId` string. This
  * sentinel fills it; the renderer's turn-scoped drop guard is taught to
@@ -196,7 +196,7 @@ function isSuccessfulModelDeliveryEvent(event: AgentEvent): boolean {
 }
 
 /**
- * The engine's OWN model/permission controls (TASK.39, cut §3.1/§2(d)), exposed
+ * The engine's OWN model/permission controls (cut §3.1/§2(d)), exposed
  * to Session as a narrow structural seam — exactly like `git`/`checkpoints`/
  * `tasks` above, and for the same reason: Session must never import an engine
  * implementation. Only a non-core engine that owns a native catalog and a native
@@ -299,8 +299,8 @@ export interface EngineSettingsSeam {
 function enginePresentation(engine: SessionEngine, settings?: EngineSettingsSeam): EnginePresentation | undefined {
   if (engine.id === "core") return undefined;
   const capabilities = engine.capabilities;
-  // The two additive blocks (TASK.39) appear only when the engine actually has a
-  // catalog/preset table: an engine without one keeps the pre-TASK.39 projection
+  // The two additive blocks appear only when the engine actually has a
+  // catalog/preset table: an engine without one keeps the pre-projection
   // byte-identical, and a renderer that sees no `model`/`permissions` hides the
   // pickers rather than guessing.
   const models = settings?.models() ?? [];
@@ -405,7 +405,7 @@ export class Outbound {
   }
 
   /**
-   * TASK.117 acceptance defect 1: read-only view of the current ring, in
+   * acceptance defect 1: read-only view of the current ring, in
    * emission order (oldest first). Used ONLY by pushSessionCheckpoint to
    * compute, per open partial stream, how much of its delta text the ring
    * still holds (the replay suffix a reconnecting renderer is about to
@@ -458,7 +458,7 @@ export class Outbound {
   }
 }
 
-// ── child-mode support (TASK.102 CUT-S2 §2.6.3, slice S2b B4) ──
+// ── child-mode support (CUT-S2 §2.6.3, slice S2b B4) ──
 
 /**
  * The child-mode terminal report Session hands to `ChildSessionOptions.
@@ -482,7 +482,7 @@ export interface ChildTerminalReport {
   activitySuppressed?: number;
   /** Present only when the child's final turn_end carried finishReason "length" (output-token ceiling cut). */
   finalTurnFinishReason?: "length";
-  /** TASK 4149: the last loop_end's ceiling verdict declared the work done. Present only when true. */
+  /** the last loop_end's ceiling verdict declared the work done. Present only when true. */
   declaredDoneAtCeiling?: boolean;
   /**
    * The child host's ACTIVE session model at terminal — the literal
@@ -505,7 +505,7 @@ export interface ChildTerminalReport {
    */
   ceiling?: ChildCeilingSummary;
   /**
-   * R2 (Taskana 4704 cross-review): the redacted SAFE error descriptor of an
+   * R2 (cross-review): the redacted SAFE error descriptor of an
    * `error` terminal — the first line of finalText, carried separately so the
    * parent host's infra-failure classifier never runs over the child's free
    * model text. Present only on error terminals; absent everywhere else.
@@ -537,7 +537,7 @@ export type ChildProgressReport =
  */
 export interface ChildSessionOptions {
   /**
-   * TASK.196 DI seam for the turn-limit wrap-up rescue. CORE-ONLY: a callback
+   * DI seam for the turn-limit wrap-up rescue. CORE-ONLY: a callback
    * exists only when the child runs the core loop with an in-process ModelPort
    * (host/index.ts wires it to core's runWrapUp). CLI-engine children
    * (codex/claude) have no core loop/model to run the tool-free wrap-up call
@@ -594,14 +594,14 @@ export interface ChildSessionOptions {
   now?: () => number;
 }
 
-/** Taskana 4821: what a child's pending approval is about, for the parent-visible notice. */
+/** what a child's pending approval is about, for the parent-visible notice. */
 export interface ChildApprovalAsk {
   toolName: string;
   subject: string;
 }
 
 /**
- * Taskana 4821: the tool name plus its one-line subject (file path or command),
+ * the tool name plus its one-line subject (file path or command),
  * capped to the wire limits of `ChildProgress{kind:"attention"}`.
  *
  * Review F3: a COMMAND subject rides through the parent-visible approval
@@ -675,7 +675,7 @@ export function tapChildPermissions(
  */
 export interface SessionPersistence {
   /**
-   * `enginePreset` (TASK.39, cut §2(k).4) is deliberately its OWN field rather
+   * `enginePreset` (cut §2(k).4) is deliberately its OWN field rather
    * than being smuggled through `mode`: a Codex preset id is not a core
    * PermissionMode, and the two vocabularies must not be conflated in the type
    * system even though they share the `mode` COLUMN in the session row (which
@@ -697,8 +697,8 @@ export interface SessionPersistence {
 }
 
 /**
- * Taskana 4083 / TASK.34: the host's write-behind recorder for the persistent
- * per-step provider-usage audit. Fed from the SAME TASK.117 finish-capture
+ * /the host's write-behind recorder for the persistent
+ * per-step provider-usage audit. Fed from the SAME finish-capture
  * site that folds checkpointSessionTokens (engine gating, step identity and
  * reconnect-dedup context are shared), one call per completed core model
  * step. The SQLite PK (session_id, turn_id, step) + INSERT OR IGNORE make a
@@ -706,7 +706,7 @@ export interface SessionPersistence {
  */
 export interface ProviderUsageAudit {
   /**
-   * Fire-and-forget, never blocks or fails the turn (write-behind, TASK.34 invariant 3).
+   * Fire-and-forget, never blocks or fails the turn (write-behind, invariant 3).
    *
    * `finishedAt` is the instant the MODEL STEP finished, captured when its
    * finish event arrived — not when this call happens. A step with tool calls
@@ -716,7 +716,7 @@ export interface ProviderUsageAudit {
    */
   record(record: Omit<ProviderUsageRecord, "sessionId" | "createdAt">, finishedAt?: number): void;
   /**
-   * Taskana 4083 cross-review finding 4: OPTIONAL drain of the write-behind
+   * cross-review finding 4: OPTIONAL drain of the write-behind
    * queue — resolves once every record() handed over so far has settled.
    * Awaited by shutdown() so a finish captured in the shutdown window cannot
    * fire an unbounded write against a database the host is about to close
@@ -726,7 +726,7 @@ export interface ProviderUsageAudit {
   flush?(): Promise<void>;
 }
 
-/** Taskana 4083 / TASK.34: read side — the durable step list + honest totals for hydration. */
+/** /read side — the durable step list + honest totals for hydration. */
 export interface ProviderUsageSummaryPort {
   summary(): Promise<{
     steps: ProviderUsageRecord[];
@@ -735,7 +735,7 @@ export interface ProviderUsageSummaryPort {
 }
 
 /**
- * Taskana 4083 / TASK.34: pure fold over the durable step list (host/index.ts
+ * /pure fold over the durable step list (host/index.ts
  * wires it behind the summary port; exported for unit tests). Sums ONLY
  * defined values (a NULL column is "provider did not report", never 0);
  * `stepsReported` counts steps with any token field, `stepsWithCache` counts
@@ -789,7 +789,7 @@ export interface SessionOptions {
   /** The host-selected agent runtime; Session never imports an external engine. */
   engine: SessionEngine;
   /**
-   * Taskana 4068 / TASK.98 (review 23.08 narrowing): builds the replacement
+   * (review 23.08 narrowing): builds the replacement
    * engine for an `engine_switch_request`. Injected by the composition root;
    * absent -> the message is refused with reason "engine switch is not
    * available in this host". The production wiring (real startCodexEngine /
@@ -798,7 +798,7 @@ export interface SessionOptions {
    */
   switchEngineFactory?: (engine: EngineId) => Promise<SessionEngine>;
   /**
-   * TASK.39: the engine's own model catalog + permission presets. Absent for
+   * the engine's own model catalog + permission presets. Absent for
    * core (and for any engine without native controls) -> `set_engine_preset` is
    * a no-op, `set_model` keeps its legacy core path, and `host_ready.engine`
    * carries no `model`/`permissions` block.
@@ -806,7 +806,7 @@ export interface SessionOptions {
   engineSettings?: EngineSettingsSeam;
   broker: IpcPermissionBroker;
   /**
-   * TASK.117 (2026-10-04 product defect) TEST SEAM: overrides the
+   * (2026-10-04 product defect) TEST SEAM: overrides the
    * close→denyAll grace window (see Session.reconnectGraceTimer). Absent ->
    * production default; ONLY tests inject a value to pin the expiry path
    * without real-time waits. Never read from the environment.
@@ -848,7 +848,7 @@ export interface SessionOptions {
    */
   bootHistory?: ReturnType<SessionEngine["historyItems"]>;
   /**
-   * Dev/automation-ONLY override for `SESSION_HISTORY_MAX_ITEMS` (TASK.188
+   * Dev/automation-ONLY override for `SESSION_HISTORY_MAX_ITEMS` (
    * S4): a replay recording needs a long session hydrated in full. Resolved
    * ONCE in the composition root (`host/index.ts`, `resolveSessionHistoryMaxItems`)
    * from `ANYCODE_SESSION_HISTORY_MAX_ITEMS` — `Session` inspects no runtime
@@ -877,14 +877,14 @@ export interface SessionOptions {
    */
   compactionRecords?: CompactionRecordSeam;
   /**
-   * Taskana 4083 / TASK.34: the persistent per-step provider-usage audit
+   * /the persistent per-step provider-usage audit
    * (SQLite provider_usage, migration v19). Wired ONLY for the core engine's
    * boot (host/index.ts) — a foreign engine's usage arrives as cumulative
    * REPLACE snapshots, not per-step finishes, so mapping it would be
    * dishonest; those engines keep engine_session_tokens semantics. Absent
    * (every legacy test, codex/claude boots) -> the write-behind recorder,
    * the session_checkpoint.usageAudit hydration field and the
-   * usage_audit_request reply are all inert, byte-identical to pre-TASK.34.
+   * usage_audit_request reply are all inert, byte-identical to pre-.
    *
    * Append-only across rewinds (cross-review finding 2): the audit is a
    * SPEND LEDGER — the provider genuinely billed every audited step, so a
@@ -921,10 +921,10 @@ export interface SessionOptions {
    */
   git?: GitUiBridge;
   /**
-   * Shell (AnyCode chrome) capability projection (design TASK.40 §2(f)):
+   * Shell (AnyCode chrome) capability projection (design §2(f)):
    * independent of the active engine's own tool capabilities. Absent (core,
    * and any engine that hasn't wired one) defaults every shell feature to
-   * enabled -- byte-identical to the pre-TASK.40 behavior, where a
+   * enabled -- byte-identical to the pre-behavior, where a
    * user-initiated `git_command` mutation was gated on
    * `engine.capabilities.supportsGitMutations` (always `true` for `CoreEngine`).
    * That flag now describes ONLY the agent's own tool-mutation capability;
@@ -947,11 +947,11 @@ export interface SessionOptions {
     drainNotices(): BackgroundTaskNotice[];
     list?(): BackgroundTaskSnapshot[];
     readOutput?(taskId: string): { snapshot: BackgroundTaskSnapshot; newOutput: string } | undefined;
-    /** Non-consuming whole-buffer read (Taskana 4097): preferred over readOutput so the UI never advances the model's BashOutput cursor. */
+    /** Non-consuming whole-buffer read: preferred over readOutput so the UI never advances the model's BashOutput cursor. */
     peekOutput?(taskId: string): { snapshot: BackgroundTaskSnapshot; output: string } | undefined;
     kill?(taskId: string): boolean;
     /**
-     * Taskana 4097: "a background task just left running" registration.
+     * "a background task just left running" registration.
      * Fires at the settle moment itself (finalize — natural exit, timeout,
      * kill, spawn error), NOT only at turn teardown, so an IDLE session's
      * task_list push (see the constructor subscription) reaches an
@@ -962,7 +962,7 @@ export interface SessionOptions {
     onTaskSettled?(listener: (notice: BackgroundTaskNotice) => void): () => void;
   };
   /**
-   * TASK.145 срез 3 §2/§3: narrow read/cancel seam onto the host's own
+   * срез 3 §2/§3: narrow read/cancel seam onto the host's own
    * detached-children registry (host/child-session-port.ts's `ChildSessionPort`,
    * core-engine-only — absent for a claude/codex-master boot, which never wires
    * `config.sessionSubagents` at all, spec §5). Mirrors the `tasks`/`lsp`
@@ -983,7 +983,7 @@ export interface SessionOptions {
     onChange?(listener: () => void): () => void;
   };
   /**
-   * taskana 4181: the supervisor idle-watchdog seam. Absent in every legacy/
+   * the supervisor idle-watchdog seam. Absent in every legacy/
    * test harness (and every child-session boot) -> the feature is entirely
    * off and every turn is byte-identical to pre-4181. When present, Session
    * feeds it exactly two signals, both already computed here for other
@@ -1002,7 +1002,7 @@ export interface SessionOptions {
     noteTurnStarted(): void;
   };
   /**
-   * Taskana 4704 §3.6: the orchestrator-route turn-start check. Called at
+   * §3.6: the orchestrator-route turn-start check. Called at
    * turn accept (before busy=true) ONLY while orchestrate is on and
    * roles.orchestrator.primary targets the tab's ACTIVE connection: the host
    * checks the entry's health and, when it is unhealthy and a healthy
@@ -1011,7 +1011,7 @@ export interface SessionOptions {
    */
   orchestratorRouteCheck?: () => string | { notice: string; model: string; effort?: ReasoningEffort } | undefined;
   /**
-   * Taskana 4704 §3.7: host callback fired on every orchestrate TRANSITION
+   * §3.7: host callback fired on every orchestrate TRANSITION
    * (after the mode switch + ack emit). The host copies the flag onto the
    * AgentLoopConfig (`config.orchestrate`), which the loop threads into the
    * dispatch context and the dispatcher into every ToolContext — the Agent
@@ -1030,13 +1030,13 @@ export interface SessionOptions {
   lsp?: {
     status(): LspServerStatus[];
     onStatusChange?(listener: () => void): () => void;
-    /** Taskana 4711 — Environment menu Restart; absent seam → no-op */
+    /** Environment menu Restart; absent seam → no-op */
     restart?(): void;
   };
   /** Renderer Panels sub-slice B: static command-hook config list seam. */
   hooksList?: { list(): readonly CommandHookDeclaration[]; configError?: string };
   /**
-   * Taskana 4736: the pending workspace-trust prompt for this host, or undefined
+   * the pending workspace-trust prompt for this host, or undefined
    * when the folder is decided. Re-sent on every ui_ready while pending so a
    * reloaded renderer always sees the question. Absent seam = no prompt.
    */
@@ -1084,18 +1084,18 @@ export interface SessionOptions {
   /** Multimodal send-path capability gate, mirroring the CLI image staging guard. */
   imageInputEnabled?: () => boolean;
   /**
-   * TASK.198 срез C (plan §1.3/§3/§4): live verdict for the vision fallback —
+   * срез C (plan §1.3/§3/§4): live verdict for the vision fallback —
    * true exactly when a recognizer endpoint is currently configured for this
    * session, independent of `imageInputEnabled` above (a blind model can
    * still accept an attachment through the fallback). Re-evaluated per call,
    * same discipline as `imageInputEnabled`. Absent (codex/claude engine
    * boots, and every pre-existing test) is the fail-closed default — no
    * fallback — so the turn-accept gate below stays byte-identical to
-   * pre-TASK.198 wherever this seam is not wired.
+   * pre-wherever this seam is not wired.
    */
   imageFallbackAvailable?: () => boolean;
   /**
-   * Taskana 4127: true while the active model's context window is the assumed
+   * true while the active model's context window is the assumed
    * unknown-model fallback (not catalog, not an explicit override). Re-read per
    * emit (host_ready / model_changed). Absent (codex/claude, legacy tests) ->
    * the wire field is omitted and the UI shows no hint.
@@ -1103,8 +1103,8 @@ export interface SessionOptions {
   contextWindowAssumed?: () => boolean;
   modelSettingsConnectionId?: string | null;
   /**
-   * TASK.198 срез C (plan §1.3): host-owned commit for a live recognizer-
-   * config push (main's RecognizerConfigChanged, TASK.198 E1). Session's own
+   * срез C (plan §1.3): host-owned commit for a live recognizer-
+   * config push (main's RecognizerConfigChanged, E1). Session's own
    * `applyRecognizerConfig` public method decides WHEN to call this (now, if
    * idle; deferred to the next busy->idle boundary, last-value-wins,
    * otherwise) — this callback decides HOW: swap the resolved
@@ -1116,7 +1116,7 @@ export interface SessionOptions {
    */
   applyRecognizerConfig?: (endpoint: RecognizerEndpoint | null) => void;
   /**
-   * TASK.45 W11: reports a real request outcome for the connection this session
+   * W11: reports a real request outcome for the connection this session
    * is pinned to (a runtime auth failure, rate limit, network/server error, or a
    * successful generation) so main can classify + persist advisory connection
    * health. `code` mirrors core's `ProviderFailureCode` (provider/failure.ts) as
@@ -1129,7 +1129,7 @@ export interface SessionOptions {
    */
   reportProviderHealth?: (event: { kind: "success" } | { kind: "failure"; code: string }) => void;
   /**
-   * Taskana 4090 (TASK.71 follow-up): reports the PRIMARY window of a
+   * (follow-up): reports the PRIMARY window of a
    * provider-reported quota observation (`provider_quota` ModelStreamEvent —
    * response-header quota, parsed by core's provider/quota.ts) so MAIN can
    * persist it onto the tab's pinned connection (`lastQuota`, throttled
@@ -1182,7 +1182,7 @@ export interface SessionOptions {
    * tests -> `set_model` is a silent no-op (no switch factory available).
    */
   /**
-   * Turn-end auto-open signal (night-track wave-1 cut §1(a)/§2.3, TASK.96
+   * Turn-end auto-open signal (night-track wave-1 cut §1(a)/§2.3,
    * 96-E): posts a `PreviewArtifactsMessage` over the host<->main control
    * plane (`process.parentPort`, wired by host/index.ts mirroring
    * `sendPreviewRequest`/`sendCredentialRequest`) once per turn teardown, iff
@@ -1192,14 +1192,14 @@ export interface SessionOptions {
    */
   postPreviewArtifacts?: (paths: string[]) => void;
   /**
-   * TASK.102 CUT-S2 §2.6.3: present ONLY for a child-mode host (host/index.ts's
+   * CUT-S2 §2.6.3: present ONLY for a child-mode host (host/index.ts's
    * child branch). Absent -> every child-only branch below is inert and this
    * Session is byte-identical to the pre-S2 root session (every legacy test
    * omits this field).
    */
   child?: ChildSessionOptions;
   /**
-   * TASK.145 срез 2: the host-side pending-report queue seam
+   * срез 2: the host-side pending-report queue seam
    * (child-report-queue.ts's `ChildReportQueue`, wired only where a
    * `sessionSubagents` port was also wired — host/index.ts, always the ROOT
    * engine construction site, never a child-mode one, mirroring the
@@ -1209,7 +1209,7 @@ export interface SessionOptions {
    */
   pendingChildReports?: PendingChildReportsOptions;
   /**
-   * TASK.159: the ONLY telemetry seam a foreign-engine (codex/claude) boot
+   * the ONLY telemetry seam a foreign-engine (codex/claude) boot
    * has — those engines wrap their own CLI protocol and never instantiate
    * AgentLoop, so `AgentLoopConfig.eventTap` (the core path's telemetry
    * attachment point, records.ts's `buildTelemetryTap`) is physically
@@ -1230,7 +1230,7 @@ export interface SessionOptions {
 }
 
 /**
- * TASK.145 срез 2: Session's own narrow view of the host's pending
+ * срез 2: Session's own narrow view of the host's pending
  * detached-child-report queue — mirrors the `SessionPersistence`/`tasks`/`lsp`
  * seam posture (a small closure-based interface, not the whole queue object)
  * so Session never needs to import `child-report-queue.ts` itself.
@@ -1248,7 +1248,7 @@ export interface PendingChildReportsOptions {
   ack: (id: string) => void;
 }
 
-/** Taskana 4763: asks that need a human reading or typing stay in AnyCode. */
+/** asks that need a human reading or typing stay in AnyCode. */
 function isAnswerableApproval(toolName: string): boolean {
   return toolName !== "ExitPlanMode" && toolName !== "AskUserQuestion";
 }
@@ -1262,21 +1262,21 @@ export class Session {
   private readonly presentationJournal: PresentationJournal;
   private readonly outbound: Outbound;
   /**
-   * Taskana 4068: NOT readonly — the engine_swap_request handler re-assigns
+   * NOT readonly — the engine_swap_request handler re-assigns
    * this between turns (old engine disposed only after the replacement is
    * live). Every reader goes through `this.engine` live, so a swap
    * re-projects host_ready/engine notices correctly by construction.
    */
   private engine: SessionEngine;
   /**
-   * Builds the replacement engine for engine_switch_request (Taskana 4068).
+   * Builds the replacement engine for engine_switch_request.
    * Injected by the composition root; absent -> the message is refused with
    * reason "engine switch is not available in this host".
    */
   private readonly switchEngineFactory: ((engine: EngineId) => Promise<SessionEngine>) | undefined;
   /**
-   * TASK.39: engine-native model/preset controls; undefined -> the engine has
-   * none. Taskana 4068: NOT readonly — a successful engine swap resets this to
+   * engine-native model/preset controls; undefined -> the engine has
+   * none. NOT readonly — a successful engine swap resets this to
    * undefined (the new engine's settings seam needs per-engine re-bootstrapping,
    * §7 Q2 follow-up); host_ready then legally omits the engine.model block.
    */
@@ -1284,15 +1284,15 @@ export class Session {
   /** Releases the `onSettingsApplied` subscription at shutdown (no push-after-dispose). */
   private engineSettingsUnsubscribe: (() => void) | undefined;
   /**
-   * Taskana 4068: one-shot import prompt for the FIRST turn after an engine
+   * one-shot import prompt for the FIRST turn after an engine
    * switch. runTurn consumes it by PREPENDING it to the user's own turn input
    * for exactly that one engine call.
    */
   private engineSwitchImportPending: { prompt: string } | null = null;
-  /** Taskana 4068: set once an engine_switch_request succeeded (freezes the core ui_ready history rebuild). */
+  /** set once an engine_switch_request succeeded (freezes the core ui_ready history rebuild). */
   private engineSwitched = false;
   /**
-   * Taskana 4068 cross-review: the canonical transcript carried across the
+   * cross-review: the canonical transcript carried across the
    * LAST successful switch. A switched-to engine's live history holds only its
    * OWN post-switch items, so the next switch prepends this instead of
    * re-reading (and losing) everything that came before.
@@ -1311,7 +1311,7 @@ export class Session {
   private readonly onContinuationComplete: (() => Promise<void>) | undefined;
   private readonly onWorkspaceTransition: SessionOptions["onWorkspaceTransition"];
   private readonly worktreeControl: SessionOptions["worktreeControl"];
-  /** TASK.45 W11: undefined for Codex / every legacy test -> no-op. */
+  /** W11: undefined for Codex / every legacy test -> no-op. */
   private readonly reportProviderHealth: SessionOptions["reportProviderHealth"];
   private readonly reportProviderQuota: SessionOptions["reportProviderQuota"];
   // Slice P7.15 (F14): mutable — a mid-session set_model updates the live model.
@@ -1326,24 +1326,24 @@ export class Session {
    * between compactions, so a record never borrows a neighbouring trigger.
    */
   private compactionTrigger: "auto" | "manual" | null = null;
-  /** Taskana 4083 / TASK.34: see SessionOptions.usageAudit's own doc. */
+  /** /see SessionOptions.usageAudit's own doc. */
   private readonly usageAudit: SessionOptions["usageAudit"];
   private readonly rules: SessionPermissionRules;
   private readonly git: GitUiBridge | undefined;
-  /** Design TASK.40 §2(f): shell capability projection; undefined -> every shell feature defaults to enabled. */
+  /** Design §2(f): shell capability projection; undefined -> every shell feature defaults to enabled. */
   private readonly shell: ShellCapabilitiesProjection | undefined;
   private readonly tasks: SessionOptions["tasks"];
-  /** Taskana 4097: the renderer's own read cursor per background task (see pushTaskOutput). */
+  /** the renderer's own read cursor per background task (see pushTaskOutput). */
   private readonly uiTaskOutputCursors = new Map<string, number>();
-  /** TASK.145 срез 3 §2/§3: see SessionOptions.backgroundChildren's own doc. */
+  /** срез 3 §2/§3: see SessionOptions.backgroundChildren's own doc. */
   private readonly backgroundChildren: SessionOptions["backgroundChildren"];
-  /** Taskana 4704 §3.7: host callback on every orchestrate transition (loop-config copy). */
+  /** §3.7: host callback on every orchestrate transition (loop-config copy). */
   private readonly onOrchestrateChanged: SessionOptions["onOrchestrateChanged"];
-  /** Taskana 4704 §3.6: turn-start orchestrator-route health check (host-owned health cache). */
-  private readonly orchestratorRouteCheck: SessionOptions["orchestratorRouteCheck"];  /** taskana 4181: see SessionOptions.supervisorIdle's own doc. */
+  /** §3.6: turn-start orchestrator-route health check (host-owned health cache). */
+  private readonly orchestratorRouteCheck: SessionOptions["orchestratorRouteCheck"];  /** see SessionOptions.supervisorIdle's own doc. */
   private readonly supervisorIdle: SessionOptions["supervisorIdle"];
   /**
-   * taskana 4181: the latest turn's final assistant text, captured in
+   * the latest turn's final assistant text, captured in
    * runTurn's recordResult so the acceptUserMessage teardown can hand it to
    * the supervisor idle-watchdog without a runTurn signature change.
    */
@@ -1355,14 +1355,14 @@ export class Session {
   /** Slice P7.26/R2: rewind/list seam (undefined -> checkpoints disabled, fail-closed). */
   private readonly checkpoints: SessionOptions["checkpoints"];
   private readonly imageInputEnabled: (() => boolean) | undefined;
-  /** TASK.198 срез C: see SessionOptions.imageFallbackAvailable's own doc. */
+  /** срез C: see SessionOptions.imageFallbackAvailable's own doc. */
   private readonly imageFallbackAvailable: (() => boolean) | undefined;
   private readonly contextWindowAssumed: (() => boolean) | undefined;
   private readonly modelSettingsConnectionId: string | null | undefined;
-  /** TASK.198 срез C: see SessionOptions.applyRecognizerConfig's own doc. */
+  /** срез C: see SessionOptions.applyRecognizerConfig's own doc. */
   private readonly applyRecognizerConfigImpl: ((endpoint: RecognizerEndpoint | null) => void) | undefined;
   /**
-   * TASK.198 срез C (plan §1.3): the last recognizer-config push received
+   * срез C (plan §1.3): the last recognizer-config push received
    * while `busy` — last-value-wins, applied at the very next busy->idle
    * boundary. `undefined` means nothing is pending (the initial state, and
    * the state right after a commit); wrapped in an object so `{endpoint:
@@ -1378,7 +1378,7 @@ export class Session {
   /** Slice P7.15 (F14): the user-selected effort tier, persisted across a model switch. */
   private selectedEffort: ReasoningEffort;
   /**
-   * Taskana 4895: a CORE-engine `set_model` / `set_reasoning_effort` that
+   * a CORE-engine `set_model` / `set_reasoning_effort` that
    * arrived while a turn was running. The running turn keeps the model it
    * started with — the pick is queued here (last-value-wins per axis) and
    * applied at the turn boundary, so it rides the NEXT turn and never races
@@ -1406,7 +1406,7 @@ export class Session {
   private sessionHistory: { items: WireHistoryItem[]; truncated: boolean } | null;
 
   /**
-   * Resolved cap for `sessionHistory` (TASK.188 S4): `options.historyMaxItems`
+   * Resolved cap for `sessionHistory` (S4): `options.historyMaxItems`
    * when the composition root supplied a dev/automation override, else
    * `SESSION_HISTORY_MAX_ITEMS`. Read by every `buildSessionHistory` call
    * (boot and post-rewind rebuild) so the two stay in lockstep.
@@ -1456,7 +1456,7 @@ export class Session {
     this.publishActivity();
   }
   /**
-   * Taskana 4704 §2.2/§3.7: per-session orchestrate flag — a TAB-level state,
+   * §2.2/§3.7: per-session orchestrate flag — a TAB-level state,
    * never a PermissionMode. Enabling it (a) switches the mode to `plan` (the
    * orchestrator's own tools become read-only via the existing engine), (b)
    * sets this flag, (c) replaces the plan-mode reminder with the orchestrate
@@ -1475,7 +1475,7 @@ export class Session {
   /** Epoch ms the live turn began (host clock) — rides every turn_started, including the per-connect re-assertion. */
   private turnStartedAt: number | undefined = undefined;
   /**
-   * TASK.117: the CURRENT outer turn's pending prompt, recorded by
+   * the CURRENT outer turn's pending prompt, recorded by
    * `acceptUserMessage` the moment a turn is admitted (BEFORE runTurn) and
    * cleared on EVERY terminal boundary of that turn: the turn's own teardown
    * (finally), any pre-append refusal (unsupported_images / busy / not_ready
@@ -1489,21 +1489,21 @@ export class Session {
    */
   private pendingPrompt: { turnId: string; requestId: string; text: string; images?: ImageAttachment[] } | null = null;
   /**
-   * TASK.117: the CURRENT outer turn's inner request ordinal (core's
+   * the CURRENT outer turn's inner request ordinal (core's
    * `turn_start.turn`, 1-based, reset per outer turn). Maintained inside
    * runTurn's event loop; undefined outside a turn / for foreign engines.
    */
   private currentStep: number | undefined;
   private currentAttempt = 0;
   /**
-   * Taskana 4083 / TASK.34: `stream_retry` events observed for the CURRENT
+   * /`stream_retry` events observed for the CURRENT
    * core step — the transport-retry count the usage audit row for that step
    * carries (a step with no retry records 0). Reset beside `currentStep`
    * (turn start/teardown) and after each audit record (per-step scope).
    */
   private finishRetries = 0;
   /**
-   * Taskana 4083 cross-review: the PROVISIONAL audit row for the current
+   * cross-review: the PROVISIONAL audit row for the current
    * core step — the finish capture stages it here instead of writing it
    * through, because a stall-retried step can emit TWO finishes for one
    * (turnId, step): the port re-yields the ABANDONED attempt's finish
@@ -1521,7 +1521,7 @@ export class Session {
    */
   private pendingUsageAuditRow: (Omit<ProviderUsageRecord, "sessionId" | "createdAt"> & { finishedAt: number }) | null = null;
   /**
-   * Taskana 4083 / TASK.34: the last audit summary the hydration path has
+   * /the last audit summary the hydration path has
    * read (pushSessionCheckpoint is sync; the summary port is async, so the
    * ui_ready cascade kicks the read and re-pushes when it lands). Null
    * before the first read (the checkpoint then ships without usageAudit
@@ -1529,14 +1529,14 @@ export class Session {
    */
   private lastUsageSummary: Awaited<ReturnType<ProviderUsageSummaryPort["summary"]>> | null = null;
   /**
-   * TASK.117: the live outer turn's requestId (pair with this.turnId), kept
+   * the live outer turn's requestId (pair with this.turnId), kept
    * only while the turn is in flight — the ui_ready cascade re-asserts
    * `turn_started` as sendDirect handshake meta so a reconnecting renderer
    * opens the turn even when the ring's buffered copy has been evicted.
    */
   private lastTurnRequest: { requestId: string; turnId: string } | undefined;
   /**
-   * TASK.117 control/accounting checkpoint: cumulative session token totals,
+   * control/accounting checkpoint: cumulative session token totals,
    * captured AT EMISSION TIME from every core `finish` AgentEvent (SUM
    * semantics mirroring the renderer's accumulateSessionTokens) because
    * durable history carries NO usage fields — once the replay ring evicts a
@@ -1549,7 +1549,7 @@ export class Session {
    */
   private checkpointSessionTokens: { input: number; output: number; total: number; latestCacheRead?: number; latestCacheInput?: number } | null = null;
   /**
-   * TASK.117 checkpoint dedup: the fold keys (`${turnId}:${step}`) of every
+   * checkpoint dedup: the fold keys (`${turnId}:${step}`) of every
    * core finish accumulated into checkpointSessionTokens, newest-first.
    * Shipped as `session_checkpoint.countedSteps` so the renderer can drop a
    * REPLAYED finish by exact key instead of by durability coverage — the
@@ -1561,7 +1561,7 @@ export class Session {
    */
   private readonly checkpointCountedSteps: string[] = [];
   /**
-   * TASK.117 control/accounting checkpoint: the LATEST core context_usage
+   * control/accounting checkpoint: the LATEST core context_usage
    * reading (latest-wins scalar), captured at emission for the same reason
    * as checkpointSessionTokens above. Null until the first reading.
    */
@@ -1569,14 +1569,14 @@ export class Session {
   private contextWriteTail: Promise<void> = Promise.resolve();
   private checkpointContextUsage: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" } | null = null;
   /**
-   * TASK.117 acceptance defect 1: the LIVE turn's currently-open partial
+   * acceptance defect 1: the LIVE turn's currently-open partial
    * streams, folded at emission time from the raw stream events (BEFORE
    * sanitizeAgentEvent strips nothing here — text/reasoning stream ids are
    * wire-safe). Keyed `${turnId}:${step}:${streamId}` (SDK stream ids are
    * reused across steps of one outer turn — the same scope the renderer's
    * openStreamBlocks keys by); the value carries the FULL accumulated body
    * plus the block kind, and a `settled` flag set on stream END (text_end /
-   * reasoning_end). TASK.117 acceptance defect 3: an ENDED stream is NOT
+   * reasoning_end). acceptance defect 3: an ENDED stream is NOT
    * dropped at emission time — core appends the assistant item only after
    * the model stream's finish settles, so the end-to-append gap is exactly
    * the reconnect window where the streamed text exists NOWHERE else (the
@@ -1591,7 +1591,7 @@ export class Session {
    */
   private readonly liveStreams = new Map<string, { turnId: string; step: number; attempt: number; streamId: string; kind: "text" | "reasoning"; text: string; settled?: boolean }>();
   /**
-   * TASK.117 supervisor correction defect 1: the LIVE turn's tool calls whose
+   * supervisor correction defect 1: the LIVE turn's tool calls whose
    * `tool_execution_start` has been emitted but whose `tool_result` has not
    * landed yet — keyed by toolCallId. Captured AT EMISSION TIME (before any
    * ring cap could evict the start event) for the same reason as the other
@@ -1611,7 +1611,7 @@ export class Session {
   private currentTurn: Promise<void> | null = null;
 
   /**
-   * TASK.102 CUT-S2 §10.12.1: flipped as the FIRST step of `shutdown()`,
+   * CUT-S2 §10.12.1: flipped as the FIRST step of `shutdown()`,
    * strictly before `abort.abort()`/`denyAll`/`dispose` so any teardown woken
    * by the abort below already observes it. A SEMANTIC gate (distinct from
    * the reentrant `currentTurn` wait in `shutdown()` below, which is a
@@ -1626,7 +1626,7 @@ export class Session {
   private shuttingDown = false;
 
   /**
-   * TASK.117 (2026-10-04 product defect): the port the UI wire is currently
+   * (2026-10-04 product defect): the port the UI wire is currently
    * bound to (the latest bindPort argument). Lets the onClose handler tell a
    * STALE predecessor port's late close (a successor is already bound — the
    * reload completed) apart from the CURRENT port dying. Identity is the
@@ -1635,7 +1635,7 @@ export class Session {
    */
   private boundPort: WirePort | null = null;
   /**
-   * TASK.117: armed when the CURRENT port closes with no successor bound —
+   * armed when the CURRENT port closes with no successor bound —
    * a renderer reload closes the old port and main re-posts a fresh one on
    * did-finish-load (index.ts deliverAllTabPorts), i.e. AFTER the close is
    * observed here, so the close handler cannot know at that moment whether a
@@ -1647,7 +1647,7 @@ export class Session {
    */
   private reconnectGraceTimer: ReturnType<typeof setTimeout> | null = null;
   /**
-   * TASK.117: the grace window's length. Default covers a renderer reload's
+   * the grace window's length. Default covers a renderer reload's
    * full cycle (old port close -> fresh page load -> did-finish-load port
    * re-post -> ui_ready) with margin; injectable ONLY as a test seam
    * (SessionOptions.reconnectGraceMs) so the expiry path stays pinned
@@ -1672,19 +1672,19 @@ export class Session {
   private advertisedCapabilities: EngineCapabilitiesProjection | undefined;
   /** Slice P7.25/F3: unsubscribes the LSP status listener on shutdown (no leaked listener, no push-after-dispose). */
   private lspUnsubscribe: (() => void) | undefined;
-  /** TASK.145 срез 2: host's pending-report queue seam; undefined for a child-mode host/legacy test (doc on SessionOptions.pendingChildReports). */
+  /** срез 2: host's pending-report queue seam; undefined for a child-mode host/legacy test (doc on SessionOptions.pendingChildReports). */
   private readonly pendingChildReports: PendingChildReportsOptions | undefined;
-  /** TASK.159: see SessionOptions.eventTap's own doc — undefined for core (byte-identical to pre-159). */
+  /** see SessionOptions.eventTap's own doc — undefined for core (byte-identical to pre-159). */
   private readonly eventTap: SessionOptions["eventTap"];
-  /** TASK.145 срез 3 §2: unsubscribes the background-children live-push listener on shutdown (mirror of lspUnsubscribe). */
+  /** срез 3 §2: unsubscribes the background-children live-push listener on shutdown (mirror of lspUnsubscribe). */
   private backgroundChildrenUnsubscribe: (() => void) | undefined;
   /**
-   * Taskana 4097: unsubscribes the tasks port's settled listener on shutdown
+   * unsubscribes the tasks port's settled listener on shutdown
    * (mirror of lspUnsubscribe) — no push-after-dispose, no leaked listener.
    */
   private tasksSettledUnsubscribe: (() => void) | undefined;
 
-  // ── child-mode state (TASK.102 CUT-S2 §2.6.3); every field below is inert
+  // ── child-mode state (CUT-S2 §2.6.3); every field below is inert
   // (never read or mutated) whenever `this.child === undefined`. ──
 
   private readonly child: ChildSessionOptions | undefined;
@@ -1694,7 +1694,7 @@ export class Session {
   private programmaticTurnStarted = false;
   /** Host-side steer queue (§1.1/§2.6.3): a `user_message` received while busy is parked here instead of rejected, bounded by `CHILD_STEER_QUEUE_MAX`. */
   /**
-   * Taskana 4730: bounded ring of the last plain HUMAN user-message texts this
+   * bounded ring of the last plain HUMAN user-message texts this
    * session accepted (<= 3 entries x 500 chars), fed from onUserMessage's
    * accepted path. Sole consumer: `recentHumanUserTurns()` — the host index
    * hands that getter to the classifying broker decorator so ENGINE-SESSION
@@ -1702,7 +1702,7 @@ export class Session {
    * assistant text, tool output, or injected frames — same discipline as
    * core's recentUserTurns.
    *
-   * Taskana 4730 xfix D2: model-authored text never enters, on any session.
+   * xfix D2: model-authored text never enters, on any session.
    * The parent agent's spawn prompt (startProgrammaticTurn), a
    * SessionSubagentPort.send follow-up the renderer drains, and an
    * agent-inbox delivery all arrive with origin "system" and are never
@@ -1725,14 +1725,14 @@ export class Session {
   private childToolCalls = 0;
   /** The last loop_end's status (workspace_transition mapped to "error" — a child never actually relocates); undefined until the first loop_end. */
   private childLoopStatus: ChildRunStatus | undefined;
-  /** The last loop_end's `declaredDoneAtCeiling` (TASK 4149). */
+  /** The last loop_end's `declaredDoneAtCeiling`. */
   private childDeclaredDoneAtCeiling = false;
   /** TASK.240/4055: the child's ceiling ladder, folded for the terminal summary. */
   private childCeilingRounds = 0;
   private childCeilingGrantedTurns = 0;
   private childCeilingLastRefusal: CeilingRefusalReason | undefined;
   private childSafeError: string | undefined;
-  /** TASK.116: latched when an engine error event carried safe.code "engine_dead" — no live engine remains, so queued steers are rejected, never drained into a turn that can only die again. */
+  /** latched when an engine error event carried safe.code "engine_dead" — no live engine remains, so queued steers are rejected, never drained into a turn that can only die again. */
   private childEngineDead = false;
   /** Once-latch (F7): true once `finalizeChildTerminal` has actually invoked `child.onTerminal` (or handed off an error terminal) — guards its docstring's "exactly once" contract against a second concurrent call. */
   private childTerminalFinalized = false;
@@ -1759,7 +1759,7 @@ export class Session {
   /** NEW counter (CUT-S2 §10.7 п.3): count of `turn_end` events over the whole turn chain — the progress report's `turns` field, mirroring inline's local `turnEndCount` (runner.ts). Distinct from `childTurns`, which sums `loop_end.turns`. */
   private childTurnEndCount = 0;
   /**
-   * Taskana 4820 review F2: model rounds counted via `engine_model_round`
+   * review F2: model rounds counted via `engine_model_round`
    * (one per assistant message on a claude child). Once ANY round arrives,
    * this child's `turns` metric is round-based — the per-runTurn `turn_end`
    * stops incrementing `childTurnEndCount` (the rounds already counted every
@@ -1773,7 +1773,7 @@ export class Session {
   /** Wall-clock (per `this.now`) of the last emitted progress report — `undefined` until the first boundary, so the first boundary always emits (leading edge). */
   private childLastProgressEmitAt: number | undefined;
   /**
-   * Taskana 4820 review F3: liveness interval armed while a child tool call
+   * review F3: liveness interval armed while a child tool call
    * is EXECUTING (dispatch crossed one boundary; the result may be minutes
    * away). Re-crosses the throttled progress boundary every 60s so the
    * parent-side SubagentStallClock keeps being re-armed — a long-but-working
@@ -1867,14 +1867,14 @@ export class Session {
     this.lspUnsubscribe = this.lsp?.onStatusChange?.(() => {
       if (this.uiReady) this.pushLspStatus();
     });
-    // TASK.145 срез 3 §2: live-push background_children on registry change
+    // срез 3 §2: live-push background_children on registry change
     // (a detached child admitted or reaching its terminal), mirroring the LSP
     // subscription immediately above. Absent seam (claude/codex-master boot,
     // or a legacy test) -> no subscription, ui_ready-only pull.
     this.backgroundChildrenUnsubscribe = this.backgroundChildren?.onChange?.(() => {
       if (this.uiReady) this.pushBackgroundChildren();
     });
-    // Taskana 4097: a background task that finishes BETWEEN turns (the
+    // a background task that finishes BETWEEN turns (the
     // session idle, no turn teardown pending) must still refresh the
     // renderer's panel — the same task_list status push the turn teardown
     // already makes, moved to the moment the manager actually settles the
@@ -1885,7 +1885,7 @@ export class Session {
     this.tasksSettledUnsubscribe = this.tasks?.onTaskSettled?.(() => {
       if (this.uiReady && this.engine.capabilities.supportsTasks) this.pushTaskList();
     });
-    // Phase 2 of the settings ack (TASK.39, cut §2(k).3). This fires from inside
+    // Phase 2 of the settings ack (cut §2(k).3). This fires from inside
     // the engine's turn/start, i.e. always while a turn is running and therefore
     // always after ui_ready; it is `emit` (buffered), not sendDirect, so the ack
     // survives a renderer reload via replay rather than racing it.
@@ -1925,7 +1925,7 @@ export class Session {
     // mounted new renderer — the same not-yet-mounted-renderer race class the
     // 5.7-hostfix git_status fix addressed (host/session.ts git_status push).
     this.uiReady = false;
-    // TASK.117 (2026-10-04 product defect): remember WHICH port is current so
+    // (2026-10-04 product defect): remember WHICH port is current so
     // a stale predecessor's late 'close' can be told apart from the CURRENT
     // port dying, and disarm any pending grace deny — a port arriving here
     // IS the successor of a completed renderer reload, so its predecessor's
@@ -1940,12 +1940,12 @@ export class Session {
       this.route(raw);
     });
     port.onClose(() => {
-      // Taskana 4820 review F3: a closed port can deliver no further
+      // review F3: a closed port can deliver no further
       // progress — the liveness interval stops speaking for a dead wire.
       // (Before the reload-grace branch below: even a reload-adjacent close
       // must not keep pushing while no port is bound.)
       this.disarmChildToolLiveness();
-      // TASK.117: the old unconditional denyAll here destroyed the parked
+      // the old unconditional denyAll here destroyed the parked
       // ask mid-reload (live S2: "ui disconnected" deny + no_pending_request
       // 1.3s after a Page.reload — the close is observed BEFORE main re-posts
       // the new port on did-finish-load, so at this instant the reload is
@@ -1975,7 +1975,7 @@ export class Session {
   }
 
   /**
-   * TASK.102 CUT-S2 §10.14.3 BLOCKER-1: arms the admission funnel BEFORE the
+   * CUT-S2 §10.14.3 BLOCKER-1: arms the admission funnel BEFORE the
    * rest of host teardown runs, closing the window between `handleShutdown`'s
    * first step and its eventual `shutdown()` call during which the funnel
    * (route()'s `this.shuttingDown` check) was ungated — a `rewind_request` or
@@ -1989,7 +1989,7 @@ export class Session {
   /**
    * Cross-review F3 (2026-10-24): this tab's UI steers accepted into the
    * running core turn's injection queue but not yet flushed at the seam, in
-   * send order. Mirrors TASK.117's `pendingPrompt` discipline (host-owned
+   * send order. Mirrors's `pendingPrompt` discipline (host-owned
    * truth a reconnecting renderer cannot reconstruct) at the breadth the
    * 4110 seam needs (SEVERAL steers may pend at once). Cleared on delivery
    * (handleUiSteerMessage's then), on refusal (its catch/emit paths), and
@@ -2303,7 +2303,7 @@ export class Session {
   }
 
   /**
-   * Taskana 4763: Sessions API `cancel_turn`. The Stop button's own path
+   * Sessions API `cancel_turn`. The Stop button's own path
    * (onCancel) with an explicit answer for the states where there is nothing
    * to stop. Idle is not an error, and a second call during one turn is safe.
    */
@@ -2317,7 +2317,7 @@ export class Session {
   }
 
   /**
-   * Taskana 4763: parked approvals for the Sessions API. `description` is the
+   * parked approvals for the Sessions API. `description` is the
    * scrubbed one-line summary (never the raw input); `answerable` is false for
    * the two asks that need a human reading or typing in AnyCode.
    */
@@ -2333,7 +2333,7 @@ export class Session {
   }
 
   /**
-   * Taskana 4763: an answer from the Sessions API. A not-answerable ask is
+   * an answer from the Sessions API. A not-answerable ask is
    * refused WITHOUT settling, so the UI modal stays the only way to answer it.
    */
   communicationAnswerApproval(raw: unknown): ExternalAnswer | { result: "not_answerable" } {
@@ -2353,7 +2353,7 @@ export class Session {
   }
 
   /**
-   * Taskana 4110 rework (Opus defects 1+3): the UI's own steer_message —
+   * rework (Opus defects 1+3): the UI's own steer_message —
    * core-engine only, and NEVER through the agent_message delivery protocol,
    * whose transcript blocks would render Codex-worded "Delivery:
    * acknowledged — app-server accepted input…" prose and delete the
@@ -2426,7 +2426,7 @@ export class Session {
     const delivery: AgentDelivery = { envelope, state: "queued" };
     this.publishAgentDelivery(delivery);
     if (envelope.mode === "steer") {
-      // Taskana 4110 rework (Opus defect 4): agent-to-agent steers keep the
+      // rework (Opus defect 4): agent-to-agent steers keep the
       // PRE-BRANCH protocol and timing verbatim. Core gained `engine.steer`
       // for the UI's own steer_message route (handleUiSteerMessage) only; an
       // envelope steer into a core session is still rejected immediately
@@ -2486,7 +2486,7 @@ export class Session {
     this.pendingEngineEffort = undefined;
     this.inFlightEngineEffort = undefined;
     this.settingsGeneration++;
-    // TASK.117: same disarm as shutdown() — once admissions close, the
+    // same disarm as shutdown() — once admissions close, the
     // session is on its terminal path and the disconnect grace timer must
     // never fire past the real settlement.
     if (this.reconnectGraceTimer !== null) {
@@ -2498,20 +2498,20 @@ export class Session {
 
   /** Graceful shutdown: abort the turn, release parked asks, await turn teardown. */
   async shutdown(): Promise<void> {
-    // TASK.102 CUT-S2 §10.11.1 N1: flipped FIRST, strictly before abort/
+    // CUT-S2 §10.11.1 N1: flipped FIRST, strictly before abort/
     // denyAll/dispose below, so teardown woken by the abort already sees it.
     this.closeAdmissions();
-    // Taskana 4820 review F3: the in-tool liveness interval must not survive
+    // review F3: the in-tool liveness interval must not survive
     // the session — clear it before any teardown await can interleave.
     this.disarmChildToolLiveness();
-    // TASK.117: shutdown is the terminal settlement — disarm the reconnect
+    // shutdown is the terminal settlement — disarm the reconnect
     // grace window so its timer can never fire a disconnect-origin denyAll
     // after (or beside) the shutdown settlement below.
     if (this.reconnectGraceTimer !== null) {
       clearTimeout(this.reconnectGraceTimer);
       this.reconnectGraceTimer = null;
     }
-    // TASK.117: shutdown is a terminal boundary — the live turn's pending
+    // shutdown is a terminal boundary — the live turn's pending
     // prompt dies with it (a respawned host re-derives nothing). "cancelled":
     // an in-flight prompt's frame may never land; retire the bubble.
     this.pendingPrompt = null;
@@ -2527,13 +2527,13 @@ export class Session {
     this.lspUnsubscribe = undefined;
     this.backgroundChildrenUnsubscribe?.();
     this.backgroundChildrenUnsubscribe = undefined;
-    // Taskana 4097: release the tasks settled listener with the same
+    // release the tasks settled listener with the same
     // push-after-dispose discipline as the LSP/background-children seams above.
     this.tasksSettledUnsubscribe?.();
     this.tasksSettledUnsubscribe = undefined;
     this.engineSettingsUnsubscribe?.();
     this.engineSettingsUnsubscribe = undefined;
-    // TASK.145 срез 3 §3: closing this session's tab is a deliberate decision
+    // срез 3 §3: closing this session's tab is a deliberate decision
     // to give up on any detached background child it spawned — nobody
     // remains to receive an eventual report, and an orphaned child process is
     // worse than a lost report. This is now an EXPLICIT registry sweep, not a
@@ -2559,7 +2559,7 @@ export class Session {
       console.error(`[host] engine dispose threw during shutdown: ${describeError(error)}`);
       disposal = Promise.resolve();
     }
-    // TASK.102 CUT-S2 §10.12.1/§10.12.2: a snapshot-await of `this.currentTurn`
+    // CUT-S2 §10.12.1/§10.12.2: a snapshot-await of `this.currentTurn`
     // (the pre-fix shape) misses a FRESH turn a drain synchronously
     // re-points it to (onChildTurnSettled / finalizeChildTerminal's
     // re-check) — that new turn's own teardown (including its own
@@ -2580,7 +2580,7 @@ export class Session {
     }
     await Promise.allSettled([disposal]);
     await this.contextWriteTail;
-    // Taskana 4083 cross-review finding 4: the LAST finish a settling turn
+    // cross-review finding 4: the LAST finish a settling turn
     // emitted may still be STAGED for the usage audit (cross-review finding
     // 1 made the write provisional until the step is certain) — hand it to
     // the write-behind sink and AWAIT the sink's queue drain, so the write
@@ -2614,7 +2614,7 @@ export class Session {
       return;
     }
     const message = parsed.data;
-    // TASK.102 CUT-S2 §10.12.1: the SINGLE admission funnel for every wire
+    // CUT-S2 §10.12.1: the SINGLE admission funnel for every wire
     // message once shutdown has begun — default-deny: new message types are
     // shutdown-safe by construction, not by a per-case audit (the class of
     // bug this replaces: §10.11.1's own point-gates missed ui_ready's
@@ -2667,9 +2667,9 @@ export class Session {
         // status pushes are safe from here on. Set BEFORE the snapshot cascade
         // below (which already pushes the current lsp_status).
         this.uiReady = true;
-        // Taskana 4097: a (re)attaching renderer starts with empty task output.
+        // a (re)attaching renderer starts with empty task output.
         this.uiTaskOutputCursors.clear();
-        // TASK.102 CUT-S2 §2.6.3: child-ready fires on the FIRST ui_ready only —
+        // CUT-S2 §2.6.3: child-ready fires on the FIRST ui_ready only —
         // never before (nothing was listening yet) and never again on a later
         // reconnect (Open re-attaching to an already-running child).
         if (this.child !== undefined && !this.childReadySent) {
@@ -2692,19 +2692,19 @@ export class Session {
           reasoningEffort: this.engine.reasoningEffort() ?? "off",
           ...(bootEffortAdjustment !== undefined ? { effortAdjustment: bootEffortAdjustment } : {}),
           ...(this.availableEffortLevels !== undefined ? { availableEffortLevels: this.availableEffortLevels } : {}),
-          // TASK.56 W2: live image-input verdict for the CURRENT model (the
+          // W2: live image-input verdict for the CURRENT model (the
           // seam is a closure over the active model, host/index.ts). Rides
           // beside the `engine` block — a model-level fact, not an engine
           // capability. Absent seam (legacy hosts/tests) -> field absent, so
           // the renderer applies no model-level attachment gating.
           ...(this.imageInputEnabled !== undefined ? { imageInput: this.imageInputEnabled() } : {}),
-          // TASK.198 срез C: the vision-fallback verdict, same additive-
+          // срез C: the vision-fallback verdict, same additive-
           // optional discipline as imageInput above — absent seam (codex/
           // claude, legacy tests) -> field absent, no fallback-aware gating.
           ...(this.imageFallbackAvailable !== undefined ? { imageFallback: this.imageFallbackAvailable() } : {}),
           ...(this.contextWindowAssumed !== undefined ? { contextWindowAssumed: this.contextWindowAssumed() } : {}),
           ...(this.modelSettingsConnectionId !== undefined ? { modelSettingsConnectionId: this.modelSettingsConnectionId } : {}),
-          // Taskana 4110 (TASK.123): the engine's live steering verdict —
+          // the engine's live steering verdict —
           // additive-optional, absent on legacy hosts/engines without the seam
           // (mirrors imageInput/imageFallback's discipline above). 4110
           // rework: CORE ONLY by decision — codex must not advertise
@@ -2713,14 +2713,14 @@ export class Session {
           // id, not on the method's presence.
           ...(this.engine.id === "core" && this.engine.steeringStatus ? { steering: this.engine.steeringStatus() } : {}),
           ...(presentation !== undefined ? { engine: presentation } : {}),
-          // Design TASK.40 §2(f)/§3.2: shell is emitted ONLY alongside a
+          // Design §2(f)/§3.2: shell is emitted ONLY alongside a
           // present `engine` (never for core), so the core wire stays
           // byte-identical by construction.
           ...(presentation !== undefined && this.shell !== undefined ? { shell: this.shell } : {}),
         });
         // Phase-2 §3.3: session_history (transcript hydration of a resumed
         // session) is emitted AFTER host_ready and BEFORE replay(). sendDirect
-        // (not buffered). TASK.117: the snapshot is REBUILT from the engine's
+        // (not buffered). the snapshot is REBUILT from the engine's
         // current durable history on EVERY ui_ready — not the boot-frozen
         // snapshot from the constructor — so a renderer reconnecting after the
         // Outbound replay ring has overflowed still sees the latest persisted
@@ -2732,7 +2732,7 @@ export class Session {
         // — COMPLETE later-completed replay rides the ring exactly as
         // before (native compat), and the rebuild gate must never touch
         // their history projection.
-        // Taskana 4068: after an in-session engine switch the live engine's
+        // after an in-session engine switch the live engine's
         // history holds only post-switch turns — rebuilding from it would drop
         // the pre-switch transcript; keep the switch-time snapshot (the ring
         // carries everything newer, the native-engine discipline).
@@ -2757,18 +2757,18 @@ export class Session {
             ...(this.turnId !== null ? { liveTurnId: this.turnId } : {}),
           });
         }
-        // TASK.117: the pending-prompt state rides the same per-connect
+        // the pending-prompt state rides the same per-connect
         // cascade — a reconnecting renderer re-renders the in-flight prompt
         // bubble (or clears it) BEFORE the replay ring's turn events land.
         this.pushPendingPrompt();
-        // TASK.117: a LIVE outer turn's `turn_started` is re-asserted
+        // a LIVE outer turn's `turn_started` is re-asserted
         // per-connect as handshake meta (sendDirect, regenerated on every
         // ui_ready — never ring-buffered). Without it, a turn whose buffered
         // turn_started has been evicted from the replay ring (REPLAY_BUFFER_CAP
         // overflow) delivers its live agent_events to a fresh store that
         // never saw the turn open — the renderer's turn-scoped guard drops
         // every one, and the visible transcript freezes (the original
-        // TASK.117 symptom). Idempotent on the renderer: the handler sets the
+        // symptom). Idempotent on the renderer: the handler sets the
         // same running-turn state; the ring's own copy (if still present)
         // replays to the same effect. Emitted for ANY engine's live turn —
         // the wire contract for turn_started is engine-agnostic.
@@ -2780,13 +2780,13 @@ export class Session {
             ...(this.turnStartedAt !== undefined ? { startedAt: this.turnStartedAt } : {}),
           });
         }
-        // TASK.117 control/accounting checkpoint: re-assert the wire state
+        // control/accounting checkpoint: re-assert the wire state
         // the ring may have evicted (cumulative finish totals, latest
         // context_usage, the parked permission ask) BEFORE replay() — the
         // fresh store's slots are then already correct, and any ring copy
         // that still replays is idempotent (permission set-slot, finish
         // once-per-step fold, context_usage latest-wins).
-        // Taskana 4083 / TASK.34: kick the DURABLE audit-summary read ONCE
+        // /kick the DURABLE audit-summary read ONCE
         // per ui_ready, BEFORE the direct checkpoint push — pushSessionCheckpoint
         // is sync, so it ships without usageAudit when the summary hasn't
         // landed yet; the second push (if any) is just another checkpoint
@@ -2818,7 +2818,7 @@ export class Session {
         }
         this.pushTodoReminderSnapshot();
         for (const delivery of this.agentDeliveries.values()) this.outbound.sendDirect({ type: "agent_message", delivery });
-        // TASK.145 срез 2: re-post every still-unacknowledged detached-child
+        // срез 2: re-post every still-unacknowledged detached-child
         // report to the just-(re)attached renderer — covers the race the
         // outer `sendDirect` at delivery time cannot: a renderer that was
         // reloading/disconnected exactly when the report was first sent. See
@@ -2839,7 +2839,7 @@ export class Session {
         if (this.engine.capabilities.supportsTasks) this.pushTaskList();
         this.pushEnvStatus();
         this.pushPendingEngineSettings();
-        // TASK.145 срез 3 §2: always pushed, unconditionally — unlike
+        // срез 3 §2: always pushed, unconditionally — unlike
         // pushTaskList's `supportsTasks` gate (an ENGINE capability), a
         // detached child is a CORE-engine-only feature (spec §5: claude/codex
         // masters have no Agent tool at all) already expressed by the seam's
@@ -2855,7 +2855,7 @@ export class Session {
         }
         break;
       case "steer_message":
-        // Taskana 4110 rework: the UI's own steer takes a core-only route
+        // rework: the UI's own steer takes a core-only route
         // that NEVER renders as an agent_message transcript block (Opus
         // defect 3) and never drops the text: every path that cannot
         // deliver into the running turn ends in steer_requeued, and the
@@ -2863,11 +2863,11 @@ export class Session {
         this.handleUiSteerMessage(message.requestId, message.text);
         return;
       case "user_message":
-        // Typed input is proof that a human is at the screen (TASK.138): it
+        // Typed input is proof that a human is at the screen: it
         // disarms the broker's unattended latch, so a session that went quiet
         // long enough to expire an ask starts asking again once its owner is back.
         //
-        // TASK.145 срезы 2+3 (merged): `message.origin === "system"` marks a
+        // срезы 2+3 (merged): `message.origin === "system"` marks a
         // `user_message` the renderer auto-drained from its own prompt queue
         // rather than a human actually typing (today: a detached child's
         // report, срез 1's `child_report` -> `enqueuePrompt` path). ONE field
@@ -2875,7 +2875,7 @@ export class Session {
         // block renders in the transcript (срез 2, threaded on to
         // `onUserMessage` below) and whether it counts as human presence
         // (срез 3, the gate here). A background wake-up is NOT proof anyone is
-        // watching the screen, so it must not rearm TASK.138's unattended
+        // watching the screen, so it must not rearm's unattended
         // latch on an autonomous run nobody is actually attending.
         if (message.origin !== "system") {
           this.broker.noteHumanPresent();
@@ -2886,7 +2886,7 @@ export class Session {
         this.onCancel();
         break;
       case "network_retry_now":
-        // Taskana 4772: the Retry-now control wakes every parked network probe of this host.
+        // the Retry-now control wakes every parked network probe of this host.
         wakeNetworkWaiters();
         break;
       case "exit_worktree":
@@ -2946,7 +2946,7 @@ export class Session {
         if (!this.engine.capabilities.supportsInteractiveApprovals) {
           break;
         }
-        // TASK.144: no longer gated on `supportsCorePermissions`. That gate was
+        // no longer gated on `supportsCorePermissions`. That gate was
         // honest while a stored rule could only be honoured by
         // RuleAwarePermissionEngine — remembering in a session that had no such
         // engine wrote a rule nothing would ever read. The engine boots now hand
@@ -2960,7 +2960,7 @@ export class Session {
         this.onSetMode(message.mode);
         break;
       case "set_orchestrate":
-        // Taskana 4704 §3.7: between-turns only (busy => silent drop inside
+        // §3.7: between-turns only (busy => silent drop inside
         // onSetOrchestrate, the set_mode discipline). The orchestrate flag
         // drives the reminder swap (acceptUserMessage) and the Agent tool's
         // default-detach via the loop config copy.
@@ -2978,7 +2978,7 @@ export class Session {
             this.applyReasoningEffort(message.effort, message.requestId);
             break;
           }
-          // Taskana 4895: the CORE engine queues a mid-turn pick instead of
+          // the CORE engine queues a mid-turn pick instead of
           // dropping it — it applies at the turn boundary (never to the turn
           // that is running), see `applyPendingModelSelection`. A foreign
           // engine keeps its own between-turns discipline (its effort picker
@@ -2998,7 +2998,7 @@ export class Session {
         if (!this.engine.capabilities.supportsModelSelection || id.length === 0 || /\s/.test(id)) {
           break;
         }
-        // TASK.39: an engine with its OWN catalog validates the id against it
+        // an engine with its OWN catalog validates the id against it
         // (never against AnyCode's provider catalog) and answers on the engine
         // settings channel. Reusing `set_model` rather than inventing a second
         // ui->host message keeps one model-switch verb on the wire for every
@@ -3019,7 +3019,7 @@ export class Session {
         if (this.engine.switchModel === undefined) {
           break;
         }
-        // Taskana 4895: the CORE engine queues a mid-turn pick instead of
+        // the CORE engine queues a mid-turn pick instead of
         // dropping it. Messages route sequentially, so a pick arriving after
         // an accepted user_message sees busy=true; it is applied at that
         // turn's boundary, never to the running turn. A foreign engine (or a
@@ -3035,13 +3035,13 @@ export class Session {
         break;
       }
       case "set_engine_preset":
-        // TASK.39 (cut §2(d)/§3.3): the ONLY way a Codex permission posture is
+        // (cut §2(d)/§3.3): the ONLY way a Codex permission posture is
         // expressible from the renderer — a preset id, checked for membership in
         // the engine's own frozen table. No sandbox object, no approvalPolicy, no
         // raw config JSON is accepted from the renderer, by construction of this
         // message (DoD-4). Between-turns discipline mirrors set_model.
         if (this.engineSettings === undefined) break;
-        // Taskana 4078 cross-review finding 2: an engine CHILD's posture is
+        // cross-review finding 2: an engine CHILD's posture is
         // FROZEN. The child tab renders the same SessionSurface (and therefore
         // the same preset picker) a root tab does, so without this gate one
         // click in a `child-ask`-booted codex child's tab widens it to
@@ -3107,7 +3107,7 @@ export class Session {
         break;
       }
       case "git_command":
-        // Slice 5.7 / TASK.40 (design §2(f)): user-initiated git command. The
+        // Slice 5.7 / (design §2(f)): user-initiated git command. The
         // bridge validates nothing (the zod schema already ran in `route`
         // above) and never throws into the session. A MUTATION is gated on
         // the SHELL's own capability (`shell.gitUserMutations`) -- a
@@ -3116,9 +3116,9 @@ export class Session {
         // OWN tool-mutation capability and no longer gates the Review
         // panel's user-initiated mutations. Absent shell (core, or a future
         // engine that hasn't wired one) defaults to `true`, byte-identical
-        // to the pre-TASK.40 unconditional-for-core routing (CoreEngine's
+        // to the pre-unconditional-for-core routing (CoreEngine's
         // supportsGitMutations was always `true`).
-        // TASK.102 CUT-S2 §10.14.3 BLOCKER-2(b): a MUTATION admitted after the
+        // CUT-S2 §10.14.3 BLOCKER-2(b): a MUTATION admitted after the
         // handoff has begun would write to the ABANDONED workspace main is
         // about to `git worktree remove` — gated the same way as the
         // gitUserMutations permission above (mutation branch only; read-only
@@ -3153,7 +3153,7 @@ export class Session {
         void this.onCompact();
         break;
       case "engine_switch_request":
-        // Taskana 4068: async handler holds `busy` across the factory await —
+        // async handler holds `busy` across the factory await —
         // the exact rewind pattern (route() itself never awaits). The handler
         // re-checks its own gates (messages route synchronously, but this
         // mirrors onCompact's defensive-net discipline).
@@ -3178,7 +3178,7 @@ export class Session {
         void this.onRewind(message);
         break;
       case "child_report_ack":
-        // TASK.145 срез 2: no reply of its own — the renderer already has
+        // срез 2: no reply of its own — the renderer already has
         // what it needs (the enqueued/deduped item). Undefined seam (child-
         // mode host, legacy test) -> silent no-op, same posture as every
         // other optional seam this switch reads.
@@ -3194,7 +3194,7 @@ export class Session {
   }
 
   /**
-   * Taskana 4895 — applies the core model/effort change queued by a mid-turn
+   * applies the core model/effort change queued by a mid-turn
    * pick (see `pendingModel`/`pendingEffort`).
    *
    * Called at every root busy->idle boundary (the turn teardown, a manual
@@ -3233,7 +3233,7 @@ export class Session {
     }
   }
 
-  /** Taskana 4895: drops a queued mid-turn pick — used when the engine itself is about to be replaced (the pick was made against the old one). */
+  /** drops a queued mid-turn pick — used when the engine itself is about to be replaced (the pick was made against the old one). */
   private clearPendingModelSelection(): void {
     this.pendingModelRequestId = undefined;
     this.pendingEffortRequestId = undefined;
@@ -3243,7 +3243,7 @@ export class Session {
 
   /**
    * Slice P7.15 (F14) — the between-turns model switch, verbatim, now shared by
-   * the idle route and Taskana 4895's turn-boundary apply. Returns false when
+   * the idle route and's turn-boundary apply. Returns false when
    * no switch factory is wired (a legacy engine/test double: a silent no-op).
    */
   /** Host-only refresh at the start of a new core turn, before its first model call. */
@@ -3283,12 +3283,12 @@ export class Session {
       model: result.model,
       reasoningEffort: result.reasoningEffort,
       ...(result.availableEffortLevels !== undefined ? { availableEffortLevels: result.availableEffortLevels } : {}),
-      // TASK.56 W2: the verdict re-read for the NEW model — switchModel has
+      // W2: the verdict re-read for the NEW model — switchModel has
       // already advanced the closure's current model above, so the push
       // reflects the switched-to model (upfront re-gate on vision -> non-
       // vision, mirror of the availableEffortLevels re-resolution).
       ...(this.imageInputEnabled !== undefined ? { imageInput: this.imageInputEnabled() } : {}),
-      // TASK.198 срез C: same additive-optional discipline as imageInput above.
+      // срез C: same additive-optional discipline as imageInput above.
       ...(this.imageFallbackAvailable !== undefined ? { imageFallback: this.imageFallbackAvailable() } : {}),
       ...(this.contextWindowAssumed !== undefined ? { contextWindowAssumed: this.contextWindowAssumed() } : {}),
     });
@@ -3302,7 +3302,7 @@ export class Session {
     }
   }
 
-  /** Taskana 4895: the effort half of the same recipe — remembered as the user's SELECTED tier, applied to the engine, acked to the renderer. */
+  /** the effort half of the same recipe — remembered as the user's SELECTED tier, applied to the engine, acked to the renderer. */
   private applyReasoningEffort(effort: ReasoningEffort, requestId?: string): void {
     // Slice P7.15 (F14): remember the user-selected tier so a later model
     // switch re-resolves effort against it (a non-reasoning model drops it,
@@ -3345,12 +3345,12 @@ export class Session {
   }
 
   /**
-   * Taskana 4083 cross-review finding 1: hands the staged per-step audit row
+   * cross-review finding 1: hands the staged per-step audit row
    * (see pendingUsageAuditRow) to the write-behind sink. Fail-soft in the
    * SAME two layers the original emission-time write had: a missing slot is
    * a no-op (most events flush nothing — the slot fills only on a core
    * finish), and a synchronously-throwing sink is contained + logged so the
-   * turn (or the teardown calling here) never fails (TASK.34 invariant 3).
+   * turn (or the teardown calling here) never fails (invariant 3).
    * Clears the slot — one row is written exactly once per flush trigger.
    */
   private flushPendingUsageAuditRow(): void {
@@ -3367,7 +3367,7 @@ export class Session {
   }
 
   /**
-   * Taskana 4083 / TASK.34: answers a `usage_audit_request` with the durable
+   * /answers a `usage_audit_request` with the durable
    * audit list (newest-first, retaining the complete current turn) + totals. Any
    * engine with an audit port answers; an unwired host answers nothing. A read
    * failure answers an empty list (honest "nothing loaded" instead of a hang)
@@ -3390,7 +3390,7 @@ export class Session {
   }
 
   /**
-   * TASK.117: pushes the current pending-prompt state to the attached
+   * pushes the current pending-prompt state to the attached
    * renderer. sendDirect (never ring-buffered — regenerated on every
    * ui_ready). Only meaningful for a CORE host (its renderer owns the
    * pending-bubble/pending_prompt folding; the capture itself is core-gated
@@ -3399,7 +3399,7 @@ export class Session {
    * per-connect state push carries none.
    */
   private pushPendingPrompt(outcome?: "settled" | "cancelled"): void {
-    // TASK.117 phase-1 defect 1: the pending_prompt wire contract is CORE
+    // phase-1 defect 1: the pending_prompt wire contract is CORE
     // ONLY — a foreign engine's renderer has no pending-bubble field at all,
     // so it must never receive even a bare field-clear (the per-connect
     // snapshot push below) or a terminal clear ("cancelled" would strip a
@@ -3411,7 +3411,7 @@ export class Session {
       return;
     }
     const pending = this.pendingPrompt;
-    // TASK.117 phase-1 defect 2: `outcome` rides ONLY the terminal clears —
+    // phase-1 defect 2: `outcome` rides ONLY the terminal clears —
     // the per-connect state push is a pure snapshot and must never retire a
     // live bubble ("cancelled" removes the renderer's block). Foreign
     // engines have no payload ever (capture is core-gated), and a core host
@@ -3430,7 +3430,7 @@ export class Session {
   }
 
   /**
-   * TASK.117: the ONE exact-owner terminal clear, extracted VERBATIM from
+   * the ONE exact-owner terminal clear, extracted VERBATIM from
    * the turn teardown's `.finally` (behavior-identical: same owner equality
    * on the captured requestId + outer turn UUID pair, same
    * durability-derived outcome) so the regression for a stale older
@@ -3464,7 +3464,7 @@ export class Session {
   }
 
   /**
-   * TASK.117 control/accounting checkpoint: ONE sendDirect snapshot re-sent
+   * control/accounting checkpoint: ONE sendDirect snapshot re-sent
    * on EVERY ui_ready (never ring-buffered), carrying exactly the wire state
    * the replay ring may have evicted: cumulative finish totals, the latest
    * context_usage reading, and the broker's CURRENTLY-SHOWN parked ask.
@@ -3502,7 +3502,7 @@ export class Session {
       return;
     }
     const shown = this.broker.pendingShownRequest();
-    // TASK.117 acceptance defect 1: for each open partial stream, count how
+    // acceptance defect 1: for each open partial stream, count how
     // much of its delta text the ring STILL HOLDS — the exact suffix the
     // replay is about to redeliver to the fresh store. The fresh store's
     // checkpoint re-open carries the FULL partial; the replayed suffix must
@@ -3523,7 +3523,7 @@ export class Session {
         replayCharsByKey.set(key, (replayCharsByKey.get(key) ?? 0) + message.event.text.length);
       }
     }
-    // TASK.117 acceptance defect 3: a SETTLED stream (text_end/reasoning_end
+    // acceptance defect 3: a SETTLED stream (text_end/reasoning_end
     // seen, assistant append still pending behind the model finish) rides
     // the checkpoint ONLY while its step has no durable assistant item yet —
     // once the append lands the renderer re-opens from `session_history`
@@ -3539,7 +3539,7 @@ export class Session {
     const streams = [...this.liveStreams.values()].filter(
       (stream) => stream.settled !== true || !durableStepKeys.has(`${stream.turnId}:${stream.step}`),
     );
-    // TASK.117 acceptance defect 1 (strict ownership vs new turns): when the
+    // acceptance defect 1 (strict ownership vs new turns): when the
     // last session_history was TRUNCATED, compute the set of turns it cut
     // away ENTIRELY — present in durable history, absent from the snapshot
     // the renderer holds, and not the live turn. The renderer's below-cut
@@ -3558,7 +3558,7 @@ export class Session {
           cut.add(item.turnId);
         }
       }
-      // TASK.117 acceptance defect 1: on a truncated snapshot the field is
+      // acceptance defect 1: on a truncated snapshot the field is
       // ALWAYS shipped — an EMPTY list is authoritative ("the cut landed
       // within turns; no whole turnId vanished") and must reach the renderer
       // distinctly from an OMITTED one (untruncated history / older host),
@@ -3572,13 +3572,13 @@ export class Session {
     this.outbound.sendDirect({
       type: "session_checkpoint",
       ...(this.latestTurnId !== null ? { latestTurnId: this.latestTurnId } : {}),
-      // TASK.117 acceptance defect 2: the authoritative live turn id — see
+      // acceptance defect 2: the authoritative live turn id — see
       // the protocol field's doc (the renderer's cut-replay guard exempts
       // exactly this id, never a ring-replayed turn_started's).
       ...(this.turnId !== null ? { liveTurnId: this.turnId } : {}),
       ...(cutTurnIds !== undefined ? { cutTurnIds } : {}),
       ...(this.currentStep !== undefined && this.turnId !== null ? { currentAttempt: { step: this.currentStep, attempt: this.currentAttempt } } : {}),
-      // TASK.117 acceptance defect 1: the currently-open partial streams ride
+      // acceptance defect 1: the currently-open partial streams ride
       // the same per-connect checkpoint — an EMPTY liveStreams (idle turn)
       // omits the field entirely, so an older renderer / an idle host sees a
       // byte-identical message to before.
@@ -3594,7 +3594,7 @@ export class Session {
             })),
           }
         : {}),
-      // TASK.117 supervisor correction defect 1: the currently-executing tool
+      // supervisor correction defect 1: the currently-executing tool
       // calls — each id flips the reconnected store's hydrated `proposed`
       // card to `running` (the ring-replayed tool_execution_start is the only
       // other source, and a >CAP overflow evicts it). Absent when nothing is
@@ -3609,7 +3609,7 @@ export class Session {
         ? { sessionTokens: this.checkpointSessionTokens, ...(this.checkpointCountedSteps.length > 0 ? { countedSteps: [...this.checkpointCountedSteps] } : {}) }
         : {}),
       ...(this.checkpointContextUsage !== null ? { contextUsage: this.checkpointContextUsage } : {}),
-      // Taskana 4083 / TASK.34: the durable audit slice — present only when
+      // /the durable audit slice — present only when
       // the option is wired AND a summary has landed (async read kicked per
       // ui_ready). Additive-optional: an older renderer / unwired host
       // changes nothing.
@@ -3637,7 +3637,7 @@ export class Session {
     });
   }
 
-  /** Taskana 4736: re-asserts the pending workspace-trust question on every ui_ready (no-op when decided). */
+  /** re-asserts the pending workspace-trust question on every ui_ready (no-op when decided). */
   private pushWorkspaceTrustRequired(): void {
     const message = this.workspaceTrustRequired?.();
     if (message !== undefined) {
@@ -3659,7 +3659,7 @@ export class Session {
   }
 
   /**
-   * TASK.145 срез 3 §2: mirror of pushTaskList/pushHooksList — a pure read of
+   * срез 3 §2: mirror of pushTaskList/pushHooksList — a pure read of
    * the host's own detached-children registry. Pushed on ui_ready, in
    * response to a background_children_request, on registry change (the
    * `backgroundChildrenUnsubscribe` listener above), and after handling a
@@ -3671,7 +3671,7 @@ export class Session {
   }
 
   /**
-   * TASK.145 срез 3 §2(a): mirror of onTaskKillRequest. `ok:false` covers an
+   * срез 3 §2(a): mirror of onTaskKillRequest. `ok:false` covers an
    * unknown/already-finished childSessionId — not a refusal on the merits,
    * same discipline as task_kill_result's own reason text.
    */
@@ -3704,7 +3704,7 @@ export class Session {
   }
 
   private pushTaskOutput(taskId: string): void {
-    // Taskana 4097: the UI keeps its OWN per-task cursor over a non-consuming
+    // the UI keeps its OWN per-task cursor over a non-consuming
     // peek — `readOutput` would advance the cursor the model's BashOutput tool
     // reads, so a user clicking "Output" would make the agent miss output.
     // The buffer is append-only (capped, never a ring), so a length cursor is
@@ -3769,7 +3769,7 @@ export class Session {
    *
    * On an accepted rewind, HOLD this.busy for the whole async operation
    * (drift-flag-3) so a mid-rewind user_message/set_model hits the busy
-   * gate — restored in `finally`. Since TASK.37, `set_mode` is no longer in
+   * gate — restored in `finally`. Since, `set_mode` is no longer in
    * this list: it is accepted during a rewind too (D-S3-4a — harmless, a
    * rewind neither reads nor writes mode). The service writes the mandatory fail-closed
    * pre-rewind safety checkpoint + two-tree file restore internally; the host only
@@ -3786,7 +3786,7 @@ export class Session {
    */
   private async onRewind(message: Extract<UiToHostMessage, { type: "rewind_request" }>): Promise<void> {
     const { requestId, checkpointId, scope } = message;
-    // TASK.102 CUT-S2 §10.14.3 BLOCKER-2(a): a rewind after the handoff has
+    // CUT-S2 §10.14.3 BLOCKER-2(a): a rewind after the handoff has
     // begun would restore the ABANDONED workspace main is about to `git
     // worktree remove` — `busy` alone does not catch this window (relocating
     // outlives the turn that set it; see onUserMessage's own gate above).
@@ -3836,8 +3836,8 @@ export class Session {
     }
     // Hold busy for the whole rewind (drift-flag-3): concurrent turn-starting /
     // model messages observe busy=true while the store+git spawns run. Since
-    // TASK.37, mode messages are no longer in this list (D-S3-4a).
-    // TASK.102 CUT-S2 §10.12.1 (б): rewind is not abort-aware and a
+    // mode messages are no longer in this list (D-S3-4a).
+    // CUT-S2 §10.12.1 (б): rewind is not abort-aware and a
     // destructive two-tree git-restore split in half by shutdown is worse
     // than one shutdown() awaits to completion — routed through
     // `currentTurn`, the session's single wait primitive, via a
@@ -3898,7 +3898,7 @@ export class Session {
         this.sessionHistory = buildSessionHistory([...this.engine.historyItems()], this.historyMaxItems);
         this.outbound.clear();
         this.presentationJournal.clear();
-        // TASK.117: rewind success retires any leftover pending prompt — the
+        // rewind success retires any leftover pending prompt — the
         // rewound-to state owns the transcript tail now (rewind runs
         // between turns, so this is normally already null; belt-and-braces
         // for a rewind racing a just-admitted turn's early window).
@@ -3934,7 +3934,7 @@ export class Session {
         restoredPaths: null,
       });
     } finally {
-      // Taskana 4895: the rewind held `busy`, so a mid-rewind model/effort
+      // the rewind held `busy`, so a mid-rewind model/effort
       // pick was queued — apply it at this idle boundary (a maintenance op
       // ends here; there is no turn for it to disturb).
       this.applyPendingModelSelection();
@@ -3946,7 +3946,7 @@ export class Session {
   }
 
   /**
-   * Manual compaction (TASK.146): mirrors `onRewind`'s busy-holding deferred
+   * Manual compaction: mirrors `onRewind`'s busy-holding deferred
    * (a compaction is an inter-turn maintenance op, not a real turn) plus
    * `runTurn`'s AbortController (so `cancel_turn` -> `onCancel` ->
    * `this.abort.abort()` reaches `AgentLoop.compactNow` exactly like it
@@ -4004,7 +4004,7 @@ export class Session {
         // events do — a fresh renderer attach should never see a half-open
         // "Compacting…" toast with no matching end.
         this.outbound.emit({ type: "agent_event", turnId: MANUAL_COMPACTION_TURN_ID, event: this.recordCompactionOutcome(sanitizeAgentEvent(event, this.engine.id)) });
-        // TASK.117 supervisor correction defect 2: the manual compaction's
+        // supervisor correction defect 2: the manual compaction's
         // post-swap context_usage is the LATEST session-scoped reading — fold
         // it into the emission-time checkpoint exactly like runTurn's loop
         // does, so a reconnect whose >CAP overflow evicted the ring copy
@@ -4049,10 +4049,10 @@ export class Session {
   }
 
   /**
-   * Taskana 4068 / TASK.98 (review 23.08 narrowing): swap the active
+   * (review 23.08 narrowing): swap the active
    * SessionEngine BETWEEN turns — in place, no session respawn, no N×N
    * transcript transportation (frozen by review). Ordering contract
-   * (TASK.98 frame "do not destroy the old session until the new one has
+   * (frame "do not destroy the old session until the new one has
    * started successfully"): the old engine is disposed ONLY after the factory
    * resolved, the new engine was assigned, the transcript continuity snapshot
    * was rebuilt and the engine_notice was emitted — on ANY earlier failure the
@@ -4086,7 +4086,7 @@ export class Session {
       // `historyItems()` is only its BOOT snapshot (codex) or `[]` (claude);
       // codex can re-read the live thread, so prefer that when available —
       // otherwise the import would silently omit every turn of this launch.
-      // Taskana 4068 cross-review: after an earlier switch the live engine's
+      // cross-review: after an earlier switch the live engine's
       // items are only its own post-switch turns, so the carried pre-switch
       // transcript is the prefix (a double switch with no turn between would
       // otherwise import 0 items and blank the reload snapshot).
@@ -4103,7 +4103,7 @@ export class Session {
       try {
         next = await this.switchEngineFactory(message.engine);
       } catch (error) {
-        // Old engine untouched — TASK.98 frame: a failed start leaves the
+        // Old engine untouched — frame: a failed start leaves the
         // session exactly as it was, next turn still runs on the old engine.
         fail(error instanceof Error ? error.message : String(error));
         return;
@@ -4150,7 +4150,7 @@ export class Session {
       this.engineSettingsUnsubscribe?.();
       this.engineSettingsUnsubscribe = undefined;
       // Transcript continuity: the reload snapshot is rebuilt from the
-      // canonical items. Taskana 4068 cross-review: when that snapshot carries
+      // canonical items. cross-review: when that snapshot carries
       // any transcript, the pre-switch turn events in the replay ring must
       // go too — otherwise a renderer reload renders them twice (snapshot +
       // replay), exactly the rewind discipline. With an EMPTY canonical (a
@@ -4184,7 +4184,7 @@ export class Session {
     } finally {
       release();
       if (this.currentTurn === op) this.currentTurn = null;
-      // Taskana 4895: a pick queued during the switch was made against the
+      // a pick queued during the switch was made against the
       // PREVIOUS engine, so it must not be replayed onto the new one.
       this.clearPendingModelSelection();
       this.busy = false;
@@ -4196,7 +4196,7 @@ export class Session {
       this.outbound.emit({ type: "turn_rejected", requestId, reason: "not_ready" });
       return;
     }
-    // TASK.102 CUT-S2 §10.10.1 п.5: a completed child is READ-ONLY (§6) —
+    // CUT-S2 §10.10.1 п.5: a completed child is READ-ONLY (§6) —
     // once the terminal has been dispatched there is no live turn chain left
     // for a late message to join. Checked BEFORE the busy gate below because
     // `busy` is already false by the time the terminal has committed (see
@@ -4208,7 +4208,7 @@ export class Session {
       return;
     }
     if (this.busy) {
-      // TASK.102 CUT-S2 §1.1/§2.6.3: a child session queues a busy-time
+      // CUT-S2 §1.1/§2.6.3: a child session queues a busy-time
       // user_message (steer) instead of rejecting it — the composer of a live
       // child's own surface docks new instructions onto the running turn
       // chain rather than losing them. 4730 xfix D3: the entry carries its
@@ -4226,20 +4226,20 @@ export class Session {
   }
 
   /**
-   * TASK.198 срез C (plan §3 gate table): the model-level half of the
+   * срез C (plan §3 gate table): the model-level half of the
    * image-attachment gate — true when the current model can see images
    * itself, OR the vision fallback is available (a recognizer is currently
    * configured for this session). `engine.capabilities.supportsImages` (the
    * ENGINE-level half) is checked separately by both call sites, unchanged.
    * `imageFallbackAvailable` absent (codex/claude, legacy tests) makes this
-   * identical to the pre-TASK.198 `imageInputEnabled?.() === true` check.
+   * identical to the pre-`imageInputEnabled?.() === true` check.
    */
   private imagesAccepted(): boolean {
     return this.imageInputEnabled?.() === true || this.imageFallbackAvailable?.() === true;
   }
 
   /**
-   * Taskana 4730: emits ONE agent event to the renderer exactly the way the
+   * emits ONE agent event to the renderer exactly the way the
    * session's own agent_event path does. Callers: the classifying broker
    * decorator's `permission_auto_decided` journal event (the decorator is
    * wired in host/index.ts BEFORE the Session exists, so it receives this
@@ -4257,7 +4257,7 @@ export class Session {
     this.outbound.emit({ type: "agent_event", turnId, event: wireEvent });
   }
 
-  /** Taskana 4730: appends one human turn to the bounded ring (<= 3 x 500 chars). */
+  /** appends one human turn to the bounded ring (<= 3 x 500 chars). */
   private noteHumanUserTurn(text: string): void {
     const capped = text.length > 500 ? text.slice(0, 500) : text;
     this.humanTurnRing.push(capped);
@@ -4267,7 +4267,7 @@ export class Session {
   }
 
   /**
-   * Taskana 4730: the last accepted HUMAN user turns, oldest first — the
+   * the last accepted HUMAN user turns, oldest first — the
    * userContext source for the classifying broker decorator on engine-session
    * (Codex/Claude) approval bridges. A defensive copy, so the ring can never
    * be mutated through the getter.
@@ -4336,7 +4336,7 @@ export class Session {
    * queued item is fully spent and produced nothing to wait on."
    */
   private acceptUserMessage(requestId: string, text: string, images?: ImageAttachment[], origin?: "system"): boolean {
-    // Taskana 4730: record the RAW human turn for the ask-zone classifier's
+    // record the RAW human turn for the ask-zone classifier's
     // engine-session coverage (classifying-broker.ts). Only genuinely human
     // turns: origin "system" never enters — that is the parent agent's spawn
     // text (startProgrammaticTurn), a SessionSubagentPort.send follow-up, or
@@ -4356,7 +4356,7 @@ export class Session {
       this.outbound.emit({ type: "turn_rejected", requestId, reason: "unsupported_images" });
       return false;
     }
-    // TASK.117 phase-1 defect 3: the pending RAW prompt is captured HERE —
+    // phase-1 defect 3: the pending RAW prompt is captured HERE —
     // at admission, AFTER the unsupported_images refusal (a refused message
     // never becomes pending) and BEFORE the title derivation / hook /
     // notices awaits below — owned by the outer turn UUID + requestId pair
@@ -4392,7 +4392,7 @@ export class Session {
     // busy gate already returned) — a rejected message drains nothing. A turn
     // with no notices keeps `turnInput === text`, byte-identical to pre-6.DP-2.
     let turnInput = text;
-    // Plan-mode reminder (TASK.27, mirror of cli/main.ts's REPL branch): the
+    // Plan-mode reminder (mirror of cli/main.ts's REPL branch): the
     // system prompt is static and shared, so the model is told it is in plan
     // mode — and that ExitPlanMode exists — once per plan-mode turn. Injected
     // AFTER the raw-text title derivation above (a reminder never leaks into
@@ -4405,7 +4405,7 @@ export class Session {
     // the set of engines whose plan mode WE run — Claude and Codex own their
     // own plan handling and must never be handed our tool's rules.
     //
-    // Taskana 4704 §3.7: while the tab is orchestrate, the ORCHESTRATE
+    // §3.7: while the tab is orchestrate, the ORCHESTRATE
     // reminder replaces the plan reminder entirely (never both) — an
     // orchestrate parent sits in plan mode, but its discipline is delegation,
     // not planning.
@@ -4414,7 +4414,7 @@ export class Session {
         ? withOrchestrateReminder(turnInput)
         : withPlanModeReminder(turnInput);
     }
-    // Taskana 4704 §3.6/§2.6: the orchestrator role resolves at turn START
+    // §3.6/§2.6: the orchestrator role resolves at turn START
     // only (never mid-turn). While orchestrate is on and the configured
     // primary targets the tab's ACTIVE connection, the host checks entry
     // health HERE — strictly before busy=true — and switches to the first
@@ -4445,7 +4445,7 @@ export class Session {
     this.busy = true;
     const turn: Promise<void> = this.runTurn(requestId, turnInput, attachments, carriesWorktreeExitNotice, origin, pendingTurnIdHolder).finally(
       async () => {
-        // TASK.117: clear the pending prompt at this turn's terminal via the
+        // clear the pending prompt at this turn's terminal via the
         // REAL exact-owner guard (`clearPendingPromptIfOwner` — extracted
         // verbatim from this teardown, behavior-identical, so the guard is
         // the one and only clear path). Outcome by DURABILITY, not by
@@ -4459,11 +4459,11 @@ export class Session {
           pendingTurnIdHolder.turnId,
           this.currentStep !== undefined ? "settled" : "cancelled",
         );
-        // Taskana 4895: a core model/effort pick made DURING this turn applies
+        // a core model/effort pick made DURING this turn applies
         // HERE — synchronously, before `busy` relaxes, so it can never race
         // the turn's own model calls and no next turn can overtake it.
         this.applyPendingModelSelection();
-        // TASK.102 CUT-S2 §10.10.1 O1: `busy` means something different for a
+        // CUT-S2 §10.10.1 O1: `busy` means something different for a
         // root session than for a child, and that asymmetry is now explicit
         // instead of one flag doing two incompatible jobs. ROOT: `busy` means
         // "a model turn is in flight" and clears as the very FIRST step of
@@ -4477,7 +4477,7 @@ export class Session {
         // only ever described the child-side pause) and is reverted here.
         if (this.child === undefined) {
           this.busy = false;
-          // taskana 4181: the supervisor idle-watchdog's turn-settled signal,
+          // the supervisor idle-watchdog's turn-settled signal,
           // at the ROOT busy->idle boundary — the moment a supervisor's turn
           // has fully ended. The watchdog itself decides whether the final
           // text's terminal marker (READY/BLOCKED/DONE/ACCEPT) disarms it or
@@ -4485,7 +4485,7 @@ export class Session {
           // boot is supervised by its parent, never supervises anything
           // itself. Absent seam -> no-op, byte-identical turn teardown.
           this.supervisorIdle?.noteTurnSettled(this.lastTurnPublicText ?? "");
-          // TASK.198 срез C (plan §1.3): the ONE pending recognizer-config
+          // срез C (plan §1.3): the ONE pending recognizer-config
           // commit (if any), applied HERE — the exact "busy=false" boundary
           // the plan names, strictly before every teardown await below.
           // Last-value-wins: a push received while this turn ran overwrote
@@ -4502,7 +4502,7 @@ export class Session {
         this.turnId = null;
         this.currentStep = undefined;
         this.finishRetries = 0;
-        // Taskana 4083 cross-review finding 1: a turn that ended WITHOUT a
+        // cross-review finding 1: a turn that ended WITHOUT a
         // turn_end for its last step (abort/error boundary) still flushes
         // that step's staged audit row — a finish that arrived is the step's
         // honest record (the loop's usage reset only ever fires on
@@ -4510,12 +4510,12 @@ export class Session {
         this.flushPendingUsageAuditRow();
         this.lastTurnRequest = undefined;
         this.snapshotPaths.clear();
-        // TASK.117 acceptance defect 1: the partial-stream checkpoint dies with
+        // acceptance defect 1: the partial-stream checkpoint dies with
         // its turn — a settled turn's streams are finished (or dropped), so a
         // later reconnect's session_checkpoint must not re-open a block for a
         // stream nobody is emitting into anymore.
         this.liveStreams.clear();
-        // TASK.117 supervisor correction defect 1: the running-tool set dies
+        // supervisor correction defect 1: the running-tool set dies
         // with its turn — no call of a settled turn is executing anymore.
         this.runningTools.clear();
         this.flushPreviewArtifacts();
@@ -4589,7 +4589,7 @@ export class Session {
     if (this.child === undefined) {
       return { ok: false, reason: "not a child session" };
     }
-    // TASK.102 CUT-S2 §10.11.1 N1: a child-start that lands after shutdown()
+    // CUT-S2 §10.11.1 N1: a child-start that lands after shutdown()
     // has begun must never start a turn on an engine already mid-dispose.
     if (this.shuttingDown) {
       return { ok: false, reason: "shutting down" };
@@ -4612,7 +4612,7 @@ export class Session {
   }
 
   /**
-   * TASK.102 CUT-S2 §10.12.3: shifts queued steer messages until one
+   * CUT-S2 §10.12.3: shifts queued steer messages until one
    * actually STARTS a turn (`true` — the new turn owns busy/currentTurn) or
    * the queue runs out (`false`). A refusal from `acceptUserMessage`
    * (`unsupported_images` — it already emitted its own `turn_rejected`)
@@ -4622,7 +4622,7 @@ export class Session {
    * `finalizeChildTerminal`'s healthy-path re-check) instead of duplicated.
    */
   private startNextQueuedSteerTurn(): boolean {
-    // TASK.116: a dead engine (claude latched its terminal error and closed the transport)
+    // a dead engine (claude latched its terminal error and closed the transport)
     // must never be handed a queued steer — the drain would start a turn that can only
     // error again (the incident's double "Claude exited during a turn"). Reject honestly;
     // every caller (onChildTurnSettled AND finalizeChildTerminal's two re-checks) then
@@ -4758,7 +4758,7 @@ export class Session {
     const childResult = this.childLoopStatus === "error"
       ? { ...this.childFinalText, final: `${this.childSafeError ?? safeFailureMessage("unknown")}\n\n${this.childFinalText.final}` }
       : this.childFinalText;
-    // R2 (Taskana 4704 cross-review): the INFRA-FAILURE CLASSIFIER downstream
+    // R2 (cross-review): the INFRA-FAILURE CLASSIFIER downstream
     // (host role-route.ts decideRoutedTerminal) must see ONLY the redacted
     // safe descriptor — the free model text below it legitimately discusses
     // "forbidden", auth code, proxies or "rate limits" of the task domain, and
@@ -4808,7 +4808,7 @@ export class Session {
       // must never be mistaken for a live hand-off (see docstring above).
       return "drained";
     }
-    // TASK.196 turn-limit rescue: a max_turns child with at least one
+    // turn-limit rescue: a max_turns child with at least one
     // completed turn and NO report text gets one bounded tool-free wrap-up
     // BEFORE the terminal is latched/published — placed AFTER the steer
     // drain above so a discarded terminal attempt never triggers a second
@@ -4836,7 +4836,7 @@ export class Session {
         finalText = cappedRescue.text;
         truncated = cappedRescue.truncated;
       }
-      // Post-rescue re-check (TASK.196): mirror of the pre-rescue handling
+      // Post-rescue re-check: mirror of the pre-rescue handling
       // — never latch the terminal while the queue holds an undrained steer
       // or shutdown has begun mid-rescue.
       if (this.shuttingDown) {
@@ -4883,7 +4883,7 @@ export class Session {
   }
 
   /**
-   * TASK.196: resolves the report text for a max_turns child that produced
+   * resolves the report text for a max_turns child that produced
    * no final text. With a `wrapUpRescue` callback (core-engine children:
    * host/index.ts wires it to core's runWrapUp), awaits it — non-whitespace
    * text is the report; a throw or blank result degrades to the shared
@@ -4922,7 +4922,7 @@ export class Session {
    * increments the NEW `childTurnEndCount` (the progress report's `turns`,
    * distinct from `childTurns`) and crosses the same progress boundary.
    *
-   * Taskana 4820 additions: `text_delta`, `reasoning_delta` and
+   * additions: `text_delta`, `reasoning_delta` and
    * `tool_execution_start` ALSO cross the (throttled) progress boundary —
    * liveness pushes only, never tool facts or activity reports — so a child
    * streaming a long model turn or sitting inside one long tool call keeps
@@ -4950,7 +4950,7 @@ export class Session {
           this.childStatusTextSnapshot = this.childFinalText.current;
           this.child?.onProgress({ kind: "status", itemKind: "assistant", text: sanitizeStatusText(this.childFinalText.current, 160, true) });
         }
-        // Taskana 4820: a streaming turn is a sign of life — crosses the
+        // a streaming turn is a sign of life — crosses the
         // throttled boundary so the parent-side stall clock keeps getting
         // re-armed while the child is mid-answer (a long model turn is not
         // silence; the 25.10 triage false-stall was exactly this gap).
@@ -4961,7 +4961,7 @@ export class Session {
         this.child?.onProgress({ kind: "status", itemKind: "reset", text: "" });
         this.childFinalText = resetFinalText(this.childFinalText);
         break;
-      // Taskana 4820: same rationale as text_delta — a model emitting
+      // same rationale as text_delta — a model emitting
       // reasoning frames is mid-turn, not hung.
       case "reasoning_delta":
         this.emitChildProgressBoundary();
@@ -4969,12 +4969,12 @@ export class Session {
       case "tool_execution_start":
         this.child?.onProgress({ kind: "status", itemKind: "tool", text: sanitizeAndCap(event.toolName, 160), toolName: sanitizeAndCap(event.toolName, 40) || "tool" });
         this.pendingChildCalls.set(event.toolCallId, { toolName: event.toolName, input: event.input });
-        // Taskana 4820: dispatch itself is a sign of life — a child inside
+        // dispatch itself is a sign of life — a child inside
         // one long-running tool call (a 15-min Bash, a slow web fetch) is
         // working, not stalled. Liveness push only: `childLastTool` stays
         // result-based and the activity bridge stays result-paired.
         this.emitChildProgressBoundary();
-        // Taskana 4820 review F3: ONE boundary at dispatch is not enough —
+        // review F3: ONE boundary at dispatch is not enough —
         // a tool call longer than the parent-side stall timeout then looks
         // like silence. Arm the 60s liveness interval until the result.
         this.armChildToolLiveness();
@@ -4989,7 +4989,7 @@ export class Session {
         this.emitChildProgressBoundary();
         this.emitChildActivity(event.outcome.toolCallId, event.outcome.status);
         break;
-      // Taskana 4820 review F2: one `engine_model_round` == one assistant
+      // review F2: one `engine_model_round` == one assistant
       // message == one model round on a claude child. Counted FIRST (before
       // any turn_end of the same round can arrive) and crossed through the
       // throttled boundary so the parent sees the round land mid-runTurn —
@@ -5004,7 +5004,7 @@ export class Session {
       case "turn_end":
         if (this.childFinalText.current !== this.childStatusTextSnapshot) this.child?.onProgress({ kind: "status", itemKind: "assistant", text: sanitizeStatusText(this.childFinalText.current, 160, true) });
         this.childFinalText = fixateFinalText(this.childFinalText);
-        // Taskana 4820 review F2: for a claude child counting model rounds,
+        // review F2: for a claude child counting model rounds,
         // turn_end (once per runTurn) is already covered by the rounds that
         // preceded it — incrementing here too would double-count the final
         // assistant message. A core child has no rounds and keeps counting
@@ -5073,7 +5073,7 @@ export class Session {
   /**
    * Crosses a progress-report boundary (CUT-S2 §10.7 п.3: `tool_result` and
    * `turn_end`, mirroring the inline runner's own two `onProgress({kind:
-   * "progress",…})` call sites, runner.ts:503/537; Taskana 4820 additionally
+   * "progress",…})` call sites, runner.ts:503/537; additionally
    * `text_delta`/`reasoning_delta`/`tool_execution_start` — streaming and
    * dispatch are signs of life, see observeChildEvent). Leading-edge throttled
    * at 1000ms via the injected `this.now` — the FIRST boundary this session
@@ -5092,7 +5092,7 @@ export class Session {
     this.childLastProgressEmitAt = now;
     this.child?.onProgress({
       kind: "progress",
-      // Taskana 4820 review F2: model rounds once any were seen (a claude
+      // review F2: model rounds once any were seen (a claude
       // child — the metric the budget latch compares against the cap);
       // otherwise the turn_end count (a core child), unchanged.
       turns: this.childModelRounds > 0 ? this.childModelRounds : this.childTurnEndCount,
@@ -5102,7 +5102,7 @@ export class Session {
   }
 
   /**
-   * Taskana 4820 review F3: arms the in-tool liveness interval (see the
+   * review F3: arms the in-tool liveness interval (see the
    * field's own doc). Idempotent — a second concurrent tool call keeps the
    * ONE interval (the boundary re-cross is per-session, not per-call).
    * `unref`-less on purpose: Electron's main-thread host has no exit-to-war
@@ -5124,7 +5124,7 @@ export class Session {
   }
 
   /**
-   * Taskana 4820 review F3: clears the liveness interval. Called on the
+   * review F3: clears the liveness interval. Called on the
    * paired tool_result, on turn_end, in shutdown(), and on port close —
    * never a push after the session's life or the call's settle.
    */
@@ -5143,7 +5143,7 @@ export class Session {
     origin?: "system",
     pendingTurnIdHolder?: { turnId: string },
   ): Promise<void> {
-    // TASK.117 phase-1 defect 3: the outer turn UUID is minted by
+    // phase-1 defect 3: the outer turn UUID is minted by
     // `acceptUserMessage` at ADMISSION (captured there into pendingPrompt,
     // before any await) and threaded in via the holder — runTurn only
     // adopts it here. Continuations (no holder: startContinuation's direct
@@ -5155,7 +5155,7 @@ export class Session {
     this.nativeUsageStep = 0;
     this.currentStep = undefined;
     this.finishRetries = 0;
-    // Taskana 4083 cross-review finding 1: a new turn starting with a staged
+    // cross-review finding 1: a new turn starting with a staged
     // audit row means the prior turn's teardown missed it (a drain can
     // preempt the teardown tail) — flush rather than silently drop; the
     // SQLite PK keeps any double flush a storage no-op.
@@ -5164,12 +5164,12 @@ export class Session {
     this.turnStartedAt = Date.now();
     this.presentationJournal.start(turnId, requestId, this.turnStartedAt, text, attachments, origin);
     this.outbound.emit({ type: "turn_started", requestId, turnId, startedAt: this.turnStartedAt });
-    // taskana 4181: the supervisor idle-watchdog's turn-start signal, fired at
+    // the supervisor idle-watchdog's turn-start signal, fired at
     // the exact `turn_started` emission — a turn beginning proves the
     // supervisor woke on its own, so any pending idle reminder disarms. Absent
     // seam (every legacy harness, every child boot) -> no-op.
     this.supervisorIdle?.noteTurnStarted();
-    // TASK.117: remember the live turn's requestId for the per-connect
+    // remember the live turn's requestId for the per-connect
     // turn_started re-assertion (see ui_ready) — the ring copy alone is not
     // survivable past REPLAY_BUFFER_CAP overflow.
     this.lastTurnRequest = { requestId, turnId };
@@ -5179,7 +5179,7 @@ export class Session {
     const recordResult = (terminalReason: SessionPublicResult["terminalReason"]) => {
       this.latestPublicResult = { source: "live_turn", turnId, requestId, nativeTurnId, terminalReason, publicAnswer: lastCompletedText?.text ?? null, truncated: lastCompletedText?.truncated ?? false, completedAt: Date.now() };
       this.rememberTurnResult(turnId, this.latestPublicResult);
-      // taskana 4181: thread this turn's final assistant text OUT of runTurn
+      // thread this turn's final assistant text OUT of runTurn
       // for the supervisor idle-watchdog's noteTurnSettled call — the accept
       // -UserMessage teardown (outside this method) reads the private field.
       // Stored ONLY when non-empty: an aborted/quiet turn must not clobber a
@@ -5207,7 +5207,7 @@ export class Session {
         }
         return;
       }
-      // Taskana 4068: consume the one-shot engine-switch import prompt BEFORE
+      // consume the one-shot engine-switch import prompt BEFORE
       // the engine call — the import is PREPENDED to the user's own turn
       // input (typed text + any plan/notice augmentation) for exactly this one
       // engine call; nothing else carries the user's message to the engine,
@@ -5223,12 +5223,12 @@ export class Session {
         ...(carriesWorktreeExitNotice
           ? { systemContext: worktreeExitSystemContext(this.projectRoot) }
           : {}),
-        // TASK.145 срез 2: harmless on the `continueTurn` (text===undefined)
+        // срез 2: harmless on the `continueTurn` (text===undefined)
         // branch below — that path never appends a synthetic user frame at
         // all (its own doc comment), so AgentLoop.continueTurn's forwarded
         // `origin` is simply never read.
         ...(origin !== undefined ? { origin } : {}),
-        // TASK.117 causal stamp: the outer turn UUID rides into CoreEngine ->
+        // causal stamp: the outer turn UUID rides into CoreEngine ->
         // AgentLoop so every HistoryItem this turn appends (user frame step 0,
         // assistant/tool items per inner step ordinal, cancelled stragglers
         // included) carries {turnId, step}. Foreign engines ignore it.
@@ -5259,7 +5259,7 @@ export class Session {
           publicText.clear();
         }
         if (event.type === "loop_end") recordResult(event.reason);
-        // TASK.159: the foreign-engine telemetry seam — see SessionOptions.
+        // the foreign-engine telemetry seam — see SessionOptions.
         // eventTap's own doc/invariant comment. Fires for every event this
         // loop observes (covers continueTurn too, since it drives the same
         // for-await), before any other per-event handling below, and never
@@ -5314,14 +5314,14 @@ export class Session {
         // event) BEFORE journaling/emitting, so the live row and the replayed
         // one are the same row.
         const wireEvent = this.recordCompactionOutcome(sanitizeAgentEvent(event, this.engine.id));
-        // TASK.117: track the inner request ordinal (core's turn_start.turn,
+        // track the inner request ordinal (core's turn_start.turn,
         // reset per outer turn) and stamp it onto the envelope for core
         // turns — the renderer's fold checkpoint keys events and durable
         // history items by `${turnId}:${step}`.
         if (event.type === "turn_start") {
           this.currentStep = event.turn;
           this.currentAttempt = 0;
-          // TASK.117 phase-1 defect 3: the FIRST core turn_start of the turn
+          // phase-1 defect 3: the FIRST core turn_start of the turn
           // owning the pending slot hands ownership to DURABILITY — core
           // appends the user frame strictly BEFORE the first model request,
           // so generation starting proves the frame landed. Exact-owner
@@ -5332,7 +5332,7 @@ export class Session {
             this.pendingPrompt = null;
           }
         }
-        // Taskana 4083 / TASK.34: count this step's transport retries for the
+        // /count this step's transport retries for the
         // usage audit row (reset per finish capture and per turn boundary).
         // Cross-review finding 1: a stall-retried step re-yields the ABANDONED
         // attempt's finish BEFORE the retry (the port replays both finishes
@@ -5365,18 +5365,18 @@ export class Session {
           this.observeChildEvent(event);
         }
         if (event.type === "error") {
-          // TASK.2 DoD-c: the raw provider failure reaches the process log
+          // DoD-c: the raw provider failure reaches the process log
           // (stdio:"inherit" -> app log), not only the transcript block.
           if (wireEvent.type === "error") {
             console.error(`[host] provider stream error: ${wireEvent.error.code ?? "unknown"}`);
             recordErrorDiagnostic(process.env.ANYCODE_DIAGNOSTICS_DIR, this.sessionId, wireEvent.error.code ?? "unknown", event.safe?.statusCode);
           }
-          // TASK.45 W11: relay the core loop's OWN classification (event.safe.code)
+          // W11: relay the core loop's OWN classification (event.safe.code)
           // verbatim — never reclassified here. Absent `safe` (a legacy/foreign
           // producer) defaults to "unknown" rather than dropping the signal.
           this.reportProviderHealth?.({ kind: "failure", code: event.safe?.code ?? "unknown" });
         }
-        // Taskana 4090: forward the observation to main for the durable
+        // forward the observation to main for the durable
         // `lastQuota` write (the PRIMARY window is the tightest constraint —
         // the one the connect card renders). The wire event above already
         // carries the live value to the renderer; this side channel exists
@@ -5385,7 +5385,7 @@ export class Session {
         if (event.type === "provider_quota" && event.quota.primary !== undefined) {
           this.reportProviderQuota?.(event.quota.primary, event.quota.primarySource ?? "");
         }
-        // TASK.117 control/accounting checkpoint: capture the wire state AT
+        // control/accounting checkpoint: capture the wire state AT
         // EMISSION TIME (before any ring cap/cut could evict it). Core-only:
         // a finish's usage sums onto the cumulative session totals (mirrors
         // the renderer's accumulateSessionTokens — the checkpoint REPLACES a
@@ -5395,7 +5395,7 @@ export class Session {
         // ring overflow this host-side capture is the only surviving record.
         if (this.engine.id === "core" && event.type === "finish") {
           this.checkpointSessionTokens = accumulateCheckpointTokens(this.checkpointSessionTokens, event.usage);
-          // Taskana 4083 cross-review finding 5: currentStep is set by every
+          // cross-review finding 5: currentStep is set by every
           // core turn_start (the loop yields it before the model call), but a
           // future engine variant emitting finish without one must not write
           // `step: undefined` into a NOT NULL PK — the guard costs nothing.
@@ -5437,14 +5437,14 @@ export class Session {
         if (event.type === "context_usage") {
           this.updateContextUsage({ estimatedTokens: event.estimatedTokens, budgetTokens: event.budgetTokens, source: event.source });
         }
-        // Taskana 4083 cross-review finding 1: the step's turn_end proves the
+        // cross-review finding 1: the step's turn_end proves the
         // attempt was NOT stall-discarded (a retry never yields turn_end for
         // the abandoned attempt) — flush the staged audit row through to the
         // write-behind sink now. See pendingUsageAuditRow's own doc.
         if (this.engine.id === "core" && event.type === "turn_end") {
           this.flushPendingUsageAuditRow();
         }
-        // TASK.117 acceptance defect 1: fold the partial-stream checkpoint AT
+        // acceptance defect 1: fold the partial-stream checkpoint AT
         // EMISSION TIME (before any ring cap could evict the stream's
         // text_start). One Map entry per OPEN stream, keyed by the same
         // `${turnId}:${step}:${streamId}` scope the renderer's
@@ -5462,7 +5462,7 @@ export class Session {
               entry.text += event.text;
             }
           } else if (event.type === "text_end") {
-            // TASK.117 acceptance defect 3: do NOT delete on text_end — core
+            // acceptance defect 3: do NOT delete on text_end — core
             // appends the assistant item only AFTER the model stream's finish
             // settles, so a reconnect inside that gap would otherwise see no
             // checkpoint stream AND no durable item (and no ring text_start
@@ -5481,7 +5481,7 @@ export class Session {
               entry.text += event.text;
             }
           } else if (event.type === "reasoning_end") {
-            // TASK.117 acceptance defect 3: same retention as text_end above
+            // acceptance defect 3: same retention as text_end above
             // — completed reasoning is never a durable item of its own; only
             // the assistant append (after finish) makes the step durable.
             const endedReasoning = this.liveStreams.get(`${turnId}:${this.currentStep}:${event.id}`);
@@ -5491,11 +5491,11 @@ export class Session {
           }
         }
         if (event.type === "finish") {
-          // TASK.45 W11: a model step that reached a finish reason completed a
+          // W11: a model step that reached a finish reason completed a
           // real request against the pinned connection's credential/endpoint.
           this.reportProviderHealth?.({ kind: "success" });
         }
-        // TASK.117 supervisor correction defect 1: fold the running-tool set AT
+        // supervisor correction defect 1: fold the running-tool set AT
         // EMISSION TIME (before any ring cap could evict the start event) —
         // added on tool_execution_start, removed on its paired tool_result, so
         // the set always reads "executing right now" at any later checkpoint
@@ -5525,7 +5525,7 @@ export class Session {
     try {
       await this.onContinuationReady?.();
       if (this.continuationMode === "model") {
-        // TASK.117: a continuation has NO prompt — clear any stale pending
+        // a continuation has NO prompt — clear any stale pending
         // state BEFORE the first turn_start of the resumed segment.
         // "cancelled": nothing is in flight; retire any bubble outright.
         this.pendingPrompt = null;
@@ -5536,7 +5536,7 @@ export class Session {
         await this.onContinuationComplete?.();
       }
     } finally {
-      // Taskana 4895: idle-boundary apply, same contract as the turn teardown
+      // idle-boundary apply, same contract as the turn teardown
       // (a resumed segment is a turn like any other).
       this.applyPendingModelSelection();
       this.busy = false;
@@ -5544,13 +5544,13 @@ export class Session {
       this.turnId = null;
       this.currentStep = undefined;
       this.finishRetries = 0;
-      // Taskana 4083 cross-review finding 1: same boundary flush as
+      // cross-review finding 1: same boundary flush as
       // acceptUserMessage's turn teardown — see flushPendingUsageAuditRow.
       this.flushPendingUsageAuditRow();
       this.lastTurnRequest = undefined;
       this.snapshotPaths.clear();
       this.liveStreams.clear();
-      // TASK.117 supervisor correction defect 1: same teardown bound as
+      // supervisor correction defect 1: same teardown bound as
       // acceptUserMessage's — the running set never outlives its turn.
       this.runningTools.clear();
       this.flushPreviewArtifacts();
@@ -5713,7 +5713,7 @@ export class Session {
     if (this.abort) {
       this.abort.abort();
     }
-    // TASK.117: cancel is a terminal boundary for the pending prompt — the
+    // cancel is a terminal boundary for the pending prompt — the
     // turn's teardown will also clear it, but clearing HERE covers the
     // pre-append window (UserPromptSubmit hook await) where no teardown has
     // started yet... teardown runs regardless; this early clear keeps a
@@ -5728,7 +5728,7 @@ export class Session {
   }
 
   /**
-   * Phase 1 of the two-phase, host-authoritative settings ack (TASK.39, cut
+   * Phase 1 of the two-phase, host-authoritative settings ack (cut
    * §2(k).3). There IS no server-side ack channel — the app-server never sends a
    * settings-updated notification (L6) — so the host answers on its own:
    *
@@ -5879,7 +5879,7 @@ export class Session {
   }
 
   /**
-   * User-initiated permission-mode change (TASK.37): accepted while busy — the
+   * User-initiated permission-mode change: accepted while busy — the
    * mode is policy for the NEXT permission decision, which CoreEngine delivers
    * into the running loop (AgentLoop.setMode). An open permission ask is
    * untouched (snapshot semantics): it completes under the mode captured in
@@ -5894,7 +5894,7 @@ export class Session {
       });
       return;
     }
-    // R5 (Taskana 4704 cross-review): orchestrate IS the plan-mode posture —
+    // R5 (cross-review): orchestrate IS the plan-mode posture —
     // a user set_mode that moves the tab OUT of plan while orchestrate is on
     // would leave a writable orchestrator behind, so it is an implicit
     // orchestrate-off. orchestrate's OWN internal switches pass
@@ -5909,7 +5909,7 @@ export class Session {
   }
 
   /**
-   * A1 (Taskana 4704 review): the permission mode CHILD sessions run under.
+   * A1 (review): the permission mode CHILD sessions run under.
    * While orchestrate is on: the PRE-orchestrate mode, with `plan` coerced to
    * `build` (an orchestrate parent sits in plan, but its executor children
    * MUST be able to write) and `yolo` preserved only if the user was already
@@ -5929,7 +5929,7 @@ export class Session {
   }
 
   /**
-   * R1 (Taskana 4704 cross-review): the pre-orchestrate mode the host's
+   * R1 (cross-review): the pre-orchestrate mode the host's
    * late-binding spawn-mode cell consults when onOrchestrateChanged fires
    * after the mode already flipped to plan. The Session captured the true
    * pre-orchestrate mode BEFORE the flip (onSetOrchestrate), so this — not
@@ -5942,7 +5942,7 @@ export class Session {
   }
 
   /**
-   * Taskana 4704 §2.2/§3.7: `set_orchestrate` — between-turns only (busy =>
+   * §2.2/§3.7: `set_orchestrate` — between-turns only (busy =>
    * silent drop, the set_mode/set_model discipline). On enable: remember the
    * current mode (preOrchestrateMode), switch the mode to `plan` (the
    * orchestrator's own tools become read-only via the existing engine), set
@@ -5977,7 +5977,7 @@ export class Session {
   }
 
   /**
-   * Mode advance driven by the LOOP, not the UI (TASK.27): the single
+   * Mode advance driven by the LOOP, not the UI: the single
    * sanctioned mid-turn transition an approved ExitPlanMode performs, delivered
    * through `AgentLoopConfig.onModeChange`. It deliberately differs from
    * `onSetMode` above in both directions:
@@ -5985,7 +5985,7 @@ export class Session {
    *  - it never calls `engine.setMode` — the loop already mutated `config.mode`
    *    before notifying, so setting it again would be a redundant second write;
    *  - it never consults `this.busy` — it fires from INSIDE a running turn
-   *    (and since TASK.37, `onSetMode` accepts mid-turn changes too; the two
+   *    (and since, `onSetMode` accepts mid-turn changes too; the two
    *    paths still differ in who calls `engine.setMode` and who emits).
    *
    * Everything downstream is unchanged: the same `mode_changed` message the UI
@@ -5993,7 +5993,7 @@ export class Session {
    * persistence touch that lets a resume restore the mode.
    */
   notifyModeChanged(mode: PermissionMode): void {
-    // R5 (Taskana 4704 re-review #3): an approved ExitPlanMode leaves plan
+    // R5 (re-review #3): an approved ExitPlanMode leaves plan
     // mode, and orchestrate IS the plan posture — leaving plan turns
     // orchestrate off exactly like a user set_mode would, so an approved
     // orchestrator never keeps running writable with the flag still on.
@@ -6005,7 +6005,7 @@ export class Session {
   }
 
   /**
-   * R5 (Taskana 4704 re-review #3): the single orchestrate-off path for a
+   * R5 (re-review #3): the single orchestrate-off path for a
    * transition OUT of plan (user set_mode or approved ExitPlanMode). Clears the
    * flag through the same route set_orchestrate(false) takes — the host's
    * loop-config copy plus the orchestrate_changed ack — so default-detach
@@ -6020,7 +6020,7 @@ export class Session {
   }
 
   /**
-   * Live recognizer-config push from main (TASK.198 срез C, plan §1.3):
+   * Live recognizer-config push from main (срез C, plan §1.3):
    * called by host/index.ts's parentPort handler on every
    * `RecognizerConfigChanged`. Applies immediately while idle; while a turn
    * is running, stashes it as the ONE pending value (overwriting any earlier
@@ -6143,10 +6143,10 @@ export class Session {
  * §3.3): HistoryItem -> WireHistoryItem (drop tokenEstimate), keeping only the
  * last `maxItems` (+truncated). Returns null for an empty snapshot (nothing to
  * hydrate). `maxItems` is `SESSION_HISTORY_MAX_ITEMS` unless the composition
- * root resolved a dev/automation override (TASK.188 S4, Session.historyMaxItems).
+ * root resolved a dev/automation override (S4, Session.historyMaxItems).
  */
 /**
- * TASK.117 control/accounting checkpoint: SUMs one core `finish` AgentEvent's
+ * control/accounting checkpoint: SUMs one core `finish` AgentEvent's
  * TokenUsage onto the host-side cumulative totals — the EXACT semantics of
  * the renderer's `accumulateSessionTokens` (store.ts), duplicated host-side
  * by design: durable history carries no usage fields, so after a replay-ring
@@ -6188,7 +6188,7 @@ function buildSessionHistory(
     createdAt: item.createdAt,
     ...(item.kind !== undefined ? { kind: item.kind } : {}),
     ...(item.origin !== undefined ? { origin: item.origin } : {}),
-    // TASK.117 phase-1 defect 2: the causal stamps ride verbatim — the
+    // phase-1 defect 2: the causal stamps ride verbatim — the
     // renderer decides from the HANDSHAKE's engine discriminator whether
     // they mean durable coverage (core) or are inert hydration data (a
     // native host's fixed boot snapshot may carry stamped items through the

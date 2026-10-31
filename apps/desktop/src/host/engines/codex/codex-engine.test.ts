@@ -188,14 +188,14 @@ class FakeAppServer implements CodexClient {
   /**
    * How many `turn/interrupt` calls are rejected with JSON-RPC `-32600`
    * ("no active turn to interrupt") before one is accepted — the LIVE reject
-   * window measured on codex-cli 0.144.3 (TASK.38): an interrupt sent in the
+   * window measured on codex-cli 0.144.3: an interrupt sent in the
    * first ~10-25ms of a turn's life is refused even though `turn/start` has
    * already returned a real turn id. 0 (the default) reproduces the previous
    * fake exactly: the first interrupt is accepted.
    */
   interruptRejections = 0;
   /**
-   * `code`/message of every rejected `turn/interrupt` (TASK.38 W14): broken out
+   * `code`/message of every rejected `turn/interrupt` (W14): broken out
    * so a test can prove the engine classifies a rejection by `code` ALONE —
    * never by prose. Defaults reproduce the live wire error exactly (W12's
    * fixture value and its code), so no existing test that leaves these alone
@@ -270,7 +270,7 @@ class FakeAppServer implements CodexClient {
   /** Quota pull failure mode: the boot must survive it (no quota block, session usable). */
   rateLimitsReadFails = false;
   /**
-   * TASK.185 / Taskana 4139: `windowsSandbox/readiness` result. The default
+   * /`windowsSandbox/readiness` result. The default
    * mirrors a Windows boot that never had a setup — the probe-only status the
    * engine turns into a boot notice (never a boot failure).
    */
@@ -284,7 +284,7 @@ class FakeAppServer implements CodexClient {
     reasoningEffort: "high",
   };
   threadStartParams: unknown = undefined;
-  /** `thread/read`'s response (TASK.42 resume-history hydration); default has zero turns — an empty resumed thread. */
+  /** `thread/read`'s response (resume-history hydration); default has zero turns — an empty resumed thread. */
   threadReadResult: unknown = { thread: { id: "persisted-thread", turns: [] } };
   compactResponse: Promise<unknown> = Promise.resolve({});
   compactCalls = 0;
@@ -466,7 +466,7 @@ describe("CodexEngine — native session boot", () => {
     const server = new FakeAppServer();
     const created = await createNativeCodexSession(server, "/work");
     expect(created).toMatchObject({ threadId: "fresh-thread", model: "gpt-native" });
-    // TASK.39: the catalog is read BEFORE thread/start, so the first model id the
+    // the catalog is read BEFORE thread/start, so the first model id the
     // host could ever put on the wire is already validatable by then (L7).
     // Codex-profiles cut §6.1: the quota pull runs AFTER the thread exists.
     expect(server.calls.map((call) => call.method)).toEqual([
@@ -564,7 +564,7 @@ describe("CodexEngine — native session boot", () => {
   });
 });
 
-describe("CodexEngine — Windows sandbox readiness probe (Taskana 4139 / TASK.185)", () => {
+describe("CodexEngine — Windows sandbox readiness probe", () => {
   it("windowsSandboxNotice stays silent on non-win32 platforms and on a ready sandbox", () => {
     expect(windowsSandboxNotice("darwin", "notConfigured")).toBeNull();
     expect(windowsSandboxNotice("linux", undefined)).toBeNull();
@@ -808,7 +808,7 @@ describe("CodexEngine — capabilities (C-bug-1, cut §5.2)", () => {
   });
 });
 
-describe("CodexEngine — subscription quota (TASK.51, cut §6)", () => {
+describe("CodexEngine — subscription quota (cut §6)", () => {
   it("seeds the session quota from the boot pull and exposes it for EnginePresentation.quota", async () => {
     const server = new FakeAppServer();
     const { engine } = await createNativeCodexSession(server, "/work");
@@ -908,7 +908,7 @@ describe("CodexEngine — subscription quota (TASK.51, cut §6)", () => {
   });
 });
 
-describe("CodexEngine — Stop (TASK.38 blocker)", () => {
+describe("CodexEngine — Stop (blocker)", () => {
   it("interrupts EXACTLY ONCE when the abort lands on a parked iterator, with no notification before it", async () => {
     const server = new FakeAppServer();
     const engine = new CodexEngine(server, THREAD);
@@ -1032,7 +1032,7 @@ describe("CodexEngine — Stop (TASK.38 blocker)", () => {
     expect(types(later.events)).toEqual(["error", "turn_end", "loop_end"]);
   });
 
-  // TASK.38 (W12): the live app-server refuses a `turn/interrupt` sent in the
+  // (W12): the live app-server refuses a `turn/interrupt` sent in the
   // first ~10-25ms of a turn's life with JSON-RPC -32600 — AFTER `turn/start`
   // has already returned a real turn id. The pre-fix engine sent exactly one
   // interrupt, swallowed that rejection, and latched: the Stop was lost, and a
@@ -1106,7 +1106,7 @@ describe("CodexEngine — Stop (TASK.38 blocker)", () => {
     expect(second.events.at(-1)).toEqual({ type: "loop_end", reason: "completed", turns: 2 });
   });
 
-  // TASK.38 (W14): `isNoActiveTurnRejection` classifies ONLY on the numeric
+  // (W14): `isNoActiveTurnRejection` classifies ONLY on the numeric
   // JSON-RPC `code` (codex-engine.ts ~line 133) — the message is free-form
   // server prose and must never be pattern-matched. The two tests below pin
   // that rule at the seams a code+text-matching fake could otherwise hide: the
@@ -1334,7 +1334,7 @@ describe("CodexEngine — approvals on one live client process", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TASK.39 — native model + permission controls.
+// native model + permission controls.
 //
 // Read the FakeAppServer's thread/start and turn/start answers first: they
 // ACCEPT any model id, exactly as the real 0.144.3 app-server does (L7, fixture
@@ -1398,7 +1398,7 @@ describe("CodexEngine — boot version warning (owner decision 10.10)", () => {
   });
 });
 
-describe("TASK.39 — model catalog + initial values", () => {
+describe("— model catalog + initial values", () => {
   it("carries a validated draft model and the draft preset's policy into thread/start", async () => {
     const server = new FakeAppServer();
     const connected = await createNativeCodexSession(server, "/work", undefined, undefined, {
@@ -1493,10 +1493,10 @@ describe("TASK.39 — model catalog + initial values", () => {
     expect(JSON.stringify(server.calls)).not.toContain('"sandbox":"danger-full-access"');
   });
 
-  // TASK.241 evidence chain: an explicit Sol pick present in the catalog rides
+  // evidence chain: an explicit Sol pick present in the catalog rides
   // thread/start, the server-confirmed echo, AND the first turn/start — the
   // first actual turn is on the model the UI displayed and the wire sent.
-  it("TASK.241: an explicit gpt-5.6-sol present in the catalog reaches thread/start, connected.model, and the FIRST turn/start", async () => {
+  it("an explicit gpt-5.6-sol present in the catalog reaches thread/start, connected.model, and the FIRST turn/start", async () => {
     const server = new FakeAppServer();
     const connected = await createNativeCodexSession(server, "/work", undefined, undefined, {
       model: "gpt-5.6-sol",
@@ -1535,7 +1535,7 @@ describe("TASK.39 — model catalog + initial values", () => {
   });
 });
 
-describe("TASK.39 — posture enforcement on every turn (cut §2(k).1)", () => {
+describe("— posture enforcement on every turn (cut §2(k).1)", () => {
   it("re-asserts the FULL effective set on turn 1 and on every later turn", async () => {
     const server = new FakeAppServer();
     const connected = await createNativeCodexSession(server, "/work", undefined, undefined, {
@@ -1827,7 +1827,7 @@ describe("TASK.39 — posture enforcement on every turn (cut §2(k).1)", () => {
   });
 });
 
-describe("Taskana 4078 — child boots untrusted (TASK.179)", () => {
+describe("— child boots untrusted", () => {
   it("carries the child-ask preset's untrusted posture on thread/start", async () => {
     const server = new FakeAppServer();
     const connected = await createNativeCodexSession(server, "/work", undefined, undefined, {
@@ -1897,7 +1897,7 @@ describe("Taskana 4078 — child boots untrusted (TASK.179)", () => {
   });
 });
 
-describe("TASK.39 — resume (cut §2(k).2/.4)", () => {
+describe("— resume (cut §2(k).2/.4)", () => {
   // W3-review test (b): a host RESPAWN boots from the persisted posture, so
   // chosen === applied by design (cut §2(k).1) — the restored posture is not a
   // "pending change" that a user has to wait a turn for, and the UI must not
@@ -1942,7 +1942,7 @@ describe("TASK.39 — resume (cut §2(k).2/.4)", () => {
     });
   });
 
-  it("treats a pre-TASK.39 session row (mode='build') as the default preset, silently", async () => {
+  it("treats a pre-session row (mode='build') as the default preset, silently", async () => {
     const server = new FakeAppServer();
     const connected = await resumeNativeCodexSession(server, "/work", "persisted-thread", undefined, undefined, {
       model: "gpt-resumed",
@@ -1995,7 +1995,7 @@ describe("TASK.39 — resume (cut §2(k).2/.4)", () => {
   });
 });
 
-describe("Taskana 4682 — excludeTmpRoots rides selection into every turn/start", () => {
+describe("— excludeTmpRoots rides selection into every turn/start", () => {
   it("carries BOTH tmp flags true on every turn/start, and threads nothing at boot", async () => {
     const server = new FakeAppServer();
     const connected = await createNativeCodexSession(server, "/work", undefined, undefined, {
@@ -2084,7 +2084,7 @@ describe("Taskana 4682 — excludeTmpRoots rides selection into every turn/start
   });
 });
 
-describe("Taskana 4682 rework — childTempDir rides the selection into writableRoots", () => {
+describe("rework — childTempDir rides the selection into writableRoots", () => {
   it("the private dir is appended to writableRoots on EVERY turn/start, alongside the exclusion", async () => {
     const server = new FakeAppServer();
     const privateDir = "/Users/me/.anycode/tmp/018f-child";
@@ -2179,10 +2179,10 @@ describe("Taskana 4682 rework — childTempDir rides the selection into writable
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TASK.42 — resume-history hydration + the command shadow log (cut §2(e)).
+// resume-history hydration + the command shadow log (cut §2(e)).
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe("CodexEngine — resume-history hydration (TASK.42)", () => {
+describe("CodexEngine — resume-history hydration", () => {
   it("historyItems() is [] for a bare/fresh-started engine", async () => {
     const server = new FakeAppServer();
     const created = await createNativeCodexSession(server, "/work");
@@ -2247,13 +2247,13 @@ describe("CodexEngine — resume-history hydration (TASK.42)", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TASK.143 — readTranscript(): the live, on-demand counterpart to the frozen
+// readTranscript(): the live, on-demand counterpart to the frozen
 // historyItems() boot snapshot. This is the whole point of the fix: a child
 // session's flush must see turns that ran AFTER boot, which historyItems()
 // (built once, at construction) can never reflect.
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe("CodexEngine — readTranscript() live flush-time re-read (TASK.143)", () => {
+describe("CodexEngine — readTranscript() live flush-time re-read", () => {
   it("reflects a turn that landed AFTER boot — unlike historyItems(), which stays frozen at the boot snapshot", async () => {
     const server = new FakeAppServer();
     // Boot: a fresh thread has nothing to hydrate (createNativeCodexSession
@@ -2328,7 +2328,7 @@ describe("CodexEngine — readTranscript() live flush-time re-read (TASK.143)", 
   });
 });
 
-describe("CodexEngine — command shadow log live writer (TASK.42)", () => {
+describe("CodexEngine — command shadow log live writer", () => {
   it("writes a shadow row for a completed commandExecution, with the correct turnOrdinal/positionInTurn", async () => {
     const server = new FakeAppServer();
     const shadowLog = new RecordingShadowLog();
@@ -2986,7 +2986,7 @@ describe("CodexEngine — AnyCode dynamic tool integration", () => {
     expect(next.events.some((e) => e.type === "tool_result")).toBe(false);
   });
 
-  // TASK.226 release blocker (GUI evidence 226-cancel-failure.json): Stop
+  // release blocker (GUI evidence 226-cancel-failure.json): Stop
   // cancels the native turn AND the bridged child, but the child's REAL
   // terminal outcome (cancelled status + child-session target + subagent card
   // metadata) settles asynchronously — the abort rejection wins the bridge's
@@ -3084,7 +3084,7 @@ describe("CodexEngine — AnyCode dynamic tool integration", () => {
     expect(next.events.some((e) => e.type === "tool_result")).toBe(false);
   });
 
-  // TASK.226 review defect 2: the transport-close-under-Stop path yielded
+  // review defect 2: the transport-close-under-Stop path yielded
   // translator.finishTerminal BEFORE the finally drained, so the child's late
   // terminal card event still landed AFTER loop_end. Same deterministic mock
   // order as the main regression (native side closes, child settles at
@@ -3138,7 +3138,7 @@ describe("CodexEngine — AnyCode dynamic tool integration", () => {
     expect(turn.events.slice(loopEndAt).some((event) => event.type === "tool_result")).toBe(false);
   });
 
-  // TASK.226 review defect 3: the error catch likewise yielded its terminal
+  // review defect 3: the error catch likewise yielded its terminal
   // pair before the finally drained. A turn that errors under Stop (here: the
   // post-interrupt settle deadline fires because the server never settles)
   // must still drain the child's cancelled outcome BEFORE its terminal pair,
@@ -3285,7 +3285,7 @@ describe("Codex dynamic Agent metadata at graceful shutdown", () => {
   });
 });
 
-describe("TASK.239 owned active-turn steering", () => {
+describe("owned active-turn steering", () => {
   it("uses expectedTurnId on the same app-server without interrupting pending work", async () => {
     const server = new FakeAppServer();
     const originalRequest = server.request.bind(server);
@@ -3328,10 +3328,10 @@ describe("TASK.239 owned active-turn steering", () => {
   });
 });
 
-// TASK.180: a codex child's profile budget is NOT enforced — the supplied
+// a codex child's profile budget is NOT enforced — the supplied
 // boot notice is surfaced once, as a visible engine_notice warning on the
 // FIRST turn only, and no native Codex budget field is ever sent.
-describe("CodexEngine — boot notices (TASK.180: maxTurns not enforced)", () => {
+describe("CodexEngine — boot notices (maxTurns not enforced)", () => {
   const BUDGET_NOTICE: AgentEvent = {
     type: "engine_notice",
     level: "warning",
@@ -3376,14 +3376,14 @@ describe("CodexEngine — boot notices (TASK.180: maxTurns not enforced)", () =>
   });
 });
 
-// TASK.180 (rework): the PUBLIC wrappers startCodexEngine/resumeCodexEngine
+// (rework): the PUBLIC wrappers startCodexEngine/resumeCodexEngine
 // must forward options.bootNotices into the native session's notices queue —
 // a native-function test cannot catch a wrapper dropping the argument. Runs
 // against the REAL AppServerClient with the test-child.mjs fake app-server
 // (answers the boot RPCs), so the full wrapper -> client -> native path is
 // exercised. The notices surface on the FIRST runTurn as engine_notice
 // warnings, exactly once.
-describe("startCodexEngine/resumeCodexEngine — bootNotices forwarding (TASK.180)", () => {
+describe("startCodexEngine/resumeCodexEngine — bootNotices forwarding", () => {
   const BUDGET_NOTICE: AgentEvent = {
     type: "engine_notice",
     level: "warning",
@@ -3461,21 +3461,21 @@ describe("startCodexEngine/resumeCodexEngine — bootNotices forwarding (TASK.18
   });
 });
 
-// ── Taskana 4265 / cross-review M2: the PRODUCTION patchAutoApproval wiring ──
+// ── / cross-review M2: the PRODUCTION patchAutoApproval wiring ──
 //
 // The unit tests inject `CodexPatchAutoApprovalContext` straight into the
 // bridge, so nothing pinned the closure `startCodexEngine` itself builds:
 // `{...options.patchAutoApproval, workspace: options.workspace,
 // activePresetId: () => engine?.snapshot().activePresetId ?? null}`. These
 // run the REAL wrapper over the REAL AppServerClient + test-child.mjs (same
-// rig as the TASK.180 bootNotices tests — a live child process, real fd
+// rig as the bootNotices tests — a live child process, real fd
 // transport, real initialize handshake, a real driven turn), so a future
 // refactor that drops `workspace`, freezes the preset at boot, or keys the
 // closure to a dead engine fails here instead of passing silently. Verified
 // by mutation: dropping `workspace` from the closure and reading the preset
 // from a dead closure both fail the accept test; a lying fs port fails it
 // too (containment genuinely runs through the supplied FileSystemPort).
-describe("startCodexEngine — patchAutoApproval wiring (Taskana 4265, cross-review M2)", () => {
+describe("startCodexEngine — patchAutoApproval wiring (cross-review M2)", () => {
   let WS = "";
   let OUTSIDE = "";
 
@@ -3659,9 +3659,9 @@ describe("startCodexEngine — patchAutoApproval wiring (Taskana 4265, cross-rev
   });
 });
 
-// ── TASK.182 / Taskana 4136: config.mcp_servers on thread/start + thread/resume ──
+// ── / config.mcp_servers on thread/start + thread/resume ──
 
-describe("CodexEngine — native session MCP thread config (TASK.182)", () => {
+describe("CodexEngine — native session MCP thread config", () => {
   const SAMPLE_MAP: Record<string, unknown> = {
     alpha: { command: "npx", args: ["-y", "alpha"], env: { TOKEN: "SECRET_SENTINEL_ABC" }, cwd: "/srv/alpha" },
     remote: { url: "https://remote.example/mcp", http_headers: { Authorization: "Bearer SECRET_SENTINEL_ABC" } },
@@ -3748,7 +3748,7 @@ describe("CodexEngine — native session MCP thread config (TASK.182)", () => {
   }
 });
 
-describe("TASK.95 — engine-owned collab correlation across parent turns", () => {
+describe("— engine-owned collab correlation across parent turns", () => {
   const spawnItem = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
     type: "collabAgentToolCall",
     id: "spawn-1",
@@ -3840,10 +3840,10 @@ describe("TASK.95 — engine-owned collab correlation across parent turns", () =
 });
 
 
-// Taskana 4764 X2/X3/X14: dynamicTools carry the browser declarations for a
+// X2/X3/X14: dynamicTools carry the browser declarations for a
 // root boot WITHOUT any agent profile; thread/resume still sends none; a
 // dynamicToolCall item projects nothing (no double count).
-describe("CodexEngine — Taskana 4764 browser dynamicTools", () => {
+describe("CodexEngine — browser dynamicTools", () => {
   function browserOnlyBridge(): CodexDynamicToolBridge {
     const browser = createEngineBrowserBridge({
       preview: {

@@ -2,7 +2,7 @@ import { scrubApprovalText } from "@anycode/core";
 export { scrubApprovalText } from "@anycode/core";
 
 /**
- * Taskana 4763: a short, scrubbed, single-line description of a pending tool
+ * a short, scrubbed, single-line description of a pending tool
  * request, for the Sessions API (`list_pending_approvals`) and for any channel
  * plugin that shows it to a person. It never carries file contents, edit
  * bodies, typed browser text, query strings or credentials. It is pure and it
