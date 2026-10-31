@@ -75,6 +75,14 @@ full bypass by your explicit grant.
 Prefer narrow, patterned rules. Add bare tool rules only for tools whose every
 use you would approve.
 
+## Profile rules
+
+A subagent profile can carry its own `permissions.allow` and `permissions.deny`
+lists in its frontmatter. They narrow that profile's children only, on top of
+the rules above: a denied call is refused without a prompt, an allowed call
+runs without a prompt where this gate would have asked, and everything else is
+unchanged. See [subagents.md](subagents.md#profile-permissions).
+
 ## Trusted binaries
 
 The Codex and Claude CLIs are trusted automatically unless their file could be

@@ -13,6 +13,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - You can turn streaming token-usage requests on or off for each Chat Completions connection in Advanced settings (GitHub #1).
 - Xiaomi MiMo pay-as-you-go API is available as a provider (mimo-v2.6-pro and mimo-v2.6-flash, with per-token cost tracking).
+- Agent profiles can carry their own permission rules (`permissions.allow` and `permissions.deny` in the profile's frontmatter) for their in-process children, applied on top of the session's rules and never wider than them: a denied command is refused without a prompt, an allowed one runs without a prompt, and everything else keeps the session's normal prompting (GitHub #8).
 
 ### Fixed
 

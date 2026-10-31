@@ -77,6 +77,27 @@ export interface PermissionRule {
   pattern?: string;
 }
 
+/**
+ * An agent profile's (`.anycode/agents/*.md` frontmatter) permission overlay.
+ * Both lists use the SAME rule shape and the same per-tool subject matching as
+ * the stored always-allow rules, and the overlay is NEVER WIDER than the
+ * session's own gate:
+ *  - `deny` is checked first and refuses a call without a prompt, but only
+ *    after the base engine already said allow/ask — a base `deny` keeps its
+ *    own (more specific) reason;
+ *  - `allow` only downgrades a base `ask` to `allow`; a base `allow` needs no
+ *    help and a base `deny` is never overridden;
+ *  - both lists are applied per child CONFIG (subagents/runner.ts
+ *    buildChildConfig), so they narrow exactly one profile's children. That is
+ *    the IN-PROCESS tier (the default); a session-tier child is its own session
+ *    with its own gate and does not read them — the same scope the profile's
+ *    `tools:` list has.
+ */
+export interface ProfilePermissionRules {
+  allow: readonly PermissionRule[];
+  deny: readonly PermissionRule[];
+}
+
 export interface PermissionBroker {
   /**
 
