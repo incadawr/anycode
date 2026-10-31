@@ -1,3 +1,4 @@
+import { manualCompactionUnavailableReason } from "../shared/manual-compaction.js";
 import { PresentationJournal } from "./presentation-journal.js";
 import type { CompactionRecordSeam } from "./compaction-records.js";
 import { agentMessageText, type AgentEnvelope, type AgentDelivery, type SessionPublicResult, type SessionStatus, type SessionActivityState, type SetSessionEffortOutcome } from "../shared/communication.js";
@@ -88,6 +89,7 @@ import {
 } from "@anycode/core";
 import { randomUUID } from "node:crypto";
 import type {
+  EngineCapabilitiesProjection,
   EngineModelChoice,
   EnginePermissionPreset,
   HostToUiMessage,
@@ -401,6 +403,14 @@ export class Outbound {
   clear(): void {
     this.buffer.length = 0;
     this.settledRequests.clear();
+  }
+
+  /** Drop readings from the previous engine while retaining transcript events. */
+  clearContextUsage(): void {
+    for (let i = this.buffer.length - 1; i >= 0; i--) {
+      const message = this.buffer[i];
+      if (message?.type === "agent_event" && message.event.type === "context_usage") this.buffer.splice(i, 1);
+    }
   }
 
   private write(message: HostToUiMessage): void {
@@ -1629,6 +1639,14 @@ export class Session {
    * lesson), and the ui_ready case itself pushes the current snapshot.
    */
   private uiReady = false;
+  /**
+   * Capabilities advertised at the last host_ready/engine push. An engine may
+   * revoke one mid-session (Codex flips `supportsManualCompact` off when the
+   * app-server answers `thread/compact/start` with -32601/-32000); onCompact
+   * diffs against this and pushes `engine_capabilities_changed` so the
+   * renderer stops offering the revoked command for THIS session.
+   */
+  private advertisedCapabilities: EngineCapabilitiesProjection | undefined;
   /** Slice P7.25/F3: unsubscribes the LSP status listener on shutdown (no leaked listener, no push-after-dispose). */
   private lspUnsubscribe: (() => void) | undefined;
   /** TASK.145 срез 2: host's pending-report queue seam; undefined for a child-mode host/legacy test (doc on SessionOptions.pendingChildReports). */
@@ -2554,6 +2572,7 @@ export class Session {
           this.child.onReady();
         }
         const presentation = enginePresentation(this.engine, this.engineSettings);
+        this.advertisedCapabilities = presentation?.capabilities;
         const bootEffortAdjustment = this.bootEffortAdjustment;
         this.bootEffortAdjustment = undefined;
         this.outbound.sendDirect({
@@ -3334,10 +3353,8 @@ export class Session {
    * on EVERY ui_ready (never ring-buffered), carrying exactly the wire state
    * the replay ring may have evicted: cumulative finish totals, the latest
    * context_usage reading, and the broker's CURRENTLY-SHOWN parked ask.
-   * CORE-ONLY by the capture gates (both checkpoint fields are written only
-   * for core-engine events; a foreign host's engine_session_tokens REPLACE
-   * semantics ride the ring untouched), so the whole push is core-gated
-   * here too — a native host never receives core checkpoint semantics.
+   * Native engines receive only the latest context reading. Core accounting
+   * and transcript checkpoint fields retain their existing capture gates.
    * Additive-optional fields: whatever has not been captured yet is simply
    * absent from the message (an older renderer / nothing-in-flight changes
    * nothing). The permission re-assert re-sends the SAME
@@ -3358,6 +3375,10 @@ export class Session {
 
   private pushSessionCheckpoint(): void {
     if (this.engine.id !== "core") {
+      // Native context telemetry needs reconnect custody without core accounting.
+      if (this.checkpointContextUsage !== null) {
+        this.outbound.sendDirect({ type: "session_checkpoint", contextUsage: this.checkpointContextUsage });
+      }
       if (this.lastUsageSummary !== null) this.outbound.sendDirect({
         type: "session_checkpoint",
         ...(this.latestTurnId !== null ? { latestTurnId: this.latestTurnId } : {}),
@@ -3835,9 +3856,8 @@ export class Session {
     if (this.shuttingDown) {
       return refuse("This session is closing.");
     }
-    if (this.child !== undefined || this.engine.compactNow === undefined) {
-      return refuse("Manual compaction is not available in this session.");
-    }
+    if (this.child !== undefined) return refuse(manualCompactionUnavailableReason(this.engine.id, true));
+    if (this.engine.compactNow === undefined) return refuse(manualCompactionUnavailableReason(this.engine.id, false));
     if (this.relocating) {
       return refuse("Wait for the workspace move to finish before compacting.");
     }
@@ -3848,6 +3868,11 @@ export class Session {
     // compactNow reads `this.options.loop` internally — detaching the method
     // from its receiver would call it with `this` undefined.
     const engine = this.engine;
+    engine.onMaintenanceEvent?.((event) => {
+      if (this.engine !== engine || this.shuttingDown) return;
+      this.outbound.emit({ type: "agent_event", turnId: MANUAL_COMPACTION_TURN_ID, event: sanitizeAgentEvent(event) });
+      if (event.type === "context_usage") this.checkpointContextUsage = { estimatedTokens: event.estimatedTokens, budgetTokens: event.budgetTokens, source: event.source };
+    });
     this.busy = true;
     let release!: () => void;
     const op = new Promise<void>((resolve) => {
@@ -3882,8 +3907,23 @@ export class Session {
       // is a defensive net mirroring runTurn's own catch above.
       this.outbound.emit({ type: "fatal", message: `compaction failed: ${describeError(error)}` });
     } finally {
-      // Taskana 4895: same idle-boundary apply as the rewind path above — a
-      // compaction holds `busy`, so a pick made during it was queued.
+      // Manual-compaction review minor: the engine may have REVOKED a
+      // capability during the attempt above (Codex flips
+      // `supportsManualCompact` off when the app-server refuses
+      // `thread/compact/start` with -32601/-32000). Diff the LIVE
+      // capabilities against the ones the renderer learned at session start
+      // and push an additive `engine_capabilities_changed` when they drifted,
+      // so the UI stops offering `/compact` for THIS session instead of
+      // re-refusing on every try. sendDirect, not emit: it is a present-tense
+      // fact, not replayable history — a reconnecting renderer re-reads the
+      // fresh host_ready projection instead.
+      if (this.advertisedCapabilities !== undefined && this.engine.id !== "core") {
+        const live = enginePresentation(this.engine, this.engineSettings)?.capabilities;
+        if (live !== undefined && live !== this.advertisedCapabilities) {
+          this.advertisedCapabilities = live;
+          this.outbound.sendDirect({ type: "engine_capabilities_changed", capabilities: live });
+        }
+      }
       this.applyPendingModelSelection();
       this.busy = false;
       this.abort = null;
@@ -3987,6 +4027,8 @@ export class Session {
       this.settingsBarrierActive = false;
       this.updateContextUsage(null);
       this.engine = next;
+      this.checkpointContextUsage = null;
+      this.outbound.clearContextUsage();
       this.engineSwitched = true;
       this.switchCarriedHistory = canonical;
       this.engineSettings = undefined; // foreign seam re-wired by the composition root later (§7 Q2)

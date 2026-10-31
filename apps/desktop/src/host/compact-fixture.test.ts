@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+import { createDesktopStore } from "../renderer/src/store.js";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -50,29 +52,98 @@ describe("Claude compact protocol fixture", () => {
 });
 
 
+
 describe("Codex compact protocol fixture", () => {
-  it("boots the native engine and refuses compact without another turn", async () => {
+  async function setup(unsupported = false) {
     const home = mkdtempSync(join(tmpdir(), "compact-codex-wire-"));
+    if (unsupported) writeFileSync(join(home, "codex-compact-mode"), "unsupported");
     const fixture = fileURLToPath(new URL("../../scripts/compact-fixtures/codex.mjs", import.meta.url));
-    const client = new AppServerClient({ binaryPath: fixture, cwd: home, sourceEnv: { HOME: home, PATH: process.env.PATH, CODEX_HOME: home } });
-    let h: ReturnType<typeof createHarness> | undefined;
+    const launches: Array<{ args: readonly string[]; pid: number | undefined }> = [];
+    const registrations: Array<{ enginePid: number; pgid: number }> = [];
+    const client = new AppServerClient({ binaryPath: fixture, cwd: home, sourceEnv: { HOME: home, PATH: process.env.PATH, CODEX_HOME: home },
+      spawnImpl: (command, args, options) => {
+        const child = spawn(command, args, options);
+        launches.push({ args, pid: child.pid });
+        return child;
+      },
+      processOwnership: { hostPid: process.pid, generation: 1, report: message => registrations.push(message) },
+    });
+    await client.start(); const { engine } = await createNativeCodexSession(client, home);
+    const h = createHarness({ steps: [], engine });
+    h.send({ type: "ui_ready" }); await h.waitFor((m): m is Extract<HostToUiMessage, { type: "host_ready" }> => m.type === "host_ready");
+    const rpcs = () => readFileSync(join(home, "codex-rpcs.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
+    const end = () => h.waitFor((m): m is Extract<HostToUiMessage, { type: "agent_event" }> => m.type === "agent_event" && m.event.type === "compaction_end");
+    const idle = () => vi.waitFor(() => expect((h.session as unknown as { busy: boolean }).busy).toBe(false));
+    const chat = async (text = "fixture ready") => { const before = h.received.length; h.send({ type: "user_message", requestId: `chat-${before}`, text }); await vi.waitFor(() => expect(h.received.slice(before).some(m => m.type === "agent_event" && m.event.type === "loop_end")).toBe(true)); await idle(); };
+    const close = async () => { await client.close(); h.close(); rmSync(home, { recursive: true, force: true }); };
+    return { home, client, engine, h, rpcs, end, idle, chat, close, launches, registrations };
+  }
+  it("routes idle Codex compact through native RPC and the manual UI rail", async () => {
+    const f = await setup();
     try {
-      await client.start();
-      const { engine } = await createNativeCodexSession(client, home);
-      h = createHarness({ steps: [], engine });
-      h.send({ type: "ui_ready" });
-      await h.waitFor((m): m is Extract<HostToUiMessage, { type: "host_ready" }> => m.type === "host_ready");
-      h.send({ type: "user_message", requestId: "fixture", text: "fixture ready" });
-      const turns = () => readFileSync(join(home, "codex-turns.jsonl"), "utf8").trim().split("\n");
-      await vi.waitFor(() => expect(turns()).toHaveLength(1));
-      h.send({ type: "compact_request" });
-      const refusal = await h.waitFor((m): m is Extract<HostToUiMessage, { type: "compact_rejected" }> => m.type === "compact_rejected");
-      expect(refusal.reason).toBe("Manual compaction is not available in this session.");
-      expect(turns()).toHaveLength(1);
-    } finally {
-      await client.close();
-      h?.close();
-      rmSync(home, { recursive: true, force: true });
-    }
-  }, 15_000);
+      expect(f.launches.map(launch => launch.args)).toEqual([["--version"], ["app-server", "--stdio"]]);
+      if (process.platform !== "win32") expect(f.registrations).toEqual([expect.objectContaining({ enginePid: f.launches[1]?.pid, pgid: f.launches[1]?.pid })]);
+      await f.chat(); const initialTurns = f.rpcs().filter(r => r.method === "turn/start").length;
+      f.h.send({ type: "compact_request" });
+      await f.h.waitFor((m): m is Extract<HostToUiMessage, { type: "agent_event" }> => m.type === "agent_event" && m.event.type === "compaction_start");
+      const store = createDesktopStore({ schedule: fn => fn() }); let cursor = 0;
+      for (; cursor < f.h.received.length; cursor++) store.getState().applyHostMessage(f.h.received[cursor]!);
+      expect(store.getState().turn.status).toBe("compacting");
+      await vi.waitFor(() => expect(f.rpcs().filter(r => r.method === "thread/compact/start")).toHaveLength(1));
+      writeFileSync(join(f.home, "release-codex-compact-1"), "release");
+      const end = await f.end(); await f.idle();
+      expect(end.turnId).toBe("manual-compaction"); expect(end.event).toMatchObject({ ok: true, preTokens: 47000 });
+      expect(end.event).not.toHaveProperty("postTokens");
+      // The replacement estimate rides AFTER compaction_end (yielded last);
+      // idle() can observe busy=false before the harness sees it.
+      await f.h.waitFor((m): m is Extract<HostToUiMessage, { type: "agent_event" }> => m.type === "agent_event" && m.event.type === "context_usage" && m.event.estimatedTokens === 8000);
+      for (; cursor < f.h.received.length; cursor++) store.getState().applyHostMessage(f.h.received[cursor]!);
+      expect(store.getState().turn.status).toBe("idle"); expect(store.getState().contextUsage).toEqual({ estimatedTokens: 8000, budgetTokens: 100000, source: "provider" });
+      expect(store.getState().notice?.text).toContain("before: 47000"); expect(f.rpcs().filter(r => r.method === "turn/start")).toHaveLength(initialTurns);
+    } finally { await f.close(); }
+  });
+  it("routes cancel_turn to the active native Codex compaction", async () => {
+    const f = await setup();
+    try {
+      await f.chat(); f.h.send({ type: "compact_request" });
+      await vi.waitFor(() => expect(f.rpcs().some(r => r.method === "thread/compact/start")).toBe(true));
+      f.h.send({ type: "cancel_turn" }); const end = await f.end(); await f.idle();
+      expect(end.event).toMatchObject({ ok: false, error: "cancelled" });
+      expect(f.rpcs().filter(r => r.method === "turn/interrupt").map(r => r.params)).toEqual([{ threadId: "fixture-thread", turnId: "fixture-compact-1" }]);
+      expect(f.h.received.some(m => m.type === "fatal")).toBe(false); await f.chat("following chat");
+    } finally { await f.close(); }
+  });
+  it("refuses unsupported Codex compact while idle with engine-specific copy", async () => {
+    const f = await setup(true);
+    try {
+      // Regression (review minor): the refused attempt must re-advertise the
+      // revoked capability to the renderer, so /compact stops being offered
+      // for this session instead of toasting the refusal on every try.
+      const store = createDesktopStore({ schedule: fn => fn() });
+      for (const message of f.h.received) store.getState().applyHostMessage(message);
+      expect(store.getState().engine?.capabilities.supportsManualCompact).toBe(true);
+      await f.chat(); expect(f.engine.capabilities.supportsManualCompact).toBe(true); f.h.send({ type: "compact_request" });
+      const end = await f.end(); await f.idle();
+      expect(end.event).toMatchObject({ ok: false, error: "Manual compaction is unavailable for this Codex app-server. Update Codex and start a new session." });
+      expect(f.engine.capabilities.supportsManualCompact).toBe(false);
+      const push = await f.h.waitFor((m): m is Extract<HostToUiMessage, { type: "engine_capabilities_changed" }> => m.type === "engine_capabilities_changed");
+      expect(push.capabilities.supportsManualCompact).toBe(false);
+      for (const message of f.h.received.slice(f.h.received.indexOf(push))) store.getState().applyHostMessage(message);
+      expect(store.getState().engine?.capabilities.supportsManualCompact).toBe(false);
+      f.h.send({ type: "compact_request" });
+      const refusal = await f.h.waitFor((m): m is Extract<HostToUiMessage, { type: "compact_rejected" }> => m.type === "compact_rejected");
+      expect(refusal.reason).toBe("Manual compaction is unavailable for this Codex app-server. Update Codex and start a new session.");
+      expect(f.rpcs().filter(r => r.method === "thread/compact/start")).toHaveLength(1); await f.chat("following chat");
+    } finally { await f.close(); }
+  });
+  it("refuses busy Codex compact without another native request", async () => {
+    const f = await setup();
+    try {
+      f.h.send({ type: "user_message", requestId: "held", text: "fixture: hold" });
+      await vi.waitFor(() => expect(f.rpcs().some(r => r.method === "turn/start")).toBe(true)); f.h.send({ type: "compact_request" });
+      const refusal = await f.h.waitFor((m): m is Extract<HostToUiMessage, { type: "compact_rejected" }> => m.type === "compact_rejected");
+      expect(refusal.reason).toBe("Cannot compact while this session is busy. Try again after this turn.");
+      writeFileSync(join(f.home, "release-codex"), "release"); await f.idle(); expect(f.rpcs().some(r => r.method === "thread/compact/start")).toBe(false);
+    } finally { await f.close(); }
+  });
 });

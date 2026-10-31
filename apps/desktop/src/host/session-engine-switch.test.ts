@@ -91,6 +91,7 @@ class SwitchableFakeEngine implements SessionEngine {
 
   /** Holds each runTurn's stream open until releaseTurn() (busy-gate fixture). */
   parked = false;
+  reportUsage = false;
 
   releaseTurn(): void {
     this.release?.();
@@ -105,6 +106,7 @@ class SwitchableFakeEngine implements SessionEngine {
         this.release = resolve;
       });
     }
+    if (this.reportUsage) yield { type: "context_usage", estimatedTokens: 47000, budgetTokens: 100000, source: "provider" };
     yield { type: "loop_end", reason: "completed", turns: 1 };
   }
 
@@ -198,6 +200,28 @@ describe("Session — engine switch (Taskana 4068)", () => {
     } finally {
       h.close();
     }
+  });
+
+  it.each([false, true])("drops the old context reading on reconnect after a switch (history: %s)", async (history) => {
+    const oldEngine = new SwitchableFakeEngine(history ? seededHistory() : []);
+    oldEngine.reportUsage = true;
+    const h = createHarness({ steps: [], engine: oldEngine, switchEngineFactory: async () => new NextFakeEngine() });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "user_message", requestId: "usage", text: "hello" });
+      await h.waitFor(agentEventOf("context_usage"));
+      await h.waitUntil(() => !(h.session as unknown as { busy: boolean }).busy);
+      h.send({ type: "engine_switch_request", requestId: "switch", engine: "codex" });
+      await h.waitFor(isEngineSwitched);
+      const before = h.received.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.slice(before).some(isHostReady));
+      await new Promise(resolve => setTimeout(resolve, 30));
+      const replay = h.received.slice(before);
+      expect(replay.some(m => m.type === "session_checkpoint" && m.contextUsage !== undefined)).toBe(false);
+      expect(replay.some(agentEventOf("context_usage"))).toBe(false);
+    } finally { h.close(); }
   });
 
   it("busy: refuses while a turn runs, engine unchanged, old engine not disposed", async () => {

@@ -760,7 +760,7 @@ describe("compactionRowText (TASK.227)", () => {
   });
 
   it("a post-swap reading the host declined to give prints \"?\", never an invented zero", () => {
-    expect(compactionRowText(card({ status: "done", preTokens: 10_703 }))).toContain("?");
+    expect(compactionRowText(card({ status: "done", preTokens: 10_703 }))).toBe("Conversation compacted (before: 10703 tokens)");
     expect(compactionRowText(card({ status: "done", preTokens: 10_703 }))).not.toContain("0 tokens");
   });
 

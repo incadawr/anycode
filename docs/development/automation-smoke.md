@@ -231,6 +231,22 @@ derive it from `os.homedir()` / `os.tmpdir()` at runtime (see `apps/desktop/scri
 when a doc or fixture needs an example path, use the placeholder `/Users/<user>`.
 History scrubbing of already-pushed commits is out of scope (see Taskana 4163).
 
+
+## Codex manual compaction smoke
+
+Codex manual compaction has a credential-free executable-fixture mode:
+
+```bash
+node apps/desktop/scripts/compact-submit-ui-smoke.mjs --codex-only
+```
+
+It opens isolated Codex fixture tabs and checks Enter, Send, menu submission,
+progress, reported context usage, cancellation, busy refusal, and unsupported
+app-server refusal. It requires local Electron dependencies and a graphical
+session, but no real login or paid provider. These synthetic fixtures do not
+prove compaction against the real Codex backend. An independent checker should
+inspect `facts.json`, screenshots, and the native request log.
+
 ## Running approval expiry smoke
 
 ```bash

@@ -276,3 +276,22 @@ Machine-checked coverage that does NOT need the live run: the child env
 family (app-server-client.test.ts), the writableRoots composition
 (presets.test.ts, codex-engine.test.ts), the owner-tab byte-identity
 (index.test.ts's 4682 shape block), and the dir lifecycle (codex-home.test.ts).
+
+
+Manual compaction (GitHub #24) consumes `thread/compact/start` with the required
+string `threadId` and the object acknowledgement `ThreadCompactStartResponse`.
+That acknowledgement carries no native turn ID and does not indicate completion.
+`turn/started` establishes identity; a completed `contextCompaction` item and
+`turn/completed` confirm the outcome. Provider usage arrives separately.
+
+There is NO boot-time schema discovery for compaction: the adapter sends
+`thread/compact/start` unconditionally and treats the first reply as the
+verdict. An app-server that lacks the method answers with a JSON-RPC error
+(-32601; a wedged server may answer -32000), at which point the engine reports
+the refusal, clears `compactNow`, and flips `supportsManualCompact` off for the
+rest of the session — the renderer is told over the additive
+`engine_capabilities_changed` push so `/compact` is no longer offered. The
+contract pin below (`thread/compact/start` under `methods.clientRequests`) is
+drift-checked against the pinned schema by contract-drift.test.ts only; it does
+not gate the runtime request. Executable compact fixtures are synthetic protocol
+evidence, not captures of live backend compaction.

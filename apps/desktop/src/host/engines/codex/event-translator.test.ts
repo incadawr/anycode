@@ -1,3 +1,4 @@
+import { decodeCodexContextUsage } from "./event-translator.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -1426,7 +1427,7 @@ function collabTests(): void {
   });
 
   describe("TASK.95 — discriminating bookkeeping", () => {
-    it.each(["reasoning", "contextCompaction", "plan", "userMessage", "enteredReviewMode", "exitedReviewMode"])("%s produces no generic tool card", (type) => {
+    it.each(["reasoning", "contextCompaction", "plan", "userMessage", "enteredReviewMode", "exitedReviewMode"])("keeps compaction bookkeeping out of ordinary tool cards: %s", (type) => {
       const translator = fresh();
       expect(translator.onNotification(startOf({ type, id: "b1" }))).toEqual([]);
       expect(translator.onNotification(completeOf({ type, id: "b1", status: "completed" }))).toEqual([]);
@@ -1473,3 +1474,14 @@ function collabTests(): void {
 }
 
 collabTests();
+
+describe("provider context usage decoder", () => {
+  it("decodes provider context usage without substituting cumulative totals", () => {
+    expect(decodeCodexContextUsage({ tokenUsage: { last: { totalTokens: 8000 }, total: { totalTokens: 100000 }, modelContextWindow: 100000 } })).toEqual({ type: "context_usage", estimatedTokens: 8000, budgetTokens: 100000, source: "provider" });
+  });
+  it("accepts zero context usage and rejects invalid readings", () => {
+    expect(decodeCodexContextUsage({ tokenUsage: { last: { totalTokens: 0 }, modelContextWindow: 100 } })?.estimatedTokens).toBe(0);
+    for (const count of [-1, NaN, Infinity, undefined]) expect(decodeCodexContextUsage({ tokenUsage: { last: { totalTokens: count }, modelContextWindow: 100 } })).toBeNull();
+    for (const window of [0, -1, NaN, Infinity, undefined]) expect(decodeCodexContextUsage({ tokenUsage: { last: { totalTokens: 10 }, modelContextWindow: window } })).toBeNull();
+  });
+});

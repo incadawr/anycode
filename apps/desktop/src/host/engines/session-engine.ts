@@ -36,10 +36,8 @@ export interface EngineCapabilities {
   readonly supportsTasks: boolean;
   readonly supportsFileSnapshots: boolean;
   /**
-   * TASK.92: the engine can run a MANUAL compaction on demand (`compactNow`
-   * exists on it — Session's `compact_request` rail reaches a real method).
-   * Core and Claude: true; codex: false (nothing user-triggerable is pinned
-   * upstream — compact there is only an auto `NonSteerableTurnKind`).
+   * Manual compaction is available when the engine exposes compactNow.
+   * Native engines verify support against their configured executable at boot.
    */
   readonly supportsManualCompact: boolean;
 }
@@ -111,12 +109,11 @@ export interface SessionEngine {
   replaceHistory?(items: HistoryItem[]): void;
   contextBreakdown?(): ContextBreakdown;
   /**
-   * Manual conversation compaction (TASK.146). Implemented ONLY by CoreEngine
-   * (delegates to AgentLoop.compactNow) — an engine without this method makes
-   * Session drop `compact_request` by construction; that absence IS the
-   * engine gate, not a runtime capability check.
+   * Manual conversation compaction on the existing host maintenance rail.
+   * Unsupported engines omit this method; Session visibly refuses the request.
    */
   compactNow?(options: { signal: AbortSignal }): AsyncIterable<AgentEvent>;
+  onMaintenanceEvent?(observer: (event: AgentEvent) => void): void;
   dispose(reason: "session-close" | "host-shutdown"): Promise<void>;
 }
 

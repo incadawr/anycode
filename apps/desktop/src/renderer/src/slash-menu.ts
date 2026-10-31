@@ -15,6 +15,8 @@
  * without mounting anything.
  */
 
+import { manualCompactionUnavailableReason } from "../../shared/manual-compaction.js";
+import type { EngineId } from "../../shared/engines.js";
 import type { SkillRowView, SkillSourceKind } from "../../shared/skills-config.js";
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -82,6 +84,7 @@ export interface SlashCapabilityCtx {
 
 /** Live composer/session state a command's dynamic description/enabled/visible reads. */
 export interface SlashMenuCtx extends SlashCapabilityCtx {
+  engineId?: EngineId;
   mode: string;
   model: string;
   running: boolean;
@@ -476,10 +479,10 @@ export function resolveBareSlashSubmit(
   }
 
   if (command.id === "compact") {
-    // Unsupported = no engine compactNow (Codex) or a child surface (its
+    // Unsupported = no verified engine compactNow or a child surface (its
     // transcript belongs to the parent's Agent-tool chain).
     if (!ctx.supportsManualCompact || childSurface) {
-      return { kind: "refuse", reason: "Manual compaction is not available in this session." };
+      return { kind: "refuse", reason: manualCompactionUnavailableReason(ctx.engineId ?? "core", childSurface) };
     }
     // The truly-idle window (separate from `modelDisabled`):
     // running, compacting, drained-but-unacked queue, or not-yet-ready.

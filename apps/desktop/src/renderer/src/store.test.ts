@@ -1166,6 +1166,49 @@ describe("desktop store — Phase 1 context/retry events (task 1.9, design §2.1
     return store;
   }
 
+  it.each([
+    { name: "renders Codex manual compact success and provider context usage on the sentinel", success: true },
+    { name: "releases Codex manual compact state after cancellation without ending a chat turn", success: false },
+  ])("$name", ({ success }) => {
+    const store = readyStore();
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "fixture", sessionId: "codex", engine: { id: "codex", capabilities: { supportsCorePermissions: false, supportsRewind: false, supportsWorkflow: false, supportsGitMutations: false, supportsContextUsage: true, supportsContextBreakdown: false, supportsInteractiveApprovals: false, costAccounting: false, supportsModelSelection: true, supportsReasoningEffort: true, supportsImages: true, supportsTasks: false, supportsFileSnapshots: false, supportsManualCompact: true } } });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: MANUAL_COMPACTION_TURN_ID, event: { type: "compaction_start", trigger: "manual" } });
+    expect(store.getState().turn.status).toBe("compacting");
+    store.getState().applyHostMessage({ type: "agent_event", turnId: MANUAL_COMPACTION_TURN_ID, event: { type: "compaction_end", ok: success, preTokens: 47000, ...(success ? { postTokens: 8000 } : { error: "cancelled" }), durationMs: 5 } });
+    if (success) store.getState().applyHostMessage({ type: "agent_event", turnId: MANUAL_COMPACTION_TURN_ID, event: { type: "context_usage", estimatedTokens: 8000, budgetTokens: 100000, source: "provider" } });
+    expect(store.getState().turn.status).toBe("idle"); expect(store.getState().turn.turnId).toBeNull();
+    if (success) expect(store.getState().contextUsage).toEqual({ estimatedTokens: 8000, budgetTokens: 100000, source: "provider" });
+    else expect(store.getState().notice?.text).toContain("cancelled");
+  });
+
+  it("learns a mid-session manual-compact revocation from engine_capabilities_changed", () => {
+    const store = readyStore();
+    const codexCapabilities = { supportsCorePermissions: false, supportsRewind: false, supportsWorkflow: false, supportsGitMutations: false, supportsContextUsage: true, supportsContextBreakdown: false, supportsInteractiveApprovals: false, costAccounting: false, supportsModelSelection: true, supportsReasoningEffort: true, supportsImages: true, supportsTasks: false, supportsFileSnapshots: false, supportsManualCompact: true } as const;
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "fixture", sessionId: "codex", engine: { id: "codex", capabilities: codexCapabilities } });
+    expect(store.getState().engine?.capabilities.supportsManualCompact).toBe(true);
+    // The app-server refused thread/compact/start; the host re-advertises the
+    // revoked capability so the Compact slash row disappears for this session.
+    store.getState().applyHostMessage({ type: "engine_capabilities_changed", capabilities: { ...codexCapabilities, supportsManualCompact: false } });
+    expect(store.getState().engine?.capabilities.supportsManualCompact).toBe(false);
+    // A core session (no engine projection) ignores the push.
+    const core = readyStore();
+    core.getState().applyHostMessage({ type: "engine_capabilities_changed", capabilities: { ...codexCapabilities, supportsManualCompact: false } });
+    expect(core.getState().engine).toBeNull();
+  });
+
+  it("accepts maintenance accounting and notices without accepting foreign turn events", () => {
+    const store = readyStore();
+    store.getState().applyHostMessage({ type: "agent_event", turnId: MANUAL_COMPACTION_TURN_ID, event: { type: "engine_session_tokens", input: 100, output: 20, total: 120 } });
+    expect(store.getState().sessionTokens).toMatchObject({ input: 100, output: 20, total: 120 });
+    const quota = { primary: { usedPercent: 10, windowDurationMins: 60 }, observedAt: "2026-10-29T00:00:00.000Z" };
+    store.getState().applyHostMessage({ type: "agent_event", turnId: MANUAL_COMPACTION_TURN_ID, event: { type: "engine_quota", quota } });
+    expect(store.getState().quota).toEqual(quota);
+    store.getState().applyHostMessage({ type: "agent_event", turnId: MANUAL_COMPACTION_TURN_ID, event: { type: "engine_notice", level: "warning", message: "Maintenance warning" } });
+    expect(store.getState().notice?.text).toContain("Maintenance warning");
+    store.getState().applyHostMessage({ type: "agent_event", turnId: MANUAL_COMPACTION_TURN_ID, event: { type: "compaction_end", ok: true, postTokens: 8000, durationMs: 5 } });
+    expect(store.getState().notice?.text).toContain("? → 8000");
+  });
+
   it("TASK.146: a manual compaction between turns survives the turn-scoped drop guard and claims the session", () => {
     const store = readyStore();
     // Between turns there IS no active turn — the guard's `turnId` is null,

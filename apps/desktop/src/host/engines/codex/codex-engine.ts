@@ -37,7 +37,7 @@ import { CodexApprovalBridge, type ActiveCodexTurn } from "./approval-bridge.js"
 import type { CodexPatchAutoApprovalPolicy } from "./patch-auto-approval.js";
 import { AppServerClient, type AppServerClientOptions } from "./app-server-client.js";
 import { CodexModelCatalog } from "./catalog.js";
-import { TurnTranslator } from "./event-translator.js";
+import { decodeCodexContextUsage, TurnTranslator } from "./event-translator.js";
 import { NATIVE_PERSISTED, projectCodexHistory, type CodexThreadRead } from "./history-projection.js";
 import {
   DEFAULT_CODEX_PRESET,
@@ -50,6 +50,8 @@ import { CollabAgentCardIndex } from "./collab-agent-index.js";
 import { CodexQuotaTracker } from "./quota.js";
 import type { CodexShadowLogPort } from "./shadow-log.js";
 import { TurnItemIndex } from "./turn-item-index.js";
+import { CODEX_THREAD_COMPACT_START_METHOD } from "./protocol.js";
+import { manualCompactionUnavailableReason } from "../../../shared/manual-compaction.js";
 import type { JsonRpcNotification } from "./protocol.js";
 import {
   WINDOWS_SANDBOX_READINESS_METHOD,
@@ -110,10 +112,7 @@ export const CODEX_ENGINE_CAPABILITIES: EngineCapabilities = {
   supportsImages: true,
   supportsTasks: false,
   supportsFileSnapshots: false,
-  // TASK.92: no user-triggerable compaction method is pinned on the codex
-  // contract (compact exists only as an auto NonSteerableTurnKind), so the
-  // Compact row stays hidden and Session drops any compact_request.
-  supportsManualCompact: false,
+  supportsManualCompact: true,
 };
 
 const CODEX_BRIDGED_CAPABILITIES: EngineCapabilities = {
@@ -128,6 +127,7 @@ function codexImageInput(attachment: ImageAttachment): { type: "image"; url: str
 
 /** Every bound is frozen in shared/codex-timeouts.ts; overrides exist for tests only. */
 export interface CodexEngineTimeouts {
+  compactUsageWaitMs: number;
   bootRpcMs: number;
   turnStartMs: number;
   interruptMs: number;
@@ -154,6 +154,7 @@ export interface CodexEngineTimeouts {
 }
 
 export const DEFAULT_CODEX_ENGINE_TIMEOUTS: CodexEngineTimeouts = {
+  compactUsageWaitMs: 1000,
   bootRpcMs: CODEX_BOOT_RPC_TIMEOUT_MS,
   turnStartMs: CODEX_TURN_START_TIMEOUT_MS,
   interruptMs: CODEX_TURN_INTERRUPT_TIMEOUT_MS,
@@ -479,6 +480,16 @@ function watchAbort(signal: AbortSignal): { promise: Promise<void>; dispose(): v
     signal.addEventListener("abort", listener, { once: true });
   });
   return { promise, dispose: () => signal.removeEventListener("abort", listener) };
+}
+
+// Codex reports its replacement-history estimate with zero request counters.
+// Ordinary compaction request usage must not be mistaken for the new context.
+function compactedContextUsage(params: unknown): Extract<AgentEvent, { type: "context_usage" }> | null {
+  const last = record(record(record(params)?.tokenUsage)?.last);
+  if (!last || last.inputTokens !== 0 || last.cachedInputTokens !== 0 ||
+      last.outputTokens !== 0 || last.reasoningOutputTokens !== 0 ||
+      typeof last.totalTokens !== "number" || last.totalTokens <= 0) return null;
+  return decodeCodexContextUsage(params);
 }
 
 interface SettleDeadline {
@@ -829,21 +840,21 @@ export class CodexEngine implements SessionEngine {
     this.bridgeWake = undefined;
   }
   readonly id = "codex" as const;
-  readonly capabilities: EngineCapabilities;
+  capabilities: EngineCapabilities;
   private readonly bounds: CodexEngineTimeouts;
   private readonly unobserve: () => void;
   private turnNumber = 0;
-  /**
-   * Count of native turns THIS launch has actually started, incremented ONLY
-   * once `turn/start` has returned a real turn id (LOW1 fix) — never at the
-   * top of `runTurn()` alongside `turnNumber`. `turnNumber` is burned by an
-   * early return (closed engine, unsupported attachments) before any native
-   * turn exists; anchoring shadow rows to it would silently skip an ordinal
-   * and misalign every later shadow row's `turnOrdinal` against the resumed
-   * thread's real `turns[]` indexing. This counter cannot drift that way: a
-   * turn that never reaches a confirmed turn id never advances it.
-   */
-  private nativeTurnCount = 0;
+  private operation: "turn" | "compact" | null = null;
+  private notificationIterator?: AsyncIterator<JsonRpcNotification>;
+  private pendingNotification?: Promise<IteratorResult<JsonRpcNotification>>;
+  private maintenanceObserver?: (event: AgentEvent) => void;
+  onMaintenanceEvent(observer: (event: AgentEvent) => void): void { this.maintenanceObserver = observer; }
+  private lateCompaction: { turnId: string; translator: TurnTranslator; succeeded: boolean } | null = null;
+  private compactUsageNotifications: JsonRpcNotification[] | null = null;
+  private latestContextUsage: Extract<AgentEvent, { type: "context_usage" }> | null = null;
+  private nextNativeTurnOrdinal: number;
+  private nativeTurnOrdinalDirty = false;
+  compactNow?: (options: { signal: AbortSignal }) => AsyncIterable<AgentEvent>;
   private activeTurn: ActiveCodexTurn | null = null;
   /** Item index of the turn currently being started/run; written by the transport tap. */
   private activeItems: TurnItemIndex | null = null;
@@ -892,7 +903,7 @@ export class CodexEngine implements SessionEngine {
     /** Host-owned shadow command log (cut §2(e)); undefined only for bare test-constructed engines. */
     private readonly shadowLog?: CodexShadowLogPort,
     /** This thread's turn count as of boot (0 for a fresh thread) — the ordinal the FIRST live turn of this launch occupies. */
-    private readonly baseTurnOrdinal = 0,
+    baseTurnOrdinal = 0,
     /** The one-shot resume-history projection (cut §2(e)); `[]` for a fresh session. */
     private readonly bootHistoryItems: readonly HistoryItem[] = [],
     /**
@@ -908,7 +919,9 @@ export class CodexEngine implements SessionEngine {
   ) {
     // Interactive approval is advertised only after the exact W0 bridge is
     // installed; direct/test-only engines retain the fail-closed capability.
-    this.capabilities = approvals === undefined ? CODEX_ENGINE_CAPABILITIES : CODEX_BRIDGED_CAPABILITIES;
+    this.capabilities = { ...(approvals === undefined ? CODEX_ENGINE_CAPABILITIES : CODEX_BRIDGED_CAPABILITIES) };
+    this.nextNativeTurnOrdinal = baseTurnOrdinal;
+    this.compactNow = this.compactNowInner.bind(this);
     this.bounds = timeouts(overrides);
     this.settings = settings;
     this.applied = this.chosen();
@@ -916,7 +929,7 @@ export class CodexEngine implements SessionEngine {
   }
 
   get activeTurnDetails(): ActiveCodexTurn | null {
-    return this.disposed ? null : this.activeTurn;
+    return this.disposed || this.operation === "compact" ? null : this.activeTurn;
   }
 
   mode(): PermissionMode {
@@ -1164,12 +1177,12 @@ export class CodexEngine implements SessionEngine {
   }
 
   steeringStatus(): { supported: boolean; ready: boolean; nativeTurnId?: string } {
-    return { supported: true, ready: this.activeTurn !== null && !this.disposed && this.terminalError === null, ...(this.activeTurn ? { nativeTurnId: this.activeTurn.turnId } : {}) };
+    return { supported: true, ready: this.operation !== "compact" && this.activeTurn !== null && !this.disposed && this.terminalError === null, ...(this.operation !== "compact" && this.activeTurn ? { nativeTurnId: this.activeTurn.turnId } : {}) };
   }
 
   async steer(input: string): Promise<{ turnId: string }> {
     const active = this.activeTurn;
-    if (active === null || this.disposed || this.terminalError !== null) throw new Error("No active Codex turn; use next_turn");
+    if (this.operation === "compact" || active === null || this.disposed || this.terminalError !== null) throw new Error("No active Codex turn; use next_turn");
     let result: { turnId?: string };
     try { result = await this.client.request<{ turnId?: string }>("turn/steer", {
       threadId: this.threadId,
@@ -1198,6 +1211,21 @@ export class CodexEngine implements SessionEngine {
     if (options.attachments?.length && this.settings !== undefined && !this.imageInputEnabled()) {
       yield* this.terminalEvents(turn, new Error("The selected Codex model does not support image attachments"));
       return;
+    }
+    if (this.operation !== null) {
+      yield* this.terminalEvents(turn, new Error("Codex engine is busy"));
+      return;
+    }
+    this.operation = "turn";
+    if (this.nativeTurnOrdinalDirty) {
+      try {
+        this.nextNativeTurnOrdinal = (await this.readNativeTurnState()).count;
+        this.nativeTurnOrdinalDirty = false;
+      } catch (error) {
+        this.operation = null;
+        yield* this.terminalEvents(turn, error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
     }
     yield { type: "turn_start", turn };
     // Boot-time notices (drift / unusable draft model) have no wire of their own:
@@ -1251,7 +1279,6 @@ export class CodexEngine implements SessionEngine {
     const settleRacers = (): Promise<{ kind: "settle-timeout" }>[] => (settle === null ? [] : [settle.promise]);
     const cancelSettle = (): void => settle?.cancel();
 
-    const iterator = this.client.notifications()[Symbol.asyncIterator]();
     // Captured BEFORE the request is written: this exact set is what the server
     // is about to be told, so it is also exactly what an "applied" ack may claim.
     const applying = this.pendingSettings;
@@ -1264,7 +1291,6 @@ export class CodexEngine implements SessionEngine {
       input: inputItems,
       ...this.turnSettingsOverride(),
     }, { timeoutMs: this.bounds.turnStartMs });
-    let next = iterator.next();
     const buffered: JsonRpcNotification[] = [];
 
     try {
@@ -1275,7 +1301,7 @@ export class CodexEngine implements SessionEngine {
       while (result === null) {
         const raced = await Promise.race([
           request.then((value) => ({ kind: "response" as const, value })),
-          next.then((value) => ({ kind: "notification" as const, value })),
+          this.peekNotification().then((value) => ({ kind: "notification" as const, value })),
           ...(abortObserved ? [] : [abort.promise.then(() => ({ kind: "abort" as const }))]),
         ]);
         if (raced.kind === "abort") {
@@ -1304,19 +1330,13 @@ export class CodexEngine implements SessionEngine {
             throw new Error("Codex app-server exceeded the pre-turn notification limit");
           }
         }
-        next = iterator.next();
+        this.consumeNotification();
       }
 
       const turnId = result.turn?.id;
       if (typeof turnId !== "string" || turnId.length === 0) throw new Error("Codex turn/start returned no turn id");
-      // A native turn now unambiguously exists — this is the ONLY point that
-      // may advance nativeTurnCount (LOW1 fix): this launch's live turns
-      // continue the thread's own turns[] sequence (cut §2(e)), so the
-      // ordinal shadow rows anchor to must track turns that actually
-      // happened, not `runTurn()` invocations (some of which return before a
-      // native turn ever starts).
-      const turnOrdinal = this.baseTurnOrdinal + this.nativeTurnCount;
-      this.nativeTurnCount += 1;
+      // Only an accepted native turn advances the next shadow-history ordinal.
+      const turnOrdinal = this.nextNativeTurnOrdinal++;
       // Phase 2 of the ack (cut §2(k).3): the server ACCEPTED a turn/start that
       // carried the new posture. That acceptance — not a notification, of which
       // there is none — is the confirmation. A turn/start that errored or timed
@@ -1430,7 +1450,10 @@ export class CodexEngine implements SessionEngine {
           heldTerminal = translated as AgentEvent[] | null;
           return;
         }
-        for (const event of translated) yield event;
+        for (const event of translated) {
+          if (event.type === "context_usage") { engine.latestContextUsage = event; engine.lateCompaction = null; }
+          yield event;
+        }
       };
 
       // The native id now exists, so a Stop latched during phase A fires here.
@@ -1449,7 +1472,7 @@ export class CodexEngine implements SessionEngine {
         const bridgeReady = new Promise<{ kind: "bridge" }>((resolve) => { this.bridgeWake = () => resolve({ kind: "bridge" }); });
         const raced = await Promise.race([
           bridgeReady,
-          next.then((value) => ({ kind: "notification" as const, value })),
+          this.peekNotification().then((value) => ({ kind: "notification" as const, value })),
           ...(abortObserved ? [] : [abort.promise.then(() => ({ kind: "abort" as const }))]),
           ...settleRacers(),
         ]);
@@ -1474,7 +1497,7 @@ export class CodexEngine implements SessionEngine {
           }
           throw this.terminalError ?? new Error("Codex app-server closed during a turn");
         }
-        next = iterator.next();
+        this.consumeNotification();
         yield* deliver(raced.value.value);
       }
       // TASK.226: under Stop the native terminal batch is HELD (deliver
@@ -1518,6 +1541,183 @@ export class CodexEngine implements SessionEngine {
       this.activeItems = null;
       cancelSettle();
       abort.dispose();
+      this.operation = null;
+    }
+  }
+
+  private peekNotification(): Promise<IteratorResult<JsonRpcNotification>> {
+    this.notificationIterator ??= this.client.notifications()[Symbol.asyncIterator]();
+    return this.pendingNotification ??= this.notificationIterator.next();
+  }
+
+  private consumeNotification(): void { this.pendingNotification = undefined; }
+
+  private async readNativeTurnState(): Promise<{ ids: Set<string>; count: number }> {
+    const response = await this.client.request("thread/read", { threadId: this.threadId, includeTurns: true }, { timeoutMs: this.bounds.bootRpcMs });
+    const thread = record(record(response)?.thread);
+    if (thread?.id !== this.threadId || !Array.isArray(thread.turns)) throw new Error("Codex thread/read returned invalid compaction correlation history");
+    const ids = new Set<string>();
+    for (const turn of thread.turns) {
+      const id = record(turn)?.id;
+      if (typeof id !== "string" || !id.length || ids.has(id)) throw new Error("Codex thread/read returned invalid native turn identities");
+      ids.add(id);
+    }
+    return { ids, count: ids.size };
+  }
+
+  private async *compactNowInner(options: { signal: AbortSignal }): AsyncIterable<AgentEvent> {
+    const started = Date.now();
+    const preTokens = this.latestContextUsage?.estimatedTokens;
+    const end = (ok: boolean, error?: string): AgentEvent => ({
+      type: "compaction_end", ok, ...(preTokens !== undefined ? { preTokens } : {}), durationMs: Date.now() - started,
+      ...(error ? { error } : {}),
+    });
+    if (this.operation !== null || this.disposed || this.terminalError) {
+      yield end(false, this.operation ? "Codex engine is busy" : "Codex engine is closed");
+      return;
+    }
+    this.operation = "compact";
+    this.lateCompaction = null;
+    const abort = watchAbort(options.signal);
+    let startup: SettleDeadline | null = null;
+    const settlement: { current: SettleDeadline | null } = { current: null };
+    let grace: SettleDeadline | null = null;
+    let submitted = false;
+    let nativeId: string | null = null;
+    let terminal = false;
+    let aborted = false;
+    let acknowledged = false;
+    let confirmed = false;
+    let sawUsage = false;
+    let translator: TurnTranslator | null = null;
+    const presentation = new TurnTranslator({ threadId: this.threadId, turnId: "", turn: 0, items: new TurnItemIndex(), ...(this.quota ? { quota: this.quota } : {}) });
+    let status: unknown;
+    let nativeError: string | undefined;
+    const cancel = (): void => {
+      aborted = true;
+      if (nativeId && !terminal) {
+        settlement.current ??= deadline(this.bounds.postInterruptSettleMs);
+        void this.sendInterruptOnce();
+      }
+    };
+    try {
+      yield { type: "compaction_start", trigger: "manual" };
+      if (options.signal.aborted) { yield end(false, "cancelled"); return; }
+      const baseline = await Promise.race([
+        this.readNativeTurnState().then(value => ({ kind: "baseline" as const, value })),
+        abort.promise.then(() => ({ kind: "abort" as const })),
+      ]);
+      if (baseline.kind === "abort" || options.signal.aborted || this.disposed) { yield end(false, "cancelled"); return; }
+      this.interruptSent = false;
+      startup = deadline(this.bounds.turnStartMs);
+      submitted = true;
+      this.compactUsageNotifications = [];
+      const request = this.client.request(CODEX_THREAD_COMPACT_START_METHOD, { threadId: this.threadId }, { timeoutMs: this.bounds.turnStartMs })
+        .then(value => ({ kind: "ack" as const, value }), error => ({ kind: "rejection" as const, error }));
+      while (!(terminal && acknowledged && (status !== "completed" || !confirmed || sawUsage))) {
+        if (terminal && acknowledged && status === "completed" && confirmed && !sawUsage) grace ??= deadline(this.bounds.compactUsageWaitMs);
+        const raced = await Promise.race([
+          this.peekNotification().then(value => ({ kind: "notification" as const, value })),
+          ...(!acknowledged ? [request] : []),
+          ...(!aborted && !terminal ? [abort.promise.then(() => ({ kind: "abort" as const }))] : []),
+          ...(!acknowledged || !nativeId ? [startup.promise.then(() => ({ kind: "startup-timeout" as const }))] : []),
+          ...(settlement.current && !terminal ? [settlement.current.promise] : []),
+          ...(grace ? [grace.promise.then(() => ({ kind: "grace" as const }))] : []),
+        ]);
+        if (raced.kind === "abort") { cancel(); continue; }
+        if (raced.kind === "grace") break;
+        if (raced.kind === "startup-timeout" || raced.kind === "settle-timeout") throw new Error("Codex manual compaction timed out awaiting native settlement");
+        if (raced.kind === "rejection") {
+          if (!nativeId && typeof raced.error?.code === "number") {
+            submitted = false;
+            if (raced.error.code === -32601) {
+              this.capabilities = { ...this.capabilities, supportsManualCompact: false };
+              this.compactNow = undefined;
+            }
+            yield end(false, raced.error.code === -32601 ? manualCompactionUnavailableReason("codex", false) : `Codex thread/compact/start failed: ${String(raced.error.message)}`);
+            return;
+          }
+          throw raced.error;
+        }
+        if (raced.kind === "ack") {
+          if (!record(raced.value)) throw new Error("Codex thread/compact/start returned an invalid acknowledgement");
+          acknowledged = true;
+          continue;
+        }
+        this.consumeNotification();
+        if (raced.value.done) throw new Error("Codex app-server closed during manual compaction");
+        const n: JsonRpcNotification = raced.value.value;
+        const params = record(n.params);
+        if (n.method === "account/rateLimits/updated" || n.method === "warning") {
+          yield* presentation.onNotification(n);
+          continue;
+        }
+        if (!params || params.threadId !== this.threadId) continue;
+        const item = record(params.item);
+        const candidate: unknown = n.method === "turn/started" ? record(params.turn)?.id
+          : (n.method === "item/started" || n.method === "item/completed") && item?.type === "contextCompaction" ? params.turnId : null;
+        if (!nativeId && typeof candidate === "string" && candidate.length && !baseline.value.ids.has(candidate)) {
+          nativeId = candidate;
+          this.nativeTurnOrdinalDirty = true;
+          const items = new TurnItemIndex();
+          this.activeItems = items;
+          this.activeTurn = { threadId: this.threadId, turnId: nativeId, items };
+          translator = new TurnTranslator({ threadId: this.threadId, turnId: nativeId, turn: 0, items, onUsage: usage => this.usageObserver?.(usage) });
+          if (aborted || options.signal.aborted) cancel();
+        }
+        if (!nativeId) continue;
+        const matches = n.method === "turn/started" || n.method === "turn/completed"
+          ? record(params.turn)?.id === nativeId : params.turnId === nativeId;
+        if (!matches) continue;
+        if (n.method === "item/completed" && item?.type === "contextCompaction" && typeof item.id === "string" && item.id.length) confirmed = true;
+        if (n.method === "thread/tokenUsage/updated") {
+          sawUsage = true;
+          if (!this.client.observeNotifications) this.compactUsageNotifications?.push(n);
+        }
+        if (n.method === "turn/completed" && !terminal) {
+          terminal = true;
+          status = record(params.turn)?.status;
+          nativeError = typeof record(record(params.turn)?.error)?.message === "string" ? record(record(params.turn)?.error)!.message as string : undefined;
+          this.activeTurn = null;
+          this.activeItems = null;
+          settlement.current?.cancel();
+        }
+      }
+      const ok = status === "completed" && confirmed;
+      // The transport tap runs before the pull reader, so reconcile every matching
+      // reading dispatched so far, including those still queued after the terminal.
+      const readings = this.compactUsageNotifications ?? [];
+      this.compactUsageNotifications = null;
+      const accounting: AgentEvent[] = [];
+      if (nativeId && translator) {
+        this.lateCompaction = { turnId: nativeId, translator, succeeded: ok };
+        for (const reading of readings) {
+          if (record(reading.params)?.turnId !== nativeId) continue;
+          for (const event of translator.onNotification(reading)) if (event.type === "engine_session_tokens") accounting.push(event);
+        }
+      }
+      // Only the zero-counter replacement estimate describes the new context.
+      const context = ok ? readings.filter(reading => record(reading.params)?.turnId === nativeId)
+        .map(reading => compactedContextUsage(reading.params)).filter(event => event !== null).at(-1) : undefined;
+      if (ok) this.latestContextUsage = context ?? null;
+      for (const event of accounting) yield event;
+      yield end(ok, ok ? undefined : status === "interrupted" ? "cancelled" : nativeError ?? "Codex did not confirm compaction");
+      if (context) yield context;
+    } catch (error) {
+      if (submitted) {
+        this.terminalError = error instanceof Error ? error : new Error(String(error));
+        await this.client.close().catch(() => {});
+      }
+      yield end(false, error instanceof Error ? error.message : String(error));
+    } finally {
+      this.activeTurn = null;
+      this.activeItems = null;
+      this.compactUsageNotifications = null;
+      this.operation = null;
+      abort.dispose();
+      startup?.cancel();
+      settlement.current?.cancel();
+      grace?.cancel();
     }
   }
 
@@ -1601,6 +1801,21 @@ export class CodexEngine implements SessionEngine {
    */
   private observeNotification(notification: JsonRpcNotification): void {
     this.indexItem(notification);
+    const late = this.lateCompaction;
+    const params = record(notification.params);
+    if (this.compactUsageNotifications && notification.method === "thread/tokenUsage/updated" && params?.threadId === this.threadId) {
+      this.compactUsageNotifications.push(notification);
+    }
+    if (late && notification.method === "thread/tokenUsage/updated" && params?.threadId === this.threadId && params.turnId === late.turnId) {
+      for (const event of late.translator.onNotification(notification)) {
+        if (event.type === "engine_session_tokens") this.maintenanceObserver?.(event);
+      }
+      const context = late.succeeded ? compactedContextUsage(notification.params) : null;
+      if (context) {
+        this.latestContextUsage = context;
+        this.maintenanceObserver?.(context);
+      }
+    }
     // `account/rateLimits/updated` (codex-profiles cut §6.1) is ACCOUNT-scoped:
     // it carries no threadId, so the per-turn queue's this-thread filter drops
     // it — and between turns there is no turn iterator draining the queue at

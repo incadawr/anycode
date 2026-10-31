@@ -247,7 +247,7 @@ export type AgentEvent =
   | {
       type: "compaction_end";
       ok: boolean;
-      preTokens: number;
+      preTokens?: number;
       postTokens?: number;
       durationMs: number;
       error?: string;

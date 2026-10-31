@@ -246,17 +246,24 @@ describe("Codex context boot", () => {
     const binaryDir = makeTrustedScratchDir("context-boot-codex");
     const binary = join(binaryDir, "codex.mjs");
     const fixture = resolve("apps/desktop/scripts/compact-fixtures/codex.mjs");
+    // The fixture auto-completes each turn with its own usage reading after
+    // 30ms; pin that reading to this test's numbers instead of patching a
+    // literal turn-id response the fixture no longer spells out.
     const source = readFileSync(fixture, "utf8")
-      .replace('case "thread/start":', `case "thread/resume": result = { thread: { id: "fixture-thread", turns: [] }, model: "gpt-fake-1" }; break;
-    case "thread/read":
-      send({ method: "thread/tokenUsage/updated", params: { threadId: "fixture-thread", tokenUsage: { last: { totalTokens: 5000 }, modelContextWindow: 200000 } } });
-      result = { thread: { id: "fixture-thread", turns: [] } }; break;
-    case "thread/start":`)
-      .replace('result = { turn: { id: "fixture-turn", status: "inProgress" } };', `result = { turn: { id: "fixture-turn", status: "inProgress" } };
-      setTimeout(() => {
-        send({ method: "thread/tokenUsage/updated", params: { threadId: "fixture-thread", turnId: "fixture-turn", tokenUsage: { last: { totalTokens: 12345 }, modelContextWindow: 200000 } } });
-        send({ method: "turn/completed", params: { threadId: "fixture-thread", turn: { id: "fixture-turn", status: "completed", items: [], error: null } } });
-      }, 50);`);
+      .replace('case "thread/start": case "thread/resume": respond({ thread: { id: "fixture-thread" }, model: "gpt-fake-1", approvalPolicy: "on-request", sandbox: { type: "workspaceWrite", writableRoots: [], networkAccess: false }, reasoningEffort: "high" }); break;', `case "thread/resume": {
+      notify("thread/tokenUsage/updated", { tokenUsage: { last: { totalTokens: 5000 }, modelContextWindow: 200000 } });
+      respond({ thread: { id: "fixture-thread" }, model: "gpt-fake-1", approvalPolicy: "on-request", sandbox: { type: "workspaceWrite", writableRoots: [], networkAccess: false }, reasoningEffort: "high" }); break;
+    }
+    case "thread/start": case "thread/resume": respond({ thread: { id: "fixture-thread" }, model: "gpt-fake-1", approvalPolicy: "on-request", sandbox: { type: "workspaceWrite", writableRoots: [], networkAccess: false }, reasoningEffort: "high" }); break;`)
+      .replace('else setTimeout(() => complete(), 30);', `else setTimeout(() => {
+        usage(active.id, 12345);
+        complete();
+      }, 30);`)
+      .replace('else usage(turn.id, 47000);', 'else usage(turn.id, 12345, 200000);')
+      // usage()'s signature is (turnId, tokens) with a fixed 100000 window; the
+      // extra arg is ignored there, so patch the window literal instead.
+      .replace('const usage = (turnId, tokens) => notify("thread/tokenUsage/updated", { turnId, tokenUsage: { last: { totalTokens: tokens }, total: { inputTokens: 47000, outputTokens: 1000, totalTokens: 48000 }, modelContextWindow: 100000 } });',
+        'const usage = (turnId, tokens, window = 100000) => notify("thread/tokenUsage/updated", { turnId, tokenUsage: { last: { totalTokens: tokens }, total: { inputTokens: 47000, outputTokens: 1000, totalTokens: 48000 }, modelContextWindow: window } });');
     writeFileSync(binary, source);
     chmodSync(binary, 0o755);
     const argv = process.argv;

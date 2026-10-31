@@ -3108,7 +3108,7 @@ describe("AgentLoop.compactNow — manual compaction (design slice-2.3-cut.md, t
     // The reading is the POST-swap one: identical to compaction_end's own
     // postTokens and strictly below the number the meter had been showing.
     expect(usage.estimatedTokens).toBe(end.postTokens);
-    expect(usage.estimatedTokens).toBeLessThan(end.preTokens);
+    expect(usage.estimatedTokens).toBeLessThan(end.preTokens!);
     // runCompaction dropped the now-stale provider baseline before returning,
     // so the reading is the local estimate, not a provider count.
     expect(usage.source).toBe("estimate");

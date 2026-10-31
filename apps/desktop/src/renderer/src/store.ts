@@ -156,6 +156,7 @@ export interface WorkspaceTrustRequest {
 
 /** Host's engine-switch announcement sentinel (mirrors host/engine-switch.ts ENGINE_SWITCH_TURN_ID). */
 const ENGINE_SWITCH_NOTICE_TURN_ID = "engine-switch";
+const MANUAL_COMPACTION_TURN_ID = "manual-compaction";
 
 /** Lifecycle of the renderer<->host port itself, independent of the agent turn lifecycle. */
 export type ConnectionPhase = "awaiting_port" | "awaiting_host_ready" | "ready" | "host_exited";
@@ -1961,12 +1962,21 @@ function compactionEndNotice(
   if (event.skipped === true) {
     return null;
   }
-  return {
-    kind: "compaction_end",
-    text: event.ok
-      ? `Conversation compacted (${event.preTokens} → ${event.postTokens ?? "?"} tokens).`
-      : `Compaction not applied: ${event.error ?? "unknown error"}`,
-  };
+  // Native engines (Codex compaction) may omit both token counts; the verdict
+  // below mirrors the transcript row's wording for the same event instead of
+  // printing "undefined". One `error` channel serves refusals and failures
+  // alike, so the ok:false branch stays "not applied", never "failed".
+  let text: string;
+  if (!event.ok) {
+    text = `Compaction not applied: ${event.error ?? "unknown error"}`;
+  } else if (event.postTokens !== undefined) {
+    text = `Conversation compacted (${event.preTokens ?? "?"} → ${event.postTokens} tokens).`;
+  } else if (event.preTokens !== undefined) {
+    text = `Conversation compacted (before: ${event.preTokens} tokens).`;
+  } else {
+    text = "Conversation compacted.";
+  }
+  return { kind: "compaction_end", text };
 }
 
 /**
@@ -3625,13 +3635,15 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       // event type: other engines' drift `engine_notice`s are real turn-scoped
       // events and must keep being dropped when foreign.
       const isEngineSwitchNotice = event.type === "engine_notice" && turnId === ENGINE_SWITCH_NOTICE_TURN_ID;
+      const isMaintenanceEvent = turnId === MANUAL_COMPACTION_TURN_ID && (event.type === "engine_session_tokens" || event.type === "engine_notice" || event.type === "engine_quota");
       if (
         get().turn.turnId !== turnId &&
         event.type !== "context_usage" &&
         event.type !== "preview_console" &&
         event.type !== "compaction_start" &&
         event.type !== "compaction_end" &&
-        !isEngineSwitchNotice
+        !isEngineSwitchNotice &&
+        !isMaintenanceEvent
       ) {
         return;
       }
@@ -5860,6 +5872,21 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // config change, so the composer re-gates attachments without a
             // model switch or a host restart.
             set({ imageFallback: message.imageFallback });
+            return;
+          case "engine_capabilities_changed":
+            // Manual-compaction review minor: the host reports a mid-session
+            // capability revocation (Codex's app-server refuses
+            // `thread/compact/start` with -32601/-32000 on first use, so the
+            // engine flips `supportsManualCompact` off). Patch the cached
+            // EnginePresentation in place — the Compact slash row reads this
+            // projection, so `/compact` disappears for THIS session without a
+            // reconnect. No-op when the renderer has no engine projection
+            // (core session, legacy host).
+            set((state) => ({
+              ...(state.engine !== null
+                ? { engine: { ...state.engine, capabilities: message.capabilities } }
+                : {}),
+            }));
             return;
           case "engine_switched":
             // Taskana 4068: the host swapped the live engine in place between

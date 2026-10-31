@@ -159,3 +159,7 @@ export const UNHANDLED_SERVER_REQUEST_ERROR: JsonRpcError = {
   code: -32001,
   message: "AnyCode Codex transport has no handler for this server request",
 };
+
+export const CODEX_THREAD_COMPACT_START_METHOD = "thread/compact/start";
+export interface ThreadCompactStartParams { threadId: string }
+export type ThreadCompactStartResponse = Record<string, never>;
