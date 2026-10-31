@@ -112,7 +112,9 @@ describe("describeClaudeReportStatus", () => {
     }).detail;
     expect(detail).toContain("Cannot find module");
     expect(detail).toContain("claude --version");
-    expect(detail).toContain("Binary");
+    // The hint names the control that actually exists on the pane.
+    expect(detail).toContain("Choose binary…");
+    expect(detail).not.toContain("under “Binary”");
   });
 });
 

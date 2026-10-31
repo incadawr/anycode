@@ -28,7 +28,11 @@ export type ClaudeDoctorStatus = "not_installed" | "update_required" | "signed_o
 /**
  * Result of one bounded doctor run. `error` carries a human-readable,
  * credential-free diagnostic — the doctor never persists or logs a token,
- * email, or subscription tier (sentinel-leak PoC, cut §1.2 DoD-4).
+ * email, or subscription tier (sentinel-leak PoC, cut §1.2 DoD-4). When a
+ * failed `--version` run contributes the CLI's own last stderr line as the
+ * cause, credential-shaped spans (`sk-…`, `ghp_…`, JWTs, `TOKEN=…` assignments)
+ * are masked to `<redacted>` and the text is bounded before it reaches this
+ * field.
  */
 export interface ClaudeDoctorReport {
   status: ClaudeDoctorStatus;

@@ -1122,6 +1122,13 @@ export interface ConnectionDrawerFieldsProps {
   footer?: ReactNode;
   /** First-run form: keep connection tuning behind a disclosure. */
   simplified?: boolean;
+  /**
+   * Fired with the id of a connection this form CREATED (both create flows).
+   * The dialog chrome needs it to stop calling a saved connection "Add
+   * connection"; nothing else may infer it (a connection appearing in the list
+   * is not proof this form made it).
+   */
+  onConnectionCreated?(connectionId: string): void;
 }
 
 /** The provider connection add/edit form body — no dialog chrome (see file docstring). Exported for both `ConnectionDrawer` and WelcomeScreen's first-run embed. */
@@ -1137,6 +1144,7 @@ export function ConnectionDrawerFields({
   customProvider,
   footer,
   simplified = false,
+  onConnectionCreated,
 }: ConnectionDrawerFieldsProps) {
   const labelInputRef = useRef<HTMLInputElement>(null);
   const maxOutputTokensInputRef = useRef<HTMLInputElement>(null);
@@ -1525,6 +1533,7 @@ export function ConnectionDrawerFields({
       }
       setProviderId(newId);
       setCreatedConnectionId(outcome.createdConnectionId);
+      onConnectionCreated?.(outcome.createdConnectionId);
       if (outcome.partial) {
         setError(outcome.error ?? "Custom endpoint and connection created, but the model list couldn't be saved — retry with Save.");
       }
@@ -1633,6 +1642,7 @@ export function ConnectionDrawerFields({
         return;
       }
       setCreatedConnectionId(outcome.createdConnectionId);
+      onConnectionCreated?.(outcome.createdConnectionId);
       // TASK.108-A: the just-revealed Model field opens on the catalog default
       // instead of blank, so the follow-up Save can't persist the empty-model
       // trap.
@@ -2552,22 +2562,17 @@ export interface ConnectionDrawerProps {
  * that moment on (the form switches to the created connection); leaving the
  * title at "Add connection" reads as if nothing was saved.
  */
-export function connectionDrawerTitle(mode: "add" | "edit", createdWhileOpen: boolean): "Add connection" | "Edit connection" {
-  return mode === "edit" || createdWhileOpen ? "Edit connection" : "Add connection";
-}
-
-/** A connection appearing under an open add drawer means the create flow succeeded. */
-export function connectionCreatedWhileOpen(baseline: number | null, current: number, mode: "add" | "edit"): boolean {
-  return mode === "add" && baseline !== null && current > baseline;
+export function connectionDrawerTitle(mode: "add" | "edit", created: boolean): "Add connection" | "Edit connection" {
+  return mode === "edit" || created ? "Edit connection" : "Add connection";
 }
 
 /** Native-`<dialog>` wrapper around `ConnectionDrawerFields` for the Settings grid's Add/Edit action. */
 export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDrawerProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   // The create path lives inside `fieldsProps`; the one fact the header needs
-  // is whether a connection appeared while this drawer was open.
-  const [createdWhileOpen, setCreatedWhileOpen] = useState(false);
-  const openCount = useRef<number | null>(null);
+  // is the id it reported, never a change in list length (a connection written
+  // elsewhere must not turn an unsaved Add form into "Edit connection").
+  const [createdId, setCreatedId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) {
@@ -2582,18 +2587,8 @@ export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDr
   }, [open]);
 
   useEffect(() => {
-    if (open) {
-      openCount.current = fieldsProps.connections.length;
-      setCreatedWhileOpen(false);
-    }
-    // The baseline is the count at OPEN time, not every count change.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (open) setCreatedId(null);
   }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    setCreatedWhileOpen(connectionCreatedWhileOpen(openCount.current, fieldsProps.connections.length, fieldsProps.mode));
-  }, [open, fieldsProps.mode, fieldsProps.connections.length]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -2615,7 +2610,7 @@ export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDr
     <dialog
       ref={dialogRef}
       className="connection-drawer"
-      aria-label={connectionDrawerTitle(fieldsProps.mode, createdWhileOpen)}
+      aria-label={connectionDrawerTitle(fieldsProps.mode, createdId !== null)}
       onCancel={(event) => {
         // TASK.58 item 4: act only on THIS drawer's own Escape — the shared
         // guard also stops this cancel (which React propagates up the tree)
@@ -2628,7 +2623,7 @@ export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDr
       }}
     >
       <div className="connection-drawer-header">
-        <span className="connection-drawer-title">{connectionDrawerTitle(fieldsProps.mode, createdWhileOpen)}</span>
+        <span className="connection-drawer-title">{connectionDrawerTitle(fieldsProps.mode, createdId !== null)}</span>
         <button type="button" className="connection-drawer-close" aria-label="Close" onClick={onClose}>
           <X aria-hidden="true" />
         </button>
@@ -2639,6 +2634,7 @@ export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDr
       <ConnectionDrawerFields
         key={fieldsProps.editConnection?.id ?? "add"}
         {...fieldsProps}
+        onConnectionCreated={(connectionId) => setCreatedId(connectionId)}
         footer={
           <div className="connection-drawer-footer">
             <button type="button" className="settings-button settings-button-primary" onClick={onClose}>

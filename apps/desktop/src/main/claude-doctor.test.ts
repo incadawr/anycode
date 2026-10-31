@@ -8,6 +8,7 @@ import { discoverClaudeBinary } from "./claude-binary.js";
 import { ENV_CLAUDE_PROXY_URL, LOOPBACK_NO_PROXY, encodeEngineProxyCarrier } from "../shared/engines.js";
 import {
   buildClaudeDoctorChildEnv,
+  maskCredentials,
   meetsClaudeVersionFloor,
   parseClaudeVersion,
   runClaudeDoctor,
@@ -29,6 +30,34 @@ function fakeSpawn(extraFlags: string[] = []) {
 function freshProfileDir(): string {
   return mkdtempSync(join(scratchDir, "profile-"));
 }
+
+describe("maskCredentials", () => {
+  it("redacts provider keys, bearer credentials, JWTs and TOKEN= assignments", () => {
+    const masked = maskCredentials(
+      "sk-ant-api03-abcdef123456 ghp_abcdefgh12345678 xoxb-1234567890-abcdef " +
+        "Bearer abcdef123456.789 eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signaturepart " +
+        "OPENAI_API_KEY=abcd1234 GITHUB_TOKEN: zzzz",
+    );
+    for (const secret of [
+      "sk-ant-api03-abcdef123456",
+      "ghp_abcdefgh12345678",
+      "xoxb-1234567890-abcdef",
+      "abcdef123456.789",
+      "eyJhbGciOiJIUzI1NiJ9",
+      "OPENAI_API_KEY=abcd1234",
+      "zzzz",
+    ]) {
+      expect(masked).not.toContain(secret);
+    }
+    expect(masked).toContain("<redacted>");
+  });
+
+  it("leaves ordinary diagnostics intact", () => {
+    expect(maskCredentials("Error: Cannot find module '@anthropic-ai/claude-code/cli.js'"))
+      .toBe("Error: Cannot find module '@anthropic-ai/claude-code/cli.js'");
+    expect(maskCredentials("disk-usage is high; task-run failed")).toBe("disk-usage is high; task-run failed");
+  });
+});
 
 describe("parseClaudeVersion / meetsClaudeVersionFloor", () => {
   it("parses the live `<major>.<minor>.<patch> (Claude Code)` shape", () => {
@@ -279,6 +308,20 @@ describe("runClaudeDoctor — status discrimination against a fake CLI", () => {
     expect(report.status).toBe("error");
     expect(report.error).toContain("exited with code 1");
     expect(report.error).toContain("Cannot find module '@anthropic-ai/claude-code/cli.js'");
+  });
+
+  it("error: the carried cause never reports a credential the wrapper echoed", async () => {
+    const report = await runClaudeDoctor("/fake/claude", {
+      trust: TRUSTED,
+      spawnImpl: fakeSpawn(["--leaky-stderr"]),
+      profileDir: freshProfileDir(),
+    });
+    expect(report.status).toBe("error");
+    expect(report.error).toContain("exited with code 1");
+    expect(report.error).toContain("<redacted>");
+    expect(report.error).not.toContain("sk-ant-api03-sentinel0secret0value");
+    expect(report.error).not.toContain("sentinel-bearer-token-value");
+    expect(report.error).not.toContain("ANTHROPIC_API_KEY=");
   });
 
   it("error: trust gate refuses the path before any spawn happens", async () => {

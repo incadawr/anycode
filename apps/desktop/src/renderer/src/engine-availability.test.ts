@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { watchExternalEngines } from "./engine-availability.js";
+import { useTabsStore } from "./tabs-store.js";
 import type { EngineId } from "../../shared/engines.js";
 
 function deferred() {
@@ -48,5 +49,29 @@ describe("first-run engine readiness", () => {
     second.resolve({ engineIds: ["codex"] });
     await Promise.resolve();
     expect(apply.mock.calls).toEqual([[false, []]]);
+  });
+
+  it("publishes every confirmed verdict to the shell store, so a pane that subscribed once stays current", async () => {
+    const startup = deferred();
+    const login = deferred();
+    let changed!: () => void;
+    useTabsStore.setState({ availableEngines: ["core"] });
+    const stop = watchExternalEngines({
+      listAvailableEngines: vi.fn().mockReturnValueOnce(startup.promise).mockReturnValueOnce(login.promise),
+      onEnginesChanged: (callback) => { changed = callback; return () => {}; },
+    }, () => {});
+    // Signing in after the dialog/editor is already open is the case that used
+    // to leave a ready engine reading "not connected".
+    changed();
+    login.resolve({ engineIds: ["core", "claude"] });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(useTabsStore.getState().availableEngines).toEqual(["core", "claude"]);
+    startup.resolve({ engineIds: ["core"] });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(useTabsStore.getState().availableEngines).toEqual(["core", "claude"]);
+    stop();
+    useTabsStore.setState({ availableEngines: ["core"] });
   });
 });
