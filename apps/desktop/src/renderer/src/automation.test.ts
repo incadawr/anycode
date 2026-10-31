@@ -9655,22 +9655,22 @@ describe("automation facade — codexProfileChipState / open / pick (W4-F0, find
   it("reads label/menuOpen/options{label,disabled}/addAccountLast off the rendered popover, and the draft's raw codexProfileId off the store", () => {
     const options: CodexProfileChipOptionState[] = [
       { label: "main", disabled: false, current: false },
-      { label: "acc2", disabled: true, current: false },
+      { label: "account-b", disabled: true, current: false },
     ];
-    const dom = fakeChipDom({ label: "acc2", menuOpen: true, options, addAccountLast: true });
+    const dom = fakeChipDom({ label: "account-b", menuOpen: true, options, addAccountLast: true });
     const { facade, tabsStore } = buildChipFixture(dom);
     tabsStore.getState().openDraft("/ws/x");
     tabsStore.getState().setDraftEngine("codex");
-    tabsStore.getState().setDraftCodexProfileId("acc2");
+    tabsStore.getState().setDraftCodexProfileId("account-b");
     expect(facade.codexProfileChipState()).toEqual({
       ok: true,
       chipVisible: true,
-      label: "acc2",
+      label: "account-b",
       menuOpen: true,
       options,
       addAccountLast: true,
       draftActive: true,
-      draftCodexProfileId: "acc2",
+      draftCodexProfileId: "account-b",
     });
   });
 
@@ -9700,7 +9700,7 @@ describe("automation facade — codexProfileChipState / open / pick (W4-F0, find
   it("codexProfileChipPick auto-opens the popover, FIRES the click even on a disabled row (the product's own gate is what a smoke must observe), refuses out-of-range", async () => {
     const options: CodexProfileChipOptionState[] = [
       { label: "main", disabled: false, current: false },
-      { label: "acc2", disabled: true, current: false },
+      { label: "account-b", disabled: true, current: false },
     ];
     const dom = fakeChipDom({ options });
     const { facade } = buildChipFixture(dom);

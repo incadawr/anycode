@@ -15,6 +15,9 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Xiaomi MiMo pay-as-you-go API is available as a provider (mimo-v2.6-pro and mimo-v2.6-flash, with per-token cost tracking).
 - Agent profiles can carry their own permission rules (`permissions.allow` and `permissions.deny` in the profile's frontmatter) for their in-process children, applied on top of the session's rules and never wider than them: a denied command is refused without a prompt, an allowed one runs without a prompt, and everything else keeps the session's normal prompting (GitHub #8).
 - A built-in using-subagents skill teaches the model how to delegate: picking the inline or session tier, detach, models, parallel limits, the shared checkout, reading max_turns and other outcomes, and writing a self-contained child prompt; Agent errors now point at it (GitHub #9).
+- Settings → Codex marks which account is the default and offers “Make default” on the others; a new session that does not pick an account itself starts on that default instead of your personal `~/.codex` plan, and a Codex subagent runs on the same account as the tab that started it (a Claude or core tab’s Codex subagent uses that default account).
+- `create_session` accepts `account` (a Codex profile id or its label) and refuses an unknown or ambiguous one with `invalid_account` plus the candidate list; omitting it uses the default account.
+- A session’s context popover names the Codex account it runs on (and whether it is the default).
 
 ### Fixed
 
@@ -73,6 +76,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - The background-tasks and terminal header toggles have distinct icons, and only the current sidebar tab wears the accent bar (other open tabs keep a quieter marker).
 - Kimi price records now cite the platform's pricing page (platform.kimi.ai/docs/pricing/chat) instead of the site root, and the newly published Kimi K2.7 Code / K2.7 Code Highspeed / K2.6 rates are included, so those models show a cost estimate instead of “price unknown”.
 - `/compact` supports idle Codex sessions and cancellation and updates the context meter from Codex’s replacement estimate and subsequent usage (GitHub #24)
+- Hitting a Codex usage limit is now recognised as such: the banner offers “Continue on another account”, which copies the conversation into the chosen account’s own Codex home and opens a new tab resuming the same thread there (the tab that ran out keeps its account); continuing the same thread on an account that already has it open is refused instead of opening it twice.
 
 ## [0.0.55] — 2026-10-30
 

@@ -7,7 +7,7 @@
 // parseUsageLimitNotice + UsageLimitNotice moved to shared/usage-limit.ts so the
 // HOST parses the raw provider message at the wire boundary (the renderer now
 // receives a redacted message it cannot parse). Re-exported here so existing
-// renderer imports keep resolving (W7b-FIX #2).
+// renderer imports keep resolving.
 export { parseUsageLimitNotice, type UsageLimitNotice } from "../../shared/usage-limit.js";
 import type { UsageLimitNotice } from "../../shared/usage-limit.js";
 
@@ -45,7 +45,11 @@ export function loadUsageLimitNotices(sessionId: string): UsageLimitNotice[] {
     return parsed.filter((item): item is UsageLimitNotice => {
       if (typeof item !== "object" || item === null) return false;
       const value = item as Partial<UsageLimitNotice>;
-      return value.kind === "usage_limit" && value.code === 1308 && typeof value.resetAt === "number" && Number.isFinite(value.resetAt);
+      // Both producers: a core 1308 (always with a reset time) and a Codex 429
+      // (a reset time is optional — the banner renders without it).
+      const knownCode = value.code === 1308 || value.code === 429;
+      const resetAtOk = value.resetAt === undefined || (typeof value.resetAt === "number" && Number.isFinite(value.resetAt));
+      return value.kind === "usage_limit" && knownCode && resetAtOk;
     });
   } catch {
     return [];

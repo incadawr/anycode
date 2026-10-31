@@ -990,7 +990,21 @@ describe("handleCreate — Codex profile resolution (codex-profiles W3-F)", () =
     };
   }
 
-  it("new: no codexProfileId in the request ⇒ resolveCodexProfile is never called, no codexProfile key on createTab", async () => {
+  it("new: no codexProfileId ⇒ the default account is resolved and reaches createTab", async () => {
+    const { manager, createTab } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    // `undefined` is the DEFAULT account: main resolves `settings.codex.activeProfileId`.
+    const resolveCodexProfile = vi.fn(async (profileId: string | undefined) => ({ ok: true as const, ...(profileId === undefined ? { codexProfile: { id: "account-b" } } : {}) }));
+    const deps: TabIpcDeps = { manager, persistence: persistenceStub, dialog, resolveCodexProfile };
+
+    await handleCreate(deps, { kind: "new", workspace: "/x", engine: "codex" });
+
+    expect(resolveCodexProfile).toHaveBeenCalledWith(undefined);
+    const call = createTab.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(call.codexProfile).toEqual({ id: "account-b" });
+  });
+
+  it("new: no codexProfileId and a DEFAULT of `system` ⇒ no codexProfile key, the ambient spawn unchanged", async () => {
     const { manager, createTab } = makeManager();
     const { dialog } = makeDialog({ canceled: false, filePaths: [] });
     const resolveCodexProfile = vi.fn(async () => ({ ok: true as const }));
@@ -998,9 +1012,19 @@ describe("handleCreate — Codex profile resolution (codex-profiles W3-F)", () =
 
     await handleCreate(deps, { kind: "new", workspace: "/x", engine: "codex" });
 
-    expect(resolveCodexProfile).not.toHaveBeenCalled();
     const call = createTab.mock.calls[0]?.[0] as Record<string, unknown>;
     expect("codexProfile" in call).toBe(false);
+  });
+
+  it("new: a CORE tab with no codexProfileId never consults the Codex registry", async () => {
+    const { manager } = makeManager();
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const resolveCodexProfile = vi.fn(async () => ({ ok: true as const }));
+    const deps: TabIpcDeps = { manager, persistence: persistenceStub, dialog, resolveCodexProfile };
+
+    await handleCreate(deps, { kind: "new", workspace: "/x", engine: "core" });
+
+    expect(resolveCodexProfile).not.toHaveBeenCalled();
   });
 
   it("new: a codexProfileId with NO resolver wired refuses fail-closed (not_ready), never spawns", async () => {
