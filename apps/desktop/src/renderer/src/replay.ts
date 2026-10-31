@@ -1,5 +1,5 @@
 /**
- *  S1 — the replay frame machine.
+ * S1 — the replay frame machine.
  *
  * Debug-only playback of an ALREADY RECORDED session: a resumed tab's
  * transcript (and an expanded child's history) is re-shown block by block,

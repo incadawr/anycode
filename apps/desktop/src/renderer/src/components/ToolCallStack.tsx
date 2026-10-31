@@ -1,5 +1,5 @@
 /**
- * Collapsible stack of consecutive terminal tool-call cards (, design
+ * Collapsible stack of consecutive terminal tool-call cards (design
  * §2). Pure presentation — the grouping projection lives in
  * `MessageList.groupTranscriptBlocks`; this component renders its `tool_stack`
  * items.
@@ -10,7 +10,7 @@
  * reveals every original `ToolCallCard` in order, each with its own
  * diffs/results/disclosure intact — `ToolCallCard` is reused as-is.
  *
- * Automation/`data-block-id` discipline ( §4b): `automation.ts`'s
+ * Automation/`data-block-id` discipline (§4b): `automation.ts`'s
  * `rewindState` counts rendered `[data-block-id]` nodes as a deterministic
  * transcript-truncation proof, and `TodoPanel`/`jumpToBlock` locate cards by
  * the same attribute. A collapsed stack shows only its header, so without
@@ -21,7 +21,7 @@
  * carry their own `data-block-id` via their standard wrapper.
  *
  * The disclosure state is local `useState(false)` — stacks are collapsed by
- * default ( §DoD invariant 6). React keys are stable: `MessageList`
+ * default (§DoD invariant 6). React keys are stable: `MessageList`
  * keys the stack by its first member's id (see `groupTranscriptBlocks`), so
  * a live append that grows a 2-stack into a 3-stack reuses the same node and
  * preserves the user's expand choice.

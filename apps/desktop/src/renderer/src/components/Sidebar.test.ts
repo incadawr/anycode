@@ -68,7 +68,7 @@ function session(overrides: Partial<SessionSummary> & Pick<SessionSummary, "id" 
 }
 
 describe("buildSidebarGroups", () => {
-  it("marks engine rows via engineId: open tab from a codex session, claude resumable, absent/core get none ( п.5)", () => {
+  it("marks engine rows via engineId: open tab from a codex session, claude resumable, absent/core get none (п.5)", () => {
     const groups = buildSidebarGroups(
       [tab({ tabId: "t1", workspace: "/ws" })],
       [
@@ -397,7 +397,7 @@ describe("limitGroupRows", () => {
   });
 });
 
-describe("tabsSessionKey ( — real session-set membership)", () => {
+describe("tabsSessionKey (real session-set membership)", () => {
   it("identity-only mutations keep the key: title/flag flips", () => {
     const base = tab({ tabId: "t1", workspace: "/w", sessionId: "s1" });
     const flipped = { ...base, title: "B", hostExited: true, terminalOpen: true };
@@ -432,7 +432,7 @@ describe("capSessionPage", () => {
   });
 });
 
-describe("SessionIndexController ( — fetch discipline; the hook delegates here)", () => {
+describe("SessionIndexController (fetch discipline; the hook delegates here)", () => {
   function rig(rows: readonly SessionSummary[]) {
     const fetchList = vi.fn(async (limit?: number): Promise<readonly SessionSummary[]> => {
       if (limit === undefined && rows.length > SIDEBAR_SESSIONS_LIMIT) {
@@ -601,7 +601,7 @@ describe("clampMenuLeft", () => {
   });
 });
 
-// : session-delete message/verdict helpers (pure, node-env — same
+// session-delete message/verdict helpers (pure, node-env — same
 // discipline as buildSidebarGroups above).
 describe("isRowDeletable", () => {
   it("offers delete only on resumable rows", () => {
@@ -650,7 +650,7 @@ describe("bulkDeleteConfirm", () => {
   });
 });
 
-// : the ConfirmDialog copy per pending confirm — must reuse the exact
+// the ConfirmDialog copy per pending confirm — must reuse the exact
 // singleDeleteConfirm / bulkDeleteConfirm text the old window.confirm calls
 // quoted (their own tests above stay authoritative for that text).
 describe("sidebarConfirmCopy", () => {
@@ -695,7 +695,7 @@ describe("deleteOlderNotice", () => {
 });
 
 // ---------------------------------------------------------------------------
-// REVIEW 15.08 ( defect 1) +  — THE NATIVE DIALOG GUARD.
+// REVIEW 15.08 (defect 1) + — THE NATIVE DIALOG GUARD.
 // window.prompt is NOT supported by Electron: it THROWS "prompt() is not
 // supported" the moment it is called. window.confirm/alert are blocking and
 // freeze the renderer behind a dialog the WebContentsView overlay can't hide.
@@ -705,7 +705,7 @@ describe("deleteOlderNotice", () => {
 // blocking native dialog. Pure-fn tests around handlers can never catch this
 // class of bug.
 
-describe("renderer native-dialog guard ( review 15.08, )", () => {
+describe("renderer native-dialog guard (review 15.08)", () => {
   it("no renderer production source calls confirm/alert/prompt — window., globalThis. or bare (Electron blocks/freezes them)", async () => {
     const { readdir, readFile } = await import("node:fs/promises");
     const { join, extname } = await import("node:path");

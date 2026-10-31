@@ -1,6 +1,6 @@
 /**
  * Profile settings pane (P7.22/F19 W3, design/slice-P7.22-cut.md §1/§2-D3/
- * §2-D7 W3; period filter + full model list added  slice 2): a
+ * §2-D7 W3; period filter + full model list added slice 2): a
  * read-only usage-stats dashboard aggregated from the local telemetry sink —
  * a 5-tile stat strip (ALWAYS lifetime, never filtered), a 12-month "Token
  * activity" daily heatmap (also always the full calendar), a Today/7 days/
@@ -31,7 +31,7 @@
  * simply omitted in that branch — the pane-level Refresh button is the retry
  * affordance).
  *
- * LOADING ( S4, defect 2 — "show it immediately and let the parts
+ * LOADING (S4, defect 2 — "show it immediately and let the parts
  * arrive"): the pane no longer replaces itself with a "Loading profile…"
  * line for the length of a full telemetry scan. On mount it fires the
  * cache-only read and the fresh scan in PARALLEL, paints whichever answers
@@ -87,16 +87,16 @@ import "../profile-pane.css";
 /** Subset of `window.anycode.profile` this pane drives, injectable so tests never touch a real `window`. */
 export interface ProfileBridge {
   getStats(): Promise<ProfileStatsResult>;
-  /**  S3: the cache-only read behind the instant first paint. */
+  /** S3: the cache-only read behind the instant first paint. */
   getStatsCached(): Promise<ProfileStatsCachedResult>;
   setTelemetry(enabled: boolean): Promise<ProfileTelemetrySetResult>;
   revealDir(): Promise<ProfileRevealDirResult>;
-  /**  S3: drop the aggregation cache and re-aggregate from empty (the footer's recovery action). */
+  /** S3: drop the aggregation cache and re-aggregate from empty (the footer's recovery action). */
   rebuildStats(): Promise<ProfileStatsResult>;
 }
 
 /**
- * The ONE place this pane touches the preload bridge ( S4). The
+ * The ONE place this pane touches the preload bridge (S4). The
  * controller is deliberately given its own narrow interface instead of
  * `ProfileBridge` itself, so that reconciling the renderer with whatever the
  * real preload ends up exposing is an edit to this function and nothing else.
@@ -192,8 +192,8 @@ export function buildProfileTiles(view: ProfileStatsView): ProfileTile[] {
 export type ProfileBranch = "hero" | "banner" | "normal" | "io-error";
 
 /** True when there is any history to show at all, independent of the current enable flag.
- *   slice 2: reads `days` (the period-filter's own data source) — the
- *  pre- `dailyTokens` map it superseded no longer exists on the wire
+ *  slice 2: reads `days` (the period-filter's own data source) — the
+ *  pre-`dailyTokens` map it superseded no longer exists on the wire
  *  (removed S10). */
 export function hasProfileData(view: ProfileStatsView): boolean {
   return view.lifetimeTokens > 0 || view.totalSessions > 0 || Object.keys(view.days).length > 0;
@@ -330,9 +330,9 @@ export function heatmapMonthLabels(weeks: HeatmapCell[][]): (string | null)[] {
   return labels;
 }
 
-// ── period filter ( slice 2, telemetry-track-plan.md §2/§3 S7) ──
+// ── period filter (slice 2, telemetry-track-plan.md §2/§3 S7) ──
 //
-// Everything below reads ONLY `view.days` — the pre- `dailyTokens`/
+// Everything below reads ONLY `view.days` — the pre-`dailyTokens`/
 // `topTools`/`topModels` top-N/single-map fields no longer exist on the wire
 // at all (removed S10; see the module doc on ProfileStatsView). The 5-tile
 // row and the heatmap's *window* stay global by design (§158 DoD:
@@ -469,7 +469,7 @@ function pluralFiles(n: number): string {
 
 /**
  * Whether the remaining backlog is still being eaten automatically
- * ( S4 catch-up), or the loader's progress guard has stopped the
+ * (S4 catch-up), or the loader's progress guard has stopped the
  * self-advancing loop. Both honesty notes below branch on it: a note may
  * only say "it continues by itself" while that is actually true, and must
  * say what the user has to do once it stops.
@@ -478,7 +478,7 @@ export type ProfileBacklogProgress = "advancing" | "stalled";
 
 /**
  * Honesty plashka for a period whose lower bound reaches past what the scan
- * actually covered ( slice 0's `coverageStartTs`): `null` when the
+ * actually covered (slice 0's `coverageStartTs`): `null` when the
  * scan was never truncated, or when the window's start is on/after the
  * covered boundary; otherwise names the boundary date. `now` is accepted for
  * signature symmetry with `periodStartKey`/`buildHeatmapCells` (every
@@ -486,7 +486,7 @@ export type ProfileBacklogProgress = "advancing" | "stalled";
  * coverage date itself is already fully disambiguated (YYYY-MM-DD includes
  * the year), so nothing here currently branches on it.
  *
- *  S4 (plan D-2): the copy now depends on `backlogRemaining`, because
+ * S4 (plan D-2): the copy now depends on `backlogRemaining`, because
  * with the incremental cache the two ways history can be missing stopped
  * being the same thing. A non-zero backlog is TEMPORARY — the next pass eats
  * into it, so the note may promise that Refresh continues. A zero backlog
@@ -517,7 +517,7 @@ export function coverageNotice(
 }
 
 /**
- * The global `.profile-truncated-note` copy ( S4). Pre-187 this was a
+ * The global `.profile-truncated-note` copy (S4). Pre-187 this was a
  * bare JSX string with no test of its own — "Stats truncated (very large
  * telemetry dir)." — which was also the wrong diagnosis once the scan became
  * incremental: the usual reason for a truncated view is now simply that the
@@ -563,7 +563,7 @@ export function coverageCollapseNoteText(progress: ProfileCollapseProgress): str
 
 /**
  * The `data-*` attributes the pane root carries for the automation probe
- * ( S4 + review round). Kept as one pure function rather than four
+ * (S4 + review round). Kept as one pure function rather than four
  * inline expressions on the JSX, so the published contract is pinned by a
  * unit test instead of by a DOM read nothing in this package can run.
  *
@@ -614,7 +614,7 @@ export function profileBusyNoteText(state: ProfileLoadState): string | null {
 }
 
 /**
- * Whether the pane must flag `longestSessionMs` as provisional ( S4,
+ * Whether the pane must flag `longestSessionMs` as provisional (S4,
  * plan §2 "Блокер 1"): main has not finished its exact second pass over the
  * sessions whose activity spans several files. A named predicate rather than
  * an inline comparison, so the renderer reads this wire field in exactly one
@@ -655,7 +655,7 @@ export function isTelemetryToggleDisabled(view: ProfileStatsView | null): boolea
 }
 
 /**
- * What the rendered switch actually reads ( S4): the pre-187
+ * What the rendered switch actually reads (S4): the pre-187
  * conditions above, plus the window in which the user's own toggle write is
  * still in flight. Only that write holds it — a background stats read must
  * never make a settings switch unclickable, which is why the controller
@@ -772,7 +772,7 @@ export function ProfilePane({ bridge = window.anycode.profile, now }: ProfilePan
 }
 
 /**
- * The cold-start frame ( defect 2 / plan D-4): the pane's real
+ * The cold-start frame (defect 2 / plan D-4): the pane's real
  * skeleton — a five-tile strip, a heatmap block and the two section
  * headings, each with its own spinner — instead of the single "Loading
  * profile…" line that used to replace the entire pane for the length of a
@@ -814,7 +814,7 @@ function ProfileSkeleton() {
 }
 
 /**
- * The cache-rebuild action ( S4, plan D-5 / review-v3 finding 4).
+ * The cache-rebuild action (S4, plan D-5 / review-v3 finding 4).
  * Deliberately a footer text row rather than a button in the pane chrome:
  * Refresh is the everyday affordance and stays incremental, while this is the
  * recovery path for the one cache-corruption class the fingerprint cannot

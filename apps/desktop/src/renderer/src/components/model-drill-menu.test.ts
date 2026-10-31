@@ -1,5 +1,5 @@
 /**
- *  — the shared model popover's empty-root "Add connection"
+ * the shared model popover's empty-root "Add connection"
  * affordance. Same jsdom-free discipline as ConfirmDialog.test.ts: the
  * component is presentational (no hooks), so `renderToStaticMarkup` renders its
  * HTML under this package's plain "node" vitest environment, and calling it

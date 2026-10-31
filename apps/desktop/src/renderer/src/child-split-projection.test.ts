@@ -1,5 +1,5 @@
 /**
- *  (supervisor correction 4): the split panel's CONTINUATION
+ * (supervisor correction 4): the split panel's CONTINUATION
  * projection, tested through the real seam — `projectChildSplitRows` fed by
  * the REAL relation store (driven the way `registerPort` drives it:
  * `registerChild` per delivered child port) and a real master transcript.

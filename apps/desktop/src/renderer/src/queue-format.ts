@@ -1,6 +1,6 @@
 /**
  * Shared formatting for user messages carrying image attachments (slice
- * P7.14 §2.1). : NO LONGER used for the transcript echo
+ * P7.14 §2.1). NO LONGER used for the transcript echo
  * — live `user_text` blocks carry the attachments themselves
  * (`appendUserText(..., images)`) and render thumbnails instead of this badge.
  * `imageAttachmentBadge`/`transcriptTextWithImages` remain for the prompt-QUEUE
@@ -18,7 +18,7 @@ export function imageAttachmentBadge(count: number): string {
  * Composes the queued-prompt display text for a user message: the raw text
  * alone when there are no images, otherwise the text followed by the
  * attachment badge on its own line (or the badge alone when the text is
- * blank). : transcript echoes no longer use this — only the queue
+ * blank). transcript echoes no longer use this — only the queue
  * pill/preview does.
  */
 export function transcriptTextWithImages(text: string, imageCount: number): string {

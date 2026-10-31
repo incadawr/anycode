@@ -62,11 +62,11 @@ describe("modeIndexForDigit", () => {
 });
 
 /**
- *  honest Edit mode: the copy string pin (D-S1-11). Only the `edit`
+ * honest Edit mode: the copy string pin (D-S1-11). Only the `edit`
  * entry changes; the other four modes' strings are byte-exact pins of today.
  */
 describe("MODE_DESCRIPTIONS", () => {
-  it("M1t: edit copy is the  string", () => {
+  it("M1t: edit copy is the string", () => {
     expect(MODE_DESCRIPTIONS.edit).toBe("Edit files in this project without asking");
   });
 
@@ -94,7 +94,7 @@ describe("modeChangeDisabled", () => {
 });
 
 /**
- *  §3.7 (part B): the Orchestrate row pins. The row renders
+ * §3.7 (part B): the Orchestrate row pins. The row renders
  * AFTER the five modes behind a divider and toggles through
  * `onToggleOrchestrate` (set_orchestrate), never through
  * `onChange`/PERMISSION_MODE_OPTIONS — the digit-selection guard below is the

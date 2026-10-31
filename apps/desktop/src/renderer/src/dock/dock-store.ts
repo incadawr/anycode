@@ -43,7 +43,7 @@ export interface DockStoreState {
    */
   splitTabId: string | null;
   /**
-   * : the conversation tab that OWNS `tabs`/`activeTabId`/
+   * the conversation tab that OWNS `tabs`/`activeTabId`/
    * `splitTabId` right now. The store is a singleton across conversation
    * tabs, so without an owner marker a tab switch would render the previous
    * tab's dock items for one frame (ActiveTabBody's derivation effects run
@@ -53,7 +53,7 @@ export interface DockStoreState {
    */
   ownerTabId: string | null;
   /**
-   * : become the owner (ActiveTabBody's layout effect, BEFORE
+   * become the owner (ActiveTabBody's layout effect, BEFORE
    * its derivation effects and before paint). Same id → no-op (the same
    * state object, no re-render); new id → synchronously reset the owned
    * triple. Renderer state ONLY — the per-tab sources of truth
@@ -150,7 +150,7 @@ export function createDockStore(storage: DockStorage = typeof window === "undefi
 export const useDockStore = createDockStore();
 
 /**
- * : the owner-gated view of the dock for one conversation tab.
+ * the owner-gated view of the dock for one conversation tab.
  * Frozen module singleton for every NON-owner (zustand selectors must not
  * allocate per call — callers compare by reference); the live triple for the
  * owner. This is the ONLY render-time read path for `tabs`/`activeTabId`/

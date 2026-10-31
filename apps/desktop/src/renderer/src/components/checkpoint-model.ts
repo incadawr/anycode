@@ -66,7 +66,8 @@ export function deriveTurnLabel(userInput: string): string {
 }
 
 /**
- * Map transcript user turns to their auto-captured checkpoints ( §2.3). A checkpoint carries no turn/message id — only the label core
+ * Map transcript user turns to their auto-captured checkpoints (
+ * 4742 §2.3). A checkpoint carries no turn/message id — only the label core
  * derived from the turn's prompt (`deriveTurnLabel` above) and `createdAt`.
  * The rail's "Rewind to before this message" action is offered ONLY for a
  * turn with a matched checkpoint; never a guess.
@@ -124,7 +125,8 @@ export function matchCheckpointsToTurns(
 }
 
 /**
- * Gate for the popover's "Rewind to before this message" action ( §2.4): shown only when the tab supports rewind (the owner already
+ * Gate for the popover's "Rewind to before this message" action (
+ * 4742 §2.4): shown only when the tab supports rewind (the owner already
  * resolved `engine?.capabilities.supportsRewind ?? true` — an absent
  * `rewind` prop means no), the turn has a MATCHED checkpoint, and the list
  * is not read-only (a read-only pane never passes a `rewind` prop, so

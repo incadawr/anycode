@@ -29,10 +29,10 @@ export function shouldShowPromptQueue(
 export function PromptQueue() {
   const promptQueue = useTabStore((state) => state.promptQueue);
   const queuePaused = useTabStore((state) => state.queuePaused);
-  // : the banner must name the REAL reason the queue is held
-  // ("turn limit" vs "cancelled/failed") —  «Работа» §2.
+  // the banner must name the REAL reason the queue is held
+  // ("turn limit" vs "cancelled/failed") — «Работа» §2.
   const queuePauseReason = useTabStore((state) => state.queuePauseReason);
-  // : steers already on the wire to the host's steer queue, awaiting
+  // steers already on the wire to the host's steer queue, awaiting
   // their turn_started. Host-owned — no renderer edit/delete controls.
   const pendingSteers = useTabStore((state) => state.pendingSteers);
   const tabStore = useTabStoreApi();

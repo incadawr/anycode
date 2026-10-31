@@ -21,7 +21,7 @@ const STORAGE_PREFIX = "anycode.provider-switches.v1:";
 
 function storage(): Storage | null {
   try {
-    // Same  boundary discipline as provider-notices.ts: resolve
+    // Same boundary discipline as provider-notices.ts: resolve
     // through the `window` property of globalThis so node-lib typechecks and
     // tests stubbing globalThis.window keep working; fail soft when denied.
     return (globalThis as { window?: { localStorage?: Storage } }).window?.localStorage ?? null;

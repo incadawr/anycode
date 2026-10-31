@@ -10,7 +10,7 @@
  * augmentation must be wrapped in `declare global` + a top-level `export {}`
  * to actually merge into the global `Window` interface.
  */
-// : duplicated from main/artifacts-ipc.ts's result shapes (preload's
+// duplicated from main/artifacts-ipc.ts's result shapes (preload's
 // own copies are not exported to the renderer tsconfig; same "duplicated on
 // purpose" convention as preload's channel literals).
 type ArtifactReadImageResult =
@@ -41,11 +41,11 @@ type ArtifactActionResult =
         | "io_error";
     };
 
-// -A: duplicated from main/artifacts-ipc.ts's ArtifactAllowResult (and
+// duplicated from main/artifacts-ipc.ts's ArtifactAllowResult (and
 // preload's own mirror of it) — same "duplicated on purpose" convention.
 type ArtifactAllowResult = { ok: true; realPath: string } | { ok: false; reason: "no_workspace" | "not_found" };
 
-//  slice 2: duplicated from main/artifacts-ipc.ts's previewable-probe
+// slice 2: duplicated from main/artifacts-ipc.ts's previewable-probe
 // result (and preload's own mirror of it) — same "duplicated on purpose"
 // convention. `paths` is the subset of the CALLER'S OWN strings that
 // verified — never a resolved realpath.
@@ -63,7 +63,7 @@ import type {
   PreviewPanelStatePayload,
   PreviewSetContainerResult,
 } from "../../shared/preview-panel";
-//  M1: native DOM markdown preview's doc-read contract — a frozen
+// M1: native DOM markdown preview's doc-read contract — a frozen
 // shared/** contract, imported directly (same convention as preview-panel above).
 import type { MdDocReadResult } from "../../shared/md-preview";
 import type {
@@ -78,7 +78,7 @@ import type {
   TabRebindResult,
   WorkspacePickResult,
 } from "../../shared/tabs";
-//  CUT-S2 §2.5/§10.8.1: `WireHistoryItem` read type-only off
+// CUT-S2 §2.5/§10.8.1: `WireHistoryItem` read type-only off
 // shared/protocol.ts (unrestricted read access; only EDITING
 // apps/desktop/src/shared/** is out of this slice's fence).
 import type { WireHistoryItem } from "../../shared/protocol";
@@ -97,7 +97,7 @@ import type {
   SettingsPatch,
   SettingsSnapshot,
 } from "../../shared/settings";
-// : the proxy-registry contract (a frozen shared/** module, imported
+// the proxy-registry contract (a frozen shared/** module, imported
 // directly — same convention as preview-panel/md-preview above).
 import type {
   ProxyCheckRequest,
@@ -107,7 +107,7 @@ import type {
   ProxyProfileUpsertRequest,
   ProxyRefSetRequest,
 } from "../../shared/proxy";
-// : the vision-fallback recognizer's probe + save/off contracts (a
+// the vision-fallback recognizer's probe + save/off contracts (a
 // frozen shared/** module, imported directly — same convention as
 // preview-panel/md-preview above).
 import type { RecognizerProbeRequest, RecognizerProbeResult, RecognizerSetRequest } from "../../shared/recognizer";
@@ -150,7 +150,7 @@ import type {
   McpImportScanResult,
 } from "../../shared/mcp-config";
 import type { McpSecretMutationResult, McpSecretsListResult } from "../../shared/mcp-secrets";
-// : Settings → Language servers invoke-API (mirror of preload's
+// Settings → Language servers invoke-API (mirror of preload's
 // `lspConfig.*` wrappers over shared/lsp-config.ts).
 import type {
   LspCatalogStatusRequest,
@@ -223,7 +223,7 @@ import type { DesktopPlatform, WindowState } from "../../shared/window";
 import type { CodexDoctorReport } from "../../shared/codex-doctor";
 import type { ClaudeDoctorReport } from "../../shared/claude-doctor";
 
-//  (design/slice-codex-fixes-cut.md §2(g)/§3.8): mirrors the SAME
+// (design/slice-codex-fixes-cut.md §2(g)/§3.8): mirrors the SAME
 // duplicated shapes declared in preload/index.ts (that file's own header
 // explains why — `shared/**` froze read-only after block C0, so these small
 // wire interfaces are kept in sync by contract, the same "duplicated on
@@ -234,7 +234,7 @@ export interface CodexOnboardingSnapshot {
   binaryPath: string | null;
   source: "env" | "settings" | "path" | "common" | "installed" | "picker" | "none";
   checkedAt: string;
-  /** : alternate-binary candidates the error card may offer — absent when the ladder found none. */
+  /** alternate-binary candidates the error card may offer — absent when the ladder found none. */
   alternates?: Array<{ path: string; source: "env" | "settings" | "path" | "common" | "installed" | "picker" | "none" }>;
 }
 
@@ -249,7 +249,7 @@ export type CodexUseBinaryResult =
 export type CodexLoginStartResult =
   | { ok: true; snapshot: CodexOnboardingSnapshot }
   /**
-   * : `detail` is a short, non-secret explanation of a `failed`
+   * `detail` is a short, non-secret explanation of a `failed`
    * outcome (which branch refused, and why) — it exists so the UI can say
    * something more useful than "Sign-in failed. Try again.", and so the main
    * log carries a breadcrumb. Never a token/credential; absent when there is
@@ -257,7 +257,7 @@ export type CodexLoginStartResult =
    */
   | { ok: false; reason: "busy" | "unsupported" | "cancelled" | "timeout" | "failed"; detail?: string };
 
-//  (codex-profiles cut §2/§4, amended §A1): mirrors the SAME
+// (codex-profiles cut §2/§4, amended §A1): mirrors the SAME
 // duplicated shapes declared in preload/index.ts and main/codex-ipc.ts.
 export interface CodexProfilesSnapshot {
   profiles: Array<{ profile: CodexProfileRecord; report?: CodexDoctorReport }>;
@@ -276,7 +276,7 @@ export type CodexProfileCreateResult =
 
 export type CodexProfileGuardResult = { ok: true } | { ok: false; reason: string };
 
-//  (codex-profiles cut §7, amended §A4): mirrors main/codex-install.ts.
+// (codex-profiles cut §7, amended §A4): mirrors main/codex-install.ts.
 export type CodexInstallResult =
   | { ok: true; version: string; binaryPath: string; report: CodexDoctorReport }
   | { ok: false; error: string };
@@ -292,7 +292,7 @@ export interface CodexManifestRefreshResult {
   supportedRange: string;
 }
 
-//  (codex-profiles cut §8.8): mirrors the SAME duplicated shapes
+// (codex-profiles cut §8.8): mirrors the SAME duplicated shapes
 // declared in preload/index.ts (that file's own header explains why
 // `CodexRolloutImportReportView` deliberately narrows main's own
 // `RolloutImportReport` — it omits `items`, an `@anycode/core` type this
@@ -338,7 +338,7 @@ export type CodexRolloutImportResult =
   | { ok: true; sessionId: string; workspace: string; report: CodexRolloutImportReportView }
   | { ok: false; reason: "profile_not_found" | "invalid_file_name" | "not_readable" | "too_large" | "invalid_model" };
 
-//  (cut §9.2/§13.1): mirrors the SAME duplicated shapes declared in
+// (cut §9.2/§13.1): mirrors the SAME duplicated shapes declared in
 // preload/index.ts and main/provider-ipc.ts. `CustomProviderRecord` itself
 // IS a frozen shared/** type, imported above.
 export type CustomProviderMutationReason = "invalid" | "read_only" | "not_found" | "needs_api_key" | "weak_storage_needs_consent";
@@ -360,7 +360,7 @@ export type FetchModelsFailureReason =
   | "empty_models"
   | "read_only";
 
-// : a successful fetch may carry live per-model capabilities
+// a successful fetch may carry live per-model capabilities
 // (OpenRouter-style reasoning meta); both fields are optional additive metadata.
 export type FetchModelsOutcome =
   | { ok: true; models: { id: string; reasoning?: boolean; effortLevels?: string[] }[] }
@@ -370,7 +370,7 @@ export interface CustomProviderCreateRequest {
   name: string;
   baseUrl: string;
   kind: CustomProviderRecord["kind"];
-  // : optional — a keyless local endpoint sets `authOptional: true`
+  // optional — a keyless local endpoint sets `authOptional: true`
   // instead. A non-empty key is authoritative (see main/provider-ipc.ts).
   apiKey?: string;
   authOptional?: boolean;
@@ -400,13 +400,13 @@ export type ClaudePickBinaryResult =
   | { ok: true; snapshot: ClaudeOnboardingSnapshot }
   | { ok: false; reason: "cancelled" | "invalid" };
 
-// SLICE-CC-LOGIN (, cut §4): mirrors the SAME duplicated shape
+// SLICE-CC-LOGIN (cut §4): mirrors the SAME duplicated shape
 // declared in preload/index.ts and main/claude-ipc.ts.
 export type ClaudeLoginStartResult =
   | { ok: true; snapshot: ClaudeOnboardingSnapshot }
   | { ok: false; reason: "busy" | "unsupported" | "cancelled" | "timeout" | "failed" };
 
-//  CUT-S2 §2.5/§10.8.1 (slice S2c C4): mirrors the SAME duplicated
+// CUT-S2 §2.5/§10.8.1 (slice S2c C4): mirrors the SAME duplicated
 // shape declared in preload/index.ts and main/tab-ipc.ts.
 export type ChildHistoryResult =
   | { ok: true; items: WireHistoryItem[] }
@@ -419,39 +419,39 @@ declare global {
       selectTab(tabId: string): void;
       createTab(request: CreateTabRequest): Promise<CreateTabResult>;
       closeTab(tabId: string): Promise<CloseTabResult>;
-      //  cut-2: re-bind a running tab's session to another provider
+      // cut-2: re-bind a running tab's session to another provider
       // connection (drill-down pick on the model chip). Fail-closed — every
       // refusal leaves the tab on its original connection.
       tabRebind(request: TabRebindRequest): Promise<TabRebindResult>;
       listSessions(limit?: number): Promise<SessionSummary[]>;
-      // : hard-delete one persisted session + its cascade; main's
+      // hard-delete one persisted session + its cascade; main's
       // active-session gate (`reason:"active"`) is the authority.
       deleteSession(sessionId: string): Promise<DeleteSessionResult>;
-      // : bulk delete-older; `dryRun` counts without deleting.
+      // bulk delete-older; `dryRun` counts without deleting.
       deleteSessionsOlder(workspace: string, olderThanDays: number, dryRun?: boolean): Promise<DeleteSessionsOlderResult>;
-      //  CUT-S2 §2.5/§10.8.1 (slice S2c C4): the read-only
+      // CUT-S2 §2.5/§10.8.1 (slice S2c C4): the read-only
       // completed-child transcript lookup — main authorizes by
       // (parentSessionId, spawnToolCallId) relationship before touching
       // persistence; no childSessionId ever crosses this bridge.
       childHistory(parentSessionId: string, spawnToolCallId: string): Promise<ChildHistoryResult>;
       pickWorkspace(): Promise<WorkspacePickResult>;
       listAvailableEngines(): Promise<AvailableEngines>;
-      //  (design/slice-codex-fixes-cut.md §5.5): push fired after any
+      // (design/slice-codex-fixes-cut.md §5.5): push fired after any
       // step that could flip `listAvailableEngines()`'s result. No payload —
       // returns an unsubscribe, same shape as `updates.onUpdateStatus`/
       // `window.onWindowState` below.
       onEnginesChanged(callback: () => void): () => void;
-      //  (design/slice-codex-fixes-cut.md §2(g)): Codex onboarding
+      // (design/slice-codex-fixes-cut.md §2(g)): Codex onboarding
       // invoke-API. No token/credential value ever crosses this bridge in
       // either direction — every result carries only status/version/account
       // type+plan (custody).
       codex: {
-        // `profileId` (, cut §4.2): omitted diagnoses/signs into the
-        // ACTIVE profile. `force`: true bypasses main's doctor TTL
+        // `profileId` (cut §4.2): omitted diagnoses/signs into the
+        // ACTIVE profile. `force` true bypasses main's doctor TTL
         // cache (explicit "Recheck all"); omitted reuses a fresh cached verdict.
         recheck(profileId?: string, force?: boolean): Promise<CodexOnboardingSnapshot>;
         pickBinary(): Promise<CodexPickBinaryResult>;
-        // : adopt a path main itself listed as an
+        // adopt a path main itself listed as an
         // alternate in its latest doctor report — the error card's
         // "Use <path>" buttons. A user gesture per switch; never a silent
         // substitution.
@@ -460,7 +460,7 @@ declare global {
         onLoginProgress(callback: (progress: import("../../shared/codex-login.js").CodexDeviceCodeProgress) => void): () => void;
         loginCancel(): Promise<void>;
         loginOpenDevicePage(): Promise<void>;
-        //  (cut §2/§4): the profile control-plane — settings/fs
+        // (cut §2/§4): the profile control-plane — settings/fs
         // mutations only, no spawns. No credential value ever crosses this
         // bridge (custody, cut §4.4).
         listProfiles(): Promise<CodexProfilesSnapshot>;
@@ -478,12 +478,12 @@ declare global {
          * current tab keeps its account. `detail` is a sentence to show as-is.
          */
         continueOnAccount(tabId: string, accountId: string): Promise<import("../../shared/codex-account.js").CodexContinueResult>;
-        //  (cut §7, amended §A4): the binary/manifest control plane.
+        // (cut §7, amended §A4): the binary/manifest control plane.
         install(version?: string): Promise<CodexInstallResult>;
         acceptRisk(version: string): Promise<{ ok: boolean; error?: string }>;
         supportStatus(): Promise<CodexSupportStatusResult>;
         manifestRefresh(): Promise<CodexManifestRefreshResult>;
-        //  (cut §8.8): the rollout-import control plane — a profile's
+        // (cut §8.8): the rollout-import control plane — a profile's
         // sessions dir is resolved main-side from `profileId` alone, never a
         // renderer-supplied path. `rolloutImport`'s `model` is the one piece
         // of new-session identity the renderer supplies (continuing an
@@ -491,7 +491,7 @@ declare global {
         rolloutList(profileId: string): Promise<CodexRolloutListResult>;
         rolloutPreview(profileId: string, fileName: string): Promise<CodexRolloutPreviewResult>;
         rolloutImport(profileId: string, fileName: string, model: string): Promise<CodexRolloutImportResult>;
-        //  (D-S4-8): the consent-card "Trust this binary" action.
+        // (D-S4-8): the consent-card "Trust this binary" action.
         // `path` ONLY — the fingerprint is computed entirely main-side.
         trustBinary(path: string): Promise<SettingsMutationResult>;
       };
@@ -502,11 +502,11 @@ declare global {
       claude: {
         recheck(): Promise<ClaudeOnboardingSnapshot>;
         pickBinary(): Promise<ClaudePickBinaryResult>;
-        // SLICE-CC-LOGIN (, cut §4): the native subscription-login
+        // SLICE-CC-LOGIN (cut §4): the native subscription-login
         // invoke-API — no token/credential value ever crosses this bridge.
         loginStart(): Promise<ClaudeLoginStartResult>;
         loginCancel(): Promise<void>;
-        //  (D-S4-8): the consent-card "Trust this binary" action —
+        // (D-S4-8): the consent-card "Trust this binary" action —
         // the codex mirror, same GRANT channel (engine-agnostic, D-S4-1).
         trustBinary(path: string): Promise<SettingsMutationResult>;
         // Doctor-spawn-loop fix: pushes the fresh snapshot itself after every
@@ -515,8 +515,8 @@ declare global {
         // shape as `updates.onUpdateStatus`/`window.onWindowState`).
         onSnapshotChanged(callback: (snapshot: ClaudeOnboardingSnapshot) => void): () => void;
       };
-      // : the answer to a folder's project-trust question (tab id + decision only).
-      // : Settings list/forget — forget takes ONLY a key main listed.
+      // the answer to a folder's project-trust question (tab id + decision only).
+      // Settings list/forget — forget takes ONLY a key main listed.
       workspaceTrust: {
         decide(request: WorkspaceTrustDecideRequest): Promise<WorkspaceTrustDecideResult>;
         list(): Promise<WorkspaceTrustListResult>;
@@ -537,33 +537,33 @@ declare global {
         setSecret(key: SecretKey, value: string): Promise<SettingsMutationResult>;
         clearSecret(key: SecretKey): Promise<SettingsMutationResult>;
         addRule(rule: PermissionRuleAddRequest): Promise<SettingsMutationResult>;
-        //  (D-S4-7): revokes ONE trusted-binary consent by path.
+        // (D-S4-7): revokes ONE trusted-binary consent by path.
         binaryTrustRevoke(path: string): Promise<SettingsMutationResult>;
         // Slice 2.5 (design §4.5): interactive OAuth sign-in / cancel. No token
         // ever returns — oauthStart resolves with a fresh snapshot on success.
-        // `connectionId` ( W12-FIX §1, additive/optional): scopes the
+        // `connectionId` (W12-FIX §1, additive/optional): scopes the
         // sign-in to one connection; omitted preserves the legacy provider-scoped
         // findOrCreate behavior byte-for-byte.
         oauthStart(providerId: string, connectionId?: string): Promise<OAuthStartResult>;
         oauthCancel(providerId: string): Promise<void>;
-        //  W10: main-authoritative connection metadata update (ModelPill's
+        // W10: main-authoritative connection metadata update (ModelPill's
         // model/effort write path, off the v1-patch shim). Never carries a secret.
         connectionUpdate(req: ConnectionUpdateRequest): Promise<SettingsMutationResult>;
-        //  W12: the connections grid/drawer's remaining CRUD surface.
+        // W12: the connections grid/drawer's remaining CRUD surface.
         // Never carries a secret; resolves with a fresh snapshot.
         connectionCreate(req: ConnectionCreateRequest): Promise<SettingsMutationResult>;
         connectionSetActive(req: ConnectionSetActiveRequest): Promise<SettingsMutationResult>;
         connectionDelete(req: ConnectionDeleteRequest): Promise<SettingsMutationResult>;
         connectionCheck(req: ConnectionCheckRequest): Promise<SettingsMutationResult>;
-        //  W11-FIX (W13 live-dogfood finding): push fired after a real
+        // W11-FIX (W13 live-dogfood finding): push fired after a real
         // request outcome updates a connection's advisory health — no payload,
         // same shape as `onEnginesChanged` above.
         onProviderHealthChanged(callback: () => void): () => void;
-        // : push fired after main's throttled `lastQuota` write
+        // push fired after main's throttled `lastQuota` write
         // lands (connection-quota.ts) — same payload-less shape as
         // `onProviderHealthChanged` above.
         onProviderQuotaChanged(callback: () => void): () => void;
-        // : the named proxy registry (shared/proxy.ts). `upsert`
+        // the named proxy registry (shared/proxy.ts). `upsert`
         // without an id CREATES and reports the minted id back as
         // `createdProxyProfileId`; `delete` REFUSES while any scope still
         // references the profile and names the consumers in the refusal;
@@ -582,19 +582,19 @@ declare global {
         proxyProfileDelete(req: ProxyProfileDeleteRequest): Promise<ProxyProfileDeleteResult>;
         proxyRefSet(req: ProxyRefSetRequest): Promise<SettingsMutationResult>;
         proxyCheck(req: ProxyCheckRequest): Promise<ProxyCheckResult>;
-        //  срез E2: the Vision panel's "Probe" button — resolves a
+        // срез E2: the Vision panel's "Probe" button — resolves a
         // {connectionId, modelId} pair (not necessarily saved yet) through the
         // SAME production ladder a live run uses. Always resolves a tagged
         // `RecognizerProbeResult`, never rejects.
         recognizerProbe(req: RecognizerProbeRequest): Promise<RecognizerProbeResult>;
-        // : the Vision panel's save/off write — a SEPARATE channel
+        // the Vision panel's save/off write — a SEPARATE channel
         // from `settings.set` because the generic merge can never DELETE a
         // key (shared/recognizer.ts's own docstring on `RECOGNIZER_SET_CHANNEL`
         // spells out why); `{recognizer: null}` is the only way to turn the
         // fallback off.
         recognizerSet(req: RecognizerSetRequest): Promise<SettingsMutationResult>;
       };
-      //  (cut §9.2/§13.1): custom OpenAI-compatible model-provider
+      // (cut §9.2/§13.1): custom OpenAI-compatible model-provider
       // CRUD + guarded `/v1/models` preview fetch (main/provider-ipc.ts owns
       // the URL/redirect/body-cap threat model + vault custody). No
       // credential ever crosses back — every result carries only the
@@ -629,19 +629,19 @@ declare global {
         importScan(req?: McpImportScanRequest): Promise<McpImportScanResult>;
         importApply(req: McpImportApplyRequest): Promise<McpImportApplyResult>;
       };
-      // : write-only MCP secret store. list/set/delete return names only.
+      // write-only MCP secret store. list/set/delete return names only.
       mcpSecrets: {
         list(): Promise<McpSecretsListResult>;
         set(req: { name: string; value: string }): Promise<McpSecretMutationResult>;
         delete(req: { name: string }): Promise<McpSecretMutationResult>;
       };
-      // : language-server management invoke-API. `status` returns
+      // language-server management invoke-API. `status` returns
       // the joined catalog/detection/config/trust view (detection answers
       // carry only booleans + a coarse source — never a resolved binary
       // path); enable writes a catalog preset into a scope's `lspServers`,
       // disable removes one by name, customUpsert adds or replaces a
       // non-catalog entry. Every mutator resolves a fresh status on success.
-      // : the Sessions API (local MCP for external agents). No path
+      // the Sessions API (local MCP for external agents). No path
       // and no token cross this bridge; copyConfig returns JSON the renderer
       // writes to the clipboard and never persists.
       communication: {
@@ -661,12 +661,12 @@ declare global {
         agentProjectsList(): Promise<AgentProjectsListResult>;
         agentProjectsOff(key: string): Promise<CommunicationMutationResult>;
       };
-      // : the Settings scope dropdown's folder list (opaque ids only).
+      // the Settings scope dropdown's folder list (opaque ids only).
       scopeWorkspaces: {
         list(): Promise<ScopeWorkspacesListResult>;
         resolve(ref: string): Promise<string | null>;
       };
-      // : "Full browser access" per session. Only the user can set it (the
+      // "Full browser access" per session. Only the user can set it (the
       // main window's sender is checked); set/get resolve the EFFECTIVE value.
       browserAccess: {
         get(): Promise<BrowserAccessGetResult>;
@@ -711,7 +711,7 @@ declare global {
         reveal(req: SubagentsRevealRequest): Promise<SubagentsRevealResult>;
         preview(req: SubagentsPreviewRequest): Promise<SubagentsPreviewResult>;
       };
-      //  S1-C (design 4732 §6/§7): plugins management invoke-API.
+      // S1-C (design 4732 §6/§7): plugins management invoke-API.
       // `list` returns the joined installed/available view; install is
       // two-phase (prepare returns a single-use token + consent preview,
       // commit applies it, optionally allowing MCP servers). A filesystem
@@ -749,11 +749,11 @@ declare global {
       // and resolves with a fresh stats view on success.
       profile: {
         getStats(): Promise<ProfileStatsResult>;
-        /**  S3: the instant view rebuilt from main's aggregation
+        /** S3: the instant view rebuilt from main's aggregation
          *  cache, with no directory scan; `{ok:false, reason:"no_cache"}`
          *  before the first pass has ever completed. */
         getStatsCached(): Promise<ProfileStatsCachedResult>;
-        /**  S3: discard the aggregation cache and re-enter the normal
+        /** S3: discard the aggregation cache and re-enter the normal
          *  incremental cycle from empty — budget-cut like any other pass, so
          *  the first answer carries a backlog rather than blocking. */
         rebuildStats(): Promise<ProfileStatsResult>;
@@ -767,7 +767,7 @@ declare global {
         check(): Promise<UpdateActionResult>;
         download(): Promise<UpdateActionResult>;
         install(): Promise<UpdateActionResult>;
-        //  defect 2: darwin honest-manual-path action.
+        // defect 2: darwin honest-manual-path action.
         openReleasesPage(): Promise<UpdateActionResult>;
         onUpdateStatus(callback: (status: UpdateStatus) => void): () => void;
       };
@@ -780,7 +780,7 @@ declare global {
       paths: {
         roots(): Promise<PathRootsResult>;
       };
-      // : chat-artifact invoke-API (inline image preview + open/reveal
+      // chat-artifact invoke-API (inline image preview + open/reveal
       // for transcript file links). The renderer supplies only tabId + the
       // model-authored path; main re-checks containment + the image-extension
       // allowlist before any read/open/reveal (main/artifacts-ipc.ts).
@@ -788,13 +788,13 @@ declare global {
         readImage(tabId: string, path: string): Promise<ArtifactReadImageResult>;
         open(tabId: string, path: string): Promise<ArtifactActionResult>;
         reveal(tabId: string, path: string): Promise<ArtifactActionResult>;
-        // -A: explicit per-path consent for a path outside the
+        // explicit per-path consent for a path outside the
         // allowed roots (main/artifacts-ipc.ts's ArtifactConsentStore).
         allow(tabId: string, path: string): Promise<ArtifactAllowResult>;
         // Night-track wave-1: user click on a local .html/.htm/.md artifact
         // link opens/reopens it in the PreviewHost window.
         preview(tabId: string, path: string): Promise<PreviewResult<PreviewOpenSuccess>>;
-        //  slice 2: batched yes/no existence-and-containment probe
+        // slice 2: batched yes/no existence-and-containment probe
         // for path candidates a plain-text scan found (markdown/path-
         // spans.ts) — never opens/reads/reveals anything, unlike `preview`
         // above, so it is safe to call on every render.
@@ -815,7 +815,7 @@ declare global {
         setContainer(tabId: string, previewId: string, container: PreviewContainerKind): Promise<PreviewSetContainerResult>;
         onChanged(callback: (payload: PreviewChangedPayload) => void): () => void;
       };
-      // : the native DOM markdown preview's doc control plane
+      // the native DOM markdown preview's doc control plane
       // (CUT.md CONTRACTS). `read` (M1) is also what a Reload click
       // re-invokes — main never caches, so there is no separate "reload"
       // method. `navigate` (M2) follows a local `.md` link, replacing the

@@ -8,7 +8,7 @@
  * Extracted from Composer's old 5-radio `.composer-modes` row (UI-5). The parent
  * owns the wire traffic: `onChange` is Composer's `handleModeChange`, which keeps
  * the `set_mode` send + the `modeChangeDisabled(turn.status, ready) || next ===
- * mode` guard. `disabled` mirrors a not-`ready` connection (: a running
+ * mode` guard. `disabled` mirrors a not-`ready` connection (a running
  * turn no longer gates mode changes); a disabled chip can't open.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -44,7 +44,7 @@ const MODE_MENU_POPOVER_WIDTH = 240;
  * (packages/core/src/permissions/engine.ts): plan denies all writes; build
  * asks before every side-effecting tool; edit allows Write/Edit inside the
  * workspace without asking and asks for everything else side-effecting
- *; auto asks only on high-risk tools; yolo never asks.
+ * ; auto asks only on high-risk tools; yolo never asks.
  */
 export const MODE_DESCRIPTIONS: Record<PermissionMode, string> = {
   plan: "Read-only planning",
@@ -98,7 +98,7 @@ export function modeIndexForDigit(code: string, count: number): number | null {
  * is policy for the NEXT permission decision, so a running turn no longer
  * disables the chip, the keyboard summon, or the slash toggle (contrast
  * modelPickDisabled, which keeps its between-turns busy gate: model switching
- * remains turn-boundary-only per 's own scope). Host stays the source
+ * remains turn-boundary-only per's own scope). Host stays the source
  * of truth; not-ready has no host to send to. Exported for unit testing.
  */
 export function modeChangeDisabled(_turnStatus: TurnState["status"], ready: boolean): boolean {
@@ -106,7 +106,7 @@ export function modeChangeDisabled(_turnStatus: TurnState["status"], ready: bool
 }
 
 /**
- *  §3.7 (part B): the Orchestrate row's description, exported for
+ * §3.7 (part B): the Orchestrate row's description, exported for
  * ModeMenu.test.ts's copy pin. Kept next to MODE_DESCRIPTIONS so the two
  * description tables stay physically together.
  */
@@ -130,7 +130,7 @@ export interface ModeMenuProps {
   disabled: boolean;
   onChange(next: PermissionMode): void;
   /**
-   *  §3.7 (part B): tab-scoped orchestrate flag (the store's
+   * §3.7 (part B): tab-scoped orchestrate flag (the store's
    * `orchestrateActive`, kept from the host's `orchestrate_changed` acks).
    * Absent/undefined hides the Orchestrate row entirely (a legacy host that
    * never acks — the same honest-hide posture as the slash row below), the
@@ -215,7 +215,7 @@ export function ModeMenu({ mode, disabled, onChange, orchestrateActive = false, 
     }
   }, [open, mode]);
 
-  //  §3.7 (part B): the Orchestrate row renders after the five
+  // §3.7 (part B): the Orchestrate row renders after the five
   // modes iff BOTH the state and the handler were passed. Keyboard math below
   // reads this count, never `PERMISSION_MODE_OPTIONS.length` directly. The
   // chip mirrors the same gate so a caller that passes only the state renders
@@ -265,7 +265,7 @@ export function ModeMenu({ mode, disabled, onChange, orchestrateActive = false, 
   }
 
   /**
-   *  §3.7 (part B): the Orchestrate row's commit — toggles the
+   * §3.7 (part B): the Orchestrate row's commit — toggles the
    * tab-level flag through the dedicated handler (set_orchestrate), never
    * through `onChange`/`set_mode` (§2.2: orchestrate is not a permission
    * mode; enabling it MOVES the session to plan host-side, §3.7).
@@ -308,7 +308,7 @@ export function ModeMenu({ mode, disabled, onChange, orchestrateActive = false, 
       case "Enter":
       case " ": {
         event.preventDefault();
-        //  §3.7 (part B): the last row (when the Orchestrate row
+        // §3.7 (part B): the last row (when the Orchestrate row
         // renders) toggles orchestrate instead of selecting a mode.
         if (showOrchestrateRow && focusIndex === PERMISSION_MODE_OPTIONS.length) {
           toggleOrchestrate();
@@ -334,7 +334,7 @@ export function ModeMenu({ mode, disabled, onChange, orchestrateActive = false, 
         if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) {
           break;
         }
-        //  §3.7 (part B): digit selection stays over the FIVE
+        // §3.7 (part B): digit selection stays over the FIVE
         // permission modes only (`modeIndexForDigit(code, 5)`) — the
         // Orchestrate row is a separator-below toggle, not mode #6, so Digit6
         // never reaches it. This is the "does not enter
@@ -400,7 +400,7 @@ export function ModeMenu({ mode, disabled, onChange, orchestrateActive = false, 
               </button>
             );
           })}
-          {/*  §3.7 (part B): the Orchestrate toggle sits AFTER the
+          {/* §3.7 (part B): the Orchestrate toggle sits AFTER the
               five permission modes, behind a divider — it is a tab-level state,
               not a 6th mode (§2.2). `aria-checked` on a `menuitemcheckbox`
               mirrors the active row's Check glyph; the click goes through

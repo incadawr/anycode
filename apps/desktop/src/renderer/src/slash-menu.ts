@@ -45,9 +45,9 @@ export type SlashIconId =
  */
 export type SlashRunIntent =
   | { kind: "set_mode_toggle" }
-  /** : a single payload-less wire-send (`compact_request`); Composer's exhaustive `dispatchSlashIntent` owns it, exactly like `set_mode_toggle`. */
+  /** a single payload-less wire-send (`compact_request`); Composer's exhaustive `dispatchSlashIntent` owns it, exactly like `set_mode_toggle`. */
   | { kind: "compact_now" }
-  /**  §3.8 (part B): submit the draft text after the `/orchestrate` token as a task under orchestrate mode (enabling it first if needed, possibly through the first-run RolePickerDialog). */
+  /** §3.8 (part B): submit the draft text after the `/orchestrate` token as a task under orchestrate mode (enabling it first if needed, possibly through the first-run RolePickerDialog). */
   | { kind: "orchestrate_submit" }
   | { kind: "window_event"; event: string }
   | { kind: "run_action"; action: string }
@@ -57,11 +57,11 @@ export type SlashRunIntent =
 
 /**
  * Named engine/shell capability gates a command's structural VISIBILITY reads
- * (design  §2(f)). Distinct from `enabled` below: `enabled` grays out a
+ * (design §2(f)). Distinct from `enabled` below: `enabled` grays out a
  * row for a transient reason (busy/not-ready) while its target control still
  * exists; these gates hide a row ENTIRELY when its target control isn't even
  * rendered for the active engine — never a permanently-disabled row with no
- * explanation ("no dead actions",  DoD). Defaults mirror core (every
+ * explanation ("no dead actions", DoD). Defaults mirror core (every
  * capability true) so every pre-existing caller/test that omits an override
  * keeps seeing the full registry.
  */
@@ -72,7 +72,7 @@ export interface SlashCapabilityCtx {
   supportsModelSelection: boolean;
   /**
    * Mirrors `engine.capabilities.supportsManualCompact` — gates the Compact
-   * row ( opens it to Claude). Defaults TRUE (mirrors core): a null
+   * row (opens it to Claude). Defaults TRUE (mirrors core): a null
    * engine is core, which always has `compactNow`.
    */
   supportsManualCompact: boolean;
@@ -91,13 +91,13 @@ export interface SlashMenuCtx extends SlashCapabilityCtx {
   ready: boolean;
   /**
    * Mirrors `ModelPill.tsx`'s `modelPickDisabled` — the Model row is enabled
-   * iff the pill itself is clickable (codex R1 P2 fix). Since 
+   * iff the pill itself is clickable (codex R1 P2 fix). Since
    * that is engine-dependent (core is clickable mid-turn), so the Compact row
    * reads `idle` below instead of borrowing this one.
    */
   modelDisabled: boolean;
   /**
-   * : "the host is truly idle right now" — the exact window a
+   * "the host is truly idle right now" — the exact window a
    * `compact_request` is accepted in. Kept separate from `modelDisabled`
    * because that predicate became engine-dependent (the core engine accepts a
    * mid-turn model/effort pick): a running turn must keep Compact disabled
@@ -108,7 +108,7 @@ export interface SlashMenuCtx extends SlashCapabilityCtx {
 }
 
 /**
- * Where a command's implementation lives (design  §2(f)): `common`
+ * Where a command's implementation lives (design §2(f)): `common`
  * (shell-owned or otherwise engine-independent) works under any engine;
  * `core` requires an AnyCode-loop-only control (ModeMenu/ModelPill/the
  * fetched Skills section) and is gated on a named engine capability;
@@ -126,7 +126,7 @@ export interface SlashCommand {
   run: SlashRunIntent;
   enabled: (ctx: SlashMenuCtx) => boolean;
   source: SlashCommandSource;
-  /** Structural visibility gate (design  §2(f)) — see `SlashCapabilityCtx` above. A hidden row is filtered out of `filterSlashItems`'s result entirely, never shown disabled. */
+  /** Structural visibility gate (design §2(f)) — see `SlashCapabilityCtx` above. A hidden row is filtered out of `filterSlashItems`'s result entirely, never shown disabled. */
   visible: (ctx: SlashMenuCtx) => boolean;
 }
 
@@ -266,7 +266,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     description: (ctx) => (ctx.mode === "plan" ? "Turn plan mode off" : "Turn plan mode on"),
     icon: "plan",
     run: { kind: "set_mode_toggle" },
-    // : mid-turn mode changes are now accepted (D-S3-7a) — a running
+    // mid-turn mode changes are now accepted (D-S3-7a) — a running
     // turn no longer gates this toggle; not-ready is the sole surviving gate.
     enabled: (ctx) => ctx.ready,
     source: "core",
@@ -274,7 +274,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     visible: (ctx) => ctx.supportsCorePermissions,
   },
   {
-    //  §3.8 (part B): `/orchestrate <task>` — enable orchestrate
+    // §3.8 (part B): `/orchestrate <task>` — enable orchestrate
     // (via the first-run RolePickerDialog when no roles are configured) and
     // submit the text after the token as a normal user message. Sits right
     // after plan-mode in the registry (the orchestration posture's nearest
@@ -318,9 +318,9 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     description: () => "Summarize the conversation to free context",
     icon: "compact",
     run: { kind: "compact_now" },
-    // The TRULY-IDLE window ( split it out of `modelDisabled`):
+    // The TRULY-IDLE window (split it out of `modelDisabled`):
     // the host refuses compact_request while busy (Session's silent-drop gate,
-    // ), so the row is gray for exactly that window: a running turn, a
+    // so the row is gray for exactly that window: a running turn, a
     // compaction already in flight ("compacting"), a drained-but-unacked
     // prompt, or a not-yet-ready connection.
     enabled: (ctx) => ctx.idle ?? !ctx.modelDisabled,
@@ -361,7 +361,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     run: { kind: "store_git_panel" },
     enabled: () => true,
     source: "common",
-    // Shell-owned (design  §2(f)): the Review panel itself stays
+    // Shell-owned (design §2(f)): the Review panel itself stays
     // closed under App.tsx's gitPanelOpen gate without shell.gitReadOnly.
     visible: (ctx) => ctx.shellGitReadOnly,
   },
@@ -401,7 +401,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     visible: () => true,
   },
   {
-    //  §3.9 (part B): deep-link to the Roles settings pane —
+    // §3.9 (part B): deep-link to the Roles settings pane —
     // the /orchestrate first-run dialog's "later edits go through Settings"
     // escape hatch. Sits next to Skills, common like every settings_pane row.
     id: "roles",
@@ -420,7 +420,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     icon: "settings",
     run: { kind: "settings_pane", pane: "plugins" },
     enabled: () => true,
-    //  S1-C: opens Settings → Plugins (engine-independent — the
+    // S1-C: opens Settings → Plugins (engine-independent — the
     // pane degrades honestly to "service unavailable" when main's plugins
     // channels are absent, so the row is common-gated like MCP/Skills).
     source: "common",
@@ -695,7 +695,7 @@ export function filterSlashItems(
 
   const commandRows: Array<{ item: SlashMenuItem; rank: number; order: number }> = [];
   commands.forEach((command, order) => {
-    // Structural visibility (design  §2(f)): filtered out BEFORE
+    // Structural visibility (design §2(f)): filtered out BEFORE
     // ranking, unconditionally of the query — a command whose target control
     // the active engine/shell cannot honor never appears, matching/disabled
     // ("no dead actions").

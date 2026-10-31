@@ -1,5 +1,5 @@
 /**
- * Unit gate for BackgroundTasksPanel.tsx ( /  follow-up).
+ * Unit gate for BackgroundTasksPanel.tsx (follow-up).
  *
  * Scope of this gate (the wire/reducer seams have their own gates):
  *  - the live-tail poll fires ONLY while drawer-open ∧ row-selected ∧
@@ -10,7 +10,7 @@
  *
  * Harness: the repo's SettingsScreen.test.ts pattern (node environment, no
  * DOM) — `vi.mock("react")` with slot-based useState/useEffect/useCallback,
- * effects drained by `mountUnit` passes. Two  extensions over
+ * effects drained by `mountUnit` passes. Two extensions over
  * that pattern: useEffect slots keep their CLEANUP and re-run it on a deps
  * change (the poll interval is started/stopped exactly through effect
  * cleanups), and `unmountKey` runs every live cleanup (poll stops on
@@ -104,7 +104,7 @@ vi.mock("react", async (importOriginal) => {
       if (prev !== undefined && sameDeps(prev.deps, deps)) {
         return;
       }
-      // : a deps change re-runs the effect — the PREVIOUS effect's
+      // a deps change re-runs the effect — the PREVIOUS effect's
       // cleanup must fire first (this is what stops a live-tail interval when
       // the drawer closes, the selection moves, or the task settles).
       prev?.cleanup?.();

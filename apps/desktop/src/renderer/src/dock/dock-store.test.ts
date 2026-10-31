@@ -155,7 +155,7 @@ describe("dock store", () => {
     expect(store.getState().splitTabId).toBe(null);
   });
 
-  // ── : conversation-tab ownership (adopt/selectDockView) ──
+  // ── conversation-tab ownership (adopt/selectDockView) ──
 
   it("selectDockView returns the real triple for the owner and EMPTY_DOCK_VIEW for everyone else", () => {
     const store = createDockStore(memoryStorage());

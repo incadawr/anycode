@@ -1,5 +1,5 @@
 /**
- *  §3.9 (part B) — RolePickerDialog behavior tests. This
+ * §3.9 (part B) — RolePickerDialog behavior tests. This
  * package's vitest runs `environment: "node"` (no jsdom), so the JSX itself
  * cannot mount here; what the dialog RENDERS is the pure draft model
  * (role-editor-model.ts) seeded from the pure presets (role-presets.ts), and

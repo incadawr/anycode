@@ -1,5 +1,5 @@
 /**
- * replay.ts tests ( S1): the whole replay model proved without a DOM
+ * replay.ts tests (S1): the whole replay model proved without a DOM
  * — frame arithmetic, the store's reducers, the injected-timer clock, the
  * hotkey table and the JSON view. Pins are numbered after the slice's pin
  * list; pin 2 is deliberately written at DEFAULT params (`toolRunningMs: 0`)

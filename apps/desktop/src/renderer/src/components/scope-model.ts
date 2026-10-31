@@ -1,5 +1,5 @@
 /**
- * : pure model behind the Settings scope dropdown. A selection is
+ * pure model behind the Settings scope dropdown. A selection is
  * either the user scope or an opaque workspace id from the main-side list.
  * No function here takes or returns a filesystem path for a request; the
  * `displayPath` field is for labels only.

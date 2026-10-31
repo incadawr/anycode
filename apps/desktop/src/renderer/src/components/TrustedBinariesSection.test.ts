@@ -1,5 +1,5 @@
 /**
- * Pure-logic tests for TrustedBinariesSection's exported helper (,
+ * Pure-logic tests for TrustedBinariesSection's exported helper (
  * CUT-S4.md §6c BU3). Same `.test.ts`-only, no-jsdom rationale as every
  * other component test in this directory — the section's own JSX is never
  * rendered here, only `trustedBinaryRows`, the pure projection both the

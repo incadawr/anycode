@@ -1,5 +1,5 @@
 /**
- * The ONE proxy-profile editor plaque ( §3, owner's explicit
+ * The ONE proxy-profile editor plaque (§3, owner's explicit
  * requirement: "редактор-плашка существует ровно в одном месте"). Every knob a
  * proxy has — mode, host/port/scheme, exemptions, credentials, Check — is
  * declared here exactly once and rendered by whoever needs it:
@@ -223,7 +223,7 @@ export function proxyPortBlocked(port: string): boolean {
  * Pre-flight for the manual mode's address (B-06: main validates the same rule,
  * `manual` REQUIRES a URL and REFUSES userinfo in it). `system` never has an
  * address, so it is never blocked. Blocking here rather than letting main's
- * generic "Invalid value" come back is the same reasoning 's
+ * generic "Invalid value" come back is the same reasoning's
  * `proxyUrlSaveBlocked` had: the refusal is otherwise undiagnosable.
  */
 export function proxyHostPortBlocked(draft: ProxyProfileDraft): boolean {

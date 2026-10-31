@@ -55,7 +55,7 @@ describe("describeCreateTabFailure", () => {
       expect(codexCopy.toLowerCase()).toContain("codex");
     });
 
-    // : main carries the doctor's exact verdict into not_ready.
+    // main carries the doctor's exact verdict into not_ready.
     it("codex signed_out keeps the sign-in copy", () => {
       const result: CreateTabResult = { ok: false, reason: "not_ready", notReadyReason: "codex_signed_out" };
       expect(describeCreateTabFailure(result, "codex")).toBe(
@@ -150,7 +150,7 @@ describe("describeCreateTabFailure — existing copy guards", () => {
   });
 });
 
-describe("resolveConnectionMissingAction ( W10-FIX F1 re-pin affordance)", () => {
+describe("resolveConnectionMissingAction (W10-FIX F1 re-pin affordance)", () => {
   it("arms a re-pin action for connection_missing when a current connection exists", () => {
     const result: CreateTabResult = { ok: false, reason: "connection_missing", connectionId: "conn-dead" };
     expect(resolveConnectionMissingAction(result, "sess-1", "conn-active")).toEqual({

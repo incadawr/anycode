@@ -63,8 +63,8 @@ describe("canRememberPermission", () => {
     expect(canRememberPermission(null)).toBe(true);
   });
 
-  it(": an engine with a live approval bridge may remember despite supportsCorePermissions:false", () => {
-    // The whole point of : codex/claude both report
+  it("an engine with a live approval bridge may remember despite supportsCorePermissions:false", () => {
+    // The whole point of: codex/claude both report
     // supportsCorePermissions:false, and hiding the checkbox on that flag left
     // those sessions with no in-app way to stop being asked. Their rule store is
     // now read by IpcPermissionBroker itself, so a remembered rule is honoured.
@@ -265,7 +265,7 @@ describe("formatPermissionTitle", () => {
 });
 
 /**
- *  — the ExitPlanMode special case. The permission engine already
+ * the ExitPlanMode special case. The permission engine already
  * escalates the tool into the ordinary `permission_request` tract, so the modal
  * renders it with no wiring change; what these pin is the PRESENTATION, which
  * is the whole point of the special case:
@@ -395,7 +395,7 @@ describe("describePermissionAsk — Bash unknown shell expression", () => {
 });
 
 /**
- *  ( §2): the per-command risk plaque, derived from the
+ * (§2): the per-command risk plaque, derived from the
  * SAME lexical classifier that powers auto-allow. Presentation only — no
  * engine decision reads this. The three-way split among ASKS:
  *   (a) provably read-only pipelines → readOnly plaque,
@@ -425,7 +425,7 @@ describe("describePermissionAsk — Bash risk plaque", () => {
     expect(presentation.hint).toBeNull();
   });
 
-  it("shell expression keeps 's hint alone — plaque is null (never co-occur)", () => {
+  it("shell expression keeps's hint alone — plaque is null (never co-occur)", () => {
     const presentation = describePermissionAsk("Bash", { command: "cat f | tee out" });
     expect(presentation.hint).toBe(UNKNOWN_SHELL_HINT);
     expect(presentation.plaque).toBeNull();
@@ -477,7 +477,7 @@ describe("describePermissionAsk — Bash risk plaque", () => {
 });
 
 /**
- * : the three rule-birth points treat `CodexExec` as the command-line
+ * the three rule-birth points treat `CodexExec` as the command-line
  * tool it is. Without this a Codex session's "Always allow" checkbox had no
  * pattern field at all, so the only rule it could mint was a patternless
  * allow-EVERY-command one.
@@ -511,7 +511,7 @@ describe("CodexExec always-allow birth points", () => {
 const SCOPED_PNPM_TEST = 'scoped-runner:{"workspace":"/ws/proj","runner":"pnpm","verb":"test"}';
 
 /**
- *  — the modal's scoped proposal: `cd <workspace> && <runner> <verb>
+ * the modal's scoped proposal: `cd <workspace> && <runner> <verb>
  * [inert args]` against the active tab's canonical workspace. The recognizer is
  * core's (reached through the safe-command subpath) so create and match cannot
  * drift; here we pin the proposal side and its fail-closed edges.
@@ -747,7 +747,7 @@ describe("scoped pattern survives the generic sanitizers untouched", () => {
 });
 
 /**
- *  follow-up: the plaque now covers a CodexExec ask (the Codex
+ * follow-up: the plaque now covers a CodexExec ask (the Codex
  * bridge's name for a `commandExecution` approval), and a core-engine Bash
  * ask whose command the classifier PROVES read-only gets a NEUTRAL header
  * instead of the static "High risk"/"Destructive" badge — the plaque and the

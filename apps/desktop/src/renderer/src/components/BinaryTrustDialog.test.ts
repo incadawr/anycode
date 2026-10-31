@@ -1,5 +1,5 @@
 /**
- * Pure-logic tests for BinaryTrustDialog's exported helpers (,
+ * Pure-logic tests for BinaryTrustDialog's exported helpers (
  * CUT-S4.md §6c BU1-BU2). Same `.test.ts`-only, no-jsdom rationale as every
  * other component test in this directory (vitest runs `environment: "node"`
  * — no jsdom, no testing-library): the dialog's own `<dialog>` JSX is never

@@ -1,5 +1,5 @@
 /**
- * Plugins pane pure model (design 4732 §6,  S1-C, reconciled to
+ * Plugins pane pure model (design 4732 §6, S1-C, reconciled to
  * the S1-B wire contract). Every display decision the PluginsPane renders is
  * a pure function here, unit tested directly (same ethic as McpServersPane's
  * exported helpers): status chips per row, which actions a tier/status combo
@@ -94,7 +94,7 @@ export function pluginMcpNeedsApproval(row: PluginRowView): boolean {
   return row.mcpServerNames.length > 0 && row.mcpConsentGranted !== true;
 }
 
-/** Secret NAMES a plugin's services read, sorted and unique ( part 0; names only). */
+/** Secret NAMES a plugin's services read, sorted and unique (part 0; names only). */
 export function serviceSecretNamesOf(row: PluginRowView): string[] {
   const names = new Set<string>();
   for (const service of row.services ?? []) {
@@ -147,7 +147,7 @@ export function serviceChip(view: PluginServiceView): PluginChip {
         case "bad_command":
           return { text: "Blocked: bad command", tone: "warn" };
         case "missing_secret":
-          // Names only ( part 0): the secret VALUE never reaches the renderer.
+          // Names only (part 0): the secret VALUE never reaches the renderer.
           return { text: `Missing secret: ${(view.missingSecrets ?? []).join(", ") || "?"}`, tone: "warn" };
         default:
           return { text: "Blocked", tone: "warn" };

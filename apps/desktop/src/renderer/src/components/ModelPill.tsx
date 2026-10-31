@@ -13,8 +13,8 @@ import { modelSettingsTarget } from "../model-settings-target.js";
  * reused as-is rather than re-derived.
  *
  * Wire: picking a model sends `set_model`; picking an effort sends the
- * existing `set_reasoning_effort` (since  `set_mode` accepts a mid-turn
- * change; since  the CORE engine accepts `set_model` /
+ * existing `set_reasoning_effort` (since `set_mode` accepts a mid-turn
+ * change; since the CORE engine accepts `set_model` /
  * `set_reasoning_effort` mid-turn too — it queues them and applies them at the
  * next turn boundary, so the pill stays live while a turn runs and says
  * plainly that a pick applies from the next turn). A foreign engine keeps its
@@ -24,7 +24,7 @@ import { modelSettingsTarget } from "../model-settings-target.js";
  *
  * Persist (§2.4, the owner-pain half): a pick does NOT persist optimistically.
  * The component remembers the pending pick in a ref and only writes the
- * connection's model/effort ( W10: a main-authoritative `connection-update`
+ * connection's model/effort (W10: a main-authoritative `connection-update`
  * IPC by the ACTIVE connection id, off the retired v1-patch `defaults[pid]` shim)
  * once the corresponding store field (`model` / `reasoningEffort`) actually lands
  * the picked value — i.e. once the host has ACKed it via `model_changed` /
@@ -37,7 +37,7 @@ import { modelSettingsTarget } from "../model-settings-target.js";
  * between), and every ack-triggered write is chained through `chainWrite` so fast
  * back-to-back picks persist in ack order rather than write-completion order.
  *
- *  cut-2 (§D4, DoD 6): the popover's own root/model/effort pages are
+ * cut-2 (§D4, DoD 6): the popover's own root/model/effort pages are
  * gone — the chip now renders the SHARED drill-down (`ModelDrillMenu`, the same
  * component the New Session screen renders), whose rows span EVERY connected
  * connection rather than this tab's alone. Picking a model from the tab's own
@@ -72,7 +72,7 @@ import { nextRovingIndex } from "./ModeMenu.js";
 // the running-children gate on a cross-connection pick is a question, and this
 // component only ever renders it (the caller owns the pending state).
 import { ConfirmDialog } from "./ConfirmDialog.js";
-//  cut-2 §D4: the shared drill-down (markup) over the shared decision
+// cut-2 §D4: the shared drill-down (markup) over the shared decision
 // layers (rows + verbs). None of it is re-derived here — this file only wires
 // the running tab's own axes (its pin, its live model/effort) into them.
 import { connectionDisplayName } from "./ConnectionTile.js";
@@ -128,7 +128,7 @@ const MODEL_PILL_POPOVER_WIDTH = 240;
 export const MODEL_PILL_MENU_GAP_PX = 8;
 
 /**
- *  cut-2 §D4 (DoD 5): how tall the drill-down may grow over a RUNNING
+ * cut-2 §D4 (DoD 5): how tall the drill-down may grow over a RUNNING
  * session's chip.
  *
  * That chip lives at the bottom of the composer, so unlike the start screen's
@@ -157,7 +157,7 @@ export function asReasoningEffort(level: string): ReasoningEffort | undefined {
 }
 
 /**
- *  cut-2 §D5: whether the tab's pin just MOVED — the trigger for the
+ * cut-2 §D5: whether the tab's pin just MOVED — the trigger for the
  * transcript's provider-switch line.
  *
  * Only a transition between two known connections counts. The first pin a tab
@@ -174,7 +174,7 @@ export function shouldMarkConnectionChange(
 }
 
 /**
- * : whether a pin change seen by the pill is a switch IN THIS TAB.
+ * whether a pin change seen by the pill is a switch IN THIS TAB.
  * Switching tabs is a pure re-render (tab-context.tsx), so the same pill
  * instance sees tab A's pin replaced by tab B's — two different tabs, not a
  * switch; reporting it wrote a false "Provider switched" line into B. Only a
@@ -283,7 +283,7 @@ export function pillDisplayLabel(
 
 /**
  * Resolves the model list a provider offers its pickers (F2, codex-profiles
- * cut lane FXH review; union semantics from ). Base hints come from a
+ * cut lane FXH review; union semantics from). Base hints come from a
  * builtin catalog hit; failing that, the `custom:<slug>` record's own curated
  * `models[]` (cut §9.2 — the user-picked subset a custom endpoint's fetch
  * surfaced); anything else (unknown id, or `providerId` itself `undefined` —
@@ -291,7 +291,7 @@ export function pillDisplayLabel(
  * `undefined`, exactly like today's plain `catalog.find(...)?.models`.
  *
  * `connectionModels` — the target connection's OWN ids (`ProviderConnection.
- * models`: manual additions plus connection-scoped fetched ids, ) —
+ * models`: manual additions plus connection-scoped fetched ids) —
  * when non-empty is unioned with the base hints in CATALOG ORDER: the base
  * hints first, then only the connection ids the hints do not already offer
  * (deduped by exact id via the shared `mergeModelIds`). The order is a
@@ -356,7 +356,7 @@ export function modelMenuItems(
 /**
  * Client-side mirror of the host's model/effort availability guard.
  *
- * : the CORE engine accepts a `set_model` / `set_reasoning_effort`
+ * the CORE engine accepts a `set_model` / `set_reasoning_effort`
  * mid-turn and applies it at the next turn boundary (host/session.ts's
  * `applyPendingModelSelection`), so a running turn no longer disables the pill
  * there — `midTurnChangeSupported` is the caller's engine fact (the tab store's
@@ -432,7 +432,7 @@ export function chainWrite(chain: Promise<unknown>, write: () => Promise<unknown
 }
 
 /**
- * : what the chip says while a turn is running — a core model or
+ * what the chip says while a turn is running — a core model or
  * effort pick is accepted right away but only takes effect at the next turn
  * boundary (the host queues it; see host/session.ts's
  * `applyPendingModelSelection`). Exported so the copy is unit-testable and the
@@ -499,7 +499,7 @@ export function ModelPill() {
   const pinnedConnection = useTabStore((state) => state.pinnedConnection);
   const modelSettingsConnectionId = useTabStore((state) => state.modelSettingsConnectionId);
   const ready = connection === "ready";
-  // : the tab store's engine projection is `null` ONLY for the core
+  // the tab store's engine projection is `null` ONLY for the core
   // engine (`host_ready` carries no `engine` block for core). Core accepts a
   // mid-turn model/effort pick and applies it at the next turn boundary, so the
   // pill stays live while a turn runs. A foreign engine (codex/claude) keeps its
@@ -515,7 +515,7 @@ export function ModelPill() {
   const snapshot = useSettingsStore((state) => state.snapshot);
   const connectionUpdate = useSettingsStore((state) => state.connectionUpdate);
 
-  //  W10-FIX F2: both the model catalog AND the write-target follow this
+  // W10-FIX F2: both the model catalog AND the write-target follow this
   // tab's PINNED connection (delivered on the tab-port envelope, control plane —
   // NOT the session wire), falling back to the ACTIVE connection for an
   // unpinned/legacy tab (the prior behaviour, preserved). This closes the F2
@@ -548,7 +548,7 @@ export function ModelPill() {
   // D8 overlay wiring: the preview WebContentsView must hide while this
   // composer dropdown is up.
   useOverlayFlag(open);
-  //  cut-2 §D4: which LEVEL of the shared drill-down is on screen
+  // cut-2 §D4: which LEVEL of the shared drill-down is on screen
   // (root → a connection's models → the effort vocabulary), replacing the
   // pill's own root/model/effort pages.
   const [drillPage, setDrillPage] = useState<ModelDrillPage>({ kind: "root" });
@@ -558,7 +558,7 @@ export function ModelPill() {
   // ABOVE the chip by its own fixed coordinates, so the menu inside it must not
   // re-anchor itself a second time.
   const [placement, setPlacement] = useState<{ flipUp: boolean; maxHeightPx: number } | null>(null);
-  // Recent sessions, for the root level's popular picks ( D6:
+  // Recent sessions, for the root level's popular picks (D6:
   // popularity is measured from the user's OWN history). One fetch per mount,
   // fail-soft — an empty list just means the strip is topped up from the first
   // group's catalog order, exactly as it is for a user with no history.
@@ -636,7 +636,7 @@ export function ModelPill() {
     setChildCancelPending(null);
   }, [tabId]);
 
-  //  cut-2 §D4: the drill-down's rows for THIS tab — groups over every
+  // cut-2 §D4: the drill-down's rows for THIS tab — groups over every
   // connected connection, the tab's own pin first with its live model
   // checkmarked, popular picks from the user's recent sessions, and the effort
   // level of the current pair. All of it decided by the shared pure layer.
@@ -702,7 +702,7 @@ export function ModelPill() {
       left: clampMenuLeft(rect.left, MODEL_PILL_POPOVER_WIDTH, window.innerWidth),
       bottom: window.innerHeight - rect.top + MODEL_PILL_MENU_GAP_PX,
     });
-    //  cut-2 §D4 (DoD 5): the popover already hangs above the chip by
+    // cut-2 §D4 (DoD 5): the popover already hangs above the chip by
     // construction (the `bottom` anchor above), so there is no side to choose —
     // only a ceiling to respect, measured from the room above the chip. `max`,
     // not `height`: a short level renders with no scrollbar at all.
@@ -791,7 +791,7 @@ export function ModelPill() {
     }
   }, [open, focusIndex, drillPage]);
 
-  //  cut-2 §D5: the transcript's provider-switch line.
+  // cut-2 §D5: the transcript's provider-switch line.
   //
   // A rebind delivers the new port with the NEW pin already recorded and the
   // tab parked in `awaiting_host_ready`; the respawned host's `host_ready` then
@@ -800,7 +800,7 @@ export function ModelPill() {
   // and a pin that moves while the tab is not ready is reported once it is,
   // never lost and never written into a transcript about to be cleared.
   //
-  // : the write also passes the tab's sessionId from the
+  // the write also passes the tab's sessionId from the
   // tabs-store so the store can stage the marker renderer-locally until the
   // respawned host's `session_history` boundary, and persist it there — the
   // marker never enters host/model history.
@@ -841,7 +841,7 @@ export function ModelPill() {
     if (pickDisabled) {
       return;
     }
-    // : a mid-turn pick is QUEUED host-side (last-value-wins), so
+    // a mid-turn pick is QUEUED host-side (last-value-wins), so
     // re-picking the model still on screen must travel too: it replaces the
     // queued pick instead of being mistaken for a no-op. `pendingPickRef` is
     // the only record of a pick the host has not acked yet.
@@ -877,7 +877,7 @@ export function ModelPill() {
   }
 
   /**
-   *  cut-2 §D3/§D6: picking a model from ANOTHER connection.
+   * cut-2 §D3/§D6: picking a model from ANOTHER connection.
    *
    * The provider is baked into the host's fork env, so this is not a message to
    * the running host but a rebind: the pair is written onto the TARGET
@@ -887,7 +887,7 @@ export function ModelPill() {
    * before the rebind (rebinding then would boot the target on its OLD model),
    * and a refused rebind leaves the session exactly where it was running.
    *
-   * The idle gate (§D2) is NOT `pickDisabled` since  (that one is
+   * The idle gate (§D2) is NOT `pickDisabled` since (that one is
    * live mid-turn for core): a rebind tears the host down, so it keeps the
    * between-turns `idle` predicate and refuses loudly while a turn runs.
    *
@@ -902,7 +902,7 @@ export function ModelPill() {
     if (pickDisabled) {
       return;
     }
-    // : the chip itself now stays live during a running turn (a
+    // the chip itself now stays live during a running turn (a
     // same-connection pick is queued), but a FOREIGN connection pick is a
     // rebind — it shuts the host down and respawns it, which would cut the
     // running turn. That stays between-turns only; name the refusal instead of
@@ -1210,7 +1210,7 @@ export function ModelPill() {
               : undefined
           }
         >
-          {/*  cut-2 §D4 (DoD 6): the SHARED drill-down — the same
+          {/* cut-2 §D4 (DoD 6): the SHARED drill-down — the same
               component the New Session screen renders, spanning every
               connected connection. The popover wrapper above keeps the pill's
               own fixed-position escape from `.composer-footer-left`'s
@@ -1224,7 +1224,7 @@ export function ModelPill() {
             backLabel={drillPage.kind === "effort" ? "Effort" : (openGroup?.label ?? "Models")}
             focusIndex={focusIndex}
             emptyText="No connected providers yet."
-            // : same wording as the chip's own note — a pick is
+            // same wording as the chip's own note — a pick is
             // accepted now and rides the NEXT turn, never the running one.
             {...(turnInProgress ? { note: MID_TURN_CHANGE_NOTE } : {})}
             itemRefs={itemRefs}

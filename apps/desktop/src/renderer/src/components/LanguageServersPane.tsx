@@ -66,7 +66,7 @@ export interface LanguageServersPaneProps {
   tabId?: string;
   /** Injectable for tests / isolation; defaults to `window.anycode.lspConfig`. */
   bridge?: LspConfigBridge;
-  /** : reports the pane's count for the scope chip (null while loading). */
+  /** reports the pane's count for the scope chip (null while loading). */
   onCountChange?: (count: number | null) => void;
   /**
    * The scope tab's store, when the caller sits outside that tab's
@@ -103,7 +103,7 @@ export function LanguageServersPane({ tabId, bridge = window.anycode.lspConfig, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bridge, tabId]);
 
-  // : the scope chip's count = configured entries across scopes.
+  // the scope chip's count = configured entries across scopes.
   const configuredCount = status ? (status.entries.project ?? []).length + status.entries.user.length : null;
   useEffect(() => {
     onCountChange?.(configuredCount);

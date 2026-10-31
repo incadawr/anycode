@@ -165,7 +165,7 @@ describe("agent-message grouping (GitHub #19)", () => {
   });
 });
 
-describe("Continue button DOM class ( cross-review — must not share the Try-again probe's class)", () => {
+describe("Continue button DOM class (cross-review — must not share the Try-again probe's class)", () => {
   it("a Continue offer renders a button that is NOT counted by the Try-again probe selector", () => {
     const blocks = [{ kind: "loop_end", id: "loop_end:t1", reason: "max_turns", turns: 3 }] as unknown as TranscriptBlock[];
     const html = renderToStaticMarkup(
@@ -220,7 +220,7 @@ describe("shouldShowTranscriptEmpty on a read-only surface", () => {
   });
 });
 
-describe("shouldShowTranscriptEmpty on a replay surface ( S14, §11 N1)", () => {
+describe("shouldShowTranscriptEmpty on a replay surface (S14, §11 N1)", () => {
   it("(a) the opening frame of a film is BLANK — zero blocks under a replay draw nothing", () => {
     expect(shouldShowTranscriptEmpty(0, false, true)).toBe(false);
   });
@@ -323,7 +323,7 @@ describe("needsSnap (F17 sticky-follow, codex P7.3-F finding 4 dedup helper)", (
 });
 
 // ─────────────────────────────────────────────────────────────────────────
-//  — Stack consecutive terminal tool-call cards (ANY mix of tool
+// Stack consecutive terminal tool-call cards (ANY mix of tool
 // names — a single-tool run is the special case). Pure-logic tests for the
 // grouping projection and its helpers (no DOM, no jsdom — same posture as the
 // isAtBottom/needsSnap tests above).
@@ -404,7 +404,7 @@ describe("stackLabel", () => {
   });
 });
 
-describe("stackHeaderLabel ( — never masquerade as one tool name)", () => {
+describe("stackHeaderLabel (never masquerade as one tool name)", () => {
   it("returns the single tool name for a one-type run", () => {
     expect(stackHeaderLabel([mkToolCall({ toolName: "Bash" }), mkToolCall({ toolName: "Bash" })])).toBe("Bash");
   });
@@ -462,7 +462,7 @@ describe("stackStatusClass", () => {
   });
 });
 
-describe("groupTranscriptBlocks ( — any adjacent terminal tool calls stack)", () => {
+describe("groupTranscriptBlocks (any adjacent terminal tool calls stack)", () => {
   it("returns an empty array for no blocks", () => {
     expect(groupTranscriptBlocks([])).toEqual([]);
   });
@@ -576,7 +576,7 @@ function retryMeta(overrides: Partial<ErrorRetryMeta> = {}): ErrorRetryMeta {
   return { attemptsMade: 3, maxAttempts: 3, retryable: true, hadModelOutput: false, code: "connect_timeout", ...overrides };
 }
 
-describe("formatErrorRetrySuffix ( W8 — mirrors cli/render.ts wording)", () => {
+describe("formatErrorRetrySuffix (W8 — mirrors cli/render.ts wording)", () => {
   it("is empty when the event carries no retry metadata (pre-W7b byte parity)", () => {
     expect(formatErrorRetrySuffix(undefined)).toBe("");
   });
@@ -598,7 +598,7 @@ describe("formatErrorRetrySuffix ( W8 — mirrors cli/render.ts wording)", () =>
 
 });
 
-describe("formatStreamRetryLine ( W8 — mirrors cli/render.ts's '[retry N/M in X s: reason]')", () => {
+describe("formatStreamRetryLine (W8 — mirrors cli/render.ts's '[retry N/M in X s: reason]')", () => {
   it("formats attempt/limit/delay/reason, with the delay in seconds", () => {
     expect(formatStreamRetryLine(1, 3, 500, "connect refused")).toBe("Retry 1 in 0.5 s: connect refused");
     expect(formatStreamRetryLine(2, 3, 1000, "ECONNRESET")).toBe("Retry 2 in 1.0 s: ECONNRESET");
@@ -610,7 +610,7 @@ describe("formatStreamRetryLine ( W8 — mirrors cli/render.ts's '[retry N/M in 
     );
   });
 
-  it("drops the total once the network budget runs past maxRetries ( review: no 9/8)", () => {
+  it("drops the total once the network budget runs past maxRetries (review: no 9/8)", () => {
     expect(formatStreamRetryLine(8, 8, 500, "network")).toBe("Retry 8 in 0.5 s: network");
     expect(formatStreamRetryLine(9, 8, 500, "network")).toBe("Retry 9 in 0.5 s: network");
   });
@@ -655,7 +655,7 @@ describe("formatLoopEndLine (loop-end footer wording)", () => {
   });
 });
 
-describe("showTryAgainButton ( W8 button-visibility truth-table)", () => {
+describe("showTryAgainButton (W8 button-visibility truth-table)", () => {
   const offer: RetryOffer = { loopEndBlockId: "loop_end:turn-1", text: "hello", images: [] };
 
   it("hidden when there is no armed offer at all (nonretryable / mid-stream — the store never arms `retry`)", () => {
@@ -670,14 +670,14 @@ describe("showTryAgainButton ( W8 button-visibility truth-table)", () => {
     expect(showTryAgainButton(offer, "loop_end:turn-0", "ready")).toBe(false);
   });
 
-  it("hidden while the connection is not ready ( W8-FIX #1) — a click would silently drop the resend since setHostExited preserves the armed offer", () => {
+  it("hidden while the connection is not ready (W8-FIX #1) — a click would silently drop the resend since setHostExited preserves the armed offer", () => {
     expect(showTryAgainButton(offer, "loop_end:turn-1", "host_exited")).toBe(false);
     expect(showTryAgainButton(offer, "loop_end:turn-1", "awaiting_port")).toBe(false);
     expect(showTryAgainButton(offer, "loop_end:turn-1", "awaiting_host_ready")).toBe(false);
   });
 });
 
-describe("showContinueButton ( — one-shot Continue on the max_turns loop_end row)", () => {
+describe("showContinueButton (one-shot Continue on the max_turns loop_end row)", () => {
   const offer = { loopEndBlockId: "loop_end:turn-1" };
 
   it("shown when armed + matching block + ready connection + empty prompt queue", () => {
@@ -704,7 +704,7 @@ describe("showContinueButton ( — one-shot Continue on the max_turns loop_end r
   });
 });
 
-describe("showStandaloneRetry ( FIX-A — fallback row visibility when the anchor is lost to respawn)", () => {
+describe("showStandaloneRetry (FIX-A — fallback row visibility when the anchor is lost to respawn)", () => {
   const offer: RetryOffer = { loopEndBlockId: "loop_end:turn-1", text: "hello", images: [] };
   const anchorBlock: TranscriptBlock = { kind: "loop_end", id: "loop_end:turn-1", reason: "retryable", turns: 1 };
   // Hydration-shaped transcript (store.ts's projectHistoryToBlocks): ids are
@@ -795,7 +795,7 @@ describe("compactionRowText", () => {
   });
 });
 
-describe("topmostVisibleUserIndex ( minimap scroll-spy core, 4086 follow-up)", () => {
+describe("topmostVisibleUserIndex (minimap scroll-spy core, 4086 follow-up)", () => {
   const spy = (tops: readonly number[], top: number, height: number): number | null =>
     topmostVisibleUserIndex(tops.length, (i) => tops[i]!, top, height);
 

@@ -1,7 +1,7 @@
 /**
- * The ONE proxy control every scope gets ( §3): a dropdown of named
- * profiles. It replaces the three separate `Proxy URL` text fields  and
- *  left behind (the connection drawer's, and one per engine pane) —
+ * The ONE proxy control every scope gets (§3): a dropdown of named
+ * profiles. It replaces the three separate `Proxy URL` text fields and
+ * left behind (the connection drawer's, and one per engine pane) —
  * a proxy is configured ONCE, in the Network pane, and a scope only points at
  * it.
  *
@@ -80,7 +80,7 @@ const ENGINE_DISPLAY_NAME: Record<"codex" | "claude", string> = {
 
 /**
  * What each engine's proxy actually covers (-F3, migrated verbatim
- * from the deleted EngineProxyField;  lifted the codex carve-out).
+ * from the deleted EngineProxyField; lifted the codex carve-out).
  * Both engines' subagents now run under the engine proxy same as the
  * top-level session: a codex-engine child routes through
  * `runSessionTier`/`ctx.sessionSubagents` exactly like a claude one (the

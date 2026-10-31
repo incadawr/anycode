@@ -20,7 +20,7 @@ export interface SessionAccessBridge {
   get(): Promise<CommunicationGetResult>;
   setSessionAccess(tabId: string, enabled: boolean): Promise<CommunicationMutationResult>;
   setSessionHandle(tabId: string, handle: string | null): Promise<CommunicationHandleResult>;
-  /** : the External approvals switch. Refused by main unless the session is shared. */
+  /** the External approvals switch. Refused by main unless the session is shared. */
   setSessionApprovals(tabId: string, enabled: boolean): Promise<CommunicationMutationResult>;
 }
 

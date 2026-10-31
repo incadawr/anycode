@@ -3,7 +3,7 @@
  * turn into text a user can act on. The reason this exists: a Reveal that the
  * main process blocked used to render as a button that did nothing at all.
  *
- * -A adds `artifactChipState`, the pure state machine behind the
+ * adds `artifactChipState`, the pure state machine behind the
  * blocked-preview chip's "Allow preview" button — it is exercised here
  * because Markdown.tsx (a `.tsx`) is outside this package's vitest include
  * glob (`src/**\/*.test.ts` only, see vitest.config.ts).
@@ -59,7 +59,7 @@ describe("artifactActionFailureMessage", () => {
 });
 
 describe("artifactFailureMessage", () => {
-  it("-A frozen copy: the blocked-preview row text is exactly this string", () => {
+  it("frozen copy: the blocked-preview row text is exactly this string", () => {
     expect(artifactFailureMessage("outside_allowed_roots")).toBe("Preview blocked — outside allowed roots");
   });
 });

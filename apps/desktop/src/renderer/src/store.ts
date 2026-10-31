@@ -71,14 +71,14 @@ import type { AgentDelivery } from "../../shared/communication.js";
  * run-level terminal status. Purely additive: no existing field, action, or
  * the frozen five-kind `TranscriptBlock` union changes.
  *
- *  slice S3 revises the `workflow_start`/`workflow_step_start` pair
+ * slice S3 revises the `workflow_start`/`workflow_step_start` pair
  * above: `workflow_start` now PREFILLS `steps` with every step of the run's
  * graph (not `steps: []`), so the card holds all N steps before the first one
  * launches; `workflow_step_start` UPDATES the matching prefilled entry in
  * place rather than appending. See `WorkflowStepStatus`/`WorkflowSubStatus`'s
  * own doc comments below for the full per-field semantics.
  *
- * Codex-fixes  (B2-ui, cut §2(k).3/§3.3) fills in the
+ * Codex-fixes (B2-ui, cut §2(k).3/§3.3) fills in the
  * `engine_settings_changed` branch that B2-host's contracts left as a
  * documented no-op: `pendingEngineChange` (new session-slice field) tracks a
  * `set_model`/`set_engine_preset` the host has ACCEPTED
@@ -141,13 +141,13 @@ import { type UsageLimitNotice } from "./provider-notices.js";
 import { saveConnectionSwitch, type ConnectionSwitchRecord } from "./provider-switch-log.js";
 import { decodeSubagentCardSnapshot, decodeSubagentHandoff, projectSubagentCard } from "./subagent-card.js";
 import { decodeWorkflowCardSnapshot, projectWorkflowCard } from "./workflow-card.js";
-// : the global settings-store (NOT part of DesktopState) — the
+// the global settings-store (NOT part of DesktopState) — the
 // provider_quota case projects the observation onto its snapshot's matching
 // connection `lastQuota` so the connect card updates live.
 import { useSettingsStore } from "./settings-store.js";
 import type { WorkspaceTrustItemWire } from "../../shared/workspace-trust.js";
 
-/** : the pending project-trust question shown for a tab. */
+/** the pending project-trust question shown for a tab. */
 export interface WorkspaceTrustRequest {
   state: "unknown" | "changed";
   workspace: string;
@@ -210,7 +210,7 @@ export interface ToolCallSnapshot {
  * card shows a spinner while `final` is null); `subagent_progress` refreshes
  * the counters; `subagent_activity` appends a live per-child-tool row (slice
  * P7.18/F16b, ring-capped — see `SUBAGENT_ACTIVITY_RING`); `subagent_attention`
- * toggles `waiting` (session-tier children only,  CUT-S2 §2.5);
+ * toggles `waiting` (session-tier children only, CUT-S2 §2.5);
  * `subagent_end` fills `final`, flipping the card to the terminal status. The
  * full child result/text is NOT here — it arrives capped in the ordinary
  * `tool_result` that settles this same tool_call (design §3.3: no nested
@@ -233,7 +233,7 @@ export interface SubagentSubStatus {
    * Set only for an engine persona (md-profile `engine:`) — a one-shot
    * foreign CLI run (Codex or Claude Code) in place of an in-process child;
    * null for an in-process child AND for a legacy transcript replayed from
-   * before `subagent_start` carried this field ( R5, wave2-cut §1.4/
+   * before `subagent_start` carried this field (R5, wave2-cut §1.4/
    * §5.4 — never inferred from `agentType`). Read by
    * `formatSubagentCounters` (ToolCallCard.tsx) to label/adjust the counter
    * line per engine.
@@ -247,7 +247,7 @@ export interface SubagentSubStatus {
   /** Count of activity rows dropped from the front of the ring once the cap was exceeded (honest overflow counter, not a wire field). */
   activityDropped: number;
   /**
-   * : the provider's model claim as seen LIVE on `subagent_progress`
+   * the provider's model claim as seen LIVE on `subagent_progress`
    * (first response frame onward). Live-only: the persisted card and the
    * settled `final.responseModel` supersede it once the run ends. Absent
    * until observed; never erased by a later progress that lacks it.
@@ -258,7 +258,7 @@ export interface SubagentSubStatus {
     durationMs: number;
     /**
      * Provider-reported model id read off the child's port after its final
-     * model call (raw wire claim — ). Absent for engine children,
+     * model call (raw wire claim). Absent for engine children,
      * session-tier children, inherited-port children, and providers exposing
      * no raw claim. This is the provider's CLAIM, not proof of serving.
      */
@@ -281,7 +281,7 @@ export interface SubagentSubStatus {
    * PRESENCE, not value, is the signal: `true` while a session-tier child
    * session is blocked on a permission ask, and the key is ABSENT — never
    * `false` — the moment the ask is answered or the card settles. A single
-   * encoding is load-bearing here ( CUT-S2 §2.5 review finding 2):
+   * encoding is load-bearing here (CUT-S2 §2.5 review finding 2):
    * both `patchSubagentAttention(false)` and `patchSubagentEnd`'s settle
    * strip the key in the SAME way, so any reader — including the future
    * badge-priority VM (CUT-S2 §2.5) — can test `"waiting" in subagent`
@@ -296,13 +296,13 @@ export interface SubagentSubStatus {
    * PRESENCE-encoded (`?: true`, same discipline as `waiting` above): set
    * ONLY by `projectSubagentCard` when the terminal S1 snapshot's
    * `target.kind === "session"` — i.e. this Agent call spawned a session-tier
-   * child ( CUT-S2 §2.5/§10.8). Live subagent_* patches never set it
+   * child (CUT-S2 §2.5/§10.8). Live subagent_* patches never set it
    * (the live Open path resolves through the child relation-store instead);
    * inline cards and legacy hydrations never have the key.
    */
   sessionChild?: true;
   /**
-   * Live stall report ( follow-up slice): set ONLY by the
+   * Live stall report (follow-up slice): set ONLY by the
    * `subagent_stalled` AgentEvent while the child is unsettled; carries the
    * detector's own fields verbatim — never inferred. Cleared (key removed)
    * by the next `subagent_progress`, `subagent_activity`, or `subagent_end`
@@ -322,7 +322,7 @@ export const SUBAGENT_ACTIVITY_RING = 100;
 
 /**
  * Coarse progress of one DAG step within a running Workflow tool call
- * (design/slice-3.4-cut.md §2.3/§6, task 3.4.5).  slice S3:
+ * (design/slice-3.4-cut.md §2.3/§6, task 3.4.5). slice S3:
  * `workflow_start` now PREFILLS this array with every step of the run's
  * graph (`started`/`running` both false, `final` null), so the array order
  * is `workflow_start`'s own definition order — NOT arrival order of
@@ -336,7 +336,7 @@ export const SUBAGENT_ACTIVITY_RING = 100;
 export interface WorkflowStepStatus {
   stepId: string;
   agentType: string;
-  /** The step's declared dependencies ( slice S3), straight off the
+  /** The step's declared dependencies (slice S3), straight off the
    *  run's graph — used to lay the checklist out by dependency level rather
    *  than trust this array's own order (see `orderStepsByDependency` in
    *  ToolCallCard.tsx), since a definition may legally declare a step before
@@ -346,7 +346,7 @@ export interface WorkflowStepStatus {
   toolCalls: number;
   lastTool: string | null;
   /**
-   * The step's token spend ( slice S2), cumulative since that step
+   * The step's token spend (slice S2), cumulative since that step
    * started. `null` means the tier reported none at all — engine and
    * session-tier children surface no spend, and a card must show nothing there
    * rather than a zero it cannot vouch for. Wire events REPLACE this value;
@@ -354,17 +354,17 @@ export interface WorkflowStepStatus {
    * erasing it.
    */
   usage: TokenUsage | null;
-  /** `workflow_step_start` observed ( slice S3). False means the step
+  /** `workflow_step_start` observed (slice S3). False means the step
    *  has never been scheduled (no `workflow_step_start`) — its dependencies
    *  aren't all satisfied yet, or launches are frozen (fail-fast/
    *  cancellation) and never will be. Whether the CHILD itself ever launched
    *  is a separate question this field does not answer: a synthetic
-   *  pre-check throw (`errorOutcome()`, ) still emits `step_start`
+   *  pre-check throw (`errorOutcome()`) still emits `step_start`
    *  before settling, so `started: true` and `final.unlaunched: true` are
    *  both legally true on the same step. The fact of launch lives on the
    *  terminal — absence of `final.unlaunched` once settled. */
   started: boolean;
-  /** `workflow_step_running` observed ( slice S3): the step cleared
+  /** `workflow_step_running` observed (slice S3): the step cleared
    *  the shared subagent semaphore and its child is actually executing. A
    *  step with `started: true` but `running: false` is honestly "queued" —
    *  `started` alone cannot tell the two apart (§B7: step_start fires before
@@ -374,7 +374,7 @@ export interface WorkflowStepStatus {
     status: "completed" | "max_turns" | "cancelled" | "error" | "skipped";
     durationMs: number;
     /**
-     * : the runtime's own reason the step did not complete, present
+     * the runtime's own reason the step did not complete, present
      * only for `error`/`max_turns` (never `completed`/`skipped`/`cancelled`
      * — `cancelled`'s last-finished-turn text is not a cause, see
      * `workflow/step-failure.ts`). `kind` labels what `text` IS: an error
@@ -393,7 +393,7 @@ export interface WorkflowStepStatus {
 /**
  * Sub-status of a Workflow tool call's DAG run (design §2.3/§6, task 3.4.5),
  * keyed onto the Workflow tool_call block by `toolCallId` — the workflow
- * mirror of `SubagentSubStatus`.  slice S3: `workflow_start` seeds it
+ * mirror of `SubagentSubStatus`. slice S3: `workflow_start` seeds it
  * with EVERY step of the run's graph already in `steps` (`started`/`running`
  * both false, `final` null) — not the empty array it used to seed, since the
  * card is meant to hold all N steps before the first one launches; each
@@ -403,7 +403,7 @@ export interface WorkflowStepStatus {
  * card to the terminal status. Like `SubagentSubStatus`, the full step/run
  * output text is NOT here — it arrives capped in the ordinary `tool_result`
  * that settles this same tool_call. The one exception is a failed step's
- * `final.failure`: its own bounded reason rides the terminal
+ * `final.failure` its own bounded reason rides the terminal
  * `workflow_step_end` event itself, independently capped, so a click can
  * reveal it without waiting on (or duplicating) the tool_result text.
  */
@@ -412,7 +412,7 @@ export interface WorkflowSubStatus {
   totalSteps: number;
   steps: WorkflowStepStatus[];
   /**
-   * Live per-step-tool activity rows ( slice S1), ONE lane for the
+   * Live per-step-tool activity rows (slice S1), ONE lane for the
    * whole run rather than one per step. A DAG runs steps concurrently, so a
    * per-step lane would both grow the card by a lane per step and destroy the
    * only thing a reader wants here — the chronology BETWEEN steps. Each row
@@ -425,7 +425,7 @@ export interface WorkflowSubStatus {
 }
 
 /**
- * Ring cap for `WorkflowSubStatus.activity` ( slice S1). Deliberately
+ * Ring cap for `WorkflowSubStatus.activity` (slice S1). Deliberately
  * larger than SUBAGENT_ACTIVITY_RING: that ring holds ONE child's rows, this
  * one is shared by every concurrent step of a DAG, so at equal size a
  * multi-lane run would keep a proportionally shorter stretch of history. The
@@ -434,7 +434,7 @@ export interface WorkflowSubStatus {
  */
 export const WORKFLOW_ACTIVITY_RING = 200;
 
-/**  W7b terminal-error retry metadata — mirrors the core AgentEvent's `error.retry` field (types/events.ts) 1:1. */
+/** W7b terminal-error retry metadata — mirrors the core AgentEvent's `error.retry` field (types/events.ts) 1:1. */
 export interface ErrorRetryMeta {
   attemptsMade: number;
   replayStopped?: "output_started";
@@ -458,12 +458,12 @@ export type TranscriptBlock =
       /**
        * Attached images rendered as thumbnails (MessageList.tsx). Populated by
        * the resume/projection path (projectHistoryToBlocks) and the reconnect
-       * `turn_started` bubble, and — since  — by every
+       * `turn_started` bubble, and — since — by every
        * LIVE append path too (appendUserText / pendingSteer flush), so the
        * thumbnail shows immediately after send instead of only after a reload.
        */
       images?: readonly ImageAttachment[];
-      /**  срез 2: present iff this "user" turn was host-injected (a detached child's report), not typed by the human — MessageList.tsx renders it as a compact system card instead of the normal user bubble. Survives reload: mirrors WireHistoryItem.origin via projectHistoryToBlocks, and the live append path (tab-registry.ts) stamps it too. */
+      /** срез 2: present iff this "user" turn was host-injected (a detached child's report), not typed by the human — MessageList.tsx renders it as a compact system card instead of the normal user bubble. Survives reload: mirrors WireHistoryItem.origin via projectHistoryToBlocks, and the live append path (tab-registry.ts) stamps it too. */
       origin?: "system";
       /** Authenticated agent delivery, distinct from a detached child report. */
       agentMessage?: true;
@@ -499,7 +499,7 @@ export type TranscriptBlock =
       workflow: WorkflowSubStatus | null;
     }
   /**
-   * `retry` ( W8) mirrors the core AgentEvent's additive-optional
+   * `retry` (W8) mirrors the core AgentEvent's additive-optional
    * `error.retry` field 1:1 (types/events.ts) — absent for a pre-W7b core
    * event. Feeds the "(failed after N attempts)" suffix (MessageList,
    * wording mirrors cli/render.ts) and, via `lastErrorRetry` below, the
@@ -521,7 +521,7 @@ export type TranscriptBlock =
   /** Wall time from turn start to completion, using host timestamps when available. */
   | { kind: "loop_end"; id: string; reason: string; turns: number; durationMs?: number; /** Epoch ms when the turn ended. */ at?: number }
   /**
-   * One persisted line per `stream_retry` AgentEvent ( W8), ADDITIVE to
+   * One persisted line per `stream_retry` AgentEvent (W8), ADDITIVE to
    * the existing one-slot `notice` toast (which still shows the LATEST retry
    * only) — this gives the transcript a full history of every attempt this
    * turn made, not just the last one.
@@ -534,7 +534,7 @@ export type TranscriptBlock =
       delayMs: number;
       reason: string;
       /**
-       *  review F5: present only on a retry that follows a
+       * review F5: present only on a retry that follows a
        * recovered network wait — the episode's duration (the retry itself
        * fired at once; `delayMs` is 0). Rendered as "now (network back after
        * N s)", never as a pending delay.
@@ -629,12 +629,12 @@ export type TranscriptBlock =
       suppressed?: number;
     }
   /**
-   * One row per `ceiling_grant` AgentEvent ( cut-1): the turn-ceiling
+   * One row per `ceiling_grant` AgentEvent (cut-1): the turn-ceiling
    * ladder granted an extension — round number, how many turns it bought and
    * the model's own remaining list. Kept minimal on purpose: the interactive
    * continuation affordance (a button that lets a human overrule a refusal)
    * is cut-2; cut-1 only needs the grant to be VISIBLE in the feed, never
-   * silent ( "Видимость"). The optional `nextAction` rides along only
+   * silent ("Видимость"). The optional `nextAction` rides along only
    * so the cut-2 UI does not need a wire change to show it.
    */
   | {
@@ -647,7 +647,7 @@ export type TranscriptBlock =
       nextAction?: string;
     }
   /**
-   *  cut-2 §D5: the ledger line marking the moment this session moved
+   * cut-2 §D5: the ledger line marking the moment this session moved
    * to another provider connection (a rebind — the host was shut down and
    * respawned on the resume path, §D1). Renderer-only, never reconstructed
    * into prompt history: the model learns which provider it is from its own
@@ -671,7 +671,7 @@ export type ToolCallBlock = Extract<TranscriptBlock, { kind: "tool_call" }>;
 
 /**
  * Index of the newest compaction card still running, or -1 when none is open
- *. Scanned from the END so a session that compacted more than once
+ * . Scanned from the END so a session that compacted more than once
  * closes the card THIS `compaction_end` belongs to, and an earlier finished
  * card is never rewritten by a later outcome.
  */
@@ -703,7 +703,7 @@ export interface PermissionUiRequest {
  * `SESSION_HISTORY_MAX_ITEMS`, so the hydrated transcript only shows the tail.
  * Slice P7.26/R2 adds `rewind_restored`/`rewind_rejected` for the checkpoint
  * timeline's `rewind_result` outcome (design slice-P7.26-R2-ratification.md §1).
- *  W3-FIX adds `retry_blocked`: `dispatchTryAgain` (App.tsx) refuses an
+ * W3-FIX adds `retry_blocked`: `dispatchTryAgain` (App.tsx) refuses an
  * armed offer whose images the live model verdict no longer accepts, leaving
  * the offer armed instead of consuming it (fable-task56-w3-codex-ruling.md
  * finding 2 §(c)).
@@ -725,21 +725,21 @@ export type NoticeKind =
   | "worktree_notice"
   | "retry_blocked"
   /**
-   *  cut-2 §D6: `tab-rebind` refused the provider switch the user just
+   * cut-2 §D6: `tab-rebind` refused the provider switch the user just
    * picked (`busy`, `connection_missing`, `not_ready`, …). The pick is NOT
    * applied and the session keeps running on its current connection, so the
    * refusal has to be visible — silence would read as a switch that happened.
    */
   | "rebind_failed"
   /**
-   * : the host refused an `engine_switch_request` (turn running,
+   * the host refused an `engine_switch_request` (turn running,
    * child attached, same engine, switch factory unavailable or failed). The
    * session keeps running on the current engine — the refusal must be visible,
    * silence would read as a switch that happened (same family as rebind_failed).
    */
   | "engine_switch_failed"
   /**
-   *  rework (Opus defect 1): a UI steer could not be delivered
+   * rework (Opus defect 1): a UI steer could not be delivered
    * into the running turn — it was moved into the prompt queue for the next
    * turn instead (never dropped), and the user must see that it happened.
    */
@@ -804,7 +804,7 @@ export function accumulateSessionTokens(prev: SessionTokens | null, usage: Token
 
 /**
  * Builds `SessionTokens` from an `engine_session_tokens` AgentEvent
- * (codex-profiles cut §3.4/§5.3, ). SEMANTICS ARE REPLACE, NOT
+ * (codex-profiles cut §3.4/§5.3). SEMANTICS ARE REPLACE, NOT
  * ACCUMULATE — deliberately NOT `accumulateSessionTokens`: the event's
  * `total`/`input`/`output` are already the wire's cumulative session totals
  * (`thread/tokenUsage/updated.total`), so summing them onto a running base
@@ -828,7 +828,7 @@ export function sessionTokensFromEngineEvent(event: {
 }
 
 /**
- * : projects a core `provider_quota` observation
+ * projects a core `provider_quota` observation
  * (provider layer's `ProviderQuotaUpdate`) onto the SAME wire slot the
  * engine brokers use (`CodexRateLimitsWire`, the Composer popover's sole
  * reader) — primary/secondary carry through, `observedAt` stamps the
@@ -988,7 +988,7 @@ export interface QueuedPrompt {
   text: string;
   images: readonly QueuedPromptImage[];
   /**
-   *  срез 2: presence marks this item as a detached child's terminal
+   * срез 2: presence marks this item as a detached child's terminal
    * report (a SYSTEM-origin queue item), not an ordinary human-typed prompt —
    * absent for every other enqueue call site (Composer, App.tsx's retry
    * offer, automation.ts). Drives two things: `takeQueueHead`'s pause-bypass
@@ -1008,7 +1008,7 @@ export interface QueuedPrompt {
 }
 
 /**
- *  W8 one-shot "Try again": the exact text+images actually put on the
+ * W8 one-shot "Try again": the exact text+images actually put on the
  * wire, snapshotted at send time by `recordSentMessage` (Composer's direct
  * path, tab-registry's queue-drain/initial-prompt paths — the only three
  * places a `user_message` is ever sent) so a later retry can replay the
@@ -1021,7 +1021,7 @@ export interface LastSentMessage {
 }
 
 /**
- *  W8 armed Try-again state: set on `loop_end` when the turn ended in
+ * W8 armed Try-again state: set on `loop_end` when the turn ended in
  * a retryable, no-model-output error (`ErrorRetryMeta.retryable &&
  * !hadModelOutput`), null otherwise. `loopEndBlockId` ties the offer to the
  * SPECIFIC `loop_end` transcript block it belongs to — MessageList shows the
@@ -1039,7 +1039,7 @@ export interface RetryOffer {
 }
 
 /**
- * Codex-fixes  (cut §2(k).3): a `set_model`/`set_engine_preset` the
+ * Codex-fixes (cut §2(k).3): a `set_model`/`set_engine_preset` the
  * host has ACCEPTED (an `engine_settings_changed{state:"pending"}` landed)
  * but not yet APPLIED (the matching `state:"applied"` — host/session.ts's
  * `onSettingsApplied`, fired only once a `turn/start` carrying the change was
@@ -1069,7 +1069,7 @@ export interface ModelSelectionAck {
 export interface DesktopState {
   connection: ConnectionPhase;
   /**
-   * The provider connection this tab is pinned to ( W10-FIX F2), delivered
+   * The provider connection this tab is pinned to (W10-FIX F2), delivered
    * on the tab-port envelope (control plane, NOT a host message). Null for an
    * unpinned/legacy tab — the ModelPill then targets the active connection. Set at
    * port attach and stable for the tab's life (survives host respawns), so it lives
@@ -1077,7 +1077,7 @@ export interface DesktopState {
    */
   pinnedConnection: { connectionId: string; providerId: string } | null;
   /**
-   *  CUT-S2 §10.15.1: true for a child-session tab's store, set once
+   * CUT-S2 §10.15.1: true for a child-session tab's store, set once
    * at `registerPort` (tab-registry.ts's child branch) and never flipped back
    * — same "control-plane, outside the session slice" shape as
    * `pinnedConnection` above, so a host_ready respawn never drops it. Lets
@@ -1088,7 +1088,7 @@ export interface DesktopState {
    */
   childSurface: boolean;
   /**
-   * : provider-switch markers are STAGED renderer-locally while
+   * provider-switch markers are STAGED renderer-locally while
    * the hydrated history of the respawned host has not landed yet
    * (`hostHistoryArrived` false ⇔ the `host_ready` reset happened but the
    * following `session_history` has not), and flushed/persisted at that same
@@ -1107,13 +1107,13 @@ export interface DesktopState {
     effortResetTo?: string;
     sessionId: string | null;
   }>;
-  /** : the tab's session id, lifted at attach; null before the handshake. */
+  /** the tab's session id, lifted at attach; null before the handshake. */
   sessionId: string | null;
   workspace: string | null;
   model: string | null;
   mode: PermissionMode | null;
   /**
-   *  §3.7 (part A): tab-scoped orchestrate flag, kept from the
+   * §3.7 (part A): tab-scoped orchestrate flag, kept from the
    * host's `orchestrate_changed` acks (same pattern as `mode`). Part B (UI
    * steps 8–11) renders the ModeMenu row/dialog; part A only keeps state.
    */
@@ -1121,7 +1121,7 @@ export interface DesktopState {
   /** Host-authoritative external-engine projection; null means historical core wire. */
   engine: EnginePresentation | null;
   /**
-   * Codex-fixes  (cut §2(k).3): a model/preset change the host has
+   * Codex-fixes (cut §2(k).3): a model/preset change the host has
    * accepted but not yet applied — see `PendingEngineChange`'s own doc
    * comment. Null when nothing is queued (the common case: `engine === null`
    * for core, or an engine session with no outstanding change). Part of the
@@ -1131,7 +1131,7 @@ export interface DesktopState {
   pendingEngineChange: PendingEngineChange | null;
   /**
    * Host-authoritative shell (AnyCode chrome) capability projection (design
-   *  §2(f)/§3.2): null for core (legacy wire) OR whenever the host
+   * §2(f)/§3.2): null for core (legacy wire) OR whenever the host
    * omitted it -- every consumer treats null the SAME as "every shell
    * feature enabled" (`shell?.x ?? true`), never as "everything disabled".
    */
@@ -1140,17 +1140,17 @@ export interface DesktopState {
   /** Effort levels the current model supports; undefined ⇒ hide the selector. */
   availableEffortLevels: ReasoningEffort[] | undefined;
   /**
-   *  W3: live image-input verdict for the CURRENT model, carried on
+   * W3: live image-input verdict for the CURRENT model, carried on
    * `host_ready`/`model_changed` (W2). `undefined` means the host omitted the
    * field (no seam wired, or a legacy host) — the renderer then applies NO
-   * model-level attachment gating, exactly today's pre- behavior.
+   * model-level attachment gating, exactly today's pre-behavior.
    * Lives alongside `model`/`reasoningEffort` (NOT in `SessionSlice`) for the
    * same reason: `host_ready` sets it explicitly, `performReset` must not
    * clear it out from under an in-flight model pick.
    */
   imageInput: boolean | undefined;
   /**
-   *  срез D: whether a recognizer connect is configured, so images can
+   * срез D: whether a recognizer connect is configured, so images can
    * still be attached to a model that cannot see them — the host runs them
    * through the `InspectImage` fallback instead of the model's own vision.
    * `undefined` means the host never sent the field (a legacy host); the
@@ -1160,11 +1160,11 @@ export interface DesktopState {
    * recognizer config.
    */
   imageFallback: boolean | undefined;
-  /** : host says the context window is the assumed 8K fallback (set by host_ready/model_changed). */
+  /** host says the context window is the assumed 8K fallback (set by host_ready/model_changed). */
   contextWindowAssumed: boolean | undefined;
   modelSettingsConnectionId: string | null | undefined;
   /**
-   * : the host's steering verdict from `host_ready`
+   * the host's steering verdict from `host_ready`
    * (engine-level: core's deferred-injection slot / Codex app-server steer).
    * null on a legacy host or an engine without the seam (claude) — the
    * composer then keeps the prompt-queue fallback for sends while running.
@@ -1180,7 +1180,7 @@ export interface DesktopState {
   permission: PermissionUiRequest | null;
   unattended: boolean;
   /**
-   *  S1: toolCallIds of live Agent tool_call blocks whose child is
+   * S1: toolCallIds of live Agent tool_call blocks whose child is
    * currently blocked on a permission ask (mirrors `SubagentSubStatus.waiting`
    * presence across the transcript, maintained incrementally by
    * `patchSubagentAttention`/`patchSubagentEnd` rather than scanned). A SET,
@@ -1196,13 +1196,13 @@ export interface DesktopState {
   /** Transient toast-channel notice; null when nothing is pending. Fed by the reducer, rendered by MVP.5. */
   notice: Notice | null;
   /**
-   * : the running turn is parked waiting for the network (a
+   * the running turn is parked waiting for the network (a
    * `waiting_for_network` event). Cleared by the recovery `stream_retry`, and
    * by the turn's end. Drives the "Waiting for network…" status line only.
    */
   waitingForNetwork: boolean;
   /**
-   *  review F2: open waiting episodes per source — the parent's
+   * review F2: open waiting episodes per source — the parent's
    * own model port and inline-subagent children share one network, so both
    * can park at once; `waitingForNetwork` is this map's `sum > 0` projection
    * so the banner survives the FIRST recovery of a simultaneous pair.
@@ -1238,7 +1238,7 @@ export interface DesktopState {
   hookDeclarations: CommandHookDeclaration[];
   /** Hook config load error, if the host fail-softed to no command hooks. */
   hookConfigError: string | null;
-  /** : this folder's pending project-trust question, or null once decided. */
+  /** this folder's pending project-trust question, or null once decided. */
   workspaceTrust: WorkspaceTrustRequest | null;
   /** Latest background-task snapshots from the host, replaced wholesale. */
   backgroundTasks: BackgroundTaskSnapshot[];
@@ -1281,7 +1281,7 @@ export interface DesktopState {
    */
   sessionTokens: SessionTokens | null;
   /**
-   *  / : the DURABLE provider-usage audit slice, restored
+   * /the DURABLE provider-usage audit slice, restored
    * from SQLite via `session_checkpoint.usageAudit` (REPLACE-merge: the
    * host's lastStep/totals/totalSteps win) and the `usage_audit` list reply
    * (fetched when the ctx-popover opens). `list: null` = never loaded /
@@ -1295,7 +1295,7 @@ export interface DesktopState {
     list: WireUsageAuditStep[] | null;
   };
   /**
-   * Codex subscription-quota snapshot (codex-profiles cut §3.4/§6, ):
+   * Codex subscription-quota snapshot (codex-profiles cut §3.4/§6):
    * seeded from `host_ready.engine.quota` and REPLACED wholesale by every
    * `engine_quota` AgentEvent — the sparse merge (null never wipes a known
    * field) already happened host-side (`shared/codex-quota.ts`'s
@@ -1323,19 +1323,19 @@ export interface DesktopState {
    */
   lastRewindResult: RewindResultInfo | null;
 
-  /**  W8: the exact text+images last actually sent (see `LastSentMessage` doc). Part of the session slice. */
+  /** W8: the exact text+images last actually sent (see `LastSentMessage` doc). Part of the session slice. */
   lastSentMessage: LastSentMessage | null;
   /**
-   *  W8: the CURRENT turn's most recent `error` AgentEvent's retry
+   * W8: the CURRENT turn's most recent `error` AgentEvent's retry
    * metadata (overwritten by every error this turn — only the last one before
    * a `loop_end` matters), read by the `loop_end` handler to decide whether to
    * arm `retry`. Part of the session slice; cleared on `turn_started`.
    */
   lastErrorRetry: ErrorRetryMeta | null;
-  /**  W8 armed Try-again offer; see `RetryOffer` doc. Part of the session slice. */
+  /** W8 armed Try-again offer; see `RetryOffer` doc. Part of the session slice. */
   retry: RetryOffer | null;
   /**
-   * : the host-pushed in-flight prompt of the CURRENT outer turn
+   * the host-pushed in-flight prompt of the CURRENT outer turn
    * (`pending_prompt` wire message, core-only). Rendered as a REAL pending
    * bubble block (`pending:{turnId}`, appended by the pending_prompt handler
    * itself) only while no durable user item (turnId, step 0) exists — the
@@ -1347,7 +1347,7 @@ export interface DesktopState {
   pendingPrompt: { turnId: string; requestId: string; text: string; images?: ImageAttachment[] } | null;
 
   /**
-   * : steers sent directly to the host while a turn is running on a
+   * steers sent directly to the host while a turn is running on a
    * child surface (`user_message` already on the wire, its `turn_started`
    * not yet seen). Shown outside stream order in the composer queue area;
    * appended as a `user_text` block ONLY on a matching `turn_started`
@@ -1356,13 +1356,13 @@ export interface DesktopState {
    */
   pendingSteers: { requestId: string; text: string; images?: readonly ImageAttachment[]; sentMessage: LastSentMessage }[];
   /**
-   *  rework (Opus defects 1+2): requestIds of the entries in
+   * rework (Opus defects 1+2): requestIds of the entries in
    * `pendingSteers` this tab's own core-engine `steer_message` path owns (a
    * CHILD surface's `user_message` steers are host-queued and deliver at
    * their own next `turn_started` — they are NOT in here). Only these
    * entries are re-queued into `promptQueue` when the turn ends or the host
    * reports `steer_requeued` without delivering; child-surface entries
-   * survive `loop_end` untouched ( regression).
+   * survive `loop_end` untouched (regression).
    */
   uiSteerPending: string[];
 
@@ -1386,7 +1386,7 @@ export interface DesktopState {
   queuePaused: boolean;
   /** Why the prompt queue is paused; read by the PromptQueue banner. */
   queuePauseReason: "max_turns" | "cancelled" | "error" | "rejected";
-  /** One-shot Continue offer armed by a max_turns loop_end ( /  remainder 1). */
+  /** One-shot Continue offer armed by a max_turns loop_end (remainder 1). */
   continueOffer: { loopEndBlockId: string } | null;
   /**
    * The single item currently "in flight": taken off the queue with its wire
@@ -1410,32 +1410,32 @@ export interface DesktopState {
    * false: every ordinary exit keeps the connection lines.
    */
   setHostExited(missingWorkspace?: boolean, failure?: import("../../shared/host-failure.js").HostFailure): void;
-  /** Records the tab's pinned connection from the tab-port envelope ( W10-FIX F2). */
+  /** Records the tab's pinned connection from the tab-port envelope (W10-FIX F2). */
   setPinnedConnection(pinnedConnection: { connectionId: string; providerId: string }): void;
-  /** Marks this tab's store as a child surface ( CUT-S2 §10.15.1); set once, never cleared. */
+  /** Marks this tab's store as a child surface (CUT-S2 §10.15.1); set once, never cleared. */
   setChildSurface(): void;
   /** Sets or clears (null) the transient notice; the toast UI (MVP.5) dismisses through this. */
   setNotice(notice: Notice | null): void;
   /**
    * Appends the local user's message to the transcript (the wire never echoes
-   * user input back, §3). `origin` ( срез 2) is `"system"` only when
+   * user input back, §3). `origin` (срез 2) is `"system"` only when
    * this append is draining a queued detached-child report — see
    * `QueuedPrompt.origin`; absent for every ordinary human-typed send.
-   * : `images` carries the sent attachments onto the
+   * `images` carries the sent attachments onto the
    * block so the live echo renders thumbnails (spread only when non-empty).
    */
   appendUserText(id: string, text: string, images?: readonly ImageAttachment[], origin?: "system"): void;
   /**
-   * : records a steer already sent on the wire while a turn was
+   * records a steer already sent on the wire while a turn was
    * running (child surface). Pending only — NO transcript write; the block
    * is appended by the matching `turn_started`. `text` is the display text
-   * (raw, no image annotation — ); `images` carries the sent
+   * (raw, no image annotation); `images` carries the sent
    * attachments onto the delivered block; `sentMessage` keeps the ORIGINAL
    * outgoing text+images for `lastSentMessage` restore at delivery.
    */
   recordPendingSteer(requestId: string, text: string, images: readonly ImageAttachment[] | undefined, sentMessage: LastSentMessage): void;
   /**
-   *  rework (Opus defect 1): moves a still-pending UI steer
+   * rework (Opus defect 1): moves a still-pending UI steer
    * (host could not deliver it into the running turn — steer_requeued, or
    * the turn ended before delivery) into the prompt queue at the given
    * index (default: tail), keeping its place among its own kind. The bubble
@@ -1444,22 +1444,22 @@ export interface DesktopState {
    */
   requeuePendingSteer(requestId: string, index?: number): void;
   /**
-   *  rework: marks a pendingSteer entry as this tab's own UI
+   * rework: marks a pendingSteer entry as this tab's own UI
    * steer (sent via steer_message on a core session) — only UI-owned entries
    * are re-queued at loop_end / steer_requeued; child-surface entries keep
-   * their  turn_started delivery.
+   * their turn_started delivery.
    */
   markUiSteer(requestId: string): void;
   /** Appends a renderer-only persisted provider diagnostic; never sent to the host/model. */
   appendUsageLimitNotice(notice: UsageLimitNotice): void;
   /**
-   * Appends the renderer-only provider-switch ledger line ( cut-2
+   * Appends the renderer-only provider-switch ledger line (cut-2
    * §D5). The caller supplies the labels/model it wants recorded; `id` is
    * minted here unless one is passed (tests pin it). Must be called AFTER the
    * respawned host's `host_ready` — `performReset` wipes the transcript, so a
    * line written before it would never be seen.
    *
-   * : while the hydrated history has not arrived yet
+   * while the hydrated history has not arrived yet
    * (`hostHistoryArrived` false) the marker is STAGED (with the caller's
    * optional `sessionId`) and flushed at the `session_history` boundary —
    * staged/persisted renderer-locally, never sent to the host/model.
@@ -1471,7 +1471,7 @@ export interface DesktopState {
     },
   ): void;
   /**
-   * : restores persisted provider-switch markers into the
+   * restores persisted provider-switch markers into the
    * transcript at their recorded history boundaries (chronological; ids
    * already present are skipped; null/missing/truncated anchors insert at the
    * earliest visible boundary). Pure transcript insertion — no writes, no
@@ -1479,7 +1479,7 @@ export interface DesktopState {
    */
   insertConnectionChangedAt(records: readonly ConnectionSwitchRecord[]): void;
   /**
-   *  W8: snapshots the text+images just put on the wire as
+   * W8: snapshots the text+images just put on the wire as
    * `lastSentMessage`, so a later terminal retryable failure can offer to
    * replay this SAME content. Called at every `user_message` send site
    * (Composer's direct path; tab-registry's queue-drain and initial-prompt
@@ -1487,14 +1487,14 @@ export interface DesktopState {
    */
   recordSentMessage(text: string, images: readonly QueuedPromptImage[]): void;
   /**
-   *  W8 one-shot consume: clears `retry` synchronously (so the button
+   * W8 one-shot consume: clears `retry` synchronously (so the button
    * cannot be clicked twice even while the resend is merely queued, not yet
    * an acknowledged turn) and returns the offer that was just cleared (null
    * if there was none — a stale/double click).
    */
   consumeRetry(): RetryOffer | null;
   /**
-   *  one-shot consume: mirrors `consumeRetry` semantics —
+   * one-shot consume: mirrors `consumeRetry` semantics —
    * return-and-clear (null when nothing armed), so the Continue button
    * cannot fire twice.
    */
@@ -1589,9 +1589,9 @@ export interface RewindResultInfo {
 
 interface SessionSlice {
   engine: EnginePresentation | null;
-  /** Codex-fixes  (cut §2(k).3): see `PendingEngineChange`'s own doc comment. */
+  /** Codex-fixes (cut §2(k).3): see `PendingEngineChange`'s own doc comment. */
   pendingEngineChange: PendingEngineChange | null;
-  /** Design  §2(f)/§3.2: mirrors `engine` -- reset alongside it on a respawn/reset. */
+  /** Design §2(f)/§3.2: mirrors `engine` -- reset alongside it on a respawn/reset. */
   shell: ShellCapabilitiesProjection | null;
   turn: TurnState;
   latestTurnId: string | null;
@@ -1599,14 +1599,14 @@ interface SessionSlice {
   todoReminderState: { count: number; threshold: number } | null;
   permission: PermissionUiRequest | null;
   unattended: boolean;
-  /**  S1: see `DesktopState.waitingSubagents`'s own doc comment. */
+  /** S1: see `DesktopState.waitingSubagents`'s own doc comment. */
   waitingSubagents: ReadonlySet<string>;
   notice: Notice | null;
-  /** : see DesktopState.waitingForNetwork. */
+  /** see DesktopState.waitingForNetwork. */
   waitingForNetwork: boolean;
   /** GitHub #6: see DesktopState.workspaceMissing. */
   workspaceMissing: boolean;
-  /**  review F2: see DesktopState.networkWaitEpisodes. */
+  /** review F2: see DesktopState.networkWaitEpisodes. */
   networkWaitEpisodes: { parent: number; subagent: number };
   modelSelectionAck?: ModelSelectionAck | null;
   effortSelectionAck?: ModelSelectionAck | null;
@@ -1624,27 +1624,27 @@ interface SessionSlice {
   envStatus: WireEnvStatus | null;
   contextBreakdown: WireContextBreakdown | null;
   sessionTokens: SessionTokens | null;
-  /**  / : durable audit slice; see `DesktopState.usageAudit`'s own doc. */
+  /** /durable audit slice; see `DesktopState.usageAudit`'s own doc. */
   usageAudit: {
     lastStep: WireUsageAuditStep | null;
     totals: WireUsageAuditTotals | null;
     totalSteps: number;
     list: WireUsageAuditStep[] | null;
   };
-  /** Codex subscription-quota snapshot (codex-profiles cut §3.4/§6, ); see `DesktopState.quota`'s own doc comment. */
+  /** Codex subscription-quota snapshot (codex-profiles cut §3.4/§6); see `DesktopState.quota`'s own doc comment. */
   quota: CodexRateLimitsWire | null;
   /** On-demand checkpoint-timeline snapshot (slice P7.26/R2); replaced wholesale on each `checkpoint_list`. */
   checkpoints: WireCheckpointMeta[];
   /** Outcome of the last `rewind_request`, if any this session; null before the first one. */
   lastRewindResult: RewindResultInfo | null;
-  /**  W8: the exact text+images last actually sent (see `LastSentMessage` doc). */
+  /** W8: the exact text+images last actually sent (see `LastSentMessage` doc). */
   lastSentMessage: LastSentMessage | null;
-  /**  W8: the CURRENT turn's most recent `error` AgentEvent's retry metadata; cleared on `turn_started`. */
+  /** W8: the CURRENT turn's most recent `error` AgentEvent's retry metadata; cleared on `turn_started`. */
   lastErrorRetry: ErrorRetryMeta | null;
-  /**  W8 armed Try-again offer; see `RetryOffer` doc. */
+  /** W8 armed Try-again offer; see `RetryOffer` doc. */
   retry: RetryOffer | null;
   /**
-   * : the host-pushed in-flight prompt of the CURRENT outer turn
+   * the host-pushed in-flight prompt of the CURRENT outer turn
    * (`pending_prompt` wire message, core-only). Rendered as a pending bubble
    * only while no durable user item (turnId, step 0) exists — the hydrated
    * user_text block takes over the rendering the moment the frame is
@@ -1653,12 +1653,12 @@ interface SessionSlice {
    * and by the session-slice reset.
    */
   pendingPrompt: { turnId: string; requestId: string; text: string; images?: ImageAttachment[] } | null;
-  /** : see DesktopState.pendingSteers. Part of the session slice. */
+  /** see DesktopState.pendingSteers. Part of the session slice. */
   pendingSteers: { requestId: string; text: string; images?: readonly ImageAttachment[]; sentMessage: LastSentMessage }[];
-  /** : see DesktopState.uiSteerPending. Part of the session slice. */
+  /** see DesktopState.uiSteerPending. Part of the session slice. */
   uiSteerPending: string[];
   /**
-   *  §3.7 (part A): tab-scoped orchestrate flag from the host's
+   * §3.7 (part A): tab-scoped orchestrate flag from the host's
    * `orchestrate_changed` ack. Part B renders the ModeMenu row/dialog.
    */
   orchestrateActive: boolean;
@@ -1681,7 +1681,7 @@ function initialSessionSlice(): SessionSlice {
     // GitHub #6: cleared by every respawn/reset — a folder that came back and
     // got a real host must not keep the missing-workspace banner.
     workspaceMissing: false,
-    //  review F2: per-source count of open waiting episodes
+    // review F2: per-source count of open waiting episodes
     // (parent + inline-subagent children share one network, so both can park
     // at once). waitingForNetwork is its `sum > 0` projection.
     networkWaitEpisodes: { parent: 0, subagent: 0 },
@@ -1753,7 +1753,7 @@ export interface FrameScheduler {
 
 const defaultScheduler: FrameScheduler = {
   schedule(flush) {
-    //  boundary fix: `requestAnimationFrame` is reached through
+    // boundary fix: `requestAnimationFrame` is reached through
     // `globalThis` with a structural cast, not a bare DOM-global identifier —
     // this module is imported by host-side integration tests
     // (session-reconnect.test.ts) whose tsconfig (node lib, no DOM) must
@@ -1848,7 +1848,7 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
         id: `${item.id}:0`,
         text,
         ...(message.images?.length ? { images: message.images } : {}),
-        //  срез 2: reload-path parity with the live append (store.ts's
+        // срез 2: reload-path parity with the live append (store.ts's
         // appendUserText) — a persisted `HistoryItem.origin` rehydrates into
         // the SAME system-card view, not the ordinary user bubble.
         ...(item.origin !== undefined ? { origin: item.origin } : {}),
@@ -1882,13 +1882,13 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
         return;
       }
       const result = results.get(part.toolCallId);
-      // Persisted subagent card ( slice S1, CUT-S1 §3 W5 point 1):
+      // Persisted subagent card (slice S1, CUT-S1 §3 W5 point 1):
       // the paired tool_result's `presentation.subagent` is the durable
       // terminal snapshot a settled Agent call wrote (core W1-W3) — decode
       // is the LAST line of defense here (`loadHistory` parses the item's
       // JSON with no validation of its own, sqlite-persistence.ts), so any
       // structurally-wrong blob degrades to `null` rather than failing the
-      // whole session's hydration. The workflow card ( slice S5) has
+      // whole session's hydration. The workflow card (slice S5) has
       // its own persisted terminal snapshot riding the same `presentation`
       // envelope (`presentation.workflow`) and is restored the same way,
       // through the same decode-as-last-line-of-defense.
@@ -2205,7 +2205,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
   // blocks) it is not even scoped to a turnId the renderer trusts — see
   // onAgentEvent's turn-gate exemption below. Never reset, same posture as errorSeq.
   let previewConsoleSeq = 0;
-  // : monotonic id source for user_injected transcript
+  // monotonic id source for user_injected transcript
   // blocks — the event carries no id of its own, so the block id is minted
   // here (`injected:{turnId}:{step}:{seq}`). Never reset, same posture as
   // previewConsoleSeq above.
@@ -2222,7 +2222,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
   // Maps the raw (step-scoped) stream id to the minted transcript block id
   // for the currently-open block, so text_delta/reasoning_delta know which
   // block to buffer into. Cleared on reset/respawn (drainPendingDeltas).
-  // : keyed by the STREAM SCOPE `${turnId}:${step}:${streamId}` —
+  // keyed by the STREAM SCOPE `${turnId}:${step}:${streamId}` —
   // SDK stream ids are REUSED across steps of one outer turn, so a bare-id
   // key would route a later step's deltas into the earlier step's block.
   const openStreamBlocks = projectionMaps?.streams ?? new Map<string, string>();
@@ -2233,7 +2233,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
     return `${turnId}:${step ?? "_"}:${streamId}`;
   }
 
-  //  acceptance defect 1: blocks re-opened from a session_checkpoint
+  // acceptance defect 1: blocks re-opened from a session_checkpoint
   // `streams` entry, carrying the REMAINING replay budget — how many chars
   // of this stream's delta text the replay ring still holds (host-computed
   // `replayChars`, an exact SUFFIX length; the ring evicts from the front,
@@ -2246,13 +2246,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
   const currentAttempts = projectionMaps?.attempts ?? new Map<string, number>();
   const checkpointAttempts = new Map<string, number>();
 
-  // ──  core-only typed wire-state checkpoint (fold) ───────────────
+  // ── core-only typed wire-state checkpoint (fold) ───────────────
   // A RECONNECT is: host_ready(reset) -> session_history(fresh durable) ->
   // pending_prompt -> replay(ENTIRE ring). Core persists a user frame BEFORE
   // generation and an assistant item BEFORE tool dispatch, so ring events for
   // already-persisted turns replay ON TOP of hydrated blocks — with DIFFERENT
   // block ids — and every reconnect duplicated the persisted transcript (the
-  // original  symptom class). The fix is a fold checkpoint keyed by
+  // original symptom class). The fix is a fold checkpoint keyed by
   // the wire's causal identity `${turnId}:${step}` (agent_event.step +
   // WireHistoryItem.turnId/step — both core-only; foreign engines and legacy
   // hosts leave both absent and NOTHING here engages):
@@ -2275,7 +2275,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
     readonly durableResults: Set<string>;
     /** Session tokens accumulated from `finish` events folded for this step (exactly one finish per step). */
     finishUsage: TokenUsage | null;
-    /**  phase-1 defect 1: a finish's usage already applied to sessionTokens — a replayed duplicate must never re-arm it. */
+    /** phase-1 defect 1: a finish's usage already applied to sessionTokens — a replayed duplicate must never re-arm it. */
     finishApplied: boolean;
     /** Latest context_usage reading folded for this step (session-scoped value; latest wins). */
     contextUsage: ContextUsage | null;
@@ -2312,7 +2312,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
   /** Durable toolCallId -> result status/modelText/presentation, from hydrated tool items. */
   const durableToolResults = new Map<string, { status: string; modelText: string }>();
   /**
-   *  phase-1 defect 2: whether the causal/durable fold is engaged at
+   * phase-1 defect 2: whether the causal/durable fold is engaged at
    * all. It is a CORE-engine contract — `host_ready` carries NO `engine`
    * block for a core host (EnginePresentation is "present only for a
    * non-core engine", protocol.ts), so a store that just saw an `engine`
@@ -2331,7 +2331,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
    */
   let causalFoldEngaged = false;
   /**
-   *  checkpoint: fold keys (`${turnId}:${step}`) whose finish usage
+   * checkpoint: fold keys (`${turnId}:${step}`) whose finish usage
    * is ALREADY INCLUDED in the sessionTokens value installed by the last
    * `session_checkpoint` REPLACE (host-side emission-time accumulation, the
    * `countedSteps` wire field). The finish branches of onAgentEvent consult
@@ -2344,12 +2344,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
    * session_checkpoint that carries countedSteps.
    */
   const checkpointCountedSteps = new Set<string>();
-  /** : outer turnIds whose loop_end footer already landed (once-per-turn guard against replay duplicates). */
+  /** outer turnIds whose loop_end footer already landed (once-per-turn guard against replay duplicates). */
   const loopEndEmitted = new Set<string>();
   /** turnId -> when this renderer saw it start; consumed by that turn's loop_end footer. */
   const turnStartedAt = new Map<string, number>();
   /**
-   *  acceptance defect 2: the TRUNCATED-snapshot cut boundary — per
+   * acceptance defect 2: the TRUNCATED-snapshot cut boundary — per
    * turnId, the oldest step the latest session_history still covers. Ring
    * events with a causal key STRICTLY OLDER than the boundary replayed into
    * a fresh store would RESURRECT content the cut deliberately discarded
@@ -2361,7 +2361,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
    */
   let historyCutBoundary: Map<string, number> | null = null;
   /**
-   *  acceptance defect 2: the live outer turn id asserted by the
+   * acceptance defect 2: the live outer turn id asserted by the
    * last session_checkpoint (`liveTurnId`, host-authoritative, sendDirect).
    * The cut-replay guard's absent-turnId branch exempts EXACTLY this id —
    * never `get().turn.turnId`, which a ring-replayed `turn_started` for a
@@ -2370,7 +2370,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
    */
   let handshakeLiveTurnId: string | null = null;
   /**
-   *  acceptance defect 1 (strict ownership vs new turns): the turns
+   * acceptance defect 1 (strict ownership vs new turns): the turns
    * the last TRUNCATED session_history cut away entirely, as listed by the
    * last session_checkpoint's `cutTurnIds` (host-computed at push time from
    * the same history the snapshot was built from). The below-cut guard's
@@ -2385,7 +2385,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
   let handshakeCutTurnIds: Set<string> | null = null;
 
   /**
-   *  pure filter: transcript WITHOUT a turn's pending-prompt bubble
+   * pure filter: transcript WITHOUT a turn's pending-prompt bubble
    * block (id `pending:{turnId}`). Module-scope-pure (no get/set) so both
    * the fold helpers and the create() closure can use it.
    */
@@ -2423,7 +2423,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
   /** Whether a (turnId, step) is durably covered by the latest session_history. */
   function stepCovered(turnId: string | undefined, step: number | undefined): boolean {
     if (!causalFoldEngaged) {
-      //  phase-1 defect 2: no coverage without the core fold — a
+      // phase-1 defect 2: no coverage without the core fold — a
       // native host's events are never suppressed by boot-item stamps.
       return false;
     }
@@ -2438,14 +2438,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
     durableUserInjectionTurnCuts.clear();
     durableToolResults.clear();
     loopEndEmitted.clear();
-    //  phase-1 defect 2: a discarded transcript has no durable
+    // phase-1 defect 2: a discarded transcript has no durable
     // coverage — the fold goes dormant until the next session_history
     // (which re-derives engagement from the handshake's engine block).
     causalFoldEngaged = false;
-    //  checkpoint: the counted-key set dies with the coverage it
+    // checkpoint: the counted-key set dies with the coverage it
     // guards — the next session_checkpoint re-arms it after its REPLACE.
     checkpointCountedSteps.clear();
-    //  acceptance defect 2: the cut boundary dies with the snapshot
+    // acceptance defect 2: the cut boundary dies with the snapshot
     // it was derived from, and the live-turn assertion with its connection.
     historyCutBoundary = null;
     handshakeLiveTurnId = null;
@@ -2454,7 +2454,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
 
   return create<DesktopState>()((set, get) => {
       /**
-   *  acceptance defect 1: guards one streamed delta against a
+   * acceptance defect 1: guards one streamed delta against a
    * checkpoint-reopened block. Returns false when the delta is RING-REPLAY
    * and the stream's replay budget still covers it (the host shipped the
    * EXACT suffix length in `streams[].replayChars` — computed at checkpoint
@@ -2495,7 +2495,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
   }
 
 /**
-     * : removes the pending-prompt bubble block for a turn (if any).
+     * removes the pending-prompt bubble block for a turn (if any).
      * The bubble is a real `user_text` transcript block with the synthetic id
      * `pending:{turnId}` — appended ONLY from the host's `pending_prompt` push
      * (a reconnecting renderer has no Composer echo to show) and retired as
@@ -2554,14 +2554,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       openStreamBlocks.clear();
       presentationReplayTurns = null;
       presentationReplayActive = false;
-      //  acceptance defect 1: the checkpoint-stream registry dies with
+      // acceptance defect 1: the checkpoint-stream registry dies with
       // the open blocks it tracked (blockSeq is never rewound, so the minted
       // ids can never be reused by a later text_start).
       checkpointStreams.clear();
       reasoningOwners.clear();
       currentAttempts.clear();
       checkpointAttempts.clear();
-      // : the fold checkpoint mirrors durable coverage of the
+      // the fold checkpoint mirrors durable coverage of the
       // transcript — every path that discards the transcript must discard it
       // too, or a stale suppression entry would shadow post-reset turns. The
       // next session_history re-registers fresh coverage.
@@ -2579,7 +2579,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
     function performReset(): void {
       drainPendingDeltas();
       turnStartedAt.clear();
-      // : the transcript is being discarded — the hydration
+      // the transcript is being discarded — the hydration
       // anchor/projection info indexing it dies with it (public reset also
       // clears the public staging fields itself).
       hydrationItemIds = null;
@@ -2587,7 +2587,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       set({ ...initialSessionSlice(), lastFatal: null });
     }
 
-    // ── : renderer-local provider-switch marker staging/replay ──
+    // ── renderer-local provider-switch marker staging/replay ──
     // Hydration anchor info: the item ids of the LATEST session_history, in
     // hydration order, retained so insertConnectionChangedAt can resolve a
     // non-rendering anchor (e.g. a tool item, which projects no blocks) to the
@@ -2796,7 +2796,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
      * different/unknown turn's toolCallId (foreign events are ignored by
      * construction — the map below simply finds nothing to patch).
      *
-     * Terminal guard ( slice S1, CUT-S1 §3 W5 point 3): a duplicate
+     * Terminal guard (slice S1, CUT-S1 §3 W5 point 3): a duplicate
      * `subagent_start` arriving AFTER the block's sub-status already settled
      * (`final !== null` — either from a live `subagent_end` or from the
      * persisted canon a `tool_result`/hydration already applied) is a no-op.
@@ -2850,7 +2850,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       turns: number,
       toolCalls: number,
       lastTool: string | null,
-      // : the provider's live claim. Stored when present; an absent
+      // the provider's live claim. Stored when present; an absent
       // value keeps the earlier known one (a progress frame without it must
       // never erase the pill).
       responseModel?: string,
@@ -2862,7 +2862,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             return block;
           }
           // Progress is a confirmed sign of life: any prior stall report is
-          // stale the moment it lands ( follow-up slice).
+          // stale the moment it lands (follow-up slice).
           const subagent = { ...block.subagent, turns, toolCalls, lastTool };
           if (responseModel !== undefined) {
             subagent.responseModel = responseModel;
@@ -2898,7 +2898,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           const ringed = overflow > 0 ? activity.slice(overflow) : activity;
           const activityDropped = block.subagent.activityDropped + Math.max(overflow, 0);
           // Activity is a confirmed sign of life: the stall report is stale
-          // the moment a row lands ( follow-up slice).
+          // the moment a row lands (follow-up slice).
           const subagent = { ...block.subagent, activity: ringed, activityDropped };
           delete subagent.stalled;
           return { ...block, subagent };
@@ -2908,7 +2908,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
 
     /**
      * Toggles the session-tier permission-wait flag on `subagent_attention`
-     * ( CUT-S2 §2.5; store case pulled forward into S2a — CUT-S2
+     * (CUT-S2 §2.5; store case pulled forward into S2a — CUT-S2
      * §10.1). Same existing-subagent + matching-toolCallId guard as
      * `patchSubagentProgress`, including its terminal guard: once `final` is
      * set, a late/replayed attention event is a no-op — a settled card never
@@ -2923,7 +2923,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
      * against) would still count as waiting. Answering the ask and settling
      * the card must strip the key the SAME way.
      *
-     *  S1: mirrors the same flip into `waitingSubagents` (a SET) in
+     * S1: mirrors the same flip into `waitingSubagents` (a SET) in
      * the SAME atomic update, gated on the identical guard (`matched` — an
      * existing, unsettled subagent block for this exact toolCallId). A Set
      * add/delete rather than a counter increment/decrement: a duplicate
@@ -2963,7 +2963,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
     }
 
     /**
-     * Records a stall report on `subagent_stalled` ( live-presentation
+     * Records a stall report on `subagent_stalled` (live-presentation
      * slice). Same existing-subagent + matching-toolCallId + terminal guard as
      * `patchSubagentProgress`: a foreign/unseeded toolCallId, or a card
      * already settled (`final` set), is a no-op — no state is invented for an
@@ -3002,10 +3002,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
      * events the runner withheld past its own per-run cap) folds into
      * `activityDropped` at the SAME moment `final` is set, so the live
      * "+N earlier" count matches what the persisted canon will carry. The
-     * settle also strips a stale `waiting` flag ( CUT-S2 §2.5/§10.1)
+     * settle also strips a stale `waiting` flag (CUT-S2 §2.5/§10.1)
      * — see the inline comment below.
      *
-     *  S1: the settle also drops `toolCallId` from `waitingSubagents`
+     * S1: the settle also drops `toolCallId` from `waitingSubagents`
      * in the SAME update, gated on the same `matched` guard as
      * `patchSubagentAttention` — unconditionally, whether or not a
      * `waiting:false` ever arrived for this child. A card can settle
@@ -3029,7 +3029,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       activitySuppressed?: number,
       responseModel?: string,
       finalTurnFinishReason?: "length",
-      // : the terminal's own child-fact model/engine — when present
+      // the terminal's own child-fact model/engine — when present
       // they outrank the start event's pre-boot accepted label (the two may
       // legitimately differ, e.g. accepted "default" vs booted
       // "booted-model"); absent (legacy payloads, inline tier) keeps the
@@ -3068,7 +3068,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             },
           };
           // The settle strips any stale permission-wait flag in the SAME
-          // atomic update ( CUT-S2 §2.5/§10.1): a child cancelled or
+          // atomic update (CUT-S2 §2.5/§10.1): a child cancelled or
           // errored mid-ask must land as a terminal card, never one still
           // claiming to wait (`waiting` outranks the terminal badge in the
           // §2.5 priority order, so leaving it set would mask the outcome).
@@ -3087,7 +3087,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
 
     /**
      * Seeds the sub-status region of the Workflow tool_call block matching
-     * `toolCallId` on `workflow_start` (design §2.3/§6, task 3.4.5; 
+     * `toolCallId` on `workflow_start` (design §2.3/§6, task 3.4.5;
      * slice S3). `steps` is PREFILLED from the wire's run graph — one entry
      * per definition step, `started`/`running` both false, `final` null — so
      * the card holds all N steps before the first `workflow_step_start`
@@ -3128,7 +3128,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
 
     /**
      * Marks the step matching `stepId` as started on `workflow_step_start`
-     * ( slice S3): UPDATES the entry `workflow_start` already
+     * (slice S3): UPDATES the entry `workflow_start` already
      * prefilled — never appends, so a `stepId` outside the seeded graph (a
      * genuinely foreign id, as opposed to a known-but-not-yet-started one) is
      * a no-op, same as an unseeded workflow or foreign toolCallId (mirror of
@@ -3155,7 +3155,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
 
     /**
      * Marks the step matching `stepId` as actually running on
-     * `workflow_step_running` ( slice S3) — the honest post-semaphore
+     * `workflow_step_running` (slice S3) — the honest post-semaphore
      * signal: between this and `workflow_step_start` a step is "queued", not
      * "running" (§B7 — `started` alone cannot tell the two apart, since
      * `step_start` fires before the engine ever touches the shared subagent
@@ -3253,7 +3253,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
      * `workflow_step_end`: fills that step's `final`. Same
      * existing-workflow + matching-stepId guard as `patchWorkflowStepProgress`
      * — deliberately NOT gated on `started`: a step the engine fail-fasted
-     * before it ever launched ( slice S3) gets a synthetic
+     * before it ever launched (slice S3) gets a synthetic
      * `status:"skipped"` end with `started`/`running` both still false, and
      * this must still apply so the node stops reading "not started" once the
      * run is actually over.
@@ -3379,14 +3379,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       if (newBlocks.length > 0) {
         set((state) => ({ transcript: [...state.transcript, ...newBlocks] }));
       }
-      // : the hydrated boundary has arrived — record the tail
+      // the hydrated boundary has arrived — record the tail
       // anchor and hydration order, then flush any provider-switch markers
       // staged while the history was outstanding (they append after the
       // hydrated tail, persisted with this anchor).
       hydrationItemIds = items.map((item) => item.id);
       set({ hostHistoryArrived: true, lastHistoryTail: items.length > 0 ? items[items.length - 1]!.id : null });
       flushStagedConnectionChanges();
-      // : REBUILD the fold checkpoint's durable coverage from this
+      // REBUILD the fold checkpoint's durable coverage from this
       // fresh snapshot. Every ui_ready on a reconnect rebuilds
       // session_history from CURRENT persisted truth and then replays the
       // WHOLE ring, so ring events for turns already persisted replay on top
@@ -3394,7 +3394,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       // shows". Rewind/compaction honesty follows for free: a truncated
       // snapshot simply registers less coverage.
       clearFoldCheckpoint();
-      //  phase-1 defect 2 FIX: re-derive engagement from the
+      // phase-1 defect 2 FIX: re-derive engagement from the
       // handshake's engine discriminator, mirrored in the `engine` state slot
       // (host_ready sets it: null ⇔ core handshake ⇔ fold engages; a native
       // EnginePresentation block ⇒ never). NEVER from this message (a
@@ -3407,7 +3407,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       // re-derives core engagement, and pending_prompt's `causalFoldEngaged`
       // retire guard stays inert for the cleared store either way.
       causalFoldEngaged = get().engine === null;
-      //  acceptance defect 2: the toolCallIds DECLARED by assistant
+      // acceptance defect 2: the toolCallIds DECLARED by assistant
       // items inside THIS snapshot. A tool item's result identity is
       // registered for replay suppression ONLY when its declaring assistant
       // item is also in the snapshot — the hydrated card (assistant
@@ -3433,7 +3433,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         if (!causalFoldEngaged) {
           continue; // native host: stamps are inert, never fold coverage.
         }
-        //  acceptance defect 2: coverage is REGISTERED ONLY BY THE
+        // acceptance defect 2: coverage is REGISTERED ONLY BY THE
         // ROLE THAT OWNS THE RENDERING the suppression replaces — a USER
         // item covers (turnId, 0) (retire the pending bubble) and an
         // ASSISTANT item covers its own step (its hydrated blocks own the
@@ -3469,7 +3469,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             durableUserInjectionTurnCuts.add(`${item.turnId}:${item.step}`);
           }
         }
-        // : a durable user frame (step 0) supersedes the pending
+        // a durable user frame (step 0) supersedes the pending
         // bubble's rendering — the hydrated user_text block IS the prompt.
         if (item.step === 0 && item.message.role === "user") {
           removePendingBubble(item.turnId);
@@ -3487,7 +3487,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         if (item.message.role === "tool") {
           for (const part of item.message.content) {
             if (!assistantToolCallIds.has(part.toolCallId)) {
-              //  acceptance defect 2: orphaned below-cut tool item —
+              // acceptance defect 2: orphaned below-cut tool item —
               // no hydrated rendering owns this call; its replayed
               // tool_result stays live (see assistantToolCallIds' doc).
               continue;
@@ -3498,7 +3498,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         }
       }
       if (truncated) {
-        //  acceptance defect 2: record the CUT BOUNDARY — the
+        // acceptance defect 2: record the CUT BOUNDARY — the
         // oldest causal step the snapshot still covers, per turn. Ring
         // events keyed STRICTLY OLDER than this boundary belong to a turn
         // segment the host deliberately left out of the snapshot; their
@@ -3542,7 +3542,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
      * LSP/hooks/git/env panels with no re-push to refill them (ratification
      * §1, rejected-mechanism note).
      *
-     *  S1: the transcript-scoped clear also empties `waitingSubagents`
+     * S1: the transcript-scoped clear also empties `waitingSubagents`
      * — unlike the panel fields above, it isn't independent session state; it
      * only ever indexes toolCallIds of blocks live IN the transcript being
      * wiped here, and a restored history never carries `waiting` (transient,
@@ -3585,7 +3585,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
      * matches the active turn are dropped (design §3: late events from a
      * cancelled/replaced turn must not resurrect stale UI).
      *
-     *  fold: `onAgentEvent` is THE single choke point every core
+     * fold: `onAgentEvent` is THE single choke point every core
      * wire agent_event passes through — live streaming AND reconnect replay
      * alike. Before dispatching to the transcript-materializing switch, the
      * event is FOLDED into the wire-state checkpoint (capturing state BEFORE
@@ -3630,7 +3630,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       // session-scoped bookkeeping (a notice + the turn-status flip below),
       // never transcript content, so admitting a late/foreign one costs at
       // most a stale toast.
-      //  cross-review: the in-session engine switch announces
+      // cross-review: the in-session engine switch announces
       // itself as an `engine_notice` on ENGINE_SWITCH_TURN_ID (host/engine-switch.ts),
       // also a between-turns sentinel. Exempted by the sentinel id, NOT by
       // event type: other engines' drift `engine_notice`s are real turn-scoped
@@ -3648,7 +3648,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       ) {
         return;
       }
-      // : fold this wire event into the checkpoint BEFORE any
+      // fold this wire event into the checkpoint BEFORE any
       // suppression decision, then suppress the CONTENT-materializing handler
       // iff the step's OWN content item is already durably covered by the
       // latest session_history (a replayed duplicate). What suppression means
@@ -3681,7 +3681,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             state.durableResults.add(event.outcome.toolCallId);
             break;
           case "finish":
-            //  phase-1 defect 1: once-per-step — a replayed
+            // phase-1 defect 1: once-per-step — a replayed
             // duplicate finish for a step whose usage already folded (or
             // already applied) must never re-arm it.
             if (state.finishUsage === null && !state.finishApplied) {
@@ -3696,7 +3696,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         }
       }
       const covered = causalFoldEngaged && foldKeyStr !== null && durableSteps.has(foldKeyStr);
-      //  acceptance defect 2: a TRUNCATED snapshot's cut boundary —
+      // acceptance defect 2: a TRUNCATED snapshot's cut boundary —
       // ring events for a causal step STRICTLY OLDER than the oldest step
       // the snapshot still covers belong to a turn segment the host
       // deliberately discarded; their CONTENT materialization would
@@ -3750,7 +3750,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           return;
         }
       }
-      // : the pending bubble is NOT retired on turn_start — on a
+      // the pending bubble is NOT retired on turn_start — on a
       // live connection no hydration event ever re-delivers the durable user
       // frame, so the bubble stays as that prompt's ONLY rendered record
       // until a fresh session_history supersedes it (hydrateSessionHistory
@@ -3760,14 +3760,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         // switch is skipped): a step's finish usage applies exactly once
         // (finishUsage is nulled on first apply), and the latest
         // context_usage reading applies idempotently (latest-wins scalar).
-        //  phase-1 defect 1: a covered `finish` is FULLY CONSUMED by
+        // phase-1 defect 1: a covered `finish` is FULLY CONSUMED by
         // this branch — RETURN here so it can never fall through to the
         // normal finish case below and add the same step's usage a SECOND
         // time (the doubled sessionTokens defect). All other control/
         // lifecycle classes fall through unchanged.
         if (event.type === "finish") {
           const state = foldStepState(foldKeyStr);
-          //  checkpoint dedup (EXACT key): a finish whose usage is
+          // checkpoint dedup (EXACT key): a finish whose usage is
           // already INCLUDED in the checkpoint-installed sessionTokens
           // (countedSteps member) must NEVER re-add — the REPLACE + re-add
           // double-count. Applies to covered AND uncovered replayed
@@ -3821,7 +3821,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       switch (event.type) {
         // ── streamed text (batched) ──
         case "text_start": {
-          //  acceptance defect 2: idempotent open — CHECKPOINT-RESTORED
+          // acceptance defect 2: idempotent open — CHECKPOINT-RESTORED
           // SCOPES ONLY. The checkpoint re-opens the host's live streams
           // BEFORE outbound.replay(), so a ring-replayed text_start for the
           // SAME scope finds the entry already present — minting a fresh
@@ -3850,7 +3850,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           if (blockId === undefined) {
             return;
           }
-          //  acceptance defect 1 (replay dedupe): after a reconnect
+          // acceptance defect 1 (replay dedupe): after a reconnect
           // whose checkpoint re-opened this stream with its FULL partial
           // body, the replay ring may still hold deltas of the SAME stream
           // that the host folded BEFORE the checkpoint — appending them
@@ -3871,7 +3871,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
 
         // ── streamed reasoning (batched) ──
         case "reasoning_start": {
-          //  acceptance defect 2: same checkpoint-only idempotent
+          // acceptance defect 2: same checkpoint-only idempotent
           // open as text_start above (see that comment) — a legacy/unstamped
           // reuse of the stream id in a later step still mints a new block.
           const scope = streamScope(turnId, step, event.id);
@@ -3890,7 +3890,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           if (blockId === undefined) {
             return;
           }
-          //  acceptance defect 1: same replay-prefix dedupe as
+          // acceptance defect 1: same replay-prefix dedupe as
           // text_delta above (see that comment).
           if (!applyStreamDelta("reasoning", blockId, event.text)) {
             return;
@@ -3907,7 +3907,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           set({ todoReminderState: { count: event.count, threshold: event.threshold } });
           return;
         case "tool_call": {
-          // : a replayed tool_call for an id ALREADY on screen
+          // a replayed tool_call for an id ALREADY on screen
           // (hydrated block from session_history, or a live block from an
           // earlier event of this same replay) folds instead of appending —
           // patchToolCall matches by toolCallId, so lifecycle patches above
@@ -3932,7 +3932,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           return;
         }
         case "tool_execution_start":
-          //  correction 1: a replayed/late start must never REGRESS
+          // correction 1: a replayed/late start must never REGRESS
           // an already-settled tool_call block (durable result or a live
           // terminal status) back to "running" — patch only blocks still in
           // a pre-terminal state.
@@ -3945,7 +3945,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           }));
           return;
         case "tool_result": {
-          //  correction 1: suppress ONLY if THIS RESULT is already
+          // correction 1: suppress ONLY if THIS RESULT is already
           // durable — a durable assistant step's tool_call does NOT gate a
           // LIVE result for a call created after hydration settled (its id
           // is absent from durableToolResults). The hydration-time identity
@@ -3960,7 +3960,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               modelText: event.outcome.modelText,
             });
           }
-          // Live-canon ( slice S1, CUT-S1 §3 W5 point 2): a settled
+          // Live-canon (slice S1, CUT-S1 §3 W5 point 2): a settled
           // Agent call's tool_result carries the SAME persisted snapshot
           // (core W3) the ring-capped live subagent_* patches were
           // approximating — on settle it becomes the authoritative source,
@@ -3968,7 +3968,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           // divergence between the live ring and the true dropped count
           // collapses to the honest persisted value the instant the call
           // settles). A missing/malformed presentation leaves the live
-          // sub-status (if any) untouched.  slice S5: a settled
+          // sub-status (if any) untouched. slice S5: a settled
           // Workflow call's `presentation.workflow` is restored the same
           // way — wholesale replacement on decode success, live state left
           // untouched on a missing/malformed payload.
@@ -4004,9 +4004,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
 
         // ── loop end: footer block + turn goes idle again (immediate) ──
         case "loop_end": {
-          //  review F2: the loop ended — no stream can still be parked.
+          // review F2: the loop ended — no stream can still be parked.
           set({ networkWaitEpisodes: { parent: 0, subagent: 0 }, waitingForNetwork: false });
-          // : the footer appends ONCE per outer turn — a replayed
+          // the footer appends ONCE per outer turn — a replayed
           // loop_end (ring duplicate of an already-terminated turn) must not
           // stack a second footer. The idle flip below stays unconditional
           // (idempotent).
@@ -4025,7 +4025,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           set((state) => {
             const lastSent = state.lastSentMessage;
             const retryMeta = state.lastErrorRetry;
-            //  W8: arm the one-shot Try-again offer only for a terminal
+            // W8: arm the one-shot Try-again offer only for a terminal
             // retryable failure that never reached model output — the exact
             // gate the button's own visibility check re-derives from `retry`.
             const armRetry =
@@ -4034,7 +4034,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               retryMeta.retryable &&
               !retryMeta.hadModelOutput &&
               lastSent !== null;
-            //  ( remainder 1): arm the one-shot Continue
+            // (remainder 1): arm the one-shot Continue
             // offer ONLY on a max_turns stop with an empty queue — with a held
             // queue the Resume banner is already the one-action continue, so
             // the two offers must never coexist. Never armed for
@@ -4070,7 +4070,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           // state. A clean "completed" end leaves the queue unpaused so this
           // same set() drains it normally (FIFO) — the idle flip is what the
           // drainer watches for.
-          //  rework (Opus defects 1+2): a still-pending HOST steer
+          // rework (Opus defects 1+2): a still-pending HOST steer
           // (this tab's own core-engine steer_message sends; a CHILD surface's
           // user-message steers are not host-owned here) never landed in the
           // turn — RE-QUEUE it instead of dropping it: the loop is over, so
@@ -4103,8 +4103,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               ...(event.reason !== "completed" && nextQueue.length > 0
                 ? {
                     queuePaused: true,
-                    // : the held-queue banner must name the REAL
-                    // reason ("turn limit" vs "cancelled/failed") — 
+                    // the held-queue banner must name the REAL
+                    // reason ("turn limit" vs "cancelled/failed")
                     // «Работа» §2's honest-held option.
                     queuePauseReason:
                       event.reason === "max_turns" ? "max_turns" : event.reason === "error" ? "error" : "cancelled",
@@ -4121,7 +4121,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         case "turn_end":
           set((state) => ({
             modelTurns: state.modelTurns + 1,
-            //  review F2: a fresh step starts from zero episodes.
+            // review F2: a fresh step starts from zero episodes.
             networkWaitEpisodes: { parent: 0, subagent: 0 },
             waitingForNetwork: false,
           }));
@@ -4131,7 +4131,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           return;
         case "start":
         case "turn_start":
-          //  phase-1 defect 3: the turn's first STAMPED turn_start
+          // phase-1 defect 3: the turn's first STAMPED turn_start
           // (core emits turn/step stamps and appends the user frame strictly
           // before the first model request) proves the prompt is durably
           // recorded — clear the pendingPrompt FIELD while the bubble BLOCK
@@ -4155,7 +4155,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         // transcript representation (mirrors turn_start/tool_input_*
         // above); the ctx-popover is the sole reader.
         case "finish": {
-          //  phase-1 defect 1: once-per-step on the LIVE path too —
+          // phase-1 defect 1: once-per-step on the LIVE path too —
           // a duplicate finish (replayed or otherwise) for a step whose
           // usage already applied must never add again. The
           // checkpoint-counted key guards the SAME defect for the
@@ -4199,13 +4199,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             attempt: event.attempt,
             maxAttempts: event.maxAttempts,
             delayMs: event.delayMs,
-            //  review F5: the recovery retry's wait duration rides
+            // review F5: the recovery retry's wait duration rides
             // the block so the line reads "network back after N s".
             ...(event.waitedMs !== undefined ? { waitedMs: event.waitedMs } : {}),
             reason: event.reason,
           });
           // Past the announced total (network-budget retry) the label drops it.
-          // : a retry announced here ends any network wait (recovered).
+          // a retry announced here ends any network wait (recovered).
           // Review F2: a RECOVERY retry (waitedMs present) decrements its own
           // source's episode count — the banner clears only when every parked
           // stream (parent + inline-subagent children) has recovered. An
@@ -4237,10 +4237,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           });
           return;
         }
-        // : the adapter parked a transient network failure and is
+        // the adapter parked a transient network failure and is
         // probing. No transcript block and no notice: the status line says it.
         case "waiting_for_network": {
-          //  review F2: count episodes per source. The parent's
+          // review F2: count episodes per source. The parent's
           // own port and an inline-subagent child share one network, so both
           // can park at once — the banner must survive the first recovery.
           // Absent waitSource (legacy replay / port without the label) reads
@@ -4254,14 +4254,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           return;
         }
         case "compaction_start":
-          // : a compaction observed while the turn is IDLE is the
+          // a compaction observed while the turn is IDLE is the
           // manual one — it owns the session for its duration, so the status
           // goes to "compacting" and every idle predicate follows for free.
           // An AUTO compaction fires mid-turn, where the status is already
           // "running": leave it alone (overwriting it would report the turn
           // as finished the moment the compaction ended).
           //
-          // : the card is appended in the SAME set() as the notice and
+          // the card is appended in the SAME set() as the notice and
           // the status flip, for the atomicity the prompt-queue drainer needs
           // (see compaction_end below). Deltas are flushed first so the card
           // lands after the text that was still buffered when it started.
@@ -4289,7 +4289,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           }));
           return;
         case "compaction_end":
-          // : release the session in the SAME set() that raises the
+          // release the session in the SAME set() that raises the
           // notice — the prompt-queue drainer (tab-registry's `maybeDrain`)
           // fires synchronously on every set(), so a separate idle flip would
           // let it observe an intermediate state. Same atomicity rule as
@@ -4299,7 +4299,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           // — a refused compaction leaves the session just as free as a
           // successful one, and the notice carries the reason.
           //
-          // : the same set() also closes the card this compaction
+          // the same set() also closes the card this compaction
           // opened — the NEWEST still-running one, found from the end so an
           // earlier compaction's finished card is never rewritten. A tab that
           // never saw the start (reattached mid-compaction) has no card to
@@ -4409,7 +4409,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         // TODO(MVP.6): proper visual treatment; MessageList renders a minimal
         // line for now.
         //
-        //  W8: `event.retry` (additive-optional, W7b) rides through onto
+        // W8: `event.retry` (additive-optional, W7b) rides through onto
         // the transcript block unchanged, feeding MessageList's "(failed after
         // N attempts)" suffix; `lastErrorRetry` records the CURRENT turn's most
         // recent error's retry metadata (overwritten by every error this
@@ -4417,7 +4417,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         // `loop_end` handler above to decide whether to arm the Try-again offer.
         case "error":
           {
-            //  review F2: an error ends every episode at once.
+            // review F2: an error ends every episode at once.
             set({ networkWaitEpisodes: { parent: 0, subagent: 0 }, waitingForNetwork: false });
             // The usage_limit notice is parsed host-side (sanitizeAgentEvent) and
             // rides the wire event, because the redacted `error.message` the
@@ -4479,7 +4479,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         case "subagent_activity":
           patchSubagentActivity(event.toolCallId, event.toolName, event.summary);
           return;
-        // Session-tier permission-wait flag ( CUT-S2 §2.2/§2.5,
+        // Session-tier permission-wait flag (CUT-S2 §2.2/§2.5,
         // store case pulled into S2a per §10.1): additive AgentEvent variant
         // riding the same agent_event envelope; toggles
         // `SubagentSubStatus.waiting` under the same S1 guards as
@@ -4488,7 +4488,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         case "subagent_attention":
           patchSubagentAttention(event.toolCallId, event.waiting);
           return;
-        // Stall report ( slice 1 + live-presentation slice): the
+        // Stall report (slice 1 + live-presentation slice): the
         // detector REPORTS only — the store records the report verbatim on
         // the matching live card (`stalled` under the same
         // matching-toolCallId + existing-subagent + final === null guards as
@@ -4552,7 +4552,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         case "checkpoint_failed":
           return;
 
-        // Codex-fixes  (cut §2(k).2): additive AgentEvent variant the
+        // Codex-fixes (cut §2(k).2): additive AgentEvent variant the
         // core loop never emits (dormant for every existing core session).
         // Today's only producer is the host's own drift check — the
         // server's effective posture on resume came back weaker than the
@@ -4566,7 +4566,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           set({ notice: { kind: "engine_notice", text: event.message } });
           return;
 
-        // codex-profiles cut §3.4/§5.3/§6 ( W3 lane G): additive
+        // codex-profiles cut §3.4/§5.3/§6 (W3 lane G): additive
         // AgentEvent variants the core loop never emits (dormant for every
         // existing core session, same test-hazard #3 discipline as
         // `engine_notice` above) — only the Codex host translator produces
@@ -4579,7 +4579,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         case "engine_quota":
           set({ quota: event.quota });
           return;
-        // : core-loop quota from HTTP response headers —
+        // core-loop quota from HTTP response headers —
         // the SAME REPLACE semantics as `engine_quota` above (the slot serves
         // both engine brokers and core HTTP sessions; the Composer popover
         // renders whichever one last reported). Also projects the observation
@@ -4631,7 +4631,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           set({ sessionTokens: sessionTokensFromEngineEvent(event) });
           return;
 
-        //  review F2: model-round marker emitted by the Claude
+        // review F2: model-round marker emitted by the Claude
         // engine's translator (one per assistant message). UI no-op: it is a
         // host-side LIVENESS/counting signal (child-session progress turns
         // and the approaching-turn-budget latch), never a transcript fact —
@@ -4678,10 +4678,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           });
           return;
 
-        // : a user frame force-delivered INTO the
+        // a user frame force-delivered INTO the
         // running turn at the loop's legal seam. Rendered as an ordinary
         // user_text bubble (delivered-into-the-turn is visually DISTINCT from
-        // the queue pill — 's surface requirement), and the oldest
+        // the queue pill —'s surface requirement), and the oldest
         // matching UI-owned pendingSteer is retired: this event is the
         // delivery confirmation the optimistic bubble was waiting for. Reaching this case means the turn guard above already
         // matched the running turnId.
@@ -4755,7 +4755,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           return;
         }
 
-        // Turn-ceiling grant ( cut-1): the ladder extended the turn
+        // Turn-ceiling grant (cut-1): the ladder extended the turn
         // cap — must be visible in the feed, never silent. Minimal row: the
         // interactive continuation button is cut-2.
         case "ceiling_grant":
@@ -4770,12 +4770,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           });
           return;
 
-        // : a refused ladder round is telemetry-only for now — the
+        // a refused ladder round is telemetry-only for now — the
         // paired loop_end already stops the feed, so no UI surface.
         case "ceiling_refused":
           return;
 
-        //  Stage 1: an ask-zone auto-decision is journaled (the
+        // Stage 1: an ask-zone auto-decision is journaled (the
         // event is the source of truth; telemetry counts it). The muted
         // transcript line "Auto-allowed by classifier <id>" is deferred to the
         // follow-up card with the settings UI, so the transcript stays
@@ -4797,7 +4797,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       // slice so a host_ready respawn reset never drops it.
       pinnedConnection: null,
       childSurface: false,
-      // : provider-switch marker staging (see DesktopState docs).
+      // provider-switch marker staging (see DesktopState docs).
       hostHistoryArrived: false,
       lastHistoryTail: null,
       pendingConnectionChanges: [],
@@ -4850,12 +4850,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // so the preservation lives here, not inside `performReset` itself.
             const armedRetry = get().retry;
             performReset();
-            // : the respawn reset discards the old transcript, so
+            // the respawn reset discards the old transcript, so
             // the previous hydration boundary is void — markers arriving before
             // the NEW session_history stage instead of appending into a
             // transcript about to be replaced.
             set({ hostHistoryArrived: false, lastHistoryTail: null });
-            //  phase-1 defect 2 FIX: the causal/durable fold's engine
+            // phase-1 defect 2 FIX: the causal/durable fold's engine
             // identity is derived HERE, at the handshake — `host_ready.engine`
             // is "present only for a non-core engine" (protocol.ts), so absent
             // ⇔ core ⇔ the fold engages; a native Codex/Claude host (block
@@ -4885,7 +4885,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               return {
                 queueInFlight: null,
                 promptQueue,
-                // : a respawn is a failure, not a turn limit — never
+                // a respawn is a failure, not a turn limit — never
                 // leave a stale "max_turns" reason on the new pause.
                 ...(promptQueue.length > 0 ? { queuePaused: true, queuePauseReason: "error" as const } : {}),
                 ...(armedRetry !== null ? { retry: armedRetry } : {}),
@@ -4894,7 +4894,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             set({
               connection: "ready",
               contextUsage: message.contextUsage ?? null,
-              // : the tab's session id, lifted for marker persistence.
+              // the tab's session id, lifted for marker persistence.
               sessionId: message.sessionId,
               workspace: message.workspace,
               mode: message.mode,
@@ -4905,17 +4905,17 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               reasoningEffort: message.reasoningEffort ?? "off",
               ...(message.effortAdjustment !== undefined ? { notice: { kind: "engine_notice" as const, text: `${message.model} reasoning effort adjusted to ${message.effortAdjustment.to}.` } } : {}),
               availableEffortLevels: message.availableEffortLevels,
-              //  W3: live per-model verdict off the same hello (W2
+              // W3: live per-model verdict off the same hello (W2
               // wire). Absent on the message -> undefined here -> no
               // model-level gating (today's behavior for a legacy host).
               imageInput: message.imageInput,
-              //  срез D: the recognizer verdict rides the same hello.
+              // срез D: the recognizer verdict rides the same hello.
               // Absent -> undefined -> attachment gating falls back to
               // `imageInput` alone.
               imageFallback: message.imageFallback,
               contextWindowAssumed: message.contextWindowAssumed,
               modelSettingsConnectionId: message.modelSettingsConnectionId,
-              // : the engine's live steering verdict.
+              // the engine's live steering verdict.
               // Absent (legacy host / engine without the seam) -> null -> the
               // composer's steer branch never engages, the queue stays.
               steering: message.steering ?? null,
@@ -4925,7 +4925,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             set({ mode: message.mode });
             return;
           case "orchestrate_changed":
-            //  §3.7: tab-scoped orchestrate flag from the host ack
+            // §3.7: tab-scoped orchestrate flag from the host ack
             // (same pattern as mode). Part A: store sync only; the ModeMenu
             // row/dialog ride in part B (UI steps 8–11 are out of scope here).
             set({ orchestrateActive: message.enabled });
@@ -4947,7 +4947,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // non-reasoning model, which hides the effort segment of the pill
             // (same predicate the effort selector already uses).
             //
-            // Codex-fixes : host/session.ts's set_model handler routes a
+            // Codex-fixes: host/session.ts's set_model handler routes a
             // session with `engineSettings` wired (Codex) ENTIRELY through
             // `onEngineSettingsChange` (-> engine_settings_changed below) and
             // never falls through to this legacy switchModel path — this
@@ -4960,13 +4960,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               reasoningEffort: message.reasoningEffort,
               availableEffortLevels: message.availableEffortLevels,
               ...(message.effortAdjustment !== undefined ? { notice: { kind: "engine_notice" as const, text: `${message.model} reasoning effort adjusted to ${message.effortAdjustment.to}.` } } : {}),
-              //  W3: re-gate upfront on a mid-session model switch —
+              // W3: re-gate upfront on a mid-session model switch —
               // vision -> non-vision flips this to false in the SAME push
               // that already updates `model` (W2 re-reads the verdict after
               // switchModel advances the closure). Absent -> undefined -> no
               // gating, matching host_ready's fallback above.
               imageInput: message.imageInput,
-              //  срез D: a model switch re-reads the recognizer verdict
+              // срез D: a model switch re-reads the recognizer verdict
               // too — the fallback is what keeps attachments legal when the new
               // model is blind.
               imageFallback: message.imageFallback,
@@ -4988,7 +4988,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             return;
           case "turn_started": {
             if (presentationReplayActive && presentationReplayTurns?.has(message.turnId)) return;
-            //  fallback: a turn starting means post-switch content
+            // fallback: a turn starting means post-switch content
             // is about to land — if the hydration boundary never arrived (no
             // session_history at all), flush staged markers NOW so they
             // precede the new content rather than trailing it forever.
@@ -4999,7 +4999,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // acknowledges is officially accepted — clear the in-flight slot so
             // the drainer can dispatch the next item on the following turn-end.
             //
-            // Codex-fixes : does NOT fold `pendingEngineChange` here.
+            // Codex-fixes: does NOT fold `pendingEngineChange` here.
             // `turn_started` only announces that a turn began client-side; the
             // host's own `engine_settings_changed{state:"applied"}` (below) is
             // the authoritative "the override actually rode an accepted
@@ -5016,18 +5016,18 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             set({
               turn: { status: "running", turnId: message.turnId, requestId: message.requestId, startedAt: turnStartedAt.get(message.turnId) },
               latestTurnId: message.turnId,
-              //  W8: a new turn starting — whether via the Try-again
+              // W8: a new turn starting — whether via the Try-again
               // click (already one-shot consumed by then) or any other
               // send — retires the previous turn's retry bookkeeping so a
               // stale offer never reappears on a later loop_end.
               lastErrorRetry: null,
               retry: null,
-              // : a new turn (any send) consumes the one-shot
+              // a new turn (any send) consumes the one-shot
               // Continue offer so a stale button never reappears.
               continueOffer: null,
               ...(inFlight?.requestId === message.requestId ? { queueInFlight: null } : {}),
             });
-            // : a steer sent while a turn was running delivers at the
+            // a steer sent while a turn was running delivers at the
             // NEXT turn's start — append its user_text here (after everything
             // the previous turn produced; appendBlock flushes buffered deltas
             // first), retire ONLY the matching pending entry, and restore its
@@ -5070,7 +5070,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                     : "Message rejected: the host is not ready yet.",
               },
               ...(restore ?? {}),
-              // : a rejected steer never becomes transcript text —
+              // a rejected steer never becomes transcript text —
               // drop the matching pending entry, keep unrelated ones.
               ...(get().pendingSteers.some((entry) => entry.requestId === message.requestId)
                 ? { pendingSteers: get().pendingSteers.filter((entry) => entry.requestId !== message.requestId) }
@@ -5079,7 +5079,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             return;
           }
           case "steer_requeued": {
-            //  rework (Opus defect 1): the host could not deliver
+            // rework (Opus defect 1): the host could not deliver
             // this UI steer into the running turn (idle/pre-loop, Stop raced,
             // ceiling/deadline, superseded, shutting down). NEVER dropped: the
             // pending bubble becomes a prompt-queue item — the existing
@@ -5138,7 +5138,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             onAgentEvent(message.turnId, message.event, message.step, message.attempt, message.at);
             return;
           case "pending_prompt": {
-            // : the host's authoritative in-flight prompt push. A
+            // the host's authoritative in-flight prompt push. A
             // non-empty payload renders a REAL user_text transcript bubble
             // (id `pending:{turnId}`) IFF no durable user item (turnId,
             // step 0) is registered — a reconnecting renderer has no
@@ -5153,7 +5153,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // Core-only by construction (foreign hosts never send a
             // non-empty one).
             if (message.turnId === undefined || message.text === undefined) {
-              //  outcome semantics (see the protocol type's doc):
+              // outcome semantics (see the protocol type's doc):
               // "cancelled" retires the bubble block too — the prompt never
               // became durable (cancel mid-hook/shutdown/rewind) and must
               // not stay on screen; "settled" and the bare per-connect push
@@ -5217,13 +5217,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             });
             return;
           case "session_checkpoint":
-            //  acceptance defect 2: capture the host-authoritative
+            // acceptance defect 2: capture the host-authoritative
             // live turn id FIRST — the cut-replay guard below reads it.
             handshakeLiveTurnId = message.liveTurnId ?? null;
             if (message.latestTurnId !== undefined || message.liveTurnId !== undefined) {
               set({ latestTurnId: message.latestTurnId ?? message.liveTurnId ?? null });
             }
-            //  acceptance defect 1: the positive cut-entirely list —
+            // acceptance defect 1: the positive cut-entirely list —
             // absent ONLY on an untruncated history / legacy host (null =
             // legacy strict rule; see the below-cut guard). A shipped EMPTY
             // list is authoritative: the truncated snapshot cut WITHIN its
@@ -5235,7 +5235,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               message.cutTurnIds !== undefined && Array.isArray(message.cutTurnIds)
                 ? new Set(message.cutTurnIds)
                 : null;
-            //  control/accounting checkpoint (host->renderer,
+            // control/accounting checkpoint (host->renderer,
             // sendDirect per ui_ready, core-only): REPLACES this store's
             // slots with the host's emission-time wire state so a reconnect
             // after a replay-ring overflow recovers exactly what the ring
@@ -5247,7 +5247,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // nothing captured yet); an absent permission field NEVER
             // touches the slot (a settled ask cannot resurrect — only
             // permission_settled or a newer ask may move it).
-            //  acceptance defect 1: `streams` re-opens the host's
+            // acceptance defect 1: `streams` re-opens the host's
             // currently-OPEN partial streams (bounded) on THIS store — each
             // entry mints a fresh transcript block carrying the FULL partial
             // body and registers the same `${turnId}:${step}:${streamId}`
@@ -5281,7 +5281,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                   ? `text:${blockSeq++}:${stream.streamId}`
                   : `reason:${blockSeq++}:${stream.streamId}`;
               openStreamBlocks.set(scope, blockId);
-              //  acceptance defect 1: register the host-computed
+              // acceptance defect 1: register the host-computed
               // replay budget (the exact chars of this stream the ring still
               // holds) so the replayed suffix is consumed, not re-appended
               // (see applyStreamDelta).
@@ -5294,7 +5294,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               );
             }
             if (message.sessionTokens !== undefined) {
-              //  checkpoint: install the host's cumulative totals
+              // checkpoint: install the host's cumulative totals
               // (REPLACE, never add) and register the exact finish keys it
               // already includes — every finish that replays from this
               // connect's ring is a countedSteps member and adds NOTHING
@@ -5303,7 +5303,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                 checkpointCountedSteps.add(key);
               }
             }
-            //  supervisor correction defect 1: the host's currently-
+            // supervisor correction defect 1: the host's currently-
             // executing calls — flip each hydrated `proposed` card to
             // `running` (its ring-replayed tool_execution_start was evicted
             // by the >CAP overflow; the durable assistant item alone cannot
@@ -5348,7 +5348,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             set({
               ...(message.sessionTokens !== undefined ? { sessionTokens: message.sessionTokens } : {}),
               ...(message.contextUsage !== undefined ? { contextUsage: message.contextUsage } : {}),
-              //  / : REPLACE-merge the durable audit slice
+              // /REPLACE-merge the durable audit slice
               // — lastStep/totals/totalSteps from the host win; `list`
               // survives (served separately by usage_audit).
               ...(message.usageAudit !== undefined ? { usageAudit: { ...get().usageAudit, ...message.usageAudit } } : {}),
@@ -5545,7 +5545,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             set({ hookDeclarations: message.hooks, hookConfigError: message.configError ?? null });
             return;
           case "workspace_trust_required":
-            // : host boot found declarations in an undecided or changed
+            // host boot found declarations in an undecided or changed
             // folder. Re-sent on every ui_ready while pending; cleared by the dialog
             // once the user answers (the host then restarts and decides again).
             set({
@@ -5613,7 +5613,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           case "rewind_result":
             applyRewindResult(message);
             return;
-          // Codex-fixes  (cut §3.3/§2(k).3): host ack of a
+          // Codex-fixes (cut §3.3/§2(k).3): host ack of a
           // `set_engine_preset`/`set_model`. `state` is the authoritative
           // two-phase signal host/session.ts now sends (there is no server
           // ack channel — `onEngineSettingsChange` emits `state:"pending"`
@@ -5737,7 +5737,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             return;
           }
           case "child_report": {
-            //  срез 1/2: enqueues the detached child's report through
+            // срез 1/2: enqueues the detached child's report through
             // the SAME P7.14 queue a typed-ahead prompt uses (enqueuePrompt
             // below) — tab-registry's `maybeDrain` fires synchronously on
             // this set() and dispatches it right away (idle, or paused with
@@ -5775,7 +5775,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // /4055 cross-review F2: the ceiling summary is patched by
             // the same branch (it is the detached child's only terminal channel).
             const childTerminal = message.childTerminal;
-            // : a cancelled terminal patches too — the card must read
+            // a cancelled terminal patches too — the card must read
             // Cancelled, not the admit turn's "Done".
             if (
               childTerminal !== undefined &&
@@ -5856,7 +5856,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             set({ backgroundChildren: message.children });
             return;
           case "usage_audit":
-            //  / : the durable audit list, served ONLY in
+            // /the durable audit list, served ONLY in
             // response to a usage_audit_request (newest-first, last 50). The
             // host's totals win when present; the list slot is REPLACE-set
             // (list: null = never loaded / foreign host that never answers).
@@ -5880,7 +5880,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             }
             return;
           case "image_fallback_changed":
-            //  срез D: fires after the host has COMMITTED a recognizer
+            // срез D: fires after the host has COMMITTED a recognizer
             // config change, so the composer re-gates attachments without a
             // model switch or a host restart.
             set({ imageFallback: message.imageFallback });
@@ -5901,7 +5901,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             }));
             return;
           case "engine_switched":
-            // : the host swapped the live engine in place between
+            // the host swapped the live engine in place between
             // turns. The wire message carries only the ids (the full
             // EnginePresentation is host-side state); the honest renderer
             // update is the identity chip — patch `engine.id` in place, keep
@@ -5918,7 +5918,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             }));
             return;
           case "engine_switch_failed":
-            // : non-silent refusal — the user asked for a switch
+            // non-silent refusal — the user asked for a switch
             // that did not happen (turn running / child attached / same
             // engine / factory unavailable or failed). Toast-only, nothing
             // else changes: the session keeps running exactly where it was.
@@ -5970,7 +5970,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             hostFailure: failure ?? null,
             queueInFlight: null,
             promptQueue,
-            //  review F3: the host is gone, so the turn is
+            // review F3: the host is gone, so the turn is
             // definitionally not waiting on the network any more — clear the
             // flag so the banner never renders over "Host process exited"
             // and Retry now never posts into a dead port.
@@ -5990,7 +5990,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       },
 
       recordPendingSteer(requestId: string, text: string, images: readonly ImageAttachment[] | undefined, sentMessage: LastSentMessage): void {
-        // : pending only — no transcript write. The user_text block is
+        // pending only — no transcript write. The user_text block is
         // appended by the matching turn_started (delivery position), so the
         // queued text never interleaves optimistically with the running turn's
         // streamed output.
@@ -5998,7 +5998,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       },
 
       requeuePendingSteer(requestId: string, index?: number): void {
-        //  rework (Opus defect 1): the host could not deliver this
+        // rework (Opus defect 1): the host could not deliver this
         // UI steer into the running turn (steer_requeued, or the turn ended
         // first) — move it into the prompt queue (never dropped; the drainer
         // owns its next-turn delivery) and retire both the pending entry and
@@ -6043,7 +6043,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       appendConnectionChanged(block): void {
         const { id, sessionId, ...rest } = block;
         if (!get().hostHistoryArrived) {
-          // : the respawned host's history has not landed — stage
+          // the respawned host's history has not landed — stage
           // (retaining any supplied id + the nullable sessionId); the
           // session_history boundary (or the turn_started fallback) flushes.
           set((state) => ({
@@ -6169,7 +6169,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
 
       reset(): void {
         performReset();
-        // : a genuinely new session drops staged markers, the
+        // a genuinely new session drops staged markers, the
         // boundary flags and the lifted session id along with the transcript.
         set({ hostHistoryArrived: false, lastHistoryTail: null, pendingConnectionChanges: [], sessionId: null });
         // A genuinely new session in the same tab does NOT own the prior
@@ -6206,7 +6206,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         if (queueInFlight !== null || promptQueue.length === 0) {
           return null;
         }
-        //  срез 2 (spec §4 point 2): `queuePaused` exists to hold
+        // срез 2 (spec §4 point 2): `queuePaused` exists to hold
         // HUMAN-typed prompts after a turn ended anomalously ("don't send
         // silently after an anomaly") — a detached child's system report is
         // not that; it must still leave the queue. While paused, only the

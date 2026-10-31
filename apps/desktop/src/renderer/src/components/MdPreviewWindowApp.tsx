@@ -1,5 +1,5 @@
 /**
- * Root component of the md-preview WINDOW ( CUT.md GAP 1 + CONTRACTS,
+ * Root component of the md-preview WINDOW (CUT.md GAP 1 + CONTRACTS,
  * M3): mounted by main.tsx instead of `<App/>` when `location.search` carries
  * `?view=md-preview&tabId=...&previewId=...` — a second real `BrowserWindow`
  * loading the SAME renderer bundle the main window loads (main/index.ts's
