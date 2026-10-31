@@ -53,6 +53,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - A subagent card keeps the model it ran on after you switch the connection's model or reopen the session, instead of showing the connection's current model. Cards recorded before this version keep no model rather than a wrong one.
 - Session titles ask for sentence case, so identical first messages stop producing both “ok” and “Reply Exactly Ok”.
 - Usage details say “cache not reported by provider” again instead of silently omitting the cache line when the provider sends no cached-token count.
+- Claude sessions now explain why an MCP server failed: AnyCode runs the server's own launch command once and shows the spawn error, exit code and a redacted stderr tail in the status, instead of only pointing at `claude mcp list`.
 - DeepSeek sessions now get a real title after the first turn: the title request leaves room for the model's mandatory thinking instead of spending its whole token budget on it.
 - Generation speed in the context popover is measured from the first output token instead of the first stream chunk, so a slow first response no longer shows up as slower generation, and a step that streamed no output shows a dash instead of a made-up rate.
 - DeepSeek costs now follow the provider's peak/off-peak tariff: steps outside the peak windows (01:00–04:00 and 06:00–10:00 UTC on weekdays) are estimated at half rate, and the context popover labels its estimate "peak" or "off-peak".
