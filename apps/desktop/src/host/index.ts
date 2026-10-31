@@ -286,7 +286,7 @@ import {
   type RoleRouteResolution,
 } from "@anycode/core";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
-import { sessionUsageRow, subagentUsageRow } from "./usage-recording.js";
+import { pricingSnapshotWithKeyDefault, sessionUsageRow, subagentUsageRow } from "./usage-recording.js";
 import { summarizeWithChildren } from "./usage-summary.js";
 import { claudeNativeChildrenFromHistory } from "./claude-usage.js";
 import { bindClaudeUsage, bindCodexUsage } from "./native-usage.js";
@@ -3277,7 +3277,7 @@ async function boot(): Promise<void> {
       envReasoningEffortFromSettings: Boolean(process.env.ANYCODE_REASONING_EFFORT_MODEL?.trim()),
       liveCapabilitiesFor: (id) => liveCapsMap !== undefined && Object.hasOwn(liveCapsMap, id) ? liveCapsMap[id] : undefined,
     });
-    const currentPricingRaw = () => connectionModelSettings.hasReadConnection() ? JSON.stringify(connectionModelSettings.pricingSnapshot()) : process.env.ANYCODE_CONNECTION_PRICING;
+    const currentPricingRaw = () => pricingSnapshotWithKeyDefault(connectionModelSettings.hasReadConnection() ? JSON.stringify(connectionModelSettings.pricingSnapshot()) : process.env.ANYCODE_CONNECTION_PRICING, catalogEntry, envConfig.apiKey);
     let turnPricingRaw = currentPricingRaw();
     const liveCapsFor = (id: string): LiveModelCapabilities | undefined => connectionModelSettings.capabilitiesFor(id);
     const effortLevelsFor = (id: string) => envConfig.effortLevels ?? connectionModelSettings.effortLevelsFor(id);
@@ -5212,6 +5212,11 @@ process.parentPort.on("message", (event) => {
           // Structured failures (invalid_effort / not_ready) are returned as
           // RESULTS so their code survives the IPC boundary intact.
           case "set_session_effort": result = await session.communicationSetEffort(communication.payload); break;
+          // Internal main→host (never a public MCP tool): applies + CONFIRMS the
+          // model a freshly created session was asked to run, before it is
+          // published. An id this account does not offer is a structured
+          // `invalid_model` result, so the code survives the IPC boundary.
+          case "set_session_model": result = await session.communicationSetModel(communication.payload); break;
           case "send_message": result = await session.receiveAgentMessage(communication.payload as import("../shared/communication.js").AgentEnvelope); break;
           case "restore_agent_messages": session.restoreAgentMessages(communication.payload as import("../shared/communication.js").AgentDelivery[]); result = {}; break;
           case "get_message_status": result = session.agentMessageStatus(String(communication.payload)); break;

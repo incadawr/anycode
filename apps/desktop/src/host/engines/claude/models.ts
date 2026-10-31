@@ -126,6 +126,31 @@ export class ClaudeModelCatalog {
   }
 
   /**
+   * The catalog `value` to SEND for a caller-requested id — the answer to
+   * "what does this request mean on this account?".
+   *
+   * Both halves of the `value`/`resolvedModel` split are accepted because
+   * both are legitimate ways to name a model and callers mix them: the
+   * Sessions API (and anyone reading our own telemetry/UI) may well ask for
+   * the FULL id the CLI reports (`claude-haiku-5-5`), while the picker sends
+   * the alias the CLI accepts on the wire (`haiku`). Only the `value` can be
+   * PUT on the wire (`set_model`/`--model`), so a request naming the full id
+   * must be translated here — refusing it (or worse, silently dropping it)
+   * would make an honest request look like a wrong one.
+   *
+   * An exact `value` always wins over a `resolvedModel` of ANOTHER entry (the
+   * live catalog lists `default` and `opus[1m]` with the same resolved id, so
+   * a resolved-id match is resolved through `selectableForResolved`, which
+   * prefers a concrete alias over the moving `default` one). `undefined`
+   * means the account offers nothing with that id — never a guess.
+   */
+  resolveId(requested: string): string | undefined {
+    const exact = this.get(requested);
+    if (exact !== undefined) return exact.value;
+    return this.selectableForResolved(requested)?.value;
+  }
+
+  /**
    * The catalog value best representing a CLI-reported model id — the mapping
    * used when the engine adopts a resumed session's actual model (cut §1.5
    * hazard (б)).

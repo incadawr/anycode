@@ -6,7 +6,10 @@
  * cache misses and the tab dies fail-closed as `crash_looped`).
  *
  * Main owns every gate: the per-project switch, workspace trust, tab capacity,
- * engine readiness, and the core `model` -> provider connection resolution.
+ * engine readiness, the core `model` -> provider connection resolution, and the
+ * native-engine `model` confirmation (`set_session_model`) that turns an id the
+ * account does not offer into an explicit `invalid_model` instead of a session
+ * quietly running the engine's default.
  */
 
 import type { WorkspaceTrustStore } from "@anycode/core/workspace-trust";
@@ -15,7 +18,13 @@ import type { CreateSessionOutcome, CreateSessionRequest } from "./communication
 import { normalizeHandle, type SessionAccessStore } from "./communication-sessions.js";
 import type { NewSessionPin, ResumePinResult } from "./session-pin.js";
 import type { TabHostManager } from "./tabs.js";
-import { SET_SESSION_EFFORT_OPERATION, type SetSessionEffortOutcome } from "../shared/communication.js";
+import {
+  SET_SESSION_EFFORT_OPERATION,
+  SET_SESSION_MODEL_OPERATION,
+  type SetSessionEffortOutcome,
+  type SetSessionModelOutcome,
+  type SetSessionModelPayload,
+} from "../shared/communication.js";
 import { selectCodexAccount, type CodexAccountOption } from "../shared/codex-account.js";
 import { resolveCoreConnectionForModel } from "../shared/core-model-connection.js";
 import type { AnycodeSettings } from "../shared/settings.js";
@@ -238,7 +247,18 @@ export async function createSessionForAgent(
       console.warn("[main] failed to push agent session title", error);
     }
   };
-  const wantsEffort = request.effort !== undefined;
+  /**
+   * A native engine's `model` is argv-only at fork time, where the host
+   * resolves it privately against the account's live catalog. A value that
+   * catalog cannot match would then be replaced by the engine's default
+   * silently — the caller is told its model was accepted while the session
+   * runs something else. So for "codex"/"claude" the request is ALSO applied
+   * and confirmed through the host's `set_session_model` before the tab is
+   * published: the same catalog decides, but an id it does not offer is an
+   * explicit `invalid_model` refusal (and the half-made tab is rolled back).
+   */
+  const needsModelConfirmation = engine !== "core" && request.model !== undefined;
+  const wantsPreparation = request.effort !== undefined || needsModelConfirmation;
   let created: Awaited<ReturnType<TabHostManager["createTabAwaitingInitialSpawn"]>>;
   try {
     // GitHub #6: the first fork can be parked in a provider refresh. Await its
@@ -258,7 +278,7 @@ export async function createSessionForAgent(
       // i.e. before this await resolves — the attribution must already be
       // registered for that first envelope to carry the agent badge + title.
       beforeDeferredPortDelivery: () => registerAttribution(),
-      ...(wantsEffort ? { deferPublication: true } : {}),
+      ...(wantsPreparation ? { deferPublication: true } : {}),
     });
   } finally {
     releasePin();
@@ -277,15 +297,15 @@ export async function createSessionForAgent(
   const tab = created.tab;
 
   /**
-   * Discards a prepared session whose effort could not be configured. Order is
-   * load-bearing: the row is deleted only from the host-gone callback, so a
-   * late host write cannot recreate the row we delete. When the host outlives
-   * the reaper's deadlines that callback is armed for its real exit and the
-   * refusal returns first — the deletion still happens, just later. Only the
-   * id minted by this attempt is ever deleted.
+   * Discards a prepared session whose model or effort could not be configured.
+   * Order is load-bearing: the row is deleted only from the host-gone callback,
+   * so a late host write cannot recreate the row we delete. When the host
+   * outlives the reaper's deadlines that callback is armed for its real exit
+   * and the refusal returns first — the deletion still happens, just later.
+   * Only the id minted by this attempt is ever deleted.
    */
   const abortPrepared = async (
-    reason: "invalid_effort" | "not_ready",
+    reason: "invalid_model" | "invalid_effort" | "not_ready",
     detail?: string,
   ): Promise<CreateSessionOutcome> => {
     const deleteRow = async (): Promise<void> => {
@@ -300,7 +320,7 @@ export async function createSessionForAgent(
     return { ok: false, reason, ...(detail !== undefined ? { detail } : {}) };
   };
 
-  if (wantsEffort) {
+  if (wantsPreparation) {
     const deadline = Date.now() + (deps.preparationDeadlineMs ?? DEFAULT_PREPARATION_DEADLINE_MS);
     const pollMs = deps.preparationPollMs ?? DEFAULT_PREPARATION_POLL_MS;
     // 1. Readiness only. The host is reachable over the internal control plane
@@ -322,38 +342,71 @@ export async function createSessionForAgent(
     }
     if (!ready) return abortPrepared("not_ready", "the new session host did not become ready in time");
 
-    // 2. Exactly one mutation. An unknown transport outcome is never retried:
-    // a second attempt could apply a different effort than the one reported.
-    let outcome: unknown;
-    try {
-      outcome = await tabs.communicationRequest(
-        sessionId,
-        SET_SESSION_EFFORT_OPERATION,
-        { effort: request.effort },
-        tab.workspace,
-        { timeoutMs: remaining(deadline) },
-      );
-    } catch {
-      return abortPrepared("not_ready", "the new session could not confirm its reasoning effort");
+    // 2. The model first: the effort below is validated against the model the
+    // session actually runs, so it must already be the requested one. Exactly
+    // one mutation — an unknown transport outcome is never retried, because a
+    // second attempt could apply a different model than the one reported. An id
+    // the account does not offer is the host's `invalid_model`, never a quiet
+    // default, and the half-made tab is rolled back.
+    if (needsModelConfirmation) {
+      let modelOutcome: unknown;
+      try {
+        modelOutcome = await tabs.communicationRequest(
+          sessionId,
+          SET_SESSION_MODEL_OPERATION,
+          { model: request.model } satisfies SetSessionModelPayload,
+          tab.workspace,
+          { timeoutMs: remaining(deadline) },
+        );
+      } catch {
+        return abortPrepared("not_ready", "the new session could not confirm its model");
+      }
+      const modelResult = modelOutcome as SetSessionModelOutcome | null;
+      if (modelResult === null || typeof modelResult !== "object" || typeof modelResult.ok !== "boolean") {
+        return abortPrepared("not_ready", "the new session could not confirm its model");
+      }
+      if (!modelResult.ok) {
+        // `invalid_model` keeps the host's classification and complete detail
+        // (engine, requested value, available ids) verbatim.
+        return modelResult.reason === "invalid_model"
+          ? abortPrepared("invalid_model", modelResult.detail)
+          : abortPrepared("not_ready", modelResult.detail);
+      }
     }
-    const result = outcome as SetSessionEffortOutcome | null;
-    if (result === null || typeof result !== "object" || typeof result.ok !== "boolean") {
-      return abortPrepared("not_ready", "the new session could not confirm its reasoning effort");
+
+    // 3. Exactly one effort mutation, same no-retry rule.
+    if (request.effort !== undefined) {
+      let outcome: unknown;
+      try {
+        outcome = await tabs.communicationRequest(
+          sessionId,
+          SET_SESSION_EFFORT_OPERATION,
+          { effort: request.effort },
+          tab.workspace,
+          { timeoutMs: remaining(deadline) },
+        );
+      } catch {
+        return abortPrepared("not_ready", "the new session could not confirm its reasoning effort");
+      }
+      const result = outcome as SetSessionEffortOutcome | null;
+      if (result === null || typeof result !== "object" || typeof result.ok !== "boolean") {
+        return abortPrepared("not_ready", "the new session could not confirm its reasoning effort");
+      }
+      if (!result.ok) {
+        // `invalid_effort` keeps the host's classification and complete detail
+        // (model, requested value, allowed list) verbatim.
+        return result.reason === "invalid_effort"
+          ? abortPrepared("invalid_effort", result.detail)
+          : abortPrepared("not_ready", result.detail);
+      }
     }
-    if (!result.ok) {
-      // `invalid_effort` keeps the host's classification and complete detail
-      // (model, requested value, allowed list) verbatim.
-      return result.reason === "invalid_effort"
-        ? abortPrepared("invalid_effort", result.detail)
-        : abortPrepared("not_ready", result.detail);
-    }
-    // 3. Only now does this session exist for anyone else.
+    // 4. Only now does this session exist for anyone else.
     if (!tabs.publishPreparedTab(tab.tabId)) {
       return abortPrepared("not_ready", "the prepared session host exited before it could be published");
     }
   }
 
-  if (created.deferred !== true || wantsEffort) {
+  if (created.deferred !== true || wantsPreparation) {
     registerAttribution();
     tabs.deliverTabPort(tab);
   }

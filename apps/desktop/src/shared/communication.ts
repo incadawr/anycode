@@ -86,6 +86,33 @@ export type SetSessionEffortOutcome =
   | { ok: false; reason: "invalid_effort"; detail: string }
   | { ok: false; reason: "not_ready"; detail?: string };
 
+/**
+ * Internal main→host operation name (never a public MCP tool) configuring the
+ * session's model — the Sessions API's `create_session {model}` for a native
+ * engine. It exists for the same reason `set_session_effort` does: a value the
+ * caller asked for must be CONFIRMED on the real session before the session is
+ * published, and a value the engine cannot run must be a STRUCTURED refusal
+ * (never a quiet fall back to the engine's default).
+ */
+export const SET_SESSION_MODEL_OPERATION = "set_session_model";
+
+/** Payload of `set_session_model`. `model` stays `unknown` until the host classifies it. */
+export interface SetSessionModelPayload {
+  model: unknown;
+}
+
+/**
+ * Discriminated result of `set_session_model`. `invalid_model` means the
+ * session's own live catalog offers nothing under that id (the detail carries
+ * the available ids, never a guess); everything the host could not safely
+ * perform right now — a control request the engine refused or timed out, a
+ * busy/shutting-down session — is `not_ready`.
+ */
+export type SetSessionModelOutcome =
+  | { ok: true; status: SessionStatus }
+  | { ok: false; reason: "invalid_model"; detail: string }
+  | { ok: false; reason: "not_ready"; detail?: string };
+
 export function agentMessageText(e: AgentEnvelope): string {
   return `${AGENT_MESSAGE_HEADER_PREFIX}${JSON.stringify({ messageId: e.messageId, sender: e.sender, recipientSessionId: e.recipientSessionId, kind: e.kind, correlationId: e.correlationId, replyTo: e.replyTo })}]\n${e.payload}`;
 }

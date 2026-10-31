@@ -9,7 +9,7 @@
 import { APICallError } from "ai";
 import { describe, expect, it } from "vitest";
 import type { ModelStreamEvent } from "../types/events.js";
-import { classifyProviderFailure, isModelOutputEvent } from "./failure.js";
+import { classifyProviderFailure, extractStatusCode, MiniMaxBalanceFailure, isModelOutputEvent } from "./failure.js";
 import { isQuotaExhaustion, isRetryableStreamError } from "./retry.js";
 
 const MODEL_OUTPUT: ModelStreamEvent[] = [
@@ -297,5 +297,21 @@ describe("classifyProviderFailure — intentional divergence from isRetryableStr
 
     expect(classifyProviderFailure(error)).toMatchObject({ code: "unknown", retryable: false });
     expect(isRetryableStreamError(error)).toBe(true);
+  });
+});
+
+
+describe("MiniMax balance failure", () => {
+  it("preserves retry, status and quota decisions when adding a MiniMax hint", () => {
+    for (const error of [Object.assign(new Error("insufficient_balance_error"), { statusCode: 503 }), new Error("insufficient_balance_error quota")]) {
+      const wrapped = new MiniMaxBalanceFailure(error);
+      expect(isRetryableStreamError(wrapped)).toBe(isRetryableStreamError(error));
+      expect(extractStatusCode(wrapped)).toBe(extractStatusCode(error));
+      expect(isQuotaExhaustion(wrapped)).toBe(isQuotaExhaustion(error));
+      const original = classifyProviderFailure(error);
+      const result = classifyProviderFailure(wrapped);
+      expect(result).toMatchObject({ code: original.code, retryable: original.retryable, safe: original.safe.statusCode === undefined ? {} : { statusCode: original.safe.statusCode } });
+      expect(result.safe.message).toContain("M Plan");
+    }
   });
 });
