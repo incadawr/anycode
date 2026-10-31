@@ -261,6 +261,12 @@ it("derives MiniMax billing defaults without overriding explicit choices", async
       expect(derive(raw, "sk-cp-example")).toBe(raw);
       expect(derive(raw, "sk-api-example")).toBe(raw);
     }
+    for (const input of [0, 1]) {
+      const raw = JSON.stringify({ models: { model: { input, cachedInput: 0, output: 2 } } });
+      const snapshot = derive(raw, "sk-cp-example");
+      expect(resolveUsagePrice(snapshot, "model", undefined)).toMatchObject({ subscription: false, price: { input, cachedInput: 0, output: 2 } });
+      expect(resolveUsagePrice(snapshot, "other", undefined)).toEqual({ subscription: true });
+    }
     const raw = JSON.stringify({ models: { model: { input: 1, cachedInput: 0, output: 2 } } });
     expect(JSON.parse(derive(raw, "sk-api-example")!).models).toEqual(JSON.parse(raw).models);
     expect(derive(raw, "sk-api-example")).not.toContain("sk-api");
