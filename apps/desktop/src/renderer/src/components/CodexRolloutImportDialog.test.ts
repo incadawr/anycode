@@ -310,7 +310,7 @@ describe("importModelOptionsFor", () => {
       catalog,
     );
     const options = importModelOptionsFor(snap)?.map((entry) => entry.id);
-    expect(options).toEqual(["manual-a", "glm-5.2"]);
+    expect(options).toEqual(["glm-5.2", "manual-a"]);
     expect(options).not.toContain("manual-b");
   });
 
@@ -326,7 +326,7 @@ describe("importModelOptionsFor", () => {
       catalog,
     );
     const offered = importModelOptionsFor(snap);
-    expect(offered?.map((entry) => entry.id)).toEqual(["manual-b", "glm-5.2"]);
+    expect(offered?.map((entry) => entry.id)).toEqual(["glm-5.2", "manual-b"]);
     expect(resolveDefaultImportModel("manual-b", offered)).toBe("manual-b");
   });
 
@@ -336,7 +336,7 @@ describe("importModelOptionsFor", () => {
       connections: [{ id: "conn-a", providerId: "z-ai", models: ["manual-a"] }],
     };
     const reloaded = snapshot(JSON.parse(JSON.stringify(provider)) as Record<string, unknown>, catalog);
-    expect(importModelOptionsFor(reloaded)?.map((entry) => entry.id)).toEqual(["manual-a", "glm-5.2"]);
+    expect(importModelOptionsFor(reloaded)?.map((entry) => entry.id)).toEqual(["glm-5.2", "manual-a"]);
   });
 
   it("a missing snapshot is safe and yields undefined", () => {

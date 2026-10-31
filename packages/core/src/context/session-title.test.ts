@@ -162,6 +162,17 @@ describe("generateSessionTitle", () => {
     expect(request.messages).toEqual([{ role: "user", content: "hello there" }]);
   });
 
+  it("asks for one title style: sentence case, never title-cased words", async () => {
+    // Four sessions started from the same "Reply with exactly: ok" produced
+    // "ok", "ok" and "Reply Exactly Ok" — the style was never stated.
+    const port = new ScriptedModelPort(textScript("Reply exactly ok"));
+    await generateSessionTitle({ modelPort: port, text: "Reply with exactly: ok" });
+    const system = port.requests[0]!.system!;
+    expect(system).toContain("sentence case");
+    expect(system).toContain("Never title-case");
+    expect(system).toContain("keep the user's own capitalization");
+  });
+
   it("raises the cap to the port's title ceiling and carries its effort for a thinking-always provider", async () => {
     // A provider that always thinks first cannot answer a title in 32 tokens:
     // the thinking block alone consumes the cap and no text is produced.

@@ -732,7 +732,9 @@ function formatCompactMoney(value: number): string {
  * with any unpriced step reads "≥", a fully unknown one "price unknown", and a
  * subscription one "by subscription". The cache percentage divides that turn's
  * cached input by its own input and appears ONLY when a step actually reported
- * both (never a fabricated 0%).
+ * both (never a fabricated 0%); when input WAS reported but no step carried a
+ * cached-input count, the part reads "cache not reported by provider" instead
+ * of vanishing.
  */
 export function formatTurnStepSummary(steps: readonly WireUsageAuditStep[]): string | null {
   if (steps.length === 0) {
@@ -750,11 +752,18 @@ export function formatTurnStepSummary(steps: readonly WireUsageAuditStep[]): str
   }
   if (subscription.length > 0 && priced.length > 0) costPart += " · plus subscription";
   if (unpriced > 0 && (priced.length > 0 || subscription.length > 0)) costPart += " · some steps price unknown";
-  const withCache = steps.filter(
-    (step) => step.inputTokens !== undefined && step.cachedInputTokens !== undefined && step.inputTokens > 0,
-  );
+  const withInput = steps.filter((step) => step.inputTokens !== undefined && step.inputTokens > 0);
+  const withCache = withInput.filter((step) => step.cachedInputTokens !== undefined);
+  // A provider that reports no cached-input count at all (an OpenAI-compatible
+  // server without `cached_tokens`, e.g. LM Studio) must say so instead of
+  // silently dropping the cache fact: silence read as "no caching happened".
+  // Same wording as the 0.0.44 fix — a fabricated 0% is still never shown, and
+  // a step that reports cached tokens without an input count (no denominator)
+  // contributes no cache part at all.
   const cachePart = withCache.length === 0
-    ? null
+    ? withInput.length === 0
+      ? null
+      : "cache not reported by provider"
     : `cache ${Math.round(
         (withCache.reduce((total, step) => total + (step.cachedInputTokens ?? 0), 0) /
           withCache.reduce((total, step) => total + (step.inputTokens ?? 0), 0)) *

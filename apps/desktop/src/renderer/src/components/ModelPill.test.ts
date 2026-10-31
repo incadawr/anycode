@@ -191,10 +191,10 @@ describe("providerModelsFor (F2 review lane FXH: custom providers must reach the
     expect(providerModelsFor("custom:my-endpoint", catalog, [])).toBeUndefined();
   });
 
-  it("a connection's own ids come first and catalog-only hints are appended (TASK.183 union)", () => {
+  it("keeps catalog order and appends only the ids the catalog does not offer", () => {
     expect(providerModelsFor("z-ai", catalog, custom, ["glm-6", "glm-5.2"])).toEqual([
-      { id: "glm-6" },
       { id: "glm-5.2", name: "GLM-5.2" },
+      { id: "glm-6" },
     ]);
   });
 
@@ -230,10 +230,28 @@ describe("providerModelsFor — TASK.183 union of connection ids + catalog/curat
     },
   ];
 
-  it("connection ids come first, catalog-only hints are appended, catalog names decorate matching ids", () => {
+  it("catalog hints lead, ids only the connection knows follow, catalog names decorate matching ids", () => {
     expect(providerModelsFor("z-ai", catalog, custom, ["manual-1", "glm-4.6"])).toEqual([
-      { id: "manual-1" },
+      { id: "glm-5.2", name: "GLM-5.2" },
       { id: "glm-4.6", name: "GLM-4.6" },
+      { id: "manual-1" },
+    ]);
+  });
+
+  it("a catalog id stored in the connection's own list does NOT move that chip to the front", () => {
+    // An earlier build appended every saved model to `models[]`, so a GLM
+    // connection could carry ["glm-5.2"] while the catalog offers glm-5.3
+    // first. The pickers read that list too, so the stored id used to lead.
+    const ordered: CatalogSummary = [
+      {
+        id: "glm",
+        name: "GLM",
+        authKind: "api_key",
+        models: [{ id: "glm-5.3", name: "GLM-5.3" }, { id: "glm-5.2", name: "GLM-5.2" }],
+      },
+    ];
+    expect(providerModelsFor("glm", ordered, custom, ["glm-5.2"])).toEqual([
+      { id: "glm-5.3", name: "GLM-5.3" },
       { id: "glm-5.2", name: "GLM-5.2" },
     ]);
   });
@@ -246,10 +264,12 @@ describe("providerModelsFor — TASK.183 union of connection ids + catalog/curat
   });
 
   it("unions a custom record's curated fallback even with connection ids present", () => {
+    // A custom endpoint's curated list is its own offered order; a fetched or
+    // manually typed id it does not list comes after it, never before.
     expect(providerModelsFor("custom:my-endpoint", catalog, custom, ["manual-x"])).toEqual([
-      { id: "manual-x" },
       { id: "curated-a" },
       { id: "curated-b" },
+      { id: "manual-x" },
     ]);
   });
 
@@ -268,9 +288,9 @@ describe("providerModelsFor — TASK.183 union of connection ids + catalog/curat
   it("keeps the explicit current model visible when it is only in the connection list (modelMenuItems)", () => {
     const offered = providerModelsFor("z-ai", catalog, custom, ["manual-only"]);
     expect(modelMenuItems("manual-only", offered)).toEqual([
-      { id: "manual-only", name: "manual-only" },
       { id: "glm-5.2", name: "GLM-5.2" },
       { id: "glm-4.6", name: "GLM-4.6" },
+      { id: "manual-only", name: "manual-only" },
     ]);
   });
 });

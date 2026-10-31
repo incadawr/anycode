@@ -169,6 +169,23 @@ export async function appendModelsToConnection(
   return { ok: true };
 }
 
+/**
+ * Whether the selected model also needs an entry in the connection's own
+ * `models[]`. A model the catalog already offers is offered by every picker
+ * regardless, and the pickers read the connection's list BEFORE the catalog
+ * hints — appending it therefore moved that model to the front of the list
+ * (the chip order changed from catalog order on the first Save). A custom
+ * endpoint keeps every id: its `models[]` IS its curated selector list, not a
+ * redundant copy of a catalog. Exported for direct testing.
+ */
+export function shouldAppendModelToList(
+  modelId: string,
+  catalogOfferedIds: readonly string[],
+  customEndpoint: boolean,
+): boolean {
+  return customEndpoint || !catalogOfferedIds.includes(modelId);
+}
+
 /** Single-id convenience over `appendModelsToConnection`. Exported for tests. */
 export async function appendModelToConnection(
   bridge: ModelAppendBridge,
@@ -688,6 +705,18 @@ export const CONTEXT_WINDOW_HELP =
   "Leave empty to use the catalog window; for a model the catalog does not know, an assumed 8192-token window is used so long sessions compact early instead of overstuffing the prompt. Saved separately for each model. Switching models restores their saved windows. Applies to new or reopened sessions.";
 export const IMAGE_INPUT_HELP =
   "Auto uses the catalog's vision mark or the image-capable list fetched from the provider's /v1/models. On / Off override it for the model above only — switching this connection to another model ignores it. A running session picks a change up when it next starts.";
+
+/**
+ * Visible helper under Pricing. Rate edits are read when a session opens its
+ * model port, so an already-running session keeps the rates it booted with —
+ * saying that here is the only place the user meets the rule (the drawer used
+ * to change the connection silently and leave the open tab on catalog rates).
+ */
+export const PRICING_ONELINER =
+  "Used by new or reopened sessions — a session that is already open keeps the rates it started with.";
+
+/** How long the Save button row shows its "Saved" confirmation. */
+export const SAVED_NOTICE_MS = 4000;
 
 /** Title of the "this model only" badge (scope of the saved per-model value). */
 export const MODEL_ONLY_BADGE_TITLE = "Saved separately for each model. Switching models restores their saved windows. Applies to new or reopened sessions.";
@@ -1406,6 +1435,29 @@ export function ConnectionDrawerFields({
   const [saving, setSaving] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A successful Save used to be completely silent, which reads as "did it
+  // save?", so the button row carries a short-lived "Saved" confirmation. It is
+  // cleared by the next save attempt and lives only long enough to be noticed.
+  const [savedNotice, setSavedNotice] = useState(false);
+  const savedNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flashSavedNotice = (): void => {
+    setSavedNotice(true);
+    if (savedNoticeTimer.current !== null) {
+      clearTimeout(savedNoticeTimer.current);
+    }
+    savedNoticeTimer.current = setTimeout(() => {
+      savedNoticeTimer.current = null;
+      setSavedNotice(false);
+    }, SAVED_NOTICE_MS);
+  };
+  useEffect(
+    () => () => {
+      if (savedNoticeTimer.current !== null) {
+        clearTimeout(savedNoticeTimer.current);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     if (initialFocus === "context") {
@@ -1487,6 +1539,10 @@ export function ConnectionDrawerFields({
     targetConnection?.models,
     selectedEntry?.models ?? [],
   );
+  // The ids the catalog itself offers for this provider — a selected one of
+  // these needs no entry in the connection's own list (see
+  // `shouldAppendModelToList`).
+  const catalogOfferedIds = (selectedEntry?.models ?? []).map((m) => m.id);
   // Show the API-key field IN the create form (item 3): a NEW custom endpoint
   // (the record's own key) or a keyed catalog provider (the connection key).
   // A saved custom record already owns its key; an oauth provider signs in.
@@ -1782,7 +1838,9 @@ export function ConnectionDrawerFields({
           // an explicit On/Off travels as a real boolean.
           ...(usageCreateValue !== undefined ? { includeUsage: usageCreateValue } : {}),
         },
-        createModel !== "" ? createModel : null,
+        createModel !== "" && shouldAppendModelToList(createModel, catalogOfferedIds, isNewCustomEndpoint)
+          ? createModel
+          : null,
       );
       if (outcome.createdConnectionId === undefined) {
         setError(outcome.error ?? "Couldn't create the connection.");
@@ -1886,6 +1944,7 @@ export function ConnectionDrawerFields({
     }
     setSaving(true);
     setError(null);
+    setSavedNotice(false);
     try {
       // TASK.183: metadata first (the selected model rides it), THEN append the
       // same normalized model to this connection's list. A failed metadata
@@ -1908,7 +1967,9 @@ export function ConnectionDrawerFields({
           promptCacheEnabled,
           usage: usageSelection,
         }, { contextWindowDirty, contextWindowTokens: cw.value, reasoningSupportedDirty, reasoningSupported, modelEffortDirty, modelEffort, imageInputDirty, effortLevelsDirty, effortLevels }), pricing, modelPricing },
-        selectedModelId,
+        selectedModelId !== null && shouldAppendModelToList(selectedModelId, catalogOfferedIds, isCustomRecordConnection)
+          ? selectedModelId
+          : null,
       );
       if (outcome.metaOk) setDirtyRates(new Set());
       let keyRefused = false;
@@ -1941,6 +2002,8 @@ export function ConnectionDrawerFields({
         setError(keyRefusalDetail ?? "The changes were saved, but the API key was refused.");
       } else if (!outcome.appendOk) {
         setError("The changes were saved, but the model list couldn't be saved — retry Save.");
+      } else {
+        flashSavedNotice();
       }
     } finally {
       setSaving(false);
@@ -2083,23 +2146,31 @@ export function ConnectionDrawerFields({
       onToggle={(e) => setAdvancedOpen(e.currentTarget.open)}
     >
       <summary>{simplified ? "Advanced settings (optional)" : "Advanced"}</summary>
+      {/* The disclosure's fields live in their own column container: a
+          `<details>` no longer lays its slotted children out as direct grid
+          items (Chromium wraps them in `::details-content`), so the grid that
+          used to sit on the details element silently stopped applying and
+          every label sat flush against the control above it. The body carries
+          the rhythm now, in both engines. */}
+      <div className="connection-drawer-advanced-body">
       {simplified && labelFieldVisible && labelField}
       <label className="settings-field">
         <span className="settings-field-label">Pricing</span>
         <select className="settings-field-select" value={pricingMode} disabled={readOnly} onChange={(e) => setPricingMode(e.target.value as "catalog" | "subscription" | "rates")}>
           <option value="catalog">Catalog or unknown</option><option value="subscription">By subscription</option><option value="rates">Custom rates</option>
         </select>
+        <div className="settings-field-hint">{PRICING_ONELINER}</div>
       </label>
-      {pricingMode === "rates" && <div>
-        {([["Input", priceInput, setPriceInput], ["Cached input", priceCached, setPriceCached], ["Output", priceOutput, setPriceOutput], ["Cache write (optional)", priceWrite, setPriceWrite]] as const).map(([label, value, set]) => <label className="settings-field" key={label}><span className="settings-field-label">{label} · USD / 1M tokens</span><input type="number" min="0" step="any" value={value} disabled={readOnly} onChange={(e) => set(e.target.value)} /></label>)}
+      {pricingMode === "rates" && <div className="connection-drawer-rate-grid">
+        {([["Input", priceInput, setPriceInput], ["Cached input", priceCached, setPriceCached], ["Output", priceOutput, setPriceOutput], ["Cache write (optional)", priceWrite, setPriceWrite]] as const).map(([label, value, set]) => <label className="settings-field" key={label}><span className="settings-field-label">{label} · USD / 1M tokens</span><input className="settings-field-input" type="number" min="0" step="any" value={value} disabled={readOnly} onChange={(e) => set(e.target.value)} /></label>)}
       </div>}
 
-      <p>Prices apply to future usage. Model rates override the connection fallback.</p>
-      <div aria-label="Per-model prices">
+      <p className="settings-field-hint">Prices apply to future usage. Model rates override the connection fallback.</p>
+      <div className="connection-drawer-model-rates" aria-label="Per-model prices">
         {mergeModelIds(modelSuggestions.map((item) => item.id), mergeModelIds(Object.keys(modelRates), normalizeModelId(model) ? [normalizeModelId(model)!] : [])).map((id) => {
           const draft = (Object.hasOwn(modelRates, id) ? modelRates[id] : undefined) ?? { input: "", cachedInput: "", output: "", cacheWrite: "" };
           return <fieldset key={id} disabled={readOnly || saving || pricingMode === "subscription"}><legend>{id}</legend>
-            {([ ["input", "Input"], ["cachedInput", "Cached input"], ["output", "Output"], ["cacheWrite", "Cache write (optional)"] ] as const).map(([key, label]) => <label className="settings-field" key={key}><span className="settings-field-label">{label} · USD / 1M tokens</span><input type="number" min="0" step="any" aria-label={`${id} ${label} · USD / 1M tokens`} value={draft[key]} onChange={(e) => { const value = e.target.value; setModelRates((previous) => ({ ...previous, [id]: { ...draft, [key]: value } })); setDirtyRates((previous) => new Set(previous).add(id)); }} /></label>)}
+            {([ ["input", "Input"], ["cachedInput", "Cached input"], ["output", "Output"], ["cacheWrite", "Cache write (optional)"] ] as const).map(([key, label]) => <label className="settings-field" key={key}><span className="settings-field-label">{label} · USD / 1M tokens</span><input className="settings-field-input" type="number" min="0" step="any" aria-label={`${id} ${label} · USD / 1M tokens`} value={draft[key]} onChange={(e) => { const value = e.target.value; setModelRates((previous) => ({ ...previous, [id]: { ...draft, [key]: value } })); setDirtyRates((previous) => new Set(previous).add(id)); }} /></label>)}
           </fieldset>;
         })}
       </div>
@@ -2330,6 +2401,7 @@ export function ConnectionDrawerFields({
         value={proxyRef}
         onChange={setProxyRef}
       />
+      </div>
     </details>
   );
 
@@ -2704,6 +2776,11 @@ export function ConnectionDrawerFields({
             >
               {saving ? "Saving…" : "Save"}
             </button>
+            {savedNotice && (
+              <span className="connection-drawer-saved" role="status">
+                Saved
+              </span>
+            )}
           </div>
         </>
       )}
