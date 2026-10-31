@@ -86,6 +86,8 @@
 import { execFileSync, spawn } from "node:child_process";
 import { launchSmokeElectron } from "./smoke-electron-launch.mjs";
 import { buildSmokeEnv } from "./model-overrides-smoke-env.mjs";
+import { connectIsolatedCdp } from "./isolated-cdp.mjs";
+import { providerSmokeApi, stopProviderSmokeLauncher, registerProviderSmokeChild, providerSmokeTeardown } from "./provider-connections-smoke-api.mjs";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -119,15 +121,6 @@ function parseArgs(argv) {
 const FLAGS = parseArgs(process.argv.slice(2));
 
 // ── small process/fs helpers (lifted from retry-ui-smoke.mjs / keybindings-ui-smoke.mjs) ──
-
-function isPidAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -219,23 +212,7 @@ function assert(step, cond, detail) {
 // ── HTTP helpers against the automation channel (README.md routes) ──
 
 async function api(ctx, method, path, body) {
-  const headers = { Authorization: `Bearer ${ctx.token}` };
-  const init = { method, headers };
-  if (body !== undefined) {
-    headers["content-type"] = "application/json";
-    init.body = JSON.stringify(body);
-  }
-  const res = await fetch(`http://127.0.0.1:${ctx.port}${path}`, init);
-  const text = await res.text();
-  let parsed = null;
-  if (text.length > 0) {
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      parsed = text;
-    }
-  }
-  return { status: res.status, body: parsed };
+  return providerSmokeApi(ctx, method, path, body);
 }
 
 async function apiOk(ctx, step, method, path, body) {
@@ -405,7 +382,7 @@ function staticGrepLegacyShimGone() {
 
 // ── generic launch helper (both phases share this shape) ──
 
-async function launchApp(step, label, extraEnv) {
+async function launchApp(step, label, extraEnv, register) {
   const profile = mkdtempSync(join(tmpdir(), `anycode-provconn-smoke-${label}-profile-`));
   const ctx = {
     label,
@@ -421,6 +398,7 @@ async function launchApp(step, label, extraEnv) {
     token: undefined,
     appPid: null,
     child: null,
+    cdp: null,
     teardownPromise: null,
   };
 
@@ -442,58 +420,66 @@ async function launchApp(step, label, extraEnv) {
     stdio: ["ignore", "inherit", "inherit"],
     detached: process.platform !== "win32",
   });
-  ctx.child = child;
+  registerProviderSmokeChild(ctx, child, register);
 
-  const deadline = Date.now() + LAUNCH_TIMEOUT_MS;
-  let info = null;
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      fail(step, `[${label}] dev process exited early (code=${child.exitCode}, signal=${child.signalCode}) before publishing discovery`);
+  try {
+    ctx.cdp = await connectIsolatedCdp({ profile, env, launcher:child, wait:async fn => {
+      const deadline = Date.now() + LAUNCH_TIMEOUT_MS;
+      while (Date.now() < deadline) {
+        if (child.exitCode !== null || child.signalCode !== null) throw new Error("Automation launcher exited");
+        const value = await fn();
+        if (value) return value;
+        await sleep(500);
+      }
+      throw new Error("Timed out waiting for verified automation");
+    }});
+    const deadline = Date.now() + LAUNCH_TIMEOUT_MS;
+    let info = null;
+    while (Date.now() < deadline) {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        fail(step, `[${label}] dev process exited early (code=${child.exitCode}, signal=${child.signalCode}) before publishing discovery`);
+      }
+      const candidate = readDiscoveryFile(ctx.profileAutomationInfo);
+      if (candidate !== null && candidate.startedAt > t0 && candidate.pid === ctx.cdp.pid) {
+        info = candidate;
+        break;
+      }
+      await sleep(500);
     }
-    const candidate = readDiscoveryFile(ctx.profileAutomationInfo);
-    if (candidate !== null && candidate.startedAt > t0 && isPidAlive(candidate.pid)) {
-      info = candidate;
-      break;
+    if (info === null) {
+      fail(step, `[${label}] timed out after ${LAUNCH_TIMEOUT_MS}ms waiting for ${ctx.profileAutomationInfo} (startedAt > ${t0})`);
     }
-    await sleep(500);
+    ctx.port = info.port;
+    ctx.token = info.token;
+    ctx.appPid = info.pid;
+    await waitForFacade(ctx, step);
+    pass(step, `[${label}] app launched (pid=${info.pid}), facade ready after ${Date.now() - t0}ms on automation port ${info.port}, profile=${profile}`);
+    return ctx;
+  } catch (error) {
+    await teardown(ctx, []);
+    throw error;
   }
-  if (info === null) {
-    fail(step, `[${label}] timed out after ${LAUNCH_TIMEOUT_MS}ms waiting for ${ctx.profileAutomationInfo} (startedAt > ${t0})`);
-  }
-  ctx.port = info.port;
-  ctx.token = info.token;
-  ctx.appPid = info.pid;
-  await waitForFacade(ctx, step);
-  pass(step, `[${label}] app launched (pid=${info.pid}), facade ready after ${Date.now() - t0}ms on automation port ${info.port}, profile=${profile}`);
-  return ctx;
 }
 
 /** Shared-promise discipline (retry-ui-smoke.mjs precedent): every caller awaits the SAME in-flight teardown rather than racing a signal handler's own call against the normal end-of-phase call. */
 function teardown(ctx, workspaces) {
-  if (!ctx.teardownPromise) {
-    ctx.teardownPromise = teardownApp(ctx, workspaces);
-  }
-  return ctx.teardownPromise;
+  return providerSmokeTeardown(ctx, workspaces, teardownApp);
 }
 
 async function teardownApp(ctx, workspaces) {
-  if (ctx.port && ctx.token && ctx.child) {
+  if (ctx.port && ctx.token && ctx.child && ctx.cdp) {
     try {
       await api(ctx, "POST", "/quit", {});
     } catch {
       // best-effort — the app may already be gone.
     }
   }
+  ctx.cdp?.ws.close();
   if (ctx.child) {
     const exited = await waitForExit(ctx.child, APP_EXIT_GRACE_MS);
     if (!exited) {
       console.warn(`[provider-connections-ui-smoke] [${ctx.label}] app did not exit within ${APP_EXIT_GRACE_MS}ms of /quit — escalating SIGTERM`);
-      killTree(ctx.child.pid, "SIGTERM");
-      await sleep(SIGTERM_GRACE_MS);
-      if (isPidAlive(ctx.child.pid)) {
-        console.warn(`[provider-connections-ui-smoke] [${ctx.label}] app still alive ${SIGTERM_GRACE_MS}ms after SIGTERM — escalating SIGKILL`);
-        killTree(ctx.child.pid, "SIGKILL");
-      }
+      await stopProviderSmokeLauncher(ctx.child, { kill: killTree, sleep, graceMs: SIGTERM_GRACE_MS });
     }
   }
   const dirs = [ctx.profile, ...(workspaces ?? [])];
@@ -517,11 +503,11 @@ async function teardownApp(ctx, workspaces) {
 // connections -> a11y -> custom-provider e2e credential pickup
 // ══════════════════════════════════════════════════════════════════════════
 
-async function phase1Launch() {
+async function phase1Launch(register) {
   // No ANYCODE_API_KEY/MODEL/BASE_URL, no ANYCODE_WORKSPACE: providerReady
   // stays false at boot, tabs.length is 0 -> shouldShowWelcome (App.tsx) is
   // true. This is the ONLY boot shape that reaches the real empty state.
-  return launchApp(1, "welcome", {});
+  return launchApp(1, "welcome", {}, register);
 }
 
 async function step2WelcomeEmptyState(ctx) {
@@ -961,7 +947,7 @@ async function step15E2ECredentialPickup(ctx) {
 // grid's own connection count/health
 // ══════════════════════════════════════════════════════════════════════════
 
-async function phase2Launch() {
+async function phase2Launch(register) {
   const refusedPort = await reserveUnusedPort();
   const ctx = await launchApp(17, "env-override", {
     // Dummy provider credential + an unreachable base URL: `computeProviderReady`
@@ -970,7 +956,7 @@ async function phase2Launch() {
     ANYCODE_API_KEY: "sk-env-override-smoke-dummy",
     ANYCODE_MODEL: "env-override-smoke-dummy-model",
     ANYCODE_BASE_URL: `http://127.0.0.1:${refusedPort}`,
-  });
+  }, register);
   ctx.refusedPort = refusedPort;
   return ctx;
 }
@@ -1061,7 +1047,7 @@ async function run() {
   // ── phase 1 ──
   let ctx1 = null;
   try {
-    ctx1 = await phase1Launch();
+    ctx1 = await phase1Launch(ctx => { currentCtx = ctx; });
     currentCtx = ctx1;
     await step2WelcomeEmptyState(ctx1);
     await step3CreateConnectionA(ctx1);
@@ -1093,7 +1079,7 @@ async function run() {
   if (failedStep === null) {
     let ctx2 = null;
     try {
-      ctx2 = await phase2Launch();
+      ctx2 = await phase2Launch(ctx => { currentCtx = ctx; });
       currentCtx = ctx2;
       await step18EnvBannerZeroConnections(ctx2);
       await step19EnvBannerIndependentOfConnectionHealth(ctx2);

@@ -8,4 +8,4 @@ export function connectIsolatedCdp(options: {
   wait: (fn: () => any) => Promise<any>;
   openSocket?: any;
   run?: any;
-}): Promise<{ ws: any; call: (method: string, params?: Record<string, unknown>) => Promise<any>; automation: (info: any, path: string, method?: string, body?: any) => Promise<any> }>;
+}): Promise<{ pid: number; ws: any; call: (method: string, params?: Record<string, unknown>) => Promise<any>; automation: (info: any, path: string, method?: string, body?: any) => Promise<any> }>;

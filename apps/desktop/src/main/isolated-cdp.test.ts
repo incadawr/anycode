@@ -37,6 +37,9 @@ describe("isolated browser ownership", () => {
     writeFileSync(join(root, "user-data", "DevToolsActivePort"), `54321\n${browserPath}\n`);
     const socket = vi.fn();
     const wait = async (fn: () => unknown) => fn();
+    const badIdentity = {...env, ANYCODE_SMOKE_IDENTITY:"wrong-nonce"};
+    await expect(connectIsolatedCdp({profile:root, env:badIdentity, launcher:{pid:100}, wait, openSocket:socket, run:vi.fn()})).rejects.toThrow("identity mismatch");
+    expect(socket).not.toHaveBeenCalled();
     const run = vi.fn(() => "999\n");
     await expect(connectIsolatedCdp({profile:root, env, launcher:{pid:100}, wait, openSocket:socket, run})).rejects.toThrow("another process");
     expect(socket).not.toHaveBeenCalled();

@@ -25,7 +25,7 @@ it("sends a request only after verification on the same synthetic socket", async
   const verifyPeer = vi.fn(() => { expect(wire).toBe(""); });
   const pending = verifiedAutomationRequest({port:1234, token:"fixture-token", path:"/state", connectImpl:() => socket, verifyPeer});
   socket.emit("connect");
-  await expect(pending).resolves.toEqual({ok:true, result:{ok:true}});
+  await expect(pending).resolves.toEqual({status:200, ok:true, result:{ok:true}});
   expect(verifyPeer).toHaveBeenCalledWith(4567);
   expect(wire).toContain("Bearer fixture-token");
 });
