@@ -442,6 +442,7 @@ const connectionCreateSchema = z
     reasoningSupported: z.literal(true).optional(),
     effortLevels: z.array(reasoningEffortEnum).min(1).transform((levels) => [...new Set(levels)]).optional(),
     promptCache: promptCacheSchema.optional(),
+    openRouterProviders: z.array(z.string().trim().min(1).max(128)).max(20).optional(),
     maxOutputTokens: maxOutputTokensSchema.optional(),
     // Per-model context window. Only the numeric value is accepted
     // from the renderer; the model binding is derived server-side from the
@@ -492,6 +493,7 @@ const connectionUpdateSchema = z
     promptCache: z.union([promptCacheSchema, z.literal("")]).optional(),
     // Output-token ceiling with the same `""` clear sentinel as
     // `transport`/`proxyRef` above.
+    openRouterProviders: z.array(z.string().trim().min(1).max(128)).max(20).optional(),
     maxOutputTokens: z.union([maxOutputTokensSchema, z.literal("")]).optional(),
     // Per-model context window with the same `""` clear sentinel as
     // `maxOutputTokens` above; a number sets tokens AND the server-derived binding.
@@ -1810,6 +1812,7 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
     }
     const connection: ProviderConnection = {
       id,
+      ...(req.openRouterProviders?.length ? { openRouterProviders: req.openRouterProviders } : {}),
       ...(req.pricing !== undefined ? { pricing: req.pricing } : {}),
       providerId: req.providerId,
       ...(req.label !== undefined ? { label: req.label } : {}),
@@ -1999,6 +2002,10 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
     // has to DELETE the key, not spread `undefined` over it. Health is
     // deliberately NOT invalidated: a ceiling is not an endpoint identity, so a
     // `ready` observed a minute ago stays true.
+    if (req.openRouterProviders !== undefined) {
+      if (req.openRouterProviders.length) updatedConnection.openRouterProviders = req.openRouterProviders;
+      else delete updatedConnection.openRouterProviders;
+    }
     if (req.maxOutputTokens !== undefined) {
       if (req.maxOutputTokens === "") {
         delete updatedConnection.maxOutputTokens;

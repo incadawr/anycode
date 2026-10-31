@@ -1391,6 +1391,7 @@ export function ConnectionDrawerFields({
   // an in-progress edit (e.g. a momentarily-empty field) never gets coerced
   // through `Number()` before the user is done typing; `maxOutputTokensField`
   // does the actual parse/validate at save time.
+  const [openRouterProviders, setOpenRouterProviders] = useState(editConnection?.openRouterProviders?.join(", ") ?? "");
   const [maxOutputTokens, setMaxOutputTokens] = useState(
     editConnection?.maxOutputTokens === undefined ? "" : String(editConnection.maxOutputTokens),
   );
@@ -1862,6 +1863,7 @@ export function ConnectionDrawerFields({
         reloadSnapshot,
         {
           providerId,
+          ...(providerId === "openrouter" && openRouterProviders.trim() ? { openRouterProviders: openRouterProviders.split(",").map(v => v.trim()).filter(Boolean) } : {}),
           modelPricing: Object.fromEntries(Object.entries(modelPricing).filter(([, value]) => value !== "")) as Record<string, TokenRates>,
           ...(pricing !== "" ? { pricing } : {}),
           ...(createModel !== "" ? { model: createModel } : {}),
@@ -2002,7 +2004,7 @@ export function ConnectionDrawerFields({
         modelPersistenceBridge(),
         reloadSnapshot,
         createdConnectionId,
-        { ...buildDrawerSavePayload({
+        { ...(effectiveProviderId === "openrouter" ? { openRouterProviders: openRouterProviders.split(",").map(v => v.trim()).filter(Boolean) } : {}), ...buildDrawerSavePayload({
           connectionId: createdConnectionId,
           label,
           model: selectedModelId ?? model,
@@ -2269,6 +2271,13 @@ export function ConnectionDrawerFields({
         </>
       )}
 
+      {effectiveProviderId === "openrouter" && (
+        <label className="settings-field">
+          <span className="settings-field-label">OpenRouter providers</span>
+          <input className="settings-field-input" value={openRouterProviders} disabled={readOnly} onChange={e => setOpenRouterProviders(e.target.value)} placeholder="Provider slugs, comma-separated" />
+          <span className="settings-field-hint">Only these providers will be used; fallback is disabled. Leave empty for automatic routing.</span>
+        </label>
+      )}
       {/* GitHub #1: per-connection streaming token-usage policy, shown only for
           the transport that actually sends `stream_options.include_usage`. A
           hidden control keeps its state, so switching transport back restores

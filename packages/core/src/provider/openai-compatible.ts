@@ -37,11 +37,18 @@ export const OPENAI_COMPATIBLE_PROVIDER_NAME = "openaiCompatible";
  *    verdict, so this factory stays a pure capability forwarder — it spreads
  *    the flag in when and only when it is explicitly `true`.
  */
+export function openRouterRequestBody(body: Record<string, unknown>, raw: string | undefined): Record<string, unknown> {
+  let providers: unknown;
+  try { providers = raw ? JSON.parse(raw) : undefined; } catch { providers = undefined; }
+  const only = Array.isArray(providers) ? providers.filter((v): v is string => typeof v === "string" && v.trim().length > 0) : [];
+  return { ...body, usage: { include: true }, ...(only.length ? { provider: { only, allow_fallbacks: false } } : {}) };
+}
+
 export function createOpenAICompatibleLanguageModel(config: EndpointConfig): LanguageModel {
   const provider = createOpenAICompatible({
     name: OPENAI_COMPATIBLE_PROVIDER_NAME,
     baseURL: normalizeExplicitBaseUrl(config.baseUrl),
-    ...(new URL(config.baseUrl).hostname === "openrouter.ai" ? { transformRequestBody: (body) => ({ ...body, usage: { include: true } }) } : {}),
+    ...(new URL(config.baseUrl).hostname === "openrouter.ai" ? { transformRequestBody: (body) => openRouterRequestBody(body, process.env.ANYCODE_OPENROUTER_PROVIDERS) } : {}),
     ...(config.apiKey !== undefined ? { apiKey: config.apiKey } : {}),
     ...(config.headers !== undefined ? { headers: config.headers } : {}),
     ...(config.includeUsage === true ? { includeUsage: true } : {}),

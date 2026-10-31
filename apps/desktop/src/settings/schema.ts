@@ -258,6 +258,7 @@ const connectionSchema = z.object({
   // document and reset every other section to defaults. A rejected value reads
   // back as "no explicit ceiling", which is the pre- behaviour.
   // Strictness lives at the IPC boundary (main/settings-ipc.ts).
+  openRouterProviders: z.array(z.string().trim().min(1).max(128)).max(20).optional().catch(undefined),
   maxOutputTokens: z.number().int().positive().optional().catch(undefined),
   // Per-model context window. Same fail-soft `.catch(undefined)` as
   // `maxOutputTokens` above — a hand-edited bad value reads back as "no

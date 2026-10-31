@@ -1274,6 +1274,9 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // property of the whole ladder (env > settings), not incidental to how
   // fillFromSettings happens to be implemented.
   fillFromSettings(env, ENV_MAX_OUTPUT_TOKENS, numToStr(view.maxOutputTokens));
+  const routerProviders = activeConnection(settings)?.openRouterProviders;
+  if (routerProviders?.length) env.ANYCODE_OPENROUTER_PROVIDERS = JSON.stringify(routerProviders);
+  else delete env.ANYCODE_OPENROUTER_PROVIDERS;
   // Streaming token-usage policy (GitHub #1): the connection-level opt-in/out
   // rides the same env rung as the ceiling above, so a launching shell's own
   // ANYCODE_INCLUDE_USAGE always wins — including an explicit `0`/`false` over
