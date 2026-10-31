@@ -54,6 +54,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Session titles ask for sentence case, so identical first messages stop producing both “ok” and “Reply Exactly Ok”.
 - Usage details say “cache not reported by provider” again instead of silently omitting the cache line when the provider sends no cached-token count.
 - Claude sessions now explain why an MCP server failed: AnyCode runs the server's own launch command once and shows the spawn error, exit code and a redacted stderr tail in the status, instead of only pointing at `claude mcp list`.
+- When several background subagents wait for permission at once, the approval dialog names each subagent and its type, shows which request of how many is on screen, and lets you switch to the next one instead of letting it expire unseen.
+- The notice a parent agent gets about a subagent's pending approval now points at the approval dialog it is actually shown in, instead of the subagent's own tab.
 - DeepSeek sessions now get a real title after the first turn: the title request leaves room for the model's mandatory thinking instead of spending its whole token budget on it.
 - Generation speed in the context popover is measured from the first output token instead of the first stream chunk, so a slow first response no longer shows up as slower generation, and a step that streamed no output shows a dash instead of a made-up rate.
 - DeepSeek costs now follow the provider's peak/off-peak tariff: steps outside the peak windows (01:00–04:00 and 06:00–10:00 UTC on weekdays) are estimated at half rate, and the context popover labels its estimate "peak" or "off-peak".

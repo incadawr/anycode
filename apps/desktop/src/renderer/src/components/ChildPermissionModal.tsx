@@ -15,8 +15,8 @@ import {
   collectChildPermissions,
   childPermissionOwnerLabel,
   childPermissionSubmissionKey,
+  forwardedChildPermissionQueue,
   respondChildPermission,
-  selectForwardedChildPermission,
   subscribeChildPermissions,
   type ChildPermissionStore,
 } from "../child-permissions.js";
@@ -57,11 +57,28 @@ export function ConnectedChildPermissionModal() {
     return subscribeChildPermissions(parentSessionId, relations, childStore, () => setRevision((revision) => revision + 1));
   }, [parentSessionId, relations]);
 
-  const forwarded = selectForwardedChildPermission({
+  const forwardedQueue = forwardedChildPermissionQueue({
     rootHasOwnPermission: rootHasOwn,
     owners,
     displayedChildSpawnToolCallIds: [],
   });
+  // Which queued ask the user picked (by its stable (child, request) key).
+  // Null — or a key that is no longer pending, i.e. the ask settled — falls
+  // back to the queue's head, so answering the shown ask reveals the next one.
+  const [pickedKey, setPickedKey] = useState<string | null>(null);
+  const pickedIndex = Math.max(
+    0,
+    forwardedQueue.findIndex((owner) => childPermissionSubmissionKey(owner.childTabId, owner.request.requestId) === pickedKey),
+  );
+  const forwarded = forwardedQueue[pickedIndex] ?? null;
+  const queuePosition = { index: pickedIndex, total: forwardedQueue.length };
+  // Cycles through every waiting child, so a second pending ask is reachable
+  // WITHOUT answering the first — it would otherwise sit hidden and expire.
+  const showNextRequest = (): void => {
+    const next = forwardedQueue[(pickedIndex + 1) % forwardedQueue.length];
+    if (next === undefined) return;
+    setPickedKey(childPermissionSubmissionKey(next.childTabId, next.request.requestId));
+  };
 
   const shownTabId = forwarded?.childTabId;
   const shownRequestId = forwarded?.request.requestId;
@@ -148,6 +165,8 @@ export function ConnectedChildPermissionModal() {
       allowRemember={allowRemember}
       workspace={childState?.workspace ?? null}
       ownerLabel={childPermissionOwnerLabel(forwarded.childSessionId, forwarded.spawnToolCallId, transcript, backgroundChildren)}
+      queuePosition={queuePosition}
+      onShowNextRequest={showNextRequest}
     />
     </>
   );

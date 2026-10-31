@@ -92,6 +92,16 @@ export interface PermissionModalProps {
    * knows which agent is asking. Absent for the tab's own ask.
    */
   ownerLabel?: string;
+  /**
+   * Set when several child asks are waiting at once: the 0-based position of
+   * THIS one among them and the total. The header prints "Request 1 of N" and
+   * offers a switch to the next one, so a second pending ask is visible and
+   * answerable instead of silently expiring behind the first. Absent for the
+   * tab's own ask and for a single forwarded ask.
+   */
+  queuePosition?: { index: number; total: number };
+  /** Switches this dialog to the next waiting child ask; rendered only while `queuePosition.total > 1`. */
+  onShowNextRequest?: () => void;
 }
 
 const RISK_LABELS: Record<RiskLevel, string> = {
@@ -448,6 +458,8 @@ export function PermissionModal({
   allowRemember = true,
   workspace = null,
   ownerLabel,
+  queuePosition,
+  onShowNextRequest,
 }: PermissionModalProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const denyRef = useRef<HTMLButtonElement>(null);
@@ -614,6 +626,16 @@ export function PermissionModal({
           </span>
           {ownerLabel !== undefined && (
             <span className="permission-owner-label">{ownerLabel}</span>
+          )}
+          {queuePosition !== undefined && queuePosition.total > 1 && (
+            <span className="permission-queue-position" role="status">
+              Request {queuePosition.index + 1} of {queuePosition.total}
+              {onShowNextRequest !== undefined && (
+                <button type="button" className="permission-queue-next" onClick={onShowNextRequest}>
+                  Next request
+                </button>
+              )}
+            </span>
           )}
           {!isPlan && (
             <span
