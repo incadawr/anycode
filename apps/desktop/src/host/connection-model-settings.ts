@@ -59,6 +59,8 @@ export function createConnectionModelSettings(deps: {
         ...row,
         ...(live?.reasoning !== undefined ? { reasoning: live.reasoning } : {}),
         ...(live?.effortLevels !== undefined ? { effortLevels: mapForeignEffortLevels(live.effortLevels) } : {}),
+        ...(live?.thinkingAlwaysOn !== undefined ? { thinkingAlwaysOn: live.thinkingAlwaysOn } : {}),
+        ...(live?.defaultEffort !== undefined ? { defaultEffort: live.defaultEffort } : {}),
         ...(supported === true && !(live?.reasoning ?? row.reasoning) ? { reasoning: true, effortLevels: ["off", "low", "medium", "high", "xhigh", "max"] as ReasoningEffort[] } : {}),
         ...(off ? { thinkingAlwaysOn: false, supportsExplicitOff: true, effortLevels: ["off" as const, ...(live?.effortLevels !== undefined ? mapForeignEffortLevels(live.effortLevels) : row.effortLevels ?? []).filter(level => level !== "off")] } : {}),
         ...(supported === false ? { reasoning: false, thinkingAlwaysOn: false, effortLevels: undefined, defaultEffort: undefined } : {}),
