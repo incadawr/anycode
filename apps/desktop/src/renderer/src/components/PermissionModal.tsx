@@ -857,7 +857,7 @@ export function PermissionModal({
  * consulted by the IpcPermissionBroker itself (host/permission-broker.ts), so
  * the rule is honoured on the very next ask and after every restart. Hiding the
  * checkbox left the owner of a Claude/Codex session with no in-app way to stop
- * being asked the same question — the wall was filed for.
+ * being asked the same question — the wall this change addressed.
  *
  * `supportsInteractiveApprovals` stays, and is the correct gate on its own: it
  * is false exactly when the engine has no approval bridge, and Session drops a

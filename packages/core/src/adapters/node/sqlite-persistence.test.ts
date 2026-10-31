@@ -3429,7 +3429,7 @@ describe("SqlitePersistenceAdapter — session delete", () => {
 });
 
 /**
- * /the provider_usage audit (migration v19). One row
+ * the provider_usage audit (migration v19). One row
  * per completed core model step, append-only, idempotent per
  * (session, turn, step). All tests run on :memory: or tmp-dir databases only.
  */

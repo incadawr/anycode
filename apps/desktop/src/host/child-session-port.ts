@@ -10,7 +10,7 @@ import { childSessionLimitMessage } from "../shared/session-limits.js";
  * credential broker (host/index.ts:348-377): this module never touches
  * `process.parentPort` directly, so it is fully testable with fakes.
  *
- * / wire: the control plane now carries a THIRD op —
+ * wire: the control plane now carries a THIRD op —
  * `ChildRunSend` (`send` below) — which delivers a follow-up to one
  * of the parent's OWN still-running children. It shares the requestId
  * namespace and waiter map with `run()`, but nothing else: it never spawns,

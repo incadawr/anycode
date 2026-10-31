@@ -535,7 +535,7 @@ export function buildConnectionUpdatePayload(params: {
     transport: params.transport,
     baseUrl: params.showBaseUrl ? params.baseUrl.trim() : "",
     // Sent unconditionally, same rationale as `transport` (inherited
-    // from's `proxyUrl`): choosing "Use application proxy" must CLEAR
+    // from the earlier `proxyUrl`): choosing "Use application proxy" must CLEAR
     // the persisted ref, and `""` is the channel's clear sentinel — omitting it
     // would leave the old choice in force. The legacy `proxyUrl` key is
     // deliberately NOT sent here: absent means "keep", which is what lets an
@@ -2325,7 +2325,7 @@ export function ConnectionDrawerFields({
         </>
       )}
 
-      {/* /one segmented control. Default writes "" (the
+      {/* one segmented control. Default writes "" (the
           provider default), the presets write the same values the chips did,
           Custom reveals the number input. `step={1}` on the input on purpose:
           every whole number in [min, max] is accepted, and a coarser step would

@@ -526,7 +526,7 @@ export type UiToHostMessage =
   // mid-turn (contextBreakdown() is a pure read). Sent only when the ctx-meter
   // popover opens.
   | { type: "context_breakdown_request" }
-  // /payload-less persistent provider-usage audit
+  // payload-less persistent provider-usage audit
   // request (mirror of context_breakdown_request). Served by the CORE host
   // only — a foreign engine's host never answers (the renderer's list stays
   // null, same posture as an unsupported context_breakdown).
@@ -847,7 +847,7 @@ export type HostToUiMessage =
       countedSteps?: string[];
       contextUsage?: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" };
       /**
-       * /the SQLite-backed provider-usage audit slice
+       * the SQLite-backed provider-usage audit slice
        * for THIS session (last completed step + honest totals + step count),
        * read from the durable provider_usage table — the record that
        * survives a host restart, unlike sessionTokens above (process
@@ -896,7 +896,7 @@ export type HostToUiMessage =
       content: string | null;
       truncated: boolean;
     } // content:null = unreadable / too large
-  // /trusted provider-usage audit list, sent ONLY in
+  // trusted provider-usage audit list, sent ONLY in
   // response to a usage_audit_request (no zod, precedent context_breakdown).
   // No legacy/byte-locked flow emits one, so automation/replay snapshots stay
   // byte-identical. Core host only; a foreign host never answers.
@@ -1352,7 +1352,7 @@ export const contextBreakdownRequestSchema = z
   })
   .strict();
 
-// /payload-less usage-audit request (mirror of
+// payload-less usage-audit request (mirror of
 // contextBreakdownRequestSchema). Untrusted ui->host direction, so it rides
 // zod even though it carries no data — fail-closed on any extra key.
 export const usageAuditRequestSchema = z

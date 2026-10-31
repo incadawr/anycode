@@ -859,7 +859,7 @@ async function route(
   if (method === "GET" && parts[0] === "tabs" && parts.length === 3 && parts[2] === "slash-menu") {
     return slashMenuState(deps, decodeURIComponent(parts[1]!));
   }
-  // /composer queue-affordance probe — same
+  // composer queue-affordance probe — same
   // `/tabs/:tabId/<probe>` shape as the model-pill/slash-menu GET routes.
   if (method === "GET" && parts[0] === "tabs" && parts.length === 3 && parts[2] === "composer-queue") {
     return composerQueueState(deps, decodeURIComponent(parts[1]!));

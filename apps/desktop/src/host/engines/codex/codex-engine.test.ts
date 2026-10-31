@@ -270,7 +270,7 @@ class FakeAppServer implements CodexClient {
   /** Quota pull failure mode: the boot must survive it (no quota block, session usable). */
   rateLimitsReadFails = false;
   /**
-   * /`windowsSandbox/readiness` result. The default
+   * `windowsSandbox/readiness` result. The default
    * mirrors a Windows boot that never had a setup — the probe-only status the
    * engine turns into a boot notice (never a boot failure).
    */

@@ -1545,7 +1545,7 @@ function blankProfilePaneState(): ProfilePaneState {
  * while the phase still reads `ready` — and a disabled button swallows a
  * `.click()` without a trace. A route that reported `ok:true` off the click
  * would therefore certify a gesture that never happened, the same false-`ok`
- * class as's `HTTP 200`. So this route now refuses `busy` on a held
+ * class as the `HTTP 200` response. So this route now refuses `busy` on a held
  * button, requires the busy window to actually OPEN after the click
  * (`did_not_start`), and waits for it to close again including the catch-up
  * flag (`did_not_settle`) — a wait that stops at `refreshing → ready` while
@@ -2822,7 +2822,7 @@ export interface AnycodeBridge {
 }
 
 /**
- * /one live reading of the composer's queue affordances
+ * one live reading of the composer's queue affordances
  * for a running turn — the facts the owner repro needed, addressable from a
  * smoke without a hand-driven app. `queueLength`/`paused`/`draining` come
  * straight off the live store (no mirror); `inputEnabled`/`placeholder`/`draft`

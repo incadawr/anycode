@@ -1007,7 +1007,7 @@ function CtxPopover({
   contextUsage: ContextUsage | null;
   contextBreakdown: WireContextBreakdown | null;
   sessionTokens: SessionTokens | null;
-  /** /the durable audit slice (see DesktopState.usageAudit). */
+  /** the durable audit slice (see DesktopState.usageAudit). */
   usageAudit: {
     lastStep: WireUsageAuditStep | null;
     totals: WireUsageAuditTotals | null;
@@ -1076,7 +1076,7 @@ function CtxPopover({
   // the request entirely when the engine has no breakdown at all
   // (codex-profiles cut §5.2) — asking would only ever get dropped, and the
   // popover still needs its anchor to show the session-tokens/quota lines.
-  // /the SAME transition also fires the twin
+  // the SAME transition also fires the twin
   // `usage_audit_request` — UNCONDITIONALLY, because the audit is a core
   // feature independent of supportsContextBreakdown; a foreign host that
   // never answers leaves the list null (lazy-load skeleton posture).

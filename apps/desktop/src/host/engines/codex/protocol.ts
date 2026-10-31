@@ -114,7 +114,7 @@ export const OBSERVED_COMMAND_APPROVAL_METHOD = "item/commandExecution/requestAp
 export const OBSERVED_FILE_CHANGE_APPROVAL_METHOD = "item/fileChange/requestApproval";
 
 /**
- * /Windows sandbox is its own protocol family — a
+ * Windows sandbox is its own protocol family — a
  * SEPARATE set of wire methods from the sandbox POLICY fields the thread
  * params already carry. Probe-only: `windowsSandbox/readiness` is sent on
  * win32 boot and its status decoded; `windowsSandbox/setupStart` is

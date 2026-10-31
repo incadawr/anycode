@@ -500,7 +500,7 @@ describe("unattended latch", () => {
  *  2. AFTER expiry (the detached-child case): the ask expired unseen in the
  *     hidden child tab (a detached run has no live card), the latch
  *     armed, and the owner then opens the tab and answers the EXPIRED ask.
- * The click still routes through `handleResponse` — law is
+ *     The click still routes through `handleResponse` — the latch's rule is
  *     "a click is proof of a human — even for an unknown/already-settled
  *     requestId, since the click happened either way" — so the latch MUST
  *     disarm there too, and asking must resume.
@@ -652,7 +652,7 @@ describe("IpcPermissionBroker always-allow rules", () => {
 });
 
 /**
- * Where's latch and's rule seam meet — a case neither branch
+ * Where the latch and the rule seam meet — a case neither branch
  * could see alone, since each shipped without the other. The rule wins: it is a
  * standing human answer given in advance, so the "nobody is at the screen"
  * premise the latch reasons from simply does not apply to it. The opposite
@@ -724,8 +724,8 @@ describe("always-allow rules vs the unattended latch", () => {
 });
 
 /**
- * scoped broker-only translation. deliberately forbade any
- * Bash/CodexExec translation; carves out exactly one exception — a
+ * scoped broker-only translation. The rule seam deliberately forbade any
+ * Bash/CodexExec translation; this change carves out exactly one exception — a
  * CodexExec request that missed every rule under its own name and carries a
  * string `command` (and is not a stdin write) is retried against the matcher
  * as ("Bash", {command}). Core matching semantics, upstream hooks, and the

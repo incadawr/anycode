@@ -1584,7 +1584,7 @@ export function createSubagentRunner(
                 ceilingLastRefusal = event.reason;
                 break;
               case "error":
-                // (inline-tier mirror of's finding): this event was
+                // (inline-tier mirror of the provider failure finding): this event was
                 // never read here, so a child that died on a provider failure reported
                 // its PREVIOUS turn's text as its final text. Only the whitelist-derived
                 // `safe` descriptor may cross a trust boundary (types/events.ts); the raw

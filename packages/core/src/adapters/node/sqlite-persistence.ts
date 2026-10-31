@@ -1126,7 +1126,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     const idPlaceholders = deletedSessionIds.map(() => "?").join(", ");
     counts.historyItems = Number(db.prepare(`DELETE FROM history_items WHERE session_id IN (${idPlaceholders})`).run(...deletedSessionIds).changes);
     counts.checkpoints = Number(db.prepare(`DELETE FROM checkpoints WHERE session_id IN (${idPlaceholders})`).run(...deletedSessionIds).changes);
-    // /the usage audit is keyed by the AnyCode session
+    // the usage audit is keyed by the AnyCode session
     // id directly (unlike the shadow logs' native engine refs), so it cascades
     // with the same placeholders as history/checkpoints.
     counts.providerUsage = Number(db.prepare(`DELETE FROM provider_usage WHERE session_id IN (${idPlaceholders})`).run(...deletedSessionIds).changes);

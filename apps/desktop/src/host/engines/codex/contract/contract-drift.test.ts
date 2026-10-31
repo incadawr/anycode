@@ -156,7 +156,7 @@ describe("contract-drift layer 1 (always-on)", () => {
   });
 
   it("the pinned windowsSandbox family matches protocol.ts constants", () => {
-    // /Windows sandbox is a SEPARATE protocol family
+    // Windows sandbox is a SEPARATE protocol family
     // (not sandbox policy fields). readiness is probe-only; setupStart is
     // deliberately NOT pinned (never sent). The refs are v2/-scoped because
     // the 0.144.3 schema declares the whole family under definitions.v2.

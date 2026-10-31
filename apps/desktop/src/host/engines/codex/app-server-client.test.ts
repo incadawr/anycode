@@ -850,7 +850,7 @@ describe("buildCodexChildEnv — engine proxy carrier", () => {
     expect(env.HTTPS_PROXY).toBe(ENGINE_PROXY);
   });
 
-  // /engines WERE the deliberate exception to the
+  // engines WERE the deliberate exception to the
   // child-env proxy scrub. reverses that exemption: a credentialed
   // proxy never reaches the engine CLI — the host swaps it for its
   // credential-free loopback relay URL (fail-closed without one). The exemption

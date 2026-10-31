@@ -726,7 +726,7 @@ describe("maxOutputTokensEffectiveHint (name the number a blank field resolves t
   });
 });
 
-describe("contextWindowTokensField (per-model context window, same range discipline as)", () => {
+describe("contextWindowTokensField (per-model context window, same range discipline as max output tokens)", () => {
   it("blank (and whitespace-only) is the CLEAR sentinel, not zero and not invalid", () => {
     expect(contextWindowTokensField("")).toEqual({ ok: true, value: "" });
     expect(contextWindowTokensField("   ")).toEqual({ ok: true, value: "" });

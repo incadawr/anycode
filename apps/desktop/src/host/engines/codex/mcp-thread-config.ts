@@ -1,5 +1,5 @@
 /**
- * /serializes core-resolved MCP server specs into the
+ * serializes core-resolved MCP server specs into the
  * `config.mcp_servers` map sent on Codex app-server `thread/start` /
  * `thread/resume` (version-matched Codex 0.144.x probe evidence P1–P7).
  *

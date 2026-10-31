@@ -1,5 +1,5 @@
 /**
- * /serializes core-resolved MCP server specs into the
+ * serializes core-resolved MCP server specs into the
  * Claude Code `--mcp-config` JSON document.
  *
  * Grammar (version-matched probe evidence, planner P1–P7):
