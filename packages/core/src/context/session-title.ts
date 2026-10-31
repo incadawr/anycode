@@ -171,11 +171,35 @@ function postProcessTitle(raw: string): string | null {
   let candidate = firstLine.trim();
   candidate = stripSurroundingQuotes(candidate);
   candidate = stripTrailingPeriod(candidate);
+  candidate = stripTitleEcho(candidate);
   candidate = candidate.trim().replace(/\s+/g, " ");
   if (candidate.length > SESSION_TITLE_MAX_LENGTH) {
     candidate = candidate.slice(0, SESSION_TITLE_MAX_LENGTH);
   }
   return candidate.length > 0 ? candidate : null;
+}
+
+/**
+ * Removes the instruction's own verb from a reply that echoed it instead of
+ * writing a title ("Title a code reading session", "Title: Fix the login
+ * bug"). Two narrow shapes only, so a real title that merely starts with the
+ * word stays intact ("Title IX at the university"):
+ *   - a `Title:`/`Title -` LABEL, which is never part of the title text;
+ *   - `Title` used as a VERB, recognized by the determiner that follows it
+ *     ("Title a …", "Title the …"); the remainder is capitalized as the new
+ *     first word.
+ */
+function stripTitleEcho(candidate: string): string {
+  const labelled = candidate.match(/^title\s*[:\-–—]\s*(.+)$/i);
+  if (labelled !== null) {
+    return labelled[1]!.trim();
+  }
+  const asVerb = candidate.match(/^title\s+((?:a|an|the)\b.*)$/i);
+  if (asVerb !== null) {
+    const rest = asVerb[1]!.trim();
+    return rest.charAt(0).toUpperCase() + rest.slice(1);
+  }
+  return candidate;
 }
 
 /** Strips a single matching pair of wrapping `"..."` or `'...'` quotes, if present. */

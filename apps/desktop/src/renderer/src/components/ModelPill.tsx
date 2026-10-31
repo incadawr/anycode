@@ -579,6 +579,11 @@ export function ModelPill() {
     modelId: string;
     runningChildren: number;
   } | null>(null);
+  // The "next turn" tag answers ONE question: "does something I picked now land
+  // later?" — so it needs a render-visible record of a pick made during a turn.
+  // `pendingPickRef` cannot drive it (refs never re-render) and a turn alone
+  // must not (nothing is deferred until the user picks).
+  const [deferredPick, setDeferredPick] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const chipRef = useRef<HTMLButtonElement>(null);
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -839,6 +844,11 @@ export function ModelPill() {
       const requestId = crypto.randomUUID();
       pendingPickRef.current.model = modelSettingsPick("model", id, modelSettingsConnectionId, pinnedConnection?.connectionId, snapshot?.settings.provider.activeConnectionId, requestId);
       sendToHost({ type: "set_model", model: id, requestId });
+      // Audit C6: only a pick made WHILE the turn runs is deferred — the tag
+      // says "your choice lands later", not "a turn is running".
+      if (turnInProgress) {
+        setDeferredPick(true);
+      }
     }
     close(true);
   }
@@ -850,6 +860,9 @@ export function ModelPill() {
     const requestId = crypto.randomUUID();
     pendingPickRef.current.effort = modelSettingsPick("effort", effort, modelSettingsConnectionId, pinnedConnection?.connectionId, snapshot?.settings.provider.activeConnectionId, requestId);
     sendToHost({ type: "set_reasoning_effort", effort, requestId });
+    if (turnInProgress) {
+      setDeferredPick(true);
+    }
     close(true);
   }
 
@@ -1059,9 +1072,20 @@ export function ModelPill() {
     for (const request of modelSettingsWrites(pendingPickRef.current, { model: ack.model, effort: ack.effort, requestId: ack.requestId, effortRequestId: ack.effortRequestId, kind: ack.kind })) {
       writeChainRef.current = chainWrite(writeChainRef.current, () => connectionUpdate(request));
     }
+    if (pendingPickRef.current.model === undefined && pendingPickRef.current.effort === undefined) {
+      setDeferredPick(false);
+    }
   }
   useEffect(() => { persistAck(effortSelectionAck); }, [effortSelectionAck]);
   useEffect(() => { persistAck(modelSelectionAck); }, [modelSelectionAck]);
+  // The deferred tag lives exactly as long as a pick can still land: a turn
+  // boundary clears it (the host applied the pick and the ack follows), as
+  // does an ack that consumes the last pending pick.
+  useEffect(() => {
+    if (!turnInProgress) {
+      setDeferredPick(false);
+    }
+  }, [turnInProgress]);
 
   function onChipKeyDown(event: KeyboardEvent<HTMLButtonElement>): void {
     if (pickDisabled) {
@@ -1154,9 +1178,10 @@ export function ModelPill() {
         onKeyDown={onChipKeyDown}
       >
         <span className="model-pill-label">{label}</span>
-        {/* Taskana 4895: plainly says WHEN a pick lands while a turn runs —
-            the running turn itself keeps the model it started with. */}
-        {turnInProgress && <span className="model-pill-midturn">next turn</span>}
+        {/* Audit C6: plainly says WHEN a pick lands — and only once there IS a
+            pick waiting for the turn boundary. A bare running turn renders no
+            tag: nothing is deferred yet. */}
+        {turnInProgress && deferredPick && <span className="model-pill-midturn">next turn</span>}
         <Chevron className="model-pill-chevron" />
       </button>
 

@@ -61,6 +61,19 @@ function classifyConsoleLevel(level: "info" | "warning" | "error" | "debug"): Pr
   return "log"; // "info" | "debug"
 }
 
+/**
+ * Electron's OWN security warnings are not the page's console output. In a dev
+ * build Electron writes them into the same `console-message` channel with a
+ * literal `%c` formatting marker ("%cElectron Security Warning (…)"); fed
+ * through as preview-console rows they looked like the page logging a warning
+ * and put raw console text into the conversation. They say nothing about the
+ * user's document, so they are dropped at capture time — the page's real
+ * warnings keep flowing. Exported for the adapter's own wiring test.
+ */
+export function isElectronInternalWarning(message: string): boolean {
+  return message.includes("Electron Security Warning");
+}
+
 /** Exported: md-window-adapter.ts (TASK.99 M3) reuses this for the md-preview window's own `capturePage()` — same `PreviewCapturedImage` wrapping, zero duplication. */
 export function wrapCapturedImage(image: NativeImage): PreviewCapturedImage {
   return {
@@ -175,6 +188,11 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
     console.warn("[preview] debugger attach failed; pageerror capture degraded to console-message only");
   }
   wc.on("console-message", (event) => {
+    // Electron's own security warning is not a page console message (see
+    // isElectronInternalWarning) — never surface it in the transcript.
+    if (isElectronInternalWarning(event.message)) {
+      return;
+    }
     // Sliced BEFORE the listener (cut §1.3/F3) — the giant string still
     // arrives in main once (Chromium delivers it; unavoidable) but is never
     // re-serialized host-ward at size. preview-host.ts's own slice at

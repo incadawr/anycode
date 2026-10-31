@@ -570,8 +570,10 @@ body {
   color: var(--text-1);
 }
 
-/* The per-tab "Split right" affordance (⫿): same shape as the close ×;
-   disabled state is carried by title text only (the store refuses anyway). */
+/* The per-tab "Split right" affordance: a real two-pane glyph, same shape as
+   the close × (Audit C10 — the old text glyph "⫿" read as a stray divider
+   between the title and the close button). Disabled state is carried by the
+   title text and the dimmed icon (the store refuses anyway). */
 .dock-tab-split {
   display: flex;
   align-items: center;
@@ -579,10 +581,14 @@ body {
   flex-shrink: 0;
   padding: 0;
   color: var(--text-3);
-  font-size: var(--fs-xs);
   background: transparent;
   border: none;
   cursor: pointer;
+}
+
+.dock-tab-split > svg {
+  width: 12px;
+  height: 12px;
 }
 
 .dock-tab-split:hover {
@@ -1129,6 +1135,13 @@ body {
 /* TASK.119 п.4: conspicuous open-row treatment — inset accent bar + primary text. */
 .sidebar-row-open {
   color: var(--text-1);
+  /* Audit C12: only the CURRENT tab wears the accent bar. Other open tabs keep
+     a quiet inset marker (they are open in the background, not active), so two
+     rows never read as equally active. */
+  box-shadow: inset 2px 0 0 var(--border-strong);
+}
+
+.sidebar-row-open[aria-current="true"] {
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
@@ -3512,6 +3525,17 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
+/* Audit C9: a standalone document is read as a table, so its table gets the
+   framed GitHub look (cell borders + header tint) instead of the transcript's
+   row rules; scoped to the preview so conversation tables stay quiet. */
+.md-preview-view-rendered .md-table th,
+.md-preview-view-rendered .md-table td {
+  border: 1px solid var(--border);
+}
+.md-preview-view-rendered .md-table th {
+  background: var(--bg-inset);
+}
+
 .md-hr {
   border: none;
   height: 1px;
@@ -5509,7 +5533,11 @@ body {
   position: relative;
   display: inline-flex;
   min-width: 0;
+  /* Audit C8: the chip may take the room the footer actually has; it only
+     shrinks when the row runs out (the label ellipsis then does the clipping).
+     A fixed ch cap truncated real model names beside empty space. */
   flex-shrink: 1;
+  max-width: 100%;
 }
 
 .model-pill-chip {
@@ -5517,7 +5545,7 @@ body {
   align-items: center;
   gap: var(--sp-1);
   min-width: 0;
-  max-width: 22ch;
+  max-width: 100%;
   padding: 0.15rem var(--sp-2);
   border-radius: var(--r-full);
   border: 1px solid var(--border);
@@ -5563,11 +5591,9 @@ body {
   white-space: nowrap;
 }
 
-/* The tag must not eat the label: the chip's 22ch cap is widened just enough
-   while the tag is present. */
-.model-pill-chip:has(.model-pill-midturn) {
-  max-width: 30ch;
-}
+/* The tag must not eat the label: the chip's own max-width is now the footer's
+   free space, so the tag simply shares the shrunk chip (the label ellipsis
+   yields first). */
 
 .model-pill-popover {
   position: fixed;

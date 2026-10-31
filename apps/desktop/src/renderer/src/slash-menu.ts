@@ -505,6 +505,45 @@ export function resolveBareSlashSubmit(
   return { kind: "run", intent: command.run };
 }
 
+/**
+ * Submit-time guard for a slash-shaped draft that names NO registry command.
+ * Without it `/foo`, `/help` or `/compact/compact` (a doubled token left by a
+ * refused command plus a retype) travel to the model as an ordinary user turn
+ * and cost a whole turn to answer "I don't recognize that".
+ *
+ * Deliberately narrow, because a leading `/` is also how a user writes a path:
+ * only a WHOLE draft (whitespace-free, so prose never matches) shaped like a
+ * command is considered, and only two shapes count —
+ *   - a single `/name` whose `name` is not a registry id (`/foo`, `/help`), or
+ *   - a token built from one KNOWN id repeated (`/compact/compact`), which is
+ *     never a plausible path and is exactly what a refused command retyped
+ *     after the token stays in the draft looks like.
+ * Paths (`/usr/local/bin/node`, `/tmp/tmp`) therefore keep going to the model.
+ * Skill invocations are unaffected twice over: they are written `$name`, and
+ * a name that is a known registry id is never reported as unknown.
+ *
+ * Returns the user-facing notice text, or `null` for "ordinary text".
+ */
+export function unknownSlashCommandNotice(text: string): string | null {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("/") || /\s/.test(trimmed)) {
+    return null;
+  }
+  const segments = trimmed.slice(1).split("/");
+  const first = segments[0] ?? "";
+  // A command id is a word; anything else (`.`/`:`/`%`/empty) is not a command
+  // the menu could ever have offered, so it is far more likely a path or prose.
+  if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(first)) {
+    return null;
+  }
+  const isKnown = (name: string): boolean => SLASH_COMMANDS.some((command) => command.id === name);
+  const unknownSingle = segments.length === 1 && !isKnown(first);
+  const unknownDoubled = segments.length > 1 && segments.every((segment) => segment === first) && isKnown(first);
+  return unknownSingle || unknownDoubled
+    ? `Unknown command: ${trimmed}. Type / to see the available commands.`
+    : null;
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Trigger detection (cut §4.3)
 // ─────────────────────────────────────────────────────────────────────────
