@@ -438,11 +438,11 @@ async function step9SplitLeg(ctx) {
   // (App.tsx's `open()` re-focuses an existing tab), which left `git` as the
   // primary, isSplittableTab refused the pin and the facade honestly
   // answered split_refused — the smoke aborted on a step-defect premise.
-  // Bounded retry (review 4839 follow-up): once preconditions HELD, a
-  // split_refused is retried (browser-tab click → precondition wait → split
-  // click) and a refusal that persists through every attempt with preconditions
-  // held is a FAIL — an always-refusing facade must never read ALL GREEN. A
-  // refusal is PASS-expected only when the precondition wait never held.
+  // Bounded retry: once preconditions HELD, a split_refused is retried
+  // (browser-tab click → precondition wait → split click) and a refusal that
+  // persists through every attempt with preconditions held is a FAIL — an
+  // always-refusing facade must never read ALL GREEN. A refusal is
+  // PASS-expected only when the precondition wait never held.
   const SPLIT_MAX_ATTEMPTS = 3;
   const browserTabId = `preview:${ctx.htmlPreviewId}`;
   const attempts = [];

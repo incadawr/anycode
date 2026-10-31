@@ -6,12 +6,11 @@ import { checkAutoMerged, checkPinned, checkSplitPreconditions, checkSplitRetryO
  * Unit coverage for `dock-squash-smoke.mjs`'s --split leg verdicts — the
  * shapes mirror the facade contract exactly (`renderer/src/automation.ts`
  * dockTabSplit/dockLayoutState, pinned by automation.test.ts), so this test
- * pins the LIVE smoke's own judgement logic. The review 4839 follow-up made
- * the retry policy explicit: a split_refused is retried (browser-tab click →
- * precondition wait → split click, bounded attempts) and only a refusal that
- * persists with preconditions held is a FAIL — an always-refusing facade must
- * never read ALL GREEN. A refusal is PASS-expected only when the precondition
- * wait never held.
+ * pins the LIVE smoke's own judgement logic. The retry policy is explicit: a
+ * split_refused is retried (browser-tab click → precondition wait → split
+ * click, bounded attempts) and only a refusal that persists with preconditions
+ * held is a FAIL — an always-refusing facade must never read ALL GREEN. A
+ * refusal is PASS-expected only when the precondition wait never held.
  */
 
 function state(overrides = {}) {
@@ -49,7 +48,7 @@ describe("dock-squash-smoke assertions — classifySplitClick", () => {
   });
 });
 
-describe("dock-squash-smoke assertions — checkSplitRetryOutcome (the review 4839 fix)", () => {
+describe("dock-squash-smoke assertions — checkSplitRetryOutcome (bounded retry policy)", () => {
   it("an ok click on the first attempt passes", () => {
     const verdict = checkSplitRetryOutcome([{ preconditionsOk: true, click: { ok: true } }]);
     expect(verdict.status).toBe("PASS");
