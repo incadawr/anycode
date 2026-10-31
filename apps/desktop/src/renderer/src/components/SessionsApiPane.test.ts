@@ -14,6 +14,7 @@ import {
   SESSIONS_API_DESCRIPTION,
   SESSIONS_API_FOLDER_HINT,
 } from "./sessions-api-model.js";
+import { AGENT_PROJECT_SWITCH_LABEL } from "./project-agent-switch.js";
 import type { CommunicationView } from "../../../shared/communication-config.js";
 
 const TOKEN = "deadbeef".repeat(8);
@@ -98,6 +99,13 @@ describe("SessionsApiPaneView (Taskana 4747)", () => {
     expect(on).toContain("Connect an agent");
     expect(on).toContain("Choose which sessions to share");
     expect(on).toContain("Paste it into your agent&#x27;s MCP settings and restart the agent.");
+  });
+
+  it("step 1 also points at the project switch that gates agent-opened tasks", () => {
+    const html = render(props({ view: base({ enabled: true }) }));
+    expect(html).toContain("Choose which sessions to share");
+    expect(html).toContain(`“${AGENT_PROJECT_SWITCH_LABEL}” switch is on (sidebar project ⋯ menu)`);
+    expect(html).toContain("Agents may open new tasks in a project only when");
   });
 
   it("Advanced is a collapsed details disclosure by default", () => {

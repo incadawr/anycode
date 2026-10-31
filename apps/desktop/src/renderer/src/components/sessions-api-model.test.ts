@@ -21,6 +21,7 @@ import {
   SESSIONS_API_AGENT_PROJECTS_EMPTY,
   SESSIONS_API_SHARE_HINT,
 } from "./sessions-api-model.js";
+import { AGENT_PROJECT_SWITCH_LABEL } from "./project-agent-switch.js";
 import type { CommunicationMutationReason, CommunicationStatus } from "../../../shared/communication-config.js";
 
 const listening: CommunicationStatus = { state: "listening", url: "http://127.0.0.1:4310/mcp", port: 4310, workspaces: 0, sessions: 1 };
@@ -110,6 +111,15 @@ describe("Sessions API pane discoverability copy (audit D9)", () => {
   it("the shared-sessions hint says how a session is shared, not only how many are", () => {
     expect(SESSIONS_API_SHARE_HINT).toMatch(/session's ⋯ environment menu/);
     expect(SESSIONS_API_SHARE_HINT).toMatch(/Currently shared/);
+  });
+
+  it("the shared-sessions hint also names the project switch that gates new agent-opened tasks", () => {
+    // The exact label the sidebar project menu renders — one constant, so copy and menu cannot drift.
+    expect(SESSIONS_API_SHARE_HINT).toContain(`“${AGENT_PROJECT_SWITCH_LABEL}”`);
+    const sentence = SESSIONS_API_SHARE_HINT.slice(SESSIONS_API_SHARE_HINT.indexOf("Agents may open"));
+    expect(sentence).toMatch(/open new tasks in a project only when/);
+    expect(sentence).toMatch(/sidebar project ⋯ menu/);
+    expect(sentence).toMatch(/is on/);
   });
 
   it("the pane subtitle mentions the per-session switch (sharing is opt-in per session)", () => {
