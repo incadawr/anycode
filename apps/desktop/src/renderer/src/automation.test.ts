@@ -9428,7 +9428,7 @@ describe("automation facade — codexPaneState / drivers (W4-F0, findings S1-1 p
 describe("automation facade — binaryTrustDialogState / Resolve, trustedBinariesState / Revoke (CUT-S4.md §6c BU6-BU7)", () => {
   /**
    * `createAutomationFacade`'s positional-parameter list is 28 long
- * (registry.. trustedBinariesSectionDom,two additions
+   * (registry .. trustedBinariesSectionDom, with two additions
    * appended at the END — see the factory's own comment on why). Every
    * describe block in this file builds its OWN thin wrapper rather than
    * sharing one, same convention as `buildFacade` above and every other

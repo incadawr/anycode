@@ -2,7 +2,7 @@
  * Public-tree gate: no tracker card references in any tracked file.
  *
  * What counts as a reference: the tracker product name (optionally with a card
- * number and a letter suffix), and the card marker followed by `.`/`-`/space
+ * number and a letter suffix), and the card marker followed by `.`/`-`/space/`_`/`#`
  * and a number, an optional letter suffix and an optional `-F5`-style
  * sub-item. The marker may also be glued straight onto the number, which is how
  * card numbers leak into script names, log tags and directory names. Dotted
@@ -51,7 +51,7 @@ const REF_SOURCE =
   "|" +
   "[Tt][Aa][Ss][Kk][Aa][Nn][Aa](?:[ ._:#-]*\\d+[a-z]?)?" +
   "|[Tt]ask\\s+\\d+(?:\\.\\d+)+" +
-  "|[Tt][Aa][Ss][Kk][.\\- ]?\\d+[a-z]?(?:-[A-ZА-Я]\\d*|-[а-я]\\d+)?" +
+  "|[Tt][Aa][Ss][Kk][.\\- _#]?\\d+[a-z]?(?:-[A-ZА-Я]\\d*|-[а-я]\\d+)?" +
   ")";
 
 const newRef = () => new RegExp(REF_SOURCE, "g");
@@ -389,6 +389,8 @@ describe("public tree carries no tracker card references", () => {
     expect(scanText("docs/x.md", `${PRODUCT}-cli did it`)).not.toEqual([]);
     expect(scanText(".github/workflows/ci.yml", `pinned in ${PRODUCT} 4750a`)).not.toEqual([]);
     expect(scanText("sample.ts", `waiting on ${MARK}-123`)).not.toEqual([]);
+    expect(scanText("docs/x.md", `see ${MARK.toUpperCase()}_123`)).not.toEqual([]);
+    expect(scanText(`scripts/${MARK.toUpperCase()}#123.mjs`, "clean body")).not.toEqual([]);
     expect(scanText("AGENTS.md", `history lives in ${card}`)).not.toEqual([]);
     expect(scanText("sample.ts", `mkdtemp(join(tmp, "${PRODUCT}4294-"))`)).not.toEqual([]);
     expect(scanText("sample.ts", `// ${glued} notes`)).not.toEqual([]);

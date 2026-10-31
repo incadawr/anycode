@@ -1,5 +1,5 @@
 /**
- * Live GUI smoke for ("живой смоук карты без человека"):
+ * Live GUI smoke for the workflow map:
  * the FIRST end-to-end run of the Workflow run map + collapsed tick strip on
  * a REAL Electron dev instance, driven entirely over the automation HTTP
  * channel (`main/automation/*` — this card's own probes/drivers from

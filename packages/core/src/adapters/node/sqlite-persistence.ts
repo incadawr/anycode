@@ -1092,7 +1092,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
 
   /**
    * The cascade ENGINE (body of `deleteSessionTree` above), factored out to
- * run inside an ALREADY-open transaction — `deleteSessions`
+   * run inside an ALREADY-open transaction — `deleteSessions`
    * batch-delete calls it per root inside ONE transaction. Adds per-table
    * `counts` (rows each DELETE removed) for `SessionDeleteSummary`; the
    * public `deleteSessionTree` contract (three reviews + live smoke) drops
