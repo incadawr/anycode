@@ -105,6 +105,92 @@ it.each(["on", "off"] as const)("creates and reloads image input %s through the 
   } finally { await act(async () => root.unmount()); container.remove(); rmSync(dir, {recursive:true, force:true}); }
 });
 
+// ── The custom-connection drawer right after Create: what actually lands in
+// settings.json when the form is filled the way a user fills it, and what the
+// dialog title shows. Runs the REAL persistence handlers (same rig as the
+// image-input test above) so the answer is about the code, not a mock. ──
+
+function createScenarioRig() {
+  const dir = mkdtempSync(join(tmpdir(), "drawer-acceptance-"));
+  const path = join(dir, "settings.json");
+  const vault = {setSecret:async () => ({ok:true as const}), clearSecret:async () => {}, getSecretValue:async () => undefined, probeSecret:async () => ({state:"unset" as const}), statuses:async () => []};
+  const providerDeps = {vault, settingsPath:path, genId:() => "custom:fixture"};
+  const snapshot = {settings:cloneDefaults(), readOnly:false, secrets:[], envOverrides:[], providerReady:true, catalog:[]};
+  const create = vi.fn((request: unknown) => handleConnectionCreate({vault, settingsPath:path, bootEnv:{}, catalogIds:["custom:fixture"], isCustom:() => true, genConnectionId:() => "conn-fixture"}, request));
+  const store = createStore(() => ({snapshot, oauthPendingProviderId:null, connectionCreate:create, load:vi.fn()})) as unknown as SettingsStoreApi;
+  const bridge = {create:(request: unknown) => handleCustomProviderCreate(providerDeps, request), fetchModels:(request: unknown) => handleCustomProviderFetchModels(providerDeps, request)};
+  const catalog = [{id:"custom", name:"Custom endpoint", authKind:"api_key" as const, models:[], needsBaseUrl:true, isCustom:true}];
+  return { path, create, store, bridge, catalog, cleanup: () => rmSync(dir, {recursive:true, force:true}) };
+}
+
+async function mountAddDrawer(rig: ReturnType<typeof createScenarioRig>) {
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(createElement(ConnectionDrawerFields, {mode:"add", catalog:rig.catalog as never, connections:[], secrets:[], readOnly:false, store:rig.store, customProvider:rig.bridge as never})));
+  return { container, root };
+}
+
+async function typeInto(input: HTMLInputElement, value: string) {
+  await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value); input.dispatchEvent(new Event("input", {bubbles:true})); });
+}
+
+async function pickCustomTemplate(container: HTMLElement) {
+  const provider = container.querySelector<HTMLSelectElement>("select")!;
+  await act(async () => { provider.value = "custom"; provider.dispatchEvent(new Event("change", {bubbles:true})); });
+}
+
+async function clickCreate(container: HTMLElement) {
+  await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Create connection")!.click(); });
+}
+
+it("persists the record's name and base URL, and the entered model, on the custom create", async () => {
+  const rig = createScenarioRig();
+  const { container, root } = await mountAddDrawer(rig);
+  try {
+    await pickCustomTemplate(container);
+    await typeInto(container.querySelector('input[placeholder="e.g. LM Studio"]')!, "Int D Conn");
+    await typeInto(container.querySelector('input[placeholder="http://localhost:1234/v1"]')!, "http://127.0.0.1:1234/v1");
+    await typeInto(container.querySelector('input[placeholder="Enter a model ID"]')!, "gpt-x");
+    const noAuth = [...container.querySelectorAll("input[type=checkbox]")].find(x => x.parentElement?.textContent?.includes("doesn't need")) as HTMLInputElement;
+    await act(async () => noAuth.click());
+    await clickCreate(container);
+    await act(async () => { await vi.waitFor(() => expect(rig.create).toHaveBeenCalledOnce()); });
+    const settings = (await loadSettings(rig.path)).settings;
+    // The RECORD carries the name and base URL typed into their own fields.
+    expect(settings.provider.custom?.[0]).toMatchObject({name:"Int D Conn", baseUrl:"http://127.0.0.1:1234/v1"});
+    // A custom-record connection's baseUrl lives on the record, not the connection.
+    expect(rig.create).toHaveBeenCalledWith(expect.objectContaining({providerId:"custom:fixture", model:"gpt-x"}));
+    await act(async () => { await vi.waitFor(async () => expect((await loadSettings(rig.path)).settings.provider.connections[0]).toMatchObject({providerId:"custom:fixture", model:"gpt-x"})); });
+  } finally { await act(async () => root.unmount()); container.remove(); rig.cleanup(); }
+});
+
+it("reports the connection it created so the dialog header stops saying Add, and creates no connection when the base URL is blank", async () => {
+  const rig = createScenarioRig();
+  const { container, root } = await mountAddDrawer(rig);
+  let reported: string | undefined;
+  try {
+    // Re-render through the dialog-style prop so the created-id report is observable.
+    await act(async () => root.render(createElement(ConnectionDrawerFields, {mode:"add", catalog:rig.catalog as never, connections:[], secrets:[], readOnly:false, store:rig.store, customProvider:rig.bridge as never, onConnectionCreated:(id) => { reported = id; }})));
+    await pickCustomTemplate(container);
+    await typeInto(container.querySelector('input[placeholder="e.g. LM Studio"]')!, "Int D Conn");
+    // Base URL deliberately LEFT BLANK: buildCustomProviderCreateRequest refuses,
+    // no record and no connection are written.
+    const noAuth = [...container.querySelectorAll("input[type=checkbox]")].find(x => x.parentElement?.textContent?.includes("doesn't need")) as HTMLInputElement;
+    await act(async () => noAuth.click());
+    await clickCreate(container);
+    await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain("Enter a name and base URL")); });
+    expect(rig.create).not.toHaveBeenCalled();
+    expect((await loadSettings(rig.path)).settings.provider.custom).toBeUndefined();
+    // Now complete the base URL and create: the id IS reported (what the dialog
+    // title keys on) and the record persists its base URL.
+    await typeInto(container.querySelector('input[placeholder="http://localhost:1234/v1"]')!, "http://127.0.0.1:9/v1");
+    await typeInto(container.querySelector('input[placeholder="Enter a model ID"]')!, "m1");
+    await clickCreate(container);
+    await act(async () => { await vi.waitFor(() => expect(reported).toBe("conn-fixture")); });
+    expect((await loadSettings(rig.path)).settings.provider.custom?.[0]).toMatchObject({baseUrl:"http://127.0.0.1:9/v1"});
+  } finally { await act(async () => root.unmount()); container.remove(); rig.cleanup(); }
+});
+
 // ── Drawer polish: the Advanced section's vertical rhythm and rate-input
 // styling, an explicit save confirmation, and a save no longer reordering the
 // offered models ──
