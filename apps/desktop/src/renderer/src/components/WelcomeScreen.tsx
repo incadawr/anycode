@@ -78,6 +78,7 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
   const ready = snapshot?.providerReady === true;
   const connections = snapshot?.settings.provider.connections ?? [];
   const pendingConsent = useStore(store, (s) => s.pendingConsent);
+  const consentSaving = useStore(store, (s) => s.consentSaving);
   const [path, setPath] = useState<"api" | "codex" | "claude" | null>(null);
   const activePath = path ?? (connections.length > 0 ? "api" : null);
 
@@ -237,6 +238,7 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
         {onOpenSettings && <button type="button" className="settings-button" data-open-settings onClick={onOpenSettings}>Open settings</button>}
 
         <ConsentDialog
+          busy={consentSaving}
           open={pendingConsent !== null && !settingsOpen}
           onAccept={() => void store.getState().acceptWeakStorageConsent()}
           onDecline={() => store.getState().declineWeakStorageConsent()}

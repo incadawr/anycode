@@ -1090,6 +1090,7 @@ export function paneHasScope(pane: SettingsPaneId | undefined): boolean {
 export function ProviderSettings({ store = useSettingsStore, addConnectionRequest = 0, onAddConnectionConsumed }: ProviderSettingsProps) {
   const snapshot = useStore(store, (s) => s.snapshot);
   const pendingConsent = useStore(store, (s) => s.pendingConsent);
+  const consentSaving = useStore(store, (s) => s.consentSaving);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState<"add" | "edit">("add");
@@ -1330,6 +1331,7 @@ export function ProviderSettings({ store = useSettingsStore, addConnectionReques
       />
 
       <ConsentDialog
+        busy={consentSaving}
         open={pendingConsent !== null}
         onAccept={() => void store.getState().acceptWeakStorageConsent()}
         onDecline={() => store.getState().declineWeakStorageConsent()}
