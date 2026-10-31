@@ -68,6 +68,32 @@ export function isTailLive(block: TranscriptBlock | undefined): boolean {
 }
 
 /**
+ * The loop-end footer line, exported pure for unit tests (audit D15): the
+ * banner's parts each carry their own unit — "2 turns · 2m 12s · at 00:02".
+ * The wall-clock field is prefixed "at" because a bare "00:02" read as a
+ * second duration whose unit was anyone's guess; the duration itself uses
+ * `formatElapsed`'s lowercase "2m 12s" register. The max_turns stop keeps
+ * its own wording (a turn-limit decision point, TASK.124).
+ */
+export function formatLoopEndLine(
+  block: Extract<TranscriptBlock, { kind: "loop_end" }>,
+  nowMs: number,
+): string {
+  if (block.reason === "max_turns") {
+    return `Stopped: turn limit reached (${block.turns} turns).`;
+  }
+  const parts: string[] = [`${block.turns} turn${block.turns === 1 ? "" : "s"}`];
+  if (block.durationMs !== undefined) {
+    parts.push(formatElapsed(Math.round(block.durationMs / 1000)));
+  }
+  const endTime = formatBlockTime(block.at, nowMs);
+  if (endTime !== null) {
+    parts.push(`at ${endTime.label}`);
+  }
+  return `Turn ended: ${block.reason} (${parts.join(" · ")})`;
+}
+
+/**
  * TASK.31 — Stack consecutive tool-call cards (design: pure renderer-derived
  * projection over `TranscriptBlock[]`). When the agent explores a project it
  * tends to fire a series of adjacent tool calls (Bash, Read, Grep, often a
@@ -1124,15 +1150,7 @@ export function MessageList({
                   title={endTime?.title}
                   className={`message message-loop-end${enterClass(block.id)}`}
                 >
-                  {block.reason === "max_turns"
-                    // TASK.124: the turn cap is a decision point, not a setting
-                    // — the ladder already granted (ceiling_grant rows above)
-                    // or refused. Pointing at Settings would name an action
-                    // that is no longer the one that happened.
-                    ? `Stopped: turn limit reached (${block.turns} turns).`
-                    : `Turn ended: ${block.reason} (${block.turns} turn${block.turns === 1 ? "" : "s"}${
-                        block.durationMs !== undefined ? ` · ${formatElapsed(Math.round(block.durationMs / 1000))}` : ""
-                      }${endTime ? ` · ${endTime.label}` : ""})`}
+                  {formatLoopEndLine(block, Date.now())}
                   {showTryAgainButton(retry, block.id, connection) && (
                     <button type="button" className="retry-try-again-button" onClick={onTryAgain}>
                       Try again

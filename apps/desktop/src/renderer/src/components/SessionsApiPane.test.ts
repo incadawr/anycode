@@ -104,7 +104,7 @@ describe("SessionsApiPaneView (Taskana 4747)", () => {
     const html = render(props({ view: base({ enabled: true }) }));
     expect(html).toMatch(/<details class="connection-drawer-advanced sessions-api-advanced">/);
     expect(html).not.toMatch(/<details[^>]*\sopen/);
-    expect(html).toContain("<summary>Advanced</summary>");
+    expect(html).toContain('<summary class="settings-section-title">Advanced</summary>');
   });
 
   it("the subtitle is not repeated in the pane body (the Settings header prints it once)", () => {

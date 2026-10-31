@@ -17,6 +17,9 @@ import {
   SESSIONS_API_NODE_HINT,
   SESSIONS_API_PANE_ID,
   SESSIONS_API_REGENERATE_CONFIRM,
+  SESSIONS_API_AGENT_PROJECTS_HINT,
+  SESSIONS_API_AGENT_PROJECTS_EMPTY,
+  SESSIONS_API_SHARE_HINT,
 } from "./sessions-api-model.js";
 import type { CommunicationMutationReason, CommunicationStatus } from "../../../shared/communication-config.js";
 
@@ -95,6 +98,22 @@ describe("Sessions API pane model (Taskana 4747)", () => {
     expect(SESSIONS_API_NODE_HINT).toMatch(/Node 22\+/);
     expect(SESSIONS_API_DESCRIPTION).toMatch(/Local only\.$/);
     expect(SESSIONS_API_REGENERATE_CONFIRM).toMatch(/restart the external client's MCP connection/);
+  });
+});
+
+describe("Sessions API pane discoverability copy (audit D9)", () => {
+  it("the project switch is named where it lives: the sidebar project ⋯ menu", () => {
+    expect(SESSIONS_API_AGENT_PROJECTS_HINT).toMatch(/sidebar project ⋯ menu|project ⋯ menu in the sidebar/);
+    expect(SESSIONS_API_AGENT_PROJECTS_EMPTY).toMatch(/sidebar project ⋯ menu|project ⋯ menu in the sidebar/);
+  });
+
+  it("the shared-sessions hint says how a session is shared, not only how many are", () => {
+    expect(SESSIONS_API_SHARE_HINT).toMatch(/session's ⋯ environment menu/);
+    expect(SESSIONS_API_SHARE_HINT).toMatch(/Currently shared/);
+  });
+
+  it("the pane subtitle mentions the per-session switch (sharing is opt-in per session)", () => {
+    expect(SESSIONS_API_DESCRIPTION).toMatch(/sessions you choose/i);
   });
 });
 

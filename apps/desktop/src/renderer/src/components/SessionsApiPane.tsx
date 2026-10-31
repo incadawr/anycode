@@ -28,6 +28,7 @@ import {
   SESSIONS_API_PORT_HINT,
   SESSIONS_API_REGENERATE_CONFIRM,
   SESSIONS_API_REGENERATE_HINT,
+  SESSIONS_API_SHARE_HINT,
   copyConfigEnabled,
   mutationRefusalText,
   parsePortInput,
@@ -141,7 +142,7 @@ export function SessionsApiPaneView(props: SessionsApiPaneViewProps) {
             <li className="sessions-api-step">
               <div className="sessions-api-step-body">
                 <div className="sessions-api-step-title">Choose which sessions to share</div>
-                <p className="settings-field-hint">{`Open a session's ⋯ environment menu and turn on Sessions API. Currently shared: ${shared}.`}</p>
+                <p className="settings-field-hint">{SESSIONS_API_SHARE_HINT.replace("{count}", String(shared))}</p>
               </div>
             </li>
             <li className="sessions-api-step">
@@ -189,7 +190,7 @@ export function SessionsApiPaneView(props: SessionsApiPaneViewProps) {
       )}
 
       <details className="connection-drawer-advanced sessions-api-advanced">
-        <summary>Advanced</summary>
+        <summary className="settings-section-title">Advanced</summary>
 
         <div className="sessions-api-row sessions-api-folders">
           <div className="sessions-api-row-main">

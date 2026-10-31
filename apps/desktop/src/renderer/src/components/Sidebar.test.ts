@@ -25,6 +25,7 @@ import {
   parseOlderThanDays,
   agentProjectMenuItem,
   PROJECT_MENU_ITEM_COUNT,
+  removeProjectDisabledReason,
   sidebarConfirmCopy,
   singleDeleteConfirm,
   SIDEBAR_GROUP_ROW_LIMIT,
@@ -791,5 +792,21 @@ describe("agent-open project switch (Taskana 4768)", () => {
     expect("openedByAgent" in rows.find((r) => r.tabId === "t-human")!).toBe(false);
     const source = readFileSync(new URL("./Sidebar.tsx", import.meta.url), "utf8");
     expect(source).toMatch(/sidebar-row-agent/);
+  });
+});
+
+describe("disabled \"Remove project from list\" explains itself without hover", () => {
+  it("the disabled item carries its reason as visible text, not only a title tooltip", () => {
+    expect(removeProjectDisabledReason(true)).toBe("Close this project's open tasks first.");
+    expect(removeProjectDisabledReason(false)).toBeNull();
+    // The reason is real on-screen text inside the item (a `title` alone only
+    // surfaces on hover, and screen readers skip disabled buttons in some
+    // composite menus).
+    const source = readFileSync(new URL("./Sidebar.tsx", import.meta.url), "utf8");
+    expect(source).toMatch(/sidebar-project-menu-item-note/);
+    expect(source).toMatch(/\{removeProjectDisabledReason\(menuHasOpenRow\) !== null &&/);
+    // The note is a rendered block (CSS), so it is layout, not a stray span.
+    const css = readFileSync(new URL("../app.css", import.meta.url), "utf8");
+    expect(css).toMatch(/\.sidebar-project-menu-item-note\s*\{/);
   });
 });
