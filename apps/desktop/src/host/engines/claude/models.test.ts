@@ -189,6 +189,47 @@ describe("Claude permission presets — frozen table (cut §1.4)", () => {
   });
 });
 
+describe("ClaudeModelCatalog.resolveId — a wire alias and a full CLI id both name the same model", () => {
+  const catalog = ClaudeModelCatalog.fromInitialize(liveModels());
+
+  it("accepts the catalog `value` (what the picker sends) unchanged", () => {
+    expect(catalog.resolveId("haiku")).toBe("haiku");
+    expect(catalog.resolveId("sonnet")).toBe("sonnet");
+  });
+
+  it("maps the CLI's FULL resolved id onto the value that may go on the wire", () => {
+    // The reported defect: `create_session {model: "claude-haiku-…"}` was
+    // matched only against `value`, so every full-id request looked unknown to
+    // the engine and was silently replaced by the default.
+    expect(catalog.resolveId("claude-haiku-4-5-20251001")).toBe("haiku");
+    expect(catalog.resolveId("claude-sonnet-5")).toBe("sonnet");
+    expect(catalog.resolveId("claude-fable-5")).toBe("claude-fable-5[1m]");
+  });
+
+  it("prefers a concrete alias over `default` for an id both resolve to", () => {
+    expect(catalog.resolveId("claude-opus-4-8[1m]")).toBe("opus[1m]");
+  });
+
+  it("resolves the exact reported shape: value `haiku`, resolvedModel `claude-haiku-5-5`", () => {
+    const synthetic = ClaudeModelCatalog.fromInitialize([
+      { value: "default", resolvedModel: "claude-opus-5", displayName: "Default" },
+      { value: "haiku", resolvedModel: "claude-haiku-5-5", displayName: "Haiku" },
+    ]);
+    expect(synthetic.resolveId("claude-haiku-5-5")).toBe("haiku");
+    expect(synthetic.resolveId("haiku")).toBe("haiku");
+  });
+
+  it("answers undefined for an id nothing offers — never a guess at a default", () => {
+    expect(catalog.resolveId("claude-imaginary-9")).toBeUndefined();
+    expect(catalog.resolveId("")).toBeUndefined();
+  });
+
+  it("an unreadable catalog resolves nothing (fail-closed)", () => {
+    const empty = ClaudeModelCatalog.fromInitialize(undefined);
+    expect(empty.resolveId("haiku")).toBeUndefined();
+  });
+});
+
 describe("ClaudeModelCatalog.selectableForResolved — the ambiguous read-back (cut §1.5 hazard (б))", () => {
   const catalog = ClaudeModelCatalog.fromInitialize(liveModels());
 

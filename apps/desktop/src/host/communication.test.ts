@@ -770,6 +770,150 @@ describe("session effort configuration and status", () => {
   });
 });
 
+// ── Session-wide model configuration (Sessions API `create_session` → `set_session_model`) ──
+//
+// A model named at creation time must be applied AND confirmed on the real
+// session before it is published, and a value the session cannot run must be a
+// structured `invalid_model` — never a quiet fall back to the engine's default.
+// These tests drive the host operation directly on sessions built with a native
+// engine seam (the harness is core-only).
+
+/**
+ * A Claude-shaped seam: `selectModel` applies over an ACKNOWLEDGED control
+ * request (`selectModelAndWait`), and a requested id may be the CLI's FULL
+ * `resolvedModel` rather than the catalog `value` that goes on the wire.
+ * Modeled on the live Claude catalog's two-ids-per-model shape.
+ */
+class AcknowledgedModelEngine extends NativeEffortEngine {
+  /** The CLI rejects the change even though validation passed. */
+  refuseAck = false;
+  /** The account's model list could not be read: nothing validates. */
+  unreadableCatalog = false;
+  private readonly aliases = new Map<string, string>();
+
+  override models(): ReturnType<NativeEffortEngine["models"]> {
+    return this.unreadableCatalog ? [] : super.models();
+  }
+
+  /** Names `value` (the wire id) by its full resolved id as well. */
+  alias(fullId: string, value: string): this {
+    this.aliases.set(fullId, value);
+    return this;
+  }
+
+  resolveModelId(requested: string): string | null {
+    const resolved = this.aliases.get(requested) ?? requested;
+    return this.models().some((choice) => choice.id === resolved) ? resolved : null;
+  }
+
+  async selectModelAndWait(id: string): Promise<EngineSettingsChange> {
+    // The real engine advances its record only AFTER the ack lands, so a
+    // rejected change leaves the previous model in place.
+    if (this.refuseAck) return { ok: false, reason: "Claude refused the model change." };
+    return this.selectModel(id);
+  }
+}
+
+describe("set_session_model — a requested model is applied and confirmed, never replaced by the default", () => {
+  it("a full resolved id and its alias both configure the SAME model", async () => {
+    const engine = new AcknowledgedModelEngine([{ id: "default" }, { id: "haiku" }]).alias("claude-haiku-5-5", "haiku");
+    const f = nativeEffortSession(engine, "model-session");
+    try {
+      const full = await f.session.communicationSetModel({ model: "claude-haiku-5-5" });
+      expect(full.ok).toBe(true);
+      if (!full.ok) throw new Error("expected the full id to be accepted");
+      expect(full.status.model).toBe("haiku");
+
+      const alias = await f.session.communicationSetModel({ model: "haiku" });
+      expect(alias.ok).toBe(true);
+      if (!alias.ok) throw new Error("expected the alias to be accepted");
+      expect(alias.status.model).toBe("haiku");
+    } finally { f.close(); }
+  });
+
+  it("an id the account offers nothing for is an explicit invalid_model listing the available ids", async () => {
+    const engine = new AcknowledgedModelEngine([{ id: "default" }, { id: "haiku" }]).alias("claude-haiku-5-5", "haiku");
+    const f = nativeEffortSession(engine, "model-unknown");
+    try {
+      const outcome = await f.session.communicationSetModel({ model: "claude-imaginary-9" });
+      expect(outcome).toEqual({
+        ok: false,
+        reason: "invalid_model",
+        detail: 'engine=codex; model="claude-imaginary-9"; available=["default","haiku"]; reason=not_advertised',
+      });
+      // Refused WITHOUT touching anything: the previous model survives.
+      expect(f.session.communicationStatus().model).toBe("default");
+      expect(engine.pendingSnapshot()).toBeNull();
+    } finally { f.close(); }
+  });
+
+  it("a malformed value and an unreadable catalog are classified, never guessed at", async () => {
+    const engine = new AcknowledgedModelEngine([{ id: "default" }]);
+    const f = nativeEffortSession(engine, "model-malformed");
+    try {
+      expect(await f.session.communicationSetModel({ model: "   " })).toMatchObject({ ok: false, reason: "invalid_model" });
+      expect(await f.session.communicationSetModel({ model: 42 })).toMatchObject({
+        ok: false,
+        reason: "invalid_model",
+        detail: expect.stringContaining("reason=invalid_type") as unknown as string,
+      });
+      expect(await f.session.communicationSetModel({})).toMatchObject({ ok: false, reason: "not_ready" });
+    } finally { f.close(); }
+
+    // A catalog that could not be read validates NOTHING (fail-closed).
+    const empty = new AcknowledgedModelEngine([{ id: "default" }]);
+    empty.unreadableCatalog = true;
+    const g = nativeEffortSession(empty, "model-no-catalog");
+    try {
+      expect(await g.session.communicationSetModel({ model: "haiku" })).toMatchObject({
+        ok: false,
+        reason: "invalid_model",
+        detail: 'engine=codex; model="haiku"; available=[]; reason=no_models',
+      });
+    } finally { g.close(); }
+  });
+
+  it("a rejected acknowledgement is not_ready — the model did not change and the default is never claimed", async () => {
+    const engine = new AcknowledgedModelEngine([{ id: "default" }, { id: "haiku" }]).alias("claude-haiku-5-5", "haiku");
+    engine.refuseAck = true;
+    const f = nativeEffortSession(engine, "model-ack-refused");
+    try {
+      expect(await f.session.communicationSetModel({ model: "haiku" })).toEqual({
+        ok: false,
+        reason: "not_ready",
+        detail: "Claude refused the model change.",
+      });
+      expect(f.session.communicationStatus().model).toBe("default");
+    } finally { f.close(); }
+  });
+
+  it("a synchronous (codex-shaped) seam is accepted on membership and refuses an unknown id", async () => {
+    const engine = new NativeEffortEngine([{ id: "gpt-6.1-terra" }, { id: "gpt-6.1-sol" }]);
+    const f = nativeEffortSession(engine, "codex-model");
+    try {
+      const accepted = await f.session.communicationSetModel({ model: "gpt-6.1-sol" });
+      expect(accepted.ok).toBe(true);
+      if (!accepted.ok) throw new Error("expected the selected model to be accepted");
+      expect(accepted.status.model).toBe("gpt-6.1-sol");
+      expect(await f.session.communicationSetModel({ model: "gpt-imaginary" })).toMatchObject({
+        ok: false,
+        reason: "invalid_model",
+      });
+    } finally { f.close(); }
+  });
+
+  it("the core engine has no engine model control (its model picks a connection instead)", async () => {
+    const h = createHarness({ steps: [] });
+    try {
+      expect(await h.session.communicationSetModel({ model: "anything" })).toEqual({
+        ok: false,
+        reason: "not_ready",
+        detail: "this engine has no model control",
+      });
+    } finally { h.close(); }
+  });
+});
+
 /** A synthetic provider entry — the given models only, no catalog lookup. */
 function syntheticEntry(models: Array<{ id: string; reasoning?: boolean; effortLevels?: ReasoningEffort[]; supportsExplicitOff?: boolean }>): CatalogProviderEntry {
   return { id: "synthetic", name: "Synthetic", baseUrl: "", models } as unknown as CatalogProviderEntry;

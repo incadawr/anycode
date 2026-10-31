@@ -1070,6 +1070,20 @@ export class CodexEngine implements SessionEngine {
    * `turn/start` carries it. An id the catalog does not contain is refused
    * before any RPC, so an unsupported/removed model can never burn a turn (L7).
    */
+  /**
+   * The id this session would run for a caller-requested model, or null when
+   * the account does not offer it — the lookup behind the Sessions API's
+   * `set_session_model` (an unknown request is REFUSED there, never replaced by
+   * the default). Codex's live `model/list` carries ONE id per model (every
+   * entry has `id === model`), so this is a plain membership check: there is no
+   * alias/full-id split to translate, unlike Claude's catalog.
+   */
+  resolveModelId(requested: string): string | null {
+    const settings = this.settings;
+    if (settings === undefined || !settings.catalog.available) return null;
+    return settings.catalog.has(requested) ? requested : null;
+  }
+
   selectModel(id: string): CodexSettingsChange {
     const settings = this.settings;
     if (settings === undefined) return { ok: false, reason: "Codex model selection is unavailable for this session." };
