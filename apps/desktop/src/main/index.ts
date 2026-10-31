@@ -60,6 +60,7 @@ import {
   MessageChannelMain,
   app,
   dialog,
+  ipcMain,
   nativeImage,
   net,
   powerMonitor,
@@ -264,6 +265,8 @@ import {
   type ClaudeOnboardingSnapshot,
 } from "./claude-ipc.js";
 import { SYSTEM_PROFILE_ID, codexProfilesRoot, resolveCodexProfile } from "./codex-profiles.js";
+import { SYSTEM_CODEX_ACCOUNT, type CodexAccountOption } from "../shared/codex-account.js";
+import { CODEX_TAB_ACCOUNT_CHANNEL, handleCodexTabAccount } from "./codex-tab-account.js";
 import { registerCodexRolloutIpc } from "./codex-rollout-ipc.js";
 import { registerCodexInstallIpc } from "./codex-install.js";
 import { runCodexManagedUpgrade } from "./codex-managed-upgrade.js";
@@ -1879,6 +1882,17 @@ async function resolveResumePin(meta: {
 }
 
 /**
+ * Main's Codex account list as a caller may name it: the always-present
+ * `system` pseudo-account plus every persisted profile. Read fresh off the
+ * in-memory settings the onMutation reload maintains — a profile created or
+ * deleted a second ago is already reflected. Labels are the user's own; ids are
+ * the registry's (never paths).
+ */
+function listCodexAccounts(): CodexAccountOption[] {
+  return [SYSTEM_CODEX_ACCOUNT, ...(settings?.codex?.profiles ?? []).map((profile) => ({ id: profile.id, label: profile.label }))];
+}
+
+/**
  * Resolves an opaque Codex profile id — a new tab's draft pick, or a resumed
  * session's persisted `codexProfileId` — against the profile registry
  * (codex-profiles cut §3.3, W3-F) into the argv facts main/tabs.ts forwards.
@@ -1888,12 +1902,20 @@ async function resolveResumePin(meta: {
  * fail-closed — a deleted/renamed real profile must never silently fall back
  * to the ambient account (same custody rule as `resolveResumePin`'s
  * connection refusal above).
+ *
+ * `undefined` asks for the DEFAULT account (`settings.codex.activeProfileId`,
+ * set by Settings → Codex's "Make default", else `system`). This is the one
+ * resolution every pick-less Codex session — the start screen and the Sessions
+ * API — goes through, so "no explicit pick" can never again mean "the owner's
+ * ambient ~/.codex plan". A Codex subagent inherits its tab's account, so it
+ * follows the same default without a separate path.
  */
-async function resolveCodexProfileForTab(profileId: string): Promise<ResolveCodexProfileResult> {
-  if (profileId === SYSTEM_PROFILE_ID) {
+async function resolveCodexProfileForTab(profileId: string | undefined): Promise<ResolveCodexProfileResult> {
+  const wanted = profileId ?? settings?.codex?.activeProfileId ?? SYSTEM_PROFILE_ID;
+  if (wanted === SYSTEM_PROFILE_ID) {
     return { ok: true };
   }
-  const record = settings?.codex?.profiles?.find((profile) => profile.id === profileId);
+  const record = settings?.codex?.profiles?.find((profile) => profile.id === wanted);
   if (record === undefined) {
     return { ok: false };
   }
@@ -2487,6 +2509,11 @@ void app.whenReady().then(async () => {
     currentSettings,
     primeNewSessionPin,
     resolveResumePin,
+    // The Sessions API's Codex account: an explicit `account` (id or label)
+    // matched against this same list; omitted ⇒ `resolveCodexProfile(undefined)`
+    // = the default account chosen in Settings → Codex.
+    resolveCodexProfile: resolveCodexProfileForTab,
+    listCodexAccounts: async () => listCodexAccounts(),
     randomUUID,
     agentOpenedSessions,
     agentSessionTitles,
@@ -3211,6 +3238,22 @@ void app.whenReady().then(async () => {
     // refresh before an update_required refusal is cached. Absent (self-check)
     // = legacy behavior.
     ...(codexRefusalRefresh !== null ? { refreshPolicyBeforeRefusal: () => codexRefusalRefresh.refreshBeforeRefusal() } : {}),
+  });
+
+  // Session account line (context popover): "which Codex account is this tab
+  // running on?" Read-only and presentation-only — the answer is the tab's own
+  // resolved profile id (`system` when it never pinned one) plus its registry
+  // label, never a credential or a path.
+  ipcMain.handle(CODEX_TAB_ACCOUNT_CHANNEL, (_event, tabId: unknown) => {
+    const id = typeof tabId === "string" && tabId !== "" ? tabId : undefined;
+    if (id === undefined) return { ok: false, reason: "unknown_tab" };
+    return handleCodexTabAccount(
+      {
+        tab: (tabId) => manager?.getTab(tabId),
+        accounts: async () => ({ activeProfileId: settings?.codex?.activeProfileId, profiles: settings?.codex?.profiles }),
+      },
+      id,
+    );
   });
 
   // Kick off the first discovery+doctor pass in the background (TASK.41 п.1:

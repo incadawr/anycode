@@ -119,14 +119,17 @@ function rig(options: {
   // (through resolveResumePin) and read fail-closed by the fork's `env`.
   const cache = new Map<string, NodeJS.ProcessEnv>();
   const forkEnvs: Array<NodeJS.ProcessEnv | undefined> = [];
+  /** Every fork's argv — the wire a tab really boots with (account/profile flags included). */
+  const forkArgs: string[][] = [];
   const hosts: FakeHost[] = [];
   /** Every internal control-plane operation the created hosts received, in order. */
   const operations: string[] = [];
   /** Answers waiting for the test to release them (deferred replies only). */
   const deferredReplies: DeferredReply[] = [];
-  const fork: HostForkFn = (_entry, _args, opts) => {
+  const fork: HostForkFn = (_entry, args, opts) => {
     if (options.failFork) throw new Error("fork failed");
     forkEnvs.push(opts?.env as NodeJS.ProcessEnv | undefined);
+    forkArgs.push([...args]);
     const host = new FakeHost();
     hosts.push(host);
     host.postMessage.mockImplementation((message: unknown) => {
@@ -244,7 +247,7 @@ function rig(options: {
     listTabs: () => manager.listTabs(),
     ...overrides,
   });
-  return { manager, deps, forkEnvs, sessions, exposed, posted, agentOpenedSessions, agentSessionTitles, hosts, operations, deferredReplies };
+  return { manager, deps, forkEnvs, forkArgs, sessions, exposed, posted, agentOpenedSessions, agentSessionTitles, hosts, operations, deferredReplies };
 }
 
 describe("create_session — the production creation path primes a non-active connection before the fork", () => {
@@ -1005,5 +1008,92 @@ describe("create_session — effort preparation before publication", () => {
     expect(r.forkEnvs[0]?.ANYCODE_CONNECTION_ID).toBe("conn-glm");
     expect(sequence).toEqual(["effort-configured", "registered"]);
     expect(r.operations).toEqual(["get_session_status", "set_session_effort"]);
+  });
+});
+
+describe("create_session — Codex account", () => {
+  const accounts = [
+    { id: "system", label: "System" },
+    { id: "work", label: "Work" },
+  ];
+  const codexDeps = (overrides: Partial<CreateSessionByAgentDeps> = {}): Partial<CreateSessionByAgentDeps> => ({
+    listCodexAccounts: async () => accounts,
+    resolveCodexProfile: async (profileId) =>
+      profileId === undefined || profileId === "system"
+        ? { ok: true as const }
+        : profileId === "work"
+          ? { ok: true as const, codexProfile: { id: "work" } }
+          : { ok: false as const },
+    ...overrides,
+  });
+
+  it("an `account` label starts the tab on THAT profile (argv), not on the ambient account", async () => {
+    const r = rig();
+    const outcome = await createSessionForAgent(
+      { workspace: "/ws", engine: "codex", account: "Work" },
+      r.deps(codexDeps()),
+    );
+    expect(outcome.ok).toBe(true);
+    expect(r.forkArgs[0]).toContain("--codex-profile");
+    expect(r.forkArgs[0]?.slice(r.forkArgs[0].indexOf("--codex-profile") + 1)).toContain("work");
+  });
+
+  it("an `account` id works the same way (ids are what a caller reads off the API list)", async () => {
+    const r = rig();
+    const outcome = await createSessionForAgent(
+      { workspace: "/ws", engine: "codex", account: "WORK" },
+      r.deps(codexDeps()),
+    );
+    expect(outcome.ok).toBe(true);
+    expect(r.forkArgs[0]).toContain("work");
+  });
+
+  it("with no `account` the DEFAULT account is resolved — `resolveCodexProfile(undefined)`, never a silent system spawn", async () => {
+    const r = rig();
+    const resolveCodexProfile = vi.fn(async (profileId: string | undefined) =>
+      profileId === undefined ? { ok: true as const, codexProfile: { id: "work" } } : { ok: false as const },
+    );
+    const outcome = await createSessionForAgent(
+      { workspace: "/ws", engine: "codex" },
+      r.deps(codexDeps({ resolveCodexProfile })),
+    );
+    expect(outcome.ok).toBe(true);
+    expect(resolveCodexProfile).toHaveBeenCalledWith(undefined);
+    expect(r.forkArgs[0]).toContain("--codex-profile");
+    expect(r.forkArgs[0]).toContain("work");
+  });
+
+  it("an unknown account is refused `invalid_account` with every candidate, and no tab is forked", async () => {
+    const r = rig();
+    const outcome = await createSessionForAgent(
+      { workspace: "/ws", engine: "codex", account: "nope" },
+      r.deps(codexDeps()),
+    );
+    expect(outcome).toMatchObject({ ok: false, reason: "invalid_account" });
+    if (outcome.ok) throw new Error("expected a refusal");
+    expect(outcome.detail).toContain("System (system)");
+    expect(outcome.detail).toContain("Work (work)");
+    expect(r.forkEnvs).toHaveLength(0);
+  });
+
+  it("an account the registry refuses after matching is refused fail-closed, never spawned on the wrong home", async () => {
+    const r = rig();
+    const outcome = await createSessionForAgent(
+      { workspace: "/ws", engine: "codex", account: "work" },
+      r.deps(codexDeps({ resolveCodexProfile: async () => ({ ok: false as const }) })),
+    );
+    expect(outcome).toMatchObject({ ok: false, reason: "invalid_account" });
+    expect(r.forkEnvs).toHaveLength(0);
+  });
+
+  it("the account argument is not consulted for a core session", async () => {
+    const r = rig();
+    const listCodexAccounts = vi.fn(async () => accounts);
+    const outcome = await createSessionForAgent(
+      { workspace: "/ws", engine: "core", account: "Work" },
+      r.deps(codexDeps({ listCodexAccounts })),
+    );
+    expect(outcome.ok).toBe(true);
+    expect(listCodexAccounts).not.toHaveBeenCalled();
   });
 });

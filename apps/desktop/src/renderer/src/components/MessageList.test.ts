@@ -801,3 +801,32 @@ describe("topmostVisibleUserIndex (TASK.48 minimap scroll-spy core, 4086 follow-
     expect(spy([900], 100, 500)).toBe(null);
   });
 });
+
+describe("usage limit — Codex account escape hatch", () => {
+  const blocks = (): TranscriptBlock[] => [
+    { kind: "usage_limit", id: "usage-1", notice: { kind: "usage_limit", code: 1308, resetAt: Date.UTC(2026, 10, 1, 0, 0, 0) } },
+  ];
+  const base = {
+    blocks: blocks(),
+    turn: { status: "idle" as const, turnId: null, requestId: null },
+    workspace: null,
+    connection: "ready" as const,
+    retry: null,
+    onTryAgain: () => {},
+    continueOffer: null,
+    onContinue: () => {},
+    promptQueueLength: 0,
+  };
+
+  it("offers \"Continue on another account\" on a Codex session", () => {
+    const html = renderToStaticMarkup(
+      createElement(MessageList, { ...base, onSwitchCodexAccount: () => {} }),
+    );
+    expect(html).toContain("Continue on another account");
+  });
+
+  it("never offers it where the surface did not arm a Codex account switch (core/Claude quota errors)", () => {
+    const html = renderToStaticMarkup(createElement(MessageList, base));
+    expect(html).not.toContain("Continue on another account");
+  });
+});

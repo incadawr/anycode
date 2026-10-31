@@ -48,7 +48,7 @@ import { HostBanner } from "./components/HostBanner.js";
 import { Composer, shouldEnqueue } from "./components/Composer.js";
 import type { UiToHostMessage } from "../../shared/protocol.js";
 import { FOCUS_MODE_MENU_EVENT } from "./components/ModeMenu.js";
-import { RUN_ACTION_EVENT } from "./slash-menu.js";
+import { RUN_ACTION_EVENT, openSettingsCodexAccounts } from "./slash-menu.js";
 import { ConnectedPermissionModal } from "./components/PermissionModal.js";
 import { ParentChildPermissionModal } from "./components/ParentChildPermissionModal.js";
 import { Collapse as CollapseIcon } from "./components/icons.js";
@@ -457,6 +457,7 @@ export function SessionSurface({ tabId, onToast, suppressPermissionModal = false
           onContinue={handleContinue}
           promptQueueLength={promptQueueLength}
           {...(rewindProp !== undefined ? { rewind: rewindProp } : {})}
+          {...(engine?.id === "codex" ? { onSwitchCodexAccount: openSettingsCodexAccounts } : {})}
         />
 
         {waitingForNetwork && turn.status === "running" && (

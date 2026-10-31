@@ -466,6 +466,10 @@ declare global {
         deleteProfile(id: string): Promise<CodexProfileGuardResult>;
         setActiveProfile(id: string): Promise<CodexProfileGuardResult>;
         repairProfileLink(id: string): Promise<CodexProfileGuardResult>;
+        // Session account line (context popover): the account THIS tab runs on
+        // — registry id + label + whether it is the default for new sessions.
+        // Read-only presentation data; never a credential or a path.
+        tabAccount(tabId: string): Promise<import("../../shared/codex-account.js").CodexTabAccountResult>;
         // TASK.53 (cut §7, amended §A4): the binary/manifest control plane.
         install(version?: string): Promise<CodexInstallResult>;
         acceptRisk(version: string): Promise<{ ok: boolean; error?: string }>;

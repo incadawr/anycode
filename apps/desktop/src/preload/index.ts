@@ -56,6 +56,7 @@ import {
   type CommunicationRegenerateResult,
 } from "../shared/communication-config.js";
 import { SCOPE_WORKSPACES_LIST_CHANNEL, SCOPE_WORKSPACES_RESOLVE_CHANNEL, type ScopeWorkspacesListResult } from "../shared/scope-workspaces.js";
+import type { CodexTabAccountResult } from "../shared/codex-account.js";
 import {
   BROWSER_ACCESS_CHANGED_CHANNEL,
   BROWSER_ACCESS_GET_CHANNEL,
@@ -353,6 +354,8 @@ const CODEX_PROFILE_CREATE_CHANNEL = "anycode:codex-profile-create";
 const CODEX_PROFILE_DELETE_CHANNEL = "anycode:codex-profile-delete";
 const CODEX_PROFILE_SET_ACTIVE_CHANNEL = "anycode:codex-profile-set-active";
 const CODEX_PROFILE_REPAIR_LINK_CHANNEL = "anycode:codex-profile-repair-link";
+/** Read-only "which Codex account is this tab on" (main/codex-tab-account.ts is the byte-identical source of truth). */
+const CODEX_TAB_ACCOUNT_CHANNEL = "anycode:codex-tab-account";
 // TASK.53 (codex-profiles cut §7, amended §A4): the binary/manifest control
 // plane — main/codex-install.ts holds the byte-identical source of truth.
 const CODEX_INSTALL_CHANNEL = "anycode:codex-install";
@@ -852,6 +855,11 @@ contextBridge.exposeInMainWorld("anycode", {
       ipcRenderer.invoke(CODEX_PROFILE_SET_ACTIVE_CHANNEL, { id }) as Promise<CodexProfileGuardResult>,
     repairProfileLink: (id: string): Promise<CodexProfileGuardResult> =>
       ipcRenderer.invoke(CODEX_PROFILE_REPAIR_LINK_CHANNEL, { id }) as Promise<CodexProfileGuardResult>,
+    // Session account line (context popover): the account THIS tab runs on —
+    // id + registry label + whether it is the default. Never a credential, never
+    // a path (main resolves it from its own live tab/registry state).
+    tabAccount: (tabId: string): Promise<CodexTabAccountResult> =>
+      ipcRenderer.invoke(CODEX_TAB_ACCOUNT_CHANNEL, tabId) as Promise<CodexTabAccountResult>,
     // TASK.53 (cut §7, amended §A4): the binary/manifest control plane.
     install: (version?: string): Promise<CodexInstallResult> =>
       ipcRenderer.invoke(CODEX_INSTALL_CHANNEL, version ? { version } : undefined) as Promise<CodexInstallResult>,

@@ -1,4 +1,5 @@
 import { modelCapabilitiesFor, modelOverrideFor } from "../../../shared/model-overrides.js";
+import { SYSTEM_CODEX_ACCOUNT_ID } from "../../../shared/codex-account.js";
 import { resolveProfileRoles, rolesPatch } from "../../../shared/role-profiles.js";
 /**
  * "New Task" start screen (slice P7.12 §4.5 / intake F5#1a, extended by F5#1b
@@ -531,19 +532,27 @@ export function shouldShowCodexProfileChip(isCodexDraft: boolean, profiles: read
 }
 
 /**
- * The chip's displayed label: the draft's explicit pick once made, else
- * "System" — the same label for BOTH "never touched the chip" and "picked a
- * profile since removed from the list", so the chip never claims an account
- * that `createStartTabRequest` (start-session.ts) would not actually submit
- * (an absent `codexProfileId` resolves to the `system` pseudo-profile,
- * shared/tabs.ts's own documented default). Exported for unit testing.
+ * The chip's displayed label: the draft's explicit pick once made, else the
+ * account a submission would ACTUALLY start on — the configured default
+ * (`settings.codex.activeProfileId`), which is `system` when
+ * nothing was ever made default. Both "never touched the chip" and "the draft
+ * points at a profile since removed" show that same real identity, so the chip
+ * never claims an account `createStartTabRequest` (start-session.ts) would not
+ * submit. A non-system default carries its own "(default)" marker because
+ * otherwise the chip would silently name someone else's plan. Exported for unit
+ * testing.
  */
 export function computeCodexProfileChipLabel(
   draftCodexProfileId: string | undefined,
   profiles: readonly CodexProfileChipOption[],
+  defaultProfileId?: string,
 ): string {
   if (draftCodexProfileId === undefined) {
-    return "System";
+    const defaultLabel =
+      defaultProfileId === undefined || defaultProfileId === SYSTEM_CODEX_ACCOUNT_ID
+        ? undefined
+        : profiles.find((profile) => profile.id === defaultProfileId)?.label;
+    return defaultLabel === undefined ? "System" : `${defaultLabel} (default)`;
   }
   return profiles.find((profile) => profile.id === draftCodexProfileId)?.label ?? "System";
 }
@@ -625,6 +634,10 @@ export function StartScreen({ onToast }: StartScreenProps) {
   // fetched the same "once per codex-selected transition, live-refreshed via
   // engines-changed" way as `codexModels` above.
   const [codexProfileOptions, setCodexProfileOptions] = useState<readonly CodexProfileChipOption[]>([]);
+  // the configured default account — what a submission with no
+  // explicit pick actually starts on. Kept beside the catalog because both come
+  // from the same `listProfiles()` snapshot.
+  const [codexDefaultProfileId, setCodexDefaultProfileId] = useState<string | undefined>(undefined);
   const [codexProfileMenuOpen, setCodexProfileMenuOpen] = useState(false);
   const codexProfileRootRef = useRef<HTMLDivElement>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -823,7 +836,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
   // codex-profiles cut §3.3/W3-F: same "plain derived value ahead of the
   // draft===null early return" discipline as the other Codex draft values above.
   const showCodexProfileChip = shouldShowCodexProfileChip(codexEngineSelected, codexProfileOptions);
-  const codexProfileChipLabel = computeCodexProfileChipLabel(draft?.codexProfileId, codexProfileOptions);
+  const codexProfileChipLabel = computeCodexProfileChipLabel(draft?.codexProfileId, codexProfileOptions, codexDefaultProfileId);
 
   useEffect(() => {
     let cancelled = false;
@@ -940,6 +953,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
           }
           const options = deriveCodexProfileOptions(snapshot.profiles);
           setCodexProfileOptions(options);
+          setCodexDefaultProfileId(snapshot.activeProfileId);
           // R3-2 facet i: the profile the draft points at may have just
           // dropped out of this fresh catalog (deleted/renamed while the
           // draft stayed open) — sanitize immediately so the chip's
@@ -1550,7 +1564,12 @@ export function StartScreen({ onToast }: StartScreenProps) {
             {codexProfileMenuOpen && (
               <div className="model-pill-popover" role="menu" aria-label="Codex account">
                 {codexProfileOptions.map((profile) => {
-                  const current = profile.id === draft.codexProfileId;
+                  // With no explicit pick the DEFAULT account is what will be
+                  // submitted, so it is the row that reads as checked.
+                  // `system` has no row here — the chip's own "System" label
+                  // already stands for it.
+                  const current = profile.id === (draft.codexProfileId ?? codexDefaultProfileId);
+                  const isDefault = profile.id === codexDefaultProfileId;
                   return (
                     <button
                       key={profile.id}
@@ -1565,6 +1584,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
                         {current ? <Check /> : null}
                       </span>
                       <span className="model-pill-item-name">{profile.label}</span>
+                      {isDefault && <span className="model-pill-item-default">default</span>}
                     </button>
                   );
                 })}

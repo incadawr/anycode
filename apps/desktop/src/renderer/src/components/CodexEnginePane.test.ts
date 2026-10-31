@@ -15,6 +15,7 @@ import {
   alternateBinaryChoices,
   canRepairLink,
   canSignIn,
+  codexDefaultAccountAction,
   codexQuotaLines,
   codexVersionWarningNotice,
   deriveBinaryActions,
@@ -736,5 +737,22 @@ describe("Taskana 4092 — 127 diagnosis + alternate binary choices", () => {
       expect(result.detail).toBe("Codex version check exited with code 127");
       expect(result.tone).toBe("error");
     });
+  });
+});
+
+// ── default account ──
+
+describe("codexDefaultAccountAction (Settings → Codex \"Make default\")", () => {
+  it("marks exactly the configured active profile as Default and hides its own action", () => {
+    expect(codexDefaultAccountAction("acc2", "acc2")).toEqual({ isDefault: true, showMakeDefault: false });
+  });
+
+  it("offers \"Make default\" on every other account, including system", () => {
+    expect(codexDefaultAccountAction("work", "acc2")).toEqual({ isDefault: false, showMakeDefault: true });
+    expect(codexDefaultAccountAction("system", "acc2")).toEqual({ isDefault: false, showMakeDefault: true });
+  });
+
+  it("marks system as Default when nothing else is configured (an absent activeProfileId means system)", () => {
+    expect(codexDefaultAccountAction("system", "system")).toEqual({ isDefault: true, showMakeDefault: false });
   });
 });

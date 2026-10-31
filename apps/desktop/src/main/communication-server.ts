@@ -39,6 +39,14 @@ const createSessionSchema = z.object({
   engine: z.enum(["core", "codex", "claude"]).optional(),
   model: z.string().min(1).max(128).optional(),
   /**
+   * Codex account for the new session — a profile id or its label, exactly as
+   * listed in Settings → Codex. Resolved against main's own registry (labels
+   * may repeat, so an ambiguous one is refused `invalid_account` with the
+   * candidates); only meaningful for `engine: "codex"`, where omitting it
+   * starts on the configured default account.
+   */
+  account: z.string().min(1).max(128).optional(),
+  /**
    * Reasoning effort for the new session. Deliberately `unknown`: the allowed
    * values are MODEL-dependent (native engines advertise free-form strings), so
    * they cannot be a static enum here. The raw value travels to the host's
@@ -77,11 +85,13 @@ const CLOSE_REFUSAL_TEXT: { [K in CloseSessionRefusal]: string } = {
 };
 const closeRefusal = (code: CloseSessionRefusal) => new Error(`close_session ${code}: ${CLOSE_REFUSAL_TEXT[code]}`);
 /** Taskana 4768: fixed create_session refusal codes, prefixed in error text. */
-export type CreateSessionRefusal = "not_allowed" | "not_trusted" | "folder_not_found" | "rate_limited" | "too_many" | "not_ready" | "invalid_model" | "invalid_effort";
+export type CreateSessionRefusal = "not_allowed" | "not_trusted" | "folder_not_found" | "rate_limited" | "too_many" | "not_ready" | "invalid_model" | "invalid_effort" | "invalid_account";
 export type CreateSessionRequest = {
   workspace: string;
   engine?: "core" | "codex" | "claude";
   model?: string;
+  /** Codex profile id or label (`engine: "codex"`); omitted = the default account. */
+  account?: string;
   /** Kept raw until the shared validator classifies it (see `createSessionSchema`). */
   effort?: unknown;
   handle?: string;
@@ -101,6 +111,7 @@ const CREATE_REFUSAL_TEXT: { [K in CreateSessionRefusal]: string } = {
   not_ready: "AnyCode could not open the tab right now (engine not signed in or tab limit reached)",
   invalid_model: "the requested model does not select exactly one provider connection (for the core engine, model picks the connection — by connection id, its label, providerId/model, or a model id the connection offers)",
   invalid_effort: "reasoning effort is not supported",
+  invalid_account: "the requested Codex account does not name exactly one configured account (pass a profile id or its label from Settings → Codex; omitting it uses the default account)",
 };
 const createRefusal = (code: CreateSessionRefusal, detail?: string) =>
   new Error(`create_session ${code}: ${CREATE_REFUSAL_TEXT[code]}${detail === undefined || detail === "" ? "" : ` — ${detail}`}`);
@@ -124,7 +135,7 @@ const tools = [
   { name: "list_pending_approvals", description: "List tool requests waiting for an answer, for sessions whose External approvals switch is on. Shows tool and a short scrubbed description, never file contents or raw input. Omit sessionId to list every approving session. Asks that need a human reading or typing (ExitPlanMode, AskUserQuestion) are listed with answerable:false.", inputSchema: { type: "object", properties: { sessionId: { type: "string" } }, additionalProperties: false } },
   { name: "answer_approval", description: "Allow or deny one pending tool request of a session whose External approvals switch is on. First answer wins (UI or this tool); a later answer reports already_answered. No 'always allow' from outside AnyCode.", inputSchema: { type: "object", properties: { sessionId: { type: "string" }, approvalId: { type: "string", minLength: 1, maxLength: 100 }, decision: { enum: ["allow", "deny"] } }, required: ["sessionId", "approvalId", "decision"], additionalProperties: false } },
   { name: "cancel_turn", description: "Stop the running turn of an allowed session, like the Stop button: queued agent messages are rejected and parked approvals are denied. Idle is not an error (cancelled:false, reason:idle). Needs only the Sessions API switch.", inputSchema: { type: "object", properties: { sessionId: { type: "string" } }, required: ["sessionId"], additionalProperties: false } },
-  { name: "create_session", description: "Open a new tab in a project where the user switched on 'Allow agents to open tasks here' (sidebar project menu, off by default; trusted folders only; at most 5 per minute and 8 agent-opened alive; only successful creations count towards the per-minute limit). The new session is shared immediately. model picks what the new session runs: for engine \"core\" (the default) it selects the configured provider connection — by connection id, its label, providerId/model, or a model id that connection offers — and an unknown or ambiguous value is refused with invalid_model, whose text lists the candidates; omit model to use the active connection. For \"codex\"/\"claude\" model is passed to that engine. Optional effort sets the session's reasoning effort for the whole session (a string; the allowed values are model-dependent, so there is no fixed list here) — it is validated exactly against the selected model's advertised levels and an unsupported or malformed value is refused with invalid_effort, whose text names the engine, model, requested value and the complete allowed list; a model that advertises no levels refuses every explicit effort. Omitting effort keeps the engine's own default and the connection's settings. Optional firstMessage is delivered like send_message next_turn and returns messageId (explicit error if the host was not ready within 10 s; refused with not_allowed, naming the tab ids, if the new tab is outside the folders list). Errors start with a code: not_allowed, not_trusted, folder_not_found, rate_limited, too_many, not_ready, invalid_model, invalid_effort.", inputSchema: { type: "object", properties: { workspace: { type: "string", minLength: 1, maxLength: 4096 }, engine: { enum: ["core", "codex", "claude"] }, model: { type: "string", minLength: 1, maxLength: 128 }, effort: { type: "string", minLength: 1, maxLength: 64 }, handle: { type: "string", maxLength: 200 }, firstMessage: { type: "string", minLength: 1, maxLength: 32000 } }, required: ["workspace"], additionalProperties: false } },
+  { name: "create_session", description: "Open a new tab in a project where the user switched on 'Allow agents to open tasks here' (sidebar project menu, off by default; trusted folders only; at most 5 per minute and 8 agent-opened alive; only successful creations count towards the per-minute limit). The new session is shared immediately. model picks what the new session runs: for engine \"core\" (the default) it selects the configured provider connection — by connection id, its label, providerId/model, or a model id that connection offers — and an unknown or ambiguous value is refused with invalid_model, whose text lists the candidates; omit model to use the active connection. For \"codex\"/\"claude\" model is passed to that engine. Optional account (engine \"codex\" only) picks the Codex account the session runs on: a profile id or its label from Settings → Codex; an unknown or ambiguous value is refused with invalid_account, whose text lists the candidates; omit it to start on the account marked as default. Optional effort sets the session's reasoning effort for the whole session (a string; the allowed values are model-dependent, so there is no fixed list here) — it is validated exactly against the selected model's advertised levels and an unsupported or malformed value is refused with invalid_effort, whose text names the engine, model, requested value and the complete allowed list; a model that advertises no levels refuses every explicit effort. Omitting effort keeps the engine's own default and the connection's settings. Optional firstMessage is delivered like send_message next_turn and returns messageId (explicit error if the host was not ready within 10 s; refused with not_allowed, naming the tab ids, if the new tab is outside the folders list). Errors start with a code: not_allowed, not_trusted, folder_not_found, rate_limited, too_many, not_ready, invalid_model, invalid_effort, invalid_account.", inputSchema: { type: "object", properties: { workspace: { type: "string", minLength: 1, maxLength: 4096 }, engine: { enum: ["core", "codex", "claude"] }, model: { type: "string", minLength: 1, maxLength: 128 }, effort: { type: "string", minLength: 1, maxLength: 64 }, account: { type: "string", minLength: 1, maxLength: 128 }, handle: { type: "string", maxLength: 200 }, firstMessage: { type: "string", minLength: 1, maxLength: 32000 } }, required: ["workspace"], additionalProperties: false } },
   { name: "close_session", description: "Close a shared tab opened by create_session, through the same path as closing it in the UI. A running turn must be stopped with cancel_turn first. Errors start with a code: not_allowed (including env-file mode), not_found (unknown, closing or not shared), not_agent_opened (user tab), busy (running turn or host not ready), last_tab (open another tab first).", inputSchema: { type: "object", properties: { sessionId: { type: "string", minLength: 1 } }, required: ["sessionId"], additionalProperties: false } },
 ];
 
@@ -620,7 +631,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
         return { sessionId: input.sessionId, closed: true };
       }
       case "create_session": {
-        const input = parseOr(createSessionSchema, raw, "create_session expects workspace (absolute path); optional: engine (core|codex|claude), model, effort, handle, firstMessage (1..32000 chars)");
+        const input = parseOr(createSessionSchema, raw, "create_session expects workspace (absolute path); optional: engine (core|codex|claude), model, effort, account (Codex profile id or label), handle, firstMessage (1..32000 chars)");
         if (!options.createSessionByAgent) throw createRefusal("not_allowed");
         const createByAgent = options.createSessionByAgent;
         if (!isAbsolute(input.workspace)) throw createRefusal("folder_not_found");
@@ -634,7 +645,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
           if (aliveAgentOpened() >= MAX_AGENT_OPENED_TABS) throw createRefusal("too_many");
           let created: CreateSessionOutcome;
           try {
-            created = await createByAgent({ workspace: resolved, ...(input.engine ? { engine: input.engine } : {}), ...(input.model ? { model: input.model } : {}), ...(input.effort !== undefined ? { effort: input.effort } : {}), ...(input.handle !== undefined ? { handle: input.handle } : {}) });
+            created = await createByAgent({ workspace: resolved, ...(input.engine ? { engine: input.engine } : {}), ...(input.model ? { model: input.model } : {}), ...(input.effort !== undefined ? { effort: input.effort } : {}), ...(input.account !== undefined ? { account: input.account } : {}), ...(input.handle !== undefined ? { handle: input.handle } : {}) });
           } catch { throw createRefusal("not_ready"); }
           if (!created.ok) throw createRefusal(created.reason, created.detail);
           // Taskana 4808 (review F2): only a successful creation consumes the rate budget — refused
