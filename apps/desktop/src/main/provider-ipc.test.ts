@@ -1425,7 +1425,7 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
 
   it("removes a saved OpenRouter rate when the refreshed model has conditional pricing", async () => {
     const id = "vendor/conditional";
-    await seedConnection({ id: "conditional", providerId: "custom", baseUrl: "https://openrouter.ai/api/v1", modelCapabilities: { [id]: { contextWindow: 1000, pricing: { input: 1, cachedInput: 1, output: 2 } } } });
+    await seedConnection({ id: "conditional", providerId: "kimi", baseUrl: "https://openrouter.ai/api/v1", modelCapabilities: { [id]: { contextWindow: 1000, pricing: { input: 1, cachedInput: 1, output: 2 } } } });
     const { deps } = makeCatalogDeps({ fetchModels: async () => fetchCustomProviderModels({ baseUrl: "https://openrouter.ai/api/v1", fetchImpl: async () => new Response(JSON.stringify({ data: [{ id, context_length: 2000, pricing: { prompt: "0.1", completion: "0.2", overrides: [{ prompt: "0.3" }] } }] })) }) });
     expect((await handleCustomProviderFetchModels(deps, { connectionId: "conditional" })).ok).toBe(true);
     const connection = (await loadSettings(settingsPath)).settings.provider.connections[0]!;
