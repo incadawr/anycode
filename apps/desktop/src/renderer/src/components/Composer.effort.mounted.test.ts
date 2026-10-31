@@ -109,6 +109,20 @@ afterEach(() => {
 });
 
 describe("Composer — native effort handoff", () => {
+  it("allows Fast when the current tier is unknown", async () => {
+    const store = nativeStore();
+    const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab-1", store } }, createElement(Composer))));
+    try {
+      const speed = container.querySelector<HTMLButtonElement>('button[aria-label="Codex speed"]')!;
+      expect(speed.textContent).toBe("Standard");
+      await act(async () => speed.click());
+      expect(send).toHaveBeenCalledWith("tab-1", { type: "set_engine_fast", fast: true });
+    } finally { await act(async () => root.unmount()); }
+  });
   it("shows the effective Fast tier in the model chip and switches the session", async () => {
     const store = nativeStore();
     store.setState({ engine: { ...store.getState().engine!, fast: true } });

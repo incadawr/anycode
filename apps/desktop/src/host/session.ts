@@ -212,7 +212,7 @@ function isSuccessfulModelDeliveryEvent(event: AgentEvent): boolean {
  *    no settings-updated notification at all).
  */
 export type EngineSettingsChange =
-  | { ok: true; model: string; activePresetId: string; effort?: string; fast?: boolean }
+  | { ok: true; model: string; activePresetId: string; effort?: string; fast?: boolean; resetFast?: boolean }
   | { ok: false; reason: string };
 
 export interface EngineSettingsSeam {
@@ -5861,6 +5861,7 @@ export class Session {
         this.persistence?.touch({ model: result.model });
       }
       if (intent.fast !== undefined) this.persistence?.touch({ codexFast: intent.fast });
+      else if (result.resetFast) this.persistence?.touch({ codexFast: false });
       if (intent.presetId !== undefined) {
         this.persistence?.touch({ enginePreset: result.activePresetId });
       }

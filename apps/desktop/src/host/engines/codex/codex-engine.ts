@@ -249,7 +249,7 @@ export interface CodexSessionSelection {
 
 /** Result of a host-side settings change request. `ok:false` never reaches the wire — it becomes a recoverable UI error. */
 export type CodexSettingsChange =
-  | { ok: true; model: string; activePresetId: string; effort?: string; fast?: boolean }
+  | { ok: true; model: string; activePresetId: string; effort?: string; fast?: boolean; resetFast?: boolean }
   | { ok: false; reason: string };
 
 /** Everything the engine needs to re-assert the full effective posture on every turn (cut §2(k).1). */
@@ -1112,7 +1112,8 @@ export class CodexEngine implements SessionEngine {
     const effort = this.resolveEffortForModel(id);
     if (effort === undefined) delete settings.effort;
     else settings.effort = effort;
-    return this.markPending();
+    const change = this.markPending();
+    return !settings.catalog.get(id)?.supportsFast && change.ok ? { ...change, resetFast: true } : change;
   }
 
   selectEffort(effort: string): CodexSettingsChange {

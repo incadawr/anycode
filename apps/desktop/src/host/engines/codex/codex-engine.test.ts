@@ -4164,7 +4164,7 @@ describe("Codex service tier", () => {
   it("refuses Fast on a model without priority tier", async () => {
     const server = new FakeAppServer();
     const { engine } = await createNativeCodexSession(server, "/work");
-    engine.selectModel("gpt-5.4-mini");
+    expect(engine.selectModel("gpt-5.4-mini")).toMatchObject({ ok: true, resetFast: true });
     expect(engine.selectFast(true)).toMatchObject({ ok: false });
   });
 
