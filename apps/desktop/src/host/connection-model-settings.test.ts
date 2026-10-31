@@ -284,3 +284,10 @@ it.each(["connection", "model"] as const)("honors %s off over a gateway always-o
   expect(resolveReasoningEffort(model, settings.entryFor(model), settings.effortFor(model))).toBe("off");
   expect(settings.switchEffort("other", model, "high")).toBe("off");
 });
+
+it("prefers gateway endpoint capabilities to dictionary facts in the host", () => {
+  const model = "vendor/glm-5-fp8";
+  const settings = createConnectionModelSettings({ connection: {}, liveCapabilitiesFor: () => ({ reasoning: true, effortLevels: ["low", "high"] }) });
+  expect(resolveEffortLevels(model, settings.entryFor(model), settings.capabilitiesFor(model))).toEqual(["low", "high"]);
+  expect(resolveReasoningEffort(model, settings.entryFor(model), "high", settings.capabilitiesFor(model))).toBe("high");
+});

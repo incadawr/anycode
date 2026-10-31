@@ -274,7 +274,7 @@ it("still appends a model the catalog does not offer, so a manual id stays durab
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
 
-it("shows the matched model and catalog prices and saves the opt-out", async () => {
+it("shows the matched model, hides complex prices and saves the opt-out", async () => {
   const connection = { id:"c", providerId:"custom:test", model:"vendor/glm-5.3-fp8" };
   const snapshot = { settings: cloneDefaults(), readOnly:false, secrets:[], envOverrides:[], providerReady:true, catalog:[] };
   const update = vi.fn().mockResolvedValue({ok:true, snapshot});
@@ -284,7 +284,7 @@ it("shows the matched model and catalog prices and saves the opt-out", async () 
   try {
     await act(async () => root.render(createElement(ConnectionDrawerFields, {mode:"edit", editConnection:connection, catalog:[], connections:[connection], secrets:[], readOnly:false, store})));
     expect(container.textContent).toContain("Recognized as GLM-5.3");
-    expect(container.textContent).toContain("Catalog reference for GLM-5.3");
+    expect(container.textContent).not.toContain("Catalog reference for GLM-5.3");
     const check = [...container.querySelectorAll("input[type=checkbox]")].find(c => c.parentElement?.textContent?.includes("Recognized as")) as HTMLInputElement;
     await act(async () => check.click());
     await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
