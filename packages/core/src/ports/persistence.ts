@@ -122,9 +122,9 @@ export type SessionMetaPatch = Partial<
     | "worktreeExitNoticePending"
     | "connectionId"
     | "codexProfileId"
-    | "codexFast"
   >
 > & {
+  codexFast?: boolean | null;
   /** `null` atomically clears the active worktree identity fields. */
   worktree?: SessionWorktree | null;
   /** `null` atomically clears the deferred cleanup ledger. */

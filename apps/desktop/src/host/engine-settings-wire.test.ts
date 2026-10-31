@@ -410,7 +410,7 @@ describe(" — set_engine_preset / set_model routing", () => {
     });
     ui.send({ type: "set_model", model: "gpt-5.4-mini" });
     await ui.settle();
-    expect(ui.touches).toContainEqual({ codexFast: false });
+    expect(ui.touches).toContainEqual({ codexFast: null });
   });
 
   it("queues speed behind the settings barrier", async () => {

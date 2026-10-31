@@ -79,6 +79,8 @@ describe("SqlitePersistenceAdapter", () => {
       expect((await adapter.getRootSession("speed"))?.codexFast).toBe(true);
       await adapter.touchSession("speed", { codexFast: false });
       expect((await adapter.getRootSession("speed"))?.codexFast).toBe(false);
+      await adapter.touchSession("speed", { codexFast: null });
+      expect((await adapter.getRootSession("speed"))?.codexFast).toBeUndefined();
     });
 
     it("getSession returns null for an unknown id", async () => {

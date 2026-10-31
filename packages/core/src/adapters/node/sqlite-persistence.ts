@@ -1184,7 +1184,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     }
     if (patch?.codexFast !== undefined) {
       sets.push("codex_fast = ?");
-      params.push(patch.codexFast ? 1 : 0);
+      params.push(patch.codexFast === null ? null : patch.codexFast ? 1 : 0);
     }
     if (patch?.model !== undefined) {
       sets.push("model = ?");
