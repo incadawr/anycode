@@ -785,6 +785,31 @@
   color: var(--warning);
 }
 
+/* ── Diagnostics export (GitHub #18): preview before saving ── */
+
+.settings-diagnostics-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.settings-diagnostics-preview {
+  margin: 0.5rem 0 0;
+  padding: 0.6rem 0.75rem;
+  max-height: 18rem;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-inset);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
 /* ── OAuth credential block (slice 2.5 §5: Sign in / pending / Signed in) ── */
 
 .settings-oauth-block {

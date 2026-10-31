@@ -8,6 +8,7 @@ import { createEngineBrowserBridge } from "./engines/browser-bridge.js";
 import { assertChildModel, readAllowedChildModels } from "../shared/child-model.js";
 import { resolveModelClassifierBoot } from "./model-classifier-boot.js";
 import { recordHostBootFailure } from "./error-diagnostics.js";
+import { createDiagnosticsRing, noteWireMessage } from "../shared/diagnostics-ring.js";
 /**
  * Host utilityProcess entry point (design §2/§6, MVP.3; persistence/hooks
  * wiring per §2.12, task 1.9).
@@ -671,6 +672,21 @@ function sendCredentialRequest(request: CredentialRequest): void {
 // siblings above.
 const childRunEventListeners = new Set<(event: ChildRunEvent) => void>();
 
+/**
+ * Control-plane wire SHAPES for the diagnostics export (GitHub #18). In
+ * memory, bounded (see shared/diagnostics-ring.ts) and fed only by
+ * `noteWireMessage`, which reads a message's `type`/`kind` and nothing else —
+ * no prompt, path or payload can reach it.
+ */
+const hostDiagnosticsRing = createDiagnosticsRing({ scope: "host" });
+const HOST_RING_SNAPSHOT_LIMIT = 512;
+
+/** Post one host -> main control message, logging its shape first. */
+function postHostControlMessage(message: unknown): void {
+  noteWireMessage(hostDiagnosticsRing, "out", message);
+  process.parentPort.postMessage(message);
+}
+
 function subscribeChildRunEvents(listener: (event: ChildRunEvent) => void): () => void {
   childRunEventListeners.add(listener);
   return () => {
@@ -679,7 +695,7 @@ function subscribeChildRunEvents(listener: (event: ChildRunEvent) => void): () =
 }
 
 function sendChildSessionMessage(message: ChildSpawnRequest | ChildRunCancel | ChildRunSend): void {
-  process.parentPort.postMessage(message);
+  postHostControlMessage(message);
 }
 
 let routedChildComposition: ReturnType<typeof createRoutedChildComposition> | undefined;
@@ -1121,7 +1137,7 @@ function resolveCodexDbPath(env: NodeJS.ProcessEnv): string {
  */
 function buildChildBrokerEmit(emitFn: (message: HostToUiMessage) => void): (message: HostToUiMessage) => void {
   return tapChildPermissions(emitFn, (waiting, ask) => {
-    process.parentPort.postMessage({
+    postHostControlMessage({
       type: CHILD_PROGRESS_TYPE,
       kind: "attention",
       waiting,
@@ -1159,14 +1175,14 @@ function buildChildSessionOptions(
     // childTurnLimitNotice in Session.rescueTurnLimitReport.
     ...(wrapUpRescue !== undefined ? { wrapUpRescue } : {}),
     onReady: () => {
-      process.parentPort.postMessage({ type: CHILD_READY_TYPE } satisfies ChildReady);
+      postHostControlMessage({ type: CHILD_READY_TYPE } satisfies ChildReady);
     },
     flushHistory,
     // Core-only seam: reads the child's dedicated model port's provider claim
     // at terminal. Engine boots pass no getter (no core claim exists there).
     ...(responseModel !== undefined ? { responseModel } : {}),
     onTerminal: (report) => {
-      process.parentPort.postMessage({
+      postHostControlMessage({
         type: CHILD_TERMINAL_TYPE,
         status: report.status,
         finalText: report.finalText,
@@ -1193,7 +1209,7 @@ function buildChildSessionOptions(
       }
     },
     onProgress: (report) => {
-      process.parentPort.postMessage({
+      postHostControlMessage({
         type: CHILD_PROGRESS_TYPE,
         ...report,
       } satisfies ChildProgress);
@@ -5142,6 +5158,10 @@ process.parentPort.on("message", (event) => {
           case "cancel_turn": result = session.communicationCancelTurn(); break;
           case "list_pending_approvals": result = session.communicationPendingApprovals(); break;
           case "answer_approval": result = session.communicationAnswerApproval(communication.payload); break;
+          // GitHub #18: main asks for this fork's bounded control-plane ring
+          // while assembling a diagnostics export. Identifiers only — see
+          // shared/diagnostics-ring.ts.
+          case "get_diagnostics_ring": result = hostDiagnosticsRing.snapshot(HOST_RING_SNAPSHOT_LIMIT); break;
           default: throw new Error("Unsupported communication operation");
         }
         process.parentPort.postMessage({ type: "communication_response", requestId: communication.requestId, result });
@@ -5186,6 +5206,7 @@ process.parentPort.on("message", (event) => {
   // actually correlates the event to the ONE `run()` call it belongs to.
   const childRunEvent = parseChildRunEvent(data);
   if (childRunEvent) {
+    noteWireMessage(hostDiagnosticsRing, "in", childRunEvent);
     for (const listener of childRunEventListeners) {
       listener(childRunEvent);
     }

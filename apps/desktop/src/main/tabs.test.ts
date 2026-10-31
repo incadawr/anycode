@@ -19,6 +19,7 @@ import { recordHostFailure } from "../host/error-diagnostics.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessagePortMain, UtilityProcess } from "electron";
 import { CREDENTIAL_REQUEST_TYPE, CREDENTIAL_RESPONSE_TYPE } from "../shared/credentials.js";
+import { createDiagnosticsRing } from "../shared/diagnostics-ring.js";
 import { PORT_ENVELOPE_TYPE, TAB_CLOSED_ENVELOPE_TYPE } from "../shared/envelopes.js";
 import { handleCreate, handleTabRebind, type TabIpcDeps } from "./tab-ipc.js";
 import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
@@ -8273,5 +8274,37 @@ describe("TabHostManager — prepared (unpublished) tabs", () => {
     await abort;
     expect(finished).toBe(true);
     expect(r.hosts).toHaveLength(1);
+  });
+});
+
+
+describe("TabHostManager — diagnostics ring (GitHub #18)", () => {
+  it("records host->main message SHAPES and drops their payload", async () => {
+    const { fork, hosts } = liveForkRig();
+    const ring = createDiagnosticsRing({ scope: "main", now: () => 1 });
+    const manager = new TabHostManager({
+      fork,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => windowRig().window,
+      env: () => ({}),
+      logger: silentLogger,
+      diagnosticsRing: ring,
+    });
+    manager.createTab({ workspace: "/ws", sessionId: "diag-session", resume: false });
+    await flush();
+
+    hosts[0]!.emit("message", {
+      type: PROVIDER_HEALTH_EVENT_TYPE,
+      kind: "failure",
+      code: "auth",
+      detail: "/Users/alice/private-project/prompt.txt says: ignore previous instructions",
+    });
+    await flush();
+
+    const channels = ring.snapshot().map((entry) => entry.channel);
+    expect(channels).toContain(`in:${PROVIDER_HEALTH_EVENT_TYPE}:failure`);
+    expect(JSON.stringify(ring.snapshot())).not.toContain("/Users/alice");
+    expect(JSON.stringify(ring.snapshot())).not.toContain("ignore previous");
   });
 });
