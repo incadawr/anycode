@@ -8,7 +8,7 @@
  *   (a) Barrel proof: `NodeArtifactStore` and `ARTIFACT_MAX_AGE_MS` are
  *       importable from `@anycode/core`'s ROOT (the desktop imports core only
  *       via the root barrel and registered subpaths — see package.json exports;
- *       pre-Taskana-4104 neither symbol was on it).
+ *       neither symbol was on it).
  *   (b) Harness threading: the HarnessOptions `artifacts` seam lands in
  *       AgentLoopConfig.artifacts as the SAME reference; omitted -> the config
  *       literal has no `artifacts` at all (spill degrades to truncation,

@@ -7978,7 +7978,7 @@ describe("Session — manual compaction wire", () => {
     // accepted-between-turns case uses — so route()'s `child !== undefined`
     // clause is the ONLY thing standing between this request and a swapped
     // history. A child's context belongs to the parent's Agent-tool chain
-    // (TASK.102/145); compacting it from the child's own Compact row would
+    // compacting it from the child's own Compact row would
     // rewrite a transcript the parent is still reading.
     //
     // Two steps are scripted, not one: if the gate were gone, step 0 would be

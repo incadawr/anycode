@@ -1,7 +1,7 @@
 /**
  * `ClaudeMcpBridge` — the desktop glue that serves the CLI's in-process MCP
  * door (срез S3, plan §3.3/§3.4 as amended by
- * `working-docs/tasks/TASK.226.probes.md` P0/P1/P3). Wires срез S2's
+ * P0/P1/P3). Wires срез S2's
  * `createInProcessMcpServer`/`ControlChannelTransport` (`@anycode/core`) to
  * `ClaudeClient`'s control-request routing (`approval-bridge.ts`), using the
  * literal wire shapes CLI 2.1.261 was proven, live, to send and accept.

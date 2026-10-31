@@ -1,6 +1,6 @@
 /**
  * Supervisor idle watchdog. Watches the ONE state of the
- * no-polling detach loop (TASK.145/148/218) that previously sat silent
+ * no-polling detach loop that previously sat silent
  * forever: the supervisor's turn has ENDED, there are ZERO live detached
  * children, and the turn's final assistant text carries no terminal marker
  * (READY/BLOCKED/DONE/ACCEPT) — i.e. the chain is neither working nor closed,

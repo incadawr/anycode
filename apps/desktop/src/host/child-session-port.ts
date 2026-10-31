@@ -1216,7 +1216,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                 durationMs: event.durationMs,
                 ...(event.activitySuppressed !== undefined ? { activitySuppressed: event.activitySuppressed } : {}),
                 ...(event.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: event.finalTurnFinishReason } : {}),
-                // TASK.240/4055 (cross-review F1): the ceiling summary rides
+                // (cross-review F1): the ceiling summary rides
                 // the end progress — the ONLY source of subagent_end, which
                 // the UI budget line and telemetry read. Mirrors runner.ts.
                 ...(event.ceiling !== undefined ? { ceiling: event.ceiling } : {}),

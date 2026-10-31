@@ -748,7 +748,7 @@ function deliverDetachedChildReport(outcome: SessionSubagentOutcome, req: Sessio
     status: outcome.status,
     durationMs: outcome.durationMs,
     ...(outcome.finalTurnFinishReason === "length" ? { finalTurnFinishReason: "length" } : {}),
-    // TASK.240/4055 cross-review F2: the ceiling summary rides the report's
+    // cross-review F2: the ceiling summary rides the report's
     // metadata so the renderer's card shows the budget line on this path too.
     ...(outcome.ceiling !== undefined ? { ceiling: outcome.ceiling } : {}),
   });
@@ -2242,7 +2242,7 @@ async function bootClaudeSession(
           externalSessionRef: existing.externalSessionRef,
           // Posture survives the resume through the PERSISTED preset id (same
           // no-server-echo-to-trust discipline codex uses, cut §2(k).4): an
-          // unrecognized id (a pre-TASK.39-era "build" mode row) silently
+          // unrecognized id (a pre-era "build" mode row) silently
           // becomes the default preset rather than failing the resume.
           selection: { model: existing.model, presetId: existing.mode, origin: "persisted" },
         });
@@ -3916,7 +3916,7 @@ async function boot(): Promise<void> {
 
     /**
      * (De)registers InspectImage against the CURRENT (recognizer configured
-     * ∧ blind model) verdict — the exact gate TASK.198.md §1 step 5 and plan
+     * ∧ blind model) verdict — the exact gate §1 step 5 and plan
      * §5 specify — and reports whether registration actually flipped, so a
      * caller knows whether the system prompt needs recomposing (finding #6:
      * no recompose when nothing changed). Idempotent both ways
@@ -3960,7 +3960,7 @@ async function boot(): Promise<void> {
       port.record({
         v: 1, ts: Date.now(), session: sessionMeta.id, t: "session_start",
         model: envConfig.model, provider: catalogEntry?.name ?? "custom", mode,
-        // §2.1: session-tier child back-reference (TASK.102/145),
+        // §2.1: session-tier child back-reference
         // the same field the codex/claude boots stamp at their own
         // session_start above — the core path just never had it wired.
         ...(args.child !== undefined ? { parentSession: args.child.parentSessionId } : {}),

@@ -499,7 +499,7 @@ export interface ChildTerminalReport {
    */
   responseModel?: string;
   /**
-   * TASK.240/4055: the child session's own ceiling ladder summary, folded
+   * the child session's own ceiling ladder summary, folded
    * from its ceiling_grant/ceiling_refused events. Optional: absent when the
    * child never tripped the ceiling.
    */
@@ -1727,7 +1727,7 @@ export class Session {
   private childLoopStatus: ChildRunStatus | undefined;
   /** The last loop_end's `declaredDoneAtCeiling`. */
   private childDeclaredDoneAtCeiling = false;
-  /** TASK.240/4055: the child's ceiling ladder, folded for the terminal summary. */
+  /** the child's ceiling ladder, folded for the terminal summary. */
   private childCeilingRounds = 0;
   private childCeilingGrantedTurns = 0;
   private childCeilingLastRefusal: CeilingRefusalReason | undefined;
@@ -4629,7 +4629,7 @@ export class Session {
     // falls through to committing the terminal with the real reason. Core recoverable
     // provider errors set no such safe code and keep the drain-into-retry behavior.
     if (this.childEngineDead) { this.rejectQueuedSteerMessages(); return false; }
-    // TASK.240/4055 cross-review F4: a chain that starts here is a NEW run
+    // cross-review F4: a chain that starts here is a NEW run
     // of the ladder — the refusal latched by an earlier chain ended THAT
     // chain, not this one. Cleared only once a chain actually started, so a
     // rejected drain never loses the refusal the terminal still reports.
@@ -5026,7 +5026,7 @@ export class Session {
         this.childTurns += event.turns;
         this.childDeclaredDoneAtCeiling = event.declaredDoneAtCeiling === true;
         break;
-      // TASK.240/4055: fold the child session's own ceiling ladder into the
+      // fold the child session's own ceiling ladder into the
       // terminal summary — same closed shape (numbers + refusal enum) as
       // runner.ts's in-process fold, no model text crosses the boundary.
       case "ceiling_grant":
