@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A custom Anthropic-compatible connection that declares its effort levels now sends the chosen level to the endpoint, so picking low, medium or high actually takes effect instead of the endpoint reasoning at its own maximum.
+
 ## [0.0.56] — 2026-10-31
 
 ### Added

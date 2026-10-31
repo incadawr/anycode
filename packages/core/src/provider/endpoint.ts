@@ -89,12 +89,15 @@ export interface EndpointConfig {
    * Effort tiers THIS connection declared it supports — the same vocabulary
    * the CLI reads from ANYCODE_EFFORT_LEVELS and validates the selected tier
    * against. The generic anthropic-messages path uses it as the ONLY
-   * authorisation to put `output_config.effort` on the wire: declaring BOTH
-   * `xhigh` and `max` is the connection asserting that its endpoint
-   * distinguishes those tiers itself, which on this transport can only mean
-   * the effort enum. Absent ⇒ never sent, so a strict Anthropic-compatible
-   * server that only understands `thinking.budget_tokens` never sees an
-   * unknown field; the tier distinction still reaches it as distinct budgets.
+   * authorisation to put `output_config.effort` on the wire: a declaration is
+   * the connection naming the effort vocabulary its endpoint speaks, and on
+   * this transport that vocabulary can only be expressed as the effort enum —
+   * so every DECLARED tier that is selected rides it (`low` included: an
+   * endpoint that ignores `thinking.budget_tokens` and switches tier on the
+   * enum would otherwise keep its own default whatever the user picked).
+   * Absent ⇒ never sent, so a strict Anthropic-compatible server that only
+   * understands `thinking.budget_tokens` never sees an unknown field; the tier
+   * distinction still reaches it as distinct budgets.
    */
   declaredEffortLevels?: readonly ReasoningEffort[];
   /**
