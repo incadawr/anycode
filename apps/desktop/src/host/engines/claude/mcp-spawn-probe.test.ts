@@ -182,6 +182,30 @@ describe("probeMcpServerSpawn — the definitive cause for a Claude-side MCP fai
     expect(elapsed).toBeLessThan(5000);
   });
 
+  it("does not let the main timer report ok while an exit is parked waiting for stderr to drain", async () => {
+    // The launcher dies just before the probe timeout, but a grandchild holds
+    // the stderr fd open past it: the deferred exit must still win over the
+    // main timer's "still alive => ok" verdict.
+    const started = Date.now();
+    const outcome = await probeMcpServerSpawn(
+      stdio("parked", {
+        command: process.execPath,
+        args: [
+          "-e",
+          `const { spawn } = require("node:child_process");
+           spawn(process.execPath, ["-e", "setInterval(() => {}, 1000);"], { stdio: ["ignore", "ignore", 2] });
+           process.stderr.write("parked-exit\\\\n");
+           process.exit(6);`,
+        ],
+      }),
+      { timeoutMs: 300 },
+    );
+    const elapsed = Date.now() - started;
+    expect(outcome.ok).toBe(false);
+    expect(outcome.detail).toContain("exited with code 6");
+    expect(elapsed).toBeLessThan(2900);
+  });
+
   it("exposes the default timeout as a bounded constant", () => {
     expect(MCP_SPAWN_PROBE_TIMEOUT_MS).toBe(10_000);
   });

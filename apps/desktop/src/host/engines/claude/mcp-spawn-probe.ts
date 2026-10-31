@@ -162,6 +162,9 @@ export async function probeMcpServerSpawn(
           return;
         }
         // Defer until stderr drains (or the cap): "exit" may precede the pipe's tail.
+        // The launcher is dead, so the main timer's "still alive => ok" verdict
+        // no longer applies — clear it, only the drain path may settle now.
+        clearTimeout(timer);
         pendingExit = { code, signal };
         drainCap = setTimeout(() => {
           if (settled) return;
