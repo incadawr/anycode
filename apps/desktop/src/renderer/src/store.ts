@@ -4405,7 +4405,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             event.description,
             event.model ?? null,
             event.engine ?? null,
-            event.parentModel,
+            // An empty id is no id: the card must read "unknown", not blank.
+            event.parentModel !== undefined && event.parentModel.length > 0 ? event.parentModel : undefined,
           );
           return;
         case "subagent_progress":

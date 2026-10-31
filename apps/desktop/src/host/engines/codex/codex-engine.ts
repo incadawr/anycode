@@ -1342,6 +1342,10 @@ export class CodexEngine implements SessionEngine {
         // per-turn translator (same rationale as the quota tracker above) so
         // later child observations patch the original spawn card.
         collab: this.collabIndex,
+        // The applied model: a spawned subagent that names no model of its own
+        // runs on it, and the card records that at spawn so it stays truthful
+        // after a model switch or on reopen.
+        ...(this.applied.model.length > 0 ? { sessionModel: this.applied.model } : {}),
         onUsage: (usage) => this.usageObserver?.(usage),
       });
       let terminal = false;

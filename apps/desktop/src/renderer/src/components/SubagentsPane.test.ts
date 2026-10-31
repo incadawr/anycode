@@ -591,7 +591,7 @@ describe("resolveSubagentModelOptions with the parent connection's own model ids
     { id: "z-ai", name: "Z.ai", authKind: "api_key", models: [{ id: "glm-5.3", name: "GLM-5.3" }] },
   ];
 
-  it("offers the ACTIVE parent connection's manual id ahead of the catalog hints, not a sibling's", () => {
+  it("offers the ACTIVE parent connection's manual id alongside the catalog hints, not a sibling's", () => {
     const snap = {
       settings: {
         version: 2,
@@ -613,7 +613,7 @@ describe("resolveSubagentModelOptions with the parent connection's own model ids
     const parentModels = providerModelsFor("z-ai", snap.catalog, snap.settings.provider.custom, parent.models);
     const { models, inheritLabel } = resolveSubagentModelOptions("", parentModels ?? [], {});
     expect(inheritLabel).toBe("Same as parent");
-    expect(models.map((m) => m.id)).toEqual(["manual-parent", "glm-5.3"]);
+    expect(models.map((m) => m.id)).toEqual(["glm-5.3", "manual-parent"]);
     expect(models.map((m) => m.id)).not.toContain("manual-sibling");
   });
 

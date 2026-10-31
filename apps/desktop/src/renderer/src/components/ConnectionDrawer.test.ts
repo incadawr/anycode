@@ -1223,7 +1223,7 @@ describe("appendModelsToConnection (TASK.183)", () => {
 });
 
 describe("provider-list agreement (TASK.183): liveModelSuggestions and providerModelsFor keep the same effective ids", () => {
-  it("for equal inputs (connection.models = fetched ++ persisted) the raw id order matches", () => {
+  it("for equal inputs the effective ID SETS match; the pickers order them by the catalog, the drawer's own suggestion list by freshness", () => {
     const fetched = [{ id: "live-a" }, { id: "live-b" }];
     const persisted = ["manual-1"];
     const hints = [
@@ -1234,7 +1234,12 @@ describe("provider-list agreement (TASK.183): liveModelSuggestions and providerM
     const connectionModels = [...fetched.map((m) => m.id), ...persisted];
     const catalog = [{ id: "z-ai", name: "Z.ai", authKind: "api_key" as const, models: hints }];
     const provider = providerModelsFor("z-ai", catalog, undefined, connectionModels)?.map((m) => m.id);
-    expect(provider).toEqual(suggestions);
+    // Same ids — a live or manual model is never lost by either list …
+    expect([...(provider ?? [])].sort()).toEqual([...suggestions].sort());
+    // … but the offered order belongs to the provider's own list, while the
+    // drawer's text-field suggestions lead with what was just fetched/manual.
+    expect(provider).toEqual(["hint-x", "live-a", "live-b", "manual-1"]);
+    expect(suggestions).toEqual(["live-a", "live-b", "manual-1", "hint-x"]);
   });
 });
 
@@ -1357,12 +1362,12 @@ describe("whole-path: a manual model added through production IPC is discoverabl
       expect(offered?.map((m) => m.id)).toBeDefined();
     }
     expect(providerModelsFor("kimi", catalog, snapshot.provider.custom, conn1!.models)?.map((m) => m.id)).toEqual([
-      "manual-new",
       "kimi-for-coding",
+      "manual-new",
     ]);
     expect(providerModelsFor("kimi", catalog, snapshot.provider.custom, conn2!.models)?.map((m) => m.id)).toEqual([
-      "sibling",
       "kimi-for-coding",
+      "sibling",
     ]);
     // StartScreen groups.
     const groups = buildStartModelGroups(snapshot.provider.connections, catalog, snapshot.provider.custom, {
@@ -1380,7 +1385,7 @@ describe("whole-path: a manual model added through production IPC is discoverabl
       envOverrides: [],
       readOnly: false,
     } as never);
-    expect(importOptions?.map((m) => m.id)).toEqual(["manual-new", "kimi-for-coding"]);
+    expect(importOptions?.map((m) => m.id)).toEqual(["kimi-for-coding", "manual-new"]);
     // The model menu still shows the explicit selection.
     expect(modelMenuItems("manual-new", importOptions).map((m) => m.id)).toContain("manual-new");
   });
@@ -2025,7 +2030,7 @@ describe("custom endpoint cache creation", () => {
       },
       modelPersistenceBridge: () => ({}), label: "", transport: "openai-responses", proxyRef: "",
       connectionCreateProxyRefField: () => ({}), promptCacheEnabled: true, IMPLICIT_PROMPT_CACHE,
-      setProviderId: () => {}, setCreatedConnectionId: () => {}, onCreated: () => {},
+      setProviderId: () => {}, setCreatedConnectionId: () => {},
     };
     const run = new Function(...Object.keys(bindings), js)(...Object.values(bindings)) as () => Promise<void>;
     await run();

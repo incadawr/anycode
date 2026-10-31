@@ -2248,6 +2248,20 @@ describe("explore default model (Taskana 4131)", () => {
     expect(start && "model" in start && start.model !== undefined).toBe(false);
   });
 
+  it("records no parent model when the parent's own id is an empty string", async () => {
+    // A blank id is no id: the snapshot must omit the field rather than store
+    // an empty string the reader would then have to treat as unknown.
+    const progress: SubagentProgress[] = [];
+    const inner = new ScriptedModelPort(() => textStep("parent-report"));
+    const parentModel: ModelPort = { streamText: (request) => inner.streamText(request), modelId: "" };
+    const runner = createSubagentRunner(makeParent({ modelPort: parentModel }), {});
+
+    await runner.run({ ...REQ, agentType: "explore" }, { onProgress: (p) => progress.push(p) });
+
+    const start = progress.find((p) => p.kind === "start");
+    expect(start && "parentModel" in start && start.parentModel !== undefined).toBe(false);
+  });
+
   it("an allowed explore default is used with no fallback notice", async () => {
     const parentModel = new ScriptedModelPort(() => textStep("parent-report"));
     const cheapModel = new ScriptedModelPort(() => textStep("cheap-report"));

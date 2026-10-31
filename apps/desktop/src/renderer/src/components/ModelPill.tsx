@@ -292,11 +292,16 @@ export function pillDisplayLabel(
  *
  * `connectionModels` — the target connection's OWN ids (`ProviderConnection.
  * models`: manual additions plus connection-scoped fetched ids, TASK.183) —
- * when non-empty is unioned with the base hints, connection ids FIRST and the
- * catalog/curated hints after (stable primary-first, deduped by exact id via
- * the shared `mergeModelIds`). The base hints only DECORATE matching ids with
- * display names — a connection id with no catalog hint still appears (as a
- * bare `{id}`), and a custom record's fallback is included even when no
+ * when non-empty is unioned with the base hints in CATALOG ORDER: the base
+ * hints first, then only the connection ids the hints do not already offer
+ * (deduped by exact id via the shared `mergeModelIds`). The order is a
+ * property of the provider's own list, never of which id happened to be saved
+ * into `models[]` — a connection that stored a catalog id (an earlier build
+ * appended every chosen model) must not thereby move that chip to the front,
+ * while an id ONLY the connection knows still appears, so a working model
+ * never vanishes. The base hints only DECORATE matching ids with display
+ * names — a connection id with no catalog hint still appears (as a bare
+ * `{id}`), and a custom record's fallback is included even when no
  * synthesized catalog entry exists. Absent/empty `connectionModels` keeps
  * every pre-fetch behavior byte-identical. Exported for unit testing.
  */
@@ -312,8 +317,8 @@ export function providerModelsFor(
     catalogHit ?? (customHit !== undefined ? customHit.models.map((id) => ({ id })) : undefined);
   if (connectionModels !== undefined && connectionModels.length > 0) {
     const union = mergeModelIds(
-      connectionModels,
       (baseHints ?? []).map((hint) => hint.id),
+      connectionModels,
     );
     return union.map((id) => {
       const hint = baseHints?.find((m) => m.id === id);

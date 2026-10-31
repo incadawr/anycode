@@ -1270,8 +1270,11 @@ export function createSubagentRunner(
           // An absent `model` still means "inherited" (only what we asked
           // for is reported there), but the card still has to say what the
           // child ran on AFTER the parent switches models or the session is
-          // resumed: record the parent model in force right now, at spawn.
-          ...(requestedModel === undefined && parent.modelPort.modelId !== undefined
+          // resumed: record the parent model in force right now, at spawn. An
+          // empty id is no id — it is omitted rather than persisted blank.
+          ...(requestedModel === undefined &&
+          parent.modelPort.modelId !== undefined &&
+          parent.modelPort.modelId.length > 0
             ? { parentModel: parent.modelPort.modelId }
             : {}),
           // Taskana 4704 §3.10: the inline chain walk's route identity +

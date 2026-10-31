@@ -1133,14 +1133,6 @@ export function MaxOutputSegmented({ value, custom, disabled, title, onSelect, o
 
 export interface ConnectionDrawerFieldsProps {
   mode: "add" | "edit";
-  /**
-   * Fired once the form's own create call has minted a connection and the
-   * form has switched to its post-create state. The dialog chrome uses it to
-   * stop advertising "Add connection" for what is now an editable one — the
-   * parent's `mode` cannot know: creating does not change which connection
-   * (if any) the parent opened the drawer for.
-   */
-  onCreated?: (connectionId: string) => void;
   /** The connection being edited; required for `mode: "edit"`. */
   editConnection?: ProviderConnection;
   catalog: CatalogSummary;
@@ -1172,7 +1164,6 @@ export function ConnectionDrawerFields({
   customProvider,
   footer,
   simplified = false,
-  onCreated,
 }: ConnectionDrawerFieldsProps) {
   const labelInputRef = useRef<HTMLInputElement>(null);
   const maxOutputTokensInputRef = useRef<HTMLInputElement>(null);
@@ -1312,10 +1303,9 @@ export function ConnectionDrawerFields({
   const [saving, setSaving] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // A successful Save used to be completely silent (the owner's audit read
-  // that as "did it save?"), so the button row carries a short-lived "Saved"
-  // confirmation. It is cleared by the next save attempt and lives only long
-  // enough to be noticed.
+  // A successful Save used to be completely silent, which reads as "did it
+  // save?", so the button row carries a short-lived "Saved" confirmation. It is
+  // cleared by the next save attempt and lives only long enough to be noticed.
   const [savedNotice, setSavedNotice] = useState(false);
   const savedNoticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const flashSavedNotice = (): void => {
@@ -1589,7 +1579,6 @@ export function ConnectionDrawerFields({
       }
       setProviderId(newId);
       setCreatedConnectionId(outcome.createdConnectionId);
-      onCreated?.(outcome.createdConnectionId);
       if (outcome.partial) {
         setError(outcome.error ?? "Custom endpoint and connection created, but the model list couldn't be saved — retry with Save.");
       }
@@ -1700,7 +1689,6 @@ export function ConnectionDrawerFields({
         return;
       }
       setCreatedConnectionId(outcome.createdConnectionId);
-      onCreated?.(outcome.createdConnectionId);
       // TASK.108-A: the just-revealed Model field opens on the catalog default
       // instead of blank, so the follow-up Save can't persist the empty-model
       // trap.
@@ -2626,15 +2614,6 @@ export interface ConnectionDrawerProps {
 /** Native-`<dialog>` wrapper around `ConnectionDrawerFields` for the Settings grid's Add/Edit action. */
 export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDrawerProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
-  // The form creates the connection in place (no navigation, same dialog), so
-  // the chrome has to follow it: after a Create the dialog shows a saved,
-  // editable connection and must stop calling itself "Add connection".
-  const [createdConnectionId, setCreatedConnectionId] = useState<string | null>(null);
-  const connectionKey = fieldsProps.editConnection?.id;
-  useEffect(() => {
-    setCreatedConnectionId(null);
-  }, [open, connectionKey]);
-  const title = fieldsProps.mode === "edit" || createdConnectionId !== null ? "Edit connection" : "Add connection";
 
   useEffect(() => {
     if (!open) {
@@ -2668,7 +2647,7 @@ export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDr
     <dialog
       ref={dialogRef}
       className="connection-drawer"
-      aria-label={title}
+      aria-label={fieldsProps.mode === "add" ? "Add connection" : "Edit connection"}
       onCancel={(event) => {
         // TASK.58 item 4: act only on THIS drawer's own Escape — the shared
         // guard also stops this cancel (which React propagates up the tree)
@@ -2681,7 +2660,7 @@ export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDr
       }}
     >
       <div className="connection-drawer-header">
-        <span className="connection-drawer-title">{title}</span>
+        <span className="connection-drawer-title">{fieldsProps.mode === "add" ? "Add connection" : "Edit connection"}</span>
         <button type="button" className="connection-drawer-close" aria-label="Close" onClick={onClose}>
           <X aria-hidden="true" />
         </button>
@@ -2692,7 +2671,6 @@ export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDr
       <ConnectionDrawerFields
         key={fieldsProps.editConnection?.id ?? "add"}
         {...fieldsProps}
-        onCreated={(connectionId) => setCreatedConnectionId(connectionId)}
         footer={
           <div className="connection-drawer-footer">
             <button type="button" className="settings-button settings-button-primary" onClick={onClose}>

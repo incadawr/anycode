@@ -103,14 +103,17 @@ function decodeIdentity(raw: unknown): SubagentCardSnapshotV1["identity"] | null
   if (typeof raw.description !== "string") return null;
   if (!(typeof raw.model === "string" || raw.model === null)) return null;
   // Optional and additive: a snapshot written before this field existed, or
-  // one whose child named its own model, carries nothing here.
-  if (!(raw.parentModel === undefined || (typeof raw.parentModel === "string" && raw.parentModel.length > 0))) return null;
+  // one whose child named its own model, carries nothing here. A present but
+  // unusable value (empty, or not a string) is treated as absent rather than
+  // as a structural mismatch — this field only ever ADDS a label, so it must
+  // never cost the reader the whole card.
+  const parentModel = typeof raw.parentModel === "string" && raw.parentModel.length > 0 ? raw.parentModel : undefined;
   if (!(raw.engine === null || (typeof raw.engine === "string" && ENGINES.has(raw.engine)))) return null;
   return {
     agentType: capCodePoints(raw.agentType, AGENT_TYPE_MAX_CHARS),
     description: capCodePoints(raw.description, DESCRIPTION_MAX_CHARS),
     model: raw.model === null ? null : capCodePoints(raw.model, MODEL_MAX_CHARS),
-    ...(raw.parentModel === undefined ? {} : { parentModel: capCodePoints(raw.parentModel, MODEL_MAX_CHARS) }),
+    ...(parentModel === undefined ? {} : { parentModel: capCodePoints(parentModel, MODEL_MAX_CHARS) }),
     engine: raw.engine as "codex" | "claude" | null,
   };
 }
