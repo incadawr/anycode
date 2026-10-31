@@ -62,6 +62,13 @@ export type ModelStreamEvent =
   | { type: "tool_input_delta"; id: string; delta: string }
   | { type: "tool_input_end"; id: string }
   | { type: "tool_call"; toolCall: ProposedToolCall }
+  /**
+   * `timeToFirstEventMs` is time from request start to the FIRST OUTPUT
+   * TOKEN (text, reasoning or tool content — never a metadata chunk), and
+   * `generationDurationMs` is the span from that token to this finish. Both
+   * are absent when the step streamed no output token at all, so a consumer
+   * never derives a rate from a wait it cannot attribute to generation.
+   */
   | { type: "finish"; finishReason: FinishReason; usage: TokenUsage; timeToFirstEventMs?: number; generationDurationMs?: number }
   /**
    * `retry` (TASK.33 W7b) is additive-optional terminal-retry metadata the loop

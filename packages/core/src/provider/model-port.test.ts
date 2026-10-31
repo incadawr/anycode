@@ -326,29 +326,51 @@ afterEach(() => {
 });
 
 describe("AiSdkModelPort — happy path", () => {
-  it("excludes queue wait and includes hidden reasoning after the first provider event", async () => {
+  // GitHub #2 review follow-up: the generation window opens on the first
+  // OUTPUT TOKEN, not on the first stream chunk. A `start-step` (or a raw
+  // `message_start`) can precede any token by seconds; counting that wait as
+  // generation understates t/s and hides the true time-to-first-token.
+  it("starts the generation window at the first output token, after a metadata chunk and a queue wait", async () => {
     let now = 100;
     vi.spyOn(performance, "now").mockImplementation(() => now);
     mockStreamText.mockImplementationOnce(() => ({ fullStream: (async function* () {
       yield startPart; // SDK's synthetic start, before any provider data
-      now = 1100; yield { type: "start-step" }; // first provider event
-      now = 5100; yield { type: "text-delta", id: "t", text: "answer" };
+      now = 1100; yield { type: "start-step" }; // metadata: NOT a token
+      now = 5100; yield { type: "text-delta", id: "t", text: "answer" }; // first token
       now = 6100; yield { ...finishPart, totalUsage: { inputTokens: 1, outputTokens: 1100, totalTokens: 1101 } };
     })() }));
     const finish = (await collect(new AiSdkModelPort(baseConfig()).streamText(baseRequest))).find((event) => event.type === "finish");
-    expect(finish).toMatchObject({ timeToFirstEventMs: 1000, generationDurationMs: 5000 });
+    // request start 100 → first token 5100 → finish 6100.
+    expect(finish).toMatchObject({ timeToFirstEventMs: 5000, generationDurationMs: 1000 });
   });
 
-  it("measures a response with billed output but no visible deltas", async () => {
+  it("opens the window on a reasoning or tool block too, not only on text", async () => {
     let now = 100;
     vi.spyOn(performance, "now").mockImplementation(() => now);
     mockStreamText.mockImplementationOnce(() => ({ fullStream: (async function* () {
       yield startPart;
       now = 1100; yield { type: "start-step" };
+      now = 2100; yield { type: "reasoning-delta", id: "r", text: "thinking" }; // first token: reasoning
+      now = 4100; yield { type: "tool-input-start", id: "call-1", toolName: "read" };
+      now = 4600; yield { ...finishPart, totalUsage: { inputTokens: 1, outputTokens: 50, totalTokens: 51 } };
+    })() }));
+    const finish = (await collect(new AiSdkModelPort(baseConfig()).streamText(baseRequest))).find((event) => event.type === "finish");
+    expect(finish).toMatchObject({ timeToFirstEventMs: 2000, generationDurationMs: 2500 });
+  });
+
+  it("omits both timing fields when the step streamed no output token at all", async () => {
+    let now = 100;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    mockStreamText.mockImplementationOnce(() => ({ fullStream: (async function* () {
+      yield startPart;
+      now = 1100; yield { type: "start-step" }; // metadata only — billed output may still exist
       now = 5100; yield finishPart;
     })() }));
     const finish = (await collect(new AiSdkModelPort(baseConfig()).streamText(baseRequest))).find((event) => event.type === "finish");
-    expect(finish).toMatchObject({ timeToFirstEventMs: 1000, generationDurationMs: 4000 });
+    // Billed output with no observable token is no measurement: absent fields
+    // (the popover shows a dash) instead of a fabricated 4000 ms window.
+    expect(finish).not.toHaveProperty("timeToFirstEventMs");
+    expect(finish).not.toHaveProperty("generationDurationMs");
   });
 
   it("yields translated events for a single successful attempt with no retries", async () => {
@@ -359,7 +381,7 @@ describe("AiSdkModelPort — happy path", () => {
 
     expect(events).toEqual([
       { type: "start" },
-      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, timeToFirstEventMs: expect.any(Number), generationDurationMs: expect.any(Number) },
+      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
     ]);
     expect(mockStreamText).toHaveBeenCalledTimes(1);
   });
@@ -400,7 +422,7 @@ describe("AiSdkModelPort — retry before model output (thrown exception)", () =
     expect(events[1]).toMatchObject({ type: "stream_retry", attempt: 1, maxAttempts: 3 });
     expect(events.slice(2)).toEqual([
       { type: "start" },
-      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, timeToFirstEventMs: expect.any(Number), generationDurationMs: expect.any(Number) },
+      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
     ]);
     expect(mockStreamText).toHaveBeenCalledTimes(2);
   });
@@ -639,7 +661,7 @@ describe("AiSdkModelPort — ignorable provider stream artifacts (slice 3.7 R1)"
 
     expect(events).toEqual([
       { type: "start" },
-      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, timeToFirstEventMs: expect.any(Number), generationDurationMs: expect.any(Number) },
+      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
     ]);
     expect(events.some((e) => e.type === "stream_retry" || e.type === "error")).toBe(false);
     expect(warnSpy).toHaveBeenCalledTimes(1);
@@ -1155,7 +1177,7 @@ describe("AiSdkModelPort — response-model provenance and identity readback", (
     // Raw parts have no core-vocabulary counterpart and never reach the caller.
     expect(events).toEqual([
       { type: "start" },
-      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, timeToFirstEventMs: expect.any(Number), generationDurationMs: expect.any(Number) },
+      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
     ]);
   });
 
@@ -1265,7 +1287,7 @@ describe("AiSdkModelPort — TASK.168 include_usage probe (openai-chat-completio
     expect(events).toEqual([
       { type: "start" },
       { type: "start" },
-      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, timeToFirstEventMs: expect.any(Number), generationDurationMs: expect.any(Number) },
+      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
     ]);
     expect(mockStreamText).toHaveBeenCalledTimes(2);
     expect(mockCreateLanguageModel).toHaveBeenNthCalledWith(1, expect.objectContaining({ includeUsage: true }));
@@ -1282,7 +1304,7 @@ describe("AiSdkModelPort — TASK.168 include_usage probe (openai-chat-completio
 
     expect(events2).toEqual([
       { type: "start" },
-      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, timeToFirstEventMs: expect.any(Number), generationDurationMs: expect.any(Number) },
+      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
     ]);
     expect(mockStreamText).toHaveBeenCalledTimes(3); // 2 above + this 1 — no re-probe attempt
     expect(mockCreateLanguageModel).toHaveBeenNthCalledWith(3, expect.objectContaining({ includeUsage: false }));
@@ -1302,7 +1324,7 @@ describe("AiSdkModelPort — TASK.168 include_usage probe (openai-chat-completio
     expect(events).toEqual([
       { type: "start" },
       { type: "start" },
-      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, timeToFirstEventMs: expect.any(Number), generationDurationMs: expect.any(Number) },
+      { type: "finish", finishReason: "stop", usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
     ]);
     expect(mockStreamText).toHaveBeenCalledTimes(2);
     expect(mockCreateLanguageModel).toHaveBeenNthCalledWith(2, expect.objectContaining({ includeUsage: false }));
