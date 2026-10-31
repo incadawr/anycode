@@ -52,15 +52,21 @@ const MODELS = [{ value: "model-a", resolvedModel: "model-a", displayName: "A" }
  * appeared on the wire at all (i.e. `mcpBridge` was never supplied), which is
  * itself part of what the switch test below pins.
  */
-function fakeSpawn(account: Record<string, unknown> = { tokenSource: "oauth" }): {
+function fakeSpawn(
+  account: Record<string, unknown> = { tokenSource: "oauth" },
+  models: unknown = MODELS,
+): {
   spawnImpl: (command: string, args: readonly string[]) => unknown;
   capturedArgs: () => string[] | undefined;
   controlSubtypes: () => string[];
+  /** Every control request the host SENT, with its body (the wire a pick really rides). */
+  capturedControls: () => Array<{ subtype: string; request: Record<string, unknown> }>;
   capturedSdkMcpServers: () => unknown;
   nestedMcpResponse: () => { subtype: string; response?: unknown; error?: string } | undefined;
 } {
   let mainArgs: string[] | undefined;
   const controls: string[] = [];
+  const controlRequests: Array<{ subtype: string; request: Record<string, unknown> }> = [];
   let sdkMcpServers: unknown;
   let nestedResponse: { subtype: string; response?: unknown; error?: string } | undefined;
   const NESTED_MCP_REQUEST_ID = "nested-mcp-handshake";
@@ -102,7 +108,7 @@ function fakeSpawn(account: Record<string, unknown> = { tokenSource: "oauth" }):
         const message = JSON.parse(line) as {
           type: string;
           request_id?: string;
-          request?: { subtype: string; sdkMcpServers?: unknown };
+          request?: { subtype: string; sdkMcpServers?: unknown; model?: unknown };
           response?: { request_id: string; subtype: string; response?: unknown; error?: string };
         };
         if (message.type === "control_response") {
@@ -114,6 +120,7 @@ function fakeSpawn(account: Record<string, unknown> = { tokenSource: "oauth" }):
         }
         if (message.type !== "control_request" || message.request === undefined) continue;
         controls.push(message.request.subtype);
+        controlRequests.push({ subtype: message.request.subtype, request: { ...message.request } });
         if (message.request.subtype !== "initialize") {
           const response = {};
           queueMicrotask(() => {
@@ -131,7 +138,7 @@ function fakeSpawn(account: Record<string, unknown> = { tokenSource: "oauth" }):
             Buffer.from(
               `${JSON.stringify({
                 type: "control_response",
-                response: { subtype: "success", request_id: message.request_id, response: { commands: [], models: MODELS, account } },
+                response: { subtype: "success", request_id: message.request_id, response: { commands: [], models, account } },
               })}\n`,
             ),
           );
@@ -167,6 +174,7 @@ function fakeSpawn(account: Record<string, unknown> = { tokenSource: "oauth" }):
     spawnImpl,
     capturedArgs: () => mainArgs,
     controlSubtypes: () => [...controls],
+    capturedControls: () => [...controlRequests],
     capturedSdkMcpServers: () => sdkMcpServers,
     nestedMcpResponse: () => nestedResponse,
   };
@@ -301,6 +309,85 @@ describe("connect: --effort rides the spawn (TASK.75)", () => {
     });
     try {
       expect(connected.engine.snapshot().effort).toBeUndefined();
+    } finally {
+      await connected.engine.dispose("session-close");
+    }
+  });
+});
+
+/**
+ * The reported defect: `create_session {engine:"claude", model:"<full id>"}`
+ * started a session that actually ran the DEFAULT model. The live catalog
+ * carries two ids per model — the wire `value` (`haiku`) and the full
+ * `resolvedModel` the CLI reports (`claude-haiku-5-5`) — and the boot resolved
+ * only the former, so a request naming the latter fell through to the default.
+ * Both are honest names for the same model and BOTH must reach the engine.
+ */
+describe("connect: a requested model reaches the engine by alias OR by full resolved id", () => {
+  /** Two entries: the reported shape (haiku = value, claude-haiku-5-5 = full id) plus the moving default. */
+  const FULL_ID_MODELS = [
+    { value: "default", resolvedModel: "claude-opus-5", displayName: "Default" },
+    { value: "haiku", resolvedModel: "claude-haiku-5-5", displayName: "Haiku" },
+  ];
+
+  const setModelBodies = (spawn: ReturnType<typeof fakeSpawn>): unknown[] =>
+    spawn.capturedControls().filter((c) => c.subtype === "set_model").map((c) => c.request.model);
+
+  it("a full resolved id boots that model — not the default, and set_model carries the wire value", async () => {
+    const spawn = fakeSpawn({ tokenSource: "oauth" }, FULL_ID_MODELS);
+    const connected = await startClaudeEngine({
+      ...baseOptions(spawn.spawnImpl),
+      selection: { model: "claude-haiku-5-5", origin: "draft" },
+    });
+    try {
+      expect(connected.model).toBe("haiku");
+      expect(setModelBodies(spawn)).toEqual(["haiku"]);
+    } finally {
+      await connected.engine.dispose("session-close");
+    }
+  });
+
+  it("the alias for the same model boots identically", async () => {
+    const spawn = fakeSpawn({ tokenSource: "oauth" }, FULL_ID_MODELS);
+    const connected = await startClaudeEngine({
+      ...baseOptions(spawn.spawnImpl),
+      selection: { model: "haiku", origin: "draft" },
+    });
+    try {
+      expect(connected.model).toBe("haiku");
+      expect(setModelBodies(spawn)).toEqual(["haiku"]);
+    } finally {
+      await connected.engine.dispose("session-close");
+    }
+  });
+
+  it("an id the account offers nothing for still degrades to the default at BOOT (the Sessions API refuses it before publication instead)", async () => {
+    const spawn = fakeSpawn({ tokenSource: "oauth" }, FULL_ID_MODELS);
+    const connected = await startClaudeEngine({
+      ...baseOptions(spawn.spawnImpl),
+      selection: { model: "claude-haiku-9-9", origin: "draft" },
+    });
+    try {
+      expect(connected.model).toBe("default");
+      // Nothing was sent to the CLI: an unverified id never reaches the wire.
+      expect(setModelBodies(spawn)).toEqual([]);
+    } finally {
+      await connected.engine.dispose("session-close");
+    }
+  });
+
+  it("a full resolved id passed to selectModel is translated to the wire value too", async () => {
+    const spawn = fakeSpawn({ tokenSource: "oauth" }, FULL_ID_MODELS);
+    const connected = await startClaudeEngine(baseOptions(spawn.spawnImpl));
+    try {
+      expect(connected.model).toBe("default");
+      const selected = await connected.engine.selectModel("claude-haiku-5-5");
+      expect(selected).toEqual({ ok: true, model: "haiku" });
+      expect(setModelBodies(spawn)).toEqual(["haiku"]);
+      expect(connected.engine.snapshot().model).toBe("haiku");
+      // The lookup the Sessions API's set_session_model uses.
+      expect(connected.engine.resolveModelId("claude-haiku-5-5")).toBe("haiku");
+      expect(connected.engine.resolveModelId("claude-imaginary-9")).toBeNull();
     } finally {
       await connected.engine.dispose("session-close");
     }

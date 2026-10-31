@@ -302,10 +302,21 @@ function resolvePreset(selection: ClaudeSessionSelection | undefined, notices: A
 }
 
 /**
- * Resolves the model id to spawn with. Returns undefined whenever the choice
- * cannot be POSITIVELY validated against the live catalog — the CLI's own
- * default is then used. Fail-closed: an unverifiable id would be accepted at
- * spawn and fail the turn late.
+ * Resolves the model id to spawn with — the catalog `value` that will be sent,
+ * never the raw request when the request named the CLI's RESOLVED id instead.
+ *
+ * The catalog carries TWO ids per model (`models.ts`): `value` (what the wire
+ * accepts, e.g. `haiku`) and `resolvedModel` (what the CLI reports, e.g.
+ * `claude-haiku-5-5`). Both are honest ways for a caller to name a model, so
+ * `catalog.resolveId` is what decides the wire value; matching only `value`
+ * dropped every full-id request on the floor.
+ *
+ * Returns undefined whenever the choice cannot be POSITIVELY validated against
+ * the live catalog — the CLI's own default is then used, with a notice naming
+ * the refusal (fail-closed: an unverifiable id would be accepted at spawn and
+ * fail the turn late). A caller that must NOT fall back (the Sessions API's
+ * `create_session`, see `set_session_model`) validates the same request against
+ * the same catalog and refuses it instead of accepting this default.
  */
 function resolveModel(
   catalog: ClaudeModelCatalog,
@@ -318,11 +329,12 @@ function resolveModel(
     notices.push(warning(`Claude could not read its model list, so "${requested}" could not be verified; the default model is used.`));
     return undefined;
   }
-  if (!catalog.has(requested)) {
+  const resolved = catalog.resolveId(requested);
+  if (resolved === undefined) {
     notices.push(warning(`Claude model "${requested}" is not available for this account; the default model is used.`));
     return undefined;
   }
-  return requested;
+  return resolved;
 }
 
 /**
@@ -643,8 +655,11 @@ async function connectClaudeEngine(
       // (`reconcileFromInit`). A persisted id the catalog no longer knows
       // degrades silently, exactly as `resolvePreset` does for a stale preset:
       // it is not a choice the user just made, so it is not a user-visible error.
+      // A persisted row holds the catalog `value` we selected, but an older row
+      // (or one written by a caller that named the CLI's resolved id) may hold
+      // the full id; resolveId maps both onto the wire value.
       const persisted = options.selection?.model;
-      model = persisted !== undefined && catalog.has(persisted) ? persisted : catalog.defaultValue() ?? "";
+      model = (persisted !== undefined ? catalog.resolveId(persisted) : undefined) ?? catalog.defaultValue() ?? "";
     } else {
       const requested = resolveModel(catalog, options.selection, notices);
       model = requested ?? catalog.defaultValue() ?? "";
@@ -962,11 +977,14 @@ export class ClaudeEngine implements SessionEngine {
     if (!settings.catalog.available) {
       return { ok: false, reason: "Claude could not read its model list; start a new session to retry." };
     }
-    if (!settings.catalog.has(id)) {
+    // A request may name the model by its catalog `value` OR by the full id the
+    // CLI reports (`models.ts` `resolveId`); only the value goes on the wire.
+    const resolved = settings.catalog.resolveId(id);
+    if (resolved === undefined) {
       return { ok: false, reason: `Claude model "${id}" is not available for this account.` };
     }
     try {
-      await this.client.controlRequest("set_model", { model: id });
+      await this.client.controlRequest("set_model", { model: resolved });
     } catch (error) {
       return { ok: false, reason: error instanceof Error ? error.message : "Claude refused the model change." };
     }
@@ -975,8 +993,8 @@ export class ClaudeEngine implements SessionEngine {
     // stashed before switching, and the incoming model's own remembered (or
     // no longer supported) effort is restored.
     this.rememberCurrentModelEffort();
-    settings.model = id;
-    const effort = this.resolveEffortForModel(id);
+    settings.model = resolved;
+    const effort = this.resolveEffortForModel(resolved);
     if (effort === undefined) {
       delete settings.effort;
     } else {
@@ -988,10 +1006,25 @@ export class ClaudeEngine implements SessionEngine {
         // model. The memory itself is unaffected by this failing — it stays
         // available to restore on a later switch back — but the user is told
         // the live process may not actually be running it.
-        settings.notices.push(warning(`Claude could not re-apply the remembered effort "${effort}" for model "${id}".`));
+        settings.notices.push(warning(`Claude could not re-apply the remembered effort "${effort}" for model "${resolved}".`));
       }
     }
-    return { ok: true, model: id };
+    return { ok: true, model: resolved };
+  }
+
+  /**
+   * Maps a caller-requested model id onto the catalog value this session can
+   * actually run, or null when the account offers nothing with that id — the
+   * lookup behind the Sessions API's `set_session_model` (an unknown request is
+   * REFUSED there, never replaced by the default).
+   *
+   * Accepts both ids the live catalog carries (`value` and `resolvedModel`); a
+   * catalog that could not be read validates NOTHING, so every id is null.
+   */
+  resolveModelId(requested: string): string | null {
+    const settings = this.settings;
+    if (settings === undefined || !settings.catalog.available) return null;
+    return settings.catalog.resolveId(requested) ?? null;
   }
 
   /** Remembers the current model's effective effort before switching away. */

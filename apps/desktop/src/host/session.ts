@@ -1,7 +1,7 @@
 import { manualCompactionUnavailableReason } from "../shared/manual-compaction.js";
 import { PresentationJournal } from "./presentation-journal.js";
 import type { CompactionRecordSeam } from "./compaction-records.js";
-import { agentMessageText, type AgentEnvelope, type AgentDelivery, type SessionPublicResult, type SessionStatus, type SessionActivityState, type SetSessionEffortOutcome } from "../shared/communication.js";
+import { agentMessageText, type AgentEnvelope, type AgentDelivery, type SessionPublicResult, type SessionStatus, type SessionActivityState, type SetSessionEffortOutcome, type SetSessionModelOutcome } from "../shared/communication.js";
 import { normalizeEffortLevels, validateSessionEffort } from "../shared/session-effort.js";
 import { safeFailureMessage } from "./safe-failure.js";
 import { claudeNativeChildRecord } from "./claude-usage.js";
@@ -223,6 +223,27 @@ export interface EngineSettingsSeam {
   selectModel(id: string): EngineSettingsChange;
   selectPreset(id: string): EngineSettingsChange;
   selectEffort?(effort: string): EngineSettingsChange;
+  /**
+   * Maps a caller-requested model id onto a choice this session can actually
+   * run, or null when it offers nothing under that id (`set_session_model`).
+   *
+   * It exists because a request may name a model in the engine's OWN
+   * vocabulary rather than the wire's: Claude's live catalog carries a `value`
+   * to send (`haiku`) and a full `resolvedModel` the CLI reports
+   * (`claude-haiku-5-5`), and both are honest names for the same model. The
+   * engine is the only authority on that mapping, so the lookup lives there.
+   * Absent -> the request is matched against `models()` ids exactly.
+   */
+  resolveModelId?(requested: string): string | null;
+  /**
+   * The ACKNOWLEDGED form of `selectModel`, for an engine that applies a model
+   * change over its own control request (Claude). Resolves only once the engine
+   * has confirmed the change; a refusal or a timeout resolves `{ ok: false }`
+   * and leaves the previously applied model in place — never a thrown error.
+   * Absent for an engine whose change rides the next `turn/start` (codex),
+   * where the synchronous `selectModel` IS the honest end of the operation.
+   */
+  selectModelAndWait?(id: string): Promise<EngineSettingsChange>;
   /**
    * The ACKNOWLEDGED form of `selectEffort`, for an engine that applies a
    * change over its own control request (Claude). Resolves only once the
@@ -2194,6 +2215,74 @@ export class Session {
     const change = seam.selectEffort(validation.effort);
     if (!change.ok) return { ok: false, reason: "not_ready", detail: change.reason };
     this.onEngineSettingsChange(change, { effort: validation.effort });
+    return { ok: true, status: this.communicationStatus() };
+  }
+
+  /**
+   * The Sessions API's session-wide model configuration (`set_session_model`,
+   * internal main→host op). It is the model twin of `communicationSetEffort`:
+   * a session created with an explicit model must be running it BEFORE anything
+   * (firstMessage, a restored prompt, the renderer) can start a turn.
+   *
+   * Why it exists at all: the model a caller names for `create_session` used to
+   * be handed to the host as argv and then resolved privately at boot, where a
+   * value the live catalog could not match was silently replaced by the
+   * engine's default — the caller was told its model was accepted while the
+   * session actually ran something else. Now the SAME request is applied and
+   * CONFIRMED here: an id the session's own catalog offers nothing for is a
+   * structured `invalid_model` refusal (with the ids it does offer), never a
+   * quiet default.
+   *
+   * Refusals are structured, never thrown, and nothing is mutated before
+   * validation passes: a failed native mutation leaves the previously applied
+   * model in place.
+   */
+  async communicationSetModel(payload: unknown): Promise<SetSessionModelOutcome> {
+    if (payload === null || typeof payload !== "object" || Array.isArray(payload) || !("model" in payload)) {
+      return { ok: false, reason: "not_ready", detail: "set_session_model expects a model value" };
+    }
+    const requested = (payload as { model?: unknown }).model;
+    if (this.shuttingDown) return { ok: false, reason: "not_ready", detail: "session is shutting down" };
+    if (this.relocating) return { ok: false, reason: "not_ready", detail: "session is relocating" };
+    if (this.busy) return { ok: false, reason: "not_ready", detail: "session is busy; stop the turn first" };
+    if (this.agentInbox.length > 0) {
+      return { ok: false, reason: "not_ready", detail: "a queued turn is waiting; stop it before changing model" };
+    }
+    const seam = this.engineSettings;
+    if (this.engine.id === "core" || seam === undefined) {
+      return { ok: false, reason: "not_ready", detail: "this engine has no model control" };
+    }
+    const available = seam.models().map((choice) => choice.id);
+    const refuse = (reason: "invalid_type" | "no_models" | "not_advertised"): SetSessionModelOutcome => ({
+      ok: false,
+      reason: "invalid_model",
+      detail: `engine=${this.engine.id}; model=${JSON.stringify(requested)}; available=${JSON.stringify(available)}; reason=${reason}`,
+    });
+    // An empty or whitespace-only request is a malformed value, not a model the
+    // account failed to offer.
+    if (typeof requested !== "string" || requested.trim() === "") return refuse("invalid_type");
+    if (available.length === 0) return refuse("no_models");
+    // The engine maps the request onto its OWN vocabulary: Claude's catalog
+    // carries both the wire `value` (`haiku`) and the full `resolvedModel` the
+    // CLI reports (`claude-haiku-5-5`), and either names the same model. An
+    // engine with no mapping keeps the exact-membership rule.
+    const resolved = seam.resolveModelId !== undefined
+      ? seam.resolveModelId(requested)
+      : (available.includes(requested) ? requested : null);
+    if (resolved === null) return refuse("not_advertised");
+
+    if (seam.selectModelAndWait !== undefined) {
+      // Claude: the change is applied over an acknowledged control request, so
+      // "configured" means the CLI really adopted it.
+      const applied = await seam.selectModelAndWait(resolved);
+      if (!applied.ok) return { ok: false, reason: "not_ready", detail: applied.reason };
+      return { ok: true, status: this.communicationStatus() };
+    }
+    // Codex: "selected" is the honest end of the operation — the choice rides
+    // the next turn/start, so it stays pending until that turn carries it.
+    const change = seam.selectModel(resolved);
+    if (!change.ok) return { ok: false, reason: "not_ready", detail: change.reason };
+    this.onEngineSettingsChange(change, { model: resolved });
     return { ok: true, status: this.communicationStatus() };
   }
 

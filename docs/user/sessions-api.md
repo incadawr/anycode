@@ -128,7 +128,12 @@ changed while the tab was opening), `firstMessage` is refused with
   AnyCode never falls back to the active connection in that case.
 - Omit `model` to use the active connection, as before.
 - For `engine: "codex"` or `engine: "claude"`, `model` is the model that engine
-  runs.
+  runs. Either id the engine's own catalog carries is accepted — the short
+  alias the CLI takes on the wire (`haiku`) and the full model id it reports
+  (`claude-haiku-5-5`) name the same model. The new session is confirmed to be
+  running that model before it is shared; a value the account does not offer is
+  refused with `invalid_model` and the error text lists the ids it does offer.
+  AnyCode never replaces it with the engine's default.
 
 ### Set the reasoning effort
 
@@ -212,8 +217,9 @@ Rules and limits:
   project switch is off, or the folders list excludes it), `not_trusted`,
   `folder_not_found`, `rate_limited`, `too_many`, `not_ready` (the engine is not
   signed in, or the tab limit is reached, or the new session could not confirm
-  its effort), `invalid_model` (`model` does not select exactly one provider
-  connection; the text lists the candidates), `invalid_effort` (the requested
+  its model or effort), `invalid_model` (`model` does not select exactly one
+  provider connection for `core`, or is a model the engine's account does not
+  offer; the text lists the candidates), `invalid_effort` (the requested
   effort is not one the selected model advertises; the text lists the allowed
   values), `invalid_account` (the requested Codex account names no configured
   account, or a label two accounts share; the text lists the candidates).
@@ -349,7 +355,7 @@ Services that bridge an outside channel use the same tools. See the
 | `create_session` says `not_allowed` | Tick **Allow agents to open tasks here** in the project's sidebar **⋯** menu. |
 | `create_session` says `not_trusted` | Trust the folder first (Settings → Permissions). |
 | `create_session` says `rate_limited` or `too_many` | At most 5 per minute and 8 agent-opened tabs alive. Wait, or close some. |
-| `create_session` says `invalid_model` | The `model` value matches no configured provider connection, or more than one. The error lists the connections; retry with a connection id, its label, `<providerId>/<model>`, or omit `model`. |
+| `create_session` says `invalid_model` | For `core`, the `model` value matches no configured provider connection, or more than one; retry with a connection id, its label, `<providerId>/<model>`, or omit `model`. For `codex`/`claude`, the account does not offer that model; retry with one of the ids the error lists, or omit `model`. |
 | `create_session` says `invalid_effort` | The selected model does not advertise that effort. The error lists the allowed values for that engine and model; retry with one of them, or omit `effort` to use the engine default. |
 | `create_session` says `invalid_account` | The `account` value names no configured Codex account, a label two accounts share, or it was sent for an engine other than `codex`. The error lists the accounts as `label (id)`; retry with the id, omit `account` to use the default, or drop it for a non-Codex session. |
 | Copy buttons are disabled | The endpoint is not listening. Fix the status first. |
