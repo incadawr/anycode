@@ -1,8 +1,8 @@
 /**
- * Live GUI smoke for TASK.106 cut-1 (design: grouped all-connections model
+ * Live GUI smoke for cut-1 (design: grouped all-connections model
  * picker on the New Session start screen): drives a REAL Electron dev
  * instance over the automation HTTP channel (`main/automation/*`, see
- * `automation/README.md`'s "Start screen" section, "Model-menu (TASK.106
+ * `automation/README.md`'s "Start screen" section, "Model-menu (
  * cut-1)" subsection) through the full live path — two z-ai connections
  * created via the real Settings drawer, the New Session model popover
  * grouped by connection, a real click-select of a model from the NON-default
@@ -521,7 +521,7 @@ async function step5OpenDraftAndModelMenu(ctx) {
   assert(step, groupLabels.includes("Main"), `expected a group labeled "Main", got labels=${JSON.stringify(groupLabels)}`);
   assert(step, groupLabels.includes("Second"), `expected a group labeled "Second", got labels=${JSON.stringify(groupLabels)}`);
 
-  // TASK.131 drill-down form: the popover opens on its ROOT level, which
+  // drill-down form: the popover opens on its ROOT level, which
   // renders the popular picks, one row per connection, and (for a model that
   // declares a vocabulary) the effort row. A connection's models are a level
   // of their own, so NO group has rendered items here — `count` is the
@@ -544,7 +544,7 @@ async function step5OpenDraftAndModelMenu(ctx) {
 
 async function step6SelectFromSecondGroup(ctx) {
   const step = 6;
-  // TASK.131 drill-down form: Second's model rows are NOT in the DOM while
+  // drill-down form: Second's model rows are NOT in the DOM while
   // the root level is showing — the /select driver (facade clickModelItem)
   // clicks Second's group row first, opening its level, then the model row.
   // The model id to pick comes from the connection's settings.json models[]

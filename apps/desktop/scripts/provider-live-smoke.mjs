@@ -1,5 +1,5 @@
 /**
- * Live provider matrix smoke for TASK.43 W6 (design/track-43-45-33-47-49-cut.md
+ * Live provider matrix smoke for W6 (design/track-43-45-33-47-49-cut.md
  * §2 W6): drives REAL wire requests, one per transport/gateway cell, exercising
  * the exact HTTP shapes AnyCode's own transports send — Anthropic-messages
  * dual-auth + reasoning (`anthropic.ts`), OpenAI Responses store:false +
@@ -404,7 +404,7 @@ async function runOpenRouterCell(cellIdChat, labelChat, cellIdResponses, labelRe
   // OpenRouter does not universally guarantee a Responses-shaped surface —
   // this reuses the SAME request builder as the OpenAI responses cell against
   // OpenRouter's baseURL, proving the openai-responses transport is baseURL-
-  // portable (TASK.43 §0.4's whole point); a non-2xx here is reported as a
+  // portable (§0.4's whole point); a non-2xx here is reported as a
   // real FAIL, not silently downgraded, since it's a live, credentialed call.
   try {
     const { status, json } = await postJson(

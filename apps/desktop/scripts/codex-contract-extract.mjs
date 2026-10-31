@@ -74,7 +74,7 @@ const CLIENT_REQUEST_METHODS = [
   // (F19), and a silent rename would erode that consumer's premise
   // unnoticed. Also called WITHOUT a `params` key (amended §A3.7).
   { method: "account/usage/read", resultRef: "v2/GetAccountTokenUsageResponse" },
-  // TASK.185 / Taskana 4139: Windows sandbox is a SEPARATE protocol family
+  // /Windows sandbox is a SEPARATE protocol family
   // (not sandbox policy fields). readiness is PROBE-ONLY so far — no setup is
   // ever started (setupStart is deliberately NOT pinned: AnyCode never sends
   // it, so pinning it would widen the consumed contract for a method no code
@@ -110,7 +110,7 @@ const SERVER_NOTIFICATION_METHODS = [
   // added to the pre-turn benign list so it never counts toward
   // PRE_TURN_NOTIFICATION_LIMIT.
   { method: "remoteControl/status/changed" },
-  // TASK.185 / Taskana 4139: setup-completed echo; pinned for drift only —
+  // / setup-completed echo; pinned for drift only —
   // AnyCode never starts a setup, so a thread-less arrival is dropped by the
   // foreign-notification backstop like any other.
   { method: "windowsSandbox/setupCompleted" },

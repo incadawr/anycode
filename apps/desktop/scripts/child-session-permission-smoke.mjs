@@ -1,5 +1,5 @@
 /**
- * Live smoke for TASK.102 CUT-S2 §4.2 пп.6, 7, 12 — S2d D3. Drives a REAL
+ * Live smoke for CUT-S2 §4.2 пп.6, 7, 12 — S2d D3. Drives a REAL
  * Electron dev instance end-to-end and proves, on a real screen and a real
  * SQLite file, what a unit matrix structurally cannot:
  *

@@ -1,5 +1,5 @@
 /**
- * Live smoke for Taskana 4703 (docs/development/dock.md): the owner's exact
+ * Live smoke for (docs/development/dock.md): the owner's exact
  * squash stack — md preview + browser preview + subagents split + git panel,
  * all open at once in a ~2000px window — must now produce ONE dock column
  * with the conversation keeping its 420px floor (it was `minmax(0,1fr)`

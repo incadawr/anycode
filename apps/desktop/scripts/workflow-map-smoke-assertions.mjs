@@ -1,8 +1,8 @@
 /**
- * Pure assertion helpers for `workflow-map-smoke.mjs` (Taskana 4161).
+ * Pure assertion helpers for `workflow-map-smoke.mjs`.
  *
  * Every "does the run's shape look right" judgement the live smoke makes on
- * the workflow map/ticks probe bodies (`automation/README.md`'s Taskana-4161
+ * the workflow map/ticks probe bodies (`automation/README.md`'s
  * routes) lives HERE, dependency-free and data-in/verdict-out, so vitest can
  * pin the logic itself (`src/main/workflow-map-smoke-assertions.test.ts`)
  * even where a live Electron run is impossible (the smoke's own

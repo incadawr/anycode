@@ -1,5 +1,5 @@
 /**
- * Live smoke for TASK.102 CUT-S2 §4.2 пп.9,10,11 (S2d D3) — the track's race
+ * Live smoke for CUT-S2 §4.2 пп.9,10,11 (S2d D3) — the track's race
  * probes. Drives a REAL Electron dev instance end-to-end over the automation
  * HTTP channel and proves four things a synchronous fake-fork unit test
  * cannot (`tabs.test.ts`'s admission-atomicity/drain matrix uses a FAKE

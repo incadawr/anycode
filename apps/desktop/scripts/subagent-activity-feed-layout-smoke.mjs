@@ -1,5 +1,5 @@
 /**
- * Deterministic Chromium layout regression for TASK.73.
+ * Deterministic Chromium layout regression for.
  *
  * Unlike the live subagent-card smoke, this needs no provider or running app:
  * it loads the production CSS into an isolated headless Chrome, creates a

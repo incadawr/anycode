@@ -1,5 +1,5 @@
 /**
- * Live smoke for TASK.102 CUT-S2 §10.9.3 F4-wiring / §4.2 п.13: drives a REAL
+ * Live smoke for CUT-S2 §10.9.3 F4-wiring / §4.2 п.13: drives a REAL
  * Electron dev instance end-to-end over the automation HTTP channel
  * (`main/automation/*`, see `automation/README.md`) and proves the ONE thing
  * a unit matrix cannot (architect verdict §10.10.4 — `shared/settings.test.ts`
@@ -8,7 +8,7 @@
  * provider connection, a real model calling
  * `Agent(tier:"session", provider:<the parent's own providerId>)` makes the
  * child ACTUALLY start (a second live process, admitted into
- * `TabHostManager`'s in-memory `childRuns` ledger — TASK.102 S2d D1's new
+ * `TabHostManager`'s in-memory `childRuns` ledger — S2d D1's new
  * `/state` projection), and the child's persisted SQLite row (`/child-runs`,
  * the SAME D1 slice's maintenance route) carries the SAME `connectionId` as
  * the one connection the whole app was configured with. Per the cut's own
@@ -27,7 +27,7 @@
  * — same P7.H per-run disposable profile + `.smoke-secrets/glm.env`
  * discipline). UNLIKE `subagent-card-smoke.mjs`, this script seeds a REAL
  * settings v2 `provider.connections[]` entry (not the vestigial v1-shaped
- * `provider:{id,model}` that predates TASK.45 and validates to nothing under
+ * `provider:{id,model}` that predates and validates to nothing under
  * the current zod schema, `settings/schema.ts`'s `settingsSchema` requiring
  * `version:2` + `provider.connections: array`) — this scenario's whole point
  * is a REAL `connectionId`, which only a real v2 connection entry produces;
@@ -384,7 +384,7 @@ export function findAnyAgentBlock(transcript) {
  * Polls `GET /state` for BOTH signals at once: the Agent tool_call block (to
  * read back `input.tier`/`input.provider`, proving the model exercised the
  * EXPLICIT-provider branch and not the default/omitted-provider one) and the
- * main-plane `childRuns` ledger projection (TASK.102 S2d D1's new seam,
+ * main-plane `childRuns` ledger projection (S2d D1's new seam,
  * `TabHostManager.listChildRuns` via `main/tabs.ts` — proof the child was
  * REALLY admitted server-side, independent of anything the renderer
  * transcript reports). Returns as soon as EITHER settles into a stable
@@ -908,7 +908,7 @@ async function run() {
   process.exit(failedStep === null ? 0 : 1);
 }
 
-// TASK.102 S2d D2: guarded so `child-session-scenario-smoke.mjs` can `import`
+// S2d D2: guarded so `child-session-scenario-smoke.mjs` can `import`
 // this module's helpers (step1LaunchApp/step1DiscoverTab/api/… above, all now
 // `export`ed) without triggering ITS OWN app launch/dispatch/teardown cycle as
 // an unwanted side effect of the import — auto-run only fires when this file

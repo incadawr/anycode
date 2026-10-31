@@ -1,5 +1,5 @@
 /**
- * Live GUI smoke for Taskana 4161 (TASK.232, "живой смоук карты без человека"):
+ * Live GUI smoke for ("живой смоук карты без человека"):
  * the FIRST end-to-end run of the Workflow run map + collapsed tick strip on
  * a REAL Electron dev instance, driven entirely over the automation HTTP
  * channel (`main/automation/*` — this card's own probes/drivers from
@@ -450,7 +450,7 @@ async function getTranscriptBlocks(ctx, step) {
   return transcript;
 }
 
-// ── workflow probe/driver helpers (automation/README.md, Taskana 4161 section) ──
+// ── workflow probe/driver helpers (automation/README.md, section) ──
 
 async function workflowMapState(ctx, step, toolCallId) {
   const resp = await api(
