@@ -1297,7 +1297,7 @@ export interface ConnectionDrawerFieldsProps {
   /** Secondary action supplied by the drawer; the embedded form omits it. */
   cancelAction?: ReactNode;
   onCommitBegin?: () => number;
-  onCommitSuccess?: (version: number) => void;
+  onCommitSuccess?: (version: number) => boolean;
   onBusyChange?: (busy: boolean) => void;
   interactionBlocked?: boolean;
   /** First-run form: keep connection tuning behind a disclosure. */
@@ -1497,6 +1497,7 @@ export function ConnectionDrawerFields({
   const [draftDefaultModel, setDraftDefaultModel] = useState("");
   const [visibleModelDraft, setVisibleModelDraft] = useState<string[]>([]);
   const [pendingVisibleModels, setPendingVisibleModels] = useState<string[] | null>(null);
+  const modelSelectionRevision = useRef(0);
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [clearing, setClearing] = useState(false);
@@ -1523,8 +1524,7 @@ export function ConnectionDrawerFields({
     if (consentResolution.ok) {
       setError(current => current === "The API key is awaiting storage consent. If you decline, enter it again." ? null : current);
       if (pending.complete && (onCommitBegin?.() ?? pending.version) === pending.version) {
-        onCommitSuccess?.(pending.version);
-        flashSavedNotice();
+        if (onCommitSuccess?.(pending.version) ?? true) flashSavedNotice();
       }
     } else {
       setError(current => current && current !== "The API key is awaiting storage consent. If you decline, enter it again." ? `${current} The API key was not saved. Enter it again to retry.` : "The API key was not saved. Enter it again to retry.");
@@ -2080,6 +2080,7 @@ export function ConnectionDrawerFields({
       return;
     }
     const commitVersion = onCommitBegin?.() ?? 0;
+    const savedSelectionRevision = modelSelectionRevision.current;
     onBusyChange?.(true);
     setSaving(true);
     setError(null);
@@ -2114,7 +2115,14 @@ export function ConnectionDrawerFields({
         setError("The connection, key or proxy changed after fetching. Fetch again or discard fetched metadata; your model selections are kept.");
         return;
       }
-      if (outcome.metaOk) { setDirtyRates(new Set()); setPendingVisibleModels(null); setCommitFetchedModels(false); }
+      if (outcome.metaOk) {
+        setDirtyRates(new Set());
+        // An older request must not discard a model selection made while it ran.
+        if (modelSelectionRevision.current === savedSelectionRevision) {
+          setPendingVisibleModels(null);
+          setCommitFetchedModels(false);
+        }
+      }
       let keyRefused = false;
       let keyPending = false;
       let keyRefusalDetail: string | null = null;
@@ -2152,8 +2160,7 @@ export function ConnectionDrawerFields({
       } else if (keyPending && credentialKey !== undefined) {
         setError("The API key is awaiting storage consent. If you decline, enter it again.");
       } else {
-        onCommitSuccess?.(commitVersion);
-        flashSavedNotice();
+        if (onCommitSuccess?.(commitVersion) ?? true) flashSavedNotice();
       }
     } finally {
       onBusyChange?.(false);
@@ -2201,6 +2208,7 @@ export function ConnectionDrawerFields({
    * already merged onto the connection by main.
    */
   function invalidateFetchedReceipt(): void {
+    modelSelectionRevision.current++;
     fetchGeneration.current++;
     setPendingVisibleModels(retainedModelSelection(modelPopupOpen, visibleModelDraft, pendingVisibleModels));
     if (fetchedModels !== null || fetchingModels || commitFetchedModels) {
@@ -2810,6 +2818,7 @@ export function ConnectionDrawerFields({
               </div>
               <div className="connection-drawer-popup-manual"><input className="settings-field-input" aria-label="Manual model ID" placeholder="Enter a model ID" value={manualModel} onChange={e => setManualModel(e.target.value)} /><button type="button" className="settings-button connection-drawer-model-add" disabled={readOnly || normalizeModelId(manualModel) === null} onClick={() => { const id = normalizeModelId(manualModel); if (id) { setVisibleModelDraft(current => mergeModelIds(current, [id])); setManualModel(""); } }}>Add</button></div>
               <div className="connection-drawer-model-heading"><span>{visibleModelDraft.length} selected</span><button type="button" className="settings-button connection-drawer-model-done" disabled={readOnly || fetchingModels || visibleModelDraft.length === 0} onClick={() => {
+                modelSelectionRevision.current++;
                 const defaultModel = visibleModelDraft.includes(draftDefaultModel) ? draftDefaultModel : visibleModelDraft[0]!;
                 setPendingVisibleModels(visibleModelDraft);
                 setCommitFetchedModels(fetchedModels !== null);
@@ -2912,7 +2921,7 @@ export function ConnectionDrawerFields({
       {error !== null && !modelPopupOpen && (
         <div className="settings-notice" role="alert">
           {error}
-          {commitFetchedModels && <button type="button" className="settings-button" onClick={() => { setFetchedModels(null); setFetchedSource(null); setCommitFetchedModels(false); setError("Fetched metadata discarded. Your model selections are kept; save or fetch again."); }}>Discard fetched metadata</button>}
+          {commitFetchedModels && <button type="button" className="settings-button" onClick={() => { modelSelectionRevision.current++; setFetchedModels(null); setFetchedSource(null); setCommitFetchedModels(false); setError("Fetched metadata discarded. Your model selections are kept; save or fetch again."); }}>Discard fetched metadata</button>}
         </div>
       )}
 
@@ -3043,7 +3052,11 @@ export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDr
         onConnectionCreated={(connectionId) => setCreatedId(connectionId)}
         cancelAction={<button type="button" className="settings-button" disabled={busy} onClick={requestClose}>Cancel</button>}
         onCommitBegin={() => editVersion.current}
-        onCommitSuccess={(version) => { if (version === editVersion.current) setDirty(false); }}
+        onCommitSuccess={(version) => {
+          if (version !== editVersion.current) return false;
+          setDirty(false);
+          return true;
+        }}
         onBusyChange={setBusy}
         interactionBlocked={confirmDiscard}
       />

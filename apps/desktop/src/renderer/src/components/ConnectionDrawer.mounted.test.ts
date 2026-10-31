@@ -616,3 +616,44 @@ it.each([true, false])("handles OpenRouter consent %s while model refresh is sti
     else { expect(onClose).not.toHaveBeenCalled(); expect(container.textContent).toContain("Discard unsaved changes?"); }
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
+
+it("preserves a newer model choice made while an earlier Save is pending", async () => {
+  const connection = {id:"c1", providerId:"glm", model:"glm-5.3", modelsFetchedAt:"2026-01-01", visibleModels:["glm-5.3"]};
+  const rig = catalogRig(connection), onClose = vi.fn();
+  let finish!: (value: unknown) => void;
+  rig.update.mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
+  const {container, root} = await mountDrawer(connection, rig, onClose);
+  try {
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    expect(rig.update).toHaveBeenCalledOnce();
+    await act(async () => { container.querySelector<HTMLButtonElement>(".connection-drawer-model-open")!.click(); });
+    const newDefault = container.querySelector<HTMLButtonElement>('[aria-label="Set glm-5.2 as default"]')!;
+    await act(async () => newDefault.click());
+    await act(async () => { container.querySelector<HTMLButtonElement>(".connection-drawer-model-done")!.click(); });
+    await act(async () => { finish({ok:true, snapshot:rig.snapshot}); });
+    expect(container.querySelector('[data-model-id="glm-5.2"]')?.textContent).toContain("default");
+    expect(container.querySelector(".connection-drawer-saved")).toBeNull();
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    expect(rig.update).toHaveBeenCalledTimes(2);
+    expect(rig.update.mock.calls[1]![0]).toMatchObject({model:"glm-5.2", visibleModels:["glm-5.3", "glm-5.2"]});
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it("keeps a fetched model receipt chosen during an earlier Save", async () => {
+  const connection = {id:"c1", providerId:"glm", model:"glm-5.3", authOptional:true, modelsFetchedAt:"2026-01-01", visibleModels:["glm-5.3"]};
+  const rig = catalogRig(connection), onClose = vi.fn();
+  let finish!: (value: unknown) => void;
+  rig.update.mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
+  rig.fetchModels.mockResolvedValue({ok:true, models:[{id:"remote-model"}], source:{guard:"fixture-guard", targetUrl:"http://127.0.0.1/v1/models", baseUrl:"", transport:""}});
+  const {container, root} = await mountDrawer(connection, rig, onClose);
+  try {
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    await act(async () => { container.querySelector<HTMLButtonElement>(".connection-drawer-model-open")!.click(); });
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Refresh")!.click(); });
+    await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="Set remote-model as default"]')!.click(); });
+    await act(async () => { container.querySelector<HTMLButtonElement>(".connection-drawer-model-done")!.click(); });
+    await act(async () => { finish({ok:true, snapshot:rig.snapshot}); });
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    expect(rig.update.mock.calls[1]![0]).toMatchObject({model:"remote-model", fetchedModels:{guard:"fixture-guard", models:[{id:"remote-model"}]}});
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
