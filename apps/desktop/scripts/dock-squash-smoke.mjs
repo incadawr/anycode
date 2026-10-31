@@ -21,7 +21,8 @@
  *  5. tab close → previews list drops it (D5 round-trip)
  *  6. window 760×600 → drawer mode, conversation ≥400; back to 1600×900 →
  *     column mode, dock re-clamped
- *  7. (Stage 2) split leg at 1800 → split:true; at 900 → auto-merged
+ *  7. (Stage 2) split leg at 1800 → split pinned, or the documented
+ *     split_refused refusal recorded as expected; at 900 → auto-merged
  *
  * Every assertion is PASS/FAIL recorded, never silently assumed.
  * Plain node >=22, ZERO npm deps. Usage:
@@ -30,6 +31,17 @@
 
 import { spawn } from "node:child_process";
 import { execFileSync } from "node:child_process";
+// The --split leg's verdict logic lives here, pure and vitest-covered (see
+// src/main/dock-squash-smoke-assertions.test.ts) — the workflow-map smoke's
+// discipline: a smoke's failure output is its UI.
+import {
+  checkAutoMerged,
+  checkPinned,
+  checkSplitPreconditions,
+  checkSplitRetryOutcome,
+  classifySplitClick,
+  expectedSplitPredicate,
+} from "./dock-squash-smoke-assertions.mjs";
 import {
   closeSync,
   copyFileSync,
@@ -415,17 +427,75 @@ async function step9SplitLeg(ctx) {
   await apiOk(ctx, 9, "POST", "/window/size", { width: 1800, height: 900 });
   await waitForDockState(ctx, 9, (s) => s.mode === "column", "column at 1800", 30_000);
   // Cross-review D1/D6: the pinned tab must NOT be the active (primary) tab,
-  // and a web preview is never splittable — the browser preview is the active
-  // primary here, so the split pins the Review (git) tab.
-  const split = await apiOk(ctx, 9, "POST", `/dock/tabs/${encodeURIComponent("git")}/split`);
-  assert(9, split?.ok === true, `split failed: ${JSON.stringify(split)}`);
-  // `split` is the pinned tab ID (string) or null — never a boolean.
-  const splitState = await waitForDockState(ctx, 9, (s) => typeof s.split === "string", "split:<tabId>", 20_000);
-  record("1800px: split right → split pinned", typeof splitState.split === "string" ? "PASS" : "FAIL", JSON.stringify(splitState.split));
+  // and a web preview is never splittable — so the leg pins the Review (git)
+  // tab and FIRST makes the browser preview the active primary explicitly
+  // (a real dock tab click). The old step assumed the preview was already
+  // active; the git-panel derivation effect re-focuses `git` on every re-run
+  // (App.tsx's `open()` re-focuses an existing tab), which left `git` as the
+  // primary, isSplittableTab refused the pin and the facade honestly
+  // answered split_refused — the smoke aborted on a step-defect premise.
+  // Bounded retry (review 4839 follow-up): once preconditions HELD, a
+  // split_refused is retried (browser-tab click → precondition wait → split
+  // click) and a refusal that persists through every attempt with preconditions
+  // held is a FAIL — an always-refusing facade must never read ALL GREEN. A
+  // refusal is PASS-expected only when the precondition wait never held.
+  const SPLIT_MAX_ATTEMPTS = 3;
+  const browserTabId = `preview:${ctx.htmlPreviewId}`;
+  const attempts = [];
+  let split = null;
+  for (let attempt = 1; attempt <= SPLIT_MAX_ATTEMPTS; attempt += 1) {
+    const click = await apiOk(ctx, 9, "POST", `/dock/tabs/${encodeURIComponent(browserTabId)}/click`);
+    assert(9, click?.ok === true, `browser preview tab click failed: ${JSON.stringify(click)}`);
+    let preconditionsOk = false;
+    let ready = null;
+    try {
+      ready = await waitForDockState(
+        ctx,
+        9,
+        (s) => checkSplitPreconditions(s, "git").ok,
+        "git present, browser preview active (split preconditions)",
+        20_000,
+      );
+      preconditionsOk = true;
+    } catch {
+      // The precondition wait timing out is itself the honest signal: record
+      // the last state's precondition detail and let the outcome judge.
+      ready = await apiOk(ctx, 9, "GET", "/dock/state");
+    }
+    const pre = checkSplitPreconditions(ready, "git");
+    if (preconditionsOk) {
+      record("split leg preconditions: git present, NOT the active primary", "PASS", `${pre.detail} (attempt ${attempt}/${SPLIT_MAX_ATTEMPTS})`);
+    } else {
+      stepLog(9, `split preconditions not held (attempt ${attempt}/${SPLIT_MAX_ATTEMPTS}): ${pre.detail}`);
+    }
+    split = await apiOk(ctx, 9, "POST", `/dock/tabs/${encodeURIComponent("git")}/split`);
+    attempts.push({ preconditionsOk, click: split });
+    if (classifySplitClick(split) !== "refused") {
+      break; // pinned (done) or failed (wiring defect) — no retry either way
+    }
+    stepLog(9, `split refused (attempt ${attempt}/${SPLIT_MAX_ATTEMPTS}) — re-focusing the browser preview and retrying`);
+  }
+  const verdict = checkSplitRetryOutcome(attempts);
+  record(verdict.label, verdict.status, verdict.detail);
+  assert(9, verdict.status === "PASS", `split click verdict failed: ${verdict.detail}`);
+  // `split` is the pinned tab ID (string) or null — never a boolean. A
+  // refused click must read split:null too (the store never pinned): the
+  // wait predicate is exact in both branches, so ok-then-stuck and
+  // refused-then-pinned both time out here instead of passing vacuously.
+  const splitState = await waitForDockState(
+    ctx,
+    9,
+    expectedSplitPredicate(split),
+    split?.ok === true ? "split:<tabId>" : "split:null (refused, no stale pin)",
+    20_000,
+  );
+  const pinned = checkPinned(split, splitState);
+  record(pinned.label, pinned.status, pinned.detail);
 
   await apiOk(ctx, 9, "POST", "/window/size", { width: 900, height: 700 });
   const merged = await waitForDockState(ctx, 9, (s) => s.split === null, "auto-merged (split:null)", 30_000);
-  record("900px: below canSplit → auto-merged", merged.split === null ? "PASS" : "FAIL", JSON.stringify(merged.split));
+  const mergeVerdict = checkAutoMerged(merged);
+  record(mergeVerdict.label, mergeVerdict.status, mergeVerdict.detail);
 }
 
 // ── teardown ──
