@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- MiniMax is available as a provider, for the international and the China region: the session gets MiniMax-M3.1-Flash and MiniMax-M3 with the right context window, the reasoning tiers; M3.1-Flash has a catalog API rate and M3 has no catalog price yet, and picking a thinking depth now actually takes effect instead of the endpoint reasoning at its own maximum.
+
 ## [0.0.57] — 2026-10-31
 
 ### Fixed
