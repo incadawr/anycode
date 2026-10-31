@@ -16,6 +16,11 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - The Environment menu's Sessions API, External approvals, handle and Full browser access rows now match the Workspace/Branch/Changes rows: an icon, a title with a readable second line, and the switch or field on the right. Hints are no longer cut off.
 - Settings → Sessions API now marks an allowed folder that is missing on disk ("Missing on disk") and explains that it grants nothing until the folder is back; the mark clears without a restart once the folder exists again.
 
+- Turn-end footer reads "2 turns · 2m 12s · at 00:02" — the clock time is labelled, so it no longer looks like a second, unit-less duration.
+- Long single-word tab titles (paths, filenames) wrap in the session header instead of being cut mid-word by the ellipsis, capped at two lines so any title length still fits the fixed header height.
+- The disabled "Remove project from list" sidebar menu item shows its reason ("Close this project's open tasks first.") as visible text instead of a hover-only tooltip.
+- Settings → Sessions API explains how sessions become shareable (the session's ⋯ environment menu) rather than only counting them, and the Advanced heading matches the pane's other section labels.
+- The working-row verb rotation no longer shows "Checking…", which stacked on the auto-check toasts; the fourth band reads "Waiting…".
 - DeepSeek sessions now get a real title after the first turn: the title request leaves room for the model's mandatory thinking instead of spending its whole token budget on it.
 - Choosing No thinking for Xiaomi MiMo models now turns their reasoning off.
 - Xiaomi MiMo Token Plan sessions show a pay-as-you-go list-price cost estimate instead of “price unknown”.
