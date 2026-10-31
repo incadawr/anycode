@@ -159,8 +159,7 @@ function extractSubject(toolName: string, input: unknown): string | undefined {
 const PAREN_RE = /[()]/;
 
 /**
- * Splits a Bash command into the individual commands a shell would run
- * (; exported and separator-kind-aware as of). Returns
+ * Splits a Bash command into the individual commands a shell would run. Returns
  * `undefined` when the command must be treated as unsegmentable — the caller
  * then refuses the match (fail closed).
  *
