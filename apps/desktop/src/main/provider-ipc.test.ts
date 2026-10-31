@@ -357,6 +357,11 @@ describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP 
     });
   });
 
+  it("maps OpenRouter limits and per-token prices", async () => {
+    const result = await fetchCustomProviderModels({ baseUrl: "https://openrouter.ai/api/v1", fetchImpl: async () => new Response(JSON.stringify({ data: [{ id: "vendor/model", context_length: 1048576, top_provider: { max_completion_tokens: 524288 }, pricing: { prompt: "0.000000075", completion: "0.0000003" }, supported_parameters: ["reasoning_effort"] }] })) });
+    expect(result).toEqual({ ok: true, models: [{ id: "vendor/model", contextWindow: 1048576, maxOutputTokens: 524288, pricing: { input: 0.075, cachedInput: 0.075, output: 0.3 }, reasoning: true, effortLevels: ["off", "low", "medium", "high", "xhigh"] }] });
+  });
+
   it("exposes effort controls when a model declares reasoning_effort", async () => {
     const { origin } = await listen((_req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
