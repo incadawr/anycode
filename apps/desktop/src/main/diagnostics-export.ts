@@ -65,11 +65,17 @@ export const DIAGNOSTICS_TELEMETRY_TAIL_BYTES = 512 * 1024;
 /** Head window used to find `session_start.parentSession` (never exported). */
 export const DIAGNOSTICS_TELEMETRY_HEAD_BYTES = 8 * 1024;
 /**
- * How many telemetry files may be HEAD-read to discover the tree edges. Heads
- * carry no records, but the directory can hold years of sessions: this bounds
- * the discovery pass independently of the data caps.
+ * Hard safety cap on how many file HEADS the discovery pass may read. Heads
+ * carry no records and the pass normally stops far earlier (at the first file
+ * older than the root session's start — see `discoverSessionTree`), so this
+ * only bites for a root so old that the whole directory is still inside its
+ * lifetime. When it bites, the bundle SAYS the tree may be incomplete instead
+ * of quietly exporting a root-only "tree".
  */
-export const DIAGNOSTICS_TELEMETRY_MAX_EDGE_FILES = 200;
+export const DIAGNOSTICS_TELEMETRY_MAX_EDGE_FILES = 2_000;
+/** Bundle note added when the head-read cap stopped the discovery pass. */
+export const DIAGNOSTICS_TREE_DISCOVERY_NOTE =
+  "session-tree discovery stopped at the file cap; some session-tree files may be missing";
 export const DIAGNOSTICS_TELEMETRY_MAX_TOTAL_BYTES = 8 * 1024 * 1024;
 export const DIAGNOSTICS_TELEMETRY_MAX_SESSIONS = 50;
 export const DIAGNOSTICS_TELEMETRY_MAX_RECORDS_PER_SESSION = 2_000;
@@ -154,6 +160,8 @@ export interface DiagnosticsExportDeps {
   /** Injectable per-export id salt (tests); default is random per export. */
   salt?: string;
   maxBytes?: number;
+  /** Injectable head-read cap for tree discovery (tests); default is the module cap. */
+  maxEdgeFiles?: number;
 }
 
 export interface DiagnosticsToolShape {
@@ -330,26 +338,63 @@ async function listTelemetryFiles(
   return { files, skipped };
 }
 
+/** What the discovery pass proved, and whether it had to stop early. */
+interface TreeDiscovery {
+  /** The root plus every session whose ancestor chain reaches it. */
+  members: Set<string>;
+  /** True when the head-read cap stopped the pass before the listing was exhausted. */
+  incomplete: boolean;
+}
+
 /**
  * Reads the tree edges ONLY: each file's first complete lines, looking for a
  * `session_start.parentSession`. Head reads are bounded, are used to decide
  * membership alone, and never reach the bundle.
+ *
+ * Two bounds keep the pass cheap WITHOUT losing a descendant:
+ *
+ * - a file last written BEFORE the root session started cannot be a descendant
+ *   of it — a child's file is created after its parent's session starts, and a
+ *   file's mtime is never earlier than its own creation — so the newest-first
+ *   walk stops at the first such file. This is what makes an OLD root still
+ *   find the children created during its life: they are newer than its start,
+ *   so they stay inside the window no matter how many unrelated sessions exist;
+ * - `maxHeads` is a hard safety cap for a root old enough that the whole
+ *   directory is inside its lifetime. When it bites the result is marked
+ *   incomplete, and the bundle says so rather than presenting a root-only
+ *   "tree" as the complete one.
  */
-async function readParentEdges(
+async function discoverSessionTree(
   deps: DiagnosticsExportDeps,
   files: readonly TelemetryFile[],
-): Promise<Map<string, string>> {
+  rootFile: TelemetryFile,
+  maxHeads: number,
+): Promise<TreeDiscovery> {
   const edges = new Map<string, string>();
-  // Newest-first (the caller's order), bounded: a child is always created
-  // after its parent, so a descendant of the requested session cannot hide
-  // behind years of older, unrelated files.
-  for (const file of files.slice(0, DIAGNOSTICS_TELEMETRY_MAX_EDGE_FILES)) {
+  // The root's own head comes first, so its start time is known before the
+  // mtime window is applied to the rest of the (newest-first) listing.
+  const ordered = [rootFile, ...files.filter((file) => file !== rootFile)];
+  let rootStartTs: number | undefined;
+  let scanned = 0;
+  let incomplete = false;
+
+  for (const file of ordered) {
+    if (scanned >= maxHeads) {
+      incomplete = true;
+      break;
+    }
+    if (file !== rootFile && rootStartTs !== undefined && file.mtimeMs < rootStartTs) {
+      // Newest-first order: every remaining file is older still, so none of
+      // them can be a descendant. This is a proof, not a heuristic.
+      break;
+    }
     let head: string;
     try {
       head = await deps.fs.readFileHeadNoFollow(`${deps.telemetryDir}/${file.name}`, DIAGNOSTICS_TELEMETRY_HEAD_BYTES);
     } catch {
       continue;
     }
+    scanned += 1;
     const complete = file.size > DIAGNOSTICS_TELEMETRY_HEAD_BYTES ? head.slice(0, Math.max(0, head.lastIndexOf("\n"))) : head;
     for (const line of complete.split("\n")) {
       if (line.trim().length === 0) continue;
@@ -360,6 +405,11 @@ async function readParentEdges(
         continue;
       }
       if (!isRecord(parsed) || parsed.t !== "session_start") continue;
+      if (rootStartTs === undefined) {
+        // Only the ROOT's own start matters; a child's file is newer than it.
+        const ts = finiteNumber(parsed.ts);
+        if (file === rootFile && ts !== undefined) rootStartTs = ts;
+      }
       const parent = parsed.parentSession;
       if (typeof parent === "string" && parent.length > 0 && parent !== file.session) {
         edges.set(file.session, parent);
@@ -367,7 +417,8 @@ async function readParentEdges(
       break;
     }
   }
-  return edges;
+
+  return { members: sessionTreeOf(rootFile.session, edges), incomplete };
 }
 
 /** Transitive closure: the root plus every session whose ancestor chain reaches it. */
@@ -396,6 +447,8 @@ interface TelemetryReadResult {
   partialTailLines: number;
   notIncluded: DiagnosticsSkippedSession[];
   truncated: boolean;
+  /** Bundle notes raised while reading (e.g. an incomplete tree discovery). */
+  notes: string[];
 }
 
 async function readTelemetry(
@@ -423,6 +476,7 @@ async function readTelemetry(
     partialTailLines: 0,
     notIncluded: [],
     truncated: false,
+    notes: [],
   };
 
   const rootFile = listed.files.find((file) => file.session === deps.sessionId);
@@ -432,13 +486,16 @@ async function readTelemetry(
     return empty;
   }
 
-  // The root's own head comes first so its edge is always discovered; the rest
-  // is newest-first and bounded by the edge cap.
-  const edgeCandidates = [rootFile, ...listed.files.filter((file) => file !== rootFile)];
-  const edges = await readParentEdges(deps, edgeCandidates);
-  const tree = sessionTreeOf(deps.sessionId, edges);
+  const discovery = await discoverSessionTree(
+    deps,
+    listed.files,
+    rootFile,
+    deps.maxEdgeFiles ?? DIAGNOSTICS_TELEMETRY_MAX_EDGE_FILES,
+  );
+  const tree = discovery.members;
   const treeFiles = listed.files.filter((file) => tree.has(file.session));
   const rootFirst = [rootFile, ...treeFiles.filter((file) => file !== rootFile)];
+  const notes: string[] = discovery.incomplete ? [DIAGNOSTICS_TREE_DISCOVERY_NOTE] : [];
 
   const sessions = new Map<string, DiagnosticsTelemetrySession>();
   const notIncluded: DiagnosticsSkippedSession[] = [];
@@ -448,7 +505,9 @@ async function readTelemetry(
   let droppedRecords = 0;
   let partialTailLines = 0;
   let totalBytes = 0;
-  let truncated = false;
+  // An incomplete discovery means the tree itself may be short: report it as
+  // truncation rather than a complete export.
+  let truncated = discovery.incomplete;
 
   for (const [index, file] of rootFirst.entries()) {
     const session = sessionIdFor(file.session);
@@ -549,6 +608,7 @@ async function readTelemetry(
     partialTailLines,
     notIncluded,
     truncated,
+    notes,
   };
 }
 
@@ -656,8 +716,11 @@ function fitBundle(bundle: DiagnosticsBundle, maxBytes: number): { bundle: Diagn
       continue;
     }
     if (bundle.wire.entries.length > 0) {
-      const keep = Math.max(1, Math.floor(bundle.wire.entries.length / 2));
-      bundle.wire.entries = bundle.wire.entries.slice(-keep);
+      // Halving must always REMOVE something: `slice(-1)` on one entry is a
+      // no-op, and the loop below would spin here forever without ever
+      // reaching the tool-shape stage.
+      const keep = Math.floor(bundle.wire.entries.length / 2);
+      bundle.wire.entries = keep > 0 ? bundle.wire.entries.slice(-keep) : [];
       bundle.wire.byChannel = countByChannel(bundle.wire.entries);
       bundle.wire.truncated = true;
       markTruncated("wire entries dropped to fit the size cap");
@@ -724,7 +787,7 @@ export async function buildDiagnosticsBundle(deps: DiagnosticsExportDeps): Promi
     },
     toolShapes: buildToolShapes(telemetry.sessions.values()),
     wire,
-    notes: [],
+    notes: [...telemetry.notes],
   };
 
   const fitted = fitBundle(bundle, maxBytes);
