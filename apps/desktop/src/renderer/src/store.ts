@@ -2994,6 +2994,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       status: "completed" | "max_turns" | "cancelled" | "error",
       turns: number,
       durationMs: number,
+      // The terminal's own exact tool-call count. `subagent_progress` frames
+      // are throttled on the session tier (leading-edge 1000 ms), and the
+      // inline runner's last frame can equally predate its final call, so a
+      // card settled from the progress stream alone keeps a lower count
+      // forever. Absent (legacy replay, Codex collaboration card, engine
+      // child — no measurement) keeps the last count the card already has.
+      toolCalls?: number,
       activitySuppressed?: number,
       responseModel?: string,
       finalTurnFinishReason?: "length",
@@ -3023,6 +3030,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           const settled: SubagentSubStatus = {
             ...block.subagent,
             turns,
+            ...(toolCalls !== undefined ? { toolCalls } : {}),
             activityDropped: block.subagent.activityDropped + (activitySuppressed ?? 0),
             ...(model !== undefined ? { model } : {}),
             ...(engine !== undefined ? { engine } : {}),
@@ -4426,6 +4434,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             event.status,
             event.turns,
             event.durationMs,
+            event.toolCalls,
             event.activitySuppressed,
             event.responseModel,
             event.finalTurnFinishReason,

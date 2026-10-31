@@ -184,6 +184,16 @@ export type SubagentProgress =
       kind: "end";
       status: SubagentOutcome["status"];
       turns: number;
+      /**
+       * The run's exact final tool-call count, read from the same counter the
+       * terminal outcome carries. Reported on `end` because `progress` frames
+       * may be throttled (the session tier's leading-edge 1000 ms boundary) or
+       * simply absent from the last emitted frame — the terminal is the one
+       * authoritative report, so the settled card must not be left holding a
+       * stale, lagging count. Absent only where no count is measured at all
+       * (engine children report no measurements).
+       */
+      toolCalls?: number;
       durationMs: number;
       activitySuppressed?: number;
       model?: string;

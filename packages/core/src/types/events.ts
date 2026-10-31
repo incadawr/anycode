@@ -404,6 +404,18 @@ export type AgentEvent =
       toolCallId: string;
       status: "completed" | "max_turns" | "cancelled" | "error";
       turns: number;
+      /**
+       * The run's exact final tool-call count (mirror of the terminal
+       * outcome's own counter). `subagent_progress` frames are throttled on
+       * the session tier (a leading-edge 1000 ms boundary) and the inline
+       * runner's last frame can equally predate the final call, so the
+       * settle is the only report guaranteed to be exact — a card that reads
+       * only the progress stream would keep a lower count forever.
+       * Additive-optional: absent on legacy replays and for consumers that
+       * never measured one (Codex collaboration cards, engine children),
+       * in which case the last known progress count stands.
+       */
+      toolCalls?: number;
       durationMs: number;
       /**
        * Count of subagent_activity events the runner withheld past

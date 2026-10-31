@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:net";
 import { buildSmokeEnv } from "./model-overrides-smoke-env.mjs";
+import { launchSmokeElectron } from "./smoke-electron-launch.mjs";
 
 const root = mkdtempSync(join(tmpdir(), "anycode-roles-smoke-"));
 const server = createServer();
@@ -16,8 +17,8 @@ const binary = join(root, "unavailable-engine");
 writeFileSync(binary, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
 const route = { primary: { connection: "conn-smoke", model: "a-very-long-custom-model-id-for-layout-check" }, fallbacks: [{ connection: "conn-smoke" }, { connection: "conn-smoke", model: "another-model" }] };
 writeFileSync(join(root, "settings.json"), JSON.stringify({ version: 2, provider: { connections: [{ id: "conn-smoke", providerId: "custom:smoke", label: "A connection with a long name for layout testing" }], activeConnectionId: "conn-smoke", custom: [{ id: "custom:smoke", name: "Smoke", baseUrl: "http://127.0.0.1:1234/v1", kind: "openai-compatible" }] }, roleProfiles: { activeId: "p", profiles: [{ id: "p", name: "A long profile name for layout testing", roles: { orchestrator: route, planner: route, executor: route, reviewer: route, explore: route } }], projects: [] }, tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "dark" }, security: { allowWeakSecretStorage: false } }));
-const env = { ...buildSmokeEnv(process.env, root, port, binary), ANYCODE_WORKSPACE: join(root, "workspace"), ANYCODE_API_KEY: "local", ANYCODE_BASE_URL: "http://127.0.0.1:1234/v1", ANYCODE_MODEL: "test", NO_SANDBOX: "1" };
-const app = spawn("pnpm", ["--filter", "@anycode/desktop", "dev"], { env, detached: true, stdio: "inherit" });
+const env = { ...buildSmokeEnv(process.env, root, port, binary), ANYCODE_WORKSPACE: join(root, "workspace"), ANYCODE_API_KEY: "local", ANYCODE_BASE_URL: "http://127.0.0.1:1234/v1", ANYCODE_MODEL: "test" };
+const app = launchSmokeElectron(spawn, { env, detached: true, stdio: "inherit" });
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function poll(fn) { for (let i = 0; i < 300; i++) { try { const value = await fn(); if (value) return value; } catch {} if (app.exitCode !== null) throw new Error(`app exited ${app.exitCode}`); await sleep(200); } throw new Error("Timed out waiting for app"); }
 let ws, info;

@@ -38,6 +38,13 @@ export interface SubagentCardAccumulator {
   end: {
     status: SubagentCardFinalStatus;
     turns: number;
+    /**
+     * Exact final tool-call count from the terminal event. Optional on the
+     * accumulator's end record: absent when the source never measured one
+     * (legacy payloads, engine children), in which case `finalizeSubagentCard`
+     * keeps the last progress count it saw.
+     */
+    toolCalls?: number;
     durationMs: number;
     activitySuppressed?: number;
     /** Provider-reported model id, capped at SUBAGENT_CARD_MODEL_MAX_CHARS. The provider's CLAIM, not proof of serving. */
@@ -157,6 +164,7 @@ export function reduceSubagentCardEvent(
         end: {
           status: ev.status,
           turns: ev.turns,
+          ...(ev.toolCalls !== undefined ? { toolCalls: ev.toolCalls } : {}),
           durationMs: ev.durationMs,
           ...(ev.activitySuppressed !== undefined ? { activitySuppressed: ev.activitySuppressed } : {}),
           ...(ev.responseModel !== undefined
@@ -226,7 +234,10 @@ export function finalizeSubagentCard(
     identity: acc.identity,
     counters: {
       turns: acc.end?.turns ?? acc.counters.turns,
-      toolCalls: acc.counters.toolCalls,
+      // The terminal's own exact count wins over whatever the last (throttled)
+      // `subagent_progress` frame left behind; a settle that carried none
+      // keeps that last seen count rather than zeroing it.
+      toolCalls: acc.end?.toolCalls ?? acc.counters.toolCalls,
       lastTool: acc.counters.lastTool,
     },
     activity: {

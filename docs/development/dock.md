@@ -110,6 +110,25 @@ finger's moves AND its release/cancel are ignored — and treats the
 initiating pointer's `pointercancel` exactly like `pointerup`: a canceled
 drag never leaves live listeners behind.
 
+A refused split is an honest answer, not an error: the automation facade's
+`dockTabSplit` reports `{ok:false, reason:"split_refused"}` when the click
+changed nothing (window too narrow, or the target is the active primary / a web
+preview — the ⫿ affordance renders disabled and a programmatic click is
+inert). The dock smoke's `--split` leg (Stage 2) makes its premise explicit
+before clicking — the pin target (`git`) present and NOT the active primary,
+the browser preview focused as the primary via a real tab click, because the
+git-panel derivation effect re-focuses `git` on every re-run — and retries a
+`split_refused` answer (browser-tab click → precondition wait → split click,
+bounded attempts). Every all-refused run is a FAIL: with the preconditions held
+the store refused a split that should have happened, and with them never held
+the leg's own focus click did not take, so no split was ever exercised — a
+refusal is not a documented expected PASS in either case. The pinned-state wait
+is exact (an ok click must pin) and the 900px auto-merge sub-leg only counts a
+reading taken after a pin actually landed, so a leg that never split can never
+read ALL GREEN. The verdict logic is pure and unit-covered
+(`scripts/dock-squash-smoke-assertions.mjs`, tested in
+`src/main/dock-squash-smoke-assertions.test.ts`).
+
 Split rules (cross-review 4703): the pinned tab is never the active (primary)
 tab — focusing or re-opening the pinned tab unpins it — so one preview is never
 rendered twice. A web preview is never splittable: its WebContentsView is
