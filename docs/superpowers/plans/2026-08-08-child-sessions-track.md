@@ -29,7 +29,7 @@ monorepo (`apps/desktop`, `packages/core`), smoke-channel
   `.test.tsx`, env node, jsdom нет).
 - Зону `packages/core/src/permissions/` (always-allow matching) НЕ трогать —
   скоуп-дисциплина: там строится permissions-кластер волны 2
-  (TASK.35/103/37/32). Конфликт → STATE.md, не чинить. База трека — `next`
+  . Конфликт → STATE.md, не чинить. База трека — `next`
   (включает фикс `3ae9cc8`).
 - Инвариант TabHostManager «один таб — один utilityProcess» сохраняется.
 - Дефолты спеки §2 п.5 (каскадная отмена, ошибка в карточку, permission в
