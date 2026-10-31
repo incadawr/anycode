@@ -304,3 +304,15 @@ it("suppresses catalog and live reasoning when manually disabled", () => {
   expect(resolveEffortLevels(model, settings.entryFor(model), settings.capabilitiesFor(model), settings.effortLevelsFor(model))).toBeUndefined();
   expect(settings.switchEffort("other", model, "high")).toBe("off");
 });
+
+it("uses cached OpenRouter limits and rates while preserving manual overrides", () => {
+  const model = "vendor/model";
+  const settings = createConnectionModelSettings({
+    catalogEntry: findCatalogEntry("openrouter"),
+    connection: { modelCapabilities: { [model]: { contextWindow: 1048576, maxOutputTokens: 524288, pricing: { input: 0.075, cachedInput: 0.075, output: 0.3 } } }, modelOverrides: { [model]: { contextWindowTokens: 64000, pricing: { input: 1, cachedInput: 1, output: 2 } } } },
+    liveCapabilitiesFor: () => undefined,
+  });
+  expect(settings.contextFor(model).tokens).toBe(64000);
+  expect(settings.entryFor(model)?.models.find(row => row.id === model)).toMatchObject({ contextWindow: 1048576, maxOutputTokens: 524288 });
+  expect(settings.pricingSnapshot()?.models[model]).toEqual({ input: 1, cachedInput: 1, output: 2 });
+});
