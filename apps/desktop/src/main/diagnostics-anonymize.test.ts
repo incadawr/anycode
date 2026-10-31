@@ -18,6 +18,10 @@ const FORBIDDEN = {
   userPath: "/Users/alice/secret-project/src/prompt.ts",
   homePath: "/home/bob/.config/secrets.json",
   tempPath: "/tmp/anycode-debug/session.jsonl",
+  // A root outside the well-known list must be scrubbed just the same.
+  oddRootPath: "/data/models/qwen-private.json",
+  relativePath: "./profiles/work-private.json",
+  parentRelativePath: "../elsewhere/private-secrets.json",
   windowsPath: "C:\\Users\\carol\\AppData\\Roaming\\anycode\\config.json",
   host: "build-agent-7.internal.corp",
   url: "https://api.secret-provider.example.com/v1/chat?token=abc",
@@ -45,6 +49,7 @@ describe("diagnostics anonymiser (GitHub #18)", () => {
       `Authorization: Bearer ${FORBIDDEN.bearer.replace("Bearer ", "")}`,
       `stored at ${FORBIDDEN.userPath} and ${FORBIDDEN.windowsPath}`,
       `also ${FORBIDDEN.homePath} and ${FORBIDDEN.tempPath}`,
+      `odd root ${FORBIDDEN.oddRootPath} and ${FORBIDDEN.relativePath} and ${FORBIDDEN.parentRelativePath}`,
       `call ${FORBIDDEN.url} via ${FORBIDDEN.host} / ${FORBIDDEN.localhost} / ${FORBIDDEN.ip}`,
       `mail ${FORBIDDEN.email}, session ${FORBIDDEN.sessionId}, uuid ${FORBIDDEN.uuid}`,
       `hex ${FORBIDDEN.longHex}`,

@@ -1,12 +1,14 @@
 /**
  * Diagnostics bundle builder (GitHub #18).
  *
- * Collects four bounded, local sources into ONE anonymised JSON document:
+ * Collects four bounded, local sources into ONE anonymised JSON document
+ * describing ONE session TREE — the session the person asked about plus its
+ * children (transitively, via each child's `session_start.parentSession`):
  *
- * - telemetry records from the profile's telemetry directory, projected
- *   through a per-type WHITELIST (prompts, model output, tool arguments and
- *   results have no route into the bundle — an unlisted field or an unknown
- *   record type is dropped, never passed through);
+ * - telemetry records of that tree's files, projected through a per-type
+ *   WHITELIST (prompts, model output, tool arguments and results have no
+ *   route into the bundle — an unlisted field or an unknown record type is
+ *   dropped, never passed through);
  * - derived tool SHAPES (name -> calls/statuses/duration), no arguments, no
  *   outputs;
  * - the main and host ring logs (control-plane wire shapes only, see
@@ -14,13 +16,21 @@
  * - app/runtime identity (version, platform, arch) — no hostname, no user, no
  *   paths.
  *
- * Everything is additionally scrubbed by `diagnostics-anonymize` (secrets,
- * paths, URLs/hosts, e-mails, raw ids hashed with a per-export salt) and the
- * exact serialised size is measured; when it would reach the 5 MB ceiling the
- * builder drops the oldest telemetry records / wire entries / sessions until
- * it is strictly below it. The build function is Electron-free and takes its
- * filesystem through a narrow port, so the privacy properties are testable
- * through the production path.
+ * Scope is a privacy boundary, not a convenience: the telemetry directory is
+ * shared by every session of every project, so the builder reads the tree
+ * files ONLY. It learns which files are in the tree from each file's first
+ * bytes (`session_start.parentSession`); an unrelated session's records are
+ * never read, let alone serialised.
+ *
+ * Everything that survives the whitelist is additionally scrubbed by
+ * `diagnostics-anonymize` (secrets, paths, URLs/hosts, e-mails, raw ids hashed
+ * with a per-export salt) and the exact serialised size is measured; when it
+ * would reach the 5 MB ceiling the builder drops the OLDEST telemetry records,
+ * then the oldest sessions, then the oldest wire entries, then the largest
+ * tool-shape entries until it is strictly below the ceiling — the session the
+ * person is debugging is the last thing to go. The build function is
+ * Electron-free and takes its filesystem through a narrow port, so the
+ * privacy properties are testable through the production path.
  */
 
 import { createDiagnosticsAnonymizer } from "./diagnostics-anonymize.js";
@@ -39,11 +49,27 @@ export interface DiagnosticsFs {
   readdir(path: string): Promise<string[]>;
   lstat(path: string): Promise<{ size: number; mtimeMs: number; isFile: boolean; isSymbolicLink?: boolean }>;
   readFileNoFollow(path: string): Promise<string>;
+  /** At most the FIRST `maxBytes` of a file (tree discovery only — never exported). */
+  readFileHeadNoFollow(path: string, maxBytes: number): Promise<string>;
+  /** At most the LAST `maxBytes` of a file (a long session's recent records). */
+  readFileTailNoFollow(path: string, maxBytes: number): Promise<string>;
   writeFile(path: string, content: string, opts?: { mode?: number }): Promise<void>;
 }
 
-export const DIAGNOSTICS_TELEMETRY_MAX_FILES = 50;
+/** Tree files examined per export (the root plus up to 49 descendants). */
+export const DIAGNOSTICS_TELEMETRY_MAX_TREE_FILES = 50;
+/** A tree file up to this size is read whole. */
 export const DIAGNOSTICS_TELEMETRY_MAX_FILE_BYTES = 1024 * 1024;
+/** A longer tree file contributes only its tail — the recent records. */
+export const DIAGNOSTICS_TELEMETRY_TAIL_BYTES = 512 * 1024;
+/** Head window used to find `session_start.parentSession` (never exported). */
+export const DIAGNOSTICS_TELEMETRY_HEAD_BYTES = 8 * 1024;
+/**
+ * How many telemetry files may be HEAD-read to discover the tree edges. Heads
+ * carry no records, but the directory can hold years of sessions: this bounds
+ * the discovery pass independently of the data caps.
+ */
+export const DIAGNOSTICS_TELEMETRY_MAX_EDGE_FILES = 200;
 export const DIAGNOSTICS_TELEMETRY_MAX_TOTAL_BYTES = 8 * 1024 * 1024;
 export const DIAGNOSTICS_TELEMETRY_MAX_SESSIONS = 50;
 export const DIAGNOSTICS_TELEMETRY_MAX_RECORDS_PER_SESSION = 2_000;
@@ -61,6 +87,11 @@ type FieldKind = "number" | "boolean" | "text";
  * envelope (`v`/`ts`/`session`/`sub`/`t`) is handled separately. Every type or
  * field absent here is dropped: this table is the privacy boundary, not a
  * convenience list.
+ *
+ * Two deliberate omissions worth stating: `subagent_start.fallbackReason` is
+ * an `error.message` (free text that can carry a path), and `subagent_end`
+ * has no free text either. Lifecycle types carry names/ids only; their
+ * `parentSession` id is hashed by `projectTelemetryRecord` like any other id.
  */
 const TELEMETRY_FIELDS: Record<string, Record<string, FieldKind>> = {
   turn_end: { turn: "number", finishReason: "text" },
@@ -76,7 +107,7 @@ const TELEMETRY_FIELDS: Record<string, Record<string, FieldKind>> = {
   compaction_end: { ok: "boolean", preTokens: "number", postTokens: "number", durationMs: "number" },
   microcompact: { clearedToolResults: "number", savedTokens: "number" },
   context_usage: { estimatedTokens: "number", budgetTokens: "number", source: "text" },
-  subagent_start: { agentType: "text", model: "text", engine: "text", route: "text", fallbackReason: "text" },
+  subagent_start: { agentType: "text", model: "text", engine: "text", route: "text" },
   subagent_end: {
     status: "text",
     turns: "number",
@@ -92,6 +123,9 @@ const TELEMETRY_FIELDS: Record<string, Record<string, FieldKind>> = {
   ceiling_refused: { reason: "text", turn: "number", round: "number" },
   ceiling_grant: { round: "number", granted: "number", totalGranted: "number" },
   permission_auto_decided: { classifier: "text", decision: "text", latencyMs: "number", error: "boolean" },
+  // Lifecycle records: the tree's own edges live here (`parentSession`).
+  session_start: { model: "text", provider: "text", engine: "text", enginePreset: "text", mode: "text", appVersion: "text" },
+  session_end: {},
   error: {},
   checkpoint_created: {},
   checkpoint_failed: {},
@@ -109,6 +143,8 @@ export interface DiagnosticsExportDeps {
   fs: DiagnosticsFs;
   /** Resolved telemetry directory (the exact one Profile reads). */
   telemetryDir: string;
+  /** Root of the exported tree: this session plus its children. */
+  sessionId: string;
   /** Main's own ring snapshot. */
   rings?: readonly DiagnosticsRingEntry[];
   /** Ring snapshots collected from live hosts (untrusted IPC data). */
@@ -132,6 +168,18 @@ export interface DiagnosticsTelemetrySession {
   truncated?: boolean;
 }
 
+/** Why a session of the tree contributes less than its whole file. */
+export type DiagnosticsSessionSkipReason =
+  | "file_too_large"
+  | "unreadable"
+  | "over_total_cap"
+  | "over_session_cap";
+
+export interface DiagnosticsSkippedSession {
+  session: string;
+  reason: DiagnosticsSessionSkipReason;
+}
+
 export interface DiagnosticsBundle {
   format: "anycode-diagnostics";
   version: 1;
@@ -139,11 +187,20 @@ export interface DiagnosticsBundle {
   app: DiagnosticsAppInfo;
   anonymization: { applied: true; saltIncluded: false; redactions: number };
   telemetry: {
+    /** Salted id of the requested tree root. */
+    rootSession: string;
     filesRead: number;
     filesSkipped: number;
+    /** Unparseable MIDDLE lines (a torn trailing line is counted separately). */
     malformedLines: number;
+    /** Well-formed records of an unknown/dropped type, or without a timestamp. */
+    droppedRecords: number;
+    /** An append in progress: a trailing line without its newline. Expected, not corruption. */
+    partialTailLines: number;
     truncated: boolean;
     sessions: DiagnosticsTelemetrySession[];
+    /** Tree members that were left out, with a closed reason (never unrelated sessions). */
+    notIncluded: DiagnosticsSkippedSession[];
   };
   toolShapes: Record<string, DiagnosticsToolShape>;
   wire: {
@@ -161,11 +218,19 @@ export interface DiagnosticsBuild {
   summary: DiagnosticsSummary;
 }
 
+/** One telemetry file's session id (the file name) and identity on disk. */
 interface TelemetryFile {
   name: string;
+  session: string;
   size: number;
   mtimeMs: number;
 }
+
+/** `projectTelemetryRecord`'s verdict — the bundle counts each kind separately. */
+export type TelemetryProjection =
+  | { kind: "record"; session: string; record: Record<string, unknown> }
+  | { kind: "unknown_type" }
+  | { kind: "invalid" };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -184,21 +249,24 @@ function safeText(value: string, redactor: (input: string) => string): string {
 }
 
 /**
- * Projects ONE telemetry line. Returns null for anything that is not a known
- * record type — including a `t` the current build does not know, so a future
- * or forged record cannot carry an unvetted payload into the bundle.
+ * Projects ONE telemetry line. Returns `unknown_type` for anything that is not
+ * a `t` this build knows — including a future or forged record, so its
+ * payload cannot reach the bundle — and `invalid` for a known type that is
+ * missing the envelope timestamp.
  */
 export function projectTelemetryRecord(
   raw: unknown,
   deps: { anon: ReturnType<typeof createDiagnosticsAnonymizer>; sessionId: (raw: string) => string },
-): { session: string; record: Record<string, unknown> } | null {
-  if (!isRecord(raw)) return null;
+): TelemetryProjection {
+  if (!isRecord(raw)) return { kind: "invalid" };
   const type = raw.t;
-  if (typeof type !== "string" || !Object.prototype.hasOwnProperty.call(TELEMETRY_FIELDS, type)) return null;
+  if (typeof type !== "string" || !Object.prototype.hasOwnProperty.call(TELEMETRY_FIELDS, type)) {
+    return { kind: "unknown_type" };
+  }
   const fields = TELEMETRY_FIELDS[type];
-  if (fields === undefined) return null;
+  if (fields === undefined) return { kind: "unknown_type" };
   const ts = finiteNumber(raw.ts);
-  if (ts === undefined) return null;
+  if (ts === undefined) return { kind: "invalid" };
   const sessionRaw = typeof raw.session === "string" && raw.session.length > 0 ? raw.session : "unattributed";
   const session = sessionRaw === "unattributed" ? "id_unattributed" : deps.sessionId(sessionRaw);
 
@@ -222,7 +290,12 @@ export function projectTelemetryRecord(
       record[field] = safeText(value, deps.anon.text);
     }
   }
-  return { session, record };
+  // The tree edge is an id like any other: hashed per export, so the bundle
+  // still shows the shape (root -> child) without ever naming a session.
+  if (type === "session_start" && typeof raw.parentSession === "string" && raw.parentSession.length > 0) {
+    record.parentSession = deps.sessionId(raw.parentSession);
+  }
+  return { kind: "record", session, record };
 }
 
 async function listTelemetryFiles(
@@ -247,7 +320,7 @@ async function listTelemetryFiles(
         skipped += 1;
         continue;
       }
-      files.push({ name, size: stat.size, mtimeMs: stat.mtimeMs });
+      files.push({ name, session: name.slice(0, -".jsonl".length), size: stat.size, mtimeMs: stat.mtimeMs });
     } catch {
       // A vanished/permission-denied file is simply not exported.
       skipped += 1;
@@ -257,11 +330,72 @@ async function listTelemetryFiles(
   return { files, skipped };
 }
 
+/**
+ * Reads the tree edges ONLY: each file's first complete lines, looking for a
+ * `session_start.parentSession`. Head reads are bounded, are used to decide
+ * membership alone, and never reach the bundle.
+ */
+async function readParentEdges(
+  deps: DiagnosticsExportDeps,
+  files: readonly TelemetryFile[],
+): Promise<Map<string, string>> {
+  const edges = new Map<string, string>();
+  // Newest-first (the caller's order), bounded: a child is always created
+  // after its parent, so a descendant of the requested session cannot hide
+  // behind years of older, unrelated files.
+  for (const file of files.slice(0, DIAGNOSTICS_TELEMETRY_MAX_EDGE_FILES)) {
+    let head: string;
+    try {
+      head = await deps.fs.readFileHeadNoFollow(`${deps.telemetryDir}/${file.name}`, DIAGNOSTICS_TELEMETRY_HEAD_BYTES);
+    } catch {
+      continue;
+    }
+    const complete = file.size > DIAGNOSTICS_TELEMETRY_HEAD_BYTES ? head.slice(0, Math.max(0, head.lastIndexOf("\n"))) : head;
+    for (const line of complete.split("\n")) {
+      if (line.trim().length === 0) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (!isRecord(parsed) || parsed.t !== "session_start") continue;
+      const parent = parsed.parentSession;
+      if (typeof parent === "string" && parent.length > 0 && parent !== file.session) {
+        edges.set(file.session, parent);
+      }
+      break;
+    }
+  }
+  return edges;
+}
+
+/** Transitive closure: the root plus every session whose ancestor chain reaches it. */
+export function sessionTreeOf(root: string, edges: ReadonlyMap<string, string>): Set<string> {
+  const tree = new Set<string>([root]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const [child, parent] of edges) {
+      if (tree.has(child)) continue;
+      if (!tree.has(parent)) continue;
+      tree.add(child);
+      grew = true;
+    }
+  }
+  return tree;
+}
+
 interface TelemetryReadResult {
+  rootSession: string;
   sessions: Map<string, DiagnosticsTelemetrySession>;
   filesRead: number;
   filesSkipped: number;
   malformedLines: number;
+  droppedRecords: number;
+  partialTailLines: number;
+  notIncluded: DiagnosticsSkippedSession[];
+  truncated: boolean;
 }
 
 async function readTelemetry(
@@ -269,8 +403,6 @@ async function readTelemetry(
   anon: ReturnType<typeof createDiagnosticsAnonymizer>,
 ): Promise<TelemetryReadResult> {
   const listed = await listTelemetryFiles(deps.fs, deps.telemetryDir);
-  const files = listed.files;
-  const sessions = new Map<string, DiagnosticsTelemetrySession>();
   const sessionIds = new Map<string, string>();
   const sessionIdFor = (raw: string): string => {
     const existing = sessionIds.get(raw);
@@ -279,51 +411,111 @@ async function readTelemetry(
     sessionIds.set(raw, hashed);
     return hashed;
   };
+  const rootSession = sessionIdFor(deps.sessionId);
 
+  const empty: TelemetryReadResult = {
+    rootSession,
+    sessions: new Map(),
+    filesRead: 0,
+    filesSkipped: listed.skipped,
+    malformedLines: 0,
+    droppedRecords: 0,
+    partialTailLines: 0,
+    notIncluded: [],
+    truncated: false,
+  };
+
+  const rootFile = listed.files.find((file) => file.session === deps.sessionId);
+  if (rootFile === undefined) {
+    // Nothing on disk for the requested session: an empty, valid bundle is
+    // still useful (wire rings + app identity), and no other session is read.
+    return empty;
+  }
+
+  // The root's own head comes first so its edge is always discovered; the rest
+  // is newest-first and bounded by the edge cap.
+  const edgeCandidates = [rootFile, ...listed.files.filter((file) => file !== rootFile)];
+  const edges = await readParentEdges(deps, edgeCandidates);
+  const tree = sessionTreeOf(deps.sessionId, edges);
+  const treeFiles = listed.files.filter((file) => tree.has(file.session));
+  const rootFirst = [rootFile, ...treeFiles.filter((file) => file !== rootFile)];
+
+  const sessions = new Map<string, DiagnosticsTelemetrySession>();
+  const notIncluded: DiagnosticsSkippedSession[] = [];
   let filesRead = 0;
-  let filesSkipped = listed.skipped;
+  let filesSkipped = listed.skipped + (listed.files.length - treeFiles.length);
   let malformedLines = 0;
+  let droppedRecords = 0;
+  let partialTailLines = 0;
   let totalBytes = 0;
-  for (const file of files) {
-    if (filesRead >= DIAGNOSTICS_TELEMETRY_MAX_FILES) {
+  let truncated = false;
+
+  for (const [index, file] of rootFirst.entries()) {
+    const session = sessionIdFor(file.session);
+    if (index >= DIAGNOSTICS_TELEMETRY_MAX_TREE_FILES) {
       filesSkipped += 1;
+      notIncluded.push({ session, reason: "over_total_cap" });
+      truncated = true;
       continue;
     }
-    if (file.size > DIAGNOSTICS_TELEMETRY_MAX_FILE_BYTES) {
+    // A long session is read from its TAIL: recent records are what a
+    // diagnosis needs, and dropping the whole file would silently hide the
+    // very session the person is debugging.
+    const oversized = file.size > DIAGNOSTICS_TELEMETRY_MAX_FILE_BYTES;
+    const wantBytes = oversized ? Math.min(DIAGNOSTICS_TELEMETRY_TAIL_BYTES, file.size) : file.size;
+    if (filesRead > 0 && totalBytes + wantBytes > DIAGNOSTICS_TELEMETRY_MAX_TOTAL_BYTES) {
       filesSkipped += 1;
-      continue;
-    }
-    if (filesRead > 0 && totalBytes + file.size > DIAGNOSTICS_TELEMETRY_MAX_TOTAL_BYTES) {
-      filesSkipped += 1;
+      notIncluded.push({ session, reason: "over_total_cap" });
+      truncated = true;
       continue;
     }
     let content: string;
     try {
-      content = await deps.fs.readFileNoFollow(`${deps.telemetryDir}/${file.name}`);
+      content = oversized
+        ? await deps.fs.readFileTailNoFollow(`${deps.telemetryDir}/${file.name}`, wantBytes)
+        : await deps.fs.readFileNoFollow(`${deps.telemetryDir}/${file.name}`);
     } catch {
       filesSkipped += 1;
+      notIncluded.push({ session, reason: "unreadable" });
       continue;
     }
     filesRead += 1;
     totalBytes += byteLength(content);
-    for (const line of content.split("\n")) {
+    const headDropped = oversized && file.size > wantBytes;
+    if (headDropped) {
+      // The tail starts mid-line; that fragment is not a record and is not
+      // corruption either.
+      const firstBreak = content.indexOf("\n");
+      content = firstBreak < 0 ? "" : content.slice(firstBreak + 1);
+      truncated = true;
+    }
+
+    let group = sessions.get(session);
+    if (group === undefined) {
+      group = { id: session, records: [] };
+      sessions.set(session, group);
+    }
+    if (headDropped) group.truncated = true;
+
+    const lines = content.split("\n");
+    const hasTrailingNewline = content.endsWith("\n");
+    for (const [lineIndex, line] of lines.entries()) {
       if (line.trim().length === 0) continue;
+      const isLastLine = lineIndex === lines.length - 1;
       let parsed: unknown;
       try {
         parsed = JSON.parse(line);
       } catch {
-        malformedLines += 1;
+        // An append in flight leaves an unterminated trailing line. That is
+        // the normal state of a live sink, not a corrupt file.
+        if (isLastLine && !hasTrailingNewline) partialTailLines += 1;
+        else malformedLines += 1;
         continue;
       }
       const projected = projectTelemetryRecord(parsed, { anon, sessionId: sessionIdFor });
-      if (projected === null) {
-        malformedLines += 1;
+      if (projected.kind !== "record") {
+        droppedRecords += 1;
         continue;
-      }
-      let group = sessions.get(projected.session);
-      if (group === undefined) {
-        group = { id: projected.session, records: [] };
-        sessions.set(projected.session, group);
       }
       group.records.push(projected.record);
     }
@@ -339,10 +531,25 @@ async function readTelemetry(
     kept.set(group.id, {
       id: group.id,
       records: over ? group.records.slice(-DIAGNOSTICS_TELEMETRY_MAX_RECORDS_PER_SESSION) : group.records,
-      ...(over ? { truncated: true as const } : {}),
+      ...(over || group.truncated === true ? { truncated: true as const } : {}),
     });
   }
-  return { sessions: kept, filesRead, filesSkipped, malformedLines };
+  for (const group of ordered.slice(DIAGNOSTICS_TELEMETRY_MAX_SESSIONS)) {
+    notIncluded.push({ session: group.id, reason: "over_session_cap" });
+    truncated = true;
+  }
+
+  return {
+    rootSession,
+    sessions: kept,
+    filesRead,
+    filesSkipped,
+    malformedLines,
+    droppedRecords,
+    partialTailLines,
+    notIncluded,
+    truncated,
+  };
 }
 
 function buildToolShapes(sessions: Iterable<DiagnosticsTelemetrySession>): Record<string, DiagnosticsToolShape> {
@@ -372,6 +579,14 @@ function buildToolShapes(sessions: Iterable<DiagnosticsTelemetrySession>): Recor
   return shapes;
 }
 
+function countByChannel(entries: readonly DiagnosticsRingEntry[]): Record<string, number> {
+  const byChannel: Record<string, number> = Object.create(null) as Record<string, number>;
+  for (const entry of entries) {
+    byChannel[entry.channel] = (byChannel[entry.channel] ?? 0) + 1;
+  }
+  return byChannel;
+}
+
 function buildWire(
   rings: readonly DiagnosticsRingEntry[],
   hostRings: unknown,
@@ -389,18 +604,25 @@ function buildWire(
     channel: redact(entry.channel).slice(0, DIAGNOSTICS_MAX_FIELD_CHARS),
     ...(entry.code !== undefined ? { code: redact(entry.code).slice(0, DIAGNOSTICS_MAX_FIELD_CHARS) } : {}),
   }));
-  const byChannel: Record<string, number> = Object.create(null) as Record<string, number>;
-  for (const entry of kept) {
-    byChannel[entry.channel] = (byChannel[entry.channel] ?? 0) + 1;
+  return { entries: kept, byChannel: countByChannel(kept), truncated: merged.length > kept.length };
+}
+
+/** Index of the OLDEST session that still has records (sessions are newest-first). */
+function oldestSessionWithRecords(sessions: readonly DiagnosticsTelemetrySession[]): DiagnosticsTelemetrySession | undefined {
+  for (let index = sessions.length - 1; index >= 0; index -= 1) {
+    const session = sessions[index];
+    if (session !== undefined && session.records.length > 0) return session;
   }
-  return { entries: kept, byChannel, truncated: merged.length > kept.length };
+  return undefined;
 }
 
 /**
  * Trims the bundle until its compact JSON is strictly below `maxBytes`.
- * Dropping order: oldest telemetry records, then oldest sessions, then oldest
- * wire entries, then the largest tool-shape entries. Every drop sets
- * `truncated` and adds one note so the reader knows the bundle is partial.
+ * Dropping order, oldest data first: the OLDEST session's oldest records, then
+ * the oldest empty sessions, then the oldest wire entries, then the largest
+ * tool-shape entries. The requested session is therefore the last thing to be
+ * touched. Every drop sets `truncated` and adds one note so the reader knows
+ * the bundle is partial.
  */
 function fitBundle(bundle: DiagnosticsBundle, maxBytes: number): { bundle: DiagnosticsBundle; json: string } {
   const notes = bundle.notes;
@@ -413,7 +635,7 @@ function fitBundle(bundle: DiagnosticsBundle, maxBytes: number): { bundle: Diagn
   if (byteLength(json) < maxBytes) return { bundle, json };
 
   while (byteLength(json) >= maxBytes) {
-    const session = bundle.telemetry.sessions.find((entry) => entry.records.length > 0);
+    const session = oldestSessionWithRecords(bundle.telemetry.sessions);
     if (session !== undefined) {
       const drop = Math.max(1, Math.ceil(session.records.length / 2));
       session.records = session.records.slice(drop);
@@ -423,16 +645,20 @@ function fitBundle(bundle: DiagnosticsBundle, maxBytes: number): { bundle: Diagn
       json = serialise();
       continue;
     }
-    if (bundle.telemetry.sessions.length > 0) {
-      bundle.telemetry.sessions.shift();
+    // Only EMPTY sessions remain: drop the oldest of them.
+    const lastIndex = bundle.telemetry.sessions.length - 1;
+    const last = bundle.telemetry.sessions[lastIndex];
+    if (last !== undefined && last.records.length === 0) {
+      bundle.telemetry.sessions.splice(lastIndex, 1);
       bundle.telemetry.truncated = true;
       markTruncated("telemetry sessions dropped to fit the size cap");
       json = serialise();
       continue;
     }
     if (bundle.wire.entries.length > 0) {
-      const drop = Math.max(1, Math.ceil(bundle.wire.entries.length / 2));
-      bundle.wire.entries = bundle.wire.entries.slice(drop);
+      const keep = Math.max(1, Math.floor(bundle.wire.entries.length / 2));
+      bundle.wire.entries = bundle.wire.entries.slice(-keep);
+      bundle.wire.byChannel = countByChannel(bundle.wire.entries);
       bundle.wire.truncated = true;
       markTruncated("wire entries dropped to fit the size cap");
       json = serialise();
@@ -458,8 +684,9 @@ function sectionBytes(value: unknown): number {
 }
 
 /**
- * Builds the anonymised bundle. Never throws for a missing/unreadable
- * telemetry directory (the bundle is still useful with only the wire rings).
+ * Builds the anonymised bundle for ONE session tree. Never throws for a
+ * missing/unreadable telemetry directory, nor for a root session with no file
+ * (the bundle is still useful with only the wire rings).
  */
 export async function buildDiagnosticsBundle(deps: DiagnosticsExportDeps): Promise<DiagnosticsBuild> {
   // A floor keeps the "strictly below maxBytes" guarantee meaningful for a
@@ -485,11 +712,15 @@ export async function buildDiagnosticsBundle(deps: DiagnosticsExportDeps): Promi
     // The salt is deliberately absent: it would make the id hashes reversible.
     anonymization: { applied: true, saltIncluded: false, redactions: anon.redactionCount() },
     telemetry: {
+      rootSession: telemetry.rootSession,
       filesRead: telemetry.filesRead,
       filesSkipped: telemetry.filesSkipped,
       malformedLines: telemetry.malformedLines,
-      truncated: false,
+      droppedRecords: telemetry.droppedRecords,
+      partialTailLines: telemetry.partialTailLines,
+      truncated: telemetry.truncated,
       sessions: [...telemetry.sessions.values()],
+      notIncluded: telemetry.notIncluded,
     },
     toolShapes: buildToolShapes(telemetry.sessions.values()),
     wire,
@@ -542,35 +773,50 @@ export interface HostRingSource {
     operation: string,
     payload?: unknown,
     expectedWorkspace?: string,
-    requestOptions?: { timeoutMs?: number },
+    requestOptions?: { timeoutMs?: number; allowNonRunning?: boolean },
   ): Promise<unknown>;
 }
 
 export const HOST_RING_REQUEST_TIMEOUT_MS = 750;
 export const HOST_RING_MAX_TABS = 16;
+/** Wall-clock budget for the whole sweep; a dead host must not freeze the dialog. */
+export const HOST_RING_TOTAL_BUDGET_MS = 3_000;
 
 /**
- * Asks every live host for its ring snapshot. Best-effort by design: a dead,
- * booting or unresponsive host contributes nothing rather than failing the
- * export, and its answer is re-validated as untrusted data before it can
- * reach the bundle.
+ * Asks the live hosts for their ring snapshots, ONE AT A TIME. Sequential on
+ * purpose: every request attaches a `message` listener to the SAME host port,
+ * so a fan-out of 16 would trip Node's max-listeners warning on every export
+ * and would also interleave 16 in-flight RPCs on a control plane that is
+ * processing a turn. A dead, booting or degraded host contributes nothing
+ * rather than failing the export, its answer is re-validated as untrusted
+ * data, and the sweep stops asking once the total budget is spent.
  */
 export async function collectHostRingEntries(
   source: HostRingSource,
-  options?: { timeoutMs?: number; maxTabs?: number },
+  options?: { timeoutMs?: number; maxTabs?: number; budgetMs?: number; now?: () => number },
 ): Promise<DiagnosticsRingEntry[]> {
   const timeoutMs = options?.timeoutMs ?? HOST_RING_REQUEST_TIMEOUT_MS;
   const maxTabs = options?.maxTabs ?? HOST_RING_MAX_TABS;
+  const budgetMs = options?.budgetMs ?? HOST_RING_TOTAL_BUDGET_MS;
+  const now = options?.now ?? Date.now;
+  const deadline = now() + budgetMs;
   const tabs = source.listTabs().slice(0, maxTabs);
-  const results = await Promise.allSettled(
-    tabs.map((tab) =>
-      source.communicationRequest(tab.sessionId, "get_diagnostics_ring", undefined, tab.workspace, { timeoutMs }),
-    ),
-  );
   const entries: DiagnosticsRingEntry[] = [];
-  for (const result of results) {
-    if (result.status !== "fulfilled") continue;
-    entries.push(...parseDiagnosticsRingEntries(result.value, "host", DIAGNOSTICS_WIRE_MAX_ENTRIES));
+  for (const tab of tabs) {
+    const remaining = deadline - now();
+    if (remaining <= 0) break;
+    try {
+      const result = await source.communicationRequest(
+        tab.sessionId,
+        "get_diagnostics_ring",
+        undefined,
+        tab.workspace,
+        { timeoutMs: Math.max(1, Math.min(timeoutMs, remaining)), allowNonRunning: true },
+      );
+      entries.push(...parseDiagnosticsRingEntries(result, "host", DIAGNOSTICS_WIRE_MAX_ENTRIES));
+    } catch {
+      // Best effort: one unresponsive host never fails the export.
+    }
   }
   return entries;
 }

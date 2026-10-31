@@ -209,6 +209,44 @@ export class NodeProfileFs implements ProfileFs {
       await handle.close();
     }
   }
+  /**
+   * Diagnostics export (GitHub #18) only: the FIRST `maxBytes` of a file.
+   * Used to discover a session's `parentSession` edge; the bytes are never
+   * serialised anywhere. Same O_NOFOLLOW custody as `readFileNoFollow`.
+   */
+  async readFileHeadNoFollow(path: string, maxBytes: number): Promise<string> {
+    return this.readFileWindowNoFollow(path, maxBytes, 0);
+  }
+  /**
+   * Diagnostics export (GitHub #18) only: the LAST `maxBytes` of a file — a
+   * long session's recent records, so the export does not have to skip the
+   * very session a person is debugging.
+   */
+  async readFileTailNoFollow(path: string, maxBytes: number): Promise<string> {
+    return this.readFileWindowNoFollow(path, maxBytes, -1);
+  }
+  /** Shared bounded window read: `offset < 0` means "from the end". */
+  private async readFileWindowNoFollow(path: string, maxBytes: number, offset: number): Promise<string> {
+    const limit = Math.max(0, Math.floor(maxBytes));
+    if (limit === 0) return "";
+    const handle = await fsp.open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    try {
+      const size = (await handle.stat()).size;
+      const start = offset < 0 ? Math.max(0, size - limit) : Math.min(offset, size);
+      const length = Math.min(limit, size - start);
+      if (length <= 0) return "";
+      const buffer = Buffer.allocUnsafe(length);
+      let read = 0;
+      while (read < length) {
+        const chunk = await handle.read(buffer, read, length - read, start + read);
+        if (chunk.bytesRead === 0) break;
+        read += chunk.bytesRead;
+      }
+      return buffer.subarray(0, read).toString("utf-8");
+    } finally {
+      await handle.close();
+    }
+  }
   async readFileSnapshot(path: string): Promise<ProfileFileSnapshot> {
     const handle = await fsp.open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
     try {

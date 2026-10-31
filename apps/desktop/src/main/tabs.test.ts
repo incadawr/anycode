@@ -8308,3 +8308,34 @@ describe("TabHostManager — diagnostics ring (GitHub #18)", () => {
     expect(JSON.stringify(ring.snapshot())).not.toContain("ignore previous");
   });
 });
+
+describe("TabHostManager — diagnostics ring RPC on a host that is not running (GitHub #18)", () => {
+  it("reaches a closing host only when the caller opts in, so a broken host can still be described", async () => {
+    const rig = liveForkRig();
+    const manager = makeManager(rig.fork, windowRig().window);
+    manager.createTab({ workspace: "/ws", sessionId: "diag-a", resume: false });
+    manager.createTab({ workspace: "/ws", sessionId: "diag-b", resume: false });
+    await flush();
+    const host = rig.hosts[0]!;
+    const tabId = manager.listTabs().find((tab) => tab.sessionId === "diag-a")!.tabId;
+
+    // `closeTab` seals synchronously (`state = "closing"`) before its first
+    // await, so the two requests below are dispatched against exactly that
+    // state — a live process that is no longer "running".
+    void manager.closeTab(tabId);
+
+    await expect(manager.communicationRequest("diag-a", "get_diagnostics_ring", undefined, "/ws")).rejects.toThrow(
+      "unavailable",
+    );
+
+    const pending = manager.communicationRequest("diag-a", "get_diagnostics_ring", undefined, "/ws", {
+      allowNonRunning: true,
+    });
+    const request = host.postMessage.mock.calls
+      .map((call) => call[0] as { type?: string; requestId?: string; operation?: string })
+      .find((message) => message.type === "communication_request" && message.operation === "get_diagnostics_ring");
+    expect(request).toBeDefined();
+    host.emit("message", { type: "communication_response", requestId: request!.requestId, result: [] });
+    await expect(pending).resolves.toEqual([]);
+  });
+});

@@ -43,7 +43,7 @@ import { assertChildModel } from "../shared/child-model.js";
 import { randomUUID } from "node:crypto";
 import { CODEX_LOGIN_PROGRESS_CHANNEL } from "../shared/codex-login.js";
 import { existsSync, mkdirSync, realpathSync, statSync, watch as fsWatch } from "node:fs";
-import { access, realpath as fsRealpath, stat as fsStat, writeFile } from "node:fs/promises";
+import { access, chmod, realpath as fsRealpath, stat as fsStat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import {
   nodeTrustStoreFs,
@@ -172,7 +172,7 @@ import { registerMcpSecretsIpc } from "./mcp-secrets-ipc.js";
 // as the MCP registration above; detection is existence-only, nothing spawns).
 import { NodeLspConfigFs, registerLspConfigIpc } from "./lsp-config-ipc.js";
 import { NodeProfileFs, registerProfileIpc, resolveProfileDir } from "./profile-ipc.js";
-import { registerDiagnosticsIpc } from "./diagnostics-ipc.js";
+import { registerDiagnosticsIpc, writeDiagnosticsFile } from "./diagnostics-ipc.js";
 import { buildDiagnosticsBundle, collectHostRingEntries } from "./diagnostics-export.js";
 import { createDiagnosticsRing } from "../shared/diagnostics-ring.js";
 // Taskana 4109 (old TASK.122): telemetry-directory retention sweep.
@@ -3799,13 +3799,14 @@ void app.whenReady().then(async () => {
     env: process.env,
   });
 
-  // GitHub #18: Settings -> Environment -> "Export diagnostics…". Main builds
-  // the already-anonymised bundle (telemetry whitelist + wire shapes), the
-  // renderer only ever receives its preview, and saving goes through the
-  // native dialog as a 0600 file. The builder is Electron-free so its privacy
-  // properties are unit-tested through the production path.
+  // GitHub #18: Environment menu -> "Export diagnostics…" for the session the
+  // person is looking at. Main builds the already-anonymised bundle for that
+  // session TREE (telemetry whitelist + wire shapes), the renderer only ever
+  // receives its preview, and saving goes through the native dialog as a 0600
+  // file. The builder is Electron-free so its privacy properties are
+  // unit-tested through the production path.
   registerDiagnosticsIpc({
-    build: async () => {
+    build: async (sessionId) => {
       const home = (selfCheckProfile ?? resolveProfileHome(process.env, app.isPackaged)) ?? homedir();
       const fs = new NodeProfileFs();
       const resolved = await resolveProfileDir({ home: () => home, fs, env: process.env, reveal: () => undefined });
@@ -3813,6 +3814,7 @@ void app.whenReady().then(async () => {
       return buildDiagnosticsBundle({
         fs,
         telemetryDir: resolved.dir,
+        sessionId,
         rings: mainDiagnosticsRing.snapshot(),
         hostRings,
         app: {
@@ -3835,7 +3837,7 @@ void app.whenReady().then(async () => {
       if (result.canceled || result.filePath === undefined || result.filePath.length === 0) {
         return { saved: false };
       }
-      await writeFile(result.filePath, content, { encoding: "utf8", mode: 0o600 });
+      await writeDiagnosticsFile({ writeFile, chmod }, result.filePath, content);
       return { saved: true, path: result.filePath };
     },
   });

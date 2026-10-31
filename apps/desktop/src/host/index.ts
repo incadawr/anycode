@@ -5136,6 +5136,20 @@ process.parentPort.on("message", (event) => {
   if (communication?.type === "communication_request") {
     void ready.then(async () => {
       try {
+        // GitHub #18: main asks for this fork's bounded control-plane ring
+        // while assembling a diagnostics export. Answered BEFORE the session
+        // readiness guard on purpose: the host that failed to boot is exactly
+        // the one whose wire log explains why, and the ring is in-memory and
+        // identifier-only (see shared/diagnostics-ring.ts), so it needs no
+        // session.
+        if (communication.operation === "get_diagnostics_ring") {
+          process.parentPort.postMessage({
+            type: "communication_response",
+            requestId: communication.requestId,
+            result: hostDiagnosticsRing.snapshot(HOST_RING_SNAPSHOT_LIMIT),
+          });
+          return;
+        }
         if (!session) throw new Error("Session not ready");
         let result: unknown;
         switch (communication.operation) {
@@ -5158,10 +5172,6 @@ process.parentPort.on("message", (event) => {
           case "cancel_turn": result = session.communicationCancelTurn(); break;
           case "list_pending_approvals": result = session.communicationPendingApprovals(); break;
           case "answer_approval": result = session.communicationAnswerApproval(communication.payload); break;
-          // GitHub #18: main asks for this fork's bounded control-plane ring
-          // while assembling a diagnostics export. Identifiers only — see
-          // shared/diagnostics-ring.ts.
-          case "get_diagnostics_ring": result = hostDiagnosticsRing.snapshot(HOST_RING_SNAPSHOT_LIMIT); break;
           default: throw new Error("Unsupported communication operation");
         }
         process.parentPort.postMessage({ type: "communication_response", requestId: communication.requestId, result });
