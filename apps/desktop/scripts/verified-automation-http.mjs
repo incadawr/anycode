@@ -18,7 +18,13 @@ export function verifiedAutomationRequest({ port, token, path, method = "GET", b
           const chunks = []; let size = 0;
           response.on("data", chunk => { size += chunk.length; if (size > 33554432) { fail(new Error("Automation response too large")); return; } chunks.push(chunk); });
           response.on("error", fail);
-          response.on("end", () => { clearTimeout(timer); try { resolve({ok:response.statusCode >= 200 && response.statusCode < 300, result:JSON.parse(Buffer.concat(chunks).toString("utf8"))}); } catch (error) { fail(error); } });
+          response.on("end", () => {
+            clearTimeout(timer);
+            const text = Buffer.concat(chunks).toString("utf8");
+            let result = null;
+            if (text) { try { result = JSON.parse(text); } catch { result = text; } }
+            resolve({status:response.statusCode, ok:response.statusCode >= 200 && response.statusCode < 300, result});
+          });
         });
         req.on("error", fail);
         req.end(payload);

@@ -79,6 +79,6 @@ export async function connectIsolatedCdp({ profile, env, launcher, wait, openSoc
       const records = run("/usr/sbin/lsof", ["-nP", "-a", `-iTCP:${info.port}`, "-sTCP:ESTABLISHED", "-Fpn"], { encoding:"utf8", timeout:5000 });
       verifyCdpPeer({records, browserPid:identity.pid, port:info.port, localPort});
     }});
-    return { ws, call, automation };
+    return { ws, call, automation, pid:identity.pid };
   } catch (error) { ws.close(); throw error; }
 }

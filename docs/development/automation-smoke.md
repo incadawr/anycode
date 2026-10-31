@@ -268,3 +268,5 @@ Isolated provider automation uses disposable credentials and a fixture-only stor
 Custom provider records have one shared API key: all connections referencing the same record use that key, and replacing or clearing it affects every such connection. Catalog provider connection keys remain scoped to the individual connection.
 
 Isolated CDP drivers request an OS-assigned debugging port and attach through the browser endpoint recorded in the disposable profile. They verify that the listener belongs to the Electron process descended from their launcher and check the owner of each established CDP or automation HTTP socket before sending commands or credentials. This ownership check currently supports macOS; it fails closed elsewhere. The roles smoke uses a separate temporary workspace so the profile remains fresh.
+
+The provider-connections driver also verifies launcher identity and pins each automation request, including quit, to the verified process.

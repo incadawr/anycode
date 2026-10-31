@@ -1,0 +1,4 @@
+export function providerSmokeApi(ctx: { cdp?: { automation(info: {port:number; token:string}, path:string, method:string, body?:unknown): Promise<{status:number; result:any}> }; port?:number; token?:string }, method:string, path:string, body?:unknown): Promise<{status:number; body:any}>;
+export function stopProviderSmokeLauncher(child: {pid?:number; exitCode:number | null; signalCode:NodeJS.Signals | null}, deps: {kill: (pid:number, signal:NodeJS.Signals) => void; sleep:(ms:number) => Promise<void>; graceMs:number}): Promise<void>;
+export function registerProviderSmokeChild<T extends {child: unknown}>(ctx:T, child:unknown, register:(ctx:T) => void): void;
+export function providerSmokeTeardown<T extends {teardownPromise: Promise<void> | null}>(ctx:T, workspaces:unknown[], teardownApp:(ctx:T, workspaces:unknown[]) => Promise<void>): Promise<void>;
