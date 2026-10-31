@@ -33,7 +33,7 @@
  * privacy properties are testable through the production path.
  */
 
-import { createDiagnosticsAnonymizer } from "./diagnostics-anonymize.js";
+import { createDiagnosticsAnonymizer, type DiagnosticsAnonymizer } from "./diagnostics-anonymize.js";
 import {
   DIAGNOSTICS_MAX_BUNDLE_BYTES,
   type DiagnosticsSectionSummary,
@@ -195,8 +195,11 @@ export interface DiagnosticsBundle {
   app: DiagnosticsAppInfo;
   /**
    * `redactions` counts the replacements that are STILL IN THIS ARCHIVE: a
-   * record or wire entry the size cap drops stops contributing, so the number
-   * never describes scrubbing of data the file does not contain.
+   * record or wire entry the size cap drops stops contributing, a replacement
+   * past a field's saved prefix was never carried, and a tool shape carries
+   * the events of the fields it was built from even after its records go. One
+   * replacement is one event, however many places it survived in, so the
+   * number never describes scrubbing of data the file does not contain.
    */
   anonymization: { applied: true; saltIncluded: false; redactions: number };
   telemetry: {
@@ -255,32 +258,64 @@ function byteLength(text: string): number {
 
 /**
  * Replacements attributed to each CARRIED object (one telemetry record, one
- * wire entry) — keyed by identity, never serialised into the bundle.
+ * wire entry, one tool shape) — keyed by identity, never serialised.
  *
- * The anonymiser's own counter is a running total over everything the builder
- * ever scrubbed, which includes records the size-cap trimmer later drops. The
- * bundle must not claim to have scrubbed data it does not carry, so the
- * reported number is summed from this ledger AFTER fitting: an entry only
- * counts while the object it describes is still in the archive.
+ * Entries are redaction EVENT ids, not counts: the anonymiser's own counter is
+ * a running total over everything the builder ever scrubbed, which includes
+ * values the field truncation and the size-cap trimmer later drop. `all` holds
+ * what the object still carries in the archive; `fields` keeps the per-field
+ * split a tool shape needs, because a shape is built from record fields and
+ * therefore carries the events of those fields with it once the records go.
+ * Counting is by set union, so one replacement that survives in two places (a
+ * record and the shape derived from it) is reported once.
  */
-type RedactionLedger = WeakMap<object, number>;
+interface RedactionLedger {
+  fields: WeakMap<object, Map<string, readonly number[]>>;
+  all: WeakMap<object, readonly number[]>;
+}
+
+function createRedactionLedger(): RedactionLedger {
+  return { fields: new WeakMap(), all: new WeakMap() };
+}
 
 /** Sums the ledger over exactly what the bundle still holds. */
 function archivedRedactions(ledger: RedactionLedger, bundle: DiagnosticsBundle): number {
-  let total = 0;
+  const ids = new Set<number>();
+  const add = (object: object): void => {
+    for (const id of ledger.all.get(object) ?? []) ids.add(id);
+  };
   for (const session of bundle.telemetry.sessions) {
-    for (const record of session.records) total += ledger.get(record) ?? 0;
+    for (const record of session.records) add(record);
   }
-  for (const entry of bundle.wire.entries) total += ledger.get(entry) ?? 0;
-  return total;
+  for (const entry of bundle.wire.entries) add(entry);
+  for (const shape of Object.values(bundle.toolShapes)) add(shape);
+  return ids.size;
 }
 
 function finiteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function safeText(value: string, redactor: (input: string) => string): string {
-  return redactor(value).slice(0, DIAGNOSTICS_MAX_FIELD_CHARS);
+/** A scrubbed field plus the replacement events its SAVED prefix still holds. */
+interface CarriedText {
+  text: string;
+  ids: readonly number[];
+}
+
+/**
+ * Scrubs one carried field and reports only the replacements that survive the
+ * 128-char save. A replacement positioned past that point sits in the part of
+ * the field the bundle throws away, so counting it would describe scrubbing of
+ * data the archive does not contain.
+ */
+function carriedText(value: string, anon: DiagnosticsAnonymizer): CarriedText {
+  const scrubbed = anon.textWithRedactions(value);
+  return {
+    text: scrubbed.text.slice(0, DIAGNOSTICS_MAX_FIELD_CHARS),
+    ids: scrubbed.redactions
+      .filter((event) => event.start < DIAGNOSTICS_MAX_FIELD_CHARS)
+      .map((event) => event.id),
+  };
 }
 
 /**
@@ -291,7 +326,12 @@ function safeText(value: string, redactor: (input: string) => string): string {
  */
 export function projectTelemetryRecord(
   raw: unknown,
-  deps: { anon: ReturnType<typeof createDiagnosticsAnonymizer>; sessionId: (raw: string) => string },
+  deps: {
+    anon: DiagnosticsAnonymizer;
+    sessionId: (raw: string) => string;
+    /** One call per carried field that still holds a replacement, for the ledger. */
+    carry?: (field: string, ids: readonly number[]) => void;
+  },
 ): TelemetryProjection {
   if (!isRecord(raw)) return { kind: "invalid" };
   const type = raw.t;
@@ -305,11 +345,19 @@ export function projectTelemetryRecord(
   const sessionRaw = typeof raw.session === "string" && raw.session.length > 0 ? raw.session : "unattributed";
   const session = sessionRaw === "unattributed" ? "id_unattributed" : deps.sessionId(sessionRaw);
 
+  // Every carried string goes through here, so the ledger learns which
+  // replacements the saved field keeps and under which name.
+  const carry = (field: string, value: string): string => {
+    const carried = carriedText(value, deps.anon);
+    if (carried.ids.length > 0) deps.carry?.(field, carried.ids);
+    return carried.text;
+  };
+
   const record: Record<string, unknown> = { t: type, ts };
   const sub = isRecord(raw.sub)
     ? {
-        ...(typeof raw.sub.agentType === "string" ? { agentType: safeText(raw.sub.agentType, deps.anon.text) } : {}),
-        ...(typeof raw.sub.model === "string" ? { model: safeText(raw.sub.model, deps.anon.text) } : {}),
+        ...(typeof raw.sub.agentType === "string" ? { agentType: carry("sub.agentType", raw.sub.agentType) } : {}),
+        ...(typeof raw.sub.model === "string" ? { model: carry("sub.model", raw.sub.model) } : {}),
       }
     : undefined;
   if (sub !== undefined && Object.keys(sub).length > 0) record.sub = sub;
@@ -322,7 +370,7 @@ export function projectTelemetryRecord(
     } else if (kind === "boolean") {
       if (typeof value === "boolean") record[field] = value;
     } else if (typeof value === "string") {
-      record[field] = safeText(value, deps.anon.text);
+      record[field] = carry(field, value);
     }
   }
   // The tree edge is an id like any other: hashed per export, so the bundle
@@ -480,7 +528,7 @@ interface TelemetryReadResult {
 
 async function readTelemetry(
   deps: DiagnosticsExportDeps,
-  anon: ReturnType<typeof createDiagnosticsAnonymizer>,
+  anon: DiagnosticsAnonymizer,
   ledger: RedactionLedger,
 ): Promise<TelemetryReadResult> {
   const listed = await listTelemetryFiles(deps.fs, deps.telemetryDir);
@@ -599,15 +647,25 @@ async function readTelemetry(
         else malformedLines += 1;
         continue;
       }
-      // The record is charged with the replacements IT caused, so the ledger
-      // stays correct once the size cap starts dropping records.
-      const before = anon.redactionCount();
-      const projected = projectTelemetryRecord(parsed, { anon, sessionId: sessionIdFor });
+      // The record is charged with the replacements its OWN saved fields still
+      // hold, per field, so the ledger stays correct once the size cap starts
+      // dropping records and the tool shapes outlive them.
+      const fields = new Map<string, number[]>();
+      const projected = projectTelemetryRecord(parsed, {
+        anon,
+        sessionId: sessionIdFor,
+        carry: (field, ids) => {
+          const existing = fields.get(field);
+          if (existing === undefined) fields.set(field, [...ids]);
+          else existing.push(...ids);
+        },
+      });
       if (projected.kind !== "record") {
         droppedRecords += 1;
         continue;
       }
-      ledger.set(projected.record, anon.redactionCount() - before);
+      ledger.fields.set(projected.record, fields);
+      ledger.all.set(projected.record, [...fields.values()].flat());
       group.records.push(projected.record);
     }
   }
@@ -644,8 +702,19 @@ async function readTelemetry(
   };
 }
 
-function buildToolShapes(sessions: Iterable<DiagnosticsTelemetrySession>): Record<string, DiagnosticsToolShape> {
+/**
+ * Tool shapes are built from the records BEFORE the size cap trims them, and
+ * they survive their source records. A shape copies the record's tool name and
+ * status, so it also carries that field's redaction events: the ledger
+ * attributes them to the shape here, and the final count takes the union over
+ * records and shapes — a replacement present in both is still one redaction.
+ */
+function buildToolShapes(
+  sessions: Iterable<DiagnosticsTelemetrySession>,
+  ledger: RedactionLedger,
+): Record<string, DiagnosticsToolShape> {
   const shapes: Record<string, DiagnosticsToolShape> = Object.create(null) as Record<string, DiagnosticsToolShape>;
+  const shapeIds = new Map<DiagnosticsToolShape, number[]>();
   for (const session of sessions) {
     for (const record of session.records) {
       if (record.t !== "tool" || typeof record.tool !== "string") continue;
@@ -655,11 +724,15 @@ function buildToolShapes(sessions: Iterable<DiagnosticsTelemetrySession>): Recor
         statuses: Object.create(null) as Record<string, number>,
         durationMs: { min: 0, max: 0, total: 0 },
       });
+      const ids = shapeIds.get(shape) ?? [];
       shape.calls += 1;
+      ids.push(...(ledger.fields.get(record)?.get("tool") ?? []));
       if (typeof record.status === "string") {
         const status = record.status.slice(0, DIAGNOSTICS_MAX_FIELD_CHARS);
         shape.statuses[status] = (shape.statuses[status] ?? 0) + 1;
+        ids.push(...(ledger.fields.get(record)?.get("status") ?? []));
       }
+      shapeIds.set(shape, ids);
       const duration = finiteNumber(record.durationMs);
       if (duration !== undefined && duration >= 0) {
         shape.durationMs.total += duration;
@@ -668,6 +741,7 @@ function buildToolShapes(sessions: Iterable<DiagnosticsTelemetrySession>): Recor
       }
     }
   }
+  for (const [shape, ids] of shapeIds) ledger.all.set(shape, ids);
   return shapes;
 }
 
@@ -682,7 +756,7 @@ function countByChannel(entries: readonly DiagnosticsRingEntry[]): Record<string
 function buildWire(
   rings: readonly DiagnosticsRingEntry[],
   hostRings: unknown,
-  anon: ReturnType<typeof createDiagnosticsAnonymizer>,
+  anon: DiagnosticsAnonymizer,
   ledger: RedactionLedger,
 ): DiagnosticsBundle["wire"] {
   const merged = [
@@ -693,15 +767,14 @@ function buildWire(
     // Defence in depth: the ring already refuses anything but an identifier,
     // but a compromised host can still choose an identifier-looking string.
     // A hostname/token smuggled into `type` is scrubbed here too.
-    const before = anon.redactionCount();
+    const channel = carriedText(entry.channel, anon);
+    const code = entry.code === undefined ? undefined : carriedText(entry.code, anon);
     const safe = {
       ...entry,
-      channel: anon.text(entry.channel).slice(0, DIAGNOSTICS_MAX_FIELD_CHARS),
-      ...(entry.code !== undefined
-        ? { code: anon.text(entry.code).slice(0, DIAGNOSTICS_MAX_FIELD_CHARS) }
-        : {}),
+      channel: channel.text,
+      ...(code !== undefined ? { code: code.text } : {}),
     };
-    ledger.set(safe, anon.redactionCount() - before);
+    ledger.all.set(safe, [...channel.ids, ...(code?.ids ?? [])]);
     return safe;
   });
   return { entries: kept, byChannel: countByChannel(kept), truncated: merged.length > kept.length };
@@ -724,12 +797,24 @@ function oldestSessionWithRecords(sessions: readonly DiagnosticsTelemetrySession
  * touched. Every drop sets `truncated` and adds one note so the reader knows
  * the bundle is partial.
  */
-function fitBundle(bundle: DiagnosticsBundle, maxBytes: number): { bundle: DiagnosticsBundle; json: string } {
+function fitBundle(
+  bundle: DiagnosticsBundle,
+  maxBytes: number,
+  ledger: RedactionLedger,
+): { bundle: DiagnosticsBundle; json: string } {
   const notes = bundle.notes;
   const markTruncated = (why: string): void => {
     if (!notes.includes(why)) notes.push(why);
   };
-  const serialise = (): string => JSON.stringify(bundle);
+  // The count is refreshed BEFORE every measurement, so the size bound is
+  // measured against the number the archive actually holds. Measuring against
+  // the pre-trim total would make the same archive look a few bytes larger and
+  // drop a batch it had room for at the boundary. The count only ever shrinks
+  // as records go, so it can never push the JSON past `maxBytes`.
+  const serialise = (): string => {
+    bundle.anonymization.redactions = archivedRedactions(ledger, bundle);
+    return JSON.stringify(bundle);
+  };
 
   let json = serialise();
   if (byteLength(json) < maxBytes) return { bundle, json };
@@ -808,7 +893,7 @@ export async function buildDiagnosticsBundle(deps: DiagnosticsExportDeps): Promi
   const now = deps.now ?? Date.now;
   const generatedAtMs = now();
   const anon = createDiagnosticsAnonymizer({ ...(deps.salt !== undefined ? { salt: deps.salt } : {}) });
-  const ledger: RedactionLedger = new WeakMap();
+  const ledger = createRedactionLedger();
 
   const telemetry = await readTelemetry(deps, anon, ledger);
   const wire = buildWire(deps.rings ?? [], deps.hostRings, anon, ledger);
@@ -824,8 +909,7 @@ export async function buildDiagnosticsBundle(deps: DiagnosticsExportDeps): Promi
       ...(deps.app.node !== undefined ? { node: deps.app.node } : {}),
     },
     // The salt is deliberately absent: it would make the id hashes reversible.
-    // The count is provisional (everything projected so far) and is replaced
-    // with the archived total once fitting has decided what survives.
+    // The count is written by every serialisation in `fitBundle` (see there).
     anonymization: { applied: true, saltIncluded: false, redactions: 0 },
     telemetry: {
       rootSession: telemetry.rootSession,
@@ -838,22 +922,12 @@ export async function buildDiagnosticsBundle(deps: DiagnosticsExportDeps): Promi
       sessions: [...telemetry.sessions.values()],
       notIncluded: telemetry.notIncluded,
     },
-    toolShapes: buildToolShapes(telemetry.sessions.values()),
+    toolShapes: buildToolShapes(telemetry.sessions.values(), ledger),
     wire,
     notes: [...telemetry.notes],
   };
 
-  // Fit against the PRE-trim total: it is an upper bound of the number that
-  // ends up in the archive, so replacing it later can never lengthen the JSON
-  // past `maxBytes` (the survivor count has no more digits than its bound).
-  bundle.anonymization.redactions = archivedRedactions(ledger, bundle);
-  const fitted = fitBundle(bundle, maxBytes);
-
-  const archived = archivedRedactions(ledger, fitted.bundle);
-  if (archived !== fitted.bundle.anonymization.redactions) {
-    fitted.bundle.anonymization.redactions = archived;
-    fitted.json = JSON.stringify(fitted.bundle);
-  }
+  const fitted = fitBundle(bundle, maxBytes, ledger);
 
   const summary: DiagnosticsSummary = {
     generatedAt: fitted.bundle.generatedAt,
