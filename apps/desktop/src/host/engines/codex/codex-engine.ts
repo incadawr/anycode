@@ -1106,7 +1106,10 @@ export class CodexEngine implements SessionEngine {
     if (!settings.catalog.get(id)?.supportsFast) {
       delete settings.fast;
       settings.speedOverride = false;
-    } else if (settings.fast === undefined) settings.fast = false;
+    } else if (settings.fast === undefined) {
+      settings.fast = false;
+      settings.speedOverride = false;
+    }
     // Each model keeps its own remembered effort. Switching restores that
     // model's last valid choice (or its catalog default).
     const effort = this.resolveEffortForModel(id);
