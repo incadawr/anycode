@@ -94,7 +94,7 @@ describe("loadSettings (fail-soft)", () => {
   });
 });
 
-// ── TASK.45 W12-FIX2 §2: load-normalize repairs active<->non-empty (codex W12-FIX review #2) ──
+// ── W12-FIX2 §2: load-normalize repairs active<->non-empty (codex W12-FIX review #2) ──
 
 describe("loadSettings — normalizeActiveConnection repairs the active<->non-empty invariant", () => {
   // §2.1 — reverting the normalize-hunk (files.ts) turns this red: schema-level
@@ -190,9 +190,9 @@ describe("loadSettings — normalizeActiveConnection repairs the active<->non-em
   });
 });
 
-// ── TASK.159 slice D: load drops out-of-bounds connection.maxOutputTokens (read as absent) ──
+// ── slice D: load drops out-of-bounds connection.maxOutputTokens (read as absent) ──
 
-describe("loadSettings — out-of-bounds connection maxOutputTokens is read as absent (TASK.159)", () => {
+describe("loadSettings — out-of-bounds connection maxOutputTokens is read as absent", () => {
   /** A settings.json with one connection carrying the given (hand-editable) ceiling. */
   function withCeiling(maxOutputTokens: number): string {
     return JSON.stringify({
@@ -337,7 +337,7 @@ describe("secrets.json (frozen v1 custody format)", () => {
   });
 });
 
-describe("readTrustedBinaryConsentsSync (TASK.103) — fail-soft, per-element", () => {
+describe("readTrustedBinaryConsentsSync — fail-soft, per-element", () => {
   const validConsent = {
     path: "/opt/homebrew/bin/codex",
     fingerprint: { mode: 0o755, uid: 501, gid: 20, size: 4096, mtimeMs: 1_700_000_000_000 },

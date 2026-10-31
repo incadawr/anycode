@@ -44,7 +44,7 @@
  *     callers must not read it as a guarantee.
  * None of the above is a closed guarantee; callers must not describe it as one.
  *
- * ── CONSENT (TASK.103) ──────────────────────────────────────────────────────
+ * ── CONSENT ──────────────────────────────────────────────────────
  * The wall above has no off-switch — this module also carries the ONE
  * off-switch there is: a per-path, fingerprint-pinned, explicit consent.
  * `checkConsentedBinaryTrust` wraps `checkCodexBinaryTrust` unchanged (the
@@ -223,7 +223,7 @@ export function consentCoversBinary(
 }
 
 /**
- * The classified consent verdict (TASK.103 fix wave, D-S4-13/17). `null` =
+ * The classified consent verdict (fix wave, D-S4-13/17). `null` =
  * base policy passes or a consent covers the file. A refusal carries:
  * - `consentable`: false for STRUCTURAL refusals (not a file, not
  *   executable, an ancestor that is not a directory) AND for the
@@ -266,7 +266,7 @@ export function classifyConsentedBinaryTrust(
 }
 
 /**
- * The consent-aware trust verdict (TASK.103). Base policy first; a PASS needs
+ * The consent-aware trust verdict. Base policy first; a PASS needs
  * no consent. A STRUCTURAL refusal (not a file, not executable, an ancestor
  * that is not a directory) is never consentable — re-derived from the input,
  * not string-matched. An ownership/writability refusal (any unsafeReason

@@ -1,5 +1,5 @@
 /**
- * TASK.112 — one source of truth for "which document extensions can the
+ * one source of truth for "which document extensions can the
  * PreviewHost window render". The same list used to live hand-copied in six
  * independent gates (renderer link chip, md-doc navigation, the artifact
  * preview IPC, PreviewHost's record-kind switch, the md-doc reader, and the
@@ -13,7 +13,7 @@
  * node env alike.
  */
 
-/** Markdown extensions PreviewHost renders as a native `dom-md` record (TASK.99 CUT.md CONTRACTS) rather than loading as a web page. */
+/** Markdown extensions PreviewHost renders as a native `dom-md` record (CUT.md CONTRACTS) rather than loading as a web page. */
 export const MARKDOWN_EXTENSIONS: ReadonlySet<string> = new Set([".md", ".markdown"]);
 
 /**

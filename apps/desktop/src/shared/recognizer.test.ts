@@ -1,5 +1,5 @@
 /**
- * Unit tests for the vision-fallback recognizer's live-push contract (TASK.198
+ * Unit tests for the vision-fallback recognizer's live-push contract (
  * E1): the wire message shape and the fingerprint pure logic main's mutation
  * hooks use to decide whether a push is even worth resolving a secret for
  * (plan §1.2/§7 finding #7 — a resolved secret must never ride an unrelated
@@ -101,7 +101,7 @@ describe("RECOGNIZER_CONFIG_CHANGED_TYPE", () => {
   });
 });
 
-describe("recognizerFingerprint — custom-provider route (TASK.202)", () => {
+describe("recognizerFingerprint — custom-provider route", () => {
   const record: CustomProviderRecord = {
     id: "custom:vision-slug",
     name: "Vision custom",
@@ -185,7 +185,7 @@ describe("recognizerFingerprint — custom-provider route (TASK.202)", () => {
   });
 });
 
-describe("recognizerSecretTargetKey (TASK.202)", () => {
+describe("recognizerSecretTargetKey", () => {
   it("matches the recognizer connection's api_key and the custom record's key for a custom selection; nothing else", () => {
     const normal = settings({
       provider: {

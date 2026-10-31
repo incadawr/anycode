@@ -1,5 +1,5 @@
 /**
- * Control-plane protocol for the host<->main child-session wire (TASK.102
+ * Control-plane protocol for the host<->main child-session wire (
  * CUT-S2 §2.3, frozen in slice S2a). A "child session" is a full session
  * running in ITS OWN utilityProcess, spawned by a root session's `Agent
  * tier:"session"` tool call — distinct from the in-process inline subagent
@@ -27,7 +27,7 @@
  *
  * Every `parseXxx` below is fail-closed: malformed input, wrong-typed fields,
  * missing required fields, or an object carrying EXTRA unknown keys all return
- * `null` — they never throw. `ChildTerminal` is the TASK 4239 exception:
+ * `null` — they never throw. `ChildTerminal` is the exception:
  * unknown additive keys are stripped (forward-compat with newer child hosts);
  * malformed known fields still fail closed. Main and the hosts must never trust ambient
  * identity-shaped payload fields (see the child-message correlation note
@@ -73,7 +73,7 @@ export interface ChildSpawnRequest {
   prompt: string;
   provider?: string;
   /**
-   * Taskana 4269: EXACT connection id from a profile's `connection:` frontmatter
+   * EXACT connection id from a profile's `connection:` frontmatter
    * (relayed via `SessionSubagentRequest.connectionId`). Main resolves it against
    * the live connections registry and pins the child's env to it. Mutually
    * exclusive with `provider` — a request carrying both is refused. Rides the
@@ -91,7 +91,7 @@ export interface ChildSpawnRequest {
   effort?: ChildEffort;
   permissionMode: PermissionMode;
   /**
-   * Child engine (TASK.102 CUT-S4 §3.1). Absent = core (byte-compatible with
+   * Child engine (CUT-S4 §3.1). Absent = core (byte-compatible with
    * every S2 producer): the child runs the in-process AgentLoop, exactly as
    * before this field existed. Present = the child boots that engine's own
    * interactive CLI (startClaudeEngine/startCodexEngine) instead — set ONLY
@@ -106,7 +106,7 @@ export interface ChildSpawnRequest {
    */
   resumeChildSessionId?: string;
   /**
-   * Turn budget for the creating spawn (TASK.180): from a profile's turnBudget
+   * Turn budget for the creating spawn: from a profile's turnBudget
    * frontmatter. Validated as a safe integer within
    * 1..CHILD_MAX_TURNS_CEILING (mirrors core's SUBAGENT_MAX_TURNS_CEILING,
    * duplicated here to keep this module value-only). Absent = existing
@@ -131,7 +131,7 @@ export interface ChildRunCancel {
   requestId: string;
 }
 
-/** Parent host -> main: deliver a follow-up to the sender's OWN RUNNING child (Taskana 4153 / TASK.216 wire). */
+/** Parent host -> main: deliver a follow-up to the sender's OWN RUNNING child (wire). */
 export interface ChildRunSend {
   type: typeof CHILD_RUN_SEND_TYPE;
   /** Wire-local correlation id, same role as ChildSpawnRequest.requestId. */
@@ -211,7 +211,7 @@ export type ChildRunEvent = { type: typeof CHILD_RUN_EVENT_TYPE; requestId: stri
       childTabId: string;
       model: string;
       /**
-       * Taskana 4820 review F1 (additive): the child host's EFFECTIVE turn
+       * review F1 (additive): the child host's EFFECTIVE turn
        * cap for this run — `--child-max-turns` when the spawn stamped one,
        * else the host env's resolved `ANYCODE_MAX_TURNS`, else absent (the
        * child falls back to DEFAULT_MAX_TURNS=100 internally). Absent on
@@ -248,7 +248,7 @@ export type ChildRunEvent = { type: typeof CHILD_RUN_EVENT_TYPE; requestId: stri
       durationMs: number;
       childSessionId: string;
       /**
-       * Additive field (TASK.102 CUT-S2 §10.7 п.4, authorized amendment to
+       * Additive field (CUT-S2 §10.7 п.4, authorized amendment to
        * this otherwise-frozen S2a type): mirrors `ChildTerminal
        * .activitySuppressed` through to the parent-host wire — main relays it
        * verbatim from the child's own `ChildTerminal` (§2.6.4). Present only
@@ -259,16 +259,16 @@ export type ChildRunEvent = { type: typeof CHILD_RUN_EVENT_TYPE; requestId: stri
       activitySuppressed?: number;
       /** Present only when the child's final turn_end carried finishReason "length" (output-token ceiling cut). */
       finalTurnFinishReason?: "length";
-      /** Additive (TASK 4149): the child declared its work finished at its turn ceiling; present only when true. */
+      /** Additive: the child declared its work finished at its turn ceiling; present only when true. */
       declaredDoneAtCeiling?: boolean;
-      /** Additive (TASK.219): the child host's ACTIVE session model at terminal. Absent on legacy payloads. */
+      /** Additive: the child host's ACTIVE session model at terminal. Absent on legacy payloads. */
       model?: string;
-      /** Additive (TASK.219): the child's dedicated-port provider claim at terminal, when attributable. Absent on legacy payloads. */
+      /** Additive: the child's dedicated-port provider claim at terminal, when attributable. Absent on legacy payloads. */
       responseModel?: string;
       /** TASK.240/4055 (additive): the child's ceiling ladder summary. Absent on legacy payloads and runs that never tripped the ceiling. */
       ceiling?: ChildCeilingSummary;
       /**
-       * R2 (Taskana 4704, additive): the redacted SAFE error descriptor of an
+       * R2 (additive): the redacted SAFE error descriptor of an
        * error terminal (finalText's first line), carried separately so the
        * parent host's infra-failure classifier never sees the child's free
        * model text. Absent on non-error terminals and legacy payloads.
@@ -276,7 +276,7 @@ export type ChildRunEvent = { type: typeof CHILD_RUN_EVENT_TYPE; requestId: stri
       errorDescriptor?: string;
     }
   /**
-   * Additive (Taskana 4153): ack for a `ChildRunSend` — the follow-up message
+   * Additive: ack for a `ChildRunSend` — the follow-up message
    * was queued for the parent's OWN RUNNING child (main already verified
    * ownership and the child's running state). Carries no payload: the ack
    * waiter in the parent host only needs the requestId correlation.
@@ -321,16 +321,16 @@ export interface ChildTerminal {
   activitySuppressed?: number;
   /** Present only when the child's final turn_end carried finishReason "length" (output-token ceiling cut). */
   finalTurnFinishReason?: "length";
-  /** Additive (TASK 4149): present only when true. */
+  /** Additive: present only when true. */
   declaredDoneAtCeiling?: boolean;
   /**
-   * Additive (TASK.219): the child host's ACTIVE session model at terminal —
+   * Additive: the child host's ACTIVE session model at terminal —
    * the literal configured/sent model, never the request's `model:` nor the
    * parent's pre-boot accepted label. Absent on legacy payloads.
    */
   model?: string;
   /**
-   * Additive (TASK.219): the child's dedicated model-port provider claim at
+   * Additive: the child's dedicated model-port provider claim at
    * terminal, when one is attributable. Absent on legacy payloads and when
    * no claim exists.
    */
@@ -338,7 +338,7 @@ export interface ChildTerminal {
   /** TASK.240/4055 (additive): the child's ceiling ladder summary. Absent on legacy payloads. */
   ceiling?: ChildCeilingSummary;
   /**
-   * R2 (Taskana 4704, additive): the redacted SAFE error descriptor of an
+   * R2 (additive): the redacted SAFE error descriptor of an
    * error terminal (finalText's first line). Absent on non-error terminals
    * and legacy payloads.
    */
@@ -357,17 +357,17 @@ export const CHILD_START_DEADLINE_MS = 30_000;
 export const CHILD_STEER_QUEUE_MAX = 16;
 /**
  * Max spawn requests parked waiting for a per-parent/global slot,
- * application-wide (TASK.147 срез 1: a cap-exceeding spawn now queues
+ * application-wide (срез 1: a cap-exceeding spawn now queues
  * instead of being refused outright). Bounds the queue itself — an
  * unbounded queue would only trade a lost task for a silently, indefinitely
  * stuck one, which the task's own "Границы решения" rules out just as
  * firmly as dropping the cap would be. Sized like `CHILD_STEER_QUEUE_MAX`
- * (no empirical basis exists yet for either number; TASK.147 срез 2
+ * (no empirical basis exists yet for either number; срез 2
  * revisits both).
  */
 export const CHILD_SPAWN_QUEUE_MAX = 16;
 
-// ── field-length caps (review finding 1, TASK.102 S2a): every string field on
+// ── field-length caps (review finding 1, S2a): every string field on
 // this wire that can originate from MODEL-controlled text (a provider mints
 // `part.toolCallId` verbatim on OpenAI-compatible connects — see
 // stream-translator.ts — and the parent's prompt/description are user/model
@@ -404,7 +404,7 @@ export const CHILD_PROMPT_MAX_CHARS = 200_000;
 /** Mirrors `SUBAGENT_OUTPUT_MAX_BYTES` (config.ts) — the SAME cap §2.6.3 already applies at the child-host producer. This is the defense-in-depth copy at the parser: the producer's own discipline is not what this validator exists to prove, so an unbounded `finalText` must never silently pass through it regardless of which producer sent it. */
 export const CHILD_FINAL_TEXT_MAX_CHARS = 100_000;
 /**
- * TASK.180: ceiling for `ChildSpawnRequest.maxTurns` — a local duplicate of
+ * ceiling for `ChildSpawnRequest.maxTurns` — a local duplicate of
  * core's `SUBAGENT_MAX_TURNS_CEILING` (packages/core/src/types/config.ts),
  * same "verbatim value, duplicated to keep this module free of runtime
  * imports" discipline as `PERMISSION_MODE_VALUES` above.
@@ -428,7 +428,7 @@ export const CHILD_MAX_TURNS_CEILING = 200;
 export const PERMISSION_MODE_VALUES: readonly string[] = ["plan", "build", "edit", "auto", "yolo"];
 
 /**
- * Local dictionary for `ChildSpawnRequest.engine` (TASK.102 CUT-S4 §3.1) —
+ * Local dictionary for `ChildSpawnRequest.engine` (CUT-S4 §3.1) —
  * same "verbatim over this wire, duplicated to avoid a runtime import"
  * discipline as `PERMISSION_MODE_VALUES` above. `"core"` is deliberately NOT
  * a member: core is spelled by the field's ABSENCE (file header), never by a
@@ -472,7 +472,7 @@ function isIdString(value: unknown, maxLength: number): value is string {
 
 /**
  * Public pre-flight variant of `isIdString`, capped at `CHILD_ID_MAX_CHARS`
- * (TASK.102 CUT-S2 §10.5, additive to the frozen S2a file). Lets the parent
+ * (CUT-S2 §10.5, additive to the frozen S2a file). Lets the parent
  * host's RPC client (`host/child-session-port.ts`) validate a model/provider-
  * minted `spawnToolCallId` BEFORE putting it on the wire, using the EXACT
  * same shape rule `parseChildSpawnRequest` enforces on the other end. This
@@ -489,7 +489,7 @@ export function isValidChildId(value: unknown): value is string {
 
 /**
  * Public pre-flight variant of `isIdString` for `ChildSpawnRequest.model`
- * (TASK.102 S4 blocker fix), capped at `CHILD_MODEL_MAX_CHARS` rather than
+ * (S4 blocker fix), capped at `CHILD_MODEL_MAX_CHARS` rather than
  * `CHILD_ID_MAX_CHARS` — `isValidChildId` cannot be reused directly since the
  * two caps differ (model 200, id 256). `model` is model-authored and, on the
  * main side, becomes a literal `--engine-model` argv value forwarded onto the
@@ -554,11 +554,11 @@ const CHILD_SPAWN_REQUEST_KEYS = [
   "model",
   "effort",
   "permissionMode",
-  // TASK.102 CUT-S4 §3.1: additive key, authorized amendment (mirrors the
+  // CUT-S4 §3.1: additive key, authorized amendment (mirrors the
   // §2.6 п.4 amendment style already used for `activitySuppressed` below).
   "engine",
   "resumeChildSessionId",
-  // TASK.180: additive key (profile turn budget for the creating spawn).
+  // additive key (profile turn budget for the creating spawn).
   "maxTurns",
   // GitHub #17 slice B: additive key (detach admission flag).
   "detach",
@@ -593,7 +593,7 @@ export function parseChildSpawnRequest(msg: unknown): ChildSpawnRequest | null {
   if (msg.provider !== undefined && !isNonEmptyCappedString(msg.provider, CHILD_PROVIDER_MAX_CHARS)) {
     return null;
   }
-  // Taskana 4269: same shape cap as `provider`; both at once rejects the whole
+  // same shape cap as `provider`; both at once rejects the whole
   // message (they are two ways to select the same connection).
   if (msg.connectionId !== undefined && !isNonEmptyCappedString(msg.connectionId, CHILD_PROVIDER_MAX_CHARS)) {
     return null;
@@ -619,7 +619,7 @@ export function parseChildSpawnRequest(msg: unknown): ChildSpawnRequest | null {
   if (msg.resumeChildSessionId !== undefined && !isIdString(msg.resumeChildSessionId, CHILD_ID_MAX_CHARS)) {
     return null;
   }
-  // TASK.180: absent stays valid; a defined budget must be a safe integer
+  // absent stays valid; a defined budget must be a safe integer
   // within 1..CHILD_MAX_TURNS_CEILING — anything else rejects the whole
   // message (fail-closed, like every other invalid field above).
   if (
@@ -671,7 +671,7 @@ export function parseChildRunCancel(msg: unknown): ChildRunCancel | null {
 const CHILD_RUN_SEND_KEYS = ["type", "requestId", "childSessionId", "text"] as const;
 
 /**
- * Fail-closed parser for `ChildRunSend` (Taskana 4153), mirroring
+ * Fail-closed parser for `ChildRunSend` mirroring
  * `parseChildRunCancel`'s discipline: exact keys, id-shaped `requestId`/
  * `childSessionId`, and `text` bounded by the same prompt cap the spawn
  * request's prompt rides. Proves WELL-FORMED only — ownership and the
@@ -700,7 +700,7 @@ const CHILD_RUN_EVENT_ACCEPTED_KEYS = [
   "childSessionId",
   "childTabId",
   "model",
-  // Taskana 4820 review F1: additive optional key (see the variant's own doc).
+  // review F1: additive optional key (see the variant's own doc).
   "maxTurns",
 ] as const;
 const CHILD_RUN_EVENT_REJECTED_KEYS = ["type", "requestId", "kind", "reason", "message"] as const;
@@ -720,16 +720,16 @@ const CHILD_RUN_EVENT_TERMINAL_KEYS = [
   "toolCalls",
   "durationMs",
   "childSessionId",
-  // TASK.102 CUT-S2 §10.7 п.4: additive key, authorized amendment.
+  // CUT-S2 §10.7 п.4: additive key, authorized amendment.
   "activitySuppressed",
   "finalTurnFinishReason",
   "declaredDoneAtCeiling",
-  // TASK.219: additive child-fact model attribution keys.
+  // additive child-fact model attribution keys.
   "model",
   "responseModel",
   // TASK.240/4055: additive ceiling-ladder summary key.
   "ceiling",
-  // R2 (Taskana 4704): additive safe-error-descriptor key.
+  // R2: additive safe-error-descriptor key.
   "errorDescriptor",
 ] as const;
 
@@ -831,7 +831,7 @@ export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
       if (!isBoolean(msg.waiting)) {
         return null;
       }
-      // Taskana 4821: optional ask identity (what the child is blocked on).
+      // optional ask identity (what the child is blocked on).
       if (msg.toolName !== undefined && !isNonEmptyCappedString(msg.toolName, CHILD_TOOL_NAME_MAX_CHARS)) {
         return null;
       }
@@ -848,7 +848,7 @@ export function parseChildRunEvent(msg: unknown): ChildRunEvent | null {
       };
     }
     case "sent": {
-      // Taskana 4153: ack for ChildRunSend — requestId correlation only, no payload.
+      // ack for ChildRunSend — requestId correlation only, no payload.
       if (!hasOnlyKeys(msg, CHILD_RUN_EVENT_SENT_KEYS)) {
         return null;
       }
@@ -1091,7 +1091,7 @@ export function parseChildTerminal(msg: unknown): ChildTerminal | null {
   if (msg.ceiling !== undefined && ceiling === null) {
     return null;
   }
-  // R2 (Taskana 4704): same fail-closed posture as the run-event parser.
+  // R2: same fail-closed posture as the run-event parser.
   if (
     msg.errorDescriptor !== undefined &&
     ((msg.status as string) !== "error" || !isCappedString(msg.errorDescriptor, CHILD_FINAL_TEXT_MAX_CHARS))

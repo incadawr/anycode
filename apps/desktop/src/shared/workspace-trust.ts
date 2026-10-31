@@ -1,5 +1,5 @@
 /**
- * Workspace trust wire contract (Taskana 4736). A project folder's own spawn
+ * Workspace trust wire contract. A project folder's own spawn
  * declarations (project MCP servers, hooks, LSP servers, project-tier plugin
  * MCP) start only after the user trusts the folder. The host reports what is
  * pending to the UI as display-only items; the UI answers with a decision and
@@ -47,7 +47,7 @@ export type WorkspaceTrustDecideResult =
   | { ok: true }
   | { ok: false; reason: "invalid" | "unknown_tab" | "no_pending" | "write_failed" };
 
-// Taskana 4739: Settings → Permissions lists the remembered trusted/denied
+// Settings → Permissions lists the remembered trusted/denied
 // folders and can forget ONE record. The renderer is untrusted: list carries
 // NO payload, forget carries ONLY a `key` string it previously received from
 // main's list — never a decision, hash, tab id, or arbitrary path. The key is

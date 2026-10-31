@@ -1,5 +1,5 @@
 /**
- * Catalog shape tests (Taskana 4743): every `LSP_CATALOG` entry must validate
+ * Catalog shape tests: every `LSP_CATALOG` entry must validate
  * against core's REAL `lspServerEntrySchema` after the `{name: id, command,
  * args, extensions}` mapping main performs on enable — this is the exact
  * object that would be written to `lspServers`, so a catalog typo must fail

@@ -2,7 +2,7 @@
  * Bidirectional round-trip between core's CLI-side settings.json writer/reader
  * (`packages/core/src/cli/settings-rules.ts`) and desktop's strict-schema
  * writer/reader (`files.ts`/`schema.ts`) — design slice-P7.5-cut.md §3.3,
- * TASK.8. Proves the two clients are format-compatible on the SAME
+ * . Proves the two clients are format-compatible on the SAME
  * `~/.anycode/settings.json` `permissions.alwaysAllow` section: one file, one
  * format, two writers. Every test runs against a fresh scratch dir, idiom of
  * files.test.ts.

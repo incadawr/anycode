@@ -91,7 +91,7 @@ describe("codex-timeouts", () => {
     expect(CODEX_DOCTOR_MODEL_LIST_PAGE_TIMEOUT_MS).toBeLessThan(CODEX_MODEL_LIST_PAGE_TIMEOUT_MS);
   });
 
-  it("login/start gets a bound WIDER than the doctor's per-RPC one — it is a network mint, not a local read (Taskana 4884)", () => {
+  it("login/start gets a bound WIDER than the doctor's per-RPC one — it is a network mint, not a local read", () => {
     // The regression this pins: reusing CODEX_DOCTOR_RPC_TIMEOUT_MS here made
     // any server mint slower than 3s look like a hard sign-in failure, with no
     // device code ever shown. 4s is below the observed tail (>3.9s).

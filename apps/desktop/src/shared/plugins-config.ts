@@ -1,5 +1,5 @@
 /**
- * Plugins control-plane channel names + wire view types (Taskana 4732 S1-B,
+ * Plugins control-plane channel names + wire view types (S1-B,
  * design §7). VALUE-ONLY, zero imports — the S1-C renderer pane compiles
  * against exactly these names; main/plugins-ipc.ts registers them; preload
  * bridges them. Any rename here is a three-file contract change by design.

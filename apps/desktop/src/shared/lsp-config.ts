@@ -1,5 +1,5 @@
 /**
- * Language-server management control-plane contract (Taskana 4743). Four
+ * Language-server management control-plane contract. Four
  * additive invoke channels between main and the renderer for the Settings →
  * Language servers pane: a joined catalog+config+trust status view, one-click
  * enable of a catalog preset, disable (remove) of a configured entry, and a

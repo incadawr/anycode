@@ -1,5 +1,5 @@
 /**
- * Taskana 4888: the pure policy behind `create_session {engine:"core", model}`
+ * the pure policy behind `create_session {engine:"core", model}`
  * — which provider CONNECTION a requested model selects.
  *
  * The core engine has no `--engine-model`: its model and endpoint come from the

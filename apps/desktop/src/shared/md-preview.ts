@@ -1,5 +1,5 @@
 /**
- * Native DOM markdown-preview contract between main and renderer (TASK.99
+ * Native DOM markdown-preview contract between main and renderer (
  * CUT.md CONTRACTS — M1 shipped READ, M2 adds NAVIGATE). Same value-only
  * shape as shared/preview-panel.ts / shared/window.ts: channel-name constants
  * + wire types only, ZERO runtime imports, so it is safe to import from

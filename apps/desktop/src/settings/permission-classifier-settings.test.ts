@@ -1,5 +1,5 @@
 /**
- * Taskana 4702 Stage 1: the optional `permissions.classifier` settings key.
+ * Stage 1: the optional `permissions.classifier` settings key.
  * Absent = off and round-trips absent; a valid record parses; an invalid
  * record is dropped ALONE (the classifier stays off) without disturbing the
  * sibling `alwaysAllow` rules. No version bump (additive-optional).
@@ -12,7 +12,7 @@ function docWith(permissions: Record<string, unknown>): Record<string, unknown> 
   return { ...cloneDefaults(), permissions };
 }
 
-describe("permissions.classifier (Taskana 4702)", () => {
+describe("permissions.classifier", () => {
   it("absent: the key is off and round-trips absent (no version bump)", () => {
     const parsed = parseSettings(cloneDefaults());
     expect(parsed.status).toBe("ok");
@@ -59,7 +59,7 @@ describe("permissions.classifier (Taskana 4702)", () => {
   });
 });
 
-describe("permissions.classifier kind:model (Taskana 4730)", () => {
+describe("permissions.classifier kind:model", () => {
   it("a valid model record parses and keeps every field", () => {
     const parsed = parseSettings(
       docWith({

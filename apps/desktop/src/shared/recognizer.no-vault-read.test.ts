@@ -1,5 +1,5 @@
 /**
- * TASK.202 guard: the fingerprint (and its new push-side companion
+ * guard: the fingerprint (and its new push-side companion
  * `recognizerSecretTargetKey`) must stay vault-free, value-only pure functions
  * — computing "did anything change" must never cost a secret resolution.
  * Two tripwires: (1) a Proxy around the settings document that throws on any
@@ -103,7 +103,7 @@ function plainDataProxy<T extends object>(value: T, path: string[] = []): T {
   return wrap(value, path) as T;
 }
 
-describe("recognizerFingerprint — declared no-vault-read property (TASK.202 guard)", () => {
+describe("recognizerFingerprint — declared no-vault-read property (guard)", () => {
   const record: CustomProviderRecord = {
     id: "custom:vision-slug",
     name: "Vision custom",

@@ -40,7 +40,7 @@ export interface ClaudeDoctorReport {
   version?: string;
   error?: string;
   /**
-   * Present when the refusal came from the binary-trust gate (TASK.103):
+   * Present when the refusal came from the binary-trust gate:
    * `binaryPath` is the gate's RESOLVED path — the file execve reads — and is
    * the path a grant pins (D-S4-14); present only for CONSENTABLE refusals
    * (D-S4-13); never present for a missing path (D-S4-18). The consent card
