@@ -17,7 +17,7 @@
  *    term-port is only bound after `ready` (index.ts), so by the time any
  *    `term_open` can arrive the key is gone — the shell can never see it. The
  *    env is read at spawn time (not snapshotted at construction) precisely so it
- *    always reflects the post-scrub state.  adds a second scrub at the
+ *    always reflects the post-scrub state. adds a second scrub at the
  *    same choke point: the env passes through `buildChildEnv`
  *    (@anycode/core/child-env), so a proxy URL that carries credentials (and
  *    the ANYCODE_*_PROXY_URL engine carriers) never reaches the interactive

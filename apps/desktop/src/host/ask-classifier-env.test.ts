@@ -1,5 +1,5 @@
 /**
- *  Stage 1: the host-side reader for ANYCODE_PERMISSION_CLASSIFIER.
+ * Stage 1: the host-side reader for ANYCODE_PERMISSION_CLASSIFIER.
  * Pins the fail-closed contract: unset, empty, garbage JSON, a disabled record,
  * an invalid shape, or an empty command all yield NO classifier (off), never a
  * partial one. A valid enabled record yields a command classifier with the

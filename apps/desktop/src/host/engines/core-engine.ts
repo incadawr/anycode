@@ -26,7 +26,7 @@ export interface CoreEngineOptions {
    */
   onBeforeTurn?: () => Promise<void>;
   /**
-   *  (§0b adjudication): notifies the host that the USER selected a
+   * (§0b adjudication): notifies the host that the USER selected a
    * reasoning tier, so the host can keep its own `selectedEffort` cell current
    * for anything that must re-resolve against the selected tier later — the
    * child-model settings resolver at subagent spawn, above all.
@@ -110,14 +110,14 @@ export class CoreEngine implements SessionEngine {
   }
 
   continueTurn(options: RunTurnOptions) {
-    // : continueTurn's AgentLoop path appends no user frame, but the
+    // continueTurn's AgentLoop path appends no user frame, but the
     // resumed steps' assistant/tool items still get {turnId, step} stamps —
     // options pass through verbatim, exactly like runTurn above.
     return this.wrapSteerLifecycle(this.options.loop.continueTurn(options));
   }
 
   /**
-   *  ( rework): pending steer waiters — one entry per
+   * (rework): pending steer waiters — one entry per
    * in-flight `steer()` call, in send order, resolved with the step ordinal
    * the loop delivered the frame after. A turn that ends before the seam
    * flush kills its undelivered steers via `failUndeliveredSteers` from the
@@ -164,7 +164,7 @@ export class CoreEngine implements SessionEngine {
   }
 
   /**
-   * : force-delivers `input` into the RUNNING turn via
+   * force-delivers `input` into the RUNNING turn via
    * the loop's deferred-injection queue. Resolves only once the loop has
    * actually flushed the frame at the legal seam — `{ turnId: "core:step:N" }`
    * names the step whose results the frame follows (self-describing, never

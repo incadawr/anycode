@@ -1,5 +1,5 @@
 /**
- *  xfix C1 / C2 / H1(a): the host's plugin discovery wiring, end
+ * xfix C1 / C2 / H1(a): the host's plugin discovery wiring, end
  * to end over a REAL temp directory (NodeFileSystemAdapter) — not a mock of
  * discovery. Feeds `pluginsDiscoveryWiring` (the exact options host/index.ts
  * spreads into discoverExtensions) into discoverPlugins and asserts what the

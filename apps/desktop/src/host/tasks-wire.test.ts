@@ -11,7 +11,7 @@
  *       marker file appears). permission_request shape == sync Bash (toolName
  *       "Bash", input.command present).
  *  (#2) a completed task's notice is injected into the NEXT accepted turn's model
- *       input exactly once (`Background task update:` + `task-1 ... completed,
+ *       input exactly once (`Background task update:` + `... completed,
  *       exit 0`), drained so the following turn is byte-identical (no block).
  *  (#3) BashKill reaps a real child to ESRCH; a TERM-ignoring task dies only via
  *       SIGKILL escalation (>= SIGKILL_GRACE_MS) and disposeAll stays bounded.
@@ -212,7 +212,7 @@ describe("tasks-wire e2e — real InProcessTaskManager + real sh children over t
         await h.waitFor(toolResultOf("c1"), 8_000);
         await h.waitUntil(() => countLoopEnds(h.received) >= 1, 8_000);
 
-        // Poll the manager until task-1 is terminal (a notice is now queued).
+        // Poll the manager until is terminal (a notice is now queued).
         const termDeadline = Date.now() + 8_000;
         while (Date.now() < termDeadline && manager.get("task-1")?.status === "running") {
           await sleepMs(25);
@@ -417,7 +417,7 @@ describe("tasks-wire e2e — real InProcessTaskManager + real sh children over t
         steps: [
           toolStep("c1", "Bash", { command: `echo $$ > ${pidfile}; exec ${SLEEP}`, run_in_background: true }),
           // A second (sync) Bash parks on the broker, keeping the STARTING turn
-          // in-flight so cancel_turn hits it while task-1 is running. It is never
+          // in-flight so cancel_turn hits it while is running. It is never
           // allowed (we cancel), so its handler — which would touch the stubbed
           // ports.exec — never runs.
           toolStep("c2", "Bash", { command: "echo second" }),

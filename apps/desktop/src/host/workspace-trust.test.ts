@@ -123,7 +123,7 @@ describe("establishHostWorkspaceTrust", () => {
   });
 });
 
-//  xfix D4: a child tab shares the parent's workspace; it never
+// xfix D4: a child tab shares the parent's workspace; it never
 // reports a pending trust question (its surface cannot answer one) and boots
 // with the parent's current decision — the record/once-approval decides, so a
 // child of a trusted-once parent boots trusted, an undecided one untrusted.
@@ -193,7 +193,7 @@ describe("establishHostWorkspaceTrust on a child surface (xfix D4)", () => {
   });
 });
 
-// : the host canonicalises the workspace with realpath, so a
+// the host canonicalises the workspace with realpath, so a
 // symlinked workspace shares one trust record with its target. The fake fs is
 // not symlink-aware: the project config is visible under BOTH names (what a
 // real symlink does) and the injected realpath maps link -> real.

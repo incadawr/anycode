@@ -324,7 +324,7 @@ describe("ClaudeClient", () => {
         child.stdout = makeFakeStream();
         child.stderr = makeFakeStream();
         // Every stdin write is captured, line by line — used by the
-        //  S3 `initialize(extra)` test to assert on the exact
+        // S3 `initialize(extra)` test to assert on the exact
         // outbound control_request body, not just on the inbound replay
         // (the fixture-driven tests above never inspect what WE sent).
         if (!args.includes("--version")) {
@@ -395,7 +395,7 @@ describe("ClaudeClient", () => {
     }
   });
 
-  //  blocker (probes.md, "Блокер, которого в плане нет"): the live
+  // blocker (probes.md, "Блокер, которого в плане нет"): the live
   // CLI emits this exact top-level frame every ~30s during a long tool call.
   // Before dispatch() recognized it, it fell through to the unrecognized-type
   // branch and terminalized the whole session on the FIRST heartbeat.
@@ -426,11 +426,11 @@ describe("ClaudeClient", () => {
     }
   });
 
-  //  S3: `ClaudeMcpBridge.announceOn` merges `sdkMcpServers` onto this
+  // S3: `ClaudeMcpBridge.announceOn` merges `sdkMcpServers` onto this
   // call's body (probes.md P0) without `initialize()` knowing anything about
   // MCP. Argv is untouched by this slice — only the control_request BODY
   // changes — so these are framing-level tests, not argv pins.
-  it("initialize(extra) merges caller-supplied fields into the outbound control_request body ( S3)", async () => {
+  it("initialize(extra) merges caller-supplied fields into the outbound control_request body (S3)", async () => {
     const { client, stdinWrites, emit } = makeFramingClient();
     try {
       await client.start();
@@ -454,7 +454,7 @@ describe("ClaudeClient", () => {
     }
   });
 
-  it("initialize() with no argument still sends the pre- empty body byte-for-byte", async () => {
+  it("initialize() with no argument still sends the pre-empty body byte-for-byte", async () => {
     const { client, stdinWrites, emit } = makeFramingClient();
     try {
       await client.start();
@@ -512,7 +512,7 @@ describe("buildClaudeSpawnArgs — GUI-surface system-prompt append", () => {
     expect(args[args.indexOf("--append-system-prompt") + 1]).toBe(CLAUDE_GUI_SURFACE_PROMPT);
   });
 
-  it("the static block still carries every previously-pinned flag alongside the new pair (argv enumeration, updated for )", () => {
+  it("the static block still carries every previously-pinned flag alongside the new pair (argv enumeration, updated for)", () => {
     const args = buildClaudeSpawnArgs({ sessionId: "s-1" });
     expect(args).toEqual([
       "-p",
@@ -541,14 +541,14 @@ describe("buildClaudeSpawnArgs — GUI-surface system-prompt append", () => {
     expect(CLAUDE_GUI_SURFACE_PROMPT).toMatch(/not a terminal/i);
     expect(CLAUDE_GUI_SURFACE_PROMPT).toMatch(/chat panel/);
     expect(CLAUDE_GUI_SURFACE_PROMPT).toMatch(/stdout\/stderr/);
-    // Ownership-boundary clause ( §"Связи"): the CLI's own subagent
+    // Ownership-boundary clause (§"Связи"): the CLI's own subagent
     // registry/skills/slash-commands support no conclusions about AnyCode.
     expect(CLAUDE_GUI_SURFACE_PROMPT).toMatch(/Task tool/);
     expect(CLAUDE_GUI_SURFACE_PROMPT).toMatch(/not AnyCode features/);
   });
 
   /**
-   *  cross-review M2: the always-on block must not NAME a tool
+   * cross-review M2: the always-on block must not NAME a tool
    * that exists only when the profile catalog is non-empty. The bridge (and
    * with it `mcp__anycode__agent`) is announced per-boot
    * (`ClaudeEngineCreateOptions.mcpBridge`'s own switch doc); on a machine
@@ -558,7 +558,7 @@ describe("buildClaudeSpawnArgs — GUI-surface system-prompt append", () => {
    * sentence rides the argv conditionally instead (see
    * `appendSystemPrompt`'s tests below).
    */
-  it("the always-on block never names mcp__anycode__agent — that sentence is catalog-conditional, not surface truth ( M2)", () => {
+  it("the always-on block never names mcp__anycode__agent — that sentence is catalog-conditional, not surface truth (M2)", () => {
     expect(CLAUDE_GUI_SURFACE_PROMPT).not.toContain("mcp__anycode__agent");
     expect(CLAUDE_GUI_SURFACE_PROMPT).not.toContain("detach: true");
   });
@@ -572,7 +572,7 @@ describe("buildClaudeSpawnArgs — GUI-surface system-prompt append", () => {
     expect(args.filter((arg) => arg === "--append-system-prompt")).toHaveLength(1);
   });
 
-  it("buildClaudeSpawnArgs appends the agent-bridge sentence AFTER the always-on block when the door is announced ( M2)", () => {
+  it("buildClaudeSpawnArgs appends the agent-bridge sentence AFTER the always-on block when the door is announced (M2)", () => {
     const args = buildClaudeSpawnArgs({ sessionId: "s-1", agentBridgePrompt: CLAUDE_AGENT_BRIDGE_PROMPT });
     const at = args.lastIndexOf("--append-system-prompt");
     expect(at).toBeGreaterThan(0);
@@ -611,7 +611,7 @@ describe("buildClaudeSpawnArgs — slash passthrough", () => {
     }
   });
 
-  it("the passthrough variant's full argv is the default argv minus exactly the one flag ( enumeration)", () => {
+  it("the passthrough variant's full argv is the default argv minus exactly the one flag (enumeration)", () => {
     const withFlag = buildClaudeSpawnArgs({ sessionId: "s-1" });
     const withoutFlag = buildClaudeSpawnArgs({ sessionId: "s-1", enableSlashPassthrough: true });
     expect(withoutFlag.length).toBe(withFlag.length - 1);
@@ -621,7 +621,7 @@ describe("buildClaudeSpawnArgs — slash passthrough", () => {
   });
 });
 
-//  xfix D1: an untrusted folder's .claude/settings.json hooks must
+// xfix D1: an untrusted folder's .claude/settings.json hooks must
 // never reach Claude Code's own settings loader. `--setting-sources` decides
 // which settings files the CLI reads; `project` and `local` both live in the
 // workspace, so the untrusted spawn admits `user` only. Verified against the
@@ -678,7 +678,7 @@ describe("buildClaudeChildEnv", () => {
     expect("CLAUDE_CONFIG_DIR" in env).toBe(false);
   });
 
-  //  срез C durable ( precedent): the ALLOWLIST projection
+  // срез C durable (precedent): the ALLOWLIST projection
   // excludes any name it does not enumerate — AnyCode's own provider
   // credential and the vision-fallback recognizer's OWN, separately-resolved
   // credential are both structurally excluded exactly like any other unnamed
@@ -699,9 +699,9 @@ describe("buildClaudeChildEnv", () => {
   });
 });
 
-//  part A (A-4): the session-identity pair passes through the
+// part A (A-4): the session-identity pair passes through the
 // engine allowlist when present; the ambient ANYCODE_* namespace stays closed.
-describe("buildClaudeChildEnv — session tool env (, A-4)", () => {
+describe("buildClaudeChildEnv — session tool env (A-4)", () => {
   it("A-4: passes ANYCODE_SESSION_ID and ANYCODE_SESSION_WORKSPACE through when present", () => {
     const env = buildClaudeChildEnv(
       {
@@ -770,7 +770,7 @@ describe("buildClaudeChildEnv — engine proxy carrier", () => {
 
   // Byte-identity, asserted over the WHOLE child env rather than selected keys:
   // the guarantee is that an unconfigured engine proxy changes nothing at all.
-  it("without a carrier the child env is byte-identical to the pre- build", () => {
+  it("without a carrier the child env is byte-identical to the pre-build", () => {
     const env = buildClaudeChildEnv(CONNECTION_SOURCE, undefined, "linux");
     expect(env).toEqual({
       HOME: "/home/test",
@@ -850,13 +850,13 @@ describe("buildClaudeChildEnv — engine proxy carrier", () => {
     expect(env.HTTPS_PROXY).toBe(CONNECTION_PROXY);
   });
 
-  //  / : engines WERE the deliberate exception to the
-  // child-env proxy scrub.  reverses that exemption: a credentialed
+  // /engines WERE the deliberate exception to the
+  // child-env proxy scrub. reverses that exemption: a credentialed
   // proxy never reaches the engine CLI — the host swaps it for its
   // credential-free loopback relay URL (fail-closed without one). The exemption
   // is now relay-only.
-  describe(" rework: credentialed family swapped for the relay URL", () => {
-    //  rework: the relay URL carries the token as USERINFO
+  describe("rework: credentialed family swapped for the relay URL", () => {
+    // rework: the relay URL carries the token as USERINFO
     // (`http://anycode:<token>@127.0.0.1:<port>`), and the swap is PER VALUE
     // (blocker B2 — each credentialed upstream gets ITS OWN relay).
     const RELAY = "http://anycode:AbCdEf1234567890_-XyZ@127.0.0.1:47557";
@@ -937,7 +937,7 @@ describe("buildClaudeChildEnv — engine proxy carrier", () => {
       }
     });
 
-    it("a credentialed ALL_PROXY/all_proxy is dropped, a clean one passes ( review)", () => {
+    it("a credentialed ALL_PROXY/all_proxy is dropped, a clean one passes (review)", () => {
       const SRC: NodeJS.ProcessEnv = { HOME: "/home/test", PATH: "/usr/bin", ALL_PROXY: "socks5://u:s3cret@p:1080", all_proxy: "socks5://p:1080" };
       const env = buildClaudeChildEnv(SRC, undefined, "linux");
       expect(env.ALL_PROXY).toBeUndefined();
@@ -960,7 +960,7 @@ describe("buildClaudeChildEnv — engine proxy carrier", () => {
         // Source carries a credentialed passthrough AND the carrier carries a
         // (differently) credentialed engine-scoped proxy: the swap runs first,
         // then the carrier override stamps its own url on top. Main's
-        // `relayCredentialedCarrier` ( §2.4) de-credentialises the
+        // `relayCredentialedCarrier` (§2.4) de-credentialises the
         // CARRIER before it ever reaches the host fork.
         const env = buildClaudeChildEnv(
           {
@@ -992,7 +992,7 @@ describe("buildClaudeChildEnv — engine proxy carrier", () => {
     }
   });
 
-  it("sanitizing the source first does not change the outcome: the builder still receives the credentialed carrier ( boundary)", async () => {
+  it("sanitizing the source first does not change the outcome: the builder still receives the credentialed carrier (boundary)", async () => {
     const { sanitizeChildEnv } = await import("@anycode/core/child-env");
     const source: NodeJS.ProcessEnv = {
       HOME: "/home/test",
@@ -1078,7 +1078,7 @@ describe("checkClaudeBinaryTrustOnDisk — consent threading — BH2", () => {
   );
 });
 
-// : the session child's turn budget maps to the CLI's native
+// the session child's turn budget maps to the CLI's native
 // --max-turns flag — present only when a budget was set.
 describe("buildClaudeSpawnArgs — max-turns flag", () => {
   it("includes --max-turns <decimal> when a budget is set", () => {
@@ -1165,7 +1165,7 @@ describe("ClaudeClient.start forwards options.maxTurns to the spawn argv", () =>
   });
 });
 
-// ──  / : --mcp-config argv adjacency + file custody ──
+// ── / --mcp-config argv adjacency + file custody ──
 
 describe("buildClaudeSpawnArgs — mcpConfigPath", () => {
   it("places --mcp-config,path IMMEDIATELY BEFORE --strict-mcp-config on fresh spawns", () => {

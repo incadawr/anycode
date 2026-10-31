@@ -23,7 +23,7 @@ export class CodexDynamicToolBridge {
   private turnKey = "";
   private readonly seenCalls = new Set<string>();
   /**
-   * : `port` is OPTIONAL (an empty agent catalog means no child
+   * `port` is OPTIONAL (an empty agent catalog means no child
    * port, but the browser tools still ride the bridge); `browser` adds the
    * ten anycode_browser_* tools — same core ToolDefinitions, same serialized
    * dispatch and the same input-aware approval gate as the Claude door
@@ -40,7 +40,7 @@ export class CodexDynamicToolBridge {
     // for a follow-up (defect return) instead of minting a fresh one.
     const decl = this.port === undefined ? null : buildAgentBridgeToolDecl(this.catalog, { detach: true, continueSession: true });
     const agentDecls = decl ? [{ ...decl, name: ANYCODE_AGENT_TOOL, type: "function" }, { ...agentStatusBridgeDecl, name: ANYCODE_AGENT_STATUS_TOOL, type: "function" }] : [];
-    // : the browser tools ride dynamicTools for EVERY root boot.
+    // the browser tools ride dynamicTools for EVERY root boot.
     const browserDecls = (this.browser?.specs ?? []).map((spec) => ({
       type: "function" as const,
       name: spec.codexName,
@@ -55,7 +55,7 @@ export class CodexDynamicToolBridge {
   }
 
   /**
-   * : cancel + a promise that settles once every in-flight call has
+   * cancel + a promise that settles once every in-flight call has
    * EMITTED its real terminal event (or never will). Used ONLY by the engine's
    * bounded pre-loop_end settle: Stop stays immediate (the interrupt and the
    * immediate cancelled acknowledgment are sent synchronously by `cancel()` +
@@ -88,7 +88,7 @@ export class CodexDynamicToolBridge {
   }
 
   /**
-   * : one browser tool call. The validations already ran in
+   * one browser tool call. The validations already ran in
    * `handle()` (active turn, no namespace, unique callId, `seenCalls`); this
    * branch registers its controller in `pending` (so `cancel()` aborts it and
    * Stop stays immediate), emits the canonical-named AgentEvents, runs the
@@ -148,7 +148,7 @@ export class CodexDynamicToolBridge {
     active: ActiveCodexTurn | null, emit: (event: AgentEvent) => void): Promise<void> {
     const p = request.params as Record<string, unknown> | undefined;
     const fail = (text: string): void => respond.result({ success: false, contentItems: [{ type: "inputText", text }] });
-    // : the validations below run for ALL bridge tools (agent and
+    // the validations below run for ALL bridge tools (agent and
     // browser alike); only the tool-name dispatch differs.
     const browserSpec = typeof p?.tool === "string" ? this.browser?.byCodexName(p.tool) : undefined;
     if (!p || !active || p.threadId !== active.threadId || p.turnId !== active.turnId ||
@@ -219,7 +219,7 @@ export class CodexDynamicToolBridge {
         );
       if (result.via === "failed") throw result.settled;
       if (result.via === "cancelled") {
-        // : Stop must stay immediate — emit the abort acknowledgment
+        // Stop must stay immediate — emit the abort acknowledgment
         // NOW (the native interrupt must never wait on the child) — but the
         // child's REAL terminal outcome (status + child-session target +
         // subagent card) only settles when main's terminal arrives, AFTER the
@@ -249,7 +249,7 @@ export class CodexDynamicToolBridge {
           }
           return outcome;
         });
-        //  review fix: track and delete the SAME promise. `late`
+        // review fix: track and delete the SAME promise. `late`
         // settles only after the late emission ran, so a drain() joins the
         // emission too — and removing it keeps `work` from retaining settled
         // entries forever (the old shape added `late.then(cleanup)` but

@@ -79,14 +79,14 @@ interface FakeTransportOptions {
   /** Control subtypes that must be REFUSED, mapping to the refusal message. */
   refuse?: Record<string, string>;
   /**
-   * : a per-call provider of `get_context_usage` readings. Each call
+   * a per-call provider of `get_context_usage` readings. Each call
    * receives the call index (0-based) and returns a reading, a promise of one,
    * or throws. Takes precedence over `contextUsage` when present. Use
    * `deferredUsage()` to gate individual calls.
    */
   contextUsageSequence?: (call: number) => Record<string, unknown> | Promise<Record<string, unknown>>;
   /**
-   * : the error the parked notifications reader is rejected with when
+   * the error the parked notifications reader is rejected with when
    * `releaseStreamReject()` is called. Models a transport death mid-turn whose
    * rejection text is hostile — arbitrary text or a `ClaudeClientError` wrapping
    * provider text — exercising `engineDeathSafe`'s redaction from the real path.
@@ -103,9 +103,9 @@ class FakeTransport implements ClaudeTransport {
   readonly controls: ControlCall[] = [];
   readonly order: string[] = [];
   contextUsageCalls = 0;
-  /** : concurrent in-flight `get_context_usage` requests right now. */
+  /** concurrent in-flight `get_context_usage` requests right now. */
   activeContextUsage = 0;
-  /** : high-water mark of concurrent context requests. */
+  /** high-water mark of concurrent context requests. */
   maxConcurrentContextUsage = 0;
   interrupts = 0;
   closed = 0;
@@ -115,9 +115,9 @@ class FakeTransport implements ClaudeTransport {
   private waiters: { resolve(result: IteratorResult<ClaudeStreamMessage>): void; reject(error: unknown): void }[] = [];
   private buffer: ClaudeStreamMessage[] = [];
   private done = false;
-  /** : the one-shot rejection to hand the parked reader (undefined once spent). */
+  /** the one-shot rejection to hand the parked reader (undefined once spent). */
   private streamReject: Error | undefined;
-  /** : a rejection armed before any reader parked, delivered on the next next(). */
+  /** a rejection armed before any reader parked, delivered on the next next(). */
   private armedStreamReject: Error | undefined;
 
   constructor(private readonly options: FakeTransportOptions = {}) {
@@ -200,7 +200,7 @@ class FakeTransport implements ClaudeTransport {
     for (const waiter of this.waiters.splice(0)) waiter.resolve({ value: undefined, done: true });
   }
 
-  /** : frames delivered on the NEXT sendUserMessage (a later turn's stream). */
+  /** frames delivered on the NEXT sendUserMessage (a later turn's stream). */
   enqueue(frame: ClaudeStreamMessage): void {
     this.pending.push(frame);
   }
@@ -216,7 +216,7 @@ class FakeTransport implements ClaudeTransport {
   }
 
   /**
-   * : reject the parked notifications reader with `rejectStreamOnce`.
+   * reject the parked notifications reader with `rejectStreamOnce`.
    * A reader is normally parked while the engine awaits a frame; if none is
    * parked yet the rejection is armed for the next `next()` so the death lands
    * on the CURRENT turn deterministically, never on a later call's timing.
@@ -231,7 +231,7 @@ class FakeTransport implements ClaudeTransport {
   }
 
   /**
-   * : gate the NEXT frames — the listed frames are withheld from
+   * gate the NEXT frames — the listed frames are withheld from
    * the stream until `release()` is called, mirroring a quiet stretch of a
    * live turn (a bridge call the CLI is waiting on, no frames flowing).
    * Delivered through the normal `push` path, so waiter/buffer plumbing is
@@ -281,7 +281,7 @@ function types(events: readonly AgentEvent[]): string[] {
   return events.map((event) => event.type);
 }
 
-/** : a manually-gated `get_context_usage` reading. */
+/** a manually-gated `get_context_usage` reading. */
 interface DeferredUsage {
   readonly promise: Promise<Record<string, unknown>>;
   resolve(reading: Record<string, unknown>): void;
@@ -327,7 +327,7 @@ function resultFrame157(reason: "completed" | "aborted_streaming" = "completed")
   } as unknown as ClaudeStreamMessage;
 }
 
-// ── : CLI self-started (foreign) turn fixtures ──────────────────────
+// ── CLI self-started (foreign) turn fixtures ──────────────────────
 
 function foreignAssistantFrame(id: string, text: string): ClaudeStreamMessage {
   return {
@@ -455,7 +455,7 @@ describe("ClaudeEngine.runTurn — projection of a real W0 turn", () => {
   });
 });
 
-describe("ClaudeEngine —  срез S4: takePresentation reaches the turn's translator", () => {
+describe("ClaudeEngine — срез S4: takePresentation reaches the turn's translator", () => {
   it("a tool_result for the bridge's own tool_use id carries the stamped presentation snapshot", async () => {
     const snapshot = { subagent: "opaque" } as never;
     const transport = new FakeTransport({
@@ -508,7 +508,7 @@ describe("ClaudeEngine —  срез S4: takePresentation reaches the turn's tra
   });
 });
 
-// ── : live bridge subagent_* events surface inside the turn ────
+// ── live bridge subagent_* events surface inside the turn ────
 
 /**
  * The bridge frames of a delegating owner turn: an assistant tool_use for the
@@ -523,7 +523,7 @@ function bridgeToolUseFrame(): ClaudeStreamMessage {
   } as unknown as ClaudeStreamMessage;
 }
 
-describe("ClaudeEngine — : bridge events surface mid-turn", () => {
+describe("ClaudeEngine — bridge events surface mid-turn", () => {
   it("a bridge event pushed while the turn is parked on a quiet stream is yielded between stream events", async () => {
     const toolResult = userToolResultFrame("toolu_bridge");
     const result = resultFrame157("completed");
@@ -647,7 +647,7 @@ describe("ClaudeEngine — : bridge events surface mid-turn", () => {
   });
 
   /**
-   *  cross-review P1: `takePresentation` is consumed exactly once
+   * cross-review P1: `takePresentation` is consumed exactly once
    * by the PAIRED top-level tool_result — but a turn that terminalizes
    * WITHOUT that frame (a dying transport, or a Stop whose interrupt lands
    * between the MCP response and the `user` tool_result frame) must not
@@ -733,7 +733,7 @@ describe("ClaudeEngine — the context meter is get_context_usage, never a resul
     const transport = new FakeTransport({ frames, contextUsage: { totalTokens: 33_333, maxTokens: 200_000 } });
     const events = await collect(engineWith(transport).runTurn("hi", { signal: new AbortController().signal }));
 
-    // : the fixture carries user (tool-result) frames, so a mid-turn
+    // the fixture carries user (tool-result) frames, so a mid-turn
     // refresh fires too — the FINAL reading is the LAST context_usage.
     const usage = events.filter((event) => event.type === "context_usage").at(-1);
     expect(usage).toEqual({ type: "context_usage", estimatedTokens: 33_333, budgetTokens: 200_000, source: "provider" });
@@ -747,7 +747,7 @@ describe("ClaudeEngine — the context meter is get_context_usage, never a resul
     });
     const events = await collect(engineWith(transport).runTurn("hi", { signal: new AbortController().signal }));
     const order = types(events);
-    // : the FINAL reading is the LAST context_usage, strictly after
+    // the FINAL reading is the LAST context_usage, strictly after
     // loop_end; mid-turn refreshes only ever precede it.
     expect(order.lastIndexOf("context_usage")).toBeGreaterThan(order.lastIndexOf("loop_end"));
     // Ordering on the wire, not just in the event list: the fixture's
@@ -889,7 +889,7 @@ describe("ClaudeEngine.selectModel — validate host-side, THEN set_model", () =
     expect(opus.snapshot().effort).toBe("high");
   });
 
-  it("re-resolves the effort for the switched-to model and restores the remembered value when switching back ( shape)", async () => {
+  it("re-resolves the effort for the switched-to model and restores the remembered value when switching back (shape)", async () => {
     const transport = new FakeTransport();
     const engine = engineWith(transport, { model: "opus[1m]" });
     await expect(engine.selectEffort("high")).resolves.toEqual({ ok: true, effort: "high" });
@@ -929,14 +929,14 @@ describe("ClaudeEngine — cancellation and disposal", () => {
     await turn;
 
     expect(transport.interrupts).toBe(1);
-    //  healthy-cancellation control: a cancel that SETTLES is not a
+    // healthy-cancellation control: a cancel that SETTLES is not a
     // death — no transport close, no engine_dead signal, semantics unchanged.
     expect(transport.closed).toBe(0);
     expect(events.some((event) => event.type === "error")).toBe(false);
     expect(events.find((event) => event.type === "loop_end")).toEqual({ type: "loop_end", reason: "cancelled", turns: 2 });
   });
 
-  it(": a Stop that cannot settle in time closes the session and terminalizes as cancelled with a restart-required posture", async () => {
+  it("a Stop that cannot settle in time closes the session and terminalizes as cancelled with a restart-required posture", async () => {
     const transport = new FakeTransport({
       frames: [
         {
@@ -961,7 +961,7 @@ describe("ClaudeEngine — cancellation and disposal", () => {
     expect(events.some((event) => event.type === "tool_call")).toBe(true);
     expect(transport.interrupts).toBe(1);
     expect(transport.closed).toBe(1);
-    // : the intentional-cancel settle timeout ALSO closes the engine and
+    // the intentional-cancel settle timeout ALSO closes the engine and
     // signals engine death — additively, WITHOUT turning the cancelled terminal
     // into an error terminal (the loop status below is still "cancelled").
     const errorEvent = events.find((event) => event.type === "error") as
@@ -993,7 +993,7 @@ describe("ClaudeEngine — cancellation and disposal", () => {
     expect(transport.sent).toEqual(["long job"]);
   });
 
-  it(": a transport that dies without an abort is still an error turn", async () => {
+  it("a transport that dies without an abort is still an error turn", async () => {
     const transport = new FakeTransport({ contextUsage: { totalTokens: 1, maxTokens: 2 } });
     const controller = new AbortController();
     const events: AgentEvent[] = [];
@@ -1008,9 +1008,9 @@ describe("ClaudeEngine — cancellation and disposal", () => {
     expect(events.find((event) => event.type === "loop_end")).toEqual({ type: "loop_end", reason: "error", turns: 1 });
   });
 
-  // ── : trusted engine-death descriptor (safe.code "engine_dead") ─────
+  // ── trusted engine-death descriptor (safe.code "engine_dead") ─────
 
-  it(": a mid-turn transport death carries safe.code engine_dead and the fixed reason, and the latch survives into the next turn", async () => {
+  it("a mid-turn transport death carries safe.code engine_dead and the fixed reason, and the latch survives into the next turn", async () => {
     const transport = new FakeTransport({ contextUsage: { totalTokens: 1, maxTokens: 2 } });
     const engine = engineWith(transport);
     const events: AgentEvent[] = [];
@@ -1034,7 +1034,7 @@ describe("ClaudeEngine — cancellation and disposal", () => {
     expect(next.filter((event) => event.type === "loop_end")).toEqual([{ type: "loop_end", reason: "error", turns: 2 }]);
   });
 
-  it(": hostile engine text never reaches safe.message — only a trusted descriptor does", async () => {
+  it("hostile engine text never reaches safe.message — only a trusted descriptor does", async () => {
     // Drive one turn whose parked reader rejects with `error` (the real death path).
     const rejectedTurn = async (error: Error): Promise<AgentEvent[]> => {
       const transport = new FakeTransport({ contextUsage: { totalTokens: 1, maxTokens: 2 }, rejectStreamOnce: error });
@@ -1092,7 +1092,7 @@ describe("ClaudeEngine — cancellation and disposal", () => {
     expect(safeOf(plainExit)?.message).not.toContain("SIGTERM");
   });
 
-  it(": a Stop that cannot settle a FOREIGN turn in time closes the session, signals engine death, and stays cancelled", async () => {
+  it("a Stop that cannot settle a FOREIGN turn in time closes the session, signals engine death, and stays cancelled", async () => {
     const t1 = streamFrames("w0-02-control-writeprobe.jsonl");
     const transport = new FakeTransport({ frames: t1, contextUsage: { totalTokens: 1, maxTokens: 2 } });
     const engine = engineWith(transport, { timeouts: { postInterruptSettleMs: 30 } });
@@ -1241,7 +1241,7 @@ describe("ClaudeEngine — presentation surface", () => {
 });
 
 /**
- * : a CLI turn started by ITSELF (injected cross-session notice)
+ * a CLI turn started by ITSELF (injected cross-session notice)
  * between owner turns must be absorbed — never misattributed to the next
  * owner turn's transcript, never allowed to terminate that turn early.
  *
@@ -1255,7 +1255,7 @@ describe("ClaudeEngine — presentation surface", () => {
  *   completed with no owner assistant output); engine_session_tokens carried
  *   the FOREIGN usage snapshot (input 115 = fixture + foreign 111).
  */
-describe("ClaudeEngine — : CLI self-started turns", () => {
+describe("ClaudeEngine — CLI self-started turns", () => {
   it("repro: an unsolicited CLI turn between owner turns is absorbed, not misattributed", async () => {
     const t1 = streamFrames("w0-02-control-writeprobe.jsonl");
     const transport = new FakeTransport({ frames: t1, contextUsage: { totalTokens: 1, maxTokens: 2 } });
@@ -1721,12 +1721,12 @@ describe("ClaudeEngine — reconciliation from the first system/init (cut §1.5 
 });
 
 /**
- * : a `system/init` reporting an MCP server as `failed` must be
+ * a `system/init` reporting an MCP server as `failed` must be
  * visible in the turn's own event stream — before this fix the status was
  * dropped by name-only parsing, so a failed "anycode" counted as healthy and
  * the model was the only one to notice ("anycode failed to connect").
  */
-describe("ClaudeEngine — : a failed MCP server is visible in the turn", () => {
+describe("ClaudeEngine — a failed MCP server is visible in the turn", () => {
   const RESULT: ClaudeStreamMessage = {
     type: "result",
     subtype: "success",
@@ -1875,7 +1875,7 @@ describe("ClaudeEngine — the MCP report follows EVERY system/init (GitHub #3)"
 });
 
 /**
- * : claude emits NO token event through the core `finish`->`usage`
+ * claude emits NO token event through the core `finish`->`usage`
  * path (the context meter is deliberately `get_context_usage`, never a
  * `result.usage` sum — the describe block above). This is the OTHER half:
  * `result.usage` DOES feed a session-cumulative `engine_session_tokens`
@@ -1981,7 +1981,7 @@ describe("ClaudeEngine — session-cumulative token accounting", () => {
 });
 
 /**
- * : mid-turn provider context refreshes. Claude must refresh the
+ * mid-turn provider context refreshes. Claude must refresh the
  * meter at user/tool-result and assistant boundaries during a RUNNING turn,
  * at most once per 30s (first refresh immediately eligible), never
  * overlapping, with completions surfacing during quiet periods without
@@ -1990,7 +1990,7 @@ describe("ClaudeEngine — session-cumulative token accounting", () => {
  */
 describe("ClaudeEngine — mid-turn context refreshes", () => {
   /** Continuously consumes a turn while it stays open; resolves with events when it finishes.
-   *  : `parked` resolves once the turn has passed its pre-send barrier
+   *  `parked` resolves once the turn has passed its pre-send barrier
    *  and actually SENT — under engine-lifetime stream ownership a frame pushed
    *  before that point is (correctly) classified as a CLI self-started turn,
    *  not this turn's mid-turn stream. */
@@ -2257,9 +2257,9 @@ describe("ClaudeEngine — mid-turn context refreshes", () => {
   });
 });
 
-// ── : manual compaction via the allowlisted slash passthrough ────────
+// ── manual compaction via the allowlisted slash passthrough ────────
 
-describe("ClaudeEngine.compactNow —  allowlisted /compact passthrough", () => {
+describe("ClaudeEngine.compactNow — allowlisted /compact passthrough", () => {
   it("sends the allowlisted /compact frame and maps result success to compaction events", async () => {
     const transport = new FakeTransport({
       frames: [resultFrame157("completed")],
@@ -2455,7 +2455,7 @@ describe("ClaudeEngine.compactNow —  allowlisted /compact passthrough", () => 
   });
 
   it("F4: a CLI self-started (foreign) turn finishes BEFORE the /compact frame is sent — its result is never mistaken for the compaction's verdict", async () => {
-    // The exact interleave  built the send barrier for: the idle
+    // The exact interleave built the send barrier for: the idle
     // reader has already classified a foreign assistant frame (foreignTurn
     // open) when the user hits Compact. Pre-fix, compactNow sent /compact
     // immediately and treated the FIRST result it saw as terminal — the
@@ -2615,7 +2615,7 @@ describe("ClaudeEngine.compactNow —  allowlisted /compact passthrough", () => 
   });
 
   it("F2: a system-origin turn whose model-authored text starts with '/' is neutralized — never interpreted as a slash command", async () => {
-    // The injection boundary 's spawn change actually created: the
+    // The injection boundary's spawn change actually created: the
     // ROOT engine session interprets a leading /command in a stream-json user
     // frame (w0-17 evidence), and host paths DO convert model output into
     // user frames — a detached child's final text (child_report ->
@@ -2686,11 +2686,11 @@ describe("ClaudeEngine.compactNow —  allowlisted /compact passthrough", () => 
   });
 });
 
-// ──  review: compactNow through the REAL composition ───────────
+// ── review: compactNow through the REAL composition ───────────
 // host/index.ts hands Session a ClaudeShadowTranscriptEngine wrapping a real
 // ClaudeEngine; Session's compact_request rail gates on method presence. This
 // pins the shipped composition (real engine, real wrapper), not a fake.
-describe("ClaudeEngine under ClaudeShadowTranscriptEngine —  review (F1 end-to-end)", () => {
+describe("ClaudeEngine under ClaudeShadowTranscriptEngine — review (F1 end-to-end)", () => {
   it("the wrapper over a real root ClaudeEngine exposes compactNow, sends the allowlisted frame, and hands the stream back", async () => {
     const { ClaudeShadowTranscriptEngine } = await import("./shadow-transcript.js");
     const transport = new FakeTransport({
@@ -2710,7 +2710,7 @@ describe("ClaudeEngine under ClaudeShadowTranscriptEngine —  review (F1 end-to
   });
 });
 
-describe("ClaudeEngine.compactNow —  review (Stop during the foreign-turn barrier)", () => {
+describe("ClaudeEngine.compactNow — review (Stop during the foreign-turn barrier)", () => {
   it("a Stop while waiting out a foreign turn never sends /compact, never interrupts the CLI's own turn, and ends ok:false cancelled", async () => {
     const transport = new FakeTransport({
       frames: [foreignAssistantFrame("m-turn1", "first owner turn"), foreignResultFrame("first result")],

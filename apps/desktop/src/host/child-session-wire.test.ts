@@ -1,5 +1,5 @@
 /**
- * child-session-wire ( CUT-S2 §3 slice S2b B5): the "полупровод"
+ * child-session-wire (CUT-S2 §3 slice S2b B5): the "полупровод"
  * contract test for the parent-host <-> main half of the session-tier `Agent`
  * wire. `host/index.ts` itself is NOT importable here — it touches
  * `process.parentPort` at module scope (the established host-test idiom, see
@@ -26,7 +26,7 @@
  *
  * Registry/config construction (`buildConfig` below) touches the two
  * host/index.ts wiring points this slice added — non-recursion locks #1
- * and #2 — under the trek's zеркало law ( CUT-S2 §10.9.3 A3, first
+ * and #2 — under the trek's zеркало law (CUT-S2 §10.9.3 A3, first
  * applied right here): a mirror may reproduce TRANSPORT shape, but a
  * DECISION belongs to production code, imported, never re-typed as a copy:
  *   - lock #1 (the registry ternary) stays a BY-DESIGN mirror of a single
@@ -231,7 +231,7 @@ function terminalEvent(
   };
 }
 
-describe("session-tier Agent call over a fake parentPort ( CUT-S2 §3 slice S2b B5)", () => {
+describe("session-tier Agent call over a fake parentPort (CUT-S2 §3 slice S2b B5)", () => {
   it("real dispatcher + real RPC client round-trip a full lifecycle through a scripted main: tool_result carries the final text and an S1 snapshot with a session target carrying all three ids", async () => {
     const channel = fakeParentPort();
     const port = createChildSessionPort({
@@ -687,11 +687,11 @@ describe("one handshake, one session_history (CUT-S1 §9.2 / CUT-S2 §10.4, B5's
       { id: "h1", createdAt: Date.now(), message: { role: "user", content: "hello from before the crash" } },
     ];
 
-    // : mirror the REAL host boot seam (host/index.ts's
+    // mirror the REAL host boot seam (host/index.ts's
     // `ConversationHistory({ initial })`) — a resumed child's persisted rows
     // live in the loop's history, so `engine.historyItems()` and the Session
     // `bootHistory` option are the same items by construction. Without this
-    // seed, 's rebuild-on-ui_ready reads an engine whose history
+    // seed,'s rebuild-on-ui_ready reads an engine whose history
     // never grew (a production-impossible state) and the handshake snapshot
     // comes back empty.
     loop.history.replaceAll([...bootHistory]);

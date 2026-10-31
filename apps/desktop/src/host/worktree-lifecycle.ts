@@ -543,7 +543,7 @@ export class WorktreeLifecycleService {
 
   private async ensureNotClaimed(targetReal: string): Promise<WorktreeLifecycleResult<null>> {
     try {
-      // Maintenance selection ( S2a §2.4): a running child session's
+      // Maintenance selection (S2a §2.4): a running child session's
       // worktree claim is a real, live claim — omitting children here would
       // let this session enter a worktree a child is actively using.
       const sessions = await this.persistence.listSessionsForMaintenance();

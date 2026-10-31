@@ -807,10 +807,10 @@ describe("projectCodexHistory — native command persistence in Codex 0.160", ()
 });
 
 
-//  review F17/F7: a persisted anycode_browser_* dynamicToolCall
+// review F17/F7: a persisted anycode_browser_* dynamicToolCall
 // item projects as a canonical-named tool_call/tool_result pair (name, args,
 // result text; image outputs become a text placeholder).
-describe("Codex history projection —  browser items", () => {
+describe("Codex history projection — browser items", () => {
   it("X14: an anycode_browser_click item projects as a BrowserClick tool pair, not the fallback stub", () => {
     const read: CodexThreadRead = {
       thread: { id: "t", turns: [{ id: "turn-a", startedAt: 0, items: [

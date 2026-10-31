@@ -100,14 +100,14 @@ export const CLAUDE_ENGINE_CAPABILITIES: EngineCapabilities = {
   supportsImages: true,
   supportsTasks: false,
   supportsFileSnapshots: false,
-  // : manual compaction via the allowlisted /compact slash frame
+  // manual compaction via the allowlisted /compact slash frame
   // (`compactNow` below) — this is what opens the Compact slash-menu row for
   // Claude, NOT `supportsCorePermissions` (that flag gates the ModeMenu).
   supportsManualCompact: true,
 };
 
 /**
- * : the ONLY slash commands AnyCode ever sends to the CLI. A closed
+ * the ONLY slash commands AnyCode ever sends to the CLI. A closed
  * list by construction — anything not here is never built into a user frame
  * by host code. Ambient catalog commands (`initialize.commands[]` /
  * `system/init.slash_commands[]`) are neither surfaced in the UI nor
@@ -126,7 +126,7 @@ const CLAUDE_BRIDGED_CAPABILITIES: EngineCapabilities = {
 
 export interface ClaudeEngineTimeouts {
   postInterruptSettleMs: number;
-  /** : minimum spacing between mid-turn `get_context_usage` refreshes. */
+  /** minimum spacing between mid-turn `get_context_usage` refreshes. */
   midTurnContextUsageIntervalMs: number;
 }
 
@@ -176,7 +176,7 @@ interface ClaudeEngineSettings {
   preset: ClaudePermissionPresetDefinition;
   effort?: string;
   /**
-   * Remembered effort per model id ( shape, mirrors
+   * Remembered effort per model id (shape, mirrors
    * `CodexEngineSettings.effortsByModel`), restored on `selectModel`. In-RAM
    * only, scoped to this one live engine instance — same as Codex's own
    * memory, which likewise never reaches a durable store.
@@ -185,7 +185,7 @@ interface ClaudeEngineSettings {
   /** Boot-time warnings (unusable draft model, quota pressure) flushed into the first turn's stream. */
   notices: AgentEvent[];
   /**
-   * : true only when this engine's CLI was spawned WITHOUT
+   * true only when this engine's CLI was spawned WITHOUT
    * `--disable-slash-commands` (`ClaudeEngineCreateOptions.enableSlashPassthrough`).
    * Absent/false: `compactNow` refuses and the Compact capability is off — a
    * `/compact` frame to a flagged CLI would reach the model as plain text.
@@ -198,7 +198,7 @@ function warning(message: string): AgentEvent {
 }
 
 /**
- * : defensively parses a `system/init.mcp_servers[]` array into plain
+ * defensively parses a `system/init.mcp_servers[]` array into plain
  * names. Each entry may be `{name, status, source, …}` or a bare string
  * (both shapes have been observed across CLI versions); anything else is
  * skipped, never thrown — the init must never fail a turn over a field we
@@ -220,7 +220,7 @@ export function parseClaudeInitMcpServerNames(mcpServers: unknown[] | undefined)
   return names;
 }
 
-/** : a `system/init` mcp_servers entry WITH its connection status (a bare string entry carries none). */
+/** a `system/init` mcp_servers entry WITH its connection status (a bare string entry carries none). */
 export interface ClaudeInitMcpServerStatus {
   name: string;
   /** `connected`/`failed`/`needs-auth`/`pending`/… as the CLI reports it; `null` for a bare-string entry. */
@@ -240,7 +240,7 @@ export interface ClaudeSystemInitReport {
 }
 
 /**
- * : names WITH status (`connected`/`failed`/`needs-auth`/
+ * names WITH status (`connected`/`failed`/`needs-auth`/
  * `pending`/…); bare strings => status null. Same tolerance rules as
  * `parseClaudeInitMcpServerNames` — junk entries are skipped, never thrown.
  */
@@ -264,8 +264,8 @@ export function parseClaudeInitMcpServerStatuses(mcpServers: unknown[] | undefin
 }
 
 /**
- * : one warning per server whose init status is `failed` or
- * `needs-auth`. Names only, never values/paths ( rule).
+ * one warning per server whose init status is `failed` or
+ * `needs-auth`. Names only, never values/paths (rule).
  */
 export function mcpServerFailureNotices(statuses: readonly ClaudeInitMcpServerStatus[]): AgentEvent[] {
   const notices: AgentEvent[] = [];
@@ -345,7 +345,7 @@ function resolveModel(
  * ids, except here the closed 5-value CLI vocabulary makes a useful
  * pre-spawn check possible where the open-ended model catalog offers none.
  * A model that ends up not supporting this level is the server's own
- * rejection to make ( open question #4); `connectClaudeEngine`
+ * rejection to make (open question #4); `connectClaudeEngine`
  * re-validates against the confirmed model once the catalog is known and
  * only then records a local `settings.effort`.
  */
@@ -384,7 +384,7 @@ function userMessageContent(text: string, attachments?: ImageAttachment[]): stri
 }
 
 /**
- *  cross-review F2: the slash-injection guard for NON-HUMAN user
+ * cross-review F2: the slash-injection guard for NON-HUMAN user
  * frames. Root engine sessions interpret slash commands in stream-json user
  * frames (w0-17 evidence, the same mechanism `compactNow` rides), and host
  * paths DO convert model output into user frames with `origin:"system"` — a
@@ -413,7 +413,7 @@ function neutralizeSystemOriginSlashes(text: string): string {
 }
 
 /**
- * : the trusted, host-authored death descriptor attached to EVERY
+ * the trusted, host-authored death descriptor attached to EVERY
  * terminal claude `error` event. Raw engine text is used only to select a
  * constant (or to re-emit a narrowly validated host format), never disclosed:
  * `ClaudeClientError` alone is NOT a trust boundary, because
@@ -493,7 +493,7 @@ export interface ClaudeEngineCreateOptions extends Omit<ClaudeClientOptions, "bo
   selection?: ClaudeSessionSelection;
   timeouts?: Partial<ClaudeEngineTimeouts>;
   /**
-   *  срез S4: the MCP agent-bridge door for this tab, built and
+   * срез S4: the MCP agent-bridge door for this tab, built and
    * routed BEFORE `initialize()` is ever sent (probes.md P0 — the CLI drives
    * its OWN mcp handshake INSIDE our outbound `initialize`, before it answers
    * ours). Absent for a claude CHILD boot and for a tab whose profile catalog
@@ -503,7 +503,7 @@ export interface ClaudeEngineCreateOptions extends Omit<ClaudeClientOptions, "bo
    */
   mcpBridge?: ClaudeMcpBridge;
   /**
-   * : the full CLI names (`mcp__anycode__browser_*`) of the
+   * the full CLI names (`mcp__anycode__browser_*`) of the
    * browser tools the door announced. Supplied exactly when `mcpBridge`
    * exists; `ClaudeApprovalBridge` auto-allows `can_use_tool` for these
    * names (the real, input-aware approval gate runs inside the door's
@@ -511,7 +511,7 @@ export interface ClaudeEngineCreateOptions extends Omit<ClaudeClientOptions, "bo
    */
   browserToolNames?: ReadonlySet<string>;
   /**
-   *  cross-review M2: `CLAUDE_AGENT_BRIDGE_PROMPT`, re-declared
+   * cross-review M2: `CLAUDE_AGENT_BRIDGE_PROMPT`, re-declared
    * here only to carry the engine-level contract — the host supplies it
    * EXACTLY when it supplies `mcpBridge` (the same non-empty-catalog,
    * non-child-boot switch), and `connectClaudeEngine` below additionally
@@ -523,7 +523,7 @@ export interface ClaudeEngineCreateOptions extends Omit<ClaudeClientOptions, "bo
    */
   agentBridgePrompt?: string;
   /**
-   *  срез S4: looks up (and consumes) the durable subagent-card
+   * срез S4: looks up (and consumes) the durable subagent-card
    * snapshot for one `mcp__anycode__agent` tool_use id — stamped by the
    * bridge's `callTool` handler (host/index.ts) onto its own
    * `AgentBridgeCallResult.presentation` once the child session settles. The
@@ -534,7 +534,7 @@ export interface ClaudeEngineCreateOptions extends Omit<ClaudeClientOptions, "bo
    */
   takePresentation?(toolUseId: string): ToolResultPresentation | undefined;
   /**
-   *  cross-review P1: called once at the END of every turn with
+   * cross-review P1: called once at the END of every turn with
    * the ids of THIS turn's `tool_use` blocks whose paired top-level
    * `tool_result` never arrived (a cancelled/dying turn's still-open tool
    * calls). The host drops any bridge presentation stamped for those ids —
@@ -546,7 +546,7 @@ export interface ClaudeEngineCreateOptions extends Omit<ClaudeClientOptions, "bo
    */
   dropPresentations?(toolUseIds: readonly string[]): void;
   /**
-   * : controlled MCP-forwarding warnings (mcp-forward-diagnostic.ts
+   * controlled MCP-forwarding warnings (mcp-forward-diagnostic.ts
    * templates only — no loader strings, no values) collected by the host boot
    * from prepareEngineMcpForward. Appended into connect's notices for
    * first-turn drain on BOTH fresh and resume boots.
@@ -570,14 +570,14 @@ async function connectClaudeEngine(
   spawn: { sessionId: string } | { resume: string },
 ): Promise<ConnectedClaudeEngine> {
   const notices: AgentEvent[] = [];
-  // : controlled MCP-forward warnings drain with the first turn.
+  // controlled MCP-forward warnings drain with the first turn.
   if (options.bootNotices !== undefined) notices.push(...options.bootNotices);
   const resuming = !("sessionId" in spawn);
   const preset = resolvePreset(options.selection, notices);
   const requestedEffort = resolveEffort(options.selection, notices);
   const sessionRef = "sessionId" in spawn ? spawn.sessionId : spawn.resume;
   let engine: ClaudeEngine | null = null;
-  //  срез S4 (probes.md P0's ordering correction): the bridge is
+  // срез S4 (probes.md P0's ordering correction): the bridge is
   // handed to `ClaudeApprovalBridge` HERE, before `ClaudeClient` is even
   // constructed — the CLI's own MCP handshake (`initialize` ->
   // `notifications/initialized` -> `tools/list`, each wrapped as a
@@ -588,7 +588,7 @@ async function connectClaudeEngine(
   const approvals = new ClaudeApprovalBridge({
     broker: options.broker,
     activePresetId: () => engine?.activePresetId ?? preset.id,
-    //  (cross-review F1): the CLI is spawned at `options.cwd`
+    // (cross-review F1): the CLI is spawned at `options.cwd`
     // (host/index.ts passes the boot workspace), so that same directory is
     // the workspace root the approval bridge's fact minting anchors against.
     workspace: options.cwd,
@@ -620,14 +620,14 @@ async function connectClaudeEngine(
     ...spawn,
     bootstrap: options.bootstrap,
     onControlRequest: approvals.handle,
-    // : only a ROOT engine session drops the flag, so the CLI
+    // only a ROOT engine session drops the flag, so the CLI
     // interprets host-built allowlisted /compact user frames. Fail-closed:
     // the host opts in explicitly (host/index.ts, root sessions only). Doctor,
     // login, engine-children.ts AND session-tier claude children (whose
     // prompt is model-authored — a leading "/" there would be slash
     // injection) keep the flag.
     enableSlashPassthrough: options.enableSlashPassthrough === true,
-    //  M2: the delegation sentence rides the argv only on the
+    // M2: the delegation sentence rides the argv only on the
     // SAME switch that announces the bridge (`mcpBridge !== undefined`) —
     // spread AFTER `...options` so an explicit undefined still overrides,
     // and a bridge-less boot can never name the tool.
@@ -637,11 +637,11 @@ async function connectClaudeEngine(
   });
   try {
     await client.start();
-    // `announceOn` ( S4) is the ONLY source of `sdkMcpServers` on the
+    // `announceOn` (S4) is the ONLY source of `sdkMcpServers` on the
     // wire; a tab with no bridge (child boot, or an empty profile catalog —
     // see `mcpBridge`'s own doc above) calls `initialize(undefined)`, the
-    // exact pre- empty body (claude-client.ts's own `initialize`
-    // doc: "an omitted `extra` reproduces the pre- empty body
+    // exact pre-empty body (claude-client.ts's own `initialize`
+    // doc: "an omitted `extra` reproduces the pre-empty body
     // byte-for-byte").
     const initialized = await client.initialize(options.mcpBridge?.announceOn());
     if (!isClaudeSignedIn(initialized.account)) {
@@ -749,11 +749,11 @@ export class ClaudeEngine implements SessionEngine {
   private interruptSent = false;
   private turnActive = false;
   private terminalError: Error | null = null;
-  // ── : single-owner notification stream ──────────────────────────
+  // ── single-owner notification stream ──────────────────────────
   /** The engine's ONE cached pending read of the notification stream. Shared
    *  by the idle reader and every owner turn; see takeFrame/frameConsumed. */
   private pendingNext: Promise<IteratorResult<ClaudeStreamMessage>> | null = null;
-  /** : the cached read's fulfillment, once it has landed. Draining
+  /** the cached read's fulfillment, once it has landed. Draining
    *  code inspects this after a microtask checkpoint instead of racing
    *  promises (a `.then` wrapper adds a microtask and loses every race
    *  against an already-resolved sentinel). */
@@ -766,7 +766,7 @@ export class ClaudeEngine implements SessionEngine {
   private idleEpoch = 0;
   /** Wakes the idle reader's abort race (runTurn entry / dispose). */
   private idleWake: (() => void) | null = null;
-  /** : resolved once when dispose() runs while an owner turn is parked
+  /** resolved once when dispose() runs while an owner turn is parked
    *  in the foreign-wait loop. Created lazily and never rejects; the resolver
    *  is idempotent. */
   private disposalWait: Promise<void> | null = null;
@@ -782,18 +782,18 @@ export class ClaudeEngine implements SessionEngine {
   private readonly firstInitListeners = new Set<(init: ClaudeSystemInitReport) => void>();
   /** Observers of EVERY turn-scoped `system/init` (`onEverySystemInit`). */
   private readonly everyInitListeners = new Set<(init: ClaudeSystemInitReport) => void>();
-  /** : names from the first observed `system/init`'s mcp_servers[]. */
+  /** names from the first observed `system/init`'s mcp_servers[]. */
   private liveMcpServerNames: string[] | null = null;
-  /** : statuses from the most recent `system/init`'s mcp_servers[] (latched for `onFirstSystemInit`). */
+  /** statuses from the most recent `system/init`'s mcp_servers[] (latched for `onFirstSystemInit`). */
   private liveMcpServerStatuses: ClaudeInitMcpServerStatus[] | null = null;
   /**
-   * : server names whose MCP failure notice has already been
+   * server names whose MCP failure notice has already been
    * surfaced. `system/init` repeats every turn, so without this latch one
    * failed server would warn on every single turn of the session.
    */
   private readonly reportedMcpFailures = new Set<string>();
   /**
-   * : MCP status notices queued by the CURRENT turn's init and
+   * MCP status notices queued by the CURRENT turn's init and
    * yielded inside that same turn (runTurn drains them right after the
    * translator's events). An init absorbed while idle routes through
    * `settings.notices` instead (absorbIdleFrame) — see the comment there.
@@ -803,7 +803,7 @@ export class ClaudeEngine implements SessionEngine {
   /** Cumulative `result.total_cost_usd` for this session (capability `costAccounting`). */
   private totalCostUsd = 0;
   /**
-   * : session-cumulative token counters fed by `onResult` below, the
+   * session-cumulative token counters fed by `onResult` below, the
    * source `engine_session_tokens` (host/index.ts's engine-boot telemetry tap,
    * `records.ts`'s `buildEngineTelemetryTap`) converts to additive delta
    * records. Per-process, like `totalCostUsd` — never persisted, never
@@ -820,17 +820,17 @@ export class ClaudeEngine implements SessionEngine {
    * usable `usage`) cannot silently replay the previous turn's numbers. Read
    * once, right after the post-terminal `readContextUsage` read below —
    * `null` there means this turn emits no `engine_session_tokens` event at
-   * all (fail-soft: an undercount, never an invented one, per  §DoD).
+   * all (fail-soft: an undercount, never an invented one, per §DoD).
    */
   private lastTurnTokenUsage: { input: number; output: number; cached?: number } | null = null;
   /**
-   * : timestamp (ms) of the LAST STARTED mid-turn context refresh, or
+   * timestamp (ms) of the LAST STARTED mid-turn context refresh, or
    * `null` when none has started yet. `null` (not 0) is the sentinel so a
    * mocked clock sitting at zero still permits the FIRST refresh of a turn.
    */
   private lastMidTurnUsageReadAt: number | null = null;
   /**
-   * : the PHYSICAL in-flight guard for `get_context_usage`. Engine
+   * the PHYSICAL in-flight guard for `get_context_usage`. Engine
    * level, not turn level: an iterator closed before its outstanding read
    * settles must still block a later turn from overlapping that request. Held
    * until the actual transport request settles, then cleared by promise
@@ -840,7 +840,7 @@ export class ClaudeEngine implements SessionEngine {
    */
   private contextUsageInFlight: Promise<unknown> | null = null;
   /**
-   * : subagent_* events from the MCP agent bridge
+   * subagent_* events from the MCP agent bridge
    * (`runAgentBridgeCall`'s `onEvent`), waiting for the live turn's race. The
    * host's `callTool` pushes them from OUTSIDE the engine's turn generator —
    * an `AgentEvent` only travels inside a turn — so the queue is the seam the
@@ -861,9 +861,9 @@ export class ClaudeEngine implements SessionEngine {
    * nothing leaks across turns.
    */
   private bridgeEvents: AgentEvent[] = [];
-  /** : the cached bridge-event slot (see `bridgeEvents`'s own header). */
+  /** the cached bridge-event slot (see `bridgeEvents`'s own header). */
   private bridgePending: { promise: Promise<AgentEvent | null>; settled: boolean; event: AgentEvent | null } | null = null;
-  /** : the parked slot's waiter — at most one; woken by `pushBridgeEvent`/`dispose`. */
+  /** the parked slot's waiter — at most one; woken by `pushBridgeEvent`/`dispose`. */
   private bridgeWaiters: { resolve: (event: AgentEvent | null) => void }[] = [];
 
   constructor(
@@ -873,19 +873,19 @@ export class ClaudeEngine implements SessionEngine {
     private readonly approvals?: ClaudeApprovalBridge,
     private readonly settings?: ClaudeEngineSettings,
     overrides?: Partial<ClaudeEngineTimeouts>,
-    /**  срез S4 — see `ClaudeEngineCreateOptions.takePresentation`'s own doc. */
+    /** срез S4 — see `ClaudeEngineCreateOptions.takePresentation`'s own doc. */
     private readonly takePresentation?: (toolUseId: string) => ToolResultPresentation | undefined,
-    /**  cross-review P1 — see `ClaudeEngineCreateOptions.dropPresentations`'s own doc. */
+    /** cross-review P1 — see `ClaudeEngineCreateOptions.dropPresentations`'s own doc. */
     private readonly dropPresentations?: (toolUseIds: readonly string[]) => void,
   ) {
     // Interactive approval is advertised only once the real bridge is installed
     // (the codex CODEX_BRIDGED_CAPABILITIES precedent); a bare test engine keeps
     // the fail-closed capability.
     const base = approvals === undefined ? CLAUDE_ENGINE_CAPABILITIES : CLAUDE_BRIDGED_CAPABILITIES;
-    // : no slash passthrough (child session, flagged spawn) => no Compact row.
+    // no slash passthrough (child session, flagged spawn) => no Compact row.
     this.capabilities = settings?.slashPassthrough === true ? base : { ...base, supportsManualCompact: false };
     this.bounds = { ...DEFAULT_CLAUDE_ENGINE_TIMEOUTS, ...overrides };
-    // : the idle reader owns the notification stream from boot, so an
+    // the idle reader owns the notification stream from boot, so an
     // unsolicited CLI turn BEFORE the first owner turn is absorbed too. If the
     // constructor throws earlier (invalid water marks), no reader was started
     // and no client was spawned — fine.
@@ -989,7 +989,7 @@ export class ClaudeEngine implements SessionEngine {
     } catch (error) {
       return { ok: false, reason: error instanceof Error ? error.message : "Claude refused the model change." };
     }
-    // Each model keeps its own remembered effort ( shape, mirrors
+    // Each model keeps its own remembered effort (shape, mirrors
     // `CodexEngine.selectModel`): the outgoing model's current effort is
     // stashed before switching, and the incoming model's own remembered (or
     // no longer supported) effort is restored.
@@ -1085,7 +1085,7 @@ export class ClaudeEngine implements SessionEngine {
       return;
     }
     yield { type: "turn_start", turn };
-    //  (order fix): the notice drain moves to AFTER the pre-send frame
+    // (order fix): the notice drain moves to AFTER the pre-send frame
     // drain below — a foreign-started notice is queued DURING that drain
     // (absorbIdleFrame -> queueNotice), so draining here would defer it to the
     // NEXT turn. `turn_start` stays the first event.
@@ -1098,18 +1098,18 @@ export class ClaudeEngine implements SessionEngine {
       ...(this.takePresentation !== undefined ? { takePresentation: this.takePresentation } : {}),
     });
     this.interruptSent = false;
-    // : take stream ownership BEFORE the first await. `turnActive`
+    // take stream ownership BEFORE the first await. `turnActive`
     // being set here (not after) is what keeps runIdleReader from re-entering
     // once an await boundary appears; stopIdleReader's epoch bump makes any
     // in-flight idle callback a no-op.
     this.stopIdleReader();
     this.turnActive = true;
-    // : turn-scoped reset — see lastTurnTokenUsage's own doc comment.
+    // turn-scoped reset — see lastTurnTokenUsage's own doc comment.
     this.resetTurnTokenUsage();
     let abortObserved = false;
     let settle: SettleDeadline | null = null;
     let terminal = false;
-    // : the run-turn-local PENDING COMPLETION slot for a mid-turn
+    // the run-turn-local PENDING COMPLETION slot for a mid-turn
     // context refresh. Distinct from the engine-level physical in-flight guard
     // (`contextUsageInFlight`): this one is consumed by the loop below and
     // dropped with the turn, so a read that settles after the turn ended can
@@ -1135,7 +1135,7 @@ export class ClaudeEngine implements SessionEngine {
     const cancelSettle = (): void => settle?.cancel();
 
     try {
-      // ── : the SEND BARRIER. The owner input is sent only from a
+      // ── the SEND BARRIER. The owner input is sent only from a
       // synchronous segment whose START was re-verified: every await or yield
       // (frame drain, notice delivery, foreign-turn wait) restarts the whole
       // barrier so nothing that arrived while the generator was suspended can
@@ -1149,7 +1149,7 @@ export class ClaudeEngine implements SessionEngine {
           // Stop before anything was sent: no owner input is injected. The
           // interrupt still fires (the CLI may be running something we did
           // not detect); the owner loop below consumes the CLI's terminal
-          // result, with the  settle deadline as backstop.
+          // result, with the settle deadline as backstop.
           abortObserved = true;
           usageDeliveryActive = false;
           beginInterrupt();
@@ -1181,7 +1181,7 @@ export class ClaudeEngine implements SessionEngine {
         // time, so the whole barrier re-runs on resume (drain again, dispose
         // and Stop checks again) before any send.
         const notices = this.drainNotices();
-        // : bridge events queued BEFORE the turn (a bridge call
+        // bridge events queued BEFORE the turn (a bridge call
         // from a prior CLI turn, or a detach whose report events raced the
         // next owner turn) flush here — before the owner input is sent, same
         // re-run discipline notices use.
@@ -1256,7 +1256,7 @@ export class ClaudeEngine implements SessionEngine {
             // nothing to inject). The interrupted foreign turn's terminal
             // result{terminal_reason:"aborted_streaming"} is consumed HERE
             // (the owner translator never sees foreign frames); if it does
-            // not settle in time, the EXISTING  settle deadline
+            // not settle in time, the EXISTING settle deadline
             // terminalizes cancelled. The foreign-turn state is cleared so a
             // later owner turn cannot wait forever for a result already
             // consumed.
@@ -1297,7 +1297,7 @@ export class ClaudeEngine implements SessionEngine {
                 level: "info",
                 message: "Stopped; the engine was still finishing a running command, so this session was closed. Start a new session to continue.",
               };
-              // : the transport is closed and no live engine remains —
+              // the transport is closed and no live engine remains —
               // signal actual death to Session (the cancelled loop status
               // below is unchanged; this is additive, never an error terminal).
               yield { type: "error", error: settledError, safe: engineDeathSafe(settledError) };
@@ -1355,7 +1355,7 @@ export class ClaudeEngine implements SessionEngine {
           ...(usageDeliveryActive && !abortObserved && pendingUsage !== null
             ? [pendingUsage.then((completion) => ({ kind: "usage" as const, completion }))]
             : []),
-          // : a live bridge subagent_* event wakes the race on
+          // a live bridge subagent_* event wakes the race on
           // its own — same quiet-period discipline as the usage arm. The
           // promise is cached in the `bridgePending` slot until the loop body
           // consumes it (a losing arm re-arms the same promise), so an event
@@ -1381,7 +1381,7 @@ export class ClaudeEngine implements SessionEngine {
         }
         if (raced.kind === "abort") {
           abortObserved = true;
-          // : an observed Stop disables mid-turn usage delivery — a
+          // an observed Stop disables mid-turn usage delivery — a
           // measurement settling after the abort must never surface as a
           // context_usage of the dying turn.
           usageDeliveryActive = false;
@@ -1389,7 +1389,7 @@ export class ClaudeEngine implements SessionEngine {
           continue;
         }
         if (raced.kind === "settle-timeout") {
-          // : a Stop that cannot settle in time is cancellation.
+          // a Stop that cannot settle in time is cancellation.
           // Close the unsettled transport so a late result cannot end a
           // subsequent turn; the terminal latch requires a new session.
           if (abortObserved) {
@@ -1403,7 +1403,7 @@ export class ClaudeEngine implements SessionEngine {
               level: "info",
               message: "Stopped; the engine was still finishing a running command, so this session was closed. Start a new session to continue.",
             };
-            // : additive death signal — see the foreign-turn branch above.
+            // additive death signal — see the foreign-turn branch above.
             yield { type: "error", error: settledError, safe: engineDeathSafe(settledError) };
             for (const event of translator.finishTerminal("cancelled")) yield event;
             return;
@@ -1411,7 +1411,7 @@ export class ClaudeEngine implements SessionEngine {
           throw new Error(`Claude did not settle the interrupted turn within ${this.bounds.postInterruptSettleMs}ms`);
         }
         if (raced.kind === "rejected") {
-          // : the cached read rejected — same terminal path the old
+          // the cached read rejected — same terminal path the old
           // `await next` rejection took (the catch below owns it).
           throw raced.error;
         }
@@ -1424,10 +1424,10 @@ export class ClaudeEngine implements SessionEngine {
           }
           throw this.terminalError ?? new Error("Claude exited during a turn");
         }
-        // : the slot's frame is consumed by THIS loop iteration; the
+        // the slot's frame is consumed by THIS loop iteration; the
         // next iteration's takeFrame() re-parks. Exactly one read in flight.
         this.frameConsumed();
-        // : at user/tool-result and assistant boundaries, kick off a
+        // at user/tool-result and assistant boundaries, kick off a
         // throttled, non-overlapping mid-turn context refresh. Never awaited
         // here — the completion rides the race above.
         if (!abortObserved && (raced.value.value.type === "user" || raced.value.value.type === "assistant")) {
@@ -1443,7 +1443,7 @@ export class ClaudeEngine implements SessionEngine {
           if (event.type === "loop_end") terminal = true;
           yield event;
         }
-        // : MCP failure notices from THIS turn's own init are
+        // MCP failure notices from THIS turn's own init are
         // yielded inside the same turn (a notice only travels inside a turn;
         // queueing them into settings.notices would defer them to the next
         // turn's pre-send drain).
@@ -1455,7 +1455,7 @@ export class ClaudeEngine implements SessionEngine {
       // The ctx meter, AFTER the terminal result and only for a turn that
       // actually ran (cut §1.4 table: "result -> turn_end + loop_end; следом
       // ctx-метр"). Session drains the full iterable, so an event yielded
-      // after loop_end still reaches the UI. : the final read is
+      // after loop_end still reaches the UI. the final read is
       // UNCONDITIONAL — never throttled by, and never merged with, a mid-turn
       // refresh. Any physical request still in flight is awaited first (it
       // never rejects) so the two can never overlap; the turn-local pending
@@ -1465,7 +1465,7 @@ export class ClaudeEngine implements SessionEngine {
       await this.awaitContextUsageInFlight();
       const usage = await this.readContextUsage();
       if (usage !== null) yield usage;
-      // : session-cumulative token accounting, next to the context
+      // session-cumulative token accounting, next to the context
       // meter read above. `lastTurnTokenUsage` is null when this turn's
       // `result.usage` was absent/malformed — no event this turn (fail-soft,
       // never invents a number). CUMULATIVE by contract (events.ts's own
@@ -1497,7 +1497,7 @@ export class ClaudeEngine implements SessionEngine {
       this.turnActive = false;
       cancelSettle();
       abort.dispose();
-      //  cross-review P1: a turn that terminalized without the
+      // cross-review P1: a turn that terminalized without the
       // paired top-level tool_result (cancelled/dying) must not leave the
       // bridge's stamped presentation behind in the host's map for the
       // process's lifetime — drop what the translator's single terminal path
@@ -1510,18 +1510,18 @@ export class ClaudeEngine implements SessionEngine {
           // A host-side sweep failure must never fail the turn's cleanup.
         }
       }
-      // : settle the bridge-event seam with the turn — wake a
+      // settle the bridge-event seam with the turn — wake a
       // still-parked waiter with the spurious `null` and re-queue any
       // resolved-but-unconsumed event, so the next turn's send barrier (not a
       // dead arm of THIS turn) delivers anything that lands after this point.
       this.sweepBridgeSlot();
-      // : drop the turn-local mid-turn refresh state. The local
+      // drop the turn-local mid-turn refresh state. The local
       // completion slot dies with the turn; a still-running PHYSICAL guard
       // (`contextUsageInFlight`) is deliberately NOT cleared — it settles
       // silently on its own and emits nothing into later turns.
       pendingUsage = null;
       usageDeliveryActive = false;
-      // : restart the idle reader for the between-turns window. Safe
+      // restart the idle reader for the between-turns window. Safe
       // even if the turn threw: takeFrame() re-parks on the (possibly closed)
       // stream and the done path parks the reader.
       if (!this.disposed && this.terminalError === null) this.runIdleReader();
@@ -1529,7 +1529,7 @@ export class ClaudeEngine implements SessionEngine {
   }
 
   /**
-   * : manual compaction over the allowlisted slash passthrough. The
+   * manual compaction over the allowlisted slash passthrough. The
    * engine spawn omits `--disable-slash-commands` (see `connectClaudeEngine`),
    * and the CLI interprets a leading `/command` in a stream-json user frame
    * (w0-17 evidence, committed fixture) — so the whole native compaction
@@ -1539,7 +1539,7 @@ export class ClaudeEngine implements SessionEngine {
    * registry, and this method is the only slash frame host code ever builds.
    *
    * Mirrors `runTurn`'s proven skeleton: single-owner stream takeover
-   *, one abort race per await, a settle-deadline backstop after an
+   * one abort race per await, a settle-deadline backstop after an
    * interrupt, idle-reader restore in `finally`. Like `AgentLoop.compactNow`
    * it never throws — every failure surfaces as `compaction_end { ok:false }`.
    */
@@ -1734,11 +1734,11 @@ export class ClaudeEngine implements SessionEngine {
   dispose(_reason: "session-close" | "host-shutdown"): Promise<void> {
     this.disposed = true;
     this.approvals?.denyAll("Claude engine is shutting down", "shutdown");
-    // : epoch bump + wake stops the idle reader; the disposal wait
+    // epoch bump + wake stops the idle reader; the disposal wait
     // settles a waiting owner turn, which terminalizes cancelled.
     this.stopIdleReader();
     this.resolveDisposalWait();
-    // : wake the parked bridge-event race arm (it resolves `null`
+    // wake the parked bridge-event race arm (it resolves `null`
     // against the now-emptied queue, so its turn loop just continues into the
     // disposal/terminal path) and drop the queue itself — no parked promise
     // leaks and a detached child's late progress cannot surface into a future
@@ -1752,11 +1752,11 @@ export class ClaudeEngine implements SessionEngine {
   }
 
   /**
-   * : the shared mapping/validation half of `readContextUsage`. When
+   * the shared mapping/validation half of `readContextUsage`. When
    * `applyModel` is set (the FINAL read only — a mid-turn refresh must never
    * patch `liveModel` from a reading whose turn may already be closed), a
    * string `usage.model` is applied to `liveModel` BEFORE the numeric gate,
-   * exactly the pre- final-read ordering. Invalid numbers return
+   * exactly the pre-final-read ordering. Invalid numbers return
    * `null`; the caller decides whether that is silent (mid-turn) or logged
    * (final, fail-soft).
    */
@@ -1774,7 +1774,7 @@ export class ClaudeEngine implements SessionEngine {
   }
 
   /**
-   * : a mid-turn context refresh. Fully SILENT — a failed or malformed
+   * a mid-turn context refresh. Fully SILENT — a failed or malformed
    * reading emits nothing, logs nothing, and never disrupts the turn. The
    * returned promise never rejects. It also installs/holds the engine-level
    * physical in-flight guard until the underlying request actually settles.
@@ -1794,7 +1794,7 @@ export class ClaudeEngine implements SessionEngine {
     return request.then((event) => ({ kind: "usage" as const, event }));
   }
 
-  /** : waits out any physically in-flight context read (never rejects). */
+  /** waits out any physically in-flight context read (never rejects). */
   private async awaitContextUsageInFlight(): Promise<void> {
     while (this.contextUsageInFlight !== null) {
       try {
@@ -1852,7 +1852,7 @@ export class ClaudeEngine implements SessionEngine {
     this.liveModel = init.model;
     this.livePermissionMode = init.permissionMode;
     this.liveMcpServerNames = parseClaudeInitMcpServerNames(init.mcp_servers);
-    // : a failed/needs-auth MCP server must be VISIBLE, not just
+    // a failed/needs-auth MCP server must be VISIBLE, not just
     // present in the name list (the old parsing dropped `status`, so a failed
     // "anycode" counted as healthy). One notice per server name per session —
     // init repeats every turn, the warning must not.
@@ -1963,7 +1963,7 @@ export class ClaudeEngine implements SessionEngine {
   }
 
   /**
-   * : turn-scoped reset for `lastTurnTokenUsage`, called at the top
+   * turn-scoped reset for `lastTurnTokenUsage`, called at the top
    * of `runTurn`. Factored into its own method rather than a direct
    * `this.lastTurnTokenUsage = null` inline in `runTurn` — with the direct
    * form, this TypeScript toolchain's flow analysis anchors the field's
@@ -1979,7 +1979,7 @@ export class ClaudeEngine implements SessionEngine {
     this.lastTurnTokenUsage = null;
   }
 
-  /** : reads AND clears `lastTurnTokenUsage` — see resetTurnTokenUsage's doc comment for why this is a method, not an inline `this.lastTurnTokenUsage` read. */
+  /** reads AND clears `lastTurnTokenUsage` — see resetTurnTokenUsage's doc comment for why this is a method, not an inline `this.lastTurnTokenUsage` read. */
   private consumeLastTurnTokenUsage(): { input: number; output: number; cached?: number } | null {
     const value = this.lastTurnTokenUsage;
     this.lastTurnTokenUsage = null;
@@ -2058,7 +2058,7 @@ export class ClaudeEngine implements SessionEngine {
   }
 
   /**
-   * : the host's bridge `callTool` pushes live subagent_* events
+   * the host's bridge `callTool` pushes live subagent_* events
    * here mid-turn (core's `runAgentBridgeCall` stamps every progress event
    * through `deps.onEvent`). A live turn's race drains them between stream
    * frames; events pushed with NO live turn (a detached child's post-turn
@@ -2083,7 +2083,7 @@ export class ClaudeEngine implements SessionEngine {
   }
 
   /**
-   * : take one buffered bridge event, or `null` when none is
+   * take one buffered bridge event, or `null` when none is
    * queued. A waiter woken after its event was consumed (drained by the send
    * barrier) must resolve `null`, never resurrect a drained event.
    */
@@ -2092,7 +2092,7 @@ export class ClaudeEngine implements SessionEngine {
   }
 
   /**
-   * : the owner loop's bridge race arm — resolves one event, or
+   * the owner loop's bridge race arm — resolves one event, or
    * `null` on a wake with nothing to deliver (dispose, or a swept turn). The
    * promise is cached in the `bridgePending` slot until the loop body consumes
    * the slot: a losing arm of one iteration re-arms the SAME promise the next
@@ -2127,7 +2127,7 @@ export class ClaudeEngine implements SessionEngine {
   }
 
   /**
-   * : the loop body's slot consumption — called ONLY after a
+   * the loop body's slot consumption — called ONLY after a
    * `bridge-event` raced result, for `null` and event alike. Clearing on
    * `null` matters as much as on an event: a resolved-`null` promise left in
    * the slot would win every later race immediately and spin the loop.
@@ -2137,7 +2137,7 @@ export class ClaudeEngine implements SessionEngine {
   }
 
   /**
-   * : settle the turn's bridge state — called from `runTurn`'s
+   * settle the turn's bridge state — called from `runTurn`'s
    * `finally`. A waiter parked by the final race iteration is woken with the
    * harmless spurious `null` (its dead arm resolves and is never awaited
    * again), so an event pushed after the turn ended cannot be captured by a
@@ -2155,7 +2155,7 @@ export class ClaudeEngine implements SessionEngine {
     }
   }
 
-  /** : splice ALL queued bridge events (the send-barrier flush). */
+  /** splice ALL queued bridge events (the send-barrier flush). */
   private drainBridgeEvents(): AgentEvent[] {
     return this.bridgeEvents.splice(0);
   }
@@ -2176,7 +2176,7 @@ export class ClaudeEngine implements SessionEngine {
     }
   }
 
-  // ── : single-owner notification stream ─────────────────────────────
+  // ── single-owner notification stream ─────────────────────────────
 
   /** Exactly ONE pending read of the stream exists at any moment. The read is
    *  created once and cached; its fulfillment lands in `readyFrame` (the only
@@ -2208,11 +2208,11 @@ export class ClaudeEngine implements SessionEngine {
     this.readyFrame = null;
   }
 
-  /** : does this frame PROVE the CLI is running a turn we did not ask
+  /** does this frame PROVE the CLI is running a turn we did not ask
    *  for? Deliberately narrow: assistant and genuine (non-replay) user and
    *  stream_event only. Idle noise (system status, rate_limit_event) is not a
    *  turn; a replay/local-command user echo is OUR OWN input coming back, not
-   *  evidence of a new CLI turn (; see event-translator's onUser). */
+   *  evidence of a new CLI turn; see event-translator's onUser). */
   private isForeignTurnFrame(frame: ClaudeStreamMessage): boolean {
     if (frame.type === "assistant" || frame.type === "stream_event") return true;
     if (frame.type === "user") {
@@ -2225,7 +2225,7 @@ export class ClaudeEngine implements SessionEngine {
     return false;
   }
 
-  /** : classification applied by BOTH idle and pre-send drains. Returns
+  /** classification applied by BOTH idle and pre-send drains. Returns
    *  nothing; mutates engine state only. Foreign frames NEVER reach an owner
    *  turn's translator. */
   private absorbIdleFrame(frame: ClaudeStreamMessage): void {
@@ -2233,7 +2233,7 @@ export class ClaudeEngine implements SessionEngine {
       if (frame.type === "system" && (frame as { subtype?: string }).subtype === "init") {
         // Live posture is state, not transcript: reconcile even mid-foreign-turn.
         this.onSystemInit(frame as unknown as ClaudeSystemInitMessage);
-        // : an init absorbed OUTSIDE an owner turn has no live
+        // an init absorbed OUTSIDE an owner turn has no live
         // stream to yield MCP failure notices on, so they take the boot-notice
         // path (queueNotice -> next turn's pre-send barrier drain). The
         // owner-turn case does NOT route through settings.notices — that path
@@ -2276,7 +2276,7 @@ export class ClaudeEngine implements SessionEngine {
     }
   }
 
-  /** : the between-turns (and pre-first-turn) reader. Catches its own
+  /** the between-turns (and pre-first-turn) reader. Catches its own
    *  rejection; NEVER lets a transport error become an unhandled rejection —
    *  idle errors are DROPPED and the slot is cleared; the next owner turn hits
    *  the real terminal path on the closed stream. */
@@ -2309,7 +2309,7 @@ export class ClaudeEngine implements SessionEngine {
     step();
   }
 
-  /** : bump the epoch (handoff took over), wake the parked race, and
+  /** bump the epoch (handoff took over), wake the parked race, and
    *  mark the reader stopped so `runIdleReader` can restart from a turn's
    *  finally. */
   private stopIdleReader(): void {
@@ -2319,7 +2319,7 @@ export class ClaudeEngine implements SessionEngine {
     this.idleWake = null;
   }
 
-  /** : lazily-created, never-rejecting disposal wait (E7). */
+  /** lazily-created, never-rejecting disposal wait (E7). */
   private ensureDisposalWait(): Promise<void> {
     this.disposalWait ??= new Promise<void>((resolve) => { this.resolveDisposalWait = resolve; });
     return this.disposalWait;

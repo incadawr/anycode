@@ -23,7 +23,7 @@ import type { EngineModelChoice } from "../../../shared/protocol.js";
 const DEFAULT_MODEL_ALIAS = "default";
 
 /**
- * The full `--effort` vocabulary the CLI's own `--help` advertises (,
+ * The full `--effort` vocabulary the CLI's own `--help` advertises (
  * binary 2.1.215) — a closed, version-independent set, unlike the model
  * catalog which is account-specific and only known post-handshake. This is
  * what makes spawn-time validation possible at all: a per-model catalog

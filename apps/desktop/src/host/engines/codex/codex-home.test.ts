@@ -160,7 +160,7 @@ describe("assertCodexProfileHome — auth.json symlink guard (amendment §A1.2)"
     expect(readlinkSync(join(home, "auth.json"))).toBe(join(home, "somewhere-else"));
   });
 
-  it("REFUSES a regular file where the symlink should be, and NEVER deletes or reads it ( DoD)", () => {
+  it("REFUSES a regular file where the symlink should be, and NEVER deletes or reads it (DoD)", () => {
     const { home, target } = managedWithTarget();
     mkdirSync(home, { recursive: true, mode: 0o700 });
     // codex may have refreshed tokens via tmp+rename, breaking the link — the
@@ -245,7 +245,7 @@ describe("resolveCodexProfilesHomeOverride (W4-F0b host lever, Fable ruling iter
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  rework — a codex CHILD's private temp dir (~/.anycode/tmp/<id>).
+// rework — a codex CHILD's private temp dir (~/.anycode/tmp/<id>).
 // Same scratch-only discipline as every block above: freshDir trees only.
 // ─────────────────────────────────────────────────────────────────────────────
 describe("resolveChildTempDir / ensureChildTempDir / removeChildTempDir", () => {

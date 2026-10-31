@@ -62,7 +62,7 @@ describe("CODEX_PERMISSION_PRESETS", () => {
   });
 });
 
-describe(" — tmp-root exclusion", () => {
+describe("— tmp-root exclusion", () => {
   it("default keeps the frozen workspaceWrite policy (no exclusion)", () => {
     const ask = findCodexPreset("ask")!.turnOverride("/repo/a");
     expect(ask.sandboxPolicy).toEqual({
@@ -116,7 +116,7 @@ describe(" — tmp-root exclusion", () => {
   });
 });
 
-describe(" rework — extraWritableRoot (the child's private temp dir)", () => {
+describe("rework — extraWritableRoot (the child's private temp dir)", () => {
   it("appends the private dir AFTER the workspace, exclusion flags intact — the exact child posture", () => {
     const ask = findCodexPreset("ask")!.turnOverride("/repo/a", {
       excludeTmpRoots: true,
@@ -175,7 +175,7 @@ describe(" rework — extraWritableRoot (the child's private temp dir)", () => {
   });
 });
 
-describe("codexPresetChoices ( wire projection)", () => {
+describe("codexPresetChoices (wire projection)", () => {
   it("exposes id/label/description only — never a policy object the renderer could edit", () => {
     const choices = codexPresetChoices();
     expect(choices).toEqual([
@@ -189,7 +189,7 @@ describe("codexPresetChoices ( wire projection)", () => {
   });
 });
 
-describe("child-ask preset ( / )", () => {
+describe("child-ask preset", () => {
   it("resolves through findCodexPreset and boots untrusted on the same workspace-write sandbox", () => {
     const preset = findCodexPreset(CODEX_CHILD_ASK_PRESET_ID);
     expect(preset).toBeDefined();

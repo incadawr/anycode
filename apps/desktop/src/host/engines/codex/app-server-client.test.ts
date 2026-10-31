@@ -55,7 +55,7 @@ writeFileSync(
  * A scripted app-server that answers EVERY request with a JSON-RPC error —
  * `turn/interrupt` with the live `-32600` / "no active turn to interrupt" the
  * real app-server returns for an interrupt sent inside its reject window
- *, anything else with a codeless error. Written to the temp fixture
+ * anything else with a codeless error. Written to the temp fixture
  * dir rather than test-child.mjs so the classification test owns its own wire.
  */
 const erroringChild = join(fixtureDir, "erroring-child.mjs");
@@ -93,7 +93,7 @@ function alive(pid: number): boolean {
 }
 
 /**
- * `makeClient`'s default `sourceEnv` with a  support-policy carrier
+ * `makeClient`'s default `sourceEnv` with a support-policy carrier
  * added — the shape main's `engineEnv` overlay stamps into every host fork.
  */
 function policyEnv(ranges: string[], riskAcceptedVersions: string[] = []): NodeJS.ProcessEnv {
@@ -140,7 +140,7 @@ describe("AppServerClient", () => {
     await expect(makeClient(["--hang-version"], { versionTimeoutMs: 150 }).start()).rejects.toBeInstanceOf(EngineVersionError);
   });
 
-  // : the rejection text must be DERIVED from SUPPORTED_CODEX_VERSION,
+  // the rejection text must be DERIVED from SUPPORTED_CODEX_VERSION,
   // not a second literal restating it — otherwise widening the constant alone
   // (as every prior codex bump did) leaves this message advertising a stale
   // ceiling narrower than the predicate actually accepts. Reads the constant's
@@ -154,7 +154,7 @@ describe("AppServerClient", () => {
     expect((failure as Error).message).toContain(SUPPORTED_CODEX_VERSION);
   });
 
-  // ── : the preflight judges by the ACTIVE support policy main
+  // ── the preflight judges by the ACTIVE support policy main
   // delivers, not by the compiled wire pin. The three properties are unit-
   // pinned in version-policy.test.ts; these run them through the REAL
   // spawn+preflight path, which is the only place that actually refuses a
@@ -200,7 +200,7 @@ describe("AppServerClient", () => {
 
   it("starts on an ABOVE-CEILING version once it is risk-accepted — the 'use it anyway' button reaching the engine path", async () => {
     // `--bad-version` reports 1.0.0, which every range refuses; the acceptance
-    // is the only thing that can let this spawn happen. Pre- the host
+    // is the only thing that can let this spawn happen. Pre-the host
     // never saw `riskAcceptedVersions` at all and this could not pass.
     const client = makeClient(["--bad-version"], {
       sourceEnv: policyEnv([">=0.144.0 <0.152.0"], ["1.0.0"]),
@@ -250,7 +250,7 @@ describe("AppServerClient", () => {
     }
   });
 
-  //  xfix D1 (codex side): pin that the app-server spawn reads NO
+  // xfix D1 (codex side): pin that the app-server spawn reads NO
   // project configuration. The argv is exactly `app-server --stdio` — no
   // project config.toml path, no `--cd` into the workspace, no `-c` overrides
   // sourced from project files — and the env carries CODEX_HOME only from the
@@ -316,7 +316,7 @@ describe("AppServerClient", () => {
     expect(client.pid).toBeNull();
   });
 
-  //  (W12): the rejection a failed request carries is the ONLY place a
+  // (W12): the rejection a failed request carries is the ONLY place a
   // caller can learn WHICH failure it was. Pre-fix the dispatcher kept the
   // message and dropped `code`, so `-32600` ("no active turn to interrupt" — the
   // interrupt reject window) was indistinguishable from any other failure and
@@ -474,7 +474,7 @@ describe("AppServerClient", () => {
       HTTPS_PROXY: "https://proxy",
       SSL_CERT_FILE: "/cert.pem",
       ANYCODE_API_KEY: "must-not-pass",
-      //  срез C durable ( precedent): the vision-fallback
+      // срез C durable (precedent): the vision-fallback
       // recognizer's OWN credential must never reach a codex child either —
       // this allowlist projection excludes it structurally, the same way it
       // already excludes the primary provider key.
@@ -524,7 +524,7 @@ describe("AppServerClient", () => {
     expect(ambient.CODEX_HOME).toBe("/ambient-shell-home");
   });
 
-  //  rework: the child's private temp dir replaces the tmp family
+  // rework: the child's private temp dir replaces the tmp family
   // in the app-server spawn env — assigned AFTER the passthrough, so the
   // ambient TMPDIR the allowlist copied in can never win (the same
   // last-assignment discipline as the profile home above).
@@ -719,9 +719,9 @@ describe("AppServerClient", () => {
   });
 });
 
-//  part A (A-4): the session-identity pair passes through the
+// part A (A-4): the session-identity pair passes through the
 // engine allowlist when present; the ambient ANYCODE_* namespace stays closed.
-describe("buildCodexChildEnv — session tool env (, A-4)", () => {
+describe("buildCodexChildEnv — session tool env (A-4)", () => {
   it("A-4: passes ANYCODE_SESSION_ID and ANYCODE_SESSION_WORKSPACE through when present", () => {
     const env = buildCodexChildEnv(
       { HOME: "/home/test", PATH: "/bin", ANYCODE_SESSION_ID: "sess-codex", ANYCODE_SESSION_WORKSPACE: "/work/repo" },
@@ -778,7 +778,7 @@ describe("buildCodexChildEnv — engine proxy carrier", () => {
 
   // Byte-identity, asserted over the WHOLE child env rather than selected keys:
   // the guarantee is that an unconfigured engine proxy changes nothing at all.
-  it("without a carrier the child env is byte-identical to the pre- build", () => {
+  it("without a carrier the child env is byte-identical to the pre-build", () => {
     const env = buildCodexChildEnv(CONNECTION_SOURCE, "linux");
     expect(env).toEqual({
       HOME: "/home/test",
@@ -850,13 +850,13 @@ describe("buildCodexChildEnv — engine proxy carrier", () => {
     expect(env.HTTPS_PROXY).toBe(ENGINE_PROXY);
   });
 
-  //  / : engines WERE the deliberate exception to the
-  // child-env proxy scrub.  reverses that exemption: a credentialed
+  // /engines WERE the deliberate exception to the
+  // child-env proxy scrub. reverses that exemption: a credentialed
   // proxy never reaches the engine CLI — the host swaps it for its
   // credential-free loopback relay URL (fail-closed without one). The exemption
   // is now relay-only.
-  describe(" rework: credentialed family swapped for the relay URL", () => {
-    //  rework: the relay URL carries the token as USERINFO
+  describe("rework: credentialed family swapped for the relay URL", () => {
+    // rework: the relay URL carries the token as USERINFO
     // (`http://anycode:<token>@127.0.0.1:<port>`), and the swap is PER VALUE
     // (blocker B2 — each credentialed upstream gets ITS OWN relay).
     const RELAY = "http://anycode:AbCdEf1234567890_-XyZ@127.0.0.1:47557";
@@ -936,7 +936,7 @@ describe("buildCodexChildEnv — engine proxy carrier", () => {
       }
     });
 
-    it("a credentialed ALL_PROXY/all_proxy is dropped, a clean one passes ( review)", () => {
+    it("a credentialed ALL_PROXY/all_proxy is dropped, a clean one passes (review)", () => {
       const SRC: NodeJS.ProcessEnv = { HOME: "/home/test", PATH: "/usr/bin", ALL_PROXY: "socks5://u:s3cret@p:1080", all_proxy: "socks5://p:1080" };
       const env = buildCodexChildEnv(SRC, "linux");
       expect(env.ALL_PROXY).toBeUndefined();
@@ -959,7 +959,7 @@ describe("buildCodexChildEnv — engine proxy carrier", () => {
         // Source carries a credentialed passthrough AND the carrier carries a
         // (differently) credentialed engine-scoped proxy: the swap runs first,
         // then the carrier override stamps its own url on top. Main's
-        // `relayCredentialedCarrier` ( §2.4) de-credentialises the
+        // `relayCredentialedCarrier` (§2.4) de-credentialises the
         // CARRIER before it ever reaches the host fork.
         const env = buildCodexChildEnv(
           { ...CREDENTIALED_SOURCE, [ENV_CODEX_PROXY_URL]: encodeEngineProxyCarrier({ kind: "proxy", url: "http://u:engpass@h:2" }) as string },

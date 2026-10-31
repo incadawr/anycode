@@ -186,7 +186,7 @@ describe("ClaudeSessionRowWriter — a fresh session writes nothing until the na
     expect(rec.touches).toEqual([{ id: "row-1", patch: { title: "buffered" } }]);
   });
 
-  //  cross-review F1: the flush of a report snapshot buffered
+  // cross-review F1: the flush of a report snapshot buffered
   // behind the CREATE used to fire with `void` and no catch — a rejected
   // save (SQLITE_BUSY past busy_timeout is the realistic trigger) surfaced
   // as an unhandled rejection, which kills the host under Node's default
@@ -216,7 +216,7 @@ describe("ClaudeSessionRowWriter — a fresh session writes nothing until the na
     expect(rec.order).toEqual(["create", "pending_reports:json"]);
   });
 
-  //  cross-review F1 sub-case: `create` itself rejects ->
+  // cross-review F1 sub-case: `create` itself rejects ->
   // onError swallows it and `this.chain` stays "resolved" — the flush used
   // to run anyway, silently UPDATE-ing a row that does not exist (0 rows
   // matched, no error) while the queue believed the report durable.
@@ -247,7 +247,7 @@ describe("ClaudeSessionRowWriter — a fresh session writes nothing until the na
     expect(rec.order).toEqual(["create:failed"]);
   });
 
-  //  review N1: the buffered flush used to be DEFERRED to
+  // review N1: the buffered flush used to be DEFERRED to
   // `created.then(...)` — it registered on the serialized chain only when the
   // create settled, i.e. AFTER any live save issued between materialize() and
   // that settlement had already registered. The older buffered snapshot then
@@ -296,7 +296,7 @@ describe("ClaudeSessionRowWriter — a fresh session writes nothing until the na
     expect(rec.order).toEqual(["create", "pending_reports:null"]);
   });
 
-  //  review N1, json variant: same window, but the live save
+  // review N1, json variant: same window, but the live save
   // carries a NEWER json snapshot (a second report). The buffered one-report
   // snapshot must not land after it and silently drop the second report.
   it("a live json save inside the window stays newer than the buffered snapshot (no NEW,OLD reorder)", async () => {
@@ -362,7 +362,7 @@ describe("ClaudeSessionRowWriter — a fresh session writes nothing until the na
   });
 });
 
-//  CUT-S4 §4.3: `index.ts`'s `bootClaudeSession` is not importable in
+// CUT-S4 §4.3: `index.ts`'s `bootClaudeSession` is not importable in
 // a test (it touches `process.parentPort` at module scope — the established
 // host-test idiom, see `index.test.ts`'s own header). This mirrors the exact
 // `sessionRow` object literal that function now builds — identity plus

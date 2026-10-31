@@ -23,7 +23,7 @@
  * ASKING mode — the one the codex `ask`/`approve-for-me` presets map back to
  * (`codexAgentPermissionMode`) and the one Claude's own table sends to `ask` —
  * so a `build`-mode codex child boots on the broker-mediated `child-ask`
- * posture ( / ): `untrusted` sends every command approval
+ * posture: `untrusted` sends every command approval
  * through CodexApprovalBridge -> IpcPermissionBroker instead of letting codex
  * decide silently under `on-request`. The explicit-autonomy modes
  * (`edit`/`auto`/`yolo`) keep the pre-4078 interactive `ask` posture exactly:
@@ -56,7 +56,7 @@ export function claudeChildPresetId(mode: PermissionMode): "read-only" | "ask" |
  * Codex preset id an engine child boots with. `plan` keeps the `read-only`
  * legacy posture. `build` — AnyCode's asking mode, the one the codex
  * `ask`/`approve-for-me` presets map back to — lands on `child-ask`
- * ( / ): a broker-mediated posture where `untrusted`
+ * a broker-mediated posture where `untrusted`
  * sends EVERY command approval through CodexApprovalBridge ->
  * IpcPermissionBroker instead of letting codex decide silently under
  * `on-request`. The explicit-autonomy modes (`edit`/`auto`/`yolo`) keep the
@@ -80,7 +80,7 @@ export function codexChildPosture(mode: PermissionMode): "read-only" | "child-as
 }
 
 /**
- * : whether a codex child's boot policy pre-authorises EDITS
+ * whether a codex child's boot policy pre-authorises EDITS
  * inside its own workspace — mirroring Claude's `workspace` tier
  * (acceptEdits, `claudeChildPresetId` above) and core edit-mode containment
  * (Write/Edit only). The auto-accept this gates is edit-parity, not a broader
@@ -103,7 +103,7 @@ export function codexChildAutoAcceptsWorkspacePatches(mode: PermissionMode): boo
 }
 
 /**
- *  cross-review M1: the claude door's port seam. Maps the parent
+ * cross-review M1: the claude door's port seam. Maps the parent
  * claude session's LIVE preset id (`ClaudeEngine.snapshot().activePresetId`)
  * to the core `PermissionMode` stamped onto every `ChildSpawnRequest` — the
  * value that gates the spawned CORE child's own permission engine, which is

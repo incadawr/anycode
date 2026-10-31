@@ -33,7 +33,7 @@ export function parseCodexVersion(output: string): CodexVersion | null {
  * and widening the string alone would have advertised a version the code
  * still refused. One edit now moves both.
  *
- *  (owner decision, 2026-08-29): dropped the FLOOR that used to pair
+ * (owner decision, 2026-08-29): dropped the FLOOR that used to pair
  * with this ceiling. Support is no longer a closed range ("island") — any
  * codex-cli build below the ceiling is accepted by version number, however
  * old. The ceiling itself stays because it is a real measurement: real
@@ -114,7 +114,7 @@ export const OBSERVED_COMMAND_APPROVAL_METHOD = "item/commandExecution/requestAp
 export const OBSERVED_FILE_CHANGE_APPROVAL_METHOD = "item/fileChange/requestApproval";
 
 /**
- *  / : Windows sandbox is its own protocol family — a
+ * /Windows sandbox is its own protocol family — a
  * SEPARATE set of wire methods from the sandbox POLICY fields the thread
  * params already carry. Probe-only: `windowsSandbox/readiness` is sent on
  * win32 boot and its status decoded; `windowsSandbox/setupStart` is

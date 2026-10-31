@@ -1,5 +1,5 @@
 /**
- * : where the built-in `anycode-setup` skill reads the user docs.
+ * where the built-in `anycode-setup` skill reads the user docs.
  * Resolved from the APP's own location, never from the user's workspace cwd,
  * in this order:
  *

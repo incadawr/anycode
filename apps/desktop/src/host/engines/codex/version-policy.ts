@@ -18,7 +18,7 @@
  *
  * FAIL-SAFE, not fail-open. "No policy travelled" — an older main that does not
  * stamp the carrier, a blank value, an unparseable payload — resolves to the
- * COMPILED WIRE PIN: exactly the check this host performed before , no
+ * COMPILED WIRE PIN: exactly the check this host performed before, no
  * floor, ceiling `SUPPORTED_CODEX_VERSION`. Absence of a policy therefore means
  * the previous check, never the absence of a check.
  */

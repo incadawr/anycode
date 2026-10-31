@@ -1,6 +1,6 @@
 /**
- * artifacts-wire ( / ): proves the desktop wires the
- * artifact store that the CLI already has (cli/main.ts  wiring) but the
+ * artifacts-wire: proves the desktop wires the
+ * artifact store that the CLI already has (cli/main.ts wiring) but the
  * desktop lacked — an oversized Bash result was truncated with no path back.
  *
  * What is pinned here and why:
@@ -31,7 +31,7 @@ import { ARTIFACT_MAX_AGE_MS, NodeArtifactStore } from "@anycode/core";
 import { artifactsRootFor } from "../shared/artifacts-root.js";
 import { createHarness, finishStep, textStep } from "./test-harness.js";
 
-describe("artifacts-wire — desktop wires the  artifact store", () => {
+describe("artifacts-wire — desktop wires the artifact store", () => {
   it("barrel proof: NodeArtifactStore and ARTIFACT_MAX_AGE_MS are on the @anycode/core root", () => {
     expect(typeof NodeArtifactStore).toBe("function");
     expect(ARTIFACT_MAX_AGE_MS).toBe(7 * 24 * 60 * 60 * 1000);

@@ -124,7 +124,7 @@ describe("seedAlwaysAllowRules", () => {
   });
 });
 
-// ── : boot-time read of live per-model capabilities (fail-soft) ──
+// ── boot-time read of live per-model capabilities (fail-soft) ──
 
 describe("readConnectionModelCapabilities", () => {
   let dir: string;
@@ -207,7 +207,7 @@ describe("scrubSecretEnv", () => {
     expect(env.PATH).toBe("/usr/bin");
   });
 
-  //  part C: the MCP secrets hand-off var is deleted by the same scrub.
+  // part C: the MCP secrets hand-off var is deleted by the same scrub.
   it("deletes ANYCODE_MCP_SECRETS (the MCP secret hand-off) and keeps unrelated vars", () => {
     const env = {
       ANYCODE_MCP_SECRETS: '{"GH":"ghp_value"}',
@@ -227,7 +227,7 @@ describe("scrubSecretEnv", () => {
     expect(env.ANYCODE_API_KEY).toBeUndefined();
   });
 
-  //  срез C durable ( precedent): the recognizer's OWN
+  // срез C durable (precedent): the recognizer's OWN
   // resolved credential rides ANYCODE_RECOGNIZER_API_KEY on a host fork's env
   // exactly like the primary provider's rides ANYCODE_API_KEY — without a
   // scrub it would survive into every Bash-tool child a core session spawns
@@ -864,7 +864,7 @@ describe("createPreviewRpcClient (night-track wave-1 cut §2.3)", () => {
   });
 });
 
-describe("routeNetworkHint (: OS network hints from the main process)", () => {
+describe("routeNetworkHint (OS network hints from the main process)", () => {
   it("recognizes the network-hint message and reports it handled", () => {
     expect(routeNetworkHint({ type: "anycode:network-hint" })).toBe(true);
   });
@@ -940,10 +940,10 @@ describe("routePreviewMessage (night-track wave-1 cut §2.3 parentPort filter)",
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-//  CUT-S2 §2.6.2 (slice S2b B4): child-mode argv + resolveBootSession
+// CUT-S2 §2.6.2 (slice S2b B4): child-mode argv + resolveBootSession
 // ═════════════════════════════════════════════════════════════════════════════
 
-describe("parseHostArgs — child-mode flags ( CUT-S2 §2.6.2)", () => {
+describe("parseHostArgs — child-mode flags (CUT-S2 §2.6.2)", () => {
   it("parses --child-parent/--child-spawn-call/--child-mode (space form) into args.child", () => {
     const result = parseHostArgs([
       "--session",
@@ -1003,7 +1003,7 @@ describe("parseHostArgs — child-mode flags ( CUT-S2 §2.6.2)", () => {
   });
 });
 
-describe("resolveBootSession — child-mode session rows ( CUT-S2 §2.6.2)", () => {
+describe("resolveBootSession — child-mode session rows (CUT-S2 §2.6.2)", () => {
   it("--session <childId> with args.child writes parentSessionId/spawnToolCallId and mode from initialMode (NOT the hardcoded \"build\")", async () => {
     const persistence = new SqlitePersistenceAdapter(":memory:");
     try {
@@ -1046,7 +1046,7 @@ describe("resolveBootSession — child-mode session rows ( CUT-S2 §2.6.2)", () 
   });
 
   it(
-    " CUT-S2 §10.4 residual: --resume <childId> of an ABSENT row (respawn racing the write-behind queue) " +
+    "CUT-S2 §10.4 residual: --resume <childId> of an ABSENT row (respawn racing the write-behind queue) " +
       "still writes parentSessionId/spawnToolCallId/mode from args.child — it must NOT silently fall back to a " +
       "parent-less ROOT row that would sit forever in the Sidebar",
     async () => {
@@ -1131,7 +1131,7 @@ describe("resolveBootSession — child-mode session rows ( CUT-S2 §2.6.2)", () 
   });
 });
 
-describe("isChildSessionBoot — second authority for non-recursion lock #2 ( CUT-S2 §10.9.2)", () => {
+describe("isChildSessionBoot — second authority for non-recursion lock #2 (CUT-S2 §10.9.2)", () => {
   function meta(overrides: Partial<SessionMeta> = {}): SessionMeta {
     return {
       id: "s1",
@@ -1182,7 +1182,7 @@ describe("childRetryPolicy", () => {
     });
   });
 
-  it("a child never gets a shorter network budget than the main session ( review)", () => {
+  it("a child never gets a shorter network budget than the main session (review)", () => {
     // Main default is 300 000: the child must match it, not fall back to 180 000.
     expect(childRetryPolicy(true, { maxRetries: 4 })).toEqual({ maxRetries: 4, networkRetryBudgetMs: 300_000 });
     // An explicit larger main budget is inherited as-is.
@@ -1191,7 +1191,7 @@ describe("childRetryPolicy", () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// : --child-max-turns — the creating spawn's turn budget on the child
+// --child-max-turns — the creating spawn's turn budget on the child
 // host's argv. Both flag forms; only decimal positive safe integers 1..200.
 // ═════════════════════════════════════════════════════════════════════════════
 
@@ -1232,7 +1232,7 @@ describe("parseHostArgs — --child-max-turns", () => {
   });
 });
 
-// : the child host's core AgentLoopConfig.maxTurns precedence — a
+// the child host's core AgentLoopConfig.maxTurns precedence — a
 // creating spawn's profile budget overrides the env default; absent preserves
 // it (the helper host/index.ts wires at its envConfig.maxTurns anchor).
 describe("resolveChildMaxTurns", () => {
@@ -1248,7 +1248,7 @@ describe("resolveChildMaxTurns", () => {
   });
 });
 
-//  cross-review finding 5: the argv→preset seam of the engine
+// cross-review finding 5: the argv→preset seam of the engine
 // boots (CUT-S4 §4.2) had no test that goes through `parseHostArgs` →
 // child-permission-map — every child-ask test hand-fed a `selection` to
 // `createNativeCodexSession` directly. This drives the REAL argv a codex
@@ -1257,7 +1257,7 @@ describe("resolveChildMaxTurns", () => {
 // exactly what `bootCodexSession` would put on `thread/start` — the branch's
 // core claim ("the broker now participates in a build-mode codex child")
 // depends on this resolving `child-ask`, not the draft's `ask`.
-describe("resolveEngineDraftPresetId — the engine boots' argv→preset seam ( finding 5)", () => {
+describe("resolveEngineDraftPresetId — the engine boots' argv→preset seam (finding 5)", () => {
   /** main's own argv for a build-mode codex child fork (main/tabs.ts childOf push + the draft flags a ROOT would carry). */
   const CODEX_CHILD_ARGV = [
     "--session", "child-1",

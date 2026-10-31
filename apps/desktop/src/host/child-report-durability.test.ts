@@ -1,5 +1,5 @@
 /**
- *  ( residual): integration tests for
+ * (residual): integration tests for
  * `attachChildReportDurability` — the REAL SqlitePersistenceAdapter
  * (`:memory:`, session row created first) against a REAL ChildReportQueue
  * over a recording outbound stub. Covers the two halves of the contract:

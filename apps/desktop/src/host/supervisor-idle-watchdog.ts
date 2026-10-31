@@ -70,7 +70,7 @@ export const SUPERVISOR_IDLE_TERMINAL_MARKERS: readonly string[] = ["READY", "BL
 
 /**
  * Resolves the first-reminder threshold from the host process env
- * (ANYCODE_SUPERVISOR_IDLE_MS, ) — the same knob core's
+ * (ANYCODE_SUPERVISOR_IDLE_MS) — the same knob core's
  * loadEnvConfig surfaces as `supervisorIdleMs`, read here directly because a
  * codex/claude boot deliberately never constructs a CoreEnvConfig. Parse
  * discipline mirrors env.ts's `readOptionalInteger`: absent/blank -> default;

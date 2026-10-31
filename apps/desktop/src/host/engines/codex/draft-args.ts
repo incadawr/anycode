@@ -10,7 +10,7 @@
  * (catalog.ts), the preset against the frozen table (presets.ts) — and an
  * unrecognized value degrades to the default rather than reaching the wire.
  * There is deliberately no argv path for a raw sandbox/approval/config payload
- * ( DoD: "the renderer can never send an invalid model, sandbox, or raw
+ * (DoD: "the renderer can never send an invalid model, sandbox, or raw
  * config JSON").
  *
  * Kept out of host/boot.ts's `parseHostArgs` on purpose: these flags are

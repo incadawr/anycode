@@ -1,5 +1,5 @@
 /**
- *  / : one load, two forwards. `prepareEngineMcpForward`
+ * /one load, two forwards. `prepareEngineMcpForward`
  * loads the MCP server specs ONCE per boot via the existing core reader
  * `loadMcpServerSpecs` (project → user → .mcp.json precedence, resolved
  * env/headers, inherited env when requested) and serializes them for each
@@ -29,7 +29,7 @@ export interface PrepareEngineMcpForwardOptions {
   engines: ReadonlyArray<"claude" | "codex">;
   /** Workspace trust gate: false keeps project-level MCP out of the forward. */
   projectTrusted?: boolean;
-  /**  part C: the host's `${secret:NAME}` resolver (values were handed over at fork time). */
+  /** part C: the host's `${secret:NAME}` resolver (values were handed over at fork time). */
   secrets?: McpSecretResolver;
   loginPath?: string;
 }
@@ -128,7 +128,7 @@ export async function prepareEngineMcpForward(
 export { sweepOrphanedMcpForwardFiles };
 
 /**
- * : names we expected in the first `system/init.mcp_servers[]` but
+ * names we expected in the first `system/init.mcp_servers[]` but
  * the CLI did not report. Expected = the forwarded server names PLUS the
  * in-band "anycode" bridge name when a bridge exists (a child boot or a
  * bridge-less tab never expects it). Pure — the host logs a controlled
