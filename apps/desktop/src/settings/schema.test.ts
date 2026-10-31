@@ -824,7 +824,7 @@ describe("plugins (S1-B, design §7, additive-optional)", () => {
     }
   });
 
-  it("serviceConsent round-trips with strict entries (Taskana 4750a)", () => {
+  it("serviceConsent round-trips with strict entries", () => {
     const withPlugins: AnycodeSettings = {
       ...cloneDefaults(),
       plugins: {

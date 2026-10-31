@@ -845,7 +845,7 @@ describe("parseChildTerminal", () => {
     expect("declaredDoneAtCeiling" in (parseChildRunEvent(plain) ?? {})).toBe(false);
   });
 
-  it("round-trips a ceiling summary on ChildTerminal and ChildRunEvent terminal; rejects malformed ones (TASK.240/4055)", () => {
+  it("round-trips a ceiling summary on ChildTerminal and ChildRunEvent terminal; rejects malformed ones", () => {
     const ceiling = { rounds: 2, grantedTurns: 6, lastRefusal: "stalled" as const };
     const withCeiling = { ...valid, status: "max_turns" as const, ceiling };
     expect(parseChildTerminal(withCeiling)).toEqual(withCeiling);

@@ -4,7 +4,7 @@
  * process (design/slice-codex-fixes-cut.md §2(b)/§2(g)/§6).
  *
  * TWO independent call sites spawn and tear down their OWN, separate
- * app-server child: the host engine (host/engines/codex/*, TASK.38/39) and
+ * app-server child: the host engine (host/engines/codex/*) and
  * main's onboarding doctor (main/codex-doctor.ts) — a host->main
  * import is architecturally forbidden (cut §2(g): "межслойный импорт
  * host→main запрещён"), so `main/codex-doctor.ts` deliberately runs its OWN
@@ -127,7 +127,7 @@ export const CODEX_DOCTOR_MODEL_LIST_PAGE_TIMEOUT_MS = 2_000;
 export const CODEX_DOCTOR_WATCHDOG_MS = 20_000;
 
 // ── teardown recipe (design §2(b) / NOTES.md "Teardown hardening regression") ──
-// Both the host engine's child (TASK.38/39) and main's doctor child
+// Both the host engine's child and main's doctor child
 // MUST tear down with this EXACT sequence — divergence here is the specific
 // hazard this module exists to close: an orphaned/hung child that survives
 // its owning process, exactly the multi-hundred-second hang the W0 probe

@@ -1101,7 +1101,7 @@ export type HostToUiMessage =
         status: "completed" | "max_turns" | "cancelled" | "error";
         durationMs: number;
         finalTurnFinishReason?: "length";
-        /** TASK.240/4055 cross-review F2: the child's ceiling summary (additive; absent when the ceiling never tripped). */
+        /** cross-review F2: the child's ceiling summary (additive; absent when the ceiling never tripped). */
         ceiling?: ChildCeilingSummary;
       };
     }
