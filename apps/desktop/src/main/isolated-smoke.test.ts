@@ -12,7 +12,7 @@ function fixture() {
   const env = buildSmokeEnv({ PATH: "/dangerous/user/bin" }, root, 1234, join(root, "unavailable-engine"));
   const desktopRoot = env.ANYCODE_EXPECTED_DESKTOP_ROOT!;
   const paths: Record<string, string> = {};
-  const app = { isPackaged: false, commandLine: { hasSwitch: vi.fn(() => true) }, getAppPath: () => desktopRoot, setPath: vi.fn((name: string, path: string) => { paths[name] = path; }), getPath: vi.fn((name: string) => paths[name]!) };
+  const app = { isPackaged: false, commandLine: { hasSwitch: vi.fn(() => true), getSwitchValue: vi.fn(() => "0") }, getAppPath: () => desktopRoot, setPath: vi.fn((name: string, path: string) => { paths[name] = path; }), getPath: vi.fn((name: string) => paths[name]!) };
   return { root, env, app };
 }
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -24,10 +24,11 @@ describe("isolated automation startup", () => {
     expect(app.getPath("sessionData")).toBe(join(root, "session-data"));
     expect(env.PATH).not.toContain("dangerous");
   });
-  it.each(["gate", "keychain", "packaged", "path", "worktree", "setPath", "ignoredPath", "mkdir", "symlink", "nestedSymlink", "hardlink"])("fails closed for %s", (fault) => {
+  it.each(["gate", "keychain", "port", "packaged", "path", "worktree", "setPath", "ignoredPath", "mkdir", "symlink", "nestedSymlink", "hardlink"])("fails closed for %s", (fault) => {
     const { env, app, root } = fixture();
     if (fault === "gate") delete env.ANYCODE_AUTOMATION;
     if (fault === "keychain") app.commandLine.hasSwitch.mockReturnValue(false);
+    if (fault === "port") app.commandLine.getSwitchValue.mockReturnValue("9222");
     if (fault === "packaged") app.isPackaged = true;
     if (fault === "path") env.ANYCODE_SETTINGS_PATH = join(tmpdir(), "real-settings.json");
     if (fault === "worktree") env.ANYCODE_EXPECTED_DESKTOP_ROOT = root;
@@ -38,7 +39,7 @@ describe("isolated automation startup", () => {
     if (fault === "hardlink") linkSync(join(root, "unavailable-engine"), join(root, "settings.json"));
     if (fault === "nestedSymlink") { mkdirSync(join(root, "session-data")); symlinkSync(tmpdir(), join(root, "session-data", "Cache")); }
     expect(() => initializeIsolatedSmoke(app, env)).toThrow("startup aborted");
-    if (["gate", "keychain", "packaged", "path", "worktree", "symlink"].includes(fault)) expect(app.setPath).not.toHaveBeenCalled();
+    if (["gate", "keychain", "port", "packaged", "path", "worktree", "symlink"].includes(fault)) expect(app.setPath).not.toHaveBeenCalled();
   });
   it("aborts before setting an Electron path when directory creation fails", () => {
     const { app, env } = fixture();

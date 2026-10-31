@@ -5,14 +5,14 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 /** Strict startup gate for disposable development automation. Throws before profile use on any mismatch. */
 export function initializeIsolatedSmoke(app: {
   isPackaged: boolean;
-  commandLine: { hasSwitch(name: string): boolean };
+  commandLine: { hasSwitch(name: string): boolean; getSwitchValue(name: string): string };
   getAppPath(): string;
   setPath(name: "userData" | "sessionData", path: string): void;
   getPath(name: "userData" | "sessionData"): string;
 }, env: NodeJS.ProcessEnv, makeDirectory: (path: string) => void = mkdirSync): boolean {
   if (env.ANYCODE_ISOLATED_SMOKE === undefined) return false;
   try {
-    if (env.ANYCODE_ISOLATED_SMOKE !== "1" || env.ANYCODE_AUTOMATION !== "1" || app.isPackaged || !app.commandLine.hasSwitch("use-mock-keychain")) throw new Error();
+    if (env.ANYCODE_ISOLATED_SMOKE !== "1" || env.ANYCODE_AUTOMATION !== "1" || app.isPackaged || !app.commandLine.hasSwitch("use-mock-keychain") || app.commandLine.getSwitchValue("remote-debugging-port") !== "0") throw new Error();
     const root = env.ANYCODE_ISOLATED_ROOT;
     if (!root || !isAbsolute(root) || lstatSync(root).isSymbolicLink() || !lstatSync(root).isDirectory()) throw new Error();
     const rootStat = lstatSync(root);
@@ -51,7 +51,7 @@ export function initializeIsolatedSmoke(app: {
     if (realpathSync(app.getPath("userData")) !== realpathSync(userData) || realpathSync(app.getPath("sessionData")) !== realpathSync(sessionData)) throw new Error();
     // Discovery and spawned programs must never inherit a user's executable search path.
     env.PATH = process.platform === "win32" ? join(process.env.SystemRoot ?? "C:\\Windows", "System32") : "/usr/bin:/bin:/usr/sbin:/sbin";
-    writeFileSync(join(root, "identity.json"), JSON.stringify({ nonce: env.ANYCODE_SMOKE_IDENTITY, desktopRoot: realpathSync(app.getAppPath()), userData: realpathSync(userData), sessionData: realpathSync(sessionData) }), { flag: "wx", mode: 0o600 });
+    writeFileSync(join(root, "identity.json"), JSON.stringify({ pid: process.pid, nonce: env.ANYCODE_SMOKE_IDENTITY, desktopRoot: realpathSync(app.getAppPath()), userData: realpathSync(userData), sessionData: realpathSync(sessionData) }), { flag: "wx", mode: 0o600 });
     return true;
   } catch {
     throw new Error("Isolated automation profile initialization failed; application startup aborted.");
