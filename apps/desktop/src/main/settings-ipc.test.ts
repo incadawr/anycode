@@ -691,7 +691,7 @@ describe("handleSet — merge + read-only", () => {
   });
 });
 
-describe("handleSet — sessionLimits (/-с2)", () => {
+describe("handleSet — sessionLimits", () => {
   it("persists a valid section and it survives a REAL reload", async () => {
     const res = await handleSet(makeDeps(), {
       sessionLimits: { maxTabs: 12, childSessionsPerParentMax: 2, childSessionsGlobalMax: 10 },

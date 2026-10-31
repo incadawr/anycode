@@ -350,7 +350,7 @@ describe("Sessions API IPC — persisted settings never carry the token", () => 
   });
 });
 
-describe("session handles over IPC (b)", () => {
+describe("session handles over IPC", () => {
   it("set-session-handle maps tabId to session and returns view with handle", async () => {
     const { deps, sessions } = rig();
     sessions.register({ sessionId: "sess-1" });

@@ -742,7 +742,7 @@ describe("the pane scans the live tab workspace (xfix M6)", () => {
   });
 });
 
-describe("plugin services consent (a)", () => {
+describe("plugin services consent", () => {
   const SERVICES = [
     { name: "relay", command: "node", args: ["./relay.js"], env: { LOG_LEVEL: "debug", TOKEN_FILE: "/secret/value-xyz" } },
   ];
@@ -865,7 +865,7 @@ describe("plugin services consent (a)", () => {
   });
 });
 
-describe("plugin services supervision IPC (a)", () => {
+describe("plugin services supervision IPC", () => {
   function fakeServices() {
     const restarts: [string, string][] = [];
     return {

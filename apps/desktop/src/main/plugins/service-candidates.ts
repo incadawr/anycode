@@ -1,5 +1,5 @@
 /**
- * Candidate source for the service supervisor (a). Builds the
+ * Candidate source for the service supervisor. Builds the
  * desired service set from the SAME admin scan the Plugins pane uses:
  *  - home scan (managed + legacy-user plugins), `enabled = row.status === "active"`;
  *  - one scan per distinct LIVE root-tab workspace, keeping only `project`-tier

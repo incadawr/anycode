@@ -14,7 +14,7 @@
  *
  * Both run under the settings-file lock.
  *
- * `upsertPluginServiceConsent` (a) is the service-consent writer:
+ * `upsertPluginServiceConsent` is the service-consent writer:
  * the same read-modify-write under the lock, but it replaces the grant for
  * ONE plugin (keyed by its servicesHash) and leaves every other plugin's grant
  * alone. There is no legacy migration for services — absent = nobody granted.

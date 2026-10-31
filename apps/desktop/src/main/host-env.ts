@@ -751,7 +751,7 @@ function systemProxyBase(deps: ProxyMaterializationDeps): string | undefined {
  * proxy, which is the same law applied to a malformed `proxyUrl`.
  *
  * The one rung that is NOT registry-shaped — a legacy `proxyUrl` string — is
- * materialised verbatim, byte-for-byte its /139 semantics, because that
+ * materialised verbatim, byte-for-byte its semantics, because that
  * is the whole promise "legacy strings keep working with no user action" makes.
  */
 export function materializeProxyRung(

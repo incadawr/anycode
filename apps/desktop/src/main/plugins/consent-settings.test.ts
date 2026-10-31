@@ -54,7 +54,7 @@ describe("grandfatherPluginsMcpConsent (one-shot migration)", () => {
   });
 });
 
-describe("upsertPluginServiceConsent (a, read-modify-write under the lock)", () => {
+describe("upsertPluginServiceConsent (read-modify-write under the lock)", () => {
   const sgrant = (plugin: string, hash: string) => ({ plugin, servicesHash: hash, grantedAt: "2026-10-25T00:00:00.000Z" });
 
   it("writes the first service grant without touching mcpConsent", async () => {

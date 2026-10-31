@@ -1,5 +1,5 @@
 /**
- * Plugin background-service supervisor (a, main process).
+ * Plugin background-service supervisor (main process).
  *
  * A plugin may declare long-lived `services` in its manifest. This module owns
  * their lifecycle: it starts an ELIGIBLE service (enabled, consented to its

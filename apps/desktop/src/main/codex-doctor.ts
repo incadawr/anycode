@@ -52,7 +52,7 @@ import {
 
 /**
  * Version support is judged against the MANIFEST policy (main/codex-manifest.ts,
- * cut §7.1/) — the old hardcoded `SUPPORTED_CODEX_VERSION` mirror is
+ * cut §) — the old hardcoded `SUPPORTED_CODEX_VERSION` mirror is
  * gone from main. host/engines/codex/protocol.ts keeps its own constant as a
  * pinned drift-gate fact about the WIRE contract; that is a different thing
  * from support policy and stays out of this file's business.

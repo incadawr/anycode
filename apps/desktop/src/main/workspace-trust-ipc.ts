@@ -71,7 +71,7 @@ export interface WorkspaceTrustTabs {
 }
 
 export interface WorkspaceTrustIpcDeps {
-  /** a: fires after a decision lands (the service supervisor reconciles project-tier services). */
+  /** fires after a decision lands (the service supervisor reconciles project-tier services). */
   onDecided?(): void;
   fs: TrustStoreFs;
   /** The user's home; the store lives at `<home>/.anycode/workspace-trust.json`. */

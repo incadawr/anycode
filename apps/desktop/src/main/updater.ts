@@ -1,6 +1,6 @@
 /**
  * Main-process auto-updater wiring (design/slice-2.6-cut.md §6; extended by
- * W15 — working-docs/tasks/.md defects 2/3), mirroring
+ * W15 — defects 2/3), mirroring
  * settings-ipc.ts's split: `createUpdaterController` holds all the testable
  * logic off an injected `AutoUpdaterLike` (so a vitest fake drives the whole
  * check->available->progress->downloaded->install chain with no Electron

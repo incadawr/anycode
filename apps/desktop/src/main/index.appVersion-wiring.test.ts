@@ -1,5 +1,5 @@
 /**
- * Production-wiring regression test (W14-fix, /): proves that
+ * Production-wiring regression test (W14-fix): proves that
  * `main/index.ts` — not just settings-ipc.ts's injectable deps bag — really
  * wires `app.getVersion()` into `SettingsIpcDeps.getAppVersion`, and that the
  * value reaches the `settings:get` snapshot the renderer's About panel reads
