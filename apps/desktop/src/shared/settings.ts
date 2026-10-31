@@ -315,6 +315,21 @@ export interface ProviderConnection {
    */
   promptCache?: ImplicitPromptCache;
   /**
+   * Streaming token-usage request policy for THIS connection (GitHub #1
+   * remainder): absent = the transport default from `resolveIncludeUsage`
+   * (request usage on `openai-chat-completions`, off elsewhere), `false` = an
+   * explicit opt-out for Chat Completions endpoints (strict servers that
+   * reject `stream_options`), `true` = an explicit opt-in. Materialised as
+   * `ANYCODE_INCLUDE_USAGE` on the fork env, so a launching shell's own value
+   * always wins — exactly the `maxOutputTokens` ladder. Connection-scoped on
+   * purpose: two connections to the same endpoint may disagree.
+   *
+   * Only truthy-on-disk does NOT apply here: `false` is a MEANING, not an
+   * absence, so the key is persisted verbatim and every truthiness check on
+   * the read path must compare against `undefined`.
+   */
+  includeUsage?: boolean;
+  /**
    * Explicit output-token ceiling for this connection (TASK.150), materialised
    * as `ANYCODE_MAX_OUTPUT_TOKENS` on the fork env — so an env value set by the
    * launching shell still wins, exactly like `reasoningEffort`.
@@ -464,6 +479,8 @@ export interface ActiveProviderView {
   reasoningEffort?: ReasoningEffort;
   /** The active connection's opt-in prompt-cache policy (GitHub #15); absent = Off. */
   promptCache?: ImplicitPromptCache;
+  /** The active connection's streaming-usage policy (GitHub #1); absent = transport default, `false` = explicit opt-out. */
+  includeUsage?: boolean;
   /** The active connection's explicit output-token ceiling (TASK.150); absent = catalog/default. */
   maxOutputTokens?: number;
   /** The active connection's per-model context-window override (TASK.142) and the model it binds to; absent = catalog/assumed fallback. */
@@ -1228,6 +1245,12 @@ export interface ConnectionCreateRequest {
    * (omission already means Off).
    */
   promptCache?: ImplicitPromptCache;
+  /**
+   * Streaming token-usage policy (GitHub #1; see
+   * `ProviderConnection.includeUsage`). Omitted = the transport default — no
+   * `""` sentinel on create, because omission already means Automatic.
+   */
+  includeUsage?: boolean;
   /** Output-token ceiling (see `ProviderConnection.maxOutputTokens`); omitted = catalog/default. */
   maxOutputTokens?: number;
   /**
@@ -1299,6 +1322,14 @@ export interface ConnectionUpdateRequest {
    * the handler deletes the key.
    */
   promptCache?: ImplicitPromptCache | "";
+  /**
+   * Streaming token-usage policy (GitHub #1) with the same `""` clear sentinel
+   * as `promptCache` above: absent = keep the current value (which may be an
+   * explicit `false`), `true`/`false` = set it, `""` = clear back to the
+   * transport default. `false` is a MEANING and must never be dropped by a
+   * truthiness check — the key is deleted ONLY on `""`.
+   */
+  includeUsage?: boolean | "";
   /**
    * Output-token ceiling (TASK.150) with the same `""` clear sentinel as
    * `transport`/`proxyRef` above: absent = keep the current value, a positive
@@ -1527,6 +1558,9 @@ export function activeProviderView(settings: AnycodeSettings): ActiveProviderVie
     proxyUrl: connection.proxyUrl,
     reasoningEffort: override?.reasoningEffort ?? connection.reasoningEffort,
     promptCache: connection.promptCache,
+    // Conditional spread, NOT a bare assignment: `false` is a meaningful
+    // opt-out and must survive projection (unlike an absent key).
+    ...(connection.includeUsage !== undefined ? { includeUsage: connection.includeUsage } : {}),
     maxOutputTokens: connection.maxOutputTokens,
     contextWindowTokens: override?.contextWindowTokens ?? connection.contextWindowTokens,
     contextWindowModel: override?.contextWindowTokens !== undefined ? model : connection.contextWindowModel,

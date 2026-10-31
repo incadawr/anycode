@@ -28,6 +28,7 @@ import type { ModelStreamEvent } from "../types/events.js";
 import type { EndpointConfig } from "./endpoint.js";
 import { AiSdkModelPort } from "./model-port.js";
 import { resolveIncludeUsage } from "./openai-compatible.js";
+import { loadEnvConfig } from "./env.js";
 
 interface CapturedRequest {
   method: string | undefined;
@@ -247,6 +248,33 @@ describe("AiSdkModelPort over a real @ai-sdk/openai-compatible SSE stream (TASK.
 
     expect(events.filter((e) => e.type === "error")).toEqual([]);
     expect(captured!.body["stream_options"]).toEqual({ include_usage: true });
+  });
+
+  it("an explicit `ANYCODE_INCLUDE_USAGE=0` from the env omits stream_options through the resolver and the real SDK", async () => {
+    responseChunks = [
+      { choices: [{ index: 0, delta: { content: "ok" }, finish_reason: "stop" }], usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 } },
+    ];
+    const request: ModelRequest = { messages: [{ role: "user", content: "hi" }], tools: [] };
+
+    // The exact production composition (GitHub #1 remainder): the fork env is
+    // parsed ONCE, then the transport-conditional resolver applies the explicit
+    // value — for `openai-chat-completions` that explicit false must beat the
+    // default-on verdict and remove the option from the wire entirely.
+    const envConfig = loadEnvConfig({
+      ANYCODE_API_KEY: "test-key",
+      ANYCODE_MODEL: "gpt-oss-120b",
+      ANYCODE_INCLUDE_USAGE: "0",
+    } as NodeJS.ProcessEnv);
+    expect(envConfig.includeUsage).toBe(false);
+
+    const events = await collect(
+      portFor({ includeUsage: resolveIncludeUsage("openai-chat-completions", envConfig.includeUsage) }).streamText(request),
+    );
+
+    expect(events.filter((e) => e.type === "error")).toEqual([]);
+    expect(captured!.body["stream_options"]).toBeUndefined();
+    // The rest of the request is unchanged — only the usage option is omitted.
+    expect(captured!.body["stream"]).toBe(true);
   });
 
   it("omits stream_options entirely when the EndpointConfig omits includeUsage (factory level; production default comes from resolveIncludeUsage)", async () => {

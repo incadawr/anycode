@@ -11,6 +11,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - The context popover shows average model generation speed for the session and current turn.
 
+- You can turn streaming token-usage requests on or off for each Chat Completions connection in Advanced settings (GitHub #1).
 - Xiaomi MiMo pay-as-you-go API is available as a provider (mimo-v2.6-pro and mimo-v2.6-flash, with per-token cost tracking).
 
 ### Fixed
