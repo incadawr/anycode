@@ -179,4 +179,33 @@ describe("presentation reload — durable compaction rows keep their place (GitH
 
     expect(shape(store)).toEqual(["compaction:skipped"]);
   });
+
+  it("a recorded structural no-op stays a no-op after reopen — plain sentence, no failure framing", () => {
+    const store = createDesktopStore({ schedule: (fn) => fn() });
+    store.getState().applyHostMessage({
+      type: "presentation_snapshot",
+      turns: [],
+      coveredTurnIds: [],
+      items: [],
+      truncated: false,
+      historyTracksTurns: true,
+      compactions: [
+        record("short", 10, {
+          ok: false,
+          skipped: true,
+          error: "Nothing to compact yet — the conversation is too short",
+          summary: undefined,
+        }),
+      ],
+    });
+
+    const row = store.getState().transcript.find((block) => block.kind === "compaction");
+    // The flag survives the round trip through the durable record, so the row
+    // does not come back reading as a refusal (UI audit v0.0.49 §C3).
+    expect(row).toMatchObject({
+      status: "failed",
+      skipped: true,
+      error: "Nothing to compact yet — the conversation is too short",
+    });
+  });
 });

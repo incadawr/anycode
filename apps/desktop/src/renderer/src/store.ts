@@ -582,6 +582,12 @@ export type TranscriptBlock =
       postTokens?: number;
       durationMs?: number;
       error?: string;
+      /**
+       * The cycle was a structural no-op (nothing to compact), not a failed
+       * attempt — `error` then reads as a plain statement and the row is not
+       * tinted as an error (UI audit v0.0.49 §C3).
+       */
+      skipped?: true;
       /** Model-visible summary that replaced the prefix (absent while running, or when the engine exposed none). */
       summary?: string;
       /** Id of the persisted `compact_summary` history item carrying `summary`. */
@@ -1917,6 +1923,7 @@ export function compactionBlockFromRecord(
     ...(record.postTokens !== undefined ? { postTokens: record.postTokens } : {}),
     ...(record.durationMs !== undefined ? { durationMs: record.durationMs } : {}),
     ...(record.error !== undefined ? { error: record.error } : {}),
+    ...(record.skipped === true ? { skipped: true as const } : {}),
     ...(record.summary !== undefined ? { summary: record.summary } : {}),
     ...(record.summaryItemId !== undefined ? { summaryItemId: record.summaryItemId } : {}),
     ...(record.prompt !== undefined ? { prompt: record.prompt } : {}),
@@ -1930,10 +1937,18 @@ export function compactionBlockFromRecord(
  * a refusal and a real failure alike, and the commonest one is core's
  * deliberate no-op. The two surfaces report the same event and must not
  * disagree about it.
+ *
+ * A structural no-op raises NO notice (UI audit v0.0.49 §C3): its transcript row
+ * already states it in plain words, and a toast repeating the same sentence was
+ * the second copy — landing on the composer, at the moment nothing had
+ * happened. `null` means "say nothing", not "clear the slot".
  */
 function compactionEndNotice(
   event: Extract<WireAgentEvent, { type: "compaction_end" }>,
-): { kind: "compaction_end"; text: string } {
+): { kind: "compaction_end"; text: string } | null {
+  if (event.skipped === true) {
+    return null;
+  }
   return {
     kind: "compaction_end",
     text: event.ok
@@ -4263,6 +4278,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               durationMs: event.durationMs,
               ...(event.postTokens === undefined ? {} : { postTokens: event.postTokens }),
               ...(event.error === undefined ? {} : { error: event.error }),
+              // UI audit v0.0.49 §C3: a structural no-op stays a no-op on the
+              // row — plain wording, no error tint — instead of becoming a
+              // refusal because the wire carries one `error` channel.
+              ...(event.skipped === true ? { skipped: true as const } : {}),
               // GitHub #36: what the swap actually left behind. Additive and
               // independent of `ok` — a failed call still carries the prompt
               // it sent, and only a successful one carries a summary.
@@ -4296,6 +4315,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                   )
                 : -1;
             const live = outcome;
+            const notice = compactionEndNotice(event);
             if (restoredAt !== -1) {
               const transcript = state.transcript.map((block, index) =>
                 index === restoredAt && block.kind === "compaction" ? { ...block, ...live } : block,
@@ -4306,7 +4326,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               return {
                 ...(event.ok ? { contextUsage: null } : {}),
                 transcript,
-                notice: compactionEndNotice(event),
+                ...(notice !== null ? { notice } : {}),
                 ...(state.turn.status === "compacting"
                   ? { turn: { status: "idle" as const, turnId: null, requestId: null } }
                   : {}),
@@ -4323,7 +4343,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                   : state.transcript.map((block, index) =>
                       index === openAtRaw && block.kind === "compaction" ? { ...block, ...live } : block,
                     ),
-              notice: compactionEndNotice(event),
+              ...(notice !== null ? { notice } : {}),
               ...(state.turn.status === "compacting"
                 ? { turn: { status: "idle" as const, turnId: null, requestId: null } }
                 : {}),
