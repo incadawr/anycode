@@ -2,18 +2,21 @@
  * Public-tree gate: no tracker card references in any tracked file.
  *
  * What counts as a reference: the tracker product name (optionally with a card
- * number and a letter suffix), the card marker followed by `.`/`-`/space and a
- * number (optional letter suffix, optional `-F5`-style sub-item), and dotted
- * plan numbering written after the marker. Card numbers and the product name
- * are spelled out in fragments below so this file cannot match itself — the
- * gate scans `git ls-files`, which includes this file.
+ * number and a letter suffix), and the card marker followed by `.`/`-`/space
+ * and a number, an optional letter suffix and an optional `-F5`-style
+ * sub-item. The marker may also be glued straight onto the number, which is how
+ * card numbers leak into script names, log tags and directory names. Dotted
+ * plan numbering written after the marker is covered too.
  *
- * The allowlist is deliberately not shape-based. A shape such as `task-<n>`
- * covers both an internal background-task id and a real card number, so every
- * exempted value is listed per file, and each entry carries the reason it is
- * not a reference. Values are stored as the suffix after the marker and
- * matched case-insensitively, which keeps this file free of literal references
- * and keeps each exemption tied to one verified value in one verified file.
+ * The product name and the marker are assembled from fragments so this file
+ * cannot match itself: the gate scans `git ls-files`, which includes this file.
+ *
+ * Exemptions are exact whole tokens, not shapes. A shape such as `task-<n>`
+ * covers both an internal background-task id and a real card number, so each
+ * entry names one file and one complete token, split around the marker
+ * (`before` + MARK + `value`) so the table itself stays free of literal
+ * references. Matching the whole token keeps an exemption narrow: allowing an
+ * evidence directory does not allow a different path that starts the same way.
  *
  * Scanning covers file names as well as bodies: a card number in a path is the
  * same leak as a card number in a comment.
@@ -34,8 +37,8 @@ const MARK = "tas" + "k";
  * Reference shapes:
  *   1. the product name, optionally followed by a card number (optional letter);
  *   2. dotted plan numbering after the marker;
- *   3. the marker with `.`/`-`/space and a number, optional letter suffix and
- *      optional sub-item such as `-F5`.
+ *   3. the marker with an optional `.`/`-`/space and a number, optional letter
+ *      suffix and optional sub-item such as `-F5`.
  * Case variants are spelled out instead of using the `i` flag: with `i` the
  * `-[A-Z]` sub-item branch would swallow the first letter of a following word.
  */
@@ -48,169 +51,271 @@ const REF_SOURCE =
 
 const newRef = () => new RegExp(REF_SOURCE, "g");
 
+/** Characters that make up one identifier, path segment or log tag. */
+const TOKEN_CHARS = /[A-Za-z0-9_./\\\u0400-\u04FF-]/;
+
 type Entry = {
   /** Tracked path, exactly as `git ls-files` prints it. */
   path: string;
-  /** Suffixes: the reference is MARK + suffix, compared case-insensitively. */
-  values: string[];
-  /** When set, the exemption only applies to lines containing this text. */
-  line?: string;
+  /** Text before the marker inside the exempted token. */
+  before?: string;
+  /** Text after the marker; MARK + value is compared against the whole token. */
+  value: string;
+  /** Why this token is not a card reference. */
+  note: string;
 };
 
 /**
- * Every exemption, by file and by exact value. Add one only for a value that
+ * Every exemption, by file and by complete token. Add one only for a token that
  * has been read and confirmed not to name a card; never widen an entry to a
  * shape or to a whole file.
  */
 const ALLOW: Entry[] = [
-  // internal background-task / worktree ids used as test data (product ids, not card numbers)
-  { path: "apps/desktop/src/host/index.ts", values: ["-1"] },
-  { path: "apps/desktop/src/host/session.test.ts", values: ["-1", "-2", "-5"] },
-  { path: "apps/desktop/src/host/tasks-wire.test.ts", values: ["-1", "-999"] },
-  { path: "apps/desktop/src/main/boot-tree.test.ts", values: ["-5"] },
-  { path: "apps/desktop/src/main/codex-rollout-fixtures/agent-message-inter-agent.jsonl", values: ["-5"] },
-  { path: "apps/desktop/src/main/tab-ipc.test.ts", values: ["-5"] },
-  { path: "apps/desktop/src/main/worktree-janitor.test.ts", values: ["-5"] },
-  { path: "apps/desktop/src/renderer/src/components/BackgroundTasksPanel.test.ts", values: ["-1", "-2"] },
-  { path: "apps/desktop/src/renderer/src/components/Sidebar.test.ts", values: ["-5"] },
-  { path: "apps/desktop/src/renderer/src/components/ToolCallCard.test.ts", values: ["-3"] },
-  { path: "apps/desktop/src/renderer/src/store.test.ts", values: ["-1", "-2"] },
-  { path: "apps/desktop/src/shared/protocol.test.ts", values: ["-1"] },
-  { path: "apps/desktop/src/shared/tabs.ts", values: ["-2"] },
-  { path: "apps/desktop/src/shared/terminal.ts", values: ["-2"] },
-  { path: "docs/development/agent-communication.md", values: ["-42"] },
-  { path: "packages/core/src/adapters/node/sqlite-persistence.test.ts", values: ["-1", "-2", "-3", "-5"] },
-  { path: "packages/core/src/cli/background-notice.test.ts", values: ["-1", "-2"] },
-  { path: "packages/core/src/cli/commands.test.ts", values: ["-1", "-2", "-9"] },
-  { path: "packages/core/src/cli/main.test.ts", values: ["-1"] },
-  { path: "packages/core/src/dispatch/dispatcher.test.ts", values: ["-1"] },
-  { path: "packages/core/src/dispatch/scheduler.test.ts", values: ["-5", "-9"] },
-  { path: "packages/core/src/extensions/bootstrap.test.ts", values: ["-3"] },
-  { path: "packages/core/src/loop/agent-loop.test.ts", values: ["-5"] },
-  { path: "packages/core/src/tasks/manager.test.ts", values: ["-1", "-2", "-42", "-999"] },
-  { path: "packages/core/src/tools/bash-background.test.ts", values: ["-1", "-7", "-9"] },
-  { path: "packages/core/src/tools/bash-kill.test.ts", values: ["-1", "-404"] },
-  { path: "packages/core/src/tools/bash-output.test.ts", values: ["-1", "-2", "-404"] },
-  { path: "packages/core/src/tools/schemas.ts", values: ["-1"] },
-  { path: "packages/core/src/tools/worktrees.test.ts", values: ["-5"] },
+  // ids of internal background tasks and throwaway worktrees used as test data or log values
+  { path: "apps/desktop/scripts/detach-smoke.mjs", value: "145", note: "evidence directory of a dev smoke script (unpublished working tree)" },
+  { path: "apps/desktop/scripts/model-picker-smoke.mjs", value: "106", note: "temporary-directory prefix of a dev smoke script" },
+  { path: "apps/desktop/src/host/session.test.ts", value: "-1", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "apps/desktop/src/host/session.test.ts", value: "-2", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "apps/desktop/src/host/session.test.ts", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "apps/desktop/src/host/session.test.ts", before: "/repo/.anycode/worktrees/", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "apps/desktop/src/host/session.test.ts", before: "\\n", value: "-1", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "apps/desktop/src/host/session.test.ts", before: "anycode-wt/", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "apps/desktop/src/host/tasks-wire.test.ts", value: "-1", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "apps/desktop/src/host/tasks-wire.test.ts", value: "-999", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "apps/desktop/src/host/tasks-wire.test.ts", before: "\\n", value: "-1", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "apps/desktop/src/main/boot-tree.test.ts", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "apps/desktop/src/main/boot-tree.test.ts", before: "/repo/.anycode/worktrees/", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "apps/desktop/src/main/boot-tree.test.ts", before: "anycode-wt/", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "apps/desktop/src/main/codex-rollout-fixtures/reasoning-nonempty-summary.jsonl", value: " 10", note: "plan numbering inside a captured engine payload, unchanged from the base commit" },
+  { path: "apps/desktop/src/main/tab-ipc.test.ts", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "apps/desktop/src/main/tab-ipc.test.ts", before: "anycode-wt/", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "apps/desktop/src/main/worktree-janitor.test.ts", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "apps/desktop/src/main/worktree-janitor.test.ts", before: "/repo/.anycode/worktrees/", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "apps/desktop/src/main/worktree-janitor.test.ts", before: "anycode-wt/", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "apps/desktop/src/renderer/src/components/BackgroundTasksPanel.test.ts", value: "-1", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "apps/desktop/src/renderer/src/components/BackgroundTasksPanel.test.ts", value: "-2", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "apps/desktop/src/renderer/src/components/Sidebar.test.ts", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "apps/desktop/src/renderer/src/components/Sidebar.test.ts", before: "/repo/.anycode/worktrees/", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "apps/desktop/src/renderer/src/components/Sidebar.test.ts", before: "anycode-wt/", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "apps/desktop/src/renderer/src/store.test.ts", value: "-1", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "apps/desktop/src/renderer/src/store.test.ts", value: "-2", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "apps/desktop/src/shared/protocol.test.ts", value: "-1", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "docs/development/agent-communication.md", value: "-42", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/adapters/node/sqlite-persistence.test.ts", value: "-1", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/adapters/node/sqlite-persistence.test.ts", value: "-3", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/adapters/node/sqlite-persistence.test.ts", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/adapters/node/sqlite-persistence.test.ts", before: "/repo/.anycode/worktrees/", value: "-1", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/adapters/node/sqlite-persistence.test.ts", before: "/repo/.anycode/worktrees/", value: "-2", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/adapters/node/sqlite-persistence.test.ts", before: "/repo/.anycode/worktrees/", value: "-3", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/adapters/node/sqlite-persistence.test.ts", before: "/repo/.anycode/worktrees/", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/adapters/node/sqlite-persistence.test.ts", before: "anycode-wt/", value: "-1", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/adapters/node/sqlite-persistence.test.ts", before: "anycode-wt/", value: "-2", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/adapters/node/sqlite-persistence.test.ts", before: "anycode-wt/", value: "-3", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/adapters/node/sqlite-persistence.test.ts", before: "anycode-wt/", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/adapters/node/sqlite-persistence.test.ts", before: "anycode/", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/cli/background-notice.test.ts", value: "-1", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/cli/background-notice.test.ts", value: "-2", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/cli/background-notice.test.ts", before: "\\n", value: "-1", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/cli/commands.test.ts", value: "-1", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/cli/commands.test.ts", value: "-2", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/cli/commands.test.ts", value: "-9", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/cli/main.test.ts", value: "-1", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/dispatch/dispatcher.test.ts", value: "-1", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/dispatch/scheduler.test.ts", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/dispatch/scheduler.test.ts", value: "-9", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/dispatch/scheduler.test.ts", before: "/work/.anycode/worktrees/", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/dispatch/scheduler.test.ts", before: "/work/.anycode/worktrees/", value: "-9", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/dispatch/scheduler.test.ts", before: "anycode-wt/", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/dispatch/scheduler.test.ts", before: "anycode-wt/", value: "-9", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/loop/agent-loop.test.ts", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/loop/agent-loop.test.ts", before: "/work/.anycode/worktrees/", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/loop/agent-loop.test.ts", before: "anycode-wt/", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/tasks/manager.test.ts", value: "-1", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/tasks/manager.test.ts", value: "-2", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/tasks/manager.test.ts", value: "-42", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/tasks/manager.test.ts", value: "-999", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/tools/bash-background.test.ts", value: "-1", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/tools/bash-background.test.ts", value: "-7", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/tools/bash-background.test.ts", value: "-9", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/tools/bash-kill.test.ts", value: "-1", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/tools/bash-kill.test.ts", value: "-404", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/tools/bash-output.test.ts", value: "-1", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/tools/bash-output.test.ts", value: "-2", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/tools/bash-output.test.ts", value: "-404", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/tools/worktrees.test.ts", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/tools/worktrees.test.ts", before: "/repo/.anycode/worktrees/", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "packages/core/src/tools/worktrees.test.ts", before: "anycode-wt/", value: "-5", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
+  { path: "references/claude-code-2.1.212/W0-FINDINGS.md", value: ".3", note: "ids of internal background tasks and throwaway worktrees used as test data or log values" },
 
-  // fragments of paths, evidence directories and session names under the unpublished working tree
-  { path: "apps/desktop/scripts/child-session-engine-smoke.mjs", values: ["102"] },
-  { path: "apps/desktop/scripts/child-session-explicit-provider-smoke.mjs", values: ["102"] },
-  { path: "apps/desktop/scripts/child-session-permission-smoke.mjs", values: ["102"] },
-  { path: "apps/desktop/scripts/child-session-race-smoke.mjs", values: ["102"] },
-  { path: "apps/desktop/scripts/child-session-scenario-smoke.mjs", values: ["102"] },
-  { path: "apps/desktop/scripts/child-session-split-smoke.mjs", values: ["102"] },
-  { path: "apps/desktop/scripts/detach-smoke.mjs", values: ["145"] },
-  { path: "apps/desktop/scripts/model-picker-smoke.mjs", values: ["106"] },
-  { path: "apps/desktop/src/host/index.test.ts", values: ["150", "198"] },
-  { path: "apps/desktop/src/host/session.test.ts", values: ["56"] },
-  { path: "apps/desktop/src/main/automation/README.md", values: ["56"] },
-  { path: "apps/desktop/src/main/host-env.test.ts", values: ["150", "198"] },
-  { path: "apps/desktop/src/main/host-env.ts", values: ["150", "198"] },
-  { path: "apps/desktop/src/main/profile-stats-cache.ts", values: ["187"] },
-  { path: "apps/desktop/src/renderer/src/App.test.ts", values: ["56"] },
-  { path: "apps/desktop/src/renderer/src/App.tsx", values: ["56"] },
-  { path: "apps/desktop/src/renderer/src/automation.test.ts", values: ["56"] },
-  { path: "apps/desktop/src/renderer/src/automation.ts", values: ["187", "56"] },
-  { path: "apps/desktop/src/renderer/src/components/SubagentsPane.test.ts", values: ["106"] },
-  { path: "apps/desktop/src/renderer/src/components/ToolCallCard.test.ts", values: ["191"] },
-  { path: "apps/desktop/src/renderer/src/components/ToolCallCard.tsx", values: ["191"] },
-  { path: "apps/desktop/src/renderer/src/components/profile-loader.ts", values: ["187"] },
-  { path: "apps/desktop/src/renderer/src/store.ts", values: ["56"] },
-  { path: "apps/desktop/src/renderer/src/tab-registry.test.ts", values: ["198", "56"] },
-  { path: "docs/superpowers/plans/2026-08-08-child-sessions-track.md", values: ["102"] },
-  { path: "packages/core/src/telemetry/admin.ts", values: ["187"] },
-  { path: "packages/core/src/telemetry/stats.test.ts", values: ["187"] },
-  { path: "packages/core/src/telemetry/stats.ts", values: ["187"] },
+  // dotted plan / slice numbering carried by the prose, not a card number
+  { path: ".github/workflows/release.yml", value: " 2.6.3", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/host/index.test.ts", value: " 3.2.4", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/host/index.test.ts", value: " 3.3.5", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/host/index.test.ts", value: " 3.4.5", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/host/index.test.ts", value: " 3.7.2", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/host/index.ts", value: " 1.9", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/host/index.ts", value: " 3.1.4", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/host/index.ts", value: " 3.2.4", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/host/index.ts", value: " 3.3.5", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/host/index.ts", value: " 3.4.5", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/host/index.ts", value: "-1.7", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/host/terminal.test.ts", value: " 2.4.3", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/main/codex-rollout-fixtures/reasoning-nonempty-summary.jsonl", value: " 10.7", note: "plan numbering inside a captured engine payload, unchanged from the base commit" },
+  { path: "apps/desktop/src/main/tabs.ts", value: " 2.4.3", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/main/tabs.ts", value: " 2.4.4", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/App.tsx", value: " 2.1.2", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/App.tsx", value: " 2.1.6", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/anycode-window.d.ts", value: " 2.1.4", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/anycode-window.d.ts", value: " 2.1.5", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/anycode-window.d.ts", value: " 2.1.6", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/app.css", value: " 3.1.4", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/components/SessionPicker.test.ts", value: " 2.1.5", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/components/SessionPicker.tsx", value: " 2.1.6", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/components/SettingsScreen.tsx", value: " 3.2.4", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/components/ToolCallCard.test.ts", value: "-3.1.4", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/components/ToolCallCard.test.ts", value: "-3.4.5", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/components/ToolCallCard.tsx", value: " 3.1.4", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/components/ToolCallCard.tsx", value: " 3.4.5", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/port.ts", value: " 2.4.1", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/settings.css", value: " 3.2.4", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/store.test.ts", value: " 1.9", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/store.test.ts", value: " 2.1.5", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/store.test.ts", value: " 2.1.6", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/store.test.ts", value: " 3.1.4", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/store.test.ts", value: " 3.2.4", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/store.test.ts", value: " 3.4.5", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/store.ts", value: " 1.9", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/store.ts", value: " 2.1.5", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/store.ts", value: " 3.1.4", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/store.ts", value: " 3.2.4", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/store.ts", value: " 3.4.5", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/tab-registry.test.ts", value: " 2.1.4", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/tab-registry.test.ts", value: " 2.4.4", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/tabs-store.ts", value: " 2.1.5", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/renderer/src/terminal-view.test.ts", value: " 2.4.4", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/settings/files.ts", value: " 2.2.2", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/settings/schema.ts", value: " 2.2.1", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/shared/envelopes.ts", value: " 2.1.1", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/shared/protocol.ts", value: " 2.1.1", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/shared/protocol.ts", value: " 3.2.4", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/shared/settings.ts", value: " 2.2.1", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/shared/tabs.ts", value: " 2.1.1", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/shared/tabs.ts", value: " 2.1.2", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/shared/tabs.ts", value: " 2.1.6", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/shared/tabs.ts", value: "-2.1.2", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "apps/desktop/src/shared/terminal.ts", value: "-2.4.3", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/adapters/node/sqlite-persistence.ts", value: " 1.7", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/adapters/node/sqlite-persistence.ts", value: " 1.9", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/cli/args.ts", value: " 1.7", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/cli/args.ts", value: " 4.1.1", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/cli/args.ts", value: " 4.1.4", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/cli/commands.test.ts", value: " 4.1.1", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/cli/commands.test.ts", value: " 4.1.4", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/cli/commands.ts", value: " 4.1.1", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/cli/commands.ts", value: " 4.1.4", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/cli/integration.test.ts", value: " 4.1.5", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/cli/main.test.ts", value: " 3.1.3", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/cli/main.test.ts", value: " 3.2.3", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/cli/main.test.ts", value: " 3.3.5", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/cli/main.ts", value: " 0.2", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/cli/main.ts", value: " 1.7", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/cli/main.ts", value: " 4.1.1", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/cli/render.ts", value: " 3.1.3", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/cli/render.ts", value: " 3.2.3", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/cli/render.ts", value: " 3.4.2", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/cli/render.ts", value: " 4.1.1", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/cli/render.ts", value: " 4.1.3", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/cli/render.ts", value: " 4.2.2", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/cli/status.ts", value: " 4.2.1", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/cli/status.ts", value: " 4.2.3", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/cli/terminal-broker.ts", value: " 4.1.2", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/cli/theme.test.ts", value: " 4.1.1", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/cli/theme.test.ts", value: " 4.1.3", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/cli/theme.ts", value: " 4.1.1", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/cli/theme.ts", value: " 4.1.3", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/context/budget.test.ts", value: " 1.2", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/context/history.test.ts", value: " 1.1", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/context/manager.test.ts", value: " 1.2", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/context/tokenizer.test.ts", value: " 1.2", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/context/tokenizer.ts", value: " 1.2", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/dispatch/hook-runner.ts", value: " 0.4", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/dispatch/hook-runner.ts", value: " 1.4", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/extensions/bootstrap.test.ts", value: " 3.6.4", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/extensions/bootstrap.test.ts", value: " 3.7.2", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/index.ts", value: " 1.1", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/mcp/index.ts", value: " 3.2.2", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/mcp/tool-bridge.ts", value: " 3.2.2", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/mcp/transport-compat.ts", value: " 3.2.2", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/prompts/sections.ts", value: " 3.6.1", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/prompts/sections.ts", value: " 3.6.2", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/prompts/system.test.ts", value: " 3.6.2", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/skills/discovery.ts", before: "3.7/", value: " 3.3.5", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/skills/index.ts", value: " 3.3.1", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/tools/skill.ts", value: " 3.3.2", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/workflow/index.ts", value: " 3.4.1", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/workflow/index.ts", value: " 3.4.2", note: "dotted plan / slice numbering carried by the prose, not a card number" },
+  { path: "packages/core/src/workflow/template.ts", value: " 3.4.1", note: "dotted plan / slice numbering carried by the prose, not a card number" },
 
-  // plan / slice numbering carried by the prose (not card numbers)
-  { path: ".github/workflows/release.yml", values: [" 2.6.3"] },
-  { path: "apps/desktop/src/host/index.test.ts", values: [" 3.2.4", " 3.3.5", " 3.4.5", " 3.7.2"] },
-  { path: "apps/desktop/src/host/index.ts", values: [" 1.9", " 3.1.4", " 3.2.4", " 3.3.5", " 3.4.5"] },
-  { path: "apps/desktop/src/host/terminal.test.ts", values: [" 2.4.3"] },
-  { path: "apps/desktop/src/main/codex-rollout-fixtures/reasoning-nonempty-summary.jsonl", values: [" 10", " 10.7"] },
-  { path: "apps/desktop/src/main/tabs.ts", values: [" 2.4.3", " 2.4.4"] },
-  { path: "apps/desktop/src/preload/index.ts", values: [" 2.4.4"] },
-  { path: "apps/desktop/src/renderer/src/App.tsx", values: [" 2.1.2", " 2.1.6"] },
-  { path: "apps/desktop/src/renderer/src/anycode-window.d.ts", values: [" 2.1.4", " 2.1.5", " 2.1.6"] },
-  { path: "apps/desktop/src/renderer/src/app.css", values: [" 3.1.4"] },
-  { path: "apps/desktop/src/renderer/src/components/SessionPicker.test.ts", values: [" 2.1.5"] },
-  { path: "apps/desktop/src/renderer/src/components/SessionPicker.tsx", values: [" 2.1.6"] },
-  { path: "apps/desktop/src/renderer/src/components/SettingsScreen.tsx", values: [" 3.2.4"] },
-  { path: "apps/desktop/src/renderer/src/components/ToolCallCard.tsx", values: [" 3.1.4", " 3.4.5"] },
-  { path: "apps/desktop/src/renderer/src/port.ts", values: [" 2.4.1"] },
-  { path: "apps/desktop/src/renderer/src/settings.css", values: [" 3.2.4"] },
-  { path: "apps/desktop/src/renderer/src/store.test.ts", values: [" 1.9", " 2.1.5", " 2.1.6", " 3.1.4", " 3.2.4", " 3.4.5"] },
-  { path: "apps/desktop/src/renderer/src/store.ts", values: [" 1.9", " 2.1.5", " 3.1.4", " 3.2.4", " 3.4.5"] },
-  { path: "apps/desktop/src/renderer/src/tab-registry.test.ts", values: [" 2.1.4", " 2.4.4"] },
-  { path: "apps/desktop/src/renderer/src/tabs-store.ts", values: [" 2.1.5"] },
-  { path: "apps/desktop/src/renderer/src/terminal-view.test.ts", values: [" 2.4.4"] },
-  { path: "apps/desktop/src/settings/files.ts", values: [" 2.2.2"] },
-  { path: "apps/desktop/src/settings/schema.test.ts", values: ["ana 4118"] },
-  { path: "apps/desktop/src/settings/schema.ts", values: [" 2.2.1"] },
-  { path: "apps/desktop/src/shared/credentials.ts", values: [" 2.5.1"] },
-  { path: "apps/desktop/src/shared/envelopes.ts", values: [" 2.1.1"] },
-  { path: "apps/desktop/src/shared/protocol.test.ts", values: [" 3.2.4"] },
-  { path: "apps/desktop/src/shared/protocol.ts", values: [" 2.1.1", " 3.2.4"] },
-  { path: "apps/desktop/src/shared/settings.ts", values: [" 2.2.1"] },
-  { path: "apps/desktop/src/shared/tabs.ts", values: [" 2.1.1", " 2.1.2", " 2.1.6"] },
-  { path: "apps/desktop/src/shared/terminal.ts", values: [" 2.4.1"] },
-  { path: "packages/core/src/adapters/node/sqlite-persistence.ts", values: [" 1.7", " 1.9"] },
-  { path: "packages/core/src/cli/args.ts", values: [" 1.7", " 4.1.1", " 4.1.4"] },
-  { path: "packages/core/src/cli/commands.test.ts", values: [" 4.1.1", " 4.1.4"] },
-  { path: "packages/core/src/cli/commands.ts", values: [" 4.1.1", " 4.1.4"] },
-  { path: "packages/core/src/cli/integration.test.ts", values: [" 4.1.5"] },
-  { path: "packages/core/src/cli/main.test.ts", values: [" 3.1.3", " 3.2.3", " 3.3.5"] },
-  { path: "packages/core/src/cli/main.ts", values: [" 0.2", " 1.7", " 4.1.1"] },
-  { path: "packages/core/src/cli/render.ts", values: [" 3.1.3", " 3.2.3", " 3.4.2", " 4.1.1", " 4.1.3", " 4.2.2"] },
-  { path: "packages/core/src/cli/status.ts", values: [" 4.2.1", " 4.2.3"] },
-  { path: "packages/core/src/cli/terminal-broker.ts", values: [" 4.1.2"] },
-  { path: "packages/core/src/cli/theme.test.ts", values: [" 4.1.1", " 4.1.3"] },
-  { path: "packages/core/src/cli/theme.ts", values: [" 4.1.1", " 4.1.3"] },
-  { path: "packages/core/src/context/budget.test.ts", values: [" 1.2"] },
-  { path: "packages/core/src/context/history.test.ts", values: [" 1.1", " 1.2"] },
-  { path: "packages/core/src/context/manager.test.ts", values: [" 1.2"] },
-  { path: "packages/core/src/context/tokenizer.test.ts", values: [" 1.2"] },
-  { path: "packages/core/src/context/tokenizer.ts", values: [" 1.2"] },
-  { path: "packages/core/src/dispatch/hook-runner.ts", values: [" 0.4", " 1.4"] },
-  { path: "packages/core/src/extensions/bootstrap.test.ts", values: [" 3.6.4", " 3.7.2"] },
-  { path: "packages/core/src/index.ts", values: [" 1.1"] },
-  { path: "packages/core/src/mcp/index.ts", values: [" 3.2.2"] },
-  { path: "packages/core/src/mcp/tool-bridge.ts", values: [" 3.2.2"] },
-  { path: "packages/core/src/mcp/transport-compat.ts", values: [" 3.2.2"] },
-  { path: "packages/core/src/prompts/sections.ts", values: [" 3.6.1", " 3.6.2"] },
-  { path: "packages/core/src/prompts/system.test.ts", values: [" 3.6.2"] },
-  { path: "packages/core/src/skills/discovery.ts", values: [" 3.3.5"] },
-  { path: "packages/core/src/skills/index.ts", values: [" 3.3.1", " 3.3.2"] },
-  { path: "packages/core/src/tools/skill.ts", values: [" 3.3.2"] },
-  { path: "packages/core/src/tools/todo-read.ts", values: [" 1.5"] },
-  { path: "packages/core/src/tools/todo-write.ts", values: [" 1.5"] },
-  { path: "packages/core/src/workflow/index.ts", values: [" 3.4.1", " 3.4.2", " 3.4.3"] },
-  { path: "packages/core/src/workflow/template.ts", values: [" 3.4.1"] },
-  { path: "references/claude-code-2.1.212/W0-FINDINGS.md", values: [".3"] },
+  // fragments of paths, evidence directories and session names from the unpublished working tree
+  { path: "apps/desktop/scripts/child-session-engine-smoke.mjs", value: "102-track", note: "evidence directory of a dev smoke script (unpublished working tree)" },
+  { path: "apps/desktop/scripts/child-session-engine-smoke.mjs", before: "working-docs/", value: "102-track/evidence/S4/", note: "evidence directory of a dev smoke script (unpublished working tree)" },
+  { path: "apps/desktop/scripts/child-session-explicit-provider-smoke.mjs", value: "102-track", note: "evidence directory of a dev smoke script (unpublished working tree)" },
+  { path: "apps/desktop/scripts/child-session-explicit-provider-smoke.mjs", before: "working-docs/", value: "102-track/evidence/S2/", note: "evidence directory of a dev smoke script (unpublished working tree)" },
+  { path: "apps/desktop/scripts/child-session-permission-smoke.mjs", value: "102-track", note: "evidence directory of a dev smoke script (unpublished working tree)" },
+  { path: "apps/desktop/scripts/child-session-permission-smoke.mjs", before: "working-docs/", value: "102-track/evidence/S2/", note: "evidence directory of a dev smoke script (unpublished working tree)" },
+  { path: "apps/desktop/scripts/child-session-race-smoke.mjs", value: "102-track", note: "evidence directory of a dev smoke script (unpublished working tree)" },
+  { path: "apps/desktop/scripts/child-session-race-smoke.mjs", before: "working-docs/", value: "102-track/evidence/S2/", note: "evidence directory of a dev smoke script (unpublished working tree)" },
+  { path: "apps/desktop/scripts/child-session-scenario-smoke.mjs", value: "102-track", note: "evidence directory of a dev smoke script (unpublished working tree)" },
+  { path: "apps/desktop/scripts/child-session-scenario-smoke.mjs", before: "working-docs/", value: "102-track/evidence/S2/", note: "evidence directory of a dev smoke script (unpublished working tree)" },
+  { path: "apps/desktop/scripts/child-session-split-smoke.mjs", value: "102-track", note: "evidence directory of a dev smoke script (unpublished working tree)" },
+  { path: "apps/desktop/scripts/child-session-split-smoke.mjs", before: "working-docs/", value: "102-track/evidence/S3/", note: "evidence directory of a dev smoke script (unpublished working tree)" },
+  { path: "apps/desktop/scripts/detach-smoke.mjs", before: "evidence/", value: "145/detach-result.json", note: "evidence directory of a dev smoke script (unpublished working tree)" },
+  { path: "apps/desktop/scripts/model-picker-smoke.mjs", before: "anycode-", value: "106-model-picker-evidence-", note: "temporary-directory prefix of a dev smoke script" },
+  { path: "apps/desktop/scripts/model-picker-smoke.mjs", before: "anycode-", value: "106-model-picker-profile-", note: "temporary-directory prefix of a dev smoke script" },
+  { path: "apps/desktop/scripts/model-picker-smoke.mjs", before: "anycode-", value: "106-model-picker-ws-", note: "temporary-directory prefix of a dev smoke script" },
+  { path: "apps/desktop/src/main/codex-rollout-fixtures/agent-message-inter-agent.jsonl", before: "/Users/scrubbed/projects/tools/anycode/.anycode/worktrees/", value: "-5\\", note: "fragments of paths, evidence directories and session names from the unpublished working tree" },
+  { path: "apps/desktop/src/preload/index.ts", value: " 2.4.4.", note: "fragments of paths, evidence directories and session names from the unpublished working tree" },
+  { path: "apps/desktop/src/shared/credentials.ts", value: " 2.5.1.", note: "fragments of paths, evidence directories and session names from the unpublished working tree" },
+  { path: "apps/desktop/src/shared/protocol.test.ts", value: " 3.2.4.", note: "fragments of paths, evidence directories and session names from the unpublished working tree" },
+  { path: "apps/desktop/src/shared/terminal.ts", value: " 2.4.1.", note: "fragments of paths, evidence directories and session names from the unpublished working tree" },
+  { path: "packages/core/src/cli/commands.test.ts", value: "-2\\n", note: "fragments of paths, evidence directories and session names from the unpublished working tree" },
+  { path: "packages/core/src/cli/main.test.ts", before: "/", value: "-1\\s", note: "fragments of paths, evidence directories and session names from the unpublished working tree" },
+  { path: "packages/core/src/context/history.test.ts", value: " 1.2.", note: "fragments of paths, evidence directories and session names from the unpublished working tree" },
+  { path: "packages/core/src/extensions/bootstrap.test.ts", value: "-3.3.2/3.3.3/3.3.4", note: "fragments of paths, evidence directories and session names from the unpublished working tree" },
+  { path: "packages/core/src/skills/index.ts", value: " 3.3.2.", note: "fragments of paths, evidence directories and session names from the unpublished working tree" },
+  { path: "packages/core/src/tools/schemas.ts", value: "-1\\", note: "fragments of paths, evidence directories and session names from the unpublished working tree" },
+  { path: "packages/core/src/tools/todo-read.ts", value: " 1.5.", note: "fragments of paths, evidence directories and session names from the unpublished working tree" },
+  { path: "packages/core/src/tools/todo-write.ts", value: " 1.5.", note: "fragments of paths, evidence directories and session names from the unpublished working tree" },
+  { path: "packages/core/src/workflow/index.ts", value: " 3.4.3.", note: "fragments of paths, evidence directories and session names from the unpublished working tree" },
 
-  // skill metadata values and a temp-dir prefix, not card numbers
-  { path: "apps/desktop/src/main/skills-ipc.test.ts", values: ["ana"], line: "owner: " },
-  { path: "packages/core/src/dispatch/dispatcher.test.ts", values: ["ana4294"], line: "mkdtemp" },
-  { path: "packages/core/src/skills/harness-skill-import.test.ts", values: ["ana"], line: "owner: " },
+  // skill metadata value inside a captured skill file
+  { path: "apps/desktop/src/main/skills-ipc.test.ts", value: "ana\\n---\\nnested", note: "captured skill-file body used as test input" },
+  { path: "packages/core/src/skills/harness-skill-import.test.ts", value: "ana\\n", note: "captured skill-file body used as test input" },
 ];
 
-function allowed(path: string, line: string, token: string): boolean {
+/** The whole identifier around a match, so an exemption is never a prefix. */
+function tokenAt(line: string, index: number, length: number): string {
+  let start = index;
+  let end = index + length;
+  while (start > 0 && TOKEN_CHARS.test(line[start - 1])) start -= 1;
+  while (end < line.length && TOKEN_CHARS.test(line[end])) end += 1;
+  return line.slice(start, end);
+}
+
+function allowed(path: string, token: string): boolean {
   const lower = token.toLowerCase();
   return ALLOW.some(
     (e) =>
-      e.path === path &&
-      (!e.line || line.includes(e.line)) &&
-      e.values.some((suffix) => (MARK + suffix).toLowerCase() === lower),
+      e.path === path && ((e.before ?? "") + MARK + e.value).toLowerCase() === lower,
   );
 }
 
-/** Reference matches in one line, minus the allowlisted ones. */
+/** Reference matches in one line, minus the exempted tokens. */
 export function scanLine(path: string, line: string): string[] {
   const hits: string[] = [];
   for (const m of line.matchAll(newRef())) {
-    if (!allowed(path, line, m[0])) hits.push(`${path}: ${m[0]}`);
+    const token = tokenAt(line, m.index ?? 0, m[0].length);
+    if (!allowed(path, token)) hits.push(`${path}: ${token}`);
   }
   return hits;
 }
@@ -222,8 +327,6 @@ export function scanText(path: string, text: string): string[] {
   return hits;
 }
 
-type Occurrence = { path: string; token: string };
-
 function tracked(): string[] {
   return execFileSync("git", ["ls-files", "-z"], { cwd: ROOT, encoding: "utf8" })
     .split("\0")
@@ -231,12 +334,15 @@ function tracked(): string[] {
     .filter((rel) => existsSync(join(ROOT, rel)));
 }
 
-function occurrencesOf(files: string[]): Occurrence[] {
-  const out: Occurrence[] = [];
+/** Every token in the tracked tree that the pattern matches, with its path. */
+function tokensInTree(files: string[]): Array<{ path: string; token: string }> {
+  const out: Array<{ path: string; token: string }> = [];
   for (const rel of files) {
     const text = readFileSync(join(ROOT, rel), "utf8");
     for (const line of [rel, ...text.split("\n")]) {
-      for (const m of line.matchAll(newRef())) out.push({ path: rel, token: m[0] });
+      for (const m of line.matchAll(newRef())) {
+        out.push({ path: rel, token: tokenAt(line, m.index ?? 0, m[0].length) });
+      }
     }
   }
   return out;
@@ -251,29 +357,28 @@ describe("public tree carries no tracker card references", () => {
     expect(violations).toEqual([]);
   });
 
-  it("keeps every allowlist entry in use, so the table cannot rot", () => {
-    const seen = new Map<string, Set<string>>();
-    for (const { path, token } of occurrencesOf(tracked())) {
-      if (!seen.has(path)) seen.set(path, new Set());
-      seen.get(path)!.add(token.toLowerCase());
-    }
+  it("keeps every exemption in use, so the table cannot rot", () => {
+    const seen = new Set(
+      tokensInTree(tracked()).map(({ path, token }) => `${path}\0${token.toLowerCase()}`),
+    );
     const stale: string[] = [];
     for (const entry of ALLOW) {
       if (!existsSync(join(ROOT, entry.path))) {
         stale.push(`${entry.path}: file is gone`);
-        continue;
-      }
-      for (const suffix of entry.values) {
-        if (!seen.get(entry.path)?.has((MARK + suffix).toLowerCase())) {
-          stale.push(`${entry.path}: ${MARK + suffix} no longer occurs`);
-        }
+      } else if (
+        !seen.has(
+          `${entry.path}\0${((entry.before ?? "") + MARK + entry.value).toLowerCase()}`,
+        )
+      ) {
+        stale.push(`${entry.path}: ${MARK + entry.value} no longer occurs`);
       }
     }
     expect(stale).toEqual([]);
   });
 
-  it("rejects each shape the gate exists for", () => {
+  it("rejects every shape the gate exists for", () => {
     const card = MARK.toUpperCase() + ".123";
+    const glued = MARK + "106-slice";
     expect(scanText("docs/x.md", `see ${PRODUCT} for details`)).not.toEqual([]);
     expect(scanText("docs/x.md", `moved to ${card} yesterday`)).not.toEqual([]);
     expect(scanText("docs/x.md", `${PRODUCT}-cli did it`)).not.toEqual([]);
@@ -281,14 +386,30 @@ describe("public tree carries no tracker card references", () => {
     expect(scanText("sample.ts", `waiting on ${MARK}-123`)).not.toEqual([]);
     expect(scanText("AGENTS.md", `history lives in ${card}`)).not.toEqual([]);
     expect(scanText("sample.ts", `mkdtemp(join(tmp, "${PRODUCT}4294-"))`)).not.toEqual([]);
+    expect(scanText("sample.ts", `// ${glued} notes`)).not.toEqual([]);
+    expect(scanText("sample.ts", `// working-docs/${MARK}102-track/evidence`)).not.toEqual([]);
+    expect(scanText(`scripts/${glued}.mjs`, "clean body")).not.toEqual([]);
     expect(scanText(`src/${card}.ts`, "clean body")).not.toEqual([]);
   });
 
-  it("accepts only a value that is listed for that exact file", () => {
+  it("rejects the exact wording an earlier exemption used to cover", () => {
+    // A `.each` title is out of reach for the AST gate that pinned this branch;
+    // it is not out of reach here.
+    expect(
+      scanText(
+        "apps/desktop/src/settings/schema.test.ts",
+        `    "${PRODUCT} 4118: a corrupt modelCapabilities"`,
+      ),
+    ).not.toEqual([]);
+  });
+
+  it("accepts a token only when it is listed for that exact file", () => {
     const entry = ALLOW[0];
-    const token = MARK + entry.values[0];
+    const token = (entry.before ?? "") + MARK + entry.value;
     expect(scanText(entry.path, `// ${token} stays`)).toEqual([]);
-    // the same value in another file is still a violation
+    // the same token in another file is still a violation
     expect(scanText("docs/other.md", `// ${token} stays`)).not.toEqual([]);
+    // nor does an exemption cover a longer token that starts the same way
+    expect(scanText(entry.path, `// ${token}extended`)).not.toEqual([]);
   });
 });
