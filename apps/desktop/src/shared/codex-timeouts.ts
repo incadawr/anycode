@@ -5,7 +5,7 @@
  *
  * TWO independent call sites spawn and tear down their OWN, separate
  * app-server child: the host engine (host/engines/codex/*, /39) and
- * main's onboarding doctor (main/codex-doctor.ts, ) — a host->main
+ * main's onboarding doctor (main/codex-doctor.ts) — a host->main
  * import is architecturally forbidden (cut §2(g): "межслойный импорт
  * host→main запрещён"), so `main/codex-doctor.ts` deliberately runs its OWN
  * minimal JSON-RPC client rather than reusing `host/engines/codex/
@@ -56,7 +56,7 @@ export const CODEX_MODEL_LIST_MAX_PAGES = 5;
 export const CODEX_POST_INTERRUPT_SETTLE_MS = 10_000;
 
 /**
- * : bound on the engine's PRE-TERMINAL join of cancelled bridged
+ * bound on the engine's PRE-TERMINAL join of cancelled bridged
  * `anycode_agent` children (Stop path only). After the interrupted native
  * turn reaches `turn/completed`, the engine waits up to this long for each
  * cancelled call's REAL terminal event (status + child-session target +
@@ -94,7 +94,7 @@ export const CODEX_DOCTOR_RPC_TIMEOUT_MS = 3_000;
 /**
  * `account/login/start` — the login's ONE RPC that is not a local app-server
  * read: the server MINTS `loginId`/`userCode`/`authUrl` over the network
- * (ChatGPT auth backend) before answering. : the doctor's 3s
+ * (ChatGPT auth backend) before answering. the doctor's 3s
  * interactive bound above was reused for it, so any mint slower than 3s
  * rejected the request and the whole sign-in collapsed into "Sign-in failed"
  * with no device code at all. Measured against a real 0.144.3 binary on the

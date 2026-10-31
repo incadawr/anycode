@@ -1,5 +1,5 @@
 /**
- * : unit tests for the `create_session {engine:"core", model}`
+ * unit tests for the `create_session {engine:"core", model}`
  * connection resolver — the pure policy that replaced the silent fallback to
  * the active connection. Discriminates every selector form (id, label,
  * `<providerId>/<model>`, bare model id) plus BOTH refusal shapes and the

@@ -1,5 +1,5 @@
 /**
- * "Full browser access" control-plane contract ( owner amendment):
+ * "Full browser access" control-plane contract (owner amendment):
  * channel names and value-only types shared by main (main/browser-access*.ts),
  * the preload bridge and the renderer. ZERO imports by construction: the
  * sandboxed preload bundles this module, so it may not pull anything in.

@@ -1,5 +1,5 @@
 /**
- * artifacts-root ( / ): pins the desktop's artifact-store
+ * artifacts-root: pins the desktop's artifact-store
  * root conditional. The SAME conditional must hold in both desktop processes —
  * main (boot sweep) and host (store construction) — which is exactly why it
  * lives in ONE shared helper (artifacts-root.ts) instead of being inlined twice.

@@ -1,5 +1,5 @@
 /**
- * Unit tests for `resolveProviderConnection` ( CUT-S2 §10.9.3, F4):
+ * Unit tests for `resolveProviderConnection` (CUT-S2 §10.9.3, F4):
  * the pure policy behind an EXPLICIT `Agent(tier:"session", provider:…)`
  * spawn's provider-id -> connection resolution. This is the shared/settings.ts
  * half of F4 — `main/index.ts` wires it into `TabHostManager`'s
@@ -24,7 +24,7 @@ function settingsWith(activeConnectionId: string | undefined, connections: Retur
   };
 }
 
-describe("resolveProviderConnection ( CUT-S2 §10.9.3 F4)", () => {
+describe("resolveProviderConnection (CUT-S2 §10.9.3 F4)", () => {
   it("the active connection wins when it matches the requested providerId, even though a later connection also matches", () => {
     const active = connectionFixture({ id: "anthropic", connectionId: "conn-active" });
     const other = connectionFixture({ id: "anthropic", connectionId: "conn-other" });
@@ -95,7 +95,7 @@ describe("activeProviderView — connection-level authOptional projection", () =
   });
 });
 
-describe("normalizeModelId (: durable manually entered models)", () => {
+describe("normalizeModelId (durable manually entered models)", () => {
   it("accepts an unknown id with slash/colon/dot/dash and arbitrary vendor characters, unchanged", () => {
     expect(normalizeModelId("deepseek-ai/DeepSeek-V3.1")).toBe("deepseek-ai/DeepSeek-V3.1");
     expect(normalizeModelId("openai/gpt-5:2026-01-01")).toBe("openai/gpt-5:2026-01-01");
@@ -139,7 +139,7 @@ describe("normalizeModelId (: durable manually entered models)", () => {
   });
 });
 
-describe("mergeModelIds (: stable primary-first union)", () => {
+describe("mergeModelIds (stable primary-first union)", () => {
   it("dedupes case-sensitively, keeping the first occurrence's order", () => {
     expect(mergeModelIds(["a", "b", "a"], ["b", "c"])).toEqual(["a", "b", "c"]);
     expect(mergeModelIds(["GLM-5"], ["glm-5"])).toEqual(["GLM-5", "glm-5"]);

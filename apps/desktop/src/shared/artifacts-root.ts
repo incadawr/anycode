@@ -1,5 +1,5 @@
 /**
- * : the desktop's artifact-store root — the SAME
+ * the desktop's artifact-store root — the SAME
  * conditional the CLI uses (cli/main.ts artifactsRoot) and the desktop's own
  * checkpoints root uses (host/index.ts checkpointsRoot): beside the sqlite DB,
  * `:memory:` falls back to `<home>/.anycode/artifacts`. One helper, both

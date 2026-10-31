@@ -3,7 +3,7 @@
  * This is deliberately not a dynamic plugin manifest: only reviewed engines
  * compiled into the desktop application can appear here.
  *
- *  adds the engine-proxy carrier contract here rather than in
+ * adds the engine-proxy carrier contract here rather than in
  * main/host-env.ts because BOTH sides need it and a host module may never
  * import from main (architectural rule, stated in the engine client headers
  * under host/engines).
@@ -48,7 +48,7 @@ export const ENV_CLAUDE_PROXY_URL = "ANYCODE_CLAUDE_PROXY_URL";
 /**
  * The carrier namespace as one unit — see `stripEngineProxyCarriers`.
  *
- *  (design review B-02) widened what a carrier SAYS without adding a
+ * (design review B-02) widened what a carrier SAYS without adding a
  * name: the exemption list and the overwrite licence travel as FIELDS inside the
  * one value (see `EngineProxyCarrier`), not as sibling variables. That is not
  * cosmetic — the carrier passes through main/codex-ipc.ts, main/claude-ipc.ts
@@ -60,7 +60,7 @@ export const ENV_CLAUDE_PROXY_URL = "ANYCODE_CLAUDE_PROXY_URL";
 export const ENGINE_PROXY_CARRIER_NAMES = [ENV_CODEX_PROXY_URL, ENV_CLAUDE_PROXY_URL] as const;
 
 /**
- * Carrier VALUE meaning "this engine explicitly uses no proxy": the
+ * Carrier VALUE meaning "this engine explicitly uses no proxy" the
  * engine scope's `proxyRef` is `direct`, or it names a profile whose path
  * resolves to direct (a `system` profile the OS answers `DIRECT` for, a manual
  * profile with a broken URL, a dangling id).
@@ -81,7 +81,7 @@ export const ENGINE_PROXY_CARRIER_NAMES = [ENV_CODEX_PROXY_URL, ENV_CLAUDE_PROXY
 export const PROXY_CARRIER_DIRECT = "direct";
 
 /**
- * What ONE engine's carrier says (, design review B-02/B-03). A
+ * What ONE engine's carrier says (design review B-02/B-03). A
  * DISCRIMINATED outcome rather than "a url string, or the absence of one",
  * because `absent` and `direct` are opposite instructions to the child builder
  * and only the discriminant tells them apart:
@@ -172,7 +172,7 @@ export function decodeEngineProxyCarrier(raw: string | undefined): EngineProxyCa
 }
 
 /**
- * Deletes every carrier name from `env` in place ( F1). Called wherever
+ * Deletes every carrier name from `env` in place (F1). Called wherever
  * main composes an env from the boot snapshot — the host fork env, the doctor/
  * login source env — BEFORE `engineProxyCarriers` writes the authoritative
  * value back, so main is the SOLE author of this namespace and an ambient
@@ -253,7 +253,7 @@ export const LOOPBACK_NO_PROXY = "localhost,127.0.0.1,[::1],::1";
 
 /**
  * Applies an engine-level proxy carrier onto an ALREADY-BUILT child env
- *. `env` is what the engine's own child-env builder assembled;
+ * . `env` is what the engine's own child-env builder assembled;
  * `source` is the env the builder read from (the host fork's env for a session
  * child, main's `bootEnv` overlay for a doctor/login probe).
  *

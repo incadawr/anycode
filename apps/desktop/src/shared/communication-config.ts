@@ -17,10 +17,10 @@ export const COMMUNICATION_COPY_CONFIG_CHANNEL = "anycode:communication-copy-con
 export const COMMUNICATION_SET_DEFAULT_ACCESS_CHANNEL = "anycode:communication-set-default-access";
 export const COMMUNICATION_SET_SESSION_ACCESS_CHANNEL = "anycode:communication-set-session-access";
 export const COMMUNICATION_SET_SESSION_HANDLE_CHANNEL = "anycode:communication-set-session-handle";
-/** : the per-session External approvals switch. Writable ONLY from this channel (the renderer's trusted UI). */
+/** the per-session External approvals switch. Writable ONLY from this channel (the renderer's trusted UI). */
 export const COMMUNICATION_SET_SESSION_APPROVALS_CHANNEL = "anycode:communication-set-session-approvals";
 /**
- * : the per-project "Allow agents to open tasks here" switch. The
+ * the per-project "Allow agents to open tasks here" switch. The
  * sidebar sends its workspace identity (like deleteSessionsOlder); main
  * canonicalises. Settings lists main-owned exact keys and can only turn them Off.
  */
@@ -62,7 +62,7 @@ export interface CommunicationView {
   status: CommunicationStatus;
   /** `approvals` is the per-session External approvals switch; always false while `enabled` is false. */
   tabs: Array<{ tabId: string; enabled: boolean; approvals: boolean; handle?: string }>;
-  /** : projects where agents may open tasks. `key` is the exact stored canonical key (a lookup key for Off, never a new path). */
+  /** projects where agents may open tasks. `key` is the exact stored canonical key (a lookup key for Off, never a new path). */
   agentProjects: Array<{ key: string; name: string; displayPath: string }>;
 }
 
