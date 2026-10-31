@@ -665,15 +665,18 @@ describe("formatTurnStepSummary (collapsed per-turn line)", () => {
     expect(formatTurnStepSummary(steps)).toBe("This turn: 2 steps · ≈ $0.004 · cache 99%");
   });
 
-  it("says 'step' for a single-step turn and drops the cache part when nobody reported it", () => {
+  it("says 'step' for a single-step turn and names a provider that reports no cache", () => {
+    // The 0.0.44 wording, restored after the 0.0.49 redesign dropped it: a
+    // server without `cached_tokens` must not look like one that cached
+    // nothing — no fabricated 0%, but the fact is spelled out.
     expect(formatTurnStepSummary([step({ inputTokens: 10, outputTokens: 4, costUsd: 1.5 })]))
-      .toBe("This turn: 1 step · ≈ $1.5");
+      .toBe("This turn: 1 step · ≈ $1.5 · cache not reported by provider");
   });
 
   it("never invents a cost or a cache percentage", () => {
-    expect(formatTurnStepSummary([step({ inputTokens: 10, outputTokens: 4 })])).toBe("This turn: 1 step · price unknown");
+    expect(formatTurnStepSummary([step({ inputTokens: 10, outputTokens: 4 })])).toBe("This turn: 1 step · price unknown · cache not reported by provider");
     expect(formatTurnStepSummary([step({ inputTokens: 10, outputTokens: 4, priceBasisId: "subscription" })]))
-      .toBe("This turn: 1 step · by subscription");
+      .toBe("This turn: 1 step · by subscription · cache not reported by provider");
     // A turn mixing priced and unpriced rows is a lower bound, marked as such.
     expect(formatTurnStepSummary([step({ costUsd: 0.002 }), step({ step: 2 })]))
       .toBe("This turn: 2 steps · ≥ $0.002 · some steps price unknown");
