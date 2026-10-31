@@ -28,6 +28,7 @@ export type DiagnosticsExportPhase =
   | { step: "error"; reason: string };
 
 const REASON_TEXT: Record<string, string> = {
+  preview_required: "The preview expired or changed. Export again to review a new bundle.",
   invalid_request: "This session cannot be exported.",
   build_failed: "The bundle could not be built.",
   too_large: "The bundle exceeded the size limit.",
