@@ -53,6 +53,54 @@ vi.mock("electron", () => ({
   },
 }));
 
+/**
+ * One-shot read gate for the settings-file watcher test: when armed, the NEXT
+ * `readFile` of the given path takes its bytes IMMEDIATELY — the pre-write
+ * snapshot — and then parks until the test opens the gate. That is the
+ * deterministic stand-in for a slow read whose bytes predate a user save that
+ * completes (and publishes its own snapshot) while it is still in flight.
+ */
+const readGate = vi.hoisted(() => ({
+  armed: false,
+  path: "",
+  started: undefined as (() => void) | undefined,
+  release: undefined as Promise<void> | undefined,
+}));
+
+/**
+ * One-shot failing-write gate: when armed, the next `*.tmp-*` write — the
+ * sibling `atomicWrite` renames into place — rejects with ENOSPC before
+ * anything reaches the directory. That is the deterministic stand-in for a
+ * save that dies before its rename: the settings write epoch moves, the file
+ * keeps its previous bytes, and no directory event can follow.
+ */
+const writeFailGate = vi.hoisted(() => ({ armed: false }));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const gatedReadFile = async (...args: unknown[]): Promise<unknown> => {
+    const bytes = await (actual.readFile as unknown as (...a: unknown[]) => Promise<unknown>)(...args);
+    if (readGate.armed && readGate.path === String(args[0])) {
+      readGate.armed = false; // one-shot: later reads (e.g. the save's own) never park
+      readGate.started?.();
+      await readGate.release;
+    }
+    return bytes;
+  };
+  const gatedWriteFile = async (...args: unknown[]): Promise<unknown> => {
+    if (writeFailGate.armed && String(args[0]).includes(".tmp-")) {
+      writeFailGate.armed = false; // one-shot
+      throw Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+    }
+    return (actual.writeFile as unknown as (...a: unknown[]) => Promise<unknown>)(...args);
+  };
+  return {
+    ...actual,
+    readFile: gatedReadFile as unknown as typeof actual.readFile,
+    writeFile: gatedWriteFile as unknown as typeof actual.writeFile,
+  };
+});
+
 /** `saveSettings` call counter (F-C zero-trace red-proofs — asserted by spy, not just by re-reading the file). */
 const saveSettingsSpy = vi.hoisted(() => ({ count: 0 }));
 /**
@@ -2185,6 +2233,35 @@ describe("startSettingsFileWatcher — external settings edits (real temp dir, p
     handles.push(startSettingsFileWatcher(settingsPath, logger, onChange));
   }
 
+  /** Arms `readGate` so the NEXT settings.json read parks mid-flight; `open()` lets it finish. */
+  function parkNextSettingsRead(): { started: Promise<void>; open: () => void } {
+    let signalStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    let open!: () => void;
+    readGate.path = settingsPath;
+    readGate.started = () => {
+      readGate.started = undefined;
+      signalStarted();
+    };
+    readGate.release = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    readGate.armed = true;
+    return { started, open };
+  }
+
+  /** Blocks until the parked read has actually started (a test hang here means it never ran). */
+  async function awaitParkedRead(started: Promise<void>): Promise<void> {
+    await Promise.race([
+      started,
+      delay(4000).then(() => {
+        throw new Error("the watcher never started reading settings.json");
+      }),
+    ]);
+  }
+
   it("delivers two sequential external replacements as two serialized callbacks", async () => {
     await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi", models: ["a"] }] });
     const seen: string[] = [];
@@ -2303,6 +2380,152 @@ describe("startSettingsFileWatcher — external settings edits (real temp dir, p
     await delay(400);
     expect(count).toBe(settled);
     expect(count).toBeLessThanOrEqual(3);
+  });
+
+  it("drops a settings read that overlapped a real provider save, so the save's snapshot stays current", async () => {
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi", models: ["a"] }] });
+    // Stands in for main/index.ts's host state: the mutation hook assigns the
+    // snapshot synchronously on entry, so the LAST entry here is what a host
+    // started next would boot on.
+    const hostSnapshots: AnycodeSettings[] = [];
+    const onMutation = (fresh: AnycodeSettings): void => {
+      hostSnapshots.push(fresh);
+    };
+    mockHandlers.clear();
+    const handle = registerProviderIpc(makeDeps({ onMutation }));
+
+    // 1. An external edit lands; the watcher's read of it starts and parks
+    //    holding the PRE-save bytes.
+    let signalReadStarted!: () => void;
+    const readStarted = new Promise<void>((resolve) => {
+      signalReadStarted = resolve;
+    });
+    let openGate!: () => void;
+    readGate.path = settingsPath;
+    readGate.started = () => {
+      readGate.started = undefined;
+      signalReadStarted();
+    };
+    readGate.release = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    readGate.armed = true;
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi", models: ["a", "stale"] }] });
+    await Promise.race([
+      readStarted,
+      delay(4000).then(() => {
+        throw new Error("the watcher never started reading settings.json");
+      }),
+    ]);
+
+    // 2. The user's provider save completes while that read is still in flight,
+    //    through the production create path (real load → save → onMutation).
+    const created = await handleCustomProviderCreate(makeDeps({ onMutation }), {
+      name: "Fresh endpoint",
+      baseUrl: "https://fresh.example.com",
+      kind: "openai-compatible",
+      apiKey: "k",
+      models: ["m1"],
+    });
+    expect(created.ok).toBe(true);
+    const savedAt = hostSnapshots.length - 1;
+    expect(hostSnapshots[savedAt]?.provider.custom?.map((p) => p.id)).toEqual(["custom:fixed-id"]);
+
+    // 3. The stale read now finishes. It must not be installed on top of the
+    //    save's snapshot — that is the "next host boots on the old model /
+    //    connection" window this guard closes.
+    openGate();
+    await delay(800);
+    for (const snapshot of hostSnapshots.slice(savedAt)) {
+      expect(snapshot.provider.custom?.map((p) => p.id)).toEqual(["custom:fixed-id"]);
+    }
+    // Dropping the stale read must not wedge the watcher: the save's own
+    // directory event still republishes the bytes that are current.
+    expect(hostSnapshots.length).toBeGreaterThanOrEqual(savedAt + 2);
+    handle.dispose();
+  });
+
+  it("re-reads after dropping a stale snapshot, so the edit survives a save that fires no event", async () => {
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi", models: ["a"] }] });
+    const hostSnapshots: AnycodeSettings[] = [];
+    mockHandlers.clear();
+    const handle = registerProviderIpc(
+      makeDeps({
+        onMutation: (fresh) => {
+          hostSnapshots.push(fresh);
+        },
+      }),
+    );
+
+    // 1. An external edit lands and the watcher's read of it parks holding its
+    //    bytes — the only in-flight handler for that edit.
+    const parked = parkNextSettingsRead();
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi", models: ["a", "edited"] }] });
+    await awaitParkedRead(parked.started);
+
+    // 2. A save that dies before its rename: the write epoch moves, the file
+    //    keeps the edit, and NO directory event follows. The parked read is
+    //    dropped as stale, and nothing in the file system will ask for another
+    //    one — the bytes on disk must not be lost because of it.
+    writeFailGate.armed = true;
+    await expect(
+      saveSettings(
+        settingsPath,
+        v2Settings({ connections: [{ id: "c1", providerId: "kimi", models: ["a", "from-save"] }] }),
+      ),
+    ).rejects.toThrow(/ENOSPC/);
+    expect(writeFailGate.armed).toBe(false); // the gate really fired
+    expect(JSON.parse(await readFile(settingsPath, "utf8")).provider.connections[0].models).toEqual(["a", "edited"]);
+
+    // 3. The dropped read must be followed by a fresh one of the watcher's own,
+    //    and that must publish the edit instead of leaving the host on the
+    //    baseline bytes until some unrelated event shows up.
+    parked.open();
+    await waitUntil(() => hostSnapshots.length > 0);
+    expect(hostSnapshots.at(-1)?.provider.connections[0]?.models).toEqual(["a", "edited"]);
+    handle.dispose();
+  });
+
+  it("keeps the second of two consecutive saves current when a watcher read was in flight across both", async () => {
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi", models: ["a"] }] });
+    const hostSnapshots: AnycodeSettings[] = [];
+    const onMutation = (fresh: AnycodeSettings): void => {
+      hostSnapshots.push(fresh);
+    };
+    mockHandlers.clear();
+    const handle = registerProviderIpc(makeDeps({ onMutation }));
+
+    // The watcher's read parks on the PRE-save bytes (no custom provider yet).
+    const parked = parkNextSettingsRead();
+    await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi", models: ["a", "external"] }] });
+    await awaitParkedRead(parked.started);
+
+    // Two saves complete while that read is still in flight: create, then rename.
+    const created = await handleCustomProviderCreate(makeDeps({ onMutation }), {
+      name: "First endpoint",
+      baseUrl: "https://fresh.example.com",
+      kind: "openai-compatible",
+      apiKey: "k",
+      models: ["m1"],
+    });
+    expect(created.ok).toBe(true);
+    const updated = await handleCustomProviderUpdate(makeDeps({ onMutation }), {
+      id: "custom:fixed-id",
+      name: "Second endpoint",
+    });
+    expect(updated.ok).toBe(true);
+    const afterSecondSave = hostSnapshots.length - 1;
+    expect(hostSnapshots[afterSecondSave]?.provider.custom?.map((p) => p.name)).toEqual(["Second endpoint"]);
+
+    // The parked (pre-save) read finishes: neither save may be undone by it, and
+    // the watcher must still publish the bytes that are current afterwards.
+    parked.open();
+    await delay(900);
+    for (const snapshot of hostSnapshots.slice(afterSecondSave)) {
+      expect(snapshot.provider.custom?.map((p) => p.name)).toEqual(["Second endpoint"]);
+    }
+    expect(hostSnapshots.length).toBeGreaterThan(afterSecondSave + 1);
+    handle.dispose();
   });
 
   it("registerProviderIpc wires the existing onMutation to external edits and returns a disposer", async () => {

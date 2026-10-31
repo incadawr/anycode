@@ -203,6 +203,31 @@ export function withSettingsFileLock<T>(path: string, fn: () => Promise<T>): Pro
   return run;
 }
 
+// ── settings write epoch ──
+
+/**
+ * Monotonic count of settings.json writes THIS process made to `path`, bumped
+ * once before and once after every `saveSettings` (a failed write bumps too —
+ * the conservative direction). A reader that is not inside the write lock — the
+ * external-edit file watcher, which must never block a user save — samples this
+ * epoch before its read and refuses the snapshot if the epoch moved by the time
+ * the read finished: the bytes it got may predate (or straddle) a write whose
+ * own `onMutation` has already published the newer settings, and handing that
+ * older snapshot to the mutation hook afterwards would make it current again.
+ *
+ * Two bumps per write close both halves of the window: a read that started
+ * before the write sees the second bump, and a read that started in the middle
+ * of it sees the second too — either way it is dropped. Keyed on `path` for the
+ * same reason as the lock above.
+ */
+const settingsWriteEpochs = new Map<string, number>();
+export function settingsWriteEpoch(path: string): number {
+  return settingsWriteEpochs.get(path) ?? 0;
+}
+function bumpSettingsWriteEpoch(path: string): void {
+  settingsWriteEpochs.set(path, settingsWriteEpoch(path) + 1);
+}
+
 // ── atomic write primitives ──
 
 /**
@@ -278,7 +303,15 @@ export async function loadSettings(path: string, logger?: FileIoLogger): Promise
 
 /** Atomically persist settings.json (0644). Caller is responsible for the read-only guard. */
 export async function saveSettings(path: string, settings: AnycodeSettings): Promise<void> {
-  await atomicWrite(path, `${JSON.stringify(migrateConnectionOverrides(settings), null, 2)}\n`, SETTINGS_FILE_MODE);
+  const data = `${JSON.stringify(migrateConnectionOverrides(settings), null, 2)}\n`;
+  // …see `settingsWriteEpoch`: bracket the write so a concurrent reader can
+  // tell its bytes may predate it.
+  bumpSettingsWriteEpoch(path);
+  try {
+    await atomicWrite(path, data, SETTINGS_FILE_MODE);
+  } finally {
+    bumpSettingsWriteEpoch(path);
+  }
 }
 
 // ── secrets.json ──
