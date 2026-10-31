@@ -130,6 +130,7 @@ export interface EnginePresentation {
   id: EngineId;
   capabilities: EngineCapabilitiesProjection;
   model?: { current: string; available: EngineModelChoice[]; effort?: string };
+  fast?: boolean;
   permissions?: { presets: EnginePermissionPreset[]; activePresetId: string };
   /**
    * What to show in the account chip (cut §3.5/§4.4 custody): `label` is the
@@ -502,6 +503,7 @@ export type UiToHostMessage =
   // time, never a raw config payload from the renderer.
   | { type: "set_engine_preset"; presetId: string }
   | { type: "set_engine_effort"; effort: string }
+  | { type: "set_engine_fast"; fast: boolean }
   //  — swap the active engine between turns; history transplant is
   // NOT part of this message (the canonical transcript stays; the new engine's
   // native context starts empty and receives a bundled first prompt).
@@ -980,6 +982,7 @@ export type HostToUiMessage =
       model?: string;
       activePresetId?: string;
       effort?: string;
+      fast?: boolean;
       deferredEffort?: boolean;
       state?: "pending" | "applied";
       appliesFrom: "next_turn";
@@ -1454,6 +1457,7 @@ export const uiToHostMessageSchema = z.discriminatedUnion("type", [
   setModelSchema,
   setEnginePresetSchema,
   setEngineEffortSchema,
+  z.object({ type: z.literal("set_engine_fast"), fast: z.boolean() }).strict(),
   engineSwitchRequestSchema,
   gitCommandMessageSchema,
   lspStatusRequestSchema,

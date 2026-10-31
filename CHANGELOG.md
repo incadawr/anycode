@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- Show and switch Codex Fast mode per session, including via the Sessions API.
+
 ### Fixed
 
 - A connected Claude Code or Codex session keeps reaching AnyCode after the app restarts on a new port with a new token, without reconnecting the MCP client, and an outdated copy of the stdio adapter in the user-data directory is replaced on the next app start.

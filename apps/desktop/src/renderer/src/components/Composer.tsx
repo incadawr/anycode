@@ -2221,6 +2221,11 @@ export function Composer() {
               onPick={handleEnginePresetPick}
             />
           )}
+          {engine?.id === "codex" && engine.fast !== undefined && (
+            <button type="button" className="model-pill-chip" aria-label="Codex speed" disabled={engineControlDisabled(turn.status, queueInFlight, ready)} title="Fast is quicker but consumes your usage limit faster. Changes apply on the next turn." onClick={() => sendToHost({ type: "set_engine_fast", fast: !(pendingEngineChange?.fast ?? engine.fast) })}>
+              {engine.fast ? "Fast" : "Standard"}{pendingEngineChange?.fast !== undefined ? ` → ${pendingEngineChange.fast ? "Fast" : "Standard"} (next turn)` : ""}
+            </button>
+          )}
           {supportsImages && (
             <>
               <input
@@ -2252,7 +2257,7 @@ export function Composer() {
               catalog — ModelPill (settings-store-backed) is core-only. */}
           {supportsModelSelection &&
             (engine?.model ? (
-              <EngineModelMenu model={engine.model} pendingModel={pendingEngineChange?.model} disabled={engineEffortDisabled(turn.status, queueInFlight, ready, engine.capabilities.supportsDeferredEffortChange === true && nativeEffort !== undefined)} modelDisabled={engineControlDisabled(turn.status, queueInFlight, ready)} onPick={handleEngineModelPick} {...(nativeEffort !== undefined ? { effort: nativeEffort } : {})} />
+              <EngineModelMenu model={engine.model} fast={engine.fast} pendingModel={pendingEngineChange?.model} disabled={engineEffortDisabled(turn.status, queueInFlight, ready, engine.capabilities.supportsDeferredEffortChange === true && nativeEffort !== undefined)} modelDisabled={engineControlDisabled(turn.status, queueInFlight, ready)} onPick={handleEngineModelPick} {...(nativeEffort !== undefined ? { effort: nativeEffort } : {})} />
             ) : (
               <ModelPill />
             ))}

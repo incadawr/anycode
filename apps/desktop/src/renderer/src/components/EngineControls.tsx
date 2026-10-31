@@ -429,6 +429,7 @@ export interface EngineModelMenuProps {
   pendingModel: string | undefined;
   disabled: boolean;
   modelDisabled?: boolean;
+  fast?: boolean;
   onPick(modelId: string): void;
   /**
    * The effort control. `current` is OPTIONAL on purpose: an
@@ -451,7 +452,7 @@ export interface EngineModelMenuProps {
  * two-level Model/Effort popover instead of growing a second composer chip.
  * Effort remains a string because Codex models advertise their own vocabulary.
  */
-export function EngineModelMenu({ model, pendingModel, disabled, modelDisabled = disabled, onPick, effort }: EngineModelMenuProps) {
+export function EngineModelMenu({ model, pendingModel, disabled, modelDisabled = disabled, onPick, effort, fast }: EngineModelMenuProps) {
   const items = engineModelItems(model.current, model.available);
   const activeLabel = engineModelDisplayName(model.current, model.available);
   const pendingLabel = pendingModel !== undefined ? engineModelDisplayName(pendingModel, model.available) : undefined;
@@ -467,7 +468,7 @@ export function EngineModelMenu({ model, pendingModel, disabled, modelDisabled =
   const currentIndex = page === "model" ? Math.max(0, items.findIndex((item) => item.id === model.current)) : page === "effort" ? Math.max(0, efforts.indexOf(engineSelectedEffort(effort) ?? "")) : 0;
 
   const menu = useEngineMenuState(itemCount, currentIndex, disabled);
-  const chipLabel = engineMenuChipLabel(model, pendingModel, effort);
+  const chipLabel = engineMenuChipLabel(model, pendingModel, effort) + (fast ? " · Fast" : "");
   const effortSummary = engineEffortSummary(effort);
   useEffect(() => {
     if (!menu.open || (modelDisabled && page === "model")) setPage("root");

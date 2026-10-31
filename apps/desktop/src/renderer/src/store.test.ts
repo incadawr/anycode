@@ -6881,6 +6881,21 @@ describe("desktop store — engine_settings_changed / pendingEngineChange (Codex
     };
   }
 
+  it("keeps the server-reported speed until the next turn applies the choice", () => {
+    const store = createDesktopStore();
+    const ready = codexHostReady();
+    if (ready.type !== "host_ready" || !ready.engine) throw new Error("missing engine");
+    ready.engine.fast = true;
+    store.getState().applyHostMessage(ready);
+    expect(store.getState().engine?.fast).toBe(true);
+    store.getState().applyHostMessage({ type: "engine_settings_changed", fast: false, state: "pending", appliesFrom: "next_turn" });
+    expect(store.getState().engine?.fast).toBe(true);
+    expect(store.getState().pendingEngineChange?.fast).toBe(false);
+    store.getState().applyHostMessage({ type: "engine_settings_changed", fast: false, state: "applied", appliesFrom: "next_turn" });
+    expect(store.getState().engine?.fast).toBe(false);
+    expect(store.getState().pendingEngineChange).toBeNull();
+  });
+
   it("reasserts newer effort after an older acknowledgement and rolls it back without losing other choices", () => {
     const store = createDesktopStore();
     const ready = codexHostReady();

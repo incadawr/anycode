@@ -196,6 +196,7 @@ type ThreadResult = {
   approvalPolicy?: unknown;
   sandbox?: unknown;
   reasoningEffort?: unknown;
+  serviceTier?: unknown;
 };
 type AccountResult = { account?: unknown; requiresOpenaiAuth?: unknown };
 type TurnResult = { turn?: { id?: unknown } };
@@ -247,7 +248,7 @@ export interface CodexSessionSelection {
 
 /** Result of a host-side settings change request. `ok:false` never reaches the wire — it becomes a recoverable UI error. */
 export type CodexSettingsChange =
-  | { ok: true; model: string; activePresetId: string; effort?: string }
+  | { ok: true; model: string; activePresetId: string; effort?: string; fast?: boolean }
   | { ok: false; reason: string };
 
 /** Everything the engine needs to re-assert the full effective posture on every turn (cut §2(k).1). */
@@ -264,6 +265,8 @@ interface CodexEngineSettings {
   effort?: string;
   /** Remembered effort per model id, restored when switching back. */
   effortsByModel: Map<string, string>;
+  fast?: boolean;
+  speedOverride?: boolean;
   /** : exclude /tmp and $TMPDIR from the workspaceWrite sandbox writable roots. */
   excludeTmpRoots?: boolean;
   /**  rework: the child's private temp dir, appended to the workspaceWrite writable roots. */
@@ -375,6 +378,7 @@ function buildSettings(
     preset,
     ...(effort !== undefined ? { effort } : {}),
     effortsByModel,
+    ...(["priority", "fast", "default"].includes(result.serviceTier as string) || result.serviceTier === null ? { fast: result.serviceTier === "priority" || result.serviceTier === "fast" } : {}),
     ...(excludeTmpRoots !== undefined ? { excludeTmpRoots } : {}),
     ...(childTempDir !== undefined ? { childTempDir } : {}),
     notices,
@@ -877,7 +881,7 @@ export class CodexEngine implements SessionEngine {
    * so an accepted `turn/start` IS the ack — this holds the snapshot to confirm
    * when that happens (cut §2(k).3).
    */
-  private pendingSettings: { model: string; activePresetId: string; effort?: string } | null = null;
+  private pendingSettings: { model: string; activePresetId: string; effort?: string; fast?: boolean } | null = null;
   /**
    * DISPLAY TRUTH: the settings a `turn/start` has actually carried — what the
    * UI may legitimately call "active". `this.settings` holds the CHOSEN values
@@ -891,8 +895,8 @@ export class CodexEngine implements SessionEngine {
    * from the PERSISTED posture, which the very first `turn/start` re-asserts, so
    * there is nothing pending about it.
    */
-  private applied: { model: string; activePresetId: string; effort?: string };
-  private readonly appliedListeners = new Set<(snapshot: { model: string; activePresetId: string; effort?: string }) => void>();
+  private applied: { model: string; activePresetId: string; effort?: string; fast?: boolean };
+  private readonly appliedListeners = new Set<(snapshot: { model: string; activePresetId: string; effort?: string; fast?: boolean }) => void>();
 
   constructor(
     private readonly client: CodexClient,
@@ -1015,13 +1019,13 @@ export class CodexEngine implements SessionEngine {
    * one. A pending change is reported through `pendingSnapshot()` and the
    * `state:"pending"` message, never by pretending it is already active.
    */
-  snapshot(): { model: string; activePresetId: string; effort?: string } {
+  snapshot(): { model: string; activePresetId: string; effort?: string; fast?: boolean } {
     return { ...this.applied };
   }
 
   /** The values the user has CHOSEN: what the next `turn/start` will carry and what persistence records. */
-  private chosen(): { model: string; activePresetId: string; effort?: string } {
-    return { model: this.settings?.model ?? "", activePresetId: this.settings?.preset.id ?? DEFAULT_CODEX_PRESET, ...(this.settings?.effort !== undefined ? { effort: this.settings.effort } : {}) };
+  private chosen(): { model: string; activePresetId: string; effort?: string; fast?: boolean } {
+    return { model: this.settings?.model ?? "", activePresetId: this.settings?.preset.id ?? DEFAULT_CODEX_PRESET, ...(this.settings?.effort !== undefined ? { effort: this.settings.effort } : {}), ...(this.settings?.fast !== undefined ? { fast: this.settings.fast } : {}) };
   }
 
   /** Remembers the current model's effective effort before switching away. */
@@ -1049,7 +1053,7 @@ export class CodexEngine implements SessionEngine {
    * after it was evicted — or that folds it away because it compares equal to a
    * wrongly-advanced "current" — would otherwise show the change as active.
    */
-  pendingSnapshot(): { model: string; activePresetId: string; effort?: string } | null {
+  pendingSnapshot(): { model: string; activePresetId: string; effort?: string; fast?: boolean } | null {
     return this.pendingSettings === null ? null : { ...this.pendingSettings };
   }
 
@@ -1115,6 +1119,13 @@ export class CodexEngine implements SessionEngine {
     return this.markPending();
   }
 
+  selectFast(fast: boolean): CodexSettingsChange {
+    if (!this.settings) return { ok: false, reason: "Codex speed control is unavailable." };
+    this.settings.fast = fast;
+    this.settings.speedOverride = fast;
+    return this.markPending();
+  }
+
   /** The live model's `inputModalities` verdict; no catalog evidence means no image upload. */
   imageInputEnabled(): boolean {
     const settings = this.settings;
@@ -1134,7 +1145,7 @@ export class CodexEngine implements SessionEngine {
   }
 
   /** Fires when a `turn/start` has actually carried a pending change (the two-phase "applied" ack). */
-  onSettingsApplied(listener: (snapshot: { model: string; activePresetId: string; effort?: string }) => void): () => void {
+  onSettingsApplied(listener: (snapshot: { model: string; activePresetId: string; effort?: string; fast?: boolean }) => void): () => void {
     this.appliedListeners.add(listener);
     return () => this.appliedListeners.delete(listener);
   }
@@ -1148,7 +1159,7 @@ export class CodexEngine implements SessionEngine {
   private markPending(): CodexSettingsChange {
     const chosen = this.chosen();
     this.pendingSettings =
-      chosen.model === this.applied.model && chosen.activePresetId === this.applied.activePresetId && chosen.effort === this.applied.effort ? null : chosen;
+      chosen.model === this.applied.model && chosen.activePresetId === this.applied.activePresetId && chosen.effort === this.applied.effort && chosen.fast === this.applied.fast ? null : chosen;
     return { ok: true, ...chosen };
   }
 
@@ -1177,6 +1188,7 @@ export class CodexEngine implements SessionEngine {
     return {
       ...(verifiedModel !== undefined ? { model: verifiedModel } : {}),
       ...(verifiedModel !== undefined && settings.effort !== undefined ? { effort: settings.effort } : {}),
+      ...(settings.speedOverride !== undefined ? { serviceTier: settings.speedOverride ? "fast" : "default" } : {}),
       approvalPolicy: override.approvalPolicy,
       approvalsReviewer: override.approvalsReviewer,
       sandboxPolicy: override.sandboxPolicy,

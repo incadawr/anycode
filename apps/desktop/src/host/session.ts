@@ -212,17 +212,18 @@ function isSuccessfulModelDeliveryEvent(event: AgentEvent): boolean {
  *    no settings-updated notification at all).
  */
 export type EngineSettingsChange =
-  | { ok: true; model: string; activePresetId: string; effort?: string }
+  | { ok: true; model: string; activePresetId: string; effort?: string; fast?: boolean }
   | { ok: false; reason: string };
 
 export interface EngineSettingsSeam {
   models(): EngineModelChoice[];
   presets(): EnginePermissionPreset[];
   /** The APPLIED settings — what a `turn/start` actually carried. Never a merely-chosen value (see `pendingSnapshot`). */
-  snapshot(): { model: string; activePresetId: string; effort?: string };
+  snapshot(): { model: string; activePresetId: string; effort?: string; fast?: boolean };
   selectModel(id: string): EngineSettingsChange;
   selectPreset(id: string): EngineSettingsChange;
   selectEffort?(effort: string): EngineSettingsChange;
+  selectFast?(fast: boolean): EngineSettingsChange;
   /**
    * Maps a caller-requested model id onto a choice this session can actually
    * run, or null when it offers nothing under that id (`set_session_model`).
@@ -258,14 +259,14 @@ export interface EngineSettingsSeam {
   selectEffortAndWait?(effort: string): Promise<EngineSettingsChange>;
   waitForModelChanges?(): Promise<void>;
   waitForSettingsChanges?(): Promise<void>;
-  onSettingsApplied(listener: (snapshot: { model: string; activePresetId: string; effort?: string }) => void): () => void;
+  onSettingsApplied(listener: (snapshot: { model: string; activePresetId: string; effort?: string; fast?: boolean }) => void): () => void;
   /**
    * The chosen-but-not-yet-applied delta, or null. Re-asserted on every
    * `ui_ready` so a renderer reload cannot lose (or mis-fold) the pending badge:
    * the original `state:"pending"` message is a one-shot in the replay ring.
    * Optional — an engine with no two-phase ack simply has nothing pending.
    */
-  pendingSnapshot?(): { model: string; activePresetId: string; effort?: string } | null;
+  pendingSnapshot?(): { model: string; activePresetId: string; effort?: string; fast?: boolean } | null;
   /**
    * True when the engine applies a settings change over its OWN acknowledged
    * control request instead of on the next `turn/start` (Claude, SLICE-CC
@@ -332,6 +333,7 @@ function enginePresentation(engine: SessionEngine, settings?: EngineSettingsSeam
     ...(snapshot !== undefined && presets.length > 0
       ? { permissions: { presets, activePresetId: snapshot.activePresetId } }
       : {}),
+    ...(snapshot?.fast !== undefined ? { fast: snapshot.fast } : {}),
     ...(quota !== null ? { quota } : {}),
   };
 }
@@ -1905,6 +1907,7 @@ export class Session {
         model: applied.model,
         activePresetId: applied.activePresetId,
         ...(applied.effort !== undefined ? { effort: applied.effort } : {}),
+        ...(applied.fast !== undefined ? { fast: applied.fast } : {}),
         state: "applied",
         appliesFrom: "next_turn",
       });
@@ -2162,6 +2165,18 @@ export class Session {
     if (this.effortResolution !== undefined) return this.effortResolution.effective(model, tier) ?? null;
     if (tier === undefined) return null;
     return this.coreEffortLevelsFor(model)?.includes(tier) === true ? tier : null;
+  }
+
+  /** Select the Codex speed before a newly created session is published. */
+  async communicationSetFast(payload: unknown): Promise<{ ok: boolean; detail?: string }> {
+    if (this.shuttingDown || this.relocating || this.busy || this.agentInbox.length > 0 ||
+        this.engine.id !== "codex" || !this.engineSettings?.selectFast || typeof payload !== "boolean") {
+      return { ok: false, detail: "Codex speed control unavailable" };
+    }
+    const result = this.engineSettings.selectFast(payload);
+    if (!result.ok) return { ok: false, detail: result.reason };
+    this.onEngineSettingsChange(result, {});
+    return { ok: true };
   }
 
   /**
@@ -3055,6 +3070,16 @@ export class Session {
         }
         this.queueIdleEngineSetting((seam) => this.onEngineSettingsChange(seam.selectPreset(message.presetId), { presetId: message.presetId }));
         break;
+      case "set_engine_fast": {
+        if (this.busy) {
+          this.outbound.emit({ type: "mode_change_rejected", reason: "Cannot change speed during a turn" });
+          break;
+        }
+        this.queueIdleEngineSetting((seam) => {
+          if (seam.selectFast) this.onEngineSettingsChange(seam.selectFast(message.fast), {});
+        });
+        break;
+      }
       case "set_engine_effort": {
         const seam = this.engineSettings;
         if (seam === undefined || seam.selectEffort === undefined) break;
@@ -5730,7 +5755,7 @@ export class Session {
    * carries only the applied snapshot. ZERO wire delta: this is the same
    * `engine_settings_changed{state:"pending"}` the change itself emits.
    */
-  private mergedEngineSettings(): { model: string; activePresetId: string; effort?: string } | null {
+  private mergedEngineSettings(): { model: string; activePresetId: string; effort?: string; fast?: boolean } | null {
     const seam = this.engineSettings;
     if (seam === undefined) return null;
     const pending = seam.pendingSnapshot?.() ?? null;
@@ -5843,6 +5868,7 @@ export class Session {
       model: result.model,
       activePresetId: result.activePresetId,
       ...(result.effort !== undefined ? { effort: result.effort } : {}),
+      ...(result.fast !== undefined ? { fast: result.fast } : {}),
       state: "pending",
       appliesFrom: "next_turn",
     });

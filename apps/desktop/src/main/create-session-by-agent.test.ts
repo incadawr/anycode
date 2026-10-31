@@ -1211,3 +1211,19 @@ describe("create_session — Codex account", () => {
     expect(r.forkEnvs).toHaveLength(0);
   });
 });
+
+
+describe("create_session speed", () => {
+  it("configures the override before publishing the session", async () => {
+    const sequence: string[] = [];
+    const r = rig({ sequence, respond: (operation, payload) => {
+      if (operation === "get_session_status") return { result: { state: "idle" } };
+      if (operation === "set_session_fast") { expect(payload).toBe(false); sequence.push("speed"); return { result: { ok: true } }; }
+      return undefined;
+    } });
+    const result = await createSessionForAgent({ workspace: "/ws", engine: "codex", fast: false }, r.deps());
+    expect(result.ok).toBe(true);
+    expect(r.operations).toEqual(["get_session_status", "set_session_fast"]);
+    expect(sequence.indexOf("speed")).toBeLessThan(sequence.indexOf("registered"));
+  });
+});
