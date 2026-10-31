@@ -1,10 +1,10 @@
 # Child-Session Subagents — Track Plan
 
-> **For agentic workers:** этот план исполняется bg-оркестратором трека по
-> `working-docs/task102-track/BOOTSTRAP-PROMPT.md`, НЕ напрямую через
+> **For agentic workers:** этот план исполняется bg-оркестратором трека,
+> НЕ напрямую через
 > subagent-driven-development. **Owner-override гранулярности (08.08):**
 > код-уровневые каты по слайсам производят архитекторы трека (Fable +
-> GPT-5.6-sol high) в `working-docs/task102-track/CUT-S*.md` — этот план
+> GPT-5.6-sol high) этот план
 > фиксирует слайсы, роли, гейты и границы, не построчные степы.
 
 **Goal:** сабагент как дочерняя сессия-таб — зайти внутрь, стирить,
@@ -29,7 +29,7 @@ monorepo (`apps/desktop`, `packages/core`), smoke-channel
   `.test.tsx`, env node, jsdom нет).
 - Зону `packages/core/src/permissions/` (always-allow matching) НЕ трогать —
   скоуп-дисциплина: там строится permissions-кластер волны 2
-  . Конфликт → STATE.md, не чинить. База трека — `next`
+  Конфликт → STATE.md, не чинить. База трека — `next`
   (включает фикс `3ae9cc8`).
 - Инвариант TabHostManager «один таб — один utilityProcess» сохраняется.
 - Дефолты спеки §2 п.5 (каскадная отмена, ошибка в карточку, permission в
