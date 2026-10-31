@@ -233,6 +233,14 @@ export interface TokenRates { input: number; cachedInput: number; output: number
 
 export type ConnectionPricing =
   | { mode: "subscription" }
+  /**
+   * The EXPLICIT "the provider's per-token rate applies" choice. Distinct
+   * from an ABSENT `pricing` (nothing declared): on an endpoint that serves
+   * both a pay-as-you-go key and a subscription key (MiniMax), an absent
+   * `pricing` prices the usage as UNKNOWN, because the API rate is simply
+   * the wrong number for a subscription user.
+   */
+  | { mode: "catalog" }
   | ({ mode: "rates" } & TokenRates);
 
 export interface ModelOverrides {
@@ -987,11 +995,12 @@ export type CatalogAuthKind = "api_key" | "oauth";
 
 /**
  * Public, non-secret projection of ONE catalog provider for the renderer. Carries
- * only display metadata — never a baseUrl secret, never a key. `models` are the
+ * only display metadata and public catalog endpoint URLs, never a key. `models` are the
 
  * `needsBaseUrl` is true for the `custom` entry (the UI must show a baseUrl field).
  */
 export interface CatalogSummaryEntry {
+  catalogBaseUrl?: string;
   id: string;
   name: string;
   /**
@@ -1042,6 +1051,7 @@ export interface CatalogSummaryEntry {
      * projects nothing and the renderer keeps its pre-4894 fallback.
      */
     defaultEffort?: string;
+    thinkingAlwaysOn?: boolean;
     maxOutputTokens?: number;
     /**
      * TASK.142: the two catalog window facts the drawer names in its
@@ -1055,6 +1065,19 @@ export interface CatalogSummaryEntry {
     imageInput?: boolean;
   }[];
   needsBaseUrl?: boolean;
+  /**
+   * True when this endpoint serves BOTH a pay-as-you-go key and a
+   * subscription key (MiniMax: its API key and its M Plan key are used on
+   * the SAME base URL), so the catalog's per-token rate applies to only one
+   * of them.
+   *
+   * The drawer's pricing select uses it to say that the mode must be chosen
+   * explicitly: an unset mode on such an endpoint prices the usage as
+   * UNKNOWN, because showing an API-rate estimate to a subscription user is
+   * a number that is simply wrong for them.
+   */
+  sharedBillingEndpoint?: boolean;
+  billingBaseUrl?: string;
   /**
    * True ONLY for the literal `custom` sentinel entry (TASK.43 W5-FIX). Distinct
    * from `needsBaseUrl`: a non-custom template (vLLM) also needs a base URL but

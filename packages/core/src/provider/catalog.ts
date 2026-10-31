@@ -90,6 +90,8 @@ export interface CatalogModel {
   effortLevels?: ReasoningEffort[];
   /** The provider accepts an explicit no-reasoning effort. */
   supportsExplicitOff?: boolean;
+  /** The model cannot disable reasoning. */
+  thinkingAlwaysOn?: boolean;
   /**
    * Taskana 4894: the effort tier the PROVIDER applies when the request says
    * nothing — only ever set where the provider's own documentation states it
@@ -145,6 +147,24 @@ export interface CatalogProviderEntry {
    * guarded by `assertBrandContract`.
    */
   modeLabel?: string;
+  /**
+   * True when this endpoint serves BOTH a pay-as-you-go key and a
+   * subscription key, so the catalog's per-token rate applies to only one of
+   * them.
+   *
+   * MiniMax is the case that forced this: its pay-as-you-go API key and its M
+   * Plan subscription key are used on the SAME base URL (owner's live M Plan
+   * connection, 2026-10-31) and differ only in billing. A connection that
+   * never says which key it holds would otherwise be priced at the API rate,
+   * and a subscription user would be shown a per-token estimate for a flat
+   * monthly plan — a number that is simply wrong for them.
+   *
+   * So on such an entry the catalog rate is NOT applied by default: an unset
+   * pricing mode prices the usage as UNKNOWN (no cost, no estimate) until
+   * the user states which billing they have — the catalog/API rate or the
+   * subscription. An explicit choice always wins.
+   */
+  sharedBillingEndpoint?: boolean;
   /** Full endpoint base (may be empty for `custom`, which sources it from settings). */
   baseUrl: string;
   /**
@@ -260,4 +280,41 @@ export function assertBrandContract(entries: readonly CatalogProviderEntry[]): v
   for (const [brand, count] of brands) {
     if (count < 2) throw new Error(`Brand "${brand}" has a single entry — it is not a group`);
   }
+}
+
+/**
+ * How a connection on this catalog entry is billed.
+ *
+ * - `"catalog"` — the entry's own per-token rate applies (the default for
+ *   every entry whose endpoint serves one kind of key);
+ * - `"subscription"` — the user declared a flat plan;
+ * - `"unknown"` — the endpoint serves BOTH kinds of key
+ *   (`sharedBillingEndpoint`), the user has not said which one they hold, so
+ *   the catalog rate CANNOT be applied: showing an API-rate estimate to a
+ *   subscription user would be a number that is simply wrong for them.
+ */
+export type CatalogBillingMode = "catalog" | "subscription" | "unknown";
+
+/**
+ * Resolve the billing mode of a connection from the entry's own facts and the
+ * connection's declared pricing mode.
+ *
+ * The connection's declaration always wins when it is explicit:
+ * `"subscription"` is a subscription, and the "catalog"/API-rate mode (the
+ * drawer's "Catalog or unknown" option) says the per-token rate applies.
+ *
+ * The ONE case this resolves is the unset mode on a `sharedBillingEndpoint`
+ * (MiniMax: its pay-as-you-go key and its M Plan key share the base URL).
+ * There the answer is `"unknown"` — no rate, no estimate — until the user
+ * picks one. Every other entry keeps the plain `"catalog"` default, so their
+ * behaviour is byte-identical to before.
+ */
+export function resolveBillingMode(
+  entry: CatalogProviderEntry | undefined,
+  declaredMode: "subscription" | "rates" | "catalog" | undefined,
+): CatalogBillingMode {
+  if (declaredMode === "subscription") return "subscription";
+  if (declaredMode === "rates") return "catalog";
+  if (declaredMode === "catalog") return "catalog";
+  return entry?.sharedBillingEndpoint === true ? "unknown" : "catalog";
 }

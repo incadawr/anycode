@@ -1,3 +1,4 @@
+import { resolveReasoningEffort } from "./capabilities.js";
 /**
  * Wire-byte proof that a custom Anthropic-compatible endpoint can observe the
  * difference between the `xhigh` and `max` effort tiers (GitHub #2 review of
@@ -139,6 +140,16 @@ describe("custom Anthropic-compatible endpoint distinguishes xhigh vs max on the
       }),
     };
   }
+
+  it("keeps the default request unchanged when a custom endpoint has no catalog default", async () => {
+    stubFetch();
+    const { port, requestFor } = customPort(["low", "high"]);
+    const reasoningEffort = resolveReasoningEffort("custom-model", undefined, undefined, undefined, ["low", "high"]);
+    expect(reasoningEffort).toBeUndefined();
+    await drain(port.streamText({ ...requestFor("high"), reasoningEffort }));
+    expect(captured[0]!.body.output_config).toBeUndefined();
+    expect(captured[0]!.body.thinking).toBeUndefined();
+  });
 
   it("an endpoint that never declared the effort enum gets distinct budgets and no output_config field", async () => {
     stubFetch();

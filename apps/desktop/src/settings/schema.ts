@@ -214,6 +214,11 @@ const promptCacheSchema = z
 const tokenRatesSchema = z.object({ input: z.number().finite().nonnegative(), cachedInput: z.number().finite().nonnegative(), output: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative().optional() }).strict();
 const connectionPricingSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("subscription") }),
+  // The EXPLICIT "the provider's per-token rate applies" choice. Distinct from
+  // an ABSENT `pricing` (nothing declared ⇒ the usage is priced as unknown
+  // on an endpoint that serves both a pay-as-you-go key and a subscription
+  // key — MiniMax).
+  z.object({ mode: z.literal("catalog") }),
   z.object({ mode: z.literal("rates"), input: z.number().finite().nonnegative(), cachedInput: z.number().finite().nonnegative(), output: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative().optional() }),
 ]);
 const connectionSchema = z.object({

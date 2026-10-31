@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { findCatalogEntry } from "@anycode/core/catalog";
 import { SqlitePersistenceAdapter } from "@anycode/core";
 import { summarizeProviderUsage } from "./session.js";
-import { calculateUsageCost, connectionPricing, resolveUsagePrice } from "./usage-cost.js";
+import { calculateUsageCost, catalogRateFor, declaredPricingMode, connectionPricing, resolveUsagePrice } from "./usage-cost.js";
 
 const price = { basisId: "test", input: 0.3, cachedInput: 0.006, output: 1.2 };
 describe("usage cost snapshots", () => {
@@ -218,4 +218,31 @@ describe("per-model price resolution", () => {
     expect(calculateUsageCost(usage, zero.price)?.costUsd).toBe(0);
     expect(resolveUsagePrice(raw, "A", price)).toEqual(resolveUsagePrice(JSON.stringify({ fallback: { mode: "rates", ...b }, models: { A: a, B: a } }), "A", price));
   });
+});
+
+describe("shared billing endpoints", () => {
+  it("requires an explicit catalog choice", async () => {
+    const { catalogRateFor } = await import("./usage-cost.js");
+    const url = "https://api.minimax.io/anthropic/v1";
+    const entry = findCatalogEntry("minimax");
+    expect(catalogRateFor(entry, url, "MiniMax-M3.1-Flash", undefined)).toBeUndefined();
+    expect(catalogRateFor(entry, url, "MiniMax-M3.1-Flash", "catalog")).toBeDefined();
+    expect(catalogRateFor(entry, url, "MiniMax-M3.1-Flash", "subscription")).toBeUndefined();
+  });
+});
+
+it("prices each turn using its captured billing mode", () => {
+  const entry = findCatalogEntry("minimax");
+  const url = "https://api.minimax.io/anthropic";
+  const model = "MiniMax-M3.1-Flash";
+  let current = JSON.stringify({ fallback: { mode: "catalog" } });
+  const snapshot = current;
+  current = JSON.stringify({ fallback: { mode: "subscription" } });
+  const capturedPrice = catalogRateFor(entry, url, model, declaredPricingMode(snapshot));
+  expect(resolveUsagePrice(snapshot, model, capturedPrice)).toEqual({ subscription: false, price: capturedPrice });
+  expect(resolveUsagePrice(current, model, catalogRateFor(entry, url, model, declaredPricingMode(current)))).toEqual({ subscription: true });
+  const unknownSnapshot = JSON.stringify({ models: {} });
+  current = JSON.stringify({ fallback: { mode: "catalog" } });
+  expect(catalogRateFor(entry, url, model, declaredPricingMode(unknownSnapshot))).toBeUndefined();
+  expect(catalogRateFor(entry, url, model, declaredPricingMode(current))).toBeDefined();
 });

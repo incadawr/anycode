@@ -188,14 +188,67 @@ export function resolveReasoningEffort(
   live?: LiveModelCapabilities,
   explicitLevels?: readonly ReasoningEffort[],
 ): ReasoningEffort | undefined {
+  const catalogModel = entry?.models.find((candidate) => candidate.id === modelId) ?? entry?.retiredModels?.find((candidate) => candidate.id === modelId);
+  if (catalogModel?.thinkingAlwaysOn !== true) {
+    if (override === "off") {
+      const model = entry?.models.find((candidate) => candidate.id === modelId);
+      return model?.supportsExplicitOff && (explicitLevels === undefined || explicitLevels.includes("off")) ? "off" : undefined;
+    }
+    if (explicitLevels !== undefined) {
+      const fallback = (entry?.models.find((candidate) => candidate.id === modelId) ?? entry?.retiredModels?.find((candidate) => candidate.id === modelId))?.defaultEffort;
+      const selected = override ?? fallback;
+      return selected !== undefined && selected !== "off" && explicitLevels.includes(selected) ? selected : undefined;
+    }
+    const matched = (entry?.models.find((candidate) => candidate.id === modelId) ?? entry?.retiredModels?.find((candidate) => candidate.id === modelId));
+    if (matched === undefined) {
+      if (override === undefined) return undefined;
+      // Taskana 4118: catalog miss ⇒ consult live capabilities, if any. The
+      // override must still be inside the live-mapped vocabulary (fail-closed:
+      // a level the endpoint never declared never reaches the wire).
+      const levels = liveEffortLevels(live);
+      return levels !== undefined && levels.includes(override) ? override : undefined;
+    }
+    if (matched.reasoning !== true) return undefined;
+    if (override === undefined) {
+      // Taskana 4894: no explicit choice ⇒ the model's recorded provider default.
+      // Validated against the declared vocabulary like any other level, so a
+      // catalog row can never push a level its own model rejects.
+      const fallback = matched.defaultEffort;
+      if (fallback === undefined || fallback === "off") return undefined;
+      if (!(matched.effortLevels ?? ["off", "low", "medium", "high"]).includes(fallback)) {
+        return undefined;
+      }
+      return fallback;
+    }
+    // Validate against declared effortLevels: an undeclared level is rejected
+    // (fail-closed) rather than silently coerced. Models without explicit
+    // effortLevels accept the legacy four-level set.
+    if (!(matched.effortLevels ?? ["off", "low", "medium", "high"]).includes(override)) {
+      return undefined;
+    }
+    return override;
+  }
   if (override === "off") {
-    const model = entry?.models.find((candidate) => candidate.id === modelId);
-    return model?.supportsExplicitOff && (explicitLevels === undefined || explicitLevels.includes("off")) ? "off" : undefined;
+    const model = entry?.models.find((candidate) => candidate.id === modelId) ?? entry?.retiredModels?.find((candidate) => candidate.id === modelId);
+    if (model?.supportsExplicitOff && (explicitLevels === undefined || explicitLevels.includes("off"))) return "off";
+    const levels = explicitLevels ?? model?.effortLevels;
+    return levels === undefined ? undefined : effectiveDefaultEffort(modelId, entry, levels.filter((level) => level !== "off"));
   }
   if (explicitLevels !== undefined) {
-    const fallback = (entry?.models.find((candidate) => candidate.id === modelId) ?? entry?.retiredModels?.find((candidate) => candidate.id === modelId))?.defaultEffort;
+    // The effective vocabulary is the DECLARED one (a per-model override wins
+    // over the catalog row's own list), so the default has to be validated
+    // against THAT list — the catalog's `defaultEffort` may name a level the
+    // override removed. See `effectiveDefaultEffort` below.
+    const fallback = effectiveDefaultEffort(modelId, entry, explicitLevels);
     const selected = override ?? fallback;
-    return selected !== undefined && selected !== "off" && explicitLevels.includes(selected) ? selected : undefined;
+    if (selected === undefined || selected === "off") return undefined;
+    // A STORED level that the vocabulary no longer contains (the list moved
+    // on under it) resolves to the effective default rather than vanishing:
+    // the request then carries the tier the user is shown. Vanishing would
+    // send NO effort at all, and an endpoint that reads an absent effort as
+    // its own maximum (MiniMax does) would then reason at `max` while the
+    // UI claimed something lower.
+    return explicitLevels.includes(selected) ? selected : fallback;
   }
   const matched = (entry?.models.find((candidate) => candidate.id === modelId) ?? entry?.retiredModels?.find((candidate) => candidate.id === modelId));
   if (matched === undefined) {
@@ -211,21 +264,55 @@ export function resolveReasoningEffort(
     // Taskana 4894: no explicit choice ⇒ the model's recorded provider default.
     // Validated against the declared vocabulary like any other level, so a
     // catalog row can never push a level its own model rejects.
-    const fallback = matched.defaultEffort;
-    if (fallback === undefined || fallback === "off") return undefined;
-    if (!(matched.effortLevels ?? ["off", "low", "medium", "high"]).includes(fallback)) {
-      return undefined;
-    }
-    return fallback;
+    return effectiveDefaultEffort(modelId, entry, matched.effortLevels ?? ["off", "low", "medium", "high"]);
   }
-  // Validate against declared effortLevels: an undeclared level is rejected
-  // (fail-closed) rather than silently coerced. Models without explicit
-  // effortLevels accept the legacy four-level set.
+  // Resolve a stale selection to the documented default when available.
+  // Models without explicit effortLevels accept the legacy four-level set.
   if (!(matched.effortLevels ?? ["off", "low", "medium", "high"]).includes(override)) {
-    return undefined;
+    return effectiveDefaultEffort(modelId, entry, matched.effortLevels ?? ["off", "low", "medium", "high"]);
   }
   return override;
 }
+
+/**
+ * The effort level a model runs at when nothing valid was chosen.
+ *
+ * The rule that keeps the DISPLAYED tier and the SENT tier the same: the
+ * effective default is ALWAYS a member of the effective level list. The
+ * catalog row's `defaultEffort` is the provider's documented default, but a
+ * per-model override can narrow the vocabulary below it (MiniMax declares
+ * `low…max` with `max` as its default; an override that lists only
+ * `low…high` leaves `max` outside). Falling back to "nothing" there would
+ * make the request carry NO effort while the picker showed the default — and
+ * an endpoint that treats an absent effort as its own maximum (MiniMax does)
+ * would then reason at `max` while the UI claimed `high`.
+ *
+ * So: the catalog default when it is inside the list; otherwise the HIGHEST
+ * level the list does contain, in the canonical order — the closest thing to
+ * "the default, clipped to what is available". `"off"` is never the default:
+ * an explicit "no reasoning" is a choice, not a fallback.
+ */
+function effectiveDefaultEffort(
+  modelId: string,
+  entry: CatalogProviderEntry | undefined,
+  levels: readonly ReasoningEffort[],
+): ReasoningEffort | undefined {
+  const matched = (entry?.models.find((candidate) => candidate.id === modelId) ?? entry?.retiredModels?.find((candidate) => candidate.id === modelId));
+  const documented = matched?.defaultEffort;
+  if (documented === undefined || documented === "off") return undefined;
+  if (levels.includes(documented)) {
+    return documented;
+  }
+  // The highest level the effective list contains, in the canonical order.
+  let highest: ReasoningEffort | undefined;
+  for (const tier of EFFORT_ORDER) {
+    if (levels.includes(tier) && tier !== "off") highest = tier;
+  }
+  return highest;
+}
+
+/** The canonical effort order — "highest" is the last one listed here. */
+const EFFORT_ORDER: readonly ReasoningEffort[] = ["off", "low", "medium", "high", "xhigh", "max"];
 
 /**
  * Resolves the effort levels a reasoning-capable model supports, for UI
@@ -246,8 +333,8 @@ export function resolveEffortLevels(
   live?: LiveModelCapabilities,
   explicitLevels?: readonly ReasoningEffort[],
 ): ReasoningEffort[] | undefined {
-  if (explicitLevels !== undefined) return [...explicitLevels];
   const matched = (entry?.models.find((candidate) => candidate.id === modelId) ?? entry?.retiredModels?.find((candidate) => candidate.id === modelId));
+  if (explicitLevels !== undefined) return matched?.thinkingAlwaysOn ? explicitLevels.filter((level) => level !== "off") : [...explicitLevels];
   if (matched === undefined) return liveEffortLevels(live); // Taskana 4118: catalog miss ⇒ live
   if (matched.reasoning !== true) return undefined; // live never resurrects a catalog model
   return matched.effortLevels ?? ["off", "low", "medium", "high"];
