@@ -21,6 +21,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - The disabled "Remove project from list" sidebar menu item shows its reason ("Close this project's open tasks first.") as visible text instead of a hover-only tooltip.
 - Settings → Sessions API explains how sessions become shareable (the session's ⋯ environment menu) rather than only counting them, and the Advanced heading matches the pane's other section labels.
 - Settings → Sessions API also says that agents can open new tasks in a project only while that project's "Allow agents to open tasks here" switch (sidebar project ⋯ menu) is on.
+- The preview console no longer swallows a page's own warning or error just because its text mentions "Electron Security Warning"; only Electron's internal banner is hidden, so the page's diagnostics reach the transcript.
 - The working-row verb rotation no longer shows "Checking…", which stacked on the auto-check toasts; the fourth band reads "Waiting…".
 - Notifications no longer cover the message box while they matter most: the toast stack now sits above the composer, clear of Stop, Send and the context meter, at both narrow and wide window sizes.
 - Compacting a short conversation now says “Nothing to compact yet — the conversation is too short” once, in the transcript, instead of showing internal jargon twice (a toast on top of the message box and a red row).
