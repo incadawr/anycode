@@ -16,8 +16,8 @@
  *    thread id inside the account's own `sessions/` tree;
  *  - the target path is the SAME relative path under the target home, built
  *    from a validated relative path (never a caller-supplied absolute one);
- *  - an existing file at the target is never overwritten; an identical rollout
- *    already in place simply means "nothing to copy" and the tab is opened;
+ *  - an existing file at the target is never overwritten or assumed current;
+ *    the operation stops without opening a tab;
  *  - the exhausted tab is left exactly as it is: a session's account cannot
  *    change under a live host, so this opens a NEW session row + tab.
  */
@@ -49,6 +49,7 @@ export type CodexContinueRefusal =
   | "invalid_account"
   | "unknown_account"
   | "rollout_missing"
+  | "rollout_exists"
   | "copy_failed"
   | "tab_failed";
 
@@ -71,7 +72,7 @@ export interface CodexContinueDeps {
   /** Absolute `sessions/` directory of an account, `null` when the account has no home. */
   sessionsDir(accountId: string): Promise<string | null>;
   createSessionFromSource(sourceId: string, meta: Omit<SessionMeta, "createdAt" | "updatedAt">): Promise<SessionMeta | null>;
-  /** Rolls back the new row when its tab could not be opened (best effort). */
+  /** Deletion is not used when tab creation has an uncertain outcome. */
   deleteSession(sessionId: string): Promise<unknown>;
   /** Opens the app's normal resume path for a freshly created session row. */
   openResumeTab(sessionId: string): Promise<{ ok: true; tabId: string } | { ok: false; reason: string }>;
@@ -92,7 +93,7 @@ export interface CodexRolloutCopyRequest {
 
 export type CodexRolloutCopyResult =
   | { ok: true; relativePath: string; copied: boolean }
-  | { ok: false; reason: "rollout_missing" | "copy_failed"; detail: string };
+  | { ok: false; reason: "rollout_missing" | "rollout_exists" | "copy_failed"; detail: string };
 
 /**
  * Finds `threadId`'s rollout under `dir` and returns its path RELATIVE to that
@@ -116,9 +117,7 @@ async function findRolloutRelative(dir: string, threadId: string, depth: number)
 
 /**
  * Copies one thread's rollout into another account's home, same relative path.
- * Never overwrites: an existing target file is left untouched and reported as
- * "already in place" (`copied: false`), which is not an error — the caller just
- * opens the tab.
+ * Never overwrites or reuses an existing target: it may be stale or in use.
  */
 export async function copyCodexRolloutForThread(request: CodexRolloutCopyRequest): Promise<CodexRolloutCopyResult> {
   if (!THREAD_ID_PATTERN.test(request.threadId)) {
@@ -140,9 +139,7 @@ export async function copyCodexRolloutForThread(request: CodexRolloutCopyRequest
     return { ok: true, relativePath, copied: true };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-      // The rollout is already in the target home (a previous attempt, or the
-      // user was pasted this conversation before). Leave the file alone.
-      return { ok: true, relativePath, copied: false };
+      return { ok: false, reason: "rollout_exists", detail: "This conversation already exists on the target account and may be outdated or in use. It was not opened or changed. Choose another account or review the existing conversation." };
     }
     return { ok: false, reason: "copy_failed", detail: error instanceof Error ? error.message : String(error) };
   }
@@ -229,12 +226,16 @@ export async function handleCodexContinueOnAccount(
     // Retain it even on failure; creating it does not grant exclusive ownership.
     return { ok: false, reason: "copy_failed", detail: error instanceof Error ? error.message : String(error) };
   }
-  const opened = await deps.openResumeTab(sessionId).catch(() => ({ ok: false as const, reason: "unavailable" }));
+  let opened: Awaited<ReturnType<CodexContinueDeps["openResumeTab"]>>;
+  try {
+    opened = await deps.openResumeTab(sessionId);
+  } catch {
+    // A callback or port delivery can throw after the host was spawned.
+    return { ok: false, reason: "tab_failed", detail: "Could not confirm whether the new tab opened. This action did not delete the session; check your tabs or session list before retrying." };
+  }
   if (!opened.ok) {
-    let cleanupFailed = false;
-    await deps.deleteSession(sessionId).catch(() => { cleanupFailed = true; });
-    // The rollout may already be in use by another continuation.
-    return { ok: false, reason: "tab_failed", detail: `the new tab could not be opened (${opened.reason})${cleanupFailed ? "; session cleanup could not be confirmed" : ""}` };
+    // A refusal such as already_open is not proof that no host uses this row.
+    return { ok: false, reason: "tab_failed", detail: `Opening was refused (${opened.reason}). This action did not delete the session; check your tabs or session list before retrying.` };
   }
   return { ok: true, sessionId, tabId: opened.tabId };
 }
