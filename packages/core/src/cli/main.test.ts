@@ -1343,7 +1343,95 @@ async function createSyntheticRoot(dbPath: string, workspace: string, id: string
   finally { db.close(); }
 }
 
+function createV4Fixture(dbPath: string, workspace: string, engineId: string): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+      INSERT INTO schema_migrations VALUES (1,1),(2,1),(3,1),(4,1);
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, model TEXT NOT NULL, mode TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, title TEXT, engine_id TEXT, external_session_ref TEXT);
+      CREATE TABLE history_items (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES sessions(id), item_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE(session_id,item_id));
+      CREATE INDEX idx_history_items_session ON history_items(session_id,seq);
+      CREATE TABLE checkpoints (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), commit_hash TEXT NOT NULL, created_at INTEGER NOT NULL, reason TEXT NOT NULL, label TEXT NOT NULL, history_json TEXT NOT NULL);
+      CREATE INDEX idx_checkpoints_session ON checkpoints(session_id,created_at DESC);
+      CREATE TABLE codex_thread_items (thread_id TEXT NOT NULL, turn_ordinal INTEGER NOT NULL, position_in_turn INTEGER NOT NULL, item_id TEXT NOT NULL, command TEXT NOT NULL, cwd TEXT, exit_code INTEGER, output_head TEXT, created_at INTEGER NOT NULL, PRIMARY KEY(thread_id,item_id));
+      CREATE INDEX idx_codex_thread_items_thread ON codex_thread_items(thread_id,turn_ordinal,position_in_turn);
+      INSERT INTO codex_thread_items VALUES ('native',1,1,'shadow','synthetic',NULL,0,NULL,1)`);
+    db.prepare("INSERT INTO sessions VALUES (?,?,?,?,?,?,?,?,?)").run("fixture",workspace,"test-model","build",1,1,null,engineId,null);
+  } finally { db.close(); }
+}
+
 describe("CLI sessions/resume UX (design slice-4.4-cut.md §7)", () => {
+  it.each(["resume", "continue", "picker"])("does not migrate or delete v4 shadow rows when %s selects a foreign session", async (kind) => {
+    const {workspace,dbPath,home} = setupTitleTestDirs();
+    createV4Fixture(dbPath,workspace,"codex");
+    const input = new PassThrough(); const output = new PassThrough(); const stderr = new PassThrough();
+    const text = collectOutput(output); const errors = collectOutput(stderr); const model = new CountingModelPort();
+    const mcp = vi.spyOn(McpManager.prototype,"start");
+    try {
+      const argv = kind === "resume" ? ["--resume","fixture","-p","hello"] : kind === "continue" ? ["--continue","-p","hello"] : ["--resume"];
+      const run = runCli({argv,interactive:kind === "picker",env:makeTitleTestEnv(dbPath,home),home,cwd:workspace,input,output,errorOutput:stderr,modelPort:model});
+      if (kind === "picker") { await vi.waitFor(() => expect(text()).toContain("pick a session")); input.write("1\n"); }
+      expect(await run).toBe(1); expect(errors()).toContain("Cannot resume");
+      expect(mcp).not.toHaveBeenCalled(); expect(model.calls).toBe(0);
+      const db = new DatabaseSync(dbPath,{readOnly:true});
+      try {
+        expect(db.prepare("SELECT version FROM schema_migrations ORDER BY version").all()).toEqual([{version:1},{version:2},{version:3},{version:4}]);
+        expect(db.prepare("SELECT count(*) AS n FROM codex_thread_items").get()).toMatchObject({n:1});
+        expect(db.prepare("PRAGMA journal_mode").get()).toMatchObject({journal_mode:"delete"});
+      } finally { db.close(); }
+    } finally { mcp.mockRestore(); }
+  });
+
+  it("rechecks the selected v4 session under the migration write lock", async () => {
+    const {workspace,dbPath,home} = setupTitleTestDirs();
+    createV4Fixture(dbPath,workspace,"core");
+    const input = new PassThrough(); const output = new PassThrough(); const text = collectOutput(output);
+    const model = new CountingModelPort(); const mcp = vi.spyOn(McpManager.prototype,"start");
+    try {
+      const run = runCli({argv:["--resume"],interactive:true,env:makeTitleTestEnv(dbPath,home),home,cwd:workspace,input,output,errorOutput:new PassThrough(),modelPort:model});
+      await vi.waitFor(() => expect(text()).toContain("pick a session"));
+      const db = new DatabaseSync(dbPath); try { db.exec("UPDATE sessions SET engine_id = 'codex' WHERE id = 'fixture'"); } finally { db.close(); }
+      input.write("1\n");
+      expect(await run).toBe(1); expect(mcp).not.toHaveBeenCalled(); expect(model.calls).toBe(0);
+      const verify = new DatabaseSync(dbPath,{readOnly:true});
+      try { expect(verify.prepare("SELECT MAX(version) AS v FROM schema_migrations").get()).toMatchObject({v:4}); expect(verify.prepare("SELECT count(*) AS n FROM codex_thread_items").get()).toMatchObject({n:1}); } finally { verify.close(); }
+    } finally { mcp.mockRestore(); }
+  });
+
+  it("migrates a compatible v4 core session after admission", async () => {
+    const {workspace,dbPath,home} = setupTitleTestDirs();
+    createV4Fixture(dbPath,workspace,"core");
+    const model = new CountingModelPort();
+    expect(await runCli({argv:["--resume","fixture","-p","hello"],env:makeTitleTestEnv(dbPath,home),home,cwd:workspace,input:new PassThrough(),output:new PassThrough(),errorOutput:new PassThrough(),modelPort:model})).toBe(0);
+    expect(model.calls).toBe(1);
+    const db = new DatabaseSync(dbPath,{readOnly:true});
+    try { expect(db.prepare("SELECT MAX(version) AS v FROM schema_migrations").get()).toMatchObject({v:31}); }
+    finally { db.close(); }
+  });
+
+  it("rolls back earlier migration changes if a later migration fails", async () => {
+    const {workspace,dbPath,home} = setupTitleTestDirs();
+    createV4Fixture(dbPath,workspace,"core");
+    const db = new DatabaseSync(dbPath);
+    try { db.exec("ALTER TABLE sessions ADD COLUMN project_root TEXT"); } finally { db.close(); }
+    const model = new CountingModelPort(); const mcp = vi.spyOn(McpManager.prototype,"start");
+    try {
+      expect(await runCli({argv:["--resume","fixture","-p","hello"],env:makeTitleTestEnv(dbPath,home),home,cwd:workspace,input:new PassThrough(),output:new PassThrough(),errorOutput:new PassThrough(),modelPort:model})).toBe(1);
+      expect(mcp).not.toHaveBeenCalled(); expect(model.calls).toBe(0);
+      const verify = new DatabaseSync(dbPath,{readOnly:true});
+      try { expect(verify.prepare("SELECT MAX(version) AS v FROM schema_migrations").get()).toMatchObject({v:4}); expect(verify.prepare("SELECT count(*) AS n FROM codex_thread_items").get()).toMatchObject({n:1}); } finally { verify.close(); }
+    } finally { mcp.mockRestore(); }
+  });
+
+  it("reports --continue activity from history rather than metadata updated_at", async () => {
+    const {workspace,dbPath,home} = setupTitleTestDirs();
+    await createSyntheticRoot(dbPath,workspace,"activity",{engineId:"core"},Date.now()-86400000);
+    const db = new DatabaseSync(dbPath);
+    try { db.prepare("INSERT INTO history_items(session_id,item_id,data) VALUES (?,?,?)").run("activity","item",JSON.stringify({id:"item",createdAt:Date.now()-90000,message:{role:"user",content:"old"}})); } finally { db.close(); }
+    const stderr = new PassThrough(); const errors = collectOutput(stderr);
+    expect(await runCli({argv:["--continue","-p","hello"],env:makeTitleTestEnv(dbPath,home),home,cwd:workspace,input:new PassThrough(),output:new PassThrough(),errorOutput:stderr,modelPort:new CountingModelPort()})).toBe(0);
+    expect(errors()).toContain("1m ago");
+  });
   it.each([
     ["codex", {engineId:"codex"}], ["claude", {engineId:"claude"}], ["unknown", {engineId:"other"}],
     ["empty engine", {engineId:""}], ["legacy native ref", {externalSessionRef:"native"}],
