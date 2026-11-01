@@ -860,16 +860,17 @@ describe("usage limit — Codex account escape hatch", () => {
     continueOn: async () => ({ ok: true }),
   });
 
-  it("offers \"Continue on another account\" on a Codex session", () => {
-    const html = renderToStaticMarkup(
-      createElement(MessageList, { ...base, codexContinue: controller() }),
-    );
-    expect(html).toContain("Continue on another account");
+  it("explains that Codex continuation is unavailable without an account picker", () => {
+    const codexBlocks: TranscriptBlock[] = [{kind:"usage_limit",id:"codex",notice:{kind:"usage_limit",code:429,engine:"codex"}}];
+    const html=renderToStaticMarkup(createElement(MessageList,{...base,blocks:codexBlocks,codexContinue:controller()}));
+    expect(html).toContain("temporarily unavailable");
+    expect(html).toContain("start a new session on another Codex account");
+    expect(html).not.toContain("usage-limit-account-choice");
   });
 
-  it("never offers it where the surface did not arm a Codex account switch (core/Claude quota errors)", () => {
-    const html = renderToStaticMarkup(createElement(MessageList, base));
-    expect(html).not.toContain("Continue on another account");
+  it("does not show the Codex notice for non-Codex quota errors", () => {
+    const html=renderToStaticMarkup(createElement(MessageList,base));
+    expect(html).not.toContain("temporarily unavailable");
   });
 
   it("a notice without a reset time renders without the \"Resets at\" clause (Codex 429 need not carry one)", () => {

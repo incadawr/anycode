@@ -272,7 +272,7 @@ import {
 import { SYSTEM_PROFILE_ID, codexProfilesRoot, resolveCodexProfile } from "./codex-profiles.js";
 import { SYSTEM_CODEX_ACCOUNT, type CodexAccountOption } from "../shared/codex-account.js";
 import { CODEX_TAB_ACCOUNT_CHANNEL, handleCodexTabAccount } from "./codex-tab-account.js";
-import { CODEX_CONTINUE_CHANNEL, handleCodexContinueOnAccount } from "./codex-continue.js";
+import { registerCodexContinueIpc } from "./codex-continue.js";
 import { registerCodexRolloutIpc } from "./codex-rollout-ipc.js";
 import { registerCodexInstallIpc } from "./codex-install.js";
 import { runCodexManagedUpgrade } from "./codex-managed-upgrade.js";
@@ -1910,9 +1910,7 @@ function listCodexAccounts(): CodexAccountOption[] {
  * home, derived here through the SAME W4-F0-aware resolver the registry uses.
  * `null` = the id names no account we can place on disk.
  *
- * One function, two readers: the "Import a session" picker and the
- * "continue on another account" rollout copy must agree on the tree — asking a
- * different path is how a thread appears importable but not continuable.
+ * Used by the "Import a session" picker to locate this account's tree.
  */
 function codexSessionsDirForAccount(accountId: string): string | null {
   if (accountId === SYSTEM_PROFILE_ID) {
@@ -2861,9 +2859,6 @@ void app.whenReady().then(async () => {
   // L4·1 peek-then-confirm: the resume path PEEKS the pick (read-only) to stamp
   // the override, then consumes it (holder above) only after createTab commits.
   let peekImportModel: ((sessionId: string) => string | undefined) | undefined;
-  // Named rather than inlined: the "continue on another account" handler below
-  // re-uses this exact deps bag to open the new tab through tab-ipc's own
-  // resume path (same priming, same readiness gate, same argv resolution).
   const tabIpcDeps: TabIpcDeps = {
     manager,
     persistence,
@@ -2988,50 +2983,8 @@ void app.whenReady().then(async () => {
   };
   registerTabIpc(tabIpcDeps);
 
-  // "Continue this Codex thread on another account" (`codex-continue.ts`): the
-  // usage-limit banner's action. The target account is validated here, the
-  // thread's rollout is copied into that account's own `CODEX_HOME`, and the
-  // new tab goes through tab-ipc's resume path — the same gate (readiness,
-  // capacity, argv resolution) a tab reopened from the session list takes.
-  // The exhausted tab is untouched: its account cannot change under a live host.
-  ipcMain.handle(CODEX_CONTINUE_CHANNEL, async (_event, raw: unknown) => {
-    if (raw === null || typeof raw !== "object") return { ok: false, reason: "unknown_tab", detail: "malformed request" };
-    const value = raw as { tabId?: unknown; accountId?: unknown };
-    if (typeof value.tabId !== "string" || value.tabId === "" || typeof value.accountId !== "string" || value.accountId === "") {
-      return { ok: false, reason: "unknown_tab", detail: "malformed request" };
-    }
-    const store = persistence;
-    if (store === null) return { ok: false, reason: "unknown_session", detail: "storage is not ready yet" };
-    return handleCodexContinueOnAccount(
-      {
-        tab: (tabId) => manager?.getTab(tabId),
-        session: (sessionId) => store.getRootSession(sessionId),
-        accounts: async () => listCodexAccounts(),
-        sessionsDir: async (accountId) => codexSessionsDirForAccount(accountId),
-        createSession: (meta) => store.createSession(meta),
-        deleteSession: (sessionId) => store.deleteSession(sessionId),
-        openResumeTab: async (sessionId) => {
-          const created = await handleCreate(tabIpcDeps, { kind: "resume", sessionId });
-          return created.ok ? { ok: true, tabId: created.tabId } : { ok: false, reason: created.reason };
-        },
-        // A thread already resumed by a live root tab on the target account is
-        // refused: a second continue would fork a second host on one rollout.
-        isThreadOpen: async (threadId, accountId) => {
-          for (const summary of manager?.listTabs() ?? []) {
-            if (summary.childOf !== undefined) continue;
-            const host = manager?.getTab(summary.tabId);
-            if (host?.engine !== "codex") continue;
-            if ((host.codexProfile?.id ?? SYSTEM_CODEX_ACCOUNT.id) !== accountId) continue;
-            const row = await store.getRootSession(summary.sessionId);
-            if (row?.externalSessionRef === threadId) return true;
-          }
-          return false;
-        },
-        randomUUID,
-      },
-      { tabId: value.tabId, accountId: value.accountId },
-    );
-  });
+  // Refuse continuation before resolving accounts, touching storage, or opening a tab.
+  registerCodexContinueIpc(ipcMain);
 
   // Window control plane (design/ui-track custom-titlebar §4): the four caption
   // handlers the renderer's custom titlebar drives. getWindow mirrors the
