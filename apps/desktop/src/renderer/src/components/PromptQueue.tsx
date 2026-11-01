@@ -6,7 +6,6 @@
  * actions (Wave 1) and the tab-registry drainer — this component only calls
  * into them.
  */
-import { useState } from "react";
 import type { KeyboardEvent } from "react";
 import { useTabStore, useTabStoreApi } from "../tab-context.js";
 import type { QueuedPrompt } from "../store.js";
@@ -36,29 +35,28 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt) =>
   // their turn_started. Host-owned — no renderer edit/delete controls.
   const pendingSteers = useTabStore((state) => state.pendingSteers);
   const tabStore = useTabStoreApi();
-  // At most one item is ever mid-edit — a second Edit click on another row
-  // simply reassigns this id, discarding the first row's uncommitted draft.
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState("");
+  const editing = useTabStore((state) => state.queueEditDraft);
 
   if (!shouldShowPromptQueue(promptQueue.length, queuePaused, pendingSteers.length)) {
     return null;
   }
 
   function startEdit(item: QueuedPrompt): void {
-    setEditingId(item.id);
-    setEditDraft(item.text);
+    const current = tabStore.getState().queueEditDraft;
+    if (current && current.id !== item.id) {
+      tabStore.getState().setNotice({ kind: "slash_command_rejected", text: "Save or cancel the current queue edit first." });
+      return;
+    }
+    tabStore.setState({queueEditDraft: { id: item.id, text: item.text }});
   }
 
   function cancelEdit(): void {
-    setEditingId(null);
-    setEditDraft("");
+    tabStore.setState({queueEditDraft: null});
   }
 
   function saveEdit(id: string): void {
-    tabStore.getState().editQueuedPrompt(id, editDraft);
-    setEditingId(null);
-    setEditDraft("");
+    const draft = tabStore.getState().queueEditDraft;
+    if (draft?.id === id) tabStore.getState().editQueuedPrompt(id, draft.text);
   }
 
   function handleEditKeyDown(event: KeyboardEvent<HTMLTextAreaElement>, id: string): void {
@@ -115,14 +113,17 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt) =>
             const ordinal = index + 1;
             return (
               <li key={item.id} className="prompt-queue-item">
-                {editingId === item.id ? (
+                {editing?.id === item.id ? (
                   <div className="prompt-queue-edit">
                     <textarea
                       className="prompt-queue-edit-textarea"
                       aria-label={`Edit queued message ${ordinal}`}
-                      value={editDraft}
+                      value={editing.text}
                       autoFocus
-                      onChange={(event) => setEditDraft(event.target.value)}
+                      onChange={(event) => {
+                        const text = event.target.value;
+                        tabStore.setState((state) => state.queueEditDraft?.id === item.id ? { queueEditDraft: { id: item.id, text } } : {});
+                      }}
                       onKeyDown={(event) => handleEditKeyDown(event, item.id)}
                     />
                     <div className="prompt-queue-edit-actions">

@@ -99,6 +99,8 @@ import type { AgentDelivery } from "../../shared/communication.js";
  * claims) into the existing one-slot notice/toast channel — "surface it,
  * don't swallow it" — via one additive `NoticeKind` variant.
  */
+import type { RolesDraft } from "./role-editor-model.js";
+import type { ProviderConnection } from "../../shared/settings.js";
 import { create } from "zustand";
 import type {
   AssistantPart,
@@ -1377,6 +1379,10 @@ export interface DesktopState {
    * a host respawn (see the section comment above `QueuedPrompt`).
    */
   promptQueue: readonly QueuedPrompt[];
+  /** Uncommitted queue edit, owned by this tab and this queue item. */
+  queueEditDraft: { id: string; text: string } | null;
+  composerRolePicker: { task: string | null; forToggle: boolean; draft?: RolesDraft } | null;
+  contextWindowDraft: { id: string; connection: ProviderConnection; model: string; raw?: string } | null;
   /** Recovered composer draft; tab-scoped across component unmounts. */
   restoredComposerDraft: { text: string; images: readonly QueuedPromptImage[]; orchestrate?: "enable"; initialPicks?: QueuedPrompt["initialPicks"] } | null;
   composerImageGeneration: number;
@@ -4829,6 +4835,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       // Prompt-queue slots (slice P7.14): outside initialSessionSlice so a
       // host respawn preserves user-typed prompts (see QueuedPrompt comment).
       promptQueue: [],
+      queueEditDraft: null,
+      composerRolePicker: null,
+      contextWindowDraft: null,
       restoredComposerDraft: null,
       composerImageGeneration: 0,
       completedComposerImages: [],
@@ -6191,7 +6200,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
 
       reset(): void {
         pendingSentMessages.clear();
-        set((state) => ({ restoredComposerDraft: null, completedComposerImages: [], pendingComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 }));
+        set((state) => ({ restoredComposerDraft: null, composerRolePicker: null, contextWindowDraft: null, completedComposerImages: [], pendingComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 }));
         performReset();
         // a genuinely new session drops staged markers, the
         // boundary flags and the lifted session id along with the transcript.
@@ -6213,15 +6222,16 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       editQueuedPrompt(id: string, text: string): void {
         set((state) => ({
           promptQueue: state.promptQueue.map((prompt) => (prompt.id === id ? { ...prompt, text } : prompt)),
+          queueEditDraft: state.queueEditDraft?.id === id ? null : state.queueEditDraft,
         }));
       },
 
       deleteQueuedPrompt(id: string): void {
-        set((state) => ({ promptQueue: state.promptQueue.filter((prompt) => prompt.id !== id) }));
+        set((state) => ({ promptQueue: state.promptQueue.filter((prompt) => prompt.id !== id), queueEditDraft: state.queueEditDraft?.id === id ? null : state.queueEditDraft }));
       },
 
       takeQueueHead(requestId: string): QueuedPrompt | null {
-        const { promptQueue, queuePaused, queueInFlight } = get();
+        const { promptQueue, queuePaused, queueInFlight, queueEditDraft } = get();
         // Atomic double-guard: held, or a drain already in flight. Read-then-set
         // is atomic in single-threaded JS (no await between), so a re-entrant
         // subscriber fired by the set() below always observes the new inFlight
@@ -6242,8 +6252,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         // intact within each kind.
         // `promptQueue.length > 0` is already guaranteed by the guard above —
         // An unpaused queue also lets system reports bypass a held head.
-        const headHeld = promptQueue[0]?.orchestrate === "enable" || promptQueue[0]?.requiresRestore === true;
-        const takeIndex = queuePaused || headHeld ? promptQueue.findIndex((prompt) => prompt.origin === "system") : 0;
+        const headHeld = promptQueue[0]?.orchestrate === "enable" || promptQueue[0]?.requiresRestore === true || promptQueue[0]?.id === queueEditDraft?.id;
+        const takeIndex = queuePaused || headHeld ? promptQueue.findIndex((prompt) => prompt.origin === "system" && prompt.id !== queueEditDraft?.id) : 0;
         if (takeIndex === -1) {
           return null;
         }
@@ -6260,7 +6270,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       },
 
       clearQueue(): void {
-        set({ promptQueue: [], queueInFlight: null, queuePaused: false });
+        set({ promptQueue: [], queueEditDraft: null, queueInFlight: null, queuePaused: false });
       },
     };
   });

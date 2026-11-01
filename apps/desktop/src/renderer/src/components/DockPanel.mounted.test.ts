@@ -21,6 +21,8 @@ import { ActiveTabBody, SessionSurface } from "../App.js";
 import { createDesktopStore } from "../store.js";
 import { createTabRegistry, tabRegistry, type DesktopStoreApi } from "../tab-registry.js";
 import { createTabsStore } from "../tabs-store.js";
+import { useSettingsStore } from "../settings-store.js";
+import { cloneDefaults } from "../../../settings/schema.js";
 import { TabContext } from "../tab-context.js";
 import { childLayoutStore } from "../child-layout.js";
 import { useDockStore } from "../dock/dock-store.js";
@@ -103,6 +105,137 @@ describe("dock resize handle placement (GitHub #31)", () => {
       childLayoutStore.getState().enterSplit("tab");
     });
   }
+
+  it("restores an unfinished role picker and task in its original tab", async () => {
+    const originalSnapshot = useSettingsStore.getState().snapshot;
+    useSettingsStore.setState({snapshot:{settings:cloneDefaults(),secrets:[],providerReady:true,envOverrides:[],readOnly:false,catalog:[]}});
+    const originalShow = HTMLDialogElement.prototype.showModal;
+    HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+    const other = createDesktopStore();
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",imageInput:true});
+    other.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"b",mode:"build",model:"m1",imageInput:true});
+    const send = vi.spyOn(tabRegistry,"sendToTab").mockImplementation(() => {});
+    const renderTab = async (tabId: string, target: DesktopStoreApi) => {
+      await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId,store:target}}, createElement(SessionSurface, {tabId,onToast:() => {}}))));
+    };
+    try {
+      await renderTab("a",store);
+      const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(textarea,"/orchestrate plan task");
+        textarea.setSelectionRange(12,12);
+        textarea.dispatchEvent(new Event("input",{bubbles:true}));
+        textarea.dispatchEvent(new KeyboardEvent("keyup",{bubbles:true,key:"e"}));
+      });
+      const option = [...container.querySelectorAll<HTMLElement>('[role="option"]')].find(element => element.textContent?.includes("Orchestrate"))!;
+      await act(async () => option.click());
+      expect(container.querySelector('[data-testid="role-picker-skip"]')).not.toBeNull();
+      await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="role-add-fallback-planner"]')!.click());
+      expect(store.getState().composerRolePicker?.task).toBe("plan task");
+      expect(store.getState().composerRolePicker?.draft?.planner.fallbacks).toHaveLength(1);
+      await renderTab("b",other);
+      expect(container.querySelector('[data-testid="role-picker-skip"]')).toBeNull();
+      expect(other.getState().composerRolePicker).toBeNull();
+      await renderTab("a",store);
+      expect(container.querySelector('[data-testid="role-picker-skip"]')).not.toBeNull();
+      expect(container.querySelector('[data-testid="role-picker-role-planner"]')?.textContent).toContain("Fallback 1");
+      expect(store.getState().composerRolePicker?.task).toBe("plan task");
+      expect(send).not.toHaveBeenCalledWith("a",expect.objectContaining({type:"user_message"}));
+    } finally {
+      HTMLDialogElement.prototype.showModal = originalShow;
+      useSettingsStore.setState({snapshot:originalSnapshot});
+    }
+  });
+
+  it("does not send an orchestration toggle when a role save finishes after tab switch", async () => {
+    const previous = useSettingsStore.getState();
+    let resolve!: (value:Awaited<ReturnType<typeof previous.setPatch>>) => void;
+    const save = vi.fn(() => new Promise<Awaited<ReturnType<typeof previous.setPatch>>>(done => {resolve = done;}));
+    useSettingsStore.setState({snapshot:{settings:cloneDefaults(),secrets:[],providerReady:true,envOverrides:[],readOnly:false,catalog:[]},setPatch:save as typeof previous.setPatch});
+    const originalShow = HTMLDialogElement.prototype.showModal;
+    HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+    const other = createDesktopStore();
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1"});
+    const send = vi.spyOn(tabRegistry,"sendToTab").mockImplementation(() => {});
+    const renderTab = async (tabId: string, target: DesktopStoreApi) => {
+      await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId,store:target}}, createElement(SessionSurface, {tabId,onToast:() => {}}))));
+    };
+    try {
+      await renderTab("a",store);
+      await act(async () => container.querySelector<HTMLButtonElement>(".mode-chip")!.click());
+      await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="mode-menu-orchestrate"]')!.click());
+      await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="role-picker-save"]')!.click());
+      expect(save).toHaveBeenCalledOnce();
+      await renderTab("b",other);
+      await act(async () => resolve({ok:true,snapshot:useSettingsStore.getState().snapshot!}));
+      expect(send).not.toHaveBeenCalledWith("a",expect.objectContaining({type:"set_orchestrate"}));
+      expect(store.getState().composerRolePicker).not.toBeNull();
+    } finally {
+      HTMLDialogElement.prototype.showModal = originalShow;
+      useSettingsStore.setState({snapshot:previous.snapshot,setPatch:previous.setPatch});
+    }
+  });
+
+  it("restores an unfinished context window edit only in its owning tab", async () => {
+    const originalSnapshot = useSettingsStore.getState().snapshot;
+    useSettingsStore.setState({snapshot:{settings:cloneDefaults(),secrets:[],providerReady:true,envOverrides:[],readOnly:false,catalog:[]}});
+    const originalShow = HTMLDialogElement.prototype.showModal;
+    HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+    const other = createDesktopStore();
+    const ready = (sessionId:string) => ({type:"host_ready" as const,workspace:"/ws",sessionId,mode:"build" as const,model:"m1",contextUsage:{estimatedTokens:25,budgetTokens:100,source:"provider" as const}});
+    store.getState().applyHostMessage(ready("a"));
+    other.getState().applyHostMessage(ready("b"));
+    store.setState({contextWindowDraft:{id:"editor-a",connection:{id:"a-connection",providerId:"custom:a"},model:"m1"}});
+    other.setState({contextWindowDraft:{id:"editor-b",connection:{id:"b-connection",providerId:"custom:b"},model:"m2",raw:"32000"}});
+    const renderTab = async (tabId: string, target: DesktopStoreApi) => {
+      await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId,store:target}}, createElement(SessionSurface, {tabId,onToast:() => {}}))));
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+    };
+    try {
+      await renderTab("a",store);
+      const input = container.querySelector<HTMLInputElement>('[aria-label="Context window (tokens)"]')!;
+      expect(input).toBeTruthy();
+      await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value")!.set!.call(input,"96000"); input.dispatchEvent(new Event("input",{bubbles:true})); });
+      await renderTab("b",other);
+      expect(container.querySelector<HTMLInputElement>('[aria-label="Context window (tokens)"]')!.value).toBe("32000");
+      await renderTab("a",store);
+      expect(container.querySelector<HTMLInputElement>('[aria-label="Context window (tokens)"]')!.value).toBe("96000");
+      expect(other.getState().contextWindowDraft?.raw).toBe("32000");
+    } finally {
+      HTMLDialogElement.prototype.showModal = originalShow;
+      useSettingsStore.setState({snapshot:originalSnapshot});
+    }
+  });
+
+  it("preserves separate unsaved queue edits across tab switches, even with identical item IDs", async () => {
+    const other = createDesktopStore();
+    store.setState({queuePaused:true,promptQueue:[{id:"same-id",text:"queued A",images:[]}]});
+    other.setState({queuePaused:true,promptQueue:[{id:"same-id",text:"queued B",images:[]}]});
+    const renderTab = async (tabId: string, target: DesktopStoreApi) => {
+      await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId,store:target}}, createElement(SessionSurface, {tabId,onToast:() => {}}))));
+    };
+    const edit = async (value: string) => {
+      const field = container.querySelector<HTMLTextAreaElement>(".prompt-queue-edit-textarea")!;
+      await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(field,value); field.dispatchEvent(new Event("input",{bubbles:true})); });
+    };
+    await renderTab("a",store);
+    await act(async () => container.querySelector<HTMLButtonElement>(".prompt-queue-edit-button")!.click());
+    await edit("unsaved A");
+    await renderTab("b",other);
+    await act(async () => container.querySelector<HTMLButtonElement>(".prompt-queue-edit-button")!.click());
+    await edit("unsaved B");
+    await renderTab("a",store);
+    expect(container.querySelector<HTMLTextAreaElement>(".prompt-queue-edit-textarea")!.value).toBe("unsaved A");
+    expect(store.getState().promptQueue[0]?.text).toBe("queued A");
+    expect(other.getState().queueEditDraft).toEqual({id:"same-id",text:"unsaved B"});
+    await act(async () => container.querySelector<HTMLButtonElement>(".prompt-queue-save")!.click());
+    expect(store.getState().promptQueue[0]?.text).toBe("unsaved A");
+    await renderTab("b",other);
+    expect(container.querySelector<HTMLTextAreaElement>(".prompt-queue-edit-textarea")!.value).toBe("unsaved B");
+    await act(async () => container.querySelector<HTMLButtonElement>(".prompt-queue-cancel")!.click());
+    expect(other.getState().promptQueue[0]?.text).toBe("queued B");
+    expect(other.getState().queueEditDraft).toBeNull();
+  });
 
   it("keeps distinct recovered drafts in their owning tab across real session-surface switches", async () => {
     const other = createDesktopStore();

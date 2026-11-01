@@ -1446,6 +1446,28 @@ describe("tab-registry — prompt-queue drainer (slice P7.14 · F15)", () => {
     expect(port.sent).toContainEqual(expect.objectContaining({type:"user_message",text:"report",origin:"system"}));
     expect(store.getState().promptQueue).toMatchObject([{text:"held",requiresRestore:true}]);
   });
+  it("holds an actively edited queue item but delivers system reports, then sends the saved edit", () => {
+    const { registry } = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    port.emit(HOST_READY("/ws/a", "sess-a"));
+    const store = registry.getStore("tab-a")!;
+    store.setState({queuePaused:true});
+    const id = store.getState().enqueuePrompt({text:"original",images:[]});
+    store.setState({queueEditDraft:{id,text:"unsaved edit"},queuePaused:false});
+    expect(port.sent).not.toContainEqual(expect.objectContaining({type:"user_message"}));
+    store.getState().enqueuePrompt({text:"system report",images:[],origin:"system",originId:"report"});
+    expect(port.sent).toContainEqual(expect.objectContaining({type:"user_message",text:"system report"}));
+    expect(store.getState().queueEditDraft).toEqual({id,text:"unsaved edit"});
+    // Acknowledgement frees the in-flight system report; the edit still holds.
+    const sent = port.sent.find(m => (m as {type:string}).type === "user_message") as {requestId:string};
+    port.emit({type:"turn_started",turnId:"report-turn",requestId:sent.requestId});
+    port.emit({type:"agent_event",turnId:"report-turn",event:{type:"loop_end",reason:"completed",turns:1}});
+    expect(port.sent).not.toContainEqual(expect.objectContaining({type:"user_message",text:"original"}));
+    store.getState().editQueuedPrompt(id,"saved edit");
+    expect(port.sent).toContainEqual(expect.objectContaining({type:"user_message",text:"saved edit"}));
+  });
+
   /** Filters port.sent down to the user_message drains (skips the ui_ready handshake). */
   function userMessages(port: FakeMessagePort): Array<{ requestId: string; text: string; images?: unknown[] }> {
     return port.sent.filter((m) => (m as { type: string }).type === "user_message") as Array<{

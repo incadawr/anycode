@@ -1031,7 +1031,8 @@ function CtxPopover({
   const pinnedConnection = useTabStore((state) => state.pinnedConnection);
   const modelSettingsConnectionId = useTabStore((state) => state.modelSettingsConnectionId);
   const snapshot = useSettingsStore((state) => state.snapshot);
-  const [settingsTarget, setSettingsTarget] = useState<{ connection: ProviderConnection; model: string } | null>(null);
+  const contextTabStore = useTabStoreApi();
+  const settingsTarget = useTabStore((state) => state.contextWindowDraft ?? null);
   useOverlayFlag(settingsTarget !== null);
   const shortcutTarget = contextWindowSettingsTarget(snapshot?.settings.provider.connections ?? [], model, modelSettingsConnectionId, pinnedConnection?.connectionId);
   const assumedHint = ctxWindowAssumedHint(contextUsage);
@@ -1227,7 +1228,7 @@ function CtxPopover({
             {contextWindowAssumed && <div className="ctx-popover-assumed">
               {assumedHint}
               {shortcutTarget !== null && <button type="button" className="settings-button"
-                onClick={() => { close(); setSettingsTarget(shortcutTarget); }}>Set context window</button>}
+                onClick={() => { close(); contextTabStore.setState({ contextWindowDraft: { ...shortcutTarget, id: crypto.randomUUID() } }); }}>Set context window</button>}
             </div>}
             {percent !== null && <div className="ctx-popover-bar">
               <div className="ctx-popover-bar-fill" style={{ width: `${fillPercent}%` }} />
@@ -1279,7 +1280,9 @@ function CtxPopover({
       {settingsTarget !== null && snapshot !== null && (
         <Suspense fallback={null}>
           <ContextWindowSettings snapshot={snapshot} connection={settingsTarget.connection} model={settingsTarget.model}
-            onClose={() => setSettingsTarget(null)} />
+            initialRaw={settingsTarget.raw}
+            onRawChange={(raw) => contextTabStore.setState((state) => state.contextWindowDraft?.id === settingsTarget.id ? {contextWindowDraft:{...state.contextWindowDraft,raw}} : {})}
+            onClose={() => contextTabStore.setState((state) => state.contextWindowDraft?.id === settingsTarget.id ? {contextWindowDraft:null} : {})} />
         </Suspense>
       )}
     </div>
@@ -1331,11 +1334,17 @@ export function Composer() {
   // Local to Composer: the pending text belongs to THIS tab's composer draft
   // lifecycle, not the store. `pendingOrchestrateTask === null` means "no
   // /orchestrate submit in flight".
-  const [rolePickerOpen, setRolePickerOpen] = useState(false);
-  const [pendingOrchestrateTask, setPendingOrchestrateTask] = useState<string | null>(null);
+  const initialRolePicker = useRef(tabStore.getState().composerRolePicker ?? null);
+  const [rolePickerOpen, setRolePickerOpen] = useState(initialRolePicker.current !== null);
+  const [pendingOrchestrateTask, setPendingOrchestrateTask] = useState<string | null>(initialRolePicker.current?.task ?? null);
   // True when the mode menu's Orchestrate row (not a `/orchestrate` submit)
   // opened the first-run dialog: Save/Skip then only enable the flag.
-  const [rolePickerForToggle, setRolePickerForToggle] = useState(false);
+  const [rolePickerForToggle, setRolePickerForToggle] = useState(initialRolePicker.current?.forToggle ?? false);
+  const composerMounted = useRef(false);
+  useEffect(() => { composerMounted.current = true; return () => { composerMounted.current = false; }; }, []);
+  useLayoutEffect(() => {
+    if (rolePickerOpen) tabStore.setState((state) => ({ composerRolePicker: { ...state.composerRolePicker, task: pendingOrchestrateTask, forToggle: rolePickerForToggle } }));
+  }, [tabStore, rolePickerOpen, pendingOrchestrateTask, rolePickerForToggle]);
   const [restoredOrchestrate, setRestoredOrchestrate] = useState(initialRestored.current?.orchestrate === "enable");
   const [restoredPicks, setRestoredPicks] = useState(initialRestored.current?.initialPicks);
   const completedImages = useTabStore((state) => state.completedComposerImages);
@@ -1402,6 +1411,7 @@ export function Composer() {
   const imageFallback = useTabStore((state) => state.imageFallback);
   const connection = useTabStore((state) => state.connection);
   const contextUsage = useTabStore((state) => state.contextUsage);
+  const hasContextWindowDraft = useTabStore((state) => state.contextWindowDraft != null);
   const contextBreakdown = useTabStore((state) => state.contextBreakdown);
   const contextWindowAssumed = useTabStore((state) => state.contextWindowAssumed);
   const sessionTokens = useTabStore((state) => state.sessionTokens);
@@ -1614,6 +1624,7 @@ export function Composer() {
     if (imagesStillLoading() || refuseOrchestrateAttachments()) return;
     sendToHost({ type: "set_orchestrate", enabled: true });
     const task = pendingOrchestrateTask;
+    tabStore.setState({composerRolePicker: null});
     setPendingOrchestrateTask(null);
     setRolePickerForToggle(false);
     setRolePickerOpen(false);
@@ -1629,6 +1640,7 @@ export function Composer() {
    * then reads "Orchestrate".
    */
   function proceedOrchestrateToggle(): void {
+    tabStore.setState({composerRolePicker: null});
     setRolePickerForToggle(false);
     setRolePickerOpen(false);
     sendToHost({ type: "set_orchestrate", enabled: true });
@@ -2130,6 +2142,10 @@ export function Composer() {
       {restoredOrchestrate && <div className="composer-hint">Orchestration intent retained. This draft will not be sent as an ordinary message. <button type="button" onClick={() => setRestoredOrchestrate(false)}>Remove orchestration intent</button></div>}
       <RolePickerDialog
         open={rolePickerOpen}
+        draftStorage={{
+          load: () => tabStore.getState().composerRolePicker?.draft,
+          save: (draft) => tabStore.setState((state) => state.composerRolePicker ? { composerRolePicker: { ...state.composerRolePicker, draft } } : {}),
+        }}
         connections={useSettingsStore.getState().snapshot?.settings.provider.connections ?? []}
         activeConnectionId={useSettingsStore.getState().snapshot?.settings.provider.activeConnectionId}
         onSave={(roles) => {
@@ -2139,7 +2155,7 @@ export function Composer() {
           // no stashed task: it only enables.
           void useSettingsStore.getState().setPatch(rolesPatch(useSettingsStore.getState().snapshot?.settings ?? {}, roles, projectRoot))
             .then((result) => {
-              if (!result.ok) return;
+              if (!result.ok || !composerMounted.current) return;
               if (rolePickerForToggle) proceedOrchestrateToggle();
               else proceedOrchestrateSubmit();
             });
@@ -2341,8 +2357,8 @@ export function Composer() {
           {hintText}
         </span>
         <div className="composer-footer-right">
-          {supportsContextUsage &&
-            (ctxPercent !== null || usageAudit.totals !== null || sessionTokens !== null || codexAccountLine !== null) && (
+          {(hasContextWindowDraft || (supportsContextUsage &&
+            (ctxPercent !== null || usageAudit.totals !== null || sessionTokens !== null || codexAccountLine !== null))) && (
               <CtxPopover
                 contextUsage={contextUsage}
                 contextBreakdown={contextBreakdown}

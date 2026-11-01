@@ -87,6 +87,8 @@ export interface RolePickerDialogProps {
    * sat off screen under the Save button.
    */
   actionsNotice?: ReactNode;
+  /** Optional tab-scoped storage for an unfinished first-run dialog. */
+  draftStorage?: { load(): RolesDraft | undefined; save(draft: RolesDraft): void };
   onSave(roles: Partial<Record<PresetRole, RoleConfig>>): void;
   onSkip?(): void;
 }
@@ -102,6 +104,7 @@ export function RolePickerDialog({
   inline = false,
   profileOverrides,
   actionsNotice,
+  draftStorage,
   onSave,
   onSkip,
 }: RolePickerDialogProps) {
@@ -133,7 +136,7 @@ export function RolePickerDialog({
     initialRoles !== undefined
       ? toDraft(initialRoles)
       : toDraft(autoSelectPreset(engines, activeConnectionId ?? "").roles);
-  const [draft, setDraft] = useState<RolesDraft>(freshDraft);
+  const [draft, setDraft] = useState<RolesDraft>(() => draftStorage?.load() ?? freshDraft());
   // What the draft state ACTUALLY holds once every effect of a commit has run.
   // The follow effect must compare the seed against this, not against the
   // render's `draft` value: when `open` flips in the same commit as a readiness
@@ -146,7 +149,13 @@ export function RolePickerDialog({
   // a seeded draft may be replaced when readiness or the active connection
   // arrives later; remembering the ROUTES (not just the preset id) is what
   // lets an unchanged id still pick up a connection change.
-  const seededDraft = useRef<RolesDraft | null>(initialRoles === undefined ? freshDraft() : null);
+  const seededDraft = useRef<RolesDraft | null>(initialRoles === undefined && draftStorage?.load() === undefined ? freshDraft() : null);
+  function updateDraft(update: RolesDraft | ((previous: RolesDraft) => RolesDraft)): void {
+    const next = typeof update === "function" ? update(draftRef.current) : update;
+    draftRef.current = next;
+    setDraft(next);
+    draftStorage?.save(next);
+  }
   // The highlighted chip follows the VALUES shown, never a click: a persisted
   // or edited chain that no preset describes highlights nothing.
   const activePreset = activePresetId(presets, fromDraft(draft).roles, engines);
@@ -165,10 +174,11 @@ export function RolePickerDialog({
   // component mounted; `open` flips per first-run attempt).
   useEffect(() => {
     if (open) {
-      const seeded = freshDraft();
-      setDraft(seeded);
+      const resumed = draftStorage?.load();
+      const seeded = resumed ?? freshDraft();
+      updateDraft(seeded);
       draftRef.current = seeded;
-      seededDraft.current = initialRoles === undefined ? seeded : null;
+      seededDraft.current = initialRoles === undefined && resumed === undefined ? seeded : null;
     }
     const dialog = dialogRef.current;
     if (dialog && open && !inline && !dialog.open) {
@@ -196,7 +206,7 @@ export function RolePickerDialog({
     const next = toDraft(autoPreset.roles);
     seededDraft.current = next;
     if (!sameRoleRoutes(fromDraft(draftRef.current).roles, fromDraft(next).roles)) {
-      setDraft(next);
+      updateDraft(next);
       draftRef.current = next;
     }
     // `open` is deliberately NOT a dependency: the open effect above seeds the
@@ -211,7 +221,7 @@ export function RolePickerDialog({
     // An explicit pick is the answer, not a seed: a later readiness change must
     // not overwrite it.
     seededDraft.current = null;
-    setDraft(toDraft(preset.roles));
+    updateDraft(toDraft(preset.roles));
   }
 
   function handleSave(): void {
@@ -283,7 +293,7 @@ export function RolePickerDialog({
                 connections={connections}
                 modelSources={modelSources}
                 engineReadiness={engines}
-                onChange={(patch) => setDraft((d) => patchEntry(d, role, null, patch))}
+                onChange={(patch) => updateDraft((d) => patchEntry(d, role, null, patch))}
               />
               {draft[role].fallbacks.map((entry, index) => (
                 <EntryRow
@@ -293,16 +303,16 @@ export function RolePickerDialog({
                   connections={connections}
                   modelSources={modelSources}
                   engineReadiness={engines}
-                  onChange={(patch) => setDraft((d) => patchEntry(d, role, index, patch))}
-                  onRemove={() => setDraft((d) => removeFallback(d, role, index))}
-                  onMove={(delta) => setDraft((d) => moveFallback(d, role, index, delta))}
+                  onChange={(patch) => updateDraft((d) => patchEntry(d, role, index, patch))}
+                  onRemove={() => updateDraft((d) => removeFallback(d, role, index))}
+                  onMove={(delta) => updateDraft((d) => moveFallback(d, role, index, delta))}
                 />
               ))}
               <button
                 type="button"
                 className="role-picker-add-fallback"
                 data-testid={`role-add-fallback-${role}`}
-                onClick={() => setDraft((d) => addFallback(d, role))}
+                onClick={() => updateDraft((d) => addFallback(d, role))}
               >
                 <Plus /> Add fallback
               </button>
