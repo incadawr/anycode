@@ -13,6 +13,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Preserve shared engine history when deleting one of the sessions that references it.
 - Connection editing now protects unsaved changes when closing and keeps disabled price values readable.
 
 ## [0.0.60] — 2026-10-31
