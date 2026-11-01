@@ -3234,6 +3234,9 @@ void app.whenReady().then(async () => {
     logger: fileLogger,
     connectionFetch: connectionProxyFetch,
     preparedConnectionFetch: (route) => fetchForProxyChain([], route),
+    // The same OS answer every other proxy consumer reads: a `system` profile
+    // must materialize through it, not degrade to direct.
+    systemProxy: systemProxyDelegate,
     // Connection-scoped fetch-models resolution (structural, same discipline
     // as settingsIpcDeps' catalog injection): only id/baseUrl/defaultTransport
     // ever cross this seam.

@@ -1469,15 +1469,68 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     expect(JSON.stringify(result)).not.toContain("fixture-password");
   });
 
-  it("refuses automatic fetch through a system proxy without invoking the dispatcher", async () => {
+  it("fetches through a system proxy via the OS answer, not a refusal", async () => {
     await seedConnection({ id: "conn-1", providerId: "kimi", proxyRef: "proxy-system" });
     const raw = JSON.parse(await readFile(settingsPath, "utf8"));
     raw.network = { proxyProfiles: [{ id: "proxy-system", name: "System", mode: "system" }] };
     await writeFile(settingsPath, JSON.stringify(raw));
-    let invoked = false;
-    const { deps } = makeCatalogDeps({ fetchModels: async () => { invoked = true; return { ok: true, models: [] }; } });
-    expect(await handleCustomProviderFetchModels(deps, { connectionId: "conn-1", preview: true })).toEqual({ ok: false, reason: "system_proxy_unsupported" });
-    expect(invoked).toBe(false);
+    const routes: unknown[] = [];
+    const asked: string[] = [];
+    const { deps } = makeCatalogDeps({
+      // The immutable prepared route must be what fetches, never the mutable
+      // dispatcher — a system route is no exception.
+      connectionFetch: () => { throw new Error("mutable dispatcher must not be used"); },
+      preparedConnectionFetch: route => { routes.push(route); return async () => new Response(); },
+      systemProxy: { cached: () => ({ kind: "unresolved" }), resolve: async url => { asked.push(url); return { kind: "proxy", url: "http://system-proxy.test:3128/" }; } },
+      fetchModels: async params => { await params.fetchImpl!("https://api.kimi.com/coding/v1/models", { method: "GET" }); return { ok: true, models: [{ id: "m" }] }; },
+    });
+
+    const result = await handleCustomProviderFetchModels(deps, { connectionId: "conn-1", preview: true });
+
+    expect(result.ok).toBe(true);
+    expect(routes).toHaveLength(1);
+    expect(routes[0]).toMatchObject({ kind: "proxy", proxy: { url: "http://system-proxy.test:3128/" } });
+    // Asked once to build the route and again by the post-fetch re-check: both
+    // go to the OS, which is exactly what makes a changed system route show up
+    // as stale_fetch instead of a silently different egress path.
+    expect(asked).toEqual(["https://api.kimi.com/coding/v1/models", "https://api.kimi.com/coding/v1/models"]);
+  });
+
+  it("takes the direct answer when the OS says a system target is not proxied", async () => {
+    await seedConnection({ id: "conn-1", providerId: "kimi", proxyRef: "proxy-system" });
+    const raw = JSON.parse(await readFile(settingsPath, "utf8"));
+    raw.network = { proxyProfiles: [{ id: "proxy-system", name: "System", mode: "system" }] };
+    await writeFile(settingsPath, JSON.stringify(raw));
+    const routes: unknown[] = [];
+    const { deps } = makeCatalogDeps({
+      preparedConnectionFetch: route => { routes.push(route); return async () => new Response(); },
+      systemProxy: { cached: () => ({ kind: "unresolved" }), resolve: async () => ({ kind: "direct" }) },
+      fetchModels: async params => { await params.fetchImpl!("https://api.kimi.com/coding/v1/models", { method: "GET" }); return { ok: true, models: [{ id: "m" }] }; },
+    });
+
+    const result = await handleCustomProviderFetchModels(deps, { connectionId: "conn-1", preview: true });
+
+    expect(result.ok).toBe(true);
+    expect(routes[0]).toEqual({ kind: "direct", why: "system-answer" });
+  });
+
+  it("discards a system-proxied preview when the OS route changed mid-fetch", async () => {
+    await seedConnection({ id: "conn-1", providerId: "kimi", proxyRef: "proxy-system" });
+    const raw = JSON.parse(await readFile(settingsPath, "utf8"));
+    raw.network = { proxyProfiles: [{ id: "proxy-system", name: "System", mode: "system" }] };
+    await writeFile(settingsPath, JSON.stringify(raw));
+    // The OS answer is not a cache entry: if it changes between the prepared
+    // route and the re-check, the honest outcome is stale_fetch (fetch again),
+    // never a result attributed to a route that no longer applies.
+    let answer = 0;
+    const { deps } = makeCatalogDeps({
+      preparedConnectionFetch: () => async () => new Response(),
+      systemProxy: { cached: () => ({ kind: "unresolved" }), resolve: async () => ({ kind: "proxy", url: `http://system-proxy-${++answer}.test:3128/` }) },
+      fetchModels: async () => ({ ok: true, models: [{ id: "m" }] }),
+    });
+
+    expect(await handleCustomProviderFetchModels(deps, { connectionId: "conn-1", preview: true })).toEqual({ ok: false, reason: "stale_fetch" });
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.models).toBeUndefined();
   });
 
   it("discards an in-flight preview after a proxy password or route change", async () => {
