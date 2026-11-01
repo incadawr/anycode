@@ -3194,6 +3194,65 @@ describe("SqlitePersistenceAdapter — session delete", () => {
     }
   }
 
+  it.each(["codex", "claude"] as const)("preserves shared %s shadow rows until the final owner is deleted", async (engine) => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    await seedFullSession(adapter, "first", "shared-ref", engine);
+    await seedFullSession(adapter, "last", "shared-ref", engine);
+    const list = () => engine === "codex" ? adapter.listCodexThreadItems("shared-ref") : adapter.listClaudeTranscriptItems("shared-ref");
+    expect(await list()).toHaveLength(2);
+    const first = await adapter.deleteSession("first");
+    expect(engine === "codex" ? first.counts.codexThreadItems : first.counts.claudeTranscriptItems).toBe(0);
+    expect(await list()).toHaveLength(2);
+    const last = await adapter.deleteSession("last");
+    expect(engine === "codex" ? last.counts.codexThreadItems : last.counts.claudeTranscriptItems).toBe(2);
+    expect(await list()).toHaveLength(0);
+    await adapter.close();
+  });
+
+  it("retains a shared thread when deleting a subtree and cleans it after the surviving root", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    await seedFullSession(adapter, "outside", "shared-tree");
+    await adapter.createSession({id:"root",workspace:"/w",model:"m",mode:"build",engineId:"codex",externalSessionRef:"shared-tree"});
+    await adapter.createSession({id:"child",workspace:"/w",model:"m",mode:"build",engineId:"codex",externalSessionRef:"shared-tree",parentSessionId:"root",spawnToolCallId:"spawn"});
+    const removed = await adapter.deleteSessionTree("root");
+    expect(removed.deletedSessionIds.sort()).toEqual(["child", "root"]);
+    expect(await adapter.listCodexThreadItems("shared-tree")).toHaveLength(1);
+    expect((await adapter.deleteSession("outside")).counts.codexThreadItems).toBe(1);
+    expect(await adapter.listCodexThreadItems("shared-tree")).toHaveLength(0);
+    await adapter.close();
+  });
+
+  it("deletes shared shadow rows once when all owners are removed in one batch", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    await seedFullSession(adapter, "a", "shared-batch");
+    await seedFullSession(adapter, "b", "shared-batch");
+    const result = await adapter.deleteSessions(["a", "b"]);
+    expect(result.counts.codexThreadItems).toBe(2);
+    expect(await adapter.listCodexThreadItems("shared-batch")).toHaveLength(0);
+    await adapter.close();
+  });
+
+  it("rolls back a contended delete and retains shared rows until a successful retry", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "shared-delete-"));
+    deleteTmpDir = tmp;
+    const dbPath = join(tmp, "test.sqlite");
+    const adapter = new SqlitePersistenceAdapter(dbPath);
+    await seedFullSession(adapter, "a", "shared-locked");
+    await seedFullSession(adapter, "b", "shared-locked");
+    const writer = new DatabaseSync(dbPath);
+    writer.exec("BEGIN IMMEDIATE");
+    writer.prepare("UPDATE sessions SET title = ? WHERE id = ?").run("concurrent change", "b");
+    try {
+      await expect(adapter.deleteSession("a")).rejects.toThrow();
+    } finally { writer.exec("COMMIT"); writer.close(); }
+    expect((await adapter.getSessionById("b"))?.title).toBe("concurrent change");
+    expect(await adapter.getSessionById("a")).not.toBeNull();
+    expect(await adapter.listCodexThreadItems("shared-locked")).toHaveLength(2);
+    expect((await adapter.deleteSession("a")).counts.codexThreadItems).toBe(0);
+    expect(await adapter.listCodexThreadItems("shared-locked")).toHaveLength(2);
+    await adapter.close();
+  }, 15000);
+
   it("cascades through all four linked tables in one delete, leaving a sibling untouched", async () => {
     const tmp = await mkdtemp(join(tmpdir(), "anycode-del-"));
     deleteTmpDir = tmp;

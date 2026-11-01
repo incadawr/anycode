@@ -1144,7 +1144,9 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     // each ref's DELETE to the deleted row's OWN `engine_id` — rather than
     // trying both tables for every ref — means a collision with a
     // SURVIVING sibling's ref in the other engine's table can never be
-    // touched by this cascade.
+    // touched by this cascade. A ref can also be shared by multiple sessions
+    // of the same engine. Remove its rows only when no owner survives this
+    // subtree; the owner check and deletion share the same transaction.
     const codexRefs = treeRows
       .filter((row) => row.engine_id === "codex" && typeof row.external_session_ref === "string" && row.external_session_ref.length > 0)
       .map((row) => row.external_session_ref as string);
@@ -1155,13 +1157,21 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     if (codexRefs.length > 0) {
       const refPlaceholders = codexRefs.map(() => "?").join(", ");
       counts.codexThreadItems = Number(
-        db.prepare(`DELETE FROM codex_thread_items WHERE thread_id IN (${refPlaceholders})`).run(...codexRefs).changes,
+        db.prepare(`DELETE FROM codex_thread_items
+          WHERE thread_id IN (${refPlaceholders})
+            AND thread_id NOT IN (SELECT s.external_session_ref FROM sessions s
+              WHERE s.engine_id = 'codex' AND s.external_session_ref IS NOT NULL
+                AND s.id NOT IN (${idPlaceholders}))`).run(...codexRefs, ...deletedSessionIds).changes,
       );
     }
     if (claudeRefs.length > 0) {
       const refPlaceholders = claudeRefs.map(() => "?").join(", ");
       counts.claudeTranscriptItems = Number(
-        db.prepare(`DELETE FROM claude_transcript_items WHERE session_ref IN (${refPlaceholders})`).run(...claudeRefs).changes,
+        db.prepare(`DELETE FROM claude_transcript_items
+          WHERE session_ref IN (${refPlaceholders})
+            AND session_ref NOT IN (SELECT s.external_session_ref FROM sessions s
+              WHERE s.engine_id = 'claude' AND s.external_session_ref IS NOT NULL
+                AND s.id NOT IN (${idPlaceholders}))`).run(...claudeRefs, ...deletedSessionIds).changes,
       );
     }
 
