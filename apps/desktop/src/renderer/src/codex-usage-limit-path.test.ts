@@ -63,7 +63,7 @@ describe("Codex usage limit — production path to the banner", () => {
     expect(blocks).toHaveLength(1);
     expect(blocks[0]).toMatchObject({ kind: "usage_limit", notice: { kind: "usage_limit", code: 429, engine: "codex" } });
     // The controller is wired, so the banner carries a live picker instead of a
-    // sentence saying the feature is gone ( restore).
+    // sentence saying the feature is gone.
     expect(renderTranscript(store)).toContain("usage-limit-switch-account");
     expect(renderTranscript(store)).not.toContain("temporarily unavailable");
   });

@@ -58,5 +58,5 @@ export type CodexTabAccountResult =
  * banner can show as-is (no codes in the UI).
  */
 export type CodexContinueResult =
-  | { ok: true; sessionId: string; tabId: string }
+  | { ok: true; sessionId: string; tabId: string; warning?: string }
   | { ok: false; reason: string; detail: string };

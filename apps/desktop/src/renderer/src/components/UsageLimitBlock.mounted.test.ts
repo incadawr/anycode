@@ -22,7 +22,7 @@ it("opens the account picker and lists only the OTHER accounts", async () => {
   const root=createRoot(container);
   try {
     await act(async()=>{root.render(createElement(UsageLimitBlock,{block,enterClass:"",codexContinue:controller}));});
-    // The button is the affordance the disable removed ( restore)...
+    // The button is the affordance the earlier disable removed...
     expect(container.querySelector(".usage-limit-switch-account")).not.toBeNull();
     expect(container.textContent).not.toContain("temporarily unavailable");
     // ...and the accounts are only fetched when it is actually used.
