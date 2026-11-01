@@ -72,7 +72,7 @@ describe("copyCodexRolloutForThread", () => {
     expect(result).toMatchObject({ ok: false, reason: "rollout_missing" });
   });
 
-  it("never overwrites an existing rollout in the target home and reports it as already in place", async () => {
+  it("refuses an existing rollout without overwriting it", async () => {
     const source = join(root, "account-a", "sessions");
     const target = join(root, "account-b", "sessions");
     await seedRollout(source);
@@ -86,8 +86,16 @@ describe("copyCodexRolloutForThread", () => {
       threadId: THREAD_ID,
     });
 
-    expect(result).toEqual({ ok: true, relativePath: ROLLOUT_RELATIVE, copied: false });
+    expect(result).toMatchObject({ ok: false, reason: "rollout_exists", detail: expect.stringContaining("may be outdated or in use") });
     expect(await readFile(existing, "utf8")).toBe("OLDER-COPY");
+  });
+
+  it("also refuses an apparently identical existing rollout", async () => {
+    const source=join(root,"a","sessions"), target=join(root,"b","sessions");
+    await seedRollout(source); await seedRollout(target);
+    const result=await copyCodexRolloutForThread({sourceSessionsDir:source,targetSessionsDir:target,threadId:THREAD_ID});
+    expect(result).toMatchObject({ok:false,reason:"rollout_exists"});
+    expect(await readFile(join(target,ROLLOUT_RELATIVE),"utf8")).toBe(ROLLOUT_TEXT);
   });
 
   it("copies the rollout only — a credential next to it is never copied (or read)", async () => {
@@ -280,28 +288,50 @@ describe("handleCodexContinueOnAccount", () => {
     expect(await readFile(join(h.accountBSessionsDir, ROLLOUT_RELATIVE), "utf8")).toBe(ROLLOUT_TEXT);
   });
 
-  it("preserves an existing rollout when source registration is refused", async () => {
+  it("refuses an existing rollout before source registration", async () => {
     const h = await harness({createSessionFromSource:async () => null});
     await seedRollout(h.accountBSessionsDir, "existing-fixture");
     const result = await handleCodexContinueOnAccount(h.deps, {tabId:"tab-1",accountId:"account-b"});
-    expect(result).toMatchObject({ok:false,reason:"unknown_session"});
+    expect(result).toMatchObject({ok:false,reason:"rollout_exists"});
+    expect(h.opened).toEqual([]);
     expect(await readFile(join(h.accountBSessionsDir, ROLLOUT_RELATIVE), "utf8")).toBe("existing-fixture");
   });
 
-  it("rolls back a new session when opening the tab rejects", async () => {
-    const h = await harness({openResumeTab:async () => { throw new Error("fixture"); }});
-    expect(await handleCodexContinueOnAccount(h.deps, {tabId:"tab-1",accountId:"account-b"})).toMatchObject({ok:false,reason:"tab_failed"});
-    expect(h.deleted).toEqual(["new-session-id"]);
+  it("refuses retry after a failed registration if the source rollout has advanced", async () => {
+    let attempts = 0;
+    const h = await harness({createSessionFromSource:async (_source,meta) => {
+      attempts++;
+      return attempts === 1 ? null : {...meta,createdAt:1,updatedAt:1};
+    }});
+    expect(await handleCodexContinueOnAccount(h.deps,{tabId:"tab-1",accountId:"account-b"})).toMatchObject({ok:false,reason:"unknown_session"});
+    await seedRollout(h.sourceSessionsDir, "newer-rollout-v2");
+    const retry = await handleCodexContinueOnAccount(h.deps,{tabId:"tab-1",accountId:"account-b"});
+    expect(retry).toMatchObject({ok:false,reason:"rollout_exists",detail:expect.stringContaining("may be outdated or in use")});
+    expect(attempts).toBe(1);
+    expect(h.opened).toEqual([]);
+    expect(await readFile(join(h.accountBSessionsDir,ROLLOUT_RELATIVE),"utf8")).toBe(ROLLOUT_TEXT);
+    expect(await readFile(join(h.sourceSessionsDir,ROLLOUT_RELATIVE),"utf8")).toBe("newer-rollout-v2");
+  });
+
+  it("keeps the session when opening throws after a host may have started", async () => {
+    let hostStarted = false;
+    const h = await harness({openResumeTab:async () => {hostStarted = true; throw new Error("fixture"); }});
+    const result = await handleCodexContinueOnAccount(h.deps, {tabId:"tab-1",accountId:"account-b"});
+    expect(result).toMatchObject({ok:false,reason:"tab_failed",detail:expect.stringContaining("Could not confirm")});
+    expect(hostStarted).toBe(true);
+    expect(h.deleted).toEqual([]);
     expect(await readFile(join(h.accountBSessionsDir, ROLLOUT_RELATIVE), "utf8")).toBe(ROLLOUT_TEXT);
   });
 
-  it("reports an unconfirmed session cleanup after tab failure", async () => {
-    const h = await harness({openResumeTab:async()=>({ok:false as const,reason:"not_ready"}),deleteSession:async()=>{throw new Error("fixture");}});
+  it("retains the session when the tab reports it is already open", async () => {
+    const h = await harness({openResumeTab:async()=>({ok:false as const,reason:"already_open"})});
     const result = await handleCodexContinueOnAccount(h.deps, {tabId:"tab-1",accountId:"account-b"});
-    expect(result).toMatchObject({ok:false,reason:"tab_failed",detail:expect.stringContaining("session cleanup could not be confirmed")});
+    expect(result).toMatchObject({ok:false,reason:"tab_failed",detail:expect.stringContaining("did not delete the session")});
+    expect(h.deleted).toEqual([]);
+    expect(await readFile(join(h.accountBSessionsDir, ROLLOUT_RELATIVE), "utf8")).toBe(ROLLOUT_TEXT);
   });
 
-  it("does not remove a rollout reused by another continuation when the first fails", async () => {
+  it("refuses a concurrent consumer and retains the first published rollout when registration fails", async () => {
     let release!: () => void;
     let entered!: () => void;
     const started = new Promise<void>(resolve => {entered=resolve;});
@@ -313,21 +343,23 @@ describe("handleCodexContinueOnAccount", () => {
     });
     const waiting=handleCodexContinueOnAccount(first.deps, {tabId:"tab-1",accountId:"account-b"});
     await started;
-    const success=await handleCodexContinueOnAccount(second.deps, {tabId:"tab-1",accountId:"account-b"});
-    expect(success.ok).toBe(true);
+    const secondResult=await handleCodexContinueOnAccount(second.deps, {tabId:"tab-1",accountId:"account-b"});
+    expect(secondResult).toMatchObject({ok:false,reason:"rollout_exists"});
+    expect(second.created).toEqual([]);
+    expect(second.opened).toEqual([]);
     release();
     expect(await waiting).toMatchObject({ok:false,reason:"unknown_session"});
     expect(await readFile(join(first.accountBSessionsDir, ROLLOUT_RELATIVE), "utf8")).toBe(ROLLOUT_TEXT);
   });
 
-  it("rolls the new row back when its tab cannot be opened", async () => {
+  it("retains the new row when the tab cannot be opened", async () => {
     const h = await harness({
       openResumeTab: async () => ({ ok: false as const, reason: "not_ready" }),
     });
     const result = await handleCodexContinueOnAccount(h.deps, { tabId: "tab-1", accountId: "account-b" });
 
     expect(result).toMatchObject({ ok: false, reason: "tab_failed" });
-    expect(h.deleted).toEqual(["new-session-id"]);
+    expect(h.deleted).toEqual([]);
   });
 
   it("reports a missing rollout instead of opening a tab on a conversation it could not carry", async () => {
