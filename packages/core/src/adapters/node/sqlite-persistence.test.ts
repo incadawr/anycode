@@ -70,7 +70,43 @@ describe("SqlitePersistenceAdapter", () => {
     finally { await verify.close(); }
   });
 
-  it.each(["ABORT", "ROLLBACK"])("keeps the adapter usable after SQLite %s is fully rolled back", async (action) => {
+  it("quarantines when a rollback error only claims no transaction is active", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "anycode-ambiguous-rollback-"));
+    const dbPath = join(tmpDir,"test.sqlite");
+    const adapter = new SqlitePersistenceAdapter(dbPath);
+    await adapter.createSession({id:"s1",workspace:"/w",model:"m",mode:"build",title:"before"});
+    const originalExec = DatabaseSync.prototype.exec;
+    const exec = vi.spyOn(DatabaseSync.prototype,"exec").mockImplementation(function (this: DatabaseSync, sql: string) {
+      // Synthetic fault: the SQL is deliberately not executed.
+      if (sql === "ROLLBACK") throw new Error("cannot rollback - no transaction is active");
+      return originalExec.call(this,sql);
+    });
+    try {
+      await expect(adapter.replaceHistory("s1",[makeItem({id:"dup"}),makeItem({id:"dup"})])).rejects.toThrow("UNIQUE constraint failed");
+      await expect(adapter.touchSession("s1",{title:"must not succeed"})).rejects.toThrow(/quarantin/i);
+    } finally { exec.mockRestore(); await adapter.close(); }
+    const verify = new SqlitePersistenceAdapter(dbPath);
+    try { expect((await verify.getRootSession("s1"))?.title).toBe("before"); expect(await verify.loadHistory("s1")).toEqual([]); }
+    finally { await verify.close(); }
+  });
+
+  it("quarantines after public close fails and allows cleanup retry", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "anycode-public-close-"));
+    const dbPath = join(tmpDir,"test.sqlite");
+    const adapter = new SqlitePersistenceAdapter(dbPath);
+    await adapter.createSession({id:"s1",workspace:"/w",model:"m",mode:"build",title:"before"});
+    const close = vi.spyOn(DatabaseSync.prototype,"close").mockImplementationOnce(() => {throw new Error("synthetic close failure");});
+    try {
+      await expect(adapter.close()).rejects.toThrow("synthetic close failure");
+      await expect(adapter.touchSession("s1",{title:"blocked"})).rejects.toThrow(/quarantin/i);
+      await expect(adapter.close()).resolves.toBeUndefined();
+      await expect(adapter.getRootSession("s1")).rejects.toThrow(/quarantin/i);
+    } finally { close.mockRestore(); await adapter.close(); }
+    const verify = new SqlitePersistenceAdapter(dbPath);
+    try { expect((await verify.getRootSession("s1"))?.title).toBe("before"); } finally { await verify.close(); }
+  });
+
+  it.each(["ABORT", "ROLLBACK"])("handles SQLite %s conservatively after rollback", async (action) => {
     tmpDir = await mkdtemp(join(tmpdir(), "anycode-safe-rollback-"));
     const dbPath = join(tmpDir,"test.sqlite");
     const adapter = new SqlitePersistenceAdapter(dbPath);
@@ -82,11 +118,15 @@ describe("SqlitePersistenceAdapter", () => {
     finally { db.close(); }
     try {
       await expect(adapter.replaceHistory("s1",[])).rejects.toThrow("synthetic failure");
-      await expect(adapter.touchSession("s1",{title:"committed"})).resolves.toBeUndefined();
-      expect((await adapter.getRootSession("s1"))?.title).toBe("committed");
+      if (action === "ABORT") {
+        await expect(adapter.touchSession("s1",{title:"committed"})).resolves.toBeUndefined();
+        expect((await adapter.getRootSession("s1"))?.title).toBe("committed");
+      } else {
+        await expect(adapter.touchSession("s1",{title:"blocked"})).rejects.toThrow(/quarantin/i);
+      }
     } finally { await adapter.close(); }
     const verify = new SqlitePersistenceAdapter(dbPath);
-    try { expect((await verify.getRootSession("s1"))?.title).toBe("committed"); expect(await verify.loadHistory("s1")).toHaveLength(1); }
+    try { expect((await verify.getRootSession("s1"))?.title).toBe(action === "ABORT" ? "committed" : "before"); expect(await verify.loadHistory("s1")).toHaveLength(1); }
     finally { await verify.close(); }
   });
 

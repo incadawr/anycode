@@ -496,11 +496,13 @@ function rollbackAndRethrow(db: DatabaseSync, original: unknown): never {
   try {
     db.exec("ROLLBACK");
   } catch (rollbackError) {
-    // RAISE(ROLLBACK, ...) ends the transaction before control reaches JS.
-    if (!(rollbackError instanceof Error && rollbackError.message === "cannot rollback - no transaction is active")) {
-      const describe = (error: unknown): string => error instanceof Error ? error.message : String(error);
-      throw new RollbackFailure([original, rollbackError], `${describe(original)}; rollback failed: ${describe(rollbackError)}`, {cause: original});
-    }
+    // Node 22 does not expose sqlite3_get_autocommit / transaction state.
+    // Even the usual no-active-transaction message is not proof of rollback;
+    // preserve the original diagnostic but quarantine on every rollback error.
+    const describe = (error: unknown): string => error instanceof Error ? error.message : String(error);
+    const message = rollbackError instanceof Error && rollbackError.message === "cannot rollback - no transaction is active"
+      ? describe(original) : `${describe(original)}; rollback failed: ${describe(rollbackError)}`;
+    throw new RollbackFailure([original, rollbackError], message, {cause: original});
   }
   throw original;
 }
@@ -2064,7 +2066,8 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   }
 
   async close(): Promise<void> {
-    this.db?.close();
+    try { this.db?.close(); }
+    catch (error) { this.quarantined = true; throw error; }
     this.db = undefined;
   }
 }
