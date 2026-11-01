@@ -10,15 +10,48 @@
  *    refusal reasons, and the new session row (the target account is what its
  *    tab's argv will be built from).
  */
+import * as fsp from "node:fs/promises";
 import { mkdir, mkdtemp, open, readdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import type { Dirent } from "node:fs";
+
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * The temp file name is derived from `randomUUID`, and the namespace export
+ * cannot be spied on in ESM. This override exists only so ONE test can squat the
+ * exact temp path and prove an `EEXIST` collision does not delete a file the
+ * attempt did not create; every other call passes straight through.
+ */
+const uuidOverride = vi.hoisted(() => ({ value: null as string | null }));
+/**
+ * Lets one test fail a REAL `readdir` call with a chosen error, so "a nested
+ * directory vanished" and "an error carries a private code" are deterministic
+ * instead of racy. Disarmed (`null`) for every other test.
+ */
+const fsOverride = vi.hoisted(() => ({ errorFor: null as ((path: string) => string | null) | null }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    readdir: async (path: string, options?: unknown) => {
+      const code = fsOverride.errorFor?.(String(path)) ?? null;
+      if (code !== null) throw Object.assign(new Error("injected"), { code });
+      return (actual.readdir as (p: string, o?: unknown) => Promise<unknown>)(path, options) as never;
+    },
+  };
+});
+vi.mock("node:crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:crypto")>();
+  return { ...actual, randomUUID: () => uuidOverride.value ?? actual.randomUUID() };
+});
 import { SqlitePersistenceAdapter, type ContinuationClaim, type SessionMeta } from "@anycode/core";
 import type { CodexAccountOption } from "../shared/codex-account.js";
 import {
   CONTINUATION_CLAIM_TTL_MS,
   copyCodexRolloutForThread,
+  findRolloutsRelative,
   handleCodexContinueOnAccount,
   registerCodexContinueIpc,
   snapshotChanged,
@@ -165,6 +198,55 @@ describe("copyCodexRolloutForThread", () => {
     expect(result).toMatchObject({ ok: true });
   });
 
+  it("refuses when a nested TARGET directory vanishes, instead of calling the tree empty", async () => {
+    const source = join(root, "a", "sessions");
+    const target = join(root, "b", "sessions");
+    await mkdir(join(source, "2026", "10", "30"), { recursive: true });
+    await writeFile(join(source, "2026", "10", "30", `rollout-2026-10-30T10-00-00-${THREAD_ID}.jsonl`), ROLLOUT_TEXT);
+    // The target ALREADY holds this thread's rollout in one branch...
+    await mkdir(join(target, "2026", "10", "31"), { recursive: true });
+    await writeFile(join(target, "2026", "10", "31", `rollout-2026-10-31T09-00-00-${THREAD_ID}.jsonl`), ROLLOUT_TEXT);
+    // ...and another branch disappears mid-traversal. Reading that ENOENT as an
+    // empty tree discards the match above; refusing is the only safe answer.
+    fsOverride.errorFor = (path) => (path === join(target, "2026", "10") ? "ENOENT" : null);
+    try {
+      const result = await copyCodexRolloutForThread({ sourceSessionsDir: source, targetSessionsDir: target, threadId: THREAD_ID });
+
+      expect(result).toMatchObject({ ok: false, reason: "target_unreadable" });
+      // And it must NOT have published a second rollout next to the existing one.
+      expect(await readdir(join(target, "2026", "10", "31"))).toHaveLength(1);
+    } finally {
+      fsOverride.errorFor = null;
+    }
+  });
+
+  it("still treats a missing target ROOT as empty, so a first transfer works", async () => {
+    const source = join(root, "a", "sessions");
+    const target = join(root, "b", "sessions");
+    await mkdir(join(source, "2026", "10", "30"), { recursive: true });
+    await writeFile(join(source, "2026", "10", "30", `rollout-2026-10-30T10-00-00-${THREAD_ID}.jsonl`), ROLLOUT_TEXT);
+
+    // No target home at all: this is the one ENOENT that really means "nothing yet".
+    expect(await copyCodexRolloutForThread({ sourceSessionsDir: source, targetSessionsDir: target, threadId: THREAD_ID })).toMatchObject({ ok: true });
+  });
+
+  it("never echoes an arbitrary error `code` into a refusal sentence", async () => {
+    const source = join(root, "a", "sessions");
+    const target = join(root, "b", "sessions");
+    await mkdir(source, { recursive: true });
+    // Shape-valid, but not a known filesystem code: a shape test would render it.
+    fsOverride.errorFor = (path) => (path === source ? "PRIVATE_TOKEN_123" : null);
+    try {
+      const result = await copyCodexRolloutForThread({ sourceSessionsDir: source, targetSessionsDir: target, threadId: THREAD_ID });
+
+      expect(result).toMatchObject({ ok: false, reason: "source_unreadable" });
+      expect((result as { detail?: string }).detail).not.toContain("PRIVATE_TOKEN_123");
+      expect((result as { detail?: string }).detail).toContain("unknown error");
+    } finally {
+      fsOverride.errorFor = null;
+    }
+  });
+
   it("refuses to choose between two rollouts that both claim the thread", async () => {
     const source = join(root, "a", "sessions");
     const target = join(root, "b", "sessions");
@@ -206,6 +288,31 @@ describe("copyCodexRolloutForThread", () => {
       threadId: "../../etc/passwd",
     });
     expect(result).toMatchObject({ ok: false, reason: "rollout_missing" });
+  });
+});
+
+describe("temp-copy ownership", () => {
+  it("leaves a pre-existing file at the temp path alone instead of unlinking it", async () => {
+    const source = join(root, "a", "sessions");
+    const target = join(root, "b", "sessions");
+    await mkdir(join(source, "2026", "10", "30"), { recursive: true });
+    await writeFile(join(source, "2026", "10", "30", `rollout-2026-10-30T10-00-00-${THREAD_ID}.jsonl`), ROLLOUT_TEXT);
+    // Squat the exact temp name this attempt will derive, then make the
+    // exclusive create collide with it: `EEXIST` means someone else's file is
+    // there, so `finally` must NOT remove it.
+    const uuid = "11111111-2222-3333-4444-555555555555";
+    const squatted = join(target, "tmp", `continue-${uuid}.jsonl`);
+    await mkdir(dirname(squatted), { recursive: true });
+    await writeFile(squatted, "someone else's bytes");
+    uuidOverride.value = uuid;
+    try {
+      const result = await copyCodexRolloutForThread({ sourceSessionsDir: source, targetSessionsDir: target, threadId: THREAD_ID });
+      expect(result).toMatchObject({ ok: false, reason: "copy_failed" });
+      // The proof: the squatter survives.
+      expect(await fsp.readFile(squatted, "utf8")).toBe("someone else's bytes");
+    } finally {
+      uuidOverride.value = null;
+    }
   });
 });
 
@@ -388,6 +495,31 @@ describe("handleCodexContinueOnAccount", () => {
     );
     expect(child).toMatchObject({ ok: false, reason: "not_resumable" });
     expect(h.created).toHaveLength(0);
+  });
+
+  it("says the source CHANGED, not that it vanished, when it was re-pointed", async () => {
+    const h = await harness({
+      createSessionFromSource: async () => ({ ok: false as const, reason: "source_changed" as const }),
+    });
+
+    const result = await handleCodexContinueOnAccount(h.deps, { tabId: "tab-1", accountId: "account-b" });
+
+    // Telling the user their conversation is gone when it merely re-pointed
+    // would be a false account of their own history.
+    expect(result).toMatchObject({ ok: false, reason: "source_session_changed" });
+    expect((result as { detail?: string }).detail).toContain("different conversation");
+    expect(h.opened).toHaveLength(0);
+  });
+
+  it("still says the source is gone when it really was deleted", async () => {
+    const h = await harness({
+      createSessionFromSource: async () => ({ ok: false as const, reason: "source_missing" as const }),
+    });
+
+    expect(await handleCodexContinueOnAccount(h.deps, { tabId: "tab-1", accountId: "account-b" })).toMatchObject({
+      ok: false,
+      reason: "unknown_session",
+    });
   });
 
   it("refuses when the session has no Codex thread yet (nothing to resume elsewhere)", async () => {

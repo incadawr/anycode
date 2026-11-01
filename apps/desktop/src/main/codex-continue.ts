@@ -23,6 +23,7 @@
  */
 import * as fsp from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
+import type { Dirent } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import type { ContinuationClaim, SessionMeta } from "@anycode/core";
@@ -204,9 +205,22 @@ export function snapshotChanged(
  * stake. Collecting all matches (instead of returning the first) is what makes
  * `rollout_ambiguous` detectable at all.
  */
-async function findRolloutsRelative(dir: string, threadId: string, depth: number): Promise<string[]> {
+/**
+ * Rollouts for `threadId` under `dir`, as paths relative to it.
+ *
+ * `readdir` is injectable ONLY so a test can make a nested directory vanish
+ * deterministically; production always passes the real one. Note what callers
+ * must do with the throw: a nested `ENOENT` means the tree is unknown, not
+ * empty, so it must NOT be read as "no rollout here".
+ */
+export async function findRolloutsRelative(
+  dir: string,
+  threadId: string,
+  depth: number,
+  readdir: (path: string, options: { withFileTypes: true }) => Promise<Dirent[]> = fsp.readdir as never,
+): Promise<string[]> {
   const found: string[] = [];
-  const entries = await fsp.readdir(dir, { withFileTypes: true });
+  const entries = await readdir(dir, { withFileTypes: true });
   const sorted = [...entries].sort((left, right) => left.name.localeCompare(right.name));
   for (const entry of sorted) {
     if (entry.isFile() && isThreadRollout(entry.name, threadId)) found.push(entry.name);
@@ -214,7 +228,7 @@ async function findRolloutsRelative(dir: string, threadId: string, depth: number
   if (depth === 0) return found;
   for (const entry of sorted) {
     if (!entry.isDirectory()) continue;
-    const nested = await findRolloutsRelative(join(dir, entry.name), threadId, depth - 1);
+    const nested = await findRolloutsRelative(join(dir, entry.name), threadId, depth - 1, readdir);
     for (const relative of nested) found.push(join(entry.name, relative));
   }
   return found;
@@ -380,12 +394,31 @@ export async function copyCodexRolloutForThread(request: CodexRolloutCopyRequest
   }
 }
 
-/** `ENOENT`/`EACCES`/… for a refusal detail, without ever echoing a path. */
+/**
+ * Filesystem error codes we are willing to show, for a refusal detail.
+ *
+ * An explicit SET, not a shape test: `code` is arbitrary data, so
+ * `PRIVATE_TOKEN_123` and `ENOENT` are indistinguishable by regex while only one
+ * of them is safe to render. Anything unknown collapses to a generic phrase,
+ * and no path is ever echoed.
+ */
+const SAFE_ERROR_CODES = new Set([
+  "EACCES",
+  "EBUSY",
+  "EEXIST",
+  "EIO",
+  "EISDIR",
+  "EMFILE",
+  "ENOENT",
+  "ENOSPC",
+  "ENOTDIR",
+  "EPERM",
+  "EROFS",
+]);
+
 function errorCode(error: unknown): string {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
-  // Allowlist, not "any string": `code` is attacker-influenced in principle and
-  // this value is forwarded into a user-facing sentence.
-  return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,31}$/.test(code) ? code : "unknown error";
+  return typeof code === "string" && SAFE_ERROR_CODES.has(code) ? code : "unknown error";
 }
 
 /**
