@@ -1539,6 +1539,61 @@ describe("tab-registry — ready host connection identity", () => {
 });
 
 describe("tab-registry — prompt-queue drainer (slice P7.14 · F15)", () => {
+  it("retains a recovery draft if its ancestor starts during dispatch before the post", () => {
+    const {registry} = createTestRegistry(createTabsStore()); const port = new FakeMessagePort();
+    registry.registerPort("tab-a","/ws/a",asPort(port)); port.emit(HOST_READY("/ws/a","sess-a"));
+    const store = registry.getStore("tab-a")!;
+    store.setState({orchestrationDeliveries:[{requestId:"ancestor",text:"original",images:[],status:"unknown",restored:false,reviewed:true}]});
+    let injected = false;
+    const unsubscribe = store.subscribe(state => {
+      if (!injected && state.queueInFlight?.item.recoverySourceId === "ancestor" && state.orchestrationDeliveries.some(item => item.parentRequestId === "ancestor" && item.status === "pending")) {
+        injected = true; port.emit({type:"turn_started",requestId:"ancestor",turnId:"late"});
+      }
+    });
+    try {
+      store.getState().enqueuePrompt({text:"edited",images:[],trackDelivery:true,recoverySourceId:"ancestor",initialPicks:{}});
+      expect(injected).toBe(true);
+      expect(userMessages(port)).toHaveLength(0);
+      expect(store.getState().promptQueue).toMatchObject([{text:"edited",recoverySourceId:"ancestor",requiresRestore:true}]);
+      expect(store.getState().orchestrationDeliveries).toHaveLength(1);
+      expect(store.getState().transcript.some(block => block.kind === "user_text" && block.text === "edited")).toBe(false);
+    } finally {unsubscribe();}
+  });
+
+  it("cancels a system retry if another attempt conflicts during dispatch before the post", () => {
+    const {registry} = createTestRegistry(createTabsStore()); const port = new FakeMessagePort();
+    registry.registerPort("tab-a","/ws/a",asPort(port)); port.emit(HOST_READY("/ws/a","sess-a"));
+    const store = registry.getStore("tab-a")!;
+    store.setState({orchestrationDeliveries:[{requestId:"old",text:"report",images:[],origin:"system",originId:"same",status:"rejected",restored:false,reviewed:false},{requestId:"selected",text:"report",images:[],origin:"system",originId:"same",status:"rejected",restored:false,reviewed:false}]});
+    let injected = false;
+    const unsubscribe = store.subscribe(state => {
+      const pending = state.queueInFlight;
+      if (!injected && pending?.item.retryOf === "selected" && state.transcript.some(block => block.kind === "user_text" && block.id === pending.requestId)) {
+        injected = true; port.emit({type:"turn_started",requestId:"old",turnId:"late"});
+      }
+    });
+    try {
+      store.getState().retryRejectedSystemDelivery("selected");
+      expect(injected).toBe(true); expect(userMessages(port)).toHaveLength(0);
+      expect(store.getState().orchestrationDeliveries[0]).toMatchObject({status:"conflict"});
+      expect(store.getState().queueInFlight).toBeNull();
+      expect(store.getState().transcript.some(block => block.kind === "user_text" && block.text === "report")).toBe(false);
+    } finally {unsubscribe();}
+  });
+
+  it("blocks another attempt for the same report once an explicit retry starts", () => {
+    const {registry} = createTestRegistry(createTabsStore()); const port = new FakeMessagePort();
+    registry.registerPort("tab-a","/ws/a",asPort(port)); port.emit(HOST_READY("/ws/a","sess-a"));
+    const store = registry.getStore("tab-a")!;
+    store.setState({orchestrationDeliveries:[{requestId:"old-a",text:"report",images:[],origin:"system",originId:"same",status:"rejected",restored:false,reviewed:false},{requestId:"old-b",text:"report",images:[],origin:"system",originId:"same",status:"rejected",restored:false,reviewed:false}]});
+    store.getState().retryRejectedSystemDelivery("old-a");
+    const sent = userMessages(port)[0]!;
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{requestId:"old-a"},{requestId:"old-b"},{requestId:sent.requestId,originId:"same",status:"pending"}]);
+    port.emit({type:"turn_started",requestId:sent.requestId,turnId:"started-retry"});
+    store.getState().retryRejectedSystemDelivery("old-b");
+    expect(store.getState().orchestrationDeliveries[2]).toMatchObject({requestId:sent.requestId,status:"started"});
+    expect(store.getState().promptQueue).toEqual([]); expect(userMessages(port)).toHaveLength(1);
+  });
   it("tracks a queued edited recovery as its own delivery after disconnect", () => {
     const {registry} = createTestRegistry(createTabsStore()); const port = new FakeMessagePort();
     registry.registerPort("tab-a","/ws/a",asPort(port)); port.emit(HOST_READY("/ws/a","sess-a"));

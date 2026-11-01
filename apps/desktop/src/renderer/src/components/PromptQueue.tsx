@@ -8,7 +8,7 @@
  */
 import type { KeyboardEvent } from "react";
 import { useTabStore, useTabStoreApi } from "../tab-context.js";
-import type { QueuedPrompt } from "../store.js";
+import { systemRetrySafe, type QueuedPrompt } from "../store.js";
 import { X } from "./icons.js";
 
 /** "N img" badge for a queued item's attachment count; null when there are none. */
@@ -80,7 +80,7 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, de
         <span className="prompt-queue-badge">{item.status === "pending" ? "Waiting for host response" : item.status === "unknown" ? "Delivery unknown — check history before retrying" : item.status === "rejected" ? "Host rejected this request" : item.status === "conflict" ? "Conflicting delivery reports — review before retrying" : "Turn started; a restored copy remains in the composer"}</span>
         {item.images.length > 0 && <span className="prompt-queue-badge">{queueImageBadge(item.images.length)}</span>}
         {item.origin === "system" && <span className="prompt-queue-badge">System report — check session history; it will not resend automatically.</span>}
-        {item.origin === "system" && item.status === "rejected" && !item.retryQueued && <button type="button" className="system-delivery-retry" disabled={connection !== "ready"} onClick={() => tabStore.getState().retryRejectedSystemDelivery(item.requestId)}>Retry rejected report</button>}
+        {item.origin === "system" && item.status === "rejected" && !item.retryQueued && <button type="button" className="system-delivery-retry" disabled={connection !== "ready" || !systemRetrySafe(deliveries,item.requestId)} onClick={() => tabStore.getState().retryRejectedSystemDelivery(item.requestId)}>Retry rejected report</button>}
         {item.origin === "system" && item.retryQueued && item.status === "rejected" && <span>Retry requested.</span>}
         {item.origin !== "system" && item.requestId !== activeDeliveryId && (item.status === "unknown" || item.status === "rejected" || item.status === "conflict") && <button type="button" className="orchestration-delivery-restore" onClick={() => {
           const state = tabStore.getState();
@@ -166,7 +166,7 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, de
                     {badge !== null && <span className="prompt-queue-badge">{badge}</span>}
                     {(item.orchestrate === "enable" || item.requiresRestore === true) && (
                       <button type="button" className="prompt-queue-restore" onClick={() => {
-                        if (onRestore?.(item) === true) tabStore.getState().deleteQueuedPrompt(item.id);
+                        if (onRestore?.(item,item.recoverySourceId) === true) tabStore.getState().deleteQueuedPrompt(item.id);
                       }}>Restore draft</button>
                     )}
                     {!item.retryOf && <button

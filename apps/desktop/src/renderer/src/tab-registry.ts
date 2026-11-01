@@ -41,7 +41,7 @@
  * child-relation store (`live: false`) instead of a root-tab banner nobody
  * would ever see.
  */
-import { createDesktopStore, type DesktopState, type QueuedPrompt, type QueuedPromptImage } from "./store.js";
+import { createDesktopStore, recoveryChainBlocked, systemRetrySafe, type DesktopState, type QueuedPrompt, type QueuedPromptImage } from "./store.js";
 import type { PermissionMode, ReasoningEffort } from "@anycode/core";
 import { connectHost, connectTerminal, type HostConnection, type TerminalConnection } from "./port.js";
 import { useTabsStore, type TabsStoreApi } from "./tabs-store.js";
@@ -445,9 +445,11 @@ export function createTabRegistry(
     const inFlight = entry.store.getState().queueInFlight;
     if (!inFlight || inFlight.item !== item || liveConnection(entry) !== connection) return;
     const requestId = inFlight.requestId;
-    const retryStillRejected = () => !item.retryOf || entry.store.getState().orchestrationDeliveries.some(delivery => delivery.requestId === item.retryOf && delivery.status === "rejected" && delivery.retryQueued);
-    const cancelRetry = () => entry.store.setState((state) => state.queueInFlight?.requestId === requestId ? {queueInFlight:null} : {});
+    const retryStillRejected = () => !item.retryOf || (systemRetrySafe(entry.store.getState().orchestrationDeliveries,item.retryOf,requestId) && entry.store.getState().orchestrationDeliveries.some(delivery => delivery.requestId === item.retryOf && delivery.retryQueued && delivery.originId === item.originId));
+    const recoveryStillSafe = () => !item.recoverySourceId || !recoveryChainBlocked(entry.store.getState().orchestrationDeliveries,item.recoverySourceId);
+    const cancelRetry = () => entry.store.getState().cancelUnsentSystemRetry(requestId);
     if (!retryStillRejected()) { cancelRetry(); return; }
+    if (!recoveryStillSafe()) { entry.store.getState().holdBlockedRecovery(requestId); return; }
     // срез 2: `item.origin` (set only for a detached-child report,
     // QueuedPrompt.origin's own doc) rides onto BOTH the local transcript
     // append (live system-card render) and the wire `user_message` (host
@@ -458,9 +460,10 @@ export function createTabRegistry(
       .appendUserText(requestId, item.text, item.images.length > 0 ? item.images.map((image) => image.attachment) : undefined, item.origin);
     // W8: snapshot what actually went on the wire so a later terminal
     // retryable failure can offer to replay this same content.
-    entry.store.getState().recordSentMessage(item.text, item.images, requestId, item.orchestrate, item.trackDelivery ? item.initialPicks ?? {} : undefined);
+    entry.store.getState().recordSentMessage(item.text, item.images, requestId, item.orchestrate, item.trackDelivery || item.retryOf ? item.initialPicks ?? {} : undefined, item.recoverySourceId ?? item.retryOf, item.retryOf ? item.originId : undefined);
     if (liveConnection(entry) !== connection) { entry.store.getState().markOrchestrationDeliveryUnknown(requestId); return; }
     if (!retryStillRejected()) { cancelRetry(); return; }
+    if (!recoveryStillSafe()) { entry.store.getState().holdBlockedRecovery(requestId); return; }
     try {
       connection.send({
         type: "user_message", requestId, text: item.text,

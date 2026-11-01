@@ -25,7 +25,7 @@ import type { ClipboardEvent, DragEvent, FocusEvent, KeyboardEvent as ReactKeybo
 import type { CodexRateLimitsWire, ImageAttachment, ImageMediaType, PermissionMode } from "@anycode/core";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
 import { tabRegistry } from "../tab-registry.js";
-import { isSessionBusy, type ContextUsage, type DesktopState, type QueuedPrompt, type SessionTokens, type TurnState } from "../store.js";
+import { isSessionBusy, recoveryChainBlocked, type ContextUsage, type DesktopState, type QueuedPrompt, type SessionTokens, type TurnState } from "../store.js";
 import { useSettingsStore } from "../settings-store.js";
 import { useTabsStore } from "../tabs-store.js";
 import type { ProviderConnection } from "../../../shared/settings.js";
@@ -1605,7 +1605,8 @@ export function Composer() {
    * the prompt queue carries the task exactly like any other send.
    */
   function beginOrchestrateSubmit(taskText: string): void {
-    if (unresolvedOrchestration(restoredDeliveryId) || rolePickerAlreadyOpen() || imagesStillLoading() || refuseOrchestrateAttachments()) return;
+    const sourceId = tabStore.getState().restoredComposerDraft?.deliveryRequestId ?? restoredDeliveryId;
+    if (unresolvedOrchestration(sourceId) || rolePickerAlreadyOpen() || imagesStillLoading() || refuseOrchestrateAttachments()) return;
     const task = taskText.trim();
     if (!ready) {
       return;
@@ -1620,7 +1621,7 @@ export function Composer() {
     if (needsRolePicker(resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {}, projectRoot))) {
       const id = crypto.randomUUID();
       rolePickerIdRef.current = id;
-      tabStore.setState({composerRolePicker:{id,task,forToggle:false,deliveryRequestId:restoredDeliveryId,sourceDraft:true}});
+      tabStore.setState({composerRolePicker:{id,task,forToggle:false,deliveryRequestId:sourceId,sourceDraft:true}});
       setRolePickerOpen(true);
       return;
     }
@@ -1670,8 +1671,10 @@ export function Composer() {
         if (!connected()) throw new Error("connection changed");
         const requestId = crypto.randomUUID();
         deliveryRequestId = requestId;
-        tabStore.getState().recordSentMessage(picker.task,[],requestId,"enable");
-        if (!connected()) throw new Error("connection changed");
+        tabStore.getState().recordSentMessage(picker.task,[],requestId,"enable",undefined,picker.deliveryRequestId);
+        tabStore.setState((state) => state.composerRolePicker?.id === id ? {composerRolePicker:{...state.composerRolePicker,deliveryRequestId:requestId}} : {});
+        if (picker.sourceDraft) bindRecoveryAttempt(requestId,picker.task,[]);
+        if (!connected() || unresolvedOrchestration(picker.deliveryRequestId)) throw new Error("connection or source changed");
         sendToHost({type:"user_message",requestId,text:picker.task});
         tabStore.getState().appendUserText(requestId,picker.task);
       }
@@ -1697,9 +1700,11 @@ export function Composer() {
     }
     const requestId = crypto.randomUUID();
     tabStore.getState().appendUserText(requestId, task);
-    tabStore.getState().recordSentMessage(task, [], requestId, "enable");
-    setRestoredDeliveryId(requestId);
-    sendToHost({ type: "user_message", requestId, text: task });
+    const parentRequestId = tabStore.getState().restoredComposerDraft?.deliveryRequestId ?? restoredDeliveryId;
+    tabStore.getState().recordSentMessage(task, [], requestId, "enable",undefined,parentRequestId);
+    bindRecoveryAttempt(requestId,task,[]);
+    try { if (unresolvedOrchestration(parentRequestId)) throw new Error("source changed"); sendToHost({ type: "user_message", requestId, text: task }); }
+    catch { tabStore.getState().markOrchestrationDeliveryUnknown(requestId); tabStore.getState().setNotice({kind:"slash_command_rejected",text:"Delivery is unconfirmed. The draft is retained for review."}); }
   }
 
   /**
@@ -1829,7 +1834,7 @@ export function Composer() {
     const isInsert = intent.kind === "insert";
     const replacement = intent.kind === "insert" ? intent.text : "";
     const nextText = text.slice(0, slashQuery.start) + replacement + text.slice(tokenEnd);
-    if (intent.kind === "orchestrate_submit" && unresolvedOrchestration(restoredDeliveryId)) return;
+    if (intent.kind === "orchestrate_submit" && unresolvedOrchestration(tabStore.getState().restoredComposerDraft?.deliveryRequestId ?? restoredDeliveryId)) return;
     setText(nextText);
     setCaret(slashQuery.start + replacement.length);
     pendingCaretRef.current = slashQuery.start + replacement.length;
@@ -1884,9 +1889,31 @@ export function Composer() {
 
   function unresolvedOrchestration(requestId: string | undefined): boolean {
     if (!requestId) return false;
-    const unresolved = tabStore.getState().orchestrationDeliveries?.some(item => item.requestId === requestId && (item.status === "pending" || item.status === "started" || ((item.status === "unknown" || item.status === "conflict") && !item.reviewed)));
+    const unresolved = recoveryChainBlocked(tabStore.getState().orchestrationDeliveries,requestId);
     if (unresolved) tabStore.getState().setNotice({kind:"slash_command_rejected",text:"This request may already have started. Check its delivery status before sending again."});
     return !!unresolved;
+  }
+
+  function bindRecoveryAttempt(requestId: string, draftText: string, images: readonly QueuedPrompt["images"][number][]): void {
+    restoredOwned.current = true;
+    tabStore.setState((state) => ({restoredComposerDraft:{...state.restoredComposerDraft,text:draftText,images,deliveryRequestId:requestId}}));
+    setRestoredDeliveryId(requestId);
+  }
+
+  function sendRecoveryAttempt(requestId: string, sourceId: string, draftText: string, images: readonly QueuedPrompt["images"][number][], message: Parameters<typeof sendToHost>[0]): boolean {
+    tabStore.getState().recordSentMessage(draftText,images,requestId,undefined,restoredPicks ?? {},sourceId);
+    bindRecoveryAttempt(requestId,draftText,images);
+    const connection = slashTabId ? tabRegistry.getLiveHostConnection(slashTabId,tabStore) : null;
+    try {
+      if (!connection || unresolvedOrchestration(sourceId)) throw new Error("connection or source changed");
+      sendToHost(message);
+      if (!slashTabId || tabRegistry.getLiveHostConnection(slashTabId,tabStore) !== connection) throw new Error("connection changed");
+      return true;
+    } catch {
+      tabStore.getState().markOrchestrationDeliveryUnknown(requestId);
+      tabStore.getState().setNotice({kind:"slash_command_rejected",text:"Delivery is unconfirmed. The draft is retained for review."});
+      return false;
+    }
   }
 
   function imagesStillLoading(): boolean {
@@ -1905,7 +1932,8 @@ export function Composer() {
 
   function handleSend(): void {
     if (imagesStillLoading()) return;
-    if (unresolvedOrchestration(restoredDeliveryId)) return;
+    const recoverySourceId = tabStore.getState().restoredComposerDraft?.deliveryRequestId ?? restoredDeliveryId;
+    if (unresolvedOrchestration(recoverySourceId)) return;
     if (supportsCorePermissions && /^\s*\/orchestrate(?:\s|$)/.test(reconstitutePasteMarkers(text, pasteBlocks)) && refuseOrchestrateAttachments()) return;
     if (restoredOrchestrate) {
       tabStore.getState().setNotice({ kind: "slash_command_rejected", text: "This restored draft requires orchestration. Review it before starting a new orchestration." });
@@ -1947,14 +1975,15 @@ export function Composer() {
         text: outgoing,
         images,
       });
-      if (restoredDeliveryId) tabStore.getState().recordSentMessage(outgoing,images,requestId,undefined,restoredPicks ?? {});
-      sendToHost({
+      const message = {
         type: "user_message",
         requestId,
         text: outgoing,
         ...(images.length > 0 ? { images: images.map((image) => image.attachment) } : {}),
-      });
-    } else if (!childSurface && turn.status !== "idle" && images.length === 0 && steerSupported && !restoredDeliveryId) {
+      } as const;
+      if (recoverySourceId) { if (!sendRecoveryAttempt(requestId,recoverySourceId,outgoing,images,message)) return; }
+      else sendToHost(message);
+    } else if (!childSurface && turn.status !== "idle" && images.length === 0 && steerSupported && !recoverySourceId) {
       // a supported running CORE session takes the
       // message as a mid-turn steer (optimistic pendingSteer bubble; the
       // user_injected event confirms delivery into the turn; the queue is the
@@ -1974,7 +2003,7 @@ export function Composer() {
       // tab-registry drainer sends it once the tab is truly idle and unpaused.
       // Direct-sending in the in-flight window would let the host busy-reject
       // it (a drained item was already accepted) and lose the prompt.
-      tabStore.getState().enqueuePrompt({ text: outgoing, images, ...(restoredDeliveryId ? {trackDelivery:true,initialPicks:restoredPicks ?? {}} : {}) });
+      tabStore.getState().enqueuePrompt({ text: outgoing, images, ...(recoverySourceId ? {trackDelivery:true,recoverySourceId,initialPicks:restoredPicks ?? {}} : {}) });
     } else {
       const requestId = crypto.randomUUID();
       // The wire protocol never echoes the user's own message back (§3 — only
@@ -1990,13 +2019,14 @@ export function Composer() {
       tabStore.getState().appendUserText(requestId, outgoing, images.length > 0 ? images.map((image) => image.attachment) : undefined);
       // W8: snapshot what actually went on the wire so a later
       // terminal retryable failure can offer to replay this same content.
-      tabStore.getState().recordSentMessage(outgoing, images, requestId, undefined, restoredDeliveryId ? restoredPicks ?? {} : undefined);
-      sendToHost({
+      const message = {
         type: "user_message",
         requestId,
         text: outgoing,
         ...(images.length > 0 ? { images: images.map((image) => image.attachment) } : {}),
-      });
+      } as const;
+      if (recoverySourceId) { if (!sendRecoveryAttempt(requestId,recoverySourceId,outgoing,images,message)) return; }
+      else { tabStore.getState().recordSentMessage(outgoing, images, requestId); sendToHost(message); }
     }
     if (restoredOwned.current) { restoredOwned.current = false; setRestoredPicks(undefined); setRestoredDeliveryId(undefined); tabStore.setState((state) => ({ restoredComposerDraft: null, completedComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 })); }
     setText("");
@@ -2484,7 +2514,7 @@ export function Composer() {
                   if (imagesStillLoading()) return;
                   // GitHub #14: the explicit Codex steer must not leak a known
                   // bare command to the model either — classify first.
-                  if (unresolvedOrchestration(restoredDeliveryId)) return;
+                  if (unresolvedOrchestration(tabStore.getState().restoredComposerDraft?.deliveryRequestId ?? restoredDeliveryId)) return;
                   const outgoing = reconstitutePasteMarkers(text, pasteBlocks);
                   if (trySubmitBareCommand(outgoing)) {
                     return;
