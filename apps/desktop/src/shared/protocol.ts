@@ -692,7 +692,7 @@ export type HostToUiMessage =
   | { type: "turn_rejected"; requestId: string; reason: "busy" | "not_ready" | "unsupported_images" }
   | { type: "user_message_invalid"; requestId: string }
   /** Diagnostic for this frame only; requestId may already name an accepted turn. */
-  | { type: "user_message_unavailable"; requestId: string; reason: "orchestrate_unavailable" }
+  | { type: "user_message_unavailable"; requestId: string; reason: "orchestrate_unavailable" | "posture_unavailable" }
   /**
    * additive envelope step: the inner request ordinal within the
    * outer turn, mirroring core's `turn_start.turn` (1-based; the loop resets

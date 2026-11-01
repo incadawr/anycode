@@ -1464,6 +1464,11 @@ export class Session {
    * a disable restores it and child spawns keep running under it (A1).
    */
   private orchestrate = false;
+  // Dormant foundation: no production transition sets this field yet.
+  // Activation requires renderer posture handling and a reviewed admission
+  // ledger; tests inject it to exercise the real Session boundaries.
+  private orchestrationPosture: "stable" | "transitioning" | "quarantined" = "stable";
+  private postureBlocked(): boolean { return this.orchestrationPosture !== "stable"; }
   /** The mode the user had BEFORE orchestrate was enabled; null while off. */
   private preOrchestrateMode: PermissionMode | null = null;
   /** Permanent source-host latch once a durable relocation handoff begins. */
@@ -2383,6 +2388,11 @@ export class Session {
    * (opus2 F1: the renderer records the id as already re-queued).
    */
   private handleUiSteerMessage(requestId: string, text: string): void {
+    if (this.postureBlocked()) {
+      // Frame diagnostic only: no terminal claim and no automatic requeue.
+      this.outbound.sendDirect({ type: "user_message_unavailable", requestId, reason: "posture_unavailable" });
+      return;
+    }
     if (this.engine.id !== "core" || this.engine.steer === undefined) {
       // Non-core engines keep the pre-branch envelope route verbatim.
       void this.receiveAgentMessage({ messageId: requestId, sender: "local-supervisor-ui", recipientSessionId: this.sessionId, kind: "agent_message", payload: text, mode: "steer", createdAt: new Date().toISOString() });
@@ -2428,6 +2438,11 @@ export class Session {
   async receiveAgentMessage(envelope: AgentEnvelope): Promise<AgentDelivery> {
     const existing = this.agentDeliveries.get(envelope.messageId);
     if (existing) return existing;
+    if (this.postureBlocked()) {
+      const delivery: AgentDelivery = { envelope, state: "rejected", detail: "Session posture unavailable" };
+      this.publishAgentDelivery(delivery);
+      return delivery;
+    }
     if (envelope.recipientSessionId !== this.sessionId || this.shuttingDown || this.relocating || (this.child !== undefined && this.childTerminalFinalized)) {
       const delivery: AgentDelivery = { envelope, state: "rejected", detail: "Session unavailable" };
       this.publishAgentDelivery(delivery);
@@ -2480,6 +2495,7 @@ export class Session {
   }
 
   private drainAgentInbox(settledChild = false): boolean {
+    if (this.postureBlocked()) return false;
     if ((!settledChild && (this.busy || this.currentTurn !== null)) || this.shuttingDown || this.relocating || this.childTerminalFinalized) return false;
     const envelope = this.agentInbox.shift();
     if (!envelope) return false;
@@ -2503,7 +2519,12 @@ export class Session {
       clearTimeout(this.reconnectGraceTimer);
       this.reconnectGraceTimer = null;
     }
-    for (const envelope of this.agentInbox.splice(0)) this.publishAgentDelivery({ envelope, state: "rejected", detail: "Session closing before queued delivery" });
+    // A blocked posture cannot safely turn retained work into a terminal
+    // result. Keep the in-memory inbox; shutdown does not make it durable.
+    while (!this.postureBlocked() && this.agentInbox.length > 0) {
+      const envelope = this.agentInbox.shift();
+      if (envelope) this.publishAgentDelivery({ envelope, state: "rejected", detail: "Session closing before queued delivery" });
+    }
   }
 
   /** Graceful shutdown: abort the turn, release parked asks, await turn teardown. */
@@ -2647,6 +2668,7 @@ export class Session {
         return;
       case "user_message":
           if (message.orchestrate !== undefined) this.outbound.sendDirect({ type: "user_message_unavailable", requestId: message.requestId, reason: "orchestrate_unavailable" });
+          else if (this.postureBlocked()) this.outbound.sendDirect({ type: "user_message_unavailable", requestId: message.requestId, reason: "posture_unavailable" });
           else this.outbound.emit({ type: "turn_rejected", requestId: message.requestId, reason: "not_ready" });
           break;
         case "set_orchestrate":
@@ -2868,7 +2890,7 @@ export class Session {
         // core-engine boot, host/index.ts). `?? []` makes this a no-op push
         // of an empty list for every other engine/legacy test.
         this.pushBackgroundChildren();
-        if (this.continuationPending) {
+        if (this.continuationPending && !this.postureBlocked()) {
           this.continuationPending = false;
           this.currentTurn = this.startContinuation().catch((error) => {
             this.outbound.emit({ type: "fatal", message: `worktree continuation failed: ${describeError(error)}` });
@@ -2888,6 +2910,10 @@ export class Session {
         // unimplemented orchestration request into an ordinary user turn.
         if (message.orchestrate !== undefined) {
           this.outbound.sendDirect({ type: "user_message_unavailable", requestId: message.requestId, reason: "orchestrate_unavailable" });
+          break;
+        }
+        if (this.postureBlocked()) {
+          this.outbound.sendDirect({ type: "user_message_unavailable", requestId: message.requestId, reason: "posture_unavailable" });
           break;
         }
         // Typed input is proof that a human is at the screen: it
@@ -2917,6 +2943,10 @@ export class Session {
         wakeNetworkWaiters();
         break;
       case "exit_worktree":
+        if (this.postureBlocked()) {
+          this.outbound.sendDirect({ type: "worktree_notice", message: "Cannot exit the worktree while session posture is unavailable." });
+          break;
+        }
         if (this.relocating) {
           this.outbound.sendDirect({
             type: "worktree_notice",
@@ -2984,9 +3014,14 @@ export class Session {
         this.broker.handleResponse(message.requestId, message.behavior, message.updatedInput);
         break;
       case "set_mode":
+        if (this.postureBlocked()) { this.outbound.sendDirect({ type: "mode_change_rejected", reason: "Session posture unavailable" }); break; }
         this.onSetMode(message.mode);
         break;
       case "set_orchestrate":
+        if (this.postureBlocked()) {
+          if (message.requestId !== undefined) this.outbound.sendDirect({ type: "orchestrate_result", requestId: message.requestId, outcome: "rejected", reason: "unavailable" });
+          break;
+        }
         // Correlated transitions are not enabled until the mode/readback and
         // renderer recovery contracts are implemented together.
         if (message.requestId !== undefined) {
@@ -3178,6 +3213,7 @@ export class Session {
         if (this.engine.capabilities.supportsContextBreakdown) this.pushContextBreakdown();
         break;
       case "compact_request":
+        if (this.postureBlocked()) { this.outbound.sendDirect({ type: "compact_rejected", reason: "Session posture unavailable" }); break; }
         // GitHub #14: NO silent early drop here. `onCompact` owns the full
         // gate order (shutting down -> unsupported method/child -> relocating
         // -> busy) and answers each refusal with a visible `compact_rejected`
@@ -3186,6 +3222,7 @@ export class Session {
         void this.onCompact();
         break;
       case "engine_switch_request":
+        if (this.postureBlocked()) { this.outbound.sendDirect({ type: "engine_switch_failed", requestId: message.requestId, reason: "Session posture unavailable" }); break; }
         // async handler holds `busy` across the factory await —
         // the exact rewind pattern (route() itself never awaits). The handler
         // re-checks its own gates (messages route synchronously, but this
@@ -3205,6 +3242,7 @@ export class Session {
         if (this.engine.capabilities.supportsRewind) void this.pushCheckpointList();
         break;
       case "rewind_request":
+        if (this.postureBlocked()) { this.outbound.sendDirect({ type: "rewind_result", requestId: message.requestId, ok: false, reason: "Session posture unavailable", conversationRestored: false, restoredPaths: null }); break; }
         // Async (awaits store + git spawns); onRewind holds this.busy for its
         // duration so a concurrent user_message/set_mode/set_model hits the
         // existing busy gate (drift-flag-3). void: route() never awaits.
@@ -4334,22 +4372,38 @@ export class Session {
     this.steerQueue.push(entry);
   }
 
+  private diagnoseBlockedSteerFrames(): void {
+    for (const queued of this.steerQueue) {
+      this.outbound.sendDirect({ type: "user_message_unavailable", requestId: queued.requestId, reason: "posture_unavailable" });
+    }
+  }
+
   /**
-   * Empties the steer queue with honest `turn_rejected "not_ready"` replies
-   * (§10.11.1 N1, extracted from §10.10.1 O7б's flush-failure path so
-   * `finalizeChildTerminal`'s shutdown branch can reuse it byte-identically):
-   * every queued message gets a reply, never a silent drop — used on the two
-   * paths that mean "no more turns will ever run against this child" (a
-   * broken durable sink, or shutdown already in progress).
+   * Stable shutdown/flush failure rejects and removes queued work. Blocked
+   * posture instead sends frame diagnostics and retains the in-memory queue:
+   * an ID may already belong to a started turn and memory is not durable.
    */
-  private rejectQueuedSteerMessages(): void {
-    for (const envelope of this.agentInbox.splice(0)) this.publishAgentDelivery({ envelope, state: "rejected", detail: "Child session cannot accept queued delivery" });
+  private rejectQueuedSteerMessages(): "rejected" | "blocked" {
+    if (this.postureBlocked()) {
+      this.diagnoseBlockedSteerFrames();
+      return "blocked";
+    }
+    while (this.agentInbox.length > 0) {
+      if (this.postureBlocked()) { this.diagnoseBlockedSteerFrames(); return "blocked"; }
+      const envelope = this.agentInbox.shift();
+      if (envelope) this.publishAgentDelivery({ envelope, state: "rejected", detail: "Child session cannot accept queued delivery" });
+    }
     while (this.steerQueue.length > 0) {
+      if (this.postureBlocked()) {
+        this.diagnoseBlockedSteerFrames();
+        return "blocked";
+      }
       const queued = this.steerQueue.shift();
       if (queued !== undefined) {
         this.outbound.emit({ type: "turn_rejected", requestId: queued.requestId, reason: "not_ready" });
       }
     }
+    return "rejected";
   }
 
   /**
@@ -4369,6 +4423,7 @@ export class Session {
    * queued item is fully spent and produced nothing to wait on."
    */
   private acceptUserMessage(requestId: string, text: string, images?: ImageAttachment[], origin?: "system"): boolean {
+    if (this.postureBlocked()) return false;
     // record the RAW human turn for the ask-zone classifier's
     // engine-session coverage (classifying-broker.ts). Only genuinely human
     // turns: origin "system" never enters — that is the parent agent's spawn
@@ -4619,6 +4674,7 @@ export class Session {
    * already unconditionally skipped for a child there.
    */
   startProgrammaticTurn(prompt: string): { ok: true } | { ok: false; reason: string } {
+    if (this.postureBlocked()) return { ok: false, reason: "Session posture unavailable" };
     if (this.child === undefined) {
       return { ok: false, reason: "not a child session" };
     }
@@ -4646,30 +4702,32 @@ export class Session {
 
   /**
    * CUT-S2 §10.12.3: shifts queued steer messages until one
-   * actually STARTS a turn (`true` — the new turn owns busy/currentTurn) or
-   * the queue runs out (`false`). A refusal from `acceptUserMessage`
+   * actually STARTS a turn (`started` — the new turn owns busy/currentTurn),
+   * the queue runs out (`empty`), or posture holds it (`blocked`). A refusal from `acceptUserMessage`
    * (`unsupported_images` — it already emitted its own `turn_rejected`)
    * spends the message and moves on: this is the N7 discipline
    * ("a refusal from acceptUserMessage is never a live hand-off"), now
    * shared by BOTH drain sites (`onChildTurnSettled` and
    * `finalizeChildTerminal`'s healthy-path re-check) instead of duplicated.
    */
-  private startNextQueuedSteerTurn(): boolean {
+  private startNextQueuedSteerTurn(): "started" | "empty" | "blocked" {
+    if (this.postureBlocked()) return "blocked";
     // a dead engine (claude latched its terminal error and closed the transport)
     // must never be handed a queued steer — the drain would start a turn that can only
     // error again (the incident's double "Claude exited during a turn"). Reject honestly;
     // every caller (onChildTurnSettled AND finalizeChildTerminal's two re-checks) then
     // falls through to committing the terminal with the real reason. Core recoverable
     // provider errors set no such safe code and keep the drain-into-retry behavior.
-    if (this.childEngineDead) { this.rejectQueuedSteerMessages(); return false; }
+    if (this.childEngineDead) return this.rejectQueuedSteerMessages() === "blocked" ? "blocked" : "empty";
     // cross-review F4: a chain that starts here is a NEW run
     // of the ladder — the refusal latched by an earlier chain ended THAT
     // chain, not this one. Cleared only once a chain actually started, so a
     // rejected drain never loses the refusal the terminal still reports.
     if (this.drainAgentInbox(true)) {
       this.childCeilingLastRefusal = undefined;
-      return true;
+      return "started";
     }
+    if (this.postureBlocked()) return "blocked";
     let next = this.steerQueue.shift();
     while (next !== undefined) {
       // 4730 xfix D3: the queued entry's `origin` survives into the turn it
@@ -4679,11 +4737,12 @@ export class Session {
       // record it in the human-turn ring.
       if (this.acceptUserMessage(next.requestId, next.text, next.images, next.origin)) {
         this.childCeilingLastRefusal = undefined;
-        return true;
+        return "started";
       }
+      if (this.postureBlocked()) return "blocked";
       next = this.steerQueue.shift();
     }
-    return false;
+    return "empty";
   }
 
   /**
@@ -4699,19 +4758,19 @@ export class Session {
    * F7 fix, return type widened under CUT-S2 §10.10.1 O7: returns `undefined`
    * when it drained a queued steer message (the new turn already set
    * `busy=true` itself — the caller must leave `busy` alone) and
-   * `finalizeChildTerminal()`'s own `"terminal" | "drained"` promise
+   * `finalizeChildTerminal()`'s own `"terminal" | "drained" | "blocked"` promise
    * otherwise — `finalizeChildTerminal` can ALSO decide to drain (a message
    * queued strictly during its `flushHistory` await, arriving too late for
    * the top-level check right above), so the caller only clears `busy` when
    * the settled value is literally `"terminal"` (§10.10.1's call-site
-   * contract), never on `"drained"`.
+   * contract), never on `"drained"` or `"blocked"`.
    *
    * §10.12.1/§10.12.3: the drain above only runs while `!this.shuttingDown`
    * — once shutdown has begun, no new turn may start (the engine is already
    * mid-dispose), so this goes straight to `finalizeChildTerminal()`, which
-   * empties the queue with honest rejects instead (shutdown = the second
-   * legal path to draining the queue, symmetric with the flush-failure path,
-   * §10.10.1 O7б). `startNextQueuedSteerTurn()` (§10.12.3) is shared with
+   * empties the queue in stable posture instead (§10.10.1 O7б). Blocked
+   * posture retains it and returns `blocked`. `startNextQueuedSteerTurn()`
+   * (§10.12.3) is shared with
    * `finalizeChildTerminal`'s own re-check below, so a refusal from
    * `acceptUserMessage` here is spent and moved past exactly like it is
    * there — this call site used to invoke `acceptUserMessage` directly and
@@ -4720,8 +4779,12 @@ export class Session {
    * OWN admission was refused (e.g. images support revoked between enqueue
    * and drain) — the shared helper is what closes that hole on both sites.
    */
-  private onChildTurnSettled(): Promise<"terminal" | "drained"> | undefined {
-    if (!this.shuttingDown && this.startNextQueuedSteerTurn()) return undefined;
+  private onChildTurnSettled(): Promise<"terminal" | "drained" | "blocked"> | undefined {
+    if (!this.shuttingDown) {
+      const result = this.startNextQueuedSteerTurn();
+      if (result === "started") return undefined;
+      if (result === "blocked") return Promise.resolve("blocked");
+    }
     return this.finalizeChildTerminal();
   }
 
@@ -4784,7 +4847,7 @@ export class Session {
    * an unguarded throw here becomes an unhandled rejection that kills the
    * host.
    */
-  private async finalizeChildTerminal(): Promise<"terminal" | "drained"> {
+  private async finalizeChildTerminal(): Promise<"terminal" | "drained" | "blocked"> {
     if (this.child === undefined || this.childTerminalFinalized) {
       return "terminal";
     }
@@ -4806,12 +4869,13 @@ export class Session {
     try {
       await this.child.flushHistory();
     } catch (error) {
+      if (this.postureBlocked()) { if (this.shuttingDown) this.diagnoseBlockedSteerFrames(); return "blocked"; }
       // Flush-failure path (§10.10.1 O7б): the durable sink is broken, so
       // running more steer turns against it is pointless — every message
       // parked during the flush is rejected honestly instead of silently
       // lost (the O7 bug), and the error terminal publishes as-is.
       const flushDurationMs = Date.now() - this.childStartedAt;
-      this.rejectQueuedSteerMessages();
+      if (this.rejectQueuedSteerMessages() === "blocked") return "blocked";
       this.childTerminalFinalized = true;
       // Read the dedicated-port claim ONCE for the terminal being reported.
       const responseModel = this.child.responseModel?.();
@@ -4832,14 +4896,15 @@ export class Session {
       }
       return "terminal";
     }
+    if (this.postureBlocked()) { if (this.shuttingDown) this.diagnoseBlockedSteerFrames(); return "blocked"; }
     if (this.shuttingDown) {
       // §10.12.1: shutdown = the second legal drain path (see docstring
       // above) — reject-empty rather than start anything new.
-      this.rejectQueuedSteerMessages();
-    } else if (this.startNextQueuedSteerTurn()) {
-      // §10.12.3: shared helper — a refusal from `acceptUserMessage` itself
-      // must never be mistaken for a live hand-off (see docstring above).
-      return "drained";
+      if (this.rejectQueuedSteerMessages() === "blocked") return "blocked";
+    } else {
+      const result = this.startNextQueuedSteerTurn();
+      if (result === "started") return "drained";
+      if (result === "blocked") return "blocked";
     }
     // turn-limit rescue: a max_turns child with at least one
     // completed turn and NO report text gets one bounded tool-free wrap-up
@@ -4873,9 +4938,11 @@ export class Session {
       // — never latch the terminal while the queue holds an undrained steer
       // or shutdown has begun mid-rescue.
       if (this.shuttingDown) {
-        this.rejectQueuedSteerMessages();
-      } else if (this.startNextQueuedSteerTurn()) {
-        return "drained";
+        if (this.rejectQueuedSteerMessages() === "blocked") return "blocked";
+      } else {
+        const result = this.startNextQueuedSteerTurn();
+        if (result === "started") return "drained";
+        if (result === "blocked") return "blocked";
       }
     }
     // Measured AFTER the rescue so the reported duration includes it.
@@ -5230,6 +5297,7 @@ export class Session {
           void this.settingsBarrier.finally(() => { controller.signal.removeEventListener("abort", abort); resolve(); });
         });
       }
+      if (this.postureBlocked()) return;
       if (controller.signal.aborted || this.shuttingDown) {
         recordResult("cancelled");
         if (!this.shuttingDown) {
@@ -5553,10 +5621,11 @@ export class Session {
   }
 
   private async startContinuation(): Promise<void> {
-    if (this.busy) return;
+    if (this.busy || this.postureBlocked()) return;
     this.busy = true;
     try {
       await this.onContinuationReady?.();
+      if (this.postureBlocked()) { this.continuationPending = true; return; }
       if (this.continuationMode === "model") {
         // a continuation has NO prompt — clear any stale pending
         // state BEFORE the first turn_start of the resumed segment.
