@@ -1590,6 +1590,7 @@ export function Composer() {
    * the prompt queue carries the task exactly like any other send.
    */
   function beginOrchestrateSubmit(taskText: string): void {
+    if (imagesStillLoading() || refuseOrchestrateAttachments()) return;
     const task = taskText.trim();
     if (!ready) {
       return;
@@ -1610,7 +1611,7 @@ export function Composer() {
 
   /** Enable orchestrate, then submit the stashed task as a normal user message. */
   function proceedOrchestrateSubmit(): void {
-    if (imagesStillLoading()) return;
+    if (imagesStillLoading() || refuseOrchestrateAttachments()) return;
     sendToHost({ type: "set_orchestrate", enabled: true });
     const task = pendingOrchestrateTask;
     setPendingOrchestrateTask(null);
@@ -1635,6 +1636,7 @@ export function Composer() {
 
   /** Send one text as a user message through the same wire path handleSend's idle branch uses. */
   function submitOrchestrateTask(task: string): void {
+    if (imagesStillLoading() || refuseOrchestrateAttachments()) return;
     if (task.length === 0) {
       return;
     }
@@ -1759,6 +1761,7 @@ export function Composer() {
     }
     const intent = item.intent;
     if (intent.kind !== "insert" && imagesStillLoading()) return;
+    if (intent.kind === "orchestrate_submit" && refuseOrchestrateAttachments()) return;
     if (intent.kind === "compact_now") {
       const verdict = resolveBareSlashSubmit("/compact", slashCtx, attachedImages.length, childSurface);
       if (verdict.kind === "refuse") {
@@ -1823,8 +1826,16 @@ export function Composer() {
     return true;
   }
 
+  function refuseOrchestrateAttachments(): boolean {
+    const savedImages = tabStore.getState().restoredComposerDraft?.images.length ?? 0;
+    if (attachedImages.length === 0 && savedImages === 0) return false;
+    tabStore.getState().setNotice({ kind: "slash_command_rejected", text: "Remove attachments before using /orchestrate. Your draft has been kept." });
+    return true;
+  }
+
   function handleSend(): void {
     if (imagesStillLoading()) return;
+    if (supportsCorePermissions && /^\s*\/orchestrate(?:\s|$)/.test(reconstitutePasteMarkers(text, pasteBlocks)) && refuseOrchestrateAttachments()) return;
     if (restoredOrchestrate) {
       tabStore.getState().setNotice({ kind: "slash_command_rejected", text: "This restored draft requires orchestration. Review it before starting a new orchestration." });
       return;

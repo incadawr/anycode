@@ -480,6 +480,34 @@ describe("Composer slash-submit wiring (GitHub #14)", () => {
     expect(harness.state["composer"]?.[0]).toBe("/compact");
   });
 
+  it("rejects a stale orchestrate menu selection if an attachment starts loading", () => {
+    seed("/orchestrate task", 12, makeStoreState({orchestrateActive:true}));
+    const tree = mountComposer();
+    const menu = findSlashMenu(tree)!;
+    const items = menu.props.items as Array<{id:string}>;
+    const index = items.findIndex(item => item.id === "orchestrate");
+    expect(index).toBeGreaterThanOrEqual(0);
+    harness.storeState.pendingComposerImages = [{id:"pending",name:"late.png"}];
+    (menu.props.onSelect as (index:number) => void)(index);
+    expect(harness.apiMethods.setNotice).toHaveBeenCalledWith(expect.objectContaining({text:expect.stringContaining("Wait for attachments")}));
+    expect(harness.sendToHost).not.toHaveBeenCalled();
+    expect(harness.apiMethods.appendUserText).not.toHaveBeenCalled();
+    expect(harness.state["composer"]?.[0]).toBe("/orchestrate task");
+  });
+
+  it("rejects a stale Codex steer click if an attachment starts loading", () => {
+    seed("keep this", 9, makeStoreState({engine:CODEX_ENGINE,turn:{status:"running",turnId:"t1",requestId:"r1"}}));
+    const tree = mountComposer();
+    const steer = findByAria(tree, "Steer active Codex turn")!;
+    expect(steer).toBeDefined();
+    harness.storeState.pendingComposerImages = [{id:"pending",name:"late.png"}];
+    (steer.props.onClick as () => void)();
+    expect(harness.apiMethods.setNotice).toHaveBeenCalledWith(expect.objectContaining({text:expect.stringContaining("Wait for attachments")}));
+    expect(harness.sendToHost).not.toHaveBeenCalled();
+    expect(harness.apiMethods.recordPendingSteer).not.toHaveBeenCalled();
+    expect(harness.state["composer"]?.[0]).toBe("keep this");
+  });
+
   it("IME composition Enter never submits", () => {
     seed("/compact ", 9);
     const tree = mountComposer();

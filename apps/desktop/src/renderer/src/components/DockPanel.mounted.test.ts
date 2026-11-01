@@ -176,6 +176,66 @@ describe("dock resize handle placement (GitHub #31)", () => {
     expect(container.querySelector(".composer-image-pill-name")).toBeNull();
   });
 
+  it("retains a completed image when the active orchestrator slash command is selected", async () => {
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",imageInput:true});
+    store.setState({orchestrateActive:true});
+    const send = vi.spyOn(tabRegistry,"sendToTab").mockImplementation(() => {});
+    let finish!: (bytes: ArrayBuffer) => void;
+    const file = new File(["ignored"], "task.png", {type:"image/png"});
+    Object.defineProperty(file,"arrayBuffer",{value: () => new Promise<ArrayBuffer>(resolve => { finish = resolve; })});
+    await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId:"a",store}}, createElement(SessionSurface, {tabId:"a",onToast:() => {}}))));
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input,"files",{configurable:true,value:[file]});
+    await act(async () => input.dispatchEvent(new Event("change",{bubbles:true})));
+    const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(textarea,"/orchestrate inspect image");
+      textarea.setSelectionRange(12,12);
+      textarea.dispatchEvent(new Event("input",{bubbles:true}));
+      textarea.dispatchEvent(new KeyboardEvent("keyup",{bubbles:true,key:"e"}));
+    });
+    const option = () => [...container.querySelectorAll<HTMLElement>('[role="option"]')].find(element => element.textContent?.includes("Orchestrate"))!;
+    expect(option()).toBeTruthy();
+    await act(async () => option().click());
+    expect(store.getState().notice?.text).toContain("Wait for attachments");
+    expect(textarea.value).toBe("/orchestrate inspect image");
+    await act(async () => finish(new Uint8Array([137,80,78,71,13,10,26,10]).buffer));
+    expect(container.querySelector(".composer-image-pill-name")?.textContent).toBe("task.png");
+    await act(async () => option().click());
+    expect(store.getState().notice?.text).toContain("Remove attachments before using /orchestrate");
+    expect(textarea.value).toBe("/orchestrate inspect image");
+    expect(store.getState().restoredComposerDraft).toMatchObject({text:"/orchestrate inspect image",images:[{name:"task.png"}]});
+    expect(send).not.toHaveBeenCalledWith("a",expect.objectContaining({type:"user_message"}));
+    expect(send).not.toHaveBeenCalledWith("a",expect.objectContaining({type:"set_orchestrate"}));
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    expect(textarea.value).toBe("/orchestrate inspect image");
+    expect(send).not.toHaveBeenCalledWith("a",expect.objectContaining({type:"user_message"}));
+  });
+
+  it("hides the mounted Codex steer when a file read begins", async () => {
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",imageInput:true,engine:{id:"codex",capabilities:{supportsCorePermissions:false,supportsRewind:false,supportsWorkflow:false,supportsGitMutations:false,supportsContextUsage:false,supportsContextBreakdown:false,supportsInteractiveApprovals:true,costAccounting:false,supportsModelSelection:false,supportsReasoningEffort:false,supportsImages:true,supportsTasks:false,supportsFileSnapshots:false,supportsManualCompact:false}}});
+    store.setState({turn:{status:"running",turnId:"turn",requestId:"request"}});
+    const send = vi.spyOn(tabRegistry,"sendToTab").mockImplementation(() => {});
+    let finish!: (bytes:ArrayBuffer) => void;
+    const file = new File(["ignored"],"pending.png",{type:"image/png"});
+    Object.defineProperty(file,"arrayBuffer",{value:() => new Promise<ArrayBuffer>(resolve => {finish=resolve;})});
+    await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId:"a",store}}, createElement(SessionSurface, {tabId:"a",onToast:() => {}}))));
+    const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(textarea,"keep this"); textarea.dispatchEvent(new Event("input",{bubbles:true})); });
+    const steer = container.querySelector<HTMLButtonElement>('[aria-label="Steer active Codex turn"]')!;
+    expect(steer).toBeTruthy();
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input,"files",{configurable:true,value:[file]});
+    await act(async () => { input.dispatchEvent(new Event("change",{bubbles:true})); steer.click(); });
+    expect(store.getState().pendingComposerImages).toHaveLength(1);
+    expect(container.querySelector('[aria-label="Steer active Codex turn"]')).toBeNull();
+    expect(textarea.value).toBe("keep this");
+    expect(send).not.toHaveBeenCalledWith("a",expect.objectContaining({type:"steer_message"}));
+    expect(send).not.toHaveBeenCalledWith("a",expect.objectContaining({type:"user_message"}));
+    await act(async () => finish(new Uint8Array([137,80,78,71,13,10,26,10]).buffer));
+    expect(container.querySelector(".composer-image-pill-name")?.textContent).toBe("pending.png");
+  });
+
   it("requires explicit cancellation before sending without a pending file", async () => {
     store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",imageInput:true});
     const send = vi.spyOn(tabRegistry,"sendToTab").mockImplementation(() => {});
