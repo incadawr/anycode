@@ -131,18 +131,38 @@ describe("copyCodexRolloutForThread", () => {
     expect(result).toMatchObject({ ok: false, reason: "rollout_missing" });
   });
 
-  it("matches the thread id as a whole segment even when it is not first in the name", async () => {
+  it("treats everything after the timestamp as the id, so a PREFIXED id is not a match", async () => {
     const source = join(root, "a", "sessions");
     const target = join(root, "b", "sessions");
     await mkdir(join(source, "2026", "10", "30"), { recursive: true });
+    // The id in this name is `prefix-<uuid>`, not `<uuid>`: reading only the
+    // trailing uuid would invent a match and copy the wrong conversation.
     await writeFile(
-      join(source, "2026", "10", "30", `rollout-2026-10-30T10-00-00-suffixed-${THREAD_ID}.jsonl`),
+      join(source, "2026", "10", "30", `rollout-2026-10-30T10-00-00-prefix-${THREAD_ID}.jsonl`),
       ROLLOUT_TEXT,
     );
 
     const result = await copyCodexRolloutForThread({ sourceSessionsDir: source, targetSessionsDir: target, threadId: THREAD_ID });
 
-    expect(result).toMatchObject({ ok: true, relativePath: join("2026", "10", "30", `rollout-2026-10-30T10-00-00-suffixed-${THREAD_ID}.jsonl`) });
+    expect(result).toMatchObject({ ok: false, reason: "rollout_missing" });
+  });
+
+  it("matches that same file when the requested id IS the whole remainder", async () => {
+    const source = join(root, "a", "sessions");
+    const target = join(root, "b", "sessions");
+    await mkdir(join(source, "2026", "10", "30"), { recursive: true });
+    await writeFile(
+      join(source, "2026", "10", "30", `rollout-2026-10-30T10-00-00-prefix-${THREAD_ID}.jsonl`),
+      ROLLOUT_TEXT,
+    );
+
+    const result = await copyCodexRolloutForThread({
+      sourceSessionsDir: source,
+      targetSessionsDir: target,
+      threadId: `prefix-${THREAD_ID}`,
+    });
+
+    expect(result).toMatchObject({ ok: true });
   });
 
   it("refuses to choose between two rollouts that both claim the thread", async () => {
@@ -272,7 +292,7 @@ describe("handleCodexContinueOnAccount", () => {
       },
       createSessionFromSource: async (_sourceId, meta) => {
         created.push(meta);
-        return { ...meta, createdAt: 1, updatedAt: 1 };
+        return { ok: true as const, session: { ...meta, createdAt: 1, updatedAt: 1 } };
       },
       deleteSession: async (sessionId) => {
         deleted.push(sessionId);
@@ -382,7 +402,7 @@ describe("handleCodexContinueOnAccount", () => {
   });
 
   it("retains a published rollout if the source disappeared before registration", async () => {
-    const createSessionFromSource = vi.fn(async () => null);
+    const createSessionFromSource = vi.fn(async () => ({ ok: false as const, reason: "source_missing" as const }));
     const h = await harness({createSessionFromSource});
     const result = await handleCodexContinueOnAccount(h.deps, { tabId:"tab-1", accountId:"account-b" });
     expect(result).toMatchObject({ok:false, reason:"unknown_session", detail:expect.stringContaining("A retry on that account will be blocked")});
@@ -407,7 +427,7 @@ describe("handleCodexContinueOnAccount", () => {
   });
 
   it("refuses an existing rollout before source registration", async () => {
-    const h = await harness({createSessionFromSource:async () => null});
+    const h = await harness({createSessionFromSource:async () => ({ ok: false as const, reason: "source_missing" as const })});
     await seedRollout(h.accountBSessionsDir, "existing-fixture");
     const result = await handleCodexContinueOnAccount(h.deps, {tabId:"tab-1",accountId:"account-b"});
     expect(result).toMatchObject({ok:false,reason:"target_exists"});
@@ -435,7 +455,9 @@ describe("handleCodexContinueOnAccount", () => {
     let attempts = 0;
     const h = await harness({createSessionFromSource:async (_source,meta) => {
       attempts++;
-      return attempts === 1 ? null : {...meta,createdAt:1,updatedAt:1};
+      return attempts === 1
+        ? { ok: false as const, reason: "source_missing" as const }
+        : { ok: true as const, session: {...meta,createdAt:1,updatedAt:1} };
     }});
     expect(await handleCodexContinueOnAccount(h.deps,{tabId:"tab-1",accountId:"account-b"})).toMatchObject({ok:false,reason:"unknown_session"});
     await seedRollout(h.sourceSessionsDir, "newer-rollout-v2");
@@ -492,7 +514,7 @@ describe("handleCodexContinueOnAccount", () => {
     let entered!: () => void;
     const started = new Promise<void>(resolve => {entered=resolve;});
     const proceed = new Promise<void>(resolve => {release=resolve;});
-    const first = await harness({createSessionFromSource:async () => {entered(); await proceed; return null;}});
+    const first = await harness({createSessionFromSource:async () => {entered(); await proceed; return { ok: false as const, reason: "source_missing" as const }; }});
     const second = await harness({
       sessionsDir: first.deps.sessionsDir,
       randomUUID:()=>"second-id",
@@ -571,7 +593,7 @@ describe("handleCodexContinueOnAccount", () => {
 
   it("takes over an EXPIRED claim but says the earlier transfer may be incomplete", async () => {
     claims.set(claimKey(THREAD_ID, "account-b"), { expiresAt: clock - 1, token: "stale" });
-    const h = await harness({ createSessionFromSource: async () => null });
+    const h = await harness({ createSessionFromSource: async () => ({ ok: false as const, reason: "source_missing" as const }) });
 
     const result = await handleCodexContinueOnAccount(h.deps, { tabId: "tab-1", accountId: "account-b" });
 
@@ -592,7 +614,7 @@ describe("handleCodexContinueOnAccount", () => {
   });
 
   it("releases the claim on every refusal, so one failure cannot wedge the action", async () => {
-    const h = await harness({ createSessionFromSource: async () => null });
+    const h = await harness({ createSessionFromSource: async () => ({ ok: false as const, reason: "source_missing" as const }) });
 
     await handleCodexContinueOnAccount(h.deps, { tabId: "tab-1", accountId: "account-b" });
 
@@ -669,7 +691,7 @@ describe("registerCodexContinueIpc", () => {
     claimContinuation: async () => ({ status: "claimed" as const, token: "t" }),
     holdsContinuation: async () => true,
     releaseContinuation: async () => {},
-    createSessionFromSource: async () => null,
+    createSessionFromSource: async () => ({ ok: false as const, reason: "source_missing" as const }),
     deleteSession: async () => {},
     openResumeTab: async () => ({ ok: true as const, tabId: "tab" }),
     randomUUID: () => "id",

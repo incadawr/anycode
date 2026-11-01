@@ -140,6 +140,18 @@ export type SessionMetaPatch = Partial<
  * the cascade deleted. Unknown ids are a no-op (absent from `deleted`).
  */
 /**
+ * Outcome of the atomic "create a successor only if the source is unchanged".
+ *
+ * The two failures are deliberately separate: a DELETED source and a source
+ * that was re-pointed to a different conversation both refuse, but telling a
+ * user "the session is gone" when it merely changed would be a false account of
+ * what happened to their history.
+ */
+export type CreateSessionFromSourceResult =
+  | { ok: true; session: SessionMeta }
+  | { ok: false; reason: "source_missing" | "source_changed" };
+
+/**
  * Outcome of `claimContinuation`. `taken_over` is distinct from `claimed` on
  * purpose: an expired claim means the previous transfer was abandoned midway,
  * which is a fact the text must not hide. `held` means a live claim exists.
@@ -184,7 +196,7 @@ export interface PersistencePort {
   createSessionFromSource(
     sourceId: string,
     meta: Omit<SessionMeta, "createdAt" | "updatedAt">,
-  ): Promise<SessionMeta | null>;
+  ): Promise<CreateSessionFromSourceResult>;
   /**
    * Cross-process claim on ONE `(threadId, accountId)` continuation: the
    * primitive that stops a second host process from copying the same rollout
