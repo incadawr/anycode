@@ -490,6 +490,8 @@ function touchSessionActivity(db: DatabaseSync, sessionId: string, items: readon
 const SESSION_LAST_ACTIVITY_SQL =
   "COALESCE((SELECT MAX(json_extract(h.data, '$.createdAt')) FROM history_items h WHERE h.session_id = s.id), s.updated_at)";
 
+class RollbackFailure extends AggregateError {}
+
 function rollbackAndRethrow(db: DatabaseSync, original: unknown): never {
   try {
     db.exec("ROLLBACK");
@@ -497,7 +499,7 @@ function rollbackAndRethrow(db: DatabaseSync, original: unknown): never {
     // RAISE(ROLLBACK, ...) ends the transaction before control reaches JS.
     if (!(rollbackError instanceof Error && rollbackError.message === "cannot rollback - no transaction is active")) {
       const describe = (error: unknown): string => error instanceof Error ? error.message : String(error);
-      throw new AggregateError([original, rollbackError], `${describe(original)}; rollback failed: ${describe(rollbackError)}`, {cause: original});
+      throw new RollbackFailure([original, rollbackError], `${describe(original)}; rollback failed: ${describe(rollbackError)}`, {cause: original});
     }
   }
   throw original;
@@ -969,12 +971,36 @@ function assertCliAdmission(db: DatabaseSync, admission: CliAdmission): void {
 
 export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStore {
   private db: DatabaseSync | undefined;
+  private quarantined = false;
+
+  private assertUsable(): void {
+    if (this.quarantined) throw new Error("SQLite adapter is quarantined after a rollback or connection cleanup failure; close it and check database state before reopening.");
+  }
+
+  private failTransaction(db: DatabaseSync, original: unknown): never {
+    try {
+      rollbackAndRethrow(db, original);
+    } catch (error) {
+      if (error instanceof RollbackFailure) {
+        this.quarantined = true;
+        try {
+          db.close();
+          if (this.db === db) this.db = undefined;
+        } catch (closeError) {
+          // Keep the quarantined handle so close() may retry cleanup.
+          throw new AggregateError([error, closeError], `${error.message}; connection cleanup failed: ${closeError instanceof Error ? closeError.message : String(closeError)}`, {cause:error});
+        }
+      }
+      throw error;
+    }
+  }
 
   /** dbPath: file path or ":memory:"; the database is opened lazily on first use. */
   constructor(private readonly dbPath: string, private readonly options?: { strictSessionSchema?: boolean; cliAdmission?: CliAdmission }) {}
 
   /** Opens (once) + migrates the database, creating the parent directory for file-backed paths. */
   private open(): DatabaseSync {
+    this.assertUsable();
     if (this.db) {
       return this.db;
     }
@@ -1010,7 +1036,13 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       }
       if (this.options?.strictSessionSchema === true) assertCliSchemaCompatible(db);
     } catch (error) {
-      db.close();
+      if (error instanceof RollbackFailure) this.quarantined = true;
+      try { db.close(); }
+      catch (closeError) {
+        this.quarantined = true;
+        this.db = db;
+        throw new AggregateError([error,closeError], `${error instanceof Error ? error.message : String(error)}; connection cleanup failed: ${closeError instanceof Error ? closeError.message : String(closeError)}`, {cause:error});
+      }
       throw error;
     }
     this.db = db;
@@ -1026,7 +1058,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       db.exec("COMMIT");
       return result;
     } catch (err) {
-      rollbackAndRethrow(db, err);
+      this.failTransaction(db, err);
     }
   }
 
@@ -1393,6 +1425,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   }
 
   async claimWorktree(id: string, target: string, patch: SessionMetaPatch): Promise<boolean> {
+    this.assertUsable();
     if (
       (patch.worktree === undefined || patch.worktree === null || patch.workspace === undefined) &&
       patch.worktreeCleanup?.path !== target
@@ -1430,7 +1463,8 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
           transition?.worktree.path === target;
       });
       if (conflict) {
-        db.exec("ROLLBACK");
+        // This branch performed only reads; committing releases the lock.
+        db.exec("COMMIT");
         return false;
       }
       if (patch.worktree !== undefined && patch.worktree !== null && patch.workspace !== undefined) {
@@ -1476,12 +1510,12 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       db.exec("COMMIT");
       return true;
     } catch (error) {
-      try { db.exec("ROLLBACK"); } catch { /* preserve original error */ }
-      throw error;
+      this.failTransaction(db, error);
     }
   }
 
   async appendHistory(sessionId: string, items: readonly HistoryItem[]): Promise<void> {
+    this.assertUsable();
     if (items.length === 0) {
       return;
     }
@@ -1556,6 +1590,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
    * the next reopen.
    */
   async discardCompactionRecords(sessionId: string, ids: readonly string[]): Promise<void> {
+    this.assertUsable();
     if (ids.length === 0) return;
     this.transaction((tx) => {
       const placeholders = ids.map(() => "?").join(", ");
@@ -1982,6 +2017,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
    * roots that actually left the table; unknown ids are a no-op.
    */
   async deleteSessions(ids: readonly string[]): Promise<SessionDeleteSummary> {
+    this.assertUsable();
     const summary = SqlitePersistenceAdapter.emptyDeleteSummary();
     if (ids.length === 0) {
       return summary;

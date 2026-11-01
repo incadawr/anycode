@@ -1484,6 +1484,28 @@ describe("CLI sessions/resume UX (design slice-4.4-cut.md §7)", () => {
     } finally { verify.close(); }
   });
 
+  it.each(["CLI", "ordinary"])("quarantines an adapter after rollback failure during %s migration", async (path) => {
+    const {workspace,dbPath} = setupTitleTestDirs();
+    createV4Fixture(dbPath,workspace,"core");
+    const db = new DatabaseSync(dbPath);
+    try { db.exec("ALTER TABLE codex_thread_items ADD COLUMN seq_in_turn INTEGER"); } finally { db.close(); }
+    const originalExec = DatabaseSync.prototype.exec;
+    const exec = vi.spyOn(DatabaseSync.prototype,"exec").mockImplementation(function (this: DatabaseSync, sql: string) {
+      if (sql === "ROLLBACK") throw new Error("synthetic rollback failure");
+      return originalExec.call(this,sql);
+    });
+    const adapter = new SqlitePersistenceAdapter(dbPath,path === "CLI" ? {strictSessionSchema:true,cliAdmission:{id:"fixture"}} : undefined);
+    try {
+      await expect(adapter.listRootSessions()).rejects.toThrow("synthetic rollback failure");
+      await expect(adapter.touchSession("fixture",{title:"blocked"})).rejects.toThrow(/quarantin/i);
+      await adapter.close();
+      await expect(adapter.listRootSessions()).rejects.toThrow(/quarantin/i);
+    } finally { exec.mockRestore(); await adapter.close(); }
+    const verify = new DatabaseSync(dbPath,{readOnly:true});
+    try { expect(verify.prepare("SELECT MAX(version) AS v FROM schema_migrations").get()).toMatchObject({v:4}); expect(verify.prepare("SELECT count(*) AS n FROM codex_thread_items").get()).toMatchObject({n:1}); }
+    finally { verify.close(); }
+  });
+
   it("reports --continue activity from history rather than metadata updated_at", async () => {
     const {workspace,dbPath,home} = setupTitleTestDirs();
     await createSyntheticRoot(dbPath,workspace,"activity",{engineId:"core"},Date.now()-86400000);
