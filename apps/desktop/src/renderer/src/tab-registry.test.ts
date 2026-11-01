@@ -1433,6 +1433,27 @@ describe("tab-registry — queueInitialPrompt images", () => {
   });
 });
 
+describe("tab-registry — ready host connection identity", () => {
+  it("rejects a closed port before a host-exit envelope and distinguishes a replacement", () => {
+    const {registry} = createTestRegistry(createTabsStore());
+    const first = new FakeMessagePort();
+    registry.registerPort("tab-a","/ws/a",asPort(first));
+    first.emit(HOST_READY("/ws/a","sess-a"));
+    const store = registry.getStore("tab-a")!;
+    const initial = registry.getLiveHostConnection("tab-a",store);
+    expect(initial).not.toBeNull();
+    first.close();
+    expect(registry.getLiveHostConnection("tab-a",store)).toBeNull();
+    const replacement = new FakeMessagePort();
+    registry.registerPort("tab-a","/ws/a",asPort(replacement));
+    expect(registry.getLiveHostConnection("tab-a",store)).toBeNull();
+    replacement.emit(HOST_READY("/ws/a","sess-a"));
+    const current = registry.getLiveHostConnection("tab-a",store);
+    expect(current).not.toBeNull();
+    expect(current).not.toBe(initial);
+  });
+});
+
 describe("tab-registry — prompt-queue drainer (slice P7.14 · F15)", () => {
   it("delivers system reports behind a held initial draft through the real subscriber", () => {
     const tabsStore = createTabsStore();

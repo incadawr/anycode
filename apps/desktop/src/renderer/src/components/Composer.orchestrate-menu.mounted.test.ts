@@ -10,7 +10,7 @@
 // @vitest-environment jsdom
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Composer } from "./Composer.js";
 import { TabContext } from "../tab-context.js";
 import { createDesktopStore } from "../store.js";
@@ -54,6 +54,11 @@ function coreReady(mode: "plan" | "build"): HostToUiMessage {
     },
   };
 }
+
+beforeEach(() => {
+  const connection = {};
+  vi.spyOn(tabRegistry, "getLiveHostConnection").mockImplementation((_id, store) => store.getState().connection === "ready" ? connection : null);
+});
 
 afterEach(() => {
   document.body.replaceChildren();

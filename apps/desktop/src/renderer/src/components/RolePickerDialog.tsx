@@ -362,7 +362,9 @@ export function RolePickerDialog({
       {content}
     </section>
   ) : (
-    <dialog ref={dialogRef} className="role-picker-dialog" aria-label="Choose orchestration roles">
+    <dialog ref={dialogRef} className="role-picker-dialog" aria-label="Choose orchestration roles"
+      onCancel={(event) => { event.preventDefault(); }}
+      onClose={() => { const dialog = dialogRef.current; if (open && dialog?.isConnected && !dialog.open) dialog.showModal(); }}>
       {content}
     </dialog>
   );

@@ -24,6 +24,7 @@ import { lazy, Suspense, useContext, useEffect, useLayoutEffect, useRef, useStat
 import type { ClipboardEvent, DragEvent, FocusEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { CodexRateLimitsWire, ImageAttachment, ImageMediaType, PermissionMode } from "@anycode/core";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
+import { tabRegistry } from "../tab-registry.js";
 import { isSessionBusy, type ContextUsage, type DesktopState, type QueuedPrompt, type SessionTokens, type TurnState } from "../store.js";
 import { useSettingsStore } from "../settings-store.js";
 import { useTabsStore } from "../tabs-store.js";
@@ -1639,16 +1640,44 @@ export function Composer() {
   }
 
   /** Claim one picker before emitting any toggle or task. */
-  function finishRolePicker(id: string): void {
+  function finishRolePicker(id: string, expectedConnection: object): void {
     const picker = tabStore.getState().composerRolePicker;
-    if (!picker || picker.id !== id || picker.saveOperation) return;
+    if (!picker || picker.id !== id || picker.saveOperation || picker.completionClaim) return;
+    const connected = () => !!slashTabId && tabRegistry.getLiveHostConnection(slashTabId, tabStore) === expectedConnection;
+    const retain = (text: string): void => {
+      tabStore.setState((state) => state.composerRolePicker?.id === id ? {composerRolePicker:{...state.composerRolePicker,completionClaim:undefined}} : {});
+      tabStore.getState().setNotice({kind:"slash_command_rejected",text});
+    };
+    if (!connected()) {
+      retain("Session disconnected or changed. The task and orchestration intent are retained; review the picker before continuing.");
+      return;
+    }
     if (!picker.forToggle && (imagesStillLoading() || refuseOrchestrateAttachments())) return;
-    tabStore.setState({composerRolePicker:null});
+    const claim = crypto.randomUUID();
+    tabStore.setState((state) => state.composerRolePicker?.id === id && !state.composerRolePicker.saveOperation && !state.composerRolePicker.completionClaim
+      ? {composerRolePicker:{...state.composerRolePicker,completionClaim:claim}} : {});
+    if (tabStore.getState().composerRolePicker?.completionClaim !== claim) return;
+    if (!connected()) {
+      retain("Session disconnected or changed. The task and orchestration intent are retained; review the picker before continuing.");
+      return;
+    }
+    try {
+      sendToHost({type:"set_orchestrate",enabled:true});
+      if (!picker.forToggle && picker.task) {
+        if (!connected()) throw new Error("connection changed");
+        const requestId = crypto.randomUUID();
+        sendToHost({type:"user_message",requestId,text:picker.task});
+        tabStore.getState().appendUserText(requestId,picker.task);
+        tabStore.getState().recordSentMessage(picker.task,[],requestId,"enable");
+      }
+    } catch {
+      retain("Delivery was not confirmed. The task and orchestration intent are retained; review the session before retrying.");
+      return;
+    }
+    tabStore.setState((state) => state.composerRolePicker?.id === id && state.composerRolePicker.completionClaim === claim ? {composerRolePicker:null} : {});
     setPendingOrchestrateTask(null);
     setRolePickerForToggle(false);
     setRolePickerOpen(false);
-    sendToHost({type:"set_orchestrate",enabled:true});
-    if (!picker.forToggle && picker.task) submitOrchestrateTask(picker.task);
   }
 
   /** Send one text as a user message through the same wire path handleSend's idle branch uses. */
@@ -2156,20 +2185,25 @@ export function Composer() {
       {restoredOrchestrate && <div className="composer-hint">Orchestration intent retained. This draft will not be sent as an ordinary message. <button type="button" onClick={() => setRestoredOrchestrate(false)}>Remove orchestration intent</button></div>}
       <RolePickerDialog
         open={rolePickerOpen}
-        saving={rolePickerSnapshot?.saveOperation !== undefined}
+        saving={rolePickerSnapshot?.saveOperation !== undefined || rolePickerSnapshot?.completionClaim !== undefined}
         draftStorage={{
-          canEdit: () => { const picker = tabStore.getState().composerRolePicker; return !!picker && picker.id === rolePickerSnapshot?.id && !picker.saveOperation; },
+          canEdit: () => { const picker = tabStore.getState().composerRolePicker; return !!picker && picker.id === rolePickerSnapshot?.id && !picker.saveOperation && !picker.completionClaim; },
           load: () => {
             const picker = tabStore.getState().composerRolePicker;
             return picker?.id === rolePickerSnapshot?.id && picker?.draft ? {draft: picker.draft, seededDraft: picker.seededDraft ?? null} : undefined;
           },
-          save: (draft, seededDraft) => tabStore.setState((state) => state.composerRolePicker && state.composerRolePicker.id === rolePickerSnapshot?.id && !state.composerRolePicker.saveOperation ? { composerRolePicker: { ...state.composerRolePicker, draft, seededDraft } } : {}),
+          save: (draft, seededDraft) => tabStore.setState((state) => state.composerRolePicker && state.composerRolePicker.id === rolePickerSnapshot?.id && !state.composerRolePicker.saveOperation && !state.composerRolePicker.completionClaim ? { composerRolePicker: { ...state.composerRolePicker, draft, seededDraft } } : {}),
         }}
         connections={useSettingsStore.getState().snapshot?.settings.provider.connections ?? []}
         activeConnectionId={useSettingsStore.getState().snapshot?.settings.provider.activeConnectionId}
         onSave={(roles) => {
           const picker = tabStore.getState().composerRolePicker;
-          if (!picker || picker.id !== rolePickerSnapshot?.id || picker.saveOperation) return;
+          if (!picker || picker.id !== rolePickerSnapshot?.id || picker.saveOperation || picker.completionClaim) return;
+          const connection = slashTabId ? tabRegistry.getLiveHostConnection(slashTabId, tabStore) : null;
+          if (!connection) {
+            tabStore.getState().setNotice({kind:"slash_command_rejected",text:"Session is not connected. The task and orchestration intent are retained."});
+            return;
+          }
           const operation = crypto.randomUUID();
           tabStore.setState((state) => state.composerRolePicker?.id === picker.id && !state.composerRolePicker.saveOperation
             ? {composerRolePicker:{...state.composerRolePicker,saveOperation:operation}} : {});
@@ -2183,7 +2217,7 @@ export function Composer() {
               tabStore.getState().setNotice({kind:"slash_command_rejected",text:ok ? "Roles saved. Review the picker before continuing." : "Role save was not confirmed. Review the picker before retrying."});
               return;
             }
-            finishRolePicker(picker.id);
+            finishRolePicker(picker.id, connection);
           };
           try {
             void useSettingsStore.getState().setPatch(rolesPatch(useSettingsStore.getState().snapshot?.settings ?? {}, roles, projectRoot))
@@ -2192,7 +2226,13 @@ export function Composer() {
         }}
         onSkip={() => {
           const picker = tabStore.getState().composerRolePicker;
-          if (picker && picker.id === rolePickerSnapshot?.id && !picker.saveOperation) finishRolePicker(picker.id);
+          if (!picker || picker.id !== rolePickerSnapshot?.id || picker.saveOperation || picker.completionClaim) return;
+          const connection = slashTabId ? tabRegistry.getLiveHostConnection(slashTabId, tabStore) : null;
+          if (!connection) {
+            tabStore.getState().setNotice({kind:"slash_command_rejected",text:"Session is not connected. The task and orchestration intent are retained."});
+            return;
+          }
+          finishRolePicker(picker.id, connection);
         }}
       />
       {isNewSession && <EnvironmentMenu placement="composer" />}

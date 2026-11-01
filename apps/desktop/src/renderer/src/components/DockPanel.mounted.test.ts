@@ -65,6 +65,8 @@ describe("dock resize handle placement (GitHub #31)", () => {
   let root: Root;
 
   beforeEach(() => {
+    const connection = {};
+    vi.spyOn(tabRegistry, "getLiveHostConnection").mockImplementation((_id, target) => target.getState().connection === "ready" ? connection : null);
     // The dock store singleton is global across tests in this file — reset
     // the triple App.tsx reads (owner-scoped tabs) and the persisted width
     // so one test's dock state never leaks into the next mount.
@@ -207,10 +209,23 @@ describe("dock resize handle placement (GitHub #31)", () => {
       });
       const option = [...container.querySelectorAll<HTMLElement>('[role="option"]')].find(element => element.textContent?.includes("Orchestrate"))!;
       await act(async () => option.click());
+      const dialog = container.querySelector<HTMLDialogElement>('[aria-label="Choose orchestration roles"]')!;
+      const pickerId = store.getState().composerRolePicker!.id;
+      const idleCancel = new Event("cancel",{cancelable:true});
+      await act(async () => dialog.dispatchEvent(idleCancel));
+      expect(idleCancel.defaultPrevented).toBe(true);
+      expect(dialog.open).toBe(true);
       const saveButton = container.querySelector<HTMLButtonElement>('[data-testid="role-picker-save"]')!;
       const skipButton = container.querySelector<HTMLButtonElement>('[data-testid="role-picker-skip"]')!;
       await act(async () => { saveButton.click(); saveButton.click(); skipButton.click(); });
       expect(save).toHaveBeenCalledOnce();
+      const savingCancel = new Event("cancel",{cancelable:true});
+      await act(async () => dialog.dispatchEvent(savingCancel));
+      expect(savingCancel.defaultPrevented).toBe(true);
+      expect(dialog.open).toBe(true);
+      expect(store.getState().composerRolePicker?.id).toBe(pickerId);
+      await act(async () => { dialog.open = false; dialog.dispatchEvent(new Event("close")); });
+      expect(dialog.open).toBe(true);
       expect(send).not.toHaveBeenCalledWith("a",expect.objectContaining({type:"user_message"}));
       await act(async () => resolve({ok:true,snapshot:useSettingsStore.getState().snapshot!}));
       const messages = send.mock.calls.filter(([,message]) => message.type === "user_message");
@@ -218,6 +233,117 @@ describe("dock resize handle placement (GitHub #31)", () => {
       expect(messages[0]?.[1]).toMatchObject({type:"user_message",text:"plan task"});
       expect(send.mock.calls.filter(([,message]) => message.type === "set_orchestrate")).toHaveLength(1);
     } finally {
+      HTMLDialogElement.prototype.showModal = originalShow;
+      useSettingsStore.setState({snapshot:previous.snapshot,setPatch:previous.setPatch});
+    }
+  });
+
+  it("retains the task and intent when the host exits before role save resolves", async () => {
+    vi.mocked(tabRegistry.getLiveHostConnection).mockRestore();
+    const previous = useSettingsStore.getState();
+    let resolve!: (value:Awaited<ReturnType<typeof previous.setPatch>>) => void;
+    const save = vi.fn(() => new Promise<Awaited<ReturnType<typeof previous.setPatch>>>(done => {resolve = done;}));
+    useSettingsStore.setState({snapshot:{settings:cloneDefaults(),secrets:[],providerReady:true,envOverrides:[],readOnly:false,catalog:[]},setPatch:save as typeof previous.setPatch});
+    const originalShow = HTMLDialogElement.prototype.showModal;
+    HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+    const port = {onmessage:null as ((event:MessageEvent) => void) | null,postMessage:vi.fn(),addEventListener:()=>{},removeEventListener:()=>{}};
+    const tabId = "role-host-exit-test";
+    tabRegistry.registerPort(tabId,"/ws",port as unknown as MessagePort);
+    const target = tabRegistry.getStore(tabId)!;
+    port.onmessage!({data:{type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1"}} as MessageEvent);
+    try {
+      await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId,store:target}}, createElement(SessionSurface, {tabId,onToast:() => {}}))));
+      const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(textarea,"/orchestrate preserve this task");
+        textarea.setSelectionRange(12,12);
+        textarea.dispatchEvent(new Event("input",{bubbles:true}));
+        textarea.dispatchEvent(new KeyboardEvent("keyup",{bubbles:true,key:"e"}));
+      });
+      const option = [...container.querySelectorAll<HTMLElement>('[role="option"]')].find(element => element.textContent?.includes("Orchestrate"))!;
+      await act(async () => option.click());
+      const picker = target.getState().composerRolePicker!;
+      await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="role-picker-save"]')!.click());
+      expect(save).toHaveBeenCalledOnce();
+      await act(async () => tabRegistry.markHostExited(tabId));
+      await act(async () => resolve({ok:true,snapshot:useSettingsStore.getState().snapshot!}));
+      expect(target.getState().composerRolePicker).toMatchObject({id:picker.id,task:"preserve this task",forToggle:false});
+      expect(target.getState().composerRolePicker?.saveOperation).toBeUndefined();
+      expect(target.getState().restoredComposerDraft?.text.trim()).toBe("preserve this task");
+      expect(target.getState().restoredComposerDraft?.images).toEqual([]);
+      expect(target.getState().notice?.text).toContain("intent are retained");
+      expect(port.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type:"set_orchestrate"}));
+      expect(port.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type:"user_message"}));
+      expect(target.getState().transcript.some(item => item.kind === "user_text")).toBe(false);
+      const replacement = {onmessage:null as ((event:MessageEvent) => void) | null,postMessage:vi.fn(),addEventListener:()=>{},removeEventListener:()=>{}};
+      await act(async () => { tabRegistry.registerPort(tabId,"/ws",replacement as unknown as MessagePort); replacement.onmessage!({data:{type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1"}} as MessageEvent); });
+      expect(target.getState().composerRolePicker?.task).toBe("preserve this task");
+      expect(replacement.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type:"user_message"}));
+      expect(replacement.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type:"set_orchestrate"}));
+    } finally {
+      tabRegistry.disposeTab(tabId);
+      HTMLDialogElement.prototype.showModal = originalShow;
+      useSettingsStore.setState({snapshot:previous.snapshot,setPatch:previous.setPatch});
+    }
+  });
+
+  it("retains the picker if the connection disappears during completion claiming", async () => {
+    const previous = useSettingsStore.getState();
+    const save = vi.fn(async () => ({ok:true as const,snapshot:useSettingsStore.getState().snapshot!}));
+    useSettingsStore.setState({snapshot:{settings:cloneDefaults(),secrets:[],providerReady:true,envOverrides:[],readOnly:false,catalog:[]},setPatch:save as typeof previous.setPatch});
+    const originalShow = HTMLDialogElement.prototype.showModal;
+    HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1"});
+    store.setState({composerRolePicker:{id:"picker",task:"held task",forToggle:false}});
+    const connection = {};
+    vi.mocked(tabRegistry.getLiveHostConnection).mockImplementation((_tabId,target) => target.getState().composerRolePicker?.completionClaim ? null : connection);
+    const send = vi.spyOn(tabRegistry,"sendToTab").mockImplementation(() => {});
+    try {
+      await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId:"a",store}}, createElement(SessionSurface, {tabId:"a",onToast:() => {}}))));
+      await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="role-picker-save"]')!.click());
+      expect(store.getState().composerRolePicker).toMatchObject({id:"picker",task:"held task",forToggle:false});
+      expect(store.getState().composerRolePicker?.completionClaim).toBeUndefined();
+      expect(send).not.toHaveBeenCalledWith("a",expect.objectContaining({type:"set_orchestrate"}));
+      expect(send).not.toHaveBeenCalledWith("a",expect.objectContaining({type:"user_message"}));
+      expect(store.getState().transcript.some(item => item.kind === "user_text")).toBe(false);
+    } finally {
+      HTMLDialogElement.prototype.showModal = originalShow;
+      useSettingsStore.setState({snapshot:previous.snapshot,setPatch:previous.setPatch});
+    }
+  });
+
+  it("does not auto-send a saved task onto a replacement host connection", async () => {
+    vi.mocked(tabRegistry.getLiveHostConnection).mockRestore();
+    const previous = useSettingsStore.getState();
+    let resolve!: (value:Awaited<ReturnType<typeof previous.setPatch>>) => void;
+    const save = vi.fn(() => new Promise<Awaited<ReturnType<typeof previous.setPatch>>>(done => {resolve = done;}));
+    useSettingsStore.setState({snapshot:{settings:cloneDefaults(),secrets:[],providerReady:true,envOverrides:[],readOnly:false,catalog:[]},setPatch:save as typeof previous.setPatch});
+    const originalShow = HTMLDialogElement.prototype.showModal;
+    HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+    const makePort = () => ({onmessage:null as ((event:MessageEvent) => void) | null,postMessage:vi.fn(),addEventListener:()=>{},removeEventListener:()=>{}});
+    const first = makePort();
+    const tabId = "role-reconnect-test";
+    const ready = {type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1"};
+    tabRegistry.registerPort(tabId,"/ws",first as unknown as MessagePort);
+    const target = tabRegistry.getStore(tabId)!;
+    first.onmessage!({data:ready} as MessageEvent);
+    target.setState({composerRolePicker:{id:"picker",task:"held task",forToggle:false}});
+    try {
+      await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId,store:target}}, createElement(SessionSurface, {tabId,onToast:() => {}}))));
+      await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="role-picker-save"]')!.click());
+      const replacement = makePort();
+      await act(async () => {
+        tabRegistry.markHostExited(tabId);
+        tabRegistry.registerPort(tabId,"/ws",replacement as unknown as MessagePort);
+        replacement.onmessage!({data:ready} as MessageEvent);
+      });
+      await act(async () => resolve({ok:true,snapshot:useSettingsStore.getState().snapshot!}));
+      expect(target.getState().composerRolePicker).toMatchObject({id:"picker",task:"held task",forToggle:false});
+      expect(replacement.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type:"user_message"}));
+      expect(replacement.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type:"set_orchestrate"}));
+      expect(target.getState().notice?.text).toContain("intent are retained");
+    } finally {
+      tabRegistry.disposeTab(tabId);
       HTMLDialogElement.prototype.showModal = originalShow;
       useSettingsStore.setState({snapshot:previous.snapshot,setPatch:previous.setPatch});
     }

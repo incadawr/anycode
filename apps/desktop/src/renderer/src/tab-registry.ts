@@ -168,6 +168,8 @@ export interface TabRegistry {
   disposeTab(tabId: string): void;
   /** Sends to the tab's live connection; warns and drops if the tab has no connection (unknown tab, or mid-reconnect/exited). */
   sendToTab(tabId: string, message: UiToHostMessage): void;
+  /** Current renderer connection identity, only for this ready tab/store. */
+  getLiveHostConnection(tabId: string, store: DesktopStoreApi): object | null;
   /** The tab's store instance, or undefined if the tab isn't registered (yet, or anymore). */
   getStore(tabId: string): DesktopStoreApi | undefined;
   /**
@@ -282,6 +284,7 @@ export function createTabRegistry(
   childRelationStore: ChildRelationStoreApi = defaultChildRelationStore,
 ): TabRegistry {
   const entries = new Map<string, TabEntry>();
+  const unusableHostConnections = new WeakSet<HostConnection>();
   const agentTitles = new Map<string, string>();
   const closedTabIds = new Set<string>();
   /**
@@ -484,8 +487,12 @@ export function createTabRegistry(
     cancelPendingModel(tabId, entry);
     entry.unsubscribeMessages?.();
     entry.unsubscribeExpiry?.();
+    entry.unsubscribeExpiry = null;
     const connection = connectHost(port);
     entry.connection = connection;
+    const onConnectionClosed = () => { unusableHostConnections.add(connection); };
+    if (typeof port.addEventListener === "function") port.addEventListener("close", onConnectionClosed, {once:true});
+    else unusableHostConnections.add(connection);
     if (entry.isChild) {
       // The host-exit envelope and the UI port are independent channels. Keep
       // this small relation-only listener until expiry arrives or the port
@@ -503,6 +510,8 @@ export function createTabRegistry(
       port.addEventListener("close", cleanup, { once: true });
       entry.unsubscribeExpiry = cleanup;
     }
+    const cleanupExpiry = entry.unsubscribeExpiry;
+    entry.unsubscribeExpiry = () => { cleanupExpiry?.(); port.removeEventListener?.("close", onConnectionClosed); };
     entry.unsubscribeMessages = connection.subscribe((message) => {
       // sessionId lands on host_ready but isn't part of the frozen DesktopState
       // shape (store.ts §3.3) — the registry is the natural place to lift it
@@ -844,6 +853,11 @@ export function createTabRegistry(
         if (sessionId) childRelationStore.getState().dismissFinishedApprovals(sessionId);
       }
       entry.connection.send(message);
+    },
+
+    getLiveHostConnection(tabId, store): object | null {
+      const entry = entries.get(tabId);
+      return entry?.store === store && entry.connection !== null && !unusableHostConnections.has(entry.connection) && store.getState().connection === "ready" ? entry.connection : null;
     },
 
     getStore(tabId): DesktopStoreApi | undefined {

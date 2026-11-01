@@ -129,6 +129,8 @@ vi.mock("react", async (importOriginal) => {
 });
 
 // Store/tab/settings seams — the harness owns their state and spies.
+vi.mock("../tab-registry.js", () => ({ tabRegistry: { getLiveHostConnection: () => ({}) } }));
+
 vi.mock("../store.js", () => ({
   isSessionBusy: (status: string): boolean => status !== "idle",
 }));
