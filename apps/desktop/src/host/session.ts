@@ -2646,7 +2646,7 @@ export class Session {
         this.handleUiSteerMessage(message.requestId, message.text);
         return;
       case "user_message":
-          if (message.orchestrate !== undefined) this.outbound.sendDirect({ type: "turn_rejected", requestId: message.requestId, reason: "orchestrate_unavailable" });
+          if (message.orchestrate !== undefined) this.outbound.sendDirect({ type: "user_message_unavailable", requestId: message.requestId, reason: "orchestrate_unavailable" });
           else this.outbound.emit({ type: "turn_rejected", requestId: message.requestId, reason: "not_ready" });
           break;
         case "set_orchestrate":
@@ -2887,7 +2887,7 @@ export class Session {
         // Reserved for the future atomic admission path. Never silently turn an
         // unimplemented orchestration request into an ordinary user turn.
         if (message.orchestrate !== undefined) {
-          this.outbound.sendDirect({ type: "turn_rejected", requestId: message.requestId, reason: "orchestrate_unavailable" });
+          this.outbound.sendDirect({ type: "user_message_unavailable", requestId: message.requestId, reason: "orchestrate_unavailable" });
           break;
         }
         // Typed input is proof that a human is at the screen: it
