@@ -41,7 +41,7 @@
  * child-relation store (`live: false`) instead of a root-tab banner nobody
  * would ever see.
  */
-import { createDesktopStore, type DesktopState, type QueuedPromptImage } from "./store.js";
+import { createDesktopStore, type DesktopState, type QueuedPrompt, type QueuedPromptImage } from "./store.js";
 import type { PermissionMode, ReasoningEffort } from "@anycode/core";
 import { connectHost, connectTerminal, type HostConnection, type TerminalConnection } from "./port.js";
 import { useTabsStore, type TabsStoreApi } from "./tabs-store.js";
@@ -289,18 +289,23 @@ export function createTabRegistry(
    * picks) queued via `queueInitialPrompt`, waiting for its tab's
    * `host_ready`. `effort`/`images` join the same slot.
    */
-  const pendingInitialPrompts = new Map<
-    string,
-    {
-      text: string;
-      model?: string;
-      mode?: PermissionMode;
-      effort?: string;
-      images?: readonly QueuedPromptImage[];
-      reasoningEffort?: string;
-      orchestrate?: boolean;
-    }
-  >();
+  type InitialPrompt = { text: string; model?: string; mode?: PermissionMode; effort?: string; images?: readonly QueuedPromptImage[]; reasoningEffort?: string; orchestrate?: boolean };
+  const pendingInitialPrompts = new Map<string, InitialPrompt>();
+  const pendingInitialModels = new Map<string, { requestId: string; prompt: InitialPrompt; timer: ReturnType<typeof setTimeout>; connection: HostConnection }>();
+
+  function holdInitial(entry: TabEntry, prompt: InitialPrompt, text: string): void {
+    entry.store.getState().enqueuePrompt({ text: prompt.text, images: prompt.images ?? [], requiresRestore: true,
+      ...(prompt.orchestrate ? { orchestrate: "enable" as const } : {}),
+      initialPicks: { model: prompt.model, mode: prompt.mode, effort: prompt.effort, reasoningEffort: prompt.reasoningEffort } });
+    entry.store.getState().setNotice({ kind: "image_attach_rejected", text });
+  }
+  function cancelPendingModel(tabId: string, entry: TabEntry): void {
+    const pending = pendingInitialModels.get(tabId);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    pendingInitialModels.delete(tabId);
+    holdInitial(entry, pending.prompt, "Model selection could not be confirmed. Restore the draft to review its settings.");
+  }
 
   /**
    * core's reasoning-effort vocabulary is CLOSED (core's own
@@ -382,10 +387,11 @@ export function createTabRegistry(
     imageInput: boolean | undefined,
     imageFallback: boolean | undefined,
     orchestrate?: boolean,
+    picks?: QueuedPrompt["initialPicks"],
   ): void {
     const blocked = isSendBlockedByModelImages(imageInput, imageFallback, images.length);
     if (blocked) {
-      entry.store.getState().enqueuePrompt({ text, images, requiresRestore: true, ...(orchestrate === true ? { orchestrate: "enable" as const } : {}) });
+      entry.store.getState().enqueuePrompt({ text, images, requiresRestore: true, ...(picks !== undefined ? { initialPicks: picks } : {}), ...(orchestrate === true ? { orchestrate: "enable" as const } : {}) });
       entry.store.getState().setNotice({ kind: "image_attach_rejected", text: MODEL_IMAGE_ATTACH_BLOCKED_TEXT });
       return;
     }
@@ -453,8 +459,26 @@ export function createTabRegistry(
     }
   });
 
+  function startInitial(entry: TabEntry, tabId: string, prompt: InitialPrompt, current: { model: string | null; mode: PermissionMode | null; effort: string | undefined; reasoningEffort: ReasoningEffort | undefined }, imageInput: boolean | undefined, imageFallback: boolean | undefined): void {
+    if ((prompt.images?.length ?? 0) > 0 && prompt.model !== undefined && prompt.model !== current.model) {
+      if (!entry.connection) { holdInitial(entry, prompt, "Model selection could not be confirmed. Restore the draft to review its settings."); return; }
+      cancelPendingModel(tabId, entry);
+      const requestId = crypto.randomUUID();
+      const connection = entry.connection;
+      const timer = setTimeout(() => cancelPendingModel(tabId, entry), 10_000);
+      pendingInitialModels.set(tabId, { requestId, prompt, timer, connection });
+      connection.send({ type: "set_model", model: prompt.model, requestId });
+      return;
+    }
+    const blocked = isSendBlockedByModelImages(imageInput, imageFallback, prompt.images?.length ?? 0);
+    applyInitialPicks(entry, prompt.model, prompt.mode, prompt.effort, current, prompt.reasoningEffort, blocked ? false : prompt.orchestrate);
+    dispatchInitialPrompt(entry, prompt.text, prompt.images ?? [], imageInput, imageFallback, prompt.orchestrate,
+      { model: prompt.model, mode: prompt.mode, effort: prompt.effort, reasoningEffort: prompt.reasoningEffort });
+  }
+
   /** (Re)connects `port` to an existing entry: tears down the old subscription, wires the new one, kicks off the handshake. */
   function attach(entry: TabEntry, tabId: string, port: MessagePort): void {
+    cancelPendingModel(tabId, entry);
     entry.unsubscribeMessages?.();
     entry.unsubscribeExpiry?.();
     const connection = connectHost(port);
@@ -500,6 +524,18 @@ export function createTabRegistry(
       // §3.3 respawn semantics) — dispatch AFTER that reset, or a queued
       // initial prompt appended before it would be wiped along with it (§4.2).
       entry.store.getState().applyHostMessage(message);
+      if (message.type === "model_changed") {
+        const pending = pendingInitialModels.get(tabId);
+        if (pending && pending.connection === connection && message.requestId === pending.requestId) {
+          clearTimeout(pending.timer); pendingInitialModels.delete(tabId);
+          if (message.model !== pending.prompt.model || (message.imageInput === undefined && message.imageFallback !== true)) holdInitial(entry, pending.prompt, "Model selection could not be confirmed. Restore the draft to review its settings.");
+          else {
+            const state = entry.store.getState();
+            if (state.turn.status !== "idle" || state.queueInFlight !== null) holdInitial(entry, pending.prompt, "Session became busy. Restore the draft to review its settings.");
+            else startInitial(entry, tabId, pending.prompt, { model: message.model, mode: state.mode, effort: state.engine?.model?.effort, reasoningEffort: state.reasoningEffort }, message.imageInput, message.imageFallback);
+          }
+        }
+      }
       // renderer-local provider-switch markers are restored at
       // their recorded history boundaries right after the hydrated history
       // lands (chronological insert, ids already present skipped) — same
@@ -532,28 +568,7 @@ export function createTabRegistry(
           // re-send a prompt (or model switch) that already went out on the
           // first one — the resumed session persisted its own model.
           pendingInitialPrompts.delete(tabId);
-          // F5#1b D3: a task-scoped model pick that differs from the boot
-          // model is switched BEFORE the initial prompt, same port ⇒ in-order
-          // delivery; the host is idle at host_ready so the busy-guard passes.
-          if (!isSendBlockedByModelImages(message.imageInput, message.imageFallback, pending.images?.length ?? 0)) {
-          applyInitialPicks(
-            entry,
-            pending.model,
-            pending.mode,
-            pending.effort,
-            {
-              model: message.model,
-              mode: message.mode,
-              effort: message.engine?.model?.effort,
-              // The host's own boot default when it reports none — the same
-              // `?? "off"` store.ts applies to this exact field.
-              reasoningEffort: message.reasoningEffort ?? "off",
-            },
-            pending.reasoningEffort,
-            pending.orchestrate,
-          );
-          }
-          dispatchInitialPrompt(entry, pending.text, pending.images ?? [], message.imageInput, message.imageFallback, pending.orchestrate);
+          startInitial(entry, tabId, pending, { model: message.model, mode: message.mode, effort: message.engine?.model?.effort, reasoningEffort: message.reasoningEffort ?? "off" }, message.imageInput, message.imageFallback);
         }
       }
       if (message.type === "agent_event" && message.event.type === "error") {
@@ -720,6 +735,7 @@ export function createTabRegistry(
       if (!entry) {
         return;
       }
+      cancelPendingModel(tabId, entry);
       entry.unsubscribeMessages?.();
       entry.unsubscribeMessages = null;
       entry.connection = null;
@@ -778,6 +794,8 @@ export function createTabRegistry(
         tabsStore.getState().removeTab(tabId);
         return;
       }
+      const pendingModel = pendingInitialModels.get(tabId);
+      if (pendingModel) { clearTimeout(pendingModel.timer); pendingInitialModels.delete(tabId); }
       entry.unsubscribeMessages?.();
       entry.unsubscribeExpiry?.();
       entry.unsubscribeTerminalMessages?.();
@@ -876,6 +894,8 @@ export function createTabRegistry(
     },
 
     reset(): void {
+      for (const pending of pendingInitialModels.values()) clearTimeout(pending.timer);
+      pendingInitialModels.clear();
       entries.clear();
       closedTabIds.clear();
       agentTitles.clear();
@@ -889,30 +909,9 @@ export function createTabRegistry(
       }
       const entry = entries.get(tabId);
       if (entry?.store.getState().connection === "ready") {
-        // F5#1b D3 (already-ready shortcut): mirror the host_ready branch's
-        // set_model-before-prompt — the tab's store already tracks the live
-        // model (set at host_ready, kept current by model_changed), so compare
-        // against THAT instead of a boot-time message.
         const state = entry.store.getState();
-        if (isSendBlockedByModelImages(state.imageInput, state.imageFallback, images?.length ?? 0)) {
-          dispatchInitialPrompt(entry, text, images ?? [], state.imageInput, state.imageFallback, orchestrate);
-          return;
-        }
-        applyInitialPicks(
-          entry,
-          model,
-          mode,
-          effort,
-          {
-            model: state.model,
-            mode: state.mode,
-            effort: state.engine?.model?.effort,
-            reasoningEffort: state.reasoningEffort,
-          },
-          reasoningEffort,
-          orchestrate,
-        );
-        dispatchInitialPrompt(entry, text, images ?? [], state.imageInput, state.imageFallback, orchestrate);
+        startInitial(entry, tabId, { text, model, mode, effort, images, reasoningEffort, orchestrate },
+          { model: state.model, mode: state.mode, effort: state.engine?.model?.effort, reasoningEffort: state.reasoningEffort }, state.imageInput, state.imageFallback);
         return;
       }
       pendingInitialPrompts.set(tabId, { text, model, mode, effort, images, reasoningEffort, orchestrate });

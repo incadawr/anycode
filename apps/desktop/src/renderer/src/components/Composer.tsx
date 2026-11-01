@@ -1287,13 +1287,16 @@ function CtxPopover({
 }
 
 export function Composer() {
-  const [text, setText] = useState("");
+  const tabStore = useTabStoreApi();
+  const initialRestored = useRef(tabStore.getState().restoredComposerDraft ?? null);
+  const restoredOwned = useRef(initialRestored.current !== null);
+  const [text, setText] = useState(initialRestored.current?.text ?? "");
   const [pasteBlocks, setPasteBlocks] = useState<readonly PasteBlock[]>([]);
-  const [attachedImages, setAttachedImages] = useState<readonly DraftImage[]>([]);
+  const [attachedImages, setAttachedImages] = useState<readonly DraftImage[]>(initialRestored.current?.images.map((image, id) => ({ ...image, id: id + 1 })) ?? []);
   const [imageError, setImageError] = useState<string | null>(null);
   // Monotonic per mount — never reset (ids stay unambiguous across sends).
   const nextPasteIdRef = useRef(1);
-  const nextImageIdRef = useRef(1);
+  const nextImageIdRef = useRef((initialRestored.current?.images.length ?? 0) + 1);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // UI audit v0.0.49 §C2: the card's measured height is what keeps the toast
@@ -1333,9 +1336,19 @@ export function Composer() {
   // True when the mode menu's Orchestrate row (not a `/orchestrate` submit)
   // opened the first-run dialog: Save/Skip then only enable the flag.
   const [rolePickerForToggle, setRolePickerForToggle] = useState(false);
-  const [restoredOrchestrate, setRestoredOrchestrate] = useState(false);
+  const [restoredOrchestrate, setRestoredOrchestrate] = useState(initialRestored.current?.orchestrate === "enable");
+  const [restoredPicks, setRestoredPicks] = useState(initialRestored.current?.initialPicks);
   const restoreInProgress = useRef(false);
   useEffect(() => { restoreInProgress.current = false; }, [text, attachedImages]);
+  useLayoutEffect(() => {
+    if (!restoredOwned.current) return;
+    tabStore.setState({ restoredComposerDraft: {
+      text: reconstitutePasteMarkers(text, pasteBlocks),
+      images: attachedImages.map(({ name, sizeBytes, attachment }) => ({ name, sizeBytes, attachment })),
+      ...(restoredOrchestrate ? { orchestrate: "enable" as const } : {}),
+      ...(restoredPicks ? { initialPicks: restoredPicks } : {}),
+    } });
+  }, [tabStore, text, pasteBlocks, attachedImages, restoredOrchestrate, restoredPicks]);
 
   useLayoutEffect(() => {
     if (pendingCaretRef.current !== null) {
@@ -1367,7 +1380,6 @@ export function Composer() {
     return () => window.removeEventListener(COMPOSER_INSERT_EVENT, onInsert);
   }, []);
 
-  const tabStore = useTabStoreApi();
   const sendToHost = useTabSend();
   const turn = useTabStore((state) => state.turn);
   const queueInFlight = useTabStore((state) => state.queueInFlight);
@@ -1706,6 +1718,7 @@ export function Composer() {
       tabStore.getState().setNotice({ kind: "slash_command_rejected", text: result.reason });
       return true;
     }
+    if (restoredOwned.current) { restoredOwned.current = false; setRestoredPicks(undefined); tabStore.setState({ restoredComposerDraft: null }); }
     setText("");
     setPasteBlocks([]);
     setCaret(0);
@@ -1814,6 +1827,16 @@ export function Composer() {
       tabStore.getState().setNotice({ kind: "slash_command_rejected", text: "This restored draft requires orchestration. Review it before starting a new orchestration." });
       return;
     }
+    if (restoredPicks) {
+      const current = tabStore.getState();
+      if ((restoredPicks.model !== undefined && restoredPicks.model !== current.model) ||
+          (restoredPicks.mode !== undefined && restoredPicks.mode !== current.mode) ||
+          (restoredPicks.effort !== undefined && restoredPicks.effort !== current.engine?.model?.effort) ||
+          (restoredPicks.reasoningEffort !== undefined && restoredPicks.reasoningEffort !== current.reasoningEffort)) {
+        current.setNotice({ kind: "slash_command_rejected", text: "Apply the original draft settings and wait for confirmation before sending." });
+        return;
+      }
+    }
     const outgoing = reconstitutePasteMarkers(text, pasteBlocks);
     // GitHub #14: a recognized whole-draft slash command is consumed (run or
     // visibly refused) BEFORE the canSend gate and before any queue/steer/
@@ -1890,6 +1913,7 @@ export function Composer() {
         ...(images.length > 0 ? { images: images.map((image) => image.attachment) } : {}),
       });
     }
+    if (restoredOwned.current) { restoredOwned.current = false; setRestoredPicks(undefined); tabStore.setState({ restoredComposerDraft: null }); }
     setText("");
     setPasteBlocks([]);
     setAttachedImages([]);
@@ -2076,11 +2100,15 @@ export function Composer() {
           return false;
         }
         restoreInProgress.current = true;
+        restoredOwned.current = true;
+        tabStore.setState({ restoredComposerDraft: { text: item.text, images: item.images, ...(item.orchestrate ? { orchestrate: item.orchestrate } : {}), ...(item.initialPicks ? { initialPicks: item.initialPicks } : {}) } });
         setText(item.text);
         setAttachedImages(item.images.map(image => ({ ...image, id: nextImageIdRef.current++ })));
         setRestoredOrchestrate(item.orchestrate === "enable");
+        setRestoredPicks(item.initialPicks);
         return true;
       }} />
+      {restoredPicks && <div className="composer-hint">Original settings: {[restoredPicks.model, restoredPicks.mode, restoredPicks.effort, restoredPicks.reasoningEffort].filter(Boolean).join(" / ")}. Select these settings before sending. <button type="button" onClick={() => setRestoredPicks(undefined)}>Use current settings instead</button></div>}
       {restoredOrchestrate && <div className="composer-hint">Orchestration intent retained. This draft will not be sent as an ordinary message. <button type="button" onClick={() => setRestoredOrchestrate(false)}>Remove orchestration intent</button></div>}
       <RolePickerDialog
         open={rolePickerOpen}
@@ -2325,7 +2353,7 @@ export function Composer() {
                   <ArrowUp />
                 </button>
               )}
-              {engine?.id === "codex" && !restoredOrchestrate && text.trim() && attachedImages.length === 0 && (
+              {engine?.id === "codex" && !restoredOrchestrate && !restoredPicks && text.trim() && attachedImages.length === 0 && (
                 <button type="button" className="composer-send" aria-label="Steer active Codex turn" title="Steer active turn; acknowledgement does not prove model application" onClick={() => {
                   // GitHub #14: the explicit Codex steer must not leak a known
                   // bare command to the model either — classify first.
@@ -2334,6 +2362,7 @@ export function Composer() {
                     return;
                   }
                   sendToHost({ type: "steer_message", requestId: crypto.randomUUID(), text: outgoing });
+                  if (restoredOwned.current) { restoredOwned.current = false; setRestoredPicks(undefined); tabStore.setState({ restoredComposerDraft: null }); }
                   setText("");
                   setPasteBlocks([]);
                 }}><ArrowUp /></button>

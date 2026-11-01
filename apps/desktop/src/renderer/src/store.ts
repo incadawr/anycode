@@ -985,6 +985,7 @@ export interface QueuedPrompt {
   orchestrate?: "enable";
   /** The whole draft needs a user's explicit recovery before sending. */
   requiresRestore?: boolean;
+  initialPicks?: { model?: string; mode?: PermissionMode; effort?: string; reasoningEffort?: string };
   /** Queue identity for edit/delete; a refused steer retains its request id. */
   id: string;
   /** Final send text — paste markers already reconstituted at enqueue time. */
@@ -1376,6 +1377,8 @@ export interface DesktopState {
    * a host respawn (see the section comment above `QueuedPrompt`).
    */
   promptQueue: readonly QueuedPrompt[];
+  /** Recovered composer draft; tab-scoped across component unmounts. */
+  restoredComposerDraft: { text: string; images: readonly QueuedPromptImage[]; orchestrate?: "enable"; initialPicks?: QueuedPrompt["initialPicks"] } | null;
   /**
    * Cross-review F2 (2026-10-24): requestIds of the steers whose text was
    * ALREADY recovered into `promptQueue` from a `steer_requeued` message (the
@@ -4823,6 +4826,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       // Prompt-queue slots (slice P7.14): outside initialSessionSlice so a
       // host respawn preserves user-typed prompts (see QueuedPrompt comment).
       promptQueue: [],
+      restoredComposerDraft: null,
       queuePaused: false,
       queuePauseReason: "cancelled",
       continueOffer: null,
@@ -6181,6 +6185,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
 
       reset(): void {
         pendingSentMessages.clear();
+        set({ restoredComposerDraft: null });
         performReset();
         // a genuinely new session drops staged markers, the
         // boundary flags and the lifted session id along with the transcript.
@@ -6230,8 +6235,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         // reordering the user prompts relative to each other — FIFO stays
         // intact within each kind.
         // `promptQueue.length > 0` is already guaranteed by the guard above —
-        // the unpaused branch is always index 0 (plain FIFO head).
-        const takeIndex = queuePaused ? promptQueue.findIndex((prompt) => prompt.origin === "system") : 0;
+        // An unpaused queue also lets system reports bypass a held head.
+        const headHeld = promptQueue[0]?.orchestrate === "enable" || promptQueue[0]?.requiresRestore === true;
+        const takeIndex = queuePaused || headHeld ? promptQueue.findIndex((prompt) => prompt.origin === "system") : 0;
         if (takeIndex === -1) {
           return null;
         }
