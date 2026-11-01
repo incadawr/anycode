@@ -17,6 +17,31 @@ function startFixture(name: string, home: string) {
   return { child, frames, send: (frame: Frame) => child.stdin.write(`${JSON.stringify(frame)}\n`) };
 }
 
+/** An RPC acknowledgement and its turn notification arrive as separate frames. */
+async function waitForCompactStarted(frames: readonly Frame[], turnId: string, timeout = 1000): Promise<void> {
+  await vi.waitFor(() => {
+    const frame = frames.find(value => value.method === "turn/started" && value.params?.turn?.id === turnId);
+    expect(frame).toMatchObject({ method: "turn/started", params: { threadId: "fixture-thread", turn: { id: turnId, status: "inProgress" } } });
+  }, { timeout, interval: 10 });
+}
+
+describe("compact fixture frame waiting", () => {
+  it("waits for the matching notification when the response arrives first", async () => {
+    const frames: Frame[] = [{ id: 1, result: {} }, { method: "turn/started", params: { threadId: "fixture-thread", turn: { id: "other", status: "inProgress" } } }];
+    let resolved = false;
+    const waiting = waitForCompactStarted(frames, "fixture-compact-1").then(() => { resolved = true; });
+    await new Promise(resolve => setTimeout(resolve, 25));
+    expect(resolved).toBe(false);
+    frames.push({ method: "turn/started", params: { threadId: "fixture-thread", turn: { id: "fixture-compact-1", status: "inProgress" } } });
+    await waiting;
+    expect(resolved).toBe(true);
+  });
+
+  it("fails within the deadline if the notification never arrives", async () => {
+    await expect(waitForCompactStarted([{ id: 1, result: {} }], "fixture-compact-1", 50)).rejects.toThrow();
+  });
+});
+
 describe("native engine smoke fixtures", () => {
   it("both fixtures pass the real engine readiness checks", async () => {
     const home = mkdtempSync(join(tmpdir(), "compact-doctor-fixture-"));
@@ -65,13 +90,14 @@ describe("Codex compact fixture lifecycle", () => {
     try {
       f.send({ id: 1, method: "thread/compact/start", params: { threadId: "fixture-thread" } });
       await vi.waitFor(() => expect(f.frames.find(frame => frame.id === 1)?.result).toEqual({}));
-      expect(f.frames.find(frame => frame.method === "turn/started")?.params.turn.id).toBe("fixture-compact-1");
+      await waitForCompactStarted(f.frames, "fixture-compact-1");
       writeFileSync(join(home, "release-codex-compact-1"), "release");
       await vi.waitFor(() => expect(f.frames.find(frame => frame.method === "turn/completed")?.params.turn.status).toBe("completed"));
       expect(f.frames.find(frame => frame.method === "thread/tokenUsage/updated")?.params.tokenUsage.last.totalTokens).toBe(8000);
       expect(f.frames.find(frame => frame.method === "item/completed")?.params.item.type).toBe("contextCompaction");
       f.send({ id: 2, method: "thread/compact/start", params: { threadId: "fixture-thread" } });
       await vi.waitFor(() => expect(f.frames.find(frame => frame.id === 2)?.result).toEqual({}));
+      await waitForCompactStarted(f.frames, "fixture-compact-2");
       f.send({ id: 3, method: "turn/interrupt", params: { threadId: "fixture-thread", turnId: "fixture-compact-2" } });
       await vi.waitFor(() => expect(f.frames.filter(frame => frame.method === "turn/completed").at(-1)?.params.turn.status).toBe("interrupted"));
       expect(f.frames.find(frame => frame.id === 3)?.result).toEqual({});
