@@ -24,7 +24,7 @@ import { lazy, Suspense, useContext, useEffect, useLayoutEffect, useRef, useStat
 import type { ClipboardEvent, DragEvent, FocusEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { CodexRateLimitsWire, ImageAttachment, ImageMediaType, PermissionMode } from "@anycode/core";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
-import { isSessionBusy, type ContextUsage, type DesktopState, type QueuedPrompt, type SessionTokens, type TurnState } from "../store.js";
+import { isSessionBusy, type ContextUsage, type DesktopState, type QueuedPrompt, type QueuedPromptImage, type SessionTokens, type TurnState } from "../store.js";
 import { useSettingsStore } from "../settings-store.js";
 import { useTabsStore } from "../tabs-store.js";
 import type { ProviderConnection } from "../../../shared/settings.js";
@@ -1338,19 +1338,25 @@ export function Composer() {
   const [rolePickerForToggle, setRolePickerForToggle] = useState(false);
   const [restoredOrchestrate, setRestoredOrchestrate] = useState(initialRestored.current?.orchestrate === "enable");
   const [restoredPicks, setRestoredPicks] = useState(initialRestored.current?.initialPicks);
+  const completedImages = useTabStore((state) => state.completedComposerImages);
   const restoreInProgress = useRef(false);
   useEffect(() => { restoreInProgress.current = false; }, [text, attachedImages]);
   useLayoutEffect(() => {
     // All tab drafts need the same lifetime: a keyed Composer unmounts on
     // tab switch, including when the user started typing without a restore.
     restoredOwned.current = true;
-    tabStore.setState({ restoredComposerDraft: {
+    const available = Math.max(0, COMPOSER_IMAGE_MAX_PER_MESSAGE - attachedImages.length);
+    const additions = (completedImages ?? []).slice(0, available).map(image => ({ ...image, id: nextImageIdRef.current++ }));
+    const merged = additions.length ? [...attachedImages, ...additions] : attachedImages;
+    if (additions.length) setAttachedImages(merged);
+    if ((completedImages?.length ?? 0) > available) tabStore.getState().setNotice({ kind: "image_attach_rejected", text: `Only ${COMPOSER_IMAGE_MAX_PER_MESSAGE} images can be attached.` });
+    tabStore.setState({ ...(completedImages?.length ? { completedComposerImages: [] } : {}), restoredComposerDraft: {
       text: reconstitutePasteMarkers(text, pasteBlocks),
-      images: attachedImages.map(({ name, sizeBytes, attachment }) => ({ name, sizeBytes, attachment })),
+      images: merged.map(({ name, sizeBytes, attachment }) => ({ name, sizeBytes, attachment })),
       ...(restoredOrchestrate ? { orchestrate: "enable" as const } : {}),
       ...(restoredPicks ? { initialPicks: restoredPicks } : {}),
     } });
-  }, [tabStore, text, pasteBlocks, attachedImages, restoredOrchestrate, restoredPicks]);
+  }, [tabStore, text, pasteBlocks, attachedImages, restoredOrchestrate, restoredPicks, completedImages]);
 
   useLayoutEffect(() => {
     if (pendingCaretRef.current !== null) {
@@ -1720,7 +1726,7 @@ export function Composer() {
       tabStore.getState().setNotice({ kind: "slash_command_rejected", text: result.reason });
       return true;
     }
-    if (restoredOwned.current) { restoredOwned.current = false; setRestoredPicks(undefined); tabStore.setState({ restoredComposerDraft: null }); }
+    if (restoredOwned.current) { restoredOwned.current = false; setRestoredPicks(undefined); tabStore.setState((state) => ({ restoredComposerDraft: null, completedComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 })); }
     setText("");
     setPasteBlocks([]);
     setCaret(0);
@@ -1769,15 +1775,6 @@ export function Composer() {
     dispatchSlashIntent(item.intent, nextText);
   }
 
-  /** Thin wrapper: `readComposerImageFile` owns validation, this only mints the renderer-local list-key `id`. */
-  async function readDraftImage(file: File): Promise<{ ok: true; image: DraftImage } | { ok: false; reason: string }> {
-    const result = await readComposerImageFile(file);
-    if (!result.ok) {
-      return result;
-    }
-    return { ok: true, image: { id: nextImageIdRef.current++, ...result.image } };
-  }
-
   async function addImageFiles(files: readonly File[]): Promise<void> {
     const imageFiles = files.filter((file) => file.type.startsWith("image/") || file.name.match(/\.(png|jpe?g|gif|webp)$/i));
     if (imageFiles.length === 0 || !ready || !supportsImages) {
@@ -1800,11 +1797,12 @@ export function Composer() {
       });
       return;
     }
-    const accepted: DraftImage[] = [];
+    const generation = tabStore.getState().composerImageGeneration;
+    const accepted: QueuedPromptImage[] = [];
     let firstError: string | null = imageFiles.length > slots ? `Only ${COMPOSER_IMAGE_MAX_PER_MESSAGE} images can be attached.` : null;
     for (const file of imageFiles.slice(0, slots)) {
       try {
-        const result = await readDraftImage(file);
+        const result = await readComposerImageFile(file);
         if (result.ok) {
           accepted.push(result.image);
         } else {
@@ -1815,11 +1813,12 @@ export function Composer() {
       }
     }
     if (accepted.length > 0) {
-      setAttachedImages((current) => [...current, ...accepted]);
-      setImageError(null);
+      tabStore.setState((state) => state.composerImageGeneration === generation
+        ? { completedComposerImages: [...state.completedComposerImages, ...accepted] }
+        : {});
     }
     if (firstError !== null) {
-      setImageError(firstError);
+      if (tabStore.getState().composerImageGeneration !== generation) return;
       tabStore.getState().setNotice({ kind: "image_attach_rejected", text: firstError });
     }
   }
@@ -1915,7 +1914,7 @@ export function Composer() {
         ...(images.length > 0 ? { images: images.map((image) => image.attachment) } : {}),
       });
     }
-    if (restoredOwned.current) { restoredOwned.current = false; setRestoredPicks(undefined); tabStore.setState({ restoredComposerDraft: null }); }
+    if (restoredOwned.current) { restoredOwned.current = false; setRestoredPicks(undefined); tabStore.setState((state) => ({ restoredComposerDraft: null, completedComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 })); }
     setText("");
     setPasteBlocks([]);
     setAttachedImages([]);
@@ -2102,6 +2101,7 @@ export function Composer() {
           return false;
         }
         restoreInProgress.current = true;
+        tabStore.setState((state) => ({ completedComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 }));
         restoredOwned.current = true;
         tabStore.setState({ restoredComposerDraft: { text: item.text, images: item.images, ...(item.orchestrate ? { orchestrate: item.orchestrate } : {}), ...(item.initialPicks ? { initialPicks: item.initialPicks } : {}) } });
         setText(item.text);
@@ -2364,7 +2364,7 @@ export function Composer() {
                     return;
                   }
                   sendToHost({ type: "steer_message", requestId: crypto.randomUUID(), text: outgoing });
-                  if (restoredOwned.current) { restoredOwned.current = false; setRestoredPicks(undefined); tabStore.setState({ restoredComposerDraft: null }); }
+                  if (restoredOwned.current) { restoredOwned.current = false; setRestoredPicks(undefined); tabStore.setState((state) => ({ restoredComposerDraft: null, completedComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 })); }
                   setText("");
                   setPasteBlocks([]);
                 }}><ArrowUp /></button>

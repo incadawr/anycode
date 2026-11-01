@@ -304,7 +304,7 @@ export function createTabRegistry(
     if (!pending) return;
     clearTimeout(pending.timer);
     pendingInitialModels.delete(tabId);
-    holdInitial(entry, pending.prompt, "Model selection could not be confirmed. Restore the draft to review its settings.");
+    holdInitial(entry, pending.prompt, "A model switch was requested; the current model and effective reasoning effort are not confirmed. Restore the draft to review its settings.");
   }
 
   /**
@@ -388,11 +388,12 @@ export function createTabRegistry(
     imageFallback: boolean | undefined,
     orchestrate?: boolean,
     picks?: QueuedPrompt["initialPicks"],
+    stagedModel?: { model: string; reasoningEffort: ReasoningEffort },
   ): void {
     const blocked = isSendBlockedByModelImages(imageInput, imageFallback, images.length);
     if (blocked) {
       entry.store.getState().enqueuePrompt({ text, images, requiresRestore: true, ...(picks !== undefined ? { initialPicks: picks } : {}), ...(orchestrate === true ? { orchestrate: "enable" as const } : {}) });
-      entry.store.getState().setNotice({ kind: "image_attach_rejected", text: MODEL_IMAGE_ATTACH_BLOCKED_TEXT });
+      entry.store.getState().setNotice({ kind: "image_attach_rejected", text: stagedModel ? `${MODEL_IMAGE_ATTACH_BLOCKED_TEXT} Model switched to ${stagedModel.model}; effective reasoning effort is ${stagedModel.reasoningEffort}.` : MODEL_IMAGE_ATTACH_BLOCKED_TEXT });
       return;
     }
     const deliveredImages = images;
@@ -459,10 +460,10 @@ export function createTabRegistry(
     }
   });
 
-  function startInitial(entry: TabEntry, tabId: string, prompt: InitialPrompt, current: { model: string | null; mode: PermissionMode | null; effort: string | undefined; reasoningEffort: ReasoningEffort | undefined }, imageInput: boolean | undefined, imageFallback: boolean | undefined): void {
+  function startInitial(entry: TabEntry, tabId: string, prompt: InitialPrompt, current: { model: string | null; mode: PermissionMode | null; effort: string | undefined; reasoningEffort: ReasoningEffort | undefined }, imageInput: boolean | undefined, imageFallback: boolean | undefined, stagedModel?: { model: string; reasoningEffort: ReasoningEffort }): void {
     cancelPendingModel(tabId, entry);
     if ((prompt.images?.length ?? 0) > 0 && prompt.model !== undefined && prompt.model !== current.model) {
-      if (!entry.connection) { holdInitial(entry, prompt, "Model selection could not be confirmed. Restore the draft to review its settings."); return; }
+      if (!entry.connection) { holdInitial(entry, prompt, "A model switch was requested; the current model and effective reasoning effort are not confirmed. Restore the draft to review its settings."); return; }
       const requestId = crypto.randomUUID();
       const connection = entry.connection;
       const timer = setTimeout(() => cancelPendingModel(tabId, entry), 10_000);
@@ -475,7 +476,7 @@ export function createTabRegistry(
     // All remaining picks and the turn are committed only after that verdict passes.
     if (!blocked) applyInitialPicks(entry, prompt.model, prompt.mode, prompt.effort, current, prompt.reasoningEffort, prompt.orchestrate);
     dispatchInitialPrompt(entry, prompt.text, prompt.images ?? [], imageInput, imageFallback, prompt.orchestrate,
-      { model: prompt.model, mode: prompt.mode, effort: prompt.effort, reasoningEffort: prompt.reasoningEffort });
+      { model: prompt.model, mode: prompt.mode, effort: prompt.effort, reasoningEffort: prompt.reasoningEffort }, stagedModel);
   }
 
   /** (Re)connects `port` to an existing entry: tears down the old subscription, wires the new one, kicks off the handshake. */
@@ -532,11 +533,11 @@ export function createTabRegistry(
           cancelPendingModel(tabId, entry);
         } else if (pending && pending.connection === connection && message.requestId === pending.requestId) {
           clearTimeout(pending.timer); pendingInitialModels.delete(tabId);
-          if (message.model !== pending.prompt.model || (message.imageInput === undefined && message.imageFallback !== true)) holdInitial(entry, pending.prompt, "Model selection could not be confirmed. Restore the draft to review its settings.");
+          if (message.model !== pending.prompt.model || (message.imageInput === undefined && message.imageFallback !== true)) holdInitial(entry, pending.prompt, `Image capability or requested model could not be confirmed. Host reports model ${message.model}; effective reasoning effort ${message.reasoningEffort}. Restore the draft to review its settings.`);
           else {
             const state = entry.store.getState();
-            if (state.turn.status !== "idle" || state.queueInFlight !== null) holdInitial(entry, pending.prompt, "Session became busy. Restore the draft to review its settings.");
-            else startInitial(entry, tabId, pending.prompt, { model: message.model, mode: state.mode, effort: state.engine?.model?.effort, reasoningEffort: state.reasoningEffort }, message.imageInput, message.imageFallback);
+            if (state.turn.status !== "idle" || state.queueInFlight !== null) holdInitial(entry, pending.prompt, `Session became busy. Host reports model ${message.model}; effective reasoning effort ${message.reasoningEffort}. Restore the draft to review its settings.`);
+            else startInitial(entry, tabId, pending.prompt, { model: message.model, mode: state.mode, effort: state.engine?.model?.effort, reasoningEffort: state.reasoningEffort }, message.imageInput, message.imageFallback, { model: message.model, reasoningEffort: message.reasoningEffort });
           }
         }
       }

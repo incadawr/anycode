@@ -19,7 +19,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ActiveTabBody, SessionSurface } from "../App.js";
 import { createDesktopStore } from "../store.js";
-import type { DesktopStoreApi } from "../tab-registry.js";
+import { tabRegistry, type DesktopStoreApi } from "../tab-registry.js";
 import { TabContext } from "../tab-context.js";
 import { childLayoutStore } from "../child-layout.js";
 import { useDockStore } from "../dock/dock-store.js";
@@ -131,6 +131,57 @@ describe("dock resize handle placement (GitHub #31)", () => {
     await renderTab("b",other);
     expect(container.querySelector<HTMLTextAreaElement>(".composer-textarea")!.value).toBe("edited B");
     expect(container.querySelector(".composer-image-pill-name")?.textContent).toBe("b.png");
+  });
+
+  it("finishes an image read for its original tab after a surface switch", async () => {
+    const other = createDesktopStore();
+    const ready = (sessionId: string) => ({type:"host_ready" as const, workspace:"/ws", sessionId, mode:"build" as const, model:"m1", imageInput:true});
+    store.getState().applyHostMessage(ready("a"));
+    other.getState().applyHostMessage(ready("b"));
+    const renderTab = async (tabId: string, target: DesktopStoreApi) => {
+      await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId,store:target}}, createElement(SessionSurface, {tabId,onToast:() => {}}))));
+    };
+    let finish!: (bytes: ArrayBuffer) => void;
+    const file = new File(["ignored"], "delayed.png", {type:"image/png"});
+    Object.defineProperty(file, "arrayBuffer", {value: () => new Promise<ArrayBuffer>(resolve => { finish = resolve; })});
+    store.setState({restoredComposerDraft:{text:"A edit",images:[{name:"old.png",sizeBytes:1,attachment:{mediaType:"image/png",data:"YQ=="}}]}});
+    await renderTab("a",store);
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input,"files",{configurable:true,value:[file]});
+    await act(async () => input.dispatchEvent(new Event("change", {bubbles:true})));
+    expect(finish).toBeTypeOf("function");
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Remove old.png"]')!.click());
+    await renderTab("b",other);
+    const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(textarea,"B edit"); textarea.dispatchEvent(new Event("input",{bubbles:true})); });
+    await act(async () => finish(new Uint8Array([137,80,78,71,13,10,26,10]).buffer));
+    expect(container.querySelector(".composer-image-pill-name")).toBeNull();
+    expect(other.getState().restoredComposerDraft).toMatchObject({text:"B edit",images:[]});
+    await renderTab("a",store);
+    expect(container.querySelector(".composer-image-pill-name")?.textContent).toBe("delayed.png");
+    expect(store.getState().restoredComposerDraft).toMatchObject({text:"A edit",images:[{name:"delayed.png"}]});
+    await renderTab("b",other);
+    expect(container.querySelector<HTMLTextAreaElement>(".composer-textarea")!.value).toBe("B edit");
+    expect(container.querySelector(".composer-image-pill-name")).toBeNull();
+  });
+
+  it("does not attach a late file to the next draft after an explicit send", async () => {
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",imageInput:true});
+    vi.spyOn(tabRegistry,"sendToTab").mockImplementation(() => {});
+    let finish!: (bytes: ArrayBuffer) => void;
+    const file = new File(["ignored"], "late.png", {type:"image/png"});
+    Object.defineProperty(file, "arrayBuffer", {value: () => new Promise<ArrayBuffer>(resolve => { finish = resolve; })});
+    await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId:"a",store}}, createElement(SessionSurface, {tabId:"a",onToast:() => {}}))));
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input,"files",{configurable:true,value:[file]});
+    await act(async () => input.dispatchEvent(new Event("change", {bubbles:true})));
+    const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(textarea,"send now"); textarea.dispatchEvent(new Event("input",{bubbles:true})); });
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    await act(async () => finish(new Uint8Array([137,80,78,71,13,10,26,10]).buffer));
+    expect(container.querySelector(".composer-image-pill-name")).toBeNull();
+    expect(store.getState().completedComposerImages).toEqual([]);
+    expect(store.getState().restoredComposerDraft?.images ?? []).toEqual([]);
   });
 
   it("preserves newly typed ordinary drafts independently when switching surfaces", async () => {

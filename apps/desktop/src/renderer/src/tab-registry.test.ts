@@ -1305,7 +1305,8 @@ describe("tab-registry — queueInitialPrompt images", () => {
     registry.queueInitialPrompt("tab-a", "look", "selected", "plan", "high", [IMAGE], "high", true);
     port.emit({ ...HOST_READY("/ws/a", "sess-a"), imageInput:true });
     const request = port.sent[1] as {requestId:string};
-    port.emit({type:"model_changed",requestId:request.requestId,model:"selected",reasoningEffort:"off",imageInput:false});
+    port.emit({type:"model_changed",requestId:request.requestId,model:"selected",reasoningEffort:"high",imageInput:false});
+    expect(registry.getStore("tab-a")!.getState()).toMatchObject({model:"selected",reasoningEffort:"high",notice:{kind:"image_attach_rejected",text:expect.stringContaining("Model switched to selected; effective reasoning effort is high.")}});
     expect(port.sent.map(m => (m as {type:string}).type)).toEqual(["ui_ready","set_model"]);
     expect(registry.getStore("tab-a")!.getState().promptQueue).toMatchObject([{text:"look",images:[IMAGE],orchestrate:"enable",initialPicks:{model:"selected",mode:"plan",effort:"high",reasoningEffort:"high"}}]);
   });
