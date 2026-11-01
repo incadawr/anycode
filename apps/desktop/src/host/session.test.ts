@@ -9482,6 +9482,25 @@ describe("Session — provider usage audit", () => {
 // live mode.
 
 describe("Session — set_orchestrate (§3.7 / A1)", () => {
+  it("refuses enabling during relocation and permits it after relocation ends", async () => {
+    const engine = orchestrateEngine({});
+    const h = createHarness({ steps: [], engine });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      const session = h.session as unknown as { relocating: boolean };
+      session.relocating = true;
+      h.send({ type: "set_orchestrate", enabled: true });
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.filter(m => m.type === "host_ready").length === 2);
+      expect(engine.mode()).toBe("build");
+      expect(h.received.some(m => m.type === "orchestrate_changed")).toBe(false);
+      session.relocating = false;
+      h.send({ type: "set_orchestrate", enabled: true });
+      await h.waitUntil(() => h.received.some(m => m.type === "orchestrate_changed" && m.enabled));
+      expect(engine.mode()).toBe("plan");
+    } finally { h.close(); }
+  });
   it("a reserved frame reusing a started ID is diagnostic only for host and renderer", async () => {
     let release: (() => void) | undefined;
     let calls = 0;

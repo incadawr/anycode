@@ -159,6 +159,35 @@ function seededHistory(): HistoryItem[] {
 }
 
 describe("Session — engine switch", () => {
+  it.each(["codex", "claude"] as const)("can disable legacy orchestration after switching from core to %s", async (target) => {
+    class CoreToggleEngine extends SwitchableFakeEngine {
+      override readonly capabilities = { ...NO_CORE_CAPS, supportsCorePermissions: true };
+      private liveMode: PermissionMode = "build";
+      override mode(): PermissionMode { return this.liveMode; }
+      setMode(mode: PermissionMode): void { this.liveMode = mode; }
+    }
+    const core = new CoreToggleEngine([]);
+    const next = new NextFakeEngine();
+    Object.defineProperty(next, "id", { value: target });
+    const h = createHarness({ steps: [], engine: core, switchEngineFactory: async () => next });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "set_orchestrate", enabled: true });
+      await h.waitUntil(() => h.received.some(m => m.type === "orchestrate_changed" && m.enabled));
+      expect(core.mode()).toBe("plan");
+      h.send({ type: "engine_switch_request", requestId: "switch-orchestrator", engine: target });
+      await h.waitFor(isEngineSwitched);
+      h.send({ type: "set_orchestrate", enabled: false });
+      await h.waitUntil(() => h.received.some(m => m.type === "orchestrate_changed" && !m.enabled));
+      expect(h.session.childSpawnPreOrchestrateMode()).toBeUndefined();
+      const offset = h.received.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.slice(offset).some(isHostReady));
+      expect(h.received.slice(offset).find(isHostReady)?.orchestration?.enabled).toBe(false);
+      expect(h.received.some(m => m.type === "mode_change_rejected")).toBe(false);
+    } finally { h.close(); }
+  });
   it("success: swaps the engine, disposes the old one after, announces once, keeps the transcript continuous", async () => {
     const oldEngine = new SwitchableFakeEngine(seededHistory());
     const next = new NextFakeEngine();

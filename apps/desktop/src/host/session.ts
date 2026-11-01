@@ -1634,7 +1634,7 @@ export class Session {
    * goes through; no new persistence identity.
    */
   private boundPort: WirePort | null = null;
-  /** Per-process Session incarnation and per-bind token; neither is an auth credential. */
+  /** Per-Session incarnation and per-bind token; neither is an auth credential. */
   private readonly hostIncarnation = randomUUID();
   private boundGeneration: string | null = null;
   /**
@@ -5984,7 +5984,7 @@ export class Session {
    * `orchestrate_changed` so the renderer keeps tab-scoped state in sync.
    */
   private onSetOrchestrate(enabled: boolean): void {
-    if (this.busy || this.child !== undefined || this.engine.id !== "core" || !this.engine.capabilities.supportsCorePermissions || this.engine.setMode === undefined) {
+    if (this.busy || (enabled && (this.relocating || this.child !== undefined || this.engine.id !== "core" || !this.engine.capabilities.supportsCorePermissions || this.engine.setMode === undefined))) {
       // Silent drop, exactly like a mid-turn set_mode/set_model — the
       // authoritative host-side refusal; the renderer disables the row too.
       return;
@@ -6001,7 +6001,9 @@ export class Session {
       this.orchestrate = false;
       const restore = this.preOrchestrateMode ?? "build";
       this.preOrchestrateMode = null;
-      this.onSetMode(restore, true);
+      // A session may have switched engines since enable. Clearing the flag
+      // must remain possible even when the current engine owns its modes.
+      if (this.engine.id === "core" && this.engine.capabilities.supportsCorePermissions && this.engine.setMode !== undefined) this.onSetMode(restore, true);
     }
     // §3.7: the host copies the flag onto the AgentLoopConfig (the dispatcher
     // threads it into every ToolContext — the Agent tool's default-detach).
