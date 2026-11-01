@@ -384,8 +384,14 @@ export function createTabRegistry(
     images: readonly QueuedPromptImage[],
     imageInput: boolean | undefined,
     imageFallback: boolean | undefined,
+    orchestrate?: boolean,
   ): void {
     const blocked = isSendBlockedByModelImages(imageInput, imageFallback, images.length);
+    if (blocked && orchestrate === true) {
+      entry.store.getState().enqueuePrompt({ text, images, orchestrate: "enable" });
+      entry.store.getState().setNotice({ kind: "image_attach_rejected", text: MODEL_IMAGE_ATTACH_BLOCKED_TEXT });
+      return;
+    }
     const deliveredImages = blocked ? [] : images;
     if (blocked) {
       entry.store.getState().setNotice({ kind: "image_attach_rejected", text: MODEL_IMAGE_ATTACH_BLOCKED_TEXT });
@@ -394,7 +400,7 @@ export function createTabRegistry(
     entry.store.getState().appendUserText(requestId, text, deliveredImages.length > 0 ? deliveredImages.map((image) => image.attachment) : undefined);
     // W8: snapshot what actually went on the wire so a later terminal
     // retryable failure can offer to replay this same content.
-    entry.store.getState().recordSentMessage(text, deliveredImages);
+    entry.store.getState().recordSentMessage(text, deliveredImages, requestId, orchestrate ? "enable" : undefined);
     entry.connection?.send({
       type: "user_message",
       requestId,
@@ -427,7 +433,7 @@ export function createTabRegistry(
       .appendUserText(requestId, item.text, item.images.length > 0 ? item.images.map((image) => image.attachment) : undefined, item.origin);
     // W8: snapshot what actually went on the wire so a later terminal
     // retryable failure can offer to replay this same content.
-    entry.store.getState().recordSentMessage(item.text, item.images);
+    entry.store.getState().recordSentMessage(item.text, item.images, requestId, item.orchestrate);
     entry.connection?.send({
       type: "user_message",
       requestId,
@@ -535,6 +541,7 @@ export function createTabRegistry(
           // F5#1b D3: a task-scoped model pick that differs from the boot
           // model is switched BEFORE the initial prompt, same port ⇒ in-order
           // delivery; the host is idle at host_ready so the busy-guard passes.
+          if (!(pending.orchestrate === true && isSendBlockedByModelImages(message.imageInput, message.imageFallback, pending.images?.length ?? 0))) {
           applyInitialPicks(
             entry,
             pending.model,
@@ -551,7 +558,8 @@ export function createTabRegistry(
             pending.reasoningEffort,
             pending.orchestrate,
           );
-          dispatchInitialPrompt(entry, pending.text, pending.images ?? [], message.imageInput, message.imageFallback);
+          }
+          dispatchInitialPrompt(entry, pending.text, pending.images ?? [], message.imageInput, message.imageFallback, pending.orchestrate);
         }
       }
       if (message.type === "agent_event" && message.event.type === "error") {
@@ -892,6 +900,10 @@ export function createTabRegistry(
         // model (set at host_ready, kept current by model_changed), so compare
         // against THAT instead of a boot-time message.
         const state = entry.store.getState();
+        if (orchestrate === true && isSendBlockedByModelImages(state.imageInput, state.imageFallback, images?.length ?? 0)) {
+          dispatchInitialPrompt(entry, text, images ?? [], state.imageInput, state.imageFallback, true);
+          return;
+        }
         applyInitialPicks(
           entry,
           model,
@@ -906,7 +918,7 @@ export function createTabRegistry(
           reasoningEffort,
           orchestrate,
         );
-        dispatchInitialPrompt(entry, text, images ?? [], state.imageInput, state.imageFallback);
+        dispatchInitialPrompt(entry, text, images ?? [], state.imageInput, state.imageFallback, orchestrate);
         return;
       }
       pendingInitialPrompts.set(tabId, { text, model, mode, effort, images, reasoningEffort, orchestrate });

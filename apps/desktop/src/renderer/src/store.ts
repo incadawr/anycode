@@ -981,6 +981,8 @@ export interface QueuedPromptImage {
 }
 
 export interface QueuedPrompt {
+  /** Retained only for explicit recovery; never resend as an ordinary turn. */
+  orchestrate?: "enable";
   /** Queue identity for edit/delete; a refused steer retains its request id. */
   id: string;
   /** Final send text — paste markers already reconstituted at enqueue time. */
@@ -1015,6 +1017,7 @@ export interface QueuedPrompt {
  * transcript `user_text` block.
  */
 export interface LastSentMessage {
+  orchestrate?: "enable";
   text: string;
   images: readonly QueuedPromptImage[];
 }
@@ -1484,7 +1487,7 @@ export interface DesktopState {
    * (Composer's direct path; tab-registry's queue-drain and initial-prompt
    * paths) — NOT a new send path of its own.
    */
-  recordSentMessage(text: string, images: readonly QueuedPromptImage[]): void;
+  recordSentMessage(text: string, images: readonly QueuedPromptImage[], requestId?: string, orchestrate?: "enable"): void;
   /**
    * W8 one-shot consume: clears `retry` synchronously (so the button
    * cannot be clicked twice even while the resend is merely queued, not yet
@@ -2347,6 +2350,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
   const loopEndEmitted = new Set<string>();
   /** turnId -> when this renderer saw it start; consumed by that turn's loop_end footer. */
   const turnStartedAt = new Map<string, number>();
+  const pendingSentMessages = new Map<string, LastSentMessage>();
   /**
    * acceptance defect 2: the TRUNCATED-snapshot cut boundary — per
    * turnId, the oldest step the latest session_history still covers. Ring
@@ -4986,6 +4990,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             set({ notice: { kind: "worktree_notice", text: message.message } });
             return;
           case "turn_started": {
+            pendingSentMessages.delete(message.requestId);
             if (presentationReplayActive && presentationReplayTurns?.has(message.turnId)) return;
             // fallback: a turn starting means post-switch content
             // is about to land — if the hydration boundary never arrived (no
@@ -5049,6 +5054,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // HEAD of the queue and pause so it isn't re-sent silently. The
             // existing notice explains the pause.
             const { queueInFlight, promptQueue } = get();
+            const direct = pendingSentMessages.get(message.requestId);
+            const restoreDirect = queueInFlight?.requestId !== message.requestId && direct !== undefined && !promptQueue.some(item => item.id === message.requestId)
+              ? { promptQueue: [{ id: message.requestId, ...direct }, ...promptQueue], queuePaused: true, queuePauseReason: "rejected" as const }
+              : null;
             const restore =
               queueInFlight && queueInFlight.requestId === message.requestId
                 ? {
@@ -5068,13 +5077,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                       ? "Message rejected: the current model does not accept image attachments."
                     : "Message rejected: the host is not ready yet.",
               },
-              ...(restore ?? {}),
+              ...(restore ?? restoreDirect ?? {}),
               // a rejected steer never becomes transcript text —
               // drop the matching pending entry, keep unrelated ones.
               ...(get().pendingSteers.some((entry) => entry.requestId === message.requestId)
                 ? { pendingSteers: get().pendingSteers.filter((entry) => entry.requestId !== message.requestId) }
                 : {}),
             });
+            pendingSentMessages.delete(message.requestId);
             return;
           }
           case "steer_requeued": {
@@ -6110,7 +6120,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         }
       },
 
-      recordSentMessage(text: string, images: readonly QueuedPromptImage[]): void {
+      recordSentMessage(text: string, images: readonly QueuedPromptImage[], requestId?: string, orchestrate?: "enable"): void {
+        if (requestId !== undefined) pendingSentMessages.set(requestId, { text, images, ...(orchestrate !== undefined ? { orchestrate } : {}) });
         set({ lastSentMessage: { text, images } });
       },
 
@@ -6167,6 +6178,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       },
 
       reset(): void {
+        pendingSentMessages.clear();
         performReset();
         // a genuinely new session drops staged markers, the
         // boundary flags and the lifted session id along with the transcript.
@@ -6222,6 +6234,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           return null;
         }
         const head = promptQueue[takeIndex]!;
+        if (head.orchestrate === "enable") return null;
         const rest = [...promptQueue.slice(0, takeIndex), ...promptQueue.slice(takeIndex + 1)];
         const sendId = get().steerRequeueSeen.includes(head.id) ? head.id : requestId;
         set({ promptQueue: rest, queueInFlight: { requestId: sendId, item: head } });

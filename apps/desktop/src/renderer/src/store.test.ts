@@ -9488,3 +9488,18 @@ describe("turn timing", () => {
     expect(store.getState().turn.startedAt).toBeUndefined();
   });
 });
+
+describe("direct refusal recovery by request identity", () => {
+  it("retains a rejected direct orchestration draft with images while another queued request is in flight", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const images = [{name:"a.png",sizeBytes:3,attachment:{mediaType:"image/png" as const,data:"YWJj"}}];
+    store.getState().recordSentMessage("direct", images, "direct-id", "enable");
+    store.getState().enqueuePrompt({text:"queued",images:[]});
+    store.getState().takeQueueHead("other-id");
+    store.getState().applyHostMessage({type:"turn_rejected",requestId:"direct-id",reason:"busy"});
+    expect(store.getState().queueInFlight?.requestId).toBe("other-id");
+    expect(store.getState().promptQueue).toMatchObject([{id:"direct-id",text:"direct",images,orchestrate:"enable"}]);
+    expect(store.getState().queuePaused).toBe(true);
+  });
+});

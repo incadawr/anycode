@@ -1249,6 +1249,19 @@ describe("tab-registry — queueInitialPrompt core reasoning-effort seam", () =>
 describe("tab-registry — queueInitialPrompt images", () => {
   const IMAGE = { name: "a.png", sizeBytes: 10, attachment: { mediaType: "image/png" as const, data: "AA==" } };
 
+  it("retains an unsupported orchestrated first message with its image without sending mode or text", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    registry.queueInitialPrompt("tab-a", "look", undefined, "plan", undefined, [IMAGE], undefined, true);
+    port.emit({ ...HOST_READY("/ws/a", "sess-a"), imageInput: false });
+    expect(port.sent.map(m => (m as {type:string}).type)).toEqual(["ui_ready"]);
+    const state = registry.getStore("tab-a")!.getState();
+    expect(state.promptQueue).toMatchObject([{text:"look",images:[IMAGE],orchestrate:"enable"}]);
+    expect(state.takeQueueHead("retry")).toBeNull();
+  });
+
   it("delivers images on the first user_message and records them via recordSentMessage when the boot model accepts them", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);

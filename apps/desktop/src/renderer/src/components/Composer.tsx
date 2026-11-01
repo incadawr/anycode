@@ -1614,7 +1614,7 @@ export function Composer() {
     }
     const requestId = crypto.randomUUID();
     tabStore.getState().appendUserText(requestId, task);
-    tabStore.getState().recordSentMessage(task, []);
+    tabStore.getState().recordSentMessage(task, [], requestId, "enable");
     sendToHost({ type: "user_message", requestId, text: task });
   }
 
@@ -1871,7 +1871,7 @@ export function Composer() {
       tabStore.getState().appendUserText(requestId, outgoing, images.length > 0 ? images.map((image) => image.attachment) : undefined);
       // W8: snapshot what actually went on the wire so a later
       // terminal retryable failure can offer to replay this same content.
-      tabStore.getState().recordSentMessage(outgoing, images);
+      tabStore.getState().recordSentMessage(outgoing, images, requestId);
       sendToHost({
         type: "user_message",
         requestId,
