@@ -5059,6 +5059,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // This renderer does not issue correlated requests yet. Never treat
             // their direct outcome as authoritative orchestration state.
             return;
+          case "user_message_invalid":
+            // A malformed duplicate can reuse an active requestId; it is not
+            // evidence that any earlier turn with that ID was rejected.
+            return;
           case "reasoning_effort_changed":
             set({
               effortSelectionAck: {kind: "effort", model: get().model, effort: message.effort, requestId: message.requestId},
@@ -5207,6 +5211,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                 text:
                   message.reason === "busy"
                     ? "Message rejected: the agent is still running the current turn."
+                    : message.reason === "orchestrate_unavailable"
+                      ? "Message rejected: orchestration is unavailable."
                     : message.reason === "unsupported_images"
                       ? "Message rejected: the current model does not accept image attachments."
                     : "Message rejected: the host is not ready yet.",

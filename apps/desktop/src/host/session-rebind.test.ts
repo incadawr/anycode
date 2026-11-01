@@ -166,6 +166,7 @@ describe("connection incarnation fence", () => {
       h.send({ type: "user_message", requestId: "closing-task", text: "retain", orchestrate: "enable" });
       const result = await h.waitFor((m): m is Of<"orchestrate_result"> => m.type === "orchestrate_result" && m.requestId === "closing");
       const refusal = await h.waitFor((m): m is Of<"turn_rejected"> => m.type === "turn_rejected" && m.requestId === "closing-task");
+      expect(refusal.reason).toBe("orchestrate_unavailable");
       expect(result).toEqual({ type: "orchestrate_result", requestId: "closing", outcome: "rejected", reason: "unavailable" });
       expect(h.engine.mode()).toBe("build");
       expect(h.outbound.ringView()).not.toContainEqual(result);

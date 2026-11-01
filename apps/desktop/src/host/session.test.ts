@@ -9481,6 +9481,76 @@ describe("Session — provider usage audit", () => {
 // live mode.
 
 describe("Session — set_orchestrate (§3.7 / A1)", () => {
+  it("does not report an existing turn rejected when a malformed frame reuses its ID", async () => {
+    let release: (() => void) | undefined;
+    const h = createHarness({ steps: [], engine: orchestrateEngine({ park: () => new Promise<void>(resolve => { release = resolve; }) }) });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "user_message", requestId: "same-id", text: "first" });
+      await h.waitFor(isTurnStarted);
+      h.send({ type: "user_message", requestId: "same-id", text: "other", orchestrate: "disable" } as unknown as UiToHostMessage);
+      await h.waitFor((m): m is Of<"user_message_invalid"> => m.type === "user_message_invalid" && m.requestId === "same-id");
+      expect(h.received.some(m => m.type === "turn_rejected" && m.requestId === "same-id")).toBe(false);
+      release?.();
+      await h.flush();
+    } finally { release?.(); h.close(); }
+  });
+  it("does not apply legacy toggle to a foreign engine", async () => {
+    const engine: SessionEngine = { ...orchestrateEngine({}), id: "claude" };
+    const modeChange = vi.spyOn(engine, "setMode");
+    const touch = vi.fn();
+    const h = createHarness({ steps: [], engine, onTouch: touch });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "set_orchestrate", enabled: true });
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.filter(m => m.type === "host_ready").length === 2);
+      expect(modeChange).not.toHaveBeenCalled();
+      expect(touch).not.toHaveBeenCalled();
+      expect(h.received.some(m => m.type === "orchestrate_changed")).toBe(false);
+    } finally { h.close(); }
+  });
+  it("refuses reserved intent for a busy child before presence or steer queuing", async () => {
+    let release: (() => void) | undefined;
+    const h = createSeamChild(() => orchestrateEngine({ park: () => new Promise<void>(resolve => { release = resolve; }) }));
+    const presence = vi.spyOn(h.broker, "noteHumanPresent");
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "set_orchestrate", enabled: true });
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.filter(m => m.type === "host_ready").length === 2);
+      expect(h.received.some(m => m.type === "orchestrate_changed")).toBe(false);
+      expect(h.session.startProgrammaticTurn("initial")).toEqual({ ok: true });
+      await h.waitFor(isTurnStarted);
+      h.send({ type: "user_message", requestId: "child-atomic", text: "must not queue", orchestrate: "enable" });
+      const result = await h.waitFor((m): m is Of<"turn_rejected"> => m.type === "turn_rejected" && m.requestId === "child-atomic");
+      expect(result.reason).toBe("orchestrate_unavailable");
+      expect(presence).not.toHaveBeenCalled();
+      release?.();
+      await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+      expect(h.received.some(m => m.type === "turn_started" && m.requestId === "child-atomic")).toBe(false);
+    } finally { release?.(); h.close(); }
+  });
+  it("returns bounded direct invalid-message refusals without presence or persistence side effects", async () => {
+    const touch = vi.fn();
+    const h = createHarness({ steps: [], engine: orchestrateEngine({}), onTouch: touch });
+    const presence = vi.spyOn(h.broker, "noteHumanPresent");
+    try {
+      h.send({ type: "ui_ready" });
+      const ready = await h.waitFor(isHostReady);
+      expect(ready.orchestration).toEqual({ enabled: false, available: false, reason: "unavailable" });
+      h.send({ type: "user_message", requestId: "malformed", text: "private", orchestrate: "disable" } as unknown as UiToHostMessage);
+      const refusal = await h.waitFor((m): m is Of<"user_message_invalid"> => m.type === "user_message_invalid" && m.requestId === "malformed");
+      expect(refusal).toEqual({ type: "user_message_invalid", requestId: "malformed" });
+      expect(h.outbound.ringView()).not.toContainEqual(refusal);
+      expect(presence).not.toHaveBeenCalled();
+      expect(touch).not.toHaveBeenCalled();
+      expect(h.received.some(m => m.type === "turn_started")).toBe(false);
+    } finally { h.close(); }
+  });
   it("refuses repeated reserved operations while busy without a second turn", async () => {
     let release: (() => void) | undefined;
     const inputs: string[] = [];
@@ -9516,7 +9586,7 @@ describe("Session — set_orchestrate (§3.7 / A1)", () => {
       h.send({ type: "set_orchestrate", enabled: true, requestId: "toggle" });
       await h.waitFor((m): m is Of<"orchestrate_result"> => m.type === "orchestrate_result" && m.requestId === "toggle");
       await h.flush();
-      expect(h.received).toContainEqual({ type: "turn_rejected", requestId: "atomic", reason: "not_ready" });
+      expect(h.received).toContainEqual({ type: "turn_rejected", requestId: "atomic", reason: "orchestrate_unavailable" });
       expect(h.received).toContainEqual({ type: "orchestrate_result", requestId: "toggle", outcome: "rejected", reason: "unavailable" });
       expect(engine.mode()).toBe("build");
       expect(inputs).toEqual([]);

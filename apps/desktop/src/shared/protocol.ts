@@ -592,6 +592,8 @@ export type HostToUiMessage =
       mode: PermissionMode;
       model: string;
       sessionId: string;
+      /** Runtime snapshot; available is false until atomic admission is implemented. */
+      orchestration?: { enabled: boolean; available: false; reason: "unavailable" };
       /** Absence on older hosts also means unsupported. */
       orchestrationProtocol?: { version: 1; hostIncarnation: string; connectionId: string; atomicSubmit: false; correlatedToggle: false };
       contextUsage?: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" };
@@ -687,7 +689,8 @@ export type HostToUiMessage =
   | { type: "worktree_notice"; message: string }
   /** `startedAt` (epoch ms, host clock): when the turn really began — a re-asserted or replayed copy carries the original, so a footer's duration survives a reconnect. Absent from older hosts. */
   | { type: "turn_started"; requestId: string; turnId: string; startedAt?: number }
-  | { type: "turn_rejected"; requestId: string; reason: "busy" | "not_ready" | "unsupported_images" }
+  | { type: "turn_rejected"; requestId: string; reason: "busy" | "not_ready" | "unsupported_images" | "orchestrate_unavailable" }
+  | { type: "user_message_invalid"; requestId: string }
   /**
    * additive envelope step: the inner request ordinal within the
    * outer turn, mirroring core's `turn_start.turn` (1-based; the loop resets
