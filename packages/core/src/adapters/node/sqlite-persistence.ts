@@ -490,6 +490,19 @@ function touchSessionActivity(db: DatabaseSync, sessionId: string, items: readon
 const SESSION_LAST_ACTIVITY_SQL =
   "COALESCE((SELECT MAX(json_extract(h.data, '$.createdAt')) FROM history_items h WHERE h.session_id = s.id), s.updated_at)";
 
+function rollbackAndRethrow(db: DatabaseSync, original: unknown): never {
+  try {
+    db.exec("ROLLBACK");
+  } catch (rollbackError) {
+    // RAISE(ROLLBACK, ...) ends the transaction before control reaches JS.
+    if (!(rollbackError instanceof Error && rollbackError.message === "cannot rollback - no transaction is active")) {
+      const describe = (error: unknown): string => error instanceof Error ? error.message : String(error);
+      throw new AggregateError([original, rollbackError], `${describe(original)}; rollback failed: ${describe(rollbackError)}`, {cause: original});
+    }
+  }
+  throw original;
+}
+
 /**
  * Idempotent migration runner: tracks applied versions in schema_migrations
  * and runs each pending migration's statements inside its own BEGIN/COMMIT
@@ -526,7 +539,7 @@ function migrate(db: DatabaseSync, strictSessionSchema = false, outerTransaction
       );
       if (!outerTransaction) db.exec("COMMIT");
     } catch (err) {
-      if (!outerTransaction) db.exec("ROLLBACK");
+      if (!outerTransaction) rollbackAndRethrow(db, err);
       throw err;
     }
   }
@@ -988,7 +1001,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
           assertCliAdmission(db, this.options.cliAdmission);
           migrate(db, this.options.strictSessionSchema === true, true);
           db.exec("COMMIT");
-        } catch (error) { db.exec("ROLLBACK"); throw error; }
+        } catch (error) { rollbackAndRethrow(db, error); }
         // WAL is a no-op on :memory: databases.
         db.exec("PRAGMA journal_mode = WAL;");
       } else {
@@ -1013,8 +1026,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       db.exec("COMMIT");
       return result;
     } catch (err) {
-      db.exec("ROLLBACK");
-      throw err;
+      rollbackAndRethrow(db, err);
     }
   }
 

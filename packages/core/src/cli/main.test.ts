@@ -1423,6 +1423,67 @@ describe("CLI sessions/resume UX (design slice-4.4-cut.md §7)", () => {
     } finally { mcp.mockRestore(); }
   });
 
+  it("preserves the trigger error when SQLite already rolled back the migration", async () => {
+    const {workspace,dbPath,home} = setupTitleTestDirs();
+    createV4Fixture(dbPath,workspace,"core");
+    const db = new DatabaseSync(dbPath);
+    try { db.exec("CREATE TRIGGER synthetic_abort BEFORE DELETE ON codex_thread_items BEGIN SELECT RAISE(ROLLBACK, 'synthetic migration refusal'); END"); }
+    finally { db.close(); }
+    const stderr = new PassThrough(); const errors = collectOutput(stderr); const model = new CountingModelPort();
+    const mcp = vi.spyOn(McpManager.prototype,"start");
+    try {
+      expect(await runCli({argv:["--resume","fixture","-p","hello"],env:makeTitleTestEnv(dbPath,home),home,cwd:workspace,input:new PassThrough(),output:new PassThrough(),errorOutput:stderr,modelPort:model})).toBe(1);
+      expect(errors()).toBe("Cannot open session database: synthetic migration refusal\n");
+      expect(mcp).not.toHaveBeenCalled(); expect(model.calls).toBe(0);
+      const verify = new DatabaseSync(dbPath,{readOnly:true});
+      try {
+        expect(verify.prepare("SELECT MAX(version) AS v FROM schema_migrations").get()).toMatchObject({v:4});
+        expect(verify.prepare("SELECT count(*) AS n FROM codex_thread_items").get()).toMatchObject({n:1});
+        expect(verify.prepare("PRAGMA table_xinfo(codex_thread_items)").all()).not.toEqual(expect.arrayContaining([expect.objectContaining({name:"seq_in_turn"})]));
+      } finally { verify.close(); }
+    } finally { mcp.mockRestore(); }
+  });
+
+  it("reports an unexpected rollback failure alongside the original migration error", async () => {
+    const {workspace,dbPath,home} = setupTitleTestDirs();
+    createV4Fixture(dbPath,workspace,"core");
+    const db = new DatabaseSync(dbPath);
+    try { db.exec("ALTER TABLE sessions ADD COLUMN project_root TEXT"); } finally { db.close(); }
+    const originalExec = DatabaseSync.prototype.exec;
+    const exec = vi.spyOn(DatabaseSync.prototype,"exec").mockImplementation(function (this: DatabaseSync, sql: string) {
+      if (sql === "ROLLBACK") throw new Error("synthetic rollback failure");
+      return originalExec.call(this,sql);
+    });
+    const stderr = new PassThrough(); const errors = collectOutput(stderr); const model = new CountingModelPort();
+    const mcp = vi.spyOn(McpManager.prototype,"start");
+    try {
+      expect(await runCli({argv:["--resume","fixture","-p","hello"],env:makeTitleTestEnv(dbPath,home),home,cwd:workspace,input:new PassThrough(),output:new PassThrough(),errorOutput:stderr,modelPort:model})).toBe(1);
+      expect(errors()).toBe("Cannot open session database: duplicate column name: project_root; rollback failed: synthetic rollback failure\n");
+      expect(mcp).not.toHaveBeenCalled(); expect(model.calls).toBe(0);
+    } finally { exec.mockRestore(); mcp.mockRestore(); }
+    const verify = new DatabaseSync(dbPath,{readOnly:true});
+    try {
+      expect(verify.prepare("SELECT MAX(version) AS v FROM schema_migrations").get()).toMatchObject({v:4});
+      expect(verify.prepare("SELECT count(*) AS n FROM codex_thread_items").get()).toMatchObject({n:1});
+    } finally { verify.close(); }
+  });
+
+  it("preserves the same trigger error in the ordinary adapter migration path", async () => {
+    const {workspace,dbPath} = setupTitleTestDirs();
+    createV4Fixture(dbPath,workspace,"core");
+    const db = new DatabaseSync(dbPath);
+    try { db.exec("CREATE TRIGGER synthetic_abort BEFORE DELETE ON codex_thread_items BEGIN SELECT RAISE(ROLLBACK, 'synthetic migration refusal'); END"); }
+    finally { db.close(); }
+    const persistence = new SqlitePersistenceAdapter(dbPath);
+    try { await expect(persistence.listRootSessions()).rejects.toThrow("synthetic migration refusal"); }
+    finally { await persistence.close(); }
+    const verify = new DatabaseSync(dbPath,{readOnly:true});
+    try {
+      expect(verify.prepare("SELECT MAX(version) AS v FROM schema_migrations").get()).toMatchObject({v:4});
+      expect(verify.prepare("SELECT count(*) AS n FROM codex_thread_items").get()).toMatchObject({n:1});
+    } finally { verify.close(); }
+  });
+
   it("reports --continue activity from history rather than metadata updated_at", async () => {
     const {workspace,dbPath,home} = setupTitleTestDirs();
     await createSyntheticRoot(dbPath,workspace,"activity",{engineId:"core"},Date.now()-86400000);
