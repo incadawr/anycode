@@ -9481,6 +9481,58 @@ describe("Session — provider usage audit", () => {
 // live mode.
 
 describe("Session — set_orchestrate (§3.7 / A1)", () => {
+  it("refuses repeated reserved operations while busy without a second turn", async () => {
+    let release: (() => void) | undefined;
+    const inputs: string[] = [];
+    const engine = orchestrateEngine({ onRunTurn: input => inputs.push(input), park: () => new Promise<void>(resolve => { release = resolve; }) });
+    const h = createHarness({ steps: [], engine });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "user_message", requestId: "running", text: "first" });
+      await h.waitFor(isTurnStarted);
+      h.send({ type: "user_message", requestId: "future", text: "second", orchestrate: "enable" });
+      h.send({ type: "user_message", requestId: "future", text: "second", orchestrate: "enable" });
+      h.send({ type: "set_orchestrate", enabled: true, requestId: "future-toggle" });
+      await h.waitFor((m): m is Of<"orchestrate_result"> => m.type === "orchestrate_result" && m.requestId === "future-toggle");
+      expect(h.received.filter(m => m.type === "turn_rejected" && m.requestId === "future")).toHaveLength(2);
+      expect(h.received.filter(m => m.type === "turn_started")).toHaveLength(1);
+      expect(engine.mode()).toBe("build");
+      release?.();
+      await h.flush();
+      expect(inputs).toHaveLength(1);
+    } finally { release?.(); h.close(); }
+  });
+
+  it("rejects reserved atomic and correlated operations without mutation or replay", async () => {
+    const inputs: string[] = [];
+    const engine = orchestrateEngine({ onRunTurn: (input) => inputs.push(input) });
+    const h = createHarness({ steps: [], engine });
+    try {
+      h.send({ type: "ui_ready" });
+      const ready = await h.waitFor(isHostReady);
+      expect(ready.orchestrationProtocol).toEqual({ atomicSubmit: false, correlatedToggle: false });
+      h.send({ type: "user_message", requestId: "atomic", text: "task", orchestrate: "enable", images: [{ mediaType: "image/png", data: "YQ==" }] });
+      h.send({ type: "set_orchestrate", enabled: true, requestId: "toggle" });
+      await h.waitFor((m): m is Of<"orchestrate_result"> => m.type === "orchestrate_result" && m.requestId === "toggle");
+      await h.flush();
+      expect(h.received).toContainEqual({ type: "turn_rejected", requestId: "atomic", reason: "not_ready" });
+      expect(h.received).toContainEqual({ type: "orchestrate_result", requestId: "toggle", outcome: "rejected", reason: "unavailable" });
+      expect(engine.mode()).toBe("build");
+      expect(inputs).toEqual([]);
+      expect(h.received.some(m => m.type === "turn_started" || m.type === "orchestrate_changed" || m.type === "mode_changed")).toBe(false);
+      const before = h.received.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.slice(before).some(m => m.type === "host_ready"));
+      await h.flush();
+      expect(h.received.slice(before).some(m => m.type === "orchestrate_result" || (m.type === "turn_rejected" && m.requestId === "atomic"))).toBe(false);
+      h.send({ type: "user_message", requestId: "legacy", text: "ordinary" });
+      await h.waitFor((m): m is Of<"turn_started"> => m.type === "turn_started" && m.requestId === "legacy");
+      await h.flush();
+      expect(inputs.some(input => input.includes("ordinary"))).toBe(true);
+    } finally { h.close(); }
+  });
+
   it("enabling: mode -> plan, turn input carries <orchestrate-reminder> and NOT <plan-mode-reminder>", async () => {
     const seenInputs: string[] = [];
     const h = createHarness({ steps: [], engine: orchestrateEngine({ onRunTurn: (input) => seenInputs.push(input) }) });

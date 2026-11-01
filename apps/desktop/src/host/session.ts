@@ -2688,6 +2688,7 @@ export class Session {
           mode: this.engine.mode(),
           model: this.model,
           sessionId: this.sessionId,
+          orchestrationProtocol: { atomicSubmit: false, correlatedToggle: false },
           ...(this.checkpointContextUsage !== null ? { contextUsage: this.checkpointContextUsage } : {}),
           reasoningEffort: this.engine.reasoningEffort() ?? "off",
           ...(bootEffortAdjustment !== undefined ? { effortAdjustment: bootEffortAdjustment } : {}),
@@ -2863,6 +2864,12 @@ export class Session {
         this.handleUiSteerMessage(message.requestId, message.text);
         return;
       case "user_message":
+        // Reserved for the future atomic admission path. Never silently turn an
+        // unimplemented orchestration request into an ordinary user turn.
+        if (message.orchestrate !== undefined) {
+          this.outbound.sendDirect({ type: "turn_rejected", requestId: message.requestId, reason: "not_ready" });
+          break;
+        }
         // Typed input is proof that a human is at the screen: it
         // disarms the broker's unattended latch, so a session that went quiet
         // long enough to expire an ask starts asking again once its owner is back.
@@ -2960,6 +2967,12 @@ export class Session {
         this.onSetMode(message.mode);
         break;
       case "set_orchestrate":
+        // Correlated transitions are not enabled until the mode/readback and
+        // renderer recovery contracts are implemented together.
+        if (message.requestId !== undefined) {
+          this.outbound.sendDirect({ type: "orchestrate_result", requestId: message.requestId, outcome: "rejected", reason: "unavailable" });
+          break;
+        }
         // §3.7: between-turns only (busy => silent drop inside
         // onSetOrchestrate, the set_mode discipline). The orchestrate flag
         // drives the reminder swap (acceptUserMessage) and the Agent tool's

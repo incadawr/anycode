@@ -451,6 +451,8 @@ export type UiToHostMessage =
       requestId: string;
       text: string;
       images?: ImageAttachment[];
+      /** Reserved atomic orchestration intent; currently unavailable. */
+      orchestrate?: "enable";
       // срезы 2+3 (merged): set ONLY when the renderer is draining a
       // queued detached-child report (tab-registry.ts's dispatchQueuedPrompt,
       // mirror of `QueuedPrompt.origin` — store.ts). Absent for every ordinary
@@ -489,7 +491,7 @@ export type UiToHostMessage =
   // remembered pre-orchestrate mode). Between-turns only (busy => silent
   // drop, the set_mode discipline); acked by `orchestrate_changed`. Untrusted
   // -> validated by `setOrchestrateSchema` below (fail-closed).
-  | { type: "set_orchestrate"; enabled: boolean }
+  | { type: "set_orchestrate"; enabled: boolean; requestId?: string }
   | { type: "set_reasoning_effort"; effort: ReasoningEffort; requestId?: string }
   // Slice P7.15 (F14): mid-session model switch (mirror of the CLI `/model`
   // re-budget, host-side switch not a respawn). Untrusted -> validated by
@@ -590,6 +592,8 @@ export type HostToUiMessage =
       mode: PermissionMode;
       model: string;
       sessionId: string;
+      /** Absence on older hosts also means unsupported. */
+      orchestrationProtocol?: { atomicSubmit: boolean; correlatedToggle: boolean };
       contextUsage?: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" };
       reasoningEffort?: ReasoningEffort;
       effortAdjustment?: { from: ReasoningEffort; to: ReasoningEffort };
@@ -911,6 +915,7 @@ export type HostToUiMessage =
   // precedent mode_changed). Carries the resulting state so the renderer's
   // tab-scoped orchestrateActive stays in sync even across a reconnect.
   | { type: "orchestrate_changed"; enabled: boolean }
+  | { type: "orchestrate_result"; requestId: string; outcome: "rejected"; reason: "unavailable" }
   | { type: "reasoning_effort_changed"; effort: ReasoningEffort; requestId?: string; availableEffortLevels?: ReasoningEffort[] }
   // Slice P7.15 (F14): host acknowledges a `set_model` switch (trusted, no zod,
   // precedent mode_changed/reasoning_effort_changed). `reasoningEffort` is the
@@ -1144,6 +1149,7 @@ export const userMessageSchema = z
     type: z.literal("user_message"),
     requestId: z.string(),
     text: z.string(),
+    orchestrate: z.literal("enable").optional(),
     images: z
       .array(
         z
@@ -1224,6 +1230,7 @@ export const setOrchestrateSchema = z
   .object({
     type: z.literal("set_orchestrate"),
     enabled: z.boolean(),
+    requestId: z.string().min(1).max(128).optional(),
   })
   .strict();
 
