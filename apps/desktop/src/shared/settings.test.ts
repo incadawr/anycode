@@ -10,6 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { AnycodeSettings } from "./settings.js";
+import { isCodexContinueEnabled } from "./settings.js";
 import { activeProviderView, mergeModelIds, normalizeModelId, resolveProviderConnection } from "./settings.js";
 import { connectionFixture, providerV2Multi } from "./provider-v2-fixture.js";
 
@@ -159,5 +160,20 @@ describe("mergeModelIds (stable primary-first union)", () => {
 
   it("defaults the secondary list to empty", () => {
     expect(mergeModelIds(["a"])).toEqual(["a"]);
+  });
+});
+
+describe("isCodexContinueEnabled", () => {
+  it("offers the action when the setting is absent (the default)", () => {
+    expect(isCodexContinueEnabled(undefined)).toBe(true);
+    expect(isCodexContinueEnabled({} as AnycodeSettings)).toBe(true);
+  });
+
+  it('offers the action when it is explicitly "on"', () => {
+    expect(isCodexContinueEnabled({ codexContinueOnAnotherAccount: "on" } as AnycodeSettings)).toBe(true);
+  });
+
+  it('refuses only when it is explicitly "off"', () => {
+    expect(isCodexContinueEnabled({ codexContinueOnAnotherAccount: "off" } as AnycodeSettings)).toBe(false);
   });
 });
