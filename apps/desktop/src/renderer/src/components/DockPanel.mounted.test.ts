@@ -441,6 +441,97 @@ describe("dock resize handle placement (GitHub #31)", () => {
     } finally {tabRegistry.disposeTab(tabId);}
   });
 
+  it("blocks restoring an ancestor into a second direct retry while its descendant is pending", async () => {
+    vi.mocked(tabRegistry.getLiveHostConnection).mockRestore();
+    const tabId = "recovery-tree-direct";
+    let reentrantClaim: boolean | undefined; let reentrantQueue: boolean | undefined;
+    let target!: DesktopStoreApi;
+    const port = {onmessage:null as ((event:MessageEvent) => void) | null,postMessage:vi.fn((message:{type:string}) => {
+      if (message.type === "user_message") {
+        reentrantClaim = target.getState().claimRecoveryAttempt("original","reentrant","same",[],{},{});
+        reentrantQueue = target.getState().enqueueRecoveryPrompt("original",{text:"same",images:[]});
+      }
+    }),addEventListener:()=>{},removeEventListener:()=>{}};
+    tabRegistry.registerPort(tabId,"/ws",port as unknown as MessagePort); target = tabRegistry.getStore(tabId)!;
+    port.onmessage!({data:{type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1"}} as MessageEvent);
+    target.getState().recordSentMessage("same",[],"original",undefined,{}); target.getState().markOrchestrationDeliveryUnknown("original");
+    target.setState((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(item => ({...item,reviewed:true}))}));
+    try {
+      await act(async () => root.render(createElement(TabContext.Provider,{value:{tabId,store:target}},createElement(SessionSurface,{tabId,onToast:()=>{}}))));
+      await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+      await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+      const sends = () => port.postMessage.mock.calls.map(([message]) => message as {type:string}).filter(message => message.type === "user_message");
+      expect(sends()).toHaveLength(1); expect(reentrantClaim).toBe(false); expect(reentrantQueue).toBe(false);
+      expect(target.getState().orchestrationDeliveries).toMatchObject([{requestId:"original",status:"unknown",reviewed:true},{parentRequestId:"original",status:"pending"}]);
+      const original = [...container.querySelectorAll<HTMLElement>('[role="status"]')].find(element => element.textContent?.includes("Delivery unknown"))!;
+      await act(async () => original.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+      expect(target.getState().restoredComposerDraft).toMatchObject({text:"same",deliveryRequestId:"original"});
+      await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+      expect(sends()).toHaveLength(1);
+      expect(target.getState().restoredComposerDraft).toMatchObject({text:"same",deliveryRequestId:"original"});
+    } finally {tabRegistry.disposeTab(tabId);}
+  });
+
+  it("blocks a second mounted recovery while an earlier retry is queued or draining", async () => {
+    vi.mocked(tabRegistry.getLiveHostConnection).mockRestore();
+    const tabId = "recovery-tree-queued";
+    const port = {onmessage:null as ((event:MessageEvent) => void) | null,postMessage:vi.fn(),addEventListener:()=>{},removeEventListener:()=>{}};
+    tabRegistry.registerPort(tabId,"/ws",port as unknown as MessagePort); const target = tabRegistry.getStore(tabId)!;
+    const emit = (data:unknown) => port.onmessage!({data} as MessageEvent);
+    emit({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1"});
+    target.getState().recordSentMessage("same",[],"original",undefined,{}); target.getState().markOrchestrationDeliveryUnknown("original");
+    target.setState((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(item => ({...item,reviewed:true}))}));
+    let duringDrain: boolean | undefined;
+    let attempted = false;
+    const unsubscribe = target.subscribe(state => {
+      if (!attempted && state.queueInFlight?.item.recoverySourceId === "original") {
+        attempted = true; duringDrain = target.getState().claimRecoveryAttempt("original","reentrant-queued","same",[],{},{});
+      }
+    });
+    try {
+      await act(async () => root.render(createElement(TabContext.Provider,{value:{tabId,store:target}},createElement(SessionSurface,{tabId,onToast:()=>{}}))));
+      await act(async () => emit({type:"turn_started",requestId:"other",turnId:"t1"}));
+      await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+      await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+      expect(target.getState().promptQueue).toMatchObject([{text:"same",recoverySourceId:"original"}]);
+      await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+      await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+      expect(target.getState().promptQueue).toHaveLength(1);
+      expect(port.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type:"user_message",text:"same"}));
+      await act(async () => emit({type:"agent_event",turnId:"t1",event:{type:"loop_end",reason:"completed",turns:1}}));
+      const sends = () => port.postMessage.mock.calls.map(([message]) => message as {type:string;text?:string}).filter(message => message.type === "user_message" && message.text === "same");
+      expect(sends()).toHaveLength(1); expect(duringDrain).toBe(false);
+      await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+      expect(sends()).toHaveLength(1);
+      expect(target.getState().restoredComposerDraft).toMatchObject({text:"same",deliveryRequestId:"original"});
+    } finally {unsubscribe(); tabRegistry.disposeTab(tabId);}
+  });
+
+  it("rechecks the full recovery tree immediately before posting a claimed attempt", async () => {
+    vi.mocked(tabRegistry.getLiveHostConnection).mockRestore();
+    const tabId = "recovery-tree-prepost";
+    const port = {onmessage:null as ((event:MessageEvent) => void) | null,postMessage:vi.fn(),addEventListener:()=>{},removeEventListener:()=>{}};
+    tabRegistry.registerPort(tabId,"/ws",port as unknown as MessagePort); const target = tabRegistry.getStore(tabId)!;
+    port.onmessage!({data:{type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1"}} as MessageEvent);
+    target.getState().recordSentMessage("same",[],"original",undefined,{}); target.getState().markOrchestrationDeliveryUnknown("original");
+    target.setState((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(item => ({...item,reviewed:true}))}));
+    let injected = false;
+    const unsubscribe = target.subscribe(state => {
+      if (!injected && state.orchestrationDeliveries.some(item => item.parentRequestId === "original" && item.status === "pending")) {
+        injected = true; target.getState().recordSentMessage("sibling",[],"synthetic-sibling",undefined,{},"original");
+      }
+    });
+    try {
+      await act(async () => root.render(createElement(TabContext.Provider,{value:{tabId,store:target}},createElement(SessionSurface,{tabId,onToast:()=>{}}))));
+      await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+      await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+      expect(injected).toBe(true);
+      expect(port.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type:"user_message",text:"same"}));
+      expect(target.getState().restoredComposerDraft?.text).toBe("same");
+      expect(target.getState().orchestrationDeliveries).toEqual(expect.arrayContaining([expect.objectContaining({requestId:"synthetic-sibling",status:"pending"}),expect.objectContaining({text:"same",parentRequestId:"original",status:"unknown"})]));
+    } finally {unsubscribe(); tabRegistry.disposeTab(tabId);}
+  });
+
   it("holds a queued recovery when an ancestor starts after the retry was queued", async () => {
     vi.mocked(tabRegistry.getLiveHostConnection).mockRestore();
     const tabId = "recovery-ancestor-mounted";

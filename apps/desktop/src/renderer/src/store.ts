@@ -985,7 +985,7 @@ export interface QueuedPromptImage {
 export interface QueuedPrompt {
   /** Recovery sends need their own delivery record, independently of the original. */
   trackDelivery?: boolean;
-  /** Recovery queue items remain fenced by their source and all its ancestors. */
+  /** Recovery queue items remain fenced by the full source attempt tree. */
   recoverySourceId?: string;
   /** Explicit system-report retry, conditional on the original still being rejected. */
   retryOf?: string;
@@ -1050,17 +1050,41 @@ function deliveryUnknown(item: OrchestrationDelivery): OrchestrationDelivery {
   return item.status === "pending" ? { ...item, status: "unknown" } : item;
 }
 
-export function recoveryChainBlocked(deliveries: readonly OrchestrationDelivery[], requestId: string): boolean {
-  const seen = new Set<string>();
-  let current: string | undefined = requestId;
-  while (current) {
-    if (seen.has(current)) return true;
-    seen.add(current);
-    const item: OrchestrationDelivery | undefined = deliveries.find(entry => entry.requestId === current);
-    if (!item || item.status === "pending" || item.status === "started" || ((item.status === "unknown" || item.status === "conflict") && !item.reviewed)) return true;
-    current = item.parentRequestId;
+function recoveryTreeIds(deliveries: readonly OrchestrationDelivery[], requestId: string): Set<string> | null {
+  const byId = new Map(deliveries.map(item => [item.requestId,item]));
+  if (byId.size !== deliveries.length || !byId.has(requestId)) return null;
+  const ids = new Set([requestId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const item of deliveries) {
+      if (ids.has(item.requestId) && item.parentRequestId && !ids.has(item.parentRequestId)) {ids.add(item.parentRequestId); changed = true;}
+      if (item.parentRequestId && ids.has(item.parentRequestId) && !ids.has(item.requestId)) {ids.add(item.requestId); changed = true;}
+    }
   }
-  return false;
+  for (const id of ids) {
+    const path = new Set<string>(); let current: string | undefined = id;
+    while (current) {
+      if (path.has(current) || !byId.has(current)) return null;
+      path.add(current); current = byId.get(current)?.parentRequestId;
+    }
+  }
+  return ids;
+}
+
+export function recoveryTreeBlocked(deliveries: readonly OrchestrationDelivery[], requestId: string, ignorePendingId?: string): boolean {
+  const ids = recoveryTreeIds(deliveries,requestId);
+  if (!ids) return true;
+  return deliveries.some(item => ids.has(item.requestId) && !(item.requestId === ignorePendingId && item.status === "pending") &&
+    (item.status === "pending" || item.status === "started" || ((item.status === "unknown" || item.status === "conflict") && !item.reviewed)));
+}
+
+export function recoveryAdmissionBlocked(state: Pick<DesktopState,"orchestrationDeliveries" | "promptQueue" | "queueInFlight">, requestId: string, opts?: {ignorePendingId?:string; ignoreQueueId?:string; ignoreInFlightId?:string}): boolean {
+  const ids = recoveryTreeIds(state.orchestrationDeliveries,requestId);
+  if (!ids || recoveryTreeBlocked(state.orchestrationDeliveries,requestId,opts?.ignorePendingId)) return true;
+  if (state.promptQueue.some(item => item.id !== opts?.ignoreQueueId && !!item.recoverySourceId && ids.has(item.recoverySourceId))) return true;
+  const inFlight = state.queueInFlight;
+  return !!inFlight && inFlight.requestId !== opts?.ignoreInFlightId && !!inFlight.item.recoverySourceId && ids.has(inFlight.item.recoverySourceId);
 }
 
 export function systemRetrySafe(deliveries: readonly OrchestrationDelivery[], requestId: string, currentAttemptId?: string): boolean {
@@ -1073,7 +1097,7 @@ function reconcileQueuedRetries(queue: readonly QueuedPrompt[], deliveries: read
   const cancelled = new Set(queue.flatMap(item => item.retryOf && !systemRetrySafe(deliveries,item.retryOf) ? [item.retryOf] : []));
   return {
     promptQueue: queue.filter(item => !item.retryOf || !cancelled.has(item.retryOf))
-      .map(item => item.recoverySourceId && recoveryChainBlocked(deliveries,item.recoverySourceId) ? {...item,requiresRestore:true} : item),
+      .map(item => item.recoverySourceId && recoveryTreeBlocked(deliveries,item.recoverySourceId) ? {...item,requiresRestore:true} : item),
     orchestrationDeliveries: deliveries.map(item => cancelled.has(item.requestId) ? {...item,retryQueued:false} : item),
   };
 }
@@ -1585,6 +1609,8 @@ export interface DesktopState {
    * paths) — NOT a new send path of its own.
    */
   recordSentMessage(text: string, images: readonly QueuedPromptImage[], requestId?: string, orchestrate?: "enable", initialPicks?: QueuedPrompt["initialPicks"], parentRequestId?: string, systemOriginId?: string): void;
+  claimRecoveryAttempt(sourceId: string, requestId: string, text: string, images: readonly QueuedPromptImage[], picks: QueuedPrompt["initialPicks"], opts?: {orchestrate?:"enable"; pickerId?:string; bindDraft?:boolean}): boolean;
+  enqueueRecoveryPrompt(sourceId: string, item: Omit<QueuedPrompt,"id" | "recoverySourceId">): boolean;
   markOrchestrationDeliveryUnknown(requestId: string): void;
   retryRejectedSystemDelivery(requestId: string): void;
   holdBlockedRecovery(requestId: string): void;
@@ -6235,6 +6261,35 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         }));
       },
 
+      claimRecoveryAttempt(sourceId, requestId, text, images, picks, opts): boolean {
+        let claimed = false;
+        set((state) => {
+          if (state.connection !== "ready" || recoveryAdmissionBlocked(state,sourceId) || state.orchestrationDeliveries.some(item => item.requestId === requestId)) return {};
+          if (opts?.bindDraft && state.restoredComposerDraft?.deliveryRequestId !== sourceId) return {};
+          if (opts?.pickerId && (state.composerRolePicker?.id !== opts.pickerId || state.composerRolePicker.deliveryRequestId !== sourceId)) return {};
+          const savedImages = images.map(image => ({...image,attachment:{...image.attachment}}));
+          claimed = true;
+          pendingSentMessages.set(requestId,{text,images:savedImages,...(opts?.orchestrate ? {orchestrate:opts.orchestrate} : {})});
+          return {
+            lastSentMessage:{text,images:savedImages},
+            orchestrationDeliveries:[...state.orchestrationDeliveries,{requestId,text,images:savedImages,...(opts?.orchestrate ? {orchestrate:opts.orchestrate} : {}),...(picks ? {initialPicks:{...picks}} : {}),parentRequestId:sourceId,status:"pending",restored:false,reviewed:false}],
+            ...(opts?.bindDraft ? {restoredComposerDraft:{...state.restoredComposerDraft!,text,images:savedImages,deliveryRequestId:requestId}} : {}),
+            ...(opts?.pickerId ? {composerRolePicker:{...state.composerRolePicker!,deliveryRequestId:requestId}} : {}),
+          };
+        });
+        return claimed;
+      },
+
+      enqueueRecoveryPrompt(sourceId, item): boolean {
+        let queued = false;
+        set((state) => {
+          if (state.connection !== "ready" || state.restoredComposerDraft?.deliveryRequestId !== sourceId || recoveryAdmissionBlocked(state,sourceId)) return {};
+          queued = true;
+          return {promptQueue:[...state.promptQueue,{...item,id:crypto.randomUUID(),trackDelivery:true,recoverySourceId:sourceId}]};
+        });
+        return queued;
+      },
+
       markOrchestrationDeliveryUnknown(requestId: string): void {
         set((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(item => item.requestId === requestId ? deliveryUnknown(item) : item)}));
       },
@@ -6384,7 +6439,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         }
         const head = promptQueue[takeIndex]!;
         if (head.orchestrate === "enable" || head.requiresRestore === true) return null;
-        if (head.recoverySourceId && recoveryChainBlocked(get().orchestrationDeliveries,head.recoverySourceId)) {
+        if (head.recoverySourceId && recoveryAdmissionBlocked(get(),head.recoverySourceId,{ignoreQueueId:head.id})) {
           set({promptQueue:promptQueue.map(item => item.id === head.id ? {...item,requiresRestore:true} : item)});
           return null;
         }

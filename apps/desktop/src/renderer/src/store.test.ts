@@ -6269,6 +6269,26 @@ describe("desktop store — prompt queue (slice P7.14 · F15)", () => {
     return store;
   }
 
+  it("blocks recovery across siblings, descendants, and queued copies while leaving unrelated trees usable", () => {
+    const store = readyStore();
+    store.setState({orchestrationDeliveries:[
+      {requestId:"root",text:"root",images:[],status:"unknown",reviewed:true,restored:false},
+      {requestId:"left",parentRequestId:"root",text:"left",images:[],status:"rejected",reviewed:false,restored:false},
+      {requestId:"right",parentRequestId:"root",text:"right",images:[],status:"rejected",reviewed:false,restored:false},
+      {requestId:"grandchild",parentRequestId:"right",text:"grandchild",images:[],status:"pending",reviewed:false,restored:false},
+      {requestId:"unrelated",text:"other",images:[],status:"rejected",reviewed:false,restored:false},
+    ]});
+    expect(store.getState().claimRecoveryAttempt("left","blocked","left",[],{},{})).toBe(false);
+    for (const status of ["started","unknown","conflict"] as const) {
+      store.setState((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(item => item.requestId === "grandchild" ? {...item,status,reviewed:false} : item)}));
+      expect(store.getState().claimRecoveryAttempt("left",`blocked-${status}`,"left",[],{},{})).toBe(false);
+    }
+    expect(store.getState().claimRecoveryAttempt("unrelated","allowed","other",[],{},{})).toBe(true);
+    store.setState((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(item => item.requestId === "grandchild" ? {...item,status:"rejected"} : item),promptQueue:[{id:"queued",text:"retry",images:[],recoverySourceId:"right",trackDelivery:true}]}));
+    expect(store.getState().claimRecoveryAttempt("left","blocked-by-queue","left",[],{},{})).toBe(false);
+    expect(store.getState().orchestrationDeliveries.some(item => item.requestId === "blocked-by-queue")).toBe(false);
+  });
+
   it("enqueue/edit/delete are pure FIFO mutations keyed by minted id", () => {
     const store = readyStore();
     store.getState().enqueuePrompt({ text: "first", images: [] });

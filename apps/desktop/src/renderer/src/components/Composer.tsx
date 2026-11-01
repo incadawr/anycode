@@ -25,7 +25,7 @@ import type { ClipboardEvent, DragEvent, FocusEvent, KeyboardEvent as ReactKeybo
 import type { CodexRateLimitsWire, ImageAttachment, ImageMediaType, PermissionMode } from "@anycode/core";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
 import { tabRegistry } from "../tab-registry.js";
-import { isSessionBusy, recoveryChainBlocked, type ContextUsage, type DesktopState, type QueuedPrompt, type SessionTokens, type TurnState } from "../store.js";
+import { isSessionBusy, recoveryAdmissionBlocked, type ContextUsage, type DesktopState, type QueuedPrompt, type SessionTokens, type TurnState } from "../store.js";
 import { useSettingsStore } from "../settings-store.js";
 import { useTabsStore } from "../tabs-store.js";
 import type { ProviderConnection } from "../../../shared/settings.js";
@@ -1671,10 +1671,18 @@ export function Composer() {
         if (!connected()) throw new Error("connection changed");
         const requestId = crypto.randomUUID();
         deliveryRequestId = requestId;
-        tabStore.getState().recordSentMessage(picker.task,[],requestId,"enable",undefined,picker.deliveryRequestId);
-        tabStore.setState((state) => state.composerRolePicker?.id === id ? {composerRolePicker:{...state.composerRolePicker,deliveryRequestId:requestId}} : {});
-        if (picker.sourceDraft) bindRecoveryAttempt(requestId,picker.task,[]);
-        if (!connected() || unresolvedOrchestration(picker.deliveryRequestId)) throw new Error("connection or source changed");
+        if (picker.deliveryRequestId) {
+          if (!tabStore.getState().claimRecoveryAttempt(picker.deliveryRequestId,requestId,picker.task,[],undefined,{orchestrate:"enable",pickerId:id,bindDraft:picker.sourceDraft})) {
+            deliveryRequestId = undefined;
+            retain("Another attempt may already be in progress. Review the retained task."); return;
+          }
+          if (picker.sourceDraft) {restoredOwned.current = true; setRestoredDeliveryId(requestId);}
+        } else {
+          tabStore.getState().recordSentMessage(picker.task,[],requestId,"enable");
+          tabStore.setState((state) => state.composerRolePicker?.id === id ? {composerRolePicker:{...state.composerRolePicker,deliveryRequestId:requestId}} : {});
+          if (picker.sourceDraft) bindRecoveryAttempt(requestId,picker.task,[]);
+        }
+        if (!connected() || (picker.deliveryRequestId && recoveryAdmissionBlocked(tabStore.getState(),picker.deliveryRequestId,{ignorePendingId:requestId}))) throw new Error("connection or source changed");
         sendToHost({type:"user_message",requestId,text:picker.task});
         tabStore.getState().appendUserText(requestId,picker.task);
       }
@@ -1699,11 +1707,14 @@ export function Composer() {
       return;
     }
     const requestId = crypto.randomUUID();
-    tabStore.getState().appendUserText(requestId, task);
     const parentRequestId = tabStore.getState().restoredComposerDraft?.deliveryRequestId ?? restoredDeliveryId;
-    tabStore.getState().recordSentMessage(task, [], requestId, "enable",undefined,parentRequestId);
-    bindRecoveryAttempt(requestId,task,[]);
-    try { if (unresolvedOrchestration(parentRequestId)) throw new Error("source changed"); sendToHost({ type: "user_message", requestId, text: task }); }
+    if (parentRequestId) {
+      if (!tabStore.getState().claimRecoveryAttempt(parentRequestId,requestId,task,[],undefined,{orchestrate:"enable",bindDraft:true})) {
+        tabStore.getState().setNotice({kind:"slash_command_rejected",text:"Another attempt may already be in progress. Review the retained draft."}); return;
+      }
+      restoredOwned.current = true; setRestoredDeliveryId(requestId);
+    } else {tabStore.getState().recordSentMessage(task, [], requestId, "enable"); bindRecoveryAttempt(requestId,task,[]);}
+    try { tabStore.getState().appendUserText(requestId, task); if (parentRequestId && recoveryAdmissionBlocked(tabStore.getState(),parentRequestId,{ignorePendingId:requestId})) throw new Error("source changed"); sendToHost({ type: "user_message", requestId, text: task }); }
     catch { tabStore.getState().markOrchestrationDeliveryUnknown(requestId); tabStore.getState().setNotice({kind:"slash_command_rejected",text:"Delivery is unconfirmed. The draft is retained for review."}); }
   }
 
@@ -1889,7 +1900,7 @@ export function Composer() {
 
   function unresolvedOrchestration(requestId: string | undefined): boolean {
     if (!requestId) return false;
-    const unresolved = recoveryChainBlocked(tabStore.getState().orchestrationDeliveries,requestId);
+    const unresolved = recoveryAdmissionBlocked(tabStore.getState(),requestId);
     if (unresolved) tabStore.getState().setNotice({kind:"slash_command_rejected",text:"This request may already have started. Check its delivery status before sending again."});
     return !!unresolved;
   }
@@ -1900,12 +1911,18 @@ export function Composer() {
     setRestoredDeliveryId(requestId);
   }
 
-  function sendRecoveryAttempt(requestId: string, sourceId: string, draftText: string, images: readonly QueuedPrompt["images"][number][], message: Parameters<typeof sendToHost>[0]): boolean {
-    tabStore.getState().recordSentMessage(draftText,images,requestId,undefined,restoredPicks ?? {},sourceId);
-    bindRecoveryAttempt(requestId,draftText,images);
+  function sendRecoveryAttempt(requestId: string, sourceId: string, draftText: string, images: readonly QueuedPrompt["images"][number][], message: Parameters<typeof sendToHost>[0], beforeSend: () => void): boolean {
     const connection = slashTabId ? tabRegistry.getLiveHostConnection(slashTabId,tabStore) : null;
+    if (!connection || !tabStore.getState().claimRecoveryAttempt(sourceId,requestId,draftText,images,restoredPicks ?? {},{bindDraft:true})) {
+      tabStore.getState().setNotice({kind:"slash_command_rejected",text:"Another attempt may already be in progress. Review the retained draft."});
+      return false;
+    }
+    restoredOwned.current = true;
+    setRestoredDeliveryId(requestId);
     try {
-      if (!connection || unresolvedOrchestration(sourceId)) throw new Error("connection or source changed");
+      beforeSend();
+      if (recoveryAdmissionBlocked(tabStore.getState(),sourceId,{ignorePendingId:requestId})) throw new Error("source changed");
+      if (!slashTabId || tabRegistry.getLiveHostConnection(slashTabId,tabStore) !== connection) throw new Error("connection changed");
       sendToHost(message);
       if (!slashTabId || tabRegistry.getLiveHostConnection(slashTabId,tabStore) !== connection) throw new Error("connection changed");
       return true;
@@ -1971,18 +1988,15 @@ export function Composer() {
       // position), recorded as a pending steer instead of an optimistic
       // append that would interleave with the running turn's output.
       const requestId = crypto.randomUUID();
-      tabStore.getState().recordPendingSteer(requestId, outgoing, images.length > 0 ? images.map((image) => image.attachment) : undefined, {
-        text: outgoing,
-        images,
-      });
+      const recordSteer = () => tabStore.getState().recordPendingSteer(requestId, outgoing, images.length > 0 ? images.map((image) => image.attachment) : undefined, {text: outgoing, images});
       const message = {
         type: "user_message",
         requestId,
         text: outgoing,
         ...(images.length > 0 ? { images: images.map((image) => image.attachment) } : {}),
       } as const;
-      if (recoverySourceId) { if (!sendRecoveryAttempt(requestId,recoverySourceId,outgoing,images,message)) return; }
-      else sendToHost(message);
+      if (recoverySourceId) { if (!sendRecoveryAttempt(requestId,recoverySourceId,outgoing,images,message,recordSteer)) return; }
+      else {recordSteer(); sendToHost(message);}
     } else if (!childSurface && turn.status !== "idle" && images.length === 0 && steerSupported && !recoverySourceId) {
       // a supported running CORE session takes the
       // message as a mid-turn steer (optimistic pendingSteer bubble; the
@@ -2003,7 +2017,11 @@ export function Composer() {
       // tab-registry drainer sends it once the tab is truly idle and unpaused.
       // Direct-sending in the in-flight window would let the host busy-reject
       // it (a drained item was already accepted) and lose the prompt.
-      tabStore.getState().enqueuePrompt({ text: outgoing, images, ...(recoverySourceId ? {trackDelivery:true,recoverySourceId,initialPicks:restoredPicks ?? {}} : {}) });
+      if (recoverySourceId) {
+        if (!tabStore.getState().enqueueRecoveryPrompt(recoverySourceId,{text:outgoing,images,initialPicks:restoredPicks ?? {}})) {
+          tabStore.getState().setNotice({kind:"slash_command_rejected",text:"Another attempt may already be queued. Review the retained draft."}); return;
+        }
+      } else tabStore.getState().enqueuePrompt({ text: outgoing, images });
     } else {
       const requestId = crypto.randomUUID();
       // The wire protocol never echoes the user's own message back (§3 — only
@@ -2016,7 +2034,6 @@ export function Composer() {
       // first so ordering stays consistent. the raw
       // text + attachments ride onto the block; the image count badge is no
       // longer appended to the live echo (thumbnails render instead).
-      tabStore.getState().appendUserText(requestId, outgoing, images.length > 0 ? images.map((image) => image.attachment) : undefined);
       // W8: snapshot what actually went on the wire so a later
       // terminal retryable failure can offer to replay this same content.
       const message = {
@@ -2025,8 +2042,9 @@ export function Composer() {
         text: outgoing,
         ...(images.length > 0 ? { images: images.map((image) => image.attachment) } : {}),
       } as const;
-      if (recoverySourceId) { if (!sendRecoveryAttempt(requestId,recoverySourceId,outgoing,images,message)) return; }
-      else { tabStore.getState().recordSentMessage(outgoing, images, requestId); sendToHost(message); }
+      const append = () => tabStore.getState().appendUserText(requestId, outgoing, images.length > 0 ? images.map((image) => image.attachment) : undefined);
+      if (recoverySourceId) { if (!sendRecoveryAttempt(requestId,recoverySourceId,outgoing,images,message,append)) return; }
+      else { append(); tabStore.getState().recordSentMessage(outgoing, images, requestId); sendToHost(message); }
     }
     if (restoredOwned.current) { restoredOwned.current = false; setRestoredPicks(undefined); setRestoredDeliveryId(undefined); tabStore.setState((state) => ({ restoredComposerDraft: null, completedComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 })); }
     setText("");

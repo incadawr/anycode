@@ -41,7 +41,7 @@
  * child-relation store (`live: false`) instead of a root-tab banner nobody
  * would ever see.
  */
-import { createDesktopStore, recoveryChainBlocked, systemRetrySafe, type DesktopState, type QueuedPrompt, type QueuedPromptImage } from "./store.js";
+import { createDesktopStore, recoveryAdmissionBlocked, systemRetrySafe, type DesktopState, type QueuedPrompt, type QueuedPromptImage } from "./store.js";
 import type { PermissionMode, ReasoningEffort } from "@anycode/core";
 import { connectHost, connectTerminal, type HostConnection, type TerminalConnection } from "./port.js";
 import { useTabsStore, type TabsStoreApi } from "./tabs-store.js";
@@ -446,7 +446,7 @@ export function createTabRegistry(
     if (!inFlight || inFlight.item !== item || liveConnection(entry) !== connection) return;
     const requestId = inFlight.requestId;
     const retryStillRejected = () => !item.retryOf || (systemRetrySafe(entry.store.getState().orchestrationDeliveries,item.retryOf,requestId) && entry.store.getState().orchestrationDeliveries.some(delivery => delivery.requestId === item.retryOf && delivery.retryQueued && delivery.originId === item.originId));
-    const recoveryStillSafe = () => !item.recoverySourceId || !recoveryChainBlocked(entry.store.getState().orchestrationDeliveries,item.recoverySourceId);
+    const recoveryStillSafe = () => !item.recoverySourceId || !recoveryAdmissionBlocked(entry.store.getState(),item.recoverySourceId,{ignoreInFlightId:requestId,ignorePendingId:requestId});
     const cancelRetry = () => entry.store.getState().cancelUnsentSystemRetry(requestId);
     if (!retryStillRejected()) { cancelRetry(); return; }
     if (!recoveryStillSafe()) { entry.store.getState().holdBlockedRecovery(requestId); return; }
@@ -710,6 +710,7 @@ export function createTabRegistry(
           // before the synchronous drainer runs, and leave system reports alone.
           const store = entry.store;
           const enqueuePrompt = store.getState().enqueuePrompt;
+          const enqueueRecoveryPrompt = store.getState().enqueueRecoveryPrompt;
           store.setState({
             enqueuePrompt(item) {
               if (item.origin === undefined) {
@@ -717,6 +718,11 @@ export function createTabRegistry(
                 if (sessionId) childRelationStore.getState().dismissFinishedApprovals(sessionId);
               }
               return enqueuePrompt(item);
+            },
+            enqueueRecoveryPrompt(sourceId,item) {
+              const queued = enqueueRecoveryPrompt(sourceId,item);
+              if (queued) { const sessionId = store.getState().sessionId; if (sessionId) childRelationStore.getState().dismissFinishedApprovals(sessionId); }
+              return queued;
             },
           });
           tabsStore.getState().addTab({ tabId, workspace, ...(openedByAgent === true ? { openedByAgent: true as const } : {}) });
