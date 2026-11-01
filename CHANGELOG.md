@@ -9,11 +9,13 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Temporarily disable continuing a Codex conversation on another account; starting a new session remains available.
+- Continue a Codex conversation on another account again: the usage-limit banner's account picker is back, with a settings switch (`codexContinueOnAnotherAccount`) to pause it without a rebuild.
 - Redesign provider connection editing with a compact model picker and per-model pricing table.
 
 ### Fixed
 
+- Continue on another account now refuses rather than guesses: a rollout is matched by its exact thread-id segment (a rollout that merely contained the id could be copied instead), an unreadable sessions folder is reported as such instead of "missing", and two rollouts claiming one thread are refused as ambiguous.
+- A continued conversation is published only when complete: the copy is written to a temp file, synced and linked into place, and the source is re-checked, so a conversation still being written is refused instead of resumed with a truncated tail.
 - Prevent continuing a Codex conversation from an existing target copy that may be stale, and retain its session if opening the new tab has an uncertain outcome.
 - Preserve shared engine history when deleting one of the sessions that references it.
 - Connection editing now protects unsaved changes when closing and keeps disabled price values readable.
