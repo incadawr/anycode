@@ -1019,7 +1019,20 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   }
 
   async createSession(meta: Omit<SessionMeta, "createdAt" | "updatedAt">): Promise<SessionMeta> {
-    const db = this.open();
+    return this.createSessionInDb(this.open(), meta);
+  }
+
+  /** Atomically transfer a native reference only while its source still owns it. */
+  async createSessionFromSource(sourceId: string, meta: Omit<SessionMeta, "createdAt" | "updatedAt">): Promise<SessionMeta | null> {
+    if ((meta.engineId !== "codex" && meta.engineId !== "claude") || !meta.externalSessionRef) return null;
+    return this.transaction((db) => {
+      const source = db.prepare("SELECT 1 FROM sessions WHERE id = ? AND engine_id = ? AND external_session_ref = ? AND parent_session_id IS NULL")
+        .get(sourceId, meta.engineId!, meta.externalSessionRef!);
+      return source ? this.createSessionInDb(db, meta) : null;
+    });
+  }
+
+  private createSessionInDb(db: DatabaseSync, meta: Omit<SessionMeta, "createdAt" | "updatedAt">): SessionMeta {
     const now = Date.now();
     const full: SessionMeta = { ...meta, createdAt: now, updatedAt: now };
     const projectRoot = meta.projectRoot ?? meta.workspace;
