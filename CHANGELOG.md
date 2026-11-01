@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.61] — 2026-11-01
+
 ### Changed
 
 - Continue a Codex conversation on another account is available again, and the transfer no longer guesses: a conversation is copied by its exact thread id rather than by a partial match, never published half-written, never opened twice, and two competing transfers of one conversation refuse each other. A settings switch (`codexContinueOnAnotherAccount`, `"off"`) pauses the action if needed. Limit worth knowing: a rollout being written at the same moment by another program can go undetected — the size and modification-time check only narrows that window, it does not close it.
@@ -20,6 +22,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Prevent continuing a Codex conversation from an existing target copy that may be stale, and retain its session if opening the new tab has an uncertain outcome.
 - Preserve shared engine history when deleting one of the sessions that references it.
 - Connection editing now protects unsaved changes when closing and keeps disabled price values readable.
+- Resuming a session from the command line now checks that the session belongs to the CLI's engine, and reads its history together with the session admission, before the database is migrated.
+- The `Agent` tool now describes the catalog `providerId` for `Agent(provider:)`, and its refusal message shows the expected format.
 
 ## [0.0.60] — 2026-10-31
 
