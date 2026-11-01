@@ -245,7 +245,7 @@ describe("dock resize handle placement (GitHub #31)", () => {
     expect(send.mock.calls.filter(([, message]) => message.type === "user_message")).toHaveLength(1);
   });
 
-  it("retains a completed recovery payload and allows explicit dismissal with late-event fences", async () => {
+  it.each([ ["completed", "Turn completed"], ["error", "Turn failed"], ["cancelled", "Turn cancelled"], ["max_turns", "Turn reached its turn limit"] ] as const)("retains a recovery payload after %s and allows explicit dismissal", async (reason, label) => {
     const image = { name: "parent.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } };
     store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", sessionId: "a", mode: "build", model: "m1", imageInput: true });
     store.getState().recordSentMessage("parent payload", [image], "parent", undefined, undefined, undefined, undefined, true);
@@ -259,15 +259,15 @@ describe("dock resize handle placement (GitHub #31)", () => {
     const sent = send.mock.calls.find(([, message]) => message.type === "user_message")?.[1] as { requestId: string };
     await act(async () => {
       store.getState().applyHostMessage({ type: "turn_started", requestId: sent.requestId, turnId: "retry-turn" });
-      store.getState().applyHostMessage({ type: "agent_event", turnId: "retry-turn", event: { type: "loop_end", reason: "completed", turns: 1 } });
+      store.getState().applyHostMessage({ type: "agent_event", turnId: "retry-turn", event: { type: "loop_end", reason, turns: 1 } });
     });
-    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === sent.requestId)).toMatchObject({ status: "completed", text: "retry payload", images: [image] });
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === sent.requestId)).toMatchObject({ status: "finished", terminalReason: reason, text: "retry payload", images: [image] });
     const row = (text: string) => [...container.querySelectorAll<HTMLElement>('[role="status"]')].find(element => element.textContent?.includes(text))!;
     await act(async () => row("parent payload").querySelector<HTMLButtonElement>(".orchestration-delivery-dismiss")!.click());
     expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "parent")).toMatchObject({ dismissed: true, images: [] });
-    expect(row("retry payload").textContent).toContain("Turn completed");
+    expect(row("retry payload").textContent).toContain(label);
     await act(async () => row("retry payload").querySelector<HTMLButtonElement>(".orchestration-delivery-dismiss")!.click());
-    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === sent.requestId)).toMatchObject({ status: "completed", dismissed: true, payloadOmitted: true, images: [] });
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === sent.requestId)).toMatchObject({ status: "finished", terminalReason: reason, dismissed: true, payloadOmitted: true, images: [] });
     await act(async () => store.getState().applyHostMessage({ type: "turn_rejected", requestId: sent.requestId, reason: "busy" }));
     expect(store.getState().orchestrationDeliveries.find(item => item.requestId === sent.requestId)).toMatchObject({ status: "conflict", payloadOmitted: true });
     expect(store.getState().claimRecoveryAttempt("parent", "unsafe", "retry", [image], undefined)).toBe(false);

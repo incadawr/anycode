@@ -19,11 +19,81 @@ describe("unknown delivery over real MessageChannel", () => {
     store.getState().applyHostMessage({ type: "turn_started", requestId: "child", turnId: "child-turn" });
     store.getState().applyHostMessage({ type: "agent_event", turnId: "child-turn", event: { type: "loop_end", reason: "completed", turns: 1 } });
     store.getState().applyHostMessage({ type: "turn_started", requestId: "child", turnId: "child-turn" });
-    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "child")).toMatchObject({ status: "completed", images: [saved] });
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "child")).toMatchObject({ status: "finished", terminalReason: "completed", images: [saved] });
     store.getState().applyHostMessage({ type: "turn_rejected", requestId: "child", reason: "busy" });
     store.getState().dismissRejectedDelivery("parent");
     expect(store.getState().orchestrationDeliveries).toMatchObject([{ requestId: "parent", status: "rejected", images: [saved] }, { requestId: "child", status: "conflict", images: [saved] }]);
     expect(store.getState().claimRecoveryAttempt("parent", "unsafe", "retry", [saved], undefined)).toBe(false);
+  });
+
+  it.each(["completed", "error", "cancelled", "max_turns"] as const)("keeps %s recovery terminal through late starts, including a conflicting turn", (reason) => {
+    const store = createDesktopStore({ schedule: () => {} });
+    store.getState().applyHostMessage(ready);
+    const saved = image();
+    store.getState().recordSentMessage("parent", [saved], "parent", undefined, undefined, undefined, undefined, true);
+    store.getState().applyHostMessage({ type: "turn_rejected", requestId: "parent", reason: "busy" });
+    expect(store.getState().claimRecoveryAttempt("parent", "child", "retry", [saved], undefined)).toBe(true);
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "child", turnId: "child-turn" });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "child-turn", event: { type: "loop_end", reason, turns: 1 } });
+    expect(store.getState().turn.status).toBe("idle");
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "child", turnId: "child-turn" });
+    expect(store.getState().turn.status).toBe("idle");
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "child")).toMatchObject({ status: "finished", terminalReason: reason, images: [saved] });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "child", turnId: "contradictory-turn" });
+    expect(store.getState().turn.status).toBe("idle");
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "other", turnId: "other-turn" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "child", turnId: "contradictory-turn" });
+    expect(store.getState().turn).toMatchObject({ status: "running", requestId: "other", turnId: "other-turn" });
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "child")).toMatchObject({ status: "conflict", terminalReason: reason, images: [saved] });
+    store.getState().dismissRejectedDelivery("parent");
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "parent")).toMatchObject({ status: "rejected", images: [saved] });
+    expect(store.getState().claimRecoveryAttempt("parent", "unsafe", "retry", [saved], undefined)).toBe(false);
+  });
+
+  it("does not stall the actual drainer after a replayed start on reconnect", async () => {
+    const registry = createTabRegistry(createTabsStore());
+    const channel = new MessageChannel();
+    const sent: Array<{type: string; text?: string}> = [];
+    channel.port2.on("message", message => sent.push(message));
+    try {
+      registry.registerPort("tab", "/synthetic", channel.port1 as unknown as MessagePort);
+      channel.port2.postMessage(ready);
+      await vi.waitFor(() => expect(registry.getStore("tab")?.getState().connection).toBe("ready"));
+      const store = registry.getStore("tab")!;
+      const saved = image();
+      store.getState().recordSentMessage("parent", [saved], "parent", undefined, undefined, undefined, undefined, true);
+      store.getState().applyHostMessage({ type: "turn_rejected", requestId: "parent", reason: "busy" });
+      expect(store.getState().claimRecoveryAttempt("parent", "child", "retry", [saved], undefined)).toBe(true);
+      channel.port2.postMessage({ type: "turn_started", requestId: "child", turnId: "child-turn" });
+      channel.port2.postMessage({ type: "agent_event", turnId: "child-turn", event: { type: "loop_end", reason: "completed", turns: 1 } });
+      await vi.waitFor(() => expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "child")?.status).toBe("finished"));
+      const replayDelivered = new Promise<void>(resolve => {
+        const listener = (message: {type: string}) => {
+          if (message.type === "turn_started") { channel.port1.off("message", listener); resolve(); }
+        };
+        channel.port1.on("message", listener);
+      });
+      channel.port2.postMessage(ready);
+      channel.port2.postMessage({ type: "turn_started", requestId: "child", turnId: "child-turn" });
+      await replayDelivered;
+      expect(store.getState().turn.status).toBe("idle");
+      store.getState().enqueuePrompt({ text: "independent task", images: [] });
+      await vi.waitFor(() => expect(sent.filter(message => message.type === "user_message" && message.text === "independent task")).toHaveLength(1));
+    } finally { registry.disposeTab("tab"); channel.port1.close(); channel.port2.close(); }
+  });
+
+  it("fences late starts for a completed ordinary direct after reconnect", () => {
+    const store = createDesktopStore({ schedule: () => {} });
+    store.getState().applyHostMessage(ready);
+    store.getState().recordSentMessage("direct", [image()], "direct", undefined, undefined, undefined, undefined, true);
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "direct", turnId: "direct-turn" });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "direct-turn", event: { type: "loop_end", reason: "completed", turns: 1 } });
+    store.getState().applyHostMessage(ready);
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "direct", turnId: "direct-turn" });
+    expect(store.getState().turn.status).toBe("idle");
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "direct", turnId: "different-turn" });
+    expect(store.getState().turn.status).toBe("idle");
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "conflict", terminalReason: "completed", payloadOmitted: true });
   });
   it("bounds a fully dismissed chain of 300 while retaining recent correlation", () => {
     const store = createDesktopStore({ schedule: () => {} });

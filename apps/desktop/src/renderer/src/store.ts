@@ -1030,7 +1030,8 @@ export interface OrchestrationDelivery {
   originId?: string;
   retryQueued?: boolean;
   parentRequestId?: string;
-  status: "pending" | "unknown" | "rejected" | "started" | "completed" | "conflict";
+  status: "pending" | "unknown" | "rejected" | "started" | "finished" | "conflict";
+  terminalReason?: "completed" | "error" | "cancelled" | "max_turns";
   restored: boolean;
   reviewed: boolean;
   turnId?: string;
@@ -1066,7 +1067,7 @@ function boundDeliveryTombstones(deliveries: readonly OrchestrationDelivery[], s
       family.has(state.queueInFlight?.requestId ?? "") || family.has(state.queueInFlight?.item.recoverySourceId ?? "") ||
       state.pendingSteers.some(entry => family.has(entry.requestId));
     if (!referenced && deliveries.every(entry => !family.has(entry.requestId) ||
-      (entry.payloadOmitted && !entry.retryQueued && (entry.status === "started" || ((entry.status === "rejected" || entry.status === "completed") && entry.dismissed))))) {
+      (entry.payloadOmitted && !entry.retryQueued && (entry.status === "started" || ((entry.status === "rejected" || entry.status === "finished") && entry.dismissed))))) {
       for (const id of family) eligible.add(id);
     }
   }
@@ -1079,13 +1080,13 @@ function boundDeliveryTombstones(deliveries: readonly OrchestrationDelivery[], s
   });
 }
 
-function compactCompletedDirect(state: DesktopState, turnId: string): readonly OrchestrationDelivery[] {
+function compactCompletedDirect(state: DesktopState, turnId: string, reason: string): readonly OrchestrationDelivery[] {
   const deliveries = state.orchestrationDeliveries.map(item => {
     const linked = state.restoredComposerDraft?.deliveryRequestId === item.requestId ||
       state.orchestrationDeliveries.some(child => child.parentRequestId === item.requestId) ||
       state.promptQueue.some(queued => queued.recoverySourceId === item.requestId) ||
       state.queueInFlight?.item.recoverySourceId === item.requestId;
-    return (item.ordinaryDirect || item.childSteer) && item.status === "started" && item.turnId === turnId && !item.preservePayload && !item.restored && !linked
+    return (reason === "completed" || reason === "error" || reason === "cancelled" || reason === "max_turns") && (item.ordinaryDirect || item.childSteer) && item.status === "started" && item.turnId === turnId && !item.preservePayload && !item.restored && !linked
       ? { ...item, text: "", images: [], payloadOmitted: true as const }
       : item;
   });
@@ -1094,13 +1095,13 @@ function compactCompletedDirect(state: DesktopState, turnId: string): readonly O
 
 function deliveryStarted(item: OrchestrationDelivery, turnId: string): OrchestrationDelivery {
   if (item.status === "conflict") return item;
-  if (item.status === "completed" && item.turnId === turnId) return item;
-  if (item.status === "rejected" || ((item.status === "started" || item.status === "completed") && item.turnId !== turnId)) return { ...item, status: "conflict", reviewed: false, dismissed: undefined };
+  if (item.status === "finished" && item.turnId === turnId) return item;
+  if (item.status === "rejected" || ((item.status === "started" || item.status === "finished") && item.turnId !== turnId)) return { ...item, status: "conflict", reviewed: false, dismissed: undefined };
   return { ...item, status: "started", turnId };
 }
 function deliveryRejected(item: OrchestrationDelivery): OrchestrationDelivery {
   if (item.status === "conflict") return item;
-  if (item.status === "started" || item.status === "completed") return { ...item, status: "conflict", reviewed: false, dismissed: undefined };
+  if (item.status === "started" || item.status === "finished") return { ...item, status: "conflict", reviewed: false, dismissed: undefined };
   return { ...item, status: "rejected" };
 }
 function deliveryUnknown(item: OrchestrationDelivery): OrchestrationDelivery {
@@ -1133,12 +1134,12 @@ export function recoveryTreeBlocked(deliveries: readonly OrchestrationDelivery[]
   const ids = recoveryTreeIds(deliveries,requestId);
   if (!ids) return true;
   return deliveries.some(item => ids.has(item.requestId) && !(item.requestId === ignorePendingId && item.status === "pending") &&
-    (item.payloadOmitted || item.dismissed || item.status === "pending" || item.status === "started" || item.status === "completed" || ((item.status === "unknown" || item.status === "conflict") && !item.reviewed)));
+    (item.payloadOmitted || item.dismissed || item.status === "pending" || item.status === "started" || item.status === "finished" || ((item.status === "unknown" || item.status === "conflict") && !item.reviewed)));
 }
 
 export function canDismissRejectedDelivery(state: DesktopState, requestId: string): boolean {
   const item = state.orchestrationDeliveries.find(entry => entry.requestId === requestId);
-  if (!item || (item.status !== "rejected" && item.status !== "completed") || item.origin === "system" || item.dismissed || item.payloadOmitted || item.retryQueued) return false;
+  if (!item || (item.status !== "rejected" && item.status !== "finished") || item.origin === "system" || item.dismissed || item.payloadOmitted || item.retryQueued) return false;
   if (!recoveryTreeIds(state.orchestrationDeliveries, requestId)) return false;
   const descendants = new Set([requestId]);
   let changed = true;
@@ -1151,7 +1152,7 @@ export function canDismissRejectedDelivery(state: DesktopState, requestId: strin
       }
     }
   }
-  if (state.orchestrationDeliveries.some(entry => entry.requestId !== requestId && descendants.has(entry.requestId) && !(entry.status === "completed" && !entry.retryQueued) && !(entry.status === "rejected" && entry.dismissed && entry.payloadOmitted && !entry.retryQueued))) return false;
+  if (state.orchestrationDeliveries.some(entry => entry.requestId !== requestId && descendants.has(entry.requestId) && !(entry.status === "finished" && !entry.retryQueued) && !(entry.status === "rejected" && entry.dismissed && entry.payloadOmitted && !entry.retryQueued))) return false;
   return !descendants.has(state.restoredComposerDraft?.deliveryRequestId ?? "") &&
     !descendants.has(state.composerRolePicker?.deliveryRequestId ?? "") &&
     !state.promptQueue.some(entry => descendants.has(entry.recoverySourceId ?? "") || descendants.has(entry.retryOf ?? "")) &&
@@ -4316,7 +4317,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             const nextQueue = [...state.promptQueue, ...queueAdditions];
             return {
               turn: { status: "idle", turnId: null, requestId: null },
-              orchestrationDeliveries: compactCompletedDirect({ ...state, orchestrationDeliveries: state.orchestrationDeliveries.map(item => event.reason === "completed" && item.parentRequestId && item.status === "started" && item.turnId === turnId ? { ...item, status: "completed" as const } : item) }, turnId),
+              orchestrationDeliveries: compactCompletedDirect({ ...state, orchestrationDeliveries: state.orchestrationDeliveries.map(item => (event.reason === "completed" || event.reason === "error" || event.reason === "cancelled" || event.reason === "max_turns") && item.status === "started" && item.turnId === turnId ? { ...item, ...(item.parentRequestId ? { status: "finished" as const } : {}), terminalReason: event.reason } : item) }, turnId, event.reason),
               pendingSteers: state.pendingSteers.filter((entry) => !uiPending.includes(entry.requestId)),
               promptQueue: nextQueue,
               uiSteerPending: [],
@@ -5216,6 +5217,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             return;
           case "turn_started": {
             pendingSentMessages.delete(message.requestId);
+            const knownDelivery = get().orchestrationDeliveries.find(item => item.requestId === message.requestId);
+            // A replay (or a contradictory second start for a finished request)
+            // must update correlation without reviving an already ended turn.
+            // Keep this fence across host_ready resets via the delivery ledger.
+            if (knownDelivery?.terminalReason || loopEndEmitted.has(`loop_end:${message.turnId}`)) {
+              set((state) => reconcileQueuedRetries(state.promptQueue, startedDeliveries(state, message.requestId, message.turnId)));
+              return;
+            }
             if (presentationReplayActive && presentationReplayTurns?.has(message.turnId)) {
               set((state) => reconcileQueuedRetries(state.promptQueue,startedDeliveries(state,message.requestId,message.turnId)));
               return;
