@@ -1020,6 +1020,8 @@ export interface OrchestrationDelivery {
   images: readonly QueuedPromptImage[];
   orchestrate?: "enable";
   initialPicks?: QueuedPrompt["initialPicks"];
+  origin?: "system";
+  originId?: string;
   status: "pending" | "unknown" | "rejected" | "started" | "conflict";
   restored: boolean;
   reviewed: boolean;
@@ -1038,6 +1040,19 @@ function deliveryRejected(item: OrchestrationDelivery): OrchestrationDelivery {
 }
 function deliveryUnknown(item: OrchestrationDelivery): OrchestrationDelivery {
   return item.status === "pending" ? { ...item, status: "unknown" } : item;
+}
+
+/** Preserve the wire id and payload when a queued turn loses its transport. */
+function holdInFlightUnknown(state: DesktopState): Pick<DesktopState, "queueInFlight" | "orchestrationDeliveries"> {
+  const current = state.queueInFlight;
+  const deliveries = state.orchestrationDeliveries.map(deliveryUnknown);
+  if (!current || deliveries.some(item => item.requestId === current.requestId)) return {queueInFlight:null,orchestrationDeliveries:deliveries};
+  const item = current.item;
+  return {queueInFlight:null,orchestrationDeliveries:[...deliveries,{
+    requestId:current.requestId,text:item.text,images:item.images.map(image => ({...image,attachment:{...image.attachment}})),
+    ...(item.orchestrate ? {orchestrate:item.orchestrate} : {}),...(item.initialPicks ? {initialPicks:{...item.initialPicks}} : {}),
+    ...(item.origin ? {origin:item.origin} : {}),...(item.originId ? {originId:item.originId} : {}),status:"unknown",restored:false,reviewed:false,
+  }]};
 }
 
 /**
@@ -1445,6 +1460,7 @@ export interface DesktopState {
 
   /* */
   setAwaitingPort(): void;
+  setPortClosed(): void;
   /** Marks the handshake in flight: port received and ui_ready sent, host_ready not yet received. */
   setAwaitingHostReady(): void;
   /**
@@ -4921,28 +4937,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // `engine` slot set below mirrors the same discriminator so
             // hydrateSessionHistory can re-derive it without its own copy.
             causalFoldEngaged = message.engine === undefined;
-            // Slice P7.14: `performReset` deliberately leaves the prompt queue
-            // intact (it isn't in the session slice), so a respawn keeps the
-            // user's typed-ahead prompts. But a respawn is an anomaly — restore
-            // any in-flight item to the HEAD of the queue (so a prompt caught
-            // mid-flight by the crash isn't lost) and hold a non-empty queue
-            // paused so nothing re-sends silently; the user Resumes when ready.
-            // This MUST run BEFORE the connection flips to "ready" below, or the
-            // drainer subscription would fire on that flip (turn already idle)
-            // and dispatch an item before the pause lands. Idempotent: on a
-            // crash+respawn `setHostExited` already restored + cleared the
-            // in-flight slot before this `host_ready` arrives, so `queueInFlight`
-            // is null here and `promptQueue` is left untouched.
+            // Preserve unacknowledged wire identity before the ready transition
+            // can wake the drainer. Reconnect never proves delivery failed.
             set((state) => {
-              const promptQueue =
-                state.queueInFlight !== null ? [state.queueInFlight.item, ...state.promptQueue] : state.promptQueue;
               return {
-                queueInFlight: null,
-                promptQueue,
-                orchestrationDeliveries: state.orchestrationDeliveries.map(deliveryUnknown),
+                ...holdInFlightUnknown(state),
                 // a respawn is a failure, not a turn limit — never
                 // leave a stale "max_turns" reason on the new pause.
-                ...(promptQueue.length > 0 ? { queuePaused: true, queuePauseReason: "error" as const } : {}),
+                ...(state.promptQueue.length > 0 ? { queuePaused: true, queuePauseReason: "error" as const } : {}),
                 ...(armedRetry !== null ? { retry: armedRetry } : {}),
               };
             });
@@ -5827,7 +5829,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             const { promptQueue, queueInFlight } = get();
             const alreadyQueued =
               promptQueue.some((prompt) => prompt.originId === message.id) ||
-              queueInFlight?.item.originId === message.id;
+              queueInFlight?.item.originId === message.id ||
+              get().orchestrationDeliveries.some(delivery => delivery.originId === message.id);
             if (!alreadyQueued) {
               get().enqueuePrompt({ text: message.text, images: [], origin: "system", originId: message.id });
             }
@@ -6002,6 +6005,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         set({ connection: "awaiting_port" });
       },
 
+      setPortClosed(): void {
+        set((state) => ({connection:"awaiting_port",...holdInFlightUnknown(state),
+          ...(state.promptQueue.length > 0 ? {queuePaused:true,queuePauseReason:"error" as const} : {})}));
+      },
+
       setAwaitingHostReady(): void {
         set((state) => ({ connection: "awaiting_host_ready", hostFailure: null, orchestrationDeliveries: state.orchestrationDeliveries.map(deliveryUnknown) }));
       },
@@ -6021,30 +6029,23 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         // but pause and flip land in ONE atomic set() so the invariant is
         // uniform with `loop_end`/`fatal` (drainer never sees an intermediate).
         //
-        // If a drained item was mid-flight (dispatched, `turn_started` not yet
-        // acknowledged) when the host died, restore it to the HEAD of the queue
-        // and clear the in-flight slot — otherwise that already-typed prompt
-        // vanishes silently (matches the `turn_rejected` restore pattern).
-        // Idempotent: a null `queueInFlight` leaves `promptQueue` untouched.
+        // A drained item without an acknowledgement becomes an unknown
+        // delivery, retaining the actual wire ID; it must not auto-resend.
         set((state) => {
-          const promptQueue =
-            state.queueInFlight !== null ? [state.queueInFlight.item, ...state.promptQueue] : state.promptQueue;
           return {
             connection: "host_exited",
-            orchestrationDeliveries: state.orchestrationDeliveries.map(deliveryUnknown),
+            ...holdInFlightUnknown(state),
             // GitHub #6: only the missing-folder refusal is terminal; every other
             // exit keeps the reconnecting path open, so the flag follows the call.
             workspaceMissing: missingWorkspace,
             hostFailure: failure ?? null,
-            queueInFlight: null,
-            promptQueue,
             // review F3: the host is gone, so the turn is
             // definitionally not waiting on the network any more — clear the
             // flag so the banner never renders over "Host process exited"
             // and Retry now never posts into a dead port.
             networkWaitEpisodes: { parent: 0, subagent: 0 },
             waitingForNetwork: false,
-            ...(promptQueue.length > 0 ? { queuePaused: true, queuePauseReason: "error" as const } : {}),
+            ...(state.promptQueue.length > 0 ? { queuePaused: true, queuePauseReason: "error" as const } : {}),
           };
         });
       },

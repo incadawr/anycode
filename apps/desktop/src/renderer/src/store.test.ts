@@ -6440,7 +6440,7 @@ describe("desktop store — prompt queue (slice P7.14 · F15)", () => {
     expect(emptyFatal.getState().queuePaused).toBe(false);
   });
 
-  it("a respawned host_ready PRESERVES still-queued prompts and RESTORES the mid-flight item to the head, paused; a public reset() clears them", () => {
+  it("a respawn retains the mid-flight request as unknown and pauses remaining queued prompts", () => {
     const store = readyStore();
     store.getState().enqueuePrompt({ text: "in-flight", images: [] });
     store.getState().enqueuePrompt({ text: "still-queued", images: [] });
@@ -6452,11 +6452,8 @@ describe("desktop store — prompt queue (slice P7.14 · F15)", () => {
 
     // Respawn: a fresh host_ready lands on the same store.
     store.getState().applyHostMessage(HOST_READY);
-    // Both prompts survived (queue isn't in the session slice) and are held
-    // paused. The mid-flight item is RESTORED to the HEAD (a crash between drain
-    // and turn_started must not lose an already-typed prompt) — matching the
-    // turn_rejected restore pattern. (P7.14/F15 codex fix, supersedes W1 dev #3.)
-    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["in-flight", "still-queued"]);
+    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["still-queued"]);
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{requestId:"req-1",text:"in-flight",status:"unknown"}]);
     expect(store.getState().queueInFlight).toBeNull();
     expect(store.getState().queuePaused).toBe(true);
 
@@ -6479,7 +6476,7 @@ describe("desktop store — prompt queue (slice P7.14 · F15)", () => {
     ]);
   });
 
-  it("setHostExited RESTORES a non-null queueInFlight item to the head, clears inFlight, and pauses (crash mid-flight must not lose the prompt)", () => {
+  it("setHostExited retains an in-flight request as unknown and pauses the remaining queue", () => {
     const store = readyStore();
     store.getState().enqueuePrompt({ text: "drained", images: [] });
     store.getState().enqueuePrompt({ text: "behind", images: [] });
@@ -6490,7 +6487,8 @@ describe("desktop store — prompt queue (slice P7.14 · F15)", () => {
     store.getState().setHostExited();
 
     expect(store.getState().connection).toBe("host_exited");
-    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["drained", "behind"]);
+    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["behind"]);
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{requestId:"req-1",text:"drained",status:"unknown"}]);
     expect(store.getState().queueInFlight).toBeNull();
     expect(store.getState().queuePaused).toBe(true);
   });
@@ -6510,20 +6508,20 @@ describe("desktop store — prompt queue (slice P7.14 · F15)", () => {
     expect(empty.getState().queuePaused).toBe(false);
   });
 
-  it("host_ready(respawn) with a null queueInFlight (already restored by setHostExited) is a no-op restore — the head is not duplicated", () => {
+  it("host_ready preserves an unknown in-flight request without requeueing it", () => {
     const store = readyStore();
     store.getState().enqueuePrompt({ text: "drained", images: [] });
     store.getState().enqueuePrompt({ text: "behind", images: [] });
     store.getState().takeQueueHead("req-1");
 
-    // Crash path: setHostExited restores + clears inFlight, THEN host_ready lands.
+    // Crash path: setHostExited retains the unknown delivery, then host_ready lands.
     store.getState().setHostExited();
-    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["drained", "behind"]);
+    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["behind"]);
     expect(store.getState().queueInFlight).toBeNull();
 
-    // host_ready's own restore sees a null inFlight → does NOT re-prepend "drained".
     store.getState().applyHostMessage(HOST_READY);
-    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["drained", "behind"]);
+    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["behind"]);
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{requestId:"req-1",text:"drained",status:"unknown"}]);
     expect(store.getState().queueInFlight).toBeNull();
     expect(store.getState().queuePaused).toBe(true);
   });

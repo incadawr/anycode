@@ -1884,7 +1884,7 @@ export function Composer() {
 
   function unresolvedOrchestration(requestId: string | undefined): boolean {
     if (!requestId) return false;
-    const unresolved = tabStore.getState().orchestrationDeliveries?.some(item => item.requestId === requestId && (item.status === "pending" || ((item.status === "unknown" || item.status === "conflict") && !item.reviewed)));
+    const unresolved = tabStore.getState().orchestrationDeliveries?.some(item => item.requestId === requestId && (item.status === "pending" || item.status === "started" || ((item.status === "unknown" || item.status === "conflict") && !item.reviewed)));
     if (unresolved) tabStore.getState().setNotice({kind:"slash_command_rejected",text:"This request may already have started. Check its delivery status before sending again."});
     return !!unresolved;
   }

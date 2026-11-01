@@ -437,12 +437,14 @@ export function createTabRegistry(
   function dispatchQueuedPrompt(entry: TabEntry): void {
     const connection = liveConnection(entry);
     if (!connection) return;
-    const requestId = crypto.randomUUID();
-    const item = entry.store.getState().takeQueueHead(requestId);
+    const candidateId = crypto.randomUUID();
+    const item = entry.store.getState().takeQueueHead(candidateId);
     if (item === null) {
       return;
     }
-    if (entry.store.getState().queueInFlight?.requestId !== requestId || liveConnection(entry) !== connection) return;
+    const inFlight = entry.store.getState().queueInFlight;
+    if (!inFlight || inFlight.item !== item || liveConnection(entry) !== connection) return;
+    const requestId = inFlight.requestId;
     // срез 2: `item.origin` (set only for a detached-child report,
     // QueuedPrompt.origin's own doc) rides onto BOTH the local transcript
     // append (live system-card render) and the wire `user_message` (host
@@ -463,11 +465,7 @@ export function createTabRegistry(
       });
     } catch {
       unusableHostConnections.add(connection);
-      entry.store.setState((state) => {
-        const pending = state.queueInFlight?.requestId === requestId ? state.queueInFlight.item : null;
-        const promptQueue = pending ? [{...pending, ...(pending.origin === "system" ? {} : {requiresRestore:true})}, ...state.promptQueue] : state.promptQueue;
-        return {connection:"awaiting_port",queueInFlight:pending ? null : state.queueInFlight,promptQueue,queuePaused:true,queuePauseReason:"error",orchestrationDeliveries:state.orchestrationDeliveries.map(delivery => delivery.requestId === requestId && delivery.status === "pending" ? {...delivery,status:"unknown" as const} : delivery)};
-      });
+      if (entry.connection === connection) entry.store.getState().setPortClosed();
     }
   }
 
@@ -515,6 +513,7 @@ export function createTabRegistry(
   /** (Re)connects `port` to an existing entry: tears down the old subscription, wires the new one, kicks off the handshake. */
   function attach(entry: TabEntry, tabId: string, port: MessagePort): void {
     cancelPendingModel(tabId, entry);
+    if (entry.connection && entry.store.getState().queueInFlight) entry.store.getState().setPortClosed();
     entry.unsubscribeMessages?.();
     entry.unsubscribeExpiry?.();
     entry.unsubscribeExpiry = null;
@@ -524,11 +523,7 @@ export function createTabRegistry(
       unusableHostConnections.add(connection);
       closedHostConnections.add(connection);
       if (entry.connection !== connection) return;
-      entry.store.setState((state) => {
-        const inFlight = state.queueInFlight?.item;
-        const promptQueue = inFlight ? [{...inFlight, ...(inFlight.origin === "system" ? {} : {requiresRestore:true})}, ...state.promptQueue] : state.promptQueue;
-        return {connection:"awaiting_port",queueInFlight:null,promptQueue,...(promptQueue.length ? {queuePaused:true,queuePauseReason:"error" as const} : {}),orchestrationDeliveries:state.orchestrationDeliveries.map(item => item.status === "pending" ? {...item,status:"unknown" as const} : item)};
-      });
+      entry.store.getState().setPortClosed();
       cancelPendingModel(tabId, entry);
       const pending = pendingInitialPrompts.get(tabId);
       if (pending) { pendingInitialPrompts.delete(tabId); holdInitial(entry, pending, "Connection closed before the first turn. Restore the draft before sending."); }
@@ -611,7 +606,7 @@ export function createTabRegistry(
         // host's pending-report queue can stop resending this id (child-
         // report-queue.ts's `ack`, its own doc explains why "enqueued" and
         // not "turn sent" is the chosen removal point).
-        entry.connection?.send({ type: "child_report_ack", id: message.id });
+        if (liveConnection(entry) === connection) connection.send({ type: "child_report_ack", id: message.id });
       }
       if (message.type === "host_ready") {
         // Renderer-only quota diagnostics are restored after host_ready's

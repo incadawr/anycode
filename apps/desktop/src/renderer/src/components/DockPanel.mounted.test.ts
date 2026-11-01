@@ -343,6 +343,63 @@ describe("dock resize handle placement (GitHub #31)", () => {
     expect(store.getState().orchestrationDeliveries[0]?.status).toBe("unknown");
   });
 
+  it("keeps a restored queued draft from sending after its original turn_started arrives", async () => {
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",imageInput:true});
+    const image = {name:"queued.png",sizeBytes:1,attachment:{mediaType:"image/png" as const,data:"YQ=="}};
+    store.getState().enqueuePrompt({text:"queued task",images:[image]});
+    store.getState().takeQueueHead("original-wire-id");
+    store.getState().setPortClosed();
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",imageInput:true});
+    const send = vi.spyOn(tabRegistry,"sendToTab").mockImplementation(() => {});
+    await mountBody();
+    await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+    expect(store.getState().restoredComposerDraft).toMatchObject({text:"queued task",images:[image],deliveryRequestId:"original-wire-id"});
+    await act(async () => store.getState().applyHostMessage({type:"turn_started",requestId:"original-wire-id",turnId:"late"}));
+    expect(container.textContent).toContain("Turn started; a restored copy remains");
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    expect(send).not.toHaveBeenCalledWith("tab",expect.objectContaining({type:"user_message"}));
+    expect(send).not.toHaveBeenCalledWith("tab",expect.objectContaining({type:"steer_message"}));
+    expect(store.getState().restoredComposerDraft?.images).toEqual([image]);
+  });
+
+  it("shows an unknown system report without offering to resend it as a user draft", async () => {
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1"});
+    store.getState().enqueuePrompt({text:"system report",images:[],origin:"system",originId:"report-id"});
+    store.getState().takeQueueHead("system-wire-id");
+    store.getState().setPortClosed();
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1"});
+    await mountBody();
+    expect(container.textContent).toContain("system report");
+    expect(container.textContent).toContain("System report — check session history");
+    expect(container.querySelector(".orchestration-delivery-restore")).toBeNull();
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{requestId:"system-wire-id",originId:"report-id",status:"unknown"}]);
+  });
+
+  it("renders the following queued message after a requeued steer is acknowledged", async () => {
+    vi.mocked(tabRegistry.getLiveHostConnection).mockRestore();
+    const tabId = "requeued-steer-mounted";
+    const port = {onmessage:null as ((event:MessageEvent) => void) | null,postMessage:vi.fn(),addEventListener:()=>{},removeEventListener:()=>{}};
+    tabRegistry.registerPort(tabId,"/ws",port as unknown as MessagePort);
+    const target = tabRegistry.getStore(tabId)!;
+    const emit = (data:unknown) => port.onmessage!({data} as MessageEvent);
+    emit({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1"});
+    try {
+      await act(async () => root.render(createElement(TabContext.Provider,{value:{tabId,store:target}},createElement(SessionSurface,{tabId,onToast:()=>{}}))));
+      await act(async () => {
+        emit({type:"turn_started",requestId:"running",turnId:"t1"});
+        target.getState().recordPendingSteer("steer-id","steer task",undefined,{text:"steer task",images:[]});
+        target.getState().markUiSteer("steer-id");
+        emit({type:"steer_requeued",requestId:"steer-id",text:"steer task",reason:"stopped"});
+        target.getState().enqueuePrompt({text:"next task",images:[]});
+        emit({type:"agent_event",turnId:"t1",event:{type:"loop_end",reason:"completed",turns:1}});
+      });
+      expect(port.postMessage).toHaveBeenCalledWith(expect.objectContaining({type:"user_message",requestId:"steer-id",text:"steer task"}));
+      expect(container.textContent).toContain("next task");
+      await act(async () => {emit({type:"turn_started",requestId:"steer-id",turnId:"t2"}); emit({type:"agent_event",turnId:"t2",event:{type:"loop_end",reason:"completed",turns:1}});});
+      expect(port.postMessage).toHaveBeenCalledWith(expect.objectContaining({type:"user_message",text:"next task"}));
+    } finally { tabRegistry.disposeTab(tabId); }
+  });
+
   it("holds a posted orchestration as delivery unknown across exit and reconciles late outcomes without overwriting edits", async () => {
     vi.mocked(tabRegistry.getLiveHostConnection).mockRestore();
     const previous = useSettingsStore.getState();

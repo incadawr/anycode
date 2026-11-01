@@ -1321,13 +1321,14 @@ describe("tab-registry — queueInitialPrompt images", () => {
     vi.spyOn(port,"postMessage").mockImplementation(message => {post(message); if ((message as {type:string}).type === "user_message") port.close();});
     const store = registry.getStore("tab-a")!;
     store.getState().enqueuePrompt({text:"queued",images:[IMAGE]});
-    expect(store.getState().promptQueue).toMatchObject([{text:"queued",images:[IMAGE],requiresRestore:true}]);
+    const sent = port.sent.find(message => (message as {type:string}).type === "user_message") as {requestId:string};
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{requestId:sent.requestId,text:"queued",images:[IMAGE],status:"unknown"}]);
     const replacement = new FakeMessagePort();
     registry.registerPort("tab-a","/ws/a",asPort(replacement));
     replacement.emit({...HOST_READY("/ws/a","sess-a"),imageInput:true});
     store.getState().resumeQueue();
     expect(replacement.sent).not.toContainEqual(expect.objectContaining({type:"user_message"}));
-    expect(store.getState().promptQueue).toMatchObject([{text:"queued",images:[IMAGE],requiresRestore:true}]);
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{requestId:sent.requestId,text:"queued",images:[IMAGE],status:"unknown"}]);
   });
 
   it("retains an unsupported orchestrated first message with its image and settings without sending text", () => {
@@ -1538,6 +1539,63 @@ describe("tab-registry — ready host connection identity", () => {
 });
 
 describe("tab-registry — prompt-queue drainer (slice P7.14 · F15)", () => {
+  it("drains a requeued steer with its original wire id and then advances to the next item", () => {
+    const {registry} = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a","/ws/a",asPort(port)); port.emit(HOST_READY("/ws/a","sess-a"));
+    const store = registry.getStore("tab-a")!;
+    port.emit({type:"turn_started",requestId:"running",turnId:"t1"});
+    store.getState().recordPendingSteer("steer-original","steer task",undefined,{text:"steer task",images:[]});
+    store.getState().markUiSteer("steer-original");
+    port.emit({type:"steer_requeued",requestId:"steer-original",text:"steer task",reason:"stopped"});
+    store.getState().enqueuePrompt({text:"next task",images:[]});
+    port.emit({type:"agent_event",turnId:"t1",event:{type:"loop_end",reason:"completed",turns:1}});
+    expect(userMessages(port)).toMatchObject([{requestId:"steer-original",text:"steer task"}]);
+    expect(store.getState().queueInFlight?.requestId).toBe("steer-original");
+    port.emit({type:"turn_started",requestId:"steer-original",turnId:"t2"});
+    port.emit({type:"agent_event",turnId:"t2",event:{type:"loop_end",reason:"completed",turns:1}});
+    expect(userMessages(port).map(message => message.text)).toEqual(["steer task","next task"]);
+  });
+
+  it("does not redeliver an unknown system report on reconnect or child-report replay, while later reports proceed", () => {
+    const {registry} = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a","/ws/a",asPort(port)); port.emit(HOST_READY("/ws/a","sess-a"));
+    const store = registry.getStore("tab-a")!;
+    port.emit({type:"child_report",id:"report-1",text:"first report"});
+    const sent = userMessages(port)[0]!;
+    expect(sent).toMatchObject({text:"first report",origin:"system"});
+    port.close();
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{requestId:sent.requestId,origin:"system",originId:"report-1",text:"first report",status:"unknown"}]);
+    const replacement = new FakeMessagePort();
+    registry.registerPort("tab-a","/ws/a",asPort(replacement)); replacement.emit(HOST_READY("/ws/a","sess-a"));
+    replacement.emit({type:"child_report",id:"report-1",text:"first report"});
+    expect(userMessages(replacement)).toHaveLength(0);
+    replacement.emit({type:"child_report",id:"report-2",text:"second report"});
+    expect(userMessages(replacement)).toMatchObject([{text:"second report",origin:"system"}]);
+    replacement.emit({type:"turn_started",requestId:sent.requestId,turnId:"late-report"});
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({requestId:sent.requestId,status:"started"});
+  });
+
+  it("correlates a late queued-user turn_started after disconnect and does not resend the task", () => {
+    const {registry} = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a","/ws/a",asPort(port)); port.emit(HOST_READY("/ws/a","sess-a"));
+    const store = registry.getStore("tab-a")!;
+    store.getState().enqueuePrompt({text:"queued user",images:[]});
+    const sent = userMessages(port)[0]!;
+    store.getState().enqueuePrompt({text:"next",images:[]});
+    port.close();
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{requestId:sent.requestId,text:"queued user",status:"unknown"}]);
+    const replacement = new FakeMessagePort();
+    registry.registerPort("tab-a","/ws/a",asPort(replacement)); replacement.emit(HOST_READY("/ws/a","sess-a"));
+    replacement.emit({type:"turn_started",requestId:sent.requestId,turnId:"late-user"});
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({requestId:sent.requestId,status:"started"});
+    expect(store.getState().promptQueue.map(item => item.text)).toEqual(["next"]);
+    replacement.emit({type:"agent_event",turnId:"late-user",event:{type:"loop_end",reason:"completed",turns:1}});
+    store.getState().resumeQueue();
+    expect(userMessages(replacement).map(message => message.text)).toEqual(["next"]);
+  });
   it("delivers system reports behind a held initial draft through the real subscriber", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);
@@ -1862,7 +1920,7 @@ describe("tab-registry — prompt-queue drainer (slice P7.14 · F15)", () => {
     expect(userMessages(respawnPort)).toHaveLength(0);
   });
 
-  it("a crash while a drained item is IN FLIGHT restores it to the head (paused) instead of losing it; respawn does not re-drain (P7.14/F15 codex fix)", () => {
+  it("a crash retains a drained item as unknown without re-draining it", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);
     const port = new FakeMessagePort();
@@ -1883,22 +1941,19 @@ describe("tab-registry — prompt-queue drainer (slice P7.14 · F15)", () => {
 
     // Host crashes mid-flight (before acking the drain).
     registry.markHostExited("tab-a");
-    // The in-flight prompt was restored to the head, not dropped, and paused.
-    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["boom"]);
+    const requestId = userMessages(port)[0]!.requestId;
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{requestId,text:"boom",status:"unknown"}]);
     expect(store.getState().queueInFlight).toBeNull();
-    expect(store.getState().queuePaused).toBe(true);
 
-    // Respawn: the prompt survives, still paused, and never auto-drains.
+    // Respawn preserves the unknown delivery and never auto-drains it.
     const respawnPort = new FakeMessagePort();
     registry.registerPort("tab-a", "/ws/a", asPort(respawnPort));
     respawnPort.emit(HOST_READY("/ws/a", "sess-a2"));
-    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["boom"]);
-    expect(store.getState().queuePaused).toBe(true);
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{requestId,text:"boom",status:"unknown"}]);
     expect(userMessages(respawnPort)).toHaveLength(0);
 
-    // Resume re-drains it exactly once onto the fresh connection.
     store.getState().resumeQueue();
-    expect(userMessages(respawnPort).map((m) => m.text)).toEqual(["boom"]);
+    expect(userMessages(respawnPort)).toHaveLength(0);
   });
 
   it("F5#1a non-intersection: a queued INITIAL prompt dispatches via dispatchInitialPrompt only — the drainer never races it", () => {
