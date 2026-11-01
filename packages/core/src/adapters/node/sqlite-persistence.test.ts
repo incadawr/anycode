@@ -9,6 +9,7 @@ import type { CheckpointRecord } from "../../ports/checkpoints.js";
 import type { PersistencePort, SessionDeleteSummary, SessionMeta } from "../../ports/persistence.js";
 import { COMPACTION_RECORD_MAX_PER_SESSION } from "../../types/compaction.js";
 import type { HistoryItem } from "../../types/history.js";
+import { ConversationHistory } from "../../context/history.js";
 
 function makeItem(overrides: Partial<HistoryItem> = {}): HistoryItem {
   return {
@@ -2889,6 +2890,40 @@ describe("SqlitePersistenceAdapter — concurrent writers (CUT-S2 §10.15.2)", (
 });
 
 describe("WriteBehindHistorySink", () => {
+  it("persists the captured replace prefix before a later append", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    await adapter.createSession({ id: "s1", workspace: "/test", model: "test", mode: "build" });
+    const sink = new WriteBehindHistorySink(adapter, "s1", { logger: { error: () => {} } });
+    const history = new ConversationHistory({ sink });
+    const first = makeItem({ id: "first", message: { role: "user", content: "first" } });
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const actualReplace = adapter.replaceHistory.bind(adapter);
+    const writes: { operation: string; ids: string[] }[] = [];
+    vi.spyOn(adapter, "replaceHistory").mockImplementation(async (id, items) => {
+      entered(); await gate;
+      writes.push({ operation: "replace", ids: items.map(item => item.id) });
+      await actualReplace(id, items);
+    });
+    const actualAppend = adapter.appendHistory.bind(adapter);
+    vi.spyOn(adapter, "appendHistory").mockImplementation(async (id, items) => {
+      writes.push({ operation: "append", ids: items.map(item => item.id) });
+      await actualAppend(id, items);
+    });
+    try {
+      history.replaceAll([first]);
+      await started;
+      const later = history.append({ role: "user", content: "later" });
+      release();
+      await sink.flushChecked();
+      expect(writes).toEqual([{ operation: "replace", ids: ["first"] }, { operation: "append", ids: [later.id] }]);
+      expect((await adapter.loadHistory("s1")).map(item => item.message)).toEqual([
+        { role: "user", content: "first" }, { role: "user", content: "later" },
+      ]);
+    } finally { release(); await sink.flush(); await adapter.close(); }
+  });
   class RecordingPersistence implements PersistencePort {
     readonly calls: { op: "append" | "replaceHistory"; items: readonly HistoryItem[] }[] = [];
     rejectNextAppend = false;
@@ -2992,6 +3027,43 @@ describe("WriteBehindHistorySink", () => {
       { op: "replaceHistory", items: [item2] },
       { op: "append", items: [item3] },
     ]);
+  });
+
+  it("captures nested append and replace data before later mutations", async () => {
+    const persistence = new RecordingPersistence();
+    const sink = new WriteBehindHistorySink(persistence, "s1");
+    const input = { nested: { values: ["original"] } };
+    const item = makeItem({ id: "call", message: { role: "assistant", content: [
+      { type: "tool_call", toolCallId: "c1", toolName: "tool", input },
+    ] } });
+    const items = [item];
+    sink.replaceAll(items);
+    sink.append(items);
+    input.nested.values.push("later");
+    item.id = "changed";
+    items.push(makeItem({ id: "extra" }));
+    await sink.flushChecked();
+    for (const call of persistence.calls) {
+      expect(call.items).toEqual([makeItem({ id: "call", message: { role: "assistant", content: [
+        { type: "tool_call", toolCallId: "c1", toolName: "tool", input: { nested: { values: ["original"] } } },
+      ] } })]);
+    }
+    expect(persistence.calls.map(call => call.op)).toEqual(["replaceHistory", "append"]);
+  });
+
+  it("queues serialization errors without throwing and continues later writes", async () => {
+    const persistence = new RecordingPersistence();
+    const errors: unknown[] = [];
+    const sink = new WriteBehindHistorySink(persistence, "s1", { logger: { error: (_message, error) => errors.push(error) } });
+    const invalid = makeItem({ message: { role: "assistant", content: [
+      { type: "tool_call", toolCallId: "c1", toolName: "tool", input: { value: 1n } },
+    ] } });
+    expect(() => sink.replaceAll([invalid])).not.toThrow();
+    sink.append([makeItem({ id: "valid" })]);
+    await expect(sink.flushChecked()).rejects.toThrow("persistence failed");
+    expect(errors).toHaveLength(1);
+    expect(persistence.calls.map(call => call.items.map(item => item.id))).toEqual([["valid"]]);
+    await expect(sink.flushChecked()).resolves.toBeUndefined();
   });
 
   it("replaceAll cannot overtake a queued append even when append is slower", async () => {
