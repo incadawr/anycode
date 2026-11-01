@@ -1034,6 +1034,30 @@ export interface OrchestrationDelivery {
   restored: boolean;
   reviewed: boolean;
   turnId?: string;
+  /** Ordinary direct sends may compact only after a confirmed completed turn. */
+  ordinaryDirect?: true;
+  /** Payload was released after completion; only correlation is retained. */
+  payloadOmitted?: true;
+  /** Once delivery is unknown, retain its full payload even after late start. */
+  preservePayload?: true;
+}
+
+/** Bounded correlation horizon for ordinary, confirmed and completed sends. */
+export const COMPLETED_DIRECT_CORRELATION_LIMIT = 256;
+
+function compactCompletedDirect(state: DesktopState, turnId: string): readonly OrchestrationDelivery[] {
+  const deliveries = state.orchestrationDeliveries.map(item => {
+    const linked = state.restoredComposerDraft?.deliveryRequestId === item.requestId ||
+      state.orchestrationDeliveries.some(child => child.parentRequestId === item.requestId) ||
+      state.promptQueue.some(queued => queued.recoverySourceId === item.requestId) ||
+      state.queueInFlight?.item.recoverySourceId === item.requestId;
+    return item.ordinaryDirect && item.status === "started" && item.turnId === turnId && !item.preservePayload && !item.restored && !linked
+      ? { ...item, text: "", images: [], payloadOmitted: true as const }
+      : item;
+  });
+  const evictable = deliveries.filter(item => item.payloadOmitted && item.status === "started");
+  const remove = new Set(evictable.slice(0, Math.max(0, evictable.length - COMPLETED_DIRECT_CORRELATION_LIMIT)).map(item => item.requestId));
+  return deliveries.filter(item => !remove.has(item.requestId));
 }
 
 function deliveryStarted(item: OrchestrationDelivery, turnId: string): OrchestrationDelivery {
@@ -1047,7 +1071,7 @@ function deliveryRejected(item: OrchestrationDelivery): OrchestrationDelivery {
   return { ...item, status: "rejected" };
 }
 function deliveryUnknown(item: OrchestrationDelivery): OrchestrationDelivery {
-  return item.status === "pending" ? { ...item, status: "unknown" } : item;
+  return item.status === "pending" ? { ...item, status: "unknown", preservePayload: true } : item;
 }
 
 function recoveryTreeIds(deliveries: readonly OrchestrationDelivery[], requestId: string): Set<string> | null {
@@ -4227,6 +4251,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             const nextQueue = [...state.promptQueue, ...queueAdditions];
             return {
               turn: { status: "idle", turnId: null, requestId: null },
+              orchestrationDeliveries: compactCompletedDirect(state, turnId),
               pendingSteers: state.pendingSteers.filter((entry) => !uiPending.includes(entry.requestId)),
               promptQueue: nextQueue,
               uiSteerPending: [],
@@ -5195,8 +5220,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             const { queueInFlight, promptQueue } = get();
             const direct = pendingSentMessages.get(message.requestId);
             const delivery = get().orchestrationDeliveries.find(item => item.requestId === message.requestId);
+            const rejectedSteer = get().pendingSteers.find(item => item.requestId === message.requestId);
             const rejectedSystem = queueInFlight?.requestId === message.requestId && queueInFlight.item.origin === "system" ? queueInFlight.item : undefined;
-            const restoreDirect = delivery === undefined && queueInFlight?.requestId !== message.requestId && direct !== undefined && !promptQueue.some(item => item.id === message.requestId)
+            const restoreDirect = delivery === undefined && rejectedSteer === undefined && queueInFlight?.requestId !== message.requestId && direct !== undefined && !promptQueue.some(item => item.id === message.requestId)
               ? { promptQueue: [{ id: message.requestId, ...direct }, ...promptQueue], queuePaused: true, queuePauseReason: "rejected" as const }
               : null;
             const restore =
@@ -5208,7 +5234,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                     queueInFlight: null,
                   }
                 : null;
-            const updatedDeliveries = delivery ? get().orchestrationDeliveries.map(item => item.requestId === message.requestId ? deliveryRejected(item) : item) : rejectedSystem ? [...get().orchestrationDeliveries,{requestId:message.requestId,text:rejectedSystem.text,images:rejectedSystem.images,origin:"system" as const,...(rejectedSystem.originId ? {originId:rejectedSystem.originId} : {}),status:"rejected" as const,restored:false,reviewed:false}] : get().orchestrationDeliveries;
+            const updatedDeliveries = delivery ? get().orchestrationDeliveries.map(item => item.requestId === message.requestId ? deliveryRejected(item) : item) : rejectedSystem ? [...get().orchestrationDeliveries,{requestId:message.requestId,text:rejectedSystem.text,images:rejectedSystem.images,origin:"system" as const,...(rejectedSystem.originId ? {originId:rejectedSystem.originId} : {}),status:"rejected" as const,restored:false,reviewed:false}] : rejectedSteer ? [...get().orchestrationDeliveries,{requestId:message.requestId,text:rejectedSteer.sentMessage.text,images:rejectedSteer.sentMessage.images.map(image => ({...image,attachment:{...image.attachment}})),status:"rejected" as const,restored:false,reviewed:false}] : get().orchestrationDeliveries;
             set({
               ...((rejectedSystem || (delivery && queueInFlight?.requestId === message.requestId)) ? {queueInFlight:null} : {}),
               notice: {
@@ -5225,7 +5251,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               // a rejected steer never becomes transcript text —
               // drop the matching pending entry, keep unrelated ones.
               ...(get().pendingSteers.some((entry) => entry.requestId === message.requestId)
-                ? { pendingSteers: get().pendingSteers.filter((entry) => entry.requestId !== message.requestId) }
+                ? { pendingSteers: get().pendingSteers.filter((entry) => entry.requestId !== message.requestId), uiSteerPending: get().uiSteerPending.filter(id => id !== message.requestId) }
                 : {}),
             });
             pendingSentMessages.delete(message.requestId);
@@ -6274,7 +6300,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         set((state) => ({
           lastSentMessage: { text, images },
           ...((trackDirect || orchestrate === "enable" || initialPicks !== undefined) && requestId !== undefined && !state.orchestrationDeliveries.some(item => item.requestId === requestId) ? {
-            orchestrationDeliveries: [...state.orchestrationDeliveries, {requestId,text,images:images.map(image => ({...image,attachment:{...image.attachment}})),...(orchestrate ? {orchestrate} : {}),...(initialPicks ? {initialPicks:{...initialPicks}} : {}),...(parentRequestId ? {parentRequestId} : {}),...(systemOriginId ? {origin:"system" as const,originId:systemOriginId} : {}),status:state.connection === "ready" ? "pending" as const : "unknown" as const,restored:false,reviewed:false}],
+            orchestrationDeliveries: [...state.orchestrationDeliveries, {requestId,text,images:images.map(image => ({...image,attachment:{...image.attachment}})),...(trackDirect ? {ordinaryDirect:true as const} : {}),...(orchestrate ? {orchestrate} : {}),...(initialPicks ? {initialPicks:{...initialPicks}} : {}),...(parentRequestId ? {parentRequestId} : {}),...(systemOriginId ? {origin:"system" as const,originId:systemOriginId} : {}),status:state.connection === "ready" ? "pending" as const : "unknown" as const,...(state.connection !== "ready" ? {preservePayload:true as const} : {}),restored:false,reviewed:false}],
           } : {}),
         }));
       },

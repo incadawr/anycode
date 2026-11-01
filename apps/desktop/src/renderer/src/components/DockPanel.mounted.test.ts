@@ -172,6 +172,38 @@ describe("dock resize handle placement (GitHub #31)", () => {
     expect(send.mock.calls.filter(([, message]) => message.type === "user_message")).toHaveLength(1);
   });
 
+  it("holds an explicitly rejected child steer with attachment for manual review", async () => {
+    const ready = { type: "host_ready" as const, workspace: "/ws", sessionId: "child", mode: "build" as const, model: "m1", imageInput: true };
+    const image = { name: "rejected.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } };
+    store.getState().applyHostMessage(ready);
+    store.getState().setChildSurface();
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "running", turnId: "turn" });
+    store.setState({ restoredComposerDraft: { text: "child rejected", images: [image] } });
+    const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+    await mountBody();
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    const sent = send.mock.calls.find(([, message]) => message.type === "user_message")?.[1] as { requestId: string };
+    await act(async () => store.getState().applyHostMessage({ type: "turn_rejected", requestId: sent.requestId, reason: "unsupported_images" }));
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{ requestId: sent.requestId, text: "child rejected", images: [image], status: "rejected" }]);
+    expect(store.getState().promptQueue).toEqual([]);
+    await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+    expect(store.getState().restoredComposerDraft).toMatchObject({ text: "child rejected", images: [image], deliveryRequestId: sent.requestId });
+    expect(send.mock.calls.filter(([, message]) => message.type === "user_message")).toHaveLength(1);
+  });
+
+  it("shows a late conflict for a compacted direct delivery without offering a missing payload", async () => {
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", sessionId: "a", mode: "build", model: "m1" });
+    const image = { name: "done.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } };
+    store.getState().recordSentMessage("completed message", [image], "done", undefined, undefined, undefined, undefined, true);
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "done", turnId: "turn-done" });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "turn-done", event: { type: "loop_end", reason: "completed", turns: 1 } });
+    store.getState().applyHostMessage({ type: "turn_rejected", requestId: "done", reason: "busy" });
+    await mountBody();
+    expect(container.textContent).toContain("Earlier completed message (payload released)");
+    expect(container.textContent).toContain("Conflicting delivery reports");
+    expect(container.querySelector(".orchestration-delivery-restore")).toBeNull();
+  });
+
   /** Opens the subagents dock tab: layout B's child view, then Split (the
       same reducer chain the breadcrumb's "Split" button drives). */
   async function openDockTab(): Promise<void> {
