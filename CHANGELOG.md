@@ -9,7 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Continue a Codex conversation on another account again, behind an opt-in settings switch (`codexContinueOnAnotherAccount`). It stays off by default because a rollout being written by another process cannot yet be proven idle.
+- Continue a Codex conversation on another account is available again. The transfer is now fail-closed: a conversation is copied by its exact thread id rather than by a partial match, it is published atomically so a half-written file can never be picked up, and it is registered atomically so the same conversation cannot be opened twice. A settings switch (`codexContinueOnAnotherAccount`, `"off"`) pauses the action if needed; note that a Codex rollout written concurrently by another program is not detected, so the safe behaviour is refusing, not overwriting.
 - Redesign provider connection editing with a compact model picker and per-model pricing table.
 
 ### Fixed
