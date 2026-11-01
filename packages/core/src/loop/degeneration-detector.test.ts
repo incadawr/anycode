@@ -230,7 +230,7 @@ function buildNonRepeatingPhrase(target: number, seedStart: number): string {
   return phrase.slice(0, target);
 }
 
-describe("DegenerationDetector — structural blind spot above WINDOW/MIN_REPEATS (codex review finding,  second pass)", () => {
+describe("DegenerationDetector — structural blind spot above WINDOW/MIN_REPEATS (codex review finding, second pass)", () => {
   it("a period of 1500 chars (> WINDOW_CHARS/MIN_REPEATS ≈ 1365) is NEVER detected, no matter how much text is fed", () => {
     const phrase = buildNonRepeatingPhrase(1500, 5);
     // 20 repeats (30,000 chars) is far past anything a real turn would need

@@ -116,10 +116,10 @@ const HOST_READY = (workspace: string, sessionId: string): Extract<HostToUiMessa
 });
 
 /**
- * A non-core (Codex-shaped) `host_ready` — 's effort/images dispatch-
+ * A non-core (Codex-shaped) `host_ready` —effort/images dispatch-
  * gate fixtures need `engine.model.effort` (the boot model's resolved
  * effort, compared against a pending pick), `imageInput` (the boot model's
- * live vision verdict), and ( срез D) `imageFallback` (a configured
+ * live vision verdict), and (срез D) `imageFallback` (a configured
  * recognizer fallback, which re-opens the same gate for a blind model) —
  * none of which the plain `HOST_READY` fixture above carries (legacy core
  * wire).
@@ -219,7 +219,7 @@ function createTestRegistry(tabsStore: ReturnType<typeof createTabsStore>) {
   return { registry, schedulers, terminalView: fakeTerminalView, statusStore, childRelationStore };
 }
 
-/** A well-formed child-envelope field ( CUT-S2 §2.5), one call site can tweak via spread. */
+/** A well-formed child-envelope field (CUT-S2 §2.5), one call site can tweak via spread. */
 function childField(overrides: Partial<NonNullable<PortEnvelope["child"]>> = {}): NonNullable<PortEnvelope["child"]> {
   return {
     parentTabId: "root-1",
@@ -496,7 +496,7 @@ describe("tab-registry — routing by tabId", () => {
 });
 
 /**
- *  CUT-S2 §2.5/§5.3, slice S2c C2: the child-registration branch of
+ * CUT-S2 §2.5/§5.3, slice S2c C2: the child-registration branch of
  * `registerPort`/`markHostExited`. Every test here discriminates against the
  * pre-S2 facade CUT-S2 §5.3 names verbatim — `tab-registry.ts`'s old
  * `registerPort` took the SAME unconditional `addTab` path for every
@@ -506,7 +506,7 @@ describe("tab-registry — routing by tabId", () => {
  * take the root path (i.e. treating `child` as decoration only) fails every
  * test below.
  */
-describe("tab-registry — child-session registration ( CUT-S2 §2.5, slice S2c C2)", () => {
+describe("tab-registry — child-session registration (CUT-S2 §2.5, slice S2c C2)", () => {
   it("a child port delivery does not add a tab to the root tabsStore, but DOES record the relation", () => {
     const tabsStore = createTabsStore();
     const { registry, childRelationStore } = createTestRegistry(tabsStore);
@@ -530,7 +530,7 @@ describe("tab-registry — child-session registration ( CUT-S2 §2.5, slice S2c 
     });
   });
 
-  // : the registration-time seam the panel projection follows — a
+  // the registration-time seam the panel projection follows — a
   // continue_session continuation registers a NEW spawn id for the SAME
   // childSessionId, and `spawnToolCallIdForChild` (latest wins, Map
   // insertion order) makes the continuation the effective id with no second
@@ -570,7 +570,7 @@ describe("tab-registry — child-session registration ( CUT-S2 §2.5, slice S2c 
     expect(port.sent).toEqual([{ type: "ui_ready" }]);
   });
 
-  // : `listChildTabs` is the enumeration seam the automation
+  // `listChildTabs` is the enumeration seam the automation
   // snapshot's `childStates` reads — a child tab's store lives ONLY here.
   it("listChildTabs returns every live child with its relation meta, and drops it once the host exits", () => {
     const tabsStore = createTabsStore();
@@ -619,7 +619,7 @@ describe("tab-registry — child-session registration ( CUT-S2 §2.5, slice S2c 
     // phantom tabs-store entry was ever created for the child to paint one on.
     expect(tabsStore.getState().tabs.find((t) => t.tabId === "root-1")?.hostExited).toBe(false);
     expect(tabsStore.getState().tabs.find((t) => t.tabId === "child-1")).toBeUndefined();
-    //  CUT-S2 §10.10.2 (R2, O4/F3-R): the child's entry is torn down
+    // CUT-S2 §10.10.2 (R2, O4/F3-R): the child's entry is torn down
     // right here, not retained — its own tabId can never reach `disposeTab`
     // (main's `closeTab` rejects a `childOf` tabId, `main/tabs.ts`), so this
     // is its only disposal point. Nothing reads the store after exit: C4
@@ -706,7 +706,7 @@ describe("tab-registry — child-session registration ( CUT-S2 §2.5, slice S2c 
     expect(childRelationStore.getState().getRelation("sess-root", "call-1")?.approvalExpired).toBeUndefined();
   });
 
-  it("markHostExited on a child tab disposes its entry ( CUT-S2 §10.10.2 R2): the store is dropped, the subscription is torn down, and the tabId is closed against a stray late port — while the relation survives for C4", () => {
+  it("markHostExited on a child tab disposes its entry (CUT-S2 §10.10.2 R2): the store is dropped, the subscription is torn down, and the tabId is closed against a stray late port — while the relation survives for C4", () => {
     const tabsStore = createTabsStore();
     const { registry, childRelationStore } = createTestRegistry(tabsStore);
 
@@ -788,7 +788,7 @@ describe("tab-registry — queueInitialPrompt (slice P7.12 §4.2)", () => {
     expect(findBlock(transcript, "user_text")?.id).toBe(userMessage.requestId);
   });
 
-  it(" W8: records the dispatched text as lastSentMessage, so a later retryable failure can offer to replay it", () => {
+  it("W8: records the dispatched text as lastSentMessage, so a later retryable failure can offer to replay it", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);
     const port = new FakeMessagePort();
@@ -1263,7 +1263,7 @@ describe("tab-registry — queueInitialPrompt images", () => {
     expect(registry.getStore("tab-a")?.getState().lastSentMessage).toEqual({ text: "look at this", images: [IMAGE] });
 
     const transcript = registry.getStore("tab-a")?.getState().transcript ?? [];
-    // : the live echo carries the attachments on the
+    // the live echo carries the attachments on the
     // block (thumbnails render) — raw text, no "[1 image attached]" badge.
     expect(findBlock(transcript, "user_text")?.text).toBe("look at this");
     expect(findBlock(transcript, "user_text")?.images).toEqual([IMAGE.attachment]);
@@ -1288,13 +1288,13 @@ describe("tab-registry — queueInitialPrompt images", () => {
     });
 
     const transcript = registry.getStore("tab-a")?.getState().transcript ?? [];
-    //  parity with deliveredImages=[]: the blocked echo carries the
+    // parity with deliveredImages=[]: the blocked echo carries the
     // raw text and NO images key (nothing to thumbnail — nothing was sent).
     expect(findBlock(transcript, "user_text")?.text).toBe("look at this");
     expect(findBlock(transcript, "user_text")?.images).toBeUndefined();
   });
 
-  it(" срез D: a configured recognizer fallback on the boot host_ready delivers images to a blind model instead of honestly blocking them", () => {
+  it("срез D: a configured recognizer fallback on the boot host_ready delivers images to a blind model instead of honestly blocking them", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);
     const port = new FakeMessagePort();
@@ -1340,12 +1340,12 @@ describe("tab-registry — queueInitialPrompt images", () => {
     });
   });
 
-  //  срез D: mirrors the boot-time test above, but through the
+  // срез D: mirrors the boot-time test above, but through the
   // already-ready shortcut, which reads the tab's LIVE store field
   // (`state.imageFallback`) rather than the host_ready message directly —
   // depends on store.ts carrying the `imageFallback` slot off `host_ready`
-  // (срез D's store.ts half, gated separately — see task198-state.md).
-  it(" срез D: already-ready shortcut honors a configured recognizer fallback off the tab's LIVE state too", () => {
+  // (срез D's store.ts half, gated separately).
+  it("срез D: already-ready shortcut honors a configured recognizer fallback off the tab's LIVE state too", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);
     const port = new FakeMessagePort();
@@ -1405,7 +1405,7 @@ describe("tab-registry — prompt-queue drainer (slice P7.14 · F15)", () => {
     expect(store.getState().promptQueue).toHaveLength(0);
   });
 
-  it(": a manual compaction holds the queue exactly like a turn — the drain waits for compaction_end", () => {
+  it("a manual compaction holds the queue exactly like a turn — the drain waits for compaction_end", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);
     const port = new FakeMessagePort();
@@ -1433,7 +1433,7 @@ describe("tab-registry — prompt-queue drainer (slice P7.14 · F15)", () => {
     expect(userMessages(port).map((m) => m.text)).toEqual(["a"]);
   });
 
-  it(" W8: records the drained item's text+images as lastSentMessage on dispatch", () => {
+  it("W8: records the drained item's text+images as lastSentMessage on dispatch", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);
     const port = new FakeMessagePort();
@@ -1518,7 +1518,7 @@ describe("tab-registry — prompt-queue drainer (slice P7.14 · F15)", () => {
     expect(userMessages(port).map((m) => m.text)).toEqual(["now"]);
   });
 
-  //  срез 1: a detached child's terminal report reaches the renderer
+  // срез 1: a detached child's terminal report reaches the renderer
   // as a `child_report` HostToUiMessage (store.ts's applyHostMessage calls
   // enqueuePrompt for it) — proving end-to-end that an idle parent's own
   // EXISTING queue-drainer opens a brand-new turn for it, with no bespoke
@@ -1530,7 +1530,7 @@ describe("tab-registry — prompt-queue drainer (slice P7.14 · F15)", () => {
     );
   }
 
-  it("a child_report on an IDLE parent is enqueued and drained immediately as a NEW user_message ( срез 1: doставка when the parent is free)", () => {
+  it("a child_report on an IDLE parent is enqueued and drained immediately as a NEW user_message (срез 1: doставка when the parent is free)", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);
     const port = new FakeMessagePort();
@@ -1542,12 +1542,12 @@ describe("tab-registry — prompt-queue drainer (slice P7.14 · F15)", () => {
     const messages = userMessages(port);
     expect(messages).toHaveLength(1);
     expect(messages[0]!.text).toBe("<task-notification>...</task-notification>");
-    //  срез 2: the wire user_message this drain sent carries the
+    // срез 2: the wire user_message this drain sent carries the
     // system origin — host stamps the persisted HistoryItem with it.
     expect((messages[0] as { origin?: string }).origin).toBe("system");
   });
 
-  it("acks a child_report the instant it is enqueued/deduped — BEFORE the queue actually drains it onto the wire ( срез 2 §4 point 1)", () => {
+  it("acks a child_report the instant it is enqueued/deduped — BEFORE the queue actually drains it onto the wire (срез 2 §4 point 1)", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);
     const port = new FakeMessagePort();
@@ -1576,7 +1576,7 @@ describe("tab-registry — prompt-queue drainer (slice P7.14 · F15)", () => {
     expect(userMessages(port).map((m) => m.text)).toEqual(["report while busy"]);
   });
 
-  it("a child_report delivered while queuePaused is true (a PRIOR turn ended anomalously) still drains — the pause is for human-typed prompts, not a background report ( срез 2 §4 point 2)", () => {
+  it("a child_report delivered while queuePaused is true (a PRIOR turn ended anomalously) still drains — the pause is for human-typed prompts, not a background report (срез 2 §4 point 2)", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);
     const port = new FakeMessagePort();
@@ -1724,13 +1724,13 @@ describe("tab-registry — prompt-queue drainer (slice P7.14 · F15)", () => {
     const drained = userMessages(port)[0]!;
     expect(drained.text).toBe("see this");
     expect(drained.images).toEqual([attachment]);
-    // : the transcript echo carries the attachments on
+    // the transcript echo carries the attachments on
     // the block (thumbnails render) — raw text, no badge line.
     expect(findBlock(store.getState().transcript, "user_text")?.text).toBe("see this");
     expect(findBlock(store.getState().transcript, "user_text")?.images).toEqual([attachment]);
   });
 
-  // T6 (fable-task56-w3-codex-ruling.md finding 1, PIN): the drainer does NOT
+  // T6 (finding 1, PIN): the drainer does NOT
   // pre-gate on `state.imageInput` — this is a spoken decision (cut §3 W3(e)
   // + smoke-plan §5.2), not an oversight. The single authoritative gate is
   // the HOST's reject (session.ts:1147), which the restore-to-head test above

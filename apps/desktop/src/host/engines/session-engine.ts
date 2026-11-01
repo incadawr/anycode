@@ -59,7 +59,7 @@ export interface RunTurnOptions {
   /** Ephemeral host context for this real turn; never persisted as a user frame. */
   systemContext?: string;
   /**
-   *  срез 2: stamps the appended user HistoryItem's `origin` (the
+   * срез 2: stamps the appended user HistoryItem's `origin` (the
    * turn was opened by a host-injected message — a detached child's report —
    * not human input). Forwarded verbatim to `AgentLoop.runTurn`'s own
    * `origin` option (core-engine.ts); only CoreEngine ever reads it — Claude/
@@ -68,7 +68,7 @@ export interface RunTurnOptions {
    */
   origin?: "system";
   /**
-   *  causal stamp: the outer turn UUID `Session.runTurn` minted for
+   * causal stamp: the outer turn UUID `Session.runTurn` minted for
    * this turn (`turn_started.turnId`). CoreEngine forwards it to
    * AgentLoop.runTurn so every HistoryItem the turn appends carries
    * `{turnId, step}` (see core's HistoryItem.turnId/step). Foreign engines
@@ -103,7 +103,7 @@ export interface SessionEngine {
   /**
    * Fresh read of the engine's live transcript (codex: `thread/read`), for
    * callers that need every turn of this launch rather than the boot snapshot
-   * `historyItems()` returns. Optional;  engine switch prefers it.
+   * `historyItems()` returns. Optional; engine switch prefers it.
    */
   readTranscript?(): Promise<readonly HistoryItem[]>;
   replaceHistory?(items: HistoryItem[]): void;

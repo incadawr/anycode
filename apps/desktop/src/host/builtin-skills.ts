@@ -1,5 +1,5 @@
 /**
- * Host registration of the in-memory built-in skills ( review).
+ * Host registration of the in-memory built-in skills (review).
  * host/index.ts hands the combined list to discoverExtensions as ONE
  * `builtinSkills` key, so every skill set the host ships is named here, in one
  * place, and the unit test pins the composition.

@@ -1,5 +1,5 @@
 /**
- * Profile pane — period-filter additions ( slice 2,
+ * Profile pane — period-filter additions (slice 2,
  * telemetry-track-plan.md §3 S7). NEW classes only: `settings.css` is
  * no-touch, and everything unchanged by this step (tiles row, heatmap,
  * `.profile-insight-row`, `.profile-top-list`/`.profile-top-row`, the
@@ -41,7 +41,7 @@
   background: color-mix(in srgb, var(--accent) 16%, var(--bg-card));
 }
 
-/* ── coverage honesty notice ( slice 0's coverageStartTs, surfaced
+/* ── coverage honesty notice (slice 0's coverageStartTs, surfaced
    per-window rather than the always-global .profile-truncated-note) ── */
 
 .profile-coverage-notice {
@@ -98,7 +98,7 @@
   color: var(--text-dim);
 }
 
-/* ──  S4: load phases ──────────────────────────────────────────────
+/* ── S4: load phases ──────────────────────────────────────────────
    Everything below is NEW markup only. The pre-187 pane replaced its whole
    body with a "Loading profile…" line for the length of a full telemetry
    scan (16 s on the owner's directory); it now paints a skeleton immediately,
@@ -297,7 +297,7 @@
   text-decoration: none;
 }
 
-/* ── automatic backlog catch-up ( S4) ──
+/* ── automatic backlog catch-up (S4) ──
    The pane finishes the aggregation by itself, one pass per applied answer,
    so the phase stays `ready`: the numbers on screen are real as of the last
    pass and must not dim. The work is reported instead — the toolbar note

@@ -182,7 +182,7 @@ export const browserReadTool: ToolDefinition<BrowserReadInput, PreviewReadSucces
     return { ok: true, output: result.value };
   },
   // The console tail rides INSIDE the formatted model text (§2.2, hard
-  // requirement) so the dispatcher's  byte budget actually covers it —
+  // requirement) so the dispatcher's byte budget actually covers it —
   // `output` itself stays the full structured PreviewReadSuccess for any
   // programmatic caller, but the MODEL only ever sees this rendered string.
   formatResultForModel: (result) => {

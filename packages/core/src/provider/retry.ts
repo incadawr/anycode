@@ -1,8 +1,8 @@
 /**
- * Stream retry policy (design §2.9, ). The AiSdkModelPort retries
+ * Stream retry policy (design §2.9). The AiSdkModelPort retries
  * a failed step while no model output has reached the consumer (connect/reset/
  * HTTP-error-before-content failures are safe to replay whole) AND — since
- *  — replays the whole step a bounded number of times after a
+ * replays the whole step a bounded number of times after a
  * MID-STREAM failure, discarding the partial output (the discarded attempt's
  * tools were never dispatched: dispatch runs after the step's stream ends, so
  * a replay cannot double-execute a tool call). A transient-network wall-clock
@@ -34,7 +34,7 @@ export interface RetryPolicy {
    */
   networkRetryBudgetMs: number;
   /**
-   * : maximum time (ms) a pre-content transient NETWORK failure may
+   * maximum time (ms) a pre-content transient NETWORK failure may
    * spend "waiting for network" before it fails the turn. Engaged only when the
    * port has a NetworkWaiter (the desktop host and the CLI do); without one the
    * waiter-less `networkRetryBudgetMs` path applies unchanged. The bound is
@@ -117,9 +117,9 @@ export function isRetryableStreamError(error: unknown): boolean {
 export const QUOTA_WORD_PATTERN = /\bquota\b/i;
 
 /**
- * The z.ai-class numeric quota code ( §W7b), only where it is named as a
+ * The z.ai-class numeric quota code (§W7b), only where it is named as a
  * code: `code 1308`, `"code":"1308"`, `code: 1308`. A bare `1308` is not matched,
- * so an unrelated number in an error body cannot refuse a retry ( review).
+ * so an unrelated number in an error body cannot refuse a retry (review).
  */
 export const QUOTA_CODE_PATTERN = /\bcode\W{0,4}1308\b/i;
 
@@ -155,7 +155,7 @@ export function matchesFailureText(error: unknown, message: string, pattern: Reg
  * refuse quota before the 429 status check classifies it retryable.
  *
  * A 429 that is really a transient rate limit stays retryable even when it
- * says "quota" ( review): a per-minute / rate-limit wording, or a
+ * says "quota" (review): a per-minute / rate-limit wording, or a
  * Retry-After header. The explicit z.ai code 1308 always counts as quota.
  */
 export function isQuotaExhaustion(error: unknown): boolean {

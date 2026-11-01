@@ -6,15 +6,15 @@
  * (unit-testable without ipcMain), zod validates every payload at the
  * boundary, and `registerArtifactsIpc` is the only Electron-touching piece.
  *
- * THREAT MODEL ( §«Риск, который нельзя проглядеть», extended by
- * -B and -A below): the path in an assistant message is
+ * THREAT MODEL (§«Риск, который нельзя проглядеть», extended by
+ * and below): the path in an assistant message is
  * MODEL-CONTROLLED text. This module is therefore the one place that decides
  * what the renderer may do with it:
  *
  * - CONTAINMENT, per action (owner decision, 31.07): the allowed roots are the
  *   requesting tab's workspace, `<home>/.anycode` (codex profile homes,
  *   including `generated_images/`, and every other app-owned artifact dir),
- *   the OS temp dir (the agent's scratch space), and — darwin ONLY (-B,
+ *   the OS temp dir (the agent's scratch space), and — darwin ONLY (
  *   owner decision 31.07) — the literal path `/tmp`. macOS's `os.tmpdir()`
  *   resolves to a per-app `/var/folders/...` directory, NOT `/tmp`; agents
  *   routinely write to the literal path anyway (it is the address every
@@ -32,7 +32,7 @@
  *   Finder/Explorer at a file, and an agent writing to `/tmp` (which is NOT
  *   `os.tmpdir()` on macOS) made the old blanket refusal read as a broken
  *   button.
- * - CONSENT (-A, owner decision 31.07): containment is the correct
+ * - CONSENT (owner decision 31.07): containment is the correct
  *   default, but a hard refusal with no way out reads as a dead end once the
  *   user has SEEN the file the agent made (the owner's screenshot report:
  *   `/tmp/anycode-icon-alt-2.png`, blocked, no way to say yes). For this
@@ -81,7 +81,7 @@ import { extensionOfPath, PREVIEWABLE_DOC_EXTENSIONS } from "../shared/previewab
 export const ARTIFACT_READ_IMAGE_CHANNEL = "anycode:artifact-read-image";
 export const ARTIFACT_OPEN_CHANNEL = "anycode:artifact-open";
 export const ARTIFACT_REVEAL_CHANNEL = "anycode:artifact-reveal";
-/** -A: per-tab, per-path consent grant for a previously-blocked path. */
+/** per-tab, per-path consent grant for a previously-blocked path. */
 export const ARTIFACT_ALLOW_CHANNEL = "anycode:artifact-allow";
 /**
  * Night-track wave-1 (owner ask): user-initiated open/reopen of a local
@@ -91,7 +91,7 @@ export const ARTIFACT_ALLOW_CHANNEL = "anycode:artifact-allow";
  */
 export const ARTIFACT_PREVIEW_CHANNEL = "anycode:artifact-preview";
 /**
- *  slice 2: batched existence/containment probe for candidate paths
+ * slice 2: batched existence/containment probe for candidate paths
  * the renderer's plain-text scan (`markdown/path-spans.ts`) found in prose or
  * inline code — a yes/no oracle so `Markdown.tsx` can decide which of those
  * candidates are real, in-bounds files worth linkifying. Deliberately NOT the
@@ -133,7 +133,7 @@ export type ArtifactActionResult =
     };
 
 /**
- * -A: result of an Allow click. An outside-roots path is exactly what
+ * result of an Allow click. An outside-roots path is exactly what
  * this channel exists to unlock, so it is NEVER a refusal reason here — only
  * a missing workspace (unknown tab) or a path that does not resolve at all
  * can fail. Never widens what the OTHER two channels' extension gates allow.
@@ -164,14 +164,14 @@ const OPENABLE_EXTENSIONS = new Set([...Object.keys(PREVIEWABLE_MIME), ".bmp", "
  * Extensions the artifact-preview channel may load into a PreviewHost window
  * — deliberately disjoint from `OPENABLE_EXTENSIONS`/`PREVIEWABLE_MIME`
  * above: a document format PreviewHost RENDERS, never a raster image and
- * never `shell.openPath`.  moved the list itself to
+ * never `shell.openPath`. moved the list itself to
  * `shared/previewable.ts` so this gate cannot drift from the five others.
  */
 
 /** Inline-read byte cap — anything bigger stays a link + open/reveal actions. */
 export const MAX_INLINE_IMAGE_BYTES = 20 * 1024 * 1024;
 
-/**  slice 2: caps on the previewable-probe batch — excess is DROPPED, never a refusal (see `previewableSchema`'s own comment). */
+/** slice 2: caps on the previewable-probe batch — excess is DROPPED, never a refusal (see `previewableSchema`'s own comment). */
 export const MAX_PREVIEWABLE_PATHS = 64;
 export const MAX_PREVIEWABLE_PATH_CHARS = 1024;
 
@@ -182,7 +182,7 @@ export interface ArtifactsFs {
   realpath(path: string): Promise<string>;
   /** O_NOFOLLOW read — the file being previewed must not be a symlink swapped in after the containment check. */
   readFileNoFollow(path: string): Promise<Buffer>;
-  /** : bounded directory listing for the workspace tail-match index. */
+  /** bounded directory listing for the workspace tail-match index. */
   readdir(path: string): Promise<string[]>;
 }
 
@@ -211,7 +211,7 @@ export class NodeArtifactsFs implements ArtifactsFs {
 }
 
 /**
- * -A: per-tab, per-resolved-path consent grants. In-memory only — no
+ * per-tab, per-resolved-path consent grants. In-memory only — no
  * settings key, no disk persistence, "always for this folder" is explicitly
  * out of wave 1 (owner cut). Backed by a plain `Map<tabId, Set<path>>`;
  * `normalizeForCompare` (below) is reused so a grant survives the exact same
@@ -263,9 +263,9 @@ export interface ArtifactsIpcDeps {
    * anything the model can address.
    */
   confirmOpen(realPath: string): Promise<boolean>;
-  /** -A: per-tab consent grants; main injects one process-lifetime singleton (main/index.ts). */
+  /** per-tab consent grants; main injects one process-lifetime singleton (main/index.ts). */
   consent: ArtifactConsentStore;
-  /** : bounded, TTL-cached unique tail-match index over workspaces; one process-lifetime singleton. */
+  /** bounded, TTL-cached unique tail-match index over workspaces; one process-lifetime singleton. */
   tailIndex: WorkspaceTailIndex;
   /**
    * Night-track wave-1: opens `realPath` (already containment-and-extension
@@ -289,7 +289,7 @@ const pathSchema = z.object({
 });
 
 /**
- *  slice 2: deliberately UNBOUNDED at the zod layer — `paths` may be
+ * slice 2: deliberately UNBOUNDED at the zod layer — `paths` may be
  * any array of strings. `handleArtifactPreviewable` enforces the 64-item /
  * 1024-char caps itself by DROPPING the excess, per its own doc comment; a
  * `.max()` here would instead REFUSE the whole batch (`{ paths: [] }`) for
@@ -306,7 +306,7 @@ const previewableSchema = z.object({
 /**
  * The roots a served path must live under: the tab's workspace, the app's
  * own artifact tree (`<home>/.anycode` — codex profile homes with
- * `generated_images/` etc.), the OS temp dir, and — darwin only (-B) —
+ * `generated_images/` etc.), the OS temp dir, and — darwin only —
  * the literal path `/tmp` (see the module's threat-model comment for why this
  * is darwin-specific rather than unconditional). Home itself is NOT a root:
  * containment is what keeps a model-invented `~/.ssh/id_rsa` out of the
@@ -347,7 +347,7 @@ export function isUnderRoot(resolvedChild: string, resolvedRoot: string, platfor
 }
 
 /**
- * : unique tail-match index over a workspace. Models write paths
+ * unique tail-match index over a workspace. Models write paths
  * relative to a subdirectory they were working in ("brief-next-stage.md"
  * meaning `working-docs/brief-next-stage.md`); base 1 (workspace root) alone
  * rejects those. This index maps a relative candidate to the UNIQUE file in
@@ -497,7 +497,7 @@ export class WorkspaceTailIndex {
  * Resolves a model-supplied path to a real one and reports whether it lands
  * under an allowed root. Containment is now a FACT the caller acts on rather
  * than a verdict baked in here, because the three actions weigh it
- * differently: read refuses (unless consented, -A), open asks (unless
+ * differently: read refuses (unless consented), open asks (unless
  * consented), reveal ignores it.
  */
 export async function resolveArtifactPath(
@@ -521,7 +521,7 @@ export async function resolveArtifactPath(
   try {
     realPath = await deps.fs.realpath(candidate);
   } catch {
-    //  base 2: a workspace-root miss on a RELATIVE candidate may be
+    // base 2: a workspace-root miss on a RELATIVE candidate may be
     // a path written relative to some subdirectory. Only a UNIQUE tail match
     // inside the workspace is tried, and the hit re-enters the SAME
     // realpath+containment flow below — containment roots never widen. An
@@ -558,7 +558,7 @@ export async function resolveArtifactPath(
 /**
  * The plain strict verdict, with NO consent overlay: outside the roots is a
  * flat refusal. Exported for tests and any future strict-only consumer;
- * `handleArtifactReadImage` no longer calls this directly (-A) since
+ * `handleArtifactReadImage` no longer calls this directly since
  * it must consult the consent store before refusing — it calls
  * `resolveArtifactPath` itself and applies the same strict mapping plus the
  * consent check in one place.
@@ -588,7 +588,7 @@ function extensionOf(path: string): string {
  * artifact-read-image: containment-or-consent-checked, extension-gated,
  * byte-capped read of one image file for the inline chat preview. SVG is
  * refused `not_previewable` (active format — the UI falls back to
- * open/reveal). -A: a path outside every root still reads if this
+ * open/reveal). a path outside every root still reads if this
  * tab was explicitly granted THIS exact realPath via the allow channel; the
  * extension/size gates below are unaffected by consent.
  */
@@ -633,7 +633,7 @@ export async function handleArtifactReadImage(deps: ArtifactsIpcDeps, raw: unkno
 /**
  * artifact-open: `shell.openPath`, gated on the image-extension allowlist
  * (openPath EXECUTES non-viewable types via the OS handler) and — outside the
- * allowed roots, and not already consented (-A) — on an explicit user
+ * allowed roots, and not already consented — on an explicit user
  * confirmation. The extension gate runs FIRST: never prompt about (or
  * silently allow via a stale grant) a file that would be refused either way.
  * An openPath error (no handler, user cancel) degrades to reveal so the user
@@ -710,7 +710,7 @@ export async function handleArtifactReveal(deps: ArtifactsIpcDeps, raw: unknown)
 }
 
 /**
- * artifact-allow (-A): records this tab's explicit consent for
+ * artifact-allow: records this tab's explicit consent for
  * exactly this resolved path. An outside-roots path is exactly what Allow
  * exists to unlock — it is NEVER refused for being outside; only a missing
  * workspace (unknown tab) or a path that fails to resolve at all (deleted,
@@ -766,7 +766,7 @@ export async function handleArtifactPreview(deps: ArtifactsIpcDeps, raw: unknown
 }
 
 /**
- * artifact-previewable ( slice 2): a yes/no oracle for the renderer's
+ * artifact-previewable (slice 2): a yes/no oracle for the renderer's
  * plain-text path scan (`markdown/path-spans.ts`) — for each candidate,
  * reports whether it is a real, in-bounds, previewable-extension REGULAR
  * FILE, so `Markdown.tsx` can decide which candidates earn a click-to-open

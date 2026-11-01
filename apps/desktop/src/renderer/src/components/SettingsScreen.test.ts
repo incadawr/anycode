@@ -92,7 +92,7 @@ const ACME_OAUTH: CatalogSummaryEntry = {
   models: [{ id: "acme-large" }],
 };
 
-//  W5 fixtures.
+// W5 fixtures.
 const OPENAI: CatalogSummaryEntry = {
   id: "openai",
   name: "OpenAI",
@@ -174,7 +174,7 @@ describe("isEnvOverridden", () => {
   });
 });
 
-// : the second banner's predicate — the SAME already-exported pure
+// the second banner's predicate — the SAME already-exported pure
 // helper, pointed at the ceiling var. These pin the exact invocations
 // ProviderSettings' gate makes, so widening it to the wrong var (or folding it
 // into the API-key boolean) turns red.
@@ -213,7 +213,7 @@ describe("parseOptionalInt", () => {
   });
 });
 
-describe("transportOptions ( W5; reused by ConnectionDrawer,  W12)", () => {
+describe("transportOptions (W5; reused by ConnectionDrawer, W12)", () => {
   it("restricts to a catalog entry's own supportedTransports", () => {
     expect(transportOptions(OPENAI)).toEqual(["openai-responses", "openai-chat-completions"]);
     expect(transportOptions(VLLM)).toEqual(["openai-chat-completions"]);
@@ -226,7 +226,7 @@ describe("transportOptions ( W5; reused by ConnectionDrawer,  W12)", () => {
 });
 
 describe("buildToolsPatch", () => {
-  it(": the adaptive toggle is sent only when the user has a value (absent stays absent)", () => {
+  it("the adaptive toggle is sent only when the user has a value (absent stays absent)", () => {
     expect(buildToolsPatch("", "", "", "", "", "")).toEqual({ tools: {} });
     expect(buildToolsPatch("", "", "", "", "", "", true)).toEqual({ tools: { adaptiveTurnBudget: true } });
     expect(buildToolsPatch("", "", "", "", "", "", false)).toEqual({ tools: { adaptiveTurnBudget: false } });
@@ -320,7 +320,7 @@ describe("shouldShowBaseUrlField (custom<->catalog baseUrl toggle, design §5 po
   });
 });
 
-describe("resolveReplaceKeyAction ( W12-FIX §1: connection-scoped oauth sign-in, codex W12 review #1)", () => {
+describe("resolveReplaceKeyAction (W12-FIX §1: connection-scoped oauth sign-in, codex W12 review #1)", () => {
   const connB: ProviderConnection = { id: "conn-b", providerId: "acme" };
 
   // §1.4 — reverting the SettingsScreen.tsx call site back to
@@ -398,7 +398,7 @@ describe("updateStatusText (slice 2.6, design §6)", () => {
     expect(updateStatusText({ kind: "available", version: "1.2.3", manualOnly: false })).not.toMatch(/GitHub Releases/);
   });
 
-  it(" defect 2: available with manualOnly:true -> names the version AND the honest download-from-Releases wording", () => {
+  it("defect 2: available with manualOnly:true -> names the version AND the honest download-from-Releases wording", () => {
     const text = updateStatusText({ kind: "available", version: "1.2.3", manualOnly: true });
     expect(text).toMatch(/1\.2\.3/);
     expect(text).toMatch(/GitHub Releases/);
@@ -443,7 +443,7 @@ describe("shouldShowUpdateBanner (design §6: non-intrusive — only the two sta
   });
 });
 
-describe("showsManualUpdateLink ( defect 2: darwin honest manual-only path)", () => {
+describe("showsManualUpdateLink (defect 2: darwin honest manual-only path)", () => {
   it("true only for available + manualOnly:true", () => {
     expect(showsManualUpdateLink({ kind: "available", version: "1.2.3", manualOnly: true })).toBe(true);
   });
@@ -572,8 +572,8 @@ describe("describeRepoMapRow (slice P7.8, design slice-P7.8-cut.md §3.5)", () =
   });
 });
 
-describe("SETTINGS_PANES nav rail (slice P7.16 W2: Permissions split out of Tools & Permissions, icon+description added; P7.20/F23 W3: Skills inserted after MCP; P7.21/F21 W3: Subagents inserted after Skills; P7.22/F19 W3: Profile inserted FIRST; P7.24/F20 W3: Keyboard shortcuts inserted between Appearance and About;  W2: Codex inserted between Provider and Permissions; SLICE-CC A4: Claude inserted between Codex and Permissions; : Network inserted after Tools;  срез E2a: Vision inserted between Tools and Network;  S1-C: Roles then Plugins inserted after Subagents)", () => {
-  it(": panes are contiguous by section (General, Models & providers, Agent, Tools & integrations, System); every pane keeps its id", () => {
+describe("SETTINGS_PANES nav rail (slice P7.16 W2: Permissions split out of Tools & Permissions, icon+description added; P7.20/F23 W3: Skills inserted after MCP; P7.21/F21 W3: Subagents inserted after Skills; P7.22/F19 W3: Profile inserted FIRST; P7.24/F20 W3: Keyboard shortcuts inserted between Appearance and About; W2: Codex inserted between Provider and Permissions; SLICE-CC A4: Claude inserted between Codex and Permissions; Network inserted after Tools; срез E2a: Vision inserted between Tools and Network; S1-C: Roles then Plugins inserted after Subagents)", () => {
+  it("panes are contiguous by section (General, Models & providers, Agent, Tools & integrations, System); every pane keeps its id", () => {
     expect(SETTINGS_PANES.map((p) => p.id)).toEqual([
       // General
       "profile",
@@ -595,7 +595,7 @@ describe("SETTINGS_PANES nav rail (slice P7.16 W2: Permissions split out of Tool
       "mcp",
       "language-servers",
       "plugins",
-      // : the Sessions API.
+      // the Sessions API.
       "sessions-api",
       // System
       "network",
@@ -646,14 +646,14 @@ describe("filterSettingsPanes (slice P7.16 W2, design §3: rail search, v1 hones
     expect(filterSettingsPanes("zzz-not-a-setting-zzz")).toEqual([]);
   });
 
-  it(" S1-C: 'plugin'/'extension'/'marketplace' find the Plugins pane", () => {
+  it("S1-C: 'plugin'/'extension'/'marketplace' find the Plugins pane", () => {
     expect(filterSettingsPanes("plugin")).toEqual(["plugins"]);
     expect(filterSettingsPanes("extension")).toEqual(["plugins"]);
     expect(filterSettingsPanes("marketplace")).toEqual(["plugins"]);
     expect(filterSettingsPanes("Plugins")).toEqual(["plugins"]);
   });
 
-  it(": 'lsp'/'language server'/'gopls' find the Language servers pane", () => {
+  it("'lsp'/'language server'/'gopls' find the Language servers pane", () => {
     expect(filterSettingsPanes("lsp")).toEqual(["language-servers"]);
     expect(filterSettingsPanes("language server")).toEqual(["language-servers"]);
     expect(filterSettingsPanes("gopls")).toEqual(["language-servers"]);
@@ -661,7 +661,7 @@ describe("filterSettingsPanes (slice P7.16 W2, design §3: rail search, v1 hones
   });
 });
 
-describe("Settings rail sections (: the flat rail grouped into five sections)", () => {
+describe("Settings rail sections (the flat rail grouped into five sections)", () => {
   const ALL_IDS = SETTINGS_PANES.map((p) => p.id);
 
   it("every pane sits under exactly one section: none missing, none duplicated", () => {
@@ -743,7 +743,7 @@ describe("Settings rail sections (: the flat rail grouped into five sections)", 
   });
 });
 
-describe("shouldShowAppVersion (/W14-fix — About pane version line)", () => {
+describe("shouldShowAppVersion (About pane version line)", () => {
   it("renders when main supplied a version string", () => {
     expect(shouldShowAppVersion({ appVersion: "1.2.3" })).toBe(true);
   });
@@ -758,7 +758,7 @@ describe("shouldShowAppVersion (/W14-fix — About pane version line)", () => {
   });
 });
 
-// ── custom model-provider pure helpers (owner-decision #6, cut §9.2, ) ──
+// ── custom model-provider pure helpers (owner-decision #6, cut §9.2) ──
 
 const CUSTOM_PROVIDER_FIXTURE: CustomProviderRecord = {
   id: "custom:acme",
@@ -866,7 +866,7 @@ describe("buildCustomProviderCreateRequest (client-side gate; main's zod schema 
     expect(Object.values(req ?? {}).filter((v) => v === "the-secret")).toHaveLength(1);
   });
 
-  // : keyless (the "no API key" checkbox) is accepted, and a keyed
+  // keyless (the "no API key" checkbox) is accepted, and a keyed
   // request is authoritative over the flag.
   it("keyless (noAuth, no key) yields authOptional:true and NO apiKey", () => {
     const req = buildCustomProviderCreateRequest({
@@ -920,7 +920,7 @@ describe("buildCustomProviderCreateRequest (client-side gate; main's zod schema 
   });
 });
 
-describe("customProviderCatalogEntries (: saved records become selectable drawer providers)", () => {
+describe("customProviderCatalogEntries (saved records become selectable drawer providers)", () => {
   it("synthesizes one entry per record with kind-implied transports, mirroring the connection into the picker", () => {
     const entries = customProviderCatalogEntries([
       { id: "custom:lm", name: "LM Studio", baseUrl: "http://localhost:1234/v1", kind: "openai-compatible", models: ["a", "b"] },
@@ -964,7 +964,7 @@ describe("customProviderCatalogEntries (: saved records become selectable drawer
   });
 });
 
-describe("isOwnDialogCancel ( item 4: Escape closes only the popup)", () => {
+describe("isOwnDialogCancel (item 4: Escape closes only the popup)", () => {
   it("true when the cancel originated on the dialog itself (target === currentTarget)", () => {
     const dialog = {} as EventTarget;
     expect(isOwnDialogCancel({ target: dialog, currentTarget: dialog })).toBe(true);
@@ -986,7 +986,7 @@ describe("isOwnDialogCancel ( item 4: Escape closes only the popup)", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────
-//  — empty-model-popover "Add connection" → Settings adding flow
+// empty-model-popover "Add connection" → Settings adding flow
 // ─────────────────────────────────────────────────────────────────────────
 
 describe("applyAddConnectionRequest", () => {
@@ -1000,7 +1000,7 @@ describe("applyAddConnectionRequest", () => {
   });
 });
 
-describe("resolvePendingAddConnection (: delivery + consumption)", () => {
+describe("resolvePendingAddConnection (delivery + consumption)", () => {
   it("does not open or consume when no request is pending (ordinary reopen / return to Provider)", () => {
     expect(resolvePendingAddConnection(false, { readOnly: false })).toEqual({ openDrawer: false, consume: false });
   });
@@ -1267,7 +1267,7 @@ function installWindow(): (type: string) => void {
   };
 }
 
-describe(" wiring: the empty-menu action reaches the add drawer", () => {
+describe("wiring: the empty-menu action reaches the add drawer", () => {
   beforeEach(() => {
     resetHarness();
   });
@@ -1465,7 +1465,7 @@ describe(" wiring: the empty-menu action reaches the add drawer", () => {
   });
 });
 
-// ── : which panes show the one scope dropdown ──
+// ── which panes show the one scope dropdown ──
 
 describe("scope dropdown panes", () => {
   it("shows the dropdown for MCP, Language servers, Skills and Subagents only", () => {

@@ -1,6 +1,6 @@
 /**
  * Control-plane contract for the vision-fallback recognizer's live config push
- * ( E1, plan §1.2/§6/§7): main recomputes the resolved recognizer
+ * (E1, plan §1.2/§6/§7): main recomputes the resolved recognizer
  * endpoint on every settings/provider mutation and pushes a fresh value to
  * every live root core tab's host over the SAME parentPort channel credentials
  * already ride (shared/credentials.ts's CREDENTIAL_RESPONSE_TYPE precedent) —
@@ -66,7 +66,7 @@ export interface RecognizerConfigChanged {
 // ── fingerprint (finding #7 — a resolved secret must never ride an unrelated
 // mutation's wire) ──
 //
-// : the fingerprint now mirrors the custom-record baseUrl the resolver
+// the fingerprint now mirrors the custom-record baseUrl the resolver
 // (main/host-env.ts `resolveRecognizerConfig`) follows for a `custom:<slug>`
 // connection — editing a CustomProviderRecord's address moves the fingerprint,
 // so the live push can no longer be swallowed by a stale comparison. The
@@ -79,7 +79,7 @@ export interface RecognizerConfigChanged {
  * The identity a live push compares against the last one sent (plan §1.2/§7):
  * `connectionId`+`modelId` are the user's OWN `settings.recognizer` selection;
  * `baseUrl`+`transport` are the address the selection CURRENTLY resolves to
- *: for a `custom:<slug>` connection that is the backing
+ * for a `custom:<slug>` connection that is the backing
  * CustomProviderRecord's baseUrl (the resolver's own route — the connection's
  * own baseUrl is deliberately left out, it is always blank there); for every
  * other connection it is the connection's own baseUrl (the resolver may
@@ -119,7 +119,7 @@ export function recognizerResolvedBaseUrl(
 
 /**
  * `provider.connection.<id>.apiKey` — byte-mirror of host-env.ts's
- * `connectionSecretKey(id, "api_key")` (; host-env keeps its own copy
+ * `connectionSecretKey(id, "api_key")`; host-env keeps its own copy
  * rather than importing this value-only module's, the convention its own header
  * documents).
  */
@@ -195,7 +195,7 @@ export function recognizerSecretTargetKey(settings: AnycodeSettings, key: Secret
   return recognizerConnectionSecretKey(connection.id) === key;
 }
 
-// ── the Vision panel's "Probe" button ( E2) ──
+// ── the Vision panel's "Probe" button (E2) ──
 
 /** Renderer -> main invoke channel for the recognizer probe. */
 export const RECOGNIZER_PROBE_CHANNEL = "anycode:recognizer-probe";

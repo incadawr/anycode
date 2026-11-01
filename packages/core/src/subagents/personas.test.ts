@@ -35,11 +35,11 @@ describe("personas", () => {
     // AgentStatus is withheld because the child cannot spawn agents.
     // Skill is withheld because a child subagent inherits no SkillPort in v1
     // (design §2.7 — persona tool lists are unchanged by slices 3.3/3.4).
-    // ArchMap ( S1) is a parent-session tool that is opt-in at the
-    // REGISTRY level since  (default off): the filter below keeps
+    // ArchMap (S1) is a parent-session tool that is opt-in at the
+    // REGISTRY level since (default off): the filter below keeps
     // holding even in a flag-on boot, where personas.ts still deliberately
     // does not grant it to children.
-    // WebSearch is NOT a default either ( follow-up): it is
+    // WebSearch is NOT a default either (follow-up): it is
     // factory-built at boot only when a search backend is configured, and
     // handing it to every general-purpose child would make paid search a new
     // silent default. A child gets it only when its persona/profile `tools:`
@@ -59,7 +59,7 @@ describe("personas", () => {
 
   it("general-purpose carries WebFetch; neither built-in persona carries WebSearch", () => {
     // WebFetch stays a default (free, no backend). WebSearch is opt-in per
-    // child ( follow-up): md-profile `tools:` frontmatter or a
+    // child (follow-up): md-profile `tools:` frontmatter or a
     // workflow step's `tools:` entry — the runner threads the boot tool in
     // only then (see runner tests).
     expect(PERSONAS["general-purpose"].tools).toContain("WebFetch");
@@ -93,7 +93,7 @@ describe("personas", () => {
     expect(getPersona("explore").name).toBe("explore");
   });
 
-  //  §5: the three role personas exist with expected
+  // §5: the three role personas exist with expected
   // tools/turnBudgets/prompt substrings.
   it("planner exists with explore-equal read-only tools, budget 30, and its prompt body", () => {
     const planner = PERSONAS.planner;
@@ -138,11 +138,11 @@ describe("personas", () => {
     }
     // WebSearch is factory-built at boot only when a search backend is
     // configured, so the bare default registry never carries it — and no
-    // built-in persona may list it ( follow-up: opt-in per child).
+    // built-in persona may list it (follow-up: opt-in per child).
     expect(registry.has("WebSearch")).toBe(false);
   });
 
-  it("the built-ins stay model-agnostic data ( adds no hardcoded id)", () => {
+  it("the built-ins stay model-agnostic data (adds no hardcoded id)", () => {
     // 4131 makes the explore model a HOST-CONFIGURED default (runner option
     // fed by ANYCODE_EXPLORE_MODEL), never a field on the built-in persona.
     for (const persona of [PERSONAS.explore, PERSONAS["general-purpose"]]) {

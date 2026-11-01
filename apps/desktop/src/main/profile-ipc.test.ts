@@ -25,7 +25,7 @@ import {
   type ProfileFs,
   type ProfileIpcDeps,
 } from "./profile-ipc.js";
-//  S3 — the incremental cache under handleProfileStatsGet/Cached.
+// S3 — the incremental cache under handleProfileStatsGet/Cached.
 import {
   createProfileStatsCacheStore,
   profileStatsCachePath,
@@ -116,7 +116,7 @@ describe("handleProfileStatsGet", () => {
     const home = await tmp();
     const telemetryDir = join(home, ".anycode/telemetry");
     await seedTelemetryDir(telemetryDir);
-    // Explicit `dir` ('s fail-closed VITEST gate in core/telemetry/
+ // Explicit `dir` (fail-closed VITEST gate in core/telemetry/
     // config.ts refuses to resolve an `enabled:true` section onto the DEFAULT
     // dir under a test runner — a test must always name its sink explicitly,
     // even though it happens to equal the default here).
@@ -255,7 +255,7 @@ describe("handleProfileStatsGet", () => {
       // Oldest mtime of the three, despite its name sorting LAST — proves the
       // cut is decided by TIME, not by name (a bare name-sort would have put
       // "zzz-huge.jsonl" last in scan order and let both small files count
-      // first, same as before  slice 0).
+      // first, same as before slice 0).
       const base = Date.now() - 60_000;
       await utimes(hugePath, base / 1000, base / 1000);
       await utimes(join(telemetryDir, "session-a.jsonl"), (base + 1000) / 1000, (base + 1000) / 1000);
@@ -273,7 +273,7 @@ describe("handleProfileStatsGet", () => {
 
   it(
     "keeps the newest files (by mtime, not by name) and drops the oldest when the total " +
-      "exceeds PROFILE_STATS_MAX_SCAN_BYTES ( slice 0 — the old scan order was " +
+      "exceeds PROFILE_STATS_MAX_SCAN_BYTES (slice 0 — the old scan order was " +
       "name-lexicographic, i.e. random relative to time, since filenames are UUIDs)",
     async () => {
       const home = await tmp();
@@ -316,7 +316,7 @@ describe("handleProfileStatsGet", () => {
 
   it(
     "falls back to the oldest included file's mtimeMs when its first line has no usable ts " +
-      "( fail-soft path — never throws, never reports null while truncated)",
+      "(fail-soft path — never throws, never reports null while truncated)",
     async () => {
       const home = await tmp();
       const telemetryDir = join(home, ".anycode/telemetry");
@@ -484,7 +484,7 @@ describe("handleProfileRevealDir", () => {
   it("reveals the resolved scan directory", async () => {
     const home = await tmp();
     const telemetryDir = join(home, ".anycode/telemetry");
-    // Explicit `dir` ('s fail-closed VITEST gate in core/telemetry/
+ // Explicit `dir` (fail-closed VITEST gate in core/telemetry/
     // config.ts refuses to resolve an `enabled:true` section onto the DEFAULT
     // dir under a test runner — a test must always name its sink explicitly,
     // even though it happens to equal the default here). Same idiom as the
@@ -519,7 +519,7 @@ async function patchCacheJson(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  S3 — incremental per-file cache (plan §3 "S3", decisions D-1/D-2/D-6)
+// S3 — incremental per-file cache (plan §3 "S3", decisions D-1/D-2/D-6)
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
@@ -1476,7 +1476,7 @@ describe("profile stats cache — untrusted cache input rebuilds instead of lyin
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  S5 — fail-closed cache validator, pinned on the CACHED channel
+// S5 — fail-closed cache validator, pinned on the CACHED channel
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
@@ -1503,7 +1503,7 @@ describe("profile stats cache — untrusted cache input rebuilds instead of lyin
  * (`decodeExactEntry`), and a real payload truncated mid-write (the crash
  * shape, as opposed to the never-was-JSON `{not json`).
  */
-describe("profile stats cache — a poisoned cache file refuses the cached channel and rebuilds to the oracle ( S5)", () => {
+describe("profile stats cache — a poisoned cache file refuses the cached channel and rebuilds to the oracle (S5)", () => {
   const poisons: Array<[string, (cachePath: string) => Promise<void>]> = [
     [
       "a real payload truncated mid-write",
@@ -1577,7 +1577,7 @@ describe("profile stats cache — a poisoned cache file refuses the cached chann
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  S3 closing review — metadata errors, prototype-named keys, cache
+// S3 closing review — metadata errors, prototype-named keys, cache
 // range validation, and rebuild guarantees
 // ═══════════════════════════════════════════════════════════════════════════
 

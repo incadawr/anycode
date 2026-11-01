@@ -17,7 +17,7 @@ export interface CommunicationManager {
  * One schema for both config sources. The env file (`configFile`) additionally
  * requires at least one folder (its contract predates the Settings UI); the live
  * `config` object may carry an EMPTY folder list, meaning "no folder restriction":
- * the per-session switch alone gates exposure ( owner amendment).
+ * the per-session switch alone gates exposure (owner amendment).
  */
 const configSchema = z.object({
   workspaces: z.array(z.string()),
@@ -33,7 +33,7 @@ const messageSchema = z.object({
   correlationId: z.string().max(200).optional(), replyTo: z.string().max(200).optional(),
   idempotencyKey: z.string().min(1).max(200).optional(),
 }).strict();
-/** : `create_session` input. `firstMessage` rides the same next_turn path as `send_message`. */
+/** `create_session` input. `firstMessage` rides the same next_turn path as `send_message`. */
 const createSessionSchema = z.object({
   workspace: z.string().min(1).max(4096),
   engine: z.enum(["core", "codex", "claude"]).optional(),
@@ -69,12 +69,12 @@ const waitSchema = z.object({
 }).strict().refine((v) => (v.messageId !== undefined) !== (v.correlationId !== undefined), { message: "Provide messageId or correlationId" });
 /** Concurrent wait_for_result calls across all clients; the 33rd is refused. */
 const MAX_WAITERS = 32;
-/** : at most this many `create_session` calls per window (per server instance; a restart resets it). */
+/** at most this many `create_session` calls per window (per server instance; a restart resets it). */
 export const CREATE_SESSION_RATE_LIMIT = 5;
 export const CREATE_SESSION_RATE_WINDOW_MS = 60_000;
-/** : most agent-opened tabs alive at once. */
+/** most agent-opened tabs alive at once. */
 export const MAX_AGENT_OPENED_TABS = 8;
-/** : stable refusal codes for agent-owned tab closing. */
+/** stable refusal codes for agent-owned tab closing. */
 export type CloseSessionRefusal = "not_allowed" | "not_found" | "not_agent_opened" | "busy" | "last_tab";
 export type CloseSessionOutcome = { ok: true } | { ok: false; reason: CloseSessionRefusal };
 const CLOSE_REFUSAL_TEXT: { [K in CloseSessionRefusal]: string } = {
@@ -85,7 +85,7 @@ const CLOSE_REFUSAL_TEXT: { [K in CloseSessionRefusal]: string } = {
   busy: "the session is busy or its host is not ready; use cancel_turn first",
 };
 const closeRefusal = (code: CloseSessionRefusal) => new Error(`close_session ${code}: ${CLOSE_REFUSAL_TEXT[code]}`);
-/** : fixed create_session refusal codes, prefixed in error text. */
+/** fixed create_session refusal codes, prefixed in error text. */
 export type CreateSessionRefusal = "not_allowed" | "not_trusted" | "folder_not_found" | "rate_limited" | "too_many" | "not_ready" | "invalid_model" | "invalid_effort" | "invalid_account" | "invalid_argument";
 export type CreateSessionRequest = {
   workspace: string;
@@ -99,7 +99,7 @@ export type CreateSessionRequest = {
   handle?: string;
 };
 /**
- * : a refusal MAY carry a `detail` sentence that main already made
+ * a refusal MAY carry a `detail` sentence that main already made
  * human-readable (the `invalid_model` candidate list). It is appended after the
  * fixed code text, never in place of it.
  */
@@ -118,9 +118,9 @@ const CREATE_REFUSAL_TEXT: { [K in CreateSessionRefusal]: string } = {
 };
 const createRefusal = (code: CreateSessionRefusal, detail?: string) =>
   new Error(`create_session ${code}: ${CREATE_REFUSAL_TEXT[code]}${detail === undefined || detail === "" ? "" : ` — ${detail}`}`);
-/** : the one message the approval tools use when the per-session switch is off. Clients match on it. */
+/** the one message the approval tools use when the per-session switch is off. Clients match on it. */
 export const EXTERNAL_APPROVAL_OFF = "External approval is off for this session";
-/** : most approvals one `list_pending_approvals` call returns. */
+/** most approvals one `list_pending_approvals` call returns. */
 const APPROVAL_LIMIT = 50;
 const listApprovalsSchema = z.object({ sessionId: z.string().min(1).optional() }).strict();
 const answerApprovalSchema = z.object({
@@ -161,13 +161,13 @@ export interface CommunicationServerOptions {
   /** Delay between host polls inside wait_for_result (tests shorten it). */
   pollMs?: number;
   /**
-   * : the per-session External approvals switch, read on every
+   * the per-session External approvals switch, read on every
    * request. FAIL CLOSED: absent means OFF for every session (the opposite of
    * isSessionExposed). The legacy env-file mode passes none, so it never allows approvals.
    */
   isExternalApprovalEnabled?: (sessionId: string) => boolean;
   /**
-   * : opens a tab for `create_session`. Main owns the per-project
+   * opens a tab for `create_session`. Main owns the per-project
    * switch, the trust check and tab creation. FAIL CLOSED: absent (the legacy
    * env-file mode) means `create_session` always answers not_allowed.
    */
@@ -430,7 +430,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
   const creationTimes: number[] = [];
   const agentOpenedSessions = options.agentOpenedSessions ?? new Set<string>();
   /**
-   *  (review F4): one in-flight create_session at a time. The rate check, the
+   * (review F4): one in-flight create_session at a time. The rate check, the
    * alive-cap check and the creator hook run as one critical section, so two concurrent
    * calls cannot both pass `aliveAgentOpened() >= MAX_AGENT_OPENED_TABS` and overshoot the
    * cap (a plain per-request handler has no such serialization). The firstMessage readiness
@@ -651,7 +651,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
             created = await createByAgent({ workspace: resolved, ...(input.engine ? { engine: input.engine } : {}), ...(input.model ? { model: input.model } : {}), ...(input.effort !== undefined ? { effort: input.effort } : {}), ...(input.fast !== undefined ? { fast: input.fast } : {}), ...(input.account !== undefined ? { account: input.account } : {}), ...(input.handle !== undefined ? { handle: input.handle } : {}) });
           } catch { throw createRefusal("not_ready"); }
           if (!created.ok) throw createRefusal(created.reason, created.detail);
-          //  (review F2): only a successful creation consumes the rate budget — refused
+          // (review F2): only a successful creation consumes the rate budget — refused
           // attempts (not_trusted, too_many, not_ready, a throwing hook) never count. Still inside
           // the section, together with the cap bookkeeping (review F4).
           creationTimes.push(at);
@@ -660,7 +660,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
         });
         let messageId: string | undefined;
         if (input.firstMessage !== undefined) {
-          //  (review F1): the new tab must be INSIDE the folders list for firstMessage
+          // (review F1): the new tab must be INSIDE the folders list for firstMessage
           // (its delivery rides list_sessions' requireSession). A tab outside the list can appear
           // when the creator lands it on another workspace; waiting the full readiness timeout and
           // then omitting messageId would silently drop the message. Refuse up front instead — the

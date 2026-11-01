@@ -28,7 +28,7 @@
  * `markOpened`/`markDead`, and `disposeTab`/`markHostExited` call
  * `terminalView.dispose`/`markDead` to keep the two lifecycles in lockstep.
  *
- *  (CUT-S2 §2.5/§5.3, slice S2c C2) adds a SECOND `registerPort`
+ * (CUT-S2 §2.5/§5.3, slice S2c C2) adds a SECOND `registerPort`
  * path, taken when the incoming envelope carries a `child` field
  * (`classifyPortEnvelope`, `child-sessions.ts`): a child session still gets
  * an entry in `entries` (store+connection+ui_ready — the child host needs
@@ -57,7 +57,7 @@ import {
   childRelationStore as defaultChildRelationStore,
   type ChildRelationStoreApi,
 } from "./child-sessions.js";
-// : the SAME model-level image gate Composer's own send-path uses
+// the SAME model-level image gate Composer's own send-path uses
 // (`canSend`'s `!attachmentsBlockedByModel`), reused here — not re-derived —
 // for the one send site with no live composer to react from beforehand (the
 // FIRST turn of a brand-new tab).
@@ -78,7 +78,7 @@ interface TabEntry {
   /** P7.14 prompt-queue drainer subscription on this tab's own store; store-lifetime (survives respawns), dies in disposeTab (symmetry with `unsubscribeStatus`). */
   unsubscribeQueue: (() => void) | null;
   /**
-   *  CUT-S2 §2.5/§5.3: true iff this tabId was classified `"child"`
+   * CUT-S2 §2.5/§5.3: true iff this tabId was classified `"child"`
    * (`classifyPortEnvelope`) on its FIRST `registerPort` — fixed for the
    * entry's lifetime, decided once at creation the same way `store` is.
    * Gates the root-tab-only side effects in `registerPort`/`markHostExited`
@@ -88,7 +88,7 @@ interface TabEntry {
    */
   isChild: boolean;
   /**
-   * : the relation meta of a child tab (`PortEnvelope["child"]`,
+   * the relation meta of a child tab (`PortEnvelope["child"]`,
    * parent/spawn/child session ids), recorded at `registerPort`; null for a
    * root tab. Lets `/state`'s `childStates` carry the parent relation without
    * a second lookup into the child-relation store.
@@ -110,10 +110,10 @@ export interface TabRegistry {
 
    * delivery); the caller is expected to drop the port with a warn.
    *
-   *  W10-FIX F2: `pinnedConnection` (additive) records the tab's pinned
+   * W10-FIX F2: `pinnedConnection` (additive) records the tab's pinned
    * provider connection on its per-tab store so the ModelPill targets it.
    *
-   *  CUT-S2 §2.5/§5.3: `child` (additive), present only for a
+   * CUT-S2 §2.5/§5.3: `child` (additive), present only for a
    * child-session tab's port delivery (`port.ts`'s `HostPortMeta.child`,
    * carried from the envelope's own `child` field). Its presence is the
    * branch condition — `classifyPortEnvelope` — for a SECOND registration
@@ -135,7 +135,7 @@ export interface TabRegistry {
     port: MessagePort,
     pinnedConnection?: { connectionId: string; providerId: string },
     child?: PortEnvelope["child"],
-    /** : the envelope's `openedByAgent` marker; root tabs only. */
+    /** the envelope's `openedByAgent` marker; root tabs only. */
     openedByAgent?: boolean,
     agentTitle?: string,
   ): boolean;
@@ -146,7 +146,7 @@ export interface TabRegistry {
    * connection reference; a later `registerPort` (respawn) clears the flag
    * again and reconnects. No-op for an unknown/disposed tabId.
    *
-   *  CUT-S2 §2.5/§0: for a CHILD tabId (`TabEntry.isChild`), the
+   * CUT-S2 §2.5/§0: for a CHILD tabId (`TabEntry.isChild`), the
    * tabs-store mirror is skipped entirely (there is no root-tab banner to
    * paint — a child was never added there) and the child-relation store's
    * entry is flipped to `live: false` instead (main's reap-on-terminal
@@ -171,7 +171,7 @@ export interface TabRegistry {
   /** The tab's store instance, or undefined if the tab isn't registered (yet, or anymore). */
   getStore(tabId: string): DesktopStoreApi | undefined;
   /**
-   * : every registered child tab (entry still live) with its
+   * every registered child tab (entry still live) with its
    * relation meta, in registration order. A child tab's store lives in this
    * registry but never in tabsStore, so this is the only enumeration seam the
    * automation snapshot (`childStates`) has; a host-exited child's entry is
@@ -270,7 +270,7 @@ export interface TabRegistry {
  * `@xterm/xterm` or `document` — the terminal-view.test.ts suite already
  * covers the xterm-instance/DOM-reparent logic in isolation.
  *
- * `childRelationStore` ( CUT-S2 §2.5, slice S2c C2) is injectable
+ * `childRelationStore` (CUT-S2 §2.5, slice S2c C2) is injectable
  * the same way: defaults to `child-sessions.ts`'s app singleton, isolated
  * per test the same way `statusStore` is.
  */
@@ -303,7 +303,7 @@ export function createTabRegistry(
   >();
 
   /**
-   * : core's reasoning-effort vocabulary is CLOSED (core's own
+   * core's reasoning-effort vocabulary is CLOSED (core's own
    * `ReasoningEffort`), while a draft's effort pick is a free-form string
    * (it also serves the non-core engines' own per-model vocabularies). This
    * narrows one to the other and returns `undefined` for anything else, so
@@ -339,7 +339,7 @@ export function createTabRegistry(
     if (model !== undefined && model !== current.model) {
       entry.connection?.send({ type: "set_model", model });
     }
-    // : sent last (after a model switch, if any) so a validated effort
+    // sent last (after a model switch, if any) so a validated effort
     // always targets the model actually active by then — moot for the START
     // flow today, since a non-core draft's model is fixed at CreateTabRequest
     // spawn time and never switched through this path, but keeps the
@@ -347,7 +347,7 @@ export function createTabRegistry(
     if (effort !== undefined && effort !== current.effort) {
       entry.connection?.send({ type: "set_engine_effort", effort });
     }
-    // : core's own effort message, on the same after-the-model
+    // core's own effort message, on the same after-the-model
     // ordering. The level is checked against core's closed vocabulary here
     // (an unrecognized string never reaches the wire) and the host then
     // re-validates it against the ACTIVE MODEL's declared levels
@@ -368,7 +368,7 @@ export function createTabRegistry(
 
   /**
    * Dispatch recipe byte-parity with Composer.tsx's `handleSend`: echo the
-   * block, then send the wire message. : `imageInput` is the boot
+   * block, then send the wire message. `imageInput` is the boot
    * model's live vision verdict (`host_ready.imageInput`, or the tab's
    * already-live store field for the already-ready shortcut) — gated through
    * the SAME `isSendBlockedByModelImages` predicate Composer's own send-gate
@@ -392,7 +392,7 @@ export function createTabRegistry(
     }
     const requestId = crypto.randomUUID();
     entry.store.getState().appendUserText(requestId, text, deliveredImages.length > 0 ? deliveredImages.map((image) => image.attachment) : undefined);
-    //  W8: snapshot what actually went on the wire so a later terminal
+    // W8: snapshot what actually went on the wire so a later terminal
     // retryable failure can offer to replay this same content.
     entry.store.getState().recordSentMessage(text, deliveredImages);
     entry.connection?.send({
@@ -417,7 +417,7 @@ export function createTabRegistry(
       return;
     }
     const requestId = entry.store.getState().queueInFlight!.requestId;
-    //  срез 2: `item.origin` (set only for a detached-child report,
+    // срез 2: `item.origin` (set only for a detached-child report,
     // QueuedPrompt.origin's own doc) rides onto BOTH the local transcript
     // append (live system-card render) and the wire `user_message` (host
     // stamps the persisted HistoryItem with it, so a reload renders the SAME
@@ -425,7 +425,7 @@ export function createTabRegistry(
     entry.store
       .getState()
       .appendUserText(requestId, item.text, item.images.length > 0 ? item.images.map((image) => image.attachment) : undefined, item.origin);
-    //  W8: snapshot what actually went on the wire so a later terminal
+    // W8: snapshot what actually went on the wire so a later terminal
     // retryable failure can offer to replay this same content.
     entry.store.getState().recordSentMessage(item.text, item.images);
     entry.connection?.send({
@@ -500,7 +500,7 @@ export function createTabRegistry(
       // §3.3 respawn semantics) — dispatch AFTER that reset, or a queued
       // initial prompt appended before it would be wiped along with it (§4.2).
       entry.store.getState().applyHostMessage(message);
-      // : renderer-local provider-switch markers are restored at
+      // renderer-local provider-switch markers are restored at
       // their recorded history boundaries right after the hydrated history
       // lands (chronological insert, ids already present skipped) — same
       // renderer-only posture as the quota notices restored on host_ready.
@@ -511,7 +511,7 @@ export function createTabRegistry(
         if (sessionId !== null) entry.store.getState().insertConnectionChangedAt(loadConnectionSwitches(sessionId));
       }
       if (message.type === "child_report") {
-        //  срез 2: acks UNCONDITIONALLY — whether store.ts's
+        // срез 2: acks UNCONDITIONALLY — whether store.ts's
         // `child_report` case just enqueued a NEW item or recognized this as
         // a re-delivered duplicate of one already queued/in-flight (dedup by
         // `originId`), the renderer now durably has it either way, so the
@@ -616,7 +616,7 @@ export function createTabRegistry(
         };
         entries.set(tabId, entry);
         if (kind === "child") {
-          //  CUT-S2 §2.5/§5.3: a child session gets the SAME
+          // CUT-S2 §2.5/§5.3: a child session gets the SAME
           // store+connection+ui_ready mechanism (below/attach()) but never
           // the root-tab bootstrap — no Sidebar/StartScreen/CommandPalette
           // entry, no status-mirror, no prompt-queue-drainer (the child's
@@ -668,7 +668,7 @@ export function createTabRegistry(
           // bails. `entry` is captured (not reassigned) so it always points at
           // the live connection after a respawn's `attach`.
           //
-          //  срез 2 (spec §4 point 2): `queuePaused` alone no longer
+          // срез 2 (spec §4 point 2): `queuePaused` alone no longer
           // means "nothing to drain" — a detached child's SYSTEM-origin report
           // must still leave the queue while paused (takeQueueHead enforces
           // the actual per-kind eligibility; this is only the cheap pre-check
@@ -696,11 +696,11 @@ export function createTabRegistry(
         entry.store.getState().setPinnedConnection(pinnedConnection);
       }
       if (child !== undefined) {
-        // : remembered on the entry itself so `listChildTabs()`
+        // remembered on the entry itself so `listChildTabs()`
         // (the automation snapshot's child enumeration seam) can carry the
         // relation without a child-relation-store lookup.
         entry.child = child;
-        //  CUT-S2 §2.5: records (or re-records) the relation C3's
+        // CUT-S2 §2.5: records (or re-records) the relation C3's
         // Open button and breadcrumb resolve through. Re-registering an
         // already-known (parent, spawn) pair resets `live` to true —
         // child-sessions.ts's own doc: a fresh port delivery only ever
@@ -732,12 +732,12 @@ export function createTabRegistry(
       }
 
       if (entry.isChild) {
-        //  CUT-S2 §0/§2.5: no root-tab banner to paint (a child was
+        // CUT-S2 §0/§2.5: no root-tab banner to paint (a child was
         // never added to the tabs-store) — flip the relation instead, so
         // C3's Open/breadcrumb read `live: false` and fall back to the
         // read-only history channel (C4) instead of a dead port.
         childRelationStore.getState().markChildGone(tabId, entry.store.getState().unattended);
-        //  CUT-S2 §10.10.2 (R2, O4/F3-R): a terminated child host
+        // CUT-S2 §10.10.2 (R2, O4/F3-R): a terminated child host
         // never respawns (main's own reap-on-terminal verdict, §0), and a
         // child's own tabId can never reach `disposeTab` — main's `closeTab`
         // rejects any `childOf` tabId (`main/tabs.ts`, `unknown_tab`) — so
@@ -783,7 +783,7 @@ export function createTabRegistry(
       entry.unsubscribeQueue?.();
       entries.delete(tabId);
       pendingInitialPrompts.delete(tabId);
-      //  CUT-S2 §2.5 (review wave R, F11 fix): a child's own tabId
+      // CUT-S2 §2.5 (review wave R, F11 fix): a child's own tabId
       // never reaches this point (main's `closeTab` rejects a `childOf`
       // tabId by construction — see `child-sessions.ts`'s own doc on
       // `removeRelationsForParentSession`), so `tabId` here is always a ROOT

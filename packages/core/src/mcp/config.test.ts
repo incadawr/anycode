@@ -308,11 +308,11 @@ describe("loadMcpServerSpecs — stdio env assembly", () => {
     }
   });
 
-  it("inheritEnv:true scrubs a credentialed proxy and hands the relay env to the server instead ( follow-up)", async () => {
+  it("inheritEnv:true scrubs a credentialed proxy and hands the relay env to the server instead (follow-up)", async () => {
     const savedEnv = process.env;
     const RELAY = "http://127.0.0.1:47557";
     const relayModule = await import("../adapters/node/proxy-relay.js");
-    //  rework: the per-value relay lookup (a minted relay URL
+    // rework: the per-value relay lookup (a minted relay URL
     // would carry `anycode:<token>@` userinfo — the one @ the scrub permits).
     const relayUrlSpy = vi.spyOn(relayModule, "proxyRelayLookup").mockReturnValue(() => RELAY);
     process.env = {
@@ -399,9 +399,9 @@ describe("loadMcpServerSpecs — stdio env assembly", () => {
 });
 
 // ---------------------------------------------------------------------------
-//  part C: ${secret:NAME} in MCP env/headers (core resolver).
+// part C: ${secret:NAME} in MCP env/headers (core resolver).
 
-describe("loadMcpServerSpecs — ${secret:NAME} substitution (, part C)", () => {
+describe("loadMcpServerSpecs — ${secret:NAME} substitution (part C)", () => {
   const secretsFrom = (values: Record<string, string>) => (name: string) =>
     Object.prototype.hasOwnProperty.call(values, name) ? values[name] : undefined;
 
@@ -577,7 +577,7 @@ describe("loadMcpServerSpecs — ${secret:NAME} substitution (, part C)", () => 
   });
 });
 
-describe("collectSecretRefs (, C-9)", () => {
+describe("collectSecretRefs (C-9)", () => {
   it("returns sorted unique names across env and headers, ignoring env refs and other fields", () => {
     const entries = {
       a: { command: "node", env: { X: "${secret:ZED}", Y: "${secret:ALPHA}", Z: "${env:HOME}" } },

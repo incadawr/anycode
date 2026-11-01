@@ -1,5 +1,5 @@
 /**
- * projectMessagesForMedia + createMediaProjectionPort ( plan §3):
+ * projectMessagesForMedia + createMediaProjectionPort (plan §3):
  * strips image bytes from every ChatMessage before they reach a blind
  * model's wire, so a live model switch (sighted -> blind) can never
  * silently re-send images the new model would 400 on.

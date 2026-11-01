@@ -1,5 +1,5 @@
 /**
- * Host-side Codex model catalog (, cut §2(j)).
+ * Host-side Codex model catalog (cut §2(j)).
  *
  * WHY THIS EXISTS AT ALL — live fact L7: the app-server does NOT reject an
  * unknown model id synchronously. `thread/start` and `turn/start` both ACCEPT a
@@ -9,7 +9,7 @@
  * validation therefore does not exist to lean on: every model id this host is
  * ever going to put on the wire MUST be checked against this catalog first, so
  * that an unsupported/removed model is a recoverable UI error rather than a
- * burned turn ( DoD "unsupported/removed model gives a recoverable
+ * burned turn (DoD "unsupported/removed model gives a recoverable
  * error" + "the renderer can never send an invalid model").
  *
  * The doctor's catalog (main/codex-doctor.ts) serves the PRE-session draft UI

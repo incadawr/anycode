@@ -1,5 +1,5 @@
 /**
- * Production-wiring regression test (, D-S4-5): proves that
+ * Production-wiring regression test (D-S4-5): proves that
  * `main/index.ts` — not just settings-ipc.ts's injectable deps bag — really
  * wires a REAL `statBinaryForTrust` (realpathSync -> statSync) into
  * `SettingsIpcDeps`, so the binary-trust grant channel persists a
@@ -179,7 +179,7 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
-describe("main/index.ts — binary-trust grant/revoke production wiring (, D-S4-5)", () => {
+describe("main/index.ts — binary-trust grant/revoke production wiring (D-S4-5)", () => {
   it("BS8 grants a REAL staged binary: settings.json on disk carries a fingerprint matching the file's live statSync tuple", async () => {
     await import("./index.js");
 

@@ -1,5 +1,5 @@
 /**
- * Pure reducer for the persisted workflow card snapshot ( slice S5).
+ * Pure reducer for the persisted workflow card snapshot (slice S5).
  * Mirror of subagents/card-snapshot.ts: three immutable, I/O-free functions
  * turn the coarse workflow_* AgentEvent stream (already bridged by
  * tools/workflow.ts's own mapProgressToEvent) into the `WorkflowCardSnapshotV1`
@@ -95,7 +95,7 @@ export function reduceWorkflowCardEvent(
     }
     case "workflow_step_running": {
       // No-op for the same reason: "queued -> running" (the step's actual,
-      // post-semaphore start —  slice S3) is a live-view transition,
+      // post-semaphore start — slice S3) is a live-view transition,
       // not part of a settled run's record.
       return acc;
     }
@@ -171,7 +171,7 @@ export function reduceWorkflowCardEvent(
  * paths — so the card is never fabricated from nothing, mirroring
  * subagents/card-snapshot.ts's finalizeSubagentCard). A fail-fast
  * unknown-agentType pre-check DOES stream a start/step_end/end trio
- *, each error terminal's step_end carrying `unlaunched: true`, so
+ * each error terminal's step_end carrying `unlaunched: true`, so
  * that run's card is produced like any other. `fallback` supplies
  * status/durationMs when no `workflow_end` was ever seen (the caller settled
  * from its own known outcome).

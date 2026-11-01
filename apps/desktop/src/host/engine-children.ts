@@ -29,7 +29,7 @@
  * agent, not a supervised child loop. `--disable-slash-commands
  * --setting-sources project,local --strict-mcp-config` (mirrored from
  * claude-client.ts's own spawn args) keep the child's init from pulling in
- * the ambient skill/plugin catalog a subagent never needed. 
+ * the ambient skill/plugin catalog a subagent never needed.
  * xfix D1: `projectTrusted === false` narrows `--setting-sources` to `user`
  * on the SAME trust gate claude-client.ts honours, so an untrusted folder's
  * `.claude/settings.json` hooks cannot load through this path either.
@@ -81,7 +81,7 @@ export interface EngineChildRunnerDeps {
   /** Injectable for tests; defaults to node:child_process's spawn. */
   spawn?: EngineChildSpawn;
   /**
-   *  xfix D1: the host's workspace-trust gate. `false` narrows
+   * xfix D1: the host's workspace-trust gate. `false` narrows
    * the Claude child's `--setting-sources` to `user` (same value
    * claude-client.ts uses), so the untrusted folder's own
    * `.claude/settings.json` hooks never load. Absent/true keeps
@@ -160,7 +160,7 @@ function adapterFor(engine: EngineChildSpec["engine"], projectTrusted?: boolean)
           "acceptEdits",
           "--disable-slash-commands",
           "--setting-sources",
-          //  xfix D1: untrusted workspace => user-only settings
+          // xfix D1: untrusted workspace => user-only settings
           // (mirrors claude-client.ts's own gate on the same flag).
           projectTrusted === false ? "user" : "project,local",
           "--strict-mcp-config",
@@ -264,7 +264,7 @@ function summarizeClaudeTool(name: string, input: Record<string, unknown> | unde
 // final reply text, "error" for an item-level failure, anything else
 // (command_execution, etc.) is a tool/action call.
 //
-// TURNS ( R5, wave2-cut §1.4): Claude's `turns` counts model
+// TURNS (R5, wave2-cut §1.4): Claude's `turns` counts model
 // (assistant) rounds — a real, comparable number. Codex `exec --json` exposes
 // NO model-round marker: `turn.started` fires exactly once per `exec` run
 // (verified live, codex-cli 0.145.0), so incrementing on it does not count

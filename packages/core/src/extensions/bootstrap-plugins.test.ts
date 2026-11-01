@@ -1,5 +1,5 @@
 /**
- * discoverExtensions —  S1-A workflow-contribution tests (design
+ * discoverExtensions — S1-A workflow-contribution tests (design
  * §8): plugin workflow roots land BETWEEN user and bundled (a plugin preset
  * shadows the bundled deep-research; project/user shadow the plugin), the
  * passthrough options (pluginStatePath/appVersion/reserved/consent) reach
@@ -95,7 +95,7 @@ afterEach(() => {
   vi.resetModules();
 });
 
-describe("discoverExtensions — plugin workflow roots ( S1-A)", () => {
+describe("discoverExtensions — plugin workflow roots (S1-A)", () => {
   it("plugin roots land BETWEEN user and bundled; a plugin preset shadows the bundled one", async () => {
     let capturedRoots: unknown;
     vi.doMock(WORKFLOW_DISCOVERY_PATH, () => ({

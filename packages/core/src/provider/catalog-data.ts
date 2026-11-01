@@ -159,7 +159,7 @@ const ENTRIES: CatalogProviderEntry[] = [
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
-    //  (2026-08-15): refreshed to the live docs.z.ai model line (guides/llm
+    // (2026-08-15): refreshed to the live docs.z.ai model line (guides/llm
     // sidebar + each page's spec box and code samples). Fresh-first so the first
     // chip — the empty-model prefill — is the newest model. reasoning/effortLevels
     // stay only where a source confirmed them (glm-5.2's native 3-state UI, and
@@ -174,7 +174,7 @@ const ENTRIES: CatalogProviderEntry[] = [
     // entry); docs.z.ai carries the page but no code sample yet ("API coming
     // soon"). 4.5/4.5-air numbers predate this pass and are kept as-is.
     //
-    //  (2026-08-28, re-verified via WebFetch): the pass above got the
+    // (2026-08-28, re-verified via WebFetch): the pass above got the
     // glm-5.3 row wrong. docs.z.ai/guides/llm/glm-5.3 states "GLM-5.3 always
     // operates with reasoning enabled" and "Disabling reasoning is no longer
     // supported", with three documented effort levels "low", "high", and "max"
@@ -187,18 +187,18 @@ const ENTRIES: CatalogProviderEntry[] = [
     // the wire as `low` instead of silently upgrading to `high` — otherwise
     // advertising `low` here would have been a fresh lie.
     //
-    //  (2026-08-29, re-verified via direct fetch of the raw page, not
+    // (2026-08-29, re-verified via direct fetch of the raw page, not
     // just the summarizing fetch): the flash page's spec card now reads
     // "Input Modality: Video / Image / Text / File", "Output Modality: Text",
     // "Context Length: 1M", "Maximum Output Tokens: 128K" — the "max output
     // length is never stated" claim above was true on 2026-08-28 but the page
-    // has since been filled in (site was mid-launch: 's own comment
+    // has since been filled in (site was mid-launch: a comment
     // flagged "API coming soon" for 5.3 the day before). `maxOutputTokens` is
     // filled in below from that spec card. Without it, a subagent spawned on
     // glm-5.3-flash silently got DEFAULT_MAX_OUTPUT_TOKENS (32_768, a ~4x drop
-    // from the parent glm-5.3's 131_072) — the  defect.
+    // from the parent glm-5.3's 131_072) — the defect.
     //
-    //  (2026-08-30, owner's ruling): `imageInput: true` on the FLASH
+    // (2026-08-30, owner's ruling): `imageInput: true` on the FLASH
     // row. Two prior passes read the same spec card ("Input Modality: Video /
     // Image / Text / File") and still withheld the flag, on the argument that
     // a spec card is not proof the Anthropic-messages endpoint accepts image
@@ -266,7 +266,7 @@ const ENTRIES: CatalogProviderEntry[] = [
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
     models: [
-      // TASK 4241 (2026-10-10): rows replaced from the supplied authoritative
+      // (2026-10-10): rows replaced from the supplied authoritative
       // live GET /models facts. Default effort is high — carried as
       // `defaultEffort` on both rows, so a session with no
       // explicit pick shows AND sends `high` instead of falling back to the
@@ -330,7 +330,7 @@ const ENTRIES: CatalogProviderEntry[] = [
   },
   {
     id: "moonshot",
-    // : one brand = one card; this entry is the platform
+    // one brand = one card; this entry is the platform
     // API mode of the Kimi brand card.
     name: "Moonshot (Kimi, platform API)",
     brand: "Kimi",
@@ -386,7 +386,7 @@ const ENTRIES: CatalogProviderEntry[] = [
     // k3-256k is the same K3 served under its context-suffixed id (both appear
     // in the endpoint's live model list), so it carries K3's capabilities.
     //
-    //  (2026-08-29): `maxOutputTokens` is deliberately OMITTED on all
+    // (2026-08-29): `maxOutputTokens` is deliberately OMITTED on all
     // four rows below. The product's own docs
     // (kimi.com/code/docs/en/kimi-code/models, "Model Configuration" table,
     // fetched and read as raw HTML — not just the summarized version) list
@@ -403,10 +403,10 @@ const ENTRIES: CatalogProviderEntry[] = [
     // the guess this file's own convention (effortLevels/reasoning) forbids.
     // Until kimi.com/code publishes an output ceiling or support confirms one,
     // these four resolve through `resolveMaxOutputTokens`'s DEFAULT stub
-    // (32_768, ) — now observable via `onStubFallback`
+    // (32_768) — now observable via `onStubFallback`
     // instead of silently.
     id: "kimi",
-    // : one brand = one card; this entry is the
+    // one brand = one card; this entry is the
     // subscription mode of the Kimi brand card.
     name: "Kimi (kimi.com subscription)",
     brand: "Kimi",
@@ -537,7 +537,7 @@ const ENTRIES: CatalogProviderEntry[] = [
   {
     id: "vllm",
     name: "vLLM / local OpenAI-compatible",
-    // Template entry ( W5): baseUrl lives in settings, exactly like
+    // Template entry (W5): baseUrl lives in settings, exactly like
     // `custom` — `needsBaseUrl` is derived from this empty string downstream
     // (main/settings-ipc.ts `projectCatalogSummary`).
     baseUrl: "",
@@ -569,7 +569,7 @@ const ENTRIES: CatalogProviderEntry[] = [
   },
 ];
 
-// Dev-time invariant ( W5): fail fast at import time if a future entry
+// Dev-time invariant (W5): fail fast at import time if a future entry
 // declares a defaultTransport outside its own supportedTransports, rather than
 // the first time some caller's default-parameter resolveEndpoint call throws.
 for (const entry of ENTRIES) {

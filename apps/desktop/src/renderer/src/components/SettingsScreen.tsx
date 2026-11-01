@@ -15,7 +15,8 @@
  * P7.8; fullscreen redesign + Permissions split out of Tools, slice P7.16
  * design/slice-P7.16-cut.md §3/§5 W2): a full-window `<dialog>` with a wide
  * rail (Back-to-app + Search settings + a vertical `role="tablist"` whose tabs
- * are grouped under five labelled, non-focusable section headers — , `SETTINGS_SECTIONS`/`settingsSectionsFor`) and a right content pane — a page-title block (`SETTINGS_PANES`'
+ * are grouped under five labelled, non-focusable section headers
+ * 4767, `SETTINGS_SECTIONS`/`settingsSectionsFor`) and a right content pane — a page-title block (`SETTINGS_PANES`'
  * label/description) above a single `role="tabpanel"` scroll column that
  * conditionally renders exactly one section's content at a time (never
  * CSS-hidden — see `ProviderSettings`' `<ConsentDialog>` top-layer hazard
@@ -43,7 +44,7 @@
  * settings-store's `pendingConsent`, not in this component's own state), so
  * a stored secret is never echoed back into a rendered field.
  *
- * PROVIDER SELECTION ( W12, replacing slice 2.5 §5's singleton
+ * PROVIDER SELECTION (W12, replacing slice 2.5 §5's singleton
  * `<select>`): the ConnectionDrawer's template `<select>` is populated from
  * `snapshot.catalog` (optional/absent = empty). `shouldShowBaseUrlField`
  * treats "no selection" and the catalog's own `custom`/needsBaseUrl entry as
@@ -134,7 +135,7 @@ import "../settings.css";
 
 const API_KEY_ENV_VAR = "ANYCODE_API_KEY";
 
-/** : the output-ceiling env rung — same local-literal convention as `API_KEY_ENV_VAR` above (renderer modules don't import main). */
+/** the output-ceiling env rung — same local-literal convention as `API_KEY_ENV_VAR` above (renderer modules don't import main). */
 const ENV_MAX_OUTPUT_TOKENS = "ANYCODE_MAX_OUTPUT_TOKENS";
 
 export type SettingsPaneId = "profile" | "provider" | "codex" | "claude" | "permissions" | "tools" | "vision" | "network" | "mcp" | "language-servers" | "skills" | "subagents" | "roles" | "plugins" | "sessions-api" | "environment" | "appearance" | "shortcuts" | "about";
@@ -153,12 +154,12 @@ type SettingsIcon = ComponentType<SVGProps<SVGSVGElement>>;
  * `requestedPane` initial value stays "provider", unrelated to array order.
  * P7.24/F20 W3 (design/slice-P7.24-cut.md §1.4) inserts "shortcuts" between
  * Appearance and About, mirroring the ref's Personal-section grouping.
- *  срез E2a inserts "vision" between Tools and Network — the
+ * срез E2a inserts "vision" between Tools and Network — the
  * fallback-recognizer pane belongs next to the other cross-cutting run-time
  * knobs, not among the per-provider connection panes.
  */
 /**
- * : the rail groups these panes into five sections (`SETTINGS_SECTIONS`).
+ * the rail groups these panes into five sections (`SETTINGS_SECTIONS`).
  * Entries are contiguous by section, so the flat array order is the rail order.
  */
 export type SettingsSectionId = "general" | "models" | "agent" | "integrations" | "system";
@@ -200,7 +201,7 @@ export const SETTINGS_PANES: ReadonlyArray<{ id: SettingsPaneId; section: Settin
     icon: Robot,
   },
   {
-    //  §3.9 (part B): orchestration roles (planner/executor/
+    // §3.9 (part B): orchestration roles (planner/executor/
     // reviewer/explore/orchestrator route chains + parallel-children cap).
     id: "roles", section: "agent",
     label: "Roles",
@@ -210,7 +211,7 @@ export const SETTINGS_PANES: ReadonlyArray<{ id: SettingsPaneId; section: Settin
   },
   { id: "mcp", section: "integrations", label: "MCP", description: "Manage MCP servers for this project and your user profile.", icon: ServerStack },
   {
-    // : language servers (catalog, PATH detection, one-click
+    // language servers (catalog, PATH detection, one-click
     // enable, custom entries) — right after MCP, the other server kind.
     id: "language-servers", section: "integrations",
     label: "Language servers",
@@ -224,7 +225,7 @@ export const SETTINGS_PANES: ReadonlyArray<{ id: SettingsPaneId; section: Settin
     icon: Package,
   },
   {
-    // : the Sessions API (local MCP for external agents) — right after
+    // the Sessions API (local MCP for external agents) — right after
     // Plugins, the other "connect something outside the app" surface.
     id: "sessions-api", section: "integrations",
     label: SESSIONS_API_LABEL,
@@ -241,7 +242,7 @@ export const SETTINGS_PANES: ReadonlyArray<{ id: SettingsPaneId; section: Settin
 ];
 
 /**
- * : the visible panes grouped under their section, in
+ * the visible panes grouped under their section, in
  * `SETTINGS_SECTIONS` order, keeping `SETTINGS_PANES` order inside each group.
  * Sections with no visible pane are omitted (the search narrows the rail).
  */
@@ -391,7 +392,7 @@ export function buildToolsPatch(
   const stallTimeoutMs = parseOptionalInt(stallTimeoutText);
   const maxTurns = parseOptionalInt(maxTurnsText);
   const subagentMaxTurns = parseOptionalInt(subagentMaxTurnsText);
-  // : provider retry knobs, mirrors of
+  // provider retry knobs, mirrors of
   // ANYCODE_MAX_RETRIES / ANYCODE_NETWORK_RETRY_BUDGET_MS (env > settings).
   const maxRetries = parseOptionalInt(maxRetriesText);
   const networkRetryBudgetMs = parseOptionalInt(networkRetryBudgetText);
@@ -405,16 +406,16 @@ export function buildToolsPatch(
   if (subagentMaxTurns !== undefined) tools.subagentMaxTurns = subagentMaxTurns;
   if (maxRetries !== undefined) tools.maxRetries = maxRetries;
   if (networkRetryBudgetMs !== undefined) tools.networkRetryBudgetMs = networkRetryBudgetMs;
-  // : ANYCODE_NETWORK_WAIT_MAX_MS mirror (blank = default).
+  // ANYCODE_NETWORK_WAIT_MAX_MS mirror (blank = default).
   const networkWaitMaxMs = parseOptionalInt(networkWaitText);
   if (networkWaitMaxMs !== undefined) tools.networkWaitMaxMs = networkWaitMaxMs;
-  // : undefined = the user never touched the toggle and the setting is
+  // undefined = the user never touched the toggle and the setting is
   // absent, so nothing is written (absent stays absent).
   if (adaptiveTurnBudget !== undefined) tools.adaptiveTurnBudget = adaptiveTurnBudget;
   return { tools };
 }
 
-// ── sessionLimits ( /  slice 2) ──
+// ── sessionLimits (slice 2) ──
 
 export type SessionLimitsPatchResult = { patch: { sessionLimits?: SessionLimitsSettings } } | { error: string };
 
@@ -444,7 +445,7 @@ export function buildSessionLimitsPatch(
   return { patch: { sessionLimits: out } };
 }
 
-// ── provider-section v2 pure helpers (slice 2.5 §5; reused by ConnectionDrawer/ConnectionTile,  W12) ──
+// ── provider-section v2 pure helpers (slice 2.5 §5; reused by ConnectionDrawer/ConnectionTile, W12) ──
 
 /** Looks up the catalog entry matching the currently selected provider id; `undefined` for an empty/absent id, an empty catalog, or an id with no match (all three fold into the same legacy/custom fallback below). */
 export function selectProviderEntry(catalog: CatalogSummary, id: string | undefined): CatalogSummaryEntry | undefined {
@@ -464,7 +465,7 @@ export function shouldShowBaseUrlField(selectedEntry: CatalogSummaryEntry | unde
   return !selectedEntry || selectedEntry.needsBaseUrl === true;
 }
 
-/** Every transport this build knows how to speak — the "custom"/no-selection option set ( W5). */
+/** Every transport this build knows how to speak — the "custom"/no-selection option set (W5). */
 const ALL_TRANSPORTS: ProviderTransportId[] = ["anthropic-messages", "openai-chat-completions", "openai-responses"];
 
 export const TRANSPORT_LABEL: Record<ProviderTransportId, string> = {
@@ -474,7 +475,7 @@ export const TRANSPORT_LABEL: Record<ProviderTransportId, string> = {
 };
 
 /**
- * Options the transport `<select>` offers ( W5, deliberately disposable
+ * Options the transport `<select>` offers (W5, deliberately disposable
  * — W12 absorbs this into a drawer): a catalog entry restricts to its own
  * `supportedTransports` (the `custom` entry itself now declares all three, so
  * it naturally falls out of this same rule — no special-casing needed);
@@ -487,7 +488,7 @@ export function transportOptions(selectedEntry: CatalogSummaryEntry | undefined)
   return selectedEntry?.supportedTransports ?? ALL_TRANSPORTS;
 }
 
-// ── custom model-provider pure helpers (owner-decision #6, cut §9.2, ) ──
+// ── custom model-provider pure helpers (owner-decision #6, cut §9.2) ──
 //
 // `CustomProviderBridge`'s request/result shapes mirror main/provider-ipc.ts's
 // handle* functions structurally (that module owns the actual CRUD/fetch
@@ -542,7 +543,7 @@ const FETCH_MODELS_ERROR_TEXT: Record<FetchModelsFailureReason, string> = {
   invalid_url: "Only https:// URLs (or http:// on localhost) are allowed.",
   redirect_blocked: "That endpoint redirected to a different address — refused for safety.",
   http_error: "The endpoint returned an error response.",
-  // : a 404/405 on the models route is ambiguous between two real
+  // a 404/405 on the models route is ambiguous between two real
   // causes (the provider never implemented a model-list endpoint, or the
   // base URL is wrong) — the copy names both instead of guessing, and points
   // at the manual entry field (datalist + preset chips) that already exists.
@@ -551,16 +552,18 @@ const FETCH_MODELS_ERROR_TEXT: Record<FetchModelsFailureReason, string> = {
   timeout: "The endpoint did not respond in time.",
   network_error: "Could not reach that endpoint.",
   invalid_response: "The endpoint's response wasn't a recognizable models list.",
-  // : Z.AI's anthropic-compat /v1/models reports auth failures as
+  // Z.AI's anthropic-compat /v1/models reports auth failures as
   // HTTP 200 + {"success":false,"code":...} — name the likely cause instead of
   // letting it read as an empty success or a generic broken endpoint.
   error_payload: "The endpoint returned an error inside a 200 response — most likely the API key was rejected; check the key.",
-  // : a well-formed empty list is its own honest outcome, not a silent
+  // a well-formed empty list is its own honest outcome, not a silent
   // success: the endpoint answered but listed zero models.
   empty_models: "The endpoint returned an empty model list — check the API key or plan, or enter the model id manually.",
-  // : a manually entered model id cannot be persisted because the
+  // a manually entered model id cannot be persisted because the
   // settings file is (or a newer-version file leaves it) read-only.
   read_only: "This settings file is read-only, so the model list can't be saved.",
+  system_proxy_unsupported: "Fetching models is unavailable with a system proxy because its route can change. Enter model IDs manually.",
+  stale_fetch: "The connection, key or proxy changed during fetching. Your model selections are kept; fetch again.",
 };
 
 /** User-facing text for a failed `/v1/models` fetch. */
@@ -605,7 +608,7 @@ export function mergeCurationModelIds(
  * "belt and suspenders" relationship `buildToolsPatch` has with its own
  * server-side counterpart).
  *
- * : a record must be EITHER keyed (a non-empty `apiKey`) OR explicitly
+ * a record must be EITHER keyed (a non-empty `apiKey`) OR explicitly
  * keyless (`noAuth` — a local server with no auth); one with neither is
  * refused (`undefined`). A non-empty key is AUTHORITATIVE: it always wins over
  * the flag and is the single field the key crosses on (mirrors main's own
@@ -686,7 +689,7 @@ export function customProviderCatalogEntries(
 
 /**
  * Whether a native `<dialog>`'s `cancel` (Escape) originated on THAT dialog
- * itself ( item 4). React's synthetic event system propagates the
+ * itself (item 4). React's synthetic event system propagates the
  * non-bubbling native `cancel` up the REACT tree, so a nested drawer's Escape
  * otherwise also fires an ancestor dialog's `onCancel` (closing Settings from
  * under the drawer). Every dialog's `onCancel` gates its close on this so it
@@ -707,7 +710,7 @@ export function updateStatusText(status: UpdateStatus): string {
     case "checking":
       return "Checking for updates…";
     case "available":
-      //  defect 2: darwin has no Developer ID yet — an honest message
+      // defect 2: darwin has no Developer ID yet — an honest message
       // instead of implying an in-app download/install is possible.
       return status.manualOnly
         ? `Update v${status.version} available — download from GitHub Releases.`
@@ -733,7 +736,7 @@ export function shouldShowUpdateBanner(status: UpdateStatus): boolean {
 }
 
 /**
- *  defect 2: whether a status should render the darwin
+ * defect 2: whether a status should render the darwin
  * honest-manual-path action (a GitHub Releases link) instead of the normal
  * in-app Download button. Only ever true for `available`; `downloaded` never
  * carries `manualOnly` because `download()` itself refuses `manual_only` on
@@ -749,7 +752,7 @@ export function showsManualUpdateLink(status: UpdateStatus): boolean {
 }
 
 /**
- * /W14-fix: whether the About pane should render the running app's
+ * whether the About pane should render the running app's
  * version line — extracted into a pure, exported gate (same pattern as
  * `shouldShowUpdateBanner`/`showsManualUpdateLink` above) because this
  * package's tests run with no DOM/jsdom (SettingsScreen.test.ts's own
@@ -875,13 +878,13 @@ function useActiveEnvStatus(): WireEnvStatus | null {
 
 // ── components ──
 
-/** The action a tile's "Replace key"/"Sign in" control resolves to for one connection ( W12-FIX §1). */
+/** The action a tile's "Replace key"/"Sign in" control resolves to for one connection (W12-FIX §1). */
 export type ReplaceKeyAction =
   | { kind: "oauthStart"; providerId: string; connectionId: string }
   | { kind: "clearSecret"; key: SecretKey };
 
 /**
- * Resolves `openReplaceKey`'s action ( W12-FIX §1): an OAuth connection
+ * Resolves `openReplaceKey`'s action (W12-FIX §1): an OAuth connection
  * with no stored token starts a sign-in SCOPED TO THIS CONNECTION — never a
  * provider-wide bucket guess, the custody defect this fix closes (a sign-in
  * on a non-active same-provider connection must not land on the active one's
@@ -909,7 +912,7 @@ export function resolveReplaceKeyAction(
 
 /**
  * Reaches for `window.anycode.customProvider` (owner-decision #6, cut §9.2,
- * ) — already part of the frozen ambient `Window.anycode` type
+ * already part of the frozen ambient `Window.anycode` type
  * (anycode-window.d.ts), so no cast is needed; resolved LAZILY (never touched
  * at module load), same discipline `settings-store.ts`'s `realBridge()` uses.
  */
@@ -927,7 +930,7 @@ export interface CustomProvidersSectionProps {
 }
 
 /**
- * Custom model-provider MANAGEMENT list (, reducing 's
+ * Custom model-provider MANAGEMENT list (reducing's
  * add-form-bearing section): a read-only list of saved custom endpoints
  * (name/kind/baseUrl/model count) each with a Delete action, and nothing else.
  * Creating a custom endpoint now happens in the shared Add-connection drawer
@@ -1005,7 +1008,7 @@ export interface ProviderSettingsProps {
   /** Injectable for tests / isolation; defaults to the app's singleton settings-store. */
   store?: SettingsStoreApi;
   /**
-   * : a request token (0 = none, N = the Nth outstanding request)
+   * a request token (0 = none, N = the Nth outstanding request)
    * forwarded down from `SettingsDialog` (the always-mounted listener) through
    * `SettingsScreen`. Only `> 0` matters here — the DRAWER decision is a plain
    * boolean, while the monotonically increasing token exists so a REPEAT is
@@ -1020,7 +1023,7 @@ export interface ProviderSettingsProps {
 }
 
 /**
- * : the always-mounted `SettingsDialog`'s reaction to the
+ * the always-mounted `SettingsDialog`'s reaction to the
  * dedicated add-connection event — land on the Provider pane and raise a
  * pending request. `requestAdd` is the dialog's own token bump (see
  * `SettingsDialog`'s `addConnectionRequest`), deliberately NOT a boolean flag:
@@ -1040,7 +1043,7 @@ export function applyAddConnectionRequest(
 }
 
 /**
- * : the pure decision behind `ProviderSettings`' pending-add
+ * the pure decision behind `ProviderSettings`' pending-add
  * effect. A request with NO snapshot yet is left unconsumed (the effect must
  * survive until there is a snapshot to act on). A request WITH a snapshot is
  * always consumed; the drawer opens only when that snapshot is writable —
@@ -1061,7 +1064,7 @@ export function resolvePendingAddConnection(
 }
 
 /**
- * : the panes that take the scope dropdown (User or a recent
+ * the panes that take the scope dropdown (User or a recent
  * folder). Exported for SettingsScreen.test.ts.
  */
 export function paneHasScope(pane: SettingsPaneId | undefined): boolean {
@@ -1069,7 +1072,7 @@ export function paneHasScope(pane: SettingsPaneId | undefined): boolean {
 }
 
 /**
- * Provider connections grid + drawer ( W12, replacing the R11 singleton
+ * Provider connections grid + drawer (W12, replacing the R11 singleton
  * form): a compact responsive grid of `ConnectionTile`s — one per user-created
  * connection — plus a trailing `+ Add connection` tile and, when an
  * `ANYCODE_API_KEY`-family env var overrides the runtime, a read-only
@@ -1087,6 +1090,7 @@ export function paneHasScope(pane: SettingsPaneId | undefined): boolean {
 export function ProviderSettings({ store = useSettingsStore, addConnectionRequest = 0, onAddConnectionConsumed }: ProviderSettingsProps) {
   const snapshot = useStore(store, (s) => s.snapshot);
   const pendingConsent = useStore(store, (s) => s.pendingConsent);
+  const consentSaving = useStore(store, (s) => s.consentSaving);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState<"add" | "edit">("add");
@@ -1095,7 +1099,7 @@ export function ProviderSettings({ store = useSettingsStore, addConnectionReques
   const [checkingIds, setCheckingIds] = useState<ReadonlySet<string>>(new Set());
   const tileRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
-  // : consume a pending "add connection" request forwarded from the
+  // consume a pending "add connection" request forwarded from the
   // always-mounted SettingsDialog. Declared BEFORE the snapshot early return so
   // the hook order stays stable while the snapshot loads; `resolvePendingAddConnection`
   // waits for a snapshot and then consumes exactly once. Keyed on the request
@@ -1125,7 +1129,7 @@ export function ProviderSettings({ store = useSettingsStore, addConnectionReques
 
   const readOnly = snapshot.readOnly;
   const customRecords = snapshot.settings.provider.custom ?? [];
-  // : the drawer's provider picker + the tiles read a UNION of the
+  // the drawer's provider picker + the tiles read a UNION of the
   // builtin catalog and one synthesized entry per saved custom record, so a
   // `custom:<id>` connection resolves a real name/models/transport set (the
   // builtin-only catalog never carried these). The builtin `custom` sentinel
@@ -1135,7 +1139,7 @@ export function ProviderSettings({ store = useSettingsStore, addConnectionReques
   const connections = snapshot.settings.provider.connections;
   const activeConnectionId = snapshot.settings.provider.activeConnectionId;
   const envOverridden = isEnvOverridden(snapshot.envOverrides, API_KEY_ENV_VAR);
-  // : a SECOND, independent env override — the output-token ceiling.
+  // a SECOND, independent env override — the output-token ceiling.
   // Not folded into `envOverridden`: that boolean gates the API-key banner,
   // whose "overrides every stored connection" sentence is simply false for the
   // ceiling (the field still stores; only new sessions are beaten by env).
@@ -1233,7 +1237,7 @@ export function ProviderSettings({ store = useSettingsStore, addConnectionReques
             </span>
           </div>
         )}
-        {/* : same banner treatment, its OWN text — the ceiling var
+        {/* same banner treatment, its OWN text — the ceiling var
             doesn't "override every stored connection" like the key does; it
             only beats the Max-output-tokens field of whatever connection new
             sessions launch with. */}
@@ -1250,7 +1254,7 @@ export function ProviderSettings({ store = useSettingsStore, addConnectionReques
           {connections.map((connection, index) => {
             const catalogEntry = selectProviderEntry(catalog, connection.providerId || undefined);
             const authKind = catalogEntry?.authKind ?? "api_key";
-            // : a custom:<id> connection's credential lives on the
+            // a custom:<id> connection's credential lives on the
             // custom provider's OWN shared key, not a connection-scoped key.
             const credentialStatus = snapshot.secrets.find(
               (s) => s.key === connectionCredentialKey(connection.id, connection.providerId, authKind),
@@ -1327,6 +1331,7 @@ export function ProviderSettings({ store = useSettingsStore, addConnectionReques
       />
 
       <ConsentDialog
+        busy={consentSaving}
         open={pendingConsent !== null}
         onAccept={() => void store.getState().acceptWeakStorageConsent()}
         onDecline={() => store.getState().declineWeakStorageConsent()}
@@ -1352,7 +1357,7 @@ export interface SettingsScreenProps {
    */
   initialPane?: SettingsPaneId;
   /**
-   * : an add-connection REQUEST TOKEN forwarded from
+   * an add-connection REQUEST TOKEN forwarded from
    * `SettingsDialog`'s always-mounted listener (0 = none, N = the Nth
    * outstanding request). A token rather than a flag or a pane value because
    * the request must re-fire even when everything it maps to is unchanged:
@@ -1361,15 +1366,15 @@ export interface SettingsScreenProps {
    * for the WelcomeScreen embed, which has no dialog to receive the event.
    */
   addConnectionRequest?: number;
-  /** : reports that the pending add request has been handled, so `SettingsDialog` can clear it. */
+  /** reports that the pending add request has been handled, so `SettingsDialog` can clear it. */
   onAddConnectionConsumed?: () => void;
-  /** : the folder list for the scope dropdown; defaults to the preload bridge (absent outside Electron). */
+  /** the folder list for the scope dropdown; defaults to the preload bridge (absent outside Electron). */
   scopeBridge?: ScopeWorkspacesBridge;
   onPaneRequestCancelled?: () => void;
   registerLeaveGuard?: (guard: ((action: () => void, onCancel?: () => void) => void) | null) => void;
 }
 
-/** : the one bridge call the scope dropdown needs (opaque ids only). */
+/** the one bridge call the scope dropdown needs (opaque ids only). */
 export interface ScopeWorkspacesBridge {
   list(): Promise<ScopeWorkspacesListResult>;
 }
@@ -1419,15 +1424,15 @@ export function SettingsScreen({
   const [stallTimeoutMs, setStallTimeoutMs] = useState("");
   const [maxTurns, setMaxTurns] = useState("");
   const [subagentMaxTurns, setSubagentMaxTurns] = useState("");
-  // : undefined = absent in settings (default OFF); a toggle sets it.
+  // undefined = absent in settings (default OFF); a toggle sets it.
   const [adaptiveTurnBudget, setAdaptiveTurnBudget] = useState<boolean | undefined>(undefined);
-  // : provider retry knobs (ANYCODE_MAX_RETRIES /
+  // provider retry knobs (ANYCODE_MAX_RETRIES /
   // ANYCODE_NETWORK_RETRY_BUDGET_MS mirrors; blank = default).
   const [maxRetries, setMaxRetries] = useState("");
   const [networkRetryBudget, setNetworkRetryBudget] = useState("");
-  // : how long a turn waits for the network before it fails (blank = default 30 min).
+  // how long a turn waits for the network before it fails (blank = default 30 min).
   const [networkWait, setNetworkWait] = useState("");
-  //  /  slice 2: live session-capacity limit fields.
+  // slice 2: live session-capacity limit fields.
   const [sessionMaxTabs, setSessionMaxTabs] = useState("");
   const [sessionPerParent, setSessionPerParent] = useState("");
   const [sessionGlobal, setSessionGlobal] = useState("");
@@ -1441,7 +1446,7 @@ export function SettingsScreen({
   // settings.preview.displayMode reads as "panel" (task default), mirroring
   // main's own displayMode() dep fallback (96-P1) exactly.
   const [previewDisplayMode, setPreviewDisplayMode] = useState<"panel" | "window">("panel");
-  //  stage 4: sibling persisted field — absent
+  // stage 4: sibling persisted field — absent
   // settings.preview.liveReload reads as ON (owner default), mirroring
   // main's own liveReloadEnabled() fallback exactly.
   const [liveReload, setLiveReload] = useState(true);
@@ -1458,7 +1463,7 @@ export function SettingsScreen({
   const [searchQuery, setSearchQuery] = useState("");
   const navRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
-  // : the one scope the MCP/Language servers/Skills/Subagents panes
+  // the one scope the MCP/Language servers/Skills/Subagents panes
   // read and write. Default User; not persisted; shared by the four panes and
   // kept across pane switches and active-tab changes. The selection is an opaque
   // id; the folder list comes from main (`scopeBridge.list`), so the renderer
@@ -1517,7 +1522,7 @@ export function SettingsScreen({
     }
   }, [initialPane]);
 
-  // : the add-connection request drives its OWN navigation, keyed on
+  // the add-connection request drives its OWN navigation, keyed on
   // the request TOKEN rather than on `initialPane`. Both parts matter:
   //
   //  - `setRequestedPane("provider")` — an EXPLICIT request must land on the
@@ -1545,7 +1550,7 @@ export function SettingsScreen({
   // NOT synced back into `requestedPane` itself, so clearing the search
   // restores exactly what was selected before.
   const visiblePaneIds = filterSettingsPanes(searchQuery);
-  // : the rail's section groups; `visiblePanes` flattens them so the
+  // the rail's section groups; `visiblePanes` flattens them so the
   // keyboard walk (`navRefs` index, ArrowUp/Down/Home/End) ignores the headers.
   const railSections = settingsSectionsFor(visiblePaneIds);
   const visiblePanes = railSections.flatMap((section) => section.panes);
@@ -1553,7 +1558,7 @@ export function SettingsScreen({
     ? requestedPane
     : visiblePanes[0]?.id;
 
-  // : the tabs feed the refetch key below (a tab opening or closing
+  // the tabs feed the refetch key below (a tab opening or closing
   // changes the "open" badges and the MCP live join).
   const tabs = useStore(useTabsStore, (s) => s.tabs);
   const tabsKey = tabs.map((tab) => `${tab.tabId}\u0000${tab.workspace}`).sort().join("\n");
@@ -1651,7 +1656,7 @@ export function SettingsScreen({
   const readOnly = snapshot.readOnly;
 
   async function saveTools(): Promise<void> {
-    // /-с2: validate the sessionLimits fields FIRST — a bad
+    // validate the sessionLimits fields FIRST — a bad
     // value refuses the whole save (nothing written) with a field-naming error.
     const limits = buildSessionLimitsPatch(sessionMaxTabs, sessionPerParent, sessionGlobal);
     if ("error" in limits) {
@@ -1721,7 +1726,7 @@ export function SettingsScreen({
     void store.getState().setPatch({ preview: { displayMode: next } });
   }
 
-  /**  stage 4: sibling of the two preview toggles above — same setPatch pattern, deep-merged so the other keys are left untouched. */
+  /** stage 4: sibling of the two preview toggles above — same setPatch pattern, deep-merged so the other keys are left untouched. */
   function toggleLiveReload(): void {
     const next = !liveReload;
     setLiveReload(next);
@@ -1830,7 +1835,7 @@ export function SettingsScreen({
           >
             <div className="settings-pane-content">
             <SettingsPaneBoundary paneId={activePane}>
-            {/* : one scope dropdown above the four config panes. */}
+            {/* one scope dropdown above the four config panes. */}
             {paneHasScope(activePane) && (
               <div className="settings-scope-bar">
                 <ScopeDropdown
@@ -1862,11 +1867,11 @@ export function SettingsScreen({
 
             {activePane === "codex" && <CodexEnginePane onRequestCloseSettings={onClose} />}
 
-            {/* : the engine's proxy is now a REFERENCE into the named
+            {/* the engine's proxy is now a REFERENCE into the named
                 registry, not a URL field — one instance of the same picker the
                 connection drawer and the Network pane's app rung use. Stacked
                 after the pane it belongs to, not patched into CodexEnginePane
-                itself ('s reasoning, unchanged). */}
+ itself (reasoning, unchanged). */}
             {activePane === "codex" && <ProxyRefPicker scope={{ kind: "engine", engine: "codex" }} store={store} />}
 
             {activePane === "claude" && <ClaudeEnginePane />}
@@ -1876,10 +1881,10 @@ export function SettingsScreen({
             {activePane === "permissions" && <PermissionsEditor store={store} />}
 
             {activePane === "permissions" && <TrustedBinariesSection store={store} />}
-            {/* : the default "Full browser access" switch for NEW sessions. */}
+            {/* the default "Full browser access" switch for NEW sessions. */}
             {activePane === "permissions" && <BrowserAccessDefaultSection store={store} />}
 
-            {/* : remembered workspace-trust decisions — a SIBLING
+            {/* remembered workspace-trust decisions — a SIBLING
                 section after TrustedBinariesSection (same rationale: a trust
                 decision is neither a permission rule nor a binary consent).
                 Reads through the workspace-trust IPC, not the settings store. */}
@@ -1999,14 +2004,14 @@ export function SettingsScreen({
 
             {activePane === "vision" && <VisionPane store={store} />}
 
-            {/* : the app rung — the bottom of every ladder — sits above
+            {/* the app rung — the bottom of every ladder — sits above
                 the registry it picks from, so "what does this app use by
                 default" is answered before "what profiles exist". */}
             {activePane === "network" && <ProxyRefPicker scope={{ kind: "app" }} store={store} />}
 
             {activePane === "network" && <ProxyProfilesPane store={store} />}
 
-          {/* : all three panes follow the scope bar above — Global
+          {/* all three panes follow the scope bar above — Global
               mode passes NO tabId (main degrades to a user-only snapshot) and
               the MCP join gets no runtime statuses (neutral details, never
               another tab's live dots); Project mode passes the chosen tab. */}
@@ -2014,7 +2019,7 @@ export function SettingsScreen({
             <McpServersPane servers={mcpLive ? mcpServers : []} tabId={scopeRef} onCountChange={setPaneCount} />
           )}
 
-          {/* /4758: language servers take the same scope; the live
+          {/* language servers take the same scope; the live
               section needs a real tab, so it gets the folder's open tab (if any). */}
           {activePane === "language-servers" && (
             <LanguageServersPane
@@ -2030,13 +2035,13 @@ export function SettingsScreen({
             <SubagentsPane tabId={scopeRef} workspace={scopeEntry?.displayPath} onCountChange={setPaneCount} />
           )}
 
-          {/*  §3.9 (part B): orchestration roles — sits right after
+          {/* §3.9 (part B): orchestration roles — sits right after
               Subagents (the persona/profile registry this builds on). It takes the same scope as the Subagents pane so a same-named
               md profile's override of a role is visible here, not silent. In
               Global mode the active tab still answers "will my route apply in
               the project I have open". */}
           {activePane === "roles" && (scopeRef && !rolesScopeRoot ? <p className="settings-field-hint">{rolesScope?.ref === scopeRef ? "Project unavailable." : "Loading project…"}</p> : <RolesPane tabId={scopeRef ?? activeTabId ?? undefined} projectRoot={rolesScopeRoot} registerGuard={registerRoleGuard} />)}
-          {/*  S1-C: the Plugins pane — NOT scope-bar-dependent (it
+          {/* S1-C: the Plugins pane — NOT scope-bar-dependent (it
               shows every tier at once: managed installs + project plugins of
               the active workspace + legacy dirs); main resolves the workspace
               itself, so the pane takes no props beyond its bridge. */}
@@ -2193,7 +2198,7 @@ export function SettingsScreen({
                     </button>
                   </div>
                 </div>
-                {/*  stage 4: live-reload toggle, same
+                {/* stage 4: live-reload toggle, same
                     role="switch" settings-switch idiom as autoOpen above —
                     file-backed previews follow their artifact on disk. */}
                 <div className="settings-field">
@@ -2261,7 +2266,7 @@ export function SettingsScreen({
                     </button>
                   ) : updateStatus.kind === "available" ? (
                     updateStatus.manualOnly ? (
-                      //  defect 2: darwin has no Developer ID yet — an
+                      // defect 2: darwin has no Developer ID yet — an
                       // in-app Download button would only fail (Squirrel.Mac
                       // rejects the ad-hoc signature mismatch), so this opens
                       // the release page instead of downloading anything.
@@ -2371,7 +2376,7 @@ export interface SettingsDialogProps {
  * Non-intrusive global notice (design §6): a compact fixed banner that shows
  * ONLY for the two states worth surfacing unprompted (`available` /
  * `downloaded`, `shouldShowUpdateBanner`) — text plus a direct action (when
- * downloaded, "Restart to install";  defect 2, when darwin's
+ * downloaded, "Restart to install"; defect 2, when darwin's
  * manual-only `available`, "Open GitHub Releases"), so the update is
  * actionable without ever needing to open Settings. Consent-first
  * throughout: install/download only fire on an explicit click here.
@@ -2442,7 +2447,7 @@ export function SettingsDialog({ open, onClose, store = useSettingsStore }: Sett
   // its own not-yet-mounted effect and drop the pane. Anchoring the listener
   // here guarantees it's already registered before any such pair can fire.
   const [selectedPane, setSelectedPane] = useState<SettingsPaneId | null>(null);
-  // : an outstanding "add connection" request, as a monotonic TOKEN
+  // an outstanding "add connection" request, as a monotonic TOKEN
   // (0 = none). Held HERE (like `selectedPane` above) because this component is
   // unconditionally mounted while `ProviderSettings` only exists once the
   // dialog is open on the Provider pane — so a request that lands before that
@@ -2466,7 +2471,7 @@ export function SettingsDialog({ open, onClose, store = useSettingsStore }: Sett
     return () => window.removeEventListener(SETTINGS_SELECT_PANE_EVENT, onSelectPane);
   }, []);
 
-  // : the dedicated add-connection seam. Same always-mounted
+  // the dedicated add-connection seam. Same always-mounted
   // lifetime as the pane-select listener above, so the request is captured
   // before the dialog has had a chance to open. `applyAddConnectionRequest`
   // selects the Provider pane AND bumps the token; the token — not the pane,
@@ -2484,7 +2489,7 @@ export function SettingsDialog({ open, onClose, store = useSettingsStore }: Sett
     return store.getState().subscribeUpdates();
   }, [store]);
 
-  //  W11-FIX (W13 live-dogfood finding): same one-time,
+  // W11-FIX (W13 live-dogfood finding): same one-time,
   // whole-app-lifetime wiring as `subscribeUpdates` above — a real request
   // outcome's advisory health (main's `applyConnectionHealthEvent`)
   // deliberately never fires the normal settings `onMutation` broadcast, so
@@ -2495,7 +2500,7 @@ export function SettingsDialog({ open, onClose, store = useSettingsStore }: Sett
     return store.getState().subscribeProviderHealth();
   }, [store]);
 
-  // : same one-time wiring as health above — main's throttled
+  // same one-time wiring as health above — main's throttled
   // `lastQuota` write (connection-quota.ts) never fires the settings
   // `onMutation` broadcast either, so without this a quota line painted live
   // in the renderer's in-memory snapshot would vanish on the next snapshot
@@ -2546,7 +2551,7 @@ export function SettingsDialog({ open, onClose, store = useSettingsStore }: Sett
         className="settings-dialog"
         aria-label="Settings"
         onCancel={(event) => {
-          //  item 4: React propagates the non-bubbling native `cancel`
+          // item 4: React propagates the non-bubbling native `cancel`
           // up the REACT tree, so a nested ConnectionDrawer's Escape also lands
           // here — act only when THIS dialog is the cancel's own target, so the
           // drawer's Escape closes only the drawer, never Settings from under it.

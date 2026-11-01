@@ -1,6 +1,6 @@
 /**
  * telegram-remote: talk to your shared AnyCode sessions from one Telegram chat
- *. AnyCode runs this as a plugin service after you consent to it.
+ * AnyCode runs this as a plugin service after you consent to it.
  * Zero dependencies: Node built-ins and global fetch only.
  *
  * Secrets arrive in the environment (AnyCode resolves `${secret:NAME}` from its

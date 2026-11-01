@@ -61,7 +61,7 @@ export const KEYMAP: readonly KeyBinding[] = [
   { action: "sidebar.toggle", key: "b", mod: true, shift: false },
   { action: "sidebar.search", key: "f", mod: true, shift: false },
   { action: "mode.focus", key: "m", mod: true, shift: true },
-  // : hide/show the right-side dock (editable like its siblings).
+  // hide/show the right-side dock (editable like its siblings).
   { action: "dock.toggle", key: "\\", mod: true, shift: false },
   { action: "turn.interrupt", key: "escape", mod: false, shift: false, docOnly: true },
 ];

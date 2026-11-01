@@ -1,5 +1,5 @@
 /**
- *  — CollabAgentCardIndex unit tests.
+ * CollabAgentCardIndex unit tests.
  *
  * The index is the session-lifetime correlation seam: registration, reverse
  * agentThreadId -> card mapping, sparse receiver/model merge, independent
@@ -10,7 +10,7 @@
 import { describe, expect, it } from "vitest";
 import { CollabAgentCardIndex } from "./collab-agent-index.js";
 
-describe(" — CollabAgentCardIndex", () => {
+describe("— CollabAgentCardIndex", () => {
   it("registers a card and exposes it plus its reverse receiver mapping", () => {
     const index = new CollabAgentCardIndex();
     const card = index.register("spawn-1", { prompt: "do the thing", model: "gpt-5.4-codex", receiverThreadIds: ["child-1"] });

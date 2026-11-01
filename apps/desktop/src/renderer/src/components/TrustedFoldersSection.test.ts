@@ -1,5 +1,6 @@
 /**
- * Pure-logic tests for TrustedFoldersSection's exported helpers. Same `.test.ts`-only, no-jsdom rationale as TrustedBinariesSection
+ * Pure-logic tests for TrustedFoldersSection's exported helpers (
+ * 4739). Same `.test.ts`-only, no-jsdom rationale as TrustedBinariesSection
  * — the section's JSX is never rendered here, only the pure projections
  * (`trustedFolderRows`, `forgetErrorMessage`) the component and its copy
  * read. The renderer is untrusted (S1): the helpers only ever see the rows

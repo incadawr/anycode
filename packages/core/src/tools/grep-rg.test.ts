@@ -133,7 +133,7 @@ describe("buildTgrepArgs", () => {
   });
 });
 
-describe("shapeRgJsonOutput (extraction from searchWithRipgrep, )", () => {
+describe("shapeRgJsonOutput (extraction from searchWithRipgrep)", () => {
   const ndjson = [
     matchEvent("/repo/a.ts", 1, "const needle = 1;"),
     contextEvent("/repo/a.ts", 2, "const other = 2;"),

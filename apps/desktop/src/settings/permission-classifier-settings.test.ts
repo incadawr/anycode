@@ -1,5 +1,5 @@
 /**
- *  Stage 1: the optional `permissions.classifier` settings key.
+ * Stage 1: the optional `permissions.classifier` settings key.
  * Absent = off and round-trips absent; a valid record parses; an invalid
  * record is dropped ALONE (the classifier stays off) without disturbing the
  * sibling `alwaysAllow` rules. No version bump (additive-optional).

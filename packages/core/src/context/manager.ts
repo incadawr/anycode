@@ -229,7 +229,7 @@ export class ContextManager {
    * tool_call is ever separated from its result. The prefix is summarized via
    * modelPort (text only; tool calls ignored) and the whole history is swapped
    * for [compact_summary user item, ...tail] in one replaceAll. On an empty
-   * prefix — or one consisting only of existing compact_summary items (,
+   * prefix — or one consisting only of existing compact_summary items (
    * a repeated compaction of an already-summarized prefix) — the call is a
    * structural no-op (not a breaker failure). On
    * error/empty-summary/abort the history is untouched and the failure counter
@@ -293,7 +293,7 @@ export class ContextManager {
         if (event.type === "text_delta") {
           summary += event.text;
         } else if (event.type === "stream_retry") {
-          //  review: a mid-stream replay discards the partial
+          // review: a mid-stream replay discards the partial
           // attempt; keeping its text would install a duplicated summary.
           summary = "";
         } else if (event.type === "error") {

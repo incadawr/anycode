@@ -215,11 +215,11 @@ describe("buildSkillCreateRequest", () => {
     });
   });
 
-  // : the create dialog's scope radio is gone — the pane seeds
+  // the create dialog's scope radio is gone — the pane seeds
   // `fields.scope` from the resolved scope-bar mode. The builder contract is
   // unchanged; both write targets pinned.
 
-  it(" Global mode: no tabId + user-scope fields — the scaffold lands in personal skills", () => {
+  it("Global mode: no tabId + user-scope fields — the scaffold lands in personal skills", () => {
     expect(buildSkillCreateRequest(undefined, { name: "s", description: "d", scope: "user" })).toEqual({
       tabId: undefined,
       scope: "user",
@@ -228,7 +228,7 @@ describe("buildSkillCreateRequest", () => {
     });
   });
 
-  it(" Project mode: tabId + project-scope fields — the scaffold lands in the chosen tab's workspace", () => {
+  it("Project mode: tabId + project-scope fields — the scaffold lands in the chosen tab's workspace", () => {
     expect(buildSkillCreateRequest("t1", { name: "s", description: "d", scope: "project" })).toEqual({
       tabId: "t1",
       scope: "project",
@@ -331,11 +331,11 @@ describe("buildSkillsImportApplyRequest", () => {
     expect(request).toEqual({ tabId: "tab-1", scope: "user", ids: ["a"] });
   });
 
-  // : the "Import into" radio is gone — the pane feeds the
+  // the "Import into" radio is gone — the pane feeds the
   // resolved scope-bar mode straight into the builder. Both write targets
   // pinned: Global writes personal skills, Project writes the workspace's.
 
-  it(" Global mode: no tabId + 'user' — imports land in personal skills", () => {
+  it("Global mode: no tabId + 'user' — imports land in personal skills", () => {
     expect(buildSkillsImportApplyRequest(undefined, "user", { a: true })).toEqual({
       tabId: undefined,
       scope: "user",
@@ -343,7 +343,7 @@ describe("buildSkillsImportApplyRequest", () => {
     });
   });
 
-  it(" Project mode: tabId + 'project' — imports land in the chosen tab's workspace", () => {
+  it("Project mode: tabId + 'project' — imports land in the chosen tab's workspace", () => {
     expect(buildSkillsImportApplyRequest("t1", "project", { a: true })).toEqual({
       tabId: "t1",
       scope: "project",
@@ -374,9 +374,9 @@ describe("skillImportResultText", () => {
   });
 });
 
-// ──  S1-C: the plugin group's "Manage in Plugins" link ──
+// ── S1-C: the plugin group's "Manage in Plugins" link ──
 
-describe("plugin group cross-link ( S1-C, design 4732 §6)", () => {
+describe("plugin group cross-link (S1-C, design 4732 §6)", () => {
   it("the plugin-group header carries a Manage-in-Plugins link wired to the settings.open + plugins-pane seam", () => {
     const source = readFileSync(new URL("./SkillsPane.tsx", import.meta.url), "utf8");
     // The group note renders the link, and its dispatch pair is exactly the

@@ -11,7 +11,7 @@ import {
 } from "./role-route.js";
 import type { RoleRouteResolution } from "./role-route.js";
 
-// : the route->request stamping shared by the Agent tool's session
+// the route->request stamping shared by the Agent tool's session
 // tier and the workflow engine's engine-role steps. The field set and the
 // caller-precedence guards are pinned here; agent-session.test.ts pins the
 // Agent tool's end-to-end request.

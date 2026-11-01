@@ -143,7 +143,7 @@ describe("NodeArtifactStore", () => {
   });
 
   describe("containment of the artifact path", () => {
-    it("writes outside a workspace fixture directory (the  §1 decision)", async () => {
+    it("writes outside a workspace fixture directory (the §1 decision)", async () => {
       const store = new NodeArtifactStore(root);
       const { path } = await store.writeToolResultArtifact(request());
       const workspaceFixture = join(tmpdir(), "anycode-artifact-workspace-fixture");

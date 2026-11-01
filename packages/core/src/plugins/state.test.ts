@@ -1,5 +1,5 @@
 /**
- * plugins/state tests ( S1-A, design §3/§4): zod round-trip,
+ * plugins/state tests (S1-A, design §3/§4): zod round-trip,
  * defaults, fail-soft reader (absent → empty+no problem; corrupt/invalid →
  * empty+exactly one problem), atomic writer over the real node adapter, and
  * the serversHash consent primitives (canonical JSON determinism, arg-change
@@ -271,7 +271,7 @@ describe("serversHash / consent (design §4)", () => {
   });
 });
 
-describe("servicesHash / service consent (a)", () => {
+describe("servicesHash / service consent", () => {
   const svc = (over: Record<string, unknown> = {}) => ({
     name: "relay",
     command: "node",
@@ -314,8 +314,8 @@ describe("servicesHash / service consent (a)", () => {
   });
 });
 
-//  part 0: the secret NAMES a service reads are part of its consent definition.
-describe("servicesHash secret refs ( part 0)", () => {
+// part 0: the secret NAMES a service reads are part of its consent definition.
+describe("servicesHash secret refs (part 0)", () => {
   it("servicesHash unchanged for services without secret refs", () => {
     // Golden values captured before the secret-ref material was added.
     expect(

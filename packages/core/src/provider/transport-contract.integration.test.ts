@@ -1,5 +1,5 @@
 /**
- * Cross-transport contract suite ( §0.8/W3): the SAME eight scenarios —
+ * Cross-transport contract suite (§0.8/W3): the SAME eight scenarios —
  * text-only, tool round-trip, parallel tools, abort, retry-before-first-event,
  * mid-stream failure, images, maxOutputTokens — run against all THREE real
  * client stacks (`@ai-sdk/anthropic`, `@ai-sdk/openai-compatible`,
@@ -556,7 +556,7 @@ describe.each(KITS)("cross-transport contract: $transport", (kit) => {
     });
     const flakyBaseUrl = `${await listen(flakyServer)}/v1`;
     try {
-      // : default policy now 8 retries + a 5-min network budget;
+      // default policy now 8 retries + a 5-min network budget;
       // budget pinned off so this test keeps asserting pure count-exhaustion.
       const port = new AiSdkModelPort(
         kit.buildConfig(flakyBaseUrl, { retry: { maxRetries: 3, baseDelayMs: 1, maxDelayMs: 1, stallTimeoutMs: 0, networkRetryBudgetMs: 0 } }),

@@ -47,7 +47,7 @@ export type WorkspaceTrustDecideResult =
   | { ok: true }
   | { ok: false; reason: "invalid" | "unknown_tab" | "no_pending" | "write_failed" };
 
-// : Settings → Permissions lists the remembered trusted/denied
+// Settings → Permissions lists the remembered trusted/denied
 // folders and can forget ONE record. The renderer is untrusted: list carries
 // NO payload, forget carries ONLY a `key` string it previously received from
 // main's list — never a decision, hash, tab id, or arbitrary path. The key is

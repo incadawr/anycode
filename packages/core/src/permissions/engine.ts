@@ -15,7 +15,7 @@
  * write tools already resolve to ask/deny before this step ever sees
  * "allow", and their read-only tools all have needsApproval === false.
  *
- *  addition (honest Edit mode): in edit mode, a Write/Edit whose
+ * addition (honest Edit mode): in edit mode, a Write/Edit whose
  * dispatch-site-resolved target provably sits inside the workspace
  * (`request.workspace`, computed by the dispatcher — see path-containment.ts)
  * is allowed TERMINALLY, before baseRuling and the needsApproval escalation
@@ -31,7 +31,7 @@ export class ModePermissionEngine implements PermissionEngine {
   check(request: PermissionRequest): PermissionRuling {
     const { mode, metadata, toolName } = request;
 
-    //  honest Edit mode: a Write/Edit whose dispatch-site-resolved
+    // honest Edit mode: a Write/Edit whose dispatch-site-resolved
     // target provably sits inside the workspace is allowed TERMINALLY. The
     // early return (before baseRuling and before the needsApproval escalation
     // below) is load-bearing (DV-4): Write/Edit carry needsApproval:true, so
@@ -103,14 +103,14 @@ export class ModePermissionEngine implements PermissionEngine {
 }
 
 /** Tools the edit-mode workspace containment may widen. Literal names, exactly
- * these two ( boundary 2): bridged mcp__* write tools, Bash, and any
+ * these two (boundary 2): bridged mcp__* write tools, Bash, and any
  * future NotebookEdit-class tool keep today's ruling. */
 const WORKSPACE_WRITE_TOOLS: ReadonlySet<string> = new Set(["Write", "Edit"]);
 
 function isContainedWorkspaceWrite(request: PermissionRequest): boolean {
   if (!WORKSPACE_WRITE_TOOLS.has(request.toolName)) return false;
   // The fact proof lives in workspace-policy (shared with the always-allow
-  // rule confinement, ): facts must be absolute real paths
+  // rule confinement): facts must be absolute real paths
   // (fail-closed against a sloppy caller's relative resolvedPath), a
   // degenerate root — its own dirname, POSIX "/", "//", "/x/..", a Windows
   // drive/UNC root — proves nothing (lexical containment would be vacuously

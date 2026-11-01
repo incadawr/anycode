@@ -66,7 +66,7 @@ const stepSchema = z.object({
   agentType: z.string().min(1).max(128, { message: "exceeds 128 characters" }),
   promptTemplate: templateStringSchema,
   dependsOn: z.array(z.string()).optional(),
-  //  follow-up: EXTRA tool names the step's child is opted into
+  // follow-up: EXTRA tool names the step's child is opted into
   // beyond its persona's own list (today: "WebSearch"). Shape-checked here —
   // non-empty strings — and carried through verbatim; the RUNNER intersects
   // it with what boot actually provides, so an unresolvable name is a silent

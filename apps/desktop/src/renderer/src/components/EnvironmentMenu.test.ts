@@ -65,7 +65,7 @@ describe("workspaceLabel", () => {
   });
 });
 
-// ── : Environment-menu status rows (pure derivations) ──
+// ── Environment-menu status rows (pure derivations) ──
 
 describe("formatEnvironmentLspDetail", () => {
   it("renders 'Not configured' for an empty server list", () => {

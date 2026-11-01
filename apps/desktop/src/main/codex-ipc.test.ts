@@ -217,7 +217,7 @@ describe("createCodexOnboardingController.pickBinary", () => {
   });
 });
 
-describe("createCodexOnboardingController.useBinary ( — Use restricted to listed candidates)", () => {
+describe("createCodexOnboardingController.useBinary (Use restricted to listed candidates)", () => {
   /** A deps bag whose discovery seam lists exactly the given alternates. */
   const depsListing = (alternates: Array<{ path: string; source: "env" | "settings" | "path" | "common" | "installed" | "picker" | "none" }>, overrides: Partial<CodexIpcDeps> = {}) =>
     makeDeps({ discoverAlternates: () => alternates, ...overrides });
@@ -585,7 +585,7 @@ describe("custody", () => {
   });
 });
 
-describe("codex profiles control plane (, cut §2/§4)", () => {
+describe("codex profiles control plane (cut §2/§4)", () => {
   /** A doctor fake that answers per-profile, echoing the profile it was run against — the shape the real runner produces. */
   function profileAwareDoctor(statusFor: (profileId: string) => CodexDoctorReport["status"] = () => "ready") {
     return vi.fn(async (_path: string, options?: { profile?: { id: string; codexHome?: string } }): Promise<CodexDoctorReport> => {
@@ -1344,7 +1344,7 @@ it("loginOpenDevicePage opens only the pending device URL held by main, and noth
   expect(openExternal).toHaveBeenCalledTimes(1);
 });
 
-// ── : refresh-before-refuse + spawn-freshness guard ──
+// ── refresh-before-refuse + spawn-freshness guard ──
 
 describe("createCodexOnboardingController — refresh-before-refuse", () => {
   it("re-runs the doctor once when a policy refresh un-blocks the version, caching the FRESH report", async () => {
@@ -1511,7 +1511,7 @@ describe("createCodexOnboardingController.verifySpawnFreshness", () => {
   });
 });
 
-describe("spawn-freshness integration — real refusal refresh + active policy judgment (, supervisor #5, reject #2)", () => {
+describe("spawn-freshness integration — real refusal refresh + active policy judgment (supervisor #5, reject #2)", () => {
   it("ready 0.161.0 -> stamp change + 0.155.0 below old range -> forced network manifest widens -> ready and policy admits 0.155.0", async () => {
     const { mkdtempSync: mk, rmSync: rm, writeFileSync: wf } = await import("node:fs");
     const manifestModule = await import("./codex-manifest.js");

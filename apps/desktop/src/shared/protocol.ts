@@ -51,7 +51,7 @@ import type { LspServerStatus } from "@anycode/core";
 import type { EngineId } from "./engines.js";
 import { ENGINE_IDS } from "./engines.js";
 import type { UsageLimitNotice } from "./usage-limit.js";
-//  срез 3 §2(a): the exact childSessionId shape bound every producer
+// срез 3 §2(a): the exact childSessionId shape bound every producer
 // on the host<->main child-session wire already validates against — reused
 // here rather than re-derived, so the UI wire's cap can never silently drift
 // from the id shape this system actually mints.
@@ -98,11 +98,11 @@ export interface EngineCapabilitiesProjection {
   supportsImages: boolean;
   supportsTasks: boolean;
   supportsFileSnapshots: boolean;
-  /**  (additive wire field): engine can run a manual compaction — gates the Compact slash-menu row. */
+  /** (additive wire field): engine can run a manual compaction — gates the Compact slash-menu row. */
   supportsManualCompact: boolean;
 }
 
-/** One selectable model choice for a non-core engine's draft/mid-session picker (, cut §3.1). */
+/** One selectable model choice for a non-core engine's draft/mid-session picker (cut §3.1). */
 export interface EngineModelChoice {
   supportsFast?: boolean;
   id: string;
@@ -110,7 +110,7 @@ export interface EngineModelChoice {
   efforts?: string[];
 }
 
-/** One selectable permission posture for a non-core engine (, cut §3.1) — engine-side table, never a raw config payload from the renderer. */
+/** One selectable permission posture for a non-core engine (cut §3.1) — engine-side table, never a raw config payload from the renderer. */
 export interface EnginePermissionPreset {
   id: string;
   label: string;
@@ -119,7 +119,7 @@ export interface EnginePermissionPreset {
 
 /**
  * Omitted for legacy core sessions so their historical host_ready wire stays
- * exact. `model`/`permissions` (codex-fixes , cut §3.1) are additive
+ * exact. `model`/`permissions` (codex-fixes, cut §3.1) are additive
  * and optional: absent for core (and for any engine that has not yet wired a
  * model/preset catalog) so this projection's core wire shape is unchanged.
  *
@@ -147,7 +147,7 @@ export interface EnginePresentation {
 
 /**
  * Shell (AnyCode UI chrome) capabilities, independent of the agent-runtime
- * capabilities above (codex-fixes , cut §3.2/§2(f)). Emitted ONLY
+ * capabilities above (codex-fixes, cut §3.2/§2(f)). Emitted ONLY
  * alongside a present `host_ready.engine` (i.e. never for core — core wire
  * stays byte-identical by construction); a renderer that sees no `shell`
  * field treats every shell feature as enabled (legacy core behavior).
@@ -163,8 +163,8 @@ export interface ShellCapabilitiesProjection {
 /**
  * AgentEvent after sanitization: the {type:"error"} variant carries a
  * SerializedError built EXCLUSIVELY from the core event's redacted `safe`
- * descriptor ( W7b-FIX #2) — the raw error never crosses. `retry`
- * ( W8) rides through unchanged from the core event. `notice`
+ * descriptor (W7b-FIX #2) — the raw error never crosses. `retry`
+ * (W8) rides through unchanged from the core event. `notice`
  * (W7b-FIX #2) is the numbers-only usage_limit descriptor the host parses from
  * the raw message at the wire boundary, because the redacted `error.message`
  * the renderer now receives no longer carries the parseable z.ai text. All
@@ -213,10 +213,10 @@ export interface WireHistoryItem {
   id: string;
   createdAt: number;
   kind?: "normal" | "compact_summary" | "microcompact_cleared";
-  /**  срез 2: mirrors core's `HistoryItem.origin` — marks a `role:"user"` item the host injected (a detached child's report), not the human. See that field's own doc. */
+  /** срез 2: mirrors core's `HistoryItem.origin` — marks a `role:"user"` item the host injected (a detached child's report), not the human. See that field's own doc. */
   origin?: "system";
   /**
-   *  causal stamps, mirrored from core's `HistoryItem.turnId`/`step`
+   * causal stamps, mirrored from core's `HistoryItem.turnId`/`step`
    * (buildSessionHistory copies them verbatim). `turnId` = the outer turn
    * UUID (`turn_started.turnId`), `step` = the inner request ordinal within
    * that outer turn (user frame is 0). Absent on every pre-117 item and on
@@ -339,7 +339,7 @@ export interface WireContextBreakdown {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// ── provider-usage audit ( / ) ── durable per-step usage.
+// ── provider-usage audit ── durable per-step usage.
 // On-demand only, exactly like context_breakdown: the host->ui variant
 // (usage_audit) is emitted ONLY in response to a request, and the
 // session_checkpoint.usageAudit field is additive-optional, so no legacy/
@@ -417,7 +417,7 @@ export interface WireCheckpointMeta {
 export type RewindScopeWire = "both" | "files" | "conversation";
 
 /**
- *  срез 3 §2: one live detached (background) child, as pushed to the
+ * срез 3 §2: one live detached (background) child, as pushed to the
  * renderer. Deliberately its own type rather than an import of host/
  * child-session-port.ts's `BackgroundChildSnapshot` (same "Wire"-prefixed,
  * self-contained-projection precedent as `WireCheckpointMeta` above) — the
@@ -451,7 +451,7 @@ export type UiToHostMessage =
       requestId: string;
       text: string;
       images?: ImageAttachment[];
-      //  срезы 2+3 (merged): set ONLY when the renderer is draining a
+      // срезы 2+3 (merged): set ONLY when the renderer is draining a
       // queued detached-child report (tab-registry.ts's dispatchQueuedPrompt,
       // mirror of `QueuedPrompt.origin` — store.ts). Absent for every ordinary
       // human-typed send (Composer, App.tsx's retry offer, automation.ts).
@@ -461,7 +461,7 @@ export type UiToHostMessage =
       // AgentLoop.runTurn) so a reload's `session_history` replay renders the
       // SAME system card — see WireHistoryItem.origin. (2) Presence, срез 3:
       // `session.ts`'s `route()` skips `broker.noteHumanPresent()` for it, so
-      // a background wake-up cannot silently rearm 's unattended latch
+      // a background wake-up cannot silently rearm's unattended latch
       // on an autonomous run nobody is actually attending — a wake-up is not
       // proof anyone is at the screen. Untrusted input: `userMessageSchema`
       // below is the fail-closed authority, not this type comment.
@@ -469,7 +469,7 @@ export type UiToHostMessage =
     } // starts a turn
   | { type: "steer_message"; requestId: string; text: string }
   | { type: "cancel_turn" } // abort the in-flight turn
-  | { type: "network_retry_now" } // : stop waiting for the network and probe now
+  | { type: "network_retry_now" } // stop waiting for the network and probe now
   | { type: "exit_worktree"; cleanup: "auto" | "keep" }
   | {
       type: "permission_response";
@@ -483,7 +483,7 @@ export type UiToHostMessage =
       remember?: { pattern?: string };
     } // MVP UI only ever sends allow/deny (no input editing); 2.2 adds optional `remember`
   | { type: "set_mode"; mode: PermissionMode } // valid between turns AND mid-turn: applies to the next not-yet-taken permission decision; an already-open ask completes under its snapshotted mode
-  //  §3.7: toggle this tab's orchestrate state (a TAB-level flag,
+  // §3.7: toggle this tab's orchestrate state (a TAB-level flag,
   // NOT a PermissionMode — enabling switches the mode to plan + swaps the
   // plan-mode reminder for the orchestrate reminder; disabling restores the
   // remembered pre-orchestrate mode). Between-turns only (busy => silent
@@ -496,7 +496,7 @@ export type UiToHostMessage =
   // `setModelSchema` below (fail-closed). Honored only between turns (Session
   // silently drops it while busy, mirroring set_reasoning_effort).
   | { type: "set_model"; model: string; requestId?: string }
-  // Codex-fixes  (cut §3.3): switch a non-core engine's permission
+  // Codex-fixes (cut §3.3): switch a non-core engine's permission
   // posture. Mirrors set_model's between-turns discipline (a pending-override
   // the engine applies to the NEXT turn/start, cut §2(d)) — untrusted ->
   // validated by `setEnginePresetSchema` below (fail-closed); host-authoritative
@@ -505,7 +505,7 @@ export type UiToHostMessage =
   | { type: "set_engine_preset"; presetId: string }
   | { type: "set_engine_effort"; effort: string }
   | { type: "set_engine_fast"; fast: boolean }
-  //  — swap the active engine between turns; history transplant is
+  // swap the active engine between turns; history transplant is
   // NOT part of this message (the canonical transcript stays; the new engine's
   // native context starts empty and receives a bundled first prompt).
   // Untrusted -> validated by `engineSwitchRequestSchema` below (fail-closed);
@@ -519,14 +519,14 @@ export type UiToHostMessage =
   | { type: "git_command"; requestId: string; command: GitCommand }
   // Renderer Panels sub-slice A: read-only LSP server-status request.
   | { type: "lsp_status_request" }
-  // : payload-less; restarts every crashed language server
+  // payload-less; restarts every crashed language server
   | { type: "lsp_restart_request" }
   // Slice P7.17 (F12, design §2.2): read-only per-category context-token
   // breakdown request. Mirror of lsp_status_request — payload-less, served even
   // mid-turn (contextBreakdown() is a pure read). Sent only when the ctx-meter
   // popover opens.
   | { type: "context_breakdown_request" }
-  //  / : payload-less persistent provider-usage audit
+  // payload-less persistent provider-usage audit
   // request (mirror of context_breakdown_request). Served by the CORE host
   // only — a foreign engine's host never answers (the renderer's list stays
   // null, same posture as an unsupported context_breakdown).
@@ -547,7 +547,7 @@ export type UiToHostMessage =
   // busy-rejects WITH a rewind_result reply while a turn runs, unlike set_model's
   // silent drop — the timeline needs a non-silent refusal).
   | { type: "rewind_request"; requestId: string; checkpointId: string; scope: RewindScopeWire }
-  //  срез 2: acknowledges ONE `child_report` (HostToUiMessage below)
+  // срез 2: acknowledges ONE `child_report` (HostToUiMessage below)
   // by its stable `id` — the renderer sends this the instant it has enqueued
   // (or recognized as an already-queued duplicate of) that report, BEFORE the
   // queue actually drains it onto the wire as a real `user_message`. The
@@ -556,13 +556,13 @@ export type UiToHostMessage =
   // doc for why "renderer confirmed enqueue" (not "turn actually sent") is
   // the chosen removal point.
   | { type: "child_report_ack"; id: string }
-  //  срез 3 §2: read-only background-children list request (mirror of
+  // срез 3 §2: read-only background-children list request (mirror of
   // task_list_request — payload-less, served even mid-turn: listing the
   // host's own in-memory registry is a pure read). This slice wires only the
   // data + command on the wire, purposely NOT a renderer surface (design
   // mandate: no new panel here, a later slice draws it).
   | { type: "background_children_request" }
-  //  срез 3 §2(a): cancel ONE detached child by id (mirror of
+  // срез 3 §2(a): cancel ONE detached child by id (mirror of
   // task_kill_request's shape). Untrusted -> validated by
   // `backgroundChildCancelRequestSchema` below.
   | { type: "background_child_cancel_request"; requestId: string; childSessionId: string };
@@ -595,17 +595,17 @@ export type HostToUiMessage =
       effortAdjustment?: { from: ReasoningEffort; to: ReasoningEffort };
       availableEffortLevels?: ReasoningEffort[];
       /**
-       *  W2: live image-input verdict for the CURRENT model (Session's
+       * W2: live image-input verdict for the CURRENT model (Session's
        * `imageInputEnabled` closure over the active model). A MODEL-level fact,
        * not an engine capability, so it rides beside the `engine` block rather
        * than inside EngineCapabilitiesProjection (`engine.capabilities.
        * supportsImages` stays the engine-level verdict). Additive + optional:
        * absent (older host / no seam wired) means the renderer applies no
-       * model-level attachment gating — exactly the pre- behavior.
+       * model-level attachment gating — exactly the behavior.
        */
       imageInput?: boolean;
       /**
-       *  срез C (plan §1.3/§4): live verdict for the vision-fallback
+       * срез C (plan §1.3/§4): live verdict for the vision-fallback
        * recognizer — true exactly when `settings.recognizer` currently
        * resolves to a usable endpoint, independent of `imageInput` above (a
        * blind model can still accept images through the fallback). Additive
@@ -613,11 +613,11 @@ export type HostToUiMessage =
        * seam wired) means the renderer applies no fallback-aware gating.
        */
       imageFallback?: boolean;
-      /** : the active model's context window is the assumed unknown-model fallback (8K). Additive + optional: absent = no hint. */
+      /** the active model's context window is the assumed unknown-model fallback (8K). Additive + optional: absent = no hint. */
       contextWindowAssumed?: boolean;
       modelSettingsConnectionId?: string | null;
       /**
-       * : the engine's live steering verdict over the
+       * the engine's live steering verdict over the
        * deferred-injection slot (core) / app-server steer (codex). Absent on
        * legacy hosts and engines without the seam (claude) — the renderer then
        * keeps the prompt-queue fallback for sends while running.
@@ -634,7 +634,7 @@ export type HostToUiMessage =
   // 2.1.5; task 2.1.1 adds only the type + a no-op reducer branch.
   | { type: "agent_message"; delivery: AgentDelivery }
   /**
-   *  rework (Opus defect 1): a UI steer_message whose frame
+   * rework (Opus defect 1): a UI steer_message whose frame
    * could NOT be delivered into the running turn (idle/pre-loop, Stop,
    * ceiling/deadline refusal, superseded, host shutting down). Core-engine
    * UI steers only — never emitted for agent-to-agent envelopes. The
@@ -685,7 +685,7 @@ export type HostToUiMessage =
   | { type: "turn_started"; requestId: string; turnId: string; startedAt?: number }
   | { type: "turn_rejected"; requestId: string; reason: "busy" | "not_ready" | "unsupported_images" }
   /**
-   *  additive envelope step: the inner request ordinal within the
+   * additive envelope step: the inner request ordinal within the
    * outer turn, mirroring core's `turn_start.turn` (1-based; the loop resets
    * it per outer turn). Sent ONLY by a core-engine host (session.ts stamps it
    * when `engine.id === "core"`); absent on every foreign-engine and legacy
@@ -697,7 +697,7 @@ export type HostToUiMessage =
    */
   | { type: "agent_event"; turnId: string; step?: number; attempt?: number; event: WireAgentEvent; /** Host completion time for a loop_end. */ at?: number }
   /**
-   * : the host's authoritative pending-prompt push (sendDirect,
+   * the host's authoritative pending-prompt push (sendDirect,
    * regenerated on every ui_ready — never ring-buffered). Present iff an
    * outer turn with a user prompt is live AND its durable user item
    * (turnId, step 0) has not landed yet. A null payload (fields absent)
@@ -722,7 +722,7 @@ export type HostToUiMessage =
       images?: ImageAttachment[];
       outcome?: "settled" | "cancelled";
     }
-  //  control/accounting checkpoint: ONE snapshot message re-sent on
+  // control/accounting checkpoint: ONE snapshot message re-sent on
   // EVERY ui_ready (sendDirect, regenerated per connect — never
   // ring-buffered) so a reconnecting renderer recovers exactly the wire
   // state the replay ring used to hold — even after the ring has overflowed
@@ -744,12 +744,12 @@ export type HostToUiMessage =
   //     parked — an absent field never resurrects a settled ask.
   | {
       /**
-       *  acceptance defect 1: the live PARTIAL stream checkpoint. The
+       * acceptance defect 1: the live PARTIAL stream checkpoint. The
        * agent_event replay ring is bounded (REPLAY_BUFFER_CAP); a long model
        * stream (>CAP deltas between two ui_readys) evicts the step's
        * `text_start`, and the renderer's `text_delta` handler DROPS deltas
        * with no open stream block — the visible transcript froze at the last
-       * durable assistant item (the original  symptom, surviving the
+       * durable assistant item (the original symptom, surviving the
        * snapshot rebuild). This field re-asserts the CURRENTLY-OPEN streams
        * on the session_checkpoint (sendDirect, regenerated per ui_ready —
        * never ring-buffered), so the reconnecting renderer re-opens its
@@ -776,7 +776,7 @@ export type HostToUiMessage =
       /** Current core attempt, retained even while no stream is open. */
       currentAttempt?: { step: number; attempt: number };
       /**
-       *  acceptance defect 2: the LIVE outer turn's id at push time
+       * acceptance defect 2: the LIVE outer turn's id at push time
        * (`Session.turnId`), absent when no turn is running. The renderer's
        * history-cut replay guard uses it to exempt the CURRENT turn's events
        * from below-cut suppression when the truncated snapshot carries no
@@ -787,7 +787,7 @@ export type HostToUiMessage =
        */
       liveTurnId?: string;
       /**
-       *  acceptance defect 1 (strict ownership vs new turns): the
+       * acceptance defect 1 (strict ownership vs new turns): the
        * ids of every outer turn the truncated session_history cut away
        * ENTIRELY (present in the engine's durable history, absent from the
        * snapshot, and not the live turn). Computed by the host at push time
@@ -808,7 +808,7 @@ export type HostToUiMessage =
       /** Most recently admitted turn, including one that ended without usage. */
       latestTurnId?: string;
       /**
-       *  supervisor correction defect 1: toolCallIds whose
+       * supervisor correction defect 1: toolCallIds whose
        * `tool_execution_start` has been emitted and whose `tool_result` has
        * not landed yet (host-side fold at emission time). The assistant item
        * carrying the call is durable BEFORE dispatch, so a reconnecting
@@ -847,7 +847,7 @@ export type HostToUiMessage =
       countedSteps?: string[];
       contextUsage?: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" };
       /**
-       *  / : the SQLite-backed provider-usage audit slice
+       * the SQLite-backed provider-usage audit slice
        * for THIS session (last completed step + honest totals + step count),
        * read from the durable provider_usage table — the record that
        * survives a host restart, unlike sessionTokens above (process
@@ -896,7 +896,7 @@ export type HostToUiMessage =
       content: string | null;
       truncated: boolean;
     } // content:null = unreadable / too large
-  //  / : trusted provider-usage audit list, sent ONLY in
+  // trusted provider-usage audit list, sent ONLY in
   // response to a usage_audit_request (no zod, precedent context_breakdown).
   // No legacy/byte-locked flow emits one, so automation/replay snapshots stay
   // byte-identical. Core host only; a foreign host never answers.
@@ -907,7 +907,7 @@ export type HostToUiMessage =
       totals: WireUsageAuditTotals | null;
     }
   | { type: "mode_changed"; mode: PermissionMode }
-  //  §3.7: host ack for `set_orchestrate` (trusted, no zod,
+  // §3.7: host ack for `set_orchestrate` (trusted, no zod,
   // precedent mode_changed). Carries the resulting state so the renderer's
   // tab-scoped orchestrateActive stays in sync even across a reconnect.
   | { type: "orchestrate_changed"; enabled: boolean }
@@ -919,7 +919,7 @@ export type HostToUiMessage =
   // reasoning-capable (the UI then hides the effort segment). Emitted ONLY in
   // response to a `set_model` — no legacy/byte-locked flow sends one, so the
   // automation byte-snapshots stay untouched (design slice-P7.15-cut.md §2.5).
-  // `imageInput` ( W2, additive + optional, precedent
+  // `imageInput` (W2, additive + optional, precedent
   // availableEffortLevels): the live image-input verdict re-read for the NEW
   // model, so the renderer can re-gate attachments upfront on a mid-session
   // vision -> non-vision switch. Absent (older host) = no model-level gating.
@@ -936,9 +936,9 @@ export type HostToUiMessage =
       reasoningEffort: ReasoningEffort;
       availableEffortLevels?: ReasoningEffort[];
       imageInput?: boolean;
-      /**  срез C: the fallback verdict re-read for the NEW model, same precedent as `imageInput` above. */
+      /** срез C: the fallback verdict re-read for the NEW model, same precedent as `imageInput` above. */
       imageFallback?: boolean;
-      /** : the active model's context window is the assumed unknown-model fallback (8K). Additive + optional: absent = no hint. */
+      /** the active model's context window is the assumed unknown-model fallback (8K). Additive + optional: absent = no hint. */
       contextWindowAssumed?: boolean;
     }
   | { type: "mode_change_rejected"; reason: string }
@@ -958,7 +958,7 @@ export type HostToUiMessage =
   // host->renderer, no zod (only the untrusted UiToHostMessage direction is
   // validated), precedent engine_switched/engine_settings_changed.
   | { type: "engine_capabilities_changed"; capabilities: EngineCapabilitiesProjection }
-  // Codex-fixes  (cut §3.3): host acknowledges a `set_engine_preset` or a
+  // Codex-fixes (cut §3.3): host acknowledges a `set_engine_preset` or a
   // `set_model` for an engine with native controls — trusted, no zod, precedent
   // mode_changed/model_changed. `appliesFrom:"next_turn"` is the ONLY value today
   // (cut §2(d): preset/model changes apply to the next turn/start, never
@@ -988,14 +988,14 @@ export type HostToUiMessage =
       state?: "pending" | "applied";
       appliesFrom: "next_turn";
     }
-  // : host acknowledges a successful in-place engine swap. Trusted
+  // host acknowledges a successful in-place engine swap. Trusted
   // host->renderer, no zod (only the untrusted UiToHostMessage direction is
   // validated), precedent model_changed above. Emitted only AFTER the new
   // engine is live and the old one disposed, so receiving it means every later
   // message flows through the replacement engine.
   | { type: "context_usage_checkpoint"; contextUsage: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" } | null }
   | { type: "engine_switched"; requestId: string; engine: EngineId; previousEngine: EngineId }
-  // : non-silent refusal for engine_switch_request — mirror of
+  // non-silent refusal for engine_switch_request — mirror of
   // rewind_result's failure shape (the UI must be able to show WHY the switch
   // did not happen: turn running, child attached, same engine, factory absent
   // or the factory's own error e.g. "codex not signed in").
@@ -1026,19 +1026,19 @@ export type HostToUiMessage =
   | { type: "lsp_status"; servers: LspServerStatus[] }
   // Renderer Panels sub-slice B: trusted static command-hook config list.
   | { type: "hooks_list"; hooks: CommandHookDeclaration[]; configError?: string }
-  // : the project folder's own spawn declarations are held until the
+  // the project folder's own spawn declarations are held until the
   // user decides (display-only rows; the answer goes back as a tab id + decision).
   | { type: "workspace_trust_required"; state: "unknown" | "changed"; workspace: string; items: WorkspaceTrustItemWire[] }
   // Renderer Panels sub-slice D: trusted background-task snapshots and output chunks.
   | { type: "task_list"; tasks: BackgroundTaskSnapshot[] }
   | { type: "task_output"; taskId: string; snapshot: BackgroundTaskSnapshot | null; newOutput: string }
   | { type: "task_kill_result"; requestId: string; ok: boolean; reason?: string }
-  //  срез 3 §2: trusted snapshot of the host's own live
+  // срез 3 §2: trusted snapshot of the host's own live
   // background-children registry (host/child-session-port.ts). Pushed on
   // ui_ready (mirror of hooks_list/task_list) and in response to a
   // background_children_request; no zod schema (host->renderer direction).
   | { type: "background_children"; children: WireBackgroundChild[] }
-  //  срез 3 §2(a): trusted result of one background_child_cancel_request
+  // срез 3 §2(a): trusted result of one background_child_cancel_request
   // (mirror of task_kill_result). `ok:false` covers an unknown/already-finished
   // childSessionId — not a refusal on the merits.
   | { type: "background_child_cancel_result"; requestId: string; ok: boolean; reason?: string }
@@ -1070,7 +1070,7 @@ export type HostToUiMessage =
       restoredPaths: number | null;
       safetyCheckpointId?: string;
     }
-  //  срез 1/2: delivers a DETACHED child session's terminal report to
+  // срез 1/2: delivers a DETACHED child session's terminal report to
   // its parent. `text` is the FULL pre-formatted `<task-notification>` block
   // (@anycode/core's formatChildTaskNotification) — already XML-escaped and
   // length-capped; the renderer treats it as opaque prompt text and enqueues
@@ -1101,12 +1101,12 @@ export type HostToUiMessage =
         status: "completed" | "max_turns" | "cancelled" | "error";
         durationMs: number;
         finalTurnFinishReason?: "length";
-        /** /4055 cross-review F2: the child's ceiling summary (additive; absent when the ceiling never tripped). */
+        /** cross-review F2: the child's ceiling summary (additive; absent when the ceiling never tripped). */
         ceiling?: ChildCeilingSummary;
       };
     }
-  //  срез C (plan §1.3): fires strictly AFTER a live recognizer-config
-  // push (main's RecognizerConfigChanged,  E1) has been COMMITTED
+  // срез C (plan §1.3): fires strictly AFTER a live recognizer-config
+  // push (main's RecognizerConfigChanged, E1) has been COMMITTED
   // host-side — applied immediately while idle, or deferred to the very next
   // busy->idle boundary and applied there, last-pending-value-wins (mirrors
   // model_changed's own imageInput re-read, never a bare echo of the
@@ -1161,10 +1161,10 @@ export const userMessageSchema = z
       )
       .max(IMAGE_MAX_PER_MESSAGE)
       .optional(),
-    //  срезы 2+3 (merged): renderer-set only when draining a queued
+    // срезы 2+3 (merged): renderer-set only when draining a queued
     // detached-child report (QueuedPrompt.origin). Validated here like every
     // other untrusted field — and unlike срез 2's original reading, a mis-set
-    // value is NOT display-only: it also suppresses 's human-presence
+    // value is NOT display-only: it also suppresses's human-presence
     // signal (see the UiToHostMessage union's own doc), so fail-closed
     // validation here is load-bearing, not just defense in depth.
     origin: z.literal("system").optional(),
@@ -1177,7 +1177,7 @@ export const cancelTurnSchema = z
   })
   .strict();
 
-/** : the "Retry now" control on a turn parked in "waiting for network". */
+/** the "Retry now" control on a turn parked in "waiting for network". */
 export const networkRetryNowSchema = z
   .object({
     type: z.literal("network_retry_now"),
@@ -1218,7 +1218,7 @@ export const setReasoningEffortSchema = z.object({
   requestId: z.string().min(1).max(128).optional(),
 }).strict();
 
-//  §3.7: untrusted set_orchestrate. Mirror of setModeSchema —
+// §3.7: untrusted set_orchestrate. Mirror of setModeSchema —
 // literal + boolean, strict; nothing else rides. Fail-closed in route().
 export const setOrchestrateSchema = z
   .object({
@@ -1240,7 +1240,7 @@ export const setModelSchema = z
   })
   .strict();
 
-// Codex-fixes  (cut §3.3): untrusted set_engine_preset. Mirrors
+// Codex-fixes (cut §3.3): untrusted set_engine_preset. Mirrors
 // setModelSchema's bounded-length discipline (defense in depth — the route()
 // handler is the actual membership-against-the-engine's-own-table authority,
 // cut §2(d) "host-authoritative"); a hostile renderer cannot ship more than a
@@ -1256,7 +1256,7 @@ export const setEngineEffortSchema = z
   .object({ type: z.literal("set_engine_effort"), effort: z.string().min(1).max(32) })
   .strict();
 
-// : untrusted engine_switch_request. Mirrors setEnginePresetSchema's
+// untrusted engine_switch_request. Mirrors setEnginePresetSchema's
 // bounded-length discipline; `engine` is validated against ENGINE_IDS (the same
 // table isEngineId uses) so a hostile renderer cannot ship an unknown engine id,
 // let alone a raw factory/config object. The host re-checks id validity against
@@ -1336,7 +1336,7 @@ export const lspStatusRequestSchema = z
   })
   .strict();
 
-// : payload-less restart request (mirror of
+// payload-less restart request (mirror of
 // lspStatusRequestSchema). Untrusted ui->host direction, so it rides zod even
 // though it carries no data — fail-closed on any extra key under .strict().
 export const lspRestartRequestSchema = z
@@ -1352,7 +1352,7 @@ export const contextBreakdownRequestSchema = z
   })
   .strict();
 
-//  / : payload-less usage-audit request (mirror of
+// payload-less usage-audit request (mirror of
 // contextBreakdownRequestSchema). Untrusted ui->host direction, so it rides
 // zod even though it carries no data — fail-closed on any extra key.
 export const usageAuditRequestSchema = z
@@ -1361,7 +1361,7 @@ export const usageAuditRequestSchema = z
   })
   .strict();
 
-// : payload-less manual-compaction request (mirror of
+// payload-less manual-compaction request (mirror of
 // contextBreakdownRequestSchema). Fail-closed on any extra key under .strict().
 export const compactRequestSchema = z
   .object({
@@ -1411,7 +1411,7 @@ export const rewindRequestSchema = z
   })
   .strict();
 
-//  срез 2: untrusted ack for ONE `child_report` — see that
+// срез 2: untrusted ack for ONE `child_report` — see that
 // HostToUiMessage variant's own doc for the id's provenance (spawnToolCallId).
 export const childReportAckSchema = z
   .object({
@@ -1420,7 +1420,7 @@ export const childReportAckSchema = z
   })
   .strict();
 
-//  срез 3 §2: payload-less background-children list request (mirror
+// срез 3 §2: payload-less background-children list request (mirror
 // of taskListRequestSchema). Fail-closed on any extra key under .strict().
 export const backgroundChildrenRequestSchema = z
   .object({
@@ -1428,7 +1428,7 @@ export const backgroundChildrenRequestSchema = z
   })
   .strict();
 
-//  срез 3 §2(a): untrusted background-child cancel request (mirror
+// срез 3 §2(a): untrusted background-child cancel request (mirror
 // of taskKillRequestSchema). `childSessionId` is capped at CHILD_ID_MAX_CHARS
 // — the exact bound `shared/child-sessions.ts`'s own `isValidChildId` enforces
 // on every childSessionId this system ever mints, reused here rather than

@@ -1,5 +1,5 @@
 /**
- * OpenAI Responses transport ( §0.3, `openai-responses`): a thin wrapper
+ * OpenAI Responses transport (§0.3, `openai-responses`): a thin wrapper
  * over `@ai-sdk/openai`'s `createOpenAI(...).responses(modelId)`, targeting the
  * real OpenAI Responses API (`POST /responses`) rather than a generic
  * chat-completions-shaped backend (that is the separate `openai-chat-completions`
@@ -59,7 +59,7 @@ export const OPENAI_RESPONSES_PROVIDER_NAME = "openai";
  * request reaches `fetch`, the SDK-generated empty `Bearer ` and a real header
  * credential are indistinguishable values, so the decision to install the
  * stripping wrapper at all is made here, before that merge, keyed off the
- * PRESENCE of an explicit header rather than its value ( W6-FIX #1).
+ * PRESENCE of an explicit header rather than its value (W6-FIX #1).
  */
 function stripAuthorizationFetch(
   input: Parameters<typeof fetch>[0],
@@ -81,7 +81,7 @@ function hasExplicitAuthorizationHeader(headers: Record<string, string> | undefi
 export function createOpenAIResponsesLanguageModel(config: EndpointConfig, onResponseActivity?: () => void): LanguageModel {
   const shouldStripAmbientAuthorization =
     config.apiKey === undefined && !hasExplicitAuthorizationHeader(config.headers);
-  // : when BOTH wrappers apply, the quota wrapper is the OUTER —
+  // when BOTH wrappers apply, the quota wrapper is the OUTER —
   // stripping sees the final init (Authorization removed before it reaches
   // the wire), quota sees the final response. Dormant unless an observer is
   // set: the conditional spread keeps the options byte-identical when unset.

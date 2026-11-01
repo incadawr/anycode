@@ -1,5 +1,5 @@
 /**
- *  CUT-S3 §3.3: the split layout's right-column stack (layouts C/D —
+ * CUT-S3 §3.3: the split layout's right-column stack (layouts C/D —
  * §0.1 rules these are ONE layout, the head's shape a pure function of stack
  * size, `buildChildStackHead`, child-layout.ts). Purely presentational: head,
  * rows, accordion frame. The expanded row's own surface — a live child

@@ -1,5 +1,5 @@
 /**
- * Transport dispatcher tests ( §0.3). `createLanguageModel` is the ONE
+ * Transport dispatcher tests (§0.3). `createLanguageModel` is the ONE
  * place that maps a transport onto a client factory. All three branches are
  * live (anthropic-messages, openai-chat-completions, openai-responses); an
  * unknown transport smuggled in past the type system must still fail LOUDLY

@@ -1,5 +1,5 @@
 /**
- * Per-run Bash allow-list ( slices 2–3). A decorator PermissionEngine,
+ * Per-run Bash allow-list (slices 2–3). A decorator PermissionEngine,
  * structurally identical to SafeCommandPermissionEngine (safe-command-engine.ts):
  * wraps a base engine and narrows ONLY an "ask" ruling to "allow", terminally,
  * when the request is a Bash command whose argv tokens are prefixed by one
@@ -8,7 +8,7 @@
  * from the base pass through untouched, exactly like every other narrowing layer
  * in this package (SafeCommandPermissionEngine, RuleAwarePermissionEngine).
  *
- * WHY:  slice 1 turned an unattended run's unanswered asks into a fast
+ * WHY: slice 1 turned an unattended run's unanswered asks into a fast
  * deny (the permission-broker "unattended" latch, host/permission-broker.ts)
  * instead of a 120s wait per call — but a fast deny is still a deny. An
  * autonomous run still cannot pass its own gate (`pnpm test`, `pnpm
@@ -135,7 +135,7 @@ function isPrefixMatch(entry: RunAllowBashEntry, candidate: readonly string[]): 
 }
 
 /**
- * The ONLY separators a compound line may be built from ( slice 3):
+ * The ONLY separators a compound line may be built from (slice 3):
  * `&&`, `||`, `;`, `|`, and newline. Single `&` (backgrounding) and `|&`
  * (pipe-with-stderr) are deliberately EXCLUDED: `splitBashSegments` reads `|&`
  * as `|` + control `&`, so the stray `&` kind fails this set and every `|&`

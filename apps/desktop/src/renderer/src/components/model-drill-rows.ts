@@ -1,5 +1,5 @@
 /**
- *  cut-2 §D4/§D3 — the drill-down picker's pure decision layer for a
+ * cut-2 §D4/§D3 — the drill-down picker's pure decision layer for a
  * RUNNING session (the New Session screen's own equivalent lives inline in
  * StartScreen.tsx over `start-model-picker.ts`).
  *
@@ -90,7 +90,7 @@ export interface SessionDrillRows {
 }
 
 /**
- *  cut-2 §D4: the drill-down's rows for a running tab.
+ * cut-2 §D4: the drill-down's rows for a running tab.
  *
  * The group set spans EVERY connected connection (that is the cut's whole
  * point — a running session can move to another provider), with the tab's own
@@ -111,7 +111,7 @@ export function buildSessionDrillRows(args: SessionDrillArgs): SessionDrillRows 
   });
   const popular = buildStartModelPopularRows(groups, args.recentModelIds, args.currentConnectionId);
   const currentConnection = args.connections.find((connection) => connection.id === args.currentConnectionId);
-  // : a model the catalog does not know falls back to the
+  // a model the catalog does not know falls back to the
   // connection's live-declared capabilities, when the fetch persisted any.
   const efforts = Object.hasOwn(args, "availableEffortLevels") ? args.availableEffortLevels : startModelEffortLevels(
     currentConnection?.providerId,
@@ -169,7 +169,7 @@ export type SessionDrillPick =
   | { kind: "rebind"; connectionId: string; modelId: string };
 
 /**
- *  cut-2 §D3: the verb behind a picked pair.
+ * cut-2 §D3: the verb behind a picked pair.
  *
  * The tab's OWN connection keeps the pre-existing, cheap path — `set_model` on
  * the live host, no respawn, no transcript reload. Any other connection means
@@ -204,7 +204,7 @@ export interface RebindEffortDecision {
 }
 
 /**
- *  cut-2 §D3 (spec §4 item 4 — "nothing is substituted silently"): the
+ * cut-2 §D3 (spec §4 item 4 — "nothing is substituted silently"): the
  * effort a rebind writes onto the target connection.
  *
  * The vocabulary belongs to the MODEL, so the question is only ever whether
@@ -221,7 +221,7 @@ export interface RebindEffortDecision {
  * A session with no effort at all (`currentEffort === undefined`) has nothing
  * to lose, so it is never reported as dropped. Exported for unit testing.
  *
- * : `targetModelCapabilities` carries the TARGET connection's
+ * `targetModelCapabilities` carries the TARGET connection's
  * live-declared capabilities for the target model — the vocabulary the host
  * will consult when the catalog does not know the model.
  */

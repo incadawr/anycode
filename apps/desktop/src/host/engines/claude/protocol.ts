@@ -251,7 +251,7 @@ export function isClaudeStreamMessageType(type: string): boolean {
  *
  * `tool_progress` — a heartbeat the CLI emits every ~30s while a tool call
  * (observed: an MCP call) is in flight, live evidence in
- * `working-docs/tasks/.probes.md` ("Блокер, которого в плане нет").
+ * ("Блокер, которого в плане нет").
  * Before this list existed, this exact frame fell through claude-client.ts's
  * dispatch() to the unrecognized-type branch and terminalized the session
  * thirty seconds into the first long MCP call.

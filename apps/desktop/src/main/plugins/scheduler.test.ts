@@ -1,5 +1,5 @@
 /**
- * Tests for the plugins update scheduler ( S1-B): jittered
+ * Tests for the plugins update scheduler (S1-B): jittered
  * startup delay, ~24h periodic re-arm with re-rolled jitter, gates
  * evaluated at every fire, fail-soft on a throwing pass, manual runs not
  * disturbing the cadence, stop() cancelling timers. Deterministic via

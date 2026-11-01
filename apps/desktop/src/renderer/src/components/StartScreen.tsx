@@ -45,7 +45,7 @@ import { resolveProfileRoles, rolesPatch } from "../../../shared/role-profiles.j
  * StartScreen.test.ts exercises these directly rather than rendering the
  * component.
  *
- *  (composer parity): the draft now carries image attachments
+ * (composer parity): the draft now carries image attachments
  * (`draft.images`) and a non-core reasoning-effort pick (`draft.engineEffort`,
  * tabs-store.ts) alongside the pre-existing model/mode/preset/profile picks.
  * Images are attach/paste only (no drag-and-drop — out of this task's DoD)
@@ -83,7 +83,7 @@ import {
   startModelMenuFlipsUp,
   startModelMenuMaxHeightPx,
 } from "./start-model-picker.js";
-//  cut-2 §D4 (DoD 6): the drill-down popover's MARKUP is one shared
+// cut-2 §D4 (DoD 6): the drill-down popover's MARKUP is one shared
 // component both pickers render (this screen and a running session's chip) —
 // the rows, the level and the placement are still decided here, since which
 // pair a DRAFT means is this screen's business alone.
@@ -172,7 +172,7 @@ export function computeProjectLabel(workspace: string | null): string {
 /**
  * §3-D3: Send stays disabled until a project is chosen and the draft has
  * something to send — mirrors Composer's `sendDisabledReason`, reusing the
- * SAME `hasSendableDraft` predicate (: an attached image alone, with
+ * SAME `hasSendableDraft` predicate (an attached image alone, with
  * no typed text, is sendable there and must be here too — no second
  * "is this draft empty" rule). `imageCount` defaults to 0 so every pre-
  * existing call site (none of which knew about images) keeps its exact
@@ -293,7 +293,7 @@ export function computeModelChipDisplay(
 ): ModelChipDisplay {
   const isDefault = draftModel === null;
   const modelId = draftModel ?? resolvedDefault;
-  // : no model resolved at all (no draft pick and no provider
+  // no model resolved at all (no draft pick and no provider
   // default) is not a name to fall back to the raw — often empty — id; it is a
   // call to action, and the empty popover renders the matching "Add connection"
   // button. `modelId`/`isDefault` are preserved untouched.
@@ -322,7 +322,7 @@ export function pickModelForDraft(modelId: string, deps: ModelPickDeps = default
 }
 
 /**
- * : the model popover's decision logic (group building, the popular
+ * the model popover's decision logic (group building, the popular
  * picks, the per-model effort vocabulary, the popover's geometry) lives in
  * `start-model-picker.ts` — the owner live smoke turned it into enough pure
  * rules to warrant its own module and its own test file. These re-exports
@@ -353,7 +353,7 @@ export function effortLabel(level: string): string {
 
 /**
  * Normalizes a grouped model-menu row's connection id to what actually gets
- * submitted on selection ( cut-1 stage B, §3 item 3): the active
+ * submitted on selection (cut-1 stage B, §3 item 3): the active
  * connection's own group submits `undefined` — `SessionDraft.connectionId`'s
  * "unset ⇒ active connection" convention means a redundant explicit pin of
  * today's already-active connection is never written — every other
@@ -364,7 +364,7 @@ export function startModelRowConnectionId(rowConnectionId: string, activeConnect
 }
 
 /**
- * A grouped model-menu row's click handler ( cut-1 stage B): sets
+ * A grouped model-menu row's click handler (cut-1 stage B): sets
  * BOTH axes of the pair in one call — `setDraftModel` for the model id, and
  * `setDraftConnectionId` for the row's connection (already normalized by the
  * caller via `startModelRowConnectionId`) — the two axes always move
@@ -384,7 +384,7 @@ export function selectStartModelRow(
 }
 
 /**
- *  (cut §2(d)/§3.8): the draft's own copy of the frozen Codex
+ * (cut §2(d)/§3.8): the draft's own copy of the frozen Codex
  * permission-preset table. Duplicated on purpose from
  * `host/engines/codex/presets.ts`'s `codexPresetChoices()` output — the same
  * "small table crosses the `shared/**` freeze as a documented duplicate"
@@ -401,7 +401,7 @@ export const CODEX_DRAFT_PRESETS: readonly EnginePermissionPreset[] = [
     id: "ask",
     label: "Ask for approval",
     // Mirrors host/engines/codex/presets.ts verbatim (honest wording,
-    // ): see that table's own comment.
+    // see that table's own comment.
     description: "Codex runs commands itself in a sandbox: this workspace and temp dirs (/tmp, $TMPDIR) are writable without a prompt; AnyCode asks you only when codex itself requests approval.",
   },
   {
@@ -471,7 +471,7 @@ export function resolveClaudeDraftModel(draftModel: string | null, available: re
 }
 
 /**
- * Resolves the Codex draft's displayed/selected model id. : the
+ * Resolves the Codex draft's displayed/selected model id. the
  * implementation lives in `codex-draft-model.ts` (shared with
  * start-session.ts's submit decision, no import cycle); this local binding
  * + re-export keeps the historical import path and test surface stable.
@@ -481,7 +481,7 @@ export function resolveClaudeDraftModel(draftModel: string | null, available: re
 export { resolveCodexDraftModel };
 
 /**
- * : a non-core draft's effort vocabulary for the CURRENT model —
+ * a non-core draft's effort vocabulary for the CURRENT model —
  * mirrors `EngineModelMenu`'s own internal `efforts` lookup
  * (EngineControls.tsx) byte-for-byte, so this file and that component never
  * disagree about which models even have an effort row. `[]` when the model
@@ -640,8 +640,8 @@ export function StartScreen({ onToast }: StartScreenProps) {
   // Core is always the local compatibility choice. Codex is appended only
   // after main returns its already-validated availability verdict.
   const [availableEngines, setAvailableEngines] = useState<readonly EngineId[]>(["core"]);
-  //  (cut §2(d)/§2(g)/§3.8): the doctor-provided Codex model catalog
-  // for the draft picker. : the catalog moved from local component
+  // (cut §2(d)/§2(g)/§3.8): the doctor-provided Codex model catalog
+  // for the draft picker. the catalog moved from local component
   // state into the tabs store (`codexModels`/`setCodexModels`) so the Send
   // button and the automation facade's `startScreenSubmit` — both funnelling
   // through `submitStartDraft` — read ONE source of truth (see the refresh
@@ -676,7 +676,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
   // roles, makes the skip stale.
   const startRolesSkippedRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  // : image attach state. The attachment LIST itself is store-backed
+  // image attach state. The attachment LIST itself is store-backed
   // (`draft.images`, mirrors the store-controlled `draft.prompt` textarea —
   // §4.1 above) so an automation facade could drive it the same way; the
   // error banner is presentation-only local state, same split Composer.tsx
@@ -694,12 +694,12 @@ export function StartScreen({ onToast }: StartScreenProps) {
 
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [modelFocusIndex, setModelFocusIndex] = useState(0);
-  //  (owner decision 17.08): which level of the drill-down is shown.
+  // (owner decision 17.08): which level of the drill-down is shown.
   // Local UI state (like modelMenuOpen itself), deliberately NOT draft state:
   // browsing a connection's models must not touch the draft until a row is
   // actually picked. Reset to the root on every open.
   const [modelMenuPage, setModelMenuPage] = useState<ModelDrillPage>({ kind: "root" });
-  // : the popover's measured placement — whether it hangs above the
+  // the popover's measured placement — whether it hangs above the
   // chip instead of below it, and how tall it may grow before it would run
   // off screen. Measured once per open (the seeding effect below) from the
   // chip's real rect; `null` until then, in which case the CSS fallback caps
@@ -715,14 +715,14 @@ export function StartScreen({ onToast }: StartScreenProps) {
   // dependency arrays, since none of them dereference `draft` unguarded
   // (`draft?.model ?? null`).
   const recents = deriveRecentWorkspaces(sessions, hiddenWorkspaces);
-  // Active-connection view ( v2): the former singleton's model/effort now
+  // Active-connection view (v2): the former singleton's model/effort now
   // live on the active connection, so the resolved default is simply `view.model`
   // / `view.reasoningEffort`.
   const view = snapshot ? activeProviderView(snapshot.settings) : undefined;
   const providerId = view?.id;
   const pid = resolvePid(providerId);
   const activeConnectionId = snapshot?.settings.provider.activeConnectionId;
-  //  cut-1 P2 fix: the chip's own LABEL must resolve against the
+  // cut-1 P2 fix: the chip's own LABEL must resolve against the
   // connection the draft is actually pinned to, else the active connection
   // (`SessionDraft.connectionId`'s own "unset ⇒ active" convention) — not
   // unconditionally the active connection. `modelDisplayName` falls back to
@@ -741,14 +741,15 @@ export function StartScreen({ onToast }: StartScreenProps) {
     snapshot?.catalog,
     snapshot?.settings.provider.custom,
     chipConnection?.models,
+    chipConnection?.visibleModels,
   );
   const resolvedDefault = resolveProviderDefaultModel(view?.model, undefined, pid);
   const modelChip = computeModelChipDisplay(draft?.model ?? null, resolvedDefault, catalogModels);
-  //  cut-1 stage B: the model popover's grouped list spans every
+  // cut-1 stage B: the model popover's grouped list spans every
   // connected connection, not just the active one; the "current pair" it
   // checkmarks is the draft's explicit connection pin, else the active
   // connection — the SAME `chipConnectionId` the label above just resolved.
-  //  D1/D4: connections offering nothing are dropped, the rest are
+  // D1/D4: connections offering nothing are dropped, the rest are
   // ordered current-first then by offered-model count, and each group's items
   // follow the provider catalog's own curated order.
   const modelGroups = buildStartModelGroups(
@@ -757,7 +758,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
     snapshot?.settings.provider.custom,
     { connectionId: chipConnectionId, modelId: modelChip.modelId },
   );
-  //  (owner decision 17.08): the root level's three quick picks,
+  // (owner decision 17.08): the root level's three quick picks,
   // ranked from the user's OWN recent sessions rather than a constant in
   // code — `sessions` is already loaded for the project popover's recents, so
   // this costs no extra round-trip.
@@ -770,7 +771,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
   // vocabulary belongs to the MODEL (`glm-5.2` off/high/max vs `k3`
   // low/high/max vs most models none at all), so `undefined` here is what
   // hides the effort level entirely — there is no app-wide effort list.
-  // : a model the catalog does not know falls back to the
+  // a model the catalog does not know falls back to the
   // connection's live-declared capabilities, when the fetch persisted any.
   const effortProviderId = effortCatalogProviderId(chipConnection, snapshot?.catalog, snapshot?.settings.provider.custom);
   const modelEfforts = startModelEffortLevels(
@@ -780,7 +781,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
     modelCapabilitiesFor(chipConnection, modelChip.modelId),
     modelOverrideFor(chipConnection, modelChip.modelId)?.effortLevels,
   );
-  // : the provider's documented default tier for that model —
+  // the provider's documented default tier for that model —
   // the level to show when neither the draft nor the connection has a pick.
   const modelDefaultEffort = startModelDefaultEffort(
     effortProviderId,
@@ -847,12 +848,12 @@ export function StartScreen({ onToast }: StartScreenProps) {
             ...(modelEfforts !== undefined ? [{ kind: "effort-open" as const, value: selectedModelEffort ?? "Default" }] : []),
           ];
   const projectRowCount = recents.length + 1; // +1 for the trailing "Browse…" row
-  // : hook-safe boolean (computed ahead of the `draft === null` early
+  // hook-safe boolean (computed ahead of the `draft === null` early
   // return below, same discipline as the other plain derived values above)
   // gating the Codex draft catalog fetch effect.
   const codexEngineSelected = draft?.engine === "codex";
   const codexDraftModel = resolveCodexDraftModel(draft?.model ?? null, codexModels);
-  // : the effort row only ever shows for a model that actually
+  // the effort row only ever shows for a model that actually
   // declares a vocabulary (EngineModelMenu's own internal gate, mirrored
   // here to decide whether to pass the `effort` prop at all — see
   // `draftModelEfforts`'s doc comment). The value itself is the draft's own
@@ -903,7 +904,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
     };
   }, []);
 
-  //  residual (cut §5.5): the one-shot fetch above has no live
+  // residual (cut §5.5): the one-shot fetch above has no live
   // listener, so a Codex login/onboarding step completed while a
   // StartScreen is already mounted would not show up until remount. Wire
   // the same `engines-changed` push CodexEnginePane already subscribes to
@@ -922,9 +923,9 @@ export function StartScreen({ onToast }: StartScreenProps) {
     });
   }, []);
 
-  //  (cut §2(g)/§3.8/§8): the draft's native model catalog comes from
+  // (cut §2(g)/§3.8/§8): the draft's native model catalog comes from
   // the same bounded "codex doctor" onboarding already uses
-  // (`window.anycode.codex.recheck()`). : the refresh lifecycle is
+  // (`window.anycode.codex.recheck()`). The refresh lifecycle is
   // the shared production helper (`createCodexDraftCatalogRefresh`) — every
   // refresh CLEARS the store catalog before re-fetching (a submit racing a
   // refresh/account switch is refused on the empty catalog, never validated
@@ -1097,7 +1098,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
     }
   }, [projectMenuOpen, projectFocusIndex]);
 
-  // Seed the model popover whenever it opens ( drill-down form): the
+  // Seed the model popover whenever it opens (drill-down form): the
   // level is reset to the root — a level left open last time must not leak
   // into this open — focus lands on the row of the model the draft currently
   // carries when the root happens to offer it (a popular pick), else the
@@ -1148,7 +1149,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
   const draftImages = draft.images ?? [];
   const sendDisabledReason = submitting ? "Sending…" : computeSendDisabledReason(draft, draftImages.length);
   const canSend = sendDisabledReason === undefined;
-  // TASK 4236: the only blocker is the missing project — say so visibly.
+  // the only blocker is the missing project — say so visibly.
   const needsProject = !submitting && draft.workspace === null && hasSendableDraft(draft.prompt, draftImages.length);
   const codexDraft = draft.engine === "codex";
   // SLICE-CC C5 (cut §1.4): the Claude draft's own branch of the composer
@@ -1157,7 +1158,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
   const claudeDraft = draft.engine === "claude";
   const claudeDraftPreset = draft.enginePreset ?? DEFAULT_CLAUDE_DRAFT_PRESET;
   const claudeDraftModel = resolveClaudeDraftModel(draft.model, CLAUDE_DRAFT_MODELS);
-  // : same "only show the row when the model actually has a
+  // same "only show the row when the model actually has a
   // vocabulary" discipline as the Codex branch above. `CLAUDE_DRAFT_MODELS`
   // does not currently declare any `efforts` (no live per-model catalog at
   // draft time — see that table's own doc comment), so this resolves to
@@ -1230,7 +1231,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
   }
 
   /**
-   * : validates + attaches files (file-picker or paste), reusing
+   * validates + attaches files (file-picker or paste), reusing
    * Composer.tsx's exact `readComposerImageFile` decoder — no second image
    * pipeline. Re-reads the draft's CURRENT image list at write time (not the
    * `draftImages` closed over at render) so a slow multi-file read never
@@ -1561,7 +1562,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
             </div>
           )}
         </div>
-        {/* Design  item 4: the selector is a choice of AGENT (which
+        {/* Design item 4: the selector is a choice of AGENT (which
             runtime drives the turn), not a product — labelled visibly so it
             no longer reads as a generic "Session engine" toggle. Group/pressed
             a11y semantics are unchanged; the visible label doubles as the
@@ -1713,7 +1714,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
             }
           }}
         />
-        {/* : image attachments, Composer.tsx's `.composer-pills` grammar
+        {/* image attachments, Composer.tsx's `.composer-pills` grammar
             verbatim — attach/paste only (no drag-and-drop: out of this
             task's scope, the DoD only calls for attach/paste parity). */}
         {draftImages.length > 0 && (
@@ -1752,7 +1753,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
           onKeyDown={(event) => {
             if (isSendKeydown(event)) {
               event.preventDefault();
-              // TASK 4236: Enter with a draft but no project opens the picker
+              // Enter with a draft but no project opens the picker
               // instead of silently doing nothing.
               if (needsProject) setProjectMenuOpen(true);
               else void submit();
@@ -1761,7 +1762,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
         />
         <div className="composer-footer">
           <div className="composer-footer-left">
-            {/* : attach affordance, shown for every engine branch alike —
+            {/* attach affordance, shown for every engine branch alike —
                 all three engines currently declare `supportsImages: true`
                 (host/engines/{session-engine,claude/claude-engine,codex/codex-engine}.ts),
                 mirroring Composer.tsx's own `engine?.capabilities.supportsImages
@@ -1789,7 +1790,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
               <ImageIcon />
             </button>
             {codexDraft ? (
-              //  item 1: native Codex model + permission-preset pickers
+              // item 1: native Codex model + permission-preset pickers
               // (from the doctor-provided catalog, never AnyCode's provider
               // catalog) replace the old static "Codex" identity badge.
               // Selecting either only ever sends a bare presetId/model id —
@@ -1874,9 +1875,9 @@ export function StartScreen({ onToast }: StartScreenProps) {
                 <Chevron className="model-pill-chevron" />
               </button>
 
-              {/*  (owner decision 17.08): a drill-down, not two panes
+              {/* (owner decision 17.08): a drill-down, not two panes
                   and not a tab row — rendered by the SHARED popover component
-                  ( cut-2 DoD 6), which a running session's chip
+                  (cut-2 DoD 6), which a running session's chip
                   renders too, so neither picker can drift from the other. */}
               {modelMenuOpen && (
                 <ModelDrillMenu

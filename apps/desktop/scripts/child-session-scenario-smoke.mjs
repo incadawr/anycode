@@ -1,5 +1,5 @@
 /**
- * Live smoke for  CUT-S2 §4.2 пп.1,2,3,5,8 — S2d D2, the track's
+ * Live smoke for CUT-S2 §4.2 пп.1,2,3,5,8 — S2d D2, the track's
  * FIRST PNG gate. Drives a REAL Electron dev instance end-to-end and proves,
  * on a real screen, what a unit matrix structurally cannot:
  *
@@ -90,7 +90,7 @@
  * model never calls the Agent tool with `tier:"session"` at all — same
  * discipline as the п.13 harness, for the same reason (a live-model
  * limitation is not a product failure). Evidence (2 PNGs + a JSON result
- * dump) lands in `working-docs/task102-track/evidence/S2/`.
+ * dump) lands in `working-docs/child-session-smoke/evidence/S2/`.
  */
 
 import { execFileSync } from "node:child_process";
@@ -123,7 +123,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(here, "..");
 const repoRoot = resolve(desktopRoot, "..", "..");
 
-const EVIDENCE_DIR = join(repoRoot, "working-docs", "task102-track", "evidence", "S2");
+const EVIDENCE_DIR = join(repoRoot, "working-docs", "child-session-smoke", "evidence", "S2");
 const TOTAL_STEPS = 5;
 const APP_EXIT_GRACE_MS = 15_000;
 const SIGTERM_GRACE_MS = 750;

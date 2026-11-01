@@ -25,7 +25,7 @@ export interface WorkflowStepDefinition {
   dependsOn?: readonly string[];
   /**
    * EXTRA tool names this step's child is opted into beyond its persona's own
-   * list ( follow-up). The only meaningful member today is
+   * list (follow-up). The only meaningful member today is
    * "WebSearch": the built-in general-purpose persona deliberately does NOT
    * carry it (paid search must never be a silent default for every child), so
    * a step that wants it — the deep-research preset's search-wide sweep —
@@ -63,7 +63,7 @@ export interface WorkflowMeta {
 }
 
 /**
- * The run's step graph, as carried on `workflow_start` ( slice S3):
+ * The run's step graph, as carried on `workflow_start` (slice S3):
  * just enough of `WorkflowStepDefinition` for the desktop card to hold and
  * lay out all N steps before the first one launches — `promptTemplate` and
  * `maxTurns` are engine-internal and never rendered, so they stay off the
@@ -116,17 +116,17 @@ export interface WorkflowRunOutcome {
 
 /** Coarse progress events bridged into the parent stream as workflow_* AgentEvents (design §2.3/§3.4). */
 export type WorkflowProgress =
-  // `steps` ( slice S3) is the run's full step graph, so a client can
+  // `steps` (slice S3) is the run's full step graph, so a client can
   // hold and order all N steps before the first `step_start` arrives instead
   // of discovering them one at a time in event-ARRIVAL order.
-  // : this event says the run has a valid graph and WILL settle with
+  // this event says the run has a valid graph and WILL settle with
   // one step_end per step — it does NOT say any child has launched. A step's
   // actual launch is `step_running` (post-semaphore); a step whose terminal
   // is reached without the engine ever calling subagents.run carries
   // `unlaunched: true` on its own step_end instead.
   | { kind: "start"; workflow: string; totalSteps: number; steps: readonly WorkflowStepGraphNode[] }
   | { kind: "step_start"; stepId: string; agentType: string }
-  // The step's REAL (post-semaphore) start ( slice S3), distinct from
+  // The step's REAL (post-semaphore) start (slice S3), distinct from
   // `step_start` above: that one fires the instant a step's deps are
   // satisfied, BEFORE the engine ever calls `subagents.run` — so a step can
   // sit ready-but-unlaunched behind the runner's shared MAX_CONCURRENT_SUBAGENTS
@@ -137,7 +137,7 @@ export type WorkflowProgress =
   // (already the point the engine arms the per-step timeout, for the same
   // post-semaphore reason).
   | { kind: "step_running"; stepId: string }
-  // `usage` ( slice S2) is the STEP's cumulative token spend since its
+  // `usage` (slice S2) is the STEP's cumulative token spend since its
   // own start, forwarded from the child's SubagentProgress unchanged. Cumulative
   // and REPLACED by the receiver, never added — a lost or repeated progress
   // event must not shift the number. Optional because a tier that reports no
@@ -151,7 +151,7 @@ export type WorkflowProgress =
       lastTool?: string;
       usage?: TokenUsage;
     }
-  // Per-step tool activity ( slice S1): the step's child emitted one
+  // Per-step tool activity (slice S1): the step's child emitted one
   // bounded one-liner for its own tool call, forwarded verbatim with the step
   // stamped on it. `toolName`/`summary` arrive already capped and sanitized by
   // the producing SubagentPort (never raw child input) — this variant adds

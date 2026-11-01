@@ -1,5 +1,5 @@
 /**
- * Managed plugin store state ( S1-A, design §3): `state.json`
+ * Managed plugin store state (S1-A, design §3): `state.json`
  * under the user plugins root (`~/.anycode/plugins/state.json`). Main is the
  * SOLE writer; host-side discovery is read-only.
  *
@@ -198,7 +198,7 @@ export function hasMcpConsent(
 }
 
 // ---------------------------------------------------------------------------
-// Service consent (a): the same consent discipline as MCP, keyed
+// Service consent the same consent discipline as MCP, keyed
 // by `servicesHash`. The hash covers name/command/args, the env KEY set and the
 // `${secret:NAME}` names the env values read — NOT the env values themselves,
 // which a user may edit without re-approving the definition.
@@ -231,7 +231,7 @@ export function servicesHash(services: readonly ServiceHashInput[] | undefined):
       command: service.command,
       args: [...(service.args ?? [])],
       envKeys: Object.keys(service.env ?? {}).sort(),
-      //  part 0: the secret NAMES a service reads are part of its definition
+      // part 0: the secret NAMES a service reads are part of its definition
       // (a plugin update that starts reading another secret needs new consent). Omitted
       // when empty so services without refs hash exactly as before.
       ...(serviceSecretRefs(service).length > 0 ? { secretRefs: serviceSecretRefs(service) } : {}),

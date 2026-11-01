@@ -78,6 +78,7 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
   const ready = snapshot?.providerReady === true;
   const connections = snapshot?.settings.provider.connections ?? [];
   const pendingConsent = useStore(store, (s) => s.pendingConsent);
+  const consentSaving = useStore(store, (s) => s.consentSaving);
   const [path, setPath] = useState<"api" | "codex" | "claude" | null>(null);
   const activePath = path ?? (connections.length > 0 ? "api" : null);
 
@@ -87,7 +88,7 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
   const [viewOverride, setViewOverride] = useState<WelcomeConnectionsView | null>(null);
   const view = viewOverride ?? initialConnectionsView(connections);
   const resolved = resolveWelcomeView(view, connections);
-  // : union the builtin catalog with saved custom records so a
+  // union the builtin catalog with saved custom records so a
   // just-created "Custom endpoint…" resolves its own synthesized entry
   // (models/transports) for the post-create model step — shared by the form
   // AND the switcher list's provider-name lookup below.
@@ -99,7 +100,7 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
   // provider field on mount so a keyboard/SR user lands directly on the one
   // actionable control (an intentional focus-steal, scoped here rather than in
   // the shared ProviderSettings, which the settings dialog also mounts).
-  // : also re-steer on every view switch (key change) — the form
+  // also re-steer on every view switch (key change) — the form
   // instance underneath is a different mount now, same "land on the one
   // actionable control" rationale as the original mount-only steal.
   useEffect(() => {
@@ -173,7 +174,7 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
                 Add another provider
               </button>
             </div>
-            {/*  item 2: the compact switcher — one row per saved
+            {/* item 2: the compact switcher — one row per saved
                 connection (label + provider + credential/health status),
                 clicking a row edits that connection. Also item 3's return path
                 from "add" mode: this list stays up, so clicking a row you were
@@ -237,6 +238,7 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
         {onOpenSettings && <button type="button" className="settings-button" data-open-settings onClick={onOpenSettings}>Open settings</button>}
 
         <ConsentDialog
+          busy={consentSaving}
           open={pendingConsent !== null && !settingsOpen}
           onAccept={() => void store.getState().acceptWeakStorageConsent()}
           onDecline={() => store.getState().declineWeakStorageConsent()}

@@ -67,12 +67,12 @@ export const ENV_NETWORK_WAIT_MAX_MS = "ANYCODE_NETWORK_WAIT_MAX_MS";
 /** Subagent turn budget; literal mirror of core's `provider/env.ts` ENV_SUBAGENT_MAX_TURNS. */
 export const ENV_SUBAGENT_MAX_TURNS = "ANYCODE_SUBAGENT_MAX_TURNS";
 /**
- * : adaptive turn budget (boolean); literal mirror of core's
+ * adaptive turn budget (boolean); literal mirror of core's
  * `provider/env.ts` ENV_ADAPTIVE_TURN_BUDGET. Settings are projected as "1"/"0".
  */
 export const ENV_ADAPTIVE_TURN_BUDGET = "ANYCODE_ADAPTIVE_TURN_BUDGET";
 /**
- * Subagent stall-detector silence threshold ( slice 1); literal
+ * Subagent stall-detector silence threshold (slice 1); literal
  * mirror of core's `provider/env.ts` ENV_SUBAGENT_STALL_MS. NOT
  * ENV_STALL_TIMEOUT_MS above — that one is the per-attempt stream watchdog.
  */
@@ -87,7 +87,7 @@ export const ENV_SUBAGENT_STALL_MS = "ANYCODE_SUBAGENT_STALL_MS";
 export const ENV_GREP_BACKEND = "ANYCODE_GREP_BACKEND";
 
 /**
- *  Stage 1: the ask-zone classifier record, one JSON object
+ * Stage 1: the ask-zone classifier record, one JSON object
  * mirroring `settings.permissions.classifier` (absent = off). Parsed defensively
  * by the host (src/host/ask-classifier-env.ts): garbage is off.
  */
@@ -126,10 +126,10 @@ export const ENV_MODEL_SETTINGS_CONNECTION_ID = "ANYCODE_MODEL_SETTINGS_CONNECTI
  * GONE — the live image-modality facts ride 4118's `modelCapabilities` map
  * (persisted on the connection, read by the host at boot), not the fork env.
  */
-/** : `<on|off>:<modelId>` — mirror of core's ENV_IMAGE_INPUT_MODEL_OVERRIDE. */
+/** `<on|off>:<modelId>` — mirror of core's ENV_IMAGE_INPUT_MODEL_OVERRIDE. */
 export const ENV_IMAGE_INPUT_MODEL_OVERRIDE = "ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE";
 /**
- * Wire transport override ( W5). Literal mirrors core's
+ * Wire transport override (W5). Literal mirrors core's
  * `provider/env.ts` `ENV_PROVIDER_TRANSPORT` — same local-literal convention
  * as every other var above (host-env stays core-free, never value-imports the
  * core runtime).
@@ -158,7 +158,7 @@ export const ENV_INCLUDE_USAGE = "ANYCODE_INCLUDE_USAGE";
  */
 export const ENV_PROMPT_CACHE_OPTIONS = "ANYCODE_PROMPT_CACHE_OPTIONS";
 /**
- * The provider connection pinned to a tab's session ( W10). Informational
+ * The provider connection pinned to a tab's session (W10). Informational
  * for the host: it is NOT a secret and NOT a credential — the resolved
  * credential rides ANYCODE_API_KEY as before. The host only reads this to persist
  * the pin into its session metadata (host/index.ts), so a resume resolves the
@@ -168,7 +168,7 @@ export const ENV_PROMPT_CACHE_OPTIONS = "ANYCODE_PROMPT_CACHE_OPTIONS";
 export const ENV_CONNECTION_ID = "ANYCODE_CONNECTION_ID";
 
 /**
- * The vision-fallback recognizer's env family ( E1) — the fork-boot
+ * The vision-fallback recognizer's env family (E1) — the fork-boot
  * snapshot half of the recognizer's config delivery (the live half is
  * `RecognizerConfigChanged` over parentPort, shared/recognizer.ts). Mirrors
  * `RecognizerWireConfig` field-for-field so a host's live-update handler
@@ -183,7 +183,7 @@ export const ENV_RECOGNIZER_MODEL = "ANYCODE_RECOGNIZER_MODEL";
 export const ENV_RECOGNIZER_PROVIDER_NAME = "ANYCODE_RECOGNIZER_PROVIDER_NAME";
 
 /**
- *  S1-B (design §7 host wiring): the app version carrier. Main
+ * S1-B (design §7 host wiring): the app version carrier. Main
  * stamps the ELECTRON app version (app.getVersion()) into every host fork's
  * env; the host reads it (trimmed-non-empty-or-undefined, same convention as
  * ENV_SETTINGS_PATH) and passes it to discoverExtensions as `appVersion`, so
@@ -221,7 +221,7 @@ const PROXY_FAMILY_KEYS = ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_pro
 const NO_PROXY_KEYS = ["NO_PROXY", "no_proxy"] as const;
 
 // The loopback exemption (`LOOPBACK_NO_PROXY`) moved to ../shared/engines.ts in
-// : the engine-proxy override writes the identical value from a module
+// the engine-proxy override writes the identical value from a module
 // the host side can import, and two copies of a measured constant is exactly the
 // kind of drift that silently un-exempts an IPv6 loopback endpoint.
 
@@ -250,7 +250,7 @@ export const SECRET_KEYS: readonly SecretKey[] = ["provider.apiKey"];
  * (can no longer index `bootEnv`). Legacy `provider.apiKey` -> `ANYCODE_API_KEY`,
  * byte-for-byte 2.2.
  *
- *  fail-closed belt (the `customProviderSecretKey` precedent): a
+ * fail-closed belt (the `customProviderSecretKey` precedent): a
  * proxy-profile password is NOT a provider credential and has no fork-env
  * materialisation at all — it is composed into a proxy URL in main and rides the
  * HTTP(S)_PROXY family, never `ANYCODE_API_KEY`. Answering "ANYCODE_API_KEY" for
@@ -294,7 +294,7 @@ export function isKnownSecretKey(key: string, catalogIds: readonly string[]): ke
   if (connMatch !== null) {
     return connMatch[1] !== undefined && connMatch[1].length > 0;
   }
-  // Proxy-profile password ( §5): `proxy.profile.<id>.password`. Same
+  // Proxy-profile password (§5): `proxy.profile.<id>.password`. Same
   // `[^.]+`-segment shape and same division of labour as the connection keys —
   // the id's membership in the registry is enforced at the CRUD boundary
   // (main/settings-ipc.ts), this predicate only says the key is well-formed and
@@ -322,11 +322,11 @@ export function connectionSecretKey(connectionId: string, authKind: "api_key" | 
 
 /**
  * Every custom-provider id currently in settings (owner-decision #6, cut
- * §9.2, ). A custom provider's vault key (`provider.<id>.apiKey`) is
+ * §9.2). A custom provider's vault key (`provider.<id>.apiKey`) is
  * only ever recognized by `isKnownSecretKey`/`Vault.statuses` when its id is
  * present in the `catalogIds` array those callers are given — main is
  * expected to union this with `catalogProviderIds()` (mirrors the existing
- * `catalogProviderIds() ∪ custom[].id` seam described in ) before
+ * `catalogProviderIds() ∪ custom[].id` seam) before
  * passing `catalogIds` down, the same way it already includes every builtin
  * catalog id.
  */
@@ -343,7 +343,7 @@ const CUSTOM_PROVIDER_PREFIX = "custom:";
  * The bare builtin catalog sentinel id (`custom`, no colon) — core-free local
  * literal of core's `CUSTOM_PROVIDER_ID` (the host-env module never imports
  * core; this mirror follows the same convention as the env-var mirrors above).
- *  (b): the keyless-sentinel default-transport rung in `buildHostEnv`
+ * (b): the keyless-sentinel default-transport rung in `buildHostEnv`
  * keys on it.
  */
 const CUSTOM_SENTINEL_ID = "custom";
@@ -419,7 +419,7 @@ export function customKindDefaultTransport(kind: CustomProviderRecord["kind"]): 
 }
 
 /**
- * : core's `loadEnvConfig` accepts a missing API key ONLY on the two
+ * core's `loadEnvConfig` accepts a missing API key ONLY on the two
  * OpenAI-family transports (a key is mandatory when the resolved transport is
  * undefined or `anthropic-messages`). This predicate mirrors that rule for the
  * connection-level authOptional waiver so the readiness gate can never say
@@ -500,7 +500,7 @@ export interface EffectiveTransport {
 }
 
 /**
- * The ONE normative transport ladder ( W5-FIX, cut Risk #3): the single
+ * The ONE normative transport ladder (W5-FIX, cut Risk #3): the single
  * authority every readiness guard and every fork-env emission consumes, so they
  * can never disagree about which transport a fork actually runs. Rungs:
  *
@@ -533,7 +533,7 @@ export function resolveEffectiveTransport(input: {
 
 /**
  * The value `buildHostEnv` writes into ANYCODE_PROVIDER_TRANSPORT for the fork,
- * per the emission rule ( W5-FIX): only an explicit user selection
+ * per the emission rule (W5-FIX): only an explicit user selection
  * (source "settings") or a NON-anthropic catalog default is emitted. An env
  * value is already carried in `{...bootEnv}` and is never re-emitted; an
  * implicit anthropic-family catalog default emits NOTHING, so the anthropic /
@@ -559,7 +559,7 @@ function transportToEmit(resolved: EffectiveTransport): string | undefined {
  * `process.env` afterwards is invisible to them.
  *
  * The one thing the snapshot does NOT preserve is the engine-proxy carrier
- * namespace ( F1): those two names are main's private main→child
+ * namespace (F1): those two names are main's private main→child
  * transport, so an ambient value is dropped at the origin and every consumer of
  * this snapshot — the fork env, the doctor/login source env, the discovery
  * ladder — is carrier-clean by construction. `engineProxyCarriers` is the only
@@ -645,8 +645,8 @@ export function shellOwnsProxyFamily(bootEnv: NodeJS.ProcessEnv): boolean {
 }
 
 /**
- * Materialises the fork's resolved proxy ('s connection field,
- * generalised to the  ladder) into a host fork's env as the
+ * Materialises the forkresolved proxy (connection field,
+ * generalised to the ladder) into a host fork's env as the
  * HTTP(S)_PROXY family + the loopback `NO_PROXY` exemption +
  * `NODE_USE_ENV_PROXY=1`. The host's own global fetch honours it through
  * undici's env-proxy agent; the claude/codex children inherit the family
@@ -669,12 +669,12 @@ export function shellOwnsProxyFamily(bootEnv: NodeJS.ProcessEnv): boolean {
  * The cost of the stricter reading is named rather than hidden: with a
  * shell-exported proxy AND a configured profile, the host's own `fetch` no
  * longer has `NODE_USE_ENV_PROXY` switched on for it, so it goes direct exactly
- * as it did before  existed. A shell that wants the host's fetch
+ * as it did before existed. A shell that wants the host's fetch
  * proxied can export `NODE_USE_ENV_PROXY=1` itself, which is a variable it
  * already owns.
  *
  * With no (or an unparseable) proxy this emits NOTHING either, so a fork's env
- * stays byte-identical to pre- in every case. A value that fails
+ * stays byte-identical in every case. A value that fails
  * `isProxyUrl` is fail-soft for the same reason a hand-edited settings.json must
  * not break every request: it degrades to "no proxy", never to a broken env.
  */
@@ -697,7 +697,7 @@ export function applyConnectionProxy(
   // an empty `NO_PROXY=""` names no exemptions, so there is nothing of the
   // shell's to preserve).
   //
-  // : a profile's own exemptions are APPENDED to the loopback default,
+  // a profile's own exemptions are APPENDED to the loopback default,
   // never substituted for it — a list that replaced it would send a local
   // Ollama/vLLM endpoint (and every loopback MCP server) through the proxy. Both
   // cases get the identical composed string, atomically, for the shadowing
@@ -744,14 +744,14 @@ function systemProxyBase(deps: ProxyMaterializationDeps): string | undefined {
 
 /**
  * Turns the rung a ladder picked into what an env needs, or `undefined` for
- * "direct" ( §2). Every failure mode collapses to DIRECT rather than to
+ * "direct" (§2). Every failure mode collapses to DIRECT rather than to
  * the rung below — a dangling ref, a profile whose `url` was hand-edited into
  * garbage, a `system` profile with nothing resolved: an explicit rung with a
  * broken value must not silently route this scope's traffic into another rung's
- * proxy, which is the same law  applied to a malformed `proxyUrl`.
+ * proxy, which is the same law applied to a malformed `proxyUrl`.
  *
  * The one rung that is NOT registry-shaped — a legacy `proxyUrl` string — is
- * materialised verbatim, byte-for-byte its /139 semantics, because that
+ * materialised verbatim, byte-for-byte its semantics, because that
  * is the whole promise "legacy strings keep working with no user action" makes.
  */
 export function materializeProxyRung(
@@ -921,7 +921,7 @@ export function engineProxyCarrierValue(
  * them has to emit the sentinel, because the connection's proxy is already in
  * the child env via the passthrough list and staying silent would leave the
  * engine on it — routing traffic through someone else's proxy after the user
- * explicitly said "none". : the result runs through
+ * explicitly said "none". the result runs through
  * `relayCredentialedCarrier` — a credentialed carrier becomes `deps.relayUrl`
  * or degrades fail-closed to `direct`.
  */
@@ -948,7 +948,7 @@ export function engineProxyOutcome(
   const carrier: EngineProxyCarrier = NO_PROXY_KEYS.some((name) => envPresent(bootEnv, name))
     ? { kind: "proxy", url: materialized.url }
     : { kind: "proxy", url: materialized.url, noProxy: composeNoProxy(materialized.noProxy) };
-  //  rework: a credentialed carrier never crosses the
+  // rework: a credentialed carrier never crosses the
   // engine-child boundary — swapped for the relay OF THAT VALUE (the
   // registry key is the carrier's own upstream), fail-closed to `direct`
   // without one.
@@ -956,7 +956,7 @@ export function engineProxyOutcome(
 }
 
 /**
- *  rework: de-credentialises an engine carrier before it is ever
+ * rework: de-credentialises an engine carrier before it is ever
  * stamped into a host fork's env. A carrier whose url carries userinfo (`@`)
  * is swapped for the relay URL of THAT SAME upstream (`relayFor` is main's
  * per-upstream registry lookup — never a relay fronting some other proxy,
@@ -1004,7 +1004,7 @@ export interface ResolvedProviderSelection {
   /** "oauth" -> also set ANYCODE_AUTH_MODE so the host brokers per-attempt tokens. */
   authKind: "api_key" | "oauth";
   /**
-   * The selected catalog entry's RAW `defaultTransport` ( W5-FIX). The
+   * The selected catalog entry's RAW `defaultTransport` (W5-FIX). The
    * effective transport ladder (env > settings.provider.transport > this
    * default) is applied by `buildHostEnv` via the single
    * `resolveEffectiveTransport` authority — this projection deliberately does
@@ -1029,7 +1029,7 @@ export interface HostEnvParams {
    */
   resolveSelection?: () => Promise<ResolvedProviderSelection | undefined>;
   /**
-   *  v2: resolves the ACTIVE connection's credential (its connection key)
+   * v2: resolves the ACTIVE connection's credential (its connection key)
    * for the legacy/custom/no-active branch — main computes it because host-env is
    * core-free (it cannot derive the auth kind / connection key itself). Absent ->
    * the byte-for-byte 2.2 read of the bare `provider.apiKey` (used by pre-v2 unit
@@ -1037,14 +1037,14 @@ export interface HostEnvParams {
    */
   resolveActiveCredential?: () => Promise<string | undefined>;
   /**
-   * : the system-resolve / password caches the proxy registry
+   * the system-resolve / password caches the proxy registry
    * materialises through. Absent (unit fixtures, and lane A's shipped default)
    * means a `system` profile resolves DIRECT and no profile carries a password —
    * both are honest answers, never an error.
    */
   proxy?: ProxyMaterializationDeps;
   /**
-   *  E1: catalog auth-kind lookup for the vision-fallback recognizer's
+   * E1: catalog auth-kind lookup for the vision-fallback recognizer's
    * SELECTED connection — host-env stays core-free, so main injects this from
    * `@anycode/core/catalog` (same reason `resolveSelection`/
    * `resolveActiveCredential` are callbacks rather than lookups on this
@@ -1055,7 +1055,7 @@ export interface HostEnvParams {
    */
   recognizerAuthKindFor?: (providerId: string) => "api_key" | "oauth" | undefined;
   /**
-   * Live-run fix (task150-output-ceiling session,  follow-up): the
+   * Live-run fix: the
    * catalog projection `resolveRecognizerConfig` needs to fall back to when a
    * CATALOG (non-custom) recognizer connection's OWN baseUrl/transport are
    * blank/absent — real settings.json connections for `z-ai`/`kimi` carry
@@ -1076,7 +1076,7 @@ export interface HostEnvParams {
 
 /**
  * Catalog projection `resolveRecognizerConfig` needs for the baseUrl/transport
- * fallback (live-run fix,  follow-up) — the same two fields main's
+ * fallback (live-run fix, follow-up) — the same two fields main's
  * `resolveCatalog` (index.ts, feeding `ResolvedProviderSelection`) already
  * returns, so main injects THAT function directly rather than a second
  * projection. `defaultTransport` stays a plain `string` (not
@@ -1103,7 +1103,7 @@ export interface RecognizerCatalogInfo {
 export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.ProcessEnv> {
   const { bootEnv, settings, getSecret, resolveSelection, resolveActiveCredential } = params;
   const env: NodeJS.ProcessEnv = { ...bootEnv };
-  //  F1: the engine-proxy carriers are main-authored, and this spread is
+  // F1: the engine-proxy carriers are main-authored, and this spread is
   // the structural hole they would otherwise ride through — same reasoning as
   // `applyCodexProfilesHomeOverride`'s delete branch above. Repeated here rather
   // than relied upon from `snapshotBootEnv` because this function accepts ANY
@@ -1111,7 +1111,7 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // `engineEnv` (main/index.ts) puts the authoritative carriers back, spread
   // over this env at spawn time.
   stripEngineProxyCarriers(env);
-  // Active-connection legacy-shaped view ( v2): model/baseUrl/transport/
+  // Active-connection legacy-shaped view (v2): model/baseUrl/transport/
   // effort come from the ACTIVE connection, not the removed v1 singleton. Post
   // migration the active connection ≡ the former singleton, so the ladder OUTPUT
   // stays byte-equivalent (DoD #5).
@@ -1182,7 +1182,7 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
     }
   }
 
-  // Wire transport ( W5-FIX, cut Risk #3): ONE ladder authority for ALL
+  // Wire transport (W5-FIX, cut Risk #3): ONE ladder authority for ALL
   // branches. `defaultTransport` is the selected catalog entry's raw default
   // (undefined on the legacy/no-catalog path), or the kind-implied default of
   // the resolved custom record (F-G-B — a deleted record contributes none, so
@@ -1191,7 +1191,7 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // custom fork env stays byte-identical to pre-W5; an env value already rides
   // in `{...bootEnv}` and `fillFromSettings` never overwrites it.
   //
-  //  (b) — the keyless-sentinel default rung: when the ACTIVE
+  // (b) — the keyless-sentinel default rung: when the ACTIVE
   // connection is the bare `custom` sentinel AND declares authOptional AND
   // neither env nor settings selected a transport, supply the OpenAI-compatible
   // default (`openai-chat-completions`) instead of leaving the rung empty. The
@@ -1205,7 +1205,7 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // "catalog-default" with a NON-anthropic value, so `transportToEmit` emits
   // it and core boots keyless. Env and explicit settings transports still win
   // by ladder construction; connections WITHOUT the flag keep `undefined` —
-  // byte-identical env to pre-.
+  // byte-identical env.
   const keylessSentinelDefault =
     view.id === CUSTOM_SENTINEL_ID && view.authOptional === true
       ? customKindDefaultTransport("openai-compatible") // "openai-chat-completions"
@@ -1223,12 +1223,12 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   fillFromSettings(env, ENV_TOOL_CONCURRENCY, numToStr(settings.tools.concurrency));
   fillFromSettings(env, ENV_STALL_TIMEOUT_MS, numToStr(settings.tools.stallTimeoutMs));
   fillFromSettings(env, ENV_MAX_TURNS, numToStr(settings.tools.maxTurns));
-  // : provider retry knobs (env > settings, same convention).
+  // provider retry knobs (env > settings, same convention).
   fillFromSettings(env, ENV_MAX_RETRIES, numToStr(settings.tools.maxRetries));
   fillFromSettings(env, ENV_NETWORK_RETRY_BUDGET_MS, numToStr(settings.tools.networkRetryBudgetMs));
   fillFromSettings(env, ENV_NETWORK_WAIT_MAX_MS, numToStr(settings.tools.networkWaitMaxMs));
   fillFromSettings(env, ENV_SUBAGENT_MAX_TURNS, numToStr(settings.tools.subagentMaxTurns));
-  // : adaptive turn budget, boolean mirror (absent stays absent => OFF).
+  // adaptive turn budget, boolean mirror (absent stays absent => OFF).
   fillFromSettings(
     env,
     ENV_ADAPTIVE_TURN_BUDGET,
@@ -1239,7 +1239,7 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // numToStr; fillFromSettings keeps env > settings and only fills a blank
   // slot, exactly like the numeric tool mirrors above.
   fillFromSettings(env, ENV_GREP_BACKEND, settings.tools.grepBackend);
-  // : the ask-zone classifier record rides as one JSON value; the
+  // the ask-zone classifier record rides as one JSON value; the
   // host parses it defensively, so a hand-edited value can only turn it off.
   fillFromSettings(
     env,
@@ -1327,7 +1327,7 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // GONE — the live image-modality facts ride 4118's modelCapabilities map,
   // which the host reads fail-soft from the connection's settings record at
   // boot (readConnectionModelCapabilities), so nothing is emitted here.
-  // : the drawer's per-model override (value+binding in ONE var).
+  // the drawer's per-model override (value+binding in ONE var).
   // The host applies it only while its current model equals the binding, so it
   // never un-gates a sibling model after a mid-session switch.
   if (view.imageInputOverride !== undefined && view.imageInputOverrideModel?.trim()) {
@@ -1337,12 +1337,12 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
       `${view.imageInputOverride}:${view.imageInputOverrideModel.trim()}`,
     );
   }
-  // The host fork's own network path (, generalised by  §2
+  // The host fork's own network path (generalised by §2
   // ladder (a)/(b)): the ACTIVE connection's rung, then the app's. Keyed off
   // `activeConnectionId` — the same handle `activeProviderView` reads — so a
   // per-tab pin (`buildHostEnvFor(settingsPinnedTo(...))`, main/index.ts) picks
   // up ITS connection's rung with no extra plumbing, exactly as before.
-  //  §4 / design review B-10: the target this fork's traffic is for is
+  // §4 / design review B-10: the target this fork's traffic is for is
   // the endpoint it was just configured with (`ANYCODE_BASE_URL`, after the
   // whole env > connection > catalog ladder above has run) — the honest answer
   // to "which host does a `system` profile resolve against for THIS fork". A
@@ -1358,7 +1358,7 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
     await resolveProxyForAsync(settings, hostForkProxyChain(settings.provider.activeConnectionId), proxyDeps),
   );
 
-  //  E1: the vision-fallback recognizer's OWN env family, resolved
+  // E1: the vision-fallback recognizer's OWN env family, resolved
   // independently of the primary provider ladder above (a different
   // connection, its own vault key) — applied last so it can never interact
   // with ENV_API_KEY/ENV_MODEL/ENV_BASE_URL.
@@ -1371,7 +1371,7 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
 }
 
 /**
- *  E1: resolves `settings.recognizer` (a connectionId + modelId
+ * E1: resolves `settings.recognizer` (a connectionId + modelId
  * pointing at an ALREADY-CONFIGURED connection, never a second credential
  * home) into the wire shape a host needs, or undefined when the fallback is
  * disabled:
@@ -1391,7 +1391,7 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
  * always `api_key` and never consults `authKindFor` at all — mirrors
  * `activeCredential`'s own posture in main/index.ts for the same bucket.
  *
- * `catalogFor` (live-run fix,  follow-up) is the SAME kind of
+ * `catalogFor` (live-run fix, follow-up) is the SAME kind of
  * main-injected catalog projection, consulted ONLY for a CATALOG (non-custom)
  * providerId: a live settings.json connection for a catalog provider
  * (`z-ai`, `kimi`, ...) carries a blank `baseUrl` and no `transport` key at
@@ -1424,8 +1424,7 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
  * PRIMARY path's own handling of `"unset"` EXACTLY: `transportToEmit`
  * (below) emits nothing for it there either, and core's `loadEnvConfig`
  * applies the implicit anthropic default downstream. Refusing the whole
- * recognizer on `"unset"` was tried and reverted (task150-output-ceiling
- * session): it made the SAME ladder value mean two different things on its
+ * recognizer on `"unset"` was tried and reverted: it made the SAME ladder value mean two different things on its
  * two consumers — contradicting the ladder's own "can never disagree"
  * contract — and it silently disabled a real, explicitly-supported case (a
  * bare connection, `providerId === ""`, with a genuine hand-typed address
@@ -1474,8 +1473,8 @@ export async function resolveRecognizerConfig(
   // baseUrl AND credential live on the CustomProviderRecord, never on the
   // connection itself (a connection only POINTS at the record via its
   // providerId) — reading `connection.baseUrl`/a connection-scoped vault key
-  // here left both blank for every custom-provider recognizer (task198-state.md
-  // "Хвост от E1"). A missing record (deleted while a connection still
+  // here left both blank for every custom-provider recognizer
+  // ("Хвост от E1"). A missing record (deleted while a connection still
   // references it) is FAIL-CLOSED exactly like the primary branch: neither
   // field falls back to the connection-scoped key/baseUrl. Its transport is
   // untouched by the catalog ladder below — a `custom:` id has no catalog
@@ -1484,7 +1483,7 @@ export async function resolveRecognizerConfig(
   // absence, same as always).
   const customId = isCustomProviderRecordId(providerId) ? providerId : undefined;
   const customRecord = customId !== undefined ? findCustomProviderRecord(settings, customId) : undefined;
-  // Catalog fallback (live-run fix,  follow-up) — the baseUrl half
+  // Catalog fallback (live-run fix, follow-up) — the baseUrl half
   // mirrors provider-ipc.ts's `handleConnectionFetchModels` resolution
   // verbatim (SAME idiom, not a second one): `connection.baseUrl?.trim() ? ...
   // : entry.baseUrl`. NEVER consulted for a `custom:<slug>` connection — its
@@ -1545,7 +1544,7 @@ export async function resolveRecognizerConfig(
 
 /**
  * ANYCODE_RECOGNIZER_* fork-env materialisation of a resolved recognizer
- * endpoint ( E1). `undefined` emits nothing — a fork whose recognizer
+ * endpoint (E1). `undefined` emits nothing — a fork whose recognizer
  * is unset/oauth/dangling boots byte-identical to today. `fillFromSettings`
  * (env-value-wins) is reused here for the same reason it governs every other
  * var in this module: a launching shell's own ANYCODE_RECOGNIZER_* always
@@ -1588,7 +1587,7 @@ export function envOverrides(bootEnv: NodeJS.ProcessEnv): string[] {
 
 /**
  * True when a live core host's provider-health event must NOT be bound to any
- * saved connection plaquette ( W11, cut §W11 env-override rule): a
+ * saved connection plaquette (W11, cut §W11 env-override rule): a
  * non-blank `ANYCODE_API_KEY` boot-snapshot override means the request that
  * just succeeded/failed actually ran on a DIFFERENT, ephemeral credential — the
  * env-override "connection" has no persisted tile to paint, so its outcome
@@ -1614,12 +1613,12 @@ export interface ReadinessParams {
    */
   credentialKey?: SecretKey;
   /**
-   * Auth-policy override ( W5, cut Risk #3): true waives the apiKeyReady
+   * Auth-policy override (W5, cut Risk #3): true waives the apiKeyReady
    * requirement entirely. Set by the caller for a catalog entry marked
    * `authOptional` (vLLM), or for `custom` on a resolved openai-family
    * transport (mirrors core's `loadEnvConfig` — a key is only ever mandatory
    * on `anthropic-messages`). The connection-level `authOptional` declaration
-   * (, projected through `activeProviderView`) waives the same
+   * (projected through `activeProviderView`) waives the same
    * requirement, but — exactly like core's own rule — ONLY when the effective
    * transport is OpenAI-family (`acceptsKeylessTransport`); an undefined or
    * anthropic-messages transport still demands a key so the gate can never
@@ -1646,14 +1645,14 @@ export interface ReadinessParams {
  * ANYCODE_API_KEY OR the vault yields a decryptable value for the selected
  * provider's `credentialKey` (a present-but-undecryptable entry counts as unset,
  * ruling §1: user re-enters) OR `authOptional` waives the requirement (
- * W5; since  the ACTIVE CONNECTION's own `authOptional` declaration —
+ * W5; since the ACTIVE CONNECTION's own `authOptional` declaration —
  * projected through `activeProviderView` — waives it the same way, but
  * TRANSPORT-GOVERNED exactly like core's own `loadEnvConfig` rule: only on
  * OpenAI-family transports, never on undefined or anthropic-messages, so the
  * gate and the spawned fork can never disagree; the model is still required).
  * model is ready from env or the settings
  * default. Readiness is blocked outright when the resolved transport is not
- * one the selected catalog entry supports ( W5 cut Risk #3) — never a
+ * one the selected catalog entry supports (W5 cut Risk #3) — never a
  * silent anthropic fallback.
  */
 export async function computeProviderReady(params: ReadinessParams): Promise<boolean> {

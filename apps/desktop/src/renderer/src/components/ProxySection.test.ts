@@ -1,5 +1,5 @@
 /**
- * Pure-logic tests for the ONE proxy-profile editor plaque ( lane C).
+ * Pure-logic tests for the ONE proxy-profile editor plaque (lane C).
  * Deliberately `.test.ts` (not `.test.tsx`) — this package's vitest runs in
  * `environment: "node"` with no jsdom and its include glob collects `.test.ts`
  * only, so a `.tsx` test would not even run. The rendered plaque is proven
@@ -49,7 +49,7 @@ function profile(over: Partial<ProxyProfile> = {}): ProxyProfile {
   return { id: "proxy-1", name: "Corporate", mode: "manual", url: "http://proxy.example.com:3128", ...over };
 }
 
-describe("proxyDecomposeUrl (: a stored URL reopens as the three controls)", () => {
+describe("proxyDecomposeUrl (a stored URL reopens as the three controls)", () => {
   it("splits scheme, host and port", () => {
     expect(proxyDecomposeUrl("http://proxy.example.com:3128")).toEqual({
       host: "proxy.example.com",
@@ -85,7 +85,7 @@ describe("proxyDecomposeUrl (: a stored URL reopens as the three controls)", () 
   });
 });
 
-describe("proxyComposeUrl (: the checkbox owns the scheme, not the user)", () => {
+describe("proxyComposeUrl (the checkbox owns the scheme, not the user)", () => {
   it("composes host + port under the http scheme by default", () => {
     expect(proxyComposeUrl("proxy.example.com", "3128", false)).toBe("http://proxy.example.com:3128");
   });
@@ -116,7 +116,7 @@ describe("proxyComposeUrl (: the checkbox owns the scheme, not the user)", () =>
   });
 });
 
-describe("proxyHostBlocked (: the scheme-less-host:port typo class, inverted)", () => {
+describe("proxyHostBlocked (the scheme-less-host:port typo class, inverted)", () => {
   it("accepts a bare host name and an IPv4 literal", () => {
     expect(proxyHostBlocked("proxy.example.com")).toBe(false);
     expect(proxyHostBlocked("10.0.0.7")).toBe(false);
@@ -166,7 +166,7 @@ describe("proxyPortBlocked", () => {
   });
 });
 
-describe("proxyHostPortBlocked ( / review B-06: manual REQUIRES a userinfo-free URL)", () => {
+describe("proxyHostPortBlocked (review B-06: manual REQUIRES a userinfo-free URL)", () => {
   it("passes a well-formed manual address", () => {
     expect(proxyHostPortBlocked(draft())).toBe(false);
     expect(proxyHostPortBlocked(draft({ https: true, port: "" }))).toBe(false);
@@ -189,7 +189,7 @@ describe("proxyHostPortBlocked ( / review B-06: manual REQUIRES a userinfo-free 
   });
 });
 
-describe("proxyProfileNameBlocked (: case-insensitive uniqueness, matching main)", () => {
+describe("proxyProfileNameBlocked (case-insensitive uniqueness, matching main)", () => {
   const registry = [profile({ id: "proxy-1", name: "Corporate" }), profile({ id: "proxy-2", name: "Lab" })];
 
   it("refuses a blank name", () => {
@@ -248,7 +248,7 @@ describe("proxyProfileDraftFrom", () => {
   });
 });
 
-describe("proxyPasswordActionFor ( / review H-01: one atomic mutation)", () => {
+describe("proxyPasswordActionFor (review H-01: one atomic mutation)", () => {
   it('nothing typed and nothing cleared = "keep"', () => {
     expect(proxyPasswordActionFor(draft())).toEqual({ action: "keep" });
     expect(proxyPasswordActionFor(draft({ passwordSet: true }))).toEqual({ action: "keep" });
@@ -318,7 +318,7 @@ describe("proxyProfileDraftToUpsert", () => {
   });
 });
 
-describe("proxyPasswordSet (: a boolean, never a value)", () => {
+describe("proxyPasswordSet (a boolean, never a value)", () => {
   const secrets: SecretStatus[] = [
     { key: "proxy.profile.proxy-1.password", set: true, source: "vault", tier: "os_encrypted" },
     { key: "proxy.profile.proxy-2.password", set: false, source: "none", tier: "os_encrypted" },
@@ -335,7 +335,7 @@ describe("proxyPasswordSet (: a boolean, never a value)", () => {
   });
 });
 
-describe("proxyCheckPayload ( / review B-11: the probe checks ONE named target)", () => {
+describe("proxyCheckPayload (review B-11: the probe checks ONE named target)", () => {
   it("omits the target entirely when the default is chosen", () => {
     const payload = proxyCheckPayload("proxy-1", "");
     expect(payload).toEqual({ profileId: "proxy-1" });
@@ -367,7 +367,7 @@ describe("proxyCheckTargetLabel", () => {
   });
 });
 
-describe("proxyCheckVerdictText ( §6 / review B-11)", () => {
+describe("proxyCheckVerdictText (§6 / review B-11)", () => {
   it("has honest text for every verdict class, and they all differ", () => {
     const verdicts = [
       "ok",
@@ -430,14 +430,14 @@ describe("proxyCheckVerdictText ( §6 / review B-11)", () => {
 // The exemption syntax has to be OURS, not JetBrains'. `192.168.*` matches
 // nothing in undici or curl, so an example in that shape would teach a syntax
 // that silently sends the traffic it claims to exempt through the proxy.
-describe("PROXY_NO_PROXY_PLACEHOLDER (: honest NO_PROXY syntax)", () => {
+describe("PROXY_NO_PROXY_PLACEHOLDER (honest NO_PROXY syntax)", () => {
   it("shows host suffixes, never a glob", () => {
     expect(PROXY_NO_PROXY_PLACEHOLDER).toBe("internal.corp, .example.com");
     expect(PROXY_NO_PROXY_PLACEHOLDER).not.toContain("*");
   });
 });
 
-describe("maskProxyText (: the renderer's own last-resort password net)", () => {
+describe("maskProxyText (the renderer's own last-resort password net)", () => {
   // `maskProxyUrl` returns a non-URL string untouched, so a URL embedded in a
   // sentence keeps its password. Main masking its own `detail` is the contract;
   // this is the guarantee, and it must hold for a detail that names several.

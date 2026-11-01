@@ -35,7 +35,7 @@ export interface ToolResultPart {
   /** Kept for persistence/analytics; only `text` reaches the model. */
   status: ToolCallStatus;
   /**
-   * Persistence/hydration only ( slice S1, CUT-S1 §2.3): NOT part of
+   * Persistence/hydration only (slice S1, CUT-S1 §2.3): NOT part of
    * messageTokenText (context/history.ts) and never mapped onto an SDK
    * message (provider/sdk-mapping.ts) — the model never sees this field on
    * any transport.
@@ -58,7 +58,7 @@ export interface HistoryItem {
   tokenEstimate?: number;
   kind?: "normal" | "compact_summary" | "microcompact_cleared";
   /**
-   *  causal identity (presentation-only, sqlite JSON keeps the whole
+   * causal identity (presentation-only, sqlite JSON keeps the whole
    * item as-is — no migration): `turnId` is the HOST-OWNED outer turn UUID
    * (Session.runTurn's `turn_started` id), `step` is the loop's inner request
    * ordinal within that outer turn (the `turn_start.turn` counter, 1-based).
@@ -74,7 +74,7 @@ export interface HistoryItem {
   turnId?: string;
   step?: number;
   /**
-   *  срез 2: marks a `role:"user"` item the human never typed — the
+   * срез 2: marks a `role:"user"` item the human never typed — the
    * host injected it on the model's behalf (a detached background child's
    * terminal report). `role` stays "user" (owner decision, spec §4bis п.1:
    * the MODEL must not be able to tell the two apart), so this field exists

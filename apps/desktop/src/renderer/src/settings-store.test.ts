@@ -114,7 +114,7 @@ describe("settings-store: load", () => {
   });
 });
 
-describe("settings-store: snapshot epoch guard ( block-45 F1 — unsequenced load() vs. mutation race)", () => {
+describe("settings-store: snapshot epoch guard (block-45 F1 — unsequenced load() vs. mutation race)", () => {
   it("clobber: a load() that started before a mutation, but resolves after it, does not overwrite the mutation's fresh snapshot", async () => {
     const held = deferred<SettingsSnapshot>();
     const fresh = baseSnapshot({ settings: { ...baseSettings(), ui: { theme: "dark" } } });
@@ -235,7 +235,7 @@ describe("settings-store: plain mutations", () => {
     expect(store.getState().snapshot).toEqual(withRule);
   });
 
-  //  (BU4): revokeBinaryTrust — the mirror of every other mutation
+  // (BU4): revokeBinaryTrust — the mirror of every other mutation
   // action's discipline (calls the dedicated bridge method with the raw
   // path, commits the fresh snapshot on ok:true, sets the failure notice on
   // ok:false — never a wholesale settings-set, D-S4-5's custody).
@@ -262,7 +262,7 @@ describe("settings-store: plain mutations", () => {
   });
 });
 
-describe("settings-store: connection CRUD ( W12)", () => {
+describe("settings-store: connection CRUD (W12)", () => {
   it("connectionCreate applies the fresh snapshot on success", async () => {
     const withConn = baseSnapshot({
       settings: { ...baseSettings(), provider: { activeConnectionId: "conn-1", connections: [{ id: "conn-1", providerId: "z-ai" }] } },
@@ -349,7 +349,7 @@ describe("settings-store: connection CRUD ( W12)", () => {
   });
 });
 
-describe("settings-store: provider-health push ( W11-FIX, W13 live-dogfood finding)", () => {
+describe("settings-store: provider-health push (W11-FIX, W13 live-dogfood finding)", () => {
   it("subscribeProviderHealth wires the bridge's push into a fresh load() and returns its unsubscribe", async () => {
     let captured: (() => void) | undefined;
     const unsubscribe = vi.fn();
@@ -421,6 +421,7 @@ describe("settings-store: weak-storage consent flow (ruling §1/design §4)", ()
     expect(result).toEqual({ ok: true, snapshot: baseSnapshot({ secrets: [readyStatus] }) });
     expect(store.getState().pendingConsent).toBeNull();
     expect(store.getState().snapshot?.secrets[0]).toEqual(readyStatus);
+    expect(store.getState().secretConsentResolution).toEqual({key:"provider.apiKey", ok:true});
     // CUSTODY: after the full accept round-trip, the plaintext is gone from
     // every corner of the store's own state (pendingConsent cleared, and the
     // snapshot never carried it to begin with).
@@ -437,6 +438,7 @@ describe("settings-store: weak-storage consent flow (ruling §1/design §4)", ()
 
     expect(store.getState().pendingConsent).toBeNull();
     expect(setSecret).toHaveBeenCalledTimes(1);
+    expect(store.getState().secretConsentResolution).toEqual({key:"provider.apiKey", ok:false});
     expect(JSON.stringify(store.getState())).not.toContain("sk-super-secret");
   });
 
@@ -616,7 +618,7 @@ describe("describeUpdateActionFailure", () => {
     expect(new Set(texts).size).toBe(reasons.length);
   });
 
-  it(" defect 2: manual_only names GitHub Releases as the alternative", () => {
+  it("defect 2: manual_only names GitHub Releases as the alternative", () => {
     expect(describeUpdateActionFailure("manual_only")).toMatch(/GitHub Releases/);
   });
 });
@@ -681,7 +683,7 @@ describe("settings-store: auto-updater (slice 2.6 §6)", () => {
     expect(store.getState().notice).toBeNull();
   });
 
-  it("openReleasesUpdate ( defect 2) forwards to the bridge and leaves no notice on success", async () => {
+  it("openReleasesUpdate (defect 2) forwards to the bridge and leaves no notice on success", async () => {
     const openReleasesPage = vi.fn().mockResolvedValue({ ok: true } satisfies UpdateActionResult);
     const store = createSettingsStore(fakeBridge(), fakeUpdatesBridge({ openReleasesPage }));
 
@@ -701,4 +703,37 @@ describe("settings-store: auto-updater (slice 2.6 §6)", () => {
     expect(result).toEqual({ ok: false, reason: "not_packaged" });
     expect(store.getState().notice).toBe(describeUpdateActionFailure("not_packaged"));
   });
+});
+
+it("serializes storage consent and ignores decline while the accepted write is in flight", async () => {
+  let finishConsent!: (value: SettingsMutationResult) => void;
+  const set = vi.fn(() => new Promise<SettingsMutationResult>(resolve => {finishConsent = resolve;}));
+  const setSecret = vi.fn().mockResolvedValueOnce({ok:false, reason:"weak_storage_needs_consent"}).mockResolvedValueOnce({ok:true, snapshot:baseSnapshot()});
+  const store = createSettingsStore(fakeBridge({set, setSecret}));
+  await store.getState().setSecret("provider.apiKey", "fixture-key");
+  const accepting = store.getState().acceptWeakStorageConsent();
+  expect(store.getState().consentSaving).toBe(true);
+  store.getState().declineWeakStorageConsent();
+  expect(store.getState().pendingConsent).not.toBeNull();
+  expect(store.getState().secretConsentResolution).toBeNull();
+  expect(await store.getState().acceptWeakStorageConsent()).toBeNull();
+  finishConsent({ok:true, snapshot:baseSnapshot()});
+  await accepting;
+  expect(set).toHaveBeenCalledOnce();
+  expect(setSecret).toHaveBeenCalledTimes(2);
+  expect(store.getState().consentSaving).toBe(false);
+  expect(store.getState().secretConsentResolution).toEqual({key:"provider.apiKey", ok:true});
+  expect(JSON.stringify(store.getState())).not.toContain("fixture-key");
+});
+
+it("clears the pending secret and reports a failed consent when the bridge rejects", async () => {
+  const setSecret = vi.fn().mockResolvedValueOnce({ok:false, reason:"weak_storage_needs_consent"});
+  const set = vi.fn().mockRejectedValue(new Error("fixture failure"));
+  const store = createSettingsStore(fakeBridge({set, setSecret}));
+  await store.getState().setSecret("provider.apiKey", "fixture-key");
+  expect(await store.getState().acceptWeakStorageConsent()).toBeNull();
+  expect(store.getState().pendingConsent).toBeNull();
+  expect(store.getState().consentSaving).toBe(false);
+  expect(store.getState().secretConsentResolution).toEqual({key:"provider.apiKey", ok:false});
+  expect(JSON.stringify(store.getState())).not.toContain("fixture-key");
 });

@@ -1,5 +1,5 @@
 /**
- * The main-side registry of proxy SCOPES ( §3): one binding per scope
+ * The main-side registry of proxy SCOPES (§3): one binding per scope
  * kind, so every operation that has to walk "all the places a proxy can be
  * referenced" — the ladder, the consumer list that blocks a profile delete, the
  * ref write — walks the same list, and adding a scope means adding one entry
@@ -157,7 +157,7 @@ export function allProxyScopes(settings: AnycodeSettings): ProxyScopeId[] {
 
 /**
  * The human-readable names of every scope that currently references
- * `profileId` ( §7). A delete is refused while this is non-empty and
+ * `profileId` (§7). A delete is refused while this is non-empty and
  * the list is shown verbatim: silently detaching the references would change the
  * network path of scopes the user is not looking at, and the worst outcome of
  * that is traffic leaving the corporate proxy — a leak class, not an
@@ -175,7 +175,7 @@ export function proxyProfileConsumers(settings: AnycodeSettings, profileId: stri
   return out;
 }
 
-// ── legacy import ( §1) ──
+// ── legacy import (§1) ──
 
 /** A fresh profile id. Opaque and dot-free — it is a vault-key segment. */
 export function defaultProxyProfileId(): string {
@@ -306,7 +306,7 @@ export async function importLegacyProxy(
   bare.username = "";
   bare.password = "";
   const bareUrl = bare.toString();
-  // The registry's custody rule is stricter than 's legacy predicate
+  // The registry's custody rule is stricter than's legacy predicate
   // (design review B-06): a profile url must be a bare proxy endpoint, with no
   // path/query/fragment. A legacy string that carries one — a PAC url pasted
   // into the proxy field, most likely — is REFUSED conversion rather than
@@ -377,8 +377,8 @@ export interface LegacyProxyMigration {
 }
 
 /**
- * : moves every CREDENTIALED legacy `proxyUrl` string into the
- *  registry at boot — the string keeps working, but the password stops
+ * moves every CREDENTIALED legacy `proxyUrl` string into the
+ * registry at boot — the string keeps working, but the password stops
  * living in a 0644 settings.json and moves into the vault.
  *
  * Per scope: read through the SAME `readProxyScope` the ladder reads; when the
@@ -418,7 +418,7 @@ export async function migrateLegacyProxyUrls(
       // importing the dead string would REPLACE the user's chosen profile
       // with a different proxy. Only the plaintext credential goes — the
       // binding's write keeps the same ref and deletes the legacy key, so the
-      // effective proxy is unchanged ( review).
+      // effective proxy is unchanged (review).
       binding.write(settings, scope, ref);
       imported.push({ scope, profileId: ref });
       continue;

@@ -94,7 +94,7 @@ describe("loadSettings (fail-soft)", () => {
   });
 });
 
-// ──  W12-FIX2 §2: load-normalize repairs active<->non-empty (codex W12-FIX review #2) ──
+// ── W12-FIX2 §2: load-normalize repairs active<->non-empty (codex W12-FIX review #2) ──
 
 describe("loadSettings — normalizeActiveConnection repairs the active<->non-empty invariant", () => {
   // §2.1 — reverting the normalize-hunk (files.ts) turns this red: schema-level
@@ -190,7 +190,7 @@ describe("loadSettings — normalizeActiveConnection repairs the active<->non-em
   });
 });
 
-// ──  slice D: load drops out-of-bounds connection.maxOutputTokens (read as absent) ──
+// ── slice D: load drops out-of-bounds connection.maxOutputTokens (read as absent) ──
 
 describe("loadSettings — out-of-bounds connection maxOutputTokens is read as absent", () => {
   /** A settings.json with one connection carrying the given (hand-editable) ceiling. */

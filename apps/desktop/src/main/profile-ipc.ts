@@ -2,7 +2,7 @@
  * Profile stats control-plane IPC (design slice-P7.22-cut.md §2-D5/D6/D2 W2).
  * Registers `ipcMain.handle` for the five channels in shared/profile-config.ts:
  * a read-only aggregated usage-stats view, the instant cache-only view and the
- * cache rebuild (both  S3), a user-scope `telemetry.enabled` toggle,
+ * cache rebuild (both S3), a user-scope `telemetry.enabled` toggle,
  * and a reveal of the resolved sink directory. Mirrors main/skills-
  * ipc.ts exactly: the handler logic is exported pure functions over a deps
  * bag (unit-testable without ipcMain), zod validates the one payload-carrying
@@ -20,7 +20,7 @@
  * caller-supplied path to defend against here (unlike skills/subagents, which
  * accept a `name`/`ids` identity to re-resolve).
  *
- * INCREMENTAL SCAN ( S3): the directory walk that used to live here —
+ * INCREMENTAL SCAN (S3): the directory walk that used to live here —
  * readdir, lstat everything, sort newest-first, read every file under a byte
  * budget — moved to main/profile-stats-cache.ts and became incremental. A file
  * whose (size, mtime, inode, ctime) fingerprint has not moved is replayed from
@@ -92,7 +92,7 @@ export interface ProfileFileStat {
   isDirectory: boolean;
   mode?: number;
   isSymbolicLink?: boolean;
-  /**  S3 (D-6): inode + ctime complete the cache fingerprint. Without
+  /** S3 (D-6): inode + ctime complete the cache fingerprint. Without
    *  the inode a rotation that reuses a name is invisible; without ctime a
    *  same-size rewrite with a restored mtime is. REQUIRED, not optional: the
    *  cache compares an `lstat` fingerprint against one taken from an open
@@ -110,11 +110,11 @@ export interface ProfileFs {
   stat(path: string): Promise<ProfileFileStat>;
   mkdir(path: string): Promise<void>;
   readdir(path: string): Promise<string[]>;
-  /** REQUIRED since  S3 (D-6): the stats cache publishes itself by
+  /** REQUIRED since S3 (D-6): the stats cache publishes itself by
    *  tmp+rename only — there is no direct-write fallback, so a port without
    *  rename could never persist a cache atomically. */
   rename(from: string, to: string): Promise<void>;
-  /** REQUIRED since  S3: sweeping tmp files orphaned by a crash
+  /** REQUIRED since S3: sweeping tmp files orphaned by a crash
    *  between the write and the rename. */
   rm(path: string): Promise<void>;
   chmod?(path: string, mode: number): Promise<void>;
@@ -124,7 +124,7 @@ export interface ProfileFs {
    *  TOCTOU on the read path, mirror of subagents-ipc.ts's SubagentsFs). */
   readFileNoFollow(path: string): Promise<string>;
   /**
-   *  S3 (D-6) coherent snapshot read: open O_NOFOLLOW, `fstat` the
+   * S3 (D-6) coherent snapshot read: open O_NOFOLLOW, `fstat` the
    * HANDLE, read exactly that many bytes, `fstat` the same handle again. The
    * caller compares the two stats to tell a legitimate append (grew) from a
    * rewrite that may have straddled the read (shrank, or same size with a
@@ -282,10 +282,10 @@ export interface ProfileIpcDeps {
   reveal(path: string): void | Promise<void>;
   /** Boot env — carries the `ANYCODE_TELEMETRY` kill-switch (also read internally by `loadTelemetryConfig`). */
   env: NodeJS.ProcessEnv;
-  /**  S3: per-pass scan budgets (D-2). Omitted fields fall back to the
+  /** S3: per-pass scan budgets (D-2). Omitted fields fall back to the
    *  production constants; tests inject tiny ones to exercise the backlog. */
   budgets?: Partial<ProfileScanBudgets>;
-  /**  S3: the cache store. Omitted, the process-wide store for this
+  /** S3: the cache store. Omitted, the process-wide store for this
    *  home's cache path is used — two IPC calls MUST share one store or nothing
    *  is cached between them. */
   cache?: ProfileStatsCacheStore;
@@ -303,7 +303,7 @@ function defaultTelemetryDir(home: string): string {
 }
 
 /** `<home>/.anycode/config.json` — byte-identical to core/telemetry/settings.ts's `userTelemetryConfigPath`.
- *  Exported for telemetry-retention.ts ( / ), which reads
+ *  Exported for telemetry-retention.ts, which reads
  *  `telemetry.retention` from the exact config Profile reads. */
 export function userConfigPath(home: string): string {
   return `${stripTrailingSep(home)}/.anycode/config.json`;
@@ -317,7 +317,7 @@ function isAbsolutePath(path: string): boolean {
 const TELEMETRY_KILL_SWITCH_VALUES = new Set(["0", "false", "off"]);
 
 /** Mirror of core/telemetry/config.ts's (unexported) kill-switch check.
- *  Exported for telemetry-retention.ts ( / ). */
+ *  Exported for telemetry-retention.ts. */
 export function isKillSwitchActive(env: NodeJS.ProcessEnv): boolean {
   const raw = env.ANYCODE_TELEMETRY;
   return raw !== undefined && TELEMETRY_KILL_SWITCH_VALUES.has(raw.toLowerCase());
@@ -355,7 +355,7 @@ async function readUserTelemetryDirOverride(fs: ProfileFs, home: string): Promis
   }
 }
 
-/** Exported for telemetry-retention.ts ( / ), which must
+/** Exported for telemetry-retention.ts, which must
  *  sweep EXACTLY the directory Profile reads. */
 export interface ResolvedProfileDir {
   dir: string;
@@ -364,7 +364,7 @@ export interface ResolvedProfileDir {
 }
 
 /** Resolves the scan/reveal directory + status flags per §2-D2. Never throws (loadTelemetryConfig + readUserTelemetryDirOverride are both fail-soft).
- *  Exported for telemetry-retention.ts ( / ). */
+ *  Exported for telemetry-retention.ts. */
 export async function resolveProfileDir(deps: ProfileIpcDeps): Promise<ResolvedProfileDir> {
   const home = deps.home();
   const killSwitchActive = isKillSwitchActive(deps.env);
@@ -376,7 +376,7 @@ export async function resolveProfileDir(deps: ProfileIpcDeps): Promise<ResolvedP
   return { dir: override ?? defaultTelemetryDir(home), telemetryEnabled: false, killSwitchActive };
 }
 
-// ── cache-backed scan ( S3; the old read-everything-every-time scan
+// ── cache-backed scan (S3; the old read-everything-every-time scan
 //     lived here and is now main/profile-stats-cache.ts) ──
 
 /** The store this deps bag scans with: injected, else the process-wide one
@@ -416,7 +416,7 @@ function toView(stats: ProfileStats, status: ResolvedProfileDir, coverage: Profi
 
 /**
  * profile-stats-get: resolves the user-scope dir (§2-D2) and runs ONE
- * incremental pass over it ( S3) — unchanged files are replayed from
+ * incremental pass over it (S3) — unchanged files are replayed from
  * the cache and never opened. A missing dir yields a zeroed stats view
  * (ok:true); only a genuine readdir/aggregation failure is `io_error`.
  */

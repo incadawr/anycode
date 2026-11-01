@@ -5,7 +5,7 @@ const pkgRoot = fileURLToPath(new URL("..", import.meta.url));
 const coreRoot = fileURLToPath(new URL("../../../packages/core/src", import.meta.url));
 await build({
   entryPoints: {
-    // Two entries ( rework, defect 3): the CLI itself, and the Ink
+    // Two entries (rework, defect 3): the CLI itself, and the Ink
     // TUI as its own chunk. main.ts loads the TUI via a dynamic
     // `await import("./tui.js")`; with code splitting that specifier maps to
     // the emitted dist/cli/tui.js, so ink/react are fetched+parsed ONLY on

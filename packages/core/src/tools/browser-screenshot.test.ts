@@ -101,7 +101,7 @@ describe("BrowserScreenshot", () => {
       expect(screenshot).not.toHaveBeenCalled();
     });
 
-    it(" slice B2: passes when the model is blind but a vision recognizer is configured", async () => {
+    it("slice B2: passes when the model is blind but a vision recognizer is configured", async () => {
       const preview = previewWith(vi.fn<PreviewPort["screenshot"]>(async () => ({ ok: true, value: screenshotSuccess })));
       const mediaBlindWithRecognizer: MediaCapabilityPort = {
         imageInputEnabled: () => false,
@@ -115,7 +115,7 @@ describe("BrowserScreenshot", () => {
       expect(result.images).toHaveLength(1);
     });
 
-    it(" slice B2: still refuses when blind and recognizerConfigured() is false", async () => {
+    it("slice B2: still refuses when blind and recognizerConfigured() is false", async () => {
       const preview = previewWith(vi.fn<PreviewPort["screenshot"]>(async () => ({ ok: true, value: screenshotSuccess })));
       const mediaBlindNoRecognizer: MediaCapabilityPort = {
         imageInputEnabled: () => false,
@@ -165,7 +165,7 @@ describe("BrowserScreenshot", () => {
     expect(result.output).toEqual(screenshotSuccess);
   });
 
-  it(" slice G: forwards a port-supplied cssWidth/cssHeight as attachment.cssSize", async () => {
+  it("slice G: forwards a port-supplied cssWidth/cssHeight as attachment.cssSize", async () => {
     const withCss: PreviewScreenshotSuccess = { ...screenshotSuccess, cssWidth: 550, cssHeight: 400 };
     const preview = previewWith(async () => ({ ok: true, value: withCss }));
     const result = await browserScreenshotTool.handler(
@@ -177,7 +177,7 @@ describe("BrowserScreenshot", () => {
     expect(img!.cssSize).toEqual({ width: 550, height: 400 });
   });
 
-  it(" slice G additivity pin: without a port-supplied CSS size, the attachment has no cssSize KEY at all (not just undefined) — byte-identical to pre-slice behaviour", async () => {
+  it("slice G additivity pin: without a port-supplied CSS size, the attachment has no cssSize KEY at all (not just undefined) — byte-identical to pre-slice behaviour", async () => {
     const preview = previewWith(async () => ({ ok: true, value: screenshotSuccess }));
     const result = await browserScreenshotTool.handler(
       browserScreenshotInputSchema.parse({}),

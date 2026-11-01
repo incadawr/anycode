@@ -183,7 +183,7 @@ describe("reduceComposer", () => {
   });
 });
 
-describe("reduceComposer cursor editing + multiline ( rework)", () => {
+describe("reduceComposer cursor editing + multiline (rework)", () => {
   it("12. insert at cursor: 'ab' + cursor-left + 'X' => 'aXb', cursor 2", () => {
     const state = drive(
       undefined,

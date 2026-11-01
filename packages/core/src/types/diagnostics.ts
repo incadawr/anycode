@@ -8,7 +8,7 @@
 export type DiagnosticEvent =
   | { kind: "provider_stream_artifact"; signature: string }
   /**
-   * : the model port confirmed, via a one-shot retry, that a strict
+   * the model port confirmed, via a one-shot retry, that a strict
    * openai-chat-completions endpoint's HTTP 400 was caused by
    * `stream_options.include_usage` and has permanently disabled the flag for
    * this endpoint (the port instance's lifetime — see AiSdkModelPort's

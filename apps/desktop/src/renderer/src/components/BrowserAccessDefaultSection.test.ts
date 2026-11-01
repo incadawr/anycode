@@ -1,5 +1,5 @@
 /**
- * Settings → Permissions "Full browser access for new sessions": brief
+ * Settings → Permissions "Full browser access for new sessions" brief
  * test 52. The toggle writes `browser.fullAccessDefault` through the generic settings patch.
  */
 import { describe, expect, it } from "vitest";

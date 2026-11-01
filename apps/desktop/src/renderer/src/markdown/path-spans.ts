@@ -1,5 +1,5 @@
 /**
- *  slice 2 — finds candidate local filesystem paths inside a plain
+ * slice 2 — finds candidate local filesystem paths inside a plain
  * run of text (a markdown `text` leaf or a `codespan`'s whole content — see
  * Markdown.tsx's `InlineTokens` for the two call sites; a `link` token's own
  * children and fenced `code` blocks are never scanned, by the CALLER's

@@ -1,6 +1,6 @@
 /**
  * Unit tests for the settings v2 schema, the v1->v2 reset, deep-partial merge
- * and version policy (design slice-2.2-cut.md §2 +  W9). Plus a freeze
+ * and version policy (design slice-2.2-cut.md §2 + W9). Plus a freeze
  * guard on the value-only contract surface (shared/settings.ts) so the wave
  * cannot drift the channels / env-key list without a red test.
  */
@@ -50,15 +50,15 @@ describe("frozen contract surface (shared/settings.ts)", () => {
     expect(PERMISSION_RULE_ADD_CHANNEL).toBe("anycode:permission-rule-add");
   });
 
-  it("pins the connection CRUD channels ( W9)", () => {
+  it("pins the connection CRUD channels (W9)", () => {
     expect(CONNECTION_CREATE_CHANNEL).toBe("anycode:connection-create");
     expect(CONNECTION_UPDATE_CHANNEL).toBe("anycode:connection-update");
     expect(CONNECTION_SET_ACTIVE_CHANNEL).toBe("anycode:connection-set-active");
     expect(CONNECTION_DELETE_CHANNEL).toBe("anycode:connection-delete");
   });
 
-  it("pins SECRET_ENV_KEYS (ruling R3;  срез C widens it with the recognizer's own credential)", () => {
-    //  part C: the MCP secret hand-off var is scrubbed by both main and host.
+  it("pins SECRET_ENV_KEYS (ruling R3; срез C widens it with the recognizer's own credential)", () => {
+    // part C: the MCP secret hand-off var is scrubbed by both main and host.
     expect(SECRET_ENV_KEYS).toEqual(["ANYCODE_API_KEY", "ANYCODE_RECOGNIZER_API_KEY", "ANYCODE_MCP_SECRETS"]);
   });
 });
@@ -189,7 +189,7 @@ describe("settingsSchema (v2)", () => {
     expect(settingsSchema.safeParse(bad).success).toBe(false);
   });
 
-  // : provider-reported quota cache on the connection.
+  // provider-reported quota cache on the connection.
   it("accepts a connection's lastQuota and preserves it through a JSON round-trip", () => {
     const lastQuota = {
       usedPercent: 80,
@@ -233,7 +233,7 @@ describe("settingsSchema (v2)", () => {
     }
   });
 
-  //  follow-up (Opus review): these two are `.catch(undefined)`
+  // follow-up (Opus review): these two are `.catch(undefined)`
   // DEGRADATIONS now, not document failures — the corrupt value reads back as
   // absent while the rest of the document survives (pinned below).
   it("degrades a malformed lastQuota (string percent) to absent, document survives", () => {
@@ -268,7 +268,7 @@ describe("settingsSchema (v2)", () => {
     }
   });
 
-  //  follow-up (Opus review): `lastQuota` is `.catch(undefined)` at
+  // follow-up (Opus review): `lastQuota` is `.catch(undefined)` at
   // the whole-object boundary — a corrupt value must load as ABSENT, never
   // fail the whole document (which would reset every other section to
   // defaults over one bad advisory field).
@@ -290,9 +290,9 @@ describe("settingsSchema (v2)", () => {
     }
   });
 
-  // ── : modelCapabilities round-trips and reads back absent on corruption ──
+  // ── modelCapabilities round-trips and reads back absent on corruption ──
 
-  it(": a connection's modelCapabilities round-trips through parse", () => {
+  it("a connection's modelCapabilities round-trips through parse", () => {
     const settings = {
       ...cloneDefaults(),
       provider: {
@@ -324,7 +324,7 @@ describe("settingsSchema (v2)", () => {
     ["a garbage effortLevels value", { m: { effortLevels: "high" } }],
     ["a non-object map", "nope"],
   ])(
-    ": a corrupt modelCapabilities (%s) reads back as absent without corrupting the rest of the document",
+    "a corrupt modelCapabilities (%s) reads back as absent without corrupting the rest of the document",
     (_name, garbage) => {
       const settings = {
         ...cloneDefaults(),
@@ -470,7 +470,7 @@ describe("keybindings.overrides (F20, slice-P7.24-cut.md §1, additive-optional)
   });
 });
 
-describe("preview (night-track wave-1 cut §2.7,  96-E, additive-optional)", () => {
+describe("preview (night-track wave-1 cut §2.7, 96-E, additive-optional)", () => {
   it("reads a file with no preview field, round-tripping byte-identically (v2)", () => {
     const legacy = cloneDefaults();
     const before = JSON.stringify(legacy);
@@ -583,7 +583,7 @@ describe("preview.displayMode (96-P0, panel-track CUT.md §2.3, additive-optiona
   });
 });
 
-describe("codex (, cut §3.5, additive-optional)", () => {
+describe("codex (cut §3.5, additive-optional)", () => {
   it("reads a file with no codex field, round-tripping byte-identically (v2)", () => {
     const legacy = cloneDefaults();
     const before = JSON.stringify(legacy);
@@ -784,7 +784,7 @@ describe("codex.profiles (codex-profiles cut §2.3, amended §A1.1) — round-tr
   });
 });
 
-describe("plugins ( S1-B, design §7, additive-optional)", () => {
+describe("plugins (S1-B, design §7, additive-optional)", () => {
   it("reads a file with no plugins field, round-tripping byte-identically (v2)", () => {
     const legacy = cloneDefaults();
     const before = JSON.stringify(legacy);
@@ -824,7 +824,7 @@ describe("plugins ( S1-B, design §7, additive-optional)", () => {
     }
   });
 
-  it("serviceConsent round-trips with strict entries (a)", () => {
+  it("serviceConsent round-trips with strict entries", () => {
     const withPlugins: AnycodeSettings = {
       ...cloneDefaults(),
       plugins: {
@@ -936,7 +936,7 @@ describe("isLoopbackUrl (FX3-L1 G-A — loopback waiver for the origin-rebind cu
   });
 });
 
-describe("isProxyUrl ( — single source of truth for settings-ipc's refine and host-env's emission gate)", () => {
+describe("isProxyUrl (single source of truth for settings-ipc's refine and host-env's emission gate)", () => {
   it("accepts http and https, with or without a port", () => {
     expect(isProxyUrl("http://proxy.example.com:3128")).toBe(true);
     expect(isProxyUrl("https://proxy.example.com")).toBe(true);
@@ -1080,7 +1080,7 @@ describe("connection.contextWindowTokens / contextWindowModel — persisted sche
   );
 });
 
-// ── : per-model image-input override + live modality set ──
+// ── per-model image-input override + live modality set ──
 
 describe("connection.imageInputOverride / imageInputModel + caps imageInput (4088-on-4118) — additive-optional, lenient on purpose", () => {
   it("round-trips a valid override+binding pair and the live-modality list verbatim through a read-modify-write", () => {
@@ -1642,7 +1642,7 @@ describe("DEFAULT_SETTINGS", () => {
   });
 });
 
-describe("security.trustedBinaries (, DV-6) — round-trip + per-element tolerance", () => {
+describe("security.trustedBinaries (DV-6) — round-trip + per-element tolerance", () => {
   const validConsent = {
     path: "/opt/homebrew/bin/codex",
     fingerprint: { mode: 0o755, uid: 501, gid: 20, size: 4096, mtimeMs: 1_700_000_000_000 },
@@ -1728,7 +1728,7 @@ describe("codex/claude proxyUrl — persisted schema stays LENIENT on purpose", 
   });
 
   // Strictness deliberately does NOT live here. `proxyUrl` on an engine block is
-  // now only ever a LEGACY value ( replaced the field with `proxyRef`),
+  // now only ever a LEGACY value (replaced the field with `proxyRef`),
   // read to be imported into the registry and refused there if unconvertible;
   // `engineProxyCarriers` gates emission fail-soft besides, so a hand-edited
   // garbage value can only ever mean "no proxy".
@@ -1743,7 +1743,7 @@ describe("codex/claude proxyUrl — persisted schema stays LENIENT on purpose", 
     expect(parsed.success).toBe(true);
     if (parsed.success) {
       // The block-level `.catch(undefined)` swallows it whole — accepted in
-      // : the block is no longer purely advisory, but the failure
+      // the block is no longer purely advisory, but the failure
       // direction ("no proxy emitted") is the safe one.
       expect(parsed.data.codex).toBeUndefined();
     }
@@ -1757,7 +1757,7 @@ describe("codex/claude proxyUrl — persisted schema stays LENIENT on purpose", 
     }
   });
 
-  // The pre- tolerance is unchanged: a wrong-shaped block still drops to
+  // The tolerance is unchanged: a wrong-shaped block still drops to
   // `undefined` without taking the document down with it.
   it("a wrong-shaped codex block still falls to undefined, document intact", () => {
     const parsed = parseSettings({ ...cloneDefaults(), codex: "legacy-value", claude: { proxyUrl: PROXY } });
@@ -1868,7 +1868,7 @@ describe("network.proxyProfiles + proxyRef — round-trip + zod-granularity", ()
   });
 });
 
-// ── design-review regressions ( lane A, gpt-5.6-sol xhigh) ──
+// ── design-review regressions (lane A, gpt-5.6-sol xhigh) ──
 
 describe("B-07 — a corrupt advisory field must not erase an explicit proxy decision", () => {
   // THE SCENARIO: `codex.proxyRef` is `"direct"` on disk. A neighbouring
@@ -1966,7 +1966,7 @@ describe("H-03 — one bad profile never blanks the registry", () => {
   });
 });
 
-describe("recognizer ( E1, additive-optional) — vision-fallback connection+model selection", () => {
+describe("recognizer (E1, additive-optional) — vision-fallback connection+model selection", () => {
   it("reads a file with no recognizer field, round-tripping byte-identically (v2)", () => {
     const legacy = cloneDefaults();
     const before = JSON.stringify(legacy);
@@ -2050,7 +2050,7 @@ describe("recognizer ( E1, additive-optional) — vision-fallback connection+mod
   });
 });
 
-describe("preview.liveReload (, additive-optional)", () => {
+describe("preview.liveReload (additive-optional)", () => {
   it("a persisted liveReload:false survives the parse (not stripped as an unknown key)", () => {
     const withOff: AnycodeSettings = { ...cloneDefaults(), preview: { liveReload: false } };
     const parsed = settingsSchema.safeParse(JSON.parse(JSON.stringify(withOff)));
@@ -2061,7 +2061,7 @@ describe("preview.liveReload (, additive-optional)", () => {
   });
 });
 
-describe("tools.grepBackend (, additive-optional)", () => {
+describe("tools.grepBackend (additive-optional)", () => {
   it("round-trips grepBackend: \"tgrep\" through the enum", () => {
     const parsed = settingsSchema.safeParse({ ...cloneDefaults(), tools: { grepBackend: "tgrep" } });
     expect(parsed.success).toBe(true);
@@ -2093,13 +2093,13 @@ describe("tools.grepBackend (, additive-optional)", () => {
 });
 
 // ---------------------------------------------------------------------------
-//  §3.5: the `roles` section — additive-optional, version NOT
+// §3.5: the `roles` section — additive-optional, version NOT
 // bumped (preview/recognizer precedent). Absent means "built-in defaults";
 // a corrupt roles value degrades alone (whole-object catch); a bad fallback
 // element drops alone (per-element tolerance); engine+connection in one
 // entry is rejected.
 
-describe("roles ( §3.5, additive-optional)", () => {
+describe("roles (§3.5, additive-optional)", () => {
   it("reads a file with no roles field, round-tripping byte-identically (v2)", () => {
     const legacy = cloneDefaults();
     const before = JSON.stringify(legacy);
@@ -2260,7 +2260,7 @@ describe("browser — browser.fullAccessDefault settings block (test 41)", () =>
   });
 });
 
-describe("communication (, additive-optional) — Sessions API settings block", () => {
+describe("communication (additive-optional) — Sessions API settings block", () => {
   it("round-trips a file with no communication key byte-identically (v2)", () => {
     const before = JSON.stringify(cloneDefaults());
     const result = parseSettings(JSON.parse(before));

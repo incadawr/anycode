@@ -2,7 +2,7 @@
  * `ClaudeMcpBridge` tests, unit-level like `approval-bridge.test.ts` (direct
  * `InboundControlRequest`/`ControlRequestResponder` construction — no spawned
  * child, no `ClaudeClient`). Wire shapes below are copied from the live
- * captures in `working-docs/tasks/.probes.md` (P0/P1/P3, CLI
+ * captures (P0/P1/P3, CLI
  * 2.1.261) — never invented.
  */
 
@@ -90,7 +90,7 @@ describe("ClaudeMcpBridge — the MCP handshake, with NO dependency on ClaudeCli
 
     const initialized = responderSpy();
     await bridge.handleControlRequest(inbound({ server_name: "anycode", message: MCP_INITIALIZED_NOTIFICATION }), initialized.responder);
-    // : a notification is answered with the official Agent SDK's
+    // a notification is answered with the official Agent SDK's
     // empty JSON-RPC result, NOT an empty success. CLI 2.1.261 tolerated the
     // absent `response` body; 2.1.288+ parses every mcp_message answer as an
     // object `{mcp_response?}` and throws on `undefined`, failing the whole
@@ -127,7 +127,7 @@ describe("ClaudeMcpBridge — tools/call reaches the injected handler and answer
 
     expect(seen.name).toBe("agent");
     expect(seen.args).toEqual({ agent_type: "probe", description: "probe run", prompt: "ping" });
-    //  probes P1: correlation rides in on `tools/call`'s own `_meta`
+    // probes P1: correlation rides in on `tools/call`'s own `_meta`
     // — this is precisely why srez S3 needs no `tool_use` registry of its own.
     expect(seen.meta).toEqual({ toolUseId: "toolu_01ABC", progressToken: 2 });
     expect(seen.signal?.aborted).toBe(false);
@@ -170,7 +170,7 @@ describe("ClaudeMcpBridge — notifications/cancelled (P3: the ONLY cancellation
     expect(capturedSignal?.aborted).toBe(true);
     // ...AND, independently, the ORIGINAL tools/call's own outer
     // control_request is answered — a JSON-RPC error for its OWN id
-    // (: the CLI requires an object body for every mcp_message
+    // (the CLI requires an object body for every mcp_message
     // answer; 2.1.261's empty success is rejected by 2.1.288+). Without this
     // answer at all, `ClaudeClient.pendingInbound` keeps one entry per
     // cancelled call forever.
@@ -202,7 +202,7 @@ describe("ClaudeMcpBridge — server_name mismatch", () => {
   });
 });
 
-describe("ClaudeMcpBridge — : every mcp_message answer carries an object body", () => {
+describe("ClaudeMcpBridge — every mcp_message answer carries an object body", () => {
   it("the CLI parses every answer as `{mcp_response?}` — no call may succeed with an absent/undefined body", async () => {
     const bridge = makeBridge();
 
@@ -259,10 +259,10 @@ describe("ClaudeMcpBridge — : every mcp_message answer carries an object body"
 });
 
 
-//  C3: a browser screenshot's images ride the MCP CallToolResult
+// C3: a browser screenshot's images ride the MCP CallToolResult
 // end to end — through ClaudeMcpBridge (pure pass-through) and the REAL
 // in-process SDK server (image content block present in the wire response).
-describe("ClaudeMcpBridge —  image pass-through (C3)", () => {
+describe("ClaudeMcpBridge — image pass-through (C3)", () => {
   const SCREENSHOT_TOOL: McpToolDecl = {
     name: "browser_screenshot",
     description: "Captures a screenshot of the session preview window.",

@@ -1,5 +1,5 @@
 /**
- * : prepares ONE already-resolved connection id for a child fork.
+ * prepares ONE already-resolved connection id for a child fork.
  *
  * This is `resolveResumePin`'s protocol (main/index.ts) borrowed, not
  * modified — a SYNCHRONOUS existence check + pin reservation (one microtask,

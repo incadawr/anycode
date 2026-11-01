@@ -61,7 +61,7 @@ import type { HostToUiMessage, WireToolMeta } from "../shared/protocol.js";
 export const PERMISSION_ASK_TIMEOUT_MS = 120_000;
 
 /**
- *  (cross-review F1): tools whose always-allow rules the BROKER's
+ * (cross-review F1): tools whose always-allow rules the BROKER's
  * rule seam confines to the session workspace. Core's
  * WORKSPACE_CONFINED_WRITE_TOOLS (Write/Edit/MultiEdit) plus the codex bridge's
  * CodexApplyPatch — a file write whose input carries a `paths[]` array and no
@@ -72,7 +72,7 @@ export const PERMISSION_ASK_TIMEOUT_MS = 120_000;
  * from), and core's engine-side set is load-bearing for other consumers.
  */
 export function brokerConfinedWriteTool(toolName: string): boolean {
-  //  review: Claude's NotebookEdit is a file write too (target in
+  // review: Claude's NotebookEdit is a file write too (target in
   // `notebook_path`, no rule subject => only the blanket `{toolName}` rule shape
   // exists for it); the claude approval bridge mints facts for it.
   return toolName === "CodexApplyPatch" || toolName === "NotebookEdit" || WORKSPACE_CONFINED_WRITE_TOOLS.has(toolName);
@@ -89,7 +89,7 @@ export function brokerConfinedWriteTool(toolName: string): boolean {
  * and rephrasing it will not help.
  */
 /**
- * : a live run showed a child whose Write approval expired redoing
+ * a live run showed a child whose Write approval expired redoing
  * the same write through a Bash `cat >` redirect. Both "nobody answered" texts
  * forbid that explicitly: the approval gate guards the EFFECT, not the tool.
  */
@@ -143,10 +143,10 @@ export function resolveAskTimeoutMs(toolName: string, defaultTimeoutMs: number):
 /** Reason a parked ask was settled, surfaced to the UI in permission_settled. */
 export type SettleOrigin = "ui" | "external" | "timeout" | "turn_cancelled" | "disconnect" | "shutdown";
 
-/** : how many recently settled asks remain addressable for `respondExternal`. */
+/** how many recently settled asks remain addressable for `respondExternal`. */
 const SETTLED_RECORD_CAP = 64;
 
-/** : one parked ask as the Sessions API sees it (copies only, no settle handle). */
+/** one parked ask as the Sessions API sees it (copies only, no settle handle). */
 export interface PendingAskSnapshot {
   requestId: string;
   toolName: string;
@@ -157,7 +157,7 @@ export interface PendingAskSnapshot {
   expiresInMs: number | null;
 }
 
-/** : outcome of an answer that arrives from outside the UI. */
+/** outcome of an answer that arrives from outside the UI. */
 export type ExternalAnswer =
   | { result: "answered" }
   | { result: "already_answered"; settledBy: SettleOrigin }
@@ -188,7 +188,7 @@ export function toWireToolMeta(metadata: ToolMetadata): WireToolMeta {
  *    call `requestPermission` DIRECTLY — core's permission engine, and with it
  *    `RuleAwarePermissionEngine`, is not in the path at all. Without this seam
  *    a persisted `alwaysAllow` rule cannot reach an engine session by
- *    construction, which is the whole defect  names.
+ *    construction, which is the whole defect names.
  *  - **The core boot does NOT**, and this is load-bearing rather than an
  *    omission. On the core path a rule has already been applied upstream
  *    (`RuleAware(SafeCommand(Mode))`, host/index.ts), so re-checking here would
@@ -208,17 +208,17 @@ interface PendingAsk {
   request: PermissionRequest;
   /** Armed only once `present()` sends the request to the UI; null while queued. */
   timer: ReturnType<typeof setTimeout> | null;
-  /** : when the ask was parked. */
+  /** when the ask was parked. */
   createdAt: number;
-  /** : when `present()` showed it to the UI; null while queued. */
+  /** when `present()` showed it to the UI; null while queued. */
   presentedAt: number | null;
-  /** : the deadline armed at presentation (per-tool), used for `expiresInMs`. */
+  /** the deadline armed at presentation (per-tool), used for `expiresInMs`. */
   presentedTimeoutMs: number | null;
   remainingTimeoutMs: number | null;
 }
 
 /**
- * : the structural subset of the broker the ENGINE approval
+ * the structural subset of the broker the ENGINE approval
  * bridges consume (denyAll + requestPermission + the two latches). Named so
  * the engine option types can accept the classifying DECORATOR
  * (classifying-broker.ts) next to the real IpcPermissionBroker without a
@@ -264,7 +264,7 @@ export class IpcPermissionBroker implements PermissionBroker {
   private unattended = false;
 
   /**
-   * : bounded record of recently settled asks, so an answer that
+   * bounded record of recently settled asks, so an answer that
    * arrives after the fact can say WHO settled it (`already_answered`) instead
    * of the ask looking like it never existed. Oldest evicted past the cap.
    */
@@ -316,7 +316,7 @@ export class IpcPermissionBroker implements PermissionBroker {
   }
 
   /**
-   * : rule matching with a scoped CodexExec compatibility retry. The
+   * rule matching with a scoped CodexExec compatibility retry. The
    * original toolName/raw input is tried FIRST so a CodexExec-specific rule
    * keeps working; only when that misses, and only for a CodexExec request
    * that carries a string `command` and is NOT a stdin write, is the matcher
@@ -330,7 +330,7 @@ export class IpcPermissionBroker implements PermissionBroker {
    */
   private ruleAllows(request: PermissionRequest): boolean {
     if (this.rules === null) return false;
-    //  (cross-review F1): a persisted rule never authorises a
+    // (cross-review F1): a persisted rule never authorises a
     // file write the caller could not PROVE lands inside the session
     // workspace. On a core boot this is already enforced upstream by
     // RuleAwarePermissionEngine (packages/core rules.ts, dispatcher-minted
@@ -375,7 +375,7 @@ export class IpcPermissionBroker implements PermissionBroker {
   }
 
   /**
-   * : the answer from outside the UI (Sessions API `answer_approval`).
+   * the answer from outside the UI (Sessions API `answer_approval`).
    * Settles through the same `settle` path as a UI click, so exactly one of the
    * two wins: the loser sees `already_answered` with the winner's origin. Never
    * carries `updatedInput` and never touches the always-allow rules.
@@ -395,7 +395,7 @@ export class IpcPermissionBroker implements PermissionBroker {
   }
 
   /**
-   * : copies of every parked ask, the shown one first, then the
+   * copies of every parked ask, the shown one first, then the
    * queue in arrival order. Mutating a returned object never reaches the broker.
    */
   pendingSnapshot(): PendingAskSnapshot[] {
@@ -489,7 +489,7 @@ export class IpcPermissionBroker implements PermissionBroker {
   }
 
   /**
-   * Core PermissionBroker.isAwaitingApproval ( slice 1): true while at
+   * Core PermissionBroker.isAwaitingApproval (slice 1): true while at
    * least one ask is parked, shown or queued. The INLINE subagent stall clock
    * (subagents/runner.ts) polls this to know whether a child sharing THIS
    * broker instance is currently blocked on a human — there is no push event
@@ -513,7 +513,7 @@ export class IpcPermissionBroker implements PermissionBroker {
   }
 
   /**
-   *  checkpoint: SNAPSHOT of the currently-SHOWN ask (the one a
+   * checkpoint: SNAPSHOT of the currently-SHOWN ask (the one a
    * renderer's `permission` slot points at), or null when the slot is free.
    * Copy only — the caller can never settle or mutate the entry through it.
    * Read by Session's ui_ready cascade to re-assert the parked ask onto a

@@ -1,5 +1,5 @@
 /**
- *  rendered reconnect integration tests.
+ * rendered reconnect integration tests.
  *
  * These tests drive the REAL host Session (test-harness.ts: AgentLoop +
  * IpcPermissionBroker + scripted ModelPort) and pipe EVERY HostToUiMessage
@@ -89,7 +89,7 @@ function renderedTextStep(text: string): ModelStreamEvent[] {
   ];
 }
 
-describe(" — rendered reconnect (Session -> fresh desktopStore)", () => {
+describe("— rendered reconnect (Session -> fresh desktopStore)", () => {
   it("restores a mid-stream steer once after the turn finishes", async () => {
     const h = createHarness({
       steps: [toolStep("first-tool", "Write", { file_path: "/workspace/first.txt", content: "ok" }), [{ type: "start" }, { type: "text_start", id: "held" }, { type: "text_delta", id: "held", text: "waiting" }, { type: "tool_call", toolCall: { id: "steer-tool", name: "Write", input: { file_path: "/workspace/steer.txt", content: "ok" } } }, { type: "finish", finishReason: "tool_calls", usage: {} }], renderedTextStep("finished")],
@@ -493,7 +493,7 @@ describe(" — rendered reconnect (Session -> fresh desktopStore)", () => {
     const h = createHarness({ steps: [renderedTextStep("Done"), renderedTextStep("Done")] });
     try {
       // Simulate a resumed FOREIGN session's boot history: old items WITHOUT
-      //  stamps (pre-117 core items carry none either) — hydration
+      // stamps (pre-117 core items carry none either) — hydration
       // must treat them as unknown-identity and never suppress live turns.
       const unstamped: HistoryItem[] = [
         { id: "old-1", createdAt: 1, message: { role: "user", content: "old turn" }, tokenEstimate: 3, kind: "normal" },
@@ -758,7 +758,7 @@ describe(" — rendered reconnect (Session -> fresh desktopStore)", () => {
     // A native Codex/Claude host keeps the ORIGINAL constructor boot
     // snapshot (the rebuild-on-ui_ready is a CORE contract) and its
     // COMPLETE later-completed turns reach a reconnecting renderer via the
-    // Outbound ring replay — exactly as before .
+    // Outbound ring replay — exactly as before.
     const boot: HistoryItem[] = [
       { id: "boot-1", createdAt: 1, message: { role: "user", content: "boot turn" }, tokenEstimate: 3, kind: "normal" },
       {
@@ -856,7 +856,7 @@ describe(" — rendered reconnect (Session -> fresh desktopStore)", () => {
   });
 
   it("non-core engine, STAMPED fixed boot: hydrates blocks but NEVER folds them — a NEW native tool_result with a colliding toolCallId is NOT suppressed", async () => {
-    //  phase-1 defect 2 (native + stamps): a native host's FIXED
+    // phase-1 defect 2 (native + stamps): a native host's FIXED
     // boot snapshot may legitimately contain items that ALREADY carry
     // {turnId, step} (a resumed session hydrated through the shared
     // projection). The durable/causal fold is a CORE contract keyed by the
@@ -958,7 +958,7 @@ describe(" — rendered reconnect (Session -> fresh desktopStore)", () => {
       await settle();
       const { store, applied } = attachStore(h);
 
-      //  phase-hydration regression: assert the STAMPED boot state
+      // phase-hydration regression: assert the STAMPED boot state
       // (old durable text/modelText) BEFORE any live turn runs — the
       // hydration must have projected the boot blocks WITHOUT folding the
       // stamps into durable coverage (no core fold for a native host_ready).
@@ -1002,7 +1002,7 @@ describe(" — rendered reconnect (Session -> fresh desktopStore)", () => {
   });
 
   it("continuation: no stale bubble before the resumed segment — the pending field/bubble is retired before the first turn_start", async () => {
-    //  continuation regression. A model continuation has NO prompt:
+    // continuation regression. A model continuation has NO prompt:
     // startContinuation must retire any STALE pending prompt BEFORE the
     // resumed segment's first turn_start. The fixture is honest about the
     // ORDER in which the stale state and the continuation arise:
@@ -1159,7 +1159,7 @@ describe(" — rendered reconnect (Session -> fresh desktopStore)", () => {
 
 
   it("stale older finalizer: an older turn's terminal clear cannot erase a NEWER pending record — both host slot and rendered bubble survive, then their own clear retires them", async () => {
-    //  owner-ordering regression (deterministic). The public busy
+    // owner-ordering regression (deterministic). The public busy
     // invariant serializes admissions (the previous fixture assumed cancel
     // could admit a newer turn while the old turn's Read teardown was still
     // parked — real admission never interleaves that way: `onCancel` clears
@@ -1251,7 +1251,7 @@ describe(" — rendered reconnect (Session -> fresh desktopStore)", () => {
     }
   });
 
-  //  PHASE: authoritative control/accounting checkpoint. When the
+  // PHASE: authoritative control/accounting checkpoint. When the
   // replay ring has overflowed (>REPLAY_BUFFER_CAP ACTUAL outbound recorded
   // events), everything the ring knew about the still-active CORE turn is
   // gone: its finishes (session token totals), its context_usage readings,
@@ -1381,7 +1381,7 @@ describe(" — rendered reconnect (Session -> fresh desktopStore)", () => {
   });
 
   // ═════════════════════════════════════════════════════════════════════════
-  //  acceptance defect 1 — live partial stream across a reconnect
+  // acceptance defect 1 — live partial stream across a reconnect
   // whose text_start was EVICTED from the replay ring by >CAP model deltas.
   // The model is genuinely mid-response (start + text_start + >CAP deltas
   // emitted; text_end/finish NOT emitted — GatedModelPort parks the stream),
@@ -1476,7 +1476,7 @@ describe(" — rendered reconnect (Session -> fresh desktopStore)", () => {
   });
 
   // ═════════════════════════════════════════════════════════════════════════
-  //  acceptance defect 3 — real Session -> fresh-store regressions
+  // acceptance defect 3 — real Session -> fresh-store regressions
   // for the live-stream checkpoint. Each drives the REAL host Session and a
   // FRESH store fed only the reconnect cascade + the live tail.
   // ═════════════════════════════════════════════════════════════════════════
@@ -1653,7 +1653,7 @@ describe(" — rendered reconnect (Session -> fresh desktopStore)", () => {
 
   it("J: NEW turn after a TRUNCATED reconnect renders while below-cut replay stays suppressed", { timeout: 60_000 }, async () => {
     // Truncation with a bounded fixture: many small turns exceed a lowered
-    // historyMaxItems (the same SESSION_HISTORY_MAX_ITEMS override 
+    // historyMaxItems (the same SESSION_HISTORY_MAX_ITEMS override
     // S4 exposes), the reconnect's session_history is truncated, and the
     // ring still holds the fully-cut turns' streams. Then a NEW turn is
     // admitted AFTER the handshake: its events carry a turnId in NEITHER
@@ -1724,7 +1724,7 @@ describe(" — rendered reconnect (Session -> fresh desktopStore)", () => {
   });
 
   // ═════════════════════════════════════════════════════════════════════════
-  //  acceptance defect 1, residual: cut WITHIN one turn vs the
+  // acceptance defect 1, residual: cut WITHIN one turn vs the
   // legacy below-cut fallback.
   //
   // A tool-heavy/multi-step turn can exceed historyMaxItems on its OWN: the
@@ -1831,7 +1831,7 @@ describe(" — rendered reconnect (Session -> fresh desktopStore)", () => {
   });
 
   // ═════════════════════════════════════════════════════════════════════════
-  //  acceptance defect 2 — history tail cut vs replay suppression.
+  // acceptance defect 2 — history tail cut vs replay suppression.
   //
   // Tool-heavy turns make the replay ring span MORE history items than the
   // session_history cap (ring counts MESSAGES ~3.6/item; the snapshot caps
@@ -1954,7 +1954,7 @@ describe(" — rendered reconnect (Session -> fresh desktopStore)", () => {
 });
 
 
-describe(" — reminder state on reconnect", () => {
+describe("— reminder state on reconnect", () => {
   it("restores the live counter after an idle reconnect even when replay events belong to an ended turn", async () => {
     const h = createHarness({
       steps: [toolStep("w1", "Write", { file_path: "/workspace/a.txt", content: "hello" }), finishStep()],

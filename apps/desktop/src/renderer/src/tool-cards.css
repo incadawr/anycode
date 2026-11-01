@@ -220,14 +220,14 @@
   font-style: italic;
 }
 
-/* Quiet stall note ( live-presentation slice): rides inline in both
+/* Quiet stall note (live-presentation slice): rides inline in both
    the collapsed Agent row and the expanded Agent body; reuses the muted
    activity-row text tone via the shared class list. */
 .subagent-stall-note {
   color: var(--text-ghost);
 }
 
-/* The same well inside a Workflow card ( slice S1). It sits at the
+/* The same well inside a Workflow card (slice S1). It sits at the
    BOTTOM of the workflow block rather than above a result, so the separator
    moves to the top edge — otherwise the lane draws a rule against nothing. */
 .workflow-activity-feed {
@@ -235,7 +235,7 @@
   border-bottom: none;
 }
 
-/* Workflow step row's real interactive element ( slice S4 — owner
+/* Workflow step row's real interactive element (slice S4 — owner
    ask: "а кликнуть в них нельзя будет?"). The `<li>` keeps its
    `workflow-step substatus-<kind>` classes rather than handing them to the
    button, because app.css's row selectors need them on THAT element —
@@ -279,7 +279,7 @@
   background: var(--bg-active);
 }
 
-/* Run map ( slice S6 — owner ask, twice: "а где красивый граф?").
+/* Run map (slice S6 — owner ask, twice: "а где красивый граф?").
    Opened on demand by `.workflow-map-toggle`; the checklist above stays the
    record and this is a second view of it. Colour comes from the SAME
    `substatus-<kind>` vocabulary the rows use — never a second palette, or a
@@ -365,7 +365,7 @@
   color: var(--text-2);
 }
 
-/* Collapsed-card tick strip ( slice S7 — the plan's collapsed state:
+/* Collapsed-card tick strip (slice S7 — the plan's collapsed state:
    "полоса засечек по числу шагов, карточка не растёт против сегодняшней").
    It rides INLINE in the toggle row, unlike `.subagent-collapsed-progress`
    above, which claims a line of its own (flex-basis: 100% + wrap on the
@@ -427,7 +427,7 @@
   box-shadow: inset 0 0 0 1px var(--border);
 }
 
-/* Provider-reported model pill ( slice C1) — follows the child-model
+/* Provider-reported model pill (slice C1) — follows the child-model
    pill in `.tool-call-subagent-line`. A MATCH with the requested model proves
    nothing beyond "the provider accepted the id", so the base state is neutral,
    the same quiet tier as `.tool-call-subagent-model`; only a MISMATCH — the

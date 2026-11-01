@@ -1,5 +1,5 @@
 /**
- * Load-controller tests ( S4, plan §S4 test list). Same
+ * Load-controller tests (S4, plan §S4 test list). Same
  * `.test.ts`-only, node-environment, no-jsdom rationale as every other
  * Settings-pane test in this directory — which is exactly why the reducer
  * and the controller live in their own module instead of inside

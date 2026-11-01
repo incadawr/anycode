@@ -1,5 +1,5 @@
 /**
- *  (codex-profiles cut §5/§6) — the Session wire for a REAL CodexEngine:
+ * (codex-profiles cut §5/§6) — the Session wire for a REAL CodexEngine:
  * proves the whole translator → engine → Session → renderer-port path carries
  *
  *  - `context_usage` (C-bug-1: the event must be ON THE WIRE in a Codex

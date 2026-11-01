@@ -33,7 +33,7 @@ describe("resolvePid", () => {
   });
 });
 
-describe("resolvePillTarget ( W10-FIX F2: pin-follows catalog + write-target)", () => {
+describe("resolvePillTarget (W10-FIX F2: pin-follows catalog + write-target)", () => {
   const catalog = [
     { id: "prov-A", models: [{ id: "a-model", name: "A Model" }] },
     { id: "prov-B", models: [{ id: "b-model", name: "B Model" }] },
@@ -102,7 +102,7 @@ describe("pillLabel", () => {
   });
 });
 
-describe("pillDisplayLabel (: blank-model chip placeholder)", () => {
+describe("pillDisplayLabel (blank-model chip placeholder)", () => {
   const catalog = [{ id: "glm-5.2", name: "GLM-5.2" }];
 
   it("shows 'No model' for an empty model, with NO effort suffix even for a reasoning-capable provider", () => {
@@ -170,6 +170,13 @@ describe("providerModelsFor (F2 review lane FXH: custom providers must reach the
     },
   ];
 
+  it("uses the explicit connection selection while retaining catalog names", () => {
+    expect(providerModelsFor("z-ai", catalog, custom, ["other"], ["glm-5.2", "manual"])).toEqual([
+      { id: "glm-5.2", name: "GLM-5.2" }, { id: "manual" },
+    ]);
+    expect(providerModelsFor("z-ai", catalog, custom, undefined, [])).toEqual([]);
+  });
+
   it("a builtin catalog hit returns its models byte-for-byte, same as today", () => {
     expect(providerModelsFor("z-ai", catalog, custom)).toEqual(catalog[0]!.models);
   });
@@ -208,7 +215,7 @@ describe("providerModelsFor (F2 review lane FXH: custom providers must reach the
   });
 });
 
-describe("providerModelsFor —  union of connection ids + catalog/curated hints", () => {
+describe("providerModelsFor — union of connection ids + catalog/curated hints", () => {
   const catalog: CatalogSummary = [
     {
       id: "z-ai",
@@ -314,7 +321,7 @@ describe("modelPickDisabled (client-side mirror of the host between-turns guard)
     expect(modelPickDisabled("idle", null, false)).toBe(true);
   });
 
-  // : the CORE engine queues a mid-turn pick and applies it at the
+  // the CORE engine queues a mid-turn pick and applies it at the
   // next turn boundary, so the pill is usable while the turn runs.
   it("stays ENABLED while a turn is running when the engine supports a mid-turn change (core)", () => {
     expect(modelPickDisabled("running", null, true, true)).toBe(false);
@@ -354,7 +361,7 @@ describe("shouldPersistOnAck (design §2.4 ack-gating)", () => {
   });
 });
 
-describe("buildConnectionUpdate ( W10 connection-update write)", () => {
+describe("buildConnectionUpdate (W10 connection-update write)", () => {
   it("a model pick never persists its incidental effective effort", () => {
     expect(buildConnectionUpdate("conn-1", true, "glm-4.6", "off")).toEqual({
       id: "conn-1",
@@ -556,7 +563,7 @@ describe("rebindRefusalText (GitHub #33: a refused provider switch must read as 
   });
 });
 
-describe("isPinSwitchInTab (: a tab switch is not a provider switch)", () => {
+describe("isPinSwitchInTab (a tab switch is not a provider switch)", () => {
   const moderato = { connectionId: "conn-moderato" };
   const glm = { connectionId: "conn-glm" };
 
@@ -575,7 +582,7 @@ describe("isPinSwitchInTab (: a tab switch is not a provider switch)", () => {
   });
 });
 
-// : ModelPill's pickForeignModel path now passes the TARGET
+// ModelPill's pickForeignModel path now passes the TARGET
 // connection's modelCapabilities entry into resolveRebindEffort. The wiring
 // test pins the resolved DECISION the call path computes with the new arg —
 // the effort a rebind onto a catalog-unknown model writes.

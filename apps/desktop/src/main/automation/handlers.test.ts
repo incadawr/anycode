@@ -336,7 +336,7 @@ describe("thin facade commands forward method + args", () => {
     expect(deps.callFacade).toHaveBeenCalledWith("sendPrompt", ["tab-a", "hello"]);
   });
 
-  it("tryAgain -> callFacade('tryAgain', [tabId]) ( W8)", async () => {
+  it("tryAgain -> callFacade('tryAgain', [tabId] W8)", async () => {
     const deps = fakeDeps();
     await tryAgain(deps, "tab-a");
     expect(deps.callFacade).toHaveBeenCalledWith("tryAgain", ["tab-a"]);
@@ -366,20 +366,20 @@ describe("thin facade commands forward method + args", () => {
     expect(deps.callFacade).toHaveBeenCalledWith("closeTab", ["tab-a"]);
   });
 
-  it("childOpen -> callFacade('childOpen', [tabId, spawnToolCallId]) ( S2d D1)", async () => {
+  it("childOpen -> callFacade('childOpen', [tabId, spawnToolCallId] S2d D1)", async () => {
     const deps = fakeDeps();
     await childOpen(deps, "tab-a", "call-1");
     expect(deps.callFacade).toHaveBeenCalledWith("childOpen", ["tab-a", "call-1"]);
   });
 
-  it("childLayoutState -> callFacade('childLayoutState', [tabId]) ( S3c, CUT-S3 §6.2)", async () => {
+  it("childLayoutState -> callFacade('childLayoutState', [tabId] S3c, CUT-S3 §6.2)", async () => {
     const deps = fakeDeps();
     await childLayoutState(deps, "tab-a");
     expect(deps.callFacade).toHaveBeenCalledWith("childLayoutState", ["tab-a"]);
   });
 });
 
-describe("sendPrompt — image attachments ( live-smoke facade)", () => {
+describe("sendPrompt — image attachments (live-smoke facade)", () => {
   const PNG_HEADER = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
 
   function writeTempImage(bytes: Buffer): string {
@@ -541,7 +541,7 @@ describe("agent-card thin facade commands forward method + args (design/slice-P7
   });
 });
 
-describe("try-again-button thin facade commands forward method + args ( W8-FIX #2)", () => {
+describe("try-again-button thin facade commands forward method + args (W8-FIX #2)", () => {
   it("tryAgainButtonState -> callFacade('tryAgainButtonState', [tabId, blockId])", async () => {
     const deps = fakeDeps();
     await tryAgainButtonState(deps, "tab-a", "loop_end:t1");
@@ -555,7 +555,7 @@ describe("try-again-button thin facade commands forward method + args ( W8-FIX #
   });
 });
 
-describe("workflow-steps thin facade commands forward method + args ( slice S4)", () => {
+describe("workflow-steps thin facade commands forward method + args (slice S4)", () => {
   it("workflowStepsState -> callFacade('workflowStepsState', [tabId, toolCallId])", async () => {
     const deps = fakeDeps();
     await workflowStepsState(deps, "tab-a", "call-1");
@@ -683,7 +683,7 @@ describe("settings thin facade commands forward method + args (design/slice-P7.1
   });
 });
 
-describe("Provider connections pane thin facade commands forward method + args ( W12)", () => {
+describe("Provider connections pane thin facade commands forward method + args (W12)", () => {
   it("settingsProviderPaneState -> callFacade('settingsProviderPaneState', [])", async () => {
     const deps = fakeDeps();
     await settingsProviderPaneState(deps);
@@ -739,7 +739,7 @@ describe("Provider connections pane thin facade commands forward method + args (
   });
 });
 
-describe("generic focus probe forwards method + args ( W12-smoke)", () => {
+describe("generic focus probe forwards method + args (W12-smoke)", () => {
   it("focusState -> callFacade('focusState', [])", async () => {
     const deps = fakeDeps();
     await focusState(deps);
@@ -874,7 +874,7 @@ describe("Subagents pane thin facade commands forward method + args (design/slic
   });
 });
 
-describe("Profile pane thin facade commands forward method + args (design/slice-P7.22-cut.md §4 W4, period/models/refresh added )", () => {
+describe("Profile pane thin facade commands forward method + args (design/slice-P7.22-cut.md §4 W4, period/models/refresh added)", () => {
   it("profilePaneState -> callFacade('profilePaneState', [])", async () => {
     const deps = fakeDeps();
     await profilePaneState(deps);
@@ -961,7 +961,7 @@ describe("dock probe/driver + window size", () => {
   });
 });
 
-describe("Vision pane thin facade commands forward method + args ( срез E2c)", () => {
+describe("Vision pane thin facade commands forward method + args (срез E2c)", () => {
   it("visionPaneState -> callFacade('visionPaneState', [])", async () => {
     const deps = fakeDeps();
     await visionPaneState(deps);
@@ -1048,7 +1048,7 @@ describe("start-screen thin facade commands forward method + args (design/slice-
     expect(deps.callFacade).toHaveBeenCalledWith("startScreenSetModel", [null]);
   });
 
-  it("startScreenSetEngine -> callFacade('startScreenSetEngine', [engineId]) (codex-fixes , cut §3.7)", async () => {
+  it("startScreenSetEngine -> callFacade('startScreenSetEngine', [engineId]) (codex-fixes, cut §3.7)", async () => {
     const deps = fakeDeps();
     await startScreenSetEngine(deps, "codex");
     expect(deps.callFacade).toHaveBeenCalledWith("startScreenSetEngine", ["codex"]);
@@ -1066,25 +1066,25 @@ describe("start-screen thin facade commands forward method + args (design/slice-
     expect(deps.callFacade).toHaveBeenCalledWith("startScreenToggleProjectMenu", [false]);
   });
 
-  it("startScreenModelMenuState -> callFacade('startScreenModelMenuState', []) ( cut-1)", async () => {
+  it("startScreenModelMenuState -> callFacade('startScreenModelMenuState', [] cut-1)", async () => {
     const deps = fakeDeps();
     await startScreenModelMenuState(deps);
     expect(deps.callFacade).toHaveBeenCalledWith("startScreenModelMenuState", []);
   });
 
-  it("startScreenToggleModelMenu(true) -> callFacade('startScreenToggleModelMenu', [true]) ( cut-1)", async () => {
+  it("startScreenToggleModelMenu(true) -> callFacade('startScreenToggleModelMenu', [true] cut-1)", async () => {
     const deps = fakeDeps();
     await startScreenToggleModelMenu(deps, true);
     expect(deps.callFacade).toHaveBeenCalledWith("startScreenToggleModelMenu", [true]);
   });
 
-  it("startScreenToggleModelMenu(false) -> callFacade('startScreenToggleModelMenu', [false]) ( cut-1)", async () => {
+  it("startScreenToggleModelMenu(false) -> callFacade('startScreenToggleModelMenu', [false] cut-1)", async () => {
     const deps = fakeDeps();
     await startScreenToggleModelMenu(deps, false);
     expect(deps.callFacade).toHaveBeenCalledWith("startScreenToggleModelMenu", [false]);
   });
 
-  it("startScreenSelectModelRow -> callFacade('startScreenSelectModelRow', [connectionId, modelId]) ( cut-1)", async () => {
+  it("startScreenSelectModelRow -> callFacade('startScreenSelectModelRow', [connectionId, modelId] cut-1)", async () => {
     const deps = fakeDeps();
     await startScreenSelectModelRow(deps, "conn-second", "m2");
     expect(deps.callFacade).toHaveBeenCalledWith("startScreenSelectModelRow", ["conn-second", "m2"]);
@@ -1200,7 +1200,7 @@ function fakePreviewHost(overrides: Partial<PreviewHostHandle> = {}): PreviewHos
       ok: true as const,
       value: { previewId: "pv-1", url: "file:///tmp/a.html", mediaType: "image/png" as const, data: "UE5H", width: 10, height: 10 },
     })),
-    // panel-track CUT.md §2.2 ( 96-P1): panel-container additions to
+    // panel-track CUT.md §2.2 (96-P1): panel-container additions to
     // PreviewHostHandle — this automation-probe fake never drives the panel
     // container, so plain no-op/empty defaults suffice.
     setPanelState: vi.fn(),
@@ -1210,7 +1210,7 @@ function fakePreviewHost(overrides: Partial<PreviewHostHandle> = {}): PreviewHos
     listForPanel: vi.fn((tabId: string) => ({ tabId, previews: [], visiblePanelPreviewId: null })),
     setContainer: vi.fn(async () => ({ ok: false as const, error: "transfer lands in 96-P3" })),
     getMdDocRef: vi.fn(() => undefined),
-    //  M2: type-level fake addition only — this suite exercises the
+    // M2: type-level fake addition only — this suite exercises the
     // automation server/handlers, not md-doc navigate (covered by
     // preview-host.test.ts's own "commitMdNavigate" suite).
     commitMdNavigate: vi.fn(() => undefined),
@@ -1390,7 +1390,7 @@ describe("health / getState / screenshot", () => {
     expect(deps.callFacade).toHaveBeenCalledWith("snapshot", [50]);
   });
 
-  it("getState projects manager.listChildRuns() verbatim as childRuns ( S2d D1)", async () => {
+  it("getState projects manager.listChildRuns() verbatim as childRuns (S2d D1)", async () => {
     const childRuns = [
       // GitHub #17 slice F: the projection carries the child tab's fork time.
       { requestId: "r1", parentSessionId: "sess-p", childTabId: "tab-c", childSessionId: "sess-c", state: "running" as const, pid: 555, forkedAt: 1_700_000 },
@@ -1423,7 +1423,7 @@ describe("health / getState / screenshot", () => {
     expect(result.tabs).toEqual(tabs);
   });
 
-  // : a facade snapshot carrying childStates narrows them — a
+  // a facade snapshot carrying childStates narrows them — a
   // root tabId also returns its children, a child tabId returns just itself,
   // and a pre-4265 facade snapshot gains no childStates key at all.
   it("getStateForTab narrows childStates to the tab itself plus its children", async () => {
@@ -1462,7 +1462,7 @@ describe("health / getState / screenshot", () => {
   });
 });
 
-describe("listChildRunsMaintenance (GET /child-runs,  S2d D1)", () => {
+describe("listChildRunsMaintenance (GET /child-runs, S2d D1)", () => {
   function meta(overrides: Partial<{ id: string; parentSessionId?: string; spawnToolCallId?: string }> = {}) {
     return {
       id: "sess-1",
@@ -1508,7 +1508,7 @@ describe("listChildRunsMaintenance (GET /child-runs,  S2d D1)", () => {
   });
 });
 
-describe("deleteSessionTreeMaintenance (POST /sessions/:id/delete-tree,  S2d D3)", () => {
+describe("deleteSessionTreeMaintenance (POST /sessions/:id/delete-tree, S2d D3)", () => {
   it("forwards the root id to persistence.deleteSessionTree and wraps its result with ok:true", async () => {
     const deleteSessionTree = vi.fn(async () => ({ deletedSessionIds: ["sess-root", "sess-c1"], externalSessionRefs: ["thread-1"] }));
     const deps = fakeDeps({ persistence: { listSessionsForMaintenance: vi.fn(), deleteSessionTree } });
@@ -1558,7 +1558,7 @@ describe("quit", () => {
   });
 });
 
-describe("killHost ( FIX-A) — dev-only host-kill lever, main-plane only", () => {
+describe("killHost (FIX-A) — dev-only host-kill lever, main-plane only", () => {
   it("forwards to manager.killHost and returns its result", () => {
     const manager = fakeManager({ killHost: vi.fn(() => ({ ok: true }) as const) });
     const deps = fakeDeps({ manager });
@@ -1736,7 +1736,7 @@ describe("waitFor poller (§4.3)", () => {
     });
   });
 
-  // : a child tab's state lives in `childStates`, never in
+  // a child tab's state lives in `childStates`, never in
   // `states` — `/wait` accepts a childTabId and matches its pending ask.
   it("matches a child tabId against childStates", async () => {
     const callFacade = vi.fn(async () => ({

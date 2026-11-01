@@ -49,7 +49,7 @@ export type {
   WorktreeControlResult,
   WorktreeIdentity,
 } from "./ports/worktrees.js";
-// Codex shadow command log DTO (codex-fixes , cut §2(e)): re-exported for
+// Codex shadow command log DTO (codex-fixes, cut §2(e)): re-exported for
 // the desktop host's `SqliteCodexShadowLog` adapter (host/engines/codex/shadow-log.ts),
 // which wraps this same SqlitePersistenceAdapter — never a hand-duplicated row shape.
 export type { CodexShadowCommandItem } from "./adapters/node/sqlite-persistence.js";
@@ -58,7 +58,7 @@ export type { CodexShadowCommandItem } from "./adapters/node/sqlite-persistence.
 // (host/engines/claude/shadow-transcript.ts), which wraps this same
 // SqlitePersistenceAdapter — never a hand-duplicated row shape.
 export type { ClaudeTranscriptItem } from "./adapters/node/sqlite-persistence.js";
-// Provider usage audit row ( / , migration v19):
+// Provider usage audit row (migration v19):
 // re-exported for the desktop host's write-behind recorder + hydration
 // summary seam (host/session.ts), which wraps this same SqlitePersistenceAdapter.
 export type { ProviderUsageRecord } from "./adapters/node/sqlite-persistence.js";
@@ -66,7 +66,7 @@ export type { ProviderUsageRecord } from "./adapters/node/sqlite-persistence.js"
 // below does not apply): re-exported for the desktop host's notice injection
 // (slice 6.DP-2), so both wiring paths append byte-identical reminder blocks.
 export { withBackgroundTaskNotices } from "./cli/background-notice.js";
-// Pure string helper ( срез 1): builds a detached child session's
+// Pure string helper (срез 1): builds a detached child session's
 // terminal report as a ZCode-form `<task-notification>` block. Re-exported
 // so the desktop host's detach-delivery seam (host/index.ts's
 // `onDetachedTerminal`) formats byte-identical text to what this module's
@@ -102,7 +102,7 @@ export { ORCHESTRATE_REMINDER, withOrchestrateReminder } from "./prompts/orchest
 // same window from the same entry.
 export { matchCatalogEntryByBaseUrl, SwitchableModelPort } from "./cli/model.js";
 // Fail-soft reader/fail-closed writer over the SAME ~/.anycode/settings.json
-// permissions.alwaysAllow section desktop main owns (slice P7.5, ), plus
+// permissions.alwaysAllow section desktop main owns (slice P7.5), plus
 // the SessionPermissionRules subclass that wires CLI add-paths to it.
 export {
   appendAlwaysAllowRule,
@@ -119,7 +119,7 @@ export * from "./dispatch/index.js";
 export * from "./loop/index.js";
 export * from "./subagents/index.js";
 export * from "./mcp/index.js";
-//  срез S2: the in-process MCP server + control-channel transport the
+// срез S2: the in-process MCP server + control-channel transport the
 // desktop host's claude-engine glue (срез S3+) serves `mcp__anycode__agent`
 // calls through. Exported HERE, directly, rather than by adding it to
 // `mcp/index.ts` (F14): `mcp/index.ts` backs the main-safe `@anycode/core/
@@ -141,7 +141,7 @@ export type {
   McpToolCallResult,
   McpToolDecl,
 } from "./mcp/in-process-server.js";
-//  review F5: the engine browser bridge (desktop host) calls the
+// review F5: the engine browser bridge (desktop host) calls the
 // core tool handlers directly and so bypasses the dispatcher — the component
 // that owns the model-visible result budget. Re-export the SAME clamp (and
 // the default budget it falls back to) so the bridge applies byte-identical
@@ -157,7 +157,7 @@ export * from "./repoMap/index.js";
 export { estimateTokensFromText } from "./context/tokens.js";
 export { ConversationHistory } from "./context/history.js";
 export type { HistorySink } from "./context/history.js";
-// Persisted subagent card snapshot contract ( slice S1, CUT-S1 §2.3):
+// Persisted subagent card snapshot contract (slice S1, CUT-S1 §2.3):
 // re-exported directly (types/index.ts's curated list does not cover every
 // types/ file — see ports/index.ts's own ImageAttachment precedent) so the
 // desktop renderer's decode/project module (S1 W4) can type-only import
@@ -169,7 +169,7 @@ export type {
   SubagentCardTarget,
   ToolResultPresentation,
 } from "./types/subagent-card.js";
-// Persisted workflow card snapshot contract ( slice S5): mirrors the
+// Persisted workflow card snapshot contract (slice S5): mirrors the
 // subagent block above, and exports the NESTED types too rather than the
 // envelope alone. The renderer's decode function validates a snapshot field by
 // field, so it needs to name each part; with only the top type exported it has

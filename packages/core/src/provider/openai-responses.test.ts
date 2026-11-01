@@ -1,5 +1,5 @@
 /**
- * Unit tests for the openai-responses factory ( §0.3/§0.5/W3).
+ * Unit tests for the openai-responses factory (§0.3/§0.5/W3).
  * Construction is side-effect free (no network until streamText), so these
  * assert the LanguageModel's static shape — model id, base URL normalization
  * delegation, and headers passthrough. The outgoing HTTP request (URL, auth,

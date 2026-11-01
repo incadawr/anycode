@@ -42,7 +42,7 @@ const fixturePath = fileURLToPath(new URL("./codex-doctor-fixtures/fake-codex.mj
  */
 const TRUSTED = (): null => null;
 const scratchDir = mkdtempSync(join(tmpdir(), "anycode-codex-doctor-test-"));
-//  (BD1): a TRUSTED-ANCESTOR scratch root, distinct from `scratchDir`
+// (BD1): a TRUSTED-ANCESTOR scratch root, distinct from `scratchDir`
 // above (plain os.tmpdir(), which is itself world-writable+sticky on Linux —
 // see shared/test-scratch.ts's own header for why that cannot serve for a
 // real on-disk trust-gate test).
@@ -148,7 +148,7 @@ describe("buildDoctorChildEnv — engine proxy carrier", () => {
   // Byte-identity, asserted over the WHOLE child env rather than selected keys:
   // the guarantee is that an unconfigured engine proxy changes nothing at all.
   // The shell's own proxy still rides the passthrough list exactly as before.
-  it("without a carrier the doctor child env is byte-identical to the pre- build", () => {
+  it("without a carrier the doctor child env is byte-identical to the build", () => {
     const env = buildDoctorChildEnv({ HOME: "/home/dev", PATH: "/usr/bin", HTTPS_PROXY: SHELL_PROXY }, "linux");
     expect(env).toEqual({ HOME: "/home/dev", PATH: AUGMENTED_PATH, HTTPS_PROXY: SHELL_PROXY });
   });
@@ -188,8 +188,8 @@ describe("buildDoctorChildEnv — engine proxy carrier", () => {
     expect(env.HTTPS_PROXY).toBeUndefined();
   });
 
-  // ── : a credentialed proxy never reaches the doctor/login CLI ──
-  describe(": credentialed family swapped for main's relay URL", () => {
+  // ── a credentialed proxy never reaches the doctor/login CLI ──
+  describe("credentialed family swapped for main's relay URL", () => {
     const RELAY = "http://127.0.0.1:47557/AbCdEf1234567890_-XyZ";
     const CREDENTIALED_SOURCE: NodeJS.ProcessEnv = {
       HOME: "/home/dev",
@@ -210,7 +210,7 @@ describe("buildDoctorChildEnv — engine proxy carrier", () => {
       expect(JSON.stringify(env)).not.toContain("s3cret");
     });
 
-    it("a credentialed ALL_PROXY/all_proxy is dropped, a clean one passes ( review)", () => {
+    it("a credentialed ALL_PROXY/all_proxy is dropped, a clean one passes (review)", () => {
       const env = buildDoctorChildEnv({ HOME: "/home/dev", PATH: "/usr/bin", ALL_PROXY: "socks5://u:s3cret@p:1080", all_proxy: "socks5://p:1080" }, "linux", RELAY);
       expect(env.ALL_PROXY).toBeUndefined();
       expect(env.all_proxy).toBe("socks5://p:1080");
@@ -265,7 +265,7 @@ describe("augmentPathForGui", () => {
   });
 });
 
-describe("isNodeShebangUnavailable ( — typed 127 verdict)", () => {
+describe("isNodeShebangUnavailable (typed 127 verdict)", () => {
   /** Scratch shim under the suite's own scratchDir — only file BYTES matter here, the exec bit never does (the classifier reads, never execs). */
   const writeShim = (name: string, firstLine: string): string => {
     const path = join(scratchDir, name);
@@ -444,7 +444,7 @@ describe("runCodexDoctor", () => {
 
   it("judges the version against the MANIFEST policy, not a hardcoded range (cut §7.1: истина — манифест)", async () => {
     // The fixture reports 0.144.3; a manifest that excludes it must flip the
-    // verdict without any code change — that is the whole point of .
+    // verdict without any code change — that is the whole point.
     const report = await runCodexDoctor("/fake/codex", {
       trust: TRUSTED,
       spawnImpl: fakeSpawn(),
@@ -501,7 +501,7 @@ describe("runCodexDoctor", () => {
     expect(report.error).toMatch(/timed out/i);
   });
 
-  // : the typed 127 verdict. A REAL scratch shim with
+  // the typed 127 verdict. A REAL scratch shim with
   // node-shebang bytes + a spawner that exits 127 must diagnose
   // nodeUnavailable. The classifier keys on FILE bytes + exitCode only — the
   // shim needs no exec bit because nothing here ever execve's it.

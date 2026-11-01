@@ -1,5 +1,5 @@
 /**
- * Tests for the  slice 2 prose/codespan path-linkification layer
+ * Tests for the slice 2 prose/codespan path-linkification layer
  * grafted onto `Markdown.tsx`. Same `.test.ts`-only, jsdom-free rationale as
  * ToolCallCard.test.ts (this package's renderer tests are pure-logic +
  * `react-dom/server` SSR only): `collectPathCandidates` and

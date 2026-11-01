@@ -1,5 +1,5 @@
 /**
- * Child spawn-mode cell ( §A1 / R1): the permission mode a
+ * Child spawn-mode cell (§A1 / R1): the permission mode a
  * session-tier child is spawned under, read by the host's child-session port
  * through `getPermissionMode`. host/index.ts builds ONE cell per boot and the
  * test harness builds the SAME cell (no copy), so a behavioural test pins the

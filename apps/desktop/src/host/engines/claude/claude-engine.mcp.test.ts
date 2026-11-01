@@ -1,5 +1,5 @@
 /**
- *  /  — Claude engine MCP tests: boot notices drain into
+ * Claude engine MCP tests: boot notices drain into
  * the first turn, and `system/init.mcp_servers[]` is parsed defensively from
  * both `{name,status,source}` objects and bare strings.
  */

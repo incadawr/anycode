@@ -1,5 +1,5 @@
 /**
- *  — session-lifetime correlation index for Codex collab (Agent)
+ * session-lifetime correlation index for Codex collab (Agent)
  * tool calls.
  *
  * A spawn CALL completing is NOT the same thing as the CHILD completing: the
@@ -10,7 +10,7 @@
  * cannot own this state; the engine owns ONE index for the whole session and
  * hands it to every per-turn translator.
  *
- * Honesty rules encoded here ( §"Contract and lifecycle"):
+ * Honesty rules encoded here (§"Contract and lifecycle"):
  *  - only `completed`/`errored`/`shutdown` are terminal CHILD states; every
  *    other string (pendingInit/running/interrupted/notFound, or a future
  *    unknown member) is an observation, never proof of completion;

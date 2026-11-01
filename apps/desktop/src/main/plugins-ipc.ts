@@ -1,5 +1,5 @@
 /**
- * Plugins IPC ( S1-B, design §7): the `anycode:plugins-*`
+ * Plugins IPC (S1-B, design §7): the `anycode:plugins-*`
  * channel family — list, check-updates, two-phase install
  * (prepare→confirm token→commit), update, rollback, pin, enable, remove,
  * MCP consent, reveal, auto-update toggle. Zod-validates every payload;
@@ -111,7 +111,7 @@ export interface PluginsIpcDeps {
     }>;
     setAutoUpdateOfficial(value: boolean): Promise<void>;
     setMcpConsent(entries: McpConsentEntry[]): Promise<void>;
-    /** a: replaces the grant for one plugin (read-modify-write under the settings lock). */
+    /** replaces the grant for one plugin (read-modify-write under the settings lock). */
     setServiceConsent(entry: ServiceConsentEntry): Promise<void>;
   };
   /** OS dialogs (path custody). */
@@ -126,21 +126,21 @@ export interface PluginsIpcDeps {
   /** Fallback scan workspace (used when no live tab exposes one). */
   workspace: string;
   /**
-   *  xfix M6: resolved on EVERY scan (not frozen at registration)
+   * xfix M6: resolved on EVERY scan (not frozen at registration)
    * so the pane follows the live tab workspace; see activePluginsWorkspace.
    */
   activeWorkspace?(): string | undefined;
   /**
    * Test/embedder seam for the whole index check. Receives the persisted
    * anti-rollback floor exactly as the production path passes it to
-   * checkPluginIndex ( xfix H2).
+   * checkPluginIndex (xfix H2).
    */
   checkIndex?(opts: { serialFloor?: number }): Promise<{ status: string; index?: PluginIndex; detail?: string; expired?: boolean }>;
   now?: () => number;
   logger?: { warn(message: string, ...args: unknown[]): void };
-  /** a: called after every plugins mutation (the supervisor reconciles on it). */
+  /** called after every plugins mutation (the supervisor reconciles on it). */
   onChanged?(reason: string): void;
-  /** a: the service supervisor's read model + restart (absent = no services wiring). */
+  /** the service supervisor's read model + restart (absent = no services wiring). */
   services?: {
     snapshot(): PluginServiceView[];
     logs(plugin: string, name: string): string[];
@@ -157,7 +157,7 @@ interface PendingInstall {
   /** Bytes for file/url installs (commit replays them). */
   bytes?: Buffer;
   /**
-   *  xfix H3: for folder installs, the EXACT path main's picker
+   * xfix H3: for folder installs, the EXACT path main's picker
    * resolved at PREPARE time. Commit reuses it — a second OS dialog at
    * commit (the old behaviour) could install a DIFFERENT folder than the
    * one the sheet previewed.
@@ -166,7 +166,7 @@ interface PendingInstall {
   /** Picked .tgz basename (file installs) — state.json provenance (xfix L3). */
   fileName?: string;
   /**
-   * a: servicesHash of the definition the SHEET showed (url/file/
+   * servicesHash of the definition the SHEET showed (url/file/
    * folder). Undefined for official installs (the index carries no service
    * definitions) and for plugins without services. Commit grants service
    * consent only when the installed definition matches this hash.
@@ -191,15 +191,15 @@ const prepareSchema = z.object({ source: installSourceSchema });
 const commitSchema = z.object({
   token: z.string().min(1),
   source: installSourceSchema,
-  //  xfix H1(b): the confirmation sheet's "Install and allow MCP
+  // xfix H1(b): the confirmation sheet's "Install and allow MCP
   // servers" checkbox — main records the consent grant (hash main-computed)
   // when true. Optional on the wire so stale renderers keep working.
   allowMcp: z.boolean().optional(),
-  // a: the sheet's "Install and allow services" grant. Optional; absent = withheld.
+  // the sheet's "Install and allow services" grant. Optional; absent = withheld.
   allowServices: z.boolean().optional(),
 });
 const nameSchema = z.object({ name: z.string().min(1) });
-// a: approve-services is name-only; any extra key (a smuggled hash) is refused.
+// approve-services is name-only; any extra key (a smuggled hash) is refused.
 const approveServicesSchema = z.object({ name: z.string().min(1) }).strict();
 const serviceRefSchema = z
   .object({ plugin: z.string().regex(PLUGIN_NAME_RE), name: z.string().regex(PLUGIN_NAME_RE) })
@@ -220,7 +220,7 @@ function refusal(reason: StoreRefusal | "signature", detail?: string): { ok: fal
   return { ok: false, reason: mapped, ...(detail !== undefined ? { detail } : {}) };
 }
 
-/** a: the sheet's service rows — command, args, env KEY names (never values); 4751: secret NAMES. */
+/** the sheet's service rows — command, args, env KEY names (never values); 4751: secret NAMES. */
 function servicePreviewOf(services: readonly PluginServiceSpec[] | undefined): NonNullable<PluginInstallPreview["services"]> {
   return (services ?? []).map((svc) => {
     const secretNames = serviceSecretRefs(svc);
@@ -273,7 +273,7 @@ async function buildSnapshot(deps: PluginsIpcDeps, indexCheck?: { status: string
   if (index !== undefined) {
     for (const entry of index.plugins) {
       if (!entry.default || installedNames.has(entry.name) || state.state.removedDefaults.includes(entry.name)) continue;
-      //  xfix H4: engines.anycode is a RANGE (">=0.0.35", "^0.1.0")
+      // xfix H4: engines.anycode is a RANGE (">=0.0.35", "^0.1.0")
       // — string equality against the app version matched nothing. Same
       // rangeMatches the store layer uses, at every IPC surface.
       const compatible = entry.versions
@@ -317,7 +317,7 @@ async function readCachedPluginIndexSafe(deps: PluginsIpcDeps): Promise<{ status
 }
 
 /**
- * The workspace the Plugins pane scans ( xfix M6): the first live
+ * The workspace the Plugins pane scans (xfix M6): the first live
  * tab's workspace — the runtime's own project tier — falling back to `fallback`
  * (home) when no tab has one. Pure; main supplies the tab list.
  */
@@ -345,7 +345,7 @@ function updateFor(
   if (index === undefined || pinned) return undefined;
   const entry = index.plugins.find((p) => p.name === name);
   if (entry === undefined) return undefined;
-  //  xfix H4: range matching (see buildSnapshot's available list).
+  // xfix H4: range matching (see buildSnapshot's available list).
   const candidate = entry.versions
     .filter((v) => v.engines?.anycode === undefined || rangeMatches(v.engines.anycode, appVersion))
     .filter((v) => compareVersionsDesc(v.version, active) < 0)
@@ -354,7 +354,7 @@ function updateFor(
   return { version: candidate.version, needsApproval: !autoUpdate };
 }
 
-// ── serial-floor persistence ( xfix H2) ──
+// ── serial-floor persistence (xfix H2) ──
 
 /**
  * state.json's persisted anti-rollback floor (`lastIndexSerial`). undefined =
@@ -393,7 +393,7 @@ export interface PluginsIpc {
 export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
   const now = deps.now ?? Date.now;
   const pending = new Map<string, PendingInstall>();
-  //  xfix H2: the anti-rollback serial floor must SURVIVE a
+  // xfix H2: the anti-rollback serial floor must SURVIVE a
   // restart. state.json's `lastIndexSerial` (written by every successful
   // update pass) is the persisted floor — seed from it here so a replayed
   // lower-serial index is refused after relaunch, not only within one
@@ -453,7 +453,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     return { status: result.status, ...(result.index !== undefined ? { index: result.index } : {}), ...(result.detail !== undefined ? { detail: result.detail } : {}) };
   }
 
-  //  xfix M1: a cached index past its own expiresAt must not
+  // xfix M1: a cached index past its own expiresAt must not
   // serve installs/updates (design §4) — the check returns it for LISTING
   // with status "expired", so every mutating surface refuses on that status.
   function indexUsableForInstall(check: { status: string; index?: PluginIndex }): boolean {
@@ -475,7 +475,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     }
     if (source.kind === "official") {
       const check = await checkIndex();
-      //  xfix M1: an expired (cached-past-expiry) index lists but
+      // xfix M1: an expired (cached-past-expiry) index lists but
       // never installs — the old gate let prepare/commit/update proceed on it.
       if (!indexUsableForInstall(check)) {
         return refusal(check.status === "signature-failed" || check.status === "rollback" ? "signature" : check.status === "expired" ? "incompatible" : check.status === "offline" ? "network" : "network", check.detail ?? `index unavailable (${check.status})`);
@@ -535,7 +535,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
         return refusal(preview.reason, preview.detail);
       }
       const token = randomUUID();
-      //  xfix H3: pin the sha256 of the EXACT previewed bytes —
+      // xfix H3: pin the sha256 of the EXACT previewed bytes —
       // commit installs `bytes` and verifies this hash, so a server that
       // serves different content at commit time can never swap the payload.
       const previewSha = createHash("sha256").update(fetched.bytes).digest("hex");
@@ -637,7 +637,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     } catch {
       return refusal("invalid", "manifest is not JSON");
     }
-    //  xfix M7: run the REAL manifest schema (not a name-only
+    // xfix M7: run the REAL manifest schema (not a name-only
     // peek) so the sheet previews the folder plugin's derived capabilities
     // and — critically — its MCP servers, which the old preview hardcoded
     // to [] (the user confirmed a sheet that lied about what would install).
@@ -698,7 +698,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
   }
 
   /**
-   * a: grants service consent for the plugin main just installed,
+   * grants service consent for the plugin main just installed,
    * ONLY when the installed definition hashes to what the sheet previewed
    * (`previewedHash`). An official install has no previewed definition, so it
    * grants nothing and the user approves from the pane after reading the row.
@@ -728,7 +728,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
   }
 
   /**
-   *  xfix H1(b): records an MCP consent grant for the plugin
+   * xfix H1(b): records an MCP consent grant for the plugin
    * main just installed — the hash is computed MAIN-side from the installed
    * plugin's manifest (never renderer-supplied), matching what discovery
    * will check at the next host boot. Fail-soft: a consent write failure
@@ -804,7 +804,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
       return { ok: true, snapshot: await buildSnapshot(deps, check) };
     }
     if (prepared.bytes !== undefined) {
-      //  xfix H3: commit installs the EXACT previewed bytes —
+      // xfix H3: commit installs the EXACT previewed bytes —
       // never a re-download. The URL pin is the sha256 computed at prepare over
       // these very bytes; installFromBytes refuses any difference.
       const result = source.kind === "url"
@@ -925,7 +925,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
   ipcMain.handle(PLUGINS_REMOVE_CHANNEL, async (_event, payload: unknown): Promise<PluginsMutationResult> => {
     const parsed = nameSchema.safeParse(payload);
     if (!parsed.success) return refusal("invalid");
-    //  xfix M4: tombstoning must not depend on the OFFLINE cache
+    // xfix M4: tombstoning must not depend on the OFFLINE cache
     // alone — with no cached (or stale) index the old code derived
     // isDefault=false and the next update pass silently reinstalled the
     // plugin the user explicitly removed. Derive from any index copy we can
@@ -1000,7 +1000,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     return { ok: true };
   });
 
-  // a: the services read model (state only), bounded logs and manual restart.
+  // the services read model (state only), bounded logs and manual restart.
   ipcMain.handle(PLUGINS_SERVICES_CHANNEL, (): PluginServiceView[] => deps.services?.snapshot() ?? []);
 
   ipcMain.handle(PLUGINS_SERVICE_LOGS_CHANNEL, (_event, payload: unknown): string[] | PluginsMutationResult => {

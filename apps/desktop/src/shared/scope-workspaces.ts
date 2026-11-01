@@ -1,5 +1,5 @@
 /**
- * : the Settings scope dropdown's workspace list. The renderer
+ * the Settings scope dropdown's workspace list. The renderer
  * receives only opaque ids plus display fields; it never supplies a path back.
  * Value-only and import-free so the sandboxed preload can value-import it.
  */

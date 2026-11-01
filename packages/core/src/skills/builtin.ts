@@ -99,7 +99,7 @@ Use the browser-preview tools to see what an HTML or Markdown artifact you wrote
 };
 
 /**
- * : operating a localhost web app in the built-in preview. Phase A
+ * operating a localhost web app in the built-in preview. Phase A
  * body names only the tools registered in Phase A; Phase B edits it to add
  * BrowserConsole/BrowserEval. Same gate as USING_BROWSER_PREVIEW_SKILL.
  */
@@ -300,7 +300,7 @@ export type AnycodeSetupDocsLocation =
   | { kind: "remote"; ref: string };
 
 /**
- * : offline setup/config assistance. Registered unconditionally
+ * offline setup/config assistance. Registered unconditionally
  * (same posture as SUBAGENT_BUILTIN_SKILLS): the skill only READS config
  * files through the normal tools and points at docs/user topics; every
  * modification still goes through Write/Edit under the permission gate, so

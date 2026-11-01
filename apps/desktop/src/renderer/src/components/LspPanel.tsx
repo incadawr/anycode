@@ -199,7 +199,7 @@ export function LspPanel() {
   // right-side drawer is up.
   useOverlayFlag(open);
 
-  // : existence-only binary detection for the "Not installed"
+  // existence-only binary detection for the "Not installed"
   // display state. Fetched while the drawer is open and on Refresh; a missing
   // bridge (tests/partial preload) or a failed invoke degrades to an empty
   // lookup — every row then keeps its live state (the pre-4845 behavior).

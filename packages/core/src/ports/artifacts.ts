@@ -1,5 +1,5 @@
 /**
- * Artifact-store contract.  bounded what a tool result may
+ * Artifact-store contract. bounded what a tool result may
  * contribute to the model's context; it bounded it with a knife — everything
  * past `resultBudget.maxModelBytes` was destroyed, and the only way back to it
  * was re-running the tool. This port is the other half: the full rendered text
@@ -10,11 +10,11 @@
  * write happens after the tool already cleared its own permission gate, lands
  * OUTSIDE the workspace (beside anycode.sqlite, like checkpoints), and is
  * therefore host bookkeeping rather than a new side effect performed on the
- * model's behalf. That is why no permission gate guards it ( §1 verdict).
+ * model's behalf. That is why no permission gate guards it (§1 verdict).
  *
  * The port is optional everywhere it is threaded (DispatchContext/ToolContext):
  * absence degrades `strategy: "artifact"` back to plain truncation, which is
- * byte-identical to  behaviour. A host that never wires a store loses
+ * byte-identical to behaviour. A host that never wires a store loses
  * nothing it had.
  */
 
@@ -27,7 +27,7 @@ export interface ArtifactWriteRequest {
   /**
    * Owning turn. Part of the contract for future per-turn cleanup, but the
    * dispatcher does not know a turn id today, so it is left unset rather than
-   * invented ( design, assumption 3).
+   * invented (design, assumption 3).
    */
   turnId?: string;
   /** Provider-issued tool-call id; doubles as the artifact's file name. */
@@ -46,7 +46,7 @@ export interface ArtifactStorePort {
    *
    * THROWS on refusal (unsafe id, over the per-write cap, I/O failure). The
    * dispatcher treats any throw as "no artifact" and falls back to truncation,
-   * so a throw here costs exactly what  already cost — never an error
+   * so a throw here costs exactly what already cost — never an error
    * shown to the model.
    */
   writeToolResultArtifact(req: ArtifactWriteRequest): Promise<{ path: string; bytes: number }>;

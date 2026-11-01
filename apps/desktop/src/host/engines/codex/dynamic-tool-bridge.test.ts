@@ -22,7 +22,7 @@ function setup() {
 }
 
 describe("Codex AnyCode dynamic tool", () => {
-  it(": a completed child's result text carries the child session id + continue_session hint (response AND tool_result)", async () => {
+  it("a completed child's result text carries the child session id + continue_session hint (response AND tool_result)", async () => {
     const s = setup();
     s.run.mockImplementation(async (_req, options) => {
       options?.onProgress?.({ kind: "start", agentType: "glm-lead", description: "d" });
@@ -148,7 +148,7 @@ describe("Codex bridge lifecycle boundaries", () => {
     expect(s.response.result).toHaveBeenCalledTimes(1);
   });
 
-  // : the session-tier port never resolves on abort — only main's
+  // the session-tier port never resolves on abort — only main's
   // eventual terminal does, strictly AFTER the abort won the bridge's race.
   // The immediate acknowledgement still closes the call (Stop stays
   // immediate), and when the real cancelled outcome settles late it must be
@@ -185,7 +185,7 @@ describe("Codex bridge lifecycle boundaries", () => {
       final: { status: "cancelled" },
       target: { kind: "session", childSessionId: "child-226", parentSessionId: "parent-226", spawnToolCallId: "call-1" },
     });
-    //  review fix: the late-emission promise must be tracked and
+    // review fix: the late-emission promise must be tracked and
     // deleted as the SAME entry — a settled call may not linger in the work
     // set, or every later drain()/cancelAwaiting() would wait on dead weight.
     // After one microtask tick the cleanup handlers have run; a subsequent
@@ -261,10 +261,10 @@ describe("Codex bridge bounded shutdown drain", () => {
 });
 
 
-//  X1/X4..X10/X12: the browser tools ride dynamicTools with the
+// X1/X4..X10/X12: the browser tools ride dynamicTools with the
 // same validations, canonical AgentEvent names, serialized dispatch, an
 // inputImage answer for screenshots, and Stop/denyAll semantics.
-describe("Codex AnyCode dynamic tool —  browser tools", () => {
+describe("Codex AnyCode dynamic tool — browser tools", () => {
   function browserRig(decision: unknown = { behavior: "allow" }) {
     const requests: Array<{ toolName: string; toolCallId: string; input: unknown }> = [];
     const portCalls: Array<{ req: unknown; opts: unknown }> = [];

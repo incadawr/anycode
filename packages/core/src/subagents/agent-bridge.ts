@@ -1,5 +1,5 @@
 /**
- * Agent MCP-bridge core logic ( срез S1, план §3.1-3.4, факт F9).
+ * Agent MCP-bridge core logic (срез S1, план §3.1-3.4, факт F9).
  *
  * Pulls the request-building and outcome-projection logic OUT of
  * tools/agent.ts so both consumers run through the exact same code: the
@@ -117,7 +117,7 @@ const AGENT_BRIDGE_CONTINUE_DESCRIPTION =
 
 export interface AgentBridgeToolDeclOptions {
   /**
-   * Declare the optional `detach` field ( semantics). Only a door whose
+   * Declare the optional `detach` field (semantics). Only a door whose
    * host delivers a detached child's terminal report back as a new parent turn
    * may set this — otherwise the report would have nowhere to go.
    */
@@ -191,7 +191,7 @@ export interface BuildSessionSubagentRequestParams {
 
 /**
  * Builds ONE SessionSubagentRequest (§3.2), extracted byte-for-byte out of
- * the pre-S1 body of tools/agent.ts's runSessionTier ( срез S1):
+ * the pre-S1 body of tools/agent.ts's runSessionTier (срез S1):
  * `provider` and `detach` are deliberately NOT set here — `provider` rides
  * only the native Agent tool's own request (agent.ts §2.1 p.2); `detach` is
  * added by each caller that honors it (agent.ts, `runAgentBridgeCall`).
@@ -220,7 +220,7 @@ export function buildSessionSubagentRequest(params: BuildSessionSubagentRequestP
 
 /**
  * Projects the terminal SubagentOutcome (shared shape of the inline and
- * session tiers) onto the Agent tool's ToolResult, honoring 's honest
+ * session tiers) onto the Agent tool's ToolResult, honoring's honest
  * outcome mapping. Shared by both tiers of the native Agent tool AND the MCP
  * bridge's runAgentBridgeCall below, so the mapping text/logic is provably
  * the SAME everywhere a subagent outcome ever gets projected to a model.
@@ -236,7 +236,7 @@ export function outcomeToResult(
   if (outcome.status === "error") {
     return { ok: false, error: (outcome.finalText || "Agent: the subagent failed.") + lengthNote, ...presentation };
   }
-  // max_turns ( + ): the child exhausted its budget — the turn
+  // max_turns (+): the child exhausted its budget — the turn
   // cap or the wall-clock deadline, which share this status because the
   // remediation is identical. This is NOT a
   // success. Return an explicit incomplete errorKind so the dispatcher maps
@@ -274,7 +274,7 @@ export function outcomeToResult(
       ...presentation,
     };
   }
-  //  marker (а): the child's own degeneration guard (agent-loop.ts)
+  // marker (а): the child's own degeneration guard (agent-loop.ts)
   // cut its FINAL turn — never the provider, never a budget exhaustion.
   // Repeats the ladder's own precedent (a guard stopped the run => the
   // parent gets a non-success, never a silently-accepted partial): ok:false
@@ -352,7 +352,7 @@ function toAgentOutput(outcome: SubagentOutcome): AgentOutput {
     ...(outcome.finalTurnFinishReason !== undefined
       ? { finalTurnFinishReason: outcome.finalTurnFinishReason }
       : {}),
-    //  (supervisor correction 1): ID discoverability must not depend
+    // (supervisor correction 1): ID discoverability must not depend
     // on subagent_start or a presentation card — the nonempty childSessionId
     // is copied onto the model-visible output whenever the outcome is
     // actually session-shaped (a SessionSubagentOutcome), never invented for
@@ -366,10 +366,10 @@ function toAgentOutput(outcome: SubagentOutcome): AgentOutput {
 }
 
 /**
- *  markers (б)/(в) — applied here, never in output.finalText, so the
+ * markers (б)/(в) — applied here, never in output.finalText, so the
  * presentation card and history persistence (which read finalText/output
  * directly) keep the raw text; only what the model itself reads is prefixed.
- * Both can be true on the same outcome at once (the  incident was:
+ * Both can be true on the same outcome at once (the incident was:
  * 131,072 tokens generated, 99,999 bytes delivered) — order is fixed (б)→(в)
  * so the model reads "the provider cut it" before "and then we cut it more".
  */
@@ -382,7 +382,7 @@ export function formatResultForModel(result: ToolResult<AgentOutput>): string {
   // tool's byte cap — ok:true because the loop itself completed honestly
   // (unlike the guard cutoff in outcomeToResult above, which never reaches
   // here). Owner's measured false-positive rate for this marker: 1 in 902
-  // turns of a sample session, and that one turn WAS the  incident.
+  // turns of a sample session, and that one turn WAS the incident.
   if (result.output?.finalTurnFinishReason === "length") {
     prefix +=
       "[TRUNCATED SUBAGENT RESULT — the final turn hit the model's output-token ceiling; " +
@@ -397,7 +397,7 @@ export function formatResultForModel(result: ToolResult<AgentOutput>): string {
 }
 
 /**
- * : the "[Child session id: …]" follow-up hint appended to every
+ * the "[Child session id: …]" follow-up hint appended to every
  * SUCCESSFUL session-tier result — output.childSessionId first (correction 1:
  * discoverability must not depend on subagent_start or a presentation card),
  * falling back to the presentation card's session target. Inline outcomes
@@ -440,7 +440,7 @@ export function mapProgressToEvent(progress: SubagentProgress, toolCallId: strin
         ...(progress.model !== undefined ? { model: progress.model } : {}),
         ...(progress.parentModel !== undefined ? { parentModel: progress.parentModel } : {}),
         ...(progress.engine !== undefined ? { engine: progress.engine } : {}),
-        //  §3.10: role-route visibility rides the start event.
+        // §3.10: role-route visibility rides the start event.
         ...(progress.route !== undefined ? { route: progress.route } : {}),
         ...(progress.fallbackReason !== undefined ? { fallbackReason: progress.fallbackReason } : {}),
       };
@@ -451,7 +451,7 @@ export function mapProgressToEvent(progress: SubagentProgress, toolCallId: strin
         turns: progress.turns,
         toolCalls: progress.toolCalls,
         lastTool: progress.lastTool,
-        // : live provider claim, forwarded verbatim like
+        // live provider claim, forwarded verbatim like
         // `subagent_end.responseModel` (no cap there either).
         ...(progress.responseModel !== undefined ? { responseModel: progress.responseModel } : {}),
       };
@@ -479,14 +479,14 @@ export function mapProgressToEvent(progress: SubagentProgress, toolCallId: strin
         ...(progress.toolCalls !== undefined ? { toolCalls: progress.toolCalls } : {}),
         durationMs: progress.durationMs,
         ...(progress.activitySuppressed !== undefined ? { activitySuppressed: progress.activitySuppressed } : {}),
-        // : the requested id (same field/semantics as subagent_start's
+        // the requested id (same field/semantics as subagent_start's
         // `model`) and the provider's own claim (`responseModel`) are two
         // distinct, independently-optional fields — never conflated.
         ...(progress.model !== undefined ? { model: progress.model } : {}),
         ...(progress.responseModel !== undefined ? { responseModel: progress.responseModel } : {}),
         ...(progress.engine !== undefined ? { engine: progress.engine } : {}),
         ...(progress.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: progress.finalTurnFinishReason } : {}),
-        // /4055: verbatim passthrough of the child's ceiling summary
+        // verbatim passthrough of the child's ceiling summary
         // (numbers + closed enum — the privacy theorem holds unchanged).
         ...(progress.ceiling !== undefined ? { ceiling: progress.ceiling } : {}),
       };
@@ -497,7 +497,7 @@ export function mapProgressToEvent(progress: SubagentProgress, toolCallId: strin
         waiting: progress.waiting,
       };
     case "stalled":
-      //  slice 1: reports only — this bridge never alters the run,
+      // slice 1: reports only — this bridge never alters the run,
       // never cancels it, and the switch above (tool_result/turn_end) keeps
       // firing normally afterward.
       return {
@@ -527,7 +527,7 @@ export interface AgentBridgeCallInput {
 }
 
 /**
- * Decodes an MCP `tools/call` request's raw `arguments` object ( срез
+ * Decodes an MCP `tools/call` request's raw `arguments` object (срез
  * S4) into `AgentBridgeCallInput`. The wire shape is untyped JSON the CLI
  * builds from the tool's own `inputSchema` (`buildAgentBridgeToolDecl` above)
  * — that schema is advertised, never enforced on THIS side, so a peer that
@@ -638,7 +638,7 @@ export async function runAgentBridgeCall(
     profile,
     // A continued child keeps the tier its session was started on.
     ...(continueSession === undefined && entry.effort !== undefined ? { effort: entry.effort } : {}),
-    // : the profile's turn budget rides only the CREATING spawn —
+    // the profile's turn budget rides only the CREATING spawn —
     // a continued child keeps whatever budget its session started with.
     ...(continueSession === undefined && entry.maxTurns !== undefined ? { maxTurns: entry.maxTurns } : {}),
   });
@@ -647,7 +647,7 @@ export async function runAgentBridgeCall(
   // the same shape the native Agent tool's detached call has.
   const request: SessionSubagentRequest = {
     ...built,
-    // : a routed entry's declared target rides the CREATING spawn
+    // a routed entry's declared target rides the CREATING spawn
     // only; a continued child keeps the connection its session started on.
     ...(continueSession === undefined && entry.connection !== undefined ? { connectionId: entry.connection } : {}),
     ...(continueSession === undefined && entry.provider !== undefined ? { provider: entry.provider } : {}),

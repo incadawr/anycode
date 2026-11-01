@@ -37,7 +37,7 @@ function subdir(baseDir: string, rel: string): string {
 }
 
 /**
- * : resolves the MAIN checkout root of a linked git worktree, purely
+ * resolves the MAIN checkout root of a linked git worktree, purely
  * from on-disk metadata (NO git process). `workspace` must be the worktree
  * root; returns undefined for ordinary checkouts, missing/garbage metadata, or
  * anything that does not match git's canonical linked-worktree layout:
@@ -226,7 +226,7 @@ export function buildAgentProfileRoots(
   const roots: AgentProfileRoot[] = [
     { dir: subdir(workspace, ".anycode/agents"), source: "project" },
   ];
-  // : a linked-worktree workspace inherits the MAIN checkout's agent
+  // a linked-worktree workspace inherits the MAIN checkout's agent
   // profiles — validated main/.anycode/agents slots SECOND with source
   // "project" (precedence worktree > main > user > plugins). Admitted
   // REGARDLESS of home equality: even when main === home the inherited catalog
@@ -300,7 +300,7 @@ export interface AgentProfileAdminRow {
   /** Frontmatter `engine:` — absent means the child runs in-process, not on a foreign CLI. */
   engine?: AgentProfileEngine;
   /**
-   *  S1-A: the contributing plugin's discovery tier, present ONLY
+   * S1-A: the contributing plugin's discovery tier, present ONLY
    * on plugin-sourced rows (sourceKind === "plugin").
    */
   pluginTier?: PluginTier;
@@ -313,7 +313,7 @@ export interface AgentProfileAdminScanResult {
   problems: string[];
 }
 
-/** Options for scanAgentProfilesAdmin: the  plugin-world passthroughs. */
+/** Options for scanAgentProfilesAdmin: the plugin-world passthroughs. */
 export interface ScanAgentProfilesAdminOptions {
   workspace: string;
   home: string;
@@ -538,7 +538,7 @@ export async function scanAgentProfilesAdmin(
             );
             break;
           case "engine_tools_conflict":
-            // Same claim semantics as bad_model/bad_engine ( R4, mirrors
+            // Same claim semantics as bad_model/bad_engine (R4, mirrors
             // discovery's switch verbatim — parseAgentProfileMd is the single oracle).
             if (claimed.has(err.name)) {
               break;
@@ -628,7 +628,7 @@ export async function scanAgentProfilesAdmin(
       for (const suffix of result.ok.problems) {
         problems.push(`Agent profile ${path}: ${suffix}`);
       }
-      //  S1-A: badge plugin-sourced rows with tier + version.
+      // S1-A: badge plugin-sourced rows with tier + version.
       const pluginMeta =
         root.source.startsWith("plugin:")
           ? pluginInfo.get(root.source.slice("plugin:".length))

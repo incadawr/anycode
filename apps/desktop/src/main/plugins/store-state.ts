@@ -1,5 +1,5 @@
 /**
- * state.json hardening ( S1-B executor addendum): re-validate
+ * state.json hardening (S1-B executor addendum): re-validate
  * the `plugins` record keys against the manifest name pattern and every
  * `active`/`previous` as a STRICT semver BEFORE any store path is built
  * from them, so `.store/<name>/<active>` can never escape the store root.

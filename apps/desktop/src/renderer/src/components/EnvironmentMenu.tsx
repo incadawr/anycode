@@ -16,7 +16,7 @@ import { useOverlayFlag } from "../preview/overlay-flag.js";
 import { Ellipsis, Folder, GitBranch, HookIcon, ServerStack } from "./icons.js";
 import { gitPillLabel } from "./GitPill.js";
 import { groupHooksByEvent } from "./HooksPanel.js";
-// : "Set up" routes through the same settings-open + pane-select
+// "Set up" routes through the same settings-open + pane-select
 // seam SkillsPane uses (slash-menu.ts owns both event names).
 import { RUN_ACTION_EVENT, SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
 
@@ -29,7 +29,7 @@ function basename(path: string): string {
 }
 
 /**
- *  п.6: display form of the session's actual cwd. Full path when it
+ * п.6: display form of the session's actual cwd. Full path when it
  * fits; otherwise "…/<last segments>" — the HEAD is sacrificed, never the
  * tail, so `proj/.anycode/worktrees/orch-1` never collapses into `proj/…`.
  * Handles both separators; "/" and "C:\" roots survive. */
@@ -54,18 +54,18 @@ function changesLabel(count: number): string {
   return count === 0 ? "Working tree clean" : `${count} change${count === 1 ? "" : "s"}`;
 }
 
-/** : per-server name + ready/✓ vs anything-else/— summary; "Not configured" when empty. */
+/** per-server name + ready/✓ vs anything-else/— summary; "Not configured" when empty. */
 export function formatEnvironmentLspDetail(servers: readonly LspServerStatus[]): string {
   if (servers.length === 0) return "Not configured";
   return servers.map((s) => `${s.name} ${s.state === "ready" ? "✓" : "—"}`).join(", ");
 }
 
-/** : the Restart action shows only when at least one server crashed. */
+/** the Restart action shows only when at least one server crashed. */
 export function hasCrashedLspServer(servers: readonly LspServerStatus[]): boolean {
   return servers.some((s) => s.state === "crashed");
 }
 
-/** : "3 hooks (PreToolUse 1, PostToolUse 2)" / "None" — reuses HooksPanel's stable event order. */
+/** "3 hooks (PreToolUse 1, PostToolUse 2)" / "None" — reuses HooksPanel's stable event order. */
 export function formatEnvironmentHooksDetail(hooks: readonly CommandHookDeclaration[]): string {
   if (hooks.length === 0) return "None";
   const groups = groupHooksByEvent(hooks);
@@ -81,7 +81,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
   const status = useTabStore((state) => state.git.status);
   const statusKnown = useTabStore((state) => state.git.statusKnown);
   const branches = useTabStore((state) => state.git.branches);
-  // : LSP/hooks status rows (core engines only — `engine === null`
+  // LSP/hooks status rows (core engines only — `engine === null`
   // mirrors the old header-button gate and the panels' mount gate in App.tsx).
   const engine = useTabStore((state) => state.engine);
   const lspServers = useTabStore((state) => state.lspServers);
@@ -156,7 +156,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
     setOpen(false);
   }
 
-  //  cross-review F4: a missing TabContext must not look like a
+  // cross-review F4: a missing TabContext must not look like a
   // working Details click — the menu still closes, so say so in the console.
   function openPanel(apply: (id: string) => void): void {
     if (tabId) apply(tabId);
@@ -168,7 +168,7 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
     openPanel((id) => useTabsStore.getState().setLspPanelOpen(id, true));
   }
 
-  // : "Set up" (zero servers) lands on the Language servers
+  // "Set up" (zero servers) lands on the Language servers
   // SETTINGS pane now — the same settings.open + select-pane pair SkillsPane
   // uses — instead of the drawer; "Details" above keeps opening the drawer.
   function openLspSetup(): void {
@@ -324,9 +324,9 @@ export function EnvironmentMenu({ placement }: { placement: EnvironmentPlacement
               </div>
             </>
           )}
-          {/* : the per-session Sessions API switch (any engine; main owns the state). */}
+          {/* the per-session Sessions API switch (any engine; main owns the state). */}
           <SessionAccessRow />
-          {/* : the per-session "Full browser access" switch (asks before turning ON). */}
+          {/* the per-session "Full browser access" switch (asks before turning ON). */}
           <BrowserAccessRow />
           {/* GitHub #18: export THIS session's tree (session + children) as an
               anonymised bundle, with a preview before saving. */}

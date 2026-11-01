@@ -1,6 +1,6 @@
 /**
  * Unit tests for the custom-provider IPC handlers (owner-decision #6, cut
- * §9.2, ) — CRUD off a FAKE vault + scratch settings path (no
+ * §9.2) — CRUD off a FAKE vault + scratch settings path (no
  * Electron `ipcMain`), and the guarded models-list fetch against REAL local
  * `node:http` servers (not a mocked `fetch`) so the redirect/body-cap/timeout
  * behavior is exercised for real, not asserted against a stub that could be
@@ -325,12 +325,12 @@ describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP 
     expect(result).toEqual({ ok: true, models: [{ id: "m" }] });
   });
 
-  // ──  + 4088: the fetch keeps declared per-model meta ──
+  // ── + 4088: the fetch keeps declared per-model meta ──
   // (reasoning facts per 4118; image-modality facts per 4088, now riding the
   // same per-model record — extractModelIds is module-private, so these run
   // the real parse end-to-end over a local server.)
 
-  it(": an OpenRouter-style body keeps reasoning + RAW supported_efforts; bare items stay bare", async () => {
+  it("an OpenRouter-style body keeps reasoning + RAW supported_efforts; bare items stay bare", async () => {
     const { origin } = await listen((req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(
@@ -378,7 +378,7 @@ describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP 
     });
   });
 
-  it(": an OpenRouter-shaped item with input_modalities [image,text] yields imageInput:true; [text] does not", async () => {
+  it("an OpenRouter-shaped item with input_modalities [image,text] yields imageInput:true; [text] does not", async () => {
     const { origin } = await listen((req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(
@@ -430,7 +430,7 @@ describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP 
     });
   });
 
-  it(" (DoD): an OpenAI-style body without meta parses to plain ids — the fetch does not degrade", async () => {
+  it("(DoD): an OpenAI-style body without meta parses to plain ids — the fetch does not degrade", async () => {
     const { origin } = await listen((req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ data: [{ id: "gpt-x", object: "model", created: 1, owned_by: "o" }] }));
@@ -439,7 +439,7 @@ describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP 
     expect(result).toEqual({ ok: true, models: [{ id: "gpt-x" }] });
   });
 
-  it(": garbage meta drops ONLY that item's meta — the id survives and the fetch stays ok", async () => {
+  it("garbage meta drops ONLY that item's meta — the id survives and the fetch stays ok", async () => {
     const { origin } = await listen((req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(
@@ -463,7 +463,7 @@ describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP 
     });
   });
 
-  it(": a bare {id} item contributes NOTHING modality-wise (additive rule — no mark, never a false fact)", async () => {
+  it("a bare {id} item contributes NOTHING modality-wise (additive rule — no mark, never a false fact)", async () => {
     const { origin } = await listen((req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(
@@ -489,7 +489,7 @@ describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP 
     }
   });
 
-  it(" review: a null/garbage reasoning block does not discard a supported_parameters reasoning declaration", async () => {
+  it("review: a null/garbage reasoning block does not discard a supported_parameters reasoning declaration", async () => {
     const { origin } = await listen((req, res) => {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(
@@ -509,7 +509,7 @@ describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP 
     });
   });
 
-  it(" cross-review F2: an over-long id (>256 chars) with reasoning meta drops ONLY that item's meta — the bare id survives", async () => {
+  it("cross-review F2: an over-long id (>256 chars) with reasoning meta drops ONLY that item's meta — the bare id survives", async () => {
     // An id longer than settings.json's `z.record(z.string().max(256), …)`
     // key cap can never round-trip into modelCapabilities; keeping its meta
     // would poison the whole connection's stored map on the next read. The
@@ -562,7 +562,7 @@ describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP 
     expect(result).toEqual({ ok: false, reason: "http_error" });
   });
 
-  // : Moonshot's Anthropic-compatible proxy answers 404 on this route
+  // Moonshot's Anthropic-compatible proxy answers 404 on this route
   // while POST /v1/messages works — the endpoint is fine, it just publishes no
   // model list. Collapsing that into `http_error` ("The endpoint returned an
   // error response") reads as "your connection is broken" and is the single
@@ -616,11 +616,11 @@ describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP 
     expect(result).toEqual({ ok: false, reason: "invalid_response" });
   });
 
-  // ── : HTTP 200 bodies that are NOT successes ──
+  // ── HTTP 200 bodies that are NOT successes ──
 
   // RED-PROOF: the exact live Z.AI anthropic-compat behavior measured 2026-08-15
   // (no key → 200 + {"code":1001,"msg":"Authentication...","success":false}).
-  // `response.ok` passes this; only the body says "refused". Before  this
+  // `response.ok` passes this; only the body says "refused". Before this
   // fell into `invalid_response` by luck of the missing `data` field, and any
   // provider answering `data: []` in the same envelope would have surfaced as a
   // silent "fetch succeeded, zero models".
@@ -689,7 +689,7 @@ describe("fetchCustomProviderModels — guarded /v1/models GET (real local HTTP 
     expect(nonEmptyResult).toEqual({ ok: true, models: [{ id: "m" }] });
   });
 
-  // Shape-without-meaning stays invalid_response (/ boundary):
+  // Shape-without-meaning stays invalid_response (boundary):
   // no data, no code, no success:false — merely an unrecognizable body.
   it("keeps a 200 body without data/code/success as invalid_response (not error_payload)", async () => {
     const { origin } = await listen((req, res) => {
@@ -841,7 +841,7 @@ describe("handleCustomProviderCreate", () => {
     expect(reloaded.settings.provider.custom?.[0]?.baseUrl).toBe("http://[::1]:8080");
   });
 
-  // ── : keyless local endpoints ──
+  // ── keyless local endpoints ──
 
   it("creates a KEYLESS record with authOptional:true and touches the vault ZERO times", async () => {
     const res = await handleCustomProviderCreate(makeDeps(), {
@@ -902,9 +902,9 @@ describe("handleCustomProviderCreate", () => {
     expect(await vault.getSecretValue(customProviderSecretKey("custom:fixed-id"))).toBe("real-key");
   });
 
-  // : only a keyed create writes a vault key, so only it may arm the
+  // only a keyed create writes a vault key, so only it may arm the
   // recognizer force-push hook — and it fires BEFORE the mutation broadcast.
-  it(": a keyed create fires onSecretWritten with the record's vault key before onMutation; a keyless create does not fire it", async () => {
+  it("a keyed create fires onSecretWritten with the record's vault key before onMutation; a keyless create does not fire it", async () => {
     const order: string[] = [];
     const keyed = await handleCustomProviderCreate(
       makeDeps({
@@ -957,10 +957,10 @@ describe("handleCustomProviderUpdate", () => {
     expect(await vault.getSecretValue(customProviderSecretKey("custom:fixed-id"))).toBe("rotated-key");
   });
 
-  // : a rotation through update is the second channel that must arm
+  // a rotation through update is the second channel that must arm
   // the recognizer force-push; a models-only update writes no key, so it must
   // stay silent.
-  it(": a key rotation via update fires onSecretWritten; a models-only update does not", async () => {
+  it("a key rotation via update fires onSecretWritten; a models-only update does not", async () => {
     await seed();
     const order: string[] = [];
     const rotation = await handleCustomProviderUpdate(
@@ -988,7 +988,7 @@ describe("handleCustomProviderUpdate", () => {
     expect(res).toEqual({ ok: false, reason: "invalid" });
   });
 
-  //  (GitHub #10): the drawer's Replace key on a custom:<id>
+  // (GitHub #10): the drawer's Replace key on a custom:<id>
   // connection routes through this handler with an apiKey-only request — the
   // key rotation must ALSO reset every connection on the record back to
   // `unchecked` (and drop its quota line), exactly like a connection-key
@@ -1022,7 +1022,7 @@ describe("handleCustomProviderUpdate", () => {
     expect(await vault.getSecretValue(customProviderSecretKey("custom:fixed-id"))).toBe("rotated-key");
   });
 
-  // : a metadata/models-only update never resets health (no key
+  // a metadata/models-only update never resets health (no key
   // change → no staleness), and the keyed→keyless transition (Clear key)
   // resets it like a replace does.
   it("a models-only update leaves health alone; a keyed→keyless transition resets it to unchecked", async () => {
@@ -1201,7 +1201,7 @@ describe("handleCustomProviderUpdate — origin-rebind custody guard (FX3-L1 G-A
     const recorder: FetchLike = async (url, init) => {
       const headers = init.headers as Record<string, string>;
       requests.push({ url, auth: headers.Authorization ?? headers["x-api-key"] });
-      // : `{data:[]}` is no longer a silent success (empty_models), so
+      // `{data:[]}` is no longer a silent success (empty_models), so
       // this stub (whose body was always empty) now serves one non-empty model —
       // the assertion under test is WHERE the key travels, not the list content.
       return new Response(JSON.stringify({ data: [{ id: "m" }] }), {
@@ -1218,7 +1218,7 @@ describe("handleCustomProviderUpdate — origin-rebind custody guard (FX3-L1 G-A
     expect(requests.filter((r) => r.url.includes("attacker.example"))).toEqual([]);
   });
 
-  // ── : a KEYLESS record has no stored key to leak, so it may rebind
+  // ── a KEYLESS record has no stored key to leak, so it may rebind
   // cross-origin without a fresh key — provided it STAYS keyless. ──
   async function seedKeyless(baseUrl = "https://api.example.com"): Promise<void> {
     await handleCustomProviderCreate(makeDeps(), {
@@ -1405,6 +1405,7 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     const calls: FetchModelsParams[] = [];
     const deps = makeDeps({
       now: () => "2026-07-18T00:00:00.000Z",
+      preparedConnectionFetch: () => async () => new Response(),
       catalogEntryById: (id) =>
         (
           {
@@ -1422,6 +1423,100 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     });
     return { deps, calls };
   }
+
+  it("previews fetched models without mutating the connection", async () => {
+    await seedConnection({ id: "conn-1", providerId: "kimi", models: ["old"] });
+    const { deps } = makeCatalogDeps();
+    expect(await handleCustomProviderFetchModels(deps, { connectionId: "conn-1", preview: true })).toEqual({ ok: true, models: [{ id: "live-a" }, { id: "live-b" }], source: { baseUrl: "", transport: "", targetUrl: expect.any(String), guard: expect.stringMatching(/^[a-f0-9]{64}$/) } });
+    const connection = (await loadSettings(settingsPath)).settings.provider.connections[0];
+    expect(connection?.models).toEqual(["old"]);
+    expect(connection?.modelsFetchedAt).toBeUndefined();
+  });
+
+  it("previews a custom connection with its own provider credential without mutating siblings", async () => {
+    await seedConnection({ id: "conn-1", providerId: "custom:fixture" });
+    const raw = JSON.parse(await readFile(settingsPath, "utf8"));
+    raw.provider.custom = [{ id: "custom:fixture", name: "Fixture", baseUrl: "https://example.test/v1", kind: "openai-compatible", models: ["old"] }];
+    raw.provider.connections.push({ id: "conn-2", providerId: "custom:fixture" });
+    await writeFile(settingsPath, JSON.stringify(raw));
+    vault.store.set("provider.custom:fixture.apiKey", "fixture-key");
+    const { deps, calls } = makeCatalogDeps();
+    const result = await handleCustomProviderFetchModels(deps, { connectionId: "conn-1", preview: true });
+    expect(result.ok).toBe(true);
+    expect(calls[0]).toMatchObject({ baseUrl: "https://example.test/v1", apiKey: "fixture-key", kind: "openai-compatible" });
+    const saved = (await loadSettings(settingsPath)).settings;
+    expect(saved.provider.custom?.[0]?.models).toEqual(["old"]);
+    expect(saved.provider.connections[1]?.visibleModels).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain("fixture-key");
+  });
+
+  it("uses the prepared disk route rather than the mutable dispatcher", async () => {
+    await seedConnection({ id: "conn-1", providerId: "kimi", proxyRef: "proxy-one" });
+    const raw = JSON.parse(await readFile(settingsPath, "utf8"));
+    raw.network = { proxyProfiles: [{ id: "proxy-one", name: "One", mode: "manual", url: "http://proxy.test:8080", login: "fixture-user" }] };
+    await writeFile(settingsPath, JSON.stringify(raw));
+    vault.store.set("proxy.profile.proxy-one.password", "fixture-password");
+    const routes: unknown[] = [];
+    const { deps } = makeCatalogDeps({
+      connectionFetch: () => { throw new Error("mutable dispatcher must not be used"); },
+      preparedConnectionFetch: route => { routes.push(route); return async () => new Response(); },
+      fetchModels: async params => { await params.fetchImpl!("https://api.kimi.com/coding/v1/models", { method: "GET" }); return { ok: true, models: [{ id: "m" }] }; },
+    });
+    const result = await handleCustomProviderFetchModels(deps, { connectionId: "conn-1", preview: true });
+    expect(result.ok).toBe(true);
+    expect(routes).toHaveLength(1);
+    expect(routes[0]).toMatchObject({ kind: "proxy", proxy: { url: "http://fixture-user:fixture-password@proxy.test:8080/" } });
+    expect(JSON.stringify(result)).not.toContain("fixture-password");
+  });
+
+  it("refuses automatic fetch through a system proxy without invoking the dispatcher", async () => {
+    await seedConnection({ id: "conn-1", providerId: "kimi", proxyRef: "proxy-system" });
+    const raw = JSON.parse(await readFile(settingsPath, "utf8"));
+    raw.network = { proxyProfiles: [{ id: "proxy-system", name: "System", mode: "system" }] };
+    await writeFile(settingsPath, JSON.stringify(raw));
+    let invoked = false;
+    const { deps } = makeCatalogDeps({ fetchModels: async () => { invoked = true; return { ok: true, models: [] }; } });
+    expect(await handleCustomProviderFetchModels(deps, { connectionId: "conn-1", preview: true })).toEqual({ ok: false, reason: "system_proxy_unsupported" });
+    expect(invoked).toBe(false);
+  });
+
+  it("discards an in-flight preview after a proxy password or route change", async () => {
+    for (const change of ["password", "route"] as const) {
+      await seedConnection({ id: "conn-1", providerId: "kimi", proxyRef: "proxy-one" });
+      const raw = JSON.parse(await readFile(settingsPath, "utf8"));
+      raw.network = { proxyProfiles: [{ id: "proxy-one", name: "One", mode: "manual", url: "http://proxy.test:8080", login: "fixture-user" }] };
+      await writeFile(settingsPath, JSON.stringify(raw));
+      vault.store.set("proxy.profile.proxy-one.password", "old-fixture-password");
+      let release!: () => void;
+      let entered!: () => void;
+      const started = new Promise<void>(resolve => { entered = resolve; });
+      const blocked = new Promise<void>(resolve => { release = resolve; });
+      const { deps } = makeCatalogDeps({ fetchModels: async () => { entered(); await blocked; return { ok: true, models: [{ id: "old-model" }] }; } });
+      const result = handleCustomProviderFetchModels(deps, { connectionId: "conn-1", preview: true });
+      await started;
+      if (change === "password") vault.store.set("proxy.profile.proxy-one.password", "new-fixture-password");
+      else { raw.network.proxyProfiles[0].url = "http://other-proxy.test:8080"; await writeFile(settingsPath, JSON.stringify(raw)); }
+      release();
+      expect(await result).toEqual({ ok: false, reason: "stale_fetch" });
+      expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.models).toBeUndefined();
+    }
+  });
+
+  it("discards a preview if the connection key rotates during the request", async () => {
+    await seedConnection({ id: "conn-1", providerId: "kimi" });
+    vault.store.set(connectionApiKeySecretKey("conn-1"), "old-fixture-key");
+    let release!: () => void;
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const { deps } = makeCatalogDeps({ fetchModels: async () => { entered(); await blocked; return { ok: true, models: [{ id: "old-model" }] }; } });
+    const result = handleCustomProviderFetchModels(deps, { connectionId: "conn-1", preview: true });
+    await started;
+    vault.store.set(connectionApiKeySecretKey("conn-1"), "new-fixture-key");
+    release();
+    expect(await result).toEqual({ ok: false, reason: "stale_fetch" });
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.models).toBeUndefined();
+  });
 
   it("removes a saved OpenRouter rate when the refreshed model has conditional pricing", async () => {
     const id = "vendor/conditional";
@@ -1531,11 +1626,11 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     expect(saveSettingsSpy.count).toBe(0);
   });
 
-  // ──  (+4088): the connection persists live per-model capabilities ──
+  // ── (+4088): the connection persists live per-model capabilities ──
   // 4088-on-4118: the image-modality facts ride the same caps map
   // (per-field merge; the old imageInputModels list is gone).
 
-  it(": a fetch outcome with caps persists modelCapabilities merged over the stored map (fetched wins per field)", async () => {
+  it("a fetch outcome with caps persists modelCapabilities merged over the stored map (fetched wins per field)", async () => {
     await seedConnection({
       id: "conn-caps",
       providerId: "kimi",
@@ -1567,7 +1662,7 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     });
   });
 
-  it(": a later fetch with NO capable models leaves the stored map intact (never deleted on empty)", async () => {
+  it("a later fetch with NO capable models leaves the stored map intact (never deleted on empty)", async () => {
     await seedConnection({
       id: "conn-caps-2",
       providerId: "kimi",
@@ -1584,7 +1679,7 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     });
   });
 
-  it(" cross-review F2: an over-long id (>256 chars) with reasoning meta never poisons the stored capability map", async () => {
+  it("cross-review F2: an over-long id (>256 chars) with reasoning meta never poisons the stored capability map", async () => {
     // settings.json's `z.record(z.string().max(256), …)` key cap is enforced
     // by a WHOLE-map `.catch(undefined)`: one illegal key would silently kill
     // the connection's entire capability map on every later load. The fix
@@ -1613,7 +1708,7 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     });
   });
 
-  it(": a FAILED fetch persists nothing (caps included)", async () => {
+  it("a FAILED fetch persists nothing (caps included)", async () => {
     await seedConnection({ id: "conn-caps-3", providerId: "kimi" });
     const { deps } = makeCatalogDeps({
       fetchModels: async () => ({ ok: false, reason: "http_error" }),
@@ -1626,7 +1721,7 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     expect(reloaded.settings.provider.connections[0]?.modelCapabilities).toBeUndefined();
   });
 
-  it(" (on 4118 caps): image facts persist into modelCapabilities and merge PER FIELD with stored facts", async () => {
+  it("(on 4118 caps): image facts persist into modelCapabilities and merge PER FIELD with stored facts", async () => {
     await seedConnection({
       id: "conn-img-1",
       providerId: "kimi",
@@ -1658,7 +1753,7 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     expect(Object.hasOwn(reloaded.settings.provider.connections[0] ?? {}, "imageInputModels")).toBe(false);
   });
 
-  it(" (on 4118 caps): a fetch with no image facts on a fresh connection persists NO caps key", async () => {
+  it("(on 4118 caps): a fetch with no image facts on a fresh connection persists NO caps key", async () => {
     await seedConnection({ id: "conn-img-3", providerId: "kimi" });
     const { deps } = makeCatalogDeps({
       fetchModels: async () => ({ ok: true, models: [{ id: "live-a" }] }),
@@ -1697,10 +1792,10 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     expect(reloaded.settings.provider.connections[0]?.models).toEqual(["kimi-for-coding", "k3"]);
   });
 
-  // ── : INTEGRATED production-seam tests (proxy routing through the
+  // ── INTEGRATED production-seam tests (proxy routing through the
   // real guarded fetch, fake ONLY at the Electron net boundary) ──
 
-  it(": proxied connection fetches models through the production proxy dispatcher", async () => {
+  it("proxied connection fetches models through the production proxy dispatcher", async () => {
     await seedConnection({
       id: "conn-1",
       providerId: "kimi",
@@ -1784,7 +1879,7 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     expect(calls).toEqual([]);
   });
 
-  it(": malformed proxy refuses with renderer-compatible reason and a credential-free log", async () => {
+  it("malformed proxy refuses with renderer-compatible reason and a credential-free log", async () => {
     await seedConnection({ id: "conn-1", providerId: "kimi", proxyUrl: "socks5://x:1" });
     vault.store.set(connectionApiKeySecretKey("conn-1"), "sk-kimi-secret");
     const dispatches: ProxyDispatchRequest[] = [];
@@ -1820,7 +1915,7 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     }
   });
 
-  it(": unproxied connection routes through the wired production chain to the UNCHANGED fallback (no session/dispatcher config)", async () => {
+  it("unproxied connection routes through the wired production chain to the UNCHANGED fallback (no session/dispatcher config)", async () => {
     // Production ALWAYS wires connectionFetch; an unproxied connection must
     // reach the fallback with the URL/init the caller passed, and never
     // configure a partition or dispatch a proxied request.
@@ -1857,7 +1952,7 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     expect(fallbackCalls[0]?.url).toBe("https://api.kimi.com/coding/v1/models");
   });
 
-  it(": unproxied connection adds no fetchImpl when the seam is unwired", async () => {
+  it("unproxied connection adds no fetchImpl when the seam is unwired", async () => {
     await seedConnection({ id: "conn-12", providerId: "kimi" });
     const { deps, calls } = makeCatalogDeps();
     await handleCustomProviderFetchModels(deps, { connectionId: "conn-12" });
@@ -2013,7 +2108,7 @@ describe("handleCustomProviderFetchModels — 4244 modelsUrl catalog wiring", ()
   });
 });
 
-// ── : durable manually entered connection models ──
+// ── durable manually entered connection models ──
 
 /** Minimal v2 settings fixture carrying an explicit `provider` object. */
 function v2Settings(provider: Record<string, unknown>): AnycodeSettings {
@@ -2055,9 +2150,9 @@ describe("handleConnectionAddModels — manual ids ({connectionId, addModels})",
     expect(conn).toMatchObject({ id: "conn-1", models: ["my-manual-id"] });
   });
 
-  // : manual ids carry no meta by definition — the branch must
+  // manual ids carry no meta by definition — the branch must
   // never write (or erase) modelCapabilities.
-  it(": the addModels branch never writes modelCapabilities", async () => {
+  it("the addModels branch never writes modelCapabilities", async () => {
     await writeSettingsFixture({
       connections: [{ id: "conn-1", providerId: "kimi", modelCapabilities: { "fetched-model": { reasoning: true } } }],
     });

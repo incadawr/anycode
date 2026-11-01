@@ -547,7 +547,7 @@ export interface McpServersPaneProps {
   tabId?: string;
   /** Injectable for tests / isolation; defaults to `window.anycode.mcpConfig` (same DI ethic as SettingsBridge). */
   bridge?: McpConfigBridge;
-  /** : reports the pane's count for the scope chip (null while loading). */
+  /** reports the pane's count for the scope chip (null while loading). */
   onCountChange?: (count: number | null) => void;
 }
 
@@ -708,7 +708,7 @@ export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConf
   const [importConsent, setImportConsent] = useState(false);
   const [importResults, setImportResults] = useState<McpImportApplyResultItem[] | null>(null);
 
-  // : the pane's WRITE target follows the header scope bar — a
+  // the pane's WRITE target follows the header scope bar — a
   // tabId present means the bar resolved Project mode (SettingsScreen passes
   // the chosen tab); absent means Global (user-only snapshot). The add form
   // and the import dialog no longer carry their own scope radios; they seed
@@ -734,7 +734,7 @@ export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConf
   const filtered = filterMcpRows(rows, searchQuery);
   const { configured, compat } = partitionMcpRows(filtered);
   const allConfigured = partitionMcpRows(rows).configured;
-  // : the scope chip's count = configured rows (compat excluded).
+  // the scope chip's count = configured rows (compat excluded).
   const configuredCount = snapshot ? allConfigured.length : null;
   useEffect(() => {
     onCountChange?.(configuredCount);
@@ -934,7 +934,7 @@ export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConf
             </div>
           )}
 
-          {/*  S1-C (design 4732 §6 "Elsewhere"): plugin-contributed
+          {/* S1-C (design 4732 §6 "Elsewhere"): plugin-contributed
               servers, READ-ONLY rows — no toggle/edit/delete here. Enable and
               consent live in Settings → Plugins (per plugin, user-global), so
               the section's only affordance is the pane-select cross-link. */}
@@ -1091,7 +1091,7 @@ interface McpFormDialogProps {
   mode: "add" | "edit";
   fields: McpFormFields;
   error: string | null;
-  /** : the pane's resolved write target (header scope bar) — displayed as a hint, no longer a radio. */
+  /** the pane's resolved write target (header scope bar) — displayed as a hint, no longer a radio. */
   scopeMode: "project" | "user";
   onChange: (fields: McpFormFields) => void;
   onCancel: () => void;
@@ -1167,7 +1167,7 @@ export function McpFormDialog({ mode, fields, error, scopeMode, onChange, onCanc
           />
         </label>
 
-        {/* : the scope radio is gone — the write target is the
+        {/* the scope radio is gone — the write target is the
             pane's header scope bar (ScopeSwitcher), restated here as a hint so
             the dialog itself names where the entry will land. Add mode only:
             an EDIT keeps the row's own source (badge-visible), while an add's
@@ -1319,7 +1319,7 @@ interface McpImportDialogProps {
   scan: McpImportScanResult | null;
   selection: Record<string, boolean>;
   consent: boolean;
-  /** : the pane's resolved write target (header scope bar) — displayed as a hint, no longer a radio. */
+  /** the pane's resolved write target (header scope bar) — displayed as a hint, no longer a radio. */
   scopeMode: "project" | "user";
   results: McpImportApplyResultItem[] | null;
   onToggleRow: (id: string) => void;
@@ -1411,7 +1411,7 @@ function McpImportDialog({
               </div>
             ))}
 
-            {/* : the "Add to" radio is gone — the write target is
+            {/* the "Add to" radio is gone — the write target is
                 the pane's header scope bar (ScopeSwitcher), restated here as a
                 hint so the dialog itself names where imports will land. */}
             <div className="mcp-import-scope">
@@ -1454,7 +1454,7 @@ function McpImportDialog({
   );
 }
 
-// ──  S1-C: read-only plugin-contributed row (design 4732 §6) ──
+// ── S1-C: read-only plugin-contributed row (design 4732 §6) ──
 
 /**
  * One plugin-contributed MCP server: name, owning plugin badge, transport

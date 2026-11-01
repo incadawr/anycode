@@ -1,6 +1,6 @@
 /**
- * Ink TUI shell — . Slice 1 shipped the composer with
- * history and slash autocomplete; the review rework adds what  requires
+ * Ink TUI shell —. Slice 1 shipped the composer with
+ * history and slash autocomplete; the review rework adds what requires
  * from day one plus the two defects found in the wild:
  *
  * - `<Static>` transcript (defect 1): every REPL byte written while the TUI is

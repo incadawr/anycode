@@ -1,5 +1,5 @@
 /**
- *  /  — main's OWN provider network requests, proxied.
+ * main's OWN provider network requests, proxied.
  *
  * Main makes three connection-scoped HTTP calls on the user's behalf
  * (`provider-ipc.ts` /v1/models, `oauth.ts` code exchange, `token-broker.ts`
@@ -651,17 +651,17 @@ export interface ProxyChainFetchDeps {
 export function createProxyChainFetch(deps: ProxyChainFetchDeps) {
   const fallback: typeof globalThis.fetch = deps.fallbackFetch ?? ((url, init) => globalThis.fetch(url, init));
   const configuredPartitions = new Map<string, Promise<void>>(); // INSTANCE-LOCAL, not module-level
-  return (chain: readonly ProxyScopeId[]) =>
+  return (chain: readonly ProxyScopeId[], preparedRoute?: ProxyRoute) =>
     async (url: string, init: RequestInit): Promise<Response> => {
-      const current = deps.readSettings();
-      if (current === null) {
+      const current = preparedRoute === undefined ? deps.readSettings() : null;
+      if (current === null && preparedRoute === undefined) {
         return fallback(url, init);
       }
-      let route: Awaited<ReturnType<typeof resolveProxyRoute>>;
+      let route: ProxyRoute;
       try {
-        route = await resolveProxyRoute(current, chain, deps.materializationFor(url), url);
+        route = preparedRoute ?? await resolveProxyRoute(current!, chain, deps.materializationFor(url), url);
       } catch (err) {
-        //  defect 3: a raw materialization-boundary rejection could
+        // defect 3: a raw materialization-boundary rejection could
         // quote the authenticated proxy URL — sanitize to the fetch-shaped
         // boundary error (fixed message + fixed credential-free cause).
         throw sanitizedBoundaryError(err);
@@ -690,7 +690,7 @@ export function createProxyChainFetch(deps: ProxyChainFetchDeps) {
         // The async IIFE places the ACTUAL setProxyFor invocation inside the
         // sanitization boundary: a synchronous throw while CALLING
         // deps.setProxyFor rejects this promise just like an async rejection
-        // ( defect 3) — neither can escape with raw proxy detail.
+        // (defect 3) — neither can escape with raw proxy detail.
         configured = (async () => {
           try {
             await deps.setProxyFor(partition, split.rules);

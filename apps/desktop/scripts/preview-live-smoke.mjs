@@ -1,5 +1,5 @@
 /**
- * Live DoD smoke for  96-E (night-track wave-1 cut §3 "96-E"): drives a
+ * Live DoD smoke for 96-E (night-track wave-1 cut §3 "96-E"): drives a
  * REAL Electron dev instance end-to-end over the automation HTTP channel
  * (`main/automation/*`, see `automation/README.md`), exercising the FULL
  * preview stack live — turn-end auto-open detection is NOT what this proves

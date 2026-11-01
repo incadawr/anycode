@@ -47,13 +47,13 @@ import type {
 import type { CodexDoctorReport } from "../shared/codex-doctor.js";
 import { canonicalWorkspace, type TabHostManager } from "./tabs.js";
 import { isEngineId, type EngineId } from "../shared/engines.js";
-//  CUT-S2 §10.5/§10.8.1 point 5: `isValidChildId` is the SAME
+// CUT-S2 §10.5/§10.8.1 point 5: `isValidChildId` is the SAME
 // shape/charset pre-flight the parent host's RPC client (host/child-session-port.ts)
 // runs before putting a spawnToolCallId on the child-spawn wire — reused here
 // so a malformed id from a compromised/buggy renderer is refused BEFORE it
 // ever reaches `getChildSession` (fail-closed, §2.5's "avtorizatsiya rodstvom").
 import { isValidChildId } from "../shared/child-sessions.js";
-//  CUT-S2 §2.5/§10.8.1: the read-only completed-child history channel's
+// CUT-S2 §2.5/§10.8.1: the read-only completed-child history channel's
 // wire item shape — imported type-only from shared/protocol.ts (unrestricted
 // read access; only EDITING apps/desktop/src/shared/** is out of this slice's
 // fence). `CHILD_HISTORY_CHANNEL`/`ChildHistoryResult` themselves are NOT
@@ -73,13 +73,13 @@ export interface DialogLike {
 }
 
 /**
- * Resolution of a resumed session's pinned provider connection ( W10):
+ * Resolution of a resumed session's pinned provider connection (W10):
  * `ok` with the connection id to re-pin the tab to (undefined = a legacy session
  * with no pin — resume on the current default, documented behaviour), or a
  * refusal carrying the deleted connection's id (the renderer offers a
  * replacement instead of silently switching accounts).
  *
- *  W10-FIX F3: the `ok` branch carries a `release` the caller MUST invoke
+ * W10-FIX F3: the `ok` branch carries a `release` the caller MUST invoke
  * (in a `finally`) once the tab is registered or on any failure — it drops the
  * synchronous pin reservation that guards the resume/delete race. Optional so
  * legacy wiring / unit fixtures that don't reserve stay source-compatible.
@@ -105,7 +105,7 @@ export interface TabIpcDeps {
   providerReadiness?(connectionId?: string): Promise<import("../shared/settings.js").ProviderReadiness>;
   manager: TabHostManager;
   /**
-   *  part C: awaited before a tab is created so the MCP secret
+   * part C: awaited before a tab is created so the MCP secret
    * hand-off for the workspace is current when spawnTabHost reads it. Optional.
    */
   primeMcpSecrets?(workspace: string): Promise<void>;
@@ -113,7 +113,7 @@ export interface TabIpcDeps {
    * The picker/resume reads main uses (§2.3), plus `touchSession` (W10-FIX F1):
    * re-pinning a resumed session to a replacement connection writes only
    * `SessionMetaPatch.connectionId` (already part of the core port — ZERO core
-   * delta).  CUT-S2 §2.5/§10.8.1 (slice C4) additive: `getChildSession`
+   * delta). CUT-S2 §2.5/§10.8.1 (slice C4) additive: `getChildSession`
    * (relationship-authorized point lookup — null for a non-child or a child of
    * a DIFFERENT parent) + `loadHistory` (the authorized child's own transcript)
    * back the read-only `CHILD_HISTORY_CHANNEL` handler below.
@@ -134,7 +134,7 @@ export interface TabIpcDeps {
   /** Production gate proves the path is still a registered worktree on the persisted branch. */
   validateWorktreeResume?(meta: SessionMeta): Promise<boolean>;
   /**
-   * : best-effort removal of the deleted sessions'
+   * best-effort removal of the deleted sessions'
    * artifact directories (NodeArtifactStore.removeSession per id, called with
    * the cascade summary's removedIds — roots plus children). Absent (legacy
    * tests) => deletion proceeds, the age-based sweep remains the backstop.
@@ -143,13 +143,13 @@ export interface TabIpcDeps {
   removeSessionArtifacts?(sessionIds: readonly string[]): Promise<void>;
   /**
    * The active provider connection id, pinned onto a NEW core session at creation
-   * ( W10). Undefined = no default configured (a fresh install, or an
+   * (W10). Undefined = no default configured (a fresh install, or an
    * env-override boot) — the tab stays unpinned and runs on the current default.
    * Never consulted for a non-core engine (Codex owns its own account).
    */
   activeConnectionId?(): string | undefined;
   /**
-   *  cut-1 stage A: does this connection id exist in main's live
+   * cut-1 stage A: does this connection id exist in main's live
    * connection registry right now? Backs the New Session model picker's
    * cross-connection pick — a `new` request's explicit `connectionId` is
    * validated against this BEFORE it is trusted (see handleCreate). Absent =
@@ -159,7 +159,7 @@ export interface TabIpcDeps {
    */
   connectionExists?(connectionId: string): boolean;
   /**
-   *  cut-1 review fix (P1, owner live smoke): primes the per-connection
+   * cut-1 review fix (P1, owner live smoke): primes the per-connection
    * fork env for an explicit NEW-tab connection pick, mirroring what
    * `resolveResumePin` already does for a RESUMED tab's stored pin. Without this,
    * `hostEnvByConnection` (main/index.ts) is only ever filled by the resume path
@@ -172,7 +172,7 @@ export interface TabIpcDeps {
    */
   ensureConnectionEnv?(connectionId: string): Promise<void>;
   /**
-   *  cut-2 (§D3/D5 of the design doc): the MODEL the target
+   * cut-2 (§D3/D5 of the design doc): the MODEL the target
    * connection is currently configured with, read off main's live settings
    * (`connectionById(settings, id)?.model`). `handleTabRebind` stamps it over
    * the session row (`touchSession({ model })`) so the row never describes a
@@ -197,7 +197,7 @@ export interface TabIpcDeps {
    */
   writeConnectionModel?(connectionId: string, model: string): Promise<boolean>;
   /**
-   * Resolves the connection a RESUMED session is pinned to ( W10). Absent
+   * Resolves the connection a RESUMED session is pinned to (W10). Absent
    * = pinning disabled (legacy wiring / unit fixtures) so resume behaves as before.
    */
   resolveResumePin?(meta: SessionMeta): Promise<ResumePinResult>;
@@ -236,7 +236,7 @@ export interface TabIpcDeps {
    */
   consumePendingImportModel?(sessionId: string): string | undefined;
   /**
-   * : is the readiness verdict for this engine/profile KNOWN yet? Splits
+   * is the readiness verdict for this engine/profile KNOWN yet? Splits
    * `canSpawn`'s fail-closed false into known-bad (refuse) vs unknown (await
    * `hydrateEngineReady` before the verdict). The boot-time Codex recheck is
    * fire-and-forget (main/index.ts), so until its first doctor snapshot lands —
@@ -246,7 +246,7 @@ export interface TabIpcDeps {
    */
   engineReadyKnown?(engine: EngineId, codexProfileId?: string): boolean;
   /**
-   * : awaits the first readiness verdict for an engine/profile whose
+   * awaits the first readiness verdict for an engine/profile whose
    * answer is still UNKNOWN (codex: runs — or coalesces onto — the doctor
    * recheck for that profile; core readiness is settled at boot before IPC
    * registers, so it never reaches here). Called ONLY after `engineReadyKnown`
@@ -256,7 +256,7 @@ export interface TabIpcDeps {
    */
   hydrateEngineReady?(engine: EngineId, codexProfileId?: string): Promise<unknown>;
   /**
-   * : the last cached Codex doctor verdict for this profile
+   * the last cached Codex doctor verdict for this profile
    * (absent id = the active one), or undefined when none landed. Read-only —
    * lets `notReady` carry the doctor's exact status (signed_out,
    * update_required, not_installed, error) into the refusal so the renderer
@@ -265,7 +265,7 @@ export interface TabIpcDeps {
    */
   latestCodexReport?(codexProfileId?: string): CodexDoctorReport | undefined;
   /**
-   * : async freshness guard for a KNOWN-READY codex verdict —
+   * async freshness guard for a KNOWN-READY codex verdict —
    * detects an externally-changed binary (size+mtime stamp vs the cached
    * doctor verdict) and force-rechecks (which itself runs the bounded
    * refresh-before-refuse) before the spawn is allowed or refused. Called
@@ -282,7 +282,7 @@ async function notReady(
   codexProfileId?: string,
 ): Promise<CreateTabResult> {
   if (engine !== "core") {
-    // : with the doctor-cache dependency wired, carry the exact
+    // with the doctor-cache dependency wired, carry the exact
     // verdict for the requested/resumed profile into the refusal. No report,
     // a ready report inconsistent with the spawn gate, a getter failure, or
     // any other status all fall back to the generic codex_error. A trust
@@ -347,7 +347,7 @@ export const createTabRequestSchema: z.ZodType<CreateTabRequest> = z.discriminat
     // resolves the id against its own registry (resolveCodexProfile), never
     // trusts it directly, same discipline as engineModel/enginePreset above.
     codexProfileId: z.string().min(1).max(128).optional(),
-    //  cut-1 stage A: bounds only (a hostile-length string) — main
+    // cut-1 stage A: bounds only (a hostile-length string) — main
     // resolves the id against its own live connection registry
     // (deps.connectionExists), never trusts it directly, same discipline as
     // codexProfileId above.
@@ -365,7 +365,7 @@ export const createTabRequestSchema: z.ZodType<CreateTabRequest> = z.discriminat
 const closeTabRequestSchema = z.object({ tabId: z.string().min(1) });
 
 /**
- *  cut-2: the fail-closed re-bind request schema. Bounds only (a
+ * cut-2: the fail-closed re-bind request schema. Bounds only (a
  * hostile-length string) — main resolves the tab against its own live
  * registry (`manager.getTab`) and the connection against
  * `deps.connectionExists`, never trusting either id, the same discipline as
@@ -385,14 +385,14 @@ const tabRebindRequestSchema: z.ZodType<TabRebindRequest> = z.object({
   cancelChildren: z.boolean().optional(),
 });
 
-/**  cut-2: exported for tests (tab-ipc.test.ts) — the fail-closed re-bind request schema. */
+/** cut-2: exported for tests (tab-ipc.test.ts) — the fail-closed re-bind request schema. */
 export { tabRebindRequestSchema };
 
-/** : single hard-delete — the id only; the active/not-found verdicts are main's, below. */
+/** single hard-delete — the id only; the active/not-found verdicts are main's, below. */
 const sessionDeleteRequestSchema = z.object({ sessionId: z.string().min(1) });
 
 /**
- * : bulk delete of one project's sessions older than N whole days.
+ * bulk delete of one project's sessions older than N whole days.
  * `dryRun` counts the candidates (and the active skips) without deleting —
  * the renderer's confirm dialog shows exactly this number BEFORE committing.
  */
@@ -414,19 +414,19 @@ function emptyDeleteSummaryWire(): SessionDeleteSummaryWire {
 }
 
 /**
- *  active-session gate (the persistence layer itself never checks
+ * active-session gate (the persistence layer itself never checks
  * liveness): a session is undeletable while THAT session is bound to a live
  * tab. Two accessors answer the same question, because `sessionOpenInTab`
  * alone has a spawn-window race — a running host whose session row is not
  * flushed yet is reachable through `listTabs()` before the index answers for
  * it — and a worktree-relocated tab is reached the same way.
  *
- * Narrowed by the owner's live smoke 15.08 ( defect 3). The original
+ * Narrowed by the owner's live smoke 15.08 (defect 3). The original
  * clause refused a session while ANY tab lived on its project, which hid the
  * delete affordance from EVERY row of a project as soon as one session there
  * was open — i.e. in the state the app is normally in. A sibling session is
  * not a conflict: the sidebar lists roots only, `deleteSessionTree` walks the
- * target's own tree, and the store is one database either way. 
+ * target's own tree, and the store is one database either way.
  * children need no clause of their own — a child runs inside its root's host,
  * so a root with no tab has no running child to protect.
  */
@@ -441,7 +441,7 @@ export function isSessionActive(deps: TabIpcDeps, sessionId: string): boolean {
   return deps.manager.listTabs().some((tab) => tab.sessionId === sessionId);
 }
 
-/** : hard-delete one session. Exported for tests (tab-ipc.test.ts). */
+/** hard-delete one session. Exported for tests (tab-ipc.test.ts). */
 export async function handleSessionDelete(deps: TabIpcDeps, sessionId: string): Promise<DeleteSessionResult> {
   const meta = await deps.persistence.getRootSession(sessionId);
   if (meta === null) {
@@ -451,7 +451,7 @@ export async function handleSessionDelete(deps: TabIpcDeps, sessionId: string): 
     return { ok: false, reason: "active" };
   }
   const summary = await deps.persistence.deleteSession(sessionId);
-  // : a hard delete is the ONLY session-death point that
+  // a hard delete is the ONLY session-death point that
   // removes artifacts (tab close / quit keep them — the session stays
   // resumable). Best-effort: never fails the delete itself.
   if (summary.removedIds.length > 0) {
@@ -465,7 +465,7 @@ export async function handleSessionDelete(deps: TabIpcDeps, sessionId: string): 
 }
 
 /**
- * : bulk delete. Candidates come from `listSessionsOlderThan` (roots
+ * bulk delete. Candidates come from `listSessionsOlderThan` (roots
  * only — children ride their root's cascade); active ones are SKIPPED, not
  * blocking, and reported in `skippedActive`. `dryRun` returns the exact same
  * selection with zero deletion so the confirm dialog can quote the count.
@@ -493,7 +493,7 @@ export async function handleSessionsDeleteOlder(
     return { ok: true, summary };
   }
   const deleted = await deps.persistence.deleteSessions(deletable);
-  // : same best-effort artifact cleanup as the single
+  // same best-effort artifact cleanup as the single
   // delete above, over the merged cascade of the whole batch. (dryRun returns
   // before this point, so a dry run never removes anything.)
   if (deleted.removedIds.length > 0) {
@@ -506,15 +506,15 @@ export async function handleSessionsDeleteOlder(
   return { ok: true, summary: { ...deleted, skippedActive } };
 }
 
-/** : optional page size for the sidebar's default capped view. Fail-open:
+/** optional page size for the sidebar's default capped view. Fail-open:
  *  an unparseable request degrades to the full list. Bounds mirror the CLI
  *  picker's limit discipline (1..1000 whole numbers). */
 export const sessionsListRequestSchema = z.object({
   limit: z.number().int().min(1).max(1000).optional(),
 });
 
-/** : the sidebar list read, exported for tests (handleSessionsDeleteOlder
- *  precedent). Root-only by construction ( S2a §2.4). `limit ===
+/** the sidebar list read, exported for tests (handleSessionsDeleteOlder
+ *  precedent). Root-only by construction (S2a §2.4). `limit ===
  *  undefined` = full list (StartScreen/ModelPill/palette/automation keep it). */
 export async function handleSessionsList(deps: TabIpcDeps, raw?: unknown): Promise<SessionSummary[]> {
   const parsed = sessionsListRequestSchema.safeParse(raw ?? {});
@@ -523,7 +523,7 @@ export async function handleSessionsList(deps: TabIpcDeps, raw?: unknown): Promi
   return sessions.map((meta) => toSummary(meta, deps.manager));
 }
 
-//  CUT-S2 §2.5/§10.8.1: read-only completed-child transcript channel.
+// CUT-S2 §2.5/§10.8.1: read-only completed-child transcript channel.
 // `CHILD_HISTORY_CHANNEL`/`ChildHistoryResult` are the source of truth this
 // slice owns — preload/index.ts and renderer/src/child-history.ts each carry
 // a byte-identical DUPLICATE (see this file's header comment for why: the
@@ -540,7 +540,7 @@ function toWireHistoryItems(items: readonly HistoryItem[]): WireHistoryItem[] {
     id: item.id,
     createdAt: item.createdAt,
     ...(item.kind !== undefined ? { kind: item.kind } : {}),
-    //  срез 2: kept in parity with host/session.ts's buildSessionHistory
+    // срез 2: kept in parity with host/session.ts's buildSessionHistory
     // (this file's own doc comment above) — a child never actually receives a
     // system-origin item itself, but the projection stays byte-identical either way.
     ...(item.origin !== undefined ? { origin: item.origin } : {}),
@@ -611,14 +611,14 @@ export function toSummary(meta: SessionMeta, manager: TabHostManager): SessionSu
     updatedAt: meta.updatedAt,
     ...(meta.title !== undefined ? { title: meta.title } : {}),
     ...(openInTabId !== undefined ? { openInTabId } : {}),
-    // : carry the session's engine to the renderer so a resume `not_ready`
+    // carry the session's engine to the renderer so a resume `not_ready`
     // toast can read the engine-correct copy (Sidebar -> handleCreateTabResult).
     ...(meta.engineId !== undefined ? { engineId: meta.engineId } : {}),
   };
 }
 
 /**
- * : the spawn gate's async verdict. `manager.canSpawn` is fail-closed on
+ * the spawn gate's async verdict. `manager.canSpawn` is fail-closed on
  * UNKNOWN readiness — right after launch (boot recheck still in flight), or for
  * a Codex profile nobody diagnosed yet, that bounced a session click with a
  * false "not ready". A refused sync verdict that is merely UNKNOWN first awaits
@@ -629,7 +629,7 @@ export function toSummary(meta: SessionMeta, manager: TabHostManager): SessionSu
  */
 async function spawnableWhenKnown(deps: TabIpcDeps, engine: EngineId, codexProfileId?: string): Promise<boolean> {
   if (deps.manager.canSpawn(engine, codexProfileId)) {
-    // : a KNOWN-READY codex verdict is only valid while the binary
+    // a KNOWN-READY codex verdict is only valid while the binary
     // file it judged is unchanged; the guard force-rechecks (with the bounded
     // refresh-before-refuse inside) before the spawn may proceed.
     if (engine === "codex" && deps.verifyCodexSpawn !== undefined) {
@@ -669,7 +669,7 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
     // a pure cache lookup, unknown ⇒ fail-closed refuse; identity authority stays
     // with resolveCodexProfile below), so a ready non-active pick spawns even when
     // the active account is signed out. Absent id ⇒ the active profile answers.
-    // : an UNKNOWN verdict (boot recheck in flight / never-diagnosed
+    // an UNKNOWN verdict (boot recheck in flight / never-diagnosed
     // profile) awaits the first snapshot instead of falsely refusing.
     if (!(await spawnableWhenKnown(deps, engine, req.codexProfileId))) {
       return notReady(deps, engine, req.connectionId, req.codexProfileId);
@@ -699,7 +699,7 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
       }
       codexProfile = resolved.codexProfile;
     }
-    //  cut-1 stage A: resolve the New Session picker's explicit
+    // cut-1 stage A: resolve the New Session picker's explicit
     // connection pick BEFORE prompting — same "never make the user pick a
     // folder for a refused request" reasoning as the Codex profile resolution
     // above. Fail-closed: an id absent from main's live registry (or no
@@ -712,7 +712,7 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
         return { ok: false, reason: "not_ready" };
       }
       explicitConnectionId = req.connectionId;
-      //  cut-1 review fix (P1): prime the fork env for this pick BEFORE
+      // cut-1 review fix (P1): prime the fork env for this pick BEFORE
       // createTab — a validated-but-unprimed id would reach the spawn guard
       // (main/tabs.ts) with no entry in `hostEnvByConnection` and be refused
       // fail-closed there instead. A throw (vault read failure, same class
@@ -748,11 +748,11 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
       }
       workspace = dialogWorkspace;
     }
-    //  W10: a NEW core session is pinned to the active connection at
+    // W10: a NEW core session is pinned to the active connection at
     // creation (main stamps it into the fork env, the host persists it), so a
     // later default-switch never retargets this session's account. Codex owns
     // its own account, so a codex tab is never pinned to a core connection.
-    //  cut-1 stage A: an explicit (already-validated) picker pick
+    // cut-1 stage A: an explicit (already-validated) picker pick
     // wins over the active connection — `settings.provider.activeConnectionId`
     // itself is never touched by this pick (session-scoped, not a default
     // change).
@@ -806,7 +806,7 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
   // Codex-profiles S3-1: gate on the profile the session was CREATED under
   // (persisted `meta.codexProfileId` — never the renderer's current active pick),
   // consistent with the re-resolve below; a legacy/system session (no id) keeps
-  // the active-profile answer. : same UNKNOWN-await as the "new" branch —
+  // the active-profile answer. same UNKNOWN-await as the "new" branch —
   // a resumed profile nobody diagnosed since boot is hydrated, not refused.
   if (!isEngineId(engine) || !(await spawnableWhenKnown(deps, engine, meta.codexProfileId))) {
     return notReady(deps, engine, meta.connectionId, meta.codexProfileId);
@@ -832,7 +832,7 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
     }
     resumeCodexProfile = resolved.codexProfile;
   }
-  //  W10: resume resolves the connection the session was pinned to. A
+  // W10: resume resolves the connection the session was pinned to. A
   // deleted pin refuses `connection_missing` (renderer offers a replacement — no
   // silent switch to the current default); a legacy session (no pin) resolves
   // `{ok:true}` with no connectionId and resumes on the current default.
@@ -918,7 +918,7 @@ export async function handleWorkspacePick(deps: TabIpcDeps): Promise<WorkspacePi
 }
 
 /**
- *  cut-2 — re-binds a RUNNING tab's session to another provider
+ * cut-2 — re-binds a RUNNING tab's session to another provider
  * connection, exported for tests (tab-ipc.test.ts). The tab, its session id
  * and its terminal panel all survive; `manager.rebindTab` replaces the host
  * process with a resume host booted on the target connection's fork env (the
@@ -1085,7 +1085,7 @@ export function registerTabIpc(deps: TabIpcDeps): void {
     return deps.manager.closeTab(parsed.data.tabId);
   });
 
-  //  cut-2: a malformed re-bind request is the same safe negative as
+  // cut-2: a malformed re-bind request is the same safe negative as
   // an unknown tab — nothing is mutated and the tab keeps running.
   ipcMain.handle(TAB_REBIND_CHANNEL, async (_event, raw: unknown): Promise<TabRebindResult> => {
     const parsed = tabRebindRequestSchema.safeParse(raw);

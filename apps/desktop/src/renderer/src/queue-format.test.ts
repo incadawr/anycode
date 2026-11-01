@@ -5,7 +5,7 @@
  * Composer send path and the prompt-queue drainer share one implementation;
  * the assertions themselves are unchanged (same function names, same output).
  *
- * : the transcript ECHO no longer uses this badge —
+ * the transcript ECHO no longer uses this badge —
  * live user_text blocks carry `images` and render thumbnails. The functions
  * stay for the prompt-queue pill/preview; do not "restore" them onto echo
  * paths.

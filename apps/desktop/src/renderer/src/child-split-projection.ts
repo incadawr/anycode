@@ -1,5 +1,5 @@
 /**
- *  (supervisor correction 4): the pure projection seam for the split
+ * (supervisor correction 4): the pure projection seam for the split
  * stack's rows — extracted from App.tsx's `resolveChildRowCard`/`childSplitRows`
  * composition so the continuation panel logic is testable WITHOUT mounting
  * React: a test drives the REAL relation store (registerPort's registrations)
@@ -282,7 +282,7 @@ export function projectChildSplitRows(
   };
   return order.map((id) => {
     const eff = effectiveChildId(id);
-    // Shared helper (child-layout.ts, ) — no duplicated traversal here.
+    // Shared helper (child-layout.ts) — no duplicated traversal here.
     const card = resolveChildRowCard(
       eff,
       continuationSiblingSpawnIds(transcript, eff, childSessionIdOf),

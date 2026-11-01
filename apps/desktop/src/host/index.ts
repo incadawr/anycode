@@ -125,7 +125,7 @@ import { createDiagnosticsRing, noteWireMessage } from "../shared/diagnostics-ri
  * host only ever reads it) and wraps ModePermissionEngine in a
  * SafeCommandPermissionEngine (slice 5.1 §2.4: auto-approves a Bash command
  * proven read-only by the conservative classifier, narrowing ask->allow only),
- * then a RunAllowBashPermissionEngine ( slice 2: a per-RUN, non-persisted
+ * then a RunAllowBashPermissionEngine (slice 2: a per-RUN, non-persisted
  * Bash allow-list read once from `ANYCODE_RUN_ALLOW_BASH` — a process input for
  * an unattended run, never a setting; see run-allow-bash.ts), and finally a
  * RuleAwarePermissionEngine over that, so a persisted always-allow rule
@@ -135,7 +135,7 @@ import { createDiagnosticsRing, noteWireMessage } from "../shared/diagnostics-ri
  * "Always allow"; main's `permission-rule-add` IPC is the control-plane half
  * that persists the rule for future boots, 2.2.2/2.2.4).
  *
- *  extends the SEED to the two engine boots (bootCodexSession /
+ * extends the SEED to the two engine boots (bootCodexSession /
  * bootClaudeSession), which until now handed Session an empty store and so
  * ignored settings.json entirely. Those two sessions have no core permission
  * engine to wrap (`supportsCorePermissions` is false for both), so the rules
@@ -265,7 +265,7 @@ import {
   resolveChildReasoningEffort,
   runWrapUp,
   SUBAGENT_WRAPUP_MODEL_TIMEOUT_MS,
-  // : supervisor idle-watchdog defaults (see
+  // supervisor idle-watchdog defaults (see
   // deliverSupervisorIdleReminder / the SupervisorIdleWatchdog constructions).
   SUPERVISOR_IDLE_ESCALATE_AFTER,
   SUPERVISOR_IDLE_FIRST_MS,
@@ -276,12 +276,12 @@ import {
   REPO_MAP_WINDOW_FRACTION,
   withSubagents,
   withWorkflows,
-  //  §3.1/§3.6: role personas, their turn budgets, and the
+  // §3.1/§3.6: role personas, their turn budgets, and the
   // role-route chain plumbing (host-side resolver below).
   PERSONAS,
   ROLE_TURN_BUDGETS,
   isRoleRouteName,
-  // : the one ceiling-object builder (adaptive key absent when off).
+  // the one ceiling-object builder (adaptive key absent when off).
   buildCeilingConfig,
   type PersonaDefinition,
   type RoleRouteResolution,
@@ -400,7 +400,7 @@ import { artifactsRootFor } from "../shared/artifacts-root.js";
  */
 const ENV_SETTINGS_PATH = "ANYCODE_SETTINGS_PATH";
 /**
- * : the same trimmed-non-empty-or-undefined read of `ENV_SETTINGS_PATH`
+ * the same trimmed-non-empty-or-undefined read of `ENV_SETTINGS_PATH`
  * `boot()` already performs inline at its `seedAlwaysAllowRules` call site
  * (below) — extracted here so the two spawn-time `binaryTrust` closures
  * (bootCodexSession / bootClaudeSession) can share it without reaching into
@@ -412,7 +412,7 @@ function hostSettingsPathOverride(): string | undefined {
   return raw !== undefined && raw.trim() !== "" ? raw : undefined;
 }
 /**
- * Mirrors main/host-env.ts's `ENV_CONNECTION_ID` ( W10) — kept in sync by
+ * Mirrors main/host-env.ts's `ENV_CONNECTION_ID` (W10) — kept in sync by
  * contract, same convention as `ENV_SETTINGS_PATH` above (host does not import
  * main/*). Informational: the pinned provider connection id main stamped into
  * this fork's env, persisted verbatim into the session row so resume resolves
@@ -420,7 +420,7 @@ function hostSettingsPathOverride(): string | undefined {
  */
 const ENV_CONNECTION_ID = "ANYCODE_CONNECTION_ID";
 /**
- *  slice 2: per-run Bash allow-list. Set by whoever LAUNCHED this
+ * slice 2: per-run Bash allow-list. Set by whoever LAUNCHED this
  * process (an autonomous/unattended run), never persisted, never a setting —
  * see the module doc on `RunAllowBashPermissionEngine`
  * (packages/core/src/permissions/run-allow-bash.ts) for the full rationale
@@ -428,7 +428,7 @@ const ENV_CONNECTION_ID = "ANYCODE_CONNECTION_ID";
  * `"pnpm test,pnpm typecheck"`.
  */
 const ENV_RUN_ALLOW_BASH = "ANYCODE_RUN_ALLOW_BASH";
-/** : the ask-zone classifier record (JSON). Mirror of host-env.ts's constant. */
+/** the ask-zone classifier record (JSON). Mirror of host-env.ts's constant. */
 const ENV_PERMISSION_CLASSIFIER = "ANYCODE_PERMISSION_CLASSIFIER";
 /**
  * 4088-on-4118 integration: the former ANYCODE_IMAGE_INPUT_MODELS local
@@ -436,9 +436,13 @@ const ENV_PERMISSION_CLASSIFIER = "ANYCODE_PERMISSION_CLASSIFIER";
  * modelCapabilities map (`imageInput?: true`), read fail-soft from THIS
  * fork's connection record at boot (see liveCapsFor).
  */
-/** : `<on|off>:<modelId>`, the drawer's per-model override (main/host-env.ts). */
+/** `<on|off>:<modelId>`, the drawer's per-model override (main/host-env.ts). */
 const ENV_IMAGE_INPUT_MODEL_OVERRIDE = "ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE";
 import { resolveExtensionsHomeOverride, resolveSessionHistoryMaxItems } from "./dev-home.js";
+
+function hostProfileHome(): string {
+  return resolveExtensionsHomeOverride(process.env) ?? homedir();
+}
 import { buildCheckpointService } from "./checkpoints.js";
 import { GitBridge } from "./git-bridge.js";
 import { createConnectionModelSettings } from "./connection-model-settings.js";
@@ -483,14 +487,14 @@ import { createCompactionRecordLog, type CompactionRecordSeam } from "./compacti
 import { claudeAgentPermissionMode, claudeChildPresetId, codexChildAutoAcceptsWorkspacePatches, codexChildPosture } from "./engines/child-permission-map.js";
 import { checkClaudeBinaryTrustOnDisk, CLAUDE_AGENT_BRIDGE_PROMPT } from "./engines/claude/claude-client.js";
 import { createEngineChildRunner } from "./engine-children.js";
-// : the host-side consent reader. Host never WRITES settings.json
+// the host-side consent reader. Host never WRITES settings.json
 // (main is the sole writer, host/boot.ts:239-245) — this is the sanctioned
 // fail-soft read, same standing custody as seedAlwaysAllowRules above.
 import { defaultSettingsPath, readTrustedBinaryConsentsSync } from "../settings/files.js";
 import { IpcPermissionBroker, PERMISSION_ASK_TIMEOUT_MS, resolveAskTimeoutMs } from "./permission-broker.js";
 import { wirePlanExit } from "./plan-exit.js";
 import { Outbound, Session, summarizeProviderUsage, tapChildPermissions, type ChildSessionOptions } from "./session.js";
-//  CUT-S2 §2.6.2/§2.6.3 (slice S2b B4) built the CHILD side of this
+// CUT-S2 §2.6.2/§2.6.3 (slice S2b B4) built the CHILD side of this
 // wire (child-ready on first ui_ready, child-start dispatch, permission-tap
 // attention, terminal report). Slice S2b B5 (below) adds the PARENT side: the
 // RPC-client wiring (createChildSessionPort), the ChildRunEvent dispatch
@@ -512,7 +516,7 @@ import {
   type ChildTerminal,
 } from "../shared/child-sessions.js";
 import { parseAskClassifierEnvKind, type AskClassifierBoot } from "./ask-classifier-env.js";
-// : engine-session approval coverage via a broker decorator.
+// engine-session approval coverage via a broker decorator.
 import { CLASSIFYING_BROKER_MODEL_TIMEOUT_MS, withAskClassifier } from "./classifying-broker.js";
 import { decorateEngineBroker, type EngineClassifierBoot } from "./engine-classifier-boot.js";
 import { createSnapshotHook } from "./snapshot-hook.js";
@@ -537,7 +541,7 @@ const emit = (message: HostToUiMessage): void => {
   outbound.emit(message);
 };
 
-// : the workspace trust gate, decided once per boot (see boot()). Until
+// the workspace trust gate, decided once per boot (see boot()). Until
 // boot computes it the gate is closed. `projectTrusted` gates every project-level
 // spawn declaration (MCP, hooks, LSP, project-tier plugin MCP); the pending message
 // is replayed to the UI on every ui_ready while the folder is undecided or changed.
@@ -545,18 +549,18 @@ let hostWorkspaceTrust: HostWorkspaceTrust = { projectTrusted: false };
 function workspaceTrustRequiredMessage(): HostToUiMessage | undefined {
   return hostWorkspaceTrust.pending?.message;
 }
-//  срез 2: one pending-report queue per host process, i.e. per parent
+// срез 2: one pending-report queue per host process, i.e. per parent
 // session — see child-report-queue.ts's own header for why a bare
 // `outbound.sendDirect` (срез 1) is not reconnect-safe on its own. Wired into
 // `deliverDetachedChildReport` below and, once the root Session exists, into
 // its own `pendingChildReports` seam (resendAll on ui_ready, ack on
-// child_report_ack).  follow-up: all three root boots (core via
+// child_report_ack). follow-up: all three root boots (core via
 // attachChildReportDurability, codex/claude via attachEngineChildReportDurability)
 // restore this queue from the session row before their Session's first
 // ui_ready and persist every mutation back to it.
 const childReportQueue = new ChildReportQueue(outbound);
 
-// ──  §3.6: host-side role-route state ──
+// ── §3.6: host-side role-route state ──
 //
 // One RoleHealthCache per host process (process-local by design, §9-Q3: a
 // restart re-probes naturally — never persisted). `resolveRoleRoute` (wired
@@ -573,7 +577,7 @@ const roleHealth = new RoleHealthCache();
 type RolesSettings = NonNullable<import("../shared/settings.js").AnycodeSettings["roles"]>;
 
 /**
- * Live roles settings cell ( §3.6). Synchronous read of the
+ * Live roles settings cell (§3.6). Synchronous read of the
  * settings document (fail-soft): the `resolveRoleRoute` port method is sync,
  * so the cell is refreshed eagerly — once at boot and again whenever main
  * signals a settings change (same notification the always-allow rules use).
@@ -587,7 +591,7 @@ function refreshRolesSettings(): void {
 refreshRolesSettings();
 
 /**
- *  S1-B (design §4/§7): plugins settings cell — same live-cell
+ * S1-B (design §4/§7): plugins settings cell — same live-cell
  * pattern as rolesSettings. Carries ONLY what discovery needs: the MCP
  * consent list (`mcpConsent`, keyed by serversHash; undefined = never
  * migrated/granted, [] = explicitly declined). Refreshed at boot and on
@@ -608,7 +612,7 @@ function refreshPluginsSettings(): void {
 refreshPluginsSettings();
 
 /**
- *  §3.6: the host-side role-route resolver — the ONE port method
+ * §3.6: the host-side role-route resolver — the ONE port method
  * core uses for role chains (runner inline walk + Agent session-tier
  * stamping). Reads settings `roles[agentType]`, builds [primary, ...
  * fallbacks], consults the health cache, and returns the still-healthy tail
@@ -620,7 +624,7 @@ refreshPluginsSettings();
  * explore keeps DEFAULT_SUBAGENT_MAX_TURNS (§2.9).
  */
 /**
- * N2 ( re-review #3): the role names a hand-authored md agent
+ * N2 (re-review #3): the role names a hand-authored md agent
  * profile (`.anycode/agents/*.md`) currently claims. Refreshed whenever `ext`
  * is (re)assigned — boot discovery and the live profile rescan. A claimed role
  * is NOT a settings-routed role: md-profile > settings-derived > built-in
@@ -662,7 +666,7 @@ function sendCredentialRequest(request: CredentialRequest): void {
   process.parentPort.postMessage(request);
 }
 
-// Session-subagent RPC broker ( CUT-S2 §2.6.1, slice S2b B5):
+// Session-subagent RPC broker (CUT-S2 §2.6.1, slice S2b B5):
 // ChildRunEvent messages (main -> this parent host) arrive on the SAME
 // parentPort "message" event as every other control-plane channel above;
 // createChildSessionPort's per-run() waiter subscribes here and correlates by
@@ -704,7 +708,7 @@ function sendChildSessionMessage(message: ChildSpawnRequest | ChildRunCancel | C
 let routedChildComposition: ReturnType<typeof createRoutedChildComposition> | undefined;
 
 /**
- *  срез 1/2: builds and delivers a detached child's terminal report
+ * срез 1/2: builds and delivers a detached child's terminal report
  * to its parent tab. Wired as `createChildSessionPort`'s `onDetachedTerminal`
  * seam above — called ONLY for a `detach:true` session-tier spawn, strictly
  * AFTER the spawning Agent tool call already resolved at admit, so this is
@@ -729,13 +733,13 @@ function deliverDetachedChildReport(outcome: SessionSubagentOutcome, req: Sessio
     agentId: outcome.childSessionId,
     subagentType: req.agentType,
     status: mapChildRunStatusToNotification(outcome.status, outcome.declaredDoneAtCeiling === true),
-    // : a child the USER stopped says so, so the parent does not read
+    // a child the USER stopped says so, so the parent does not read
     // the stop as a failure and relaunch it.
     ...(outcome.cancelledBy === "user" ? { cancelledBy: "user" as const } : {}),
     summary: outcome.finalText,
     ...(fullReportPath !== undefined ? { fullReportPath } : {}),
     ...(outcome.finalTurnFinishReason === "length" ? { finalTurnFinishReason: "length" } : {}),
-    // : a max_turns terminal the child did NOT declare done at
+    // a max_turns terminal the child did NOT declare done at
     // its ceiling gets the explicit TURN LIMIT cause line — the parent reads
     // "stopped at its budget", not a bare "failed" with orphan text. A
     // declaredDoneAtCeiling child legitimately finished and keeps the plain
@@ -748,14 +752,14 @@ function deliverDetachedChildReport(outcome: SessionSubagentOutcome, req: Sessio
     status: outcome.status,
     durationMs: outcome.durationMs,
     ...(outcome.finalTurnFinishReason === "length" ? { finalTurnFinishReason: "length" } : {}),
-    // /4055 cross-review F2: the ceiling summary rides the report's
+    // cross-review F2: the ceiling summary rides the report's
     // metadata so the renderer's card shows the budget line on this path too.
     ...(outcome.ceiling !== undefined ? { ceiling: outcome.ceiling } : {}),
   });
 }
 
 /**
- *  slice 2: builds and delivers a detached child's STALL notice to
+ * slice 2: builds and delivers a detached child's STALL notice to
  * its parent tab — the mid-run counterpart to `deliverDetachedChildReport`
  * above, which only ever fires once, at the child's TERMINAL event. Wired as
  * `createChildSessionPort`'s `onDetachedStall` seam below, invoked from the
@@ -802,7 +806,7 @@ function deliverDetachedChildStall(
 }
 
 /**
- * : a detached child raised an approval ask — nobody is at its tab
+ * a detached child raised an approval ask — nobody is at its tab
  * by construction, and the ask expires fail-closed. Tells the parent which
  * tool/subject is blocked and how to answer, instead of the child silently
  * waiting. `upsert` under `approval:<spawnToolCallId>` coalesces repeats to one
@@ -850,7 +854,7 @@ function retractDetachedChildApprovalNotice(req: SessionSubagentRequest, _childS
 }
 
 /**
- * : delivers the APPROACHING-turn-budget notice for a detached
+ * delivers the APPROACHING-turn-budget notice for a detached
  * child — fired once per run by the child port's `onDetachedTurnBudget` seam
  * (child-session-port.ts) when the child's progress crosses 10%-before-its-
  * cap, the advance warning the 25.10 orchestration incident lacked (a review
@@ -881,7 +885,7 @@ function deliverDetachedTurnBudgetNotice(
 }
 
 /**
- * : delivers a supervisor idle reminder. The host's
+ * delivers a supervisor idle reminder. The host's
  * SupervisorIdleWatchdog (constructed below for a non-child codex boot and
  * for the core root path) fires `onIdle` when the supervisor's turn has
  * ended, ZERO live detached children remain, and the turn's final assistant
@@ -926,7 +930,7 @@ function sendPreviewRequest(request: PreviewRequestMessage): void {
 }
 
 /**
- * Turn-end auto-open (night-track wave-1 cut §1(a)/§2.3,  96-E): posts
+ * Turn-end auto-open (night-track wave-1 cut §1(a)/§2.3, 96-E): posts
  * a `PreviewArtifactsMessage` over the SAME parentPort control plane as the
  * RPC broker above — unsolicited, host -> main, no requestId (fire-and-forget
  * by design, same posture as `sendCredentialRequest`/`sendPreviewRequest`
@@ -946,7 +950,7 @@ const previewPort: PreviewPort = createPreviewRpcClient({
   subscribe: subscribePreviewResponses,
 });
 
-// : this tab's "Full browser access" flag. Seeded from the fork env
+// this tab's "Full browser access" flag. Seeded from the fork env
 // main stamps, then kept live by `anycode:browser-access` messages (routed below).
 // A UX hint only: main re-checks every decision against its own live switch.
 const browserAccess = createBrowserAccess(browserFullAccessFromEnv(process.env));
@@ -1005,7 +1009,7 @@ const PREVIEW_CONSOLE_TURN_ID = "preview-console";
 
 let session: Session | null = null;
 /**
- * : late-bound Session reference for the ENGINE-SESSION classifier
+ * late-bound Session reference for the ENGINE-SESSION classifier
  * coverage. The codex/claude brokers are decorated BEFORE the Session exists
  * (the bridges capture the broker at construction), so the decorator's
  * userContext/emit thunks read through this cell; until the Session binds they
@@ -1018,7 +1022,7 @@ let initFailure: string | null = null;
 let historySink: WriteBehindHistorySink | null = null;
 let persistence: SqlitePersistenceAdapter | null = null;
 /**
- *  cross-review finding 4: the usage-audit write-behind tail —
+ * cross-review finding 4: the usage-audit write-behind tail —
  * every recordProviderUsage call chains off the previous one (serialized,
  * same discipline as WriteBehindHistorySink's queue), and the sink's flush()
  * resolves once the tail settles. Lets Session.shutdown() drain audit writes
@@ -1066,7 +1070,7 @@ let taskManager: InProcessTaskManager | null = null;
 
 let gitBridge: GitBridge | null = null;
 const gitAbort = new AbortController();
-//  rework: a codex CHILD boot's private temp dir teardown. Set by
+// rework: a codex CHILD boot's private temp dir teardown. Set by
 // bootCodexSession when args.child is present; handleShutdown runs it as the
 // shutdown-side half (child finalize already ran the other half — both are
 // idempotent). Null for owner tabs and every non-codex boot.
@@ -1122,10 +1126,10 @@ function toLifecycleCleanup(intent: WireWorktreeCleanupIntent): WorktreeCleanupI
 /** Codex deliberately reads only its own explicit bootstrap inputs, never provider env config. */
 function resolveCodexDbPath(env: NodeJS.ProcessEnv): string {
   const configured = env.ANYCODE_DB_PATH?.trim();
-  return configured && configured.length > 0 ? configured : join(homedir(), ".anycode", "anycode.sqlite");
+  return configured && configured.length > 0 ? configured : join(hostProfileHome(), ".anycode", "anycode.sqlite");
 }
 
-// ── child-mode wiring shared by all three boots ( CUT-S4 §4.1) ──
+// ── child-mode wiring shared by all three boots (CUT-S4 §4.1) ──
 // Extracted so core/codex/claude each get ONE call-site instead of three
 // copies. `boot()`'s core path is byte-equivalent to before this extraction
 // (same tapChildPermissions/postMessage bodies, just factored out); codex/
@@ -1159,7 +1163,7 @@ function buildChildBrokerEmit(emitFn: (message: HostToUiMessage) => void): (mess
  * own `process.parentPort` — the child side of the wire — identically for
  * every engine.
  *
- *  rework: `onTerminalFinalized` (optional, engine boots only)
+ * rework: `onTerminalFinalized` (optional, engine boots only)
  * runs AFTER the terminal message has been posted, inside the same try/catch
  * discipline — the child is done, its durable artifacts are flushed, so
  * per-child scratch state (the codex child's private temp dir) may go. Never
@@ -1172,7 +1176,7 @@ function buildChildSessionOptions(
   onTerminalFinalized?: () => void,
 ): ChildSessionOptions {
   return {
-    // : present ONLY for core-engine children — codex/claude have no
+    // present ONLY for core-engine children — codex/claude have no
     // core loop/ModelPort to run the tool-free wrap-up call against, so
     // their empty max_turns terminal falls back to the explicit
     // childTurnLimitNotice in Session.rescueTurnLimitReport.
@@ -1201,7 +1205,7 @@ function buildChildSessionOptions(
         ...(report.ceiling !== undefined ? { ceiling: report.ceiling } : {}),
         ...(report.errorDescriptor !== undefined ? { errorDescriptor: report.errorDescriptor } : {}),
       } satisfies ChildTerminal);
-      //  rework: the terminal is committed — the child's private
+      // rework: the terminal is committed — the child's private
       // scratch may go. Best-effort, logged, never fatal (the message above
       // already left; a cleanup failure must not masquerade as a child
       // failure downstream).
@@ -1236,14 +1240,14 @@ async function bootCodexSession(
   const args = parseHostArgs(process.argv.slice(2));
   const dbPath = resolveCodexDbPath(process.env);
   persistence = new SqlitePersistenceAdapter(dbPath);
-  // : the persisted always-allow rules, seeded from the SAME
+  // the persisted always-allow rules, seeded from the SAME
   // settings.json the core boot reads. A Codex session has no core permission
   // engine (`supportsCorePermissions` is false), so this one instance is both
   // the broker's rule source and Session's append target — see the
   // PermissionRuleMatcher header for why the core boot deliberately keeps its
   // broker rule-free.
   const rules = await seedAlwaysAllowRules(hostSettingsPathOverride());
-  //  CUT-S4 §4.1: a child-mode boot's broker wraps `emit` with the
+  // CUT-S4 §4.1: a child-mode boot's broker wraps `emit` with the
   // permission-tap, exactly like the core path already did (§4.1's shared
   // helper) — Codex previously had none of this wiring (S2 built it core-only).
   const broker = new IpcPermissionBroker(
@@ -1252,7 +1256,7 @@ async function bootCodexSession(
     rules,
     args.child !== undefined,
   );
-  // : ask-zone classifier coverage for the Codex approval bridge.
+  // ask-zone classifier coverage for the Codex approval bridge.
   // Command kind only (see engine-classifier-boot.ts); the bridges take the
   // DECORATED broker via `options` below, Session keeps the raw one.
   // 4730 xfix D4 honesty note: a model-kind record with a connectionId this
@@ -1289,10 +1293,10 @@ async function bootCodexSession(
     process.pid,
     (message) => process.parentPort.postMessage(message),
   ) ?? undefined;
-  // Shadow command log (cut §2(e), ): the HOST is the sole writer,
+  // Shadow command log (cut §2(e)): the HOST is the sole writer,
   // from the live `item/*` stream inside CodexEngine — never the renderer.
   const shadowLog = new SqliteCodexShadowLog(persistence);
-  // Codex-profiles  (cut §2.6): main resolves the picked profile to
+  // Codex-profiles (cut §2.6): main resolves the picked profile to
   // ready argv; the host re-validates it (fail-closed — malformed profile argv
   // aborts the boot rather than silently running on the ambient account) and
   // derives the CODEX_HOME the child receives. null = the `system`
@@ -1316,7 +1320,7 @@ async function bootCodexSession(
     const rejected = assertCodexProfileHome(codexProfile);
     if (rejected !== null) throw new Error(`Codex profile home rejected: ${rejected}`);
   }
-  //  rework: a codex CHILD gets a PRIVATE temp dir,
+  // rework: a codex CHILD gets a PRIVATE temp dir,
   // `~/.anycode/tmp/<childSessionId>` (bridgeRowId = --session, the host
   // minted UUID a child boot always carries), created 0700 BEFORE the first
   // spawn so both the app-server spawn env (TMPDIR/TMPPREFIX/TMP/TEMP) and
@@ -1330,7 +1334,7 @@ async function bootCodexSession(
   // fail-closed, never a silent no-dir boot that would resurrect the broken
   // toolchain state.
   const bridgeRowId = args.sessionId ?? randomUUID();
-  const codexChildTempDir = args.child !== undefined ? resolveChildTempDir(bridgeRowId, codexProfilesHomeOverride ?? homedir()) : undefined;
+  const codexChildTempDir = args.child !== undefined ? resolveChildTempDir(bridgeRowId, codexProfilesHomeOverride ?? hostProfileHome()) : undefined;
   /** Best-effort, idempotent removal — child finalize AND host shutdown both call it; never fatal. */
   const cleanupCodexChildTempDir = (): void => {
     if (codexChildTempDir !== undefined) removeChildTempDir(codexChildTempDir);
@@ -1338,7 +1342,7 @@ async function bootCodexSession(
   // Shutdown-side half: handleShutdown runs this regardless of whether the
   // child ever finalized (a killed host never reaches onTerminal).
   if (codexChildTempDir !== undefined) codexChildTempDirCleanup = cleanupCodexChildTempDir;
-  //  / : MCP forwarding. After profile resolution: load
+  // MCP forwarding. After profile resolution: load
   // the specs ONCE (core reader; project → user → .mcp.json winners) and
   // serialize the Codex thread config map. Identical for system, managed and
   // linked profiles and for session children — no profile config.toml writes,
@@ -1347,7 +1351,7 @@ async function bootCodexSession(
   const codexMcpForward = await prepareEngineMcpForward({
     fs: new NodeFileSystemAdapter(),
     workspace,
-    home: homedir(),
+    home: hostProfileHome(),
     tmpDir: tmpdir(),
     pid: process.pid,
     engines: ["codex"],
@@ -1380,12 +1384,12 @@ async function bootCodexSession(
   let codexChildPort: ChildSessionPort | undefined;
   let codexParentEngine: import("./engines/codex/codex-engine.js").CodexEngine | undefined;
   if (args.child === undefined) {
-    const profileRoots = buildAgentProfileRoots(workspace, homedir(), []);
+    const profileRoots = buildAgentProfileRoots(workspace, hostProfileHome(), []);
     const resolveCatalog = async () => catalogFromProfiles(
       (await discoverAgentProfiles(new NodeFileSystemAdapter(), profileRoots)).profiles,
     );
     const catalog = await resolveCatalog();
-    // : `port`/`codexChildPort` stay behind the catalog switch,
+    // `port`/`codexChildPort` stay behind the catalog switch,
     // but the BRIDGE itself is built for every root Codex boot — the browser
     // tools (anycode_browser_*) ride dynamicTools even with an empty catalog,
     // so the experimental API + thread/start dynamicTools are always on for
@@ -1418,7 +1422,7 @@ async function bootCodexSession(
     }
     codexAgentBridge = new CodexDynamicToolBridge(catalog, port, agentCardLog, resolveCatalog, codexEngineBrowserBridge);
   }
-  // : the supervisor idle watchdog for this (non-child) codex
+  // the supervisor idle watchdog for this (non-child) codex
   // boot — one instance, constructed once, mirroring the stall clock's
   // report-only posture. It watches for the supervisor's turn having ENDED
   // with no live detached children and no terminal marker in its final
@@ -1454,10 +1458,10 @@ async function bootCodexSession(
 
   const options = {
     bootstrap,
-    // : the bridges get the classifying decorator when a
+    // the bridges get the classifying decorator when a
     // classifier is configured; Session keeps the raw broker.
     broker: classifierBroker,
-    // : the codex approval bridge auto-accepts a file change only
+    // the codex approval bridge auto-accepts a file change only
     // when every change is an add/update, every target is realpath-provably
     // inside the workspace, AND the session's policy already allows workspace
     // writes — for a child, the inherited core mode (edit/auto/yolo,
@@ -1474,7 +1478,7 @@ async function bootCodexSession(
     binaryPath,
     cwd: workspace,
     workspace,
-    // : a codex child has no native turn cap — the profile budget is
+    // a codex child has no native turn cap — the profile budget is
     // surfaced once as a visible engine_notice warning on the first turn,
     // never enforced and never sent as a protocol field.
     ...(args.child?.maxTurns !== undefined
@@ -1496,13 +1500,13 @@ async function bootCodexSession(
     },
     sourceEnv: { ...process.env, PATH: hostMcpLoginPath ?? process.env.PATH },
     shadowLog,
-    // : per-call re-read so a consent granted or revoked mid-session
+    // per-call re-read so a consent granted or revoked mid-session
     // is honored by the very next spawn gate (D-S4-4) — main is the sole
     // writer, this closure just re-reads before each of assertTrusted's
     // per-spawn calls.
     binaryTrust: (path: string) => checkCodexBinaryTrustOnDisk(path, process.platform, readTrustedBinaryConsentsSync(hostSettingsPathOverride())),
     ...(processOwnership !== undefined ? { processOwnership } : {}),
-    //  rework: the private temp dir rides the SAME env builder
+    // rework: the private temp dir rides the SAME env builder
     // the profile home does — assigned after the allowlist, so the ambient
     // TMPDIR can never win. Absent for owner tabs (byte-identical env).
     ...(codexChildTempDir !== undefined ? { tempDir: codexChildTempDir } : {}),
@@ -1521,7 +1525,7 @@ async function bootCodexSession(
     ...codexForwardOptions,
   };
 
-  // : the draft (pre-session) model/preset choice arrives as argv from
+  // the draft (pre-session) model/preset choice arrives as argv from
   // main. It is untrusted renderer input and is validated inside the engine —
   // against the LIVE model/list catalog and the frozen preset table — before any
   // id reaches the wire; nothing here interprets it.
@@ -1544,7 +1548,7 @@ async function bootCodexSession(
         if (args.sessionId === undefined || args.sessionId.length === 0) {
           throw new Error("Codex resume requires a session id");
         }
-        //  CUT-S4 §4.3: as of S4 an engine session is NOT always root
+        // CUT-S4 §4.3: as of S4 an engine session is NOT always root
         // (a child boots on this same branch's `else` below) — but a RESUME
         // still can never legitimately target a child's id: children never
         // respawn (cut §0.6), so `--resume` only ever names a root session,
@@ -1554,7 +1558,7 @@ async function bootCodexSession(
         if (existing.engineId !== "codex" || typeof existing.externalSessionRef !== "string" || existing.externalSessionRef.length === 0) {
           throw new Error(`Codex session ${args.sessionId} has no resumable native thread`);
         }
-        //  rework: no tmp posture on this branch. getRootSession
+        // rework: no tmp posture on this branch. getRootSession
         // filters `parent_session_id IS NULL` and codex children never resume
         // (main reaps them on terminal; follow-ups are core-only), so a resume
         // is always an owner tab: no private temp dir, no exclusion.
@@ -1563,7 +1567,7 @@ async function bootCodexSession(
           externalSessionRef: existing.externalSessionRef,
           // Posture survives the relaunch through the PERSISTED row, never
           // through the server echo (L8 makes the echo un-mappable): the `mode`
-          // column carries the preset id verbatim (cut §2(k).4). A pre-
+          // column carries the preset id verbatim (cut §2(k).4). A
           // row holds a core mode there ("build") — the engine treats an
           // unrecognized id as the default preset, silently.
           selection: {
@@ -1584,11 +1588,11 @@ async function bootCodexSession(
         return { ...resumed, sessionMeta: existing };
       })()
     : (async () => {
-        //  CUT-S4 §4.2: a child boots on the posture the child-
+        // CUT-S4 §4.2: a child boots on the posture the child-
         // permission-map derives from its inherited mode — NEVER the (always
         // absent, §3.2 п.4's `enginePreset: null`) draft preset argv. A
         // non-child boot keeps the byte-identical prior draft.preset path.
-        // ( finding 5: the ternary lives in boot.ts's
+        // (finding 5: the ternary lives in boot.ts's
         // `resolveEngineDraftPresetId` so the argv→preset seam is tested.)
         const childPresetId = resolveEngineDraftPresetId(args.child, draft.preset, codexChildPosture);
         const created = await startCodexEngine({
@@ -1596,7 +1600,7 @@ async function bootCodexSession(
           selection: {
             ...(draft.model !== undefined ? { model: draft.model } : {}),
             ...(childPresetId !== undefined ? { presetId: childPresetId } : {}),
-            // : engine children get /tmp and $TMPDIR excluded from the
+            // engine children get /tmp and $TMPDIR excluded from the
             // codex workspaceWrite sandbox; owner tabs keep the frozen defaults.
             // The 4682 rework pairs the exclusion with the PRIVATE temp dir
             // (writableRoots + TMPDIR/TMPPREFIX env) so excluding the shared
@@ -1623,7 +1627,7 @@ async function bootCodexSession(
           mode: created.presetId as PermissionMode,
           engineId: "codex",
           externalSessionRef: created.threadId,
-          //  CUT-S4 §4.3: the engine-boot's own row-creation point
+          // CUT-S4 §4.3: the engine-boot's own row-creation point
           // stamps the same parentSessionId/spawnToolCallId columns the core
           // path's `resolveBootSession`/`childCreateFields` (boot.ts) stamps
           // — without this a codex child is INDISTINGUISHABLE from a root
@@ -1642,7 +1646,7 @@ async function bootCodexSession(
         });
         return { ...created, sessionMeta };
       })()).catch((error: unknown) => {
-    // Cross-review F2 (, review fix): the connect phase runs
+    // Cross-review F2 (review fix): the connect phase runs
     // BEFORE the `try` below opens, so its own failure (spawn, trust
     // preflight, --version, row persistence) must remove the private temp
     // dir here — the finally below never sees it.
@@ -1658,7 +1662,7 @@ async function bootCodexSession(
   const booted = await plugin.boot({ codexEngine: connected.engine });
   const fs = new NodeFileSystemAdapter();
 
-  // Shell wiring (design  §2(f)): AnyCode's own repo context (Git
+  // Shell wiring (design §2(f)): AnyCode's own repo context (Git
   // bridge -> branch/status/changes, the read-only Review diff, the
   // Environment chip) is a property of the WORKSPACE, not the agent
   // runtime -- wired identically to the core boot path in boot() below
@@ -1685,7 +1689,7 @@ async function bootCodexSession(
   };
 
   /**
-   *  CUT-S4 §4.4 / : the universal-snapshot write an engine
+   * CUT-S4 §4.4 / the universal-snapshot write an engine
    * child's `flushHistory` performs — a write of the FULL current transcript
    * into the SAME universal `history_items` table a core child's history
    * lives in, through the existing
@@ -1716,7 +1720,7 @@ async function bootCodexSession(
     await sink.flushChecked();
   };
 
-  // : telemetry sink for a codex boot (mirror of the core path's own
+  // telemetry sink for a codex boot (mirror of the core path's own
   // block, host boot() ~:2022-2029 — same fail-soft config load, same
   // module-level `telemetry` assignment so the existing shutdown block
   // (~:2606-2609) writes session_end + dispose for this session too, for
@@ -1729,8 +1733,8 @@ async function bootCodexSession(
   // own `patch` above, which is the DB-row `mode` COLUMN, an unrelated seam).
   let codexTelemetryConfig: ResolvedTelemetryConfig | null = null;
   try {
-    const loadedTelemetry = await loadTelemetryConfig(fs, workspace, homedir(), process.env, {
-      //  xfix D2: the project telemetry section is trust-gated on
+    const loadedTelemetry = await loadTelemetryConfig(fs, workspace, hostProfileHome(), process.env, {
+      // xfix D2: the project telemetry section is trust-gated on
       // the same `hostWorkspaceTrust` as mcp/hooks/lsp (established earlier in
       // boot()); one warning line, user-level values still load.
       projectTrusted: hostWorkspaceTrust.projectTrusted,
@@ -1751,7 +1755,7 @@ async function bootCodexSession(
   }
 
   const codexHistoryMaxItems = resolveSessionHistoryMaxItems(process.env);
-  //  follow-up: restore the persisted detached-child report queue
+  // follow-up: restore the persisted detached-child report queue
   // BEFORE this Session's first ui_ready can resendAll() it — the same
   // restore-before-first-ui_ready ordering the core tail holds. Codex's row
   // always exists by now (the create seam above ran strictly before Session),
@@ -1774,7 +1778,7 @@ async function bootCodexSession(
     workspaceTrustRequired: workspaceTrustRequiredMessage,
     outbound,
     engine: booted.engine,
-    // : the SAME CodexEngine instance, handed to Session as its narrow
+    // the SAME CodexEngine instance, handed to Session as its narrow
     // model/preset seam. `booted.engine` above is the identical object behind the
     // neutral SessionEngine interface; this reference is the only place the host
     // admits it also speaks the engine-settings contract.
@@ -1787,7 +1791,7 @@ async function bootCodexSession(
     ...await contextSnapshotOptions(persistence!, connected.sessionMeta.id, "codex", connected.model, undefined, connected.initialContextUsage),
     usageAudit: codexUsageAudit,
     // Codex owns native thread history; never an AgentLoop history — this is
-    // the resume projection built ONCE at boot (, cut §2(e)):
+    // the resume projection built ONCE at boot (cut §2(e)):
     // native `thread/read` merged with the command shadow log, `[]` for a
     // fresh session. `booted.engine` is the SAME CodexEngine instance
     // `connected.engine` already is (registry.ts's codex plugin is a
@@ -1803,7 +1807,7 @@ async function bootCodexSession(
           },
         }
       : {}),
-    // : the supervisor idle-watchdog seam — constructed once
+    // the supervisor idle-watchdog seam — constructed once
     // above (root boots only), fed turn-start/settle signals by Session.
     ...(codexSupervisorIdleWatchdog !== undefined
       ? {
@@ -1813,16 +1817,16 @@ async function bootCodexSession(
           },
         }
       : {}),
-    //  S4: dev/automation-ONLY replay-recording override, resolved
+    // S4: dev/automation-ONLY replay-recording override, resolved
     // here (the composition root) and never inside Session itself.
     ...(codexHistoryMaxItems !== null ? { historyMaxItems: codexHistoryMaxItems } : {}),
-    //  follow-up: the restored queue's delivery path — resendAll
+    // follow-up: the restored queue's delivery path — resendAll
     // on every ui_ready, ack on child_report_ack. Present only for a root
     // boot (a child-mode codex session has no detached children of its own).
     ...(codexPendingChildReports !== undefined ? { pendingChildReports: codexPendingChildReports } : {}),
     hasTitle: connected.sessionMeta.title !== undefined && connected.sessionMeta.title.length > 0,
     initialTitle: connected.sessionMeta.title,
-    // : the SAME store the broker above matches against, so an
+    // the SAME store the broker above matches against, so an
     // in-session "Always allow" starts working from the very next ask instead
     // of only after a restart re-seeds it from settings.json.
     rules,
@@ -1838,7 +1842,7 @@ async function bootCodexSession(
       onError: (error) => console.error(`[host] touchSession failed: ${describeError(error)}`),
     }),
     postPreviewArtifacts: sendPreviewArtifacts,
-    //  INVARIANT: this is a foreign-engine boot — CodexEngine never
+    // INVARIANT: this is a foreign-engine boot — CodexEngine never
     // instantiates AgentLoop, so there is no AgentLoopConfig.eventTap anywhere
     // in this branch to double up against (see SessionOptions.eventTap's own
     // doc). `baselineFromFirstEvent: args.resume` — see records.ts §2.3: a
@@ -1849,17 +1853,17 @@ async function bootCodexSession(
       ? { eventTap: buildEngineTelemetryTap(telemetry.port, telemetry.session, { baselineFromFirstEvent: args.resume }) }
       : {}),
     ...(args.child !== undefined ? { child: buildChildSessionOptions(codexFlushHistory, undefined, undefined, () => {
-      //  rework: finalize-time removal of the private temp dir
+      // rework: finalize-time removal of the private temp dir
       // (idempotent; host shutdown repeats it harmlessly).
       if (args.child !== undefined) cleanupCodexChildTempDir();
     }) } : {}),
   });
-  // : bind the late-bound Session ref the classifying broker
+  // bind the late-bound Session ref the classifying broker
   // decorator reads (userContext ring + agent_event emit).
   classifierSessionRef = session;
   console.log(`[host] initialized Codex native thread ${connected.threadId} session=${connected.sessionMeta.id} db=${dbPath}`);
   } finally {
-    //  rework: a boot that never reached Session (spawn failure,
+    // rework: a boot that never reached Session (spawn failure,
     // plugin.boot throw, a Session-constructor rejection) must not leak the
     // private temp dir — the child never finalized, shutdown may never come.
     // Best-effort and idempotent: a boot that SUCCEEDED later re-derives and
@@ -1903,11 +1907,11 @@ async function bootClaudeSession(
   // and two copies of this two-line rule could drift into two databases.
   const dbPath = resolveCodexDbPath(process.env);
   persistence = new SqlitePersistenceAdapter(dbPath);
-  // : same seed the codex boot above performs, for the same reason —
+  // same seed the codex boot above performs, for the same reason —
   // a Claude session's approvals never pass through core's permission engine,
   // so the broker is the only place a persisted rule can be honoured.
   const rules = await seedAlwaysAllowRules(hostSettingsPathOverride());
-  //  CUT-S4 §4.1: same shared wrapping the codex boot above now gets —
+  // CUT-S4 §4.1: same shared wrapping the codex boot above now gets —
   // Claude previously had none of this wiring at all (S2 built it core-only).
   const broker = new IpcPermissionBroker(
     args.child !== undefined ? buildChildBrokerEmit(emit) : emit,
@@ -1915,7 +1919,7 @@ async function bootClaudeSession(
     rules,
     args.child !== undefined,
   );
-  // : ask-zone classifier coverage for the Claude approval bridge
+  // ask-zone classifier coverage for the Claude approval bridge
   // (same shape as the codex boot above).
   const claudeClassifierBoot: EngineClassifierBoot | undefined = (() => {
     const parsed = parseAskClassifierEnvKind(process.env[ENV_PERMISSION_CLASSIFIER]);
@@ -1954,7 +1958,7 @@ async function bootClaudeSession(
   // notice rather than reaching the wire.
   const draft = parseClaudeEngineArgs(process.argv.slice(2));
 
-  //  срез S4: the MCP agent-bridge door for this tab. Built and
+  // срез S4: the MCP agent-bridge door for this tab. Built and
   // wired into `options` BEFORE `startClaudeEngine`/`resumeClaudeEngine`
   // ever call `client.initialize()` — probes.md P0's load-bearing finding is
   // that the CLI drives its OWN mcp handshake (`initialize` ->
@@ -1976,7 +1980,7 @@ async function bootClaudeSession(
   // `isChildSessionBoot(args, sessionMeta)`: a claude `--resume` can only
   // ever target a ROOT row (`persistence!.getRootSession` above returns null
   // for anything else; children never respawn — cut §0.6, echoed a few lines
-  // up at  CUT-S4 §4.3's own comment), so `sessionMeta.parentSessionId`
+  // up at CUT-S4 §4.3's own comment), so `sessionMeta.parentSessionId`
   // never carries information independent of `args.child` for this engine
   // the way it does for the core tail's respawnable rows.
   const fs = new NodeFileSystemAdapter();
@@ -1987,12 +1991,12 @@ async function bootClaudeSession(
   // this above the connect call changes no persisted value, only its timing.
   const rowId = args.sessionId ?? randomUUID();
   let mcpBridge: ClaudeMcpBridge | undefined;
-  // : hoisted out of the bridge block — the Session construction
+  // hoisted out of the bridge block — the Session construction
   // below wires this port's background-children seam into the
-  // background-agents strip (same  shape the codex door uses at its
+  // background-agents strip (same shape the codex door uses at its
   // own Session construction).
   let claudeChildPort: ChildSessionPort | undefined;
-  //  cross-review M1: late-bound parent engine for the child
+  // cross-review M1: late-bound parent engine for the child
   // permission-mode seam — the port is constructed BEFORE connect (the bridge
   // must exist before the CLI's own MCP handshake), but the engine exists
   // only after, so `getPermissionMode` below closes over this cell exactly
@@ -2000,37 +2004,37 @@ async function bootClaudeSession(
   // binds, a claude parent defaults to its own default-equivalent posture
   // (`ask` preset → `build`), never wider.
   let claudeParentEngine: import("./engines/claude/claude-engine.js").ClaudeEngine | undefined;
-  // : late-bound live bridge-event tap. The bridge is built here,
+  // late-bound live bridge-event tap. The bridge is built here,
   // but the engine exists only after connect below — `onEvent` closes over
   // this cell, and the `claudeEngine` assignment point binds it. Until then
   // (and for detached children's post-turn progress, by design) pushes are
   // no-ops.
   let pushBridgeEvent: ((event: AgentEvent) => void) | undefined;
-  //  review N2: the door's tools/call handler + presentation map
+  // review N2: the door's tools/call handler + presentation map
   // (bridge-presentation-stamp.ts), built inside the catalog block below and
   // read by the `options` wiring further down — same late-bound-cell shape as
   // `pushBridgeEvent` directly above.
   let stamp: ReturnType<typeof createBridgePresentationStamp> | undefined;
-  // : hoisted (same cell shape as `stamp`) — set by the non-child
+  // hoisted (same cell shape as `stamp`) — set by the non-child
   // boot block below, read by the `options` wiring further down.
   let claudeBrowserToolNames: Set<string> | undefined;
   let agentCatalogNonEmpty = false;
   if (args.child === undefined) {
-    const discovered = await discoverAgentProfiles(fs, buildAgentProfileRoots(workspace, homedir(), []));
+    const discovered = await discoverAgentProfiles(fs, buildAgentProfileRoots(workspace, hostProfileHome(), []));
     for (const problem of discovered.problems) {
       console.warn(`[host] claude mcp bridge: agent profile: ${problem}`);
     }
     const catalog: AgentBridgeCatalogEntry[] = catalogFromProfiles(discovered.profiles);
-    // : per-call re-read, codex-door parity (index.ts resolveCatalog
+    // per-call re-read, codex-door parity (index.ts resolveCatalog
     // above): edited body/model live from the next spawn; names stay fixed to
     // the boot snapshot the CLI's tools/list handshake already cached.
     const resolveClaudeCatalog = async (): Promise<readonly AgentBridgeCatalogEntry[]> =>
       bridgeCallableCatalog(catalog, catalogFromProfiles(
-        (await discoverAgentProfiles(fs, buildAgentProfileRoots(workspace, homedir(), []))).profiles,
+        (await discoverAgentProfiles(fs, buildAgentProfileRoots(workspace, hostProfileHome(), []))).profiles,
       ));
     // The switch (plan §5 S4 p.7): an empty `tools/list` is never worth
     // announcing for the AGENT side — so the child port is created only when
-    // the catalog is non-empty.  changes the OTHER half: the door
+    // the catalog is non-empty. changes the OTHER half: the door
     // itself is now built ALWAYS (a non-child boot gets the browser tools
     // even with an empty catalog); only `claudeChildPort`/the agent decl
     // stay behind the catalog switch, and `agentBridgePrompt` is passed only
@@ -2039,7 +2043,7 @@ async function bootClaudeSession(
     if (catalog.length > 0) {
       childPort = createChildSessionPort({
         parentSessionId: rowId,
-        //  cross-review M1: this seam feeds
+        // cross-review M1: this seam feeds
         // `ChildSpawnRequest.permissionMode` — the value that gates the
         // spawned CORE child's permission engine — so it must be an honest
         // function of the parent's LIVE preset, never a constant `"build"`.
@@ -2067,7 +2071,7 @@ async function bootClaudeSession(
       });
       claudeChildPort = childPort;
     }
-    // : the door is built ALWAYS for a non-child boot — with an
+    // the door is built ALWAYS for a non-child boot — with an
     // empty agent catalog it still serves the ten browser tools through the
     // shared engine browser bridge (same core ToolDefinitions, same broker,
     // same full-access switch the native tab uses; browser-bridge.ts doc).
@@ -2082,14 +2086,14 @@ async function bootClaudeSession(
       broker,
       cwd: workspace,
     });
-    // : the CLI names the approval bridge auto-allows (one per
+    // the CLI names the approval bridge auto-allows (one per
     // browser spec, `mcp__anycode__<claudeName>`), and the catalog switch
     // that alone gates `agentBridgePrompt` in the options wiring below.
     claudeBrowserToolNames = new Set<string>(
       engineBrowserBridge.specs.map((spec) => `mcp__anycode__${spec.claudeName}`),
     );
     agentCatalogNonEmpty = catalog.length > 0;
-    //  review N2: the door's tools/call handler (and the
+    // review N2: the door's tools/call handler (and the
     // presentation map it stamps into) lives in bridge-presentation-stamp.ts
     // now — lifted so its after-abort discipline (an aborted call's LATE
     // resolve must not stamp past the turn-end sweep) is pinned by a unit
@@ -2110,11 +2114,11 @@ async function bootClaudeSession(
         // reachable from this utility process.
         version: "1",
         listTools: () => {
-          // : the door now offers detach + continue_session. The
+          // the door now offers detach + continue_session. The
           // original withholding ("a bridge whose host cannot route a
           // background report back never offers it") no longer holds HERE:
           // this boot wires onDetachedTerminal (deliverDetachedChildReport,
-          // the  delivery path the codex door uses) and the
+          // the delivery path the codex door uses) and the
           // renderer's child_report prompt-queue delivery is engine-agnostic,
           // so a detached child's report reaches this tab as a new turn.
           return door.listTools();
@@ -2125,7 +2129,7 @@ async function bootClaudeSession(
     console.log("[host] claude mcp bridge: child boot, no bridge");
   }
 
-  //  / : MCP forwarding. After bridge/catalog/database
+  // MCP forwarding. After bridge/catalog/database
   // preparation and immediately before the connect options: sweep dead-pid
   // leftovers, then load the specs ONCE and materialize the private 0600
   // --mcp-config document (only when nonempty). The connect interval below
@@ -2136,7 +2140,7 @@ async function bootClaudeSession(
   const mcpForward = await prepareEngineMcpForward({
     fs,
     workspace,
-    home: homedir(),
+    home: hostProfileHome(),
     tmpDir: tmpdir(),
     pid: process.pid,
     engines: ["claude"],
@@ -2156,18 +2160,18 @@ async function bootClaudeSession(
 
   const options = {
     bootstrap,
-    // : classifying decorator for the Claude approval bridge.
+    // classifying decorator for the Claude approval bridge.
     broker: claudeClassifierBroker,
     binaryPath,
     cwd: workspace,
-    // : a claude child enforces the profile budget natively
+    // a claude child enforces the profile budget natively
     // (--max-turns); absent = the CLI's own default.
     ...(args.child?.maxTurns !== undefined ? { maxTurns: args.child.maxTurns } : {}),
-    // : slash passthrough (allowlisted /compact) for ROOT sessions
+    // slash passthrough (allowlisted /compact) for ROOT sessions
     // only. A child's prompt is model-authored, so its CLI keeps
     // --disable-slash-commands — no model-driven slash injection.
     enableSlashPassthrough: args.child === undefined,
-    //  xfix D1: the trust gate rides the engine spawn itself —
+    // xfix D1: the trust gate rides the engine spawn itself —
     // an untrusted folder's .claude/settings.json hooks must not load through
     // Claude Code's own settings sources either (the engine runs with
     // cwd = workspace). `hostWorkspaceTrust` is decided above, before any
@@ -2178,7 +2182,7 @@ async function bootClaudeSession(
     // `~/.claude` main's doctor diagnosed before it let this tab spawn.
     profileDir: resolveClaudeConfigDir(),
     sourceEnv: { ...process.env, PATH: hostMcpLoginPath ?? process.env.PATH },
-    // : mirror of the codex closure above — same per-call re-read
+    // mirror of the codex closure above — same per-call re-read
     // rationale (D-S4-4).
     binaryTrust: (path: string) => checkClaudeBinaryTrustOnDisk(path, process.platform, readTrustedBinaryConsentsSync(hostSettingsPathOverride())),
     ...(processOwnership !== undefined ? { processOwnership } : {}),
@@ -2187,11 +2191,11 @@ async function bootClaudeSession(
     ...(mcpBridge !== undefined && stamp !== undefined
       ? {
           mcpBridge,
-          //  cross-review M2: the same switch that announces the
+          // cross-review M2: the same switch that announces the
           // door teaches the CLI the delegation sentence — the prompt names
           // `mcp__anycode__agent` ONLY in sessions where the tool exists (a
           // bridge-less boot's argv stays byte-identical to pre-4056).
-          // : the door now exists for every non-child boot (the
+          // the door now exists for every non-child boot (the
           // browser tools ride it even with an empty catalog), but the
           // PROMPT still names the agent tool — so it is gated on the
           // catalog switch alone, not on the door's existence.
@@ -2199,12 +2203,12 @@ async function bootClaudeSession(
             ? { agentBridgePrompt: CLAUDE_AGENT_BRIDGE_PROMPT }
             : {}),
           takePresentation: stamp.takePresentation,
-          //  cross-review P1: the engine's turn-end sweep for
+          // cross-review P1: the engine's turn-end sweep for
           // presentations whose consuming tool_result never arrived (a
           // cancelled/dying turn) — without this, one map entry per aborted
           // bridge call would live for the process's lifetime.
           dropPresentations: stamp.dropPresentations,
-          // : the door's browser tool CLI names, so
+          // the door's browser tool CLI names, so
           // ClaudeApprovalBridge can auto-allow the name-only `can_use_tool`
           // gate (the real input-aware gate runs in the door's callTool).
           browserToolNames: claudeBrowserToolNames,
@@ -2212,7 +2216,7 @@ async function bootClaudeSession(
       : {}),
   };
 
-  // : the interval from materialization through boot completion. A
+  // the interval from materialization through boot completion. A
   // failure in connect releases the file HERE and rethrows; after a
   // successful connect the CLIENT owns the file (its bootstrap-adopted
   // close() is idempotent and removes it), and boot()'s own outer catch
@@ -2227,7 +2231,7 @@ async function bootClaudeSession(
         if (args.sessionId === undefined || args.sessionId.length === 0) {
           throw new Error("Claude resume requires a session id");
         }
-        //  CUT-S4 §4.3: as of S4 an engine session is NOT always root
+        // CUT-S4 §4.3: as of S4 an engine session is NOT always root
         // (a child boots on this same branch's `else` below) — but a RESUME
         // still can never legitimately target a child's id: children never
         // respawn (cut §0.6), so `--resume` only ever names a root session,
@@ -2242,18 +2246,18 @@ async function bootClaudeSession(
           externalSessionRef: existing.externalSessionRef,
           // Posture survives the resume through the PERSISTED preset id (same
           // no-server-echo-to-trust discipline codex uses, cut §2(k).4): an
-          // unrecognized id (a pre--era "build" mode row) silently
+          // unrecognized id (era "build" mode row) silently
           // becomes the default preset rather than failing the resume.
           selection: { model: existing.model, presetId: existing.mode, origin: "persisted" },
         });
         return { ...resumed, sessionMeta: existing };
       })()
     : (async () => {
-        //  CUT-S4 §4.2: a child boots on the posture the child-
+        // CUT-S4 §4.2: a child boots on the posture the child-
         // permission-map derives from its inherited mode — NEVER the
         // (always absent, §3.2 п.4's `enginePreset: null`) draft preset
         // argv. A non-child boot keeps the byte-identical prior path.
-        // ( finding 5: same extracted seam as the codex boot.)
+        // (finding 5: same extracted seam as the codex boot.)
         const childPresetId = resolveEngineDraftPresetId(args.child, draft.preset, claudeChildPresetId);
         const created = await startClaudeEngine({
           ...options,
@@ -2267,7 +2271,7 @@ async function bootClaudeSession(
         return { ...created, sessionMeta: null };
       })());
   } catch (error) {
-    // : the client (if any) closes itself through connect's own
+    // the client (if any) closes itself through connect's own
     // failure path or the bootstrap disposer; this belt cleans the file when
     // no client was ever constructed. Idempotent with the client's cleanup.
     mcpForward.cleanupFile();
@@ -2275,12 +2279,12 @@ async function bootClaudeSession(
   }
 
   const claudeEngine = connected.engine;
-  //  cross-review M1: bind the port's permission-mode seam to the
+  // cross-review M1: bind the port's permission-mode seam to the
   // live engine — from here on every bridge spawn snapshots the parent's
   // CURRENT preset (fresh per run() call, cut §0.8), exactly the codex door's
   // `codexParentEngine` binding.
   claudeParentEngine = claudeEngine;
-  // : bind the bridge's live event tap to the connected engine —
+  // bind the bridge's live event tap to the connected engine —
   // from here on, a bridged agent call's subagent_* events surface inside the
   // CLI's live turn (claude-engine.ts's bridge-event race).
   pushBridgeEvent = (event: AgentEvent) => claudeEngine.pushBridgeEvent(event);
@@ -2295,7 +2299,7 @@ async function bootClaudeSession(
     // rides the spawn argv); for a resume it is the persisted ref, echoed
     // verbatim (resumeClaudeEngine never falls back to a new session).
     externalSessionRef: connected.sessionRef,
-    //  CUT-S4 §4.3: the engine-boot's own row-creation point stamps
+    // CUT-S4 §4.3: the engine-boot's own row-creation point stamps
     // the same parentSessionId/spawnToolCallId columns the core path's
     // `resolveBootSession`/`childCreateFields` (boot.ts) stamps — without
     // this a claude child is INDISTINGUISHABLE from a root session (owner
@@ -2309,7 +2313,7 @@ async function bootClaudeSession(
   // and every `touch` can use it immediately — but no row is written yet
   // (native-first, cut §1.5 hazard (а); the ordering rule itself, plus the
   // buffering of patches that arrive before the row exists, lives in
-  // session-row.ts where it is unit-tested). Computed ABOVE ( срез
+  // session-row.ts where it is unit-tested). Computed ABOVE (срез
   // S4, before `connected` exists — the mcp bridge's session-tier port needs
   // it too) rather than here: `connected.sessionMeta?.id` is never a THIRD
   // value — a resume's `existing.id` is `args.sessionId` by construction
@@ -2324,7 +2328,7 @@ async function bootClaudeSession(
       create: (id, row) => persistence!.createSession({ id, ...row } as Parameters<SqlitePersistenceAdapter["createSession"]>[0]),
       touch: (id, patch) => persistence!.touchSession(id, patch as { title?: string; mode?: PermissionMode; model?: string }),
     },
-    //  follow-up: the pending-child-reports column writer — the
+    // follow-up: the pending-child-reports column writer — the
     // same `pending_child_reports_json` column the core/codex boots use, kept
     // OFF the touch/touchSession path so a durability write never stamps
     // updated_at (the sidebar's last-activity order).
@@ -2394,16 +2398,16 @@ async function bootClaudeSession(
     // no-migration arrangement codex uses (cut §2(k).4). Nothing reads this
     // column back as a core PermissionMode for a Claude session.
     rowWriter.materialize({ model: settled.model, mode: settled.activePresetId });
-    // : reconcile the CLI's OWN reported mcp_servers against what we
+    // reconcile the CLI's OWN reported mcp_servers against what we
     // forwarded PLUS the in-band anycode bridge when one exists (a child
     // boot never expects it). Warnings name missing SERVERS only; no values,
     // no paths. Pure seam tested in mcp-forward-boot.test.ts.
     for (const name of missingForwardedMcpServerNames(init.mcpServerNames, mcpForward.claudeNames, mcpBridge !== undefined)) {
       console.warn(`[host] claude mcp forward: server "${name}" did not appear in the session's MCP server list`);
     }
-    // : a PRESENT server with a bad status is the other half of
+    // a PRESENT server with a bad status is the other half of
     // the reconciliation — the missing-names loop above cannot see it. Names
-    // and status only, never values/paths ( rule).
+    // and status only, never values/paths (rule).
     for (const { name, status } of init.mcpServerStatuses) {
       if (status === "failed" || status === "needs-auth") {
         console.warn(`[host] claude mcp: server "${name}" reported status "${status}"`);
@@ -2438,7 +2442,7 @@ async function bootClaudeSession(
   );
 
   const booted = await plugin.boot({ claudeEngine: shadowEngine });
-  // `fs` built ABOVE ( срез S4 — needed early for the agent-profile
+  // `fs` built ABOVE (срез S4 — needed early for the agent-profile
   // catalog scan, before `connected` exists) and reused here verbatim.
 
   // Shell wiring, identical to the codex branch: AnyCode's own repo context
@@ -2459,7 +2463,7 @@ async function bootClaudeSession(
   };
 
   /**
-   *  CUT-S4 §4.4: the universal-snapshot write an engine child's
+   * CUT-S4 §4.4: the universal-snapshot write an engine child's
    * `flushHistory` performs. UNLIKE `booted.engine.historyItems()` (frozen at
    * boot — `ClaudeShadowTranscriptEngine`'s own doc comment: it returns the
    * BOOT-time mirror read, never live), this re-reads the shadow-transcript
@@ -2481,7 +2485,7 @@ async function bootClaudeSession(
     await sink.flushChecked();
   };
 
-  // : telemetry sink for a claude boot — structurally identical to
+  // telemetry sink for a claude boot — structurally identical to
   // the codex block above (same fail-soft config load, same module-level
   // `telemetry` assignment for the shared shutdown block). `provider`/
   // `enginePreset` (S9: own field, not `mode` — see the codex block's
@@ -2497,8 +2501,8 @@ async function bootClaudeSession(
   // is per-PROCESS, so it is always 0 at the start of this boot, resume or not.
   let claudeTelemetryConfig: ResolvedTelemetryConfig | null = null;
   try {
-    const loadedTelemetry = await loadTelemetryConfig(fs, workspace, homedir(), process.env, {
-      //  xfix D2: the project telemetry section is trust-gated on
+    const loadedTelemetry = await loadTelemetryConfig(fs, workspace, hostProfileHome(), process.env, {
+      // xfix D2: the project telemetry section is trust-gated on
       // the same `hostWorkspaceTrust` as mcp/hooks/lsp (established earlier in
       // boot()); one warning line, user-level values still load.
       projectTrusted: hostWorkspaceTrust.projectTrusted,
@@ -2519,7 +2523,7 @@ async function bootClaudeSession(
   }
 
   const claudeHistoryMaxItems = resolveSessionHistoryMaxItems(process.env);
-  //  follow-up: restore the persisted detached-child report queue
+  // follow-up: restore the persisted detached-child report queue
   // BEFORE this Session's first ui_ready can resendAll() it — the same
   // restore-before-first-ui_ready ordering the core tail holds. Unlike codex
   // (row always exists by now), a FRESH claude boot still has no row at this
@@ -2556,9 +2560,9 @@ async function bootClaudeSession(
     // CC-D-min: the RAW ClaudeEngine, Claude's own immediate-apply seam (never
     // codex's choose-now/apply-at-next-turn one — settings-seam.ts).
     engineSettings: new ClaudeSettingsSeam(claudeEngine),
-    // : the background-agents strip seam — same shape the codex
+    // the background-agents strip seam — same shape the codex
     // door wires (its own Session construction above) over the SAME
-    //  port API. Without it, pushBackgroundChildren() sends `[]` and
+    // port API. Without it, pushBackgroundChildren() sends `[]` and
     // a detached child of a claude tab is invisible and unstoppable in the
     // strip (BackgroundAgents.tsx renders from background_children).
     ...(claudeChildPort !== undefined
@@ -2580,16 +2584,16 @@ async function bootClaudeSession(
     // The resume projection built above — `[]` for a fresh session, the
     // shadow-mirror transcript (incl. tool_call cards) for a resumed one.
     bootHistory,
-    //  S4: dev/automation-ONLY replay-recording override, resolved
+    // S4: dev/automation-ONLY replay-recording override, resolved
     // here (the composition root) and never inside Session itself.
     ...(claudeHistoryMaxItems !== null ? { historyMaxItems: claudeHistoryMaxItems } : {}),
-    //  follow-up: the restored queue's delivery path — resendAll
+    // follow-up: the restored queue's delivery path — resendAll
     // on every ui_ready, ack on child_report_ack. Present only for a root
     // boot (a child-mode claude session has no detached children of its own).
     ...(claudePendingChildReports !== undefined ? { pendingChildReports: claudePendingChildReports } : {}),
     hasTitle: connected.sessionMeta?.title !== undefined && connected.sessionMeta.title.length > 0,
     initialTitle: connected.sessionMeta?.title,
-    // : the SAME store the broker above matches against, so an
+    // the SAME store the broker above matches against, so an
     // in-session "Always allow" starts working from the very next ask instead
     // of only after a restart re-seeds it from settings.json.
     rules,
@@ -2620,7 +2624,7 @@ async function bootClaudeSession(
       commitTitle: (title) => rowWriter.commitTitle(title),
     },
     postPreviewArtifacts: sendPreviewArtifacts,
-    //  INVARIANT: same as the codex branch above — a foreign-engine
+    // INVARIANT: same as the codex branch above — a foreign-engine
     // boot never instantiates AgentLoop, so there is no core eventTap here to
     // double up against. No `baselineFromFirstEvent` — see the telemetry
     // block's own comment above (Claude's counter is per-process).
@@ -2630,12 +2634,12 @@ async function bootClaudeSession(
   // Custody (cut §0.2 invariant 2): the ref is a UUID this host generated (or
   // the persisted one, on resume) and the id is our own row id — no account
   // email, token, subscription type or cost figure is ever written to a log line.
-  // : bind the late-bound Session ref (see the codex branch).
+  // bind the late-bound Session ref (see the codex branch).
   classifierSessionRef = session;
   console.log(`[host] initialized Claude native session ${connected.sessionRef} session=${rowId} db=${dbPath}`);
 }
 
-// ──  срез C: vision-fallback host wiring — pure helpers ──
+// ── срез C: vision-fallback host wiring — pure helpers ──
 
 /**
  * The three valid `ProviderTransport` ids (packages/core/src/provider/
@@ -2662,7 +2666,7 @@ const RECOGNIZER_TRANSPORT_VALUES: readonly string[] = ["anthropic-messages", "o
  * on either of two malformed inputs, checked at this ONE construction point
  * so both callers below (the boot-env snapshot in `parseRecognizerEnv`, and
  * main's live config push) are covered by a single check each:
- *  - `baseUrl` blank after trimming (live-run fix,  follow-up): the
+ *  - `baseUrl` blank after trimming (live-run fix, follow-up): the
  *    unconfigured-recognizer placeholder a few lines below is literally
  *    `{transport: "anthropic-messages", baseUrl: "", model: ""}`, the exact
  *    anthropic+blank-address pair a live run turned into `Invalid Anthropic
@@ -2712,7 +2716,7 @@ function recognizerEndpointFromFields(fields: {
 }
 
 /**
- *  срез C: `ANYCODE_RECOGNIZER_{TRANSPORT,BASE_URL,API_KEY,MODEL,
+ * срез C: `ANYCODE_RECOGNIZER_{TRANSPORT,BASE_URL,API_KEY,MODEL,
  * PROVIDER_NAME}` -> a core `RecognizerEndpoint`, or null when the fallback
  * is unconfigured. Literal local var-name copies mirror main/host-env.ts's
  * `ENV_RECOGNIZER_*` constants by contract — the same "host stays core-free
@@ -2721,7 +2725,7 @@ function recognizerEndpointFromFields(fields: {
  * imports from `../main/`). A blank `ANYCODE_RECOGNIZER_MODEL` is one honest
  * "off" signal, checked here; a blank `ANYCODE_RECOGNIZER_BASE_URL` and an
  * unknown `ANYCODE_RECOGNIZER_TRANSPORT` are the other two (live-run fix,
- *  follow-up) — `resolveRecognizerConfig` can emit a model with no
+ * follow-up) — `resolveRecognizerConfig` can emit a model with no
  * resolvable address (an unconfigured `needsBaseUrl` catalog template, or a
  * legacy/unknown providerId), and this env family carries no validation of
  * its own on the transport string — both gates live in
@@ -2747,7 +2751,7 @@ function parseRecognizerEnv(env: NodeJS.ProcessEnv): RecognizerEndpoint | null {
  * "reports itself" through the SAME `t:"usage"` shape core's own `finish`
  * events report (telemetry/records.ts's `telemetryRecordFor`), stamped with
  * the sub-envelope inline subagents already use (`buildSubagentTelemetryTap`'s
- * `sub:{agentType, model}` convention, ) — `agentType:"vision"` — so
+ * `sub:{agentType, model}` convention) — `agentType:"vision"` — so
  * a vision call's spend lands in the SAME jsonl session file and the Profile
  * panel attributes it without a new source type. No AgentEvent is
  * synthesized (a one-shot `ask()` call is not a nested AgentLoop run) — this
@@ -2779,18 +2783,18 @@ class VisionTelemetryModelPort implements ModelPort {
 
 async function boot(): Promise<void> {
   try {
-    //  part C: the MCP secret values main handed this fork. Read and
+    // part C: the MCP secret values main handed this fork. Read and
     // deleted FIRST, before any child can spawn (the relay, the engines, the MCP
     // load). The resolver closure is the only holder of the values: nothing stores
     // them on a global, logs them, or emits them.
     const mcpSecrets = takeMcpSecretsEnv(process.env);
-    //  follow-up: start the credential-free loopback
+    // follow-up: start the credential-free loopback
     // relay BEFORE the first non-engine spawn, when this fork holds a
     // credentialed proxy. await-ed here so the very first Bash child, PTY
     // shell, LSP and MCP stdio server already see the relay URL (the
     // NodeExecutionAdapter/terminal spawn sites re-read it per spawn).
     // No-op (settled, no server) when no proxy var carries credentials.
-    //  rework: one relay PER upstream (the registry is keyed by
+    // rework: one relay PER upstream (the registry is keyed by
     // the normalized credentialed URL). Cross-review F5b: the PLURAL scan —
     // distinct credentialed HTTP vs HTTPS upstreams each need their own
     // relay before the first spawn, not only the family's first value.
@@ -2799,14 +2803,14 @@ async function boot(): Promise<void> {
     }
     // Selection/probe is deliberately before loadEnvConfig: an external engine
     // must never require AnyCode provider credentials merely to fail/boot.
-    // : decide the workspace trust gate ONCE, before any engine, hook,
+    // decide the workspace trust gate ONCE, before any engine, hook,
     // LSP, MCP or plugin wiring. A pending decision is reported to main on the
     // control channel (main keys the answer by tab and hash, never by the UI).
-    //  S1-B: the app-version carrier (main stamps app.getVersion()
+    // S1-B: the app-version carrier (main stamps app.getVersion()
     // into the fork env as ANYCODE_APP_VERSION). Read once, fail-soft — absent
     // (bare test harness) leaves discovery byte-identical.
     const hostAppVersion = parseAppVersionEnv(process.env[ENV_APP_VERSION]);
-    //  xfix D4: parsed here (pure argv read, no I/O) so the trust
+    // xfix D4: parsed here (pure argv read, no I/O) so the trust
     // gate can see child-mode boots — the same parse the core path repeats
     // below unchanged (parseHostArgs is pure; the duplicate is harmless).
     const bootArgs = parseHostArgs(process.argv.slice(2));
@@ -2815,14 +2819,14 @@ async function boot(): Promise<void> {
     // resolved once, here. Started before the trust gate so the shell probe's
     // cost overlaps that I/O, and fail-soft by contract (discovery never
     // rejects; a broken shell yields the conventional-directory fallback).
-    const loginPathProbe = discoverLoginPath();
+    const loginPathProbe = resolveExtensionsHomeOverride(process.env) !== null ? Promise.resolve(process.env.PATH) : discoverLoginPath();
     hostWorkspaceTrust = await establishHostWorkspaceTrust(new NodeFileSystemAdapter(), {
       workspace,
-      home: homedir(),
+      home: hostProfileHome(),
       env: process.env,
-      // : symlink and target share one trust record.
+      // symlink and target share one trust record.
       realpathSync,
-      //  xfix D4: a child tab shares the parent's workspace; the
+      // xfix D4: a child tab shares the parent's workspace; the
       // parent's record/once-approval decides and no pending dialog is
       // reported for a surface that cannot answer it.
       childSurface: bootArgs.child !== undefined,
@@ -2850,7 +2854,7 @@ async function boot(): Promise<void> {
     const envConfig = loadEnvConfig(process.env);
     const args = parseHostArgs(process.argv.slice(2));
 
-    //  срез C: the fork-boot snapshot half of the recognizer's config
+    // срез C: the fork-boot snapshot half of the recognizer's config
     // delivery (plan §1.2 step 1) — E1's ANYCODE_RECOGNIZER_* family, parsed
     // once here. `liveRecognizerEndpoint` is a SINGLE mutable object identity
     // kept for the life of this boot: InspectImage's own factory (below)
@@ -2882,7 +2886,7 @@ async function boot(): Promise<void> {
       settingsPathOverride !== undefined && settingsPathOverride.trim() !== "" ? settingsPathOverride : undefined,
     );
 
-    // , 4088-on-4118 integration: the per-model override
+    // 4088-on-4118 integration: the per-model override
     // is parsed ONCE here from the env main stamps for THIS fork's connection
     // (buildHostEnv runs on the per-tab pinned settings). The live
     // image-modality set no longer travels through the fork env: it rides
@@ -2894,7 +2898,7 @@ async function boot(): Promise<void> {
     const imageModelOverride = parseImageInputModelOverride(process.env[ENV_IMAGE_INPUT_MODEL_OVERRIDE]);
     const imageModalityLookup: ImageModalityLookup = (id) => (liveCapsFor(id)?.imageInput === true ? true : undefined);
 
-    //  slice 2: per-run Bash allow-list, a PROCESS INPUT (whoever
+    // slice 2: per-run Bash allow-list, a PROCESS INPUT (whoever
     // launched this fork), never a setting — see run-allow-bash.ts's module
     // doc. Parsed once here so the same list feeds both the permission engine
     // below and this startup diagnostic; an unset/empty env var parses to []
@@ -2902,7 +2906,7 @@ async function boot(): Promise<void> {
     // change). Logged unconditionally so a widened run is never silent, even
     // when every configured entry was malformed and none were accepted.
     const runAllowBashEntries = parseRunAllowBash(process.env[ENV_RUN_ALLOW_BASH]);
-    //  Stage 1 / : the ask-zone classifier (default
+    // Stage 1 / the ask-zone classifier (default
     // off). Parsed defensively; garbage or absence = off. kind:"command"
     // yields a ready boot (Stage 1). kind:"model" (implementation B) names a
     // model from the connections — the classifier is BUILT below, once the
@@ -2942,14 +2946,14 @@ async function boot(): Promise<void> {
     const catalogEntry = matchCatalogEntryByBaseUrl(getBuiltinCatalog(), envConfig.baseUrl);
 
     // Single back-compat resolution point for the wire transport, mirroring the
-    // CLI ( §0.4): the mandatory discriminant is applied once here rather
+    // CLI (§0.4): the mandatory discriminant is applied once here rather
     // than defaulted inside EndpointConfig, so the hot-swap factory below cannot
     // silently drop it. Env always wins; the catalog's declared default is next;
     // anthropic-messages is the final legacy fallback.
     const providerTransport: ProviderTransport =
       envConfig.providerTransport ?? catalogEntry?.defaultTransport ?? "anthropic-messages";
 
-    // : usage streaming resolved ONCE, immediately after the transport
+    // usage streaming resolved ONCE, immediately after the transport
     // ladder (mirror of the CLI's resolution point): an explicit
     // ANYCODE_INCLUDE_USAGE wins outright; unset defaults to true only for
     // `openai-chat-completions`, the one transport that honours
@@ -2965,13 +2969,13 @@ async function boot(): Promise<void> {
     // object the loop/ContextManager/subagents/titling all capture by reference
     // (through the `modelPort` decorator below, which forwards every call to
     // it), so a setPort between turns is instantly visible to every holder.
-    // : a child session rides out a short network outage. The
+    // a child session rides out a short network outage. The
     // session meta resolves AFTER this factory is first used, so the flag
     // starts argv-only and is widened (with a port rebuild) once it is known.
     let childRetryBoot = args.child !== undefined;
-    // : main sessions honor ANYCODE_MAX_RETRIES / ANYCODE_NETWORK_RETRY_BUDGET_MS
-    // (filled from settings.tools by host-env); children keep the  budget policy.
-    // : every port this host builds carries the desktop waiter, so a
+    // main sessions honor ANYCODE_MAX_RETRIES / ANYCODE_NETWORK_RETRY_BUDGET_MS
+    // (filled from settings.tools by host-env); children keep the budget policy.
+    // every port this host builds carries the desktop waiter, so a
     // transient outage parks the turn ("waiting for network") instead of failing it.
     const envRetry: Partial<RetryPolicy> = {
       ...(envConfig.maxRetries !== undefined ? { maxRetries: envConfig.maxRetries } : {}),
@@ -3004,7 +3008,7 @@ async function boot(): Promise<void> {
             : Object.keys(envRetry).length > 0
               ? { retry: envRetry }
               : {}),
-          // : setting an observer is what arms the factories'
+          // setting an observer is what arms the factories'
           // wrapped fetch; the port itself captures the update and yields it
           // as a `provider_quota` event, so the host needs no state of its own.
           onQuotaHeaders: () => {},
@@ -3013,7 +3017,7 @@ async function boot(): Promise<void> {
         hostDiagnosticSink,
       );
     const switchableModelPort = new SwitchableModelPort(modelPortFactory(envConfig.model));
-    //  срез C (plan §3): the ONE external decorator around the
+    // срез C (plan §3): the ONE external decorator around the
     // SwitchableModelPort — mirror of cli/main.ts's own
     // `modelPortWithMediaProjection` wrap (B1) — so every consumer of
     // `config.modelPort` (the main turn loop, ceiling verdict, compaction,
@@ -3023,7 +3027,7 @@ async function boot(): Promise<void> {
     // INVOKED until a real turn runs streamText(), long after `media` exists.
     const modelPort = createMediaProjectionPort(switchableModelPort, () => media.imageInputEnabled());
 
-    //  (implementation B, kind:"model"): build the ask-zone
+    // (implementation B, kind:"model"): build the ask-zone
     // classifier from a ModelPort. Both `connectionId` and `model` optional =
     // "the session's own connection/model": unset uses the session's own port
     // (the switchable one, WITHOUT the media-projection wrap — a classifier
@@ -3085,7 +3089,7 @@ async function boot(): Promise<void> {
     // model and back restores the tier. `set_reasoning_effort` writes it; the
     // model switch re-resolves the effective effort from it per the new model.
     let selectedEffort: ReasoningEffort = envConfig.reasoningEffort ?? "off";
-    //  CUT-S2 §2.6.1/§2.6.2 (slice S2b B5): non-recursion lock #1. A
+    // CUT-S2 §2.6.1/§2.6.2 (slice S2b B5): non-recursion lock #1. A
     // non-child (root) boot builds the FULL registry — `sessionTier:true`
     // makes `tier:"session"` reachable in the Agent tool's SERIALIZED schema
     // (tools/schemas.ts's `agentInputSchema`) — because it is the only kind
@@ -3117,7 +3121,7 @@ async function boot(): Promise<void> {
         ? createDefaultToolRegistry({ agent: { sessionTier: true }, ...(archMapEnabled ? { archMap: true } : {}) })
         : createDefaultToolRegistry(archMapEnabled ? { archMap: true } : undefined);
 
-    // : adaptive turn budget (ANYCODE_ADAPTIVE_TURN_BUDGET, mirror of
+    // adaptive turn budget (ANYCODE_ADAPTIVE_TURN_BUDGET, mirror of
     // `tools.adaptiveTurnBudget`). OFF => no ceiling key, no subagentBudget,
     // no history file touched — the pre-4721 boot, byte-identical. ON => the
     // ladder grants on progress and the learned base budget is fed from and
@@ -3128,21 +3132,21 @@ async function boot(): Promise<void> {
 
     // session from argv — create (`--session`) or load (`--resume`, mirror of
     // cli/main.ts:239-259; the initial history is NOT re-appended to the sink).
-    const dbPath = envConfig.dbPath ?? join(homedir(), ".anycode", "anycode.sqlite");
+    const dbPath = envConfig.dbPath ?? join(hostProfileHome(), ".anycode", "anycode.sqlite");
     persistence = new SqlitePersistenceAdapter(dbPath);
     const forkConnectionId = process.env[ENV_CONNECTION_ID];
     const resolvedSession = await resolveBootSession(persistence, {
       args,
       workspace,
       model: envConfig.model,
-      //  W10: pin the fork's provider connection onto a NEW session (main
+      // W10: pin the fork's provider connection onto a NEW session (main
       // stamped it into the fork env). A resumed existing session ignores it and
       // keeps its own stored pin (resolveBootSession invariant).
       ...(forkConnectionId !== undefined && forkConnectionId.trim() !== "" ? { connectionId: forkConnectionId } : {}),
     });
     let sessionMeta = resolvedSession.sessionMeta;
     const { initialHistory, resumedMissing } = resolvedSession;
-    //  part A: tools see their session id. Main stamps the pair into
+    // part A: tools see their session id. Main stamps the pair into
     // the fork env, so this only fills a bare/legacy boot (dev harness) where it
     // is absent; `??=` never overrides main's value.
     applySessionToolEnv(process.env, sessionMeta.id, workspace);
@@ -3250,10 +3254,10 @@ async function boot(): Promise<void> {
     const projectRoot = sessionMeta.projectRoot ?? sessionMeta.workspace;
     rolesProjectRoot = projectRoot;
     refreshRolesSettings();
-    // : live capabilities for models the catalog does not know,
+    // live capabilities for models the catalog does not know,
     // read fail-soft from settings.json (main persists them on the connection).
     // The fork env's connection id wins over the session row's pin: on a
-    //  rebind main respawns the host with the NEW connection in the env
+    // rebind main respawns the host with the NEW connection in the env
     // BEFORE it re-pins the row (tab-ipc handleTabRebind), so the row still
     // names the old connection at boot. Main stamps the env from
     // `tab.connectionId` on every spawn, so it is the connection whose
@@ -3354,7 +3358,7 @@ async function boot(): Promise<void> {
       registry.register(browserOpenTool);
       registry.register(browserReadTool);
       registry.register(browserScreenshotTool);
-      // : browser control. Built from the factory so
+      // browser control. Built from the factory so
       // the "Full browser access" flag (Phase B) can drop the approval escalation.
       const browserControl = createBrowserControlTools({ fullAccess: () => browserAccess.get() });
       registry.register(browserControl.navigate);
@@ -3365,7 +3369,7 @@ async function boot(): Promise<void> {
       registry.register(browserControl.console);
       registry.register(browserControl.eval);
     }
-    // Plan-exit contract (, mirror of cli/main.ts): ONE call registers
+    // Plan-exit contract (mirror of cli/main.ts): ONE call registers
     // ExitPlanMode AND produces the planExitMode/onModeChange pair spread into
     // AgentLoopConfig below — the halves are only safe together (plan-exit.ts).
     // Placed STRICTLY before the toolNames snapshot below so the tool name
@@ -3401,7 +3405,7 @@ async function boot(): Promise<void> {
     // Lazy: zero git spawn until the first write-effect turn.
     const checkpointsRoot =
       dbPath === ":memory:"
-        ? join(homedir(), ".anycode", "checkpoints")
+        ? join(hostProfileHome(), ".anycode", "checkpoints")
         : join(dirname(dbPath), "checkpoints");
     const checkpointService = buildCheckpointService({
       exec: execAdapter,
@@ -3412,18 +3416,18 @@ async function boot(): Promise<void> {
       sessionId: sessionMeta.id,
     });
 
-    // : artifact store for oversized tool results, rooted
+    // artifact store for oversized tool results, rooted
     // beside the sqlite DB by the same conditional as checkpointsRoot above —
     // OUTSIDE the workspace, so a spilled Bash log never shows in git status and
-    // needs no write permission (ports/artifacts.ts  verdict). Written by
-    // the dispatcher; swept by main at app start; removed on  hard delete.
-    const artifactStore = new NodeArtifactStore(artifactsRootFor(dbPath, homedir()));
+    // needs no write permission (ports/artifacts.ts verdict). Written by
+    // the dispatcher; swept by main at app start; removed on hard delete.
+    const artifactStore = new NodeArtifactStore(artifactsRootFor(dbPath, hostProfileHome()));
 
     historySink = new WriteBehindHistorySink(persistence, sessionMeta.id);
     const tokenizer = await createDefaultTokenizer();
     const bootContextInfo = connectionModelSettings.contextFor(envConfig.model);
     const bootContextWindow: number | undefined = bootContextInfo.tokens;
-    // : a detached child is a subagent too; the 100 KB finalText cap
+    // a detached child is a subagent too; the 100 KB finalText cap
     // makes output beyond ~32k tokens paid-for-and-discarded, so clamp it here.
     const clampChildOutput = (resolved: number | undefined): number | undefined =>
       isChildSessionBoot(args, sessionMeta) ? clampSubagentMaxOutputTokens(resolved) : resolved;
@@ -3450,7 +3454,7 @@ async function boot(): Promise<void> {
     selectedEffort = normalizedBootEffort;
     connectionModelSettings.remember(envConfig.model, selectedEffort);
     const bootEffortLevels = resolveEffortLevels(envConfig.model, entryFor(envConfig.model), liveCapsFor(envConfig.model), effortLevelsFor(envConfig.model));
-    //  (F6): the same catalog + env overrides the three boot
+    // (F6): the same catalog + env overrides the three boot
     // resolutions above read, packaged once so an Agent-tool `model` override
     // re-resolves the child's ceiling/effort/window for ITS model instead of
     // inheriting the parent's. Every input here is boot-fixed; the one live
@@ -3488,7 +3492,7 @@ async function boot(): Promise<void> {
     let hookDeclarations: CommandHookDeclaration[] = [];
     let hookConfigError: string | undefined;
     try {
-      const declarations = await loadHookConfigs(fsAdapter, workspace, homedir(), {
+      const declarations = await loadHookConfigs(fsAdapter, workspace, hostProfileHome(), {
         projectTrusted: hostWorkspaceTrust.projectTrusted,
         onSkip: (message) => console.warn(`[host] ${message}`),
       });
@@ -3519,7 +3523,7 @@ async function boot(): Promise<void> {
     let lspServerSpecs: LspServerSpec[] = [];
     let lspIssues: string[] = [];
     try {
-      const loaded = await loadLspServerSpecs(fsAdapter, workspace, homedir(), {
+      const loaded = await loadLspServerSpecs(fsAdapter, workspace, hostProfileHome(), {
         projectTrusted: hostWorkspaceTrust.projectTrusted,
       });
       lspServerSpecs = loaded.specs;
@@ -3551,8 +3555,8 @@ async function boot(): Promise<void> {
     // no module-scope handle, no shutdown stage.
     let webSearchBackend: ResolvedWebSearchBackend | null = null;
     try {
-      const loadedWebSearch = await loadWebSearchConfig(fsAdapter, workspace, homedir(), process.env, {
-        //  xfix D2: same trust gate as the section's siblings.
+      const loadedWebSearch = await loadWebSearchConfig(fsAdapter, workspace, hostProfileHome(), process.env, {
+        // xfix D2: same trust gate as the section's siblings.
         projectTrusted: hostWorkspaceTrust.projectTrusted,
       });
       webSearchBackend = loadedWebSearch.backend;
@@ -3572,8 +3576,8 @@ async function boot(): Promise<void> {
 
     let telemetryConfig: ResolvedTelemetryConfig | null = null;
     try {
-      const loadedTelemetry = await loadTelemetryConfig(fsAdapter, workspace, homedir(), process.env, {
-        //  xfix D2: same trust gate as the section's siblings.
+      const loadedTelemetry = await loadTelemetryConfig(fsAdapter, workspace, hostProfileHome(), process.env, {
+        // xfix D2: same trust gate as the section's siblings.
         projectTrusted: hostWorkspaceTrust.projectTrusted,
       });
       telemetryConfig = loadedTelemetry.telemetry;
@@ -3583,8 +3587,8 @@ async function boot(): Promise<void> {
     }
     let repoMapConfig: RepoMapConfig | null = null;
     try {
-      const loadedRepoMap = await loadRepoMapConfig(fsAdapter, workspace, homedir(), process.env, {
-        //  xfix D2: same trust gate as the section's siblings.
+      const loadedRepoMap = await loadRepoMapConfig(fsAdapter, workspace, hostProfileHome(), process.env, {
+        // xfix D2: same trust gate as the section's siblings.
         projectTrusted: hostWorkspaceTrust.projectTrusted,
       });
       repoMapConfig = loadedRepoMap.repoMap;
@@ -3603,7 +3607,7 @@ async function boot(): Promise<void> {
     let mcpSpecs: McpServerSpec[] = [];
     let mcpProblems: string[] = [];
     try {
-      const loaded = await loadMcpServerSpecs(fsAdapter, workspace, homedir(), {
+      const loaded = await loadMcpServerSpecs(fsAdapter, workspace, hostProfileHome(), {
         projectTrusted: hostWorkspaceTrust.projectTrusted,
         secrets: mcpSecrets,
         loginPath: mcpLoginPath,
@@ -3641,7 +3645,7 @@ async function boot(): Promise<void> {
     // composed by buildHostBuiltinSkills (host/builtin-skills.ts) into ONE
     // array — discoverExtensions takes a single `builtinSkills` key, so two
     // conditional spreads of that same key would silently overwrite each other.
-    // : the anycode-setup skill's docs location is resolved from
+    // the anycode-setup skill's docs location is resolved from
     // the app's own location (packaged resources, dev checkout, or the tagged
     // GitHub URL), never from the workspace.
     const builtinSkills: readonly BuiltinSkillDefinition[] = buildHostBuiltinSkills({
@@ -3649,20 +3653,20 @@ async function boot(): Promise<void> {
       previewAvailable,
       anycodeSetupDocs: anycodeSetupDocsForHost(),
     });
-    //  xfix H1(a): the settings block is re-read here (not only at
+    // xfix H1(a): the settings block is re-read here (not only at
     // module load) so a grandfathering write from this app run is visible.
     refreshPluginsSettings();
     try {
       ext = await discoverExtensions(fsAdapter, {
         workspace,
-        home: resolveExtensionsHomeOverride(process.env) ?? homedir(),
+        home: hostProfileHome(),
         claimedMcpNames: new Set(mcpSpecs.map((spec) => spec.name)),
         loginPath: mcpLoginPath,
         repoMapConfig,
         projectTrusted: hostWorkspaceTrust.projectTrusted,
         secrets: mcpSecrets,
         ...(builtinSkills.length > 0 ? { builtinSkills } : {}),
-        //  S1-B (design §7 host wiring): app version (the
+        // S1-B (design §7 host wiring): app version (the
         // ANYCODE_APP_VERSION carrier main stamps from app.getVersion()).
         // 4736 interplay: projectTrusted above already gates project-tier
         // plugin MCP; the consent list governs the user-tier plugins only.
@@ -3670,7 +3674,7 @@ async function boot(): Promise<void> {
         // Managed store state path, consent list (deny-until-granted), and the
         // reserved builtin names — see host/plugin-wiring.ts (C1, C2, H1(a)).
         ...pluginsDiscoveryWiring({
-          home: resolveExtensionsHomeOverride(process.env) ?? homedir(),
+          home: hostProfileHome(),
           pluginsSettings,
           builtinSkillNames: builtinSkills.map((skill) => skill.name),
           builtinPersonaNames: Object.keys(PERSONAS),
@@ -3719,13 +3723,13 @@ async function boot(): Promise<void> {
       console.error(`[host] failed to start MCP servers; continuing with zero MCP servers: ${describeError(error)}`);
       mcpManager = null;
     }
-    //  part B: the connected servers' `instructions`, computed ONCE
+    // part B: the connected servers' `instructions`, computed ONCE
     // here (after start, before the first compose) so every turn sees the same
     // text; a resumed session recomputes at its own boot. Empty => "" (the
     // prompt stays byte-identical). A failed/unloaded server never contributes.
     const mcpInstructionsSection = mcpManager ? buildMcpInstructionsSection(mcpManager.instructions()) : "";
 
-    //  срез C (finding #6): the boot-time `toolNames` snapshot this
+    // срез C (finding #6): the boot-time `toolNames` snapshot this
     // comment used to describe is GONE — `composeSystemPrompt` below now
     // reads `registry.list()` LIVE on every composition instead, so a tool
     // registered/unregistered after boot (InspectImage's own gate flipping
@@ -3758,7 +3762,7 @@ async function boot(): Promise<void> {
     // === bootContextWindow ?? DEFAULT, byte-identical to the pre-P7.15 inline
     // repo-map budget above.
     let liveContextWindow = bootContextWindow ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
-    // : true while the live window is the assumed unknown-model
+    // true while the live window is the assumed unknown-model
     // fallback (no catalog entry, no explicit override) — surfaced to the UI.
     let liveContextWindowAssumed = bootContextInfo.source === "assumed";
 
@@ -3834,7 +3838,7 @@ async function boot(): Promise<void> {
     // same order); the components now carry the repoMap render, so this no longer
     // calls renderRepoMap() itself (single render per compose). The loop reads
     // config.systemPrompt per-call, so the rebuilt prompt takes effect next turn.
-    //  срез C (finding #6): `toolNames` is read LIVE off the registry
+    // срез C (finding #6): `toolNames` is read LIVE off the registry
     // on every composition (never a frozen boot snapshot), so a tool
     // registered/unregistered after boot — InspectImage's own gate, plan
     // §5/§9 — reaches the model the very next time this is called, without
@@ -3847,7 +3851,7 @@ async function boot(): Promise<void> {
         toolNames: registry.list(),
         env: systemPromptEnv,
         visionFallbackEnabled: registry.has("InspectImage"),
-        //  (mirror of cli/main.ts): the one-line LSP notice rides
+        // (mirror of cli/main.ts): the one-line LSP notice rides
         // along exactly while the host carries a LspManager (>=1 configured
         // server); null => [] => the section renders "" (byte-identity).
         lspCoveredExtensions: lspManager !== null ? lspServerSpecs.flatMap((s) => s.extensions) : [],
@@ -3869,7 +3873,7 @@ async function boot(): Promise<void> {
     const media: MediaCapabilityPort = {
       // Reads currentModel so a P7.15 model switch re-gates image input on the
       // next send; currentModel === envConfig.model at boot (byte-identical).
-      // : imageModalityLookup adds the live /v1/models modality
+      // imageModalityLookup adds the live /v1/models modality
       // rung between the env override and the catalog (additive-only, parsed
       // once at boot above); the verdict still re-resolves per call through
       // currentModel, so a switch re-gates honestly.
@@ -3882,7 +3886,7 @@ async function boot(): Promise<void> {
           envConfig.imageInput ?? (imageModelOverride?.model === currentModel ? imageModelOverride.override : undefined),
           imageModalityLookup,
         ),
-      //  срез C: live verdict for the vision fallback — true whenever
+      // срез C: live verdict for the vision fallback — true whenever
       // a recognizer endpoint is CURRENTLY configured, independent of the
       // current model's own sightedness. Consulted by host/session.ts's
       // turn-accept gate (ORed with imageInputEnabled) and by the InspectImage
@@ -3890,7 +3894,7 @@ async function boot(): Promise<void> {
       recognizerConfigured: () => recognizerConfigured,
     };
 
-    //  срез C (plan §5): the InspectImage tool instance is built
+    // срез C (plan §5): the InspectImage tool instance is built
     // EXACTLY ONCE for the life of this host process — never rebuilt on a
     // registration toggle or a live recognizer-config push. Its per-image
     // question counter and Q/A transcript live in the factory's own closure
@@ -3916,7 +3920,7 @@ async function boot(): Promise<void> {
 
     /**
      * (De)registers InspectImage against the CURRENT (recognizer configured
-     * ∧ blind model) verdict — the exact gate .md §1 step 5 and plan
+     * ∧ blind model) verdict — the exact gate §1 step 5 and plan
      * §5 specify — and reports whether registration actually flipped, so a
      * caller knows whether the system prompt needs recomposing (finding #6:
      * no recompose when nothing changed). Idempotent both ways
@@ -3936,7 +3940,7 @@ async function boot(): Promise<void> {
       return true;
     }
 
-    //  CUT-S2 §0.8/§2.6.3: a child-mode boot's broker wraps `emit`
+    // CUT-S2 §0.8/§2.6.3: a child-mode boot's broker wraps `emit`
     // with the permission-tap — an `attention` signal bracketing every
     // permission ask, relayed to main as `ChildProgress{kind:"attention"}` so
     // the parent's subagent card can show "waiting for permission" without
@@ -3960,20 +3964,20 @@ async function boot(): Promise<void> {
       port.record({
         v: 1, ts: Date.now(), session: sessionMeta.id, t: "session_start",
         model: envConfig.model, provider: catalogEntry?.name ?? "custom", mode,
-        //  §2.1: session-tier child back-reference (/145),
+        // §2.1: session-tier child back-reference
         // the same field the codex/claude boots stamp at their own
         // session_start above — the core path just never had it wired.
         ...(args.child !== undefined ? { parentSession: args.child.parentSessionId } : {}),
       });
       telemetry = { port, session: sessionMeta.id };
     }
-    //  §2.2: const capture of `telemetry` right after its only
+    // §2.2: const capture of `telemetry` right after its only
     // reassignment in this boot, so the subagentEventTap closure below
     // (built inside the AgentLoopConfig literal, read later by a child spawn)
     // sees a fixed value instead of chasing the module-level `let`.
     const subagentTelemetry = telemetry;
 
-    //  срез C (plan §8): wraps the plain port ask() would otherwise
+    // срез C (plan §8): wraps the plain port ask() would otherwise
     // build itself (`new AiSdkModelPort(endpoint)`) with a usage-telemetry
     // tap — see VisionTelemetryModelPort's own doc. Reuses `subagentTelemetry`
     // (the const capture right above, not the mutable `telemetry` let) for
@@ -3997,7 +4001,7 @@ async function boot(): Promise<void> {
         });
       });
     };
-    //  срез C (plan §5 "условная регистрация до композиции"): the
+    // срез C (plan §5 "условная регистрация до композиции"): the
     // boot-time registration decision, made BEFORE the first
     // composeSystemPrompt() call below so the very first system prompt
     // already reflects it (no post-boot recompose needed for the common
@@ -4023,7 +4027,7 @@ async function boot(): Promise<void> {
       // whatever Session.maybeRemember appends in-session; an empty `rules`
       // store is behaviorally identical to the bare ModePermissionEngine
       // (packages/core/src/permissions/rules.test.ts's own regression invariant).
-      //  slice 2: RunAllowBashPermissionEngine sits OUTSIDE the
+      // slice 2: RunAllowBashPermissionEngine sits OUTSIDE the
       // untouched SafeCommand(Mode) pair — an empty runAllowBashEntries (the
       // env-unset default) makes it a byte-identical no-op wrapper, so this
       // composition degrades to exactly the pre-slice-2 chain.
@@ -4035,10 +4039,10 @@ async function boot(): Promise<void> {
         rules,
       ),
       permissionBroker: broker,
-      //  Stage 1 / 4730: optional; absent = byte-identical to pre-4702.
+      // Stage 1 / 4730: optional; absent = byte-identical to pre-4702.
       ...(effectiveAskClassifierBoot !== undefined ? { askClassifier: effectiveAskClassifierBoot } : {}),
       mode,
-      //  remainder (owner rule 2026-08-22): "присмотр есть ⇒ корневая
+      // remainder (owner rule 2026-08-22): "присмотр есть ⇒ корневая
       // сессия вообще без потолка" — a supervised interactive ROOT has no turn
       // ceiling at all; a child session (session-tier subagent) ALWAYS keeps
       // the ladder regardless. `isChildSessionBoot` — lock #2's own
@@ -4049,7 +4053,7 @@ async function boot(): Promise<void> {
       // genuine child for a root and hand it the no-ceiling predicate — the
       // one mistake this wiring must never make (a false "root" verdict only
       // ever costs a root session its exemption, never the reverse).
-      // `broker.isUnattended` is the  latch, read LIVE on every call
+      // `broker.isUnattended` is the latch, read LIVE on every call
       // (never snapshotted): a run that starts supervised and goes quiet
       // mid-session falls under the ladder from that point on.
       ...(!isChildSessionBoot(args, sessionMeta)
@@ -4070,7 +4074,7 @@ async function boot(): Promise<void> {
         todos: new InMemoryTodoStore(),
       },
       media,
-      //  срез C (plan §1/§2/§3): wired UNCONDITIONALLY — `reserveRef`
+      // срез C (plan §1/§2/§3): wired UNCONDITIONALLY — `reserveRef`
       // is called for EVERY image this loop appends regardless of `endpoint`'s
       // presence (AgentLoopRecognizerConfig's own doc, срез B1), so a live
       // recognizer/model switch mid-session never encounters an un-numbered
@@ -4088,9 +4092,9 @@ async function boot(): Promise<void> {
       cwd: workspace,
       maxTurns: resolveChildMaxTurns(args.child, envConfig.maxTurns),
       subagentMaxTurns: envConfig.subagentMaxTurns,
-      // : learned base-budget port (adaptive only; see above).
+      // learned base-budget port (adaptive only; see above).
       ...(subagentBudget !== undefined ? { subagentBudget } : {}),
-      //  slice 1: subagent stall-detector override, ANYCODE_SUBAGENT_STALL_MS
+      // slice 1: subagent stall-detector override, ANYCODE_SUBAGENT_STALL_MS
       // / settings tools.subagentStallTimeoutMs (main/host-env.ts fills the env var
       // from the setting; envConfig re-reads it here exactly like subagentMaxTurns).
       subagentStallTimeoutMs: envConfig.subagentStallTimeoutMs,
@@ -4135,16 +4139,16 @@ async function boot(): Promise<void> {
             compactionBoundary: () => compactionRecordSeam?.sequence() ?? 0,
           }
         : {}),
-      // : spill oversized tool results to the artifact
+      // spill oversized tool results to the artifact
       // store (mirror of cli/main.ts:1292) — `sessionMeta.id`, not the later
-      // `sessionId` const. Absent = truncation, the pre- behaviour.
+      // `sessionId` const. Absent = truncation, the behaviour.
       artifacts: { store: artifactStore, sessionId: sessionMeta.id },
-      // : planExitMode ("build") + onModeChange, produced together with
+      // planExitMode ("build") + onModeChange, produced together with
       // the ExitPlanMode registration above. Without this spread the tool's
       // handler fails closed and plan mode has no model-driven exit at all.
       ...planExit,
       ...(telemetry !== null ? { eventTap: buildTelemetryTap(telemetry.port, telemetry.session) } : {}),
-      //  §2.2: factory for an inline subagent's child eventTap (core
+      // §2.2: factory for an inline subagent's child eventTap (core
       // path ONLY — this is the AgentLoop boot, not a codex/claude engine
       // boot). `subagentTelemetry` is captured into a local const because TS
       // does not carry a `let`-narrowing (module-level `telemetry`) across a
@@ -4163,7 +4167,7 @@ async function boot(): Promise<void> {
     };
 
     /**
-     *  срез C (plan §1.3): the host-owned HOW of a recognizer-config
+     * срез C (plan §1.3): the host-owned HOW of a recognizer-config
      * commit — Session's own `applyRecognizerConfig` decides WHEN (now, if
      * idle; deferred to the next busy->idle boundary otherwise) and calls
      * this. Swaps the live endpoint (mutating `liveRecognizerEndpoint`'s
@@ -4193,7 +4197,7 @@ async function boot(): Promise<void> {
       }
     }
 
-    //  CUT-S2 §2.6.1 (slice S2b B5): non-recursion lock #2. Mutates
+    // CUT-S2 §2.6.1 (slice S2b B5): non-recursion lock #2. Mutates
     // `config` in place AFTER the object literal above (mirrors
     // `withSubagents`'s own mutate-in-place pattern just below) so
     // `getPermissionMode`'s closure can read `config.mode` — the SAME field
@@ -4217,7 +4221,7 @@ async function boot(): Promise<void> {
     // mismatch. The THIRD, independent defense lives in a different process
     // entirely: `main/tabs.ts`'s own `childOf` ledger + sender check
     // (`spawnChild`) — that one does not read anything boot built here.
-    //  срез 3 §2: kept as its OWN reference (not narrowed to the
+    // срез 3 §2: kept as its OWN reference (not narrowed to the
     // frozen `SessionSubagentPort` core interface `config.sessionSubagents`
     // holds below) so the richer `ChildSessionPort` surface —
     // list/cancel/cancelAll/onChange for the desktop's own detached-children
@@ -4234,7 +4238,7 @@ async function boot(): Promise<void> {
       report: (id, text, meta) => childReportQueue.add(id, text, meta),
       deliver: deliverDetachedChildReport,
     });
-    // A1/R1 ( review): the child port (below) exists BEFORE the
+    // A1/R1 (review): the child port (below) exists BEFORE the
     // Session, so the child spawn mode is read through the shared cell
     // (spawn-mode-cell.ts): config-derived until the Session exists, then the
     // Session's own childSpawnMode(). The SAME factory is what the test harness
@@ -4253,26 +4257,26 @@ async function boot(): Promise<void> {
         getPermissionMode: () => spawnModeCell.read(),
         send: sendChildSessionMessage,
         subscribe: subscribeChildRunEvents,
-        //  срез 1: the detach-delivery seam. Fires strictly AFTER
+        // срез 1: the detach-delivery seam. Fires strictly AFTER
         // the spawning Agent tool call already returned at admit — see
         // deliverDetachedChildReport's own comment for the full picture.
-        // : a detached child's TERMINAL is the only place its real
+        // a detached child's TERMINAL is the only place its real
         // turn count exists (the admit outcome is not evidence), so the
         // adaptive history is written here, before the report is delivered.
         onDetachedTerminal: (outcome, req) => {
           routedChildComposition!.onTerminal(outcome, req);
         },
-        //  slice 2: the detached-stall delivery seam — fires
+        // slice 2: the detached-stall delivery seam — fires
         // mid-run, zero or more times, independently of onDetachedTerminal
         // above. See deliverDetachedChildStall's own comment for the full
         // picture (queue coalescing, id namespacing).
         onDetachedStall: deliverDetachedChildStall, onDetachedApproval: deliverDetachedChildApproval,
         onDetachedApprovalSettled: retractDetachedChildApprovalNotice,
-        // : the approaching-turn-budget seam — fires once per
+        // the approaching-turn-budget seam — fires once per
         // detached run, strictly before the terminal. See
         // deliverDetachedTurnBudgetNotice's own comment.
         onDetachedTurnBudget: deliverDetachedTurnBudgetNotice,
-        //  slice 1/2: same knob as the inline tier just above
+        // slice 1/2: same knob as the inline tier just above
         // (config.subagentStallTimeoutMs) so both tiers share one resolved
         // value; the port's own default (SUBAGENT_STALL_TIMEOUT_MS) applies
         // when the env/setting is unset. Now governs BOTH the sync and
@@ -4289,7 +4293,7 @@ async function boot(): Promise<void> {
       config.sessionSubagents = childSessionPortHandle;
       routedChildComposition.attach(childSessionPortHandle);
     }
-    // : the supervisor idle watchdog for a CORE root boot — the
+    // the supervisor idle watchdog for a CORE root boot — the
     // engine-agnostic twin of the codex boot's construction above (same
     // facts, same delivery seam, same report-only posture). Threshold comes
     // from the SAME envConfig the stall clock's own knob two lines above
@@ -4323,7 +4327,7 @@ async function boot(): Promise<void> {
     // `config.subagents`, which the call above just attached) and attaches a
     // WorkflowPort backed by the SAME SubagentPort, so every workflow step
     // shares the one runner semaphore. It ALSO reads `config.sessionSubagents`
-    //, already assigned further above, so an engine-profile step
+    // already assigned further above, so an engine-profile step
     // runs through the SAME session port the Agent tool uses. Absent that port
     // (should not happen here, since withSubagents always attaches one) it
     // attaches nothing and the Workflow tool stays fail-closed "unavailable" — the
@@ -4342,7 +4346,7 @@ async function boot(): Promise<void> {
     // `runEngineChild` (engine-children.ts) is NO LONGER wired here (
     // CUT-S4 §0.3): an `engine:` md-profile persona now routes to the
     // session-child path (tools/agent.ts, S4a) instead of a one-shot Claude
-    // Code / Codex CLI run — and, as of , a WORKFLOW step with an
+    // Code / Codex CLI run — and a WORKFLOW step with an
     // engine profile routes through that same session port via
     // withWorkflows(config.sessionSubagents), not the old refusal.
     // `engine-children.ts` itself stays byte-untouched and importable
@@ -4372,7 +4376,7 @@ async function boot(): Promise<void> {
               usageAuditWriteTail = (usageAuditWriteTail ?? Promise.resolve()).then(() => persistence!.recordProviderUsage(row)).catch((e) => console.error("[host] usage audit write failed", e));
             };
           },
-          //  §3.6: settings-derived role personas. For each of
+          // §3.6: settings-derived role personas. For each of
           // planner/executor/reviewer NOT claimed by md-discovery, a derived
           // PersonaDefinition is appended carrying the settings
           // roles[role].primary fields (engine/connection/provider/model/
@@ -4406,7 +4410,7 @@ async function boot(): Promise<void> {
           },
           env: systemPromptEnv,
           memorySection: ext.memorySection,
-          // : cheap-model default for inline explore children
+          // cheap-model default for inline explore children
           // (ANYCODE_EXPLORE_MODEL). Assigned directly (not conditional-spread):
           // with the var unset this reads `undefined`, which the runner treats
           // exactly like an absent option — explore inherits the parent's port.
@@ -4415,7 +4419,7 @@ async function boot(): Promise<void> {
             assertChildModel(id, readAllowedChildModels(process.env.ANYCODE_CHILD_MODELS, envConfig.model));
             return modelPortFactory(id);
           },
-          //  (F6) + §0b adjudication: unconditional, exactly like the
+          // (F6) + §0b adjudication: unconditional, exactly like the
           // port factory above (the desktop always has both). The tier handed
           // to the resolver is the host-owned `selectedEffort` cell read AT
           // SPAWN TIME — the live USER-SELECTED tier, kept current by
@@ -4425,12 +4429,12 @@ async function boot(): Promise<void> {
           // effort even though the child's own model can honor the tier.
           resolveChildModelSettings: (id: string, profileEffort?: ReasoningEffort) =>
             settingsForChild(id, profileEffort ?? selectedEffort),
-          // WebSearch parity for children (, mirror of the CLI):
+          // WebSearch parity for children (mirror of the CLI):
           // the SAME instance registered above when a backend resolved is
           // threaded into every persona child registry that lists "WebSearch".
           // Absent (no backend) keeps the runner byte-compatible.
           ...(webSearchTool !== undefined ? { webSearchTool } : {}),
-          //  §3.6: the host-side role-route resolver — settings
+          // §3.6: the host-side role-route resolver — settings
           // roles + health cache are HOST state; the runner walks the
           // returned chain for ROLE personas (§3.2) and nothing else.
           resolveRoleRoute: resolveRoleRouteImpl,
@@ -4470,7 +4474,7 @@ async function boot(): Promise<void> {
     };
 
     const sessionId = sessionMeta.id;
-    //  ( residual): a host restart must not lose a detached
+    // (residual): a host restart must not lose a detached
     // child's still-unacknowledged report — restore the persisted queue BEFORE
     // this Session's first ui_ready can resendAll() it. (The codex/claude boots
     // wire their own equivalent, attachEngineChildReportDurability, at their
@@ -4486,13 +4490,13 @@ async function boot(): Promise<void> {
         if (isChildSession) connectionModelSettings.refresh();
         else selectedTier = connectionModelSettings.switchEffort(currentModel, id, selectedTier, effortExplicit);
         const effortAdjustment = isChildSession ? undefined : connectionModelSettings.takeAdjustment();
-        //  (§0b): Session hands its OWN preserved user-selected tier
+        // (§0b): Session hands its OWN preserved user-selected tier
         // here, so this is the second (and only other) writer that keeps the
         // host cell faithful — without it a tier selected before a switch
         // would still be live in Session while the cell held a stale value.
         selectedEffort = selectedTier;
         const previous = currentModel;
-        //  срез C (plan §3): the SWITCHABLE port, not the outer
+        // срез C (plan §3): the SWITCHABLE port, not the outer
         // media-projection decorator (`modelPort`) — setPort mutates what
         // that decorator forwards to, so every existing holder (loop,
         // ContextManager, subagents, titling) sees the new model without a
@@ -4525,7 +4529,7 @@ async function boot(): Promise<void> {
         const resolvedEffort = resolveSessionEffort(id, entryFor(id), selectedTier, liveCapsFor(id), effortLevelsFor(id));
         config.reasoningEffort = resolvedEffort;
         liveContextWindow = contextWindow;
-        //  срез C (plan §9): a model switch can flip sighted<->blind,
+        // срез C (plan §9): a model switch can flip sighted<->blind,
         // which flips the InspectImage registration gate too — recomputed
         // BEFORE the unconditional recompose right below, so this switch's
         // own prompt rebuild (which runs regardless of whether registration
@@ -4597,7 +4601,7 @@ async function boot(): Promise<void> {
       fs: fsAdapter,
       workspace,
       projectRoot: sessionMeta.projectRoot ?? sessionMeta.workspace,
-      //  срез 2: wired unconditionally — for a child-mode boot (no
+      // срез 2: wired unconditionally — for a child-mode boot (no
       // `config.sessionSubagents`, non-recursion lock above) the queue simply
       // stays empty forever, so `resendAll`/`ack` are harmless no-ops. This is
       // the ONLY Session construction site among the three engines (core is
@@ -4634,7 +4638,7 @@ async function boot(): Promise<void> {
           continuationMode: null,
         });
       },
-      //  W11: core-only (Codex owns its own account, outside the core
+      // W11: core-only (Codex owns its own account, outside the core
       // provider catalog — its Session construction above never wires this).
       // Main resolves the pinned connectionId per-proc (tabs.ts); the host stays
       // connection-agnostic and only relays the loop's own classification.
@@ -4645,7 +4649,7 @@ async function boot(): Promise<void> {
             : { type: PROVIDER_HEALTH_EVENT_TYPE, kind: "failure", code: event.code };
         process.parentPort.postMessage(message);
       },
-      //  follow-up: same parentPort side channel as health above
+      // follow-up: same parentPort side channel as health above
       // — main (tabs.ts) resolves THIS proc's pinned connectionId and does the
       // throttled `lastQuota` write (main/connection-quota.ts). Core-only for
       // the same reason as health: an engine broker owns its own account.
@@ -4775,7 +4779,7 @@ async function boot(): Promise<void> {
       selectedEffort,
       sessionId,
       bootHistory,
-      //  S4: dev/automation-ONLY replay-recording override, resolved
+      // S4: dev/automation-ONLY replay-recording override, resolved
       // here (the composition root) and never inside Session itself.
       ...(coreHistoryMaxItems !== null ? { historyMaxItems: coreHistoryMaxItems } : {}),
       hasTitle: sessionMeta.title !== undefined && sessionMeta.title.length > 0,
@@ -4810,7 +4814,7 @@ async function boot(): Promise<void> {
                   if (lspStatusListener === listener) lspStatusListener = null;
                 };
               },
-              // : Environment menu Restart → respawn crashed servers.
+              // Environment menu Restart → respawn crashed servers.
               restart: () => lspManager!.restartCrashed(),
             },
           }
@@ -4821,7 +4825,7 @@ async function boot(): Promise<void> {
         list: () => hookDeclarations,
         ...(hookConfigError !== undefined ? { configError: hookConfigError } : {}),
       },
-      //  срез 3 §2: read/cancel seam onto the detached-children
+      // срез 3 §2: read/cancel seam onto the detached-children
       // registry `childSessionPortHandle` owns. Absent for a child-session
       // boot or a claude/codex master (`childSessionPortHandle` itself is
       // undefined there) — Session's own `?? []` makes that a silent
@@ -4837,7 +4841,7 @@ async function boot(): Promise<void> {
             },
           }
         : {}),
-      // : the supervisor idle-watchdog seam for the core root —
+      // the supervisor idle-watchdog seam for the core root —
       // engine-agnostic on purpose (a core supervisor driving detached
       // children deserves the same guard as a codex one); absent for a
       // child-session boot, mirroring the backgroundChildren gate above.
@@ -4849,12 +4853,12 @@ async function boot(): Promise<void> {
             },
           }
         : {}),
-      // A1 ( review, cross-review F1): the Session derives the
+      // A1 (review, cross-review F1): the Session derives the
       // child spawn mode itself (childSpawnMode(), session.ts) from its own
       // orchestrate state — the host port's copy (above) mirrors the same
       // derivation because the port exists before the Session. There is no
       // override option anymore: the earlier override wiring recursed.
-      //  §3.7: orchestrate transitions land on the AgentLoopConfig
+      // §3.7: orchestrate transitions land on the AgentLoopConfig
       // (config.orchestrate), which the loop threads into the dispatch context
       // and the dispatcher into every ToolContext — the Agent tool reads it for
       // orchestrate default-detach (§3.3).
@@ -4863,7 +4867,7 @@ async function boot(): Promise<void> {
       onOrchestrateChanged: (enabled: boolean) => {
         spawnModeCell.onOrchestrateChanged(enabled);
       },
-      //  §3.6: turn-start orchestrator-route check — the host
+      // §3.6: turn-start orchestrator-route check — the host
       // owns the health cache. Returns a model and effort selection only
       // for the tab's active connection, along with the notice to surface.
       orchestratorRouteCheck: () => {
@@ -4911,7 +4915,7 @@ async function boot(): Promise<void> {
       imageInputEnabled: media.imageInputEnabled,
       contextWindowAssumed: () => liveContextWindowAssumed,
       modelSettingsConnectionId: liveCapsConnectionId ?? null,
-      //  срез C: core-only wiring (codex/claude Sessions never pass
+      // срез C: core-only wiring (codex/claude Sessions never pass
       // these two — "codex/claude НЕ задеты (замыкание не установлено)").
       imageFallbackAvailable: media.recognizerConfigured,
       applyRecognizerConfig: applyRecognizerEndpoint,
@@ -4929,7 +4933,7 @@ async function boot(): Promise<void> {
       // every compaction this session went through, not just the ones this
       // process will produce.
       ...(compactionRecordSeam !== undefined ? { compactionRecords: compactionRecordSeam } : {}),
-      //  / : the persistent per-step provider-usage audit,
+      // the persistent per-step provider-usage audit,
       // CORE-ONLY wiring (codex/claude boots above pass nothing — their usage
       // arrives as cumulative REPLACE snapshots, not per-step finishes).
       // Write-behind: the sink swallows+logs its own failures, so audit I/O
@@ -4976,15 +4980,15 @@ async function boot(): Promise<void> {
       // unless they opt in via HarnessOptions.refineTitle.
       refineTitle: (text) => generateSessionTitle({ modelPort: config.modelPort, text }),
       postPreviewArtifacts: sendPreviewArtifacts,
-      //  CUT-S2 §2.6.3 (slice S2b B4): present ONLY for a child-mode
+      // CUT-S2 §2.6.3 (slice S2b B4): present ONLY for a child-mode
       // boot. `flushHistory` is the SAME `historySink.flushChecked()` ordering
       // guarantee the worktree-transition handoff above already relies on
       // (§0.5 — a terminal report is trusted by main/renderer ONLY once the
       // child's transcript is durably on disk). CUT-S4 §4.1: `buildChildSessionOptions`
       // is the exact same onReady/onTerminal/onProgress bodies, extracted so
       // codex/claude share them too — only `flushHistory` differs per engine.
-      // : core children get the wrap-up rescue (one bounded tool-free
-      // model call via core's runWrapUp against THIS loop/config). :
+      // core children get the wrap-up rescue (one bounded tool-free
+      // model call via core's runWrapUp against THIS loop/config).
       // also pass the dedicated wrapped modelPort's claim getter (the same
       // port the loop streams through) so the terminal can carry
       // `responseModel`. Engine boots below pass neither.
@@ -4998,14 +5002,14 @@ async function boot(): Promise<void> {
           }
         : {}),
     });
-    // A1/F1 ( cross-review): no post-construction binding. The
+    // A1/F1 (cross-review): no post-construction binding. The
     // child port's getPermissionMode closure (declared next to the port,
     // above) derives the spawn mode from the same host cells this callback
     // keeps current — the earlier late-binding-cell round-trip
     // (port -> Session.childSpawnMode() -> cell -> port ...) recursed
     // forever on the first spawn of a session-tier child.
 
-    //  xfix D4: the model-kind classifier is pinned to a
+    // xfix D4: the model-kind classifier is pinned to a
     // connection this session is not running on — the classifier is OFF and
     // the user SEES that (engine_notice renders like every other config
     // warning), never a silent fallback to the session's own connection.
@@ -5045,7 +5049,7 @@ void ready.then(() => session?.observeAgentDeliveries((delivery) => { process.pa
 async function handleShutdown(): Promise<void> {
   await ready;
 
-  //  CUT-S2 §10.14.3 BLOCKER-1: arm the admission funnel before any
+  // CUT-S2 §10.14.3 BLOCKER-1: arm the admission funnel before any
   // teardown step below runs — the whole teardown window was previously
   // ungated, admitting exit_worktree/rewind_request/user_message against
   // managers this function is about to tear down.
@@ -5058,7 +5062,7 @@ async function handleShutdown(): Promise<void> {
   // stage: git spawns are short-lived and the command queue drains to refusals
   // after abort.
   gitAbort.abort();
-  // Credential-free loopback proxy relay ( follow-up): destroy its
+  // Credential-free loopback proxy relay (follow-up): destroy its
   // sockets before the children that may still be using it — every live
   // tunnel collapses immediately rather than on its own TCP timeout.
   closeProxyRelay();
@@ -5101,7 +5105,7 @@ async function handleShutdown(): Promise<void> {
   }
   await engineBootstrap?.dispose();
   engineBootstrap = null;
-  //  rework: after the engine is disposed no tool child can hold
+  // rework: after the engine is disposed no tool child can hold
   // the private temp dir open — the LAST safe moment to remove it. Best-effort
   // (the helper swallows its own errors); idempotent with the finalize-time
   // removal a completed child already performed.
@@ -5246,7 +5250,7 @@ process.parentPort.on("message", (event) => {
     }
     return;
   }
-  //  срез C (plan §1.2/§1.3): main's live recognizer-config push
+  // срез C (plan §1.2/§1.3): main's live recognizer-config push
   // (main/tabs.ts's `broadcastRecognizerConfig`, filtered upstream to live
   // ROOT core tabs only — a codex/claude fork or a child-session fork never
   // receives this at all). `session` may still be null here (this fork
@@ -5263,7 +5267,7 @@ process.parentPort.on("message", (event) => {
     );
     return;
   }
-  //  CUT-S2 §2.6.1 (slice S2b B5): main -> this parent host, a
+  // CUT-S2 §2.6.1 (slice S2b B5): main -> this parent host, a
   // ChildRunEvent for a session-tier Agent call this host's own RPC client
   // (createChildSessionPort) started. parseChildRunEvent is fail-closed
   // (malformed/unrecognized `kind` -> null, never thrown) — a stray or
@@ -5279,7 +5283,7 @@ process.parentPort.on("message", (event) => {
     }
     return;
   }
-  //  CUT-S2 §2.6.3 (slice S2b B4): main -> child host, the queued
+  // CUT-S2 §2.6.3 (slice S2b B4): main -> child host, the queued
   // initial prompt, released once this fork's own `child-ready` was sent.
   // `startProgrammaticTurn` is a safe no-op refusal on a non-child (or
   // not-yet-booted) session — this branch is reachable from every boot path's
@@ -5290,7 +5294,7 @@ process.parentPort.on("message", (event) => {
     session?.startProgrammaticTurn(childStart.prompt);
     return;
   }
-  // : an OS connectivity hint (forwarded by main) wakes every turn parked
+  // an OS connectivity hint (forwarded by main) wakes every turn parked
   // waiting for the network; the probe decides whether it resumes.
   if (routeNetworkHint(data)) {
     wakeNetworkWaiters();

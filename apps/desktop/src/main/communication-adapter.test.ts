@@ -120,7 +120,7 @@ describe("the host refreshes that copy on every start", () => {
   });
 });
 
-describe("electron-builder ships the adapter ( source test)", () => {
+describe("electron-builder ships the adapter (source test)", () => {
   it("lists agent-communication/stdio.mjs in extraResources", () => {
     const yml = readFileSync(new URL("../../electron-builder.yml", import.meta.url), "utf8");
     expect(yml).toMatch(/from: \.\.\/\.\.\/examples\/agent-communication\/stdio\.mjs\s*\n\s*to: agent-communication\/stdio\.mjs/);

@@ -10,7 +10,7 @@
  * AgentLoopConfig — it never imports the runner or AgentLoop, and loop/ knows
  * only the WorkflowPort type (the mirror of the SubagentPort arrow) — and the
  * shared session-tier request builder (subagents/agent-bridge.js's
- * buildSessionSubagentRequest, ) so engine-profile steps compose the
+ * buildSessionSubagentRequest) so engine-profile steps compose the
  * SAME SessionSubagentRequest the Agent tool does, byte-for-byte.
  *
  * DAG semantics (§3.4):
@@ -168,7 +168,7 @@ function createRunner(
           WORKFLOW_OUTPUT_MAX_BYTES,
         );
         const summary = cappedSummary.text;
-        // : a fail-fast pre-check streams the same start/step_end/end
+        // a fail-fast pre-check streams the same start/step_end/end
         // trio a launched run would — with `unlaunched` on every error
         // terminal — so the card, CLI and telemetry see the failed step and
         // its reason and can tell it never launched. `workflow_start` is a
@@ -294,7 +294,7 @@ function createRunner(
                   controller.abort();
                 }, stepTimeoutMs);
               }
-              //  slice S3: this SAME post-semaphore moment is the
+              // slice S3: this SAME post-semaphore moment is the
               // honest "queued -> running" transition — step_start above
               // already fired, ready-but-unlaunched, before the semaphore.
               onProgress?.({ kind: "step_running", stepId: step.id });
@@ -305,14 +305,14 @@ function createRunner(
                 turns: progress.turns,
                 toolCalls: progress.toolCalls,
                 lastTool: progress.lastTool,
-                //  slice S2: the child's own running spend, restamped
+                // slice S2: the child's own running spend, restamped
                 // with this step's id. Forwarded unchanged — the engine never
                 // sums across steps, because a run's total is derived from the
                 // per-step numbers by whoever displays them.
                 ...(progress.usage !== undefined ? { usage: progress.usage } : {}),
               });
             } else if (progress.kind === "tool") {
-              //  slice S1. The child's per-tool one-liner, restamped
+              // slice S1. The child's per-tool one-liner, restamped
               // with this step's id. Until this branch existed the whole
               // `tool` kind fell through to nothing here, which is why a
               // workflow run showed counters and never named a single tool.
@@ -335,11 +335,11 @@ function createRunner(
         };
 
         let sub: SubagentOutcome;
-        // : set only when an engine-role step ran on a degraded or
+        // set only when an engine-role step ran on a degraded or
         // fallback route; prefixed to the step's finalText below.
         let routeNotice: string | undefined;
         try {
-          // : an engine-profile step (engine: claude/codex md-profile)
+          // an engine-profile step (engine: claude/codex md-profile)
           // routes through the session tier — the SAME SessionSubagentPort and
           // buildSessionSubagentRequest composition the Agent tool uses —
           // never the inline child loop. Plain steps keep the inline call
@@ -361,7 +361,7 @@ function createRunner(
             };
           } else if (engineProfile !== null) {
             const spawnToolCallId = `wf-${step.id}-${globalThis.crypto.randomUUID()}`;
-            // : a cooling role primary degrades/falls back like the
+            // a cooling role primary degrades/falls back like the
             // Agent tool does; a healthy or unresolved route keeps the profile.
             const engineRoute = resolveEngineStepRoute(step.agentType, engineProfile, subagents);
             const request =
@@ -407,7 +407,7 @@ function createRunner(
                 description: `workflow ${definition.name} step ${step.id}`,
                 prompt: cappedPrompt.text,
                 maxTurns: step.maxTurns,
-                //  follow-up: the step's declared `tools:` extras
+                // follow-up: the step's declared `tools:` extras
                 // (today: WebSearch). Threaded verbatim; the RUNNER resolves
                 // them against what boot provides (no backend => silent skip),
                 // so a preset step degrades instead of failing the run. A
@@ -438,12 +438,12 @@ function createRunner(
         // engine reports that as "error" (the step failed, §3.4), distinct from
         // a run-level cancellation.
         //
-        //  (codex review finding): a degenerate-loop cutoff keeps
+        // (codex review finding): a degenerate-loop cutoff keeps
         // SubagentOutcome.status "completed" by design (the child's loop
         // reached its sentinel cleanly — see outcomeToResult's own comment on
         // the accepted internal/external mismatch). Left unchecked here, a
         // workflow step would read "completed" and its looping partial would
-        // satisfy a dependent step's input — exactly the failure  was
+        // satisfy a dependent step's input — exactly the failure was
         // filed to close, one layer up. Remapped to "error" (no new status
         // value — WorkflowStepOutcome's union already has one) using the
         // SAME existing WorkflowStepOutcome union, mirroring the timedOut
@@ -455,7 +455,7 @@ function createRunner(
           : sub.finalTurnFinishReason === "degenerate"
             ? "error"
             : sub.status;
-        // : `status` alone cannot say what finalText IS — the three
+        // `status` alone cannot say what finalText IS — the three
         // "error" producers above deposit three different things (a timeout
         // message, a degenerate loop's partial, the child's own error text).
         // Stamped here, at the only place that still holds the distinction,
@@ -471,7 +471,7 @@ function createRunner(
               : sub.status === "error"
                 ? "error"
                 : undefined;
-        // : the route notice rides a step that ran to a result, the
+        // the route notice rides a step that ran to a result, the
         // same way the Agent tool prefixes it; a cancelled step keeps its text.
         const shownText =
           routeNotice !== undefined && sub.status !== "cancelled"
@@ -499,7 +499,7 @@ function createRunner(
           durationMs: outcome.durationMs,
           ...(failure !== null ? { failure } : {}),
           ...(outcome.unlaunched === true ? { unlaunched: true } : {}),
-          //  slice S2: the step's FINAL spend, taken from the child's
+          // slice S2: the step's FINAL spend, taken from the child's
           // own outcome rather than from the last progress event — a step whose
           // final turn made no tool call emits its last progress before that
           // turn's spend is even known.
@@ -539,7 +539,7 @@ function createRunner(
       signal?.removeEventListener("abort", onRunAbort);
 
       // Never-launched steps (deps failed, or launches frozen) are skipped.
-      //  slice S3: each ALSO gets a synthetic step_end here, not just
+      // slice S3: each ALSO gets a synthetic step_end here, not just
       // a slot in the returned outcome array — until now a step that never
       // launched got no wire event at all (this map was the ONLY place its
       // "skipped" fact was recorded), so a client fed exclusively by
@@ -641,7 +641,7 @@ function sinkJoin(
 }
 
 /**
- * The run's step graph as carried on `start` ( slice S3): field-by-
+ * The run's step graph as carried on `start` (slice S3): field-by-
  * field, not `steps` verbatim — the engine's own WorkflowStepDefinition
  * carries promptTemplate/maxTurns too, neither of which belongs on the wire
  * (never rendered, and promptTemplate can hold arbitrary-length user content).
@@ -669,7 +669,7 @@ interface EngineStepRoute {
 }
 
 /**
- * : an engine-role step honours the role chain the Agent tool
+ * an engine-role step honours the role chain the Agent tool
  * honours. Returns null — the profile request stands — when the
  * port has no resolver or the route has no skips (healthy primary or md-claimed
  * profile). Otherwise the primary is cooling: a healthy later entry runs
@@ -762,7 +762,7 @@ export function createWorkflowRunnerForTest(
  * Wiring helper: attaches a WorkflowPort to `config` AFTER withSubagents (design
  * §2.10). Reads `config.subagents`; if absent, attaches NOTHING (the Workflow
  * tool stays fail-closed "unavailable"). Mutates and returns the same config.
- * Also reads `config.sessionSubagents`: when present, engine-profile
+ * Also reads `config.sessionSubagents` when present, engine-profile
  * steps run through it as child sessions; when absent, they fail closed.
  * A child loop is created WITHOUT this helper, so it receives no port
  * (non-recursion lock).

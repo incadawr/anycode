@@ -1,5 +1,5 @@
 /**
- * Production-wiring test ( E1 §1.2/§7): proves that main/index.ts's
+ * Production-wiring test (E1 §1.2/§7): proves that main/index.ts's
  * TWO settings-mutation hooks (the generic settings-set + connection-CRUD path
  * wired through `settingsIpcDeps.onMutation`, and the custom-provider CRUD
  * path wired through `registerProviderIpc`'s own `onMutation`) actually
@@ -252,7 +252,7 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
-describe("main/index.ts — recognizer live-push wiring ( E1)", () => {
+describe("main/index.ts — recognizer live-push wiring (E1)", () => {
   it("stays silent on an unrelated mutation, pushes the resolved secret when the recognizer setting actually changes, and refuses deleting its connection", async () => {
     await import("./index.js");
 
@@ -333,11 +333,11 @@ describe("main/index.ts — recognizer live-push wiring ( E1)", () => {
     expect(deleteResult).toMatchObject({ ok: false, reason: "connection_in_use" });
   });
 
-  // : an API-key rotation moves NO fingerprint field (the deliberate
+  // an API-key rotation moves NO fingerprint field (the deliberate
   // no-vault-read property), so the push-side `onSecretWritten` sentinel is
   // the only thing that can carry it — rotating the recognizer connection's
   // OWN key must force a second push; rotating an UNRELATED key must not.
-  it(": rotating the recognizer connection's key force-pushes; rotating an unrelated key stays silent", async () => {
+  it("rotating the recognizer connection's key force-pushes; rotating an unrelated key stays silent", async () => {
     await import("./index.js");
 
     const handleTabCreate = await waitForHandler(TAB_CREATE_CHANNEL);
@@ -394,12 +394,12 @@ describe("main/index.ts — recognizer live-push wiring ( E1)", () => {
     expect(recognizerPushes(rootHost)).toHaveLength(2);
   });
 
-  //  second half: a custom-provider recognizer connection. Its
+  // second half: a custom-provider recognizer connection. Its
   // credential and address both live on the CustomProviderRecord, so the
   // fingerprint now mirrors the record's baseUrl (push fires on a baseUrl
   // edit with no key change) and `onSecretWritten` covers a key rotation
   // through the provider channel.
-  it(": a custom-provider recognizer connection pushes when its record's key rotates and when its record's baseUrl is edited", async () => {
+  it("a custom-provider recognizer connection pushes when its record's key rotates and when its record's baseUrl is edited", async () => {
     await writeFile(
       join(dir, "settings.json"),
       JSON.stringify({

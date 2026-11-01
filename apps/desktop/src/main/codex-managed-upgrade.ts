@@ -142,12 +142,12 @@ export interface CodexManagedUpgradeDeps {
    */
   swapBinaryPath: (expected: string, next: string) => Promise<CodexBinaryPathSwapResult>;
   /**
-   * The doctor source env for the post-upgrade gate ( §2 case (e)):
+   * The doctor source env for the post-upgrade gate (§2 case (e)):
    * main wires the identical `codexDoctorSourceEnv` every other main-spawned
    * probe reads through, so the gate honours `settings.codex.proxyUrl`.
    */
   doctorSourceEnv?: () => NodeJS.ProcessEnv;
-  /** : MAIN's own relay URL, threaded to the post-upgrade doctor (fail-closed drop when absent). */
+  /** MAIN's own relay URL, threaded to the post-upgrade doctor (fail-closed drop when absent). */
   relayUrl?: () => string | undefined;
   /** Fired after a successful upgrade so main pushes ENGINES_CHANGED and rechecks. */
   onChanged?: () => void;

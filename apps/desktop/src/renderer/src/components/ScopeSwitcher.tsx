@@ -1,10 +1,10 @@
 /**
- * : ONE scope dropdown for the Settings panes that read or write a
+ * ONE scope dropdown for the Settings panes that read or write a
  * config folder (MCP servers, Language servers, Skills, Subagents). The
  * trigger shows "User · This computer" or a recent folder; the menu lists the
  * user scope first, then the folders main reports (open tabs and recent root
  * sessions). The selection is an opaque id; the renderer never handles a path
- * for a request. Replaces the  Global/Project switcher.
+ * for a request. Replaces the Global/Project switcher.
  */
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactElement, type Ref } from "react";
 import { Check, Chevron, Folder } from "./icons.js";

@@ -478,7 +478,7 @@ export function renderEvent(
       break;
     }
     case "error": {
-      // event.retry ( W7b) is additive-optional: absent for any error
+      // event.retry (W7b) is additive-optional: absent for any error
       // event a pre-W7b core emitted, so the base line stays byte-identical.
       // Only surfaced when at least one retry actually happened this turn — a
       // never-retried failure needs no "after N attempts" annotation.
@@ -507,7 +507,7 @@ export function renderEvent(
     }
     // One granted extension of the turn ceiling. Every grant is
     // visible: the line names the round, what it bought, the running total and
-    // what the model said still remains. /4055: an adaptive-mode grant
+    // what the model said still remains. an adaptive-mode grant
     // renders its own line — the productive-tool count is the progress the
     // grant was actually priced on, so it belongs next to the total.
     case "ceiling_grant":
@@ -533,10 +533,10 @@ export function renderEvent(
       );
       break;
     case "loop_end":
-      // Since  the turn cap is a decision point, not a setting to raise:
+      // Since the turn cap is a decision point, not a setting to raise:
       // the ladder already asked and either granted (a ceiling_grant line above)
       // or refused. Pointing at Settings/ANYCODE_MAX_TURNS would name an action
-      // that is no longer the one that happened. : the line now
+      // that is no longer the one that happened. the line now
       // names the ONE action that works — a new message continues on the same
       // history with a fresh turn budget (the interactive REPL already accepts
       // the next message; `--print` is headless-by-contract and out of scope).
@@ -548,7 +548,7 @@ export function renderEvent(
       break;
     case "stream_retry": {
       // Past the announced total (a network-budget retry) the total is dropped.
-      // : the delay is shown in seconds, one decimal (no float ms).
+      // the delay is shown in seconds, one decimal (no float ms).
       // Review F5: a retry after a recovered network wait fires at once — the
       // wait duration rides waitedMs, never as a pending "in N s" delay.
       if (event.waitedMs !== undefined) {
@@ -661,7 +661,7 @@ export function renderEvent(
             `${event.unlaunched === true ? ", not launched" : ""}): turns=${event.turns} durationMs=${event.durationMs}\n`,
         ),
       );
-      // : a step's failure reason, one terse line — the kind labels
+      // a step's failure reason, one terse line — the kind labels
       // what the text IS (an error message vs. an unfinished partial), so a
       // reader never mistakes a cut-off partial for a finished report.
       if (event.failure !== undefined) {

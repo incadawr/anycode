@@ -1,6 +1,6 @@
 /**
  * Pure projection of a Codex `thread/read` result into core `HistoryItem[]`
- * (, cut §2(e)/§3.6). AnyCode NEVER persists a Codex transcript itself
+ * (cut §2(e)/§3.6). AnyCode NEVER persists a Codex transcript itself
  * — the native thread is the single source of truth for text/file history,
  * merged with AnyCode's own narrow command shadow log (cut §2(e): native
  * `thread/read` never persists `commandExecution` items, not even successful

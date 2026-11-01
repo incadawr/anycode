@@ -108,7 +108,7 @@ describe("discoverPlugins — empty world", () => {
   it("returns an all-empty result at zero readdir cost when neither plugins root exists", async () => {
     const fs = makeFs({});
     const result = await discoverPlugins(fs, { workspace: WORKSPACE, home: HOME, claimedMcpNames: new Set() });
-    //  S1-A: the result gains workflowRoots (additive; still empty
+    // S1-A: the result gains workflowRoots (additive; still empty
     // in the no-plugin world).
     expect(result).toMatchObject({
       skillRoots: [],
@@ -267,7 +267,7 @@ describe("discoverPlugins — mcpServers rename + cwd defaulting", () => {
   });
 });
 
-describe("discoverPlugins — ${secret:NAME} in plugin MCP servers (, part C)", () => {
+describe("discoverPlugins — ${secret:NAME} in plugin MCP servers (part C)", () => {
   it("resolves a plugin server's ${secret:} through the injected resolver", async () => {
     const fs = makeFs({
       dirs: { [PROJECT_PLUGINS]: ["sp"] },
@@ -575,7 +575,7 @@ describe("discoverPlugins — real integration (tmpdir manifest + real fixture-s
         sideEffectScope: "process",
         timeoutMs: MCP_CALL_TIMEOUT_MS,
         maxOutputBytes: MCP_RESULT_MAX_BYTES,
-        // : the model budget is tighter than the inline cap above.
+        // the model budget is tighter than the inline cap above.
         resultBudget: { maxModelBytes: MCP_RESULT_MAX_MODEL_BYTES },
       };
       expect(echoTool!.metadata).toEqual(expectedMetadata);

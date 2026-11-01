@@ -1,6 +1,6 @@
 /**
- * artifacts-wire ( / ): proves the desktop wires the
- * artifact store that the CLI already has (cli/main.ts  wiring) but the
+ * artifacts-wire: proves the desktop wires the
+ * artifact store that the CLI already has (cli/main.ts wiring) but the
  * desktop lacked — an oversized Bash result was truncated with no path back.
  *
  * What is pinned here and why:
@@ -8,7 +8,7 @@
  *   (a) Barrel proof: `NodeArtifactStore` and `ARTIFACT_MAX_AGE_MS` are
  *       importable from `@anycode/core`'s ROOT (the desktop imports core only
  *       via the root barrel and registered subpaths — see package.json exports;
- *       pre- neither symbol was on it).
+ *       neither symbol was on it).
  *   (b) Harness threading: the HarnessOptions `artifacts` seam lands in
  *       AgentLoopConfig.artifacts as the SAME reference; omitted -> the config
  *       literal has no `artifacts` at all (spill degrades to truncation,
@@ -31,7 +31,7 @@ import { ARTIFACT_MAX_AGE_MS, NodeArtifactStore } from "@anycode/core";
 import { artifactsRootFor } from "../shared/artifacts-root.js";
 import { createHarness, finishStep, textStep } from "./test-harness.js";
 
-describe("artifacts-wire — desktop wires the  artifact store", () => {
+describe("artifacts-wire — desktop wires the artifact store", () => {
   it("barrel proof: NodeArtifactStore and ARTIFACT_MAX_AGE_MS are on the @anycode/core root", () => {
     expect(typeof NodeArtifactStore).toBe("function");
     expect(ARTIFACT_MAX_AGE_MS).toBe(7 * 24 * 60 * 60 * 1000);

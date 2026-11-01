@@ -1,5 +1,5 @@
 /**
- * The right-side tabbed dock (, docs/development/dock.md):
+ * The right-side tabbed dock (docs/development/dock.md):
  * one column, one tab per side surface (preview:<id> / subagents / git), a
  * scrollable tab strip, and the ACTIVE tab's body only. Geometry (width
  * clamp, column/drawer mode) is computed by the caller (App.tsx) from the
@@ -79,7 +79,7 @@ export function DockPanel({ mode, width, onToast, subagents, canSplitNow, splitT
   }
   const { tabId } = ctx;
 
-  // : the tab set renders ONLY through the owner-gated
+  // the tab set renders ONLY through the owner-gated
   // `selectDockView` — the store is global across conversation tabs, and an
   // un-gated read would paint another tab's strip for one frame on switch.
   // `splitTabId` arrives as a prop (App.tsx already gates it the same way).

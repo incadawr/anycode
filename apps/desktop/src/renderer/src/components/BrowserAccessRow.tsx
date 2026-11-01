@@ -1,5 +1,5 @@
 /**
- * "Full browser access" per-session switch ( owner amendment), shown
+ * "Full browser access" per-session switch (owner amendment), shown
  * as a row in the tab's environment dropdown beside SessionAccessRow. It toggles
  * only THIS tab, by tabId; main resolves the session and the EFFECTIVE value
  * (trust-gated). Turning it ON asks first; turning it OFF is immediate.

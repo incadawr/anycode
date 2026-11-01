@@ -136,7 +136,7 @@ export async function generateSessionTitle(opts: {
       if (event.type === "text_delta") {
         raw += event.text;
       } else if (event.type === "stream_retry") {
-        //  review: a mid-stream replay discards the partial attempt.
+        // review: a mid-stream replay discards the partial attempt.
         raw = "";
       } else if (event.type === "error") {
         return null;

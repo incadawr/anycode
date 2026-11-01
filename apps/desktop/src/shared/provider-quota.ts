@@ -1,6 +1,7 @@
 /**
- * Control-plane contract for the host→main provider-quota signal ( /  follow-up). The exact `shared/provider-health.ts` precedent
- * ( W11): posted on `process.parentPort` by a CORE-engine host session
+ * Control-plane contract for the host→main provider-quota signal (
+ * 4090 / follow-up). The exact `shared/provider-health.ts` precedent
+ * (W11): posted on `process.parentPort` by a CORE-engine host session
  * when the model port yields a `provider_quota` ModelStreamEvent, and matched
  * by `type` in `TabHostManager.handleHostMessage` (main/tabs.ts), which
  * already knows the per-tab pinned connectionId this proc belongs to — the

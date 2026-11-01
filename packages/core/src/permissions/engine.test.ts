@@ -258,14 +258,14 @@ describe("ModePermissionEngine — mode × 11-tool snapshot (real tool metadata)
 });
 
 /**
- *  honest Edit mode (CUT-S1 §7a): a Write/Edit whose dispatch-site-
+ * honest Edit mode (CUT-S1 §7a): a Write/Edit whose dispatch-site-
  * resolved target provably sits inside the workspace is allowed TERMINALLY in
  * edit mode — before baseRuling's needsApproval escalation ever sees it (DV-4).
  * Uses REAL writeTool/editTool/bashTool metadata (needsApproval:true) so a
  * naive implementation that teaches baseRuling's edit branch to allow (and
  * lets the later escalation re-ask) goes red here.
  */
-describe("ModePermissionEngine —  edit-mode workspace containment", () => {
+describe("ModePermissionEngine — edit-mode workspace containment", () => {
   const engine = new ModePermissionEngine();
 
   const facts = (root: string, resolvedPath: string) => ({ root, resolvedPath });

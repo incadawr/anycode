@@ -106,7 +106,7 @@ describe("buildLspCatalogLookup", () => {
   });
 });
 
-describe("resolveLspRowState (: Not installed vs Not started)", () => {
+describe("resolveLspRowState (Not installed vs Not started)", () => {
   it("a lazy not_started server whose binary the catalog reports missing becomes not_installed", () => {
     const lookup = buildLspCatalogLookup(catalogStatus([{ id: "typescript", found: false, installHint: "npm i -g typescript" }]));
     expect(resolveLspRowState(server({ name: "typescript", state: "not_started" }), lookup).state).toBe("not_installed");

@@ -1,5 +1,5 @@
 /**
- * in-process-server.ts tests ( срез S2, план §3.4/§5).
+ * in-process-server.ts tests (срез S2, план §3.4/§5).
  *
  * `createInProcessMcpServer` is proven the same way manager.test.ts proves the
  * client side — hermetically, over `InMemoryTransport.createLinkedPair()` with
@@ -92,7 +92,7 @@ describe("createInProcessMcpServer (SDK Client over InMemoryTransport.createLink
     expect(result.content).toEqual([{ type: "text", text: "Unknown agent_type." }]);
   });
 
-  //  B1/B2: the additive `images` field on McpToolCallResult.
+  // B1/B2: the additive `images` field on McpToolCallResult.
   it("B1: a callTool result without images yields exactly one text content block (pre-4764 shape preserved)", async () => {
     const { client } = await connectedClient({
       listTools: () => [AGENT_DECL],
@@ -303,7 +303,7 @@ describe("ControlChannelTransport (hand-driven control-channel envelopes, no SDK
   });
 });
 
-//  (supervisor correction 6): the Claude MCP transport's result path —
+// (supervisor correction 6): the Claude MCP transport's result path —
 // a REAL runAgentBridgeCall delegation (mocked session port) projected through
 // createInProcessMcpServer and read back over a real SDK Client, proving the
 // child-session id + continue_session hint reach the wire verbatim.

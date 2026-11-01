@@ -13,7 +13,7 @@
 /** Resolved server spec (post config: env already built, ${env:VAR} substituted). */
 export interface McpStdioServerSpec {
   /**
-   * Values a `${secret:NAME}` reference resolved to. Set only by the
+   * Values a `${secret:NAME}` reference resolved. Set only by the
    * config resolver, used only to redact diagnostics; never serialized to a status,
    * a problem, or an engine config file (see mcp-forward-boot).
    */

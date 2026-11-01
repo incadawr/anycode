@@ -1,5 +1,5 @@
 /**
- * : render tests for the scope dropdown. The renderer package runs
+ * render tests for the scope dropdown. The renderer package runs
  * vitest in node, so markup is checked with renderToStaticMarkup, mirroring
  * SessionAccessRow.test.ts. The open menu is rendered through the exported
  * ScopeMenuView; keyboard movement is pinned through nextActiveIndex.

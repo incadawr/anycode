@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 import { createTabsStore, HIDDEN_WORKSPACES_KEY, type StorageLike } from "./tabs-store.js";
 
-describe("availableEngines (, design/slice-codex-fixes-cut.md §2(g)/§5.5)", () => {
+describe("availableEngines (design/slice-codex-fixes-cut.md §2(g)/§5.5)", () => {
   it("defaults to ['core'] before any fetch — Core never depends on external diagnosis", () => {
     const store = createTabsStore();
     expect(store.getState().availableEngines).toEqual(["core"]);
@@ -178,7 +178,7 @@ describe("tabs-store", () => {
     expect(store.getState().tabs[0]?.lspPanelOpen).toBe(false);
   });
 
-  it("opening one right drawer closes the others on the same tab after the Timeline panel's removal (: lsp/hooks/tasks remain mutually exclusive)", () => {
+  it("opening one right drawer closes the others on the same tab after the Timeline panel's removal (lsp/hooks/tasks remain mutually exclusive)", () => {
     const store = createTabsStore();
     store.getState().addTab({ tabId: "a", workspace: "/ws/a" });
 
@@ -410,7 +410,7 @@ describe("tabs-store draft slot (slice P7.12, §4.1)", () => {
     expect(store.getState().draft?.codexProfileId).toBeUndefined();
   });
 
-  it("setDraftConnectionId sets the draft's cross-connection model pick, absent until then ( cut-1 stage A)", () => {
+  it("setDraftConnectionId sets the draft's cross-connection model pick, absent until then (cut-1 stage A)", () => {
     const store = createTabsStore();
     store.getState().openDraft("/ws/a");
     expect(store.getState().draft?.connectionId).toBeUndefined();

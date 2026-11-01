@@ -1,5 +1,5 @@
 /**
- * Unit tests for the proxy spawn-probe ( §6).
+ * Unit tests for the proxy spawn-probe (§6).
  *
  * The classifier is exercised over the `MEASURED_*` fixtures — the error shapes
  * LIVE-MEASURED on 2026-08-22 against local stub proxies on this repo's runtime

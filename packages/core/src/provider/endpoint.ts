@@ -1,6 +1,6 @@
 /**
  * Transport-aware endpoint config: the single config object every provider
- * factory consumes ( §0.4). It is provider-neutral by content — baseUrl,
+ * factory consumes (§0.4). It is provider-neutral by content — baseUrl,
  * model, auth, headers, retry — and carries the wire protocol as an explicit
  * discriminant.
  */
@@ -37,7 +37,7 @@ export interface EndpointConfig {
   /**
    * Ask the endpoint to stream token usage (`stream_options.include_usage` on
    * the OpenAI chat-completions transport). The transport-conditional DEFAULT
-   * is owned by `resolveIncludeUsage`: production construction
+   * is owned by `resolveIncludeUsage` production construction
    * sites resolve it once per boot and only spread the field in on an
    * affirmative verdict, so an explicit false here means "omit
    * stream_options" — the `ANYCODE_INCLUDE_USAGE=0|false|off` strict-server
@@ -69,7 +69,7 @@ export interface EndpointConfig {
    */
   networkWaiter?: NetworkWaiter;
   /**
-   *  review F2: labels this port's `waiting_for_network` and
+   * review F2: labels this port's `waiting_for_network` and
    * recovery `stream_retry` events with WHO is waiting — the parent loop's
    * own port ("parent") or an inline-subagent child's ("subagent"). A host
    * where both can park at once (they share one network) uses the label so
@@ -118,7 +118,7 @@ export type AnthropicEndpointConfig = EndpointConfig;
 /**
  * Base-URL policy for endpoints whose prefix is EXPLICIT (both OpenAI
  * transports): trim, reject empty, strip trailing slashes — and nothing else
- * ( §0.5). Notably it does NOT append `/v1`: the catalog/settings hold the
+ * (§0.5). Notably it does NOT append `/v1`: the catalog/settings hold the
  * complete prefix (`https://api.openai.com/v1`, `http://localhost:8000/v1`,
  * `https://gw.example/api/openai`), and guessing a suffix would make valid
  * non-standard prefixes unexpressible. `normalizeAnthropicBaseUrl` keeps its

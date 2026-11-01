@@ -26,14 +26,14 @@ files:
   - "!out/**/*smoke*/**"
   - "!**/*.map"
 
-# : the user documentation tree ships beside app.asar, so the
+# the user documentation tree ships beside app.asar, so the
 # built-in anycode-setup skill can Read it from process.resourcesPath/docs/user
 # (host/anycode-setup-docs.ts). `from` is relative to this project directory
 # (apps/desktop); the tree is copied as plain files, not packed into asar.
 extraResources:
   - from: ../../docs/user
     to: docs/user
-  # : the stdio adapter the Sessions API copies to userData (main/communication-adapter.ts).
+  # the stdio adapter the Sessions API copies to userData (main/communication-adapter.ts).
   - from: ../../examples/agent-communication/stdio.mjs
     to: agent-communication/stdio.mjs
 
@@ -98,7 +98,7 @@ linux:
 # electron-builder publishers against the same tag) — this block's ONLY live
 # effect today is what it writes into app-update.yml inside the packaged app.
 #
-# releaseType: release ( defect 1, corrected by W14-fix) — `releaseType`
+# releaseType: release (defect 1, corrected by W14-fix) — `releaseType`
 # is publisher-side metadata electron-builder writes into app-update.yml; the
 # CLIENT (electron-updater@6.8.9, verified against the installed package: zero
 # occurrences of "releaseType" in its source) never reads this field, so it has
@@ -109,7 +109,7 @@ linux:
 # human-reviewed draft gate is enforced by a completely separate mechanism, the
 # hardcoded `--draft` flag in `.github/workflows/release.yml`'s `gh` publisher
 # job, which this field cannot touch either way. So flipping this value never
-# was the fix for  defect 1's real bug (a stuck `not-available` status)
+# was the fix for defect 1's real bug (a stuck `not-available` status)
 # and never bypassed the owner's Publish step. Kept at "release" as config
 # hygiene — it is the value electron-builder ships once a `publish:` block is
 # configured at all — and as a deliberately narrow tripwire: scripts/

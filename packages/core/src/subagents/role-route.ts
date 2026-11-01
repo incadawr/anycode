@@ -1,5 +1,5 @@
 /**
- * Shared role-route types ( §3.2/§3.6). The chain shape is the
+ * Shared role-route types (§3.2/§3.6). The chain shape is the
  * contract between the HOST-side resolver (settings roles section + health
  * cache) and core's consumers (the inline runner chain walk and the Agent
  * tool's session-tier route stamping). Core deliberately carries NO catalog,
@@ -75,7 +75,7 @@ export function formatRoleFallbackNotice(agentType: string, skipped: readonly Ro
 
 /**
  * The request fields a role route stamps onto a FRESH session-tier spawn
- * ( §3.3 / R7, , ). Every key is optional
+ * (§3.3 / R7). Every key is optional
  * and omitted rather than undefined, so the spread keeps the request
  * byte-identical when nothing stamps.
  */
@@ -110,7 +110,7 @@ export function buildRoleRouteRequestFields(
     return {};
   }
   if (roleRoute.entries.length === 0) {
-    // : an exhausted chain has no entry to stamp, but the role's
+    // an exhausted chain has no entry to stamp, but the role's
     // turn budget still rides the spawn (the last resort keeps the role's cap).
     return caller.degraded && roleRoute.turnBudget !== undefined ? { maxTurns: roleRoute.turnBudget } : {};
   }

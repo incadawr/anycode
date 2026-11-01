@@ -23,7 +23,7 @@ vi.mock("ai", async (importOriginal) => {
   };
 });
 
-// : records every `createLanguageModel` call while still DELEGATING
+// records every `createLanguageModel` call while still DELEGATING
 // to the real implementation (no behaviour change for any existing test in
 // this file) — the include_usage probe's whole effect is baked into the
 // EndpointConfig passed to this call, not into `streamText`'s own args, so
@@ -71,7 +71,7 @@ describe("reasoningRequestOptions", () => {
     });
   });
 
-  //  (2026-08-28): docs.z.ai/guides/llm/glm-5.3 documents `low` as a
+  // (2026-08-28): docs.z.ai/guides/llm/glm-5.3 documents `low` as a
   // real, distinct effort tier (not just "off"), so the wire mapping must stop
   // silently upgrading it to `high` — that collapse would make the catalog's
   // now-honest `low` tier a fresh lie. z.ai documents no per-tier budget for
@@ -107,12 +107,12 @@ describe("reasoningRequestOptions", () => {
     expect(max.maxOutputTokens! + (max.providerOptions!.anthropic.thinking as { type: "enabled"; budgetTokens: number }).budgetTokens).toBe(131_072);
   });
 
-  // TASK 4241 (2026-10-10): DeepSeek declares distinct low/high/max effort
+  // (2026-10-10): DeepSeek declares distinct low/high/max effort
   // tiers (live GET /models facts, default high). The wire mapping sends the
   // enum VERBATIM via providerOptions.anthropic.effort with NO thinking
   // budget (no DeepSeek budget fact exists) and NO maxOutputTokens
   // arithmetic — unlike the default Anthropic path, `max` is preserved.
-  it("maps DeepSeek effort verbatim low/high/max with no thinking budget and untouched maxOutputTokens (TASK 4241)", () => {
+  it("maps DeepSeek effort verbatim low/high/max with no thinking budget and untouched maxOutputTokens", () => {
     const low = reasoningRequestOptions({ ...baseRequest, maxOutputTokens: 512, reasoningEffort: "low" }, "DeepSeek");
     expect(low).toEqual({ maxOutputTokens: 512, providerOptions: { anthropic: { effort: "low" } } });
     expect(low.providerOptions!.anthropic.thinking).toBeUndefined();
@@ -181,7 +181,7 @@ describe("reasoningRequestOptions", () => {
     ).toEqual({ maxOutputTokens: 512, providerOptions: { anthropic: { effort: "low" } } });
   });
 
-  it("provider isolation: the same request maps differently on Anthropic vs Z.AI (GLM) vs DeepSeek (TASK 4241)", () => {
+  it("provider isolation: the same request maps differently on Anthropic vs Z.AI (GLM) vs DeepSeek", () => {
     const request = { ...baseRequest, maxOutputTokens: 512, reasoningEffort: "high" } as const;
     const anthropic = reasoningRequestOptions({ ...request }, "Anthropic");
     expect(anthropic.providerOptions!.anthropic.thinking).toEqual({ type: "enabled", budgetTokens: 24_576 });
@@ -629,7 +629,7 @@ describe("AiSdkModelPort — retryable/non-retryable `error` stream parts", () =
 describe("AiSdkModelPort — W7a model-output retry gate (midStreamRetries disabled)", () => {
   const textDelta = (text: string) => ({ type: "text-delta", id: "t1", text });
   const toolCallPart = { type: "tool-call", toolCallId: "call_1", toolName: "Read", input: { file_path: "/a.txt" } };
-  // : these pin the gate for users who disable replay
+  // these pin the gate for users who disable replay
   // (midStreamRetries: 0); with replay on, a bounded mid-stream retry fires.
   const gateConfig = () => baseConfig({ maxRetries: 3, midStreamRetries: 0 });
 
@@ -986,7 +986,7 @@ describe("AiSdkModelPort — stall watchdog (design slice-2.3-cut.md, tail 4)", 
     expect(retryEvent.value).toMatchObject({
       type: "stream_retry",
       attempt: 1,
-      //  review: replays count inside maxRetries, so the announced
+      // review: replays count inside maxRetries, so the announced
       // total stays maxRetries even after a mid-stream stall replay.
       maxAttempts: 3,
       // W7b-FIX #3: the stall timeout is LOCALLY generated (never provider
@@ -1084,7 +1084,7 @@ describe("AiSdkModelPort — stall watchdog (design slice-2.3-cut.md, tail 4)", 
   });
 });
 
-describe("reasoningRequestOptions — transport branching ( §0.7)", () => {
+describe("reasoningRequestOptions — transport branching (§0.7)", () => {
   it("keeps the GLM bytes byte-identical when the anthropic transport is passed explicitly", () => {
     // Negative regression against the transport branch displacing the providerName
     // branch: a GLM endpoint speaks the Anthropic wire protocol, so an explicit
@@ -1191,7 +1191,7 @@ describe("reasoningRequestOptions — transport branching ( §0.7)", () => {
   });
 });
 
-describe("AiSdkModelPort — outgoing request bytes per transport ( §0.7)", () => {
+describe("AiSdkModelPort — outgoing request bytes per transport (§0.7)", () => {
   it("sends the pre-transport GLM request bytes for a GLM providerName on the anthropic transport", async () => {
     mockStreamText.mockImplementationOnce(() => fakeResult([part(finishPart)]));
     const port = new AiSdkModelPort({
@@ -1333,7 +1333,7 @@ describe("AiSdkModelPort — response-model provenance and identity readback", (
   });
 });
 
-describe("AiSdkModelPort —  include_usage probe (openai-chat-completions)", () => {
+describe("AiSdkModelPort — include_usage probe (openai-chat-completions)", () => {
   function chatConfig(overrides: Partial<EndpointConfig> = {}): EndpointConfig {
     return {
       transport: "openai-chat-completions",
@@ -1499,7 +1499,7 @@ describe("AiSdkModelPort —  include_usage probe (openai-chat-completions)", ()
 
     // The probe is confirmed (warned once) even though the retry pass itself
     // then hit an UNRELATED failure, which goes through the ordinary
-    // stream_retry/backoff mechanism exactly as it would without .
+    // stream_retry/backoff mechanism exactly as it would without.
     expect(diagnostics).toHaveLength(1);
     expect(events.filter((e) => e.type === "stream_retry")).toHaveLength(1);
     expect(events.find((e) => e.type === "finish")).toMatchObject({ type: "finish" });
@@ -1517,7 +1517,7 @@ describe("AiSdkModelPort —  include_usage probe (openai-chat-completions)", ()
 
 });
 
-it(" makes only one attempt for a measured proxy-auth failure", async () => {
+it("makes only one attempt for a measured proxy-auth failure", async () => {
   const error = new TypeError("fetch failed", { cause: new Error("Proxy response (407) !== 200 when HTTP Tunneling") });
   mockStreamText.mockImplementation(() => fakeResult([part(startPart), throwsWith(error)]));
   const port = new AiSdkModelPort(baseConfig({ maxRetries: 3 }));
@@ -1595,7 +1595,7 @@ describe("AiSdkModelPort — networkRetryBudgetMs (transient network outage)", (
     expect(events.at(-1)?.type).toBe("finish");
   });
 
-  it("fails after 3 retries when maxRetries is an explicit 3 and the budget is off (: default is now 8 + budget)", async () => {
+  it("fails after 3 retries when maxRetries is an explicit 3 and the budget is off (default is now 8 + budget)", async () => {
     failThenSucceed(9, connectTimeout);
     const port = new AiSdkModelPort(baseConfig({ ...slow, maxRetries: 3, networkRetryBudgetMs: 0 }));
     const result = await settle(collect(port.streamText(baseRequest)), 200_000);
@@ -1613,7 +1613,7 @@ describe("AiSdkModelPort — networkRetryBudgetMs (transient network outage)", (
 
   it.each([429, 401, 403, 500])(`never extends an HTTP %i beyond maxRetries`, async (status) => {
     failThenSucceed(9, () => statusError(status));
-    // : maxRetries pinned to 3 (the new default is 8) so the
+    // maxRetries pinned to 3 (the new default is 8) so the
     // <= 4 assertion keeps its original meaning: status errors never ride
     // the network budget.
     const port = new AiSdkModelPort(baseConfig({ ...slow, maxRetries: 3, networkRetryBudgetMs: 180_000 }));
@@ -1655,10 +1655,10 @@ describe("AiSdkModelPort — networkRetryBudgetMs (transient network outage)", (
   });
 });
 
-// : pre-content transient network failures park the turn in a
+// pre-content transient network failures park the turn in a
 // "waiting for network" state (probe ladder 5 s -> 60 s, hint-woken) instead of
 // failing it, bounded by networkWaitMaxMs on a monotonic clock.
-describe("AiSdkModelPort — networkWaitMaxMs (: wait for the network)", () => {
+describe("AiSdkModelPort — networkWaitMaxMs (wait for the network)", () => {
   function connectTimeout(): TypeError {
     return Object.assign(new TypeError("fetch failed"), {
       cause: Object.assign(new Error("Connect Timeout Error"), { code: "UND_ERR_CONNECT_TIMEOUT" }),
@@ -2010,7 +2010,7 @@ describe("AiSdkModelPort — networkWaitMaxMs (: wait for the network)", () => {
   });
 });
 
-// : the port's quota observation lifecycle. The
+// the port's quota observation lifecycle. The
 // constructor installs a port-owned shim over `config.onQuotaHeaders` (the
 // shim writes `#lastQuota` then forwards); the factories see that shim via
 // the config. Tests capture the shim from the config the factory received,
@@ -2274,7 +2274,7 @@ describe("AiSdkModelPort — mid-stream replay", () => {
 
 });
 
-describe("AiSdkModelPort —  review: replay gates", () => {
+describe("AiSdkModelPort — review: replay gates", () => {
   const textDelta = (text: string) => ({ type: "text-delta", id: "t1", text });
 
   it("never replays a step once a non-error finish was seen, even with replay enabled (error part)", async () => {
@@ -2311,7 +2311,7 @@ describe("AiSdkModelPort —  review: replay gates", () => {
       vi.useRealTimers();
     });
 
-    it("maxRetries: 0 disables a mid-stream replay on the stall path too ( review)", async () => {
+    it("maxRetries: 0 disables a mid-stream replay on the stall path too (review)", async () => {
       mockStreamText.mockImplementationOnce(() => ({
         fullStream: (async function* () {
           yield { type: "text-delta", id: "t1", text: "a" };
@@ -2366,7 +2366,7 @@ describe("AiSdkModelPort —  review: replay gates", () => {
       expect(mockStreamText).toHaveBeenCalledTimes(2);
     });
 
-    it("a stall after a non-error finish ends the step without replaying it ( review)", async () => {
+    it("a stall after a non-error finish ends the step without replaying it (review)", async () => {
       mockStreamText.mockImplementationOnce(() => ({
         fullStream: (async function* () {
           yield startPart;

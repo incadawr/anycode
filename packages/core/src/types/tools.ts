@@ -24,7 +24,7 @@ import type { ResultPreviewDirection } from "../util/result-budget.js";
 import type { ToolResultPresentation } from "./subagent-card.js";
 
 /**
- * Read-only image-registry lookup handed to tool handlers ( plan §2,
+ * Read-only image-registry lookup handed to tool handlers (plan §2,
  * slice B1): resolves the `#N` a blind-model stub named back to the actual
  * attachment bytes. Absence on ToolContext is the fail-closed lock for the
  * InspectImage tool (slice B2), which returns an "unavailable" outcome
@@ -149,7 +149,7 @@ export interface ToolContext {
    */
   subagents?: SubagentPort;
   /**
-   * Session-tier subagent entry ( CUT-S2 §2.2/§0.2): spawns a full
+   * Session-tier subagent entry (CUT-S2 §2.2/§0.2): spawns a full
    * child SESSION in its own process, distinct from the in-process `subagents`
    * port above. Optional by design and NEVER copied by buildChildConfig — its
    * physical absence is non-recursion lock #2 of 3 (the schema-level
@@ -199,7 +199,7 @@ export interface ToolContext {
    */
   media?: MediaCapabilityPort;
   /**
-   * Vision-fallback image registry ( plan §2, slice B1). Optional by
+   * Vision-fallback image registry (plan §2, slice B1). Optional by
    * design: its absence is the fail-closed lock — InspectImage (slice B2)
    * returns an "unavailable" error-outcome instead of reading history. A
    * child subagent receives no port (buildChildConfig does not copy it), so
@@ -248,7 +248,7 @@ export interface ToolContext {
    */
   artifacts?: ArtifactContext;
   /**
-   *  §3.3: true ONLY while this session tab runs in orchestrate
+   * §3.3: true ONLY while this session tab runs in orchestrate
    * mode (the host sets the loop flag; the dispatcher copies it here next to
    * cwd/ports). Read SOLELY by the Agent tool — an orchestrate session
    * defaults a `tier:"session"` call with no explicit detach/send_to/
@@ -285,7 +285,7 @@ export interface ToolResult<Out = unknown> {
    */
   control?: { type: "workspace_transition"; transition: WorkspaceTransition };
   /**
-   * Renderer-facing card presentation ( slice S1, CUT-S1 §2.3).
+   * Renderer-facing card presentation (slice S1, CUT-S1 §2.3).
    * NEVER model-visible: formatResultForModel/stringifyOutput never see this
    * field — it rides ToolCallOutcome.result straight into the ToolResultPart
    * via buildToolResultMessage (loop/agent-loop.ts), for persistence/hydration
@@ -347,7 +347,7 @@ export interface ToolDefinition<In = unknown, Out = unknown> {
   formatResultForModel?(result: ToolResult<Out>): string;
   /**
    * Renders the envelope shown to the model when this tool's oversized result
-   * was spilled to an artifact ( §2). Optional: without it the
+   * was spilled to an artifact (§2). Optional: without it the
    * dispatcher emits a generic `<persisted-output>` envelope. A tool overrides
    * it when the generic one would be actively unhelpful — Bash's persisted text
    * is a JSON BashOutput, and a raw JSON stump tells the model nothing about

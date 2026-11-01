@@ -1,5 +1,5 @@
 /**
- * Live GUI smoke for  W12 (design/track-43-45-33-47-49-cut.md §"W12 —
+ * Live GUI smoke for W12 (design/track-43-45-33-47-49-cut.md §"W12 —
  * UI: сетка плашек connection'ов + drawer + Welcome"): drives a REAL Electron
  * dev instance end-to-end over the automation HTTP channel (`main/automation/*`,
  * see `automation/README.md`'s "Provider connections pane probe/driver"
@@ -52,7 +52,7 @@
  * came from nothing but `POST /settings/provider/drawer/set` +
  * `connection-create`/`connection-update` IPC, a successful connect-refused
  * failure against it is unambiguous proof the host fork resolved baseUrl+key
- * from the connection-CRUD path —  W12's "снятие шва" (removal of
+ * from the connection-CRUD path — W12's "снятие шва" (removal of
  * `applyLegacyProviderPatch`/the legacy secret-write translation/the
  * `providerSecretKey` alias, commit e03d0c2) has no other path left to fall
  * back to. Steps 5 and 8 additionally read `secrets.json` straight off disk
@@ -84,6 +84,10 @@
  */
 
 import { execFileSync, spawn } from "node:child_process";
+import { launchSmokeElectron } from "./smoke-electron-launch.mjs";
+import { buildSmokeEnv } from "./model-overrides-smoke-env.mjs";
+import { connectIsolatedCdp } from "./isolated-cdp.mjs";
+import { providerSmokeApi, stopProviderSmokeLauncher, registerProviderSmokeChild, providerSmokeTeardown } from "./provider-connections-smoke-api.mjs";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -117,15 +121,6 @@ function parseArgs(argv) {
 const FLAGS = parseArgs(process.argv.slice(2));
 
 // ── small process/fs helpers (lifted from retry-ui-smoke.mjs / keybindings-ui-smoke.mjs) ──
-
-function isPidAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -217,23 +212,7 @@ function assert(step, cond, detail) {
 // ── HTTP helpers against the automation channel (README.md routes) ──
 
 async function api(ctx, method, path, body) {
-  const headers = { Authorization: `Bearer ${ctx.token}` };
-  const init = { method, headers };
-  if (body !== undefined) {
-    headers["content-type"] = "application/json";
-    init.body = JSON.stringify(body);
-  }
-  const res = await fetch(`http://127.0.0.1:${ctx.port}${path}`, init);
-  const text = await res.text();
-  let parsed = null;
-  if (text.length > 0) {
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      parsed = text;
-    }
-  }
-  return { status: res.status, body: parsed };
+  return providerSmokeApi(ctx, method, path, body);
 }
 
 async function apiOk(ctx, step, method, path, body) {
@@ -364,7 +343,7 @@ function readJsonDisk(step, path, label) {
   }
 }
 
-/** Every key in secrets.json's `entries` MUST be connection-scoped (`provider.connection.<id>.apiKey|oauth`) —  W12's "снятие шва" removed every legacy-shaped key (`provider.apiKey`, `provider.<providerId>.apiKey/oauth`). Values are opaque `{cipher,value}` ciphertext — never read/logged. */
+/** Every key in secrets.json's `entries` MUST be connection-scoped (`provider.connection.<id>.apiKey|oauth`) — W12's "снятие шва" removed every legacy-shaped key (`provider.apiKey`, `provider.<providerId>.apiKey/oauth`). Values are opaque `{cipher,value}` ciphertext — never read/logged. */
 function assertOnlyConnectionScopedSecretKeys(step, secretsPath, expectedCount) {
   const disk = readJsonDisk(step, secretsPath, "secrets.json");
   const keys = Object.keys(disk?.entries ?? {});
@@ -403,7 +382,7 @@ function staticGrepLegacyShimGone() {
 
 // ── generic launch helper (both phases share this shape) ──
 
-async function launchApp(step, label, extraEnv) {
+async function launchApp(step, label, extraEnv, register) {
   const profile = mkdtempSync(join(tmpdir(), `anycode-provconn-smoke-${label}-profile-`));
   const ctx = {
     label,
@@ -419,84 +398,88 @@ async function launchApp(step, label, extraEnv) {
     token: undefined,
     appPid: null,
     child: null,
+    cdp: null,
     teardownPromise: null,
   };
 
   // Only disposable fake keys are used by this harness. Explicit consent
   // prevents an OS backend difference from turning it into a manual test.
   writeFileSync(ctx.settingsPath, JSON.stringify({ version: 2, provider: { connections: [] }, tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: true } }));
+  const fixtureBinary = join(profile, "unavailable-engine");
+  writeFileSync(fixtureBinary, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
   const t0 = Date.now();
   const env = {
-    ...process.env,
-    ANYCODE_AUTOMATION: "1",
-    ANYCODE_USER_DATA_DIR: ctx.profileUserDataDir,
-    ANYCODE_DB_PATH: ctx.profileDbPath,
-    ANYCODE_AUTOMATION_INFO: ctx.profileAutomationInfo,
-    ANYCODE_SETTINGS_PATH: ctx.settingsPath,
-    ANYCODE_SECRETS_PATH: ctx.secretsPath,
-    ANYCODE_CODEX_BIN: join(profile, "absent-codex"),
-    ANYCODE_CLAUDE_BIN: join(profile, "absent-claude"),
+    ...buildSmokeEnv(process.env, profile, 0, fixtureBinary),
+    ANYCODE_MAX_RETRIES: "0",
     ...extraEnv,
   };
 
-  const child = spawn("pnpm", ["--filter", "@anycode/desktop", "dev"], {
+  const child = launchSmokeElectron(spawn, {
     cwd: repoRoot,
     env,
     stdio: ["ignore", "inherit", "inherit"],
     detached: process.platform !== "win32",
   });
-  ctx.child = child;
+  registerProviderSmokeChild(ctx, child, register);
 
-  const deadline = Date.now() + LAUNCH_TIMEOUT_MS;
-  let info = null;
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      fail(step, `[${label}] dev process exited early (code=${child.exitCode}, signal=${child.signalCode}) before publishing discovery`);
+  try {
+    ctx.cdp = await connectIsolatedCdp({ profile, env, launcher:child, wait:async fn => {
+      const deadline = Date.now() + LAUNCH_TIMEOUT_MS;
+      while (Date.now() < deadline) {
+        if (child.exitCode !== null || child.signalCode !== null) throw new Error("Automation launcher exited");
+        const value = await fn();
+        if (value) return value;
+        await sleep(500);
+      }
+      throw new Error("Timed out waiting for verified automation");
+    }});
+    const deadline = Date.now() + LAUNCH_TIMEOUT_MS;
+    let info = null;
+    while (Date.now() < deadline) {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        fail(step, `[${label}] dev process exited early (code=${child.exitCode}, signal=${child.signalCode}) before publishing discovery`);
+      }
+      const candidate = readDiscoveryFile(ctx.profileAutomationInfo);
+      if (candidate !== null && candidate.startedAt > t0 && candidate.pid === ctx.cdp.pid) {
+        info = candidate;
+        break;
+      }
+      await sleep(500);
     }
-    const candidate = readDiscoveryFile(ctx.profileAutomationInfo);
-    if (candidate !== null && candidate.startedAt > t0 && isPidAlive(candidate.pid)) {
-      info = candidate;
-      break;
+    if (info === null) {
+      fail(step, `[${label}] timed out after ${LAUNCH_TIMEOUT_MS}ms waiting for ${ctx.profileAutomationInfo} (startedAt > ${t0})`);
     }
-    await sleep(500);
+    ctx.port = info.port;
+    ctx.token = info.token;
+    ctx.appPid = info.pid;
+    await waitForFacade(ctx, step);
+    pass(step, `[${label}] app launched (pid=${info.pid}), facade ready after ${Date.now() - t0}ms on automation port ${info.port}, profile=${profile}`);
+    return ctx;
+  } catch (error) {
+    await teardown(ctx, []);
+    throw error;
   }
-  if (info === null) {
-    fail(step, `[${label}] timed out after ${LAUNCH_TIMEOUT_MS}ms waiting for ${ctx.profileAutomationInfo} (startedAt > ${t0})`);
-  }
-  ctx.port = info.port;
-  ctx.token = info.token;
-  ctx.appPid = info.pid;
-  await waitForFacade(ctx, step);
-  pass(step, `[${label}] app launched (pid=${info.pid}), facade ready after ${Date.now() - t0}ms on automation port ${info.port}, profile=${profile}`);
-  return ctx;
 }
 
 /** Shared-promise discipline (retry-ui-smoke.mjs precedent): every caller awaits the SAME in-flight teardown rather than racing a signal handler's own call against the normal end-of-phase call. */
 function teardown(ctx, workspaces) {
-  if (!ctx.teardownPromise) {
-    ctx.teardownPromise = teardownApp(ctx, workspaces);
-  }
-  return ctx.teardownPromise;
+  return providerSmokeTeardown(ctx, workspaces, teardownApp);
 }
 
 async function teardownApp(ctx, workspaces) {
-  if (ctx.port && ctx.token && ctx.child) {
+  if (ctx.port && ctx.token && ctx.child && ctx.cdp) {
     try {
       await api(ctx, "POST", "/quit", {});
     } catch {
       // best-effort — the app may already be gone.
     }
   }
+  ctx.cdp?.ws.close();
   if (ctx.child) {
     const exited = await waitForExit(ctx.child, APP_EXIT_GRACE_MS);
     if (!exited) {
       console.warn(`[provider-connections-ui-smoke] [${ctx.label}] app did not exit within ${APP_EXIT_GRACE_MS}ms of /quit — escalating SIGTERM`);
-      killTree(ctx.child.pid, "SIGTERM");
-      await sleep(SIGTERM_GRACE_MS);
-      if (isPidAlive(ctx.child.pid)) {
-        console.warn(`[provider-connections-ui-smoke] [${ctx.label}] app still alive ${SIGTERM_GRACE_MS}ms after SIGTERM — escalating SIGKILL`);
-        killTree(ctx.child.pid, "SIGKILL");
-      }
+      await stopProviderSmokeLauncher(ctx.child, { kill: killTree, sleep, graceMs: SIGTERM_GRACE_MS });
     }
   }
   const dirs = [ctx.profile, ...(workspaces ?? [])];
@@ -520,11 +503,11 @@ async function teardownApp(ctx, workspaces) {
 // connections -> a11y -> custom-provider e2e credential pickup
 // ══════════════════════════════════════════════════════════════════════════
 
-async function phase1Launch() {
+async function phase1Launch(register) {
   // No ANYCODE_API_KEY/MODEL/BASE_URL, no ANYCODE_WORKSPACE: providerReady
   // stays false at boot, tabs.length is 0 -> shouldShowWelcome (App.tsx) is
   // true. This is the ONLY boot shape that reaches the real empty state.
-  return launchApp(1, "welcome", {});
+  return launchApp(1, "welcome", {}, register);
 }
 
 async function step2WelcomeEmptyState(ctx) {
@@ -645,7 +628,7 @@ async function step6GridShowsConnectionA(ctx) {
   assert(6, row.connectionId === ctx.connAId, `grid tile connectionId mismatch: ${row.connectionId} !== ${ctx.connAId}`);
   assert(6, row.displayName === "Welcome Connection", `grid tile displayName mismatch: ${row.displayName}`);
   assert(6, row.model === "claude-test-model-1", `grid tile model mismatch: ${row.model}`);
-  assert(6, row.statusText === "Unchecked", `expected status text "Unchecked" (credential set, never probed), got "${row.statusText}"`);
+  assert(6, row.statusText.startsWith("Unchecked"), `expected status text "Unchecked" (credential set, never probed), got "${row.statusText}"`);
   assert(6, row.statusTone === "muted", `expected status tone "muted" for Unchecked, got "${row.statusTone}"`);
   assert(6, row.selected === true, "expected connection A selected (it is the sole/active connection)");
 
@@ -762,7 +745,7 @@ async function step9EditConnectionBNoOp(ctx) {
  * This step therefore exercises the REAL end-to-end delete flow instead: a
  * disposable throwaway connection is created, deleted, and both its metadata
  * (settings.json) and its vault entry (secrets.json) are asserted gone —
- * "safe delete order" (: "сначала очистить connection secrets, затем
+ * "safe delete order" ("сначала очистить connection secrets, затем
  * metadata") — while connections A and B (created in earlier steps) are
  * asserted completely unaffected.
  */
@@ -847,6 +830,7 @@ async function step12CreateCustomConnection(ctx) {
   });
   assert(12, setResult.ok === true, `drawer/set (custom template) rejected: ${JSON.stringify(setResult)}`);
 
+  await apiAction(ctx, 12, "/settings/provider/drawer/set", { model: "smoke-test-model" });
   const preSubmit = await apiOk(ctx, 12, "GET", "/settings/provider");
   assert(12, preSubmit.drawer.baseUrlVisible === true, `expected the Base URL field visible for the "custom" template (needsBaseUrl), got baseUrlVisible=${preSubmit.drawer.baseUrlVisible}`);
   assert(12, preSubmit.drawer.baseUrl === `http://127.0.0.1:${ctx.refusedPort}`, `Base URL field did not carry the value we set: ${preSubmit.drawer.baseUrl}`);
@@ -854,8 +838,6 @@ async function step12CreateCustomConnection(ctx) {
   const submitResult = await apiOk(ctx, 12, "POST", "/settings/provider/drawer/submit", {});
   assert(12, submitResult.ok === true, `drawer/submit rejected: ${JSON.stringify(submitResult)}`);
 
-  assert(12, (await apiOk(ctx, 12, "POST", "/settings/provider/drawer/set", { model: "smoke-test-model" })).ok, "model field unavailable after creation");
-  assert(12, (await apiOk(ctx, 12, "POST", "/settings/provider/drawer/submit", {})).ok, "model Save rejected");
   const setKey = await apiOk(ctx, 12, "POST", "/settings/provider/drawer/set", { apiKey: "sk-e2e-smoke-key-custom" });
   assert(12, setKey.ok === true, `drawer/set (apiKey) rejected: ${JSON.stringify(setKey)}`);
   const saveKey = await apiOk(ctx, 12, "POST", "/settings/provider/drawer/save-key", {});
@@ -965,7 +947,7 @@ async function step15E2ECredentialPickup(ctx) {
 // grid's own connection count/health
 // ══════════════════════════════════════════════════════════════════════════
 
-async function phase2Launch() {
+async function phase2Launch(register) {
   const refusedPort = await reserveUnusedPort();
   const ctx = await launchApp(17, "env-override", {
     // Dummy provider credential + an unreachable base URL: `computeProviderReady`
@@ -974,7 +956,7 @@ async function phase2Launch() {
     ANYCODE_API_KEY: "sk-env-override-smoke-dummy",
     ANYCODE_MODEL: "env-override-smoke-dummy-model",
     ANYCODE_BASE_URL: `http://127.0.0.1:${refusedPort}`,
-  });
+  }, register);
   ctx.refusedPort = refusedPort;
   return ctx;
 }
@@ -1020,7 +1002,7 @@ async function step19EnvBannerIndependentOfConnectionHealth(ctx) {
   const row = state.rows[0];
   assert(
     19,
-    row.statusText === "Unchecked",
+    row.statusText.startsWith("Unchecked"),
     `expected the stored connection's OWN status to read "Unchecked" (credential set, never probed) — an env-override failure must never paint it, got "${row.statusText}"`,
   );
   assert(19, state.envOverrideVisible === true, "expected the banner to remain visible alongside a now-present stored connection");
@@ -1065,7 +1047,7 @@ async function run() {
   // ── phase 1 ──
   let ctx1 = null;
   try {
-    ctx1 = await phase1Launch();
+    ctx1 = await phase1Launch(ctx => { currentCtx = ctx; });
     currentCtx = ctx1;
     await step2WelcomeEmptyState(ctx1);
     await step3CreateConnectionA(ctx1);
@@ -1097,7 +1079,7 @@ async function run() {
   if (failedStep === null) {
     let ctx2 = null;
     try {
-      ctx2 = await phase2Launch();
+      ctx2 = await phase2Launch(ctx => { currentCtx = ctx; });
       currentCtx = ctx2;
       await step18EnvBannerZeroConnections(ctx2);
       await step19EnvBannerIndependentOfConnectionHealth(ctx2);

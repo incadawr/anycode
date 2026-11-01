@@ -1,5 +1,5 @@
 /**
- * : the desktop host's turn-budget history — the one place core's
+ * the desktop host's turn-budget history — the one place core's
  * learned base budget is fed from and read back.
  *
  * Storage is a JSONL append log at `<home>/.anycode/turn-budget-history.jsonl`

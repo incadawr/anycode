@@ -1,12 +1,12 @@
 /**
- * Background-tasks drawer ( / ): the native engine's
+ * Background-tasks drawer: the native engine's
  * `run_in_background` Bash tasks (InProcessTaskManager) as a per-tab right
  * drawer. The wire (`task_list`/`task_output`/`task_kill_result`), the host
  * pushes and the store slice all pre-exist; this panel is the missing reader
  * + sender. Mirrors TimelinePanel/HooksPanel chrome exactly (`lsp-panel*`
  * classes, right-drawer placement, its own `session-header`-owned open flag).
  *
- * Refresh cadence (v2,  follow-up): on open
+ * Refresh cadence (v2, follow-up): on open
  * (`task_list_request` here), after every turn teardown, AND on the host's
  * idle task-settled push (a task that exits BETWEEN turns now updates its
  * row live — `session.ts`'s `onTaskSettled` subscription). While the drawer

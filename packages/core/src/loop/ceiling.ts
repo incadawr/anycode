@@ -1,5 +1,5 @@
 /**
- * Turn-ceiling decision ladder ( cut-1). The turn cap stops being a
+ * Turn-ceiling decision ladder (cut-1). The turn cap stops being a
  * wall and becomes a DECISION POINT: when a loop reaches it, one structured
  * model call decides whether the run may continue, and each granted extension
  * is strictly smaller than the last (N/2, N/4, N/8), capped at
@@ -54,15 +54,15 @@ export interface CeilingConfig {
   outcomeDeadlineAt?: number;
   /**
    * Evaluated when the ceiling would trip: `true` = a human is supervising
-   * this root session, so no ceiling applies at all (, owner rule
+   * this root session, so no ceiling applies at all (owner rule
    * 2026-08-22). Absent for children, which always keep the ladder. A LIVE
    * predicate rather than a snapshot: the supervision signal (e.g. the
-   * desktop's  unattended latch) can flip mid-session, so a value
+   * desktop's unattended latch) can flip mid-session, so a value
    * captured at construction time would go stale within minutes.
    */
   supervisedRoot?: () => boolean;
   /**
-   * /4055: progress-scaled adaptive grants. Off => the  decreasing ladder, byte-identical.
+   * progress-scaled adaptive grants. Off => the decreasing ladder, byte-identical.
    */
   adaptive?: boolean;
 }
@@ -127,7 +127,7 @@ export function buildCeilingDecisionPrompt(
     `Round ${round} of ${maxRounds}.`,
   ];
   if (previousRemaining !== undefined) {
-    // /4055: adaptive mode measures DEMONSTRATED progress, not
+    // adaptive mode measures DEMONSTRATED progress, not
     // list-shortening — the model is told to report honestly instead of
     // being coached into mechanically shrinking `remaining`.
     lines.push(
@@ -144,7 +144,7 @@ export function buildCeilingDecisionPrompt(
  * eighth — each round is strictly less useful than the last, so a run that
  * cannot finish converges instead of drifting. Rounds 1-2 are floored at 1 so
  * a small budget still produces a meaningful (if tiny) grant rather than a
- * silent zero; round 3 is floored at 5 per the owner's table (.md
+ * silent zero; round 3 is floored at 5 per the owner's table (
  * "круг 3 → N/8, но не меньше 5") — the last extension is not allowed to
  * shrink to a token amount even when N/8 rounds down to nothing. The SUM
  * clamps in ceilingGrant() are what actually bound the total regardless.
@@ -155,7 +155,7 @@ export function grantForRound(round: number, maxTurns: number): number {
 }
 
 /**
- * /4055: the adaptive grant for one round — +50% of the base budget
+ * the adaptive grant for one round — +50% of the base budget
  * on round 1, then +25% for every further round (ceil, floored at 1), REPLACING
  * the decreasing ladder when CeilingConfig.adaptive is on. The SUM clamps in
  * ceilingGrant()'s existing maxGrantedTurns/maxTurnsCeiling math still bound
@@ -167,7 +167,7 @@ export function adaptiveGrantForRound(round: number, maxTurns: number): number {
 }
 
 /**
- * : the ceiling object for one loop, built from the two facts every
+ * the ceiling object for one loop, built from the two facts every
  * build site knows: whether adaptive mode is on and whether the loop is a
  * supervised root. The `adaptive` key is ABSENT when off, so the off path
  * stays byte-identical to the pre-4721 objects (`{}` / `{ supervisedRoot }`).
@@ -185,7 +185,7 @@ export function buildCeilingConfig(parts: {
 }
 
 /**
- *  follow-up: tools whose WORK is dispatching other agents. Both are
+ * follow-up: tools whose WORK is dispatching other agents. Both are
  * declared `readOnly: true` (tools/agent.ts, tools/workflow.ts) and that flag
  * STAYS as-is — the permission plane treats a dispatch as side-effect-free
  * for the parent workspace, and `readOnly` is load-bearing there. But a
@@ -200,13 +200,13 @@ export function buildCeilingConfig(parts: {
  */
 export const DISPATCH_TOOL_NAMES: readonly string[] = ["Agent", "Workflow"];
 
-/**  follow-up: true for the explicit dispatch allowlist above (name-exact). */
+/** follow-up: true for the explicit dispatch allowlist above (name-exact). */
 export function isDispatchToolCall(toolName: string): boolean {
   return DISPATCH_TOOL_NAMES.includes(toolName);
 }
 
 /**
- * /4055: does a successful call of `toolName` count as PRODUCTIVE
+ * does a successful call of `toolName` count as PRODUCTIVE
  * progress? True for the dispatch allowlist above (a successful Agent or
  * Workflow call IS the orchestrator's work, readOnly or not); otherwise true
  * unless the registry declares the tool read-only. An unknown tool (no
@@ -240,7 +240,7 @@ export function ceilingGrant(
   alreadyGranted: number,
   config?: CeilingConfig,
   /**
-   * /4055: compute the round's raw grant from adaptiveGrantForRound
+   * compute the round's raw grant from adaptiveGrantForRound
    * (+50%/+25%) instead of the decreasing ladder. The SUM clamps below apply
    * identically either way — an adaptive grant is still bounded by
    * maxGrantedTurns and maxTurnsCeiling.
@@ -291,13 +291,13 @@ export function acceptCeilingVerdict(params: {
   /** Successful tool calls made since the previous grant. */
   successfulToolCalls: number;
   /**
-   * /4055: successful NON-read-only tool calls since the previous
+   * successful NON-read-only tool calls since the previous
    * grant — the adaptive mode's progress measure. Defaults to
    * `successfulToolCalls` (callers that have not adopted the productive
    * counter keep the old arithmetic even with the flag on by accident).
    */
   productiveToolCalls?: number;
-  /** /4055: adaptive mode gates on productive progress, not shortening. */
+  /** adaptive mode gates on productive progress, not shortening. */
   adaptive?: boolean;
 }): boolean {
   const { verdict, round, previousRemaining, successfulToolCalls, adaptive } = params;
@@ -307,7 +307,7 @@ export function acceptCeilingVerdict(params: {
   }
   if (round >= 2) {
     if (adaptive === true) {
-      // : "Не считать любое успешное чтение файла прогрессом и не
+      // "Не считать любое успешное чтение файла прогрессом и не
       // требовать механического уменьшения количества пунктов плана" — the
       // round must contain at least one productive (non-read-only) success,
       // and an unchanged/grown remaining list is NOT by itself a refusal.
@@ -380,7 +380,7 @@ export interface CeilingDecisionRequest {
   round: number;
   maxRounds: number;
   previousRemaining?: number;
-  /** /4055: adaptive mode's prompt variant (progress, not shortening). */
+  /** adaptive mode's prompt variant (progress, not shortening). */
   adaptive?: boolean;
   /** Hard window for this call; the controller is aborted when it elapses. */
   windowMs: number;

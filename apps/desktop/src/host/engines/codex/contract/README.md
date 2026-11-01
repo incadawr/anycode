@@ -37,7 +37,7 @@ protocol AnyCode's Codex adapter is built against (design
 ## Supported version ceiling
 
 `<0.167.0` (mirrors `SUPPORTED_CODEX_VERSION` in
-`host/engines/codex/protocol.ts`).  (owner decision, 2026-08-29)
+`host/engines/codex/protocol.ts`). (owner decision, 2026-08-29)
 dropped the floor this used to pair with: support is a single ceiling, not a
 closed range, so any codex-cli build below 0.167.0 is accepted by version
 number alone, however old. A build genuinely too old to speak the CONSUMED
@@ -203,7 +203,7 @@ needed), confirms the unmutated round-trip still passes, then renames one
 method per registry and asserts the extractor throws.
 
 
-##  rework — live seatbelt probe protocol (owner-run)
+## rework — live seatbelt probe protocol (owner-run)
 
 The child temp-dir rework (private `~/.anycode/tmp/<childSessionId>` instead
 of losing `/tmp` and `$TMPDIR`) changes three sandbox-relevant things at
@@ -256,7 +256,7 @@ app-server spawn env. (`cd` rather than `codex sandbox -C`: codex-cli
  replacing the final command with each check below (same prefix):
 
  1. `touch /tmp/x` — expect REFUSED (the exclusion works; pre-fix this
-    silently succeeded — 's probe).
+ silently succeeded).
  2. a zsh heredoc writing a file inside `$WS`
     (`zsh -c 'cat > "$WS/f" <<\EOD ... EOD'`) — expect ok: TMPPREFIX points
     inside the private dir. This is the exact "can't create temp file for

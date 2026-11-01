@@ -34,7 +34,7 @@ export interface ClaudeSessionRowPort {
 }
 
 /**
- *  follow-up: the persistence tail behind the claude boot's
+ * follow-up: the persistence tail behind the claude boot's
  * `attachEngineChildReportDurability` save seam. Deliberately its OWN method
  * (never a `touch` patch): the pending-child-reports snapshot writes the same
  * `sessions.pending_child_reports_json` column the core/codex boots use
@@ -57,7 +57,7 @@ export interface ClaudeSessionRowWriterOptions {
   /** True for a resume: the row is already on disk, so writes go straight through. */
   rowExists: boolean;
   port: ClaudeSessionRowPort;
-  /**  follow-up: the pending-child-reports column writer; absent -> those saves are buffered until the row exists, then dropped-safe. */
+  /** follow-up: the pending-child-reports column writer; absent -> those saves are buffered until the row exists, then dropped-safe. */
   pendingChildReportsPort?: ClaudePendingChildReportsPort;
   onError(error: unknown, stage: "create" | "touch" | "pending_reports"): void;
 }
@@ -89,7 +89,7 @@ export class ClaudeSessionRowWriter {
    */
   private createFailure: unknown = null;
   /**
-   *  follow-up: the pending-child-reports snapshot saved before
+   * follow-up: the pending-child-reports snapshot saved before
    * the row exists. At most one entry is ever live (each save overwrites the
    * whole snapshot — `null` once the queue drains), so the buffer keeps only
    * the newest json; it flushes through the serialized chain right after the
@@ -97,7 +97,7 @@ export class ClaudeSessionRowWriter {
    */
   private bufferedReportJson: string | null | undefined;
   /**
-   *  review N1: how many live (non-buffered) report saves have
+   * review N1: how many live (non-buffered) report saves have
    * REGISTERED on the chain since materialize() captured the buffer. The flush
    * appended by materialize() runs after those registrations, so any count > 0
    * at flush time means the buffered snapshot is STALE — a live save already
@@ -167,7 +167,7 @@ export class ClaudeSessionRowWriter {
   }
 
   /**
-   *  follow-up: persists the pending detached-child report queue
+   * follow-up: persists the pending detached-child report queue
    * snapshot (or null, once it drains) into the same column the core/codex
    * boots use. Buffered while no row exists yet (never dropped, never able to
    * conjure the row early) and serialized behind the CREATE once it does.
@@ -188,7 +188,7 @@ export class ClaudeSessionRowWriter {
   }
 
   /**
-   *  cross-review F1: the buffered flush's fire-and-forget twin of
+   * cross-review F1: the buffered flush's fire-and-forget twin of
    * `touch()`'s catch — a rejected save (SQLITE_BUSY past busy_timeout is the
    * realistic trigger) must surface through `onError` (the boot logs it like
    * any create/touch failure), NEVER as an unhandled rejection: under Node's
@@ -199,7 +199,7 @@ export class ClaudeSessionRowWriter {
    * own hazard — the queue's NEXT mutation re-persists the full current
    * snapshot through the live path, which is the honest retry mechanism.
    *
-   *  review N1: the flush runs as the first link AFTER the create
+   * review N1: the flush runs as the first link AFTER the create
    * on the same serialized chain it appended itself to at materialize() time —
    * so any live save registered in between stays strictly AHEAD of it. If one
    * did, the buffered snapshot is stale by construction (the live path always
@@ -249,15 +249,15 @@ export class ClaudeSessionRowWriter {
     for (const item of this.buffered.splice(0, this.buffered.length)) {
       this.chain = this.chain.then(() => this.flushBufferedWrite(item, createFailure));
     }
-    //  follow-up: flush the newest report snapshot (if any was
+    // follow-up: flush the newest report snapshot (if any was
     // buffered) after the CREATE, through the same serialized chain.
-    //  cross-review F1: strictly after the create settles, and
+    // cross-review F1: strictly after the create settles, and
     // only if it SUCCEEDED — a rejected create leaves no row, so flushing
     // anyway would fire a silent no-op UPDATE (0 rows match, no error) while
     // the queue believes its snapshot is durable. (The `.catch(() => undefined)`
     // here only silences this gate's own view of the failure; the error itself
     // was already routed to onError through `this.chain` above.)
-    //  review N1: the flush link is appended to the chain HERE —
+    // review N1: the flush link is appended to the chain HERE —
     // synchronously, while materialize() still owns the code between the
     // create's start and its settlement — not in `created.then(...)`. Deferred
     // registration let any live save issued in that window register FIRST, so

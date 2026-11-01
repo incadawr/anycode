@@ -23,7 +23,7 @@ import type { ClaudeTranscriptItem, SqlitePersistenceAdapter } from "@anycode/co
 import type { EngineCapabilities, RunTurnOptions, SessionEngine } from "../session-engine.js";
 
 /**
- *  cross-review F1: the structural shape `ClaudeShadowTranscriptEngine`
+ * cross-review F1: the structural shape `ClaudeShadowTranscriptEngine`
  * needs BEYOND `SessionEngine` to forward manual compaction. `ClaudeEngine`
  * satisfies it (`compactNow` exists whenever `slashPassthrough` armed the
  * capability), while a child-shaped engine (flagged spawn,
@@ -162,7 +162,7 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
   private nextTurnOrdinal: number;
 
   /**
-   *  cross-review F1: own-property delegation, installed in the
+   * cross-review F1: own-property delegation, installed in the
    * constructor IFF the wrapped engine has the method. Without this, manual
    * compaction is unreachable in the real product path: Session receives THIS
    * wrapper (not the bare `ClaudeEngine`) for every root Claude session

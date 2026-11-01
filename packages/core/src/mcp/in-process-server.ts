@@ -1,5 +1,5 @@
 /**
- * In-process MCP server + control-channel transport ( срез S2, план
+ * In-process MCP server + control-channel transport (срез S2, план
  * §3.4, факты F14/probes.md P0-P3). Exposes ONE model-visible tool over the
  * MCP SDK's own `Server` (never a hand-rolled JSON-RPC layer, ruling B5) so
  * the desktop host's claude-engine glue (срез S3) can serve
@@ -55,7 +55,7 @@ export interface McpToolCallResult {
   text: string;
   isError: boolean;
   /**
-   * : image attachments riding the same CallToolResult, base64
+   * image attachments riding the same CallToolResult, base64
    * with no data-URI prefix (mirrors PreviewScreenshotSuccess.data). Optional
    * and additive — a result without `images` renders exactly the single text
    * content block every pre-4764 caller produced.
@@ -121,7 +121,7 @@ export function createInProcessMcpServer(options: CreateInProcessMcpServerOption
     return {
       content: [
         { type: "text" as const, text: result.text },
-        // : each image becomes its own MCP image content block
+        // each image becomes its own MCP image content block
         // AFTER the text block; an absent `images` array spreads to nothing,
         // so the pre-4764 response shape is preserved byte-for-byte.
         ...(result.images ?? []).map((image) => ({

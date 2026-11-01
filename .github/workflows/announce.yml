@@ -1,4 +1,4 @@
-# Announce release in the Telegram channel (, ).
+# Announce release in the Telegram channel.
 #
 # The release pipeline (release.yml) ends at a DRAFT release; a human presses
 # Publish. This workflow is what happens at that exact moment: it posts the

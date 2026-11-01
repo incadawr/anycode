@@ -22,7 +22,7 @@ import type { GitCommandOutcome, HostToUiMessage, WireEnvStatus, WireGitStatus }
 describe("set_model protocol (slice P7.15 · F14)", () => {
   it("accepts a non-empty model id and fails closed on junk", () => {
     expect(uiToHostMessageSchema.safeParse({ type: "set_model", model: "glm-4.6" }).success).toBe(true);
-    // : the Retry-now control of a turn parked on the network.
+    // the Retry-now control of a turn parked on the network.
     expect(uiToHostMessageSchema.safeParse({ type: "network_retry_now" }).success).toBe(true);
     expect(uiToHostMessageSchema.safeParse({ type: "network_retry_now", extra: 1 }).success).toBe(false);
     // empty / missing / wrong-type / over-length / extra keys all fail closed
@@ -50,11 +50,11 @@ describe("set_model protocol (slice P7.15 · F14)", () => {
     expect(structuredClone(nonReasoning)).toEqual(nonReasoning);
   });
 
-  //  W2: `imageInput` is additive + optional on both hello and
+  // W2: `imageInput` is additive + optional on both hello and
   // model_changed. The two `satisfies` blocks ABOVE (and the host_ready ones
-  // below) are the compile-time proof that pre- message snapshots
+  // below) are the compile-time proof that message snapshots
   // WITHOUT the field remain valid; this test covers the field-present shape.
-  it("carries the additive  imageInput model verdict as structured-clone-safe data", () => {
+  it("carries the additive imageInput model verdict as structured-clone-safe data", () => {
     const changed = {
       type: "model_changed",
       model: "glm-4.6",
@@ -73,11 +73,11 @@ describe("set_model protocol (slice P7.15 · F14)", () => {
     expect(structuredClone(ready)).toEqual(ready);
   });
 
-  //  срез C: `imageFallback` rides beside `imageInput` on both
+  // срез C: `imageFallback` rides beside `imageInput` on both
   // host_ready and model_changed (same additive-optional discipline, same
   // compile-time proof that the field-absent shapes above stay valid), and
   // the new `image_fallback_changed` event is structured-clone-safe.
-  it("carries the additive  imageFallback verdict as structured-clone-safe data", () => {
+  it("carries the additive imageFallback verdict as structured-clone-safe data", () => {
     const changed = {
       type: "model_changed",
       model: "glm-4.6",
@@ -348,9 +348,9 @@ describe("user_message images protocol", () => {
   });
 });
 
-//  срез 2: the detached-child-report delivery wire additions —
+// срез 2: the detached-child-report delivery wire additions —
 // user_message's optional `origin` and the new child_report_ack ack message.
-describe(" срез 2 protocol additions", () => {
+describe("срез 2 protocol additions", () => {
   it("user_message.origin accepts the literal \"system\" and is absent by default", () => {
     expect(
       uiToHostMessageSchema.safeParse({ type: "user_message", requestId: "r1", text: "hi", origin: "system" })
@@ -384,7 +384,7 @@ describe(" срез 2 protocol additions", () => {
   });
 });
 
-//  /  (review 23.08 narrowing): the untrusted
+// (review 23.08 narrowing): the untrusted
 // engine_switch_request side of the in-session engine swap. The engine id is
 // validated against ENGINE_IDS (the same table isEngineId uses); the trusted
 // engine_switched/engine_switch_failed host->renderer acks are plain

@@ -11,7 +11,7 @@
  * PATH itself), generalized to arbitrary command names.
  *
  * Coarse source only (`"path" | "project" | null`): the resolved absolute
- * path never crosses to the renderer ( brief §2.3).
+ * path never crosses to the renderer (brief §2.3).
  */
 
 import { posix, win32 } from "node:path";
@@ -62,7 +62,7 @@ export function candidateFileNames(command: string, platform: NodeJS.Platform): 
 }
 
 /**
- * Extra directories probed beyond `PATH` ( brief §2.3): the
+ * Extra directories probed beyond `PATH` (brief §2.3): the
  * per-user bin dirs a GUI-launched app's minimal PATH routinely misses
  * (`~/.local/bin`, `~/go/bin`, `~/.cargo/bin`, `~/.npm-global/bin`) plus the
  * system-wide Homebrew locations. `~`-relative entries drop out when `home`

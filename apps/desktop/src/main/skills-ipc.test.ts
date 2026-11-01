@@ -360,7 +360,7 @@ describe("handleSkillsImportScan / handleSkillsImportApply", () => {
     );
     await seed(
       join(home, ".codex/skills/nested/SKILL.md"),
-      "---\nname: nested\ndescription: codex nested\nmetadata:\n  owner: tracker\n---\nnested body\n",
+      "---\nname: nested\ndescription: codex nested\nmetadata:\n  owner: example\n---\nnested body\n",
     );
 
     const deps = makeDeps(ws, home);
@@ -457,7 +457,7 @@ describe("skills-create security hardening (P7.20 W6-FIX)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// : a workspace scope reference (`ws_…`) resolves like a tab id.
+// a workspace scope reference (`ws_…`) resolves like a tab id.
 
 describe("skills scope reference", () => {
   const WS_REF = "ws_0123456789abcdef";

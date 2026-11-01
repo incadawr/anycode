@@ -52,11 +52,11 @@ describe("renderEvent — no-color byte invariant (design §0.1/§9-R5)", () => 
   it("surfaces output and turn limits explicitly", () => {
     expect(collect([{ type: "turn_end", turn: 1, finishReason: "length" }])).toContain("output truncated");
     expect(collect([{ type: "loop_end", reason: "max_turns", turns: 100 }])).toContain("turn limit reached (100 turns)");
-    // : the stop line names the one action that works.
+    // the stop line names the one action that works.
     expect(collect([{ type: "loop_end", reason: "max_turns", turns: 100 }])).toContain(
       "send a message to continue with the same history",
     );
-    //  cross-review: --print is headless — no REPL to continue into.
+    // cross-review: --print is headless — no REPL to continue into.
     const headless = (text: string): string => {
       let out = "";
       renderEvent({ type: "loop_end", reason: "max_turns", turns: 100 }, (c) => (out += c), undefined, { headless: true });
@@ -66,7 +66,7 @@ describe("renderEvent — no-color byte invariant (design §0.1/§9-R5)", () => 
     expect(headless("")).not.toContain("send a message");
   });
 
-  it("renders a ceiling grant with round, grant, total and remaining ( T19)", () => {
+  it("renders a ceiling grant with round, grant, total and remaining (T19)", () => {
     const out = collect([
       {
         type: "ceiling_grant",
@@ -86,14 +86,14 @@ describe("renderEvent — no-color byte invariant (design §0.1/§9-R5)", () => 
     expect(collect([{ type: "loop_end", reason: "max_turns", turns: 150 }])).not.toContain(
       "ANYCODE_MAX_TURNS",
     );
-    // : the action pointer is ONLY on the max_turns stop — a
+    // the action pointer is ONLY on the max_turns stop — a
     // clean completion never suggests sending more.
     expect(collect([{ type: "loop_end", reason: "completed", turns: 3 }])).not.toContain("send a message");
   });
 
-  // /4055: an adaptive grant renders its own line naming the
+  // an adaptive grant renders its own line naming the
   // productive-tool count; the ladder line (mode absent or "ladder") keeps its
-  // exact  shape.
+  // exact shape.
   it("renders an adaptive ceiling grant with the productive-tool count", () => {
     const adaptive = collect([
       {
@@ -267,7 +267,7 @@ describe("renderEvent — colored output (design §3.2 palette, §5.2 item 4)", 
     expect(text).toBe("\n[error] request failed\n");
   });
 
-  it("appends a 'failed after N attempts' suffix when the error carries retry metadata ( W7b)", () => {
+  it("appends a 'failed after N attempts' suffix when the error carries retry metadata (W7b)", () => {
     const text = collect([
       {
         type: "error",
@@ -1252,7 +1252,7 @@ describe("renderTelemetryStatus (design slice-6.6-cut.md §2-C3)", () => {
   });
 });
 
-describe("stream_retry past the announced total ( review)", () => {
+describe("stream_retry past the announced total (review)", () => {
   it("drops the total once a network-budget retry outlives maxAttempts (no [retry 9/8])", () => {
     const text = collect(
       [{ type: "stream_retry", attempt: 9, maxAttempts: 8, delayMs: 100, reason: "network" }],

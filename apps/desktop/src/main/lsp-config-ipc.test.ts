@@ -426,7 +426,7 @@ describe("normalizeLspExtension", () => {
 });
 
 // ---------------------------------------------------------------------------
-// : a workspace scope reference (`ws_…`) resolves like a tab id.
+// a workspace scope reference (`ws_…`) resolves like a tab id.
 
 describe("lsp scope reference", () => {
   const WS_REF = "ws_0123456789abcdef";

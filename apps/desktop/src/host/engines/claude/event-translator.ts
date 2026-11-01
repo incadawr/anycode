@@ -43,7 +43,7 @@ export interface ClaudeTurnTranslatorOptions {
    */
   onResult?(result: ClaudeResultMessage): void;
   /**
-   *  срез S4: looks up (and consumes) the durable subagent-card
+   * срез S4: looks up (and consumes) the durable subagent-card
    * snapshot for one `mcp__anycode__agent` tool_use id, stamped by the MCP
    * bridge's `callTool` handler (host/index.ts) once that child session
    * settled. The MCP `tools/call` response itself carries no room for a card
@@ -207,7 +207,7 @@ export class ClaudeTurnTranslator {
   /** Latches the ONE terminal `{type:"error"}` a turn may emit. */
   private errorEmitted = false;
   /**
-   *  cross-review P1: the tool_use ids still open at the moment
+   * cross-review P1: the tool_use ids still open at the moment
    * `finish()` ran (every terminalization path funnels through it) — the
    * value `abandonedToolUseIds()` returns once finished.
    */
@@ -222,7 +222,7 @@ export class ClaudeTurnTranslator {
   /** The message the terminal `error` event carries when nothing has been emitted yet. */
   private latchedFailureMessage: string | null = null;
   /**
-   *  review F2: assistant messages seen this turn (one
+   * review F2: assistant messages seen this turn (one
    * `message_start` each). This turn's MODEL-ROUND count — the metric the
    * loop_end `turns` field reports (F4) and the one the child-session
    * progress tally keeps via the `engine_model_round` marker. The runTurn
@@ -231,7 +231,7 @@ export class ClaudeTurnTranslator {
    * that authoritative count arrives at finish.
    */
   private modelRounds = 0;
-  /**  review F4: the result frame's own `num_turns`, when it carries a usable one — the authoritative round count for loop_end. */
+  /** review F4: the result frame's own `num_turns`, when it carries a usable one — the authoritative round count for loop_end. */
   private resultNumTurns: number | null = null;
 
   constructor(private readonly options: ClaudeTurnTranslatorOptions) {}
@@ -339,7 +339,7 @@ export class ClaudeTurnTranslator {
         const name = text(block.name);
         if (id === undefined || name === undefined) continue;
         const input = block.input ?? {};
-        // : the door's browser tools are canonicalized at the
+        // the door's browser tools are canonicalized at the
         // projection seam (`mcp__anycode__browser_navigate` -> `BrowserNavigate`)
         // so the transcript card, permission rules and history all use the
         // SAME name a native tab shows; every other tool name is untouched.
@@ -396,7 +396,7 @@ export class ClaudeTurnTranslator {
       this.tools.delete(toolUseId);
       const status = toolStatus(block.is_error);
       const modelText = toolResultText(block.content);
-      //  срез S4: a snapshot only ever exists for a
+      // срез S4: a snapshot only ever exists for a
       // `mcp__anycode__agent` call (the ONLY caller of `callTool` that ever
       // stamps one) — `takePresentation` returns `undefined` for every other
       // tool_use id, so this spread is a no-op for the other 99% of tool
@@ -430,7 +430,7 @@ export class ClaudeTurnTranslator {
       case "message_start": {
         const id = text(record(event.message)?.id);
         if (id !== undefined) this.currentMessageId = id;
-        //  review F2: one `message_start` == one assistant
+        // review F2: one `message_start` == one assistant
         // message == one MODEL ROUND — the only per-round marker the CLI's
         // stream offers (turn_start/turn_end fire once per runTurn). The
         // marker is emitted FIRST so a downstream tallyer counts this round
@@ -520,7 +520,7 @@ export class ClaudeTurnTranslator {
 
   private onResult(message: ClaudeResultMessage): AgentEvent[] {
     this.options.onResult?.(message);
-    //  review F4: `num_turns` is the CLI's own authoritative
+    // review F4: `num_turns` is the CLI's own authoritative
     // count of model rounds this turn ran — preferred over the local
     // message_start tally at finish. Tolerant read of untyped wire data;
     // anything non-positive/non-finite is ignored (the tally takes over).
@@ -578,13 +578,13 @@ export class ClaudeTurnTranslator {
         },
       });
     }
-    //  cross-review P1: the still-open tool_use ids at the moment
+    // cross-review P1: the still-open tool_use ids at the moment
     // the turn terminalized — recorded BEFORE the map is cleared so
     // `abandonedToolUseIds()` below keeps answering after the fact.
     this.abandonedAtFinish = [...this.tools.keys()];
     this.tools.clear();
     events.push({ type: "turn_end", turn: this.options.turn, finishReason: outcome.finish });
-    //  review F4: `loop_end.turns` reports MODEL ROUNDS, not the
+    // review F4: `loop_end.turns` reports MODEL ROUNDS, not the
     // runTurn ordinal — the result frame's `num_turns` when it carried one
     // (authoritative), else the message_start tally, else the ordinal (a
     // turn that died before any assistant message: nothing better exists).
@@ -600,7 +600,7 @@ export class ClaudeTurnTranslator {
   }
 
   /**
-   *  cross-review P1: this turn's tool_use ids whose paired
+   * cross-review P1: this turn's tool_use ids whose paired
    * top-level `tool_result` never arrived. Live view, not a snapshot-at-
    * finish: EVERY terminalization path funnels through `finish()` (including
    * `finishTerminal`), and a turn whose iterable ends abnormally without

@@ -54,7 +54,7 @@ export const SECTION_TOOL_DISCIPLINE_GENERIC = [
 ].join("\n");
 
 /**
- * Vision-fallback section ( plan §5): present ONLY while InspectImage
+ * Vision-fallback section (plan §5): present ONLY while InspectImage
  * is actually registered (a blind model with a configured recognizer). Names
  * the tool literally — the plan's own risk analysis (spec §5, "molча мёртвая
  * фича") calls this the strongest lever after the inline stub text for

@@ -132,7 +132,7 @@ export interface McpConfigIpcDeps {
   workspaceForTab(tabId: string): string | undefined;
   fs: McpConfigFs;
   /**
-   *  xfix H1: the plugin MCP consent list from settings.json
+   * xfix H1: the plugin MCP consent list from settings.json
    * `plugins.mcpConsent` (undefined keeps the honest-default `false` the pane
    * rendered before; the Plugins pane remains the writer). Optional so the
    * registration stays backward-compatible with existing test scaffolds.
@@ -389,7 +389,7 @@ async function buildSnapshot(deps: McpConfigIpcDeps, tabId: string | undefined):
   };
 }
 
-// ── plugin-contributed rows ( S1-C, design 4732 §6 "Elsewhere") ──
+// ── plugin-contributed rows (S1-C, design 4732 §6 "Elsewhere") ──
 
 /**
  * Projects the plugin-contributed MCP servers into READ-ONLY pane rows. This
@@ -416,7 +416,7 @@ async function collectPluginServers(
       workspace: workspace ?? home,
       home,
       claimedMcpNames: discoveryClaimed,
-      //  xfix C1: without the state path the MANAGED store
+      // xfix C1: without the state path the MANAGED store
       // (state.json's .store/<name>/<active> + local dev links) contributed
       // nothing here either — the MCP pane never listed an installed
       // plugin's servers while the runtime (post-host-fix) starts them.

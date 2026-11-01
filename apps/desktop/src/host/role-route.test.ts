@@ -1,5 +1,5 @@
 /**
- * Host-side role-route resolution ( §3.6): pure chain-picking,
+ * Host-side role-route resolution (§3.6): pure chain-picking,
  * the exponential cooldown ladder, the health cache, and infrastructure
  * failure classification. Everything here is clock-injected — no timers.
  */
@@ -149,12 +149,12 @@ describe("classifyInfraFailure (F3: anchored to the exact provider/resolver sent
 });
 
 // ---------------------------------------------------------------------------
-//  §3.6 (fallback point 2): the PURE detached-terminal respawn
+// §3.6 (fallback point 2): the PURE detached-terminal respawn
 // decision. Infra failures re-spawn on the next healthy entry; an exhausted
 // chain delivers the original error (exhausted marker); completed children
 // mark their entry healthy; ordinary task failures never fall back.
 
-describe("decideRoutedTerminal ( §3.6)", () => {
+describe("decideRoutedTerminal (§3.6)", () => {
   const facts = (rest: Array<{ engine?: "codex" | "claude"; connection?: string; model?: string }> = []): RoutedSpawnFacts => ({
     role: "executor",
     entry: { engine: "codex" },

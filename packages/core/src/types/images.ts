@@ -25,7 +25,7 @@ export interface ImageAttachment {
   ref?: number;
   /**
    * Logical/CSS viewport size (device-pixel-ratio-independent) at capture
-   * time, when the screenshot source can report it ( plan §0a /
+   * time, when the screenshot source can report it (plan §0a /
    * slice G). Paired with the pixel size the vision fallback already derives
    * from the raw bytes (vision/metadata.ts's imageDimensions) so ask()'s
    * scale hint (vision/recognizer.ts's AskImageScale) lets the model compute

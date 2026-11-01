@@ -1,5 +1,5 @@
 /**
- *  ( §2): the per-command risk plaque for a Bash-shaped
+ * (§2): the per-command risk plaque for a Bash-shaped
  * permission ask, derived from the SAME lexical classifier that powers
  * auto-allow (`classifyBashCommandLine`). Presentation only — the allow
  * decision never reads this.
@@ -12,7 +12,7 @@
  *
  * Input discipline (mirrors the modal's `bashUnknownShellHint` exactly):
  * fail-closed — a non-command tool or a missing/non-string `command` gets
- * nothing. The plaque and the  «unknown shell expression» hint never
+ * nothing. The plaque and the «unknown shell expression» hint never
  * co-occur: a shell expression that is not provably read-only is the hint's
  * case alone.
  *
@@ -34,7 +34,7 @@
 
 import { classifyBashCommandLine } from "./safe-command.js";
 
-/**  ( §2): per-command risk note for a Bash ask, derived
+/** (§2): per-command risk note for a Bash ask, derived
  * from the SAME lexical classifier that powers auto-allow (presentation only;
  * the allow decision never reads this). `writeCapable` is NOT in this object —
  * its text names the concrete binary, so it is built by
@@ -79,7 +79,8 @@ export interface BashRiskFacts {
   binary: string | null;
 }
 
-/** Command-line tools whose ask subject is a shell command line. Mirrors `isCommandLineTool` in rules.ts and the desktop's
+/** Command-line tools whose ask subject is a shell command line (
+ * 4070). Mirrors `isCommandLineTool` in rules.ts and the desktop's
  * permission-pattern.ts: `CodexExec` is the Codex approval bridge's name for a
  * `commandExecution` approval, and its input carries the same `command`
  * string. */
@@ -87,7 +88,7 @@ export function isPlaqueCommandLineTool(toolName: string): boolean {
   return toolName === "Bash" || toolName === "CodexExec";
 }
 
-/**  ( §2): the per-command risk plaque for a Bash-shaped
+/** (§2): the per-command risk plaque for a Bash-shaped
  * ask. Pure function of (toolName, input) — see the module doc for the exact
  * split and the fail-closed discipline. */
 export function bashRiskFacts(toolName: string, input: unknown): BashRiskFacts {
@@ -97,7 +98,7 @@ export function bashRiskFacts(toolName: string, input: unknown): BashRiskFacts {
   if (typeof command !== "string") return { applies: false, plaque: null, binary: null };
   // Cross-review D2: a `kind: "writeStdin"` ask is input sent to a command
   // that is ALREADY running, not a new run of it — the classifier never
-  // reasoned about that interaction, and the Codex bridge's own 
+  // reasoned about that interaction, and the Codex bridge's own
   // `!stdinWrite` gate refuses to de-risk it (metadata stays fail-closed
   // high). The plaque must not contradict that in the same dialog by
   // asserting the command line is provably read-only: no plaque, the

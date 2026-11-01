@@ -1,5 +1,5 @@
 /**
- *  Stage 1, implementation C: an external command as the ask-zone
+ * Stage 1, implementation C: an external command as the ask-zone
  * classifier. Protocol (the `da` shape, card decision 5):
  *   - the command line is written to the child's stdin, then stdin is closed;
  *   - exit 0  -> allow, reason = first stdout line (or "classifier exit 0");

@@ -264,7 +264,7 @@ body {
   flex-direction: column;
 }
 
-/* Generalizes the old `.session-content-review-open` (design D10, 
+/* Generalizes the old `.session-content-review-open` (design D10,
    stages 2+3): grid mode now covers EITHER the Review (git) panel or the
    Preview panel or both, columns composed by App.tsx's
    `computeSessionContentColumns` — Preview is always the rightmost column. */
@@ -297,7 +297,7 @@ body {
   background: var(--text-3);
 }
 
-/* ── preview panel (working-docs/panel-track/CUT.md §2.4/D12, 
+/* ── preview panel (working-docs/panel-track/CUT.md §2.4/D12,
    stages 2+3) ── Slim REAL header above a measured body div; the
    WebContentsView paints over the body's screen rect main-side (D9) — this
    file only ever draws the chrome AROUND the preview, never its content. */
@@ -376,7 +376,7 @@ body {
   font-size: var(--fs-sm);
 }
 
-/* ── preview transfer controls ( 96-P3, D14/D15) ── */
+/* ── preview transfer controls (96-P3, D14/D15) ── */
 
 .preview-panel-open-window {
   flex-shrink: 0;
@@ -395,7 +395,7 @@ body {
   background: var(--bg-hover);
 }
 
-/* ── right-side dock (, docs/development/dock.md) ── One tabbed
+/* ── right-side dock (docs/development/dock.md) ── One tabbed
    column replacing the stacked git/preview/subagents columns: tab strip
    (scroll on overflow), the ACTIVE tab's body only, one resize handle. */
 .dock-panel {
@@ -519,7 +519,7 @@ body {
   box-shadow: var(--shadow-menu);
 }
 
-/* ── Stage 2 ( §3): split view on wide windows ── The pinned
+/* ── Stage 2 (§3): split view on wide windows ── The pinned
    tab's secondary pane: absolute right of the primary body inside the dock,
    fixed DOCK_SPLIT_MIN_PX, border-left. No drag between panes by design. */
 .dock-split-pane {
@@ -605,7 +605,7 @@ body {
   font-weight: var(--w-semibold);
 }
 
-/* ── native DOM markdown preview ( M1, CUT.md CONTRACTS) ──
+/* ── native DOM markdown preview (M1, CUT.md CONTRACTS) ──
    Renders inside .preview-panel-body when the visible preview's
    viewKind is "dom-md", AND as the whole content of the standalone
    md-preview window (M3). Owner smoke-test fix (two-header defect + window
@@ -1076,7 +1076,7 @@ body {
   background: var(--bg-hover);
 }
 
-/* : the group's row-cut toggle. Deliberately quieter than a task row
+/* the group's row-cut toggle. Deliberately quieter than a task row
    (secondary text, no hover fill until pointed at) — it is navigation about the
    list, not an item in it. */
 .sidebar-group-more {
@@ -1132,7 +1132,7 @@ body {
   color: var(--text-1);
 }
 
-/*  п.4: conspicuous open-row treatment — inset accent bar + primary text. */
+/* п.4: conspicuous open-row treatment — inset accent bar + primary text. */
 .sidebar-row-open {
   color: var(--text-1);
   /* Audit C12: only the CURRENT tab wears the accent bar. Other open tabs keep
@@ -1164,7 +1164,7 @@ body {
   white-space: nowrap;
 }
 
-/* : marks a task a Sessions API agent opened. */
+/* marks a task a Sessions API agent opened. */
 .sidebar-row-agent,
 .session-header-agent {
   flex-shrink: 0;
@@ -1236,7 +1236,7 @@ body {
   transition: opacity var(--dur-1) var(--ease-out);
 }
 
-/*  review (live smoke 15.08): the delete affordance reused the close
+/* review (live smoke 15.08): the delete affordance reused the close
    (×) geometry verbatim — absolutely positioned over the row's right edge.
    Safe for an OPEN row, which paints nothing there; a resumable row paints
    the age label in that exact spot, so the trash glyph landed on top of it.
@@ -1287,12 +1287,12 @@ body {
   opacity: 0;
 }
 
-/*  п.4: close affordance is ALWAYS visible on open rows (not hover-only). */
+/* п.4: close affordance is ALWAYS visible on open rows (not hover-only). */
 .sidebar-row-wrap:has(> .sidebar-row-open) .sidebar-row-close:not(:disabled) {
   opacity: 1;
 }
 
-/*  п.4 fix: the now permanently visible close button occupies the
+/* п.4 fix: the now permanently visible close button occupies the
    row's right edge — reserve its slot on OPEN rows (close + its right offset)
    so the engine/worktree/status indicators never sit underneath the ×.
    Resumable rows are untouched (their delete stays hover-revealed, swapping
@@ -1301,7 +1301,7 @@ body {
   padding-right: calc(var(--sp-2) + 20px);
 }
 
-/* : resumable-row hard-delete affordance — the close (×) pattern
+/* resumable-row hard-delete affordance — the close (×) pattern
    reused verbatim (absolute right, hover/focus reveal, danger on hover),
    just the Trash glyph and a danger tint so delete reads as destructive. */
 .sidebar-row-delete {
@@ -1330,12 +1330,12 @@ body {
 }
 
 .sidebar-row-delete:disabled {
-  /* Live-tab guard ( decision 4): never offer a delete main would refuse. */
+  /* Live-tab guard (decision 4): never offer a delete main would refuse. */
   cursor: not-allowed;
   opacity: 0;
 }
 
-/* REVIEW 15.08 ( defect 1): preset submenu inside the project menu —
+/* REVIEW 15.08 (defect 1): preset submenu inside the project menu —
    window.prompt is unsupported in Electron ("prompt() is not supported"),
    so the day horizon is chosen from these rows instead. */
 .sidebar-project-menu-item-group {
@@ -1514,7 +1514,7 @@ body {
   font-family: var(--font-mono);
 }
 
-/*  CUT-S2 §2.5 (slice S2c C3): layout B's child breadcrumb bar. It
+/* CUT-S2 §2.5 (slice S2c C3): layout B's child breadcrumb bar. It
    reuses `.session-header` wholesale for its box model — height, background,
    border, and (crucially) the titlebar drag region + traffic-light/window-
    controls clearance rules above, since it occupies the EXACT SAME strip
@@ -1673,7 +1673,7 @@ body {
 }
 
 .environment-workspace {
-  /*  п.6: room for the session cwd. workspaceLabel() already
+  /* п.6: room for the session cwd. workspaceLabel() already
      head-ellipsizes it to ≤44 chars, so it stays on one line; the base
      end-ellipsis only kicks in if the bar is narrower than that. */
   max-width: 44ch;
@@ -1685,7 +1685,7 @@ body {
    below (line ~1530) sets nowrap/hidden/ellipsis and would otherwise win the
    equal-specificity cascade by source order; this must outrank it. */
 .environment-menu-row-detail.environment-menu-row-detail-wrap {
-  /*  п.6: the full Workspace path in the menu row — override the base
+  /* п.6: the full Workspace path in the menu row — override the base
      detail's single-line clipping so the long cwd actually wraps, fully visible. */
   word-break: break-all;
   white-space: normal;
@@ -2085,7 +2085,7 @@ body {
   position: relative;
 }
 
-/* : a collapsed sidebar with no tab open — the pane's own way back,
+/* a collapsed sidebar with no tab open — the pane's own way back,
    in the spot the session header's expand button would occupy. */
 .main-empty-expand {
   position: absolute;
@@ -2406,7 +2406,7 @@ body {
   margin-left: var(--sp-2);
 }
 
-/* : warning chip while "Full browser access" is effective for this tab. */
+/* warning chip while "Full browser access" is effective for this tab. */
 .session-header-browser-access {
   margin-left: var(--sp-2);
   color: var(--warning);
@@ -2516,7 +2516,7 @@ body {
   min-width: 0;
 }
 
-/* ── the New Session model picker (, owner decision 17.08) ──
+/* ── the New Session model picker (owner decision 17.08) ──
    A drill-down, in the app's OWN menu language: the same two row shapes
    `.model-pill-popover` already uses (a pick with a check gutter, a drill-in
    with a value + chevron), the same overlay/shadow/radius, the same 1px row
@@ -2652,7 +2652,7 @@ body {
   line-height: var(--lh-tight);
 }
 
-/*  D2: the baseUrl host beside a colliding auto-label — two
+/* D2: the baseUrl host beside a colliding auto-label — two
    connections that auto-name to the same thing are otherwise indistinguishable. */
 .start-model-row-sub {
   flex-shrink: 0;
@@ -2693,7 +2693,7 @@ body {
   font-size: var(--fs-xs);
 }
 
-/* : the running-turn timing note above the rows. Same muted
+/* the running-turn timing note above the rows. Same muted
    treatment as the empty line, hairline-separated from the rows below so it
    reads as a caption, not as a pickable row. */
 .start-model-note {
@@ -2768,7 +2768,7 @@ body {
   border-radius: 999px;
 }
 
-/* : plan not updated for a while — the count may be stale. */
+/* plan not updated for a while — the count may be stale. */
 .todo-panel-stale { margin-left: auto; color: var(--warning); font-size: 0.85em; white-space: nowrap; }
 .todo-panel-card-stale .todo-panel-title { color: var(--text-dim); }
 
@@ -2970,7 +2970,7 @@ body {
   margin-top: var(--sp-2);
 }
 
-/* ──  срез 2: detached-child report system card ──
+/* ── срез 2: detached-child report system card ──
    Collapsed-by-default plate, styled after .reasoning-block (quiet, not a
    user bubble) — the role stays "user" for the model, but the transcript
    view is deliberately NOT the accent-soft .message-user card, so a human
@@ -3041,7 +3041,7 @@ body {
   object-fit: contain;
 }
 
-/* : thumbnails are clickable — the wrapper button is a
+/* thumbnails are clickable — the wrapper button is a
    plain passthrough (no chrome of its own) so the capped .message-image looks
    identical; only the zoom-in cursor and focus ring signal interactivity. */
 .message-image-button {
@@ -3156,7 +3156,7 @@ body {
   background: var(--border);
 }
 
-/*  W8: a quiet per-attempt line, same register as the loop-end
+/* W8: a quiet per-attempt line, same register as the loop-end
    divider's label but without its own hairlines — several can stack. */
 .message-retry {
   font-size: var(--fs-2xs);
@@ -3672,7 +3672,7 @@ body {
   padding: 0.08em 0.4em;
 }
 
-/* : chat-artifact preview — inline thumbnail of an agent-created
+/* chat-artifact preview — inline thumbnail of an agent-created
    image + Open/Reveal actions. A <span>-rooted block-shaped box so it can
    legally nest inside paragraph inline flow. */
 .md-artifact {
@@ -3842,7 +3842,7 @@ body {
    (the ledger row); expanded it reads as before (name + badge) with the
    body below. The header/body divider lives on .tool-call-body's border-top
    so a collapsed card is a clean single row. */
-/* : the toggle's row wrapper. An actionable child badge (see
+/* the toggle's row wrapper. An actionable child badge (see
    .tool-call-child-badge-action below) rides BESIDE the toggle, not inside
    it — a <button> cannot nest in the toggle <button>. Every non-actionable
    card renders exactly one child here (the toggle itself, width:100%), so
@@ -4007,7 +4007,7 @@ body {
   color: var(--text-3);
 }
 
-/* Run token spend ( slice S2). Same secondary register as the counters
+/* Run token spend (slice S2). Same secondary register as the counters
    line directly above it — the numbers are context for the run, not its
    headline. Tabular figures so the digits stop jittering as they climb. */
 .tool-call-workflow-usage {
@@ -4066,7 +4066,7 @@ body {
 .tool-call-subagent-counters,
 .tool-call-workflow-counters { font-variant-numeric: tabular-nums; }  /* live digits (R13 precedent) */
 
-/*  CUT-S2 §2.5 (slice S2c C3): the session-child badge, shown in the
+/* CUT-S2 §2.5 (slice S2c C3): the session-child badge, shown in the
    ALWAYS-visible toggle header (an Agent card defaults to collapsed, see
    ToolCallCard.tsx) — additive over `.tool-call-status-badge`, same shape,
    mounted only for a card whose Agent call spawned a session-tier child this
@@ -4107,7 +4107,7 @@ body {
   color: var(--accent);
 }
 
-/* : the waiting_permission badge rendered with an onOpen handler is
+/* the waiting_permission badge rendered with an onOpen handler is
    a real <button>, and THIS modifier carries ONLY its interactive layer —
    UA button reset (border/font; the padding/radius/size atoms live on the
    .tool-call-child-badge base, kept identical for both mounts), cursor,
@@ -4139,7 +4139,7 @@ body {
   margin-right: var(--sp-3);
 }
 
-/* : open-in-preview control for a document card (Read/Write/Edit of
+/* open-in-preview control for a document card (Read/Write/Edit of
    an .html/.htm/.md/.markdown path). Same pill posture as the subagent Open
    button, mounted in the always-visible header row — `flex-shrink: 0` keeps
    it whole when a long path pushes the summary, and the toggle's own
@@ -4268,7 +4268,7 @@ body {
   max-height: 16rem;
   overflow: auto;
 }
-/* Not-yet-started / queued step rows ( slice S3): the prefilled
+/* Not-yet-started / queued step rows (slice S3): the prefilled
    graph renders these as real rows now, not a lump trailer line —
    .substatus-pending falls through to .substatus-glyph's own ghost default
    (same tone the old lump line used), .substatus-queued gets a step up from
@@ -4430,7 +4430,7 @@ body {
   animation: fade-slide-down var(--dur-1) var(--ease-out);
 }
 
-/*  W3(c): the current model rejects images but the draft still has
+/* W3(c): the current model rejects images but the draft still has
    some attached — warn instead of silently dropping them; send stays
    blocked (composer-send/disabled) until the user switches models or
    removes the attachment. */
@@ -4548,7 +4548,7 @@ body {
   justify-self: end;
 }
 
-/* TASK 4236: visible reason the start-screen send is disabled (no project). */
+/* visible reason the start-screen send is disabled (no project). */
 .start-send-needs-project {
   padding: 0;
   border: 0;
@@ -4666,7 +4666,7 @@ body {
   color: var(--danger);
 }
 
-/* : the window is an assumed 8K fallback — dotted underline marks
+/* the window is an assumed 8K fallback — dotted underline marks
    the percent as approximate without competing with the warning/danger tint. */
 .composer-ctx-meter-assumed {
   text-decoration: underline dotted;
@@ -5227,7 +5227,7 @@ body {
   list-style: none;
 }
 
-/* : pending steers — sent to the host's steer queue, not yet part of
+/* pending steers — sent to the host's steer queue, not yet part of
    the transcript. Dashed border + italic text distinguish them from delivered
    transcript user_text bubbles and from the ordinary prompt queue. */
 .steer-queue-list {
@@ -5502,7 +5502,7 @@ body {
   color: var(--accent);
 }
 
-/*  §3.7 (part B): the divider between the five permission modes
+/* §3.7 (part B): the divider between the five permission modes
    and the Orchestrate toggle — the toggle is a tab-level state, not mode #6,
    so the visual grouping change communicates that before any copy does. Same
    hairline idiom as `.start-project-menu-divider` above. */
@@ -5660,7 +5660,7 @@ body {
   opacity: 0.7;
 }
 
-/* : the chip is live while a turn runs, and this muted tag says
+/* the chip is live while a turn runs, and this muted tag says
    when a pick lands ("next turn"). Muted accent, never a second colour family —
    it qualifies the label, it is not an alert. */
 .model-pill-midturn {
@@ -5690,7 +5690,7 @@ body {
   animation: scale-in var(--dur-2) var(--ease-spring);
 }
 
-/*  cut-2 (DoD 5): the shared drill-down rendered INSIDE the pill's
+/* cut-2 (DoD 5): the shared drill-down rendered INSIDE the pill's
    fixed-position wrapper must not bring `.start-model-menu`'s own absolute
    positioning/fallback cap with it — the wrapper already fixed the position,
    and the wrapper's inline max-height (from `modelPillMenuMaxHeightPx`) is
@@ -5817,7 +5817,7 @@ body {
   color: var(--text-3);
 }
 
-/* ── engine (Codex) model + preset controls (, EngineControls.tsx) ──
+/* ── engine (Codex) model + preset controls (EngineControls.tsx) ──
    Reuse `.model-pill*` verbatim for the chip/popover/item shell (nothing
    about that visual language is core-specific); these two rules are the
    only genuinely new pieces — a preset row's plain-language description
@@ -6295,7 +6295,7 @@ body {
   color: var(--danger);
 }
 
-/* : the neutral badge/plaque wash for a classifier-proven
+/* the neutral badge/plaque wash for a classifier-proven
    read-only command under still-high static metadata (core's Bash tool
    grades every command high/destructive) — information, not a warning. */
 .permission-risk-neutral,
@@ -6344,7 +6344,7 @@ body {
   color: var(--text-dim);
 }
 
-/* ── : ExitPlanMode plan review ── */
+/* ── ExitPlanMode plan review ── */
 
 /* A plan is prose, not a path or a command: wider well and a taller scroll
    budget than the generic ask, capped so the dialog never outgrows a short
@@ -6374,14 +6374,14 @@ body {
 
 /* Consequence line: says what Approve actually does. One notch above the
    generic "Mode:" footnote, since it is the decision the user is making.
-    reuses the same treatment for the Bash unknown-shell reason line. */
+   reuses the same treatment for the Bash unknown-shell reason line. */
 .permission-plan-hint,
 .permission-ask-hint {
   font-size: var(--fs-sm);
   color: var(--text-2);
 }
 
-/*  ( §2): per-command risk plaque for a Bash ask — the
+/* (§2): per-command risk plaque for a Bash ask — the
    classifier-derived note (read-only pipeline / named write-capable binary /
    unknown binary) under the ask's summary. Tinted by the ask's risk level
    using the SAME theme-aware washes as the modal header
@@ -7207,7 +7207,7 @@ body {
   background: var(--bg-elevated);
 }
 
-/* : missing-binary display state — a warning the user can act on
+/* missing-binary display state — a warning the user can act on
    (the row carries the catalog's install command), distinct from "Not started". */
 .lsp-state-not_installed {
   border-color: var(--warning);
@@ -7797,7 +7797,7 @@ body {
   background: color-mix(in srgb, var(--danger) 85%, black);
 }
 
-/* ──  CUT-S3 §3.3/§3.5: the split layout's right-column stack ──
+/* ── CUT-S3 §3.3/§3.5: the split layout's right-column stack ──
    Same drawer recipe as `.git-panel`/`.preview-panel` above (relative,
    flex column, `justify-self: end`, sidebar background, left border) — the
    grid column itself comes from `computeSessionContentColumns` (App.tsx). */
@@ -8010,9 +8010,9 @@ body {
   overflow: hidden;
 }
 
-/* ── : internal full-size image viewer ──
+/* ── internal full-size image viewer ──
    Rendered by MessageList as a sibling of the role="log" column (not inside
-   it).  follow-up: a real modal `<dialog>` (showModal) — the
+   it). follow-up: a real modal `<dialog>` (showModal) — the
    browser supplies the focus trap and the dimmed ::backdrop (the old fixed
    overlay div is gone). Internal-only by design: no window.open /
    shell.openExternal — Esc or a backdrop click closes. */
@@ -8063,7 +8063,7 @@ body {
   z-index: 14;
 }
 
-/*  accordion: one item = row + ITS OWN output, so an expanded
+/* accordion: one item = row + ITS OWN output, so an expanded
    output sits directly under its row, not under the whole list. */
 .background-tasks-item {
   display: flex;
@@ -8184,7 +8184,7 @@ body {
   word-break: break-all;
 }
 
-/* ──  §3.9 (part B): role picker dialog + Roles settings pane ── */
+/* ── §3.9 (part B): role picker dialog + Roles settings pane ── */
 
 .role-picker-dialog {
   padding: 0;
@@ -8454,7 +8454,7 @@ body {
   background: var(--bg-hover);
 }
 
-/* ── Sessions API settings pane ( redesign). Layout glue only: every
+/* ── Sessions API settings pane (redesign). Layout glue only: every
    control reuses a settings-* / connection-drawer-* class. ── */
 
 .sessions-api-enable-row {
@@ -8485,7 +8485,7 @@ body {
    `.sessions-api-step-body` wrapper in column 2. The number no longer spans a
    hard-coded count of rows, so a step may hold any number of children without
    an extra child auto-placing under the number and inflating the `auto`
-   column (: the copy notice's long `<pre>` pushed column 2
+   column (the copy notice's long `<pre>` pushed column 2
    off-screen). Column 2 is `minmax(0, 1fr)` so its content can shrink and a
    long command scrolls inside its own `<pre>` instead of widening the pane. */
 .sessions-api-step {

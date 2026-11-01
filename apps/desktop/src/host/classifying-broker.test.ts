@@ -1,5 +1,5 @@
 /**
- *  (4702 remainder): tests for the classifying broker decorator —
+ * (4702 remainder): tests for the classifying broker decorator —
  * engine-session approval coverage for the ask-zone classifier.
  *
  * Pins:
@@ -184,9 +184,9 @@ describe("withAskClassifier", () => {
     expect(events).toHaveLength(0);
   });
 
-  //  xfix D1: a CodexExec command approval (the Codex approval
+  // xfix D1: a CodexExec command approval (the Codex approval
   // bridge's name for a commandExecution ask) IS classified — normalized to
-  // the same Bash-shaped input the broker's own  rule retry uses —
+  // the same Bash-shaped input the broker's own rule retry uses —
   // so engine sessions get the classifier coverage the card promised.
   it("CodexExec with a string command IS consulted: allow resolves without the wrapped broker", async () => {
     const { broker, spy } = makeBroker();
@@ -212,7 +212,7 @@ describe("withAskClassifier", () => {
     expect(decision.behavior).toBe("deny");
   });
 
-  //  xfix D6: input destined for an ALREADY-RUNNING command
+  // xfix D6: input destined for an ALREADY-RUNNING command
   // (kind:"writeStdin") must never be classified on the stale command line —
   // the same exclusion the broker's rule matching and the plaque layer apply.
   it("CodexExec writeStdin is never classifiable: delegates untouched even with a string command", async () => {
@@ -247,7 +247,7 @@ describe("withAskClassifier", () => {
     expect(spy).toHaveBeenCalledOnce();
   });
 
-  //  xfix D5: while the Session reference is UNBOUND (the broker
+  // xfix D5: while the Session reference is UNBOUND (the broker
   // is decorated before the Session exists; a handshake-time or racing
   // approval can reach it first), the classifier must NOT run on an empty
   // human context — "(no user messages)" makes "consistent with what the
@@ -271,7 +271,7 @@ describe("withAskClassifier", () => {
     expect(decision.behavior).toBe("deny");
   });
 
-  //  xfix D8: the unattended latch denies asks fast.
+  // xfix D8: the unattended latch denies asks fast.
   // Consulting the classifier FIRST would burn a model call (up to the full
   // 8s timeout) before that fast deny on every ask of an unattended run.
   // The latch is checked BEFORE the consultation.

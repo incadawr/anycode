@@ -1,5 +1,5 @@
 /**
- * SessionSubagentPort ( CUT-S2 §2.2/§0.1/§0.2): the entry point for
+ * SessionSubagentPort (CUT-S2 §2.2/§0.1/§0.2): the entry point for
  * `Agent tier:"session"` — a full CHILD SESSION running in its own process,
  * as opposed to `SubagentPort` (ports/subagent.ts), which runs an in-process
  * child AgentLoop. This is a SEPARATE port, not a tier flag on SubagentPort,
@@ -68,14 +68,14 @@ export interface SessionSubagentRequest {
    */
   effort?: ReasoningEffort | "xhigh";
   /**
-   * Set ONLY by the engine-profile route (tools/agent.ts,  CUT-S4
+   * Set ONLY by the engine-profile route (tools/agent.ts, CUT-S4
    * §2.2): the child boots this engine instead of core. Never model-visible —
    * the model picks a profile NAME; the engine is the profile's own
    * frontmatter fact.
    */
   engine?: "claude" | "codex";
   /**
-   * R7 ( cross-review): set ONLY by the role-route stamping in
+   * R7 (cross-review): set ONLY by the role-route stamping in
    * tools/agent.ts when the route's resolved head entry actually stamped this
    * request's routing fields (caller passed none of model/provider). Consumed
    * ENTIRELY by the parent host's respawn bookkeeping (host/index.ts's run()
@@ -86,7 +86,7 @@ export interface SessionSubagentRequest {
    */
   routeStamped?: boolean;
   /**
-   *  срез 1: `Agent{tier:"session", detach:true}`'s own field,
+   * срез 1: `Agent{tier:"session", detach:true}`'s own field,
    * threaded straight through (tools/agent.ts validates it is only ever set
    * alongside `tier:"session"` before building this request). This flag is
    * whether a run's promise settles at admit vs. terminal is decided by the
@@ -166,7 +166,7 @@ export interface SessionSubagentOutcome extends SubagentOutcome {
 }
 
 /**
- *  /  wire: the result of delivering a follow-up message
+ * wire: the result of delivering a follow-up message
  * to the parent's OWN still-running child (`SessionSubagentPort.send`). The
  * `reason` vocabulary is presentation-only — `message` is the load-bearing
  * refusal text minted by main/host (mirroring `ChildRunEvent`'s rejected
@@ -181,7 +181,7 @@ export interface SessionSubagentPort {
   getStatus?(id: string): import("../subagents/status.js").ChildStatus | undefined;
   run(req: SessionSubagentRequest, opts: SubagentRunOptions): Promise<SessionSubagentOutcome>;
   /**
-   * : deliver a follow-up message to the parent's OWN RUNNING
+   * deliver a follow-up message to the parent's OWN RUNNING
    * child; never spawns, never resumes. `childSessionId` comes from that
    * run's accepted report; `text` is delivered as the child's next input
    * (mode next_turn). The original sync-join `run()` call keeps waiting and

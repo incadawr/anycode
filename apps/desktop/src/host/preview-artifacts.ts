@@ -1,6 +1,6 @@
 /**
  * Turn-end auto-open artifact collector (night-track wave-1 cut §1(a)/§2.8,
- *  96-E). A small pure class — zero I/O, engine-agnostic — that
+ * 96-E). A small pure class — zero I/O, engine-agnostic — that
  * Session drains once per turn (`turn_end`, including an aborted/cancelled
  * turn) to build the `PREVIEW_ARTIFACTS` message body (shared/preview.ts).
  *

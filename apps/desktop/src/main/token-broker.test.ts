@@ -236,7 +236,7 @@ describe("resolveProviderSelection — catalog selection matrix", () => {
       supportedTransports: ["openai-chat-completions"],
     },
   };
-  //  v2: the api-key read is keyed by CONNECTION id (`conn-<providerId>`
+  // v2: the api-key read is keyed by CONNECTION id (`conn-<providerId>`
   // for the fixture); the access token is minted per connection too.
   const deps = (s: AnycodeSettings) => ({
     settings: s,
@@ -283,7 +283,7 @@ describe("resolveProviderSelection — catalog selection matrix", () => {
     });
   });
 
-  describe("needsBaseUrl ( W5): a non-custom template entry (vLLM) still sources baseUrl from the connection", () => {
+  describe("needsBaseUrl (W5): a non-custom template entry (vLLM) still sources baseUrl from the connection", () => {
     it("substitutes the connection's baseUrl for a needsBaseUrl entry, unlike isCustom's bypass-to-legacy", async () => {
       const sel = await resolveProviderSelection(
         deps(settings({ id: "vllm", model: "m", baseUrl: "http://localhost:8000/v1" })),
@@ -301,7 +301,7 @@ describe("resolveProviderSelection — catalog selection matrix", () => {
     });
   });
 
-  describe("transport projection ( W5-FIX): resolveProviderSelection carries the RAW catalog default, never the resolved ladder", () => {
+  describe("transport projection (W5-FIX): resolveProviderSelection carries the RAW catalog default, never the resolved ladder", () => {
     // A dedicated fixture (not "z-ai" above) so this describe block's assertions
     // never perturb the pre-existing exact-`toEqual` tests elsewhere in this file.
     const transportCatalog: Record<string, CatalogSelectionInfo> = {
@@ -329,7 +329,7 @@ describe("resolveProviderSelection — catalog selection matrix", () => {
     });
   });
 
-  describe("active-connection model ( v2: no defaults folding)", () => {
+  describe("active-connection model (v2: no defaults folding)", () => {
     it("carries the active connection's model straight through (no defaults lookup)", async () => {
       const sel = await resolveProviderSelection(deps(settings({ id: "z-ai", model: "connection-model" })));
       expect(sel?.model).toBe("connection-model");
@@ -347,7 +347,7 @@ describe("resolveProviderSelection — catalog selection matrix", () => {
   });
 });
 
-// ── : the production proxy helper inside the real refresh ──
+// ── the production proxy helper inside the real refresh ──
 
 function proxiedSettings(connectionId: string, over: { proxyUrl?: string } = {}): AnycodeSettings {
   return {
@@ -370,7 +370,7 @@ function proxiedSettings(connectionId: string, over: { proxyUrl?: string } = {})
   } as AnycodeSettings;
 }
 
-describe("TokenBroker.getAccessToken —  production proxy helper", () => {
+describe("TokenBroker.getAccessToken — production proxy helper", () => {
   it("refreshes through the proxied token endpoint and persists the rotation", async () => {
     const vault = new FakeVault();
     vault.store.set("acme", { accessToken: "at-old", refreshToken: "rt-old", expiresAt: 500 });

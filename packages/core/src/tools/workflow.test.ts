@@ -154,7 +154,7 @@ describe("workflowTool", () => {
     });
     // Completed steps carry NO failure record: what the model sees of a
     // successful step is the definition author's call (outputTemplate/sink),
-    // never a payload duplicate ( DoD #4).
+    // never a payload duplicate (DoD #4).
     expect(result.output?.steps).toEqual([
       { stepId: "a", agentType: "general-purpose", status: "completed", turns: 1, toolCalls: 0, durationMs: 5 },
       { stepId: "b", agentType: "explore", status: "completed", turns: 1, toolCalls: 0, durationMs: 5 },
@@ -177,7 +177,7 @@ describe("workflowTool", () => {
     expect(workflowTool.formatResultForModel?.(result)).toContain("truncated");
   });
 
-  // : a precheck-failed outcome reaches the persisted payload with the
+  // a precheck-failed outcome reaches the persisted payload with the
   // SAME cap the normal run path applies — the engine caps its unknown-agentType
   // summary via capUtf8Bytes(…, WORKFLOW_OUTPUT_MAX_BYTES) and reports
   // truncated; the tool must render the existing truncation marker for it.
@@ -343,7 +343,7 @@ describe("workflowTool", () => {
     expect(emitted[6]).toMatchObject({ type: "workflow_end", status: "completed", completedSteps: 2, totalSteps: 2 });
   });
 
-  it("bridges step_end's failure and unlaunched fields onto workflow_step_end ( slice S2)", async () => {
+  it("bridges step_end's failure and unlaunched fields onto workflow_step_end (slice S2)", async () => {
     const port: WorkflowPort = {
       list: () => [meta("build")],
       run: async (_req, opts) => {
@@ -380,13 +380,13 @@ describe("workflowTool", () => {
   });
 });
 
-// Persisted workflow card snapshot ( slice S5). This pins that the
+// Persisted workflow card snapshot (slice S5). This pins that the
 // accumulator built in workflow/card-snapshot.ts actually reaches the tool
 // result via `presentation.workflow` — the reducer's own unit tests
 // (workflow/card-snapshot.test.ts) prove the reducer is correct in isolation,
 // but only THIS file proves the wiring in tools/workflow.ts actually attaches
 // it, mirroring tools/agent.test.ts's own "presentation attach" describe.
-describe("workflowTool — presentation attach ( slice S5)", () => {
+describe("workflowTool — presentation attach (slice S5)", () => {
   function progressSequence(): WorkflowProgress[] {
     return [
       {
@@ -409,7 +409,7 @@ describe("workflowTool — presentation attach ( slice S5)", () => {
         durationMs: 7,
         usage: { inputTokens: 30, outputTokens: 6, totalTokens: 36 },
       },
-      // "b" never actually launched — the synthetic skipped end ( S3).
+      // "b" never actually launched — the synthetic skipped end (S3).
       { kind: "step_end", stepId: "b", status: "skipped", turns: 0, durationMs: 0 },
       { kind: "end", status: "failed", completedSteps: 1, totalSteps: 2, durationMs: 20 },
     ];
@@ -462,7 +462,7 @@ describe("workflowTool — presentation attach ( slice S5)", () => {
     expect(result.presentation?.workflow?.activity.entries).toEqual([{ stepId: "a", toolName: "Read", summary: "a.ts" }]);
   });
 
-  it("carries a failed step's failure and unlaunched into the persisted card result ( slice S2)", async () => {
+  it("carries a failed step's failure and unlaunched into the persisted card result (slice S2)", async () => {
     const reason = 'Unknown agentType "nope" (available: general-purpose).';
     const port: WorkflowPort = {
       list: () => [meta("build")],
@@ -568,7 +568,7 @@ describe("workflowTool — presentation attach ( slice S5)", () => {
 });
 
 // ---------------------------------------------------------------------------
-//  slice S1. Before this, the tool boundary built a truthful reason for
+// slice S1. Before this, the tool boundary built a truthful reason for
 // every failed step and then threw it away, leaving the owner with nothing but
 // `Workflow "x" failed. Failed: b.` — every failure debugged by guessing.
 

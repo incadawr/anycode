@@ -232,9 +232,9 @@ describe("updater: no arbitrary-URL channel", () => {
   });
 });
 
-// ──  defect 3: auto-check schedule ──
+// ── defect 3: auto-check schedule ──
 
-describe("updater: auto-check schedule ( defect 3)", () => {
+describe("updater: auto-check schedule (defect 3)", () => {
   it("does not arm anything in a dev build (isPackaged=false) — no setTimer call at all", () => {
     const { schedule, armed } = fakeSchedule();
     const { deps } = makeDeps({ isPackaged: false, schedule });
@@ -385,9 +385,9 @@ describe("updater: auto-check schedule ( defect 3)", () => {
   });
 });
 
-// ──  defect 2: darwin honest manual-only path ──
+// ── defect 2: darwin honest manual-only path ──
 
-describe("updater: darwin honest manual-only path ( defect 2)", () => {
+describe("updater: darwin honest manual-only path (defect 2)", () => {
   it("on darwin, an update-available event decorates the status with manualOnly:true", () => {
     const { deps, autoUpdater, sent } = makeDeps({ platform: "darwin" });
     createUpdaterController(deps);
@@ -441,9 +441,9 @@ describe("updater: darwin honest manual-only path ( defect 2)", () => {
   });
 });
 
-// ──  defect 2: open-releases action ──
+// ── defect 2: open-releases action ──
 
-describe("updater: openReleasesPage ( defect 2)", () => {
+describe("updater: openReleasesPage (defect 2)", () => {
   it("calls openExternal with the exact fixed UPDATE_RELEASES_URL — no renderer-supplied argument exists to redirect it", () => {
     const openExternal = vi.fn();
     const { deps } = makeDeps({ openExternal });
@@ -476,7 +476,7 @@ describe("updater: openReleasesPage ( defect 2)", () => {
   });
 });
 
-// ── : beforeNetwork hook (updater proxy routing gate) ──
+// ── beforeNetwork hook (updater proxy routing gate) ──
 
 describe("updater: beforeNetwork hook", () => {
   it("a rejecting beforeNetwork fails check() with the same error and checkForUpdates is NEVER called", async () => {
