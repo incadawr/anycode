@@ -10134,6 +10134,9 @@ describe("dormant child posture admission foundation", () => {
     orchestrationPosture: "stable" | "quarantined";
     programmaticTurnStarted: boolean;
     childTerminalFinalized: boolean;
+    currentTurn: Promise<void> | null;
+    childLoopStatus: string | undefined;
+    childTurns: number;
     steerQueue: Array<{requestId: string; text: string; images?: ImageAttachment[]; origin?: "system"}>;
     drainAgentInbox(settledChild?: boolean): boolean;
     startNextQueuedSteerTurn(): "started" | "empty" | "blocked";
@@ -10158,7 +10161,7 @@ describe("dormant child posture admission foundation", () => {
     } finally { h.close(); }
   });
 
-  it("rechecks after child history flush before draining or terminal publication", async () => {
+  it.each([false, true])("rechecks after child history flush before draining or terminal publication (shutdown=%s)", async (shutdown) => {
     let enter!: () => void; const entered = new Promise<void>(resolve => { enter = resolve; });
     let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
     const h = createChildHarness({ steps: [], flushHistoryImpl: async () => { enter(); await gate; } });
@@ -10169,6 +10172,7 @@ describe("dormant child posture admission foundation", () => {
       const terminal = state.finalizeChildTerminal();
       await entered;
       state.orchestrationPosture = "quarantined";
+      if (shutdown) h.session.closeAdmissions();
       release();
       expect(await terminal).toBe("blocked");
       expect(state.steerQueue).toEqual(queued);
@@ -10189,5 +10193,91 @@ describe("dormant child posture admission foundation", () => {
       expect(h.onTerminal).not.toHaveBeenCalled();
       drain.mockRestore();
     } finally { h.close(); }
+  });
+
+  it.each([
+    ["success", false], ["failure", false], ["success", true], ["failure", true],
+  ] as const)("holds duplicate child frames after history flush %s (full shutdown=%s)", async (flushResult, fullShutdown) => {
+    let enter!: () => void; const entered = new Promise<void>(resolve => { enter = resolve; });
+    let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+    const h = createChildHarness({
+      steps: [textStep("done")],
+      envStatus: { telemetry: () => null, repoMap: () => null, flushTelemetry: async () => { enter(); await gate; } },
+      imageInputEnabled: () => true,
+      flushHistoryImpl: async () => { if (flushResult === "failure") throw new Error("synthetic flush failure"); },
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      const ready = await h.waitFor(isHostReady);
+      h.send({ type: "user_message", requestId: "same", text: "started payload" });
+      const started = await h.waitFor((m): m is Of<"turn_started"> => m.type === "turn_started" && m.requestId === "same");
+      await entered;
+      const image = { mediaType: "image/png" as const, data: "YQ==" };
+      h.send({ type: "user_message", requestId: "same", text: "queued duplicate", images: [image] });
+      h.send({ type: "user_message", requestId: "system", text: "system report", origin: "system" });
+      const state = h.session as unknown as ChildPostureTestState;
+      await h.waitUntil(() => state.steerQueue.length === 2);
+      state.orchestrationPosture = "quarantined";
+      const shutdown = fullShutdown ? h.session.shutdown() : (h.session.closeAdmissions(), null);
+      const turn = state.currentTurn;
+      expect(turn).not.toBeNull();
+      release();
+      await turn;
+      if (shutdown) await shutdown;
+      h.send({ type: "set_orchestrate", enabled: true, requestId: "sentinel" });
+      await h.waitFor((m): m is Of<"orchestrate_result"> => m.type === "orchestrate_result" && m.requestId === "sentinel");
+      expect(h.received.filter(m => m.type === "turn_rejected" && (m.requestId === "same" || m.requestId === "system"))).toEqual([]);
+      const diagnostics = h.received.filter(m => m.type === "user_message_unavailable" && (m.requestId === "same" || m.requestId === "system"));
+      expect(diagnostics).toEqual(expect.arrayContaining([
+        expect.objectContaining({ requestId: "same", reason: "posture_unavailable" }),
+        expect.objectContaining({ requestId: "system", reason: "posture_unavailable" }),
+      ]));
+      expect(state.steerQueue).toMatchObject([{ requestId: "same", text: "queued duplicate", images: [image] }, { requestId: "system", text: "system report", origin: "system" }]);
+      expect(h.onTerminal).not.toHaveBeenCalled();
+      const renderer = createDesktopStore({ schedule: () => {} });
+      renderer.getState().applyHostMessage(ready);
+      renderer.getState().recordSentMessage("started payload", [], "same", undefined, undefined, undefined, undefined, true);
+      renderer.getState().applyHostMessage(started);
+      for (const message of diagnostics) renderer.getState().applyHostMessage(message);
+      expect(renderer.getState().orchestrationDeliveries[0]).toMatchObject({ status: "started", requestId: "same", turnId: started.turnId });
+    } finally { release(); h.close(); }
+  });
+
+  it("preserves legacy child shutdown drain while posture is stable", async () => {
+    const h = createChildHarness({ steps: [] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      const state = h.session as unknown as ChildPostureTestState;
+      state.steerQueue = [{ requestId: "legacy", text: "queued" }];
+      h.session.closeAdmissions();
+      expect(await state.finalizeChildTerminal()).toBe("terminal");
+      expect(await h.waitFor((m): m is Of<"turn_rejected"> => m.type === "turn_rejected" && m.requestId === "legacy")).toMatchObject({ reason: "not_ready" });
+      expect(state.steerQueue).toEqual([]);
+      expect(h.onTerminal).toHaveBeenCalledTimes(1);
+    } finally { h.close(); }
+  });
+
+  it("does not terminal-reject a queued frame if posture blocks during rescue and shutdown", async () => {
+    let enter!: () => void; const entered = new Promise<void>(resolve => { enter = resolve; });
+    let release!: (value: string) => void; const gate = new Promise<string>(resolve => { release = resolve; });
+    const h = createChildHarness({ steps: [], wrapUpRescue: async () => { enter(); return gate; } });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      const state = h.session as unknown as ChildPostureTestState;
+      state.childLoopStatus = "max_turns";
+      state.childTurns = 1;
+      const terminal = state.finalizeChildTerminal();
+      await entered;
+      state.steerQueue = [{ requestId: "same", text: "queued during rescue" }];
+      state.orchestrationPosture = "quarantined";
+      h.session.closeAdmissions();
+      release("synthetic result");
+      expect(await terminal).toBe("blocked");
+      expect(await h.waitFor((m): m is Of<"user_message_unavailable"> => m.type === "user_message_unavailable" && m.requestId === "same")).toMatchObject({ reason: "posture_unavailable" });
+      expect(state.steerQueue).toMatchObject([{ requestId: "same", text: "queued during rescue" }]);
+      expect(h.onTerminal).not.toHaveBeenCalled();
+    } finally { release("synthetic result"); h.close(); }
   });
 });

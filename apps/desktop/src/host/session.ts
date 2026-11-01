@@ -2519,7 +2519,12 @@ export class Session {
       clearTimeout(this.reconnectGraceTimer);
       this.reconnectGraceTimer = null;
     }
-    for (const envelope of this.agentInbox.splice(0)) this.publishAgentDelivery({ envelope, state: "rejected", detail: "Session closing before queued delivery" });
+    // A blocked posture cannot safely turn retained work into a terminal
+    // result. Keep the in-memory inbox; shutdown does not make it durable.
+    while (!this.postureBlocked() && this.agentInbox.length > 0) {
+      const envelope = this.agentInbox.shift();
+      if (envelope) this.publishAgentDelivery({ envelope, state: "rejected", detail: "Session closing before queued delivery" });
+    }
   }
 
   /** Graceful shutdown: abort the turn, release parked asks, await turn teardown. */
@@ -4367,22 +4372,38 @@ export class Session {
     this.steerQueue.push(entry);
   }
 
+  private diagnoseBlockedSteerFrames(): void {
+    for (const queued of this.steerQueue) {
+      this.outbound.sendDirect({ type: "user_message_unavailable", requestId: queued.requestId, reason: "posture_unavailable" });
+    }
+  }
+
   /**
-   * Empties the steer queue with honest `turn_rejected "not_ready"` replies
-   * (§10.11.1 N1, extracted from §10.10.1 O7б's flush-failure path so
-   * `finalizeChildTerminal`'s shutdown branch can reuse it byte-identically):
-   * every queued message gets a reply, never a silent drop — used on the two
-   * paths that mean "no more turns will ever run against this child" (a
-   * broken durable sink, or shutdown already in progress).
+   * Stable shutdown/flush failure rejects and removes queued work. Blocked
+   * posture instead sends frame diagnostics and retains the in-memory queue:
+   * an ID may already belong to a started turn and memory is not durable.
    */
-  private rejectQueuedSteerMessages(): void {
-    for (const envelope of this.agentInbox.splice(0)) this.publishAgentDelivery({ envelope, state: "rejected", detail: "Child session cannot accept queued delivery" });
+  private rejectQueuedSteerMessages(): "rejected" | "blocked" {
+    if (this.postureBlocked()) {
+      this.diagnoseBlockedSteerFrames();
+      return "blocked";
+    }
+    while (this.agentInbox.length > 0) {
+      if (this.postureBlocked()) { this.diagnoseBlockedSteerFrames(); return "blocked"; }
+      const envelope = this.agentInbox.shift();
+      if (envelope) this.publishAgentDelivery({ envelope, state: "rejected", detail: "Child session cannot accept queued delivery" });
+    }
     while (this.steerQueue.length > 0) {
+      if (this.postureBlocked()) {
+        this.diagnoseBlockedSteerFrames();
+        return "blocked";
+      }
       const queued = this.steerQueue.shift();
       if (queued !== undefined) {
         this.outbound.emit({ type: "turn_rejected", requestId: queued.requestId, reason: "not_ready" });
       }
     }
+    return "rejected";
   }
 
   /**
@@ -4697,7 +4718,7 @@ export class Session {
     // every caller (onChildTurnSettled AND finalizeChildTerminal's two re-checks) then
     // falls through to committing the terminal with the real reason. Core recoverable
     // provider errors set no such safe code and keep the drain-into-retry behavior.
-    if (this.childEngineDead) { this.rejectQueuedSteerMessages(); return "empty"; }
+    if (this.childEngineDead) return this.rejectQueuedSteerMessages() === "blocked" ? "blocked" : "empty";
     // cross-review F4: a chain that starts here is a NEW run
     // of the ladder — the refusal latched by an earlier chain ended THAT
     // chain, not this one. Cleared only once a chain actually started, so a
@@ -4747,9 +4768,9 @@ export class Session {
    * §10.12.1/§10.12.3: the drain above only runs while `!this.shuttingDown`
    * — once shutdown has begun, no new turn may start (the engine is already
    * mid-dispose), so this goes straight to `finalizeChildTerminal()`, which
-   * empties the queue with honest rejects instead (shutdown = the second
-   * legal path to draining the queue, symmetric with the flush-failure path,
-   * §10.10.1 O7б). `startNextQueuedSteerTurn()` (§10.12.3) is shared with
+   * empties the queue in stable posture instead (§10.10.1 O7б). Blocked
+   * posture retains it and returns `blocked`. `startNextQueuedSteerTurn()`
+   * (§10.12.3) is shared with
    * `finalizeChildTerminal`'s own re-check below, so a refusal from
    * `acceptUserMessage` here is spent and moved past exactly like it is
    * there — this call site used to invoke `acceptUserMessage` directly and
@@ -4848,13 +4869,13 @@ export class Session {
     try {
       await this.child.flushHistory();
     } catch (error) {
-      if (!this.shuttingDown && this.postureBlocked()) return "blocked";
+      if (this.postureBlocked()) { if (this.shuttingDown) this.diagnoseBlockedSteerFrames(); return "blocked"; }
       // Flush-failure path (§10.10.1 O7б): the durable sink is broken, so
       // running more steer turns against it is pointless — every message
       // parked during the flush is rejected honestly instead of silently
       // lost (the O7 bug), and the error terminal publishes as-is.
       const flushDurationMs = Date.now() - this.childStartedAt;
-      this.rejectQueuedSteerMessages();
+      if (this.rejectQueuedSteerMessages() === "blocked") return "blocked";
       this.childTerminalFinalized = true;
       // Read the dedicated-port claim ONCE for the terminal being reported.
       const responseModel = this.child.responseModel?.();
@@ -4875,10 +4896,11 @@ export class Session {
       }
       return "terminal";
     }
+    if (this.postureBlocked()) { if (this.shuttingDown) this.diagnoseBlockedSteerFrames(); return "blocked"; }
     if (this.shuttingDown) {
       // §10.12.1: shutdown = the second legal drain path (see docstring
       // above) — reject-empty rather than start anything new.
-      this.rejectQueuedSteerMessages();
+      if (this.rejectQueuedSteerMessages() === "blocked") return "blocked";
     } else {
       const result = this.startNextQueuedSteerTurn();
       if (result === "started") return "drained";
@@ -4916,7 +4938,7 @@ export class Session {
       // — never latch the terminal while the queue holds an undrained steer
       // or shutdown has begun mid-rescue.
       if (this.shuttingDown) {
-        this.rejectQueuedSteerMessages();
+        if (this.rejectQueuedSteerMessages() === "blocked") return "blocked";
       } else {
         const result = this.startNextQueuedSteerTurn();
         if (result === "started") return "drained";

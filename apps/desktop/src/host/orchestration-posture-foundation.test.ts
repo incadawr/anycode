@@ -123,6 +123,9 @@ describe("dormant orchestration posture admission foundation", () => {
       const newer = { ...envelope, messageId: "new" };
       expect((await h.session.receiveAgentMessage(newer)).state).toBe("rejected");
       expect(state.agentInbox).toEqual([envelope]);
+      h.session.closeAdmissions();
+      expect(state.agentInbox).toEqual([envelope]);
+      expect(h.session.agentMessageStatus("old")?.state).toBe("queued");
     } finally { h.close(); }
   });
 
