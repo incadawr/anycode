@@ -3104,6 +3104,9 @@ void app.whenReady().then(async () => {
     // §5 / design review H-01: refreshed after the vault write and
     // before the renderer hears about the mutation.
     refreshProxySecrets: refreshProxyPasswordCache,
+    // The save-time guard re-check must resolve a `system` rung with the same
+    // OS answer the fetch used, or a fetched list could never be saved.
+    systemProxy: systemProxyDelegate,
     // fired after a successful secret write/clear, BEFORE onMutation
     // (same ordering discipline as refreshProxySecrets just above).
     onSecretWritten: noteRecognizerSecretWrite,

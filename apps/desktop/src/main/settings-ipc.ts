@@ -31,7 +31,7 @@ import { loadSettings, saveSettings, withSettingsFileLock } from "../settings/fi
 import { keybindingsSchema, mergeSettings, settingsSchema, roleProfilesWriteSchema } from "../settings/schema.js";
 import { RECOGNIZER_SET_CHANNEL } from "../shared/recognizer.js";
 import type { RecognizerSetRequest } from "../shared/recognizer.js";
-import type { ProxyProfile, ProxyProfileDeleteResult } from "../shared/proxy.js";
+import type { ProxyProfile, ProxyProfileDeleteResult, SystemProxyResolver } from "../shared/proxy.js";
 import {
   findProxyProfile,
   isProxyProfileSecretKey,
@@ -184,6 +184,14 @@ export interface SettingsIpcDeps {
    * error.
    */
   refreshProxySecrets?: () => void | Promise<void>;
+  /**
+   * The system-proxy resolver, so the save-time guard re-check resolves a
+   * `system` rung exactly as the fetch that produced the guard did. Absent
+   * (unit fixtures) makes a `system` profile materialize DIRECT — the same
+   * default everywhere else, and the same answer the fetch would have taken
+   * with no resolver at all.
+   */
+  systemProxy?: SystemProxyResolver;
   /**
    * Fired after a successful secret write/clear, BEFORE onMutation;
    * same ordering discipline as refreshProxySecrets): receives the written key
@@ -1883,7 +1891,7 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
       return { ok: false, reason: "not_found" };
     }
     if (req.fetchedModels) {
-      const context = await prepareModelFetchContext(loaded.settings, existing, deps.vault, req.fetchedModels.targetUrl);
+      const context = await prepareModelFetchContext(loaded.settings, existing, deps.vault, req.fetchedModels.targetUrl, deps.systemProxy);
       if (!context.ok || context.guard !== req.fetchedModels.guard) return { ok: false, reason: "stale_fetch" };
     }
     if (req.fetchedModels) {
