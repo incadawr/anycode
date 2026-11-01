@@ -10,16 +10,20 @@
  *    refusal reasons, and the new session row (the target account is what its
  *    tab's argv will be built from).
  */
-import { mkdir, mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SqlitePersistenceAdapter, type SessionMeta } from "@anycode/core";
+import { SqlitePersistenceAdapter, type ContinuationClaim, type SessionMeta } from "@anycode/core";
 import type { CodexAccountOption } from "../shared/codex-account.js";
 import {
+  CONTINUATION_CLAIM_TTL_MS,
   copyCodexRolloutForThread,
   handleCodexContinueOnAccount,
+  registerCodexContinueIpc,
+  snapshotChanged,
   type CodexContinueDeps,
+  type CodexContinueIpc,
 } from "./codex-continue.js";
 
 const THREAD_ID = "0199a1b2-3c4d-7e8f-9a0b-1c2d3e4f5a6b";
@@ -55,7 +59,7 @@ describe("copyCodexRolloutForThread", () => {
       threadId: THREAD_ID,
     });
 
-    expect(result).toEqual({ ok: true, relativePath: ROLLOUT_RELATIVE, copied: true });
+    expect(result).toEqual({ ok: true, relativePath: ROLLOUT_RELATIVE });
     const targetPath = join(target, ROLLOUT_RELATIVE);
     expect(await readFile(targetPath, "utf8")).toBe(ROLLOUT_TEXT);
     // The source is untouched (the exhausted tab keeps working).
@@ -86,7 +90,7 @@ describe("copyCodexRolloutForThread", () => {
       threadId: THREAD_ID,
     });
 
-    expect(result).toMatchObject({ ok: false, reason: "rollout_exists", detail: expect.stringContaining("may be outdated or in use") });
+    expect(result).toMatchObject({ ok: false, reason: "target_exists", detail: expect.stringContaining("may be outdated or in use") });
     expect(await readFile(existing, "utf8")).toBe("OLDER-COPY");
   });
 
@@ -94,7 +98,7 @@ describe("copyCodexRolloutForThread", () => {
     const source=join(root,"a","sessions"), target=join(root,"b","sessions");
     await seedRollout(source); await seedRollout(target);
     const result=await copyCodexRolloutForThread({sourceSessionsDir:source,targetSessionsDir:target,threadId:THREAD_ID});
-    expect(result).toMatchObject({ok:false,reason:"rollout_exists"});
+    expect(result).toMatchObject({ok:false,reason:"target_exists"});
     expect(await readFile(join(target,ROLLOUT_RELATIVE),"utf8")).toBe(ROLLOUT_TEXT);
   });
 
@@ -111,6 +115,70 @@ describe("copyCodexRolloutForThread", () => {
     expect(await readFile(join(root, "account-b", "auth.json"), "utf8")).toBe('{"token":"other"}');
   });
 
+  it("matches the thread id as a WHOLE segment — a rollout whose id merely contains it is not this conversation", async () => {
+    const source = join(root, "a", "sessions");
+    const target = join(root, "b", "sessions");
+    await mkdir(join(source, "2026", "10", "30"), { recursive: true });
+    // Same shape, and the wanted id appears as a substring of the actual id:
+    // `includes()` copied THIS file, i.e. the wrong conversation.
+    await writeFile(
+      join(source, "2026", "10", "30", `rollout-2026-10-30T10-00-00-x${THREAD_ID}.jsonl`),
+      ROLLOUT_TEXT,
+    );
+
+    const result = await copyCodexRolloutForThread({ sourceSessionsDir: source, targetSessionsDir: target, threadId: THREAD_ID });
+
+    expect(result).toMatchObject({ ok: false, reason: "rollout_missing" });
+  });
+
+  it("matches the thread id as a whole segment even when it is not first in the name", async () => {
+    const source = join(root, "a", "sessions");
+    const target = join(root, "b", "sessions");
+    await mkdir(join(source, "2026", "10", "30"), { recursive: true });
+    await writeFile(
+      join(source, "2026", "10", "30", `rollout-2026-10-30T10-00-00-suffixed-${THREAD_ID}.jsonl`),
+      ROLLOUT_TEXT,
+    );
+
+    const result = await copyCodexRolloutForThread({ sourceSessionsDir: source, targetSessionsDir: target, threadId: THREAD_ID });
+
+    expect(result).toMatchObject({ ok: true, relativePath: join("2026", "10", "30", `rollout-2026-10-30T10-00-00-suffixed-${THREAD_ID}.jsonl`) });
+  });
+
+  it("refuses to choose between two rollouts that both claim the thread", async () => {
+    const source = join(root, "a", "sessions");
+    const target = join(root, "b", "sessions");
+    await seedRollout(source);
+    // A second copy in another directory is what makes "the first match wins"
+    // unsafe: it silently picks one of two different histories.
+    await mkdir(join(source, "archived"), { recursive: true });
+    await writeFile(join(source, "archived", `rollout-2026-10-29T09-00-00-${THREAD_ID}.jsonl`), "OTHER-HISTORY");
+
+    const result = await copyCodexRolloutForThread({ sourceSessionsDir: source, targetSessionsDir: target, threadId: THREAD_ID });
+
+    expect(result).toMatchObject({ ok: false, reason: "rollout_ambiguous" });
+    expect(result.ok ? "" : result.detail).toContain("2 rollouts");
+    expect(await readFile(join(target, ROLLOUT_RELATIVE), "utf8").catch(() => "absent")).toBe("absent");
+  });
+
+  it("refuses an unlistable source home instead of reporting the rollout missing", async () => {
+    const result = await copyCodexRolloutForThread({
+      sourceSessionsDir: join(root, "does-not-exist", "sessions"),
+      targetSessionsDir: join(root, "b", "sessions"),
+      threadId: THREAD_ID,
+    });
+
+    expect(result).toMatchObject({ ok: false, reason: "source_unreadable" });
+    expect(result.ok ? "" : result.detail).toContain("NOT assumed to be empty");
+  });
+
+  it("treats a source that changed while being copied as a failed snapshot, in all three directions", () => {
+    const base = { size: 100, mtimeMs: 1_000 };
+    expect(snapshotChanged(base, { size: 100, mtimeMs: 1_000 })).toBe(false);
+    expect(snapshotChanged(base, { size: 140, mtimeMs: 1_000 })).toBe(true);
+    expect(snapshotChanged(base, { size: 100, mtimeMs: 1_500 })).toBe(true);
+  });
+
   it("refuses a thread id that is not a plain token (it is only ever used for matching, never as a path)", async () => {
     const result = await copyCodexRolloutForThread({
       sourceSessionsDir: join(root, "a"),
@@ -122,6 +190,28 @@ describe("copyCodexRolloutForThread", () => {
 });
 
 describe("handleCodexContinueOnAccount", () => {
+  /**
+   * Cross-process claim state, shared by every harness in one test: that is the
+   * whole point of the claim — two "processes" must collide on it.
+   */
+  let claims: Map<string, number>;
+  let released: string[];
+  let clock: number;
+  const claimKey = (threadId: string, accountId: string): string => `${threadId}\u0000${accountId}`;
+  const claim = async (threadId: string, accountId: string, ttlMs: number): Promise<ContinuationClaim> => {
+    const key = claimKey(threadId, accountId);
+    const held = claims.get(key);
+    if (held !== undefined && held > clock) return "held";
+    claims.set(key, clock + ttlMs);
+    return held === undefined ? "claimed" : "taken_over";
+  };
+
+  beforeEach(() => {
+    claims = new Map();
+    released = [];
+    clock = Date.now();
+  });
+
   interface Harness {
     deps: CodexContinueDeps;
     created: Array<Omit<SessionMeta, "createdAt" | "updatedAt">>;
@@ -165,6 +255,12 @@ describe("handleCodexContinueOnAccount", () => {
         if (accountId === "account-b") return accountBSessionsDir;
         if (accountId === "system") return systemSessionsDir;
         return null;
+      },
+      enabled: () => true,
+      claimContinuation: (threadId, accountId, ttlMs) => claim(threadId, accountId, ttlMs),
+      releaseContinuation: async (threadId, accountId) => {
+        released.push(`${threadId}\u0000${accountId}`);
+        claims.delete(`${threadId}\u0000${accountId}`);
       },
       createSessionFromSource: async (_sourceId, meta) => {
         created.push(meta);
@@ -296,7 +392,7 @@ describe("handleCodexContinueOnAccount", () => {
     expect(first).toMatchObject({ok:false,reason:"copy_failed",detail:expect.stringContaining("A copy was left on the target account")});
     expect(first.ok ? "" : first.detail).toContain("A retry on that account will be blocked");
     expect(JSON.stringify(first)).not.toContain("synthetic-private-detail");
-    expect(await handleCodexContinueOnAccount(h.deps,{tabId:"tab-1",accountId:"account-b"})).toMatchObject({ok:false,reason:"rollout_exists"});
+    expect(await handleCodexContinueOnAccount(h.deps,{tabId:"tab-1",accountId:"account-b"})).toMatchObject({ok:false,reason:"target_exists"});
     expect(createSessionFromSource).toHaveBeenCalledOnce();
     expect(h.opened).toEqual([]);
     expect(await readFile(join(h.accountBSessionsDir,ROLLOUT_RELATIVE),"utf8")).toBe(ROLLOUT_TEXT);
@@ -306,7 +402,7 @@ describe("handleCodexContinueOnAccount", () => {
     const h = await harness({createSessionFromSource:async () => null});
     await seedRollout(h.accountBSessionsDir, "existing-fixture");
     const result = await handleCodexContinueOnAccount(h.deps, {tabId:"tab-1",accountId:"account-b"});
-    expect(result).toMatchObject({ok:false,reason:"rollout_exists"});
+    expect(result).toMatchObject({ok:false,reason:"target_exists"});
     expect(h.opened).toEqual([]);
     expect(await readFile(join(h.accountBSessionsDir, ROLLOUT_RELATIVE), "utf8")).toBe("existing-fixture");
   });
@@ -319,7 +415,7 @@ describe("handleCodexContinueOnAccount", () => {
     try {
       await writer.write("partial");
       const result=await handleCodexContinueOnAccount(h.deps,{tabId:"tab-1",accountId:"account-b"});
-      expect(result).toMatchObject({ok:false,reason:"rollout_exists"});
+      expect(result).toMatchObject({ok:false,reason:"target_exists"});
       expect(h.created).toEqual([]); expect(h.opened).toEqual([]);
       expect(await readFile(target,"utf8")).toBe("partial");
       await writer.write("-completed");
@@ -336,7 +432,7 @@ describe("handleCodexContinueOnAccount", () => {
     expect(await handleCodexContinueOnAccount(h.deps,{tabId:"tab-1",accountId:"account-b"})).toMatchObject({ok:false,reason:"unknown_session"});
     await seedRollout(h.sourceSessionsDir, "newer-rollout-v2");
     const retry = await handleCodexContinueOnAccount(h.deps,{tabId:"tab-1",accountId:"account-b"});
-    expect(retry).toMatchObject({ok:false,reason:"rollout_exists",detail:expect.stringContaining("may be outdated or in use")});
+    expect(retry).toMatchObject({ok:false,reason:"target_exists",detail:expect.stringContaining("may be outdated or in use")});
     expect(attempts).toBe(1);
     expect(h.opened).toEqual([]);
     expect(await readFile(join(h.accountBSessionsDir,ROLLOUT_RELATIVE),"utf8")).toBe(ROLLOUT_TEXT);
@@ -378,7 +474,7 @@ describe("handleCodexContinueOnAccount", () => {
   it("retains the session when the tab reports it is already open", async () => {
     const h = await harness({openResumeTab:async()=>({ok:false as const,reason:"already_open"})});
     const result = await handleCodexContinueOnAccount(h.deps, {tabId:"tab-1",accountId:"account-b"});
-    expect(result).toMatchObject({ok:false,reason:"tab_failed",detail:expect.stringContaining("did not delete the session")});
+    expect(result).toMatchObject({ok:false,reason:"tab_failed",detail:expect.stringContaining("was not deleted")});
     expect(h.deleted).toEqual([]);
     expect(await readFile(join(h.accountBSessionsDir, ROLLOUT_RELATIVE), "utf8")).toBe(ROLLOUT_TEXT);
   });
@@ -396,7 +492,9 @@ describe("handleCodexContinueOnAccount", () => {
     const waiting=handleCodexContinueOnAccount(first.deps, {tabId:"tab-1",accountId:"account-b"});
     await started;
     const secondResult=await handleCodexContinueOnAccount(second.deps, {tabId:"tab-1",accountId:"account-b"});
-    expect(secondResult).toMatchObject({ok:false,reason:"rollout_exists"});
+    // Refused by the CLAIM, not by the filesystem: the copy has not even been
+    // attempted yet, so two processes never race on the shared target home.
+    expect(secondResult).toMatchObject({ok:false,reason:"already_open"});
     expect(second.created).toEqual([]);
     expect(second.opened).toEqual([]);
     release();
@@ -416,11 +514,157 @@ describe("handleCodexContinueOnAccount", () => {
 
   it("reports a missing rollout instead of opening a tab on a conversation it could not carry", async () => {
     const h = await harness();
-    await rm(h.sourceSessionsDir, { recursive: true, force: true });
+    await rm(join(h.sourceSessionsDir, ROLLOUT_RELATIVE), { force: true });
     const result = await handleCodexContinueOnAccount(h.deps, { tabId: "tab-1", accountId: "account-b" });
 
     expect(result).toMatchObject({ ok: false, reason: "rollout_missing" });
     expect(h.opened).toEqual([]);
     expect(h.created).toHaveLength(0);
+  });
+
+  it("does NOT call an unreadable source home 'missing': the two are different answers", async () => {
+    const h = await harness();
+    // The whole home is gone: enumeration fails, which must never be reported as
+    // "no rollout" — a user told "missing" stops looking for their history.
+    await rm(h.sourceSessionsDir, { recursive: true, force: true });
+    const result = await handleCodexContinueOnAccount(h.deps, { tabId: "tab-1", accountId: "account-b" });
+
+    expect(result).toMatchObject({ ok: false, reason: "source_unreadable" });
+    expect(h.opened).toEqual([]);
+    expect(h.created).toHaveLength(0);
+    expect(await readFile(join(h.accountBSessionsDir, ROLLOUT_RELATIVE), "utf8").catch(() => "absent")).toBe("absent");
+  });
+
+  it("refuses when the kill switch is off, before any account lookup or file operation", async () => {
+    const h = await harness({ enabled: () => false });
+    const sessionsDir = vi.fn(h.deps.sessionsDir);
+
+    const result = await handleCodexContinueOnAccount({ ...h.deps, sessionsDir }, { tabId: "tab-1", accountId: "account-b" });
+
+    expect(result).toMatchObject({ ok: false, reason: "temporarily_unavailable" });
+    expect(result.ok ? "" : result.detail).toContain("temporarily unavailable");
+    expect(sessionsDir).not.toHaveBeenCalled();
+    expect(h.created).toEqual([]);
+    expect(h.opened).toEqual([]);
+  });
+
+  it("refuses while another process holds a live claim and never copies into the shared home", async () => {
+    claims.set(claimKey(THREAD_ID, "account-b"), clock + CONTINUATION_CLAIM_TTL_MS);
+    const h = await harness();
+
+    const result = await handleCodexContinueOnAccount(h.deps, { tabId: "tab-1", accountId: "account-b" });
+
+    expect(result).toMatchObject({ ok: false, reason: "already_open" });
+    expect(result.ok ? "" : result.detail).toContain("another window");
+    expect(h.created).toEqual([]);
+    expect(h.opened).toEqual([]);
+    expect(await readFile(join(h.accountBSessionsDir, ROLLOUT_RELATIVE), "utf8").catch(() => "absent")).toBe("absent");
+  });
+
+  it("takes over an EXPIRED claim but says the earlier transfer may be incomplete", async () => {
+    claims.set(claimKey(THREAD_ID, "account-b"), clock - 1);
+    const h = await harness({ createSessionFromSource: async () => null });
+
+    const result = await handleCodexContinueOnAccount(h.deps, { tabId: "tab-1", accountId: "account-b" });
+
+    // The refusal is the registration one, but it now carries the takeover fact.
+    expect(result).toMatchObject({ ok: false, reason: "unknown_session" });
+    expect(result.ok ? "" : result.detail).toContain("did not report success");
+  });
+
+  it("releases the claim on success, so a finished continue cannot block the next one for a whole TTL", async () => {
+    const h = await harness();
+
+    expect(await handleCodexContinueOnAccount(h.deps, { tabId: "tab-1", accountId: "account-b" })).toMatchObject({ ok: true });
+
+    expect(released).toEqual([claimKey(THREAD_ID, "account-b")]);
+    expect(claims.has(claimKey(THREAD_ID, "account-b"))).toBe(false);
+  });
+
+  it("releases the claim on every refusal, so one failure cannot wedge the action", async () => {
+    const h = await harness({ createSessionFromSource: async () => null });
+
+    await handleCodexContinueOnAccount(h.deps, { tabId: "tab-1", accountId: "account-b" });
+
+    expect(released).toEqual([claimKey(THREAD_ID, "account-b")]);
+  });
+
+  it("copies through a temp file and leaves no temp behind (a half-written rollout must never sit at the target name)", async () => {
+    const h = await harness();
+    await handleCodexContinueOnAccount(h.deps, { tabId: "tab-1", accountId: "account-b" });
+
+    const leftovers = await readdir(join(h.accountBSessionsDir, "tmp")).catch(() => ["no tmp dir"]);
+    expect(leftovers).toEqual([]);
+  });
+});
+
+describe("registerCodexContinueIpc", () => {
+  /** Captures the registered listener so the seam can be driven without Electron. */
+  function ipcSeam(): { handle: CodexContinueIpc["handle"] & ReturnType<typeof vi.fn>; invoke: (raw: unknown) => Promise<unknown> } {
+    let listener: ((event: unknown, raw: unknown) => Promise<unknown>) | undefined;
+    const handle = vi.fn(
+      (_channel: string, fn: (event: unknown, raw: unknown) => Promise<unknown>): unknown => {
+        listener = fn;
+        return undefined;
+      },
+    ) as CodexContinueIpc["handle"] & ReturnType<typeof vi.fn>;
+    return {
+      handle,
+      invoke: async (raw: unknown) => {
+        if (listener === undefined) throw new Error("no listener registered");
+        return listener({}, raw);
+      },
+    };
+  }
+
+  const deps = (): CodexContinueDeps => ({
+    tab: () => undefined,
+    session: async () => null,
+    accounts: async () => [],
+    sessionsDir: async () => null,
+    enabled: () => true,
+    claimContinuation: async () => "claimed",
+    releaseContinuation: async () => {},
+    createSessionFromSource: async () => null,
+    deleteSession: async () => {},
+    openResumeTab: async () => ({ ok: true as const, tabId: "tab" }),
+    randomUUID: () => "id",
+  });
+
+  it("registers the channel once and validates the payload before any dependency is touched", async () => {
+    const seam = ipcSeam();
+    const resolveDeps = vi.fn(deps);
+    registerCodexContinueIpc(seam, resolveDeps);
+
+    expect(seam.handle).toHaveBeenCalledTimes(1);
+
+    for (const malformed of [null, "text", 42, {}, { tabId: "tab-1" }, { tabId: "", accountId: "account-b" }, { tabId: "tab-1", accountId: 7 }]) {
+      expect(await seam.invoke(malformed)).toMatchObject({ ok: false, reason: "unknown_tab" });
+    }
+    // A malformed frame must never resolve persistence or reach the filesystem.
+    expect(resolveDeps).not.toHaveBeenCalled();
+  });
+
+  it("answers unknown_session when storage is not open yet, exactly as the inline handler did", async () => {
+    const seam = ipcSeam();
+    registerCodexContinueIpc(seam, () => null);
+
+    expect(await seam.invoke({ tabId: "tab-1", accountId: "account-b" })).toMatchObject({
+      ok: false,
+      reason: "unknown_session",
+      detail: "storage is not ready yet",
+    });
+  });
+
+  it("delegates a well-formed frame and is resolved per request, so a restored setting needs no restart", async () => {
+    const seam = ipcSeam();
+    let resolve = deps();
+    registerCodexContinueIpc(seam, () => resolve);
+    resolve = { ...resolve, enabled: () => false };
+
+    expect(await seam.invoke({ tabId: "tab-1", accountId: "account-b" })).toMatchObject({
+      ok: false,
+      reason: "temporarily_unavailable",
+    });
   });
 });

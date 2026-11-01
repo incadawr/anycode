@@ -139,6 +139,13 @@ export type SessionMetaPatch = Partial<
  * `sessions` (roots plus cascaded children); `counts` are the per-table rows
  * the cascade deleted. Unknown ids are a no-op (absent from `deleted`).
  */
+/**
+ * Outcome of `claimContinuation`. `taken_over` is distinct from `claimed` on
+ * purpose: an expired claim means the previous transfer was abandoned midway,
+ * which is a fact the refusal text must not hide.
+ */
+export type ContinuationClaim = "claimed" | "taken_over" | "held";
+
 export interface SessionDeleteSummary {
   deleted: string[];
   removedIds: string[];
@@ -154,6 +161,36 @@ export interface SessionDeleteSummary {
 
 export interface PersistencePort {
   createSession(meta: Omit<SessionMeta, "createdAt" | "updatedAt">): Promise<SessionMeta>;
+  /**
+   * Atomically create a successor row ONLY while `sourceId` still exists, is a
+   * ROOT row, and still owns the SAME native reference (`engineId` +
+   * `externalSessionRef`) that `meta` carries; `null` when any of that no
+   * longer holds. The check and the insert run in ONE `BEGIN IMMEDIATE`
+   * transaction, so the source cannot disappear or be re-pointed between the
+   * read and the write — the reason a separate `getSession` + `createSession`
+   * is not enough for a continuation.
+   */
+  createSessionFromSource(
+    sourceId: string,
+    meta: Omit<SessionMeta, "createdAt" | "updatedAt">,
+  ): Promise<SessionMeta | null>;
+  /**
+   * Cross-process claim on ONE `(threadId, accountId)` continuation: the
+   * primitive that stops a second host process from copying the same rollout
+   * while the first is still transferring it. Taken in `BEGIN IMMEDIATE`, so
+   * two processes cannot both observe an unclaimed pair.
+   *
+   * `held` means a live (unexpired) claim exists — the caller must refuse.
+   * `taken_over` means the previous claim had expired and was replaced: the
+   * earlier transfer may not have finished, which the caller must say out
+   * loud. `claimed` is a fresh claim.
+   */
+  claimContinuation(threadId: string, accountId: string, ttlMs: number): Promise<ContinuationClaim>;
+  /**
+   * Drop one claim. Idempotent: releasing an absent or another process's
+   * expired claim is a no-op, never an error.
+   */
+  releaseContinuation(threadId: string, accountId: string): Promise<void>;
   /**
    * UX-facing selection (S2a §2.4): ONLY root sessions
    * (`parentSessionId` absent). This is the SOLE list any picker, history
