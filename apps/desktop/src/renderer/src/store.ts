@@ -1103,14 +1103,17 @@ function reconcileQueuedRetries(queue: readonly QueuedPrompt[], deliveries: read
 }
 
 /** Preserve the wire id and payload when a queued turn loses its transport. */
-function holdInFlightUnknown(state: DesktopState): Pick<DesktopState, "queueInFlight" | "orchestrationDeliveries" | "promptQueue"> {
+function holdInFlightUnknown(state: DesktopState): Pick<DesktopState, "queueInFlight" | "orchestrationDeliveries" | "promptQueue" | "pendingSteers" | "uiSteerPending"> {
   const current = state.queueInFlight;
   const cancelledRetries = new Set(state.promptQueue.flatMap(item => item.retryOf ? [item.retryOf] : []));
   const promptQueue = state.promptQueue.filter(item => !item.retryOf);
   const deliveries = state.orchestrationDeliveries.map(item => cancelledRetries.has(item.requestId) ? {...deliveryUnknown(item),retryQueued:false} : deliveryUnknown(item));
-  if (!current || deliveries.some(item => item.requestId === current.requestId)) return {queueInFlight:null,orchestrationDeliveries:deliveries,promptQueue};
+  for (const steer of state.pendingSteers) {
+    if (!deliveries.some(item => item.requestId === steer.requestId)) deliveries.push({ requestId: steer.requestId, text: steer.sentMessage.text, images: steer.sentMessage.images.map(image => ({ ...image, attachment: { ...image.attachment } })), status: "unknown", restored: false, reviewed: false });
+  }
+  if (!current || deliveries.some(item => item.requestId === current.requestId)) return {queueInFlight:null,orchestrationDeliveries:deliveries,promptQueue,pendingSteers:[],uiSteerPending:[]};
   const item = current.item;
-  return {queueInFlight:null,promptQueue,orchestrationDeliveries:[...deliveries,{
+  return {queueInFlight:null,promptQueue,pendingSteers:[],uiSteerPending:[],orchestrationDeliveries:[...deliveries,{
     requestId:current.requestId,text:item.text,images:item.images.map(image => ({...image,attachment:{...image.attachment}})),
     ...(item.orchestrate ? {orchestrate:item.orchestrate} : {}),...(item.initialPicks ? {initialPicks:{...item.initialPicks}} : {}),
     ...(item.recoverySourceId ? {parentRequestId:item.recoverySourceId} : {}),
@@ -1608,7 +1611,7 @@ export interface DesktopState {
    * (Composer's direct path; tab-registry's queue-drain and initial-prompt
    * paths) — NOT a new send path of its own.
    */
-  recordSentMessage(text: string, images: readonly QueuedPromptImage[], requestId?: string, orchestrate?: "enable", initialPicks?: QueuedPrompt["initialPicks"], parentRequestId?: string, systemOriginId?: string): void;
+  recordSentMessage(text: string, images: readonly QueuedPromptImage[], requestId?: string, orchestrate?: "enable", initialPicks?: QueuedPrompt["initialPicks"], parentRequestId?: string, systemOriginId?: string, trackDirect?: boolean): void;
   claimRecoveryAttempt(sourceId: string, requestId: string, text: string, images: readonly QueuedPromptImage[], picks: QueuedPrompt["initialPicks"], opts?: {orchestrate?:"enable"; pickerId?:string; bindDraft?:boolean}): boolean;
   enqueueRecoveryPrompt(sourceId: string, item: Omit<QueuedPrompt,"id" | "recoverySourceId">): boolean;
   markOrchestrationDeliveryUnknown(requestId: string): void;
@@ -4987,6 +4990,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // new-task/full reset, below): that path must still clear `retry`,
             // so the preservation lives here, not inside `performReset` itself.
             const armedRetry = get().retry;
+            set((state) => state.connection === "ready" ? {} : holdInFlightUnknown(state));
             performReset();
             // the respawn reset discards the old transcript, so
             // the previous hydration boundary is void — markers arriving before
@@ -5228,6 +5232,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             return;
           }
           case "steer_requeued": {
+            // An unconfirmed steer held after disconnect must never be
+            // automatically re-enqueued by a replay from either incarnation.
+            if (get().orchestrationDeliveries.some(item => item.requestId === message.requestId && item.status !== "pending")) return;
             // rework (Opus defect 1): the host could not deliver
             // this UI steer into the running turn (idle/pre-loop, Stop raced,
             // ceiling/deadline, superseded, shutting down). NEVER dropped: the
@@ -5481,9 +5488,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // survivors, and a later steer_requeued for a restored id takes
             // the ordinary pending-entry path above.
             if (message.pendingSteers !== undefined && Array.isArray(message.pendingSteers)) {
+              const heldIds = new Set(get().orchestrationDeliveries.filter(item => item.status !== "pending").map(item => item.requestId));
               const restored = message.pendingSteers.filter(
                 (entry): entry is { requestId: string; text: string } =>
-                  typeof entry?.requestId === "string" && typeof entry?.text === "string",
+                  typeof entry?.requestId === "string" && typeof entry?.text === "string" && !heldIds.has(entry.requestId),
               );
               set((state) => ({
                 pendingSteers: restored.map((entry) => ({
@@ -6143,7 +6151,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         // appended by the matching turn_started (delivery position), so the
         // queued text never interleaves optimistically with the running turn's
         // streamed output.
-        set((state) => ({ pendingSteers: [...state.pendingSteers, { requestId, text, ...(images?.length ? { images } : {}), sentMessage }] }));
+        const savedImages = sentMessage.images.map(image => ({ ...image, attachment: { ...image.attachment } }));
+        set((state) => ({ pendingSteers: [...state.pendingSteers, { requestId, text, ...(images?.length ? { images: images.map(image => ({ ...image })) } : {}), sentMessage: { ...sentMessage, images: savedImages } }] }));
       },
 
       requeuePendingSteer(requestId: string, index?: number): void {
@@ -6260,11 +6269,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         }
       },
 
-      recordSentMessage(text: string, images: readonly QueuedPromptImage[], requestId?: string, orchestrate?: "enable", initialPicks?: QueuedPrompt["initialPicks"], parentRequestId?: string, systemOriginId?: string): void {
+      recordSentMessage(text: string, images: readonly QueuedPromptImage[], requestId?: string, orchestrate?: "enable", initialPicks?: QueuedPrompt["initialPicks"], parentRequestId?: string, systemOriginId?: string, trackDirect = false): void {
         if (requestId !== undefined) pendingSentMessages.set(requestId, { text, images, ...(orchestrate !== undefined ? { orchestrate } : {}) });
         set((state) => ({
           lastSentMessage: { text, images },
-          ...((orchestrate === "enable" || initialPicks !== undefined) && requestId !== undefined && !state.orchestrationDeliveries.some(item => item.requestId === requestId) ? {
+          ...((trackDirect || orchestrate === "enable" || initialPicks !== undefined) && requestId !== undefined && !state.orchestrationDeliveries.some(item => item.requestId === requestId) ? {
             orchestrationDeliveries: [...state.orchestrationDeliveries, {requestId,text,images:images.map(image => ({...image,attachment:{...image.attachment}})),...(orchestrate ? {orchestrate} : {}),...(initialPicks ? {initialPicks:{...initialPicks}} : {}),...(parentRequestId ? {parentRequestId} : {}),...(systemOriginId ? {origin:"system" as const,originId:systemOriginId} : {}),status:state.connection === "ready" ? "pending" as const : "unknown" as const,restored:false,reviewed:false}],
           } : {}),
         }));

@@ -1,8 +1,6 @@
 /**
- * Synthetic S1 prerequisites. The two expected failures exercise the real
- * renderer store and mark missing safety properties; they must be converted to
- * ordinary passing tests when immutable staging and the posture gate land.
- * They do not enable the future feature or assert that current loss is valid.
+ * Synthetic staging regressions and S1 prerequisites. They do not enable the
+ * future posture gate or claim persistence across renderer reloads.
  */
 import { describe, expect, it } from "vitest";
 import type { HostToUiMessage } from "../../shared/protocol.js";
@@ -13,16 +11,16 @@ const ready: HostToUiMessage = { type: "host_ready", workspace: "/synthetic", se
 const image = { name: "synthetic.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } };
 
 describe("S1 prerequisites: current renderer limitations", () => {
-  it.fails("retains an ordinary unacknowledged direct payload and image as unknown after reconnect", () => {
+  it("retains an ordinary unacknowledged direct payload and image as unknown after reconnect", () => {
     const store = createDesktopStore({ schedule: () => {} });
     store.getState().applyHostMessage(ready);
-    store.getState().recordSentMessage("direct-draft", [image], "direct-id");
+    store.getState().recordSentMessage("direct-draft", [image], "direct-id", undefined, undefined, undefined, undefined, true);
     store.getState().setPortClosed();
     store.getState().applyHostMessage(ready);
     expect(store.getState().orchestrationDeliveries).toMatchObject([{ requestId: "direct-id", text: "direct-draft", images: [image], status: "unknown" }]);
   });
 
-  it.fails("retains an unacknowledged steer payload and image as unknown after reconnect", () => {
+  it("retains an unacknowledged steer payload and image as unknown after reconnect", () => {
     const store = createDesktopStore({ schedule: () => {} });
     store.getState().applyHostMessage(ready);
     store.getState().recordPendingSteer("steer-id", "steer-draft", [image.attachment], { text: "steer-draft", images: [image] });

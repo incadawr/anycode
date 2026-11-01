@@ -99,6 +99,79 @@ describe("dock resize handle placement (GitHub #31)", () => {
     );
   }
 
+  it.each(["direct", "child-steer"] as const)("restores an unknown %s with attachment only after the current edit is cleared", async (kind) => {
+    const ready = { type: "host_ready" as const, workspace: "/ws", sessionId: "a", mode: "build" as const, model: "m1", imageInput: true };
+    const image = { name: "saved.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } };
+    store.getState().applyHostMessage(ready);
+    if (kind === "direct") store.getState().recordSentMessage("original", [image], "attempt", undefined, undefined, undefined, undefined, true);
+    else store.getState().recordPendingSteer("attempt", "original", [image.attachment], { text: "original", images: [image] });
+    store.getState().setPortClosed();
+    store.getState().applyHostMessage(ready);
+    const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+    await mountBody();
+    const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+    const type = async (value: string) => act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, value); textarea.dispatchEvent(new Event("input", { bubbles: true })); });
+    await type("new edit");
+    await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+    expect(textarea.value).toBe("new edit");
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ requestId: "attempt", status: "unknown", images: [image] });
+    await type("");
+    await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+    expect(textarea.value).toBe("original");
+    expect(store.getState().restoredComposerDraft).toMatchObject({ text: "original", images: [image], deliveryRequestId: "attempt" });
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    expect(send).not.toHaveBeenCalledWith("tab", expect.objectContaining({ type: "user_message" }));
+  });
+
+  it("keeps the direct attempt linked to the draft if send throws after possible delivery", async () => {
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", sessionId: "a", mode: "build", model: "m1", imageInput: true });
+    const image = { name: "saved.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } };
+    store.setState({ restoredComposerDraft: { text: "direct", images: [image] } });
+    const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation((_tab, message) => { if (message.type === "user_message") throw new Error("synthetic possible delivery"); });
+    await mountBody();
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{ text: "direct", images: [image], status: "unknown" }]);
+    expect(store.getState().restoredComposerDraft?.deliveryRequestId).toBe(store.getState().orchestrationDeliveries[0]?.requestId);
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    expect(send.mock.calls.filter(([, message]) => message.type === "user_message")).toHaveLength(1);
+  });
+
+  it("stages a real Composer direct send before disconnect and restores its attachment", async () => {
+    const ready = { type: "host_ready" as const, workspace: "/ws", sessionId: "a", mode: "build" as const, model: "m1", imageInput: true };
+    const image = { name: "sent.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } };
+    store.getState().applyHostMessage(ready);
+    store.setState({ restoredComposerDraft: { text: "actual send", images: [image] } });
+    const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+    await mountBody();
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    const sent = send.mock.calls.find(([, message]) => message.type === "user_message")?.[1];
+    expect(sent).toMatchObject({ type: "user_message", text: "actual send", images: [image.attachment] });
+    await act(async () => { store.getState().setPortClosed(); store.getState().applyHostMessage(ready); });
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{ requestId: (sent as { requestId: string }).requestId, text: "actual send", images: [image], status: "unknown" }]);
+    await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+    expect(store.getState().restoredComposerDraft).toMatchObject({ text: "actual send", images: [image], deliveryRequestId: (sent as { requestId: string }).requestId });
+    expect(send.mock.calls.filter(([, message]) => message.type === "user_message")).toHaveLength(1);
+  });
+
+  it("stages a real child Composer steer with attachment before disconnect", async () => {
+    const ready = { type: "host_ready" as const, workspace: "/ws", sessionId: "child", mode: "build" as const, model: "m1", imageInput: true };
+    const image = { name: "steer.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } };
+    store.getState().applyHostMessage(ready);
+    store.getState().setChildSurface();
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "running", turnId: "turn" });
+    store.setState({ restoredComposerDraft: { text: "child steer", images: [image] } });
+    const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+    await mountBody();
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    const sent = send.mock.calls.find(([, message]) => message.type === "user_message")?.[1];
+    expect(sent).toMatchObject({ type: "user_message", text: "child steer", images: [image.attachment] });
+    await act(async () => { store.getState().setPortClosed(); store.getState().applyHostMessage(ready); });
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{ requestId: (sent as { requestId: string }).requestId, text: "child steer", images: [image], status: "unknown" }]);
+    await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+    expect(store.getState().restoredComposerDraft).toMatchObject({ text: "child steer", images: [image] });
+    expect(send.mock.calls.filter(([, message]) => message.type === "user_message")).toHaveLength(1);
+  });
+
   /** Opens the subagents dock tab: layout B's child view, then Split (the
       same reducer chain the breadcrumb's "Split" button drives). */
   async function openDockTab(): Promise<void> {
