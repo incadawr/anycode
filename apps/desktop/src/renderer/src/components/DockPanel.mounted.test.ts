@@ -238,6 +238,63 @@ describe("dock resize handle placement (GitHub #31)", () => {
     }
   });
 
+  it("allows an independent message with the same text while guarding the restored unknown request", async () => {
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",imageInput:true});
+    const priorImage = {name:"prior.png",sizeBytes:1,attachment:{mediaType:"image/png" as const,data:"YQ=="}};
+    const newImage = {name:"new.png",sizeBytes:1,attachment:{mediaType:"image/png" as const,data:"Yg=="}};
+    store.getState().recordSentMessage("same text",[priorImage],"prior-request","enable");
+    store.setState({restoredComposerDraft:{text:"same text",images:[newImage]}});
+    const send = vi.spyOn(tabRegistry,"sendToTab").mockImplementation(() => {});
+    await mountBody();
+    expect(store.getState().orchestrationDeliveries[0]?.status).toBe("pending");
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    expect(send).toHaveBeenCalledWith("tab",expect.objectContaining({type:"user_message",text:"same text",images:[newImage.attachment]}));
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({requestId:"prior-request",status:"pending",reviewed:false});
+    await act(async () => {store.getState().setHostExited(); store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",imageInput:true});});
+    await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+    expect(store.getState().restoredComposerDraft).toMatchObject({text:"same text",images:[priorImage],deliveryRequestId:"prior-request"});
+    const removeIntent = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Remove orchestration intent")!;
+    await act(async () => removeIntent.click());
+    await act(async () => root.render(createElement("div")));
+    await mountBody();
+    expect(store.getState().restoredComposerDraft?.deliveryRequestId).toBe("prior-request");
+    send.mockClear();
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    expect(send).not.toHaveBeenCalledWith("tab",expect.objectContaining({type:"user_message"}));
+    expect(store.getState().restoredComposerDraft?.deliveryRequestId).toBe("prior-request");
+    await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-reviewed")!.click());
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    expect(send).toHaveBeenCalledWith("tab",expect.objectContaining({type:"user_message",text:"same text",images:[priorImage.attachment]}));
+  });
+
+  it("allows an independent text-only message with the same text as a pending delivery", async () => {
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1"});
+    store.getState().recordSentMessage("same text",[],"prior-request","enable");
+    store.setState({restoredComposerDraft:{text:"same text",images:[]}});
+    const send = vi.spyOn(tabRegistry,"sendToTab").mockImplementation(() => {});
+    await mountBody();
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    expect(send).toHaveBeenCalledWith("tab",expect.objectContaining({type:"user_message",text:"same text"}));
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({requestId:"prior-request",status:"pending",reviewed:false});
+  });
+
+  it("lets the user discard a linked pending copy and write a separate message", async () => {
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1"});
+    store.getState().recordSentMessage("same text",[],"prior-request","enable");
+    store.setState({restoredComposerDraft:{text:"same text",images:[],deliveryRequestId:"prior-request"}});
+    const send = vi.spyOn(tabRegistry,"sendToTab").mockImplementation(() => {});
+    await mountBody();
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    expect(send).not.toHaveBeenCalledWith("tab",expect.objectContaining({type:"user_message"}));
+    const discard = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Discard this draft and start a new message")!;
+    await act(async () => discard.click());
+    const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+    await act(async () => {Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(textarea,"same text"); textarea.dispatchEvent(new Event("input",{bubbles:true}));});
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    expect(send).toHaveBeenCalledWith("tab",expect.objectContaining({type:"user_message",text:"same text"}));
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({requestId:"prior-request",status:"pending",reviewed:false});
+  });
+
   it("holds a posted orchestration as delivery unknown across exit and reconciles late outcomes without overwriting edits", async () => {
     vi.mocked(tabRegistry.getLiveHostConnection).mockRestore();
     const previous = useSettingsStore.getState();
@@ -251,7 +308,7 @@ describe("dock resize handle placement (GitHub #31)", () => {
     tabRegistry.registerPort(tabId,"/ws",first as unknown as MessagePort);
     const target = tabRegistry.getStore(tabId)!;
     first.onmessage!({data:ready} as MessageEvent);
-    target.setState({composerRolePicker:{id:"picker",task:"original task",forToggle:false},restoredComposerDraft:{text:"original task",images:[]}});
+    target.setState({composerRolePicker:{id:"picker",task:"original task",forToggle:false,sourceDraft:true},restoredComposerDraft:{text:"original task",images:[]}});
     try {
       await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId,store:target}}, createElement(SessionSurface, {tabId,onToast:() => {}}))));
       await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="role-picker-skip"]')!.click());

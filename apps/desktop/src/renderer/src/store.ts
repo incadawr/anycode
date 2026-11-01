@@ -1408,10 +1408,10 @@ export interface DesktopState {
   orchestrationDeliveries: readonly OrchestrationDelivery[];
   /** Uncommitted queue edit, owned by this tab and this queue item. */
   queueEditDraft: { id: string; text: string } | null;
-  composerRolePicker: { id: string; task: string | null; forToggle: boolean; draft?: RolesDraft; seededDraft?: RolesDraft | null; saveOperation?: string; completionClaim?: string } | null;
+  composerRolePicker: { id: string; task: string | null; forToggle: boolean; draft?: RolesDraft; seededDraft?: RolesDraft | null; saveOperation?: string; completionClaim?: string; deliveryRequestId?: string; sourceDraft?: boolean } | null;
   contextWindowDraft: { id: string; connection: ProviderConnection; model: string; raw?: string } | null;
   /** Recovered composer draft; tab-scoped across component unmounts. */
-  restoredComposerDraft: { text: string; images: readonly QueuedPromptImage[]; orchestrate?: "enable"; initialPicks?: QueuedPrompt["initialPicks"] } | null;
+  restoredComposerDraft: { text: string; images: readonly QueuedPromptImage[]; orchestrate?: "enable"; initialPicks?: QueuedPrompt["initialPicks"]; deliveryRequestId?: string } | null;
   composerImageGeneration: number;
   completedComposerImages: readonly QueuedPromptImage[];
   pendingComposerImages: readonly { id: string; name: string }[];

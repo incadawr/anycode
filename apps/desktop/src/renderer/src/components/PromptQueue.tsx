@@ -25,7 +25,7 @@ export function shouldShowPromptQueue(
   return queueLength > 0 || queuePaused || pendingSteerCount > 0;
 }
 
-export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt) => boolean }) {
+export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, deliveryRequestId?: string) => boolean }) {
   const promptQueue = useTabStore((state) => state.promptQueue);
   const deliveries = useTabStore((state) => state.orchestrationDeliveries);
   const queuePaused = useTabStore((state) => state.queuePaused);
@@ -80,7 +80,7 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt) =>
         {!item.restored && (item.status === "unknown" || item.status === "rejected" || item.status === "conflict") && <button type="button" className="orchestration-delivery-restore" onClick={() => {
           const current = tabStore.getState().orchestrationDeliveries.find(entry => entry.requestId === item.requestId);
           if (!current || current.restored || (current.status !== "unknown" && current.status !== "rejected" && current.status !== "conflict")) return;
-          if (onRestore?.({id:current.requestId,text:current.text,images:current.images,orchestrate:"enable",requiresRestore:true}) === true) {
+          if (onRestore?.({id:current.requestId,text:current.text,images:current.images,orchestrate:"enable",requiresRestore:true}, current.requestId) === true) {
             tabStore.setState((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(entry => entry.requestId === current.requestId ? {...entry,restored:true} : entry)}));
           }
         }}>Restore for review</button>}

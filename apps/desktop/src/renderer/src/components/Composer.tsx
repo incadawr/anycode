@@ -1350,6 +1350,7 @@ export function Composer() {
   }, [tabStore, rolePickerOpen, pendingOrchestrateTask, rolePickerForToggle]);
   const [restoredOrchestrate, setRestoredOrchestrate] = useState(initialRestored.current?.orchestrate === "enable");
   const [restoredPicks, setRestoredPicks] = useState(initialRestored.current?.initialPicks);
+  const [restoredDeliveryId, setRestoredDeliveryId] = useState(initialRestored.current?.deliveryRequestId);
   const completedImages = useTabStore((state) => state.completedComposerImages);
   const pendingImages = useTabStore((state) => state.pendingComposerImages);
   const restoreInProgress = useRef(false);
@@ -1368,8 +1369,9 @@ export function Composer() {
       images: merged.map(({ name, sizeBytes, attachment }) => ({ name, sizeBytes, attachment })),
       ...(restoredOrchestrate ? { orchestrate: "enable" as const } : {}),
       ...(restoredPicks ? { initialPicks: restoredPicks } : {}),
+      ...(restoredDeliveryId ? { deliveryRequestId: restoredDeliveryId } : {}),
     } });
-  }, [tabStore, text, pasteBlocks, attachedImages, restoredOrchestrate, restoredPicks, completedImages]);
+  }, [tabStore, text, pasteBlocks, attachedImages, restoredOrchestrate, restoredPicks, restoredDeliveryId, completedImages]);
 
   useLayoutEffect(() => {
     if (pendingCaretRef.current !== null) {
@@ -1603,7 +1605,7 @@ export function Composer() {
    * the prompt queue carries the task exactly like any other send.
    */
   function beginOrchestrateSubmit(taskText: string): void {
-    if (unresolvedOrchestration(taskText) || rolePickerAlreadyOpen() || imagesStillLoading() || refuseOrchestrateAttachments()) return;
+    if (unresolvedOrchestration(restoredDeliveryId) || rolePickerAlreadyOpen() || imagesStillLoading() || refuseOrchestrateAttachments()) return;
     const task = taskText.trim();
     if (!ready) {
       return;
@@ -1618,7 +1620,7 @@ export function Composer() {
     if (needsRolePicker(resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {}, projectRoot))) {
       const id = crypto.randomUUID();
       rolePickerIdRef.current = id;
-      tabStore.setState({composerRolePicker:{id,task,forToggle:false}});
+      tabStore.setState({composerRolePicker:{id,task,forToggle:false,deliveryRequestId:restoredDeliveryId,sourceDraft:true}});
       setRolePickerOpen(true);
       return;
     }
@@ -1652,7 +1654,7 @@ export function Composer() {
       retain("Session disconnected or changed. The task and orchestration intent are retained; review the picker before continuing.");
       return;
     }
-    if (!picker.forToggle && (imagesStillLoading() || refuseOrchestrateAttachments() || unresolvedOrchestration(picker.task ?? ""))) return;
+    if (!picker.forToggle && (imagesStillLoading() || refuseOrchestrateAttachments() || unresolvedOrchestration(picker.deliveryRequestId))) return;
     const claim = crypto.randomUUID();
     tabStore.setState((state) => state.composerRolePicker?.id === id && !state.composerRolePicker.saveOperation && !state.composerRolePicker.completionClaim
       ? {composerRolePicker:{...state.composerRolePicker,completionClaim:claim}} : {});
@@ -1675,9 +1677,12 @@ export function Composer() {
       }
     } catch {
       if (deliveryRequestId) tabStore.getState().markOrchestrationDeliveryUnknown(deliveryRequestId);
+      if (deliveryRequestId) tabStore.setState((state) => state.composerRolePicker?.id === id ? {composerRolePicker:{...state.composerRolePicker,deliveryRequestId}} : {});
+      if (deliveryRequestId && picker.sourceDraft) setRestoredDeliveryId(deliveryRequestId);
       retain("Delivery was not confirmed. The task and orchestration intent are retained; review the session before retrying.");
       return;
     }
+    if (deliveryRequestId && picker.sourceDraft) setRestoredDeliveryId(deliveryRequestId);
     tabStore.setState((state) => state.composerRolePicker?.id === id && state.composerRolePicker.completionClaim === claim ? {composerRolePicker:null} : {});
     setPendingOrchestrateTask(null);
     setRolePickerForToggle(false);
@@ -1693,6 +1698,7 @@ export function Composer() {
     const requestId = crypto.randomUUID();
     tabStore.getState().appendUserText(requestId, task);
     tabStore.getState().recordSentMessage(task, [], requestId, "enable");
+    setRestoredDeliveryId(requestId);
     sendToHost({ type: "user_message", requestId, text: task });
   }
 
@@ -1781,7 +1787,7 @@ export function Composer() {
       tabStore.getState().setNotice({ kind: "slash_command_rejected", text: result.reason });
       return true;
     }
-    if (restoredOwned.current) { restoredOwned.current = false; setRestoredPicks(undefined); tabStore.setState((state) => ({ restoredComposerDraft: null, completedComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 })); }
+    if (restoredOwned.current) { restoredOwned.current = false; setRestoredPicks(undefined); setRestoredDeliveryId(undefined); tabStore.setState((state) => ({ restoredComposerDraft: null, completedComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 })); }
     setText("");
     setPasteBlocks([]);
     setCaret(0);
@@ -1823,7 +1829,7 @@ export function Composer() {
     const isInsert = intent.kind === "insert";
     const replacement = intent.kind === "insert" ? intent.text : "";
     const nextText = text.slice(0, slashQuery.start) + replacement + text.slice(tokenEnd);
-    if (intent.kind === "orchestrate_submit" && unresolvedOrchestration(nextText)) return;
+    if (intent.kind === "orchestrate_submit" && unresolvedOrchestration(restoredDeliveryId)) return;
     setText(nextText);
     setCaret(slashQuery.start + replacement.length);
     pendingCaretRef.current = slashQuery.start + replacement.length;
@@ -1876,10 +1882,9 @@ export function Composer() {
     return true;
   }
 
-  function unresolvedOrchestration(text: string): boolean {
-    const candidate = text.trim();
-    if (!candidate) return false;
-    const unresolved = tabStore.getState().orchestrationDeliveries?.some(item => item.text.trim() === candidate && (item.status === "pending" || ((item.status === "unknown" || item.status === "conflict") && !item.reviewed)));
+  function unresolvedOrchestration(requestId: string | undefined): boolean {
+    if (!requestId) return false;
+    const unresolved = tabStore.getState().orchestrationDeliveries?.some(item => item.requestId === requestId && (item.status === "pending" || ((item.status === "unknown" || item.status === "conflict") && !item.reviewed)));
     if (unresolved) tabStore.getState().setNotice({kind:"slash_command_rejected",text:"This orchestration may already have started. Check its delivery status before sending again."});
     return !!unresolved;
   }
@@ -1900,6 +1905,7 @@ export function Composer() {
 
   function handleSend(): void {
     if (imagesStillLoading()) return;
+    if (unresolvedOrchestration(restoredDeliveryId)) return;
     if (supportsCorePermissions && /^\s*\/orchestrate(?:\s|$)/.test(reconstitutePasteMarkers(text, pasteBlocks)) && refuseOrchestrateAttachments()) return;
     if (restoredOrchestrate) {
       tabStore.getState().setNotice({ kind: "slash_command_rejected", text: "This restored draft requires orchestration. Review it before starting a new orchestration." });
@@ -1916,8 +1922,6 @@ export function Composer() {
       }
     }
     const outgoing = reconstitutePasteMarkers(text, pasteBlocks);
-    const orchestrationText = /^\s*\/orchestrate(?:\s+|$)/.test(outgoing) ? outgoing.replace(/^\s*\/orchestrate(?:\s+|$)/, "") : outgoing;
-    if (unresolvedOrchestration(orchestrationText)) return;
     // GitHub #14: a recognized whole-draft slash command is consumed (run or
     // visibly refused) BEFORE the canSend gate and before any queue/steer/
     // append side effect — it is never delivered to the model as a prompt.
@@ -1993,7 +1997,7 @@ export function Composer() {
         ...(images.length > 0 ? { images: images.map((image) => image.attachment) } : {}),
       });
     }
-    if (restoredOwned.current) { restoredOwned.current = false; setRestoredPicks(undefined); tabStore.setState((state) => ({ restoredComposerDraft: null, completedComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 })); }
+    if (restoredOwned.current) { restoredOwned.current = false; setRestoredPicks(undefined); setRestoredDeliveryId(undefined); tabStore.setState((state) => ({ restoredComposerDraft: null, completedComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 })); }
     setText("");
     setPasteBlocks([]);
     setAttachedImages([]);
@@ -2179,7 +2183,7 @@ export function Composer() {
       onDrop={handleDrop}
     >
       <BackgroundAgents />
-      <PromptQueue onRestore={(item: QueuedPrompt) => {
+      <PromptQueue onRestore={(item: QueuedPrompt, deliveryRequestId?: string) => {
         if (imagesStillLoading()) return false;
         if (restoreInProgress.current || text.length > 0 || attachedImages.length > 0 || pasteBlocks.length > 0) {
           tabStore.getState().setNotice({ kind: "slash_command_rejected", text: "Finish or clear the current draft before restoring another." });
@@ -2188,16 +2192,18 @@ export function Composer() {
         restoreInProgress.current = true;
         tabStore.setState((state) => ({ completedComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 }));
         restoredOwned.current = true;
-        tabStore.setState({ restoredComposerDraft: { text: item.text, images: item.images, ...(item.orchestrate ? { orchestrate: item.orchestrate } : {}), ...(item.initialPicks ? { initialPicks: item.initialPicks } : {}) } });
+        tabStore.setState({ restoredComposerDraft: { text: item.text, images: item.images, ...(item.orchestrate ? { orchestrate: item.orchestrate } : {}), ...(item.initialPicks ? { initialPicks: item.initialPicks } : {}), ...(deliveryRequestId ? {deliveryRequestId} : {}) } });
         setText(item.text);
         setAttachedImages(item.images.map(image => ({ ...image, id: nextImageIdRef.current++ })));
         setRestoredOrchestrate(item.orchestrate === "enable");
         setRestoredPicks(item.initialPicks);
+        setRestoredDeliveryId(deliveryRequestId);
         return true;
       }} />
       {Boolean(pendingImages?.length) && <div className="composer-hint" role="status">Loading attachments: {pendingImages!.map(image => image.name).join(", ")}. <button type="button" onClick={() => tabStore.setState((state) => ({ pendingComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 }))}>Cancel loading and exclude pending files</button></div>}
       {restoredPicks && <div className="composer-hint">Original settings: {[restoredPicks.model, restoredPicks.mode, restoredPicks.effort, restoredPicks.reasoningEffort].filter(Boolean).join(" / ")}. Select these settings before sending. <button type="button" onClick={() => setRestoredPicks(undefined)}>Use current settings instead</button></div>}
       {restoredOrchestrate && <div className="composer-hint">Orchestration intent retained. This draft will not be sent as an ordinary message. <button type="button" onClick={() => setRestoredOrchestrate(false)}>Remove orchestration intent</button></div>}
+      {restoredDeliveryId && <div className="composer-hint">This draft is linked to an earlier delivery. <button type="button" onClick={() => { setText(""); setPasteBlocks([]); setAttachedImages([]); setRestoredOrchestrate(false); setRestoredPicks(undefined); setRestoredDeliveryId(undefined); tabStore.setState((state) => ({pendingComposerImages:[],completedComposerImages:[],composerImageGeneration:state.composerImageGeneration + 1})); }}>Discard this draft and start a new message</button></div>}
       <RolePickerDialog
         open={rolePickerOpen}
         saving={rolePickerSnapshot?.saveOperation !== undefined || rolePickerSnapshot?.completionClaim !== undefined}
@@ -2301,6 +2307,7 @@ export function Composer() {
         disabled={!ready}
         placeholder={running ? "Queue a message… (Esc to stop)" : "Message the agent…"}
         onChange={(event) => {
+          tabStore.setState((state) => state.composerRolePicker?.sourceDraft ? {composerRolePicker:{...state.composerRolePicker,sourceDraft:false}} : {});
           setText(event.target.value);
           syncCaret(event.currentTarget);
         }}
@@ -2476,12 +2483,13 @@ export function Composer() {
                   if (imagesStillLoading()) return;
                   // GitHub #14: the explicit Codex steer must not leak a known
                   // bare command to the model either — classify first.
+                  if (unresolvedOrchestration(restoredDeliveryId)) return;
                   const outgoing = reconstitutePasteMarkers(text, pasteBlocks);
                   if (trySubmitBareCommand(outgoing)) {
                     return;
                   }
                   sendToHost({ type: "steer_message", requestId: crypto.randomUUID(), text: outgoing });
-                  if (restoredOwned.current) { restoredOwned.current = false; setRestoredPicks(undefined); tabStore.setState((state) => ({ restoredComposerDraft: null, completedComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 })); }
+                  if (restoredOwned.current) { restoredOwned.current = false; setRestoredPicks(undefined); setRestoredDeliveryId(undefined); tabStore.setState((state) => ({ restoredComposerDraft: null, completedComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 })); }
                   setText("");
                   setPasteBlocks([]);
                 }}><ArrowUp /></button>
