@@ -3713,6 +3713,7 @@ export class TabHostManager {
       return;
     }
 
+    this.deps.recordHostFailure?.(tab.sessionId, "host_unexpected_exit", code, startupStderr, signal);
     this.notifyHostExited(tab.tabId);
     this.logger.error(`[main] tab ${tab.tabId} host exited unexpectedly (code ${code}); respawning`);
     if (this.spawnTabHost(tab, { firstSpawn: false }) === false) return;
