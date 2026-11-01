@@ -1381,7 +1381,7 @@ export interface DesktopState {
   promptQueue: readonly QueuedPrompt[];
   /** Uncommitted queue edit, owned by this tab and this queue item. */
   queueEditDraft: { id: string; text: string } | null;
-  composerRolePicker: { task: string | null; forToggle: boolean; draft?: RolesDraft } | null;
+  composerRolePicker: { id: string; task: string | null; forToggle: boolean; draft?: RolesDraft; seededDraft?: RolesDraft | null; saveOperation?: string } | null;
   contextWindowDraft: { id: string; connection: ProviderConnection; model: string; raw?: string } | null;
   /** Recovered composer draft; tab-scoped across component unmounts. */
   restoredComposerDraft: { text: string; images: readonly QueuedPromptImage[]; orchestrate?: "enable"; initialPicks?: QueuedPrompt["initialPicks"] } | null;

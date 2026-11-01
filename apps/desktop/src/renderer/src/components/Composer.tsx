@@ -1335,15 +1335,17 @@ export function Composer() {
   // lifecycle, not the store. `pendingOrchestrateTask === null` means "no
   // /orchestrate submit in flight".
   const initialRolePicker = useRef(tabStore.getState().composerRolePicker ?? null);
+  const rolePickerIdRef = useRef(initialRolePicker.current?.id ?? null);
   const [rolePickerOpen, setRolePickerOpen] = useState(initialRolePicker.current !== null);
   const [pendingOrchestrateTask, setPendingOrchestrateTask] = useState<string | null>(initialRolePicker.current?.task ?? null);
   // True when the mode menu's Orchestrate row (not a `/orchestrate` submit)
   // opened the first-run dialog: Save/Skip then only enable the flag.
   const [rolePickerForToggle, setRolePickerForToggle] = useState(initialRolePicker.current?.forToggle ?? false);
+  const rolePickerSnapshot = useTabStore((state) => state.composerRolePicker);
   const composerMounted = useRef(false);
   useEffect(() => { composerMounted.current = true; return () => { composerMounted.current = false; }; }, []);
   useLayoutEffect(() => {
-    if (rolePickerOpen) tabStore.setState((state) => ({ composerRolePicker: { ...state.composerRolePicker, task: pendingOrchestrateTask, forToggle: rolePickerForToggle } }));
+    if (rolePickerOpen) tabStore.setState((state) => state.composerRolePicker?.id === rolePickerIdRef.current ? { composerRolePicker: { ...state.composerRolePicker, task: pendingOrchestrateTask, forToggle: rolePickerForToggle } } : {});
   }, [tabStore, rolePickerOpen, pendingOrchestrateTask, rolePickerForToggle]);
   const [restoredOrchestrate, setRestoredOrchestrate] = useState(initialRestored.current?.orchestrate === "enable");
   const [restoredPicks, setRestoredPicks] = useState(initialRestored.current?.initialPicks);
@@ -1600,7 +1602,7 @@ export function Composer() {
    * the prompt queue carries the task exactly like any other send.
    */
   function beginOrchestrateSubmit(taskText: string): void {
-    if (imagesStillLoading() || refuseOrchestrateAttachments()) return;
+    if (rolePickerAlreadyOpen() || imagesStillLoading() || refuseOrchestrateAttachments()) return;
     const task = taskText.trim();
     if (!ready) {
       return;
@@ -1613,6 +1615,9 @@ export function Composer() {
     setRolePickerForToggle(false);
     // The shared first-run gate (orchestrate-start.ts) — the start screen uses the same one.
     if (needsRolePicker(resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {}, projectRoot))) {
+      const id = crypto.randomUUID();
+      rolePickerIdRef.current = id;
+      tabStore.setState({composerRolePicker:{id,task,forToggle:false}});
       setRolePickerOpen(true);
       return;
     }
@@ -1633,17 +1638,17 @@ export function Composer() {
     }
   }
 
-  /**
-   * The mode menu's Orchestrate row asked for first-run roles: their dialog's
-   * Save/Skip only enables orchestrate. There is no task to send here, and the
-   * enable is a between-turns wire message the host acknowledges — the chip
-   * then reads "Orchestrate".
-   */
-  function proceedOrchestrateToggle(): void {
-    tabStore.setState({composerRolePicker: null});
+  /** Claim one picker before emitting any toggle or task. */
+  function finishRolePicker(id: string): void {
+    const picker = tabStore.getState().composerRolePicker;
+    if (!picker || picker.id !== id || picker.saveOperation) return;
+    if (!picker.forToggle && (imagesStillLoading() || refuseOrchestrateAttachments())) return;
+    tabStore.setState({composerRolePicker:null});
+    setPendingOrchestrateTask(null);
     setRolePickerForToggle(false);
     setRolePickerOpen(false);
-    sendToHost({ type: "set_orchestrate", enabled: true });
+    sendToHost({type:"set_orchestrate",enabled:true});
+    if (!picker.forToggle && picker.task) submitOrchestrateTask(picker.task);
   }
 
   /** Send one text as a user message through the same wire path handleSend's idle branch uses. */
@@ -1773,7 +1778,7 @@ export function Composer() {
     }
     const intent = item.intent;
     if (intent.kind !== "insert" && imagesStillLoading()) return;
-    if (intent.kind === "orchestrate_submit" && refuseOrchestrateAttachments()) return;
+    if (intent.kind === "orchestrate_submit" && (rolePickerAlreadyOpen() || refuseOrchestrateAttachments())) return;
     if (intent.kind === "compact_now") {
       const verdict = resolveBareSlashSubmit("/compact", slashCtx, attachedImages.length, childSurface);
       if (verdict.kind === "refuse") {
@@ -1829,6 +1834,12 @@ export function Composer() {
       }));
       if (!result.ok) tabStore.getState().setNotice({ kind: "image_attach_rejected", text: result.reason });
     }
+  }
+
+  function rolePickerAlreadyOpen(): boolean {
+    if (!tabStore.getState().composerRolePicker) return false;
+    tabStore.getState().setNotice({kind:"slash_command_rejected",text:"Finish the current role picker before opening another."});
+    return true;
   }
 
   function imagesStillLoading(): boolean {
@@ -1969,10 +1980,13 @@ export function Composer() {
    * agree on what was asked for.
    */
   function handleToggleOrchestrate(next: boolean): void {
-    if (!ready || next === orchestrateActive) {
+    if (!ready || next === orchestrateActive || rolePickerAlreadyOpen()) {
       return;
     }
     if (orchestrateToggleNeedsRolePicker(next, resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {}, projectRoot))) {
+      const id = crypto.randomUUID();
+      rolePickerIdRef.current = id;
+      tabStore.setState({composerRolePicker:{id,task:null,forToggle:true}});
       setPendingOrchestrateTask(null);
       setRolePickerForToggle(true);
       setRolePickerOpen(true);
@@ -2142,28 +2156,43 @@ export function Composer() {
       {restoredOrchestrate && <div className="composer-hint">Orchestration intent retained. This draft will not be sent as an ordinary message. <button type="button" onClick={() => setRestoredOrchestrate(false)}>Remove orchestration intent</button></div>}
       <RolePickerDialog
         open={rolePickerOpen}
+        saving={rolePickerSnapshot?.saveOperation !== undefined}
         draftStorage={{
-          load: () => tabStore.getState().composerRolePicker?.draft,
-          save: (draft) => tabStore.setState((state) => state.composerRolePicker ? { composerRolePicker: { ...state.composerRolePicker, draft } } : {}),
+          canEdit: () => { const picker = tabStore.getState().composerRolePicker; return !!picker && picker.id === rolePickerSnapshot?.id && !picker.saveOperation; },
+          load: () => {
+            const picker = tabStore.getState().composerRolePicker;
+            return picker?.id === rolePickerSnapshot?.id && picker?.draft ? {draft: picker.draft, seededDraft: picker.seededDraft ?? null} : undefined;
+          },
+          save: (draft, seededDraft) => tabStore.setState((state) => state.composerRolePicker && state.composerRolePicker.id === rolePickerSnapshot?.id && !state.composerRolePicker.saveOperation ? { composerRolePicker: { ...state.composerRolePicker, draft, seededDraft } } : {}),
         }}
         connections={useSettingsStore.getState().snapshot?.settings.provider.connections ?? []}
         activeConnectionId={useSettingsStore.getState().snapshot?.settings.provider.activeConnectionId}
         onSave={(roles) => {
-          // §3.9: Save writes roles, then the stashed task proceeds under
-          // orchestrate (the enable + submit are the same proceed step as
-          // Skip — only the settings write differs). A mode-menu toggle has
-          // no stashed task: it only enables.
-          void useSettingsStore.getState().setPatch(rolesPatch(useSettingsStore.getState().snapshot?.settings ?? {}, roles, projectRoot))
-            .then((result) => {
-              if (!result.ok || !composerMounted.current) return;
-              if (rolePickerForToggle) proceedOrchestrateToggle();
-              else proceedOrchestrateSubmit();
-            });
+          const picker = tabStore.getState().composerRolePicker;
+          if (!picker || picker.id !== rolePickerSnapshot?.id || picker.saveOperation) return;
+          const operation = crypto.randomUUID();
+          tabStore.setState((state) => state.composerRolePicker?.id === picker.id && !state.composerRolePicker.saveOperation
+            ? {composerRolePicker:{...state.composerRolePicker,saveOperation:operation}} : {});
+          const claimed = tabStore.getState().composerRolePicker;
+          if (claimed?.id !== picker.id || claimed.saveOperation !== operation) return;
+          const finishSave = (ok: boolean): void => {
+            const current = tabStore.getState().composerRolePicker;
+            if (!current || current.id !== picker.id || current.saveOperation !== operation) return;
+            tabStore.setState({composerRolePicker:{...current,saveOperation:undefined}});
+            if (!ok || !composerMounted.current) {
+              tabStore.getState().setNotice({kind:"slash_command_rejected",text:ok ? "Roles saved. Review the picker before continuing." : "Role save was not confirmed. Review the picker before retrying."});
+              return;
+            }
+            finishRolePicker(picker.id);
+          };
+          try {
+            void useSettingsStore.getState().setPatch(rolesPatch(useSettingsStore.getState().snapshot?.settings ?? {}, roles, projectRoot))
+              .then((result) => finishSave(result.ok), () => finishSave(false));
+          } catch { finishSave(false); }
         }}
         onSkip={() => {
-          // §3.9: Skip writes nothing; built-in defaults apply.
-          if (rolePickerForToggle) proceedOrchestrateToggle();
-          else proceedOrchestrateSubmit();
+          const picker = tabStore.getState().composerRolePicker;
+          if (picker && picker.id === rolePickerSnapshot?.id && !picker.saveOperation) finishRolePicker(picker.id);
         }}
       />
       {isNewSession && <EnvironmentMenu placement="composer" />}

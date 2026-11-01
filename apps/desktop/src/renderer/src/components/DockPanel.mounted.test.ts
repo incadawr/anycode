@@ -164,12 +164,125 @@ describe("dock resize handle placement (GitHub #31)", () => {
       await renderTab("a",store);
       await act(async () => container.querySelector<HTMLButtonElement>(".mode-chip")!.click());
       await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="mode-menu-orchestrate"]')!.click());
-      await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="role-picker-save"]')!.click());
+      const saveButton = container.querySelector<HTMLButtonElement>('[data-testid="role-picker-save"]')!;
+      const skipButton = container.querySelector<HTMLButtonElement>('[data-testid="role-picker-skip"]')!;
+      await act(async () => { saveButton.click(); saveButton.click(); skipButton.click(); });
       expect(save).toHaveBeenCalledOnce();
+      expect(container.querySelector<HTMLButtonElement>('[data-testid="role-picker-save"]')!.disabled).toBe(true);
+      expect(container.querySelector<HTMLButtonElement>('[data-testid="role-picker-skip"]')!.disabled).toBe(true);
+      expect(send).not.toHaveBeenCalledWith("a",expect.objectContaining({type:"set_orchestrate"}));
       await renderTab("b",other);
+      await renderTab("a",store);
+      expect(container.querySelector<HTMLButtonElement>('[data-testid="role-picker-skip"]')!.disabled).toBe(true);
       await act(async () => resolve({ok:true,snapshot:useSettingsStore.getState().snapshot!}));
       expect(send).not.toHaveBeenCalledWith("a",expect.objectContaining({type:"set_orchestrate"}));
       expect(store.getState().composerRolePicker).not.toBeNull();
+      expect(store.getState().composerRolePicker?.saveOperation).toBeUndefined();
+      await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="role-picker-skip"]')!.click());
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send).toHaveBeenCalledWith("a",expect.objectContaining({type:"set_orchestrate"}));
+    } finally {
+      HTMLDialogElement.prototype.showModal = originalShow;
+      useSettingsStore.setState({snapshot:previous.snapshot,setPatch:previous.setPatch});
+    }
+  });
+
+  it("sends a role-picker task exactly once after a delayed save despite repeated actions", async () => {
+    const previous = useSettingsStore.getState();
+    let resolve!: (value:Awaited<ReturnType<typeof previous.setPatch>>) => void;
+    const save = vi.fn(() => new Promise<Awaited<ReturnType<typeof previous.setPatch>>>(done => {resolve = done;}));
+    useSettingsStore.setState({snapshot:{settings:cloneDefaults(),secrets:[],providerReady:true,envOverrides:[],readOnly:false,catalog:[]},setPatch:save as typeof previous.setPatch});
+    const originalShow = HTMLDialogElement.prototype.showModal;
+    HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1"});
+    const send = vi.spyOn(tabRegistry,"sendToTab").mockImplementation(() => {});
+    try {
+      await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId:"a",store}}, createElement(SessionSurface, {tabId:"a",onToast:() => {}}))));
+      const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(textarea,"/orchestrate plan task");
+        textarea.setSelectionRange(12,12);
+        textarea.dispatchEvent(new Event("input",{bubbles:true}));
+        textarea.dispatchEvent(new KeyboardEvent("keyup",{bubbles:true,key:"e"}));
+      });
+      const option = [...container.querySelectorAll<HTMLElement>('[role="option"]')].find(element => element.textContent?.includes("Orchestrate"))!;
+      await act(async () => option.click());
+      const saveButton = container.querySelector<HTMLButtonElement>('[data-testid="role-picker-save"]')!;
+      const skipButton = container.querySelector<HTMLButtonElement>('[data-testid="role-picker-skip"]')!;
+      await act(async () => { saveButton.click(); saveButton.click(); skipButton.click(); });
+      expect(save).toHaveBeenCalledOnce();
+      expect(send).not.toHaveBeenCalledWith("a",expect.objectContaining({type:"user_message"}));
+      await act(async () => resolve({ok:true,snapshot:useSettingsStore.getState().snapshot!}));
+      const messages = send.mock.calls.filter(([,message]) => message.type === "user_message");
+      expect(messages).toHaveLength(1);
+      expect(messages[0]?.[1]).toMatchObject({type:"user_message",text:"plan task"});
+      expect(send.mock.calls.filter(([,message]) => message.type === "set_orchestrate")).toHaveLength(1);
+    } finally {
+      HTMLDialogElement.prototype.showModal = originalShow;
+      useSettingsStore.setState({snapshot:previous.snapshot,setPatch:previous.setPatch});
+    }
+  });
+
+  it("retains the role picker when a save outcome is not confirmed", async () => {
+    const previous = useSettingsStore.getState();
+    let reject!: (error:Error) => void;
+    const save = vi.fn(() => new Promise<Awaited<ReturnType<typeof previous.setPatch>>>((_done,fail) => {reject = fail;}));
+    useSettingsStore.setState({snapshot:{settings:cloneDefaults(),secrets:[],providerReady:true,envOverrides:[],readOnly:false,catalog:[]},setPatch:save as typeof previous.setPatch});
+    const originalShow = HTMLDialogElement.prototype.showModal;
+    HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1"});
+    const send = vi.spyOn(tabRegistry,"sendToTab").mockImplementation(() => {});
+    try {
+      await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId:"a",store}}, createElement(SessionSurface, {tabId:"a",onToast:() => {}}))));
+      await act(async () => container.querySelector<HTMLButtonElement>(".mode-chip")!.click());
+      await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="mode-menu-orchestrate"]')!.click());
+      await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="role-picker-save"]')!.click());
+      await act(async () => reject(new Error("disconnected")));
+      expect(store.getState().notice?.text).toContain("not confirmed");
+      expect(store.getState().composerRolePicker?.saveOperation).toBeUndefined();
+      expect(container.querySelector<HTMLButtonElement>('[data-testid="role-picker-save"]')!.disabled).toBe(false);
+      expect(send).not.toHaveBeenCalledWith("a",expect.objectContaining({type:"set_orchestrate"}));
+      expect(send).not.toHaveBeenCalledWith("a",expect.objectContaining({type:"user_message"}));
+    } finally {
+      HTMLDialogElement.prototype.showModal = originalShow;
+      useSettingsStore.setState({snapshot:previous.snapshot,setPatch:previous.setPatch});
+    }
+  });
+
+  it("ignores a delayed save result for an older picker after a replacement opens", async () => {
+    const previous = useSettingsStore.getState();
+    let resolve!: (value:Awaited<ReturnType<typeof previous.setPatch>>) => void;
+    const save = vi.fn(() => new Promise<Awaited<ReturnType<typeof previous.setPatch>>>(done => {resolve = done;}));
+    useSettingsStore.setState({snapshot:{settings:cloneDefaults(),secrets:[],providerReady:true,envOverrides:[],readOnly:false,catalog:[]},setPatch:save as typeof previous.setPatch});
+    const originalShow = HTMLDialogElement.prototype.showModal;
+    HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+    const other = createDesktopStore();
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1"});
+    const send = vi.spyOn(tabRegistry,"sendToTab").mockImplementation(() => {});
+    const renderTab = async (tabId: string, target: DesktopStoreApi) => {
+      await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId,store:target}}, createElement(SessionSurface, {tabId,onToast:() => {}}))));
+    };
+    const openPicker = async () => {
+      await act(async () => container.querySelector<HTMLButtonElement>(".mode-chip")!.click());
+      await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="mode-menu-orchestrate"]')!.click());
+    };
+    try {
+      await renderTab("a",store);
+      await openPicker();
+      const oldId = store.getState().composerRolePicker!.id;
+      await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="role-picker-save"]')!.click());
+      await renderTab("b",other);
+      // Simulate a host/session reset invalidating the old picker while its
+      // non-cancellable settings write is still in flight.
+      store.setState({composerRolePicker:null});
+      await renderTab("a",store);
+      await openPicker();
+      const newId = store.getState().composerRolePicker!.id;
+      expect(newId).not.toBe(oldId);
+      await act(async () => resolve({ok:true,snapshot:useSettingsStore.getState().snapshot!}));
+      expect(store.getState().composerRolePicker?.id).toBe(newId);
+      expect(container.querySelector('[data-testid="role-picker-save"]')).not.toBeNull();
+      expect(send).not.toHaveBeenCalledWith("a",expect.objectContaining({type:"set_orchestrate"}));
     } finally {
       HTMLDialogElement.prototype.showModal = originalShow;
       useSettingsStore.setState({snapshot:previous.snapshot,setPatch:previous.setPatch});
@@ -189,7 +302,7 @@ describe("dock resize handle placement (GitHub #31)", () => {
     other.setState({contextWindowDraft:{id:"editor-b",connection:{id:"b-connection",providerId:"custom:b"},model:"m2",raw:"32000"}});
     const renderTab = async (tabId: string, target: DesktopStoreApi) => {
       await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId,store:target}}, createElement(SessionSurface, {tabId,onToast:() => {}}))));
-      await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+      await vi.waitFor(() => expect(container.querySelector('[aria-label="Context window (tokens)"]')).not.toBeNull(), {timeout:10000, interval:25});
     };
     try {
       await renderTab("a",store);
