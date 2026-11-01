@@ -55,3 +55,13 @@ it("recordHostFailure records the two main-side dead-host causes in the same saf
     expect(loop).toContain("kept exiting right after it started");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+it("records a restarted host exit without exposing stderr details", () => {
+  const dir = mkdtempSync(join(tmpdir(), "anycode-host-exit-log-"));
+  try {
+    recordHostFailure(dir, "session", "host_unexpected_exit", 17, "Error: EACCES secret /private/path");
+    const content = readFileSync(join(dir, "session.jsonl"), "utf8");
+    expect(JSON.parse(content)).toMatchObject({ code: "host_unexpected_exit", exitCode: 17, errorLine: "Error: EACCES: [details redacted]" });
+    expect(content).not.toMatch(/secret|private|path/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

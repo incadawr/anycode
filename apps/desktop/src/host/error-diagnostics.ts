@@ -22,7 +22,7 @@ export function recordErrorDiagnostic(directory: string | undefined, sessionId: 
       ...(signal && /^SIG[A-Z0-9]+$/.test(signal) ? { signal } : {}),
     }) + "\n");
   } catch { /* Diagnostics must not interrupt a task. */ }
-  finally { if (fd !== undefined) closeSync(fd); }
+  finally { if (fd !== undefined) { try { closeSync(fd); } catch { /* Best effort; recovery must continue. */ } } }
 }
 
 /**
@@ -49,10 +49,12 @@ export function recordHostBootFailure(directory: string | undefined, sessionId: 
  *   0.0.45 defect (a non-active Sessions API tab died as `crash_looped` on a
  *   cache miss), so the cause now reaches a diagnostic file instead of living
  *   only in an inherited-stdio log line.
+ * - `host_unexpected_exit` — an unexpected exit reached the respawn path;
+ *   this preserves safe exit details even when the breaker does not trip.
  * - `host_crash_loop` — the breaker gave up after repeated immediate exits;
  *   the exit code alone named no cause.
  */
-export type HostFailureReason = "connection_env_unavailable" | "host_crash_loop" | "host_module_load" | "host_syntax_error" | "host_native_load";
+export type HostFailureReason = "connection_env_unavailable" | "host_unexpected_exit" | "host_crash_loop" | "host_module_load" | "host_syntax_error" | "host_native_load";
 
 export function recordHostFailure(directory: string | undefined, sessionId: string, reason: HostFailureReason, exitCode?: number, stderr = "", signal?: string): void {
   // Keep only the standard error class; arbitrary error text can contain secrets.

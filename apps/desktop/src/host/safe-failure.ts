@@ -24,6 +24,7 @@ const MESSAGES = {
   host_syntax_error: "The session host encountered a syntax error during startup. Reinstall AnyCode and retry.",
   host_native_load: "The session host could not load a native library. Reinstall AnyCode and retry.",
   host_module_load: "The session host could not load a required module. Reinstall AnyCode and retry.",
+  host_unexpected_exit: "The session host exited unexpectedly. Check its exit details in diagnostics.",
   host_crash_loop:
     "The session host kept exiting right after it started, so it was stopped. Check its exit code in diagnostics and reinstall AnyCode if the problem persists.",
 } as const;

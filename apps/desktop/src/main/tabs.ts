@@ -1888,8 +1888,8 @@ export class TabHostManager {
     child.on("spawn", () => {
       this.logger.log(`[main] tab ${tab.tabId} host spawned (pid ${child.pid ?? "?"})`);
     });
-    child.once("exit", (code: number, signal?: string) => {
-      this.handleExit(tab, child, code, startupStderr, signal);
+    child.once("exit", (code: number) => {
+      this.handleExit(tab, child, code, startupStderr);
     });
     // Credential channel (design §3.3): an oauth-mode host asks main for a fresh
     // access token per attempt; main answers THIS proc (per-proc routing).
@@ -3421,7 +3421,7 @@ export class TabHostManager {
    * (cascade/explicit cancel) -> `cancelled`; any other state means it died
    * on its own -> `error` (cut §2.7's crash text).
    */
-  private handleChildExit(tab: TabHost, child: UtilityProcess, _code: number, forceKilled = false): void {
+  private handleChildExit(tab: TabHost, child: UtilityProcess, code: number, stderr: string, forceKilled = false): void {
     if (tab.proc !== child && !forceKilled) {
       // Stale-generation exit from an already-superseded reference — UNLESS
       // this is the late, real exit of a process `shutdownTabHost`'s own
@@ -3431,6 +3431,7 @@ export class TabHostManager {
       // here while this is still the exit we are waiting on.
       return;
     }
+    const wasClosing = tab.state === "closing";
     tab.proc = null;
     tab.state = "closing";
     const requestId = tab.childOf?.requestId;
@@ -3445,6 +3446,9 @@ export class TabHostManager {
       // beyond making sure the tab is not left registered.
       this.tabs.delete(tab.tabId);
       return;
+    }
+    if (!this.quitting && !forceKilled && !wasClosing && entry.state !== "cancelling") {
+      this.deps.recordHostFailure?.(tab.sessionId, "host_unexpected_exit", code, stderr);
     }
     const status: ChildRunStatus = entry.state === "cancelling" ? "cancelled" : "error";
     const finalText = entry.state === "cancelling" ? CHILD_CANCELLED_MESSAGE : CHILD_HOST_EXITED_MESSAGE;
@@ -3617,7 +3621,7 @@ export class TabHostManager {
    * already-replaced host; otherwise notifies the page, runs the breaker, and
    * respawns (with a fresh channel) unless a per-tab or global breaker tripped.
    */
-  private handleExit(tab: TabHost, child: UtilityProcess, code: number, startupStderr: string, signal?: string): void {
+  private handleExit(tab: TabHost, child: UtilityProcess, code: number, startupStderr: string): void {
     const deliberate = this.deliberateRestarts.delete(child);
     // fix-wave F2 / review T3: read the snapshot BEFORE deleting —
     // consumed once, regardless of root/child. A root never needed the F2
@@ -3633,7 +3637,7 @@ export class TabHostManager {
       // decision — it is caught (and finalized) here unconditionally,
       // regardless of `quitting`/`state`, since there is no "unexpected
       // respawn" to guard against for a tab that never respawns.
-      this.handleChildExit(tab, child, code, forceKilled);
+      this.handleChildExit(tab, child, code, startupStderr, forceKilled);
       return;
     }
     if (this.quitting || tab.state === "closing") {
@@ -3656,7 +3660,7 @@ export class TabHostManager {
       // notification — the tab was never announced there.
       tab.state = "crash_looped";
       this.logger.error(`[main] prepared tab ${tab.tabId} host exited before publication (code ${code}); not respawning`);
-      this.deps.recordHostFailure?.(tab.sessionId, "host_crash_loop", code, startupStderr, signal);
+      this.deps.recordHostFailure?.(tab.sessionId, "host_crash_loop", code, startupStderr);
       return;
     }
 
@@ -3703,16 +3707,17 @@ export class TabHostManager {
     // its host-exited banner and awaits the replacement port below.
     if (decision.action === "give_up") {
       tab.state = "crash_looped";
-      tab.hostFailure = hostFailure(decision.reason, startupStderr, code, signal);
+      tab.hostFailure = hostFailure(decision.reason, startupStderr, code);
       this.notifyHostExited(tab.tabId);
       this.logger.error(
         `[main] tab ${tab.tabId} host giving up respawn (${decision.reason}, code ${code})`,
       );
       // the exit code alone named no cause; record the verdict.
-      this.deps.recordHostFailure?.(tab.sessionId, /(?:ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|Cannot find module|Cannot find package)/i.test(startupStderr) ? "host_module_load" : /SyntaxError/.test(startupStderr) ? "host_syntax_error" : /(?:ERR_DLOPEN_FAILED|dlopen|shared librar(?:y|ies))/i.test(startupStderr) ? "host_native_load" : "host_crash_loop", code, startupStderr, signal);
+      this.deps.recordHostFailure?.(tab.sessionId, /(?:ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|Cannot find module|Cannot find package)/i.test(startupStderr) ? "host_module_load" : /SyntaxError/.test(startupStderr) ? "host_syntax_error" : /(?:ERR_DLOPEN_FAILED|dlopen|shared librar(?:y|ies))/i.test(startupStderr) ? "host_native_load" : "host_crash_loop", code, startupStderr);
       return;
     }
 
+    this.deps.recordHostFailure?.(tab.sessionId, "host_unexpected_exit", code, startupStderr);
     this.notifyHostExited(tab.tabId);
     this.logger.error(`[main] tab ${tab.tabId} host exited unexpectedly (code ${code}); respawning`);
     if (this.spawnTabHost(tab, { firstSpawn: false }) === false) return;

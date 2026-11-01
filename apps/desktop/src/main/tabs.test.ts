@@ -699,6 +699,36 @@ describe("TabHostManager — per-tab circuit breaker", () => {
     expect(manager.getTab(tabId)).toBeUndefined();
   });
 
+  it("records an unexpected host exit even when respawn succeeds", () => {
+    const { fork, hosts } = liveForkRig();
+    const recorded = vi.fn();
+    const manager = new TabHostManager({
+      fork, hostEntry: "/fake/host.js", createChannel: fakeChannel,
+      getWindow: () => windowRig().window, env: () => ({}),
+      logger: silentLogger, recordHostFailure: recorded,
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId: "single-exit", resume: false });
+    expect(created.ok).toBe(true);
+    hosts[0]!.emit("exit", 17);
+    expect(hosts).toHaveLength(2);
+    expect(recorded).toHaveBeenCalledWith("single-exit", "host_unexpected_exit", 17, "");
+  });
+
+  it("does not report a deliberate restart as an unexpected exit", async () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const recorded = vi.fn();
+    const manager = new TabHostManager({
+      fork, hostEntry: "/fake/host.js", createChannel: fakeChannel,
+      getWindow: () => windowRig().window, env: () => ({}),
+      logger: silentLogger, recordHostFailure: recorded,
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId: "restart", resume: false });
+    if (!created.ok) throw new Error("create failed");
+    await manager.restartTabHost(created.tab.tabId);
+    expect(hosts).toHaveLength(2);
+    expect(recorded).not.toHaveBeenCalled();
+  });
+
   it("records a safe cause when the breaker gives up — the exit code alone named none", async () => {
     const { fork } = dyingForkRig();
     const { window } = windowRig();
@@ -716,8 +746,10 @@ describe("TabHostManager — per-tab circuit breaker", () => {
     expect(created.ok).toBe(true);
     await flush();
     expect(manager.getTab(created.ok ? created.tab.tabId : "")?.state).toBe("crash_looped");
-    // One record, at the give-up (never per intermediate respawn).
-    expect(recorded).toEqual([{ sessionId: "sess-loop", reason: "host_crash_loop" }]);
+    // Each recoverable exit is recorded; the final record is the breaker verdict.
+    expect(recorded).toHaveLength(DEFAULT_BREAKER_LIMITS.maxRapidRespawns + 1);
+    expect(recorded.slice(0, -1).every((entry) => entry.reason === "host_unexpected_exit")).toBe(true);
+    expect(recorded.at(-1)).toEqual({ sessionId: "sess-loop", reason: "host_crash_loop" });
   });
 
   it("records a module-load failure from a real host process that exits before boot", async () => {
@@ -734,12 +766,12 @@ describe("TabHostManager — per-tab circuit breaker", () => {
         },
         hostEntry: "/unused", createChannel: fakeChannel, getWindow: () => window,
         env: () => ({}), logger: silentLogger,
-        recordHostFailure: (sessionId, reason, exitCode) => { recordHostFailure(dir, sessionId, reason, exitCode); done(); },
+        recordHostFailure: (sessionId, reason, exitCode) => { recordHostFailure(dir, sessionId, reason, exitCode); if (reason !== "host_unexpected_exit") done(); },
       });
       const created = manager.createTab({ workspace: "/tmp", sessionId: "early-failure", resume: false });
       expect(created.ok).toBe(true);
       await recorded;
-      const diagnostic = JSON.parse((await readFile(join(dir, "early-failure.jsonl"), "utf8")).trim());
+      const diagnostic = JSON.parse((await readFile(join(dir, "early-failure.jsonl"), "utf8")).trim().split("\n").at(-1)!);
       expect(diagnostic).toMatchObject({ code: "host_module_load", exitCode: 1 });
       expect(diagnostic.message).toContain("required module");
       expect(diagnostic.message).not.toContain("missing-anycode-host-test-module");
@@ -760,11 +792,11 @@ describe("TabHostManager — per-tab circuit breaker", () => {
         },
         hostEntry: "/unused", createChannel: fakeChannel, getWindow: () => window,
         env: () => ({}), logger: silentLogger,
-        recordHostFailure: (id, reason, code, stderr, signal) => { recordHostFailure(dir, id, reason, code, stderr, signal); done(); },
+        recordHostFailure: (id, reason, code, stderr, signal) => { recordHostFailure(dir, id, reason, code, stderr, signal); if (reason !== "host_unexpected_exit") done(); },
       });
       manager.createTab({ workspace: "/tmp", sessionId: "permission-failure", resume: false });
       await recorded;
-      const diagnostic = JSON.parse((await readFile(join(dir, "permission-failure.jsonl"), "utf8")).trim());
+      const diagnostic = JSON.parse((await readFile(join(dir, "permission-failure.jsonl"), "utf8")).trim().split("\n").at(-1)!);
       expect(diagnostic).toMatchObject({ code: "host_crash_loop", errorLine: "Error: EACCES: [details redacted]" });
       expect(JSON.stringify(diagnostic)).not.toMatch(/private|secret|permission denied/);
     } finally { await rm(dir, { recursive: true, force: true }); }
@@ -784,11 +816,11 @@ describe("TabHostManager — per-tab circuit breaker", () => {
         },
         hostEntry: "/unused", createChannel: fakeChannel, getWindow: () => window,
         env: () => ({}), logger: silentLogger,
-        recordHostFailure: (id, reason, code, stderr, signal) => { recordHostFailure(dir, id, reason, code, stderr, signal); done(); },
+        recordHostFailure: (id, reason, code, stderr, signal) => { recordHostFailure(dir, id, reason, code, stderr, signal); if (reason !== "host_unexpected_exit") done(); },
       });
       manager.createTab({ workspace: "/tmp", sessionId: "syntax-failure", resume: false });
       await recorded;
-      const diagnostic = JSON.parse((await readFile(join(dir, "syntax-failure.jsonl"), "utf8")).trim());
+      const diagnostic = JSON.parse((await readFile(join(dir, "syntax-failure.jsonl"), "utf8")).trim().split("\n").at(-1)!);
       expect(diagnostic).toMatchObject({ code: "host_syntax_error", exitCode: 1, errorLine: "SyntaxError: [details redacted]" });
       expect(JSON.stringify(diagnostic)).not.toMatch(/secret|Users/);
     } finally { await rm(dir, { recursive: true, force: true }); }
@@ -3673,15 +3705,20 @@ describe("TabHostManager — child terminal + reap (CUT-S2 §0/§2.6.4)", () => 
   it("an unexpected child crash (no ChildTerminal ever sent) finalizes terminal error EXACTLY once, frees the quota EXACTLY once, and NEVER respawns the child", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
-    const manager = childManager(fork, window);
+    const recorded = vi.fn();
+    const manager = childManager(fork, window, { recordHostFailure: recorded });
     const root = manager.createTab({ workspace: "/ws", sessionId: "root-crash-child", resume: false });
     expect(root.ok).toBe(true);
     const rootHost = hosts[0]!;
     rootHost.emit("message", spawnRequest({ requestId: "c1" }));
     const childHost = hosts[1]!;
     const hostsBefore = hosts.length;
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "c1" && e.kind === "accepted");
+    if (!accepted || accepted.kind !== "accepted") throw new Error("child not accepted");
 
     childHost.emit("exit", 1); // the child process just dies, unprompted
+    expect(recorded).toHaveBeenCalledOnce();
+    expect(recorded).toHaveBeenCalledWith(accepted.childSessionId, "host_unexpected_exit", 1, "");
 
     const terminals = childRunEvents(rootHost).filter((e) => e.requestId === "c1" && e.kind === "terminal");
     expect(terminals).toHaveLength(1);
@@ -3700,6 +3737,23 @@ describe("TabHostManager — child terminal + reap (CUT-S2 §0/§2.6.4)", () => 
     // c1's own (earlier) accepted event is still in the log, plus c2/c3/c4:
     // the quota freed by c1's crash was exactly one slot, refillable exactly once.
     expect(childRunEvents(rootHost).filter((e) => e.kind === "accepted")).toHaveLength(1 + 3);
+  });
+
+  it("does not diagnose child completion or cancellation as an unexpected exit", async () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const recorded = vi.fn();
+    const manager = childManager(fork, windowRig().window, { recordHostFailure: recorded });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-expected-exits", resume: false });
+    if (!root.ok) throw new Error("create failed");
+    const parent = hosts[0]!;
+    parent.emit("message", spawnRequest({ requestId: "complete" }));
+    hosts[1]!.emit("message", childTerminalMsg());
+    await flush();
+    parent.emit("message", spawnRequest({ requestId: "cancel" }));
+    parent.emit("message", runCancel("cancel"));
+    await flush();
+    expect(hosts).toHaveLength(3);
+    expect(recorded).not.toHaveBeenCalled();
   });
 
   it("progress/activity/attention from a live child relay verbatim to the parent, correlated by requestId", () => {
