@@ -495,7 +495,7 @@ const SESSION_LAST_ACTIVITY_SQL =
  * and runs each pending migration's statements inside its own BEGIN/COMMIT
  * (a failure rolls back that migration's DDL and rethrows).
  */
-function migrate(db: DatabaseSync): void {
+function migrate(db: DatabaseSync, strictSessionSchema = false): void {
   db.exec(
     `CREATE TABLE IF NOT EXISTS schema_migrations (
       version INTEGER PRIMARY KEY,
@@ -506,6 +506,10 @@ function migrate(db: DatabaseSync): void {
     .prepare("SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations")
     .get() as { version: number } | undefined;
   const current = row?.version ?? 0;
+  const supported = MIGRATIONS.at(-1)!.version;
+  if (strictSessionSchema && current > supported) {
+    throw new Error(`Database schema ${current} is newer than supported schema ${supported}; update AnyCode before opening sessions.`);
+  }
 
   for (const migration of MIGRATIONS) {
     if (migration.version <= current) {
@@ -874,11 +878,41 @@ function rowToClaudeTranscriptItem(row: ClaudeTranscriptItemRow): ClaudeTranscri
   };
 }
 
+// CLI resume must fail closed if a newer or out-of-band session lifecycle
+// field exists. This intentionally requires an explicit admission update when
+// the session schema grows; older schemas are checked before migration too.
+const CLI_SUPPORTED_SESSION_COLUMNS = new Set([
+  "id", "workspace", "model", "mode", "created_at", "updated_at", "title",
+  "engine_id", "external_session_ref", "project_root", "worktree_id", "worktree_path", "worktree_branch", "worktree_base_ref", "worktree_owned_by_anycode",
+  "continuation_pending", "continuation_mode", "worktree_exit_notice_pending", "worktree_cleanup_path", "worktree_cleanup_mode", "worktree_cleanup_owned_by_anycode",
+  "worktree_cleanup_branch", "worktree_transition_json", "connection_id", "codex_profile_id", "codex_fast", "parent_session_id", "spawn_tool_call_id",
+  "next_image_ref", "pending_child_reports_json", "context_usage_json",
+]);
+
+function assertCliSchemaCompatible(db: DatabaseSync): void {
+  const migrations = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get();
+  if (migrations) {
+    const rows = db.prepare("SELECT version FROM schema_migrations").all() as unknown as Array<{version:number}>;
+    // Versions 13–15 belong to the historic orchestrator branch and occur in
+    // existing development databases. Unknown session fields are still rejected.
+    const known = new Set([...MIGRATIONS.map(migration => migration.version), 13, 14, 15]);
+    for (const {version} of rows) {
+      if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 0) throw new Error("Database schema version is invalid; cannot open sessions safely.");
+      if (version > MIGRATIONS.at(-1)!.version) throw new Error("Database schema is newer than supported; update AnyCode before opening sessions.");
+      if (!known.has(version)) throw new Error("Database contains an unsupported migration; update AnyCode before opening sessions.");
+    }
+  }
+  const columns = db.prepare("PRAGMA table_info(sessions)").all() as unknown as Array<{name:string}>;
+  if (columns.some(column => !CLI_SUPPORTED_SESSION_COLUMNS.has(column.name))) {
+    throw new Error("Session database contains unsupported session fields; update AnyCode before opening sessions.");
+  }
+}
+
 export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStore {
   private db: DatabaseSync | undefined;
 
   /** dbPath: file path or ":memory:"; the database is opened lazily on first use. */
-  constructor(private readonly dbPath: string) {}
+  constructor(private readonly dbPath: string, private readonly options?: { strictSessionSchema?: boolean }) {}
 
   /** Opens (once) + migrates the database, creating the parent directory for file-backed paths. */
   private open(): DatabaseSync {
@@ -895,10 +929,17 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     // waiting for the first writer to release it. Must be set before the WAL
     // pragma and migrate() — both take a write lock on open and are exactly
     // where the live smoke caught concurrently-forked children colliding.
-    db.exec("PRAGMA busy_timeout = 5000;");
-    // WAL is a no-op on :memory: databases (sqlite keeps them in "memory" journal mode); harmless.
-    db.exec("PRAGMA journal_mode = WAL;");
-    migrate(db);
+    try {
+      db.exec("PRAGMA busy_timeout = 5000;");
+      if (this.options?.strictSessionSchema === true) assertCliSchemaCompatible(db);
+      // WAL is a no-op on :memory: databases (sqlite keeps them in "memory" journal mode); harmless.
+      db.exec("PRAGMA journal_mode = WAL;");
+      migrate(db, this.options?.strictSessionSchema === true);
+      if (this.options?.strictSessionSchema === true) assertCliSchemaCompatible(db);
+    } catch (error) {
+      db.close();
+      throw error;
+    }
     this.db = db;
     return db;
   }
