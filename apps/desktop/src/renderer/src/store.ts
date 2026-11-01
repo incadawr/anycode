@@ -5055,6 +5055,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // row/dialog ride in part B (UI steps 8–11 are out of scope here).
             set({ orchestrateActive: message.enabled });
             return;
+          case "orchestrate_result":
+            // This renderer does not issue correlated requests yet. Never treat
+            // their direct outcome as authoritative orchestration state.
+            return;
           case "reasoning_effort_changed":
             set({
               effortSelectionAck: {kind: "effort", model: get().model, effort: message.effort, requestId: message.requestId},

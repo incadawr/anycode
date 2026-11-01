@@ -16,6 +16,9 @@ import {
   taskListRequestSchema,
   taskOutputRequestSchema,
   uiToHostMessageSchema,
+  userMessageSchema,
+  setOrchestrateSchema,
+  uiReadySchema,
 } from "./protocol.js";
 import type { GitCommandOutcome, HostToUiMessage, WireEnvStatus, WireGitStatus } from "./protocol.js";
 
@@ -345,6 +348,29 @@ describe("user_message images protocol", () => {
         images: Array.from({ length: 9 }, () => image),
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("reserved orchestration wire forms", () => {
+  it("keeps legacy forms valid and rejects new fields on the prior strict schema", () => {
+    const legacyTask = { type: "user_message", requestId: "r", text: "task" };
+    const atomicTask = { ...legacyTask, orchestrate: "enable" };
+    const legacyToggle = { type: "set_orchestrate", enabled: true };
+    const correlatedToggle = { ...legacyToggle, requestId: "t" };
+    const oldTaskSchema = userMessageSchema.omit({ orchestrate: true });
+    const oldToggleSchema = setOrchestrateSchema.omit({ requestId: true });
+    for (const message of [legacyTask, atomicTask, legacyToggle, correlatedToggle]) expect(uiToHostMessageSchema.safeParse(message).success).toBe(true);
+    expect(oldTaskSchema.safeParse(legacyTask).success).toBe(true);
+    expect(oldTaskSchema.safeParse(atomicTask).success).toBe(false);
+    expect(oldToggleSchema.safeParse(legacyToggle).success).toBe(true);
+    expect(oldToggleSchema.safeParse(correlatedToggle).success).toBe(false);
+    expect(uiToHostMessageSchema.safeParse({ ...legacyTask, orchestrate: "disable" }).success).toBe(false);
+    expect(uiToHostMessageSchema.safeParse({ ...legacyToggle, requestId: "" }).success).toBe(false);
+    expect(uiToHostMessageSchema.safeParse({ ...legacyToggle, requestId: "x".repeat(129) }).success).toBe(false);
+    expect(uiToHostMessageSchema.safeParse({ type: "ui_ready" }).success).toBe(true);
+    expect(uiToHostMessageSchema.safeParse({ type: "ui_ready", orchestrationProtocol: 1 }).success).toBe(true);
+    expect(uiToHostMessageSchema.safeParse({ type: "ui_ready", orchestrationProtocol: 2 }).success).toBe(false);
+    expect(uiReadySchema.omit({ orchestrationProtocol: true }).safeParse({ type: "ui_ready", orchestrationProtocol: 1 }).success).toBe(false);
   });
 });
 
