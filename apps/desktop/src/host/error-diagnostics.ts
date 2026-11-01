@@ -22,7 +22,7 @@ export function recordErrorDiagnostic(directory: string | undefined, sessionId: 
       ...(signal && /^SIG[A-Z0-9]+$/.test(signal) ? { signal } : {}),
     }) + "\n");
   } catch { /* Diagnostics must not interrupt a task. */ }
-  finally { if (fd !== undefined) closeSync(fd); }
+  finally { if (fd !== undefined) { try { closeSync(fd); } catch { /* Best effort; recovery must continue. */ } } }
 }
 
 /**

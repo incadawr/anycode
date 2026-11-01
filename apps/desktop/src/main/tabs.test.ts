@@ -709,9 +709,9 @@ describe("TabHostManager — per-tab circuit breaker", () => {
     });
     const created = manager.createTab({ workspace: "/ws", sessionId: "single-exit", resume: false });
     expect(created.ok).toBe(true);
-    hosts[0]!.emit("exit", 17, "SIGTERM");
+    hosts[0]!.emit("exit", 17);
     expect(hosts).toHaveLength(2);
-    expect(recorded).toHaveBeenCalledWith("single-exit", "host_unexpected_exit", 17, "", "SIGTERM");
+    expect(recorded).toHaveBeenCalledWith("single-exit", "host_unexpected_exit", 17, "");
   });
 
   it("does not report a deliberate restart as an unexpected exit", async () => {
@@ -3705,15 +3705,20 @@ describe("TabHostManager — child terminal + reap (CUT-S2 §0/§2.6.4)", () => 
   it("an unexpected child crash (no ChildTerminal ever sent) finalizes terminal error EXACTLY once, frees the quota EXACTLY once, and NEVER respawns the child", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
-    const manager = childManager(fork, window);
+    const recorded = vi.fn();
+    const manager = childManager(fork, window, { recordHostFailure: recorded });
     const root = manager.createTab({ workspace: "/ws", sessionId: "root-crash-child", resume: false });
     expect(root.ok).toBe(true);
     const rootHost = hosts[0]!;
     rootHost.emit("message", spawnRequest({ requestId: "c1" }));
     const childHost = hosts[1]!;
     const hostsBefore = hosts.length;
+    const accepted = childRunEvents(rootHost).find((e) => e.requestId === "c1" && e.kind === "accepted");
+    if (!accepted || accepted.kind !== "accepted") throw new Error("child not accepted");
 
     childHost.emit("exit", 1); // the child process just dies, unprompted
+    expect(recorded).toHaveBeenCalledOnce();
+    expect(recorded).toHaveBeenCalledWith(accepted.childSessionId, "host_unexpected_exit", 1, "");
 
     const terminals = childRunEvents(rootHost).filter((e) => e.requestId === "c1" && e.kind === "terminal");
     expect(terminals).toHaveLength(1);
@@ -3732,6 +3737,23 @@ describe("TabHostManager — child terminal + reap (CUT-S2 §0/§2.6.4)", () => 
     // c1's own (earlier) accepted event is still in the log, plus c2/c3/c4:
     // the quota freed by c1's crash was exactly one slot, refillable exactly once.
     expect(childRunEvents(rootHost).filter((e) => e.kind === "accepted")).toHaveLength(1 + 3);
+  });
+
+  it("does not diagnose child completion or cancellation as an unexpected exit", async () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const recorded = vi.fn();
+    const manager = childManager(fork, windowRig().window, { recordHostFailure: recorded });
+    const root = manager.createTab({ workspace: "/ws", sessionId: "root-expected-exits", resume: false });
+    if (!root.ok) throw new Error("create failed");
+    const parent = hosts[0]!;
+    parent.emit("message", spawnRequest({ requestId: "complete" }));
+    hosts[1]!.emit("message", childTerminalMsg());
+    await flush();
+    parent.emit("message", spawnRequest({ requestId: "cancel" }));
+    parent.emit("message", runCancel("cancel"));
+    await flush();
+    expect(hosts).toHaveLength(3);
+    expect(recorded).not.toHaveBeenCalled();
   });
 
   it("progress/activity/attention from a live child relay verbatim to the parent, correlated by requestId", () => {
