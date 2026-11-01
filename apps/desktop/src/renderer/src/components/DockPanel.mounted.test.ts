@@ -295,6 +295,54 @@ describe("dock resize handle placement (GitHub #31)", () => {
     expect(store.getState().orchestrationDeliveries[0]).toMatchObject({requestId:"prior-request",status:"pending",reviewed:false});
   });
 
+  it.each(["discard", "send"])("allows restoring again after %s of a copy and a late conflicting outcome", async (action) => {
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",imageInput:true});
+    const image = {name:"original.png",sizeBytes:1,attachment:{mediaType:"image/png" as const,data:"YQ=="}};
+    store.getState().recordSentMessage("original",[image],"original-request","enable");
+    store.getState().markOrchestrationDeliveryUnknown("original-request");
+    vi.spyOn(tabRegistry,"sendToTab").mockImplementation(() => {});
+    await mountBody();
+    await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+    expect(store.getState().restoredComposerDraft?.deliveryRequestId).toBe("original-request");
+    if (action === "discard") {
+      const discard = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Discard this draft and start a new message")!;
+      await act(async () => discard.click());
+    } else {
+      await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-reviewed")!.click());
+      const removeIntent = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Remove orchestration intent")!;
+      await act(async () => removeIntent.click());
+      await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    }
+    expect(store.getState().orchestrationDeliveries[0]?.restored).toBe(true);
+    expect(store.getState().restoredComposerDraft?.deliveryRequestId).toBeUndefined();
+    await act(async () => {store.getState().applyHostMessage({type:"turn_started",requestId:"original-request",turnId:"late"}); store.getState().applyHostMessage({type:"turn_rejected",requestId:"original-request",reason:"busy"});});
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({status:"conflict",reviewed:false,restored:true});
+    expect(container.querySelector(".orchestration-delivery-restore")).not.toBeNull();
+    const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+    const type = async (value:string) => act(async () => {Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(textarea,value); textarea.dispatchEvent(new Event("input",{bubbles:true}));});
+    await type("new edit");
+    await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+    expect(textarea.value).toBe("new edit");
+    await type("");
+    await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+    expect(store.getState().restoredComposerDraft).toMatchObject({text:"original",images:[image],orchestrate:"enable",deliveryRequestId:"original-request"});
+  });
+
+  it("restores an unknown ordinary initial message with its attachment and settings", async () => {
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",imageInput:true});
+    const image = {name:"initial.png",sizeBytes:1,attachment:{mediaType:"image/png" as const,data:"YQ=="}};
+    store.getState().recordSentMessage("initial",[image],"initial-request",undefined,{model:"m1",mode:"build"});
+    store.getState().markOrchestrationDeliveryUnknown("initial-request");
+    const send = vi.spyOn(tabRegistry,"sendToTab").mockImplementation(() => {});
+    await mountBody();
+    await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+    expect(store.getState().restoredComposerDraft).toMatchObject({text:"initial",images:[image],initialPicks:{model:"m1",mode:"build"},deliveryRequestId:"initial-request"});
+    expect(store.getState().restoredComposerDraft?.orchestrate).toBeUndefined();
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    expect(send).not.toHaveBeenCalledWith("tab",expect.objectContaining({type:"user_message"}));
+    expect(store.getState().orchestrationDeliveries[0]?.status).toBe("unknown");
+  });
+
   it("holds a posted orchestration as delivery unknown across exit and reconciles late outcomes without overwriting edits", async () => {
     vi.mocked(tabRegistry.getLiveHostConnection).mockRestore();
     const previous = useSettingsStore.getState();
@@ -322,6 +370,8 @@ describe("dock resize handle placement (GitHub #31)", () => {
       await type("/orchestrate original task");
       await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
       expect(first.postMessage.mock.calls.filter(([message]) => (message as {type:string}).type === "user_message")).toHaveLength(1);
+      const discard = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Discard this draft and start a new message")!;
+      await act(async () => discard.click());
       await type("new user edit");
       await act(async () => tabRegistry.markHostExited(tabId));
       expect(target.getState().orchestrationDeliveries[0]?.status).toBe("unknown");

@@ -285,6 +285,7 @@ export function createTabRegistry(
 ): TabRegistry {
   const entries = new Map<string, TabEntry>();
   const unusableHostConnections = new WeakSet<HostConnection>();
+  const closedHostConnections = new WeakSet<HostConnection>();
   const agentTitles = new Map<string, string>();
   const closedTabIds = new Set<string>();
   /**
@@ -295,6 +296,7 @@ export function createTabRegistry(
   type InitialPrompt = { text: string; model?: string; mode?: PermissionMode; effort?: string; images?: readonly QueuedPromptImage[]; reasoningEffort?: string; orchestrate?: boolean };
   const pendingInitialPrompts = new Map<string, InitialPrompt>();
   const pendingInitialModels = new Map<string, { requestId: string; prompt: InitialPrompt; timer: ReturnType<typeof setTimeout>; connection: HostConnection }>();
+  const liveConnection = (entry: TabEntry): HostConnection | null => entry.connection && !unusableHostConnections.has(entry.connection) && entry.store.getState().connection === "ready" ? entry.connection : null;
 
   function holdInitial(entry: TabEntry, prompt: InitialPrompt, text: string): void {
     entry.store.getState().enqueuePrompt({ text: prompt.text, images: prompt.images ?? [], requiresRestore: true,
@@ -341,11 +343,16 @@ export function createTabRegistry(
     reasoningEffort?: string,
     orchestrate?: boolean,
   ): void {
+    const connection = liveConnection(entry);
+    const sendPick = (message: UiToHostMessage): void => {
+      if (!connection || liveConnection(entry) !== connection) throw new Error("connection unavailable");
+      connection.send(message);
+    };
     if (mode !== undefined && mode !== current.mode) {
-      entry.connection?.send({ type: "set_mode", mode });
+      sendPick({ type: "set_mode", mode });
     }
     if (model !== undefined && model !== current.model) {
-      entry.connection?.send({ type: "set_model", model });
+      sendPick({ type: "set_model", model });
     }
     // sent last (after a model switch, if any) so a validated effort
     // always targets the model actually active by then — moot for the START
@@ -353,7 +360,7 @@ export function createTabRegistry(
     // spawn time and never switched through this path, but keeps the
     // ordering correct if that ever changes.
     if (effort !== undefined && effort !== current.effort) {
-      entry.connection?.send({ type: "set_engine_effort", effort });
+      sendPick({ type: "set_engine_effort", effort });
     }
     // core's own effort message, on the same after-the-model
     // ordering. The level is checked against core's closed vocabulary here
@@ -363,14 +370,14 @@ export function createTabRegistry(
     // stale catalog can only be ignored, never misapplied.
     const level = reasoningEffort === undefined ? undefined : asReasoningEffort(reasoningEffort);
     if (level !== undefined && (level !== current.reasoningEffort || (model !== undefined && model !== current.model))) {
-      entry.connection?.send({ type: "set_reasoning_effort", effort: level });
+      sendPick({ type: "set_reasoning_effort", effort: level });
     }
     // Start-screen Orchestrate (core only): LAST of the picks, so the host's
     // plan-mode flip happens after any set_mode above and before the first
     // user_message on the same port. Enabling an already-enabled flag just
     // acks (onSetOrchestrate), so no current-state comparison is needed.
     if (orchestrate === true) {
-      entry.connection?.send({ type: "set_orchestrate", enabled: true });
+      sendPick({ type: "set_orchestrate", enabled: true });
     }
   }
 
@@ -404,13 +411,19 @@ export function createTabRegistry(
     entry.store.getState().appendUserText(requestId, text, deliveredImages.length > 0 ? deliveredImages.map((image) => image.attachment) : undefined);
     // W8: snapshot what actually went on the wire so a later terminal
     // retryable failure can offer to replay this same content.
-    entry.store.getState().recordSentMessage(text, deliveredImages, requestId, orchestrate ? "enable" : undefined);
-    entry.connection?.send({
-      type: "user_message",
-      requestId,
-      text,
-      ...(deliveredImages.length > 0 ? { images: deliveredImages.map((image) => image.attachment) } : {}),
-    });
+    entry.store.getState().recordSentMessage(text, deliveredImages, requestId, orchestrate ? "enable" : undefined, picks ?? {});
+    const connection = liveConnection(entry);
+    try {
+      if (!connection) throw new Error("connection unavailable");
+      connection.send({ type: "user_message", requestId, text, ...(deliveredImages.length > 0 ? { images: deliveredImages.map((image) => image.attachment) } : {}) });
+      if (liveConnection(entry) !== connection) entry.store.getState().markOrchestrationDeliveryUnknown(requestId);
+    } catch {
+      entry.store.getState().markOrchestrationDeliveryUnknown(requestId);
+      if (connection) {
+        unusableHostConnections.add(connection);
+        if (entry.connection === connection) entry.store.getState().setAwaitingPort();
+      }
+    }
   }
 
   /**
@@ -422,11 +435,14 @@ export function createTabRegistry(
    * head couldn't be taken (queue emptied/paused/inFlight by a racing update).
    */
   function dispatchQueuedPrompt(entry: TabEntry): void {
-    const item = entry.store.getState().takeQueueHead(crypto.randomUUID());
+    const connection = liveConnection(entry);
+    if (!connection) return;
+    const requestId = crypto.randomUUID();
+    const item = entry.store.getState().takeQueueHead(requestId);
     if (item === null) {
       return;
     }
-    const requestId = entry.store.getState().queueInFlight!.requestId;
+    if (entry.store.getState().queueInFlight?.requestId !== requestId || liveConnection(entry) !== connection) return;
     // срез 2: `item.origin` (set only for a detached-child report,
     // QueuedPrompt.origin's own doc) rides onto BOTH the local transcript
     // append (live system-card render) and the wire `user_message` (host
@@ -438,13 +454,21 @@ export function createTabRegistry(
     // W8: snapshot what actually went on the wire so a later terminal
     // retryable failure can offer to replay this same content.
     entry.store.getState().recordSentMessage(item.text, item.images, requestId, item.orchestrate);
-    entry.connection?.send({
-      type: "user_message",
-      requestId,
-      text: item.text,
-      ...(item.images.length > 0 ? { images: item.images.map((image) => image.attachment) } : {}),
-      ...(item.origin !== undefined ? { origin: item.origin } : {}),
-    });
+    if (liveConnection(entry) !== connection) { entry.store.getState().markOrchestrationDeliveryUnknown(requestId); return; }
+    try {
+      connection.send({
+        type: "user_message", requestId, text: item.text,
+        ...(item.images.length > 0 ? { images: item.images.map((image) => image.attachment) } : {}),
+        ...(item.origin !== undefined ? { origin: item.origin } : {}),
+      });
+    } catch {
+      unusableHostConnections.add(connection);
+      entry.store.setState((state) => {
+        const pending = state.queueInFlight?.requestId === requestId ? state.queueInFlight.item : null;
+        const promptQueue = pending ? [{...pending, ...(pending.origin === "system" ? {} : {requiresRestore:true})}, ...state.promptQueue] : state.promptQueue;
+        return {connection:"awaiting_port",queueInFlight:pending ? null : state.queueInFlight,promptQueue,queuePaused:true,queuePauseReason:"error",orchestrationDeliveries:state.orchestrationDeliveries.map(delivery => delivery.requestId === requestId && delivery.status === "pending" ? {...delivery,status:"unknown" as const} : delivery)};
+      });
+    }
   }
 
   // R10 visit-clear (slice-R10-cut §2.3): a tab BECOMING ACTIVE is the "visit"
@@ -465,19 +489,25 @@ export function createTabRegistry(
 
   function startInitial(entry: TabEntry, tabId: string, prompt: InitialPrompt, current: { model: string | null; mode: PermissionMode | null; effort: string | undefined; reasoningEffort: ReasoningEffort | undefined }, imageInput: boolean | undefined, imageFallback: boolean | undefined, stagedModel?: { model: string; reasoningEffort: ReasoningEffort }): void {
     cancelPendingModel(tabId, entry);
+    if (!liveConnection(entry)) { holdInitial(entry, prompt, "Connection unavailable. Restore the draft to review it before sending."); return; }
     if ((prompt.images?.length ?? 0) > 0 && prompt.model !== undefined && prompt.model !== current.model) {
       if (!entry.connection) { holdInitial(entry, prompt, "A model switch was requested; the current model and effective reasoning effort are not confirmed. Restore the draft to review its settings."); return; }
       const requestId = crypto.randomUUID();
       const connection = entry.connection;
       const timer = setTimeout(() => cancelPendingModel(tabId, entry), 10_000);
       pendingInitialModels.set(tabId, { requestId, prompt, timer, connection });
-      connection.send({ type: "set_model", model: prompt.model, requestId });
+      try { connection.send({ type: "set_model", model: prompt.model, requestId }); }
+      catch { cancelPendingModel(tabId, entry); }
       return;
     }
     const blocked = isSendBlockedByModelImages(imageInput, imageFallback, prompt.images?.length ?? 0);
     // Model selection may already have been staged to obtain its image verdict.
     // All remaining picks and the turn are committed only after that verdict passes.
-    if (!blocked) applyInitialPicks(entry, prompt.model, prompt.mode, prompt.effort, current, prompt.reasoningEffort, prompt.orchestrate);
+    if (!blocked) {
+      try { applyInitialPicks(entry, prompt.model, prompt.mode, prompt.effort, current, prompt.reasoningEffort, prompt.orchestrate); }
+      catch { holdInitial(entry, prompt, "Connection failed while applying settings. Restore the draft and review the current settings."); return; }
+      if (!liveConnection(entry)) { holdInitial(entry, prompt, "Connection closed while applying settings. Restore the draft and review the current settings."); return; }
+    }
     dispatchInitialPrompt(entry, prompt.text, prompt.images ?? [], imageInput, imageFallback, prompt.orchestrate,
       { model: prompt.model, mode: prompt.mode, effort: prompt.effort, reasoningEffort: prompt.reasoningEffort }, stagedModel);
   }
@@ -492,7 +522,16 @@ export function createTabRegistry(
     entry.connection = connection;
     const onConnectionClosed = () => {
       unusableHostConnections.add(connection);
-      if (entry.connection === connection) entry.store.setState((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(item => item.status === "pending" ? {...item,status:"unknown" as const} : item)}));
+      closedHostConnections.add(connection);
+      if (entry.connection !== connection) return;
+      entry.store.setState((state) => {
+        const inFlight = state.queueInFlight?.item;
+        const promptQueue = inFlight ? [{...inFlight, ...(inFlight.origin === "system" ? {} : {requiresRestore:true})}, ...state.promptQueue] : state.promptQueue;
+        return {connection:"awaiting_port",queueInFlight:null,promptQueue,...(promptQueue.length ? {queuePaused:true,queuePauseReason:"error" as const} : {}),orchestrationDeliveries:state.orchestrationDeliveries.map(item => item.status === "pending" ? {...item,status:"unknown" as const} : item)};
+      });
+      cancelPendingModel(tabId, entry);
+      const pending = pendingInitialPrompts.get(tabId);
+      if (pending) { pendingInitialPrompts.delete(tabId); holdInitial(entry, pending, "Connection closed before the first turn. Restore the draft before sending."); }
     };
     if (typeof port.addEventListener === "function") port.addEventListener("close", onConnectionClosed, {once:true});
     else unusableHostConnections.add(connection);
@@ -516,6 +555,7 @@ export function createTabRegistry(
     const cleanupExpiry = entry.unsubscribeExpiry;
     entry.unsubscribeExpiry = () => { cleanupExpiry?.(); port.removeEventListener?.("close", onConnectionClosed); };
     entry.unsubscribeMessages = connection.subscribe((message) => {
+      if (entry.connection !== connection || closedHostConnections.has(connection)) return;
       // sessionId lands on host_ready but isn't part of the frozen DesktopState
       // shape (store.ts §3.3) — the registry is the natural place to lift it
       // into the tabs-store for the TabBar/picker, alongside forwarding the
@@ -753,6 +793,8 @@ export function createTabRegistry(
         return;
       }
       cancelPendingModel(tabId, entry);
+      const pending = pendingInitialPrompts.get(tabId);
+      if (pending) { pendingInitialPrompts.delete(tabId); holdInitial(entry, pending, "Connection exited before the first turn. Restore the draft before sending."); }
       entry.unsubscribeMessages?.();
       entry.unsubscribeMessages = null;
       entry.connection = null;
@@ -844,7 +886,7 @@ export function createTabRegistry(
 
     sendToTab(tabId, message): void {
       const entry = entries.get(tabId);
-      if (!entry?.connection) {
+      if (!entry?.connection || unusableHostConnections.has(entry.connection)) {
         console.warn("[tab-registry] dropping outgoing message, no active connection for tab", tabId, message);
         return;
       }
@@ -935,6 +977,10 @@ export function createTabRegistry(
         return;
       }
       const entry = entries.get(tabId);
+      if (entry && (entry.store.getState().connection === "host_exited" || (entry.connection && unusableHostConnections.has(entry.connection)))) {
+        holdInitial(entry, {text,model,mode,effort,images,reasoningEffort,orchestrate}, "Connection unavailable. Restore the draft before sending.");
+        return;
+      }
       if (entry?.store.getState().connection === "ready") {
         const state = entry.store.getState();
         startInitial(entry, tabId, { text, model, mode, effort, images, reasoningEffort, orchestrate },

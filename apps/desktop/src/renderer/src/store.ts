@@ -1013,12 +1013,13 @@ export interface QueuedPrompt {
   originId?: string;
 }
 
-/** Renderer-lifetime evidence for an orchestration request; no delivery is inferred from a local send. */
+/** Renderer-lifetime evidence for an orchestration or initial request; local send is not an acknowledgement. */
 export interface OrchestrationDelivery {
   requestId: string;
   text: string;
   images: readonly QueuedPromptImage[];
-  orchestrate: "enable";
+  orchestrate?: "enable";
+  initialPicks?: QueuedPrompt["initialPicks"];
   status: "pending" | "unknown" | "rejected" | "started" | "conflict";
   restored: boolean;
   reviewed: boolean;
@@ -1528,7 +1529,7 @@ export interface DesktopState {
    * (Composer's direct path; tab-registry's queue-drain and initial-prompt
    * paths) — NOT a new send path of its own.
    */
-  recordSentMessage(text: string, images: readonly QueuedPromptImage[], requestId?: string, orchestrate?: "enable"): void;
+  recordSentMessage(text: string, images: readonly QueuedPromptImage[], requestId?: string, orchestrate?: "enable", initialPicks?: QueuedPrompt["initialPicks"]): void;
   markOrchestrationDeliveryUnknown(requestId: string): void;
   /**
    * W8 one-shot consume: clears `retry` synchronously (so the button
@@ -6178,12 +6179,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         }
       },
 
-      recordSentMessage(text: string, images: readonly QueuedPromptImage[], requestId?: string, orchestrate?: "enable"): void {
+      recordSentMessage(text: string, images: readonly QueuedPromptImage[], requestId?: string, orchestrate?: "enable", initialPicks?: QueuedPrompt["initialPicks"]): void {
         if (requestId !== undefined) pendingSentMessages.set(requestId, { text, images, ...(orchestrate !== undefined ? { orchestrate } : {}) });
         set((state) => ({
           lastSentMessage: { text, images },
-          ...(orchestrate === "enable" && requestId !== undefined && !state.orchestrationDeliveries.some(item => item.requestId === requestId) ? {
-            orchestrationDeliveries: [...state.orchestrationDeliveries, {requestId,text,images:images.map(image => ({...image,attachment:{...image.attachment}})),orchestrate:"enable" as const,status:state.connection === "ready" ? "pending" as const : "unknown" as const,restored:false,reviewed:false}],
+          ...((orchestrate === "enable" || initialPicks !== undefined) && requestId !== undefined && !state.orchestrationDeliveries.some(item => item.requestId === requestId) ? {
+            orchestrationDeliveries: [...state.orchestrationDeliveries, {requestId,text,images:images.map(image => ({...image,attachment:{...image.attachment}})),...(orchestrate ? {orchestrate} : {}),...(initialPicks ? {initialPicks:{...initialPicks}} : {}),status:state.connection === "ready" ? "pending" as const : "unknown" as const,restored:false,reviewed:false}],
           } : {}),
         }));
       },

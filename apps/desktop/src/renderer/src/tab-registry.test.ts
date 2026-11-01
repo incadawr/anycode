@@ -1249,6 +1249,87 @@ describe("tab-registry — queueInitialPrompt core reasoning-effort seam", () =>
 describe("tab-registry — queueInitialPrompt images", () => {
   const IMAGE = { name: "a.png", sizeBytes: 10, attachment: { mediaType: "image/png" as const, data: "AA==" } };
 
+  it("holds an initial draft submitted after port close without posting or resending", () => {
+    const {registry} = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a","/ws/a",asPort(port));
+    port.emit({...HOST_READY("/ws/a","sess-a"),imageInput:true});
+    port.close();
+    expect(registry.getStore("tab-a")!.getState().connection).not.toBe("ready");
+    registry.queueInitialPrompt("tab-a","look",undefined,"plan",undefined,[IMAGE],undefined,true);
+    expect(port.sent).not.toContainEqual(expect.objectContaining({type:"user_message"}));
+    expect(registry.getStore("tab-a")!.getState().promptQueue).toMatchObject([{text:"look",images:[IMAGE],orchestrate:"enable",requiresRestore:true}]);
+    const replacement = new FakeMessagePort();
+    registry.registerPort("tab-a","/ws/a",asPort(replacement));
+    replacement.emit({...HOST_READY("/ws/a","sess-a"),imageInput:true});
+    expect(replacement.sent).not.toContainEqual(expect.objectContaining({type:"user_message"}));
+  });
+
+  it.each([true,false])("retains an initial message with attachment as unknown when close races its post (orchestrate=%s)", (orchestrate) => {
+    const {registry} = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a","/ws/a",asPort(port));
+    port.emit({...HOST_READY("/ws/a","sess-a"),imageInput:true});
+    const post = port.postMessage.bind(port);
+    vi.spyOn(port,"postMessage").mockImplementation(message => { post(message); if ((message as {type:string}).type === "user_message") port.close(); });
+    registry.queueInitialPrompt("tab-a","look",undefined,undefined,undefined,[IMAGE],undefined,orchestrate);
+    const state = registry.getStore("tab-a")!.getState();
+    expect(state.connection).not.toBe("ready");
+    expect(state.orchestrationDeliveries).toMatchObject([{text:"look",images:[IMAGE],status:"unknown",...(orchestrate ? {orchestrate:"enable"} : {})}]);
+    const replacement = new FakeMessagePort();
+    registry.registerPort("tab-a","/ws/a",asPort(replacement));
+    replacement.emit({...HOST_READY("/ws/a","sess-a"),imageInput:true});
+    expect(replacement.sent).not.toContainEqual(expect.objectContaining({type:"user_message"}));
+    expect(registry.getStore("tab-a")!.getState().orchestrationDeliveries[0]?.status).toBe("unknown");
+  });
+
+  it("retains the initial draft as unknown when postMessage throws", () => {
+    const {registry} = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a","/ws/a",asPort(port));
+    port.emit({...HOST_READY("/ws/a","sess-a"),imageInput:true});
+    vi.spyOn(port,"postMessage").mockImplementation(message => { if ((message as {type:string}).type === "user_message") throw new Error("closed"); });
+    expect(() => registry.queueInitialPrompt("tab-a","look",undefined,undefined,undefined,[IMAGE])).not.toThrow();
+    const state = registry.getStore("tab-a")!.getState();
+    expect(state.connection).not.toBe("ready");
+    expect(state.orchestrationDeliveries).toMatchObject([{text:"look",images:[IMAGE],status:"unknown"}]);
+    const replacement = new FakeMessagePort();
+    registry.registerPort("tab-a","/ws/a",asPort(replacement));
+    replacement.emit({...HOST_READY("/ws/a","sess-a"),imageInput:true});
+    expect(replacement.sent).not.toContainEqual(expect.objectContaining({type:"user_message"}));
+  });
+
+  it("holds an initial draft if the port closes before host_ready", () => {
+    const {registry} = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a","/ws/a",asPort(port));
+    registry.queueInitialPrompt("tab-a","look",undefined,undefined,undefined,[IMAGE]);
+    port.close();
+    expect(registry.getStore("tab-a")!.getState().promptQueue).toMatchObject([{text:"look",images:[IMAGE],requiresRestore:true}]);
+    const replacement = new FakeMessagePort();
+    registry.registerPort("tab-a","/ws/a",asPort(replacement));
+    replacement.emit({...HOST_READY("/ws/a","sess-a"),imageInput:true});
+    expect(replacement.sent).not.toContainEqual(expect.objectContaining({type:"user_message"}));
+  });
+
+  it("holds a queued user prompt for explicit restore when its port closes during send", () => {
+    const {registry} = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a","/ws/a",asPort(port));
+    port.emit({...HOST_READY("/ws/a","sess-a"),imageInput:true});
+    const post = port.postMessage.bind(port);
+    vi.spyOn(port,"postMessage").mockImplementation(message => {post(message); if ((message as {type:string}).type === "user_message") port.close();});
+    const store = registry.getStore("tab-a")!;
+    store.getState().enqueuePrompt({text:"queued",images:[IMAGE]});
+    expect(store.getState().promptQueue).toMatchObject([{text:"queued",images:[IMAGE],requiresRestore:true}]);
+    const replacement = new FakeMessagePort();
+    registry.registerPort("tab-a","/ws/a",asPort(replacement));
+    replacement.emit({...HOST_READY("/ws/a","sess-a"),imageInput:true});
+    store.getState().resumeQueue();
+    expect(replacement.sent).not.toContainEqual(expect.objectContaining({type:"user_message"}));
+    expect(store.getState().promptQueue).toMatchObject([{text:"queued",images:[IMAGE],requiresRestore:true}]);
+  });
+
   it("retains an unsupported orchestrated first message with its image and settings without sending text", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);
