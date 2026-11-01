@@ -1040,10 +1040,20 @@ export interface OrchestrationDelivery {
   payloadOmitted?: true;
   /** Once delivery is unknown, retain its full payload even after late start. */
   preservePayload?: true;
+  /** User explicitly discarded a rejected payload; correlation remains bounded. */
+  dismissed?: true;
+  /** A confirmed child-surface steer follows the same bounded retention policy. */
+  childSteer?: true;
 }
 
 /** Bounded correlation horizon for ordinary, confirmed and completed sends. */
 export const COMPLETED_DIRECT_CORRELATION_LIMIT = 256;
+
+function boundDeliveryTombstones(deliveries: readonly OrchestrationDelivery[]): readonly OrchestrationDelivery[] {
+  const evictable = deliveries.filter(item => item.payloadOmitted && (item.status === "started" || (item.status === "rejected" && item.dismissed)) && !deliveries.some(child => child.parentRequestId === item.requestId));
+  const remove = new Set(evictable.slice(0, Math.max(0, evictable.length - COMPLETED_DIRECT_CORRELATION_LIMIT)).map(item => item.requestId));
+  return deliveries.filter(item => !remove.has(item.requestId));
+}
 
 function compactCompletedDirect(state: DesktopState, turnId: string): readonly OrchestrationDelivery[] {
   const deliveries = state.orchestrationDeliveries.map(item => {
@@ -1051,18 +1061,16 @@ function compactCompletedDirect(state: DesktopState, turnId: string): readonly O
       state.orchestrationDeliveries.some(child => child.parentRequestId === item.requestId) ||
       state.promptQueue.some(queued => queued.recoverySourceId === item.requestId) ||
       state.queueInFlight?.item.recoverySourceId === item.requestId;
-    return item.ordinaryDirect && item.status === "started" && item.turnId === turnId && !item.preservePayload && !item.restored && !linked
+    return (item.ordinaryDirect || item.childSteer) && item.status === "started" && item.turnId === turnId && !item.preservePayload && !item.restored && !linked
       ? { ...item, text: "", images: [], payloadOmitted: true as const }
       : item;
   });
-  const evictable = deliveries.filter(item => item.payloadOmitted && item.status === "started");
-  const remove = new Set(evictable.slice(0, Math.max(0, evictable.length - COMPLETED_DIRECT_CORRELATION_LIMIT)).map(item => item.requestId));
-  return deliveries.filter(item => !remove.has(item.requestId));
+  return boundDeliveryTombstones(deliveries);
 }
 
 function deliveryStarted(item: OrchestrationDelivery, turnId: string): OrchestrationDelivery {
   if (item.status === "conflict") return item;
-  if (item.status === "rejected" || (item.status === "started" && item.turnId !== turnId)) return { ...item, status: "conflict", reviewed: false };
+  if (item.status === "rejected" || (item.status === "started" && item.turnId !== turnId)) return { ...item, status: "conflict", reviewed: false, dismissed: undefined };
   return { ...item, status: "started", turnId };
 }
 function deliveryRejected(item: OrchestrationDelivery): OrchestrationDelivery {
@@ -1100,7 +1108,25 @@ export function recoveryTreeBlocked(deliveries: readonly OrchestrationDelivery[]
   const ids = recoveryTreeIds(deliveries,requestId);
   if (!ids) return true;
   return deliveries.some(item => ids.has(item.requestId) && !(item.requestId === ignorePendingId && item.status === "pending") &&
-    (item.status === "pending" || item.status === "started" || ((item.status === "unknown" || item.status === "conflict") && !item.reviewed)));
+    (item.payloadOmitted || item.dismissed || item.status === "pending" || item.status === "started" || ((item.status === "unknown" || item.status === "conflict") && !item.reviewed)));
+}
+
+export function canDismissRejectedDelivery(state: DesktopState, requestId: string): boolean {
+  const item = state.orchestrationDeliveries.find(entry => entry.requestId === requestId);
+  return !!item && item.status === "rejected" && item.origin !== "system" && !item.dismissed && !item.payloadOmitted &&
+    state.restoredComposerDraft?.deliveryRequestId !== requestId && state.composerRolePicker?.deliveryRequestId !== requestId &&
+    !state.orchestrationDeliveries.some(entry => entry.parentRequestId === requestId) &&
+    !state.promptQueue.some(entry => entry.recoverySourceId === requestId || entry.retryOf === requestId) &&
+    state.queueInFlight?.requestId !== requestId && state.queueInFlight?.item.recoverySourceId !== requestId &&
+    !state.pendingSteers.some(entry => entry.requestId === requestId);
+}
+
+function startedDeliveries(state: DesktopState, requestId: string, turnId: string): readonly OrchestrationDelivery[] {
+  const existing = state.orchestrationDeliveries.find(item => item.requestId === requestId);
+  if (existing) return state.orchestrationDeliveries.map(item => item.requestId === requestId ? deliveryStarted(item, turnId) : item);
+  const steer = state.pendingSteers.find(item => item.requestId === requestId);
+  if (!steer || state.uiSteerPending.includes(requestId)) return state.orchestrationDeliveries;
+  return [...state.orchestrationDeliveries, { requestId, text: steer.sentMessage.text, images: steer.sentMessage.images.map(image => ({ ...image, attachment: { ...image.attachment } })), status: "started", turnId, restored: false, reviewed: false, childSteer: true }];
 }
 
 export function recoveryAdmissionBlocked(state: Pick<DesktopState,"orchestrationDeliveries" | "promptQueue" | "queueInFlight">, requestId: string, opts?: {ignorePendingId?:string; ignoreQueueId?:string; ignoreInFlightId?:string}): boolean {
@@ -1636,6 +1662,7 @@ export interface DesktopState {
    * paths) — NOT a new send path of its own.
    */
   recordSentMessage(text: string, images: readonly QueuedPromptImage[], requestId?: string, orchestrate?: "enable", initialPicks?: QueuedPrompt["initialPicks"], parentRequestId?: string, systemOriginId?: string, trackDirect?: boolean): void;
+  dismissRejectedDelivery(requestId: string): void;
   claimRecoveryAttempt(sourceId: string, requestId: string, text: string, images: readonly QueuedPromptImage[], picks: QueuedPrompt["initialPicks"], opts?: {orchestrate?:"enable"; pickerId?:string; bindDraft?:boolean}): boolean;
   enqueueRecoveryPrompt(sourceId: string, item: Omit<QueuedPrompt,"id" | "recoverySourceId">): boolean;
   markOrchestrationDeliveryUnknown(requestId: string): void;
@@ -5152,7 +5179,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           case "turn_started": {
             pendingSentMessages.delete(message.requestId);
             if (presentationReplayActive && presentationReplayTurns?.has(message.turnId)) {
-              set((state) => reconcileQueuedRetries(state.promptQueue,state.orchestrationDeliveries.map(item => item.requestId === message.requestId ? deliveryStarted(item,message.turnId) : item)));
+              set((state) => reconcileQueuedRetries(state.promptQueue,startedDeliveries(state,message.requestId,message.turnId)));
               return;
             }
             // fallback: a turn starting means post-switch content
@@ -5181,7 +5208,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               turnStartedAt.set(message.turnId, message.startedAt ?? Date.now());
             }
             set({
-              ...reconcileQueuedRetries(get().promptQueue,get().orchestrationDeliveries.map(item => item.requestId === message.requestId ? deliveryStarted(item,message.turnId) : item)),
+              ...reconcileQueuedRetries(get().promptQueue,startedDeliveries(get(),message.requestId,message.turnId)),
               turn: { status: "running", turnId: message.turnId, requestId: message.requestId, startedAt: turnStartedAt.get(message.turnId) },
               latestTurnId: message.turnId,
               // W8: a new turn starting — whether via the Try-again
@@ -6336,6 +6363,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
 
       markOrchestrationDeliveryUnknown(requestId: string): void {
         set((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(item => item.requestId === requestId ? deliveryUnknown(item) : item)}));
+      },
+
+      dismissRejectedDelivery(requestId: string): void {
+        set((state) => {
+          if (!canDismissRejectedDelivery(state, requestId)) return {};
+          return { orchestrationDeliveries: boundDeliveryTombstones(state.orchestrationDeliveries.map(item => item.requestId === requestId ? { ...item, text: "", images: [], payloadOmitted: true as const, dismissed: true as const } : item)) };
+        });
       },
 
       retryRejectedSystemDelivery(requestId: string): void {

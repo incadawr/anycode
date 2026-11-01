@@ -3,12 +3,84 @@ import { describe, expect, it, vi } from "vitest";
 import type { HostToUiMessage } from "../../shared/protocol.js";
 import { createTabRegistry } from "./tab-registry.js";
 import { createTabsStore } from "./tabs-store.js";
-import { COMPLETED_DIRECT_CORRELATION_LIMIT } from "./store.js";
+import { COMPLETED_DIRECT_CORRELATION_LIMIT, createDesktopStore } from "./store.js";
 
 const ready: HostToUiMessage = { type: "host_ready", workspace: "/synthetic", sessionId: "session", mode: "build", model: "model" };
 const image = () => ({ name: "synthetic.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } });
 
 describe("unknown delivery over real MessageChannel", () => {
+  it("cannot dismiss unknown, active, or rejected ancestors with dependent attempts", () => {
+    const store = createDesktopStore({ schedule: () => {} });
+    store.getState().applyHostMessage(ready);
+    const saved = image();
+    store.getState().recordSentMessage("parent", [saved], "parent", undefined, undefined, undefined, undefined, true);
+    store.getState().applyHostMessage({ type: "turn_rejected", requestId: "parent", reason: "busy" });
+    const parent = store.getState().orchestrationDeliveries[0]!;
+    store.setState({ orchestrationDeliveries: [parent, { ...parent, requestId: "child", parentRequestId: "parent", status: "pending" }] });
+    store.getState().dismissRejectedDelivery("parent");
+    store.getState().dismissRejectedDelivery("child");
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{ requestId: "parent", status: "rejected", images: [saved] }, { requestId: "child", status: "pending", images: [saved] }]);
+    store.setState({ orchestrationDeliveries: [parent], promptQueue: [{ id: "queued", text: "retry", images: [], recoverySourceId: "parent" }] });
+    store.getState().dismissRejectedDelivery("parent");
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "rejected", images: [saved] });
+    store.setState({ promptQueue: [], queueInFlight: { requestId: "retry", item: { id: "queued", text: "retry", images: [], recoverySourceId: "parent" } } });
+    store.getState().dismissRejectedDelivery("parent");
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "rejected", images: [saved] });
+    store.setState({ queueInFlight: null });
+    store.setState({ orchestrationDeliveries: [{ ...parent, status: "unknown" }] });
+    store.getState().dismissRejectedDelivery("parent");
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "unknown", images: [saved] });
+    store.setState({ orchestrationDeliveries: [{ ...parent, status: "started", turnId: "running" }] });
+    store.getState().dismissRejectedDelivery("parent");
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "started", images: [saved] });
+  });
+  it.each(["started-first", "rejected-first"] as const)("correlates child steer conflict in %s order without redelivery", async (order) => {
+    const registry = createTabRegistry(createTabsStore());
+    const channel = new MessageChannel();
+    const sent: unknown[] = [];
+    channel.port2.on("message", message => sent.push(message));
+    try {
+      registry.registerPort("tab", "/synthetic", channel.port1 as unknown as MessagePort);
+      channel.port2.postMessage(ready);
+      await vi.waitFor(() => expect(registry.getStore("tab")?.getState().connection).toBe("ready"));
+      const store = registry.getStore("tab")!;
+      const saved = image();
+      store.getState().recordPendingSteer("steer-conflict", "child", [saved.attachment], { text: "child", images: [saved] });
+      registry.sendToTab("tab", { type: "user_message", requestId: "steer-conflict", text: "child", images: [saved.attachment] });
+      const started = { type: "turn_started", requestId: "steer-conflict", turnId: "child-turn" };
+      const rejected = { type: "turn_rejected", requestId: "steer-conflict", reason: "busy" };
+      channel.port2.postMessage(order === "started-first" ? started : rejected);
+      channel.port2.postMessage(order === "started-first" ? rejected : started);
+      await vi.waitFor(() => expect(store.getState().orchestrationDeliveries).toMatchObject([{ requestId: "steer-conflict", text: "child", images: [saved], status: "conflict" }]));
+      expect(store.getState().promptQueue).toEqual([]);
+      expect(store.getState().pendingSteers).toEqual([]);
+      expect(sent.filter((message: any) => message.type === "user_message")).toHaveLength(1);
+    } finally { registry.disposeTab("tab"); channel.port1.close(); channel.port2.close(); }
+  });
+
+  it("bounds completed child-steer correlation while retaining a recent late conflict", async () => {
+    const registry = createTabRegistry(createTabsStore());
+    const channel = new MessageChannel();
+    try {
+      registry.registerPort("tab", "/synthetic", channel.port1 as unknown as MessagePort);
+      channel.port2.postMessage(ready);
+      await vi.waitFor(() => expect(registry.getStore("tab")?.getState().connection).toBe("ready"));
+      const store = registry.getStore("tab")!;
+      const saved = image();
+      for (let i = 0; i < COMPLETED_DIRECT_CORRELATION_LIMIT + 10; i++) {
+        const id = `child-${i}`;
+        store.getState().recordPendingSteer(id, "child", [saved.attachment], { text: "child", images: [saved] });
+        channel.port2.postMessage({ type: "turn_started", requestId: id, turnId: id });
+        channel.port2.postMessage({ type: "agent_event", turnId: id, event: { type: "loop_end", reason: "completed", turns: 1 } });
+      }
+      const last = `child-${COMPLETED_DIRECT_CORRELATION_LIMIT + 9}`;
+      await vi.waitFor(() => expect(store.getState().orchestrationDeliveries.find(item => item.requestId === last)?.payloadOmitted).toBe(true));
+      expect(store.getState().orchestrationDeliveries.filter(item => item.childSteer && item.payloadOmitted)).toHaveLength(COMPLETED_DIRECT_CORRELATION_LIMIT);
+      expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "child-0")).toBeUndefined();
+      channel.port2.postMessage({ type: "turn_rejected", requestId: last, reason: "busy" });
+      await vi.waitFor(() => expect(store.getState().orchestrationDeliveries.find(item => item.requestId === last)).toMatchObject({ status: "conflict", payloadOmitted: true }));
+    } finally { registry.disposeTab("tab"); channel.port1.close(); channel.port2.close(); }
+  });
   it("retains an explicitly rejected child steer once, including its attachment", async () => {
     const registry = createTabRegistry(createTabsStore());
     const channel = new MessageChannel();

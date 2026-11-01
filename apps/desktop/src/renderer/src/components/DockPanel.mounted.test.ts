@@ -191,6 +191,28 @@ describe("dock resize handle placement (GitHub #31)", () => {
     expect(send.mock.calls.filter(([, message]) => message.type === "user_message")).toHaveLength(1);
   });
 
+  it("dismisses rejected payload only after its restored draft is discarded and reports a late start", async () => {
+    const ready = { type: "host_ready" as const, workspace: "/ws", sessionId: "child", mode: "build" as const, model: "m1", imageInput: true };
+    const image = { name: "rejected.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } };
+    store.getState().applyHostMessage(ready);
+    store.getState().recordPendingSteer("rejected-steer", "keep until dismissed", [image.attachment], { text: "keep until dismissed", images: [image] });
+    store.getState().applyHostMessage({ type: "turn_rejected", requestId: "rejected-steer", reason: "busy" });
+    await mountBody();
+    await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+    await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-dismiss")!.click());
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "rejected", images: [image] });
+    expect(store.getState().restoredComposerDraft?.deliveryRequestId).toBe("rejected-steer");
+    const discard = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Discard this draft and start a new message")!;
+    await act(async () => discard.click());
+    await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-dismiss")!.click());
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "rejected", dismissed: true, payloadOmitted: true, text: "", images: [] });
+    expect(container.querySelector(".orchestration-delivery-dismiss")).toBeNull();
+    await act(async () => store.getState().applyHostMessage({ type: "turn_started", requestId: "rejected-steer", turnId: "late" }));
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "conflict", payloadOmitted: true });
+    expect(container.textContent).toContain("Conflicting delivery reports");
+    expect(container.querySelector(".orchestration-delivery-restore")).toBeNull();
+  });
+
   it("shows a late conflict for a compacted direct delivery without offering a missing payload", async () => {
     store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", sessionId: "a", mode: "build", model: "m1" });
     const image = { name: "done.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } };
