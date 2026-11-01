@@ -306,6 +306,16 @@ describe("handleCreate — dialog skip vs legacy dialog (§2F.4 / §6#6)", () =>
 });
 
 describe("handleCreate — persisted engine identity", () => {
+  it("can throw while delivering the port after creating a resumed host", async () => {
+    const {manager, createTab, deliverTabPort} = makeManager();
+    deliverTabPort.mockImplementation(() => {throw new Error("synthetic delivery failure");});
+    const {dialog} = makeDialog({canceled:false,filePaths:[]});
+    const persistence: TabIpcDeps["persistence"] = {...persistenceStub, getRootSession:async()=>({id:"resume",workspace:"/fixture",model:"m",mode:"build",engineId:"codex",createdAt:1,updatedAt:1})};
+    await expect(handleCreate({manager,persistence,dialog},{kind:"resume",sessionId:"resume"})).rejects.toThrow("synthetic delivery failure");
+    expect(createTab).toHaveBeenCalledOnce();
+    expect(deliverTabPort).toHaveBeenCalledOnce();
+  });
+
   it("blocks resume when the authoritative worktree validator rejects registration or branch identity", async () => {
     const { manager, createTab } = makeManager();
     const { dialog } = makeDialog({ canceled: false, filePaths: [] });

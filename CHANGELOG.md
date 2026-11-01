@@ -14,6 +14,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Prevent continuing a Codex conversation from an existing target copy that may be stale, and retain its session if opening the new tab has an uncertain outcome.
 - Preserve shared engine history when deleting one of the sessions that references it.
 - Connection editing now protects unsaved changes when closing and keeps disabled price values readable.
 
