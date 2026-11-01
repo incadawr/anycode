@@ -51,6 +51,7 @@
 import { randomUUID } from "node:crypto";
 import { prepareModelFetchContext } from "./model-fetch-guard.js";
 import type { ProxyRoute } from "./provider-proxy-fetch.js";
+import type { SystemProxyResolver } from "../shared/proxy.js";
 import { readFileSync, watch, type FSWatcher } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename, dirname } from "node:path";
@@ -102,7 +103,6 @@ export type FetchModelsFailureReason =
   // the settings file (or a newer-version file this binary refuses to
   // write) is read-only — a manual model addition cannot be persisted.
   | "read_only"
-  | "system_proxy_unsupported"
   | "stale_fetch";
 
 export type FetchModelsOutcome =
@@ -454,6 +454,13 @@ export interface ProviderIpcDeps {
   /** per-connection fetch (proxy routing); supplied by main/index.ts. */
   connectionFetch?: (connectionId: string) => FetchLike;
   preparedConnectionFetch?: (route: ProxyRoute) => FetchLike;
+  /**
+   * The system-proxy resolver the prepared route is materialized with. Absent
+   * (tests, and any caller with no OS answer to offer) makes a `system` profile
+   * materialize DIRECT — the same meaningful default as everywhere else — so a
+   * fetch still runs instead of being refused.
+   */
+  systemProxy?: SystemProxyResolver;
   /**
    * Catalog lookup for the connection-scoped fetch (`{connectionId}` request
    * shape). Absent = that shape is refused `invalid_request` (fail-closed) —
@@ -887,7 +894,7 @@ async function handleConnectionFetchModels(
     const modelsUrl = custom || connection.baseUrl?.trim() ? undefined : findCatalogEntry(connection.providerId)?.modelsUrl;
     const requestBase = custom ? baseUrl : catalogModelsBaseUrl(baseUrl);
     const targetUrl = modelsUrl ? modelsUrl.replace(/\/+$/, "") : `${requestBase.replace(/\/+$/, "")}${MODELS_PATH}`;
-    const prepared = preview ? await prepareModelFetchContext(loaded.settings, connection, deps.vault, targetUrl) : undefined;
+    const prepared = preview ? await prepareModelFetchContext(loaded.settings, connection, deps.vault, targetUrl, deps.systemProxy) : undefined;
     if (prepared && !prepared.ok) return { error: prepared.reason } as const;
     const apiKey = prepared ? prepared.apiKey : await deps.vault.getSecretValue(connectionApiKeySecretKey(connectionId));
     return {
@@ -918,7 +925,7 @@ async function handleConnectionFetchModels(
       const loaded = await loadSettings(deps.settingsPath, deps.logger);
       const current = loaded.settings.provider.connections.find(item => item.id === connectionId);
       if (!current || !resolved.prepared?.ok) return false;
-      const currentContext = await prepareModelFetchContext(loaded.settings, current, deps.vault, resolved.targetUrl);
+      const currentContext = await prepareModelFetchContext(loaded.settings, current, deps.vault, resolved.targetUrl, deps.systemProxy);
       return currentContext.ok && currentContext.guard === resolved.prepared.guard;
     });
     return unchanged ? { ...outcome, source: { baseUrl: resolved.savedBaseUrl, transport: resolved.savedTransport, targetUrl: resolved.targetUrl, guard: resolved.prepared!.guard } } : { ok: false, reason: "stale_fetch" };

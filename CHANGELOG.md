@@ -14,6 +14,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Fetching models works again for connections on the system proxy: the request is routed through the system's answer for that endpoint, as it was before the connection editor redesign.
 - Continue on another account now refuses rather than guesses: a rollout is matched by its exact thread-id segment (a rollout that merely contained the id could be copied instead), an unreadable sessions folder is reported as such instead of "missing", and two rollouts claiming one thread are refused as ambiguous.
 - A continued conversation is no longer published half-written: the copy is written to a temp file, synced and linked into place, and the source is re-checked, so a conversation that changed mid-copy is refused instead of resumed with a truncated tail.
 - Prevent continuing a Codex conversation from an existing target copy that may be stale, and retain its session if opening the new tab has an uncertain outcome.
