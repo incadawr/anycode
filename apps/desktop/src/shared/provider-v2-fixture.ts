@@ -1,5 +1,5 @@
 /**
- * TEST-ONLY. Builds a settings v2 `provider` block (TASK.45) from a legacy
+ * TEST-ONLY. Builds a settings v2 `provider` block from a legacy
  * singleton description, so a fixture can keep expressing intent as
  * `{id, model, ...}` while the persisted shape is the v2
  * `{activeConnectionId, connections[]}`. The single active connection it emits
@@ -25,10 +25,10 @@ export interface SingletonFixture {
   model?: string;
   baseUrl?: string;
   transport?: ProviderTransportId;
-  /** HTTP(S) proxy the connection routes through (TASK.132) — lets a fixture express a proxied connection. */
+  /** HTTP(S) proxy the connection routes through — lets a fixture express a proxied connection. */
   proxyUrl?: string;
   reasoningEffort?: ReasoningEffort;
-  /** "No API key" declaration (TASK.152) — projected only-truthy, like the real connection shape. */
+  /** "No API key" declaration — projected only-truthy, like the real connection shape. */
   authOptional?: boolean;
 }
 

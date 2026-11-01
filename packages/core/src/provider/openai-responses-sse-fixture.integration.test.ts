@@ -1,5 +1,5 @@
 /**
- * End-to-end proof of the openai-responses transport (TASK.43 §0.8/W3) through
+ * End-to-end proof of the openai-responses transport (§0.8/W3) through
  * the REAL `@ai-sdk/openai` + `ai` stack (mirrors openai-sse-fixture.integration.test.ts's
  * harness): a local `node:http` server on 127.0.0.1:<ephemeral> captures the
  * outgoing request and replies with a stream shaped like the real OpenAI
@@ -75,7 +75,7 @@ function completed(usage: { input: number; output: number; cached?: number; reas
   };
 }
 
-describe("AiSdkModelPort over a real @ai-sdk/openai Responses SSE stream (TASK.43 W3)", () => {
+describe("AiSdkModelPort over a real @ai-sdk/openai Responses SSE stream (W3)", () => {
   let server: Server;
   let baseUrl: string;
   let captured: CapturedRequest | undefined;
@@ -159,7 +159,7 @@ describe("AiSdkModelPort over a real @ai-sdk/openai Responses SSE stream (TASK.4
     expect(captured!.headers["authorization"]).toBe("Bearer test-key");
     // store:false MUST always be present — AnyCode owns history; a hidden
     // second persistence on OpenAI's servers is exactly what this prevents
-    // (TASK.43 §0.2). Present here even though no reasoning was requested.
+    // (§0.2). Present here even though no reasoning was requested.
     expect(captured!.body["store"]).toBe(false);
     expect(captured!.body["stream"]).toBe(true);
 

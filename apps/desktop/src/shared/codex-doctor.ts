@@ -1,9 +1,9 @@
 /**
- * Result shape of a bounded "codex doctor" run (TASK.41, cut §2(g)/§3.8): a
+ * Result shape of a bounded "codex doctor" run (cut §2(g)/§3.8): a
  * one-shot probe (spawn -> initialize -> account/read -> model/list -> bounded
  * close) that answers "is a working, signed-in, in-range Codex CLI reachable
  * at this binary path". TWO independent call sites produce this report — the
- * host engine (host/engines/codex/*, reusing its own AppServerClient, TASK.39
+ * host engine (host/engines/codex/*, reusing its own AppServerClient,
  * draft catalog) and main's onboarding doctor (main/codex-doctor.ts, its own
  * minimal JSON-RPC client — a host->main import is architecturally forbidden,
  * cut §2(g)) — so the shared RESULT type lives here (shared/**, zero imports
@@ -77,7 +77,7 @@ export interface CodexDoctorReport {
    */
   supportedRange?: string;
   /**
-   * Present when the refusal came from the binary-trust gate (TASK.103):
+   * Present when the refusal came from the binary-trust gate:
    * `binaryPath` is the gate's RESOLVED path — the file execve reads — and is
    * the path a grant pins (D-S4-14); present only for CONSENTABLE refusals
    * (D-S4-13); never present for a missing path (D-S4-18). The consent card
@@ -88,7 +88,7 @@ export interface CodexDoctorReport {
   /** Soft-allow warning (owner decision 10.10): the version ran without verification (patch-of-verified-minor or above the verified ceiling). In-memory report only — never persisted (lastCheckOf copies status/version/at only). */
   versionWarning?: string;
   /**
-   * Taskana 4092 (TASK.85): present when the version preflight exited 127 on a
+   * present when the version preflight exited 127 on a
    * `#!/usr/bin/env node` script — "the shim ran, node was not found in the
    * child env". Structured diagnosis for the error card; the renderer renders
    * from THIS, never from string-matching `error`. Never persisted (lastCheck

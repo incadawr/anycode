@@ -1,5 +1,5 @@
 /**
- * The ONE proxy-profile editor plaque (TASK.141 §3, owner's explicit
+ * The ONE proxy-profile editor plaque (§3, owner's explicit
  * requirement: "редактор-плашка существует ровно в одном месте"). Every knob a
  * proxy has — mode, host/port/scheme, exemptions, credentials, Check — is
  * declared here exactly once and rendered by whoever needs it:
@@ -13,14 +13,14 @@
  * could be wrong (draft↔wire conversion, host/port composition and its inverse,
  * the password action, verdict text) lives in a function the test calls
  * directly, and the JSX below is reduced to wiring. The rendered behaviour is
- * proven live instead, the same standard TASK.132/139 held.
+ * proven live instead, the same standard held.
  *
  * CUSTODY: the password is write-only in both directions. Main never returns
  * it — the editor learns only `passwordSet: boolean`, derived from the
  * snapshot's `SecretStatus` list — the draft never seeds the field from
  * anything, and no verdict/error string this file builds can carry it (every
  * URL that reaches text goes through `maskProxyUrl`). The in-env half is
- * TASK.135's scrub: the engines and the model connection still receive the
+ * scrub: the engines and the model connection still receive the
  * composed `user:pass@` URL (they need it), while the agent's shell commands,
  * the terminal and language servers do not receive a proxy URL that contains
  * credentials at all — the hint states exactly that split.
@@ -83,7 +83,7 @@ export interface ProxyCheckOutcome {
  * The editor's local shape. Deliberately NOT `ProxyProfile`: the persisted form
  * stores one `url` string, while the editor shows the three controls JetBrains'
  * dialog shows (host, port, "HTTPS proxy") — that decomposition is the whole
- * reason the scheme-less-`host:port` typo class (TASK.132's `proxyUrlSaveBlocked`)
+ * reason the scheme-less-`host:port` typo class (`proxyUrlSaveBlocked`)
  * cannot exist here: the user never types a scheme, the checkbox picks it.
  */
 export interface ProxyProfileDraft {
@@ -223,7 +223,7 @@ export function proxyPortBlocked(port: string): boolean {
  * Pre-flight for the manual mode's address (B-06: main validates the same rule,
  * `manual` REQUIRES a URL and REFUSES userinfo in it). `system` never has an
  * address, so it is never blocked. Blocking here rather than letting main's
- * generic "Invalid value" come back is the same reasoning TASK.132's
+ * generic "Invalid value" come back is the same reasoning's
  * `proxyUrlSaveBlocked` had: the refusal is otherwise undiagnosable.
  */
 export function proxyHostPortBlocked(draft: ProxyProfileDraft): boolean {
@@ -361,7 +361,7 @@ const PROXY_VERDICT_TEXT: Record<ProxyVerdict, string> = {
 
 /**
  * The named caveat of §6: a shell-exported proxy owns the whole family
- * atomically (TASK.132's law), so a profile can probe green while every real
+ * atomically (law), so a profile can probe green while every real
  * child still leaves through the shell's proxy. The verdict has to say so —
  * without this line a green Check is an actively misleading measurement.
  */

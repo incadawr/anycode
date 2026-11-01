@@ -91,7 +91,7 @@ export class InProcessTaskManager implements BackgroundTaskPort {
   private readonly tasks = new Map<string, TaskRecord>();
   private notices: BackgroundTaskNotice[] = [];
   private counter = 0;
-  /** Taskana 4097: settled-listener set (host live-push); see onTaskSettled. */
+  /** settled-listener set (host live-push); see onTaskSettled. */
   private readonly settledListeners = new Set<(notice: BackgroundTaskNotice) => void>();
 
   constructor(private readonly exec: ExecutionPort) {}
@@ -159,7 +159,7 @@ export class InProcessTaskManager implements BackgroundTaskPort {
   /**
    * Non-consuming read of the whole (capped, append-only) buffer: the read
    * cursor `readOutput` advances for the model's BashOutput tool is NOT
-   * touched. The desktop panel (Taskana 4097) reads through this so a user
+   * touched. The desktop panel reads through this so a user
    * viewing a task's output never steals the increment the agent is owed.
    */
   peekOutput(taskId: string): { snapshot: BackgroundTaskSnapshot; output: string } | undefined {
@@ -183,7 +183,7 @@ export class InProcessTaskManager implements BackgroundTaskPort {
   }
 
   /**
-   * Taskana 4097: live "a task just left running" registration for the host's
+   * live "a task just left running" registration for the host's
    * idle push (a task finishing BETWEEN turns must reach the desktop panel
    * immediately, not at the next turn teardown). Mirrors `drainNotices`'s
    * payload (a BackgroundTaskNotice) but is a side channel, never drained:
@@ -247,7 +247,7 @@ export class InProcessTaskManager implements BackgroundTaskPort {
       durationMs: record.endedAt - record.startedAt,
     };
     this.notices.push(notice);
-    // Taskana 4097: fire the live listeners only for the FIRST terminal (the
+    // fire the live listeners only for the FIRST terminal (the
     // same idempotency guard as the notice push above) — a settle is a
     // one-shot event, never a state-reading API.
     for (const listener of this.settledListeners) {

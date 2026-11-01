@@ -127,7 +127,7 @@ export interface McpConfigSnapshot {
   /** Whether the request's tab workspace resolved (main-side truth) — the pane's scope default and Project-radio enable derive from this, never from tabId presence. */
   projectAvailable: boolean;
   /**
-   * Taskana 4732 S1-C (design 4732 §6): plugin-contributed servers, read-only.
+   * S1-C (design 4732 §6): plugin-contributed servers, read-only.
    * Populated from the SAME plugin discovery the host runtime uses (renamed
    * `plugin_<plugin>_<server>` entries, explicit config always winning a name
    * collision — the collision case is exactly why these are NOT folded into
@@ -142,7 +142,7 @@ export interface McpConfigGetRequest {
   tabId?: string;
 }
 
-// ── plugin-contributed servers (Taskana 4732 S1-C, read-only rows) ──
+// ── plugin-contributed servers (S1-C, read-only rows) ──
 
 /**
  * One plugin-contributed MCP server, projected for the MCP pane (design 4732

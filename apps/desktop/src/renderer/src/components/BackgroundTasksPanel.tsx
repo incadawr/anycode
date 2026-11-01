@@ -1,12 +1,12 @@
 /**
- * Background-tasks drawer (TASK.91 / Taskana 4097): the native engine's
+ * Background-tasks drawer: the native engine's
  * `run_in_background` Bash tasks (InProcessTaskManager) as a per-tab right
  * drawer. The wire (`task_list`/`task_output`/`task_kill_result`), the host
  * pushes and the store slice all pre-exist; this panel is the missing reader
  * + sender. Mirrors TimelinePanel/HooksPanel chrome exactly (`lsp-panel*`
  * classes, right-drawer placement, its own `session-header`-owned open flag).
  *
- * Refresh cadence (v2, Taskana 4097 follow-up): on open
+ * Refresh cadence (v2, follow-up): on open
  * (`task_list_request` here), after every turn teardown, AND on the host's
  * idle task-settled push (a task that exits BETWEEN turns now updates its
  * row live — `session.ts`'s `onTaskSettled` subscription). While the drawer
@@ -16,7 +16,7 @@
  * pane under the whole list.
  *
  * NOTE: this is NOT BackgroundAgents.tsx — that strip renders detached
- * child sessions (TASK.145); this drawer renders core's Bash background
+ * child sessions; this drawer renders core's Bash background
  * tasks. Different feature, different wire.
  */
 import { useContext, useEffect, useRef, useState } from "react";
@@ -53,7 +53,7 @@ export function sortTasksNewestFirst(tasks: readonly BackgroundTaskSnapshot[]): 
   return [...tasks].sort((a, b) => b.startedAt - a.startedAt);
 }
 
-/** Live-tail poll cadence (Taskana 4097): 1s, only while open ∧ selected ∧ running. */
+/** Live-tail poll cadence: 1s, only while open ∧ selected ∧ running. */
 export const TASK_OUTPUT_POLL_MS = 1_000;
 
 /**
@@ -160,7 +160,7 @@ export function BackgroundTasksPanel() {
     return () => clearInterval(timer);
   }, [anyRunning]);
 
-  // Live-tail (Taskana 4097): poll `task_output_request` (the non-consuming
+  // Live-tail: poll `task_output_request` (the non-consuming
   // peek, 799fd604) every second ONLY while the drawer is open, the row is
   // selected and the task is running. Stops on close, on selecting another
   // row, and — through `selectedTask.status` — the moment the task ends (the

@@ -1,5 +1,5 @@
 /**
- * Pure-logic tests for `findPathSpans` (TASK.112 slice 2) — the scan that
+ * Pure-logic tests for `findPathSpans` (slice 2) — the scan that
  * turns a path stated in plain prose or inline code ("saved it in
  * report.html") into a candidate for click-to-open verification, since only
  * a real markdown link token gets that affordance for free.

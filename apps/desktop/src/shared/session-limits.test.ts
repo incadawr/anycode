@@ -45,11 +45,11 @@ describe("clampSessionLimit", () => {
     });
   }
 
-  it("TASK.119 fraction example: maxTabs 7.9 -> 7", () => {
+  it("fraction example: maxTabs 7.9 -> 7", () => {
     expect(clampSessionLimit("maxTabs", 7.9)).toBe(7);
   });
 
-  it("TASK.147 fraction example: child caps 2.7 -> 2", () => {
+  it("fraction example: child caps 2.7 -> 2", () => {
     expect(clampSessionLimit("childSessionsPerParentMax", 2.7)).toBe(2);
     expect(clampSessionLimit("childSessionsGlobalMax", 2.7)).toBe(2);
   });

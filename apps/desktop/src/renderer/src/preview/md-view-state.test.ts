@@ -150,7 +150,7 @@ describe("shouldRefetchOnDocVersionChange", () => {
   });
 });
 
-describe("parseMdWindowTarget (TASK.99 M3)", () => {
+describe("parseMdWindowTarget (M3)", () => {
   it("parses both tabId and previewId out of the query string", () => {
     expect(parseMdWindowTarget("?view=md-preview&tabId=t1&previewId=p1")).toEqual({ tabId: "t1", previewId: "p1" });
   });
@@ -176,7 +176,7 @@ describe("parseMdWindowTarget (TASK.99 M3)", () => {
   });
 });
 
-describe("findPreviewSourcePath (TASK.99 M3)", () => {
+describe("findPreviewSourcePath (M3)", () => {
   it("finds the matching preview's sourcePath", () => {
     const previews = [
       { previewId: "p1", sourcePath: "a.md" },

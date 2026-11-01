@@ -22,13 +22,13 @@ export interface PermissionRequest {
   cwd?: string;
   /* */
   toolCallId?: string;
-  /** Present only when the dispatch site proved the target resolvable (TASK.32). */
+  /** Present only when the dispatch site proved the target resolvable. */
   workspace?: PermissionWorkspaceFacts;
 }
 
 /**
  * Dispatch-site workspace facts for a filesystem-write permission check
- * (TASK.32, DV-2/DV-3). Built ONLY by the dispatcher, ONLY for the
+ * (DV-2/DV-3). Built ONLY by the dispatcher, ONLY for the
  * Write/Edit/MultiEdit tools (WORKSPACE_CONFINED_WRITE_TOOLS), and ONLY when
  * the target could be fully symlink-resolved: `root` is the realpath of the
  * workspace root (DispatchContext.cwd), `resolvedPath` is the
@@ -37,7 +37,7 @@ export interface PermissionRequest {
  * are refused upstream). Both are absolute real paths, so a pure engine may
  * decide containment lexically over them. An absent block means containment
  * is unprovable — the engine then keeps today's fail-closed behavior. Also
- * consumed by RuleAwarePermissionEngine (Taskana 4294): always-allow rules
+ * consumed by RuleAwarePermissionEngine: always-allow rules
  * for these tools apply only when the facts prove the target inside the
  * session workspace.
  */
@@ -110,11 +110,11 @@ export interface PermissionBroker {
     options?: { signal?: AbortSignal },
   ): Promise<PermissionDecision>;
 
-  /** True once an unanswered ask concluded nobody is at the screen (TASK.138 latch). Absent on brokers that cannot tell. */
+  /** True once an unanswered ask concluded nobody is at the screen (latch). Absent on brokers that cannot tell. */
   readonly isUnattended?: boolean;
   /**
    * True while at least one ask is parked awaiting a decision — shown to the
-   * user or still queued behind another (TASK.148 slice 1). Optional, like
+   * user or still queued behind another (slice 1). Optional, like
    * `isUnattended` above, so every existing implementation/test double keeps
    * compiling unchanged; a broker that omits it reads as "never waiting".
    *

@@ -1,5 +1,5 @@
 /**
- * TASK.237 regression suite: a previously MANAGED Codex install
+ * regression suite: a previously MANAGED Codex install
  * (`settings.codex.binaryPath` inside `~/.anycode/codex/bin/<X.Y.Z>/…`) is
  * upgraded to the manifest's recommended version on app upgrade; an explicit
  * EXTERNAL binary is never migrated; every failure leaves the old install
@@ -258,7 +258,7 @@ describe("planCodexManagedUpgrade (identity + ordering, pure)", () => {
 
 // ── the run ──
 
-describe("runCodexManagedUpgrade — the old-managed upgrade path (TASK.237 incident)", () => {
+describe("runCodexManagedUpgrade — the old-managed upgrade path (incident)", () => {
   it("upgrades managed 0.144.3 to the recommended 0.160.0, repoints settings, keeps the old tree", async () => {
     setActiveCodexVersionPolicy(policyRecommending(NEW_VERSION));
     const { home, oldBinaryPath } = machineWithOldManagedInstall();
@@ -501,7 +501,7 @@ describe("runCodexManagedUpgrade — failure handling leaves the old install wor
 });
 
 describe("runCodexManagedUpgrade — success details the incident cared about", () => {
-  it("the post-upgrade doctor runs behind the supplied engine-proxy source env (TASK.139 parity)", async () => {
+  it("the post-upgrade doctor runs behind the supplied engine-proxy source env (parity)", async () => {
     setActiveCodexVersionPolicy(policyRecommending(NEW_VERSION));
     const { home, oldBinaryPath } = machineWithOldManagedInstall();
     const seen: Array<RunCodexDoctorOptions | undefined> = [];

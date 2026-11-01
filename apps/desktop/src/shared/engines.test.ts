@@ -1,5 +1,5 @@
 /**
- * Unit tests for the engine-proxy carrier contract (TASK.139): the translation
+ * Unit tests for the engine-proxy carrier contract: the translation
  * from main's private carrier var into the HTTP(S)_PROXY family a codex/claude
  * child actually reads.
  *
@@ -159,7 +159,7 @@ describe("applyEngineProxyOverride — a valid carrier", () => {
   });
 
   // The children proxy natively (codex is Rust; the claude CLI reads the env
-  // itself — measured in TASK.132). NODE_USE_ENV_PROXY switches node's own
+  // itself — measured). NODE_USE_ENV_PROXY switches node's own
   // global fetch and has no business in a child env.
   it("never sets NODE_USE_ENV_PROXY", () => {
     const env: NodeJS.ProcessEnv = { HOME: "/home/me" };
@@ -294,7 +294,7 @@ describe("carrier names are frozen wire contract", () => {
   });
 });
 
-describe("applyEngineProxyOverride — the DIRECT sentinel (TASK.141)", () => {
+describe("applyEngineProxyOverride — the DIRECT sentinel", () => {
   // "This engine explicitly uses no proxy" has to be an ACTIVE deletion: the
   // connection's proxy is already in the child env via the builder's passthrough
   // list, so staying silent would leave the engine on it — the opposite of what
@@ -434,12 +434,12 @@ describe("stripEngineProxyCarriers — main is the sole author of the namespace 
     }
   });
 
-  // TASK.135 / Taskana 4074: every carrier name THIS module will ever declare
+  // every carrier name THIS module will ever declare
   // must satisfy core's carrier predicate, so the non-engine child-env scrub
   // (@anycode/core/child-env) drops exactly the namespace main writes — a new
   // carrier added here without widening that predicate would leak through the
   // scrub by construction, and this pin fails first.
-  it("every ENGINE_PROXY_CARRIER_NAMES entry satisfies isEngineProxyCarrierName (TASK.135)", async () => {
+  it("every ENGINE_PROXY_CARRIER_NAMES entry satisfies isEngineProxyCarrierName", async () => {
     const { isEngineProxyCarrierName } = await import("@anycode/core/child-env");
     for (const name of ENGINE_PROXY_CARRIER_NAMES) {
       expect(isEngineProxyCarrierName(name)).toBe(true);

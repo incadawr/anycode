@@ -1,5 +1,5 @@
 /**
- * Frozen Codex permission-preset table (TASK.39, cut §2(d)/§3.8). A pure,
+ * Frozen Codex permission-preset table (cut §2(d)/§3.8). A pure,
  * side-effect-free data module — zero contact with core's permission engine
  * (`supportsCorePermissions` stays `false` for Codex; ModeMenu stays hidden).
  * Every preset carries BOTH wire forms the protocol requires (cut §1.3):
@@ -9,7 +9,7 @@
  * the session's workspace (its `writableRoots` root) rather than a baked-in
  * path — the table itself carries no per-session state.
  *
- * Tmp-root exclusion (Taskana 4682) is a per-boot child-only option threaded
+ * Tmp-root exclusion is a per-boot child-only option threaded
  * through `CodexSessionSelection.excludeTmpRoots`; the 4682 rework pairs it
  * with `extraWritableRoot` (the child's private `~/.anycode/tmp/<id>` dir,
  * also set as TMPDIR/TMPPREFIX in the spawn env) so excluding the SHARED
@@ -21,7 +21,7 @@
  * ever pick a `presetId` from this table (host-authoritative membership check),
  * never a raw sandbox/policy object.
  *
- * One CHILD-ONLY preset (`child-ask`, TASK.179 / Taskana 4078) is resolvable
+ * One CHILD-ONLY preset (`child-ask`, /) is resolvable
  * through `findCodexPreset`'s fallback but deliberately absent from
  * `CODEX_PERMISSION_PRESETS`/`codexPresetChoices()` — the public menu never
  * shows it; only `codexChildPosture` resolves the id.
@@ -69,7 +69,7 @@ export interface CodexPermissionPresetDefinition {
   threadParams: { approvalPolicy: CodexApprovalPolicy; approvalsReviewer: CodexApprovalsReviewer; sandbox: CodexThreadSandboxMode };
   /**
    * Pure function of the session workspace — never baked into this frozen table.
-   * Taskana 4682 rework: `opts.extraWritableRoot` (a codex child's PRIVATE
+   * rework: `opts.extraWritableRoot` (a codex child's PRIVATE
    * temp dir, `~/.anycode/tmp/<childSessionId>`) appends one writable root
    * AFTER the workspace; `opts.excludeTmpRoots` (a54b2f6d) excludes /tmp and
    * $TMPDIR from the sandbox — the pair is what makes excluding the shared
@@ -94,7 +94,7 @@ export const CODEX_PERMISSION_PRESETS: readonly CodexPermissionPresetDefinition[
   {
     id: "ask",
     label: "Ask for approval",
-    // Honest text (Taskana 4078 / TASK.179): under `on-request` codex runs
+    // Honest text: under `on-request` codex runs
     // commands itself inside the OS sandbox — this workspace plus the temp
     // dirs (/tmp, $TMPDIR) are writable without any prompt — and AnyCode is
     // asked only when codex itself requests approval. The old "asks before
@@ -133,7 +133,7 @@ const LEGACY_READ_ONLY_PRESET: CodexPermissionPresetDefinition = {
 };
 
 /**
- * TASK.179 (Taskana 4078): the posture an engine CHILD boots with. Identical
+ * the posture an engine CHILD boots with. Identical
  * sandbox to "ask", but `approvalPolicy: "untrusted"` — codex asks for
  * approval on EVERY command, so every decision routes through
  * CodexApprovalBridge -> IpcPermissionBroker instead of being decided inside

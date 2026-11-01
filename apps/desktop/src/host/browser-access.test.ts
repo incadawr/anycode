@@ -1,12 +1,12 @@
 /**
- * Host-side "Full browser access" flag (Taskana 4759): brief test 48.
+ * Host-side "Full browser access" flag: brief test 48.
  */
 import { describe, expect, it } from "vitest";
 import { BROWSER_ACCESS_HOST_MESSAGE_TYPE } from "../shared/browser-access.js";
 import { routePreviewMessage } from "./boot.js";
 import { browserFullAccessFromEnv, createBrowserAccess } from "./browser-access.js";
 
-describe("host browser access flag (Taskana 4759) — test 48", () => {
+describe("host browser access flag — test 48", () => {
   it("the initial value comes from ANYCODE_BROWSER_FULL_ACCESS only when it is exactly \"1\"", () => {
     expect(browserFullAccessFromEnv({ ANYCODE_BROWSER_FULL_ACCESS: "1" })).toBe(true);
     for (const value of ["0", "true", "yes", "", " 1"]) {

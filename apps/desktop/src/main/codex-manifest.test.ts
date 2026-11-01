@@ -333,7 +333,7 @@ describe("refreshCodexManifest (network + ETag cache, cut §7.1)", () => {
     expect(result.source).toBe("bundled");
   });
 
-  // ── Taskana 4230: whole-operation timeout (an injected fetch that IGNORES
+  // ── whole-operation timeout (an injected fetch that IGNORES
   // the abort signal must still fail closed) ──
 
   it("fails closed when the fetch never settles and ignores the abort signal", async () => {
@@ -398,7 +398,7 @@ describe("refreshCodexManifest (network + ETag cache, cut §7.1)", () => {
   });
 });
 
-// ── Taskana 4230: periodic schedule ──
+// ── periodic schedule ──
 
 describe("startCodexManifestRefreshSchedule", () => {
   const T0 = Date.parse("2026-07-16T12:00:00Z");
@@ -472,7 +472,7 @@ describe("startCodexManifestRefreshSchedule", () => {
   });
 });
 
-// ── Taskana 4230: refresh-before-refusal ──
+// ── refresh-before-refusal ──
 
 describe("createCodexManifestRefusalRefresh", () => {
   const T0 = Date.parse("2026-07-16T12:00:00Z");

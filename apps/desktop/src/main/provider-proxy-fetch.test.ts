@@ -1,5 +1,5 @@
 /**
- * TASK.133 / Taskana 4117 — pure unit tests for the per-connection proxy
+ * pure unit tests for the per-connection proxy
  * dispatcher (`provider-proxy-fetch.ts`). Everything Electron-shaped is
  * injected: a scriptable fake `requestFactory` (records every dispatch, and
  * each fake request can be driven — emit `response`, stream `data` chunks,
@@ -270,6 +270,16 @@ function collectErrorText(err: unknown, depth = 0): string[] {
 }
 
 describe("createProxyChainFetch — routing decision table", () => {
+  it("uses a prepared route without consulting mutable process settings", async () => {
+    const rig = makeFakeBoundary();
+    const readSettings = vi.fn(() => settingsWithProfiles({ connectionProxyRef: "proxy-1" }));
+    const fetchImpl = createProxyChainFetch(rig.deps(readSettings))([], { kind: "direct", why: "explicit-direct" });
+    const result = await fetchImpl(URL_TARGET, { method: "GET" });
+    expect(await result.text()).toBe("fallback");
+    expect(readSettings).not.toHaveBeenCalled();
+    expect(rig.setProxyCalls).toEqual([]);
+  });
+
   it("1. proxied happy path: setProxyFor once, GET/follow, streamed body, no fallback", async () => {
     const rig = makeFakeBoundary();
     let current: AnycodeSettings | null = settingsWithProfiles({ connectionProxyRef: "proxy-1" });

@@ -1,6 +1,6 @@
 /**
  * Pure-logic tests for WelcomeScreen's exported view-selection helpers
- * (TASK.68 — onboarding was locked into editing the FIRST connection forever,
+ * (onboarding was locked into editing the FIRST connection forever,
  * with no way to switch to a different saved connection or create a new one).
  * Deliberately `.test.ts` (not `.test.tsx`): this package's vitest config
  * runs in `environment: "node"` with no jsdom (see ConnectionDrawer.test.ts's

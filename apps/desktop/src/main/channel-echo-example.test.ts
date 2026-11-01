@@ -1,5 +1,5 @@
 /**
- * The channel-echo example (Taskana 4750b): (a) its manifest is valid as a
+ * The channel-echo example: (a) its manifest is valid as a
  * service plugin; (b) the REAL Sessions API server and the REAL service script
  * run together and a file addressed to a handle is answered in the outbox;
  * (c) an unknown handle is answered with an error file; (d) without the
@@ -30,7 +30,7 @@ function output(child: ChildProcess): { read(): string } {
   return { read: () => text };
 }
 
-describe("channel-echo example plugin (Taskana 4750b)", () => {
+describe("channel-echo example plugin", () => {
   it("manifest parses as a service plugin and its service hash is stable", async () => {
     const manifest = pluginManifestSchema.parse(JSON.parse(await readFile(join(exampleDir, ".anycode-plugin", "plugin.json"), "utf8")));
     expect(manifest.services).toEqual([{ name: "bridge", command: "node", args: ["./service.mjs"] }]);

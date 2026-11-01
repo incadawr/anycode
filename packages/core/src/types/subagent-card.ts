@@ -1,5 +1,5 @@
 /**
- * Persisted subagent card snapshot (TASK.102 slice S1, CUT-S1 §2.1). Chosen
+ * Persisted subagent card snapshot (slice S1, CUT-S1 §2.1). Chosen
  * storage shape: a versioned terminal snapshot riding the paired tool_result's
  * `presentation` field — no SQLite migration in S1 (CUT-S1 §0.1).
  *
@@ -98,6 +98,6 @@ export interface ToolResultPresentation {
     target: Extract<SubagentCardTarget, { kind: "session" }>;
     reason: "requested" | "join_budget";
   };
-  /** TASK.191 slice S5: the workflow tool's own persisted card, riding the same envelope. */
+  /** slice S5: the workflow tool's own persisted card, riding the same envelope. */
   workflow?: WorkflowCardSnapshotV1;
 }

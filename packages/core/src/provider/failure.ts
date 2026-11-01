@@ -30,10 +30,10 @@ export function isModelOutputEvent(e: ModelStreamEvent): boolean {
     case "start":
     case "error":
     case "stream_retry":
-    // Taskana 4090: a quota observation is transport telemetry, not model
+    // a quota observation is transport telemetry, not model
     // output — it must never close the replay gate.
     case "provider_quota":
-    // Taskana 4772: a waiting status is not output either; the replay gate
+    // a waiting status is not output either; the replay gate
     // only closes on real model content.
     case "waiting_for_network":
       return false;
@@ -96,7 +96,7 @@ export interface ProviderFailureClassification {
  * from the classified `code`, NEVER from the raw provider error text — a
  * provider or custom error that embeds a response body or auth header in its
  * `.message` can therefore never leak it through the redacted descriptor
- * (TASK.33 W7b-FIX #1). `safe.code`/`safe.statusCode` are already safe.
+ * (W7b-FIX #1). `safe.code`/`safe.statusCode` are already safe.
  */
 const SAFE_MESSAGES: Record<ProviderFailureCode, string> = {
   proxy_unreachable: "Proxy unavailable. Check the connection proxy address and that the proxy is running, then try again.",
@@ -124,10 +124,10 @@ const RETRYABLE_NETWORK_CODES = new Set([
   "UND_ERR_SOCKET",
 ]);
 
-/** The AI SDK's undici-backed connect failure (TASK.33 owner dogfood: `api.z.ai` unreachable). */
+/** The AI SDK's undici-backed connect failure (owner dogfood: `api.z.ai` unreachable). */
 const CONNECT_TIMEOUT_PATTERN = /connect timeout error|cannot connect to api/i;
 
-// Taskana 4705: the quota patterns, USAGE_LIMIT_PATTERN and matchesFailureText
+// the quota patterns, USAGE_LIMIT_PATTERN and matchesFailureText
 // live in retry.ts (single source) so isQuotaExhaustion — the AUTO-retry
 // refusal — and the classification below share the exact same detection.
 
@@ -139,7 +139,7 @@ function extractMessage(error: unknown): string {
 
 /**
  * Exported so callers that need the raw HTTP status ahead of a full
- * classification (e.g. the model port's include_usage probe, TASK.168) reuse
+ * classification (e.g. the model port's include_usage probe) reuse
  * this exact extraction instead of duplicating the `APICallError`/plain-object
  * fallback logic.
  */
@@ -179,7 +179,7 @@ function isNetworkFailure(error: unknown, message: string): boolean {
  * W8's Try-again button. It is NOT the auto-retry decision: auto-retry is made
  * solely by `isRetryableStreamError` in the model port and is observable via the
  * terminal metadata's `attemptsMade`. The two INTENTIONALLY diverge in two
- * cases (Taskana 4705 removed the third — quota — by making
+ * cases (removed the third — quota — by making
  * `isRetryableStreamError` refuse quota before the 429 status check):
  *   (a) a plain `Error` with connect-timeout text — it does NOT auto-retry (the
  *       form carries no statusCode/errno/isRetryable for the port to act on), yet
@@ -209,7 +209,7 @@ export function classifyProviderFailure(error: unknown): ProviderFailureClassifi
   if (networkConfiguration !== undefined) return build(networkConfiguration, false);
 
   // Quota-by-text is gated on status: a status code that already names a more
-  // specific bucket (401/403/5xx) wins over quota-shaped text (M3, TASK.45
+  // specific bucket (401/403/5xx) wins over quota-shaped text (M3,
   // W11-FIX). This preserves the two documented quota cases — z.ai's 1308
   // riding as a 429, and a status-less quota message — while a 401/403/5xx
   // whose message happens to mention "quota" classifies on its actual status.

@@ -112,7 +112,7 @@ describe("createDefaultToolRegistry", () => {
     expect(registry.get("ArchMap")?.metadata.readOnly).toBe(true);
   });
 
-  // Taskana 4162: with the flag off, the default tool list AND the system
+  // with the flag off, the default tool list AND the system
   // prompt's tool-discipline section must be byte-identical to the
   // pre-ArchMap baseline (commit e89e3d76 — the v0.0.35 release). The twelve
   // names below are pinned in REGISTRATION ORDER; the tool-discipline section

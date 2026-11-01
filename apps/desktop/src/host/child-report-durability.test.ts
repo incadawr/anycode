@@ -1,5 +1,5 @@
 /**
- * Taskana 4123 (TASK.145 residual): integration tests for
+ * (residual): integration tests for
  * `attachChildReportDurability` — the REAL SqlitePersistenceAdapter
  * (`:memory:`, session row created first) against a REAL ChildReportQueue
  * over a recording outbound stub. Covers the two halves of the contract:
@@ -35,7 +35,7 @@ async function makeAdapter(): Promise<{ adapter: SqlitePersistenceAdapter; sessi
   return { adapter, sessionId: meta.id };
 }
 
-describe("attachChildReportDurability (Taskana 4123)", () => {
+describe("attachChildReportDurability", () => {
   it("persists on every mutation: add lands in the column, ack drains it back to null", async () => {
     const { adapter, sessionId } = await makeAdapter();
     const outbound = stubOutbound();

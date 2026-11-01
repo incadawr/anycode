@@ -1,5 +1,5 @@
 /**
- * Language-server config management control-plane IPC (Taskana 4743).
+ * Language-server config management control-plane IPC.
  * Registers `ipcMain.handle` for the four channels in shared/lsp-config.ts:
  * the joined catalog/detection/config/trust status view, one-click enable of
  * a catalog preset, disable (remove) of a configured entry, and a custom
@@ -107,7 +107,7 @@ export class NodeLspConfigFs implements LspConfigFs {
 export interface LspConfigIpcDeps {
   /** `os.homedir()` in production; overridable at the main/index.ts wiring site (dev/test only, MCP precedent). */
   home(): string;
-  /** Scope reference resolver (Taskana 4758): a tab id (legacy) or a workspace id `ws_<16 hex>`, resolved main-side — never a renderer-supplied path. */
+  /** Scope reference resolver: a tab id (legacy) or a workspace id `ws_<16 hex>`, resolved main-side — never a renderer-supplied path. */
   workspaceForTab(tabId: string): string | undefined;
   fs: LspConfigFs;
   /** `process.env.PATH` in production; injectable for tests. */

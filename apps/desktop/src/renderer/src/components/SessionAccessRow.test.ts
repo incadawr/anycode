@@ -1,5 +1,5 @@
 /**
- * Per-session switch row (Taskana 4747). Node env, no DOM: the initial render (no
+ * Per-session switch row. Node env, no DOM: the initial render (no
  * tab context, state not yet loaded) shows the disabled reason; the wiring to
  * `setSessionAccess(tabId, enabled)` is pinned by the IPC tests.
  */
@@ -25,7 +25,7 @@ const neverBridge = {
   setSessionApprovals: () => new Promise<never>(() => {}),
 };
 
-describe("SessionAccessRow (Taskana 4747)", () => {
+describe("SessionAccessRow", () => {
   it("without a tab it is disabled and says to open a session", () => {
     const html = renderToStaticMarkup(createElement(SessionAccessRow, { bridge: neverBridge }));
     expect(html).toContain(SESSION_SWITCH_TITLE);
@@ -52,7 +52,7 @@ describe("SessionAccessRow (Taskana 4747)", () => {
   });
 });
 
-describe("SessionAccessRow handle field (Taskana 4750b)", () => {
+describe("SessionAccessRow handle field", () => {
   it("handle input hidden when switch off", () => {
     const html = renderToStaticMarkup(createElement(SessionAccessRow, { bridge: neverBridge }));
     expect(html).not.toContain('data-environment-action="sessions-api-handle"');
@@ -73,7 +73,7 @@ describe("SessionAccessRow handle field (Taskana 4750b)", () => {
   });
 });
 
-describe("SessionAccessRow External approvals (Taskana 4763)", () => {
+describe("SessionAccessRow External approvals", () => {
   it("T30 the approvals checkbox is NOT rendered while sharing is off (no tab, state not loaded)", () => {
     const html = renderToStaticMarkup(createElement(SessionAccessRow, { bridge: neverBridge }));
     expect(html).not.toContain('data-environment-action="sessions-api-approvals"');

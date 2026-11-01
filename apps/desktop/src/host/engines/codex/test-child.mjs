@@ -22,7 +22,7 @@ if (args.includes("--version")) {
     forkStubbornGrandchild();
     setInterval(() => {}, 1_000);
   } else if (args.includes("--bad-version")) {
-    // TASK.173 (owner decision, 2026-08-29): SUPPORTED_CODEX_VERSION dropped
+    // (owner decision, 2026-08-29): SUPPORTED_CODEX_VERSION dropped
     // its floor and is now a bare ceiling, so the only way left to be
     // unsupported is ABOVE it — a below-floor probe (e.g. 0.100.0) would now
     // pass. Every codex-cli release observed so far (W0 through the 0.150.1
@@ -34,7 +34,7 @@ if (args.includes("--version")) {
   if (!args.includes("--hang-version") && !args.includes("--version-grandchild")) process.exit(0);
 } else {
   const fixture = args.find((arg) => arg.startsWith("--fixture="));
-  // Taskana 4265 cross-review M2: the last id:88 RESPONSE line this fake
+  // cross-review M2: the last id:88 RESPONSE line this fake
   // app-server received (what the host answered an emitted approval with).
   // `read-approval-answer` replays it so a driving test can observe the
   // wrapped bridge's real accept without touching host internals.
@@ -73,7 +73,7 @@ if (args.includes("--version")) {
         closeSync(0);
       }
     } else if (request.method === "account/read") {
-      // TASK.180 wrapper tests: the minimum usable boot-RPC shapes so
+      // wrapper tests: the minimum usable boot-RPC shapes so
       // startCodexEngine/resumeCodexEngine can run end-to-end here.
       process.stdout.write(`${JSON.stringify({ id: request.id, result: { account: { id: "acct" }, requiresOpenaiAuth: false } })}\n`);
     } else if (request.method === "model/list") {
@@ -89,7 +89,7 @@ if (args.includes("--version")) {
     } else if (request.method === "thread/read") {
       process.stdout.write(`${JSON.stringify({ id: request.id, result: { thread: { id: "thread-180", turns: [] } } })}\n`);
     } else if (request.method === "turn/start") {
-      // Taskana 4265 cross-review M2: answers with a REAL native turn id so a
+      // cross-review M2: answers with a REAL native turn id so a
       // driven turn can pass Phase A and own an active turn the approval
       // correlates against. The turn is then left deliberately un-terminated
       // (the driving test disposes the engine), matching a live turn parked
@@ -110,7 +110,7 @@ if (args.includes("--version")) {
     } else if (request.method === "emit-server-request") {
       process.stdout.write(`${JSON.stringify({ id: 88, method: "item/commandExecution/requestApproval", params: { command: "pwd" } })}\n`);
     } else if (request.method === "emit-server-request-file") {
-      // Taskana 4265 cross-review M2: emits a file-change approval whose
+      // cross-review M2: emits a file-change approval whose
       // identity (threadId/turnId/itemId) the REQUEST's params carry — the
       // driving test supplies the live turn's real values, so the wrapped
       // bridge correlates it against the item the same stdout stream indexed.

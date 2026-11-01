@@ -33,7 +33,7 @@ function makeFs(files: Record<string, string>): FileSystemPort {
 /**
  * Temporarily removes the ambient `VITEST` marker so a callback observes the
  * NON-test-runner code path. `loadTelemetryConfig`'s fail-closed test gate
- * (TASK.121) is keyed off this exact ambient value — never the injected `env`
+ * is keyed off this exact ambient value — never the injected `env`
  * argument — and this test file runs for real under vitest, so `VITEST` is
  * genuinely set on `process.env` here. Used to pin "no behavior change
  * without VITEST ambient" for the pre-existing home-fallback/default-dir
@@ -136,7 +136,7 @@ describe("loadTelemetryConfig — project wins WHOLESALE", () => {
   });
 
   it("falls through to home when project has no telemetry key at all (outside the test gate)", async () => {
-    // TASK.121: workspace !== home here, so under the ambient VITEST gate the
+    // workspace !== home here, so under the ambient VITEST gate the
     // home-scope source is skipped entirely (see the gate describe block
     // below) — this test pins the underlying fallthrough logic still works
     // for a non-test-runner caller.
@@ -153,7 +153,7 @@ describe("loadTelemetryConfig — project wins WHOLESALE", () => {
 
 describe("loadTelemetryConfig — fail-soft malformed input", () => {
   it("invalid JSON in project falls through to home (with an issue recorded, outside the test gate)", async () => {
-    // TASK.121: workspace !== home; see the gate note on the sibling test above.
+    // workspace !== home; see the gate note on the sibling test above.
     await withoutVitestAmbient(async () => {
       const fs = makeFs({
         [PROJECT_CONFIG]: "{ not valid json",
@@ -205,7 +205,7 @@ describe("loadTelemetryConfig — dir resolution", () => {
   });
 
   it("defaults dir to <home>/.anycode/telemetry when omitted (outside the test gate)", async () => {
-    // TASK.121: an enabled section without an explicit dir is exactly what the
+    // an enabled section without an explicit dir is exactly what the
     // ambient-VITEST gate refuses (see the gate describe block below) — this
     // test pins the underlying default-dir logic still works for a
     // non-test-runner caller.
@@ -241,8 +241,8 @@ describe("loadTelemetryConfig — dir resolution", () => {
   });
 });
 
-describe("loadTelemetryConfig — TASK.121/TASK.165 ANYCODE_TELEMETRY_DIR override", () => {
-  // TASK.165: the override REDIRECTS an already-enabled sink; it must never
+describe("loadTelemetryConfig — ANYCODE_TELEMETRY_DIR override", () => {
+  // the override REDIRECTS an already-enabled sink; it must never
   // enable telemetry on its own. This is the red->green pin for that defect —
   // on the pre-fix code this returned an ENABLED telemetry object even with
   // zero config files present anywhere.
@@ -294,7 +294,7 @@ describe("loadTelemetryConfig — TASK.121/TASK.165 ANYCODE_TELEMETRY_DIR overri
   });
 });
 
-describe("loadTelemetryConfig — TASK.121 fail-closed test gate (ambient VITEST)", () => {
+describe("loadTelemetryConfig — fail-closed test gate (ambient VITEST)", () => {
   it("skips the home-scope source entirely when workspace !== home — home is never touched", async () => {
     let homeTouched = false;
     const fs: FileSystemPort = {
@@ -316,7 +316,7 @@ describe("loadTelemetryConfig — TASK.121 fail-closed test gate (ambient VITEST
     expect(result).toEqual({ telemetry: null, issues: [] });
   });
 
-  // TASK.166: a default-dir resolution under the gate must not vanish — it
+  // a default-dir resolution under the gate must not vanish — it
   // redirects to a stable, discoverable temp dir instead. This is the
   // red->green pin for that defect: on the pre-fix code this resolved to
   // `{telemetry: null, issues: [...]}` (the fixture data was simply lost).

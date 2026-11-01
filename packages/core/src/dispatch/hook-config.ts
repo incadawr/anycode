@@ -134,7 +134,7 @@ export async function loadHookConfigs(
   workspace: string,
   homedir: string,
   opts?: ProjectTrustOptions & {
-    /** Receives one line per project config skipped by the trust gate (Taskana 4736). */
+    /** Receives one line per project config skipped by the trust gate. */
     onSkip?: (message: string) => void;
   },
 ): Promise<CommandHookDeclaration[]> {

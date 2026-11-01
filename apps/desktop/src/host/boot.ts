@@ -94,7 +94,7 @@ import {
 
 /**
  * Child-mode argv, present only for a host main forked to run a session
- * spawned by another session's `Agent tier:"session"` call (TASK.102 CUT-S2
+ * spawned by another session's `Agent tier:"session"` call (CUT-S2
  * §2.6.2). `parentSessionId`/`spawnToolCallId` become this session's durable
  * `parent_session_id`/`spawn_tool_call_id` columns (§2.4, migration v13);
  * `initialMode` is a SNAPSHOT of the parent's permission mode at the moment
@@ -106,7 +106,7 @@ export interface HostChildArgs {
   spawnToolCallId: string;
   initialMode: PermissionMode;
   /**
-   * TASK.180: the creating spawn's turn budget (`--child-max-turns <n>`),
+   * the creating spawn's turn budget (`--child-max-turns <n>`),
    * present only when the child was spawned from a profile with one. A
    * decimal positive safe integer within 1..200 (SUBAGENT_MAX_TURNS_CEILING);
    * anything else is dropped, consistently with the child-mode drop rule.
@@ -127,7 +127,7 @@ export interface HostArgs {
  * Parses `--session <id>|--session=<id>`, `--resume <id>|--resume=<id>`, and
  * the child-mode triple `--child-parent <id>`, `--child-spawn-call <id>`,
  * `--child-mode <mode>` from argv (mirror of cli/main.ts:60-105; child flags
- * added by TASK.102 CUT-S2 §2.6.2). The last id-bearing flag of each kind
+ * added by CUT-S2 §2.6.2). The last id-bearing flag of each kind
  * wins; `--resume` sets resume=true, `--session` sets resume=false. `child`
  * is populated ONLY when all three child flags were seen with well-formed
  * values (an unrecognized `--child-mode` value is dropped rather than
@@ -215,7 +215,7 @@ export function parseHostArgs(argv: string[]): HostArgs {
       }
       continue;
     }
-    // TASK.180: the creating spawn's turn budget. Only a complete decimal
+    // the creating spawn's turn budget. Only a complete decimal
     // positive safe integer within 1..200 is accepted — parseInt prefixes
     // ("5x"), fractions, NaN, Infinity, zero, negatives and over-ceiling
     // values are all DROPPED (never clamped), same fail-closed drop as an
@@ -255,7 +255,7 @@ function isPermissionMode(value: string): value is PermissionMode {
 }
 
 /**
- * TASK.180: the child host's core AgentLoopConfig.maxTurns resolution — a
+ * the child host's core AgentLoopConfig.maxTurns resolution — a
  * creating spawn's profile budget (args.child.maxTurns) overrides the env
  * default; an absent budget preserves it byte-identically. Extracted as a
  * pure helper so the precedence is unit-testable (host/index.ts wires it:
@@ -266,8 +266,8 @@ export function resolveChildMaxTurns(child: HostChildArgs | undefined, envMaxTur
 }
 
 /**
- * Taskana 4078 cross-review finding 5: the engine boots' draft-selection
- * preset seam (TASK.102 CUT-S4 §4.2), extracted verbatim from
+ * cross-review finding 5: the engine boots' draft-selection
+ * preset seam (CUT-S4 §4.2), extracted verbatim from
  * bootCodexSession/bootClaudeSession's identical
  * `args.child !== undefined ? <childMap>(args.child.initialMode) : draft.preset`
  * lines so the argv→preset seam is unit-testable end to end — `parseHostArgs`
@@ -288,7 +288,7 @@ export function resolveEngineDraftPresetId(
 }
 
 /**
- * TASK.180: a complete decimal positive integer within 1..200 — no sign, no
+ * a complete decimal positive integer within 1..200 — no sign, no
  * fraction, no exponent, no parseInt-prefix tolerance ("5x" fails). The
  * ceiling mirrors core's SUBAGENT_MAX_TURNS_CEILING.
  */
@@ -302,7 +302,7 @@ function isChildMaxTurns(value: string): boolean {
 
 /**
  * Second, independent authority feeding non-recursion lock #2
- * (`host/index.ts`'s `config.sessionSubagents` wiring — TASK.102 CUT-S2
+ * (`host/index.ts`'s `config.sessionSubagents` wiring — CUT-S2
  * §10.9.2 arbitration). True when EITHER signal says "this boot is a
  * child": the argv authority (`args.child`, the same fact lock #1 reads,
  * before persistence is even consulted) OR the durable authority
@@ -322,9 +322,9 @@ export function isChildSessionBoot(args: HostArgs, meta: SessionMeta): boolean {
 }
 
 /**
- * Retry policy for a session's model port (Taskana 4226): a child session
+ * Retry policy for a session's model port: a child session
  * (detached or in-process) keeps retrying a transient network outage for
- * CHILD_NETWORK_RETRY_BUDGET_MS past the normal retry count. Taskana 4705:
+ * CHILD_NETWORK_RETRY_BUDGET_MS past the normal retry count.
  * main sessions now default to a 5-min budget (DEFAULT_RETRY_POLICY), so the
  * explicit 180 s constant here is what still distinguishes a child — it
  * overrides any explicit budget on the child's policy. An explicit endpoint
@@ -336,7 +336,7 @@ export function childRetryPolicy(
   retry?: Partial<RetryPolicy>,
 ): Partial<RetryPolicy> | undefined {
   if (!isChild) return retry;
-  // Taskana 4705 review: children take the main session's settings (the same
+  // review: children take the main session's settings (the same
   // maxRetries/budget), with the 4226 180 s value only as a floor.
   const mainBudget = retry?.networkRetryBudgetMs ?? DEFAULT_RETRY_POLICY.networkRetryBudgetMs;
   return { ...retry, networkRetryBudgetMs: Math.max(CHILD_NETWORK_RETRY_BUDGET_MS, mainBudget) };
@@ -356,7 +356,7 @@ export interface BootSessionResult {
 
 /**
  * The session-row fields a freshly CREATED session gets from `args.child`
- * (TASK.102 CUT-S2 §2.6.2/§0's "Строку сессии ребёнка создаёт ХОСТ ребёнка,
+ * (CUT-S2 §2.6.2/§0's "Строку сессии ребёнка создаёт ХОСТ ребёнка,
  * из argv"): `parentSessionId`/`spawnToolCallId` (durable parent-link,
  * migration v13) plus `mode: initialMode` — the parent's permission-mode
  * SNAPSHOT at spawn, in place of the hardcoded `"build"` every non-child
@@ -391,13 +391,13 @@ export async function resolveBootSession(
   opts: { args: HostArgs; workspace: string; model: string; connectionId?: string },
 ): Promise<BootSessionResult> {
   const { args, workspace, model, connectionId } = opts;
-  // TASK.45 W10: the pinned provider connection is written only on session
+  // W10: the pinned provider connection is written only on session
   // CREATION. A resumed existing session keeps whatever it was pinned to — main
   // never re-pins a live thread to the current default (session-pinning invariant).
   const pin = connectionId !== undefined && connectionId !== "" ? { connectionId } : {};
 
   if (args.resume && args.sessionId !== undefined) {
-    // Internal read by id (TASK.102 S2a §2.4): a child-mode boot resumes by
+    // Internal read by id (S2a §2.4): a child-mode boot resumes by
     // the exact id main built into its argv (root or child) — not a
     // UX-facing selection, so root-filtering here would break child boot.
     const existing = await persistence.getSessionById(args.sessionId);
@@ -517,7 +517,7 @@ export async function seedAlwaysAllowRules(
   return rules;
 }
 
-// ── Taskana 4118: boot-time read of live per-model capabilities from settings.json ──
+// ── boot-time read of live per-model capabilities from settings.json ──
 
 export type ConnectionModelSettings = Pick<ProviderConnection, "modelOverrides" | "reasoningEffort" | "modelCapabilities" | "pricing">;
 
@@ -556,7 +556,7 @@ export async function readConnectionModelSettings(
 
 /**
  * Fail-soft reader of the `modelCapabilities` map main's connection-scoped
- * /v1/models fetch persists on a connection (Taskana 4118). The host consults
+ * /v1/models fetch persists on a connection. The host consults
  * it — keyed by model id — ONLY for models the static catalog does not know;
  * a missing file/connection or an empty map degrades to `undefined`, i.e. the
  * exact pre-4118 catalog-only resolution. Same shape as `seedAlwaysAllowRules`
@@ -601,7 +601,7 @@ function toPermissionRule(rule: { toolName: string; pattern?: string }): { toolN
 // ── env-hardening: scrub secrets from the host's own live process.env (ruling §3) ──
 
 /**
- * Deletes every `SECRET_ENV_KEYS` entry (`ANYCODE_API_KEY`, and since TASK.198
+ * Deletes every `SECRET_ENV_KEYS` entry (`ANYCODE_API_KEY`, and since
  * срез C also `ANYCODE_RECOGNIZER_API_KEY`) from the live `process.env`
  * of THIS host process. Called from `boot()`'s
  * `finally` in index.ts, which — by construction of `finally` — runs strictly
@@ -618,7 +618,7 @@ function toPermissionRule(rule: { toolName: string; pattern?: string }): { toolN
  * never got a session still leaks nothing. Idempotent. Non-secret `ANYCODE_*`
  * vars (MODEL/BASE_URL/DB_PATH/AUTOMATION/...) are untouched.
  *
- * PROXY credentials are deliberately NOT scrubbed here (TASK.135): the
+ * PROXY credentials are deliberately NOT scrubbed here: the
  * host's own `process.env` must keep the proxy family and the
  * `ANYCODE_*_PROXY_URL` carriers because the engine clients read the live
  * `process.env` at spawn time (`sourceEnv: process.env`) and core's own model
@@ -627,7 +627,7 @@ function toPermissionRule(rule: { toolName: string; pattern?: string }): { toolN
  * (`buildChildEnv` in node-execution.ts and terminal.ts): a proxy URL that
  * carries credentials never reaches a Bash child, the terminal or an LSP.
  *
- * Taskana 4074 follow-up: rather than merely DROPPING the credentialed value,
+ * follow-up: rather than merely DROPPING the credentialed value,
  * the host boots a credential-free loopback relay
  * (`@anycode/core/proxy-relay`, `resolveProxyRelay` — started at the top of
  * boot()) and `buildChildEnv` rewrites the dropped family to
@@ -690,7 +690,7 @@ export interface MainCredentialProviderOptions {
    * Static fallback key — the fork's own `ANYCODE_API_KEY` (envConfig.apiKey,
    * the access token this fork was spawned with) — used when a request times
    * out or main answers with no usable key. Optional because `envConfig.apiKey`
-   * itself is optional (TASK.43 §0.4, no-auth openai transports); oauth mode is
+   * itself is optional (§0.4, no-auth openai transports); oauth mode is
    * anthropic-only in practice, so this stays undefined only on a mis-wired fork.
    */
   fallbackApiKey: string | undefined;
@@ -914,7 +914,7 @@ export function createPreviewRpcClient(options: CreatePreviewRpcClientOptions): 
         { kind: "screenshot", ...(req.previewId !== undefined ? { previewId: req.previewId } : {}) },
         opts.signal,
       ),
-    // Taskana 4759: browser control rides the same correlated RPC. The request
+    // browser control rides the same correlated RPC. The request
     // union is structurally identical to core's PreviewControlRequest.
     control: (req: PreviewControlRequest, opts) =>
       call<PreviewControlSuccess>(
@@ -941,7 +941,7 @@ export interface PreviewMessageConsumers {
    */
   onEvent?: (message: PreviewEventMessage) => void;
   /**
-   * Taskana 4759: the tab's live "Full browser access" flag, pushed by main. A
+   * the tab's live "Full browser access" flag, pushed by main. A
    * malformed message (non-boolean fullAccess) is recognized and dropped.
    */
   onBrowserAccess?: (fullAccess: boolean) => void;

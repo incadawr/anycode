@@ -1,6 +1,6 @@
 /**
  * Transport dispatcher: the ONE place that maps a `ProviderTransport` onto a
- * client factory (TASK.43 §0.3). Target mapping:
+ * client factory (§0.3). Target mapping:
  *
  *   anthropic-messages       -> @ai-sdk/anthropic          (live)
  *   openai-chat-completions  -> @ai-sdk/openai-compatible  (live)

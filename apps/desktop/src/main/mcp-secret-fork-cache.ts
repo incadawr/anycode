@@ -1,5 +1,5 @@
 /**
- * Main-side preparation of `ANYCODE_MCP_SECRETS` (Taskana 4752, part C).
+ * Main-side preparation of `ANYCODE_MCP_SECRETS` (part C).
  *
  * The host forks with no vault access, so main hands it the secret VALUES its
  * tab's MCP configs reference, as ONE JSON object in the fork env. This cache

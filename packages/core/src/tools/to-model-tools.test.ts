@@ -22,7 +22,7 @@ const ALL_TOOLS = [
   "Write",
 ];
 
-/** ArchMap is opt-in (Taskana 4162) — every assertion in this file runs with the flag ON. */
+/** ArchMap is opt-in — every assertion in this file runs with the flag ON. */
 function registryWithArchMap() {
   return createDefaultToolRegistry({ archMap: true });
 }
@@ -64,7 +64,7 @@ describe("toToolDeclarations", () => {
   // set rawInputJsonSchema, so each declaration's inputJsonSchema must deep-equal
   // the direct z.toJSONSchema(inputSchema) it produced before the slice. Slice
   // 3.3 adds the eleventh native tool (Skill); slice 3.4 adds the twelfth
-  // (Workflow); TASK.233 S1 adds the thirteenth (ArchMap) — all zod-authored.
+  // (Workflow); S1 adds the thirteenth (ArchMap) — all zod-authored.
   it("the native tools have no rawInputJsonSchema and stay byte-identical to z.toJSONSchema", () => {
     const registry = registryWithArchMap();
     const declarations = toToolDeclarations(registry);

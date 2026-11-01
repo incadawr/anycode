@@ -1,5 +1,5 @@
 /**
- * "Import a Codex session" dialog (TASK.52, codex-profiles cut §8.8, lane
+ * "Import a Codex session" dialog (codex-profiles cut §8.8, lane
  * W3-H): Settings → Codex → pick a profile → pick one of its rollout files →
  * see an honest loss report → pick a model for the brand-new session → Import
  * & open. Main's half (`main/codex-rollout-ipc.ts`, lane D) already does the
@@ -89,7 +89,7 @@ const SYSTEM_PROFILE_LABEL = "System (current environment)";
 const MAX_ROLLOUT_FILE_MIB = 32;
 /** List-row first-user-message preview cap — a rollout's first message can run long; the list view only needs enough to recognize the session. */
 const FIRST_MESSAGE_PREVIEW_CAP = 96;
-/** Row-label cap (TASK.57), mirroring `@anycode/core`'s `SESSION_TITLE_MAX_LENGTH`/`deriveSessionTitle` first-line convention — duplicated as a literal rather than imported since this renderer bundle deliberately never pulls in `@anycode/core` (see file header). */
+/** Row-label cap, mirroring `@anycode/core`'s `SESSION_TITLE_MAX_LENGTH`/`deriveSessionTitle` first-line convention — duplicated as a literal rather than imported since this renderer bundle deliberately never pulls in `@anycode/core` (see file header). */
 const ROLLOUT_ROW_LABEL_MAX_LENGTH = 80;
 
 // ── pure helpers (unit-tested directly — see CodexRolloutImportDialog.test.ts) ──
@@ -120,7 +120,7 @@ export function truncateRolloutPreview(text: string | undefined): string | undef
 }
 
 /**
- * The list row's PRIMARY, human-readable label (TASK.57 — owner: "в списке
+ * The list row's PRIMARY, human-readable label (owner: "в списке
  * импортируемых сессий нужно показывать название сессии"): the first line of
  * the rollout's own first user message, trimmed and capped — the exact
  * "first line, 80 chars" convention `deriveSessionTitle` (`@anycode/core`)
@@ -258,7 +258,7 @@ export function resolveDefaultImportModel(activeModel: string | undefined, catal
 }
 
 /**
- * The model options the Import picker offers for a snapshot (TASK.183): the
+ * The model options the Import picker offers for a snapshot: the
  * ACTIVE connection's own `models[]` (manual additions + connection-scoped
  * fetched ids) unioned ahead of the catalog/curated hints, so an id the user
  * entered by hand on the active connection stays importable. Extracted so the
@@ -278,6 +278,7 @@ export function importModelOptionsFor(
     snapshot.catalog,
     snapshot.settings.provider.custom,
     activeConnection(snapshot.settings)?.models,
+    activeConnection(snapshot.settings)?.visibleModels,
   );
 }
 
@@ -350,7 +351,7 @@ export type PerformImportOutcome = { ok: true; openMessage: string | null } | { 
  * unit testing (the red-proof surface for "sends the picked model" / "opens
  * exactly the returned sessionId, never a blank new tab").
  *
- * `onOpened` (TASK.57 — "open means open") fires exactly once, ONLY when the
+ * `onOpened` ("open means open") fires exactly once, ONLY when the
  * whole chain lands the user on the new tab (import succeeded AND the resume
  * carried no failure notice) — never on a refused import, and never on an
  * import that persisted fine but whose tab failed to open (that case still
@@ -386,7 +387,7 @@ export interface CodexRolloutImportDialogProps {
   tabOpenDeps?: RolloutTabOpenDeps;
   /** Injectable for tests / isolation; defaults to the app's singleton settings-store. */
   settingsStore?: SettingsStoreApi;
-  /** Forwarded from `CodexEnginePane` (ultimately `SettingsScreen`'s own dialog close) — fired on a successful "Import & open" so the user lands on the new tab instead of staying in Settings (TASK.57). */
+  /** Forwarded from `CodexEnginePane` (ultimately `SettingsScreen`'s own dialog close) — fired on a successful "Import & open" so the user lands on the new tab instead of staying in Settings. */
   onRequestCloseSettings?: () => void;
 }
 

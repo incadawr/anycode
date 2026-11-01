@@ -1,5 +1,5 @@
 /**
- * Taskana 4702 Stage 1, implementation C: the external-command ask classifier.
+ * Stage 1, implementation C: the external-command ask classifier.
  * Spawn is injected; every test drives a fake child process. Pins the da
  * protocol (exit 0 allow / 1 ask / 2 deny->ask / anything else = error->ask),
  * the no-shell spawn, the minimal environment, the stdin payload, the output

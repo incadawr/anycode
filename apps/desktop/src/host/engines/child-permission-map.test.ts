@@ -1,5 +1,5 @@
 /**
- * TASK.102 CUT-S4 §4.2: the single, frozen mapping from a parent's
+ * CUT-S4 §4.2: the single, frozen mapping from a parent's
  * snapshotted core `PermissionMode` to the interactive posture an engine
  * child boots with. Two properties are pinned:
  *
@@ -9,8 +9,8 @@
  *    be one of the forbidden print-mode/bypass postures (§4.2's "запрещённые
  *    постуры"), proven by resolving the id through the SAME frozen preset
  *    tables (`presets.ts`, read-only import) the engine boots actually
- *    consult — not by re-asserting the id strings alone. Since TASK.179
- *    (Taskana 4078) this proof also covers the child-only `child-ask`
+ *    consult — not by re-asserting the id strings alone. Since
+ *    this proof also covers the child-only `child-ask`
  *    preset: `untrusted` is not a forbidden approval policy, and the
  *    resolved preset ids are pinned to `read-only`/`child-ask`/`ask`
  *    (`child-ask` only for the asking mode `build`; the autonomy modes
@@ -63,7 +63,7 @@ describe("claudeChildPresetId (CUT-S4 §4.2)", () => {
 });
 
 /**
- * Taskana 4056 cross-review M1: the claude door's port seam. A bridge child's
+ * cross-review M1: the claude door's port seam. A bridge child's
  * `ChildSpawnRequest.permissionMode` gates the spawned CORE child's own
  * permission engine, so the mapping from the parent's LIVE preset must be a
  * total, fail-narrow function of `snapshot().activePresetId` — the exact
@@ -76,7 +76,7 @@ describe("claudeChildPresetId (CUT-S4 §4.2)", () => {
  * id fails NARROW to `plan`, not to `build` — a future preset id can never
  * widen a child.
  */
-describe("claudeAgentPermissionMode (claude door port seam, Taskana 4056 M1)", () => {
+describe("claudeAgentPermissionMode (claude door port seam, M1)", () => {
   it.each([
     ["read-only", "plan"],
     ["ask", "build"],
@@ -108,7 +108,7 @@ describe("codexChildPosture (CUT-S4 §4.2)", () => {
   it("narrowed to the asking mode: only build boots child-ask; the autonomy modes keep the pre-4078 ask posture", () => {
     // `build` is the one AnyCode mode the codex `ask`/`approve-for-me` presets
     // map back to (codexAgentPermissionMode) — the asking kind. The explicit
-    // autonomy choices keep exactly what they had before Taskana 4078.
+    // autonomy choices keep exactly what they had before.
     expect(codexChildPosture("build")).toBe("child-ask");
     expect(codexChildPosture("edit")).toBe("ask");
     expect(codexChildPosture("auto")).toBe("ask");
@@ -131,7 +131,7 @@ describe("codexChildPosture (CUT-S4 §4.2)", () => {
     }
   });
 
-  it("Taskana 4682: every non-plan child posture resolves to a preset whose turnOverride accepts the tmp exclusion (the boot site decorates exactly these)", () => {
+  it("every non-plan child posture resolves to a preset whose turnOverride accepts the tmp exclusion (the boot site decorates exactly these)", () => {
     for (const mode of PERMISSION_MODES) {
       const preset = findCodexPreset(codexChildPosture(mode));
       expect(preset).toBeDefined();
@@ -159,7 +159,7 @@ describe("codexChildPosture (CUT-S4 §4.2)", () => {
   });
 });
 
-describe("codexChildAutoAcceptsWorkspacePatches (Taskana 4265)", () => {
+describe("codexChildAutoAcceptsWorkspacePatches", () => {
   it("is true exactly for edit/auto/yolo — the modes whose Claude twin gets the workspace tier", () => {
     expect(PERMISSION_MODES.map((mode) => [mode, codexChildAutoAcceptsWorkspacePatches(mode)])).toEqual([
       ["plan", false],

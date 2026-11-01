@@ -1,5 +1,5 @@
 /**
- * Role-route notice text (Taskana 4729). The strings are model-visible and
+ * Role-route notice text. The strings are model-visible and
  * the N3 runner notice must stay byte-identical, so the exact shapes are pinned.
  */
 
@@ -11,7 +11,7 @@ import {
 } from "./role-route.js";
 import type { RoleRouteResolution } from "./role-route.js";
 
-// Taskana 4735: the route->request stamping shared by the Agent tool's session
+// the route->request stamping shared by the Agent tool's session
 // tier and the workflow engine's engine-role steps. The field set and the
 // caller-precedence guards are pinned here; agent-session.test.ts pins the
 // Agent tool's end-to-end request.

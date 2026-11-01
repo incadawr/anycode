@@ -6,7 +6,7 @@ import { createConnectionModelSettings } from "./connection-model-settings.js";
  * MVP.3 criteria): event order/completeness with turnId, busy gate, cancel
  * mid-turn (cancelled + denyAll of parked asks), permission allow round-trip,
  * before/after snapshots, the fail-closed snapshot observer, disconnect denyAll,
- * replay on ui_ready, and mode changes (mid-turn and between turns, TASK.37).
+ * replay on ui_ready, and mode changes (mid-turn and between turns).
  *
  * Slice 2.2.3 additions (design §5, ruling §3): "Always allow" remember
  * round-trip (a remembered allow adds a session rule that auto-allows a
@@ -22,7 +22,7 @@ import { createConnectionModelSettings } from "./connection-model-settings.js";
  * exactly-once drain, A/B byte-identity with no tasks at all, busy-reject
  * never drains, and title purity.
  *
- * TASK.102 CUT-S2 §2.6.3 additions (slice S2b B4): child-mode Session over a
+ * CUT-S2 §2.6.3 additions (slice S2b B4): child-mode Session over a
  * SEPARATE local harness (`createChildHarness` below) rather than
  * `createHarness` — it wires the `child` option `createHarness` deliberately
  * never exposes (test-harness.ts is shared by many other test files; adding a
@@ -142,7 +142,7 @@ import {
  */
 class FakeTaskPort implements BackgroundTaskPort {
   private notices: BackgroundTaskNotice[] = [];
-  /** Taskana 4097: the settle side channel, mirroring InProcessTaskManager.onTaskSettled. */
+  /** the settle side channel, mirroring InProcessTaskManager.onTaskSettled. */
   private settledListeners = new Set<(notice: BackgroundTaskNotice) => void>();
   snapshots: BackgroundTaskSnapshot[] = [];
   outputs = new Map<string, string[]>();
@@ -336,7 +336,7 @@ describe("Session — LSP status panel wire", () => {
   });
 });
 
-describe("Session — LSP restart wire (Taskana 4711)", () => {
+describe("Session — LSP restart wire", () => {
   it("restarts via the seam on lsp_restart_request and pushes a fresh lsp_status after it", async () => {
     const lsp = new FakeLspPort([
       { name: "typescript", state: "crashed", extensions: [".ts"], stderrTail: "boom" },
@@ -457,7 +457,7 @@ describe("Session — context breakdown wire (slice P7.17 · F12)", () => {
   });
 });
 
-describe("Session — builtin anycode-setup skill wire (Taskana 4707)", () => {
+describe("Session — builtin anycode-setup skill wire", () => {
   it("advertises the skill in the system prompt's skills section and serves it through the Skill tool", async () => {
     // The host's own builtin list (host/builtin-skills.ts, the same helper
     // host/index.ts boots with): discoverSkills over it, one SkillPort, one
@@ -718,7 +718,7 @@ describe("Session — env status wire (slice P7.8)", () => {
   });
 });
 
-describe("Session — root busy does not span the teardown tail (TASK.102 CUT-S2 §10.10.1 O1)", () => {
+describe("Session — root busy does not span the teardown tail (CUT-S2 §10.10.1 O1)", () => {
   it("accepts a user_message sent right after loop_end even while flushTelemetry() is still pending", async () => {
     // F7 held `busy` across the ENTIRE turn teardown for every session, root
     // included — but a root session has no terminal to protect, and the
@@ -824,7 +824,7 @@ describe("Session — background jobs panel wire", () => {
     }
   });
 
-  it("task_list_request re-serves the manager snapshot even with no turn in flight (TASK.91 panel refresh)", async () => {
+  it("task_list_request re-serves the manager snapshot even with no turn in flight (panel refresh)", async () => {
     const tasks = new FakeTaskPort();
     const running = taskSnapshot({ taskId: "task-1", command: "sleep 60" });
     const completed = taskSnapshot({
@@ -863,7 +863,7 @@ describe("Session — background jobs panel wire", () => {
     }
   });
 
-  it("a task settling between turns (session idle) live-pushes a fresh task_list — no turn, no task_list_request (Taskana 4097)", async () => {
+  it("a task settling between turns (session idle) live-pushes a fresh task_list — no turn, no task_list_request", async () => {
     const tasks = new FakeTaskPort();
     const running = taskSnapshot({ taskId: "task-1", command: "sleep 60" });
     tasks.snapshots = [running];
@@ -891,7 +891,7 @@ describe("Session — background jobs panel wire", () => {
     }
   });
 
-  it("task_output_request reads through a non-consuming peek with its own UI cursor — the model's readOutput cursor is untouched (Taskana 4097)", async () => {
+  it("task_output_request reads through a non-consuming peek with its own UI cursor — the model's readOutput cursor is untouched", async () => {
     const running = taskSnapshot({ taskId: "task-1", command: "sleep 60" });
     let buffer = "one\n";
     let consumingReads = 0;
@@ -972,7 +972,7 @@ describe("Session — stream bridge", () => {
     }
   });
 
-  it("logs a provider stream error to the process log (TASK.2 DoD-c, slice-P7.7-cut.md §3.3)", async () => {
+  it("logs a provider stream error to the process log (DoD-c, slice-P7.7-cut.md §3.3)", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     const h = createHarness({ steps: [[{ type: "error", error: new Error("boom") }]] });
     try {
@@ -998,7 +998,7 @@ describe("Session — stream bridge", () => {
 });
 
 /**
- * TASK.159: SessionOptions.eventTap — the ONLY telemetry seam a foreign-engine
+ * SessionOptions.eventTap — the ONLY telemetry seam a foreign-engine
  * (codex/claude) boot has, since those engines never instantiate AgentLoop
  * (whose own eventTap is unreachable for them). Direct `new Session(...)`
  * construction (mirror of the "shell capability" describe block's own
@@ -1008,7 +1008,7 @@ describe("Session — stream bridge", () => {
  * lets a test pass `eventTap` directly, which `createHarness` (test-harness.ts)
  * does not expose.
  */
-describe("Session — foreign-engine telemetry tap (TASK.159)", () => {
+describe("Session — foreign-engine telemetry tap", () => {
   class FakeWirePort implements WirePort {
     readonly received: unknown[] = [];
     private messageCb: ((msg: unknown) => void) | null = null;
@@ -1154,7 +1154,7 @@ describe("Session — foreign-engine telemetry tap (TASK.159)", () => {
   });
 });
 
-describe("Session — provider quota reporting (Taskana 4090)", () => {
+describe("Session — provider quota reporting", () => {
   it("forwards the PRIMARY window + first header source of a provider_quota event; no primary -> no report", async () => {
     const reports: Array<{ quota: unknown; source: string }> = [];
     const h = createHarness({
@@ -1196,7 +1196,7 @@ describe("Session — provider quota reporting (Taskana 4090)", () => {
     }
   });
 
-  // Taskana 4090 cross-review A1: the persisted source is the PRIMARY window's
+  // cross-review A1: the persisted source is the PRIMARY window's
   // header, not sources[0] (the first family in FAMILIES order).
   it("reports the primary window's own header when another family is listed first", async () => {
     const reports: Array<{ quota: unknown; source: string }> = [];
@@ -1231,7 +1231,7 @@ describe("Session — provider quota reporting (Taskana 4090)", () => {
   });
 });
 
-describe("Session — provider health reporting (TASK.45 W11)", () => {
+describe("Session — provider health reporting (W11)", () => {
   it("reports a failure with the core loop's OWN classified code (401 -> auth) on a stream error", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     const events: Array<{ kind: "success" } | { kind: "failure"; code: string }> = [];
@@ -1371,7 +1371,7 @@ describe("Session — multimodal attachments", () => {
 const isImageFallbackChanged = (m: HostToUiMessage): m is Of<"image_fallback_changed"> =>
   m.type === "image_fallback_changed";
 
-describe("Session — core steer_message injection (Taskana 4110 / TASK.123)", () => {
+describe("Session — core steer_message injection", () => {
   it("steer_message while busy reaches the NEXT step of the SAME turn", async () => {
     const h = createHarness({ steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep()] });
     try {
@@ -1624,7 +1624,7 @@ describe("Session — core steer_message injection (Taskana 4110 / TASK.123)", (
   });
 });
 
-describe("Session — vision fallback (TASK.198 срез C)", () => {
+describe("Session — vision fallback (срез C)", () => {
   const image: ImageAttachment = { mediaType: "image/png", data: "QUJD", sourcePath: "shot.png" };
 
   it("accepts an image turn on a blind model when the recognizer fallback is available", async () => {
@@ -1646,7 +1646,7 @@ describe("Session — vision fallback (TASK.198 срез C)", () => {
     }
   });
 
-  it("still rejects an image turn on a blind model with NO fallback configured — unchanged pre-TASK.198 behavior", async () => {
+  it("still rejects an image turn on a blind model with NO fallback configured — unchanged behavior", async () => {
     const h = createHarness({
       steps: [textStep("must not run")],
       imageInputEnabled: false,
@@ -2023,14 +2023,14 @@ describe("Session — engine shutdown seam", () => {
 });
 
 /**
- * Design TASK.40 §2(f): shell (AnyCode chrome) vs engine (agent runtime)
+ * Design §2(f): shell (AnyCode chrome) vs engine (agent runtime)
  * capability split. These construct a minimal Session directly (not via
  * createHarness's full AgentLoop wiring — unnecessary here, since no turn
  * ever runs) over a hand-rolled in-memory WirePort, so the wire-shape and
  * git_command routing assertions below stay independent of the harness's
  * own option surface.
  */
-describe("Session — shell capability projection & git-user-mutation gate (design TASK.40 §2(f))", () => {
+describe("Session — shell capability projection & git-user-mutation gate (design §2(f))", () => {
   /** Records posted messages and lets a test push a UiToHostMessage in directly, bypassing any real transport. */
   class FakeWirePort implements WirePort {
     readonly received: unknown[] = [];
@@ -2131,9 +2131,9 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
     worktree?: { id: string; path: string; branch: string; baseRef: string; ownedByAnyCode: boolean };
     worktreeControl?: SessionOptions["worktreeControl"];
     onWorkspaceTransition?: SessionOptions["onWorkspaceTransition"];
-    /** TASK.144: an explicit store so a test can assert what a remembered allow appended to it. */
+    /** an explicit store so a test can assert what a remembered allow appended to it. */
     rules?: SessionPermissionRules;
-    /** TASK.145 срез 3: see SessionOptions.backgroundChildren's own doc. */
+    /** срез 3: see SessionOptions.backgroundChildren's own doc. */
     backgroundChildren?: SessionOptions["backgroundChildren"];
   }): { port: FakeWirePort; session: Session; broker: IpcPermissionBroker } {
     const outbound = new Outbound();
@@ -2163,7 +2163,7 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
   }
 
   /**
-   * TASK.144. `maybeRemember` used to be gated on `supportsCorePermissions`,
+   * `maybeRemember` used to be gated on `supportsCorePermissions`,
    * which is false for both foreign engines — so "Always allow" in a Codex or
    * Claude session wrote nothing anywhere. It is now gated only by reaching the
    * `permission_response` case at all (i.e. by `supportsInteractiveApprovals`),
@@ -2224,16 +2224,16 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
   });
 
   /**
-   * TASK.145 срезы 2+3 (§4bis п.2/§4ter): a `user_message` normally proves a
-   * human is at the keyboard and disarms the TASK.138 unattended latch
+   * срезы 2+3 (§4bis п.2/§4ter): a `user_message` normally proves a
+   * human is at the keyboard and disarms the unattended latch
    * (route()'s `case "user_message"`). `origin:"system"` — set on a
    * background child's report auto-drained through the renderer's own prompt
-   * queue (TASK.145 срез 1) — must NOT count: it is a system-originated
+   * queue (срез 1) — must NOT count: it is a system-originated
    * wake-up, not evidence anyone is watching. The same field срез 2 uses to
    * pick the transcript's system-card rendering is the one read here; the two
    * slices' independent additions were merged onto it.
    */
-  describe("user_message.origin and the TASK.138 unattended latch", () => {
+  describe("user_message.origin and the unattended latch", () => {
     /**
      * A Session wired to a CALLER-supplied broker (buildTestSession always
      * constructs its own, so this test needs its own minimal harness to arm
@@ -2256,7 +2256,7 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
       return { port };
     }
 
-    /** Arms the broker's unattended latch the same way TASK.138's own suite does: one unanswered ask times out. */
+    /** Arms the broker's unattended latch the same way's own suite does: one unanswered ask times out. */
     async function armUnattendedLatch(broker: IpcPermissionBroker): Promise<void> {
       const pending = broker.requestPermission({
         toolName: "Bash",
@@ -2306,14 +2306,14 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
   });
 
   /**
-   * TASK.145 срез 3 §2/§3: the `backgroundChildren` seam wiring — a pure host
+   * срез 3 §2/§3: the `backgroundChildren` seam wiring — a pure host
    * unit-test surface, deliberately NOT exercised through a real
    * ChildSessionPort (that registry logic is child-session-port.test.ts's
    * job); here a fake seam proves session.ts's OWN plumbing: ui_ready push,
    * on-demand pull, cancel request/ack, live-push-on-change, and the explicit
    * shutdown sweep (§3).
    */
-  describe("backgroundChildren seam (TASK.145 срез 3 §2/§3)", () => {
+  describe("backgroundChildren seam (срез 3 §2/§3)", () => {
     function fakeBackgroundChildren(initial: WireBackgroundChild[] = []) {
       let children = initial;
       let changeListener: (() => void) | undefined;
@@ -2448,7 +2448,7 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
       expect(backgroundChildrenMessages(port)).toHaveLength(1);
     });
 
-    it("TASK.145 срез 3 §3: session shutdown explicitly calls seam.cancelAll (not a side effect of aborting the turn)", async () => {
+    it("срез 3 §3: session shutdown explicitly calls seam.cancelAll (not a side effect of aborting the turn)", async () => {
       const { seam } = fakeBackgroundChildren([CHILD_A]);
       const { session } = buildTestSession({ backgroundChildren: seam });
 
@@ -2528,7 +2528,7 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
     expect(ordinaryRuns).toBe(0);
   });
 
-  it("(Q1-a, TASK.102 CUT-S2 §10.12.1) ui_ready arriving after shutdown() has already resolved never starts the pending continuation on the disposed engine", async () => {
+  it("(Q1-a, CUT-S2 §10.12.1) ui_ready arriving after shutdown() has already resolved never starts the pending continuation on the disposed engine", async () => {
     let continuationRuns = 0;
     const engine = buildFakeEngine({
       async *continueTurn(): AsyncIterable<AgentEvent> {
@@ -2705,7 +2705,7 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
     expect(git.handled[0]?.requestId).toBe("r2");
   });
 
-  it("defaults gitUserMutations to true when shell is absent — byte-identical to the pre-TASK.40 unconditional-for-core routing", () => {
+  it("defaults gitUserMutations to true when shell is absent — byte-identical to the unconditional-for-core routing", () => {
     const git = new FakeGitBridge();
     const { port } = buildTestSession({ git }); // no shell option at all
     port.send({ type: "ui_ready" });
@@ -2713,7 +2713,7 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
     expect(git.handled).toHaveLength(1);
   });
 
-  it("(mutational discriminator, TASK.102 CUT-S2 §10.14.3 BLOCKER-2) once relocating is true (the post-handoff workspace-transition window), rewind is refused and a git MUTATION never reaches the bridge, while a read-only git op still does", () => {
+  it("(mutational discriminator, CUT-S2 §10.14.3 BLOCKER-2) once relocating is true (the post-handoff workspace-transition window), rewind is refused and a git MUTATION never reaches the bridge, while a read-only git op still does", () => {
     const git = new FakeGitBridge();
     const { port, session } = buildTestSession({
       shell: { gitReadOnly: true, gitUserMutations: true, terminal: true },
@@ -2742,7 +2742,7 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
   });
 });
 
-describe("Session — session_checkpoint (TASK.117 control/accounting checkpoint)", () => {
+describe("Session — session_checkpoint (control/accounting checkpoint)", () => {
   type Of<T extends HostToUiMessage["type"]> = Extract<HostToUiMessage, { type: T }>;
   const isCheckpoint = (m: HostToUiMessage): m is Of<"session_checkpoint"> => m.type === "session_checkpoint";
 
@@ -2907,7 +2907,7 @@ describe("Session — snapshot observer is fail-closed", () => {
 
 describe("Session — disconnect", () => {
   it("closing the UI port force-denies parked asks (disconnect)", async () => {
-    // TASK.117 (2026-10-04 product defect): the deny is no longer immediate —
+    // (2026-10-04 product defect): the deny is no longer immediate —
     // a renderer reload's close must not destroy the parked ask before main
     // re-posts the successor port (did-finish-load), so the close arms a
     // bounded grace window instead. This test pins the DEAD-session tail of
@@ -2982,12 +2982,12 @@ describe("Session — replay", () => {
     }
   });
 
-  // TASK.117: a reconnecting renderer must get a session_history snapshot
+  // a reconnecting renderer must get a session_history snapshot
   // REBUILT from the engine's current durable history, not the boot-frozen
   // one — otherwise, once the replay ring has overflowed (older messages
   // shifted off), the delta "boot -> now" is unreachable and the renderer
   // shows a stale host-start transcript forever.
-  it("TASK.117: after the replay ring overflows, a second ui_ready's session_history carries the LATEST engine history, emitted exactly once per ui_ready", async () => {
+  it("after the replay ring overflows, a second ui_ready's session_history carries the LATEST engine history, emitted exactly once per ui_ready", async () => {
     const bootHistory: HistoryItem[] = [
       { id: "boot-1", createdAt: 1, message: { role: "user", content: "boot turn" }, tokenEstimate: 3, kind: "normal" },
     ];
@@ -3175,7 +3175,7 @@ describe("Session — mode changes", () => {
     }
   });
 
-  // MS1-MS3 (TASK.37): mid-turn set_mode is now accepted; the old busy-reject
+  // MS1-MS3: mid-turn set_mode is now accepted; the old busy-reject
   // test above (D-S3-11) is gone. MS4 is not new code — the between-turns
   // test above and the non-core rejection test (below, in the "engine
   // shutdown seam" describe) stay green byte-identical and are listed in
@@ -3361,7 +3361,7 @@ describe("Session — always-allow (slice 2.2.3, design §5)", () => {
     }
   });
 
-  it("Taskana 4294: a pre-seeded Write rule does NOT cover a write outside the workspace — the ask reaches the UI", async () => {
+  it("a pre-seeded Write rule does NOT cover a write outside the workspace — the ask reaches the UI", async () => {
     const rules = new SessionPermissionRules();
     rules.add({ toolName: "Write" });
     const toolFs = new RealpathMemFs(["/", "/workspace", "/elsewhere"]);
@@ -3958,7 +3958,7 @@ describe("Session — model switch (slice P7.15 · F14)", () => {
     }
   });
 
-  it("queues a set_model while a turn is running and applies it at the turn boundary — never to the running turn (Taskana 4895)", async () => {
+  it("queues a set_model while a turn is running and applies it at the turn boundary — never to the running turn", async () => {
     const h = createHarness({
       steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep()],
       reasoningSupported: true,
@@ -4001,7 +4001,7 @@ describe("Session — model switch (slice P7.15 · F14)", () => {
     }
   });
 
-  it("queues a set_reasoning_effort while a turn is running and applies it at the turn boundary (Taskana 4895)", async () => {
+  it("queues a set_reasoning_effort while a turn is running and applies it at the turn boundary", async () => {
     const h = createHarness({
       steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep()],
       reasoningSupported: true,
@@ -4041,7 +4041,7 @@ describe("Session — model switch (slice P7.15 · F14)", () => {
     }
   });
 
-  it("coalesces a queued model + effort pick into ONE model_changed at the boundary (Taskana 4895)", async () => {
+  it("coalesces a queued model + effort pick into ONE model_changed at the boundary", async () => {
     const h = createHarness({
       steps: [toolStep("c1", "Write", WRITE_INPUT), finishStep()],
       reasoningSupported: true,
@@ -4158,15 +4158,15 @@ describe("Session — model switch (slice P7.15 · F14)", () => {
   });
 });
 
-// ── TASK.56 W2: model image-input verdict on the wire (hello + model_changed) ──
+// ── W2: model image-input verdict on the wire (hello + model_changed) ──
 //
-// Layer discrimination (design slice-task56-vision-cut.md §4.5): every assert
+// Layer discrimination (§4.5): every assert
 // below reads RAW wire messages off the harness port, so it goes RED against a
 // rollback of the HOST layer (the `imageInput` spread removed from Session's
 // host_ready / model_changed emits). No renderer code is involved, and the
 // protocol type alone emits nothing — a renderer-side rollback cannot keep
 // these green.
-describe("Session — model image-input verdict on the wire (TASK.56 W2)", () => {
+describe("Session — model image-input verdict on the wire (W2)", () => {
   it("host_ready carries the live model verdict from the imageInputEnabled seam (both polarities)", async () => {
     for (const verdict of [true, false]) {
       const h = createHarness({ steps: [], imageInputEnabled: verdict });
@@ -4232,7 +4232,7 @@ describe("Session — model image-input verdict on the wire (TASK.56 W2)", () =>
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// TASK.102 CUT-S2 §2.6.3 (slice S2b B4): child-mode Session
+// CUT-S2 §2.6.3 (slice S2b B4): child-mode Session
 // ═════════════════════════════════════════════════════════════════════════════
 
 const isSessionHistory = (m: HostToUiMessage): m is Of<"session_history"> => m.type === "session_history";
@@ -4276,14 +4276,14 @@ function createChildHarness(opts: {
   mode?: PermissionMode;
   bootHistory?: HistoryItem[];
   flushHistoryImpl?: () => Promise<void>;
-  /** TASK.219: optional dedicated-port claim getter installed on the child options. */
+  /** optional dedicated-port claim getter installed on the child options. */
   responseModel?: () => string | undefined;
   now?: () => number;
   /** F7 regression harness: lets a test gate `flushTelemetry()` to deterministically land inside the turn-teardown window. */
   envStatus?: SessionOptions["envStatus"];
   /** §10.11.1 N7 harness: a LIVE toggle, so a test can flip it BETWEEN a steer message's enqueue and its later drain. */
   imageInputEnabled?: () => boolean;
-  /** TASK.196: optional wrap-up rescue callback forwarded into child options. */
+  /** optional wrap-up rescue callback forwarded into child options. */
   wrapUpRescue?: () => Promise<string>;
 }): ChildHarness {
   const channel = new MessageChannel();
@@ -4482,7 +4482,7 @@ describe("Session — child mode: host-side steer queue (CUT-S2 §1.1/§2.6.3)",
     }
   });
 
-  // Taskana 4730 xfix D2/D3: the human-turn ring (recentHumanUserTurns, the
+  // xfix D2/D3: the human-turn ring (recentHumanUserTurns, the
   // engine-session classifier's userContext source) must carry GENUINELY human
   // text only. A child session's inputs are model-authored by construction
   // (the parent agent's spawn prompt, a drained agent inbox delivery), so none
@@ -4589,7 +4589,7 @@ describe("Session — child mode: host-side steer queue (CUT-S2 §1.1/§2.6.3)",
   });
 });
 
-describe("Session — child mode: ceiling summary across a steer chain (Taskana 4055 F4)", () => {
+describe("Session — child mode: ceiling summary across a steer chain (F4)", () => {
   it("a steer chain drained after a refused ceiling does not carry the earlier refusal onto a completed terminal", async () => {
     const h = createChildHarness({
       steps: [
@@ -4726,10 +4726,10 @@ describe("Session — child mode: terminal ordering (CUT-S2 §0.5/§5.10/§5.16)
     }
   });
 
-  // TASK.219: the terminal report carries the child host's ACTIVE session
+  // the terminal report carries the child host's ACTIVE session
   // model (`this.model`), plus the dedicated-port claim when a getter is
   // installed; without the getter the responseModel key stays absent.
-  it("healthy terminal carries the harness session model plus the supplied getter claim (TASK.219)", async () => {
+  it("healthy terminal carries the harness session model plus the supplied getter claim", async () => {
     const h = createChildHarness({
       steps: [textStep("all done")],
       responseModel: () => "glm-5.3",
@@ -4747,7 +4747,7 @@ describe("Session — child mode: terminal ordering (CUT-S2 §0.5/§5.10/§5.16)
     }
   });
 
-  it("healthy terminal without a getter: model present, responseModel key ABSENT (TASK.219)", async () => {
+  it("healthy terminal without a getter: model present, responseModel key ABSENT", async () => {
     const h = createChildHarness({ steps: [textStep("all done")] });
     try {
       h.send({ type: "ui_ready" });
@@ -4762,7 +4762,7 @@ describe("Session — child mode: terminal ordering (CUT-S2 §0.5/§5.10/§5.16)
     }
   });
 
-  it("flush-error terminal also carries model plus the getter claim (TASK.219)", async () => {
+  it("flush-error terminal also carries model plus the getter claim", async () => {
     const h = createChildHarness({
       steps: [textStep("all done")],
       flushHistoryImpl: () => Promise.reject(new Error("disk full")),
@@ -4783,7 +4783,7 @@ describe("Session — child mode: terminal ordering (CUT-S2 §0.5/§5.10/§5.16)
   });
 });
 
-describe("Session — child mode: declaredDoneAtCeiling reaches the terminal report (TASK 4149)", () => {
+describe("Session — child mode: declaredDoneAtCeiling reaches the terminal report", () => {
   async function terminalFor(loopEnd: AgentEvent): Promise<ChildTerminalReport | undefined> {
     const h = createChildHarness({ steps: [] });
     try {
@@ -4813,7 +4813,7 @@ describe("Session — child mode: declaredDoneAtCeiling reaches the terminal rep
   });
 });
 
-describe("Session — child mode: turn-limit wrap-up rescue (TASK.196)", () => {
+describe("Session — child mode: turn-limit wrap-up rescue", () => {
   /** A max_turns loop_end fixture modeled on terminalFor above. */
   async function terminalFor(
     loopEnd: AgentEvent,
@@ -4936,7 +4936,7 @@ describe("Session — child mode: turn-limit wrap-up rescue (TASK.196)", () => {
   });
 
   it("a steer message queued DURING a pending rescue drains into a live turn; the stale rescued report is never published", async () => {
-    // TASK.196 verification defect 1: the rescue `await` opens the same
+    // verification defect 1: the rescue `await` opens the same
     // lifecycle gap `flushHistory` does (§10.10.1 O7) — a steer message
     // landing inside it must drain into a REAL second turn, not be lost to
     // the terminal latch.
@@ -5065,12 +5065,12 @@ describe("Session — child mode: turn-limit wrap-up rescue (TASK.196)", () => {
   });
 });
 
-describe("Session — child mode: an unfamiliar turn_end.finishReason breaks nothing (TASK.210)", () => {
+describe("Session — child mode: an unfamiliar turn_end.finishReason breaks nothing", () => {
   it('the child\'s own degeneration-guard cutoff ("degenerate") reaches a normal "completed" terminal, not a crash', async () => {
     // observeChildEvent's `turn_end` case (session.ts) never reads
     // event.finishReason at all — it only fixates finalText and counts turn
     // ends — so this proves end-to-end, through the REAL AgentLoop (which now
-    // can legitimately emit finishReason:"degenerate", TASK.210 S2), that a
+    // can legitimately emit finishReason:"degenerate", S2), that a
     // finishReason this code predates does not throw or corrupt the terminal
     // report. Propagating the reason itself through the child-session wire
     // protocol is a separate, out-of-scope slice (plan §10) — this test is
@@ -5239,7 +5239,7 @@ describe("Session — child mode: finalizeChildTerminal once-latch (F7, revised 
   });
 });
 
-describe("Session — child mode: teardown contract (TASK.102 CUT-S2 §10.10.1)", () => {
+describe("Session — child mode: teardown contract (CUT-S2 §10.10.1)", () => {
   it("O7: a steer message queued DURING a delayed flushHistory still gets its own turn — the terminal accounts for it, not just the turn that was already running", async () => {
     let flushCallCount = 0;
     let releaseFirstFlush: () => void = () => {};
@@ -5451,7 +5451,7 @@ function sessionBusy(session: Session): boolean {
   return (session as unknown as { busy: boolean }).busy;
 }
 
-describe("Session — shutdown() vs. admission (TASK.102 CUT-S2 §10.11.1 N1)", () => {
+describe("Session — shutdown() vs. admission (CUT-S2 §10.11.1 N1)", () => {
   it("(i) child: a steer message queued while shutdown() is pending a delayed flushHistory is rejected not_ready, the terminal publishes exactly once, and shutdown() resolves only after it — engine started exactly one turn", async () => {
     let releaseFlush: () => void = () => {};
     const flushHistoryImpl = (): Promise<void> =>
@@ -5565,7 +5565,7 @@ describe("Session — shutdown() vs. admission (TASK.102 CUT-S2 §10.11.1 N1)", 
   });
 });
 
-describe("Session — shutdown() admission funnel: exit_worktree / rewind_request / default-deny (TASK.102 CUT-S2 §10.12.1)", () => {
+describe("Session — shutdown() admission funnel: exit_worktree / rewind_request / default-deny (CUT-S2 §10.12.1)", () => {
   /**
    * Minimal recording WirePort (mirrors the shell-capability describe's own
    * FakeWirePort above, but typed HostToUiMessage for readable `toContainEqual`
@@ -5683,7 +5683,7 @@ describe("Session — shutdown() admission funnel: exit_worktree / rewind_reques
     }
   });
 
-  it("(Q1-f, mutational discriminator, TASK.102 CUT-S2 §10.14.3 BLOCKER-1) closeAdmissions() closes the funnel BEFORE shutdown() itself runs — a rewind_request and a user_message sent in that window are both refused", async () => {
+  it("(Q1-f, mutational discriminator, CUT-S2 §10.14.3 BLOCKER-1) closeAdmissions() closes the funnel BEFORE shutdown() itself runs — a rewind_request and a user_message sent in that window are both refused", async () => {
     let rewindCalled = false;
     const seam: SessionOptions["checkpoints"] = {
       list: async () => [],
@@ -5791,7 +5791,7 @@ describe("Session — shutdown() admission funnel: exit_worktree / rewind_reques
   });
 });
 
-describe("Session — shutdown() reentrant wait vs. a pre-fix single snapshot: white-box discriminator (TASK.102 CUT-S2 §10.12.2)", () => {
+describe("Session — shutdown() reentrant wait vs. a pre-fix single snapshot: white-box discriminator (CUT-S2 §10.12.2)", () => {
   it("(iii-b) shutdown() re-observes a currentTurn reassignment made WHILE it is already waiting on the ORIGINAL turn's promise — a one-shot snapshot cannot see it", async () => {
     let flushCalled = false;
     let releaseFlush: () => void = () => {};
@@ -5860,7 +5860,7 @@ describe("Session — shutdown() reentrant wait vs. a pre-fix single snapshot: w
   });
 });
 
-describe("Session — child mode: terminal/drained discriminator at the settling call-site (TASK.102 CUT-S2 §10.11.1 N3)", () => {
+describe("Session — child mode: terminal/drained discriminator at the settling call-site (CUT-S2 §10.11.1 N3)", () => {
   it("a drained settle (queue non-empty post-flush) leaves busy===true — and a live user_message sent right after is queued, never a second concurrent runTurn", async () => {
     let releaseFlush: () => void = () => {};
     const flushHistoryImpl = (): Promise<void> =>
@@ -5915,7 +5915,7 @@ describe("Session — child mode: terminal/drained discriminator at the settling
   });
 });
 
-describe("Session — child mode: flush-failure drain branch coverage (TASK.102 CUT-S2 §10.11.1 N6)", () => {
+describe("Session — child mode: flush-failure drain branch coverage (CUT-S2 §10.11.1 N6)", () => {
   it("(a) flushHistory rejects while the steer queue is non-empty — every queued message gets its own turn_rejected not_ready, the error terminal still publishes exactly once, and the once-latch is set", async () => {
     let rejectFlush: (reason: unknown) => void = () => {};
     const flushHistoryImpl = (): Promise<void> =>
@@ -6003,7 +6003,7 @@ describe("Session — child mode: flush-failure drain branch coverage (TASK.102 
   });
 });
 
-describe("Session — child mode: finalizeChildTerminal drain branch never strands a terminal on acceptUserMessage's own refusal (TASK.102 CUT-S2 §10.11.1 N7)", () => {
+describe("Session — child mode: finalizeChildTerminal drain branch never strands a terminal on acceptUserMessage's own refusal (CUT-S2 §10.11.1 N7)", () => {
   it("a queued steer message that acceptUserMessage itself refuses (image support revoked between enqueue and drain) is skipped honestly, not lost — the terminal still commits", async () => {
     let imagesAllowed = true;
     let releaseFlush: () => void = () => {};
@@ -6061,7 +6061,7 @@ describe("Session — child mode: finalizeChildTerminal drain branch never stran
   });
 });
 
-describe("Session — child mode: shared startNextQueuedSteerTurn() drain helper (TASK.102 CUT-S2 §10.12.3)", () => {
+describe("Session — child mode: shared startNextQueuedSteerTurn() drain helper (CUT-S2 §10.12.3)", () => {
   it("(Q3-i) a queued image steer refused by acceptUserMessage at onChildTurnSettled's OWN top-level check no longer strands the child — terminal still commits exactly once", async () => {
     let imagesAllowed = true;
     const h = createChildHarness({
@@ -6158,7 +6158,7 @@ describe("Session — child mode: shared startNextQueuedSteerTurn() drain helper
   });
 });
 
-describe("Session — child mode: Q4 admission gates get mutational discriminators (TASK.102 CUT-S2 §10.12.4)", () => {
+describe("Session — child mode: Q4 admission gates get mutational discriminators (CUT-S2 §10.12.4)", () => {
   it("(Q4-a, mutational discriminator) startProgrammaticTurn refuses once shutdown() has begun — kills a mutant removing that gate", async () => {
     const h = createChildHarness({ steps: [textStep("done")] });
     try {
@@ -6457,7 +6457,7 @@ describe("Session — child mode: activity/progress bridge (CUT-S2 §2.6.3/§10.
   });
 
   /**
-   * Taskana 4820: streaming and dispatching are signs of life too. The
+   * streaming and dispatching are signs of life too. The
    * 25.10 orchestration incident: two live triage children each tripped the
    * parent-side 10-minute stall clock while mid-turn — the child host pushed
    * progress ONLY on tool_result/turn_end boundaries, so a long streaming
@@ -6469,7 +6469,7 @@ describe("Session — child mode: activity/progress bridge (CUT-S2 §2.6.3/§10.
    * child keeps resetting the silence window; a genuinely quiet child still
    * trips at SUBAGENT_STALL_TIMEOUT_MS.
    */
-  describe("progress: streaming/dispatch boundaries (Taskana 4820)", () => {
+  describe("progress: streaming/dispatch boundaries", () => {
     it("text_delta events cross the throttled progress boundary — a long streaming turn is a sign of life", () => {
       let currentTime = 0;
       const h = createChildHarness({ steps: [finishStep()], now: () => currentTime });
@@ -6569,7 +6569,7 @@ describe("Session — child mode: activity/progress bridge (CUT-S2 §2.6.3/§10.
   });
 
   /**
-   * Taskana 4820 review F2: the progress report's `turns` must count MODEL
+   * review F2: the progress report's `turns` must count MODEL
    * ROUNDS, not host runTurns. A claude engine child emits exactly ONE
    * turn_end per runTurn while the CLI runs arbitrarily many assistant
    * messages inside it — so the child reported "1 turn" to its parent for a
@@ -6579,7 +6579,7 @@ describe("Session — child mode: activity/progress bridge (CUT-S2 §2.6.3/§10.
    * (message_start); the child-mode observer counts THOSE for a claude
    * child, and the per-runTurn turn_end no longer double-increments.
    */
-  describe("progress turns: claude model rounds (Taskana 4820 F2)", () => {
+  describe("progress turns: claude model rounds (F2)", () => {
     it("engine_model_round increments the progress turns — a claude child's rounds are visible mid-runTurn", () => {
       let currentTime = 0;
       const h = createChildHarness({ steps: [finishStep()], now: () => currentTime });
@@ -6635,7 +6635,7 @@ describe("Session — child mode: activity/progress bridge (CUT-S2 §2.6.3/§10.
   });
 
   /**
-   * Taskana 4820 review F3: a single tool call longer than the parent-side
+   * review F3: a single tool call longer than the parent-side
    * stall timeout (SUBAGENT_STALL_TIMEOUT_MS, 10 min) still false-stalled —
    * tool_execution_start crossed ONE boundary at dispatch, then silence
    * until the result landed. While a child tool call is executing, the
@@ -6644,7 +6644,7 @@ describe("Session — child mode: activity/progress bridge (CUT-S2 §2.6.3/§10.
    * parent's SubagentStallClock keeps being re-armed and a long-but-working
    * tool call is never silence.
    */
-  describe("progress: in-tool liveness timer (Taskana 4820 F3)", () => {
+  describe("progress: in-tool liveness timer (F3)", () => {
     it("a tool call executing longer than 60s keeps emitting liveness progress on a timer, and the timer stops at tool_result", () => {
       let currentTime = 0;
       const h = createChildHarness({ steps: [finishStep()], now: () => currentTime });
@@ -6863,7 +6863,7 @@ describe("Session — child mode: startProgrammaticTurn (CUT-S2 §2.6.3)", () =>
   });
 });
 
-describe("Session — child mode: sessionHistory is rebuilt fresh on every ui_ready (TASK.117, supersedes the old CUT-S2 §10.4 frozen-snapshot rule)", () => {
+describe("Session — child mode: sessionHistory is rebuilt fresh on every ui_ready (supersedes the old CUT-S2 §10.4 frozen-snapshot rule)", () => {
   it("a live startProgrammaticTurn's history items DO appear in a later ui_ready's session_history handshake", async () => {
     const bootHistory: HistoryItem[] = [
       { id: "h1", createdAt: 1, message: { role: "user", content: "earlier turn" }, tokenEstimate: 3, kind: "normal" },
@@ -6887,7 +6887,7 @@ describe("Session — child mode: sessionHistory is rebuilt fresh on every ui_re
       await h.waitUntil(() => h.received.filter(isSessionHistory).length === 2);
       const secondHandshake = h.received.filter(isSessionHistory).at(-1) as Of<"session_history">;
 
-      // TASK.117: session_history is rebuilt from the engine's CURRENT durable
+      // session_history is rebuilt from the engine's CURRENT durable
       // history on every ui_ready — the boot snapshot is no longer frozen at
       // construction. The turn that just ran appended real history items
       // (visible in `received` via agent_event messages), so the second
@@ -6906,7 +6906,7 @@ describe("Session — child mode: sessionHistory is rebuilt fresh on every ui_re
   });
 });
 
-describe("tapChildPermissions (TASK.102 CUT-S2 §0.8/§2.6.3)", () => {
+describe("tapChildPermissions (CUT-S2 §0.8/§2.6.3)", () => {
   it("emits attention(true) before forwarding a permission_request and attention(false) before a permission_settled — every message passes through completely unchanged", () => {
     const emitted: HostToUiMessage[] = [];
     const attention: boolean[] = [];
@@ -6958,11 +6958,11 @@ describe("tapChildPermissions (TASK.102 CUT-S2 §0.8/§2.6.3)", () => {
   });
 });
 
-// TASK.145 срез 2: the host-side pending-detached-child-report queue seam
+// срез 2: the host-side pending-detached-child-report queue seam
 // (SessionOptions.pendingChildReports) — resendAll on ui_ready, ack on
 // child_report_ack, and the origin plumbing from a wire user_message through
 // to the appended/persisted HistoryItem.
-describe("Session — TASK.145 срез 2: pendingChildReports seam + origin plumbing", () => {
+describe("Session — срез 2: pendingChildReports seam + origin plumbing", () => {
   const isSessionHistory = (m: HostToUiMessage): m is Of<"session_history"> => m.type === "session_history";
   const isLoopEnd = agentEventOf("loop_end");
 
@@ -7116,7 +7116,7 @@ describe("Session — TASK.145 срез 2: pendingChildReports seam + origin plu
   });
 });
 
-// ── TASK.162 slice B1 — the desktop half of the adjudicated tier seam (§0b) ──
+// ── slice B1 — the desktop half of the adjudicated tier seam (§0b) ──
 //
 // The child's capability settings must be re-resolved against the live
 // USER-SELECTED reasoning tier, never against the parent's model-EFFECTIVE
@@ -7237,7 +7237,7 @@ function createTierSeamWiring(bootModel: string): TierSeamWiring {
   };
 }
 
-describe("Session -> CoreEngine -> child-settings seam (TASK.162 §0b: live SELECTED tier)", () => {
+describe("Session -> CoreEngine -> child-settings seam (§0b: live SELECTED tier)", () => {
   it("carries the user-selected tier to an override child across a switch to a NON-reasoning parent, twice, on one runner", async () => {
     // Boot on glm-5.2 (z-ai catalog: reasoning, levels off/high/max).
     const w = createTierSeamWiring("glm-5.2");
@@ -7343,7 +7343,7 @@ describe("Session -> CoreEngine -> child-settings seam (TASK.162 §0b: live SELE
   });
 });
 
-describe("Session — manual compaction wire (TASK.146)", () => {
+describe("Session — manual compaction wire", () => {
   /**
    * 12 items: `compactionBoundary` sits at `len - COMPACT_KEEP_RECENT_MESSAGES`
    * (10, packages/core/src/types/config.ts) shifted back to the nearest user
@@ -7852,7 +7852,7 @@ describe("Session — manual compaction wire (TASK.146)", () => {
     }
   });
 
-  it("TASK.92: compact_request reaches a Claude-like engine's compactNow over the same rail (gate is engine-agnostic, method presence decides)", async () => {
+  it("compact_request reaches a Claude-like engine's compactNow over the same rail (gate is engine-agnostic, method presence decides)", async () => {
     // A Claude-shaped stub: foreign engine, no core permissions, but WITH a
     // compactNow — exactly what ClaudeEngine now exposes. The rail in route()/
     // onCompact is engine-agnostic, so a stub is sufficient: no real
@@ -7978,7 +7978,7 @@ describe("Session — manual compaction wire (TASK.146)", () => {
     // accepted-between-turns case uses — so route()'s `child !== undefined`
     // clause is the ONLY thing standing between this request and a swapped
     // history. A child's context belongs to the parent's Agent-tool chain
-    // (TASK.102/145); compacting it from the child's own Compact row would
+    // compacting it from the child's own Compact row would
     // rewrite a transcript the parent is still reading.
     //
     // Two steps are scripted, not one: if the gate were gone, step 0 would be
@@ -8118,7 +8118,7 @@ it("preserves a safe provider failure in the child's terminal report", async () 
   } finally { h.close(); }
 });
 
-describe("TASK.242 child inbox terminal race", () => {
+describe("child inbox terminal race", () => {
   it("drains an agent message arriving during durable terminal flush before publishing child result", async () => {
     let release!: () => void; let flushes = 0;
     const h = createChildHarness({ steps: [textStep("first"), textStep("clarified result")], flushHistoryImpl: async () => {
@@ -8140,7 +8140,7 @@ describe("TASK.242 child inbox terminal race", () => {
 
 
 // ═════════════════════════════════════════════════════════════════════════════
-// TASK.116: a claude child steered while a permission is pending / a tool runs
+// a claude child steered while a permission is pending / a tool runs
 // ═════════════════════════════════════════════════════════════════════════════
 
 /** A ClaudeTransport the test drives frame by frame (buffered stream + parked reader). */
@@ -8355,7 +8355,7 @@ const steer = (h: { send(m: UiToHostMessage): void }, id: string): void =>
   h.send({ type: "user_message", requestId: id, text: `steer ${id}` });
 const toolCallSeen = (h: SeamChildHarness): boolean => h.received.some(agentEventOf("tool_call"));
 
-describe("Session — child mode: claude engine steer seam (TASK.116)", () => {
+describe("Session — child mode: claude engine steer seam", () => {
   it("a steer during a pending permission parks without touching the child; after the owner allows, it drains into turn 2 and ends in ONE terminal", async () => {
     const h = createClaudeChildHarness();
     try {
@@ -8585,7 +8585,7 @@ function createGatedStubEngine(outcome: AgentEvent[], gate: Promise<void>) {
   return { engine, started };
 }
 
-describe("Session — child mode: engine-death latch vs recoverable errors (TASK.116)", () => {
+describe("Session — child mode: engine-death latch vs recoverable errors", () => {
   it("a steer queued before the engine_dead error turn ends AND one queued while flushHistory is parked are both rejected not_ready; one turn ever started; ONE error terminal carrying the real reason", async () => {
     let openGate!: () => void;
     const gate = new Promise<void>((resolve) => (openGate = resolve));
@@ -8692,7 +8692,7 @@ describe("Session — child mode: engine-death latch vs recoverable errors (TASK
 });
 
 /**
- * taskana 4181: the supervisor idle-watchdog seam. Session itself only ever
+ * the supervisor idle-watchdog seam. Session itself only ever
  * FEEDS the watchdog — noteTurnStarted at `turn_started` emission,
  * noteTurnSettled(final assistant text) at the root busy->idle boundary of
  * acceptUserMessage's teardown. The timing/marker logic is the watchdog's own
@@ -8700,7 +8700,7 @@ describe("Session — child mode: engine-death latch vs recoverable errors (TASK
  * the SEAM: what Session hands over, in what order, and that an absent seam
  * leaves every turn byte-identical.
  */
-describe("Session — supervisor idle-watchdog seam (taskana 4181)", () => {
+describe("Session — supervisor idle-watchdog seam", () => {
   function idleSeam() {
     const calls: Array<{ kind: "started" } | { kind: "settled"; text: string }> = [];
     return {
@@ -8786,12 +8786,12 @@ describe("Session — supervisor idle-watchdog seam (taskana 4181)", () => {
 });
 
 /**
- * Taskana 4083 / TASK.34: the persistent per-step provider-usage audit.
- * Mirrors the TASK.117 describe's usageStep shape; the harness's new
+ * the persistent per-step provider-usage audit.
+ * Mirrors the describe's usageStep shape; the harness's new
  * `usageAudit` option threads a recording sink + summary port into Session
  * exactly the way host/index.ts wires the real SqlitePersistenceAdapter.
  */
-describe("Session — provider usage audit (Taskana 4083)", () => {
+describe("Session — provider usage audit", () => {
   type Of<T extends HostToUiMessage["type"]> = Extract<HostToUiMessage, { type: T }>;
   const isCheckpoint = (m: HostToUiMessage): m is Of<"session_checkpoint"> => m.type === "session_checkpoint";
   const isUsageAudit = (m: HostToUiMessage): m is Of<"usage_audit"> => m.type === "usage_audit";
@@ -9203,7 +9203,7 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
     } finally {
       // closed above
     }
-    // Foreign-engine turn via a minimal engine (mirrors the TASK.117 foreign test).
+    // Foreign-engine turn via a minimal engine (mirrors the foreign test).
     const engine: SessionEngine = {
       id: engineId,
       capabilities: {
@@ -9446,7 +9446,7 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Taskana 4704 part A (§3.7 + A1): set_orchestrate — the tab-level orchestrate
+// part A (§3.7 + A1): set_orchestrate — the tab-level orchestrate
 // state. Enabling switches the mode to plan and swaps the plan-mode reminder
 // for the orchestrate reminder; disabling restores the remembered mode; a
 // busy turn silently drops the toggle. childSpawnMode(): while orchestrate is
@@ -9454,7 +9454,7 @@ describe("Session — provider usage audit (Taskana 4083)", () => {
 // executor child must be able to write); non-orchestrate sessions return the
 // live mode.
 
-describe("Session — set_orchestrate (Taskana 4704 §3.7 / A1)", () => {
+describe("Session — set_orchestrate (§3.7 / A1)", () => {
   it("enabling: mode -> plan, turn input carries <orchestrate-reminder> and NOT <plan-mode-reminder>", async () => {
     const seenInputs: string[] = [];
     const h = createHarness({ steps: [], engine: orchestrateEngine({ onRunTurn: (input) => seenInputs.push(input) }) });
@@ -9565,7 +9565,7 @@ describe("Session — set_orchestrate (Taskana 4704 §3.7 / A1)", () => {
     }
   });
 
-  // R1 (Taskana 4704 cross-review): the HOST wiring contract. host/index.ts's
+  // R1 (cross-review): the HOST wiring contract. host/index.ts's
   // onOrchestrateChanged used to capture config.mode AFTER the Session's
   // onSetMode("plan") already flipped it — the cell always remembered "plan"
   // and every orchestrate child ran as "build". The harness mirrors the
@@ -9638,7 +9638,7 @@ describe("Session — set_orchestrate (Taskana 4704 §3.7 / A1)", () => {
     }
   });
 
-  // R5 (Taskana 4704 cross-review): orchestrate IS the plan posture — a
+  // R5 (cross-review): orchestrate IS the plan posture — a
   // user set_mode moving the tab OUT of plan while orchestrate is on turns
   // orchestrate OFF (host loop-config copy + orchestrate_changed false),
   // never leaving a writable orchestrator behind.
@@ -9683,7 +9683,7 @@ describe("Session — set_orchestrate (Taskana 4704 §3.7 / A1)", () => {
     }
   });
 
-  // R5 (Taskana 4704 re-review #3): an APPROVED ExitPlanMode leaves plan mode
+  // R5 (re-review #3): an APPROVED ExitPlanMode leaves plan mode
   // through notifyModeChanged (the loop's onModeChange). That is the same
   // plan exit as a user set_mode, so orchestrate must turn off too — the
   // orchestrator may never keep running writable with the flag still on.
@@ -9784,7 +9784,7 @@ function orchestrateEngine(opts: {
   };
 }
 
-describe("tapChildPermissions ask identity (Taskana 4821)", () => {
+describe("tapChildPermissions ask identity", () => {
   it("passes the tool name and the path/command subject with attention(true), none with attention(false)", () => {
     const calls: Array<{ waiting: boolean; ask?: { toolName: string; subject: string } }> = [];
     const tapped = tapChildPermissions(

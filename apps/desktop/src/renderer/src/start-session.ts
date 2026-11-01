@@ -68,7 +68,7 @@ function settingsHaveRoles(projectRoot: string): boolean {
 
 /**
  * Keeps the historical Core create payload byte-for-byte additive apart from
- * the TASK.106 cut-1 stage A `connectionId` pick below. For a non-core
+ * the cut-1 stage A `connectionId` pick below. For a non-core
  * (Codex) draft, also forwards the draft's own model/preset/profile picks
  * (W3 join: main/tabs.ts's argv forwarding and the StartScreen pickers both
  * already existed — this is the missing wire between them). All are opaque
@@ -86,7 +86,7 @@ export function createStartTabRequest(
     return {
       kind: "new",
       workspace: draft.workspace,
-      // TASK.106 cut-1 stage A: the New Session model picker's cross-connection
+      // cut-1 stage A: the New Session model picker's cross-connection
       // pick. Absent ⇒ main falls back to the active connection, unchanged.
       ...(draft.connectionId !== undefined ? { connectionId: draft.connectionId } : {}),
     };
@@ -144,7 +144,7 @@ export async function submitStartDraft(
   if (options.skipRoleGate !== true && plan.orchestrate && !rolesConfigured(workspace)) {
     return { ok: false, message: "Set up orchestration roles first." };
   }
-  // TASK.241: decide the Codex draft model BEFORE creating anything — a
+  // decide the Codex draft model BEFORE creating anything — a
   // stale/unavailable pick refuses visibly through the same {ok:false}
   // channel every other refusal uses (guardedSubmit toasts it; the
   // automation facade returns it), never a silent server-default launch.
@@ -188,9 +188,9 @@ export async function submitStartDraft(
   // is the opposite split: it has NO spawn-time channel at all, so it rides
   // `queueInitialPrompt` for every engine — but through the message that
   // engine actually speaks. A non-core draft's pick goes out as
-  // `set_engine_effort` (TASK.81; host/session.ts fires that case only
+  // `set_engine_effort`; host/session.ts fires that case only
   // through the engineSettings seam core never wires), a Core draft's as
-  // `set_reasoning_effort` (TASK.131 — the New Session picker now offers the
+  // `set_reasoning_effort` (the New Session picker now offers the
   // effort level of whatever model it is about to start, from that model's
   // own declared vocabulary). Images ride `queueInitialPrompt` for every
   // engine alike — there is no spawn-time attachment channel for any of them.

@@ -303,7 +303,7 @@ describe("submitStartDraft — ok path (§4.3)", () => {
     expect(createTab).toHaveBeenCalledWith({ kind: "new", workspace: "/ws/a", engine: "codex", engineModel: "gpt-5.6-sol" });
   });
 
-  it("TASK.106 cut-1 stage A: forwards a Core draft's cross-connection pick as connectionId", async () => {
+  it("cut-1 stage A: forwards a Core draft's cross-connection pick as connectionId", async () => {
     const { deps, tabsStore, createTab } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
     tabsStore.getState().openDraft("/ws/a");
     tabsStore.getState().setDraftPrompt("hello");
@@ -337,7 +337,7 @@ describe("submitStartDraft — ok path (§4.3)", () => {
     expect(createTab).toHaveBeenCalledWith({ kind: "new", workspace: "/ws/a" });
   });
 
-  it("a Codex draft with no explicit model/preset pick sends the catalog's first entry (TASK.241: displayed default == sent), preset omitted for the host default", async () => {
+  it("a Codex draft with no explicit model/preset pick sends the catalog's first entry (displayed default == sent), preset omitted for the host default", async () => {
     const { deps, tabsStore, createTab, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
     tabsStore.getState().openDraft("/ws/a");
     tabsStore.getState().setDraftPrompt("hello");
@@ -401,7 +401,7 @@ describe("submitStartDraft — ok path (§4.3)", () => {
     expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "make a plan", undefined, "plan", undefined, undefined, undefined, false);
   });
 
-  it("TASK.81: forwards the draft's image attachments to queueInitialPrompt for a Core draft", async () => {
+  it("forwards the draft's image attachments to queueInitialPrompt for a Core draft", async () => {
     const { deps, tabsStore, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
     const image = { name: "a.png", sizeBytes: 10, attachment: { mediaType: "image/png" as const, data: "AA==" } };
     tabsStore.getState().openDraft("/ws/a");
@@ -413,7 +413,7 @@ describe("submitStartDraft — ok path (§4.3)", () => {
     expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "look at this", undefined, "build", undefined, [image], undefined, false);
   });
 
-  it("TASK.81: forwards the draft's image attachments to queueInitialPrompt for a Codex draft", async () => {
+  it("forwards the draft's image attachments to queueInitialPrompt for a Codex draft", async () => {
     const { deps, tabsStore, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
     const image = { name: "a.png", sizeBytes: 10, attachment: { mediaType: "image/png" as const, data: "AA==" } };
     tabsStore.getState().openDraft("/ws/a");
@@ -427,7 +427,7 @@ describe("submitStartDraft — ok path (§4.3)", () => {
     expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "look at this", undefined, undefined, undefined, [image]);
   });
 
-  it("TASK.81: forwards the draft's engine-effort pick to queueInitialPrompt for a Codex draft (never as part of the CreateTabRequest payload — set_engine_effort has no spawn-time channel)", async () => {
+  it("forwards the draft's engine-effort pick to queueInitialPrompt for a Codex draft (never as part of the CreateTabRequest payload — set_engine_effort has no spawn-time channel)", async () => {
     const { deps, tabsStore, createTab, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
     tabsStore.getState().openDraft("/ws/a");
     tabsStore.getState().setDraftPrompt("hello");
@@ -441,7 +441,7 @@ describe("submitStartDraft — ok path (§4.3)", () => {
     expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello", undefined, undefined, "high", undefined);
   });
 
-  it("TASK.131: a Codex effort pick never leaks into a Core session — the engine switch drops it", async () => {
+  it("a Codex effort pick never leaks into a Core session — the engine switch drops it", async () => {
     const { deps, tabsStore, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
     tabsStore.getState().openDraft("/ws/a");
     tabsStore.getState().setDraftPrompt("hello");
@@ -454,7 +454,7 @@ describe("submitStartDraft — ok path (§4.3)", () => {
     expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hello", undefined, "build", undefined, undefined, undefined, false);
   });
 
-  it("TASK.131: a Core draft's own effort pick rides as queueInitialPrompt's reasoning-effort argument (core speaks set_reasoning_effort, not set_engine_effort)", async () => {
+  it("a Core draft's own effort pick rides as queueInitialPrompt's reasoning-effort argument (core speaks set_reasoning_effort, not set_engine_effort)", async () => {
     const { deps, tabsStore, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
     tabsStore.getState().openDraft("/ws/a");
     tabsStore.getState().setDraftPrompt("hello");
@@ -480,7 +480,7 @@ describe("submitStartDraft — ok path (§4.3)", () => {
   });
 });
 
-describe("TASK.106 cut-1 — DoD item 3: settings.provider.activeConnectionId invariant", () => {
+describe("cut-1 — DoD item 3: settings.provider.activeConnectionId invariant", () => {
   function fakeSettingsSnapshot(): SettingsSnapshot {
     return {
       settings: {
@@ -618,10 +618,10 @@ describe("submitStartDraft — refusal keeps the draft (§3-D8)", () => {
   });
 });
 
-describe("submitStartDraft — TASK.241 codex draft-model agreement", () => {
+describe("submitStartDraft — codex draft-model agreement", () => {
   const CODEX_CATALOG = [{ id: "gpt-5.6-sol" }, { id: "luna" }] as const;
 
-  it("TASK.241: null draft + ready catalog sends the SAME first entry the chip displays", async () => {
+  it("null draft + ready catalog sends the SAME first entry the chip displays", async () => {
     const { deps, tabsStore, createTab } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
     tabsStore.getState().openDraft("/ws/a");
     tabsStore.getState().setDraftPrompt("hello");
@@ -636,7 +636,7 @@ describe("submitStartDraft — TASK.241 codex draft-model agreement", () => {
     expect(resolveCodexDraftModel(null, [...CODEX_CATALOG])).toBe("gpt-5.6-sol");
   });
 
-  it("TASK.241: an explicit Sol pick present in the catalog is forwarded verbatim", async () => {
+  it("an explicit Sol pick present in the catalog is forwarded verbatim", async () => {
     const { deps, tabsStore, createTab } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
     tabsStore.getState().openDraft("/ws/a");
     tabsStore.getState().setDraftPrompt("hello");
@@ -651,7 +651,7 @@ describe("submitStartDraft — TASK.241 codex draft-model agreement", () => {
     );
   });
 
-  it("TASK.241: a STALE draft.model is visibly refused — createTab never called, pick preserved, message names the id", async () => {
+  it("a STALE draft.model is visibly refused — createTab never called, pick preserved, message names the id", async () => {
     const { deps, tabsStore, createTab } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
     tabsStore.getState().openDraft("/ws/a");
     tabsStore.getState().setDraftPrompt("hello");
@@ -666,7 +666,7 @@ describe("submitStartDraft — TASK.241 codex draft-model agreement", () => {
     expect(tabsStore.getState().draft?.model).toBe("claude-opus");
   });
 
-  it("TASK.241: an empty/unloaded catalog refuses instead of silently launching the server default — for BOTH a null model and an explicit pick", async () => {
+  it("an empty/unloaded catalog refuses instead of silently launching the server default — for BOTH a null model and an explicit pick", async () => {
     const nullModel = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
     nullModel.tabsStore.getState().openDraft("/ws/a");
     nullModel.tabsStore.getState().setDraftPrompt("hello");
@@ -685,7 +685,7 @@ describe("submitStartDraft — TASK.241 codex draft-model agreement", () => {
     expect(explicit.createTab).not.toHaveBeenCalled();
   });
 
-  it("TASK.241: the claude lane is unchanged — forwards draft.model raw when set, omits when null (no catalog consulted)", async () => {
+  it("the claude lane is unchanged — forwards draft.model raw when set, omits when null (no catalog consulted)", async () => {
     const set = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
     set.tabsStore.getState().openDraft("/ws/a");
     set.tabsStore.getState().setDraftPrompt("hello");

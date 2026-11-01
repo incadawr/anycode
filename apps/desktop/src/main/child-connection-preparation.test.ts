@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createChildConnectionPreparer } from "./child-connection-preparation.js";
 
 /**
- * Taskana 4269 §3 item 11/12: the ACTUAL preparation composition extracted from
+ * §3 item 11/12: the ACTUAL preparation composition extracted from
  * main/index.ts. These tests pin the ordering that the protocol depends on:
  * the pin reservation is synchronous and PRECEDES the awaited env build, a
  * missing id never reserves, and every failure path releases exactly once.
@@ -22,7 +22,7 @@ function rig(overrides: Partial<Parameters<typeof createChildConnectionPreparer>
   return { deps, reserve, release, prepare: createChildConnectionPreparer(deps) };
 }
 
-describe("createChildConnectionPreparer — actual main composition (Taskana 4269)", () => {
+describe("createChildConnectionPreparer — actual main composition", () => {
   it("reserves SYNCHRONOUSLY, before the awaited env build", async () => {
     let releaseEnvBuild!: () => void;
     const gate = new Promise<void>((resolve) => {

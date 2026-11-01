@@ -1,5 +1,5 @@
 /**
- * Browser control tools (Taskana 4759): BrowserNavigate, BrowserSnapshot,
+ * Browser control tools: BrowserNavigate, BrowserSnapshot,
  * BrowserClick, BrowserType, BrowserWaitFor (Phase A). Each one maps its
  * snake_case input onto one `PreviewControlRequest` and calls the optional
  * `ctx.preview.control` port; the host (main's PreviewHost + BrowserController)
@@ -219,7 +219,7 @@ export function createBrowserControlTools(options: BrowserControlToolsOptions = 
     true,
   );
 
-  /** Taskana 4759 Phase B: BrowserEval always asks, unless the session's full-access switch is on. */
+  /** Phase B: BrowserEval always asks, unless the session's full-access switch is on. */
   const evalBase: ToolMetadata = {
     ...baseMetadata(
       "BrowserEval",

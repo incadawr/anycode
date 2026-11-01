@@ -1,5 +1,5 @@
 /**
- * OpenAI Chat Completions transport (TASK.43 §0.3, `openai-chat-completions`):
+ * OpenAI Chat Completions transport (§0.3, `openai-chat-completions`):
  * a thin wrapper over `@ai-sdk/openai-compatible`'s `createOpenAICompatible`,
  * targeting generic chat-completions backends (LiteLLM-fronted gateways, vLLM,
  * Ollama, OpenRouter's chat-completions surface, ...) rather than the real
@@ -31,7 +31,7 @@ export const OPENAI_COMPATIBLE_PROVIDER_NAME = "openaiCompatible";
  *    receive an `Authorization` header at all — `createOpenAICompatible` only
  *    adds it when `apiKey` is passed, so an `undefined` config.apiKey is
  *    forwarded as absence, never as an empty-string key;
- *  - `includeUsage` arrives from `resolveIncludeUsage` (TASK.158), which IS the
+ *  - `includeUsage` arrives from `resolveIncludeUsage` which IS the
  *    default authority: production construction sites resolve the transport-
  *    conditional default there and only set the field on an affirmative
  *    verdict, so this factory stays a pure capability forwarder — it spreads
@@ -52,7 +52,7 @@ export function createOpenAICompatibleLanguageModel(config: EndpointConfig): Lan
     ...(config.apiKey !== undefined ? { apiKey: config.apiKey } : {}),
     ...(config.headers !== undefined ? { headers: config.headers } : {}),
     ...(config.includeUsage === true ? { includeUsage: true } : {}),
-    // Taskana 4090: dormant unless an observer is set — the conditional
+    // dormant unless an observer is set — the conditional
     // spread keeps the options object byte-identical when unset.
     ...(config.onQuotaHeaders !== undefined
       ? { fetch: wrapFetchWithQuota(globalThis.fetch, config.onQuotaHeaders, config.baseUrl) }
@@ -62,11 +62,11 @@ export function createOpenAICompatibleLanguageModel(config: EndpointConfig): Lan
 }
 
 /**
- * The default authority for `stream_options.include_usage` (TASK.158): an
+ * The default authority for `stream_options.include_usage` an
  * explicit setting wins outright, and unset resolves to true exactly when the
  * transport is `openai-chat-completions` — the only transport here that honours
  * the flag (`anthropic-messages` always streams usage and ignores it;
- * `openai-responses` is out of scope for TASK.158 and stays off).
+ * `openai-responses` is out of scope for and stays off).
  *
  * History of the default: the original opt-in rationale ("strict
  * chat-completions servers reject the unknown `stream_options` field") was

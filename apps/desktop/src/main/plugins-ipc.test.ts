@@ -1,5 +1,5 @@
 /**
- * Tests for the plugins IPC surface (Taskana 4732 S1-B, design §7): zod
+ * Tests for the plugins IPC surface (S1-B, design §7): zod
  * payload validation, two-phase install token flow (prepare → preview →
  * commit; wrong source / expired token refused), path custody (renderer
  * never sends paths; reveal takes a NAME), refusal reasons on the wire,
@@ -455,7 +455,7 @@ describe("mutations push plugins-changed", () => {
   });
 });
 
-// ── Taskana 4732 xfix: IPC hardening (H1, H2, H3, H4, M1, M4, M7, L3) ──
+// ── xfix: IPC hardening (H1, H2, H3, H4, M1, M4, M7, L3) ──
 
 const STATE = "/home/tester/.anycode/plugins/state.json";
 const ENTRY = { source: { kind: "official" }, trust: "official", active: "1.0.0", enabled: true, pinned: false, capabilities: [] };
@@ -742,7 +742,7 @@ describe("the pane scans the live tab workspace (xfix M6)", () => {
   });
 });
 
-describe("plugin services consent (Taskana 4750a)", () => {
+describe("plugin services consent", () => {
   const SERVICES = [
     { name: "relay", command: "node", args: ["./relay.js"], env: { LOG_LEVEL: "debug", TOKEN_FILE: "/secret/value-xyz" } },
   ];
@@ -865,7 +865,7 @@ describe("plugin services consent (Taskana 4750a)", () => {
   });
 });
 
-describe("plugin services supervision IPC (Taskana 4750a)", () => {
+describe("plugin services supervision IPC", () => {
   function fakeServices() {
     const restarts: [string, string][] = [];
     return {

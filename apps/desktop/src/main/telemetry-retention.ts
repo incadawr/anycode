@@ -1,5 +1,5 @@
 /**
- * Telemetry-directory retention (Taskana 4109 / TASK.122).
+ * Telemetry-directory retention.
  *
  * The telemetry sink directory (`<home>/.anycode/telemetry`, or the user's
  * `telemetry.dir` / `ANYCODE_TELEMETRY_DIR` override) is a single FLAT

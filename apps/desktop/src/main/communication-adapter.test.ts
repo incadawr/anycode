@@ -16,7 +16,7 @@ function memoryFs(initial: Record<string, string> = {}) {
   return { fs, files, writes, modes };
 }
 
-describe("resolveBundledStdioAdapter (Taskana 4747)", () => {
+describe("resolveBundledStdioAdapter", () => {
   it("prefers the packaged Resources copy when it exists", () => {
     const found = resolveBundledStdioAdapter({ resourcesPath: "/App/Resources", moduleDir: "/x", exists: (p) => p === "/App/Resources/agent-communication/stdio.mjs" });
     expect(found).toBe("/App/Resources/agent-communication/stdio.mjs");
@@ -36,7 +36,7 @@ describe("resolveBundledStdioAdapter (Taskana 4747)", () => {
   });
 });
 
-describe("ensureStdioAdapterCopy (Taskana 4747)", () => {
+describe("ensureStdioAdapterCopy", () => {
   it("returns null without touching the disk when the source is missing", () => {
     const m = memoryFs();
     expect(ensureStdioAdapterCopy(m.fs, null, "/ud/agent-communication")).toBeNull();
@@ -120,7 +120,7 @@ describe("the host refreshes that copy on every start", () => {
   });
 });
 
-describe("electron-builder ships the adapter (Taskana 4747 source test)", () => {
+describe("electron-builder ships the adapter (source test)", () => {
   it("lists agent-communication/stdio.mjs in extraResources", () => {
     const yml = readFileSync(new URL("../../electron-builder.yml", import.meta.url), "utf8");
     expect(yml).toMatch(/from: \.\.\/\.\.\/examples\/agent-communication\/stdio\.mjs\s*\n\s*to: agent-communication\/stdio\.mjs/);

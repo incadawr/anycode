@@ -421,7 +421,7 @@ describe("formatUsage (design §3.3): only real flags, ANYCODE_* env, and the CO
   });
 });
 
-describe("parseCliArgs — --tui (Taskana 4082, slice 1)", () => {
+describe("parseCliArgs — --tui (slice 1)", () => {
   it("--tui parses to tui: true", () => {
     expect(parseCliArgs(["--tui"]).tui).toBe(true);
   });

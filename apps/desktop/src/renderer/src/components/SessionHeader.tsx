@@ -18,7 +18,7 @@
  * the sidebar is expanded its footer already owns the collapse control, so
  * the header shows nothing in that state.
  *
- * TASK.96 96-P3 (D15): also owns the compact "Previews" menu — the ONLY new
+ * 96-P3 (D15): also owns the compact "Previews" menu — the ONLY new
  * SessionHeader surface this slice adds — visible whenever the active tab
  * has >=1 preview of ANY container; picking a window-mode one transfers it
  * into the panel (`previewPanel.setContainer(..., "panel")`, raising the
@@ -163,16 +163,16 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
   const openedByAgent = tab?.openedByAgent === true;
   const orchestrateActive = useTabStore((state) => state.orchestrateActive);
   const externalEngine = engine !== null;
-  // TASK.91: core-only drawer gate — `engine` is null before host_ready ⇒
+  // core-only drawer gate — `engine` is null before host_ready ⇒
   // default true; claude/codex advertise supportsTasks:false so the toggle
   // disappears for them.
   const supportsTasks = engine?.capabilities.supportsTasks ?? true;
-  // TASK.91: third subscription — `data-running` badge on the toggle while
+  // third subscription — `data-running` badge on the toggle while
   // any background task of this tab is still live.
   const backgroundTasks = useTabStore((state) => state.backgroundTasks);
   const tasksRunning = backgroundTasks.some((task) => task.status === "running");
   const exitControl = worktreeExitControlState(turnStatus, connection);
-  // Taskana 4759: the chip shows while this tab's EFFECTIVE full browser access is on.
+  // the chip shows while this tab's EFFECTIVE full browser access is on.
   const [browserAccess] = useBrowserAccessState(tabId, window.anycode.browserAccess);
 
   // D15 (96-P3): the Previews menu — visible whenever the active tab has
@@ -232,7 +232,7 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
           console.warn("[SessionHeader] setContainer failed", error);
         });
     } else {
-      // Taskana 4703: picking a panel item focuses its DOCK TAB (the
+      // picking a panel item focuses its DOCK TAB (the
       // tab strip replaced the picker). The `select` call stays the main
       // path; the dock focus is what actually mounts the body (D7's
       // previewMounted follows the ACTIVE tab).

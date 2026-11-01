@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { RETURN_LABEL, isReturnShortcut, popoutTitle, returnMenuTemplate } from "./popout.js";
 
-describe("popoutTitle (Taskana 4778)", () => {
+describe("popoutTitle", () => {
   it("prefers the page title", () => {
     expect(popoutTitle("Reward FX Lab", "https://x.dev/a.html")).toBe("Reward FX Lab");
   });
@@ -15,7 +15,7 @@ describe("popoutTitle (Taskana 4778)", () => {
   });
 });
 
-describe("return affordances (Taskana 4778)", () => {
+describe("return affordances", () => {
   it("the menu template has one Return to AnyCode item that calls the handler", () => {
     const onReturn = vi.fn();
     const [item] = returnMenuTemplate(onReturn);

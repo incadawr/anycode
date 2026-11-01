@@ -12,7 +12,7 @@
  * lock (children, and any client that did not opt in, get no control). This tool is
  * NOT in createDefaultToolRegistry — an interactive wiring registers it directly,
  * alongside planExitMode, so child registries and every non-opted-in client are
- * unchanged. TASK.27 put it on the tools barrel so the desktop host can register it
+ * unchanged. put it on the tools barrel so the desktop host can register it
  * without a deep import; importable is not registered. The handler never throws —
  * every path is a ToolResult.
  */

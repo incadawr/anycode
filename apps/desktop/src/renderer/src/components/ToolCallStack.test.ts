@@ -1,5 +1,5 @@
 /**
- * TASK.31 — SSR component tests for `ToolCallStack`. Same jsdom-free discipline
+ * SSR component tests for `ToolCallStack`. Same jsdom-free discipline
  * as `ToolCallCard.test.ts`: `react-dom/server`'s `renderToStaticMarkup` walks
  * the React tree to an HTML string without touching any DOM API, so it works
  * under this package's plain "node" vitest environment. The component defaults

@@ -1,5 +1,5 @@
 /**
- * Plugins module barrel (Phase 3 slice 3.3 + Taskana 4732 S1-A). Manifest
+ * Plugins module barrel (Phase 3 slice 3.3 + S1-A). Manifest
  * v1 (schema + derived capabilities), tiered discovery (managed store from
  * state.json), and the managed-store state file primitives.
  */
@@ -44,7 +44,7 @@ export type {
   PluginStateReadResult,
   PluginsState,
 } from "./state.js";
-// Taskana 4732 S1-B: semver helpers shared with the desktop main store —
+// S1-B: semver helpers shared with the desktop main store —
 // re-exported here so `@anycode/core/plugins` stays the one import surface
 // for plugin semver (discovery's own engines gating uses the same module).
 export { isValidSemver, parseSemver, rangeMatches, normalizeSemverRange } from "../util/semver-range.js";

@@ -1,5 +1,5 @@
 /**
- * Live smoke for TASK.102 CUT-S4 §6.2/§6.3 (slice S4d) — the ONE gate that
+ * Live smoke for CUT-S4 §6.2/§6.3 (slice S4d) — the ONE gate that
  * proves the security hole S4 closes is actually closed: an `engine:
  * claude|codex` md-profile, spawned through the Agent tool, now runs as a
  * REAL child SESSION (startClaudeEngine/startCodexEngine, the same
@@ -41,7 +41,7 @@
  * builders' concurrent work in the same worktree, not yet landed at the time
  * this file was written): `ChildSpawnRequest.engine`/`SubagentProgress{kind:
  * "start"}.engine` (§2.3/§3.1) surfaces on the master's own transcript block
- * as `block.subagent.engine` (already wired end-to-end from TASK.97 R5 up to
+ * as `block.subagent.engine` (already wired end-to-end from R5 up to
  * the renderer chip, `ToolCallCard.tsx`'s `formatSubagentCounters` — S4 only
  * makes the PRODUCER at the session route set it); the durable child row's
  * `SessionMeta.engineId` (persistence.ts, existing field, stamped for engine
@@ -59,7 +59,7 @@
  * `parseAgentProfileMd` (packages/core/src/subagents/profiles.ts) and its own
  * `profiles.test.ts` fixtures: flat `---\nname:\ndescription:\nengine:\n---\n`
  * frontmatter, NO `tools:` line (combining `tools:` with `engine:` is a fatal
- * `engine_tools_conflict` parse error, TASK.97 R4, byte-frozen by this cut).
+ * `engine_tools_conflict` parse error, R4, byte-frozen by this cut).
  * Discovery is a live rescan gated on the master's OWN next turn start
  * (`host/index.ts`'s `refreshExtensionProfiles`, called from `onBeforeTurn`)
  * — no app restart needed, the file only has to exist before this script's
@@ -149,7 +149,7 @@
  * text matching `/not (ready|available)/i`; anything else that leaves
  * childRuns empty is a hard FAIL with the full block payload, never silently
  * absorbed. Evidence (3 PNGs, a JSON result dump, the redirected app-stderr
- * log) lands in `working-docs/task102-track/evidence/S4/`, filenames scoped
+ * log) lands in `working-docs/child-session-smoke/evidence/S4/`, filenames scoped
  * by `--engine` so a claude run and a codex run never clobber each other.
  */
 
@@ -194,7 +194,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(here, "..");
 const repoRoot = resolve(desktopRoot, "..", "..");
 
-const EVIDENCE_DIR = join(repoRoot, "working-docs", "task102-track", "evidence", "S4");
+const EVIDENCE_DIR = join(repoRoot, "working-docs", "child-session-smoke", "evidence", "S4");
 const TOTAL_STEPS = 7;
 const APP_EXIT_GRACE_MS = 15_000;
 const SIGTERM_GRACE_MS = 750;
@@ -568,7 +568,7 @@ const SIDEBAR_ROW_TITLES_JS = `(() => Array.from(document.querySelectorAll('.sid
 /**
  * On-screen text of the card's own sub-status counter line — the "engine
  * chip" CUT-S4 §4.6/§6.2 п.1 calls for is a `"<engine> · "` TEXT PREFIX on
- * this element while running (TASK.97 R5's `formatSubagentCounters`,
+ * this element while running (R5's `formatSubagentCounters`,
  * `ToolCallCard.tsx`), not a separate badge element. An Agent card is
  * COLLAPSED BY DEFAULT in EVERY status (`defaultExpanded` returns `false`
  * unconditionally for `toolName === "Agent"`) — the state this smoke

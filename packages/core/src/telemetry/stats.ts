@@ -30,9 +30,9 @@ export interface ProfileStats {
   subagentRuns: number;
   /** True when the scan stopped early on PROFILE_STATS_MAX_SCAN_BYTES. */
   truncated: boolean;
-  /** Telemetry track (TASK.158 slice 1) additions — additive, §2.6 of
+  /** Telemetry track (slice 1) additions — additive, §2.6 of
    *  telemetry-track-plan.md; these are projections over the SAME single scan.
-   *  (S10: the pre-TASK.158 `dailyTokens`/`topTools`/`topModels` top-N/single-map
+   *  (S10: the pre-`dailyTokens`/`topTools`/`topModels` top-N/single-map
    *  fields these superseded have been removed — `days`/`models` below are the
    *  only wire source for daily totals and tool/model breakdowns now.) */
   /** dayKey (same `dayKey(ts)` call used throughout this module) -> that day's stats. */
@@ -47,13 +47,13 @@ export interface ProfileStats {
    *  parent session and inherits that session's engine) — so this sum
    *  always equals `lifetimeTokens` exactly, never less. */
   engineTokens: Record<string, number>;
-  /** Lifetime prompt-cache counters (TASK.111). */
+  /** Lifetime prompt-cache counters. */
   cache: ProfileCacheStats;
 }
 
 /**
  * Prompt-cache counters over the usage records whose provider REPORTED a
- * cache figure (TASK.111). `cachedInputTokens` is a subset of
+ * cache figure. `cachedInputTokens` is a subset of
  * `reportedInputTokens` — never add it to any token total. A record without
  * the field contributes to neither side, so an old line reads "not reported"
  * rather than dragging the hit rate toward 0%. Hit rate = cached / reported
@@ -83,7 +83,7 @@ export interface ProfileDayStats {
   /** Model -> tokens that day (deferred join — see the model-attribution
    *  comment on aggregateProfileStats). */
   models: Record<string, number>;
-  /** That day's prompt-cache counters (TASK.111). */
+  /** That day's prompt-cache counters. */
   cache: ProfileCacheStats;
 }
 
@@ -104,7 +104,7 @@ export interface AggregateProfileStatsOptions {
   dayKey?: (ts: number) => string;
   /** Cumulative processed-line char budget for the WHOLE scan; defaults to
    *  PROFILE_STATS_MAX_SCAN_BYTES. `Infinity` disables truncation entirely —
-   *  that is the uncapped oracle the TASK.187 S2 equivalence harness compares
+   *  that is the uncapped oracle the S2 equivalence harness compares
    *  the per-file partial path against (partials never truncate a file, so
    *  equivalence is only ever claimed for FULL files). Additive: existing
    *  callers that omit it keep the exact previous behavior. */
@@ -142,7 +142,7 @@ interface SessionAgg {
   timestamps: number[];
   model: string | undefined;
   tokens: number;
-  /** Telemetry track (TASK.158 slice 1, deferred join — trap 158-1): usage
+  /** Telemetry track (slice 1, deferred join — trap 158-1): usage
    *  tokens NOT overridden by a `sub.model` (master-tier, or a subagent that
    *  ran on the session's own model), bucketed by dayKey. Joined to
    *  `model ?? "(unknown)"` and to `engine` only AFTER the scan, because
@@ -155,7 +155,7 @@ interface SessionAgg {
   firstTs: number;
 }
 
-/** Envelope `sub` is present only on inline-subagent-tier records (TASK.160).
+/** Envelope `sub` is present only on inline-subagent-tier records.
  *  Validated defensively — same fail-soft posture as the rest of this file —
  *  a malformed `sub` (not an object, or missing/empty `agentType`) is treated
  *  as "no sub" rather than trusted. */
@@ -232,7 +232,7 @@ function clampTokenValue(x: unknown): number {
   return typeof x === "number" && Number.isFinite(x) && x >= 0 ? x : 0;
 }
 
-/** A usage record's cache figure (TASK.111), or null when the provider did not
+/** A usage record's cache figure, or null when the provider did not
  *  report one — or reported it without the input total it is a subset of.
  *  Clamped to the input so a malformed line can never claim a >100% hit. */
 function usageCache(rec: Record<string, unknown>): { reported: number; cached: number } | null {
@@ -252,8 +252,7 @@ function usageTokens(rec: Record<string, unknown>): number {
 type ValidTelemetryRecord = Record<string, unknown> & { ts: number; t: string };
 
 /**
- * The SINGLE record-validity filter of this module (task187-aggregator-
- * semantics.md §0): JSON-parses one line, then applies the envelope gate
+ * The SINGLE record-validity filter of this module (§0): JSON-parses one line, then applies the envelope gate
  * (`v === 1`, finite `ts`) and the enumerate-the-good variant gate, returning
  * undefined for anything that fails. Every reader of a sink file goes through
  * here — the whole-directory aggregator, `aggregateFilePartial` and
@@ -339,7 +338,7 @@ export type ActivityCluster = [start: number, end: number];
  * the CANONICAL form: sorted by start, pairwise disjoint, and split exactly
  * where a gap exceeds the cap.
  *
- * WHY CLUSTERS EXIST (TASK.187 S3): the incremental cache computes a
+ * WHY CLUSTERS EXIST (S3): the incremental cache computes a
  * cross-file session's exact activity over SEVERAL passes, one participant
  * file at a time. Clusters are the state it carries between passes because
  * this fold is associative and commutative — participants may arrive in any
@@ -429,7 +428,7 @@ export function aggregateProfileStats(
 
   const sessions = new Map<string, SessionAgg>();
 
-  // Telemetry track (TASK.158 slice 1): per-day aggregate, keyed by the SAME
+  // Telemetry track (slice 1): per-day aggregate, keyed by the SAME
   // dayKey(ts) call used everywhere else in this scan (158-trap-2 — never a
   // second formatter). Model attribution inside a day is a deferred join
   // (158-trap-1); see the post-scan fold below.
@@ -564,7 +563,7 @@ export function aggregateProfileStats(
     if (active > longestSessionMs) longestSessionMs = active;
   }
 
-  // Telemetry track (TASK.158 slice 1) — deferred joins, post-scan (158-trap-1/2):
+  // Telemetry track (slice 1) — deferred joins, post-scan (158-trap-1/2):
   // full model list + per-day model breakdown + engineTokens + days[d].sessions.
   // Session-level attribution ONLY (`session.tokensByDay`, built above from
   // usage records with no sub.model override) feeds `sessions`/`engine` here;
@@ -712,7 +711,7 @@ export function aggregateProfileStats(
 }
 
 // ---------------------------------------------------------------------------
-// TASK.187 S2 — per-file partials + merge.
+// S2 — per-file partials + merge.
 //
 // Why a second path exists at all: opening the owner's ~58 763 sink files
 // costs ~16 s per Profile-pane open, and 90 % of that is the file opens
@@ -754,7 +753,7 @@ export interface ProfileFilePartialDay {
   toolCalls: number;
   subagentRuns: number;
   tools: Record<string, number>;
-  /** Prompt-cache counters (TASK.111) — see ProfileCacheStats. */
+  /** Prompt-cache counters — see ProfileCacheStats. */
   reportedInputTokens: number;
   cachedInputTokens: number;
 }

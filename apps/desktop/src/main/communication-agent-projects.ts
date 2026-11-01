@@ -1,5 +1,5 @@
 /**
- * Main-owned per-project "agents may open tasks here" switch (Taskana 4768).
+ * Main-owned per-project "agents may open tasks here" switch.
  * The unit is the PROJECT, keyed by the canonical workspace key (symlink-safe,
  * see `canonicalWorkspaceKey`). Stored in a 0600 file beside the other
  * Sessions API switches and written only by main. Default is OFF everywhere.

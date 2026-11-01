@@ -1,5 +1,5 @@
 /**
- * Live smoke for TASK.96 96-P4 (panel-track CUT.md §3 "96-P4") + TASK.99 M5
+ * Live smoke for 96-P4 (panel-track CUT.md §3 "96-P4") + M5
  * (CUT.md M5 "full DoD live smoke"): drives a REAL Electron dev instance over
  * the automation HTTP channel (`main/automation/*`, automation/README.md) to
  * prove the WebContentsView RIGHT-SIDE PANEL container (96-P0..P3) actually
@@ -10,7 +10,7 @@
  * `POST /tabs/:tabId/previews` directly, no live model needed (this is a
  * container-plumbing smoke, not a model-behavior smoke).
  *
- * TASK.99 M5 extension (steps 8-14 below): the native DOM markdown preview's
+ * M5 extension (steps 8-14 below): the native DOM markdown preview's
  * full DoD — a doc.md with a relative probe image + a relative `.md` link is
  * opened, its rendered image is asserted VISIBLE by decoding the panel's own
  * screenshot (the owner's original live repro this whole track exists to
@@ -186,7 +186,7 @@ async function waitForFacade(ctx, step, timeoutMs = 45_000) {
   }
 }
 
-// ── PNG (TASK.99 M5): a zero-dep raw encoder for the solid-color probe
+// ── PNG (M5): a zero-dep raw encoder for the solid-color probe
 // fixture + a minimal decoder for the panel/window screenshot, both over
 // node:zlib only. Encoder emits 8-bit RGB (color type 2), no interlace, one
 // IDAT, filter type 0 (None) on every scanline — the simplest valid PNG.
@@ -462,7 +462,7 @@ async function step4PositiveSmoke(ctx) {
   }
   ctx.positivePreviews = previews ?? [];
 
-  // M1 (TASK.99 CUT.md CONTRACTS): a `.md` artifact opens as a native dom-md
+  // M1 (CUT.md CONTRACTS): a `.md` artifact opens as a native dom-md
   // record — no WebContentsView, no rendered-HTML temp file (that pipeline
   // is dead code from M1 on, removed in M5). `renderedFrom` stays the
   // ORIGINAL .md path (tool-contract continuity across viewKinds) and `url`
@@ -506,7 +506,7 @@ async function step4PositiveSmoke(ctx) {
 // ── step 5: screenshot ──
 
 /**
- * TASK.99 M4: polls `GET .../screenshot` for `ctx.mdPreviewId` until it
+ * M4: polls `GET .../screenshot` for `ctx.mdPreviewId` until it
  * returns a `png`, then asserts real PNG bytes (magic + a non-trivial size —
  * same thresholds as the html leg's own check below). Polling (not a single
  * shot) accounts for the WINDOW leg specifically: right after a panel->window
@@ -557,7 +557,7 @@ async function step5Screenshot(ctx) {
     record("screenshot returns a non-empty PNG", "FAIL", `magicOk=${magicOk} sizeOk=${sizeOk} bytes=${buf.length}`);
   }
 
-  // TASK.99 M4 (CUT.md GAP 2): a dom-md preview now has a REAL capture
+  // M4 (CUT.md GAP 2): a dom-md preview now has a REAL capture
   // surface in BOTH containers — PANEL via capturePage(rect) of the main
   // window, WINDOW via the md preview's own MdPreviewWindowLike. Assert a
   // real PNG in the panel, transfer to a window via the M3 automation route
@@ -703,7 +703,7 @@ async function step6NegativeSmoke(ctx) {
   }
 }
 
-// ── step 7: transfer (TASK.99 M3 added POST .../container — this leg used
+// ── step 7: transfer (M3 added POST .../container — this leg used
 // to be a SKIPPED placeholder claiming no such route existed; that note went
 // stale the moment M3 landed (step5 above already drives the SAME route for
 // the md preview). Replaced with a REAL driven leg proving the route is
@@ -730,7 +730,7 @@ async function step7TransferCheck(ctx) {
   }
 }
 
-// ── steps 8-14: TASK.99 M5 full DoD — native DOM markdown preview ──
+// ── steps 8-14: M5 full DoD — native DOM markdown preview ──
 // (CUT.md M5 "live smoke on package:dir per DoD"). A fresh doc.md with a
 // relative probe image + a relative `.md` link, opened, its image asserted
 // VISIBLE via a real screenshot decode (the owner's original live repro),
@@ -895,7 +895,7 @@ async function step10bImageVisibleFallback(ctx) {
 // ── step 11: BrowserRead-equivalent — source contains the probe markdown ──
 
 /**
- * TASK.99 M5: there is no dedicated automation "read" route — `readForTab`
+ * M5: there is no dedicated automation "read" route — `readForTab`
  * (the model-facing BrowserRead op) is reachable only via a real tool call
  * through a live model turn, and the brief authorizes exactly ONE new
  * dev-only route (navigate). A SELF-navigate (`href` = the doc's own current
@@ -1043,7 +1043,7 @@ async function runTeardown(ctx, failedStep) {
       // best-effort
     }
   }
-  // TASK.99 M5 DoD leg (h): teardown must leave no orphan windows/processes.
+  // M5 DoD leg (h): teardown must leave no orphan windows/processes.
   // `killTree(-pid, …)` targets the WHOLE detached process group (pnpm dev
   // -> electron -> every BrowserWindow it owns, including a live md-preview
   // window from steps 9-13 above) — a clean `/quit`-driven exit within grace

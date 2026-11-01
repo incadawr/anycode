@@ -59,7 +59,7 @@ function git(overrides: Partial<GitPort> = {}): GitPort {
 }
 
 /**
- * The janitor's two persistence reads (TASK.142): the recency-bounded cleanup
+ * The janitor's two persistence reads: the recency-bounded cleanup
  * list and the unbounded metadata-only claim scan. Most tests care about one
  * session set, so this fixture serves BOTH from the same source — the claim map
  * then equals the iterated set, exactly as before the split.

@@ -639,9 +639,9 @@ describe("handleSubagentsPreview", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Taskana 4758: a workspace scope reference (`ws_…`) resolves like a tab id.
+// a workspace scope reference (`ws_…`) resolves like a tab id.
 
-describe("subagents scope reference (Taskana 4758)", () => {
+describe("subagents scope reference", () => {
   const WS_REF = "ws_0123456789abcdef";
 
   function refDeps(workspace: string | undefined, home: string): SubagentsIpcDeps {

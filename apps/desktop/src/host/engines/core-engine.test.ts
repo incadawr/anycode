@@ -47,7 +47,7 @@ describe("CoreEngine", () => {
       metaTokens: 6,
       totalEstimatedTokens: 21,
     }));
-    // TASK.37: CoreEngine.setMode now delegates to loop.setMode (D-S3-3) rather
+    // CoreEngine.setMode now delegates to loop.setMode (D-S3-3) rather
     // than writing config directly, so the fake must reproduce the real loop's
     // documented contract (always mutates the shared config object) for the
     // config-mutation assertion below to mean anything.
@@ -149,11 +149,11 @@ describe("CoreEngine", () => {
 });
 
 // ---------------------------------------------------------------------------
-// TASK.123 (Taskana 4110): CoreEngine.steer over the loop's deferred-injection
+// CoreEngine.steer over the loop's deferred-injection
 // slot — the REAL CoreEngine over a REAL AgentLoop with the desktop harness's
 // ScriptedModelPort and a parking tool (a handler gated on a deferred).
 
-describe("CoreEngine.steer (Taskana 4110)", () => {
+describe("CoreEngine.steer", () => {
   /** Minimal AgentLoopConfig-shaped wiring with a parking tool at "Mock". */
   function makeEngineFixture(steps: ModelStreamEvent[][]) {
     const port = new ScriptedModelPort(steps);

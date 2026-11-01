@@ -90,7 +90,7 @@ function rig(over: { env?: string; picked?: string | undefined; script?: string 
   return { deps, controller, sessions, approvals, agentProjects, startServer, pickFolder: deps.pickFolder as ReturnType<typeof vi.fn> };
 }
 
-describe("Sessions API IPC (Taskana 4747) — writes go through the dedicated channel", () => {
+describe("Sessions API IPC — writes go through the dedicated channel", () => {
   it("get reflects the saved block and reports envControlled false", async () => {
     const { deps } = rig();
     const result = await handleCommunicationGet(deps, {});
@@ -350,7 +350,7 @@ describe("Sessions API IPC — persisted settings never carry the token", () => 
   });
 });
 
-describe("session handles over IPC (Taskana 4750b)", () => {
+describe("session handles over IPC", () => {
   it("set-session-handle maps tabId to session and returns view with handle", async () => {
     const { deps, sessions } = rig();
     sessions.register({ sessionId: "sess-1" });
@@ -396,7 +396,7 @@ describe("session handles over IPC (Taskana 4750b)", () => {
   });
 });
 
-describe("Sessions API IPC — External approvals switch (Taskana 4763)", () => {
+describe("Sessions API IPC — External approvals switch", () => {
   it("T26 set-session-approvals: happy path only while shared; invalid payloads, unknown tab, env-controlled and access-off are refused", async () => {
     const { deps, sessions, approvals } = rig();
     sessions.register({ sessionId: "sess-1" });
@@ -433,7 +433,7 @@ describe("Sessions API IPC — External approvals switch (Taskana 4763)", () => 
   });
 });
 
-describe("External approvals — the only writer (Taskana 4763)", () => {
+describe("External approvals — the only writer", () => {
   it("T32 no main-process code except communication-ipc.ts sets the approvals store", () => {
     const mainDir = fileURLToPath(new URL(".", import.meta.url));
     const writers = readdirSync(mainDir)
@@ -444,7 +444,7 @@ describe("External approvals — the only writer (Taskana 4763)", () => {
 });
 
 
-describe("Sessions API IPC — per-project agent-open switch (Taskana 4768)", () => {
+describe("Sessions API IPC — per-project agent-open switch", () => {
   it("agent projects: get answers by canonical comparison; set stores canonically and refuses relative paths; off removes by exact stored key; env mode refuses every write; view carries agentProjects rows", async () => {
     const { deps, agentProjects } = rig();
     const link = join(dir, "link-a");

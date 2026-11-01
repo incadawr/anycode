@@ -714,12 +714,12 @@ it.each(["failed", "unexpected-status"])("terminal %s without turn.error still e
 });
 
 /**
- * TASK.181 regression coverage: four recognized tool families
+ * regression coverage: four recognized tool families
  * (commandExecution/command_execution, fileChange/file_change,
  * mcpToolCall/mcp_tool_call, webSearch/web_search) in camelCase AND
  * snake_case, both started+completed and completed-only arrival patterns.
  */
-describe("TurnTranslator — TASK.181 tool families and completed-only recovery", () => {
+describe("TurnTranslator — tool families and completed-only recovery", () => {
   type FamilyCase = {
     label: string;
     startedItem: Record<string, unknown>;
@@ -928,12 +928,12 @@ describe("TurnTranslator — TASK.181 tool families and completed-only recovery"
 });
 
 /**
- * TASK.181 verification follow-up: ITEM-level completion dedup. A repeated
+ * verification follow-up: ITEM-level completion dedup. A repeated
  * completion of the same native item id must never recover a second tool
  * lifecycle, even when the redelivery's payload projects DIFFERENT sub ids
  * (populated start `fc:0` vs sparse redelivery `fc`).
  */
-describe("TurnTranslator — repeated completions across projection shapes (TASK.181 dedup)", () => {
+describe("TurnTranslator — repeated completions across projection shapes (dedup)", () => {
   function startOf(item: Record<string, unknown>): JsonRpcNotification {
     return { method: "item/started", params: { threadId: THREAD_ID, turnId: TURN_ID, item } };
   }
@@ -998,7 +998,7 @@ describe("TurnTranslator — repeated completions across projection shapes (TASK
 });
 
 // ───────────────────────────────────────────────────────────────────────────
-// TASK.95 — collab (Agent) spawning, child correlation and generic fallback.
+// collab (Agent) spawning, child correlation and generic fallback.
 // These are SCHEMA-SHAPED SYNTHETIC cases built from contract/pinned-contract.json
 // (there is no captured collab trace in the fixture set — none of these is
 // labelled as a real capture). Regression traffic/envelopes come from the
@@ -1037,7 +1037,7 @@ function collabTests(): void {
   const fresh = (overrides: Record<string, unknown> = {}, index?: CollabAgentCardIndex): TurnTranslator =>
     new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1, ...(index !== undefined ? { collab: index } : {}), ...overrides });
 
-  describe("TASK.95 — collab spawn start/completed (call vs child)", () => {
+  describe("— collab spawn start/completed (call vs child)", () => {
     it("spawn start emits a full Agent lifecycle with actual prompt/model/persona; running child activity has NO end", () => {
       const events = fresh().onNotification(startOf(collabItem({ prompt: "survey the repo", model: "gpt-5.4-codex", agentsStates: { "child-1": { status: "running", message: "step 1" } } })));
       expect(evTypes(events)).toEqual(["tool_call", "tool_execution_start", "subagent_start", "subagent_activity"]);
@@ -1114,7 +1114,7 @@ function collabTests(): void {
     });
   });
 
-  describe("TASK.95 — cross-turn correlation through one shared index", () => {
+  describe("— cross-turn correlation through one shared index", () => {
     it.each(["wait", "sendInput", "resumeAgent", "closeAgent"] as const)(
       "%s in turn 2 patches the turn-1 card and gets its own complete generic lifecycle (call completion alone does not settle a running child)",
       (verb) => {
@@ -1153,7 +1153,7 @@ function collabTests(): void {
     });
   });
 
-  describe("TASK.95 — failed spawn and multi-receiver aggregation", () => {
+  describe("— failed spawn and multi-receiver aggregation", () => {
     it("a failed spawn with NO observed child emits an error call result plus one child error terminal (no eternal spinner)", () => {
       const translator = fresh();
       translator.onNotification(startOf(collabItem()));
@@ -1199,7 +1199,7 @@ function collabTests(): void {
     });
   });
 
-  describe("TASK.95 — receiver recovery, sparse metadata and completed-only spawn", () => {
+  describe("— receiver recovery, sparse metadata and completed-only spawn", () => {
     it("receiver ids empty at start and populated at completion still correlate a later activity", () => {
       const index = new CollabAgentCardIndex();
       const turn1 = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1, collab: index });
@@ -1229,7 +1229,7 @@ function collabTests(): void {
     });
   });
 
-  describe("TASK.95 — dedup and late delivery for collab", () => {
+  describe("— dedup and late delivery for collab", () => {
     it("duplicate starts/completions and a completion-then-late-start never reopen the lifecycle or the child region", () => {
       const translator = fresh();
       translator.onNotification(startOf(collabItem({ agentsStates: { "child-1": { status: "running" } } })));
@@ -1250,7 +1250,7 @@ function collabTests(): void {
     });
   });
 
-  describe("TASK.95 — non-spawn operations", () => {
+  describe("— non-spawn operations", () => {
     it("a non-spawn completed-only operation emits call/start/result and never creates a phantom Agent sub-status", () => {
       const translator = fresh();
       const events = translator.onNotification(completeOf({ type: "collabAgentToolCall", id: "wait-1", tool: "wait", senderThreadId: THREAD_ID, receiverThreadIds: ["child-1"], status: "completed", agentsStates: {} }));
@@ -1272,7 +1272,7 @@ function collabTests(): void {
     });
   });
 
-  describe("TASK.95 — subAgentActivity correlation and markers", () => {
+  describe("— subAgentActivity correlation and markers", () => {
     it("maps activity by agentThreadId (a different native item id) to the spawn card and shows it once for start+complete", () => {
       const translator = fresh();
       translator.onNotification(startOf(collabItem({ agentsStates: { "child-1": { status: "running" } } })));
@@ -1313,7 +1313,7 @@ function collabTests(): void {
     });
   });
 
-  describe("TASK.95 — parent turn boundary vs live child", () => {
+  describe("— parent turn boundary vs live child", () => {
     it("a parent turn ending with a live child emits no inferred subagent_end; the cancel sweep closes only the open outer call", () => {
       const index = new CollabAgentCardIndex();
       const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1, collab: index });
@@ -1332,7 +1332,7 @@ function collabTests(): void {
     });
   });
 
-  describe("TASK.95 — unknown future item types surface as generic cards", () => {
+  describe("— unknown future item types surface as generic cards", () => {
     const unknown = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({ type: "futureThing", id: "u1", text: "hello", ...overrides });
 
     it("paired unknown emits one codex:futureThing card with real scalar fields", () => {
@@ -1388,7 +1388,7 @@ function collabTests(): void {
     });
   });
 
-  describe("TASK.95 — imageView/sleep/imageGeneration", () => {
+  describe("— imageView/sleep/imageGeneration", () => {
     it("imageView/sleep/imageGeneration retain real path/duration/prompt/result/status", () => {
       const translator = fresh();
       const image = translator.onNotification(startOf({ type: "imageView", id: "img", path: "/tmp/a.png" }));
@@ -1426,7 +1426,7 @@ function collabTests(): void {
     });
   });
 
-  describe("TASK.95 — discriminating bookkeeping", () => {
+  describe("— discriminating bookkeeping", () => {
     it.each(["reasoning", "contextCompaction", "plan", "userMessage", "enteredReviewMode", "exitedReviewMode"])("keeps compaction bookkeeping out of ordinary tool cards: %s", (type) => {
       const translator = fresh();
       expect(translator.onNotification(startOf({ type, id: "b1" }))).toEqual([]);
@@ -1442,7 +1442,7 @@ function collabTests(): void {
     });
   });
 
-  describe("TASK.95 — pinned contract shape guard", () => {
+  describe("— pinned contract shape guard", () => {
     type ContractVariant = { properties: Record<string, { enum?: string[] }>; required?: string[] };
     const v2 = (JSON.parse(readFileSync(join(FIXTURES_DIR, "..", "pinned-contract.json"), "utf8")) as {
       definitions: { v2: Record<string, unknown> };

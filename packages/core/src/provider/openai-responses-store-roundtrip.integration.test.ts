@@ -1,5 +1,5 @@
 /**
- * TASK.43 HIGH#1 verification (codex W3+W4 review): does @ai-sdk/openai@4.0.14's
+ * HIGH#1 verification (codex W3+W4 review): does @ai-sdk/openai@4.0.14's
  * Responses transport serialize a prior tool result as a `function_call_output`
  * input item when `store:false` is forced? If it drops it, a multi-turn tool
  * round-trip is BROKEN on the responses transport (the model never sees the

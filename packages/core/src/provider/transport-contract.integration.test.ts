@@ -1,5 +1,5 @@
 /**
- * Cross-transport contract suite (TASK.43 §0.8/W3): the SAME eight scenarios —
+ * Cross-transport contract suite (§0.8/W3): the SAME eight scenarios —
  * text-only, tool round-trip, parallel tools, abort, retry-before-first-event,
  * mid-stream failure, images, maxOutputTokens — run against all THREE real
  * client stacks (`@ai-sdk/anthropic`, `@ai-sdk/openai-compatible`,
@@ -28,7 +28,7 @@
  * so a same-attempt connect/reset failure was classified retryable by
  * `retry.ts` yet NEVER actually retried in production, on ANY transport.
  *
- * FIXED IN W7a (TASK.33): the gate now closes on MODEL OUTPUT
+ * FIXED IN W7a: the gate now closes on MODEL OUTPUT
  * (`isModelOutputEvent` in ./failure.ts), not on any event — `start` and a
  * same-attempt `error` no longer close it, so before-content connect/reset/5xx
  * failures retry, while content/tool/finish still bar auto-retry. The
@@ -556,7 +556,7 @@ describe.each(KITS)("cross-transport contract: $transport", (kit) => {
     });
     const flakyBaseUrl = `${await listen(flakyServer)}/v1`;
     try {
-      // Taskana 4705: default policy now 8 retries + a 5-min network budget;
+      // default policy now 8 retries + a 5-min network budget;
       // budget pinned off so this test keeps asserting pure count-exhaustion.
       const port = new AiSdkModelPort(
         kit.buildConfig(flakyBaseUrl, { retry: { maxRetries: 3, baseDelayMs: 1, maxDelayMs: 1, stallTimeoutMs: 0, networkRetryBudgetMs: 0 } }),

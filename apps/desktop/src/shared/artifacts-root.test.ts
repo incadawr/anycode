@@ -1,5 +1,5 @@
 /**
- * artifacts-root (Taskana 4104 / TASK.110): pins the desktop's artifact-store
+ * artifacts-root: pins the desktop's artifact-store
  * root conditional. The SAME conditional must hold in both desktop processes —
  * main (boot sweep) and host (store construction) — which is exactly why it
  * lives in ONE shared helper (artifacts-root.ts) instead of being inlined twice.
@@ -24,7 +24,7 @@ function dirnameRef(p: string): string {
   return p.slice(0, Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\")));
 }
 
-describe("artifactsRootFor (Taskana 4104)", () => {
+describe("artifactsRootFor", () => {
   const home = join("/fake", "home", "tester");
 
   it(":memory: db falls back to <home>/.anycode/artifacts", () => {

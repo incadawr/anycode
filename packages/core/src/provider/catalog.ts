@@ -3,7 +3,7 @@
  * this shape, not code: the dispatcher (language-model.ts) picks the client
  * factory by the resolved `ProviderTransport`.
  *
- * Provider identity and wire transport are DIFFERENT axes (TASK.43 §0.1): one
+ * Provider identity and wire transport are DIFFERENT axes (§0.1): one
  * endpoint may speak several protocols (OpenRouter/vLLM expose both OpenAI
  * transports), so the catalog declares a default plus the full supported set
  * instead of collapsing both axes into a single `kind`.
@@ -93,7 +93,7 @@ export interface CatalogModel {
   /** The model cannot disable reasoning. */
   thinkingAlwaysOn?: boolean;
   /**
-   * Taskana 4894: the effort tier the PROVIDER applies when the request says
+   * the effort tier the PROVIDER applies when the request says
    * nothing — only ever set where the provider's own documentation states it
    * (DeepSeek: "default high"; GLM-5.3: "default max"). It is the rung between
    * "the user picked a level" and "no effort information exists": with no
@@ -132,7 +132,7 @@ export interface CatalogProviderEntry {
   id: string;
   name: string;
   /**
-   * TASK.70 (Taskana 4089): the brand this entry belongs to when several
+   * the brand this entry belongs to when several
    * catalog entries are the SAME vendor sold via different endpoints (Kimi:
    * kimi.com subscription vs the moonshot platform API). Entries that share a
    * `brand` render as ONE card with a mode selector; the pair below is data,
@@ -141,7 +141,7 @@ export interface CatalogProviderEntry {
    */
   brand?: string;
   /**
-   * TASK.70 (Taskana 4089): short selector label naming THIS entry's mode
+   * short selector label naming THIS entry's mode
    * inside its brand card (e.g. "Subscription (kimi.com)"). Rendering pairs
    * `brand` + `modeLabel`; `modeLabel` without `brand` must not occur and is
    * guarded by `assertBrandContract`.
@@ -170,7 +170,7 @@ export interface CatalogProviderEntry {
   /**
    * Full base URL per transport, for endpoints whose protocols live under
    * different roots. Absent transport ⇒ `baseUrl`. These are COMPLETE prefixes:
-   * no factory appends `/v1` on its own (TASK.43 §0.5), so a non-standard prefix
+   * no factory appends `/v1` on its own (§0.5), so a non-standard prefix
    * (`https://gw.example/api/openai`) stays expressible.
    */
   transportBaseUrls?: Partial<Record<ProviderTransport, string>>;
@@ -200,7 +200,7 @@ export interface CatalogProviderEntry {
   retiredModels?: CatalogModel[];
   /**
    * True when this endpoint legitimately runs with no credential at all (a
-   * local vLLM/Ollama-style server, TASK.43 W5) — readiness does not require a
+   * local vLLM/Ollama-style server, W5) — readiness does not require a
    * key even though `auth.kind` is still `api_key` for the case a key IS
    * supplied. Absent/false is the byte-compat default: every other entry
    * (including `custom`) keeps requiring a key when its resolved transport is
@@ -250,7 +250,7 @@ export function resolveEndpoint(
 }
 
 /**
- * Dev-time invariant (TASK.43 W5): a catalog entry's `defaultTransport` must be
+ * Dev-time invariant (W5): a catalog entry's `defaultTransport` must be
  * a member of its own `supportedTransports`, else `resolveEndpoint`'s default
  * parameter would immediately throw for every caller that doesn't pass an
  * explicit transport. Called over the whole built-in catalog at module load
@@ -266,7 +266,7 @@ export function assertTransportContract(entry: CatalogProviderEntry): void {
 }
 
 /**
- * Dev-time invariant (TASK.70): an entry may declare `modeLabel` only together
+ * Dev-time invariant: an entry may declare `modeLabel` only together
  * with `brand`, and a brand group needs ≥2 declared modes to be a group at all.
  */
 export function assertBrandContract(entries: readonly CatalogProviderEntry[]): void {

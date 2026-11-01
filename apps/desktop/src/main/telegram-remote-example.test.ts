@@ -1,5 +1,5 @@
 /**
- * The telegram-remote example (Taskana 4751). Telegram is ONLY a fake HTTP server
+ * The telegram-remote example. Telegram is ONLY a fake HTTP server
  * on 127.0.0.1; no test contacts api.telegram.org and no real token is used. The
  * Sessions API is the REAL startCommunicationServer with a fake session manager.
  * Only T22 spawns the service script as a child process.
@@ -260,7 +260,7 @@ function apiCallsOf(h: Harness, op: string): Array<{ op: string; sid: string; pa
   return h.calls.filter((call) => call.op === op);
 }
 
-describe("telegram-remote example (Taskana 4751)", () => {
+describe("telegram-remote example", () => {
   // ── pure rules ──
 
   it("T1 parseAllowlist accepts positive ids and drops everything else; empty fails closed", async () => {
@@ -895,7 +895,7 @@ afterEach(() => {
   for (const child of children.splice(0)) if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
 });
 
-// ── approvals and /stop (Taskana 4763) ──
+// ── approvals and /stop ──
 
 const OFF_TEXT = "External approvals are off for this session; approve in AnyCode or switch them on in the session menu.";
 const sendsOf = (h: Harness) => h.tg.requests.filter((r) => r.method === "sendMessage");
@@ -936,7 +936,7 @@ async function restartBridge(h: Harness): Promise<any> {
   return bridge;
 }
 
-describe("telegram-remote approvals and /stop (Taskana 4763)", () => {
+describe("telegram-remote approvals and /stop", () => {
   it("T33 /stop calls cancel_turn once and replies Stopped.; idle -> Nothing is running.; no selection -> hint", async () => {
     const h = await harness();
     h.tg.push(msg(1, "/stop"));
@@ -1101,7 +1101,7 @@ describe("telegram-remote approvals and /stop (Taskana 4763)", () => {
   });
 });
 
-describe("telegram-remote store and shutdown (Taskana 4785)", () => {
+describe("telegram-remote store and shutdown", () => {
   it("T44 stop() waits for a state write already in flight: it resolves only after that write lands, and run() resolves instead of rejecting", async () => {
     const h = await harness({ autoStart: false });
     const lib = await loadExample("service.mjs");

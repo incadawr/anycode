@@ -61,7 +61,7 @@ async function flush(): Promise<void> {
   await Promise.resolve();
 }
 
-/** Taskana 4294 suite: fact minting does REAL fs I/O (realpath/lstat), which settles on macrotasks. */
+/** suite: fact minting does REAL fs I/O (realpath/lstat), which settles on macrotasks. */
 async function settle(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 25));
 }
@@ -90,7 +90,7 @@ describe("CodexApprovalBridge — decisions", () => {
       toolName: "CodexExec",
       input: { command: "git status", cwd: "/workspace" },
       mode: "build",
-      // TASK.184: `git status` classifies read-only with no shell expression,
+      // `git status` classifies read-only with no shell expression,
       // so the first decision test's default command now presents as low risk.
       metadata: { readOnly: true, riskLevel: "low", sideEffectScope: "process" },
     });
@@ -171,7 +171,7 @@ describe("CodexApprovalBridge — decisions", () => {
   });
 });
 
-describe("CodexApprovalBridge — tolerant decoding (TASK.38 DoD)", () => {
+describe("CodexApprovalBridge — tolerant decoding (DoD)", () => {
   it("accepts optional/null fields and unknown extra keys without rejecting", async () => {
     const { bridge, emitted } = rig();
 
@@ -265,13 +265,13 @@ describe("CodexApprovalBridge — tolerant decoding (TASK.38 DoD)", () => {
 });
 
 /**
- * TASK.184: metadata is derived from the shared Bash classifier, fail-closed.
+ * metadata is derived from the shared Bash classifier, fail-closed.
  * Read-only commands with NO shell expression present as readOnly/low; every
  * other shape — unknown class, any shell expression (even a harmless compound),
  * a stdin write, or a missing command — keeps the high default. Classification
  * only changes what the modal SAYS; the decision still goes through the broker.
  */
-describe("CodexApprovalBridge — classifier-derived metadata (TASK.184)", () => {
+describe("CodexApprovalBridge — classifier-derived metadata", () => {
   it.each([
     ["ls", { readOnly: true, riskLevel: "low" }],
     ["cat src/main.ts", { readOnly: true, riskLevel: "low" }],
@@ -336,9 +336,9 @@ describe("CodexApprovalBridge — classifier-derived metadata (TASK.184)", () =>
 });
 
 /**
- * Taskana 4294 (cross-review F1) — the codex-engine half. A codex session's
+ * (cross-review F1) — the codex-engine half. A codex session's
  * approvals never pass through core's permission engine, so IpcPermissionBroker
- * (TASK.144 rule seam) is the ONLY gate a persisted always-allow rule passes
+ * (rule seam) is the ONLY gate a persisted always-allow rule passes
  * through. A fileChange approval (`CodexApplyPatch`) is a FILE WRITE whose
  * only possible rule shape is the bare tool-level `{toolName}` (permission-
  * pattern.ts: its `paths[]` input has no single subject, so it deliberately
@@ -347,10 +347,10 @@ describe("CodexApprovalBridge — classifier-derived metadata (TASK.184)", () =>
  * it, and the broker must refuse to auto-allow an unprovable one.
  *
  * The command approval (`CodexExec`) is a command line, not a path: it keeps
- * the TASK.184 Bash translation and is out of 4294's scope (documented
+ * the Bash translation and is out of 4294's scope (documented
  * residual — a Bash rule is an owner grant that cannot be path-analysed).
  */
-describe("CodexApprovalBridge — Taskana 4294 workspace facts on file changes", () => {
+describe("CodexApprovalBridge — workspace facts on file changes", () => {
   let root: string;
   let elsewhere: string;
 
@@ -535,14 +535,14 @@ describe("CodexApprovalBridge — Taskana 4294 workspace facts on file changes",
     bridge.handle(command({ command: "git status" }), response);
     await flush();
 
-    // TASK.184 translation stays: the rule answered silently, nothing was presented.
+    // translation stays: the rule answered silently, nothing was presented.
     expect(emitted).toEqual([]);
     expect(response.result).toHaveBeenCalledWith({ decision: "accept" });
   });
 });
 
 /**
- * Taskana 4070: a Codex `commandExecution` approval renders the SAME
+ * a Codex `commandExecution` approval renders the SAME
  * per-command risk plaque a core Bash ask gets in the modal. The bridge's
  * decoded ask (toolName CodexExec + input.command) is exactly what the modal's
  * describePermissionAsk reads, so these pin the render at that boundary — the
@@ -550,7 +550,7 @@ describe("CodexApprovalBridge — Taskana 4294 workspace facts on file changes",
  * wire shape (joined for classification/display only). Presentation only: the
  * decision still goes through the broker.
  */
-describe("CodexApprovalBridge — risk plaque for commandExecution approvals (Taskana 4070)", () => {
+describe("CodexApprovalBridge — risk plaque for commandExecution approvals", () => {
   it("a read-only command renders the readOnly plaque", async () => {
     const { bridge, broker, emitted } = rig();
     bridge.handle(command({ command: "git status" }), responder());
@@ -594,7 +594,7 @@ describe("CodexApprovalBridge — risk plaque for commandExecution approvals (Ta
     await flush();
     const presented = ask(emitted);
     expect(presented.input).toMatchObject({ command: "git status" }); // joined, shown as one line
-    expect(presented.metadata).toMatchObject({ readOnly: true, riskLevel: "low" }); // TASK.184 applied to the joined form
+    expect(presented.metadata).toMatchObject({ readOnly: true, riskLevel: "low" }); // applied to the joined form
     expect(bashRiskPlaque("CodexExec", presented.input)).toBe(BASH_RISK_PLAQUE.readOnly);
     broker.handleResponse(presented.requestId, "deny");
     await flush();
@@ -646,7 +646,7 @@ describe("CodexApprovalBridge — risk plaque for commandExecution approvals (Ta
     await flush();
   });
 
-  // Cross-review D2: the plaque follows the bridge's own TASK.184 stdin gate.
+  // Cross-review D2: the plaque follows the bridge's own stdin gate.
   // A writeStdin approval is input to an ALREADY-running command; the bridge
   // keeps the fail-closed high metadata for it, and the plaque must not
   // contradict that by calling the command line "provably read-only" in the
@@ -657,7 +657,7 @@ describe("CodexApprovalBridge — risk plaque for commandExecution approvals (Ta
     await flush();
     const presented = ask(emitted);
     expect(presented.input).toMatchObject({ command: "git status", kind: "writeStdin" });
-    expect(presented.metadata).toMatchObject({ readOnly: false, riskLevel: "high" }); // TASK.184 gate
+    expect(presented.metadata).toMatchObject({ readOnly: false, riskLevel: "high" }); // gate
     expect(bashRiskPlaque("CodexExec", presented.input)).toBeNull(); // plaque agrees with the metadata
     broker.handleResponse(presented.requestId, "deny");
     await flush();
@@ -665,13 +665,13 @@ describe("CodexApprovalBridge — risk plaque for commandExecution approvals (Ta
 });
 
 /**
- * Taskana 4265: a file change whose every target is realpath-provably inside
+ * a file change whose every target is realpath-provably inside
  * the session workspace — under a policy that already allows workspace
  * writes — is accepted without asking. Everything else still asks, exactly
  * as before. Real tmp workspace (realpath containment), async fs settled via
  * vi.waitFor.
  */
-describe("CodexApprovalBridge — workspace patch auto-accept (Taskana 4265)", () => {
+describe("CodexApprovalBridge — workspace patch auto-accept", () => {
   let WS = "";
   let OUTSIDE = "";
   const patchFs = new NodeFileSystemAdapter();
@@ -729,7 +729,7 @@ describe("CodexApprovalBridge — workspace patch auto-accept (Taskana 4265)", (
     expect(broker.pendingCount).toBe(0);
   });
 
-  // Cross-review M1 (Taskana 4265): a delete-kind patch asks even inside the
+  // Cross-review M1: a delete-kind patch asks even inside the
   // workspace — core's edit-mode containment widens only Write/Edit and
   // Claude's workspace tier is acceptEdits, so the codex child must not become
   // the only posture that silently deletes contained files.

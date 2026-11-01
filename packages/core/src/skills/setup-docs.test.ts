@@ -1,5 +1,5 @@
 /**
- * Taskana 4707 — "docs in bundle sync with repo" as a SOURCE test. A true
+ * "docs in bundle sync with repo" as a SOURCE test. A true
  * asar-level test needs a package build (CI-only), so drift is caught here
  * instead: the anycode-setup skill's topic table and the docs/user/ index are
  * asserted against the real tree in every checkout, the same tree that
@@ -49,7 +49,7 @@ function topicTableRows(): string[] {
   return rows;
 }
 
-describe("anycode-setup docs sync (Taskana 4707)", () => {
+describe("anycode-setup docs sync", () => {
   it("every topic named in the skill's topic table exists under docs/user/ and is non-empty", () => {
     for (const topic of topicTableRows()) {
       readTopic(topic);
@@ -108,7 +108,7 @@ describe("anycode-setup docs sync (Taskana 4707)", () => {
     }
   });
 
-  it("the Sessions API topic is in the skill table and documents the connect path (Taskana 4747)", () => {
+  it("the Sessions API topic is in the skill table and documents the connect path", () => {
     expect(topicTableRows()).toContain("sessions-api.md");
     const page = readTopic("sessions-api.md");
     expect(page).toContain("list_sessions");

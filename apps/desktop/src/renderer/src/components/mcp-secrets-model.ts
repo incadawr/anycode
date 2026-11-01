@@ -1,5 +1,5 @@
 /**
- * Pure view-model for the MCP secrets block of Settings → MCP (Taskana 4752, part C).
+ * Pure view-model for the MCP secrets block of Settings → MCP (part C).
  * Name validation, ordering, the reference snippet, the notice, and the failure
  * text. The component is a thin shell over these, and every one is unit-tested
  * directly (mcp-secrets-model.test.ts).

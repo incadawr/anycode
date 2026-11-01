@@ -1,5 +1,5 @@
 /**
- * Wire-byte proof of the DeepSeek (TASK 4241) reasoning-effort mapping: the
+ * Wire-byte proof of the DeepSeek reasoning-effort mapping: the
  * unit coverage in model-port.test.ts only asserts the PURE
  * `reasoningRequestOptions` options object — it never drives a real request
  * through `AiSdkModelPort` and inspects what actually lands on the wire. The
@@ -100,7 +100,7 @@ async function drain(iterable: AsyncIterable<ModelStreamEvent>): Promise<ModelSt
   return out;
 }
 
-describe("DeepSeek reasoning-effort mapping over the real @ai-sdk/anthropic wire (TASK 4241)", () => {
+describe("DeepSeek reasoning-effort mapping over the real @ai-sdk/anthropic wire", () => {
   const captured: { url: string; body: Record<string, unknown> }[] = [];
 
   afterEach(() => {
@@ -180,7 +180,7 @@ describe("DeepSeek reasoning-effort mapping over the real @ai-sdk/anthropic wire
     expect(captured[0]!.body).toMatchObject({ thinking: { type: "adaptive" }, output_config: { effort: "xhigh" }, max_tokens: 4096 });
   });
 
-  it("title request sends no tools or thinking and uses low effort (Taskana 4893)", async () => {
+  it("title request sends no tools or thinking and uses low effort", async () => {
     stubFetch();
     const { port } = portFor("low");
     // Desktop wraps the real port in both decorators; test the actual chain.

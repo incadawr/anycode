@@ -19,7 +19,7 @@ function gitFiles(): string[] {
     .filter(Boolean);
 }
 
-describe("repo hygiene — owner home path (Taskana 4163)", () => {
+describe("repo hygiene — owner home path", () => {
   it("no tracked file contains the owner's home-path literal", () => {
     // Sanity: repoRoot must really be the repo root (guards against path drift).
     expect(existsSync(join(repoRoot, "package.json"))).toBe(true);
@@ -48,12 +48,12 @@ describe("repo hygiene — owner home path (Taskana 4163)", () => {
   });
 });
 
-// Taskana 4163: captured rollout fixtures must not carry real infrastructure
+// captured rollout fixtures must not carry real infrastructure
 // IPs. Every IPv4-looking token — bare or as a CIDR base — is limited to
 // RFC 5737 documentation ranges, 10.0.0.0/8 and 127.0.0.0/8 (no CIDR
 // exemption: a real host written as "a.b.c.d/32" must still fail).
 // Deliberately narrow: codex-rollout-fixtures/ only (.jsonl and README.md).
-describe("repo hygiene — codex rollout fixtures carry no real IPv4 (Taskana 4163)", () => {
+describe("repo hygiene — codex rollout fixtures carry no real IPv4", () => {
   const fixturesDir = join(repoRoot, "apps/desktop/src/main/codex-rollout-fixtures");
 
   const IPv4_RE = /\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b/g;

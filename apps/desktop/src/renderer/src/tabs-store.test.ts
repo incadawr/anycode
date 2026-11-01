@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 import { createTabsStore, HIDDEN_WORKSPACES_KEY, type StorageLike } from "./tabs-store.js";
 
-describe("availableEngines (TASK.41, design/slice-codex-fixes-cut.md §2(g)/§5.5)", () => {
+describe("availableEngines (design/slice-codex-fixes-cut.md §2(g)/§5.5)", () => {
   it("defaults to ['core'] before any fetch — Core never depends on external diagnosis", () => {
     const store = createTabsStore();
     expect(store.getState().availableEngines).toEqual(["core"]);
@@ -113,7 +113,7 @@ describe("tabs-store", () => {
     expect(store.getState().tabs[0]?.hooksPanelOpen).toBe(false);
   });
 
-  it("tasksPanelOpen defaults to false — the background-tasks drawer is user-opened chrome state (TASK.91)", () => {
+  it("tasksPanelOpen defaults to false — the background-tasks drawer is user-opened chrome state", () => {
     const store = createTabsStore();
     store.getState().addTab({ tabId: "a", workspace: "/ws/a" });
     expect(store.getState().tabs[0]?.tasksPanelOpen).toBe(false);
@@ -178,7 +178,7 @@ describe("tabs-store", () => {
     expect(store.getState().tabs[0]?.lspPanelOpen).toBe(false);
   });
 
-  it("opening one right drawer closes the others on the same tab after the Timeline panel's removal (Taskana 4742: lsp/hooks/tasks remain mutually exclusive)", () => {
+  it("opening one right drawer closes the others on the same tab after the Timeline panel's removal (lsp/hooks/tasks remain mutually exclusive)", () => {
     const store = createTabsStore();
     store.getState().addTab({ tabId: "a", workspace: "/ws/a" });
 
@@ -188,7 +188,7 @@ describe("tabs-store", () => {
     expect(store.getState().tabs[0]?.hooksPanelOpen).toBe(false);
   });
 
-  it("setTasksPanelOpen flips only its own tab's flag (TASK.91)", () => {
+  it("setTasksPanelOpen flips only its own tab's flag", () => {
     const store = createTabsStore();
     store.getState().addTab({ tabId: "a", workspace: "/ws/a" });
     store.getState().addTab({ tabId: "b", workspace: "/ws/b" });
@@ -200,7 +200,7 @@ describe("tabs-store", () => {
     expect(b?.tasksPanelOpen).toBe(true);
   });
 
-  it("opening the tasks drawer closes the other drawers on the same tab (TASK.91)", () => {
+  it("opening the tasks drawer closes the other drawers on the same tab", () => {
     const store = createTabsStore();
     store.getState().addTab({ tabId: "a", workspace: "/ws/a" });
 
@@ -213,7 +213,7 @@ describe("tabs-store", () => {
     expect(tab?.hooksPanelOpen).toBe(false);
   });
 
-  it("opening any of the other drawers closes the tasks drawer (TASK.91)", () => {
+  it("opening any of the other drawers closes the tasks drawer", () => {
     const store = createTabsStore();
     store.getState().addTab({ tabId: "a", workspace: "/ws/a" });
 
@@ -410,7 +410,7 @@ describe("tabs-store draft slot (slice P7.12, §4.1)", () => {
     expect(store.getState().draft?.codexProfileId).toBeUndefined();
   });
 
-  it("setDraftConnectionId sets the draft's cross-connection model pick, absent until then (TASK.106 cut-1 stage A)", () => {
+  it("setDraftConnectionId sets the draft's cross-connection model pick, absent until then (cut-1 stage A)", () => {
     const store = createTabsStore();
     store.getState().openDraft("/ws/a");
     expect(store.getState().draft?.connectionId).toBeUndefined();
@@ -450,7 +450,7 @@ describe("tabs-store draft slot (slice P7.12, §4.1)", () => {
     expect(store.getState().draft?.connectionId).toBeUndefined();
   });
 
-  it("setDraftImages sets the draft's image attachments, absent until then (TASK.81)", () => {
+  it("setDraftImages sets the draft's image attachments, absent until then", () => {
     const store = createTabsStore();
     store.getState().openDraft("/ws/a");
     expect(store.getState().draft?.images).toBeUndefined();
@@ -491,7 +491,7 @@ describe("tabs-store draft slot (slice P7.12, §4.1)", () => {
     expect(store.getState().draft).toBeNull();
   });
 
-  it("setDraftEngineEffort sets the draft's non-core effort pick, absent until then (TASK.81)", () => {
+  it("setDraftEngineEffort sets the draft's non-core effort pick, absent until then", () => {
     const store = createTabsStore();
     store.getState().openDraft("/ws/a");
     store.getState().setDraftEngine("codex");

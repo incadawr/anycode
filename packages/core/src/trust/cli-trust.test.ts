@@ -1,5 +1,5 @@
 /**
- * CLI workspace-trust gate (Taskana 4736, design 2.9): interactive t/o/N prompt
+ * CLI workspace-trust gate (design 2.9): interactive t/o/N prompt
  * persists or not, non-interactive skip, denied is silent, the env override
  * trusts for this process only, and a failure is fail-closed. Injected streams
  * and a temp home — the real ~/.anycode is never touched.
@@ -79,7 +79,7 @@ describe("parseTrustAnswer", () => {
     expect(parseTrustAnswer("yes please")).toBe("no");
   });
 
-  // Taskana 4736 xfix m2: the universal confirmation used to fall into the
+  // xfix m2: the universal confirmation used to fall into the
   // DENIED branch — persisted refusal from an intending-to-trust user.
   it("y/yes trusts and n/no denies (xfix m2)", () => {
     expect(parseTrustAnswer("y")).toBe("trust");

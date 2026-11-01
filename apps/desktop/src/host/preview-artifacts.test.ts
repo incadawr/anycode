@@ -74,7 +74,7 @@ describe("PreviewArtifactCollector — multi-engine event shapes (risk §5.3)", 
     ).toEqual(["/tmp/notes.md"]);
   });
 
-  it(".markdown is collected too — TASK.112 closed the gap the auto-open filter shared with the other five gates", () => {
+  it(".markdown is collected too — closed the gap the auto-open filter shared with the other five gates", () => {
     const collector = new PreviewArtifactCollector();
     collector.observeStart(start("c1", "Write", { file_path: "/tmp/plan.markdown", content: "x" }));
     collector.observeResult(result("c1", "Write", "success"));

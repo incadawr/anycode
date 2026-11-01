@@ -1,5 +1,5 @@
 /**
- * Deep-research bundled preset (Taskana 4095 / TASK.88 §6): pins the contract
+ * Deep-research bundled preset (§6): pins the contract
  * of examples/workflows/deep-research.json — the ONE workflow definition the
  * repo itself bundles (discovered as a third "bundled" root after project and
  * user, so any same-named definition shadows it). These tests read the REAL
@@ -84,7 +84,7 @@ describe("examples/workflows/deep-research.json — bundled preset", () => {
     }
   });
 
-  it("the search-wide step requests WebSearch explicitly; the other steps carry no extras (Taskana 4095 follow-up)", () => {
+  it("the search-wide step requests WebSearch explicitly; the other steps carry no extras (follow-up)", () => {
     // WebSearch is NOT a general-purpose default anymore: the preset's sweep
     // step must OPT IN through its own `tools:` entry — the only mechanism
     // that puts the boot-built tool into a step child's registry when a

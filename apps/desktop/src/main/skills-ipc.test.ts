@@ -360,7 +360,7 @@ describe("handleSkillsImportScan / handleSkillsImportApply", () => {
     );
     await seed(
       join(home, ".codex/skills/nested/SKILL.md"),
-      "---\nname: nested\ndescription: codex nested\nmetadata:\n  owner: taskana\n---\nnested body\n",
+      "---\nname: nested\ndescription: codex nested\nmetadata:\n  owner: example\n---\nnested body\n",
     );
 
     const deps = makeDeps(ws, home);
@@ -457,9 +457,9 @@ describe("skills-create security hardening (P7.20 W6-FIX)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Taskana 4758: a workspace scope reference (`ws_…`) resolves like a tab id.
+// a workspace scope reference (`ws_…`) resolves like a tab id.
 
-describe("skills scope reference (Taskana 4758)", () => {
+describe("skills scope reference", () => {
   const WS_REF = "ws_0123456789abcdef";
 
   function refDeps(workspace: string | undefined, home: string): SkillsIpcDeps {

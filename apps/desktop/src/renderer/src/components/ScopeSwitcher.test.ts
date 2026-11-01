@@ -1,5 +1,5 @@
 /**
- * Taskana 4758: render tests for the scope dropdown. The renderer package runs
+ * render tests for the scope dropdown. The renderer package runs
  * vitest in node, so markup is checked with renderToStaticMarkup, mirroring
  * SessionAccessRow.test.ts. The open menu is rendered through the exported
  * ScopeMenuView; keyboard movement is pinned through nextActiveIndex.
@@ -45,7 +45,7 @@ function menu(entries: ScopeWorkspaceEntry[], extra: Partial<Parameters<typeof S
   );
 }
 
-describe("ScopeDropdown (Taskana 4758)", () => {
+describe("ScopeDropdown", () => {
   it("closed state renders the trigger with its data attributes and the User label", () => {
     const html = closed([]);
     expect(html).toContain("data-scope-trigger");

@@ -307,7 +307,7 @@ describe("profile `engine:` round-trip through the editor", () => {
   });
 });
 
-describe("main-inherited profiles are read-only (TASK.214)", () => {
+describe("main-inherited profiles are read-only", () => {
   function md(fields: Record<string, string>, body: string): string {
     const lines = Object.entries(fields).map(([k, v]) => `${k}: ${v}`);
     return `---\n${lines.join("\n")}\n---\n${body}`;

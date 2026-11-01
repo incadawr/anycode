@@ -1,5 +1,5 @@
 /**
- * TASK.135 / Taskana 4074 follow-up: unit suite for the credential-free
+ * follow-up: unit suite for the credential-free
  * loopback proxy relay.
  *
  * The fake upstream is a plain node http server that (a) records the
@@ -143,7 +143,7 @@ describe("parseUpstreamProxyUrl", () => {
   });
 });
 
-describe("checkRelayAuthorization (Taskana 4685 rework — blocker B1)", () => {
+describe("checkRelayAuthorization (rework — blocker B1)", () => {
   const expected = `Basic ${Buffer.from(`anycode:t`).toString("base64")}`;
 
   it("B1: a request with NO Proxy-Authorization is `absent` — rejected, never accepted", () => {
@@ -212,7 +212,7 @@ describe("proxy relay (CONNECT + plain HTTP)", () => {
     expect(relay).toBeDefined();
     cleanup.push(() => new Promise<void>((resolve) => { relay!.close(); resolve(); }));
 
-    // Taskana 4685 rework: the relay URL carries the token as USERINFO
+    // rework: the relay URL carries the token as USERINFO
     // (`http://anycode:<token>@127.0.0.1:<port>`) — curl/git/npm/undici all
     // turn this into the Proxy-Authorization the gate below requires. The
     // upstream password ("secret") appears NOWHERE in it.
@@ -309,7 +309,7 @@ describe("proxy relay (CONNECT + plain HTTP)", () => {
   });
 
   it("B2: resolveProxyRelay is keyed per upstream — two upstreams get TWO relays, one upstream is reused", async () => {
-    // A credential-less value names no upstream: no relay (TASK.135 passthrough).
+    // A credential-less value names no upstream: no relay (passthrough).
     expect(await resolveProxyRelay("http://proxy.corp:3128")).toBeUndefined();
     // Port 9 (discard) is closed on a dev box — the bind still succeeds; the
     // relay only fails to reach its upstream when a client actually connects,
@@ -342,7 +342,7 @@ describe("proxy relay (CONNECT + plain HTTP)", () => {
     fresh!.close();
   });
 
-  // ── Taskana 4685 rework (blocker B1): the auth gate matrix. No token and a
+  // ── rework (blocker B1): the auth gate matrix. No token and a
   // wrong token are BOTH rejected with 407, on plain HTTP and CONNECT alike,
   // before any upstream contact; the right token passes both. The token is
   // never printed or logged — the assertions only ever see status codes and
@@ -626,7 +626,7 @@ describe("proxy relay (CONNECT + plain HTTP)", () => {
 
 // B2 companion: the refuse memory is PER UPSTREAM — a refused https://
 // upstream does not silence the warn for a different, relayable one.
-describe("refuse memory per upstream (Taskana 4685 rework B2)", () => {
+describe("refuse memory per upstream (rework B2)", () => {
   it("two refused upstreams each warn once; a refused key never blocks a different upstream", async () => {
     const warns: string[] = [];
     const originalWarn = console.warn;
@@ -656,7 +656,7 @@ describe("proxy relay hardening (review follow-up)", () => {
       "keep-alive": "timeout=5",
       "proxy-connection": "keep-alive",
       "proxy-authorization": "Basic client-supplied",
-      "x-anycode-relay-token": "client-smuggled", // Taskana 4685 rework: retired header, dropped outright
+      "x-anycode-relay-token": "client-smuggled", // rework: retired header, dropped outright
       upgrade: "websocket",
       te: "trailers",
       trailer: "x-checksum", // cross-review F7 triage: Trailer IS stripped — no dangling trailer promise post-relay

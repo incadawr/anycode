@@ -1,5 +1,5 @@
 /**
- * Read-only COMPLETED child transcript view-state mapper (TASK.102 CUT-S2
+ * Read-only COMPLETED child transcript view-state mapper (CUT-S2
  * §10.8.1 point 4, slice S2c C4): a pure projection from a
  * `CHILD_HISTORY_CHANNEL` response (main/tab-ipc.ts's `handleChildHistory`)
  * into exactly one of three view states App.tsx's read-only child branch

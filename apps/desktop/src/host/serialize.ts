@@ -42,7 +42,7 @@ export function serializeError(error: unknown): SerializedError {
 
 /**
  * Wire error built EXCLUSIVELY from the core event's whitelist-derived `safe`
- * descriptor (TASK.33 W7b-FIX #2): the raw provider error can embed a response
+ * descriptor (W7b-FIX #2): the raw provider error can embed a response
  * body or auth header in its message/stack, so it NEVER crosses. `name` is the
  * constant "ProviderError" (raw `error.name` is provider-controlled text);
  * diagnostic identity rides `retry.code` and the host process log. Stack is

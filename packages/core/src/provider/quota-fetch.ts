@@ -1,5 +1,5 @@
 /**
- * Fetch wrapper for provider-reported quota capture (Taskana 4090 / TASK.71).
+ * Fetch wrapper for provider-reported quota capture.
  *
  * The AI SDK factory options all accept a `fetch` override, and a wrapping
  * fetch is the ONE interception point that sees response HEADERS without

@@ -289,7 +289,7 @@ describe.skipIf(!rgAvailable)("grepTool — rg/JS backend parity", () => {
   });
 });
 
-// ── tgrep backend selection (Taskana 4160) — hermetic, no real binaries ──
+// ── tgrep backend selection — hermetic, no real binaries ──
 
 function completedResult(stdout: string, exitCode = 0): ExecResult {
   return {
@@ -408,7 +408,7 @@ describe("selectGrepBackend (pure selector)", () => {
   });
 });
 
-describe("grepTool — tgrep backend selection (Taskana 4160)", () => {
+describe("grepTool — tgrep backend selection", () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -580,7 +580,7 @@ describe("grepTool — tgrep backend selection (Taskana 4160)", () => {
   });
 });
 
-describe("grepTool — tgrep capped stdout falls through the ladder (Taskana 4160 cross-review F1)", () => {
+describe("grepTool — tgrep capped stdout falls through the ladder (cross-review F1)", () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -643,7 +643,7 @@ describe("grepTool — tgrep capped stdout falls through the ladder (Taskana 416
   });
 });
 
-describe("grepTool — tgrep + rg re-check stay inside the tool budget (Taskana 4160 cross-review F3)", () => {
+describe("grepTool — tgrep + rg re-check stay inside the tool budget (cross-review F3)", () => {
   let tmpDir: string;
 
   beforeEach(() => {

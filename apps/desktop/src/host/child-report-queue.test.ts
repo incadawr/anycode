@@ -1,5 +1,5 @@
 /**
- * TASK.145 срез 2: `ChildReportQueue` unit tests. A stub `ChildReportOutbound`
+ * срез 2: `ChildReportQueue` unit tests. A stub `ChildReportOutbound`
  * records every `sendDirect` call so delivery attempts (immediate, resend,
  * cap-notice) can be asserted without a real Session/WirePort.
  */
@@ -19,7 +19,7 @@ function stubOutbound(): ChildReportOutbound & { sent: Extract<HostToUiMessage, 
   };
 }
 
-describe("ChildReportQueue (TASK.145 срез 2 §4 point 1)", () => {
+describe("ChildReportQueue (срез 2 §4 point 1)", () => {
   it("add() attempts an immediate best-effort sendDirect", () => {
     const outbound = stubOutbound();
     const queue = new ChildReportQueue(outbound);
@@ -46,9 +46,9 @@ describe("ChildReportQueue (TASK.145 срез 2 §4 point 1)", () => {
     expect(outbound.sent.at(-1)).toEqual({ type: "child_report", id: "report-plain", text: "plain" });
   });
 
-  // Taskana 4055 cross-review F2: the ceiling summary rides the detached
+  // cross-review F2: the ceiling summary rides the detached
   // report's childTerminal too (the only terminal channel a detached child has).
-  it("add() with a ceiling summary in childTerminal sends and resends it verbatim (Taskana 4055 F2)", () => {
+  it("add() with a ceiling summary in childTerminal sends and resends it verbatim (F2)", () => {
     const outbound = stubOutbound();
     const queue = new ChildReportQueue(outbound);
     const meta = {
@@ -196,7 +196,7 @@ describe("ChildReportQueue (TASK.145 срез 2 §4 point 1)", () => {
   });
 });
 
-describe("ChildReportQueue.upsert (TASK.148 slice 2 — coalesces repeat notices for the SAME id into one pending slot)", () => {
+describe("ChildReportQueue.upsert (slice 2 — coalesces repeat notices for the SAME id into one pending slot)", () => {
   it("upsert() of a brand-new id behaves like add(): admits and sends immediately", () => {
     const outbound = stubOutbound();
     const queue = new ChildReportQueue(outbound);
@@ -264,7 +264,7 @@ describe("ChildReportQueue.upsert (TASK.148 slice 2 — coalesces repeat notices
     expect(outbound.sent).toEqual([]);
   });
 
-  // taskana 4181: the supervisor idle reminder rides the same coalescing
+  // the supervisor idle reminder rides the same coalescing
   // discipline — every repeat shares the ONE "supervisor-idle-reminder" id,
   // so a long-ignored supervisor consumes at most one pending slot (latest
   // text wins), exactly like a flapping child's stall notices above.
@@ -284,7 +284,7 @@ describe("ChildReportQueue.upsert (TASK.148 slice 2 — coalesces repeat notices
   });
 });
 
-describe("ChildReportQueue snapshot/restore/onChange (Taskana 4123)", () => {
+describe("ChildReportQueue snapshot/restore/onChange", () => {
   it("empty queue: snapshot() is {reports: [], droppedSinceNotice: 0}; onChange fires on nothing until a mutation", () => {
     const outbound = stubOutbound();
     const queue = new ChildReportQueue(outbound);

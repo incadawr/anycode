@@ -631,7 +631,7 @@ describe("createCodexInstallController (IPC surface — verdict gate, doctor gat
   });
 });
 
-describe("createCodexInstallController — post-install doctor runs behind the engine proxy (TASK.139 F4)", () => {
+describe("createCodexInstallController — post-install doctor runs behind the engine proxy (F4)", () => {
   const CARRIER_ENV = { PATH: "/usr/local/bin", ANYCODE_CODEX_PROXY_URL: "http://user:pass@codex-proxy.example.com:3128" };
 
   /** Installs the recommended version and returns every `runDoctor` call's options. */
@@ -686,7 +686,7 @@ describe("createCodexInstallController — post-install doctor runs behind the e
   });
 
   // Optional dep: with none supplied the doctor is called exactly as it was
-  // before TASK.139 — no options object at all, so `runCodexDoctor` keeps its
+  // before — no options object at all, so `runCodexDoctor` keeps its
   // own `process.env` default and every existing deps bag stays valid.
   it("passes no options at all when main supplies no source env", async () => {
     const seen = await installCapturingDoctor();

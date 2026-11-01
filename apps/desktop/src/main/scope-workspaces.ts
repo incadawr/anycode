@@ -1,5 +1,5 @@
 /**
- * Taskana 4758: main-side registry behind the Settings scope dropdown.
+ * main-side registry behind the Settings scope dropdown.
  *
  * It lists the folders a user can point a Settings pane at (open tabs first,
  * then recent root sessions) and resolves an opaque scope reference back to a

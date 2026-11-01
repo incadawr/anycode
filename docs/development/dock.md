@@ -1,4 +1,4 @@
-# The right-side dock (Taskana 4703)
+# The right-side dock
 
 One tabbed dock column on the right side of the session content replaces the
 stack of independent fixed-width columns. This note is the design record for
@@ -138,7 +138,7 @@ primary body publishes preview bounds (the D9 channel has one owner). A new
 preview that arrives while the user reads git or subagents lands in the strip
 without taking focus; an explicit open still focuses its tab.
 
-## Conversation-tab ownership (Taskana 4738)
+## Conversation-tab ownership
 
 The dock store is a singleton across conversation tabs, so the tab set needs
 an owner: `ownerTabId` marks the conversation tab whose items `tabs`/

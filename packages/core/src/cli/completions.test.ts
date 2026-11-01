@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { COMMAND_HELP, KNOWN_SLASH_COMMANDS } from "./commands.js";
 import { slashCompletions } from "./completions.js";
 
-describe("slashCompletions (Taskana 4082)", () => {
+describe("slashCompletions", () => {
   it("`/` returns all commands in KNOWN_SLASH_COMMANDS order with their COMMAND_HELP summaries", () => {
     const result = slashCompletions("/");
     expect(result.map((c) => c.command)).toEqual([...KNOWN_SLASH_COMMANDS]);

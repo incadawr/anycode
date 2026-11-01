@@ -58,7 +58,7 @@ export interface AppServerClientOptions {
    */
   codexHome?: string;
   /**
-   * Taskana 4682 rework: a codex CHILD's private temp dir
+   * rework: a codex CHILD's private temp dir
    * (`~/.anycode/tmp/<childSessionId>`, created 0700 by the boot site). When
    * present it OVERRIDES the TMPDIR passthrough value (and sets TMPPREFIX for
    * zsh heredocs plus the TMP/TEMP Windows spellings) in EVERY env this
@@ -104,7 +104,7 @@ export class AppServerClientError extends Error {
    * The message alone cannot classify a failure (it is free-form server prose),
    * so callers that must react to a SPECIFIC refusal — e.g. `-32600` "no active
    * turn to interrupt", the app-server's answer to an interrupt that arrives
-   * inside its turn-start reject window (TASK.38) — read this instead.
+   * inside its turn-start reject window — read this instead.
    * Undefined for every locally-raised failure (timeout, transport, bounds).
    */
   readonly code?: number;
@@ -238,7 +238,7 @@ export function augmentCodexPathForGui(pathValue: string | undefined, platform =
  * `codexHome` (codex-profiles cut §2.6.2) is assigned LAST, after the
  * passthrough list, so a selected profile's home always beats an ambient
  * `CODEX_HOME` from the developer shell; absent, the passthrough behaviour is
- * byte-identical to the pre-profiles build. `tempDir` (Taskana 4682 rework)
+ * byte-identical to the pre-profiles build. `tempDir` (rework)
  * follows the SAME last-assignment discipline for the tmp family: a codex
  * child's private temp dir beats the ambient TMPDIR/TEMP/TMP the passthrough
  * copied in, and TMPPREFIX (zsh heredoc temp files) is set alongside — the
@@ -259,7 +259,7 @@ export function buildCodexChildEnv(source: NodeJS.ProcessEnv, platform = process
     "CODEX_HOME", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy",
     "all_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS",
     "REQUESTS_CA_BUNDLE",
-    // Taskana 4752 part A: the session-identity pair, when main/host stamped it.
+    // part A: the session-identity pair, when main/host stamped it.
     ...SESSION_TOOL_ENV_KEYS,
   ];
   const env: NodeJS.ProcessEnv = {};
@@ -267,7 +267,7 @@ export function buildCodexChildEnv(source: NodeJS.ProcessEnv, platform = process
     const value = source[key];
     if (value !== undefined) env[key] = value;
   }
-  // Taskana 4685 rework: a credentialed proxy never reaches the engine CLI —
+  // rework: a credentialed proxy never reaches the engine CLI —
   // each value is swapped for the relay of THAT value (blocker B2: the host
   // fork can hold several credentialed upstreams at once, and a relay
   // fronting a different one would silently re-route the child). Fail-closed
@@ -283,11 +283,11 @@ export function buildCodexChildEnv(source: NodeJS.ProcessEnv, platform = process
   }
   // ALL_PROXY/all_proxy ride the same passthrough list; the relay only fronts
   // the HTTP(S)_PROXY upstream, so a credentialed one is dropped — the DoD is
-  // "no upstream password in an engine tab's env" (Taskana 4685 review).
+  // "no upstream password in an engine tab's env" (review).
   for (const name of ["ALL_PROXY", "all_proxy"] as const) {
     if (proxyValueCarriesCredential(env[name] ?? "")) delete env[name];
   }
-  // TASK.139: `settings.codex.proxyUrl`, carried in from main under a private
+  // `settings.codex.proxyUrl`, carried in from main under a private
   // name and turned into the real proxy family here. It OVERWRITES whatever the
   // passthrough list just copied in — that value can only be the connection's
   // proxy, since main withholds the carrier entirely when the shell owns the
@@ -298,7 +298,7 @@ export function buildCodexChildEnv(source: NodeJS.ProcessEnv, platform = process
   applyEngineProxyOverride(env, source, ENV_CODEX_PROXY_URL);
   env.PATH = augmentCodexPathForGui(env.PATH, platform);
   if (codexHome !== undefined) env.CODEX_HOME = codexHome;
-  // Taskana 4682 rework: assigned AFTER the passthrough so the private dir
+  // rework: assigned AFTER the passthrough so the private dir
   // always wins over the ambient values. All four spellings because the
   // app-server inherits them verbatim into ITS tool children: TMPDIR/TMP
   // (posix os.tmpdir() and various tools), TEMP/TMP on Windows, TMPPREFIX
@@ -663,7 +663,7 @@ export class AppServerClient {
         settle(() => resolve(stdout));
       });
     });
-    // TASK.206: judged against the ACTIVE support policy (the manifest range
+    // judged against the ACTIVE support policy (the manifest range
     // Settings shows, plus the versions the user explicitly risk-accepted),
     // delivered per-fork by main via ENV_CODEX_SUPPORT_POLICY. Absent/garbage
     // policy falls back to the compiled wire pin — see

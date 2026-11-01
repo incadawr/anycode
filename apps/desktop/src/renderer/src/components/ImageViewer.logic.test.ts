@@ -1,5 +1,5 @@
 /**
- * Taskana 4091 follow-up: tests pinning the ImageViewer's modal-dialog
+ * follow-up: tests pinning the ImageViewer's modal-dialog
  * wiring. Same no-jsdom discipline as ConfirmDialog.test.ts (this package's
  * vitest runs `environment: "node"`): react-dom/server's renderToStaticMarkup
  * walks the React tree to an HTML string, and the event-prop wiring is tested
@@ -88,7 +88,7 @@ function renderViewer(props: Partial<Parameters<typeof ImageViewer>[0]> = {}): s
   );
 }
 
-describe("ImageViewer SSR render — it IS a modal dialog (Taskana 4091 follow-up)", () => {
+describe("ImageViewer SSR render — it IS a modal dialog (follow-up)", () => {
   it("renders a native <dialog>, not the old div overlay", () => {
     const html = renderViewer();
     expect(html).toContain("<dialog");
@@ -152,7 +152,7 @@ function findDialog(root: unknown): TestElement | null {
   return found;
 }
 
-describe("ImageViewer modal wiring (Taskana 4091 follow-up)", () => {
+describe("ImageViewer modal wiring (follow-up)", () => {
   // The focus-capture effect reads document.activeElement on (mocked) mount;
   // node-env vitest has no document, so a per-suite stub stands in. The
   // focus-restore tests below read (and assert on) this same shared fn.
@@ -266,7 +266,7 @@ describe("isViewerBackdropClick — only the dialog element itself is the backdr
   });
 });
 
-describe("nextIndex (ImageViewer wrap-around navigation, Taskana 4091)", () => {
+describe("nextIndex (ImageViewer wrap-around navigation)", () => {
   it("steps forward, wrapping at the end", () => {
     expect(nextIndex(0, 1, 3)).toBe(1);
     expect(nextIndex(1, 1, 3)).toBe(2);

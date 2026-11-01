@@ -598,10 +598,10 @@ describe("NodeExecutionAdapter", () => {
     );
   });
 
-  // ── TASK.135 / Taskana 4074: credentialed proxy vars never reach a non-engine child ──
-  // Taskana 4752 part A (A-4/A-5 at the process boundary): a Bash child sees the
+  // ── / credentialed proxy vars never reach a non-engine child ──
+  // part A (A-4/A-5 at the process boundary): a Bash child sees the
   // session-identity pair that the parent (host) env carries.
-  describe("session tool env reaches a Bash child (Taskana 4752)", () => {
+  describe("session tool env reaches a Bash child", () => {
     const KEYS = ["ANYCODE_SESSION_ID", "ANYCODE_SESSION_WORKSPACE"] as const;
 
     it("run and runBinary children inherit ANYCODE_SESSION_ID and ANYCODE_SESSION_WORKSPACE from the parent env", async () => {
@@ -634,7 +634,7 @@ describe("NodeExecutionAdapter", () => {
     });
   });
 
-  describe("child env proxy scrub (TASK.135)", () => {
+  describe("child env proxy scrub", () => {
     const CREDENTIALED = "http://user:s3cret@127.0.0.1:9";
 
     /** Polls until `predicate` holds or the deadline (same shape as the spawnPersistent suite's helper). */
@@ -782,9 +782,9 @@ describe("NodeExecutionAdapter", () => {
     });
   });
 
-  // ── Taskana 4074 follow-up: the credential-free loopback relay replaces the
+  // ── follow-up: the credential-free loopback relay replaces the
   // dropped vars in real spawns (npm/git/curl keep working, no credential) ──
-  describe("child env relay rewrite (Taskana 4074)", () => {
+  describe("child env relay rewrite", () => {
     const CREDENTIALED = "http://user:s3cret@127.0.0.1:9";
     const RELAY_URL = "http://127.0.0.1:47557";
 
@@ -800,7 +800,7 @@ describe("NodeExecutionAdapter", () => {
 
     /**
      * Spy the relay LOOKUP in (the per-value resolver `buildChildEnv`'s third
-     * argument reads — Taskana 4685 rework: one relay per upstream, so the
+     * argument reads — rework: one relay per upstream, so the
      * stub answers the value being swapped, like the real registry would).
      */
     async function stubRelayLookup(url: string = RELAY_URL): Promise<() => void> {
@@ -809,7 +809,7 @@ describe("NodeExecutionAdapter", () => {
       return () => spy.mockRestore();
     }
 
-    it("Taskana 4685 rework: a minted relay URL (token as userinfo) reaches the child verbatim", async () => {
+    it("rework: a minted relay URL (token as userinfo) reaches the child verbatim", async () => {
       const TOKENED = "http://anycode:AbCdEf1234567890_-XyZ@127.0.0.1:47557";
       const restore = await stubRelayLookup(TOKENED);
       tmpDir = await mkdtemp(join(tmpdir(), "anycode-exec-"));

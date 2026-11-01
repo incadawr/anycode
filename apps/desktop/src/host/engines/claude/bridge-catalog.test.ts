@@ -1,5 +1,5 @@
 /**
- * `catalogFromProfiles` (TASK.226 срез S4, plan §5 S4's one unit-testable
+ * `catalogFromProfiles` (срез S4, plan §5 S4's one unit-testable
  * piece — the rest of `bootClaudeSession`'s wiring is index.ts glue, proven
  * only by the live smoke, project convention).
  */
@@ -19,7 +19,7 @@ function profile(overrides: Partial<PersonaDefinition> = {}): PersonaDefinition 
   };
 }
 
-describe("catalogFromProfiles (TASK.226 срез S4)", () => {
+describe("catalogFromProfiles (срез S4)", () => {
   it("carries name/description/systemPrompt verbatim for a core (no-engine) profile", () => {
     expect(catalogFromProfiles([profile()])).toEqual([
       { name: "reviewer", description: "Reviews code", systemPrompt: "You review code." },
@@ -61,9 +61,9 @@ describe("catalogFromProfiles (TASK.226 срез S4)", () => {
   });
 });
 
-// TASK.180: a profile's turnBudget survives the catalog projection as
+// a profile's turnBudget survives the catalog projection as
 // maxTurns — for engine profiles AND core profiles alike.
-describe("catalogFromProfiles — turnBudget (TASK.180)", () => {
+describe("catalogFromProfiles — turnBudget", () => {
   it("carries turnBudget through as maxTurns for a core profile", () => {
     expect(catalogFromProfiles([profile({ turnBudget: 20 })])).toEqual([
       { name: "reviewer", description: "Reviews code", systemPrompt: "You review code.", maxTurns: 20 },
@@ -91,10 +91,10 @@ describe("catalogFromProfiles — turnBudget (TASK.180)", () => {
   });
 });
 
-// Taskana 4269: a profile's own connection selection rides the catalog — and
+// a profile's own connection selection rides the catalog — and
 // thus the bridge's creating spawn — verbatim. An engine profile can never
 // carry these (parser-fatal), so this projection adds nothing else.
-describe("catalogFromProfiles — connection/provider routing (Taskana 4269)", () => {
+describe("catalogFromProfiles — connection/provider routing", () => {
   it("carries connection:/provider: through verbatim for core profiles", () => {
     expect(
       catalogFromProfiles([
@@ -114,13 +114,13 @@ describe("catalogFromProfiles — connection/provider routing (Taskana 4269)", (
   });
 });
 
-// Taskana 4101: the claude door's per-call refresh — `callTool` re-reads
+// the claude door's per-call refresh — `callTool` re-reads
 // profile files and filters to the boot snapshot's declared names, matching
 // the codex door's own declared-names filter (dynamic-tool-bridge.ts handle()
 // — pinned "uses edited body/model for the next child without changing native
 // tool declarations"). Pure-filter cases first, then the composed path
 // through the real core handler.
-describe("bridgeCallableCatalog (Taskana 4101)", () => {
+describe("bridgeCallableCatalog", () => {
   const BOOT_LEAD: AgentBridgeCatalogEntry = {
     name: "glm-lead",
     description: "v1 lead",

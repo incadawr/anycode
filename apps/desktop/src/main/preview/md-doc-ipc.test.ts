@@ -1,5 +1,5 @@
 /**
- * Unit tests for md-doc-ipc.ts (TASK.99 CUT.md CONTRACTS — M1 READ, M2
+ * Unit tests for md-doc-ipc.ts (CUT.md CONTRACTS — M1 READ, M2
  * NAVIGATE): mirrors panel-ipc.test.ts's own pattern — `electron`'s
  * `ipcMain` is mocked with a handler-capturing fake (no Electron runtime
  * under vitest), zod-refusal shapes are tested against a stubbed
@@ -102,7 +102,7 @@ describe("registerMdDocIpc — MD_PREVIEW_READ", () => {
   });
 });
 
-describe("registerMdDocIpc — MD_PREVIEW_NAVIGATE (TASK.99 M2)", () => {
+describe("registerMdDocIpc — MD_PREVIEW_NAVIGATE (M2)", () => {
   it("is registered", () => {
     register(fakeDeps());
     expect(mockHandlers.has(MD_PREVIEW_NAVIGATE_CHANNEL)).toBe(true);

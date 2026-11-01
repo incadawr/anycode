@@ -1,5 +1,5 @@
 /**
- * F10 regression (TASK.102 CUT-S2 §2.5, review wave R): preload's
+ * F10 regression (CUT-S2 §2.5, review wave R): preload's
  * `PORT_ENVELOPE_TYPE` forwarding must not drop the `child` field main
  * stamps for a child-session tab's port delivery (`deliverTabPort`,
  * main/tabs.ts). Before this fix, the `ipcRenderer.on(PORT_ENVELOPE_TYPE,

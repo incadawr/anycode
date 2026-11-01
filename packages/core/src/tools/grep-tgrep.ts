@@ -1,5 +1,5 @@
 /**
- * tgrep-backed Grep tier (Taskana 4160, microsoft/tgrep). Opt-in ONLY:
+ * tgrep-backed Grep tier (microsoft/tgrep). Opt-in ONLY:
  * `ANYCODE_GREP_BACKEND=tgrep` or `settings.tools.grepBackend: "tgrep"`
  * (env > settings, default "rg"). tgrep is resolved as an ABSOLUTE path:
  * `ANYCODE_TGREP_BIN` verbatim, else one `tgrep`/`tgrep.exe` join per PATH
@@ -15,7 +15,7 @@
  * the exec port — same trust class as Bash. Acceptable for an explicit
  * opt-in flag; not enabled for anyone by default.
  *
- * Zero-match re-check (Taskana 4160 follow-up): a trigram index can be
+ * Zero-match re-check (follow-up): a trigram index can be
  * STALE — files written moments ago may not be in it yet — so "no matches"
  * from tgrep is not a final answer. tools/grep.ts re-runs every zero-match
  * tgrep result through the rg tier (always a fresh scan), then the JS path
@@ -48,7 +48,7 @@ import { buildTgrepArgs, shapeRgJsonOutput } from "./grep-rg.js";
 const TGREP_VERSION_TIMEOUT_MS = 5_000;
 
 /**
- * The tgrep SEARCH gets half the tool budget (Taskana 4160 cross-review F3).
+ * The tgrep SEARCH gets half the tool budget (cross-review F3).
  * tools/grep.ts may re-run a zero-match answer through rg on the SAME call,
  * and the dispatcher kills the call at DEFAULT_TOOL_TIMEOUT_MS + grace: two
  * full-budget spawns in sequence could exceed it and turn a correct answer
@@ -70,7 +70,7 @@ export const TGREP_SEARCH_TIMEOUT_MS = DEFAULT_TOOL_TIMEOUT_MS / 2;
 const tgrepProbeCache = new Map<string, Promise<string | undefined>>();
 
 /**
- * Consecutive search TIMEOUTS per resolved binary (Taskana 4160 cross-review
+ * Consecutive search TIMEOUTS per resolved binary (cross-review
  * F2). A healthy probe is cached, but a binary whose searches keep hanging
  * (no daemon and a huge corpus, say) would otherwise cost a full tool-timeout
  * spawn on EVERY Grep call before the rg fallback answers. After this many
@@ -230,7 +230,7 @@ export async function searchWithTgrep(
   if (result.status === "failed" && result.exitCode !== 0 && result.exitCode !== 1) {
     return undefined; // exit 2 = tgrep error (bad regex, daemon refused); anything but 0/1 is not ours to interpret
   }
-  // A capped stream is a TRIMMED answer (Taskana 4160 cross-review F1): never
+  // A capped stream is a TRIMMED answer (cross-review F1): never
   // final; the rg tier answers instead (rg's own cap is the default path's
   // long-standing behaviour — falling to the unbounded JS walk on every broad
   // search in a large repo would be a regression, so rg keeps it).

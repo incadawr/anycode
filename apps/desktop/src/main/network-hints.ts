@@ -1,5 +1,5 @@
 /**
- * OS connectivity hints for the host processes (Taskana 4772). The main process
+ * OS connectivity hints for the host processes. The main process
  * turns three OS signals into one parentPort message: net `online` (the network
  * came back, e.g. Wi-Fi on), power `resume` (the lid opened), and screen
  * `unlock-screen`. Each listener is persistent and registered once, so every

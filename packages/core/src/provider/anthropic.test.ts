@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { buildDualAuthHeaders, createAnthropicLanguageModel, normalizeAnthropicBaseUrl } from "./anthropic.js";
 import type { EndpointConfig } from "./endpoint.js";
 
-// Taskana 4090 (TASK.71): the SDK factory's options are recorded while still
+// the SDK factory's options are recorded while still
 // DELEGATING to the real implementation (no behaviour change for any existing
 // test) so the exact options object can be pinned — without the quota
 // observer NO `fetch` key at all (dormancy), with it `fetch` is a function.
@@ -129,7 +129,7 @@ describe("createAnthropicLanguageModel", () => {
   });
 });
 
-describe("createAnthropicLanguageModel quota fetch wiring (Taskana 4090)", () => {
+describe("createAnthropicLanguageModel quota fetch wiring", () => {
   function anthropicConfig(
     overrides: Partial<Omit<EndpointConfig, "transport">> = {},
   ): EndpointConfig & { transport: "anthropic-messages" } {

@@ -102,7 +102,7 @@ export function readPromptFromStdin(input: NodeJS.ReadableStream): Promise<strin
 }
 
 /**
- * stream-json projection of the redacted error descriptor (TASK.33 W7b-FIX #2).
+ * stream-json projection of the redacted error descriptor (W7b-FIX #2).
  * Numbers + whitelisted strings only; fails closed to a constant when `safe` is
  * absent so a legacy/foreign producer can never leak the raw error text.
  */
@@ -139,7 +139,7 @@ export async function runPrintMode(opts: PrintModeOptions): Promise<number> {
   // stream-json NDJSON emitter (design §2.2): each AgentEvent as one JSON line.
   // The `error` variant is projected from the redacted `safe` descriptor (never
   // String(event.error), which can carry a raw response body / auth header —
-  // TASK.33 W7b-FIX #2), fail-closed to a constant when `safe` is absent. Each
+  // W7b-FIX #2), fail-closed to a constant when `safe` is absent. Each
   // stringify is guarded so an unserializable event is skipped (fail-soft)
   // rather than corrupting the stream.
   const emitStreamLine = (event: AgentEvent): void => {

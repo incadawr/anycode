@@ -1,5 +1,5 @@
 /**
- * Network waiter (Taskana 4772): the seam through which a model port decides
+ * Network waiter: the seam through which a model port decides
  * whether a transient pre-content network failure is worth waiting out. The
  * port never opens sockets itself; the host injects a waiter. Every probe is
  * credential-free and never a model call: it is a bare TCP connect to the
@@ -30,7 +30,7 @@ export interface TcpReachableOptions {
   signal?: AbortSignal;
   connect?: TcpConnector;
   /**
-   * Taskana 4772 review F1: environment the proxy-aware target is resolved
+   * review F1: environment the proxy-aware target is resolved
    * against (NODE_USE_ENV_PROXY + scheme proxies + NO_PROXY). Defaults to
    * `process.env`; an explicitly empty record keeps the origin probe.
    */
@@ -53,7 +53,7 @@ export function tcpTargetOf(baseUrl: string): { host: string; port: number } | u
 }
 
 /**
- * Taskana 4772 review F1: the host:port a probe of `baseUrl` should TARGET,
+ * review F1: the host:port a probe of `baseUrl` should TARGET,
  * honoring the configured proxy. Model traffic rides Node's env-proxy path
  * only when `NODE_USE_ENV_PROXY=1`; then a scheme proxy (HTTPS_PROXY et al,
  * minus NO_PROXY) receives every request, so the probe must connect to the

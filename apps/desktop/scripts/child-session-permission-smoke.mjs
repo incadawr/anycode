@@ -1,5 +1,5 @@
 /**
- * Live smoke for TASK.102 CUT-S2 §4.2 пп.6, 7, 12 — S2d D3. Drives a REAL
+ * Live smoke for CUT-S2 §4.2 пп.6, 7, 12 — S2d D3. Drives a REAL
  * Electron dev instance end-to-end and proves, on a real screen and a real
  * SQLite file, what a unit matrix structurally cannot:
  *
@@ -82,7 +82,7 @@
  * or never with tier:"session") gets exactly ONE retry, then a documented
  * SKIP (exit 0), same discipline as every other harness in this directory.
  * Evidence (2 required PNGs + up to 1 diagnostic PNG + a JSON result dump)
- * lands in `working-docs/task102-track/evidence/S2/`.
+ * lands in `working-docs/child-session-smoke/evidence/S2/`.
  */
 
 import { execFileSync } from "node:child_process";
@@ -115,7 +115,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(here, "..");
 const repoRoot = resolve(desktopRoot, "..", "..");
 
-const EVIDENCE_DIR = join(repoRoot, "working-docs", "task102-track", "evidence", "S2");
+const EVIDENCE_DIR = join(repoRoot, "working-docs", "child-session-smoke", "evidence", "S2");
 const APP_EXIT_GRACE_MS = 15_000;
 const SIGTERM_GRACE_MS = 750;
 const STEER_SLEEP_SECONDS = 8;

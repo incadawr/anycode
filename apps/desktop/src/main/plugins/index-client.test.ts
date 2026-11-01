@@ -1,5 +1,5 @@
 /**
- * Tests for the signed official plugin index client (Taskana 4732 S1-B):
+ * Tests for the signed official plugin index client (S1-B):
  * valid signature, wrong key, tampered byte, unknown keyId, serial
  * rollback, expiry, ETag 304 replay, oversize body, timeout, offline cache
  * — all over an injected fetch + fs + clock, zero network.

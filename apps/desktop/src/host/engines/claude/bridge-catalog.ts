@@ -1,6 +1,6 @@
 /**
  * Projects `discoverAgentProfiles`'s output (`PersonaDefinition[]`, core's own
- * shared profile scanner — TASK.226 план §3.1/F13, this srez is FORBIDDEN from
+ * shared profile scanner — план §3.1/F13, this srez is FORBIDDEN from
  * writing a new scanner) onto the MCP bridge's model-visible catalog
  * (`AgentBridgeCatalogEntry[]`, срез S1's `buildAgentBridgeToolDecl`/
  * `runAgentBridgeCall`).
@@ -10,7 +10,7 @@
  * never returns one (it only scans `.anycode/agents/*.md`, never `PERSONAS`),
  * but `isReservedPersonaName` is checked here too so the exclusion holds by
  * construction rather than by the caller only ever passing the right array
- * (plan §3.1: "встроенные персоны … НЕ включаются в v1"). Taskana 4704 made
+ * (plan §3.1: "встроенные персоны … НЕ включаются в v1"). made
  * planner/executor/reviewer overridable personas (an md-profile or a
  * settings-derived role persona may legitimately own those names), so the
  * filter must be the reserved-name check, not `isKnownPersona` — otherwise
@@ -29,10 +29,10 @@ export function catalogFromProfiles(profiles: readonly PersonaDefinition[]): Age
       ...(profile.engine !== undefined ? { engine: profile.engine } : {}),
       ...(profile.model !== undefined ? { model: profile.model } : {}),
       ...(profile.effort !== undefined ? { effort: profile.effort } : {}),
-      // TASK.180: the profile's turn budget rides the creating spawn's
+      // the profile's turn budget rides the creating spawn's
       // session-tier request (catalog maxTurns); omitted when absent.
       ...(profile.turnBudget !== undefined ? { maxTurns: profile.turnBudget } : {}),
-      // Taskana 4269: the profile's own connection selection rides the catalog
+      // the profile's own connection selection rides the catalog
       // (and thus the creating spawn) verbatim. An engine profile can never
       // carry these (parser-fatal), so the two spreads below never co-exist
       // with `engine` above.
@@ -42,7 +42,7 @@ export function catalogFromProfiles(profiles: readonly PersonaDefinition[]): Age
 }
 
 /**
- * Catalog a bridge CALL may use (Taskana 4101): entries re-read from disk now,
+ * Catalog a bridge CALL may use: entries re-read from disk now,
  * filtered to names the boot snapshot declared (the CLI's tools/list cache and
  * the codex thread's declarations are both per-session — names never hot-add).
  * Parity with the codex door's own filter (dynamic-tool-bridge.ts handle()).

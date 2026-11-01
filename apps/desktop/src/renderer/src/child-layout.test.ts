@@ -1,5 +1,5 @@
 /**
- * child-layout.ts tests (TASK.102 CUT-S2 §2.5, slice S2c C1): the view
+ * child-layout.ts tests (CUT-S2 §2.5, slice S2c C1): the view
  * reducer trio, the badge-priority collapse, and the breadcrumb VM — in
  * isolation from the store (store.ts's own subagent_attention sequences are
  * covered separately, store.test.ts §10.1) and from the JSX layer (C3).
@@ -74,7 +74,7 @@ describe("childBadgeKind (priority: waiting_permission > running > error/done)",
     expect(childBadgeKind(card(undefined, { status: "max_turns", durationMs: 1 }))).toBe("done");
   });
 
-  it("TASK.240: no waiting + final cancelled -> cancelled (never Done)", () => {
+  it("no waiting + final cancelled -> cancelled (never Done)", () => {
     expect(childBadgeKind(card(undefined, { status: "cancelled", durationMs: 1 }))).toBe("cancelled");
   });
 
@@ -114,7 +114,7 @@ describe("buildChildBreadcrumb", () => {
   });
 });
 
-describe("child-layout store (per-root-tab view persistence, TASK.102 CUT-S2 §2.5 C3)", () => {
+describe("child-layout store (per-root-tab view persistence, CUT-S2 §2.5 C3)", () => {
   it("view() defaults to MASTER_VIEW for a root tab the store has never heard from", () => {
     const api = createChildLayoutStore();
     expect(api.getState().view("tab-root")).toEqual({ kind: "master" });
@@ -209,7 +209,7 @@ describe("openChild: split branches (CUT-S3 §2.2)", () => {
     }
   });
 
-  // TASK.218: the same-logical-child fold — opening a continuation of a
+  // the same-logical-child fold — opening a continuation of a
   // child already on the stack retargets that row in place AND expands it.
   it("fold: a same-child predicate retargets the aliased row id in place and expands it (position preserved)", () => {
     const view = split(["a", "b"], "b");
@@ -242,8 +242,8 @@ describe("openChild: split branches (CUT-S3 §2.2)", () => {
   });
 });
 
-// TASK.218: continuation aggregation helpers.
-describe("mergeContinuationCards (TASK.218)", () => {
+// continuation aggregation helpers.
+describe("mergeContinuationCards", () => {
   const card = (overrides: Partial<SubagentSubStatus>): SubagentSubStatus => ({
     agentType: "glm-lead",
     description: "d",
@@ -307,7 +307,7 @@ describe("mergeContinuationCards (TASK.218)", () => {
   });
 });
 
-describe("continuationSiblingSpawnIds (TASK.218)", () => {
+describe("continuationSiblingSpawnIds", () => {
   const toolCall = (id: string): TranscriptBlock => ({
     kind: "tool_call",
     id,

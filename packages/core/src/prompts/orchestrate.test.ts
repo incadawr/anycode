@@ -1,5 +1,5 @@
 /**
- * Taskana 4704 §3.4: the orchestrate reminder mirrors plan-reminder.ts —
+ * §3.4: the orchestrate reminder mirrors plan-reminder.ts —
  * these tests pin the tag shape (both transcript sanitizers strip exactly
  * `<orchestrate-reminder>`) and the core facts the desktop host depends on.
  */

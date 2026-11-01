@@ -1,5 +1,5 @@
 /**
- * Pure-logic tests for ConnectionDrawer's exported helper (TASK.45 W12).
+ * Pure-logic tests for ConnectionDrawer's exported helper (W12).
  * Deliberately `.test.ts` (not `.test.tsx`) — same rationale as
  * SettingsScreen.test.ts/ConnectionTile.test.ts: this package's vitest config
  * runs in `environment: "node"` with no jsdom, so the actual add/edit form
@@ -12,6 +12,10 @@ import type { CatalogSummaryEntry, CustomProviderRecord, ProviderConnection, Set
 import type { CustomProviderMutationResult, FetchModelsOutcome } from "../anycode-window.js";
 import {
   connectionDrawerTitle,
+  validVisibleModelIds,
+  retainedModelSelection,
+  hasPendingFetchConnectionChanges,
+  ownRateDraft,
   MAX_OUTPUT_TOKEN_PRESETS,
   MODEL_ID_ERROR,
   appendModelToConnection,
@@ -121,7 +125,7 @@ function okResult(connections: ProviderConnection[], createdConnectionId?: strin
   };
 }
 
-describe("resolveCreatedConnectionId (TASK.45 W12-FIX2 §1: authoritative created-id, codex W12-FIX review #1)", () => {
+describe("resolveCreatedConnectionId (W12-FIX2 §1: authoritative created-id, codex W12-FIX review #1)", () => {
   // §1.2 — authoritative-vs-diff discriminant: the snapshot carries TWO ids the
   // drawer never saw before (B then C, in that array order), and the result
   // names C authoritatively. The now-removed diff-heuristic (`after.find` of
@@ -144,7 +148,7 @@ describe("resolveCreatedConnectionId (TASK.45 W12-FIX2 §1: authoritative create
   });
 });
 
-describe("resolveCreatedCustomProviderId (TASK.58: the record customProvider.create just minted)", () => {
+describe("resolveCreatedCustomProviderId (the record customProvider.create just minted)", () => {
   it("resolves the single id present after that was not present before", () => {
     const before = ["custom:a", "custom:b"];
     const after = [{ id: "custom:a" }, { id: "custom:b" }, { id: "custom:c" }];
@@ -163,7 +167,7 @@ describe("resolveCreatedCustomProviderId (TASK.58: the record customProvider.cre
   });
 });
 
-describe("resolveDrawerOAuthStartArgs (TASK.45 W12-FIX §1: connection-scoped oauth sign-in, codex W12 review #1)", () => {
+describe("resolveDrawerOAuthStartArgs (W12-FIX §1: connection-scoped oauth sign-in, codex W12 review #1)", () => {
   // §1.5 — reverting the ConnectionDrawer.tsx call site back to
   // `oauthStart(selectedEntry.id)` (dropping createdConnectionId) turns this
   // red: the args must carry the connection this drawer is editing, not a
@@ -178,7 +182,7 @@ describe("resolveDrawerOAuthStartArgs (TASK.45 W12-FIX §1: connection-scoped oa
   });
 });
 
-describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears transport, codex W12 review #3)', () => {
+describe('buildConnectionUpdatePayload (W12-FIX §3: ""-sentinel clears transport, codex W12 review #3)', () => {
   // §3.3 — reverting saveMetadata's payload back to the old
   // `...(transport ? {transport} : {})` conditional spread turns this red:
   // choosing "(provider default)" (local state `""`) must SEND
@@ -294,7 +298,7 @@ describe('buildConnectionUpdatePayload (TASK.45 W12-FIX §3: ""-sentinel clears 
   });
 });
 
-describe("buildConnectionUpdatePayload — proxyRef (TASK.141, replacing TASK.132's proxyUrl)", () => {
+describe("buildConnectionUpdatePayload — proxyRef (replacing's proxyUrl)", () => {
   const base = {
     connectionId: "conn-1",
     label: "",
@@ -335,7 +339,7 @@ describe("buildConnectionUpdatePayload — proxyRef (TASK.141, replacing TASK.13
     expect("proxyRef" in payload).toBe(true);
   });
 
-  // TASK.141: the legacy key is NOT sent by this payload at all. Absent means
+  // the legacy key is NOT sent by this payload at all. Absent means
   // "keep", which is what lets an untouched legacy `proxyUrl` survive a save of
   // an unrelated field — main erases it only when the ref itself is cleared.
   it("never sends the legacy proxyUrl key", () => {
@@ -391,10 +395,10 @@ describe("providerSelectDisplayValue (dogfood 16.07: add-mode must show the plac
   });
 });
 
-// TASK.70 (Taskana 4089): one brand = one card. The Provider select's options
+// one brand = one card. The Provider select's options
 // come from this pure projection; brandless catalogs must stay byte-identical
 // to the old flat list (the byte-compat proof for every existing fixture).
-describe("providerOptionGroups (TASK.70: one brand = one card)", () => {
+describe("providerOptionGroups (one brand = one card)", () => {
   const BRANDLESS: CatalogSummaryEntry[] = [
     { id: "z-ai", name: "Z.AI (GLM)", authKind: "api_key", models: [] },
     { id: "custom", name: "Custom endpoint", authKind: "api_key", models: [], needsBaseUrl: true, isCustom: true },
@@ -459,7 +463,7 @@ describe("providerOptionGroups (TASK.70: one brand = one card)", () => {
   });
 });
 
-describe("liveModelSuggestions (TASK.183: stable union of fetched + persisted + hints)", () => {
+describe("liveModelSuggestions (stable union of fetched + persisted + hints)", () => {
   const HINTS = [
     { id: "k3", name: "K3" },
     { id: "kimi-for-coding", name: "K2.7 Coding" },
@@ -511,7 +515,7 @@ describe("liveModelSuggestions (TASK.183: stable union of fetched + persisted + 
   });
 });
 
-describe("modelAfterCatalogPrefill (TASK.108-A: default model instead of a silent empty save)", () => {
+describe("modelAfterCatalogPrefill (default model instead of a silent empty save)", () => {
   const suggestions = [{ id: "glm-5.2" }, { id: "glm-5.1" }];
 
   it("keeps an explicitly chosen model untouched", () => {
@@ -530,7 +534,7 @@ describe("modelAfterCatalogPrefill (TASK.108-A: default model instead of a silen
   });
 });
 
-describe("modelSaveBlocked (TASK.108-A: a catalog connection cannot save an empty model)", () => {
+describe("modelSaveBlocked (a catalog connection cannot save an empty model)", () => {
   const suggestions = [{ id: "glm-5.2" }];
 
   it("blocks a blank model on a catalog connection with known models", () => {
@@ -551,7 +555,7 @@ describe("modelSaveBlocked (TASK.108-A: a catalog connection cannot save an empt
   });
 });
 
-describe("maxOutputPresetSelection (TASK.150 slice 3: owner asked for presets so the round numbers need not be recalled)", () => {
+describe("maxOutputPresetSelection (slice 3: owner asked for presets so the round numbers need not be recalled)", () => {
   it("reads a blank field as the Default chip, not as 'nothing selected'", () => {
     expect(maxOutputPresetSelection("")).toBe("default");
     expect(maxOutputPresetSelection("   ")).toBe("default");
@@ -595,7 +599,7 @@ describe("maxOutputPresetSelection (TASK.150 slice 3: owner asked for presets so
   });
 });
 
-describe("maxOutputTokensField (TASK.150: on-prem/custom endpoints get no catalog model list to guess a cap from)", () => {
+describe("maxOutputTokensField (on-prem/custom endpoints get no catalog model list to guess a cap from)", () => {
   it("blank (or whitespace-only) is the clear sentinel, not invalid", () => {
     expect(maxOutputTokensField("")).toEqual({ ok: true, value: "" });
     expect(maxOutputTokensField("   ")).toEqual({ ok: true, value: "" });
@@ -630,7 +634,7 @@ describe("maxOutputTokensField (TASK.150: on-prem/custom endpoints get no catalo
 
 
 
-describe("buildConnectionUpdatePayload — maxOutputTokens (TASK.150, same unconditional-send discipline as transport/proxyRef)", () => {
+describe("buildConnectionUpdatePayload — maxOutputTokens (same unconditional-send discipline as transport/proxyRef)", () => {
   const base = {
     connectionId: "conn-1",
     label: "",
@@ -660,7 +664,7 @@ describe("buildConnectionUpdatePayload — maxOutputTokens (TASK.150, same uncon
   });
 });
 
-describe("maxOutputTokensEnvHint (TASK.159: the env rung silences this field)", () => {
+describe("maxOutputTokensEnvHint (the env rung silences this field)", () => {
   it("names the variable and says the field is overridden while it is live", () => {
     expect(maxOutputTokensEnvHint(["ANYCODE_MAX_OUTPUT_TOKENS"])).toBe(
       "ANYCODE_MAX_OUTPUT_TOKENS is set in the environment — it overrides this field for every new session.",
@@ -678,7 +682,7 @@ describe("maxOutputTokensEnvHint (TASK.159: the env rung silences this field)", 
   });
 });
 
-describe("maxOutputTokensEffectiveHint (TASK.159: name the number a blank field resolves to)", () => {
+describe("maxOutputTokensEffectiveHint (name the number a blank field resolves to)", () => {
   const GLM: CatalogSummaryEntry = {
     id: "z-ai",
     name: "Z.AI",
@@ -726,7 +730,7 @@ describe("maxOutputTokensEffectiveHint (TASK.159: name the number a blank field 
   });
 });
 
-describe("contextWindowTokensField (TASK.142: per-model context window, same range discipline as TASK.150)", () => {
+describe("contextWindowTokensField (per-model context window, same range discipline as max output tokens)", () => {
   it("blank (and whitespace-only) is the CLEAR sentinel, not zero and not invalid", () => {
     expect(contextWindowTokensField("")).toEqual({ ok: true, value: "" });
     expect(contextWindowTokensField("   ")).toEqual({ ok: true, value: "" });
@@ -749,7 +753,7 @@ describe("contextWindowTokensField (TASK.142: per-model context window, same ran
   });
 });
 
-describe("buildConnectionUpdatePayload — contextWindowTokens (TASK.142, same unconditional-send discipline as transport/proxyRef/maxOutputTokens)", () => {
+describe("buildConnectionUpdatePayload — contextWindowTokens (same unconditional-send discipline as transport/proxyRef/maxOutputTokens)", () => {
   const base = {
     connectionId: "conn-1",
     label: "",
@@ -798,7 +802,7 @@ describe("buildConnectionUpdatePayload — contextWindowTokens (TASK.142, same u
   });
 });
 
-describe("contextWindowTokensEnvHint (TASK.142: the env rung silences this field)", () => {
+describe("contextWindowTokensEnvHint (the env rung silences this field)", () => {
   it("names the variable when it is live", () => {
     expect(contextWindowTokensEnvHint(["ANYCODE_CONTEXT_WINDOW"])).toBe(
       "ANYCODE_CONTEXT_WINDOW is set in the environment — it overrides this field for every new session.",
@@ -815,7 +819,7 @@ describe("contextWindowTokensEnvHint (TASK.142: the env rung silences this field
   });
 });
 
-describe("contextWindowEffectiveHint (TASK.142: name the window a blank field resolves to)", () => {
+describe("contextWindowEffectiveHint (name the window a blank field resolves to)", () => {
   const CATALOG: CatalogSummaryEntry = {
     id: "z-ai",
     name: "Z.AI",
@@ -861,7 +865,7 @@ describe("contextWindowEffectiveHint (TASK.142: name the window a blank field re
   });
 });
 
-describe("contextWindowInitialField / contextWindowAfterModelInput / contextWindowAfterRawInput (TASK.142: owner-aware reset)", () => {
+describe("contextWindowInitialField / contextWindowAfterModelInput / contextWindowAfterRawInput (owner-aware reset)", () => {
   const SAVED_A = { contextWindowTokens: 8192, contextWindowModel: "model-a" };
 
   it("prefills the saved pair only when it binds to the connection's own model", () => {
@@ -999,7 +1003,7 @@ describe("contextWindowInitialField / contextWindowAfterModelInput / contextWind
   });
 });
 
-describe("ConnectionDrawer wiring (TASK.142: NO route may bypass the per-model reset)", () => {
+describe("ConnectionDrawer wiring (NO route may bypass the per-model reset)", () => {
   const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
 
   // There is no DOM harness in this package (see file docstring), so the wiring
@@ -1009,21 +1013,20 @@ describe("ConnectionDrawer wiring (TASK.142: NO route may bypass the per-model r
   // `setModel` directly (the reported defect) makes this red.
   it("`changeModel` is the only setModel caller, and all model-changing routes use it", () => {
     const setModelCalls = source.match(/(?<![.\w])setModel\(/g) ?? [];
-    // One call inside `changeModel` plus the two catalog-normalization effects.
+    // One call inside `changeModel` plus the catalog-normalization effect.
     const effectCalls = source.match(/setModel\(\(m\) => modelAfterCatalogPrefill\(/g) ?? [];
-    expect(effectCalls).toHaveLength(2);
+    expect(effectCalls).toHaveLength(1);
     expect(setModelCalls).toHaveLength(1 + effectCalls.length);
   });
 
-  it("the simplified input, the chips and the provider select all route through changeModel", () => {
+  it("the pre-create input, model picker and provider select route through changeModel", () => {
     // simplified pre-create Model input
     expect(source).toMatch(
       /changeModel\(\s*e\.target\.value,\s*modelAfterCatalogPrefill\(e\.target\.value, selectedEntry\.models\),\s*undefined,\s*\)/,
     );
-    // main Model input
-    expect(source).toMatch(/changeModel\(e\.target\.value, e\.target\.value, targetConnection\)/);
-    // model suggestion chip
-    expect(source).toMatch(/onClick=\{\(\) => changeModel\(m\.id, m\.id, targetConnection\)\}/);
+    // popup default selection and fallback
+    expect(source).toContain("setDraftDefaultModel(id)");
+    expect(source).toContain("changeModel(defaultModel, defaultModel, targetConnection)");
     // provider select
     expect(source).toMatch(/changeModel\("", "", undefined, true\)/);
   });
@@ -1038,9 +1041,9 @@ describe("ConnectionDrawer wiring (TASK.142: NO route may bypass the per-model r
   });
 });
 
-// ── TASK.183: durable manually entered connection models ──
+// ── durable manually entered connection models ──
 
-describe("preflightModelId (TASK.183: pre-flight before any write)", () => {
+describe("preflightModelId (pre-flight before any write)", () => {
   it("treats blank/space-only as the implicit/default sentinel", () => {
     expect(preflightModelId("")).toEqual({ kind: "blank" });
     expect(preflightModelId("   ")).toEqual({ kind: "blank" });
@@ -1102,7 +1105,7 @@ function crateBridge(options?: {
   };
 }
 
-describe("createConnectionAndPersistModel (TASK.183)", () => {
+describe("createConnectionAndPersistModel", () => {
   it("sends the create payload, then appends to the returned LOCAL id, then reloads", async () => {
     const fake = crateBridge();
     const result = await createConnectionAndPersistModel(fake.bridge, fake.reload, { providerId: "z-ai", model: "manual-1" }, "manual-1");
@@ -1175,7 +1178,7 @@ describe("createConnectionAndPersistModel (TASK.183)", () => {
   });
 });
 
-describe("updateConnectionAndPersistModel (TASK.183)", () => {
+describe("updateConnectionAndPersistModel", () => {
   it("appends the normalized selected model after a successful metadata update", async () => {
     const fake = crateBridge();
     const bridge = {
@@ -1189,6 +1192,15 @@ describe("updateConnectionAndPersistModel (TASK.183)", () => {
     expect(result).toEqual({ metaOk: true, appendOk: true });
     expect(fake.appendCalls).toEqual([{ connectionId: "c1", addModels: ["manual-1"] }]);
     expect(fake.reloads).toBe(1);
+  });
+
+  it("reports a stale receipt without changing or appending manual selections", async () => {
+    const fake = crateBridge();
+    const bridge = { ...fake.bridge, connectionUpdate: async () => ({ ok: false as const, reason: "stale_fetch" as const }) };
+    const draft = { connectionId: "c1", visibleModels: ["manual-1", "manual-2"] };
+    expect(await updateConnectionAndPersistModel(bridge, fake.reload, "c1", draft, "manual-1")).toEqual({ metaOk: false, appendOk: false, staleFetch: true });
+    expect(draft.visibleModels).toEqual(["manual-1", "manual-2"]);
+    expect(fake.appendCalls).toEqual([]);
   });
 
   it("never appends after a failed metadata update", async () => {
@@ -1218,7 +1230,7 @@ describe("updateConnectionAndPersistModel (TASK.183)", () => {
   });
 });
 
-describe("appendModelsToConnection (TASK.183)", () => {
+describe("appendModelsToConnection", () => {
   it("sends the ids through the general {connectionId, addModels} branch then reloads", async () => {
     const fake = crateBridge();
     const result = await appendModelsToConnection(fake.bridge, fake.reload, "c1", ["a", "b"]);
@@ -1240,7 +1252,7 @@ describe("appendModelsToConnection (TASK.183)", () => {
   });
 });
 
-describe("provider-list agreement (TASK.183): liveModelSuggestions and providerModelsFor keep the same effective ids", () => {
+describe("provider-list agreement: liveModelSuggestions and providerModelsFor keep the same effective ids", () => {
   it("for equal inputs the effective ID SETS match; the pickers order them by the catalog, the drawer's own suggestion list by freshness", () => {
     const fetched = [{ id: "live-a" }, { id: "live-b" }];
     const persisted = ["manual-1"];
@@ -1326,22 +1338,16 @@ describe("persistCuratedModels — the checkbox list is the selector's authority
     expect(providerModelsFor("custom:rec", [], [record], undefined)?.map((m) => m.id)).toEqual(["alpha", "beta"]);
   });
 
-  it("the fetch path saves the merged curated list and never appends to the connection", () => {
+  it("fetching a custom provider does not mutate its shared model list", () => {
     const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
-    const fetchBlock = source.slice(
-      source.indexOf("async function doFetchModels"),
-      source.indexOf("async function toggleModel"),
-    );
-    expect(fetchBlock).toMatch(/persistCuratedModels\(/);
-    expect(fetchBlock).not.toMatch(/appendModelsToConnection\(/);
-    expect(fetchBlock).toMatch(/mergeCurationModelIds\(fetchedIds, curatedModelIds, model\)/);
-    // The Model field's suggestions for a custom record come from the record
-    // (plus manual ids), not from this session's raw fetch result.
-    expect(source).toMatch(/isCustomRecordConnection \? null : fetchedModels/);
+    const fetchBlock = source.slice(source.indexOf("async function doFetchModels"), source.indexOf("const labelField ="));
+    expect(fetchBlock).not.toMatch(/persistCuratedModels\(/);
+    expect(fetchBlock).toContain("validVisibleModelIds([item.id])");
+    expect(fetchBlock).toContain("Save changes to the address, transport, key or proxy before fetching models. Your selections are kept.");
   });
 });
 
-describe("ConnectionDrawer wiring (TASK.183: pre-create Model field in BOTH create flows)", () => {
+describe("ConnectionDrawer wiring (pre-create Model field in BOTH create flows)", () => {
   const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
 
   it("the pre-create field guard is widened from simplified-only to every uncreated connection", () => {
@@ -1355,7 +1361,7 @@ describe("ConnectionDrawer wiring (TASK.183: pre-create Model field in BOTH crea
     expect(source).toMatch(/createdConnectionId === null && isNewCustomEndpoint && !selectedEntry/);
   });
 
-  it("both pre-create Model inputs route through changeModel (no direct setModel, TASK.142 intact)", () => {
+  it("both pre-create Model inputs route through changeModel (no direct setModel, intact)", () => {
     expect(source).toMatch(
       /changeModel\(\s*e\.target\.value,\s*modelAfterCatalogPrefill\(e\.target\.value, selectedEntry\.models\),\s*undefined,\s*\)/,
     );
@@ -1365,14 +1371,13 @@ describe("ConnectionDrawer wiring (TASK.183: pre-create Model field in BOTH crea
   it("all three actual handlers persist through the shared helpers (create/save/fetch)", () => {
     expect(source).toMatch(/createConnectionAndPersistModel\(\s*modelPersistenceBridge\(\)/);
     expect(source).toMatch(/updateConnectionAndPersistModel\(\s*modelPersistenceBridge\(\)/);
-    // A custom record's fetch saves the checkbox list (its selector), not the
-    // connection's unioned model list.
-    expect(source).toMatch(/persistCuratedModels\(\s*resolvedCustomProvider\(\)/);
+    // Model visibility is sent with the connection update.
+    expect(source).toContain("visibleModels: pendingVisibleModels");
     expect(source).not.toMatch(/selectedModels: \[\.\.\./);
   });
 });
 
-// ── TASK.183 item 9: whole-path evidence against a REAL settings file ──
+// ── item 9: whole-path evidence against a REAL settings file ──
 // Restart simulation: a connection is created in a real temp settings file, the
 // model is appended by the PRODUCTION provider IPC, the file is re-read from
 // disk, and that snapshot is fed to every picker helper. No Electron process is
@@ -1491,7 +1496,7 @@ describe("whole-path: a manual model added through production IPC is discoverabl
   });
 });
 
-describe("pre-create flow composition (TASK.183 items 1–2)", () => {
+describe("pre-create flow composition (items 1–2)", () => {
   it("a typed id BEFORE any connection exists is sent to connectionCreate and then appended to the SAME local id", async () => {
     const fake = crateBridge();
     const typed = "  deepseek-ai/DeepSeek-V3.1  ";
@@ -1570,18 +1575,18 @@ describe("pre-create flow composition (TASK.183 items 1–2)", () => {
   });
 
   it("the pre-create model change still routes the context-window binding through the shared change", () => {
-    // TASK.142 ownership preserved: A's number must not ride onto a manually
+    // ownership preserved: A's number must not ride onto a manually
     // typed B of the same connection.
     expect(contextWindowAfterModelInput({ raw: "900000", model: "manual-a" }, "manual-b", undefined)).toEqual({ raw: "", model: "manual-b" });
   });
 });
 
-// ── Taskana 4875 (GitHub #10): a custom:<id> connection's Replace/Clear key
+// ── (GitHub #10): a custom:<id> connection's Replace/Clear key
 // must ride customProvider.update, never the connection-scoped secret-set
 // channel (handleSetSecret refuses provider.custom:<id>.apiKey as `invalid`,
 // so the old broken path silently dropped the new key and 401s stuck). ──
 
-describe("ConnectionDrawer save/clear key routing on a custom:<id> connection (Taskana 4875)", () => {
+describe("ConnectionDrawer save/clear key routing on a custom:<id> connection", () => {
   it("Replace routes a custom record to update with the shared record id and key", () => {
     expect(buildKeyMutation("custom:record", "provider.custom:record.apiKey", "new-key")).toEqual({
       channel: "custom", request: { id: "custom:record", apiKey: "new-key" },
@@ -1623,9 +1628,9 @@ describe("ConnectionDrawer save/clear key routing on a custom:<id> connection (T
   });
 });
 
-// ── Taskana 4088 (TASK.69): the per-model image-input select's pure helpers ──
+// ── the per-model image-input select's pure helpers ──
 
-describe("buildConnectionUpdatePayload — imageInputOverride (Taskana 4088: unconditional send, \"\" clears the pair)", () => {
+describe("buildConnectionUpdatePayload — imageInputOverride (unconditional send, \"\" clears the pair)", () => {
   const base = {
     connectionId: "conn-1",
     label: "",
@@ -1656,7 +1661,7 @@ describe("buildConnectionUpdatePayload — imageInputOverride (Taskana 4088: unc
   });
 });
 
-describe("imageInputToPayload (Taskana 4088: the auto -> \"\" mapping)", () => {
+describe("imageInputToPayload (the auto -> \"\" mapping)", () => {
   it("maps the three select states onto the wire's two enum arms plus the clear sentinel", () => {
     expect(imageInputToPayload("auto")).toBe("");
     expect(imageInputToPayload("on")).toBe("on");
@@ -1664,7 +1669,7 @@ describe("imageInputToPayload (Taskana 4088: the auto -> \"\" mapping)", () => {
   });
 });
 
-describe("imageInputInitialValue (Taskana 4088: the contextWindowInitialRaw model-binding rule)", () => {
+describe("imageInputInitialValue (the contextWindowInitialRaw model-binding rule)", () => {
   it("prefills the override ONLY when it binds to the shown model", () => {
     expect(
       imageInputInitialValue({ imageInputOverride: "on", imageInputModel: "glm-5.3v", model: "glm-5.3v" }),
@@ -1685,7 +1690,7 @@ describe("imageInputInitialValue (Taskana 4088: the contextWindowInitialRaw mode
   });
 });
 
-describe("imageInputEffectiveHint (Taskana 4088: name what Auto resolves to)", () => {
+describe("imageInputEffectiveHint (name what Auto resolves to)", () => {
   const entry: CatalogSummaryEntry = {
     id: "z-ai",
     name: "Z.AI",
@@ -1717,7 +1722,7 @@ describe("imageInputEffectiveHint (Taskana 4088: name what Auto resolves to)", (
   });
 });
 
-describe("imageInputEnvHint (Taskana 4088: the per-model override rides the env)", () => {
+describe("imageInputEnvHint (the per-model override rides the env)", () => {
   it("names the variable while it is live, null otherwise (exact-name match)", () => {
     // 4088-on-4118: only the override still rides the env; the former
     // MODELS var is no longer recognized.
@@ -1728,7 +1733,7 @@ describe("imageInputEnvHint (Taskana 4088: the per-model override rides the env)
   });
 });
 
-describe("imageInputModelPreflightError (Taskana 4088 cross-review: an explicit override needs a model on BOTH create and update)", () => {
+describe("imageInputModelPreflightError (cross-review: an explicit override needs a model on BOTH create and update)", () => {
   it("refuses an explicit on/off override with a blank model, on create and update alike", () => {
     expect(imageInputModelPreflightError("on", "")).toEqual(expect.any(String));
     expect(imageInputModelPreflightError("off", "   ")).toEqual(expect.any(String));
@@ -1741,12 +1746,12 @@ describe("imageInputModelPreflightError (Taskana 4088 cross-review: an explicit 
   });
 });
 
-// ── Taskana 4749: main fields on top, tuning under a collapsed "Advanced" ──
+// ── main fields on top, tuning under a collapsed "Advanced" ──
 
 // No-break space between digit groups, as formatTokenCount writes it.
 const NBSP = "\u00A0";
 
-describe("advancedHasValues (Taskana 4749: Advanced opens by itself only for a non-default value)", () => {
+describe("advancedHasValues (Advanced opens by itself only for a non-default value)", () => {
   const base = {
     transport: "",
     maxOutputTokens: "",
@@ -1781,7 +1786,7 @@ describe("advancedHasValues (Taskana 4749: Advanced opens by itself only for a n
   });
 });
 
-describe("placeholder helpers (Taskana 4749: catalog numbers show as placeholders, not a separate line)", () => {
+describe("placeholder helpers (catalog numbers show as placeholders, not a separate line)", () => {
 
   it("formatTokenCount groups thousands with a no-break space and leaves < 1000 alone", () => {
     expect(formatTokenCount(999)).toBe("999");
@@ -1813,7 +1818,7 @@ describe("placeholder helpers (Taskana 4749: catalog numbers show as placeholder
   });
 });
 
-describe("Max output tokens segmented control (Taskana 4749: one control, input only for Custom)", () => {
+describe("Max output tokens segmented control (one control, input only for Custom)", () => {
   const noop = () => {};
 
   function render(props: Partial<MaxOutputSegmentedProps> & { value: string }): string {
@@ -2071,7 +2076,7 @@ describe("usage selection (GitHub #1: Automatic / On / Off, per connection)", ()
   });
 });
 
-describe("helper text (Taskana 4749: one visible line, the full text in a ? tooltip)", () => {
+describe("helper text (one visible line, the full text in a ? tooltip)", () => {
   it("the visible one-liners are exactly the agreed short copy", () => {
     expect(MAX_OUTPUT_ONELINER).toBe("Blank = provider default.");
     expect(CONTEXT_WINDOW_ONELINER).toBe("Blank = catalog window.");
@@ -2098,11 +2103,11 @@ describe("helper text (Taskana 4749: one visible line, the full text in a ? tool
   });
 });
 
-describe("ConnectionDrawer layout wiring (Taskana 4749)", () => {
+describe("ConnectionDrawer layout wiring", () => {
   const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
 
   it("the disclosure is a controlled <details> in BOTH modes, closed unless a value is set", () => {
-    expect(source).toMatch(/<details\s+className="connection-drawer-advanced"/);
+    expect(source).toMatch(/className="connection-drawer-advanced connection-drawer-band"/);
     expect(source).toMatch(/open=\{advancedOpen\}/);
     expect(source).toMatch(/onToggle=\{\(e\) => setAdvancedOpen\(e\.currentTarget\.open\)\}/);
     expect(source).toMatch(/useState\(\(\) => initialFocus === "context" \|\| reasoningSupported \|\| effortLevels.length > 0 \|\| modelEffort !== "" \|\| advancedHasValues\(/);
@@ -2160,9 +2165,8 @@ describe("ConnectionDrawer layout wiring (Taskana 4749)", () => {
     expect(source).not.toMatch(/role="note">[^<]*Auto uses the catalog/);
   });
 
-  it("the per-model scope is a 'this model only' badge on Context window and Image input", () => {
-    // JSX badges only (the doc comment on the title constant also names it).
-    expect(source.match(/>\s*this model only\s*</g)).toHaveLength(2);
+  it("the per-model scope is identified once for the group", () => {
+    expect(source).toContain("The following settings apply to this model only");
     expect(source).toMatch(/Context window \(tokens\) <FieldHelp text=\{CONTEXT_WINDOW_HELP\} \/>/);
     expect(source).toMatch(/Image input <FieldHelp text=\{IMAGE_INPUT_HELP\} \/>/);
   });
@@ -2207,7 +2211,7 @@ describe("custom endpoint cache creation", () => {
       modelPersistenceBridge: () => ({}), label: "", transport: "openai-responses", proxyRef: "",
       connectionCreateProxyRefField: () => ({}), promptCacheEnabled: true, IMPLICIT_PROMPT_CACHE,
       usageSelection: "auto", usageSelectionCreateValue,
-      setProviderId: () => {}, setCreatedConnectionId: () => {}, onConnectionCreated: () => {},
+      setProviderId: () => {}, setCreatedConnectionId: () => {}, onConnectionCreated: () => {}, onCommitBegin: undefined, onCommitSuccess: undefined, onBusyChange: undefined,
     };
     const run = new Function(...Object.keys(bindings), js)(...Object.values(bindings)) as () => Promise<void>;
     await run();
@@ -2238,7 +2242,7 @@ describe("custom endpoint cache creation", () => {
         modelPersistenceBridge: () => ({}), label: "", transport: "openai-chat-completions", proxyRef: "",
         connectionCreateProxyRefField: () => ({}), promptCacheEnabled: false,
         usageSelection, usageSelectionCreateValue,
-        setProviderId: () => {}, setCreatedConnectionId: () => {}, onConnectionCreated: () => {},
+        setProviderId: () => {}, setCreatedConnectionId: () => {}, onConnectionCreated: () => {}, onCommitBegin: undefined, onCommitSuccess: undefined, onBusyChange: undefined,
       };
       const run = new Function(...Object.keys(bindings), js)(...Object.values(bindings)) as () => Promise<void>;
       await run();
@@ -2281,7 +2285,7 @@ it("prefills each model's own context window when navigating A → B → A", () 
 
 it("disables per-model rate inputs while a save is pending", () => {
   const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
-  expect(source).toContain('fieldset key={id} disabled={readOnly || saving || pricingMode === "subscription"}');
+  expect(source).toContain('disabled={readOnly || saving || pricingMode === "subscription" || !custom}');
 });
 
 describe("connectionDrawerTitle", () => {
@@ -2303,4 +2307,25 @@ describe("the drawer header follows THIS form's own create result", () => {
     expect(source).toContain("createdId !== null");
     expect(source).not.toContain("connections.length >");
   });
+});
+
+it("ignores invalid model IDs and inherited property names in rate drafts", () => {
+  expect(validVisibleModelIds(["ok", "bad model", "__proto__", "bad\n"]).sort()).toEqual(["__proto__", "ok"]);
+  expect(ownRateDraft({}, "__proto__")).toBeUndefined();
+  expect(ownRateDraft({}, "constructor")).toBeUndefined();
+  expect(ownRateDraft(Object.fromEntries([["__proto__", 42]]), "__proto__")).toBe(42);
+});
+
+it("keeps manually entered selections when a fetched receipt is invalidated", () => {
+  const draft = ["catalog-model", "manual-model"];
+  expect(retainedModelSelection(true, draft, null)).toEqual(draft);
+  expect(retainedModelSelection(false, [], draft)).toEqual(draft);
+});
+
+it("blocks fetch for unsaved address, transport, key or proxy", () => {
+  const current = { showBaseUrl: true, baseUrl: "https://api.example", savedBaseUrl: "https://api.example", transport: "", savedTransport: "", proxyRef: "direct", savedProxyRef: "direct", secretValue: "" };
+  expect(hasPendingFetchConnectionChanges(current)).toBe(false);
+  for (const edit of [{ baseUrl: "https://other.example" }, { transport: "anthropic-messages" }, { proxyRef: "proxy-new" }, { secretValue: "fixture-key" }]) {
+    expect(hasPendingFetchConnectionChanges({ ...current, ...edit })).toBe(true);
+  }
 });

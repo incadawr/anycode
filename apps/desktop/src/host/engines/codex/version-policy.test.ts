@@ -1,5 +1,5 @@
 /**
- * The host's own half of TASK.206: which policy a preflight judges against,
+ * The host's own half: which policy a preflight judges against,
  * resolved from the fork env main composed. Three properties, one test each:
  * the delivered policy is honoured, a risk acceptance overrides the ceiling,
  * and NO policy falls back to the compiled wire pin rather than to "allow".
@@ -67,7 +67,7 @@ describe("resolveHostCodexVersionPolicy", () => {
   ])("falls back to the compiled wire pin for %s — absence of policy is not absence of a check", (_label, env) => {
     const policy = resolveHostCodexVersionPolicy(env as NodeJS.ProcessEnv);
     expect(policy.supportedRange).toBe(SUPPORTED_CODEX_VERSION);
-    // Byte-for-byte the pre-TASK.206 predicate: a bare ceiling, no floor.
+    // Byte-for-byte the predicate: a bare ceiling, no floor.
     expect(policy.allows(version("0.154.0"))).toBe(true);
     expect(policy.allows(version("0.166.0"))).toBe(true);
     expect(policy.allows(version("0.167.0"))).toBe(false);

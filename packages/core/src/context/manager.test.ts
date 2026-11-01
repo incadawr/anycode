@@ -361,7 +361,7 @@ describe("ContextManager.maybeMicrocompact", () => {
 
   it(
     "microcompact clears text and images but leaves `presentation` untouched " +
-      "(TASK.102 slice S1 W3, CUT-S1 §3 W3 item 4)",
+      "(slice S1 W3, CUT-S1 §3 W3 item 4)",
     () => {
       const img = (): ImageAttachment => ({ mediaType: "image/png", data: "AAAA", sourcePath: "/x.png" });
       const presentation = {
@@ -665,7 +665,7 @@ describe("ContextManager.runCompaction — success", () => {
     expect((manager as unknown as { consecutiveFailures: number }).consecutiveFailures).toBe(0);
   });
 
-  it("repeated compaction of a summary-only prefix skips the model call entirely (TASK.228)", async () => {
+  it("repeated compaction of a summary-only prefix skips the model call entirely", async () => {
     const messages: ChatMessage[] = [
       userMsg("turn 0"),
       assistantToolCall("c0"),
@@ -705,7 +705,7 @@ describe("ContextManager.runCompaction — success", () => {
     expect((manager as unknown as { consecutiveFailures: number }).consecutiveFailures).toBe(0);
   });
 
-  it("nonzero failure counter is preserved across repeated summary-only compaction no-ops (TASK.228)", async () => {
+  it("nonzero failure counter is preserved across repeated summary-only compaction no-ops", async () => {
     const messages: ChatMessage[] = [];
     for (let t = 0; t < 8; t += 1) {
       messages.push(userMsg(`q ${t} ${"x".repeat(120)}`));
@@ -766,7 +766,7 @@ describe("ContextManager.runCompaction — success", () => {
     expect((manager as unknown as { consecutiveFailures: number }).consecutiveFailures).toBe(2);
   });
 
-  it("a fresh prefix containing non-summary items still compacts (TASK.228 regression guard)", async () => {
+  it("a fresh prefix containing non-summary items still compacts (regression guard)", async () => {
     const messages: ChatMessage[] = [
       userMsg("turn 0"),
       assistantToolCall("c0"),
@@ -1053,7 +1053,7 @@ describe("ContextManager.breakerTripped (slice 6.4)", () => {
   });
 });
 
-describe("runCompaction mid-stream replay (Taskana 4705 review)", () => {
+describe("runCompaction mid-stream replay (review)", () => {
   it("installs only the replayed summary when a stream_retry discards partial text", async () => {
     const messages: ChatMessage[] = [];
     for (let t = 0; t < 6; t += 1) {

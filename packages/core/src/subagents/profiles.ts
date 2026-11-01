@@ -353,7 +353,7 @@ export function parseAgentProfileMd(raw: string, fallbackName: string): ParseAge
 
   // Reserved names are parse-fatal: a profile can never override
   // general-purpose/explore (discovery is the first rubicon; runner resolution is
-  // the second, design §2.5/§3.5). Taskana 4704 narrows the reserved set to
+  // the second, design §2.5/§3.5). narrows the reserved set to
   // exactly those two — the role personas (planner/executor/reviewer) became
   // OVERRIDABLE built-ins, so a same-named md-profile now parses and wins.
   if (isReservedPersonaName(name)) {
@@ -372,7 +372,7 @@ export function parseAgentProfileMd(raw: string, fallbackName: string): ParseAge
   // as a problem. An absent list falls back to the general-purpose baseline (nine
   // non-spawn tools); a profile can never widen beyond the default registry.
   const problems: string[] = [];
-  // An unknown key is surfaced, not swallowed (TASK.217): a profile that writes
+  // An unknown key is surfaced, not swallowed: a profile that writes
   // a key this registry does not know must learn it was ignored.
   for (const key of Object.keys(parsed.fields)) {
     if (!AGENT_PROFILE_KEYS.includes(key)) {
@@ -524,7 +524,7 @@ export function parseAgentProfileMd(raw: string, fallbackName: string): ParseAge
     return { error: { kind: "engine_permissions_conflict", name, engine } };
   }
 
-  // engine + tools: TASK.97 R4 (wave2-cut.md §1.3). ENFORCE was rejected — claude's
+  // engine + tools: R4 (wave2-cut.md §1.3). ENFORCE was rejected — claude's
   // `--allowedTools` is a permission allowlist, not a registry restriction (the
   // complement-ban `--disallowedTools` is an open set across CLI versions), and
   // codex has no per-tool surface at all, so honoring `tools:` on an engine

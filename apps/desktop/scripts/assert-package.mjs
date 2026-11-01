@@ -9,7 +9,7 @@
  *   - pty.node         — node-pty native addon (dlopen'd, not exec'd)
  *   - spawn-helper     — node-pty unix helper, must be executable (+x)
  *
- * TASK.47 defect 1 / W14-fix: it ALSO asserts `app-update.yml` (electron-builder
+ * defect 1 / W14-fix: it ALSO asserts `app-update.yml` (electron-builder
  * writes this into the packaged resources dir whenever `publish:` is configured,
  * regardless of whether the build itself actually publishes — release.yml's
  * `--publish never` build still gets one) carries `releaseType: release`. This is

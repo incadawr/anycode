@@ -209,7 +209,7 @@ describe("TerminalManager — fake pty", () => {
     expect(s.spawns[0]?.env.PATH).toBe("/bin");
   });
 
-  // Taskana 4752 part A: the desktop terminal's shell inherits the session pair.
+  // part A: the desktop terminal's shell inherits the session pair.
   it("the PTY shell env includes ANYCODE_SESSION_ID and ANYCODE_SESSION_WORKSPACE", async () => {
     const s = makeSpawner();
     const ch = makeChannel();
@@ -228,11 +228,11 @@ describe("TerminalManager — fake pty", () => {
     expect(s.spawns[0]?.env.ANYCODE_SESSION_WORKSPACE).toBe("/work/repo");
   });
 
-  // TASK.135 / Taskana 4074: the terminal shell is a non-engine child, so a
+  // the terminal shell is a non-engine child, so a
   // credentialed proxy URL and the engine proxy carriers are stripped from its
   // env at the spawn choke point — while clean proxies/exemptions pass through
   // and the injected env object itself is never mutated.
-  it("strips credentialed proxy vars and engine carriers from the shell env (TASK.135)", async () => {
+  it("strips credentialed proxy vars and engine carriers from the shell env", async () => {
     const s = makeSpawner();
     const ch = makeChannel();
     const env: NodeJS.ProcessEnv = {
@@ -258,13 +258,13 @@ describe("TerminalManager — fake pty", () => {
     expect(env).toEqual(envSnapshot);
   });
 
-  // Taskana 4074 follow-up: when the loopback relay is up, the shell receives
+  // follow-up: when the loopback relay is up, the shell receives
   // the credential-free relay URL instead of the dropped credentialed vars —
   // npm/git/curl keep working behind the authenticating proxy.
-  it("replaces the credentialed proxy vars with the relay URL in the shell env (Taskana 4074)", async () => {
+  it("replaces the credentialed proxy vars with the relay URL in the shell env", async () => {
     const RELAY = "http://127.0.0.1:47557";
     const relayModule = await import("@anycode/core/proxy-relay");
-    // Taskana 4685 rework: the per-value relay lookup (see proxy-relay.test.ts
+    // rework: the per-value relay lookup (see proxy-relay.test.ts
     // for the minted `anycode:<token>@` URL shape).
     const spy = vi.spyOn(relayModule, "proxyRelayLookup").mockReturnValue(() => RELAY);
     try {

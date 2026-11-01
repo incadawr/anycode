@@ -124,7 +124,7 @@ describe("runPrintMode — stdout/stderr split + exit codes (design §3.3)", () 
     expect(code).toBe(0);
   });
 
-  it("Taskana 4111 cross-review: the headless stderr stop line states the fact only — no 'send a message' hint (there is no REPL to continue into)", async () => {
+  it("cross-review: the headless stderr stop line states the fact only — no 'send a message' hint (there is no REPL to continue into)", async () => {
     async function* maxTurnsTurn(): AsyncGenerator<AgentEvent, void, unknown> {
       yield { type: "loop_end", reason: "max_turns", turns: 40 };
     }

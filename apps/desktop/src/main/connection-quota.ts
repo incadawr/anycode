@@ -1,8 +1,8 @@
 /**
- * Provider-reported quota persistence (Taskana 4090 / TASK.71 follow-up).
+ * Provider-reported quota persistence (follow-up).
  *
  * The host emits `provider_quota` agent events and the renderer paints them
- * into its in-memory settings snapshot live (renderer store, Taskana 4090),
+ * into its in-memory settings snapshot live (renderer store),
  * but nothing wrote `lastQuota` to disk — the connect card's quota line was
  * lost on reload and on every settings snapshot refresh. This module is the
  * missing main-side half: it receives a quota observation for a TAB, resolves
@@ -12,7 +12,7 @@
  * same host), and sparse-merges `lastQuota` into that one connection under
  * the settings-file lock.
  *
- * Wiring mirrors the health signal's exact chain (TASK.45 W11): host session
+ * Wiring mirrors the health signal's exact chain (W11): host session
  * → `PROVIDER_QUOTA_EVENT_TYPE` on parentPort → `handleHostMessage`
  * (main/tabs.ts) → `onProviderQuotaEvent(connectionId, event)` dep →
  * `recordConnectionQuota` here. Main is the sole writer of settings.json.
@@ -38,7 +38,7 @@ import { PROVIDER_QUOTA_EVENT_TYPE, type ProviderQuotaEvent, type ProviderQuotaW
 
 /**
  * Minimum spacing between two `lastQuota` writes for the SAME connection
- * (Taskana 4090 brief Q3 cadence ruling). One constant, one line to change.
+ * (brief Q3 cadence ruling). One constant, one line to change.
  */
 export const QUOTA_WRITE_INTERVAL_MS = 30_000;
 
@@ -167,7 +167,7 @@ export function resetConnectionQuotaThrottles(): void {
 }
 
 /**
- * Taskana 4090 review: drops a connection's coalesced-but-unwritten
+ * review: drops a connection's coalesced-but-unwritten
  * observation (and its trailing timer). Called when the connection is
  * re-pointed or its key replaced: the pending value was observed against the
  * OLD endpoint/key, and letting the trailing timer (or the quit flush) write
@@ -302,7 +302,7 @@ async function writeQuotaUnderLock(
 }
 
 /**
- * Hard ceiling on the quit flush (Taskana 4090 brief: "never block quit for
+ * Hard ceiling on the quit flush (brief: "never block quit for
  * more than about 200 ms"). A settings write is normally single-digit
  * milliseconds; the ceiling exists for the pathological case (a stalling
  * disk, a lock held by a wedged writer) so quit can never appear hung.
@@ -310,7 +310,7 @@ async function writeQuotaUnderLock(
 export const QUOTA_QUIT_FLUSH_BUDGET_MS = 200;
 
 /**
- * Taskana 4090 follow-up: on app quit, a trailing quota value coalesced by
+ * follow-up: on app quit, a trailing quota value coalesced by
  * the 30 s throttle (up to 29 s fresher than what is on disk) would
  * otherwise be lost — the timer is `unref`'d and dies with the process. This
  * flushes every connection's pending value ONE last time, bypassing the

@@ -1,5 +1,5 @@
 /**
- * The policy core both judges share (TASK.206). `judgeCodexVersion` is the
+ * The policy core both judges share. `judgeCodexVersion` is the
  * function `main/codex-manifest.ts`'s `codexVersionVerdict` now delegates to,
  * so its own suite (codex-manifest.test.ts) still covers the manifest-shaped
  * facade; what is pinned HERE is the part that did not exist before: the

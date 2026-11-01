@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
+import { createRequire } from "node:module";
 import {
   launchSmokeElectron,
   smokeElectronArgs,
@@ -98,4 +100,22 @@ describe("dev Electron smoke launcher", () => {
       expect(source, name).not.toContain('spawn("pnpm", ["--filter", "@anycode/desktop", "dev"');
     }
   });
+});
+
+
+it("launches isolated automation with absolute node and a controlled search path", () => {
+  const spawn = vi.fn();
+  const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+  launchSmokeElectron(spawn, { env: { ANYCODE_ISOLATED_SMOKE:"1", ANYCODE_EXPECTED_DESKTOP_ROOT:desktopRoot, PATH:"/unsafe/bin" }, cwd:resolve(desktopRoot, "../..") });
+  const [command, args, options] = spawn.mock.calls[0]! as unknown as [string, string[], {cwd:string; env:NodeJS.ProcessEnv}];
+  expect(command).toBe(process.execPath);
+  expect(args[0]).toBe(resolve(desktopRoot, "node_modules/electron-vite/bin/electron-vite.js"));
+  expect(options.cwd).toBe(desktopRoot);
+  expect(options.env.PATH).not.toContain("/unsafe/bin");
+  const require = createRequire(resolve(desktopRoot, "node_modules/electron-vite/package.json"));
+  const { cac } = require("cac") as { cac: (name: string) => { command: (name: string) => { alias: (name: string) => unknown }; parse: (argv: string[], options: { run: boolean }) => { options: Record<string, unknown> } } };
+  const parser = cac("electron-vite");
+  parser.command("[root]").alias("dev");
+  const parsed = parser.parse([command, ...args], {run:false});
+  expect(parsed.options["--"]).toEqual(AUTOMATION_SWITCHES);
 });

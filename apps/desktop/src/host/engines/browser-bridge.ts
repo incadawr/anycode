@@ -1,5 +1,5 @@
 /**
- * Taskana 4764: the ONE shared module that gives Claude and Codex engine
+ * the ONE shared module that gives Claude and Codex engine
  * tabs the browser tools. Both engine doors (claude's in-process MCP door
  * `bridge-presentation-stamp.ts`, codex's dynamicTools bridge
  * `dynamic-tool-bridge.ts`) serve the SAME core `ToolDefinition`s the native
@@ -105,7 +105,7 @@ export interface EngineBrowserBridgeDeps {
 }
 
 export interface EngineBrowserBridge {
-  /** Fixed order, the 10 entries of Taskana 4764 §2.2. */
+  /** Fixed order, the 10 entries of §2.2. */
   specs: readonly EngineBrowserSpec[];
   byClaudeName(name: string): EngineBrowserSpec | undefined;
   byCodexName(name: string): EngineBrowserSpec | undefined;

@@ -71,7 +71,7 @@ export function isTurnCompletion(prev: TurnState["status"], next: TurnState["sta
  * Dumb projection DesktopState → CoarseStatus; all transition semantics live
  * in `applyCoarse`. `needsApproval` is true on the tab's OWN pending
  * permission ask OR on any live child waiting on ITS OWN permission ask
- * (TASK.115 S1) — children are hidden from the sidebar entirely, so without
+ * (S1) — children are hidden from the sidebar entirely, so without
  * this the parent row never surfaces a blocked child. Reads
  * `state.waitingSubagents.size` (a Set maintained incrementally by
  * `patchSubagentAttention`/`patchSubagentEnd`, store.ts) rather than scanning

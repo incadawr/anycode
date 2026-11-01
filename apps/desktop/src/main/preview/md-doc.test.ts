@@ -1,5 +1,5 @@
 /**
- * Unit tests for md-doc.ts's `readMdDoc`/`navigateMdDoc` (TASK.99 CUT.md
+ * Unit tests for md-doc.ts's `readMdDoc`/`navigateMdDoc` (CUT.md
  * CONTRACTS — M1 READ, M2 NAVIGATE) — exercised against a REAL node fs in
  * scratch tmpdirs (no Electron), mirroring artifacts-ipc.test.ts's own "real
  * fs, fake containment resolver" pattern. `getRecordRef`/`resolveArtifact`/
@@ -108,7 +108,7 @@ describe("readMdDoc — containment re-check", () => {
   });
 });
 
-describe("readMdDoc — .markdown (TASK.112)", () => {
+describe("readMdDoc — .markdown", () => {
   it("reads a `.markdown` document — the realPath gate accepts it exactly like `.md`", async () => {
     const dir = await tmpDir();
     const file = join(dir, "doc.markdown");

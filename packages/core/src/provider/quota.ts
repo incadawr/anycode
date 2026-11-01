@@ -1,6 +1,6 @@
 /**
- * Normalized provider-reported quota from HTTP response headers (Taskana
- * 4090 / TASK.71).
+ * Normalized provider-reported quota from HTTP response headers (
+ * 4090).
  *
  * Every provider family spells its subscription windows differently
  * (`x-ratelimit-*`, `anthropic-ratelimit-*`, bare `ratelimit-*`, snake_case
@@ -40,7 +40,7 @@ export interface ProviderQuotaUpdate {
   secondary?: ProviderQuotaWindow;
   /**
    * The literal header name that produced the `primary` window (its family's
-   * limit leg, or the next leg when the limit name is absent). Taskana 4090
+   * limit leg, or the next leg when the limit name is absent).
    * cross-review A1: `sources` is in FAMILIES order, so index 0 is NOT
    * necessarily the primary family's header; read this instead.
    */
@@ -146,7 +146,7 @@ export function providerQuotaFromHeaders(headers: QuotaHeaderBag, now: number): 
   // Case-insensitive canonical lookup: first occurrence of a canonical key wins.
   // Names are visited in sorted order so a duplicated canonical key (e.g.
   // `x-ratelimit-requests-remaining` and `ratelimit-requests-remaining`) resolves
-  // the same way whatever order the bag iterates in (Taskana 4090 A2).
+  // the same way whatever order the bag iterates in (A2).
   const canonical = new Map<string, { original: string; value: string }>();
   for (const name of [...headers.names()].sort()) {
     const key = canonicalHeaderName(name);

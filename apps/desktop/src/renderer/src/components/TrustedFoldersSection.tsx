@@ -1,5 +1,5 @@
 /**
- * Trusted-folders Settings subsection (Taskana 4739): a SIBLING section under
+ * Trusted-folders Settings subsection: a SIBLING section under
  * the Permissions pane, directly below `<TrustedBinariesSection/>` — a
  * workspace-trust decision is neither a permission rule nor a binary consent:
  * separate copy, separate channel (`workspaceTrust.list`/`forget`, not the

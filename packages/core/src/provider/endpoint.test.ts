@@ -1,5 +1,5 @@
 /**
- * Explicit base-URL policy tests (TASK.43 §0.5). The OpenAI transports take the
+ * Explicit base-URL policy tests (§0.5). The OpenAI transports take the
  * base URL EXACTLY as configured (trim + strip trailing slashes, reject empty)
  * and never append `/v1` — appending it would make valid non-standard prefixes
  * (`https://gw.example/api/openai`) unexpressible. The Anthropic normalizer keeps

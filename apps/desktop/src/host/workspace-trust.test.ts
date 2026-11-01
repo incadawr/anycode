@@ -1,5 +1,5 @@
 /**
- * Host boot trust decision (Taskana 4736): the host computes `projectTrusted`
+ * Host boot trust decision: the host computes `projectTrusted`
  * once at boot, reports a pending decision to the UI as display-only rows, and
  * honours the main-approved "trust once" hash from the fork env.
  */
@@ -123,7 +123,7 @@ describe("establishHostWorkspaceTrust", () => {
   });
 });
 
-// Taskana 4736 xfix D4: a child tab shares the parent's workspace; it never
+// xfix D4: a child tab shares the parent's workspace; it never
 // reports a pending trust question (its surface cannot answer one) and boots
 // with the parent's current decision — the record/once-approval decides, so a
 // child of a trusted-once parent boots trusted, an undecided one untrusted.
@@ -193,11 +193,11 @@ describe("establishHostWorkspaceTrust on a child surface (xfix D4)", () => {
   });
 });
 
-// Taskana 4739: the host canonicalises the workspace with realpath, so a
+// the host canonicalises the workspace with realpath, so a
 // symlinked workspace shares one trust record with its target. The fake fs is
 // not symlink-aware: the project config is visible under BOTH names (what a
 // real symlink does) and the injected realpath maps link -> real.
-describe("establishHostWorkspaceTrust with a symlinked workspace (Taskana 4739)", () => {
+describe("establishHostWorkspaceTrust with a symlinked workspace", () => {
   const LINK_WS = "/work/link-project";
   const REAL_WS = "/work/real-project";
   const LINK_CONFIG = "/work/link-project/.anycode/config.json";

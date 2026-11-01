@@ -202,7 +202,7 @@ describe("ACTION_CATALOG (§1.4)", () => {
     expect(ACTION_CATALOG.filter((m) => m.editable)).toHaveLength(9);
   });
 
-  it("dock.toggle (Taskana 4703): default ⌘\\ / Ctrl+\\, editable, in the sweep", () => {
+  it("dock.toggle: default ⌘\\ / Ctrl+\\, editable, in the sweep", () => {
     expect(bindingFor("dock.toggle")).toEqual({ action: "dock.toggle", key: "\\", mod: true, shift: false });
     expect(matchKeymap(stroke({ key: "\\", metaKey: true }), "darwin")).toEqual({ action: "dock.toggle" });
     expect(matchKeymap(stroke({ key: "\\", ctrlKey: true }), "win32")).toEqual({ action: "dock.toggle" });

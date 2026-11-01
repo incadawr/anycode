@@ -1,5 +1,5 @@
 /**
- * Persisted workflow card snapshot (TASK.191 slice S5). Mirror of
+ * Persisted workflow card snapshot (slice S5). Mirror of
  * types/subagent-card.ts's SubagentCardSnapshotV1: a versioned terminal
  * snapshot riding the paired tool_result's `presentation` field — no SQLite
  * migration, same discipline the subagent card already established.
@@ -46,7 +46,7 @@ export interface WorkflowCardStepResult {
   /** The step's FINAL spend (workflow_step_end's own usage). Absent = the tier reported none, not zero. */
   usage?: WorkflowCardTokenUsage;
   /**
-   * TASK.193: present only for a step that did not complete — the step's
+   * present only for a step that did not complete — the step's
    * reason (an error message, or a partial output the child never finished).
    * Duplicate of `workflow/step-failure.ts`'s `StepFailure` for the same
    * import-cycle reason this file's header explains for `WorkflowCardTokenUsage`.
@@ -61,7 +61,7 @@ export interface WorkflowCardStepResult {
  * terminal result folded in once the step reaches workflow_step_end.
  * `dependsOn` is REQUIRED here for the graph to be worth persisting at all:
  * without it a reloaded card cannot tell "queued behind a dependency" from
- * "never started" — exactly the distinction TASK.191 slice S3 built the live
+ * "never started" — exactly the distinction slice S3 built the live
  * card to make, so dropping the field here would silently regress it after
  * every reload.
  */
@@ -74,7 +74,7 @@ export interface WorkflowCardStep {
    * Absent only for a step whose workflow_step_end never arrived. In
    * practice this cannot happen in a snapshot that reached `final`
    * (workflow/engine.ts emits step_end for every step, launched or
-   * synthetically skipped — TASK.191 slice S3), but the type does not
+   * synthetically skipped — slice S3), but the type does not
    * assume the wire is honest.
    */
   result?: WorkflowCardStepResult;

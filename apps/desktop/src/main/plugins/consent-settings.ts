@@ -1,5 +1,5 @@
 /**
- * settings.json `plugins.mcpConsent` writers for the main process (Taskana
+ * settings.json `plugins.mcpConsent` writers for the main process (
  * 4732 xfix H1(c)).
  *
  * Two writers, two semantics:
@@ -14,7 +14,7 @@
  *
  * Both run under the settings-file lock.
  *
- * `upsertPluginServiceConsent` (Taskana 4750a) is the service-consent writer:
+ * `upsertPluginServiceConsent` is the service-consent writer:
  * the same read-modify-write under the lock, but it replaces the grant for
  * ONE plugin (keyed by its servicesHash) and leaves every other plugin's grant
  * alone. There is no legacy migration for services — absent = nobody granted.

@@ -1,5 +1,5 @@
 /**
- * TASK.182 / Taskana 4136 — boot helper tests. Drives the REAL core loader
+ * boot helper tests. Drives the REAL core loader
  * (loadMcpServerSpecs) over an in-memory FileSystemPort with sample
  * project/user/.mcp.json configs: stdio+http, ${env:VAR} substitutions,
  * headers, disabled entries, project shadowing — proving core-resolved
@@ -211,9 +211,9 @@ describe("prepareEngineMcpForward — empty/disabled sets and controlled failure
   });
 });
 
-// ── TASK.182 defect-3 fix: first-init reconciliation seam ──
+// ── defect-3 fix: first-init reconciliation seam ──
 
-describe("missingForwardedMcpServerNames (TASK.182 reconciliation)", () => {
+describe("missingForwardedMcpServerNames (reconciliation)", () => {
   it("expects anycode when a bridge exists, and flags it missing when the CLI did not report it", async () => {
     const { missingForwardedMcpServerNames } = await import("./engines/mcp-forward-boot.js");
     // Bridge present, CLI reported only the forwarded server -> anycode missing.
@@ -235,7 +235,7 @@ describe("missingForwardedMcpServerNames (TASK.182 reconciliation)", () => {
   });
 });
 
-describe("prepareEngineMcpForward — workspace trust gate (Taskana 4736)", () => {
+describe("prepareEngineMcpForward — workspace trust gate", () => {
   const WS = "/ws-trust";
   const HOME = "/home/trust-user";
   const files = {
@@ -282,7 +282,7 @@ describe("prepareEngineMcpForward — workspace trust gate (Taskana 4736)", () =
   });
 });
 
-describe("prepareEngineMcpForward — ${secret:} via the host resolver (Taskana 4752, part C)", () => {
+describe("prepareEngineMcpForward — ${secret:} via the host resolver (part C)", () => {
   const WS = "/ws-secret";
   const HOME = "/home/secret-user";
   const SECRET_VALUE = "ghp_FORWARDED_SECRET_VALUE_1";

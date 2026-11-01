@@ -1,5 +1,5 @@
 /**
- * Service supervisor tests (Taskana 4750a). The supervisor is driven through
+ * Service supervisor tests. The supervisor is driven through
  * a hand-rolled fake clock and a fake spawn, so no real process is ever
  * started. Every timer is ours: `advance(ms)` runs due timers in order and
  * `flush()` lets the supervisor's promise queue settle.
@@ -551,9 +551,9 @@ describe("service supervisor — misc", () => {
   });
 });
 
-// Taskana 4751 part 0: `${secret:NAME}` in service env (values resolved by the candidate source).
+// part 0: `${secret:NAME}` in service env (values resolved by the candidate source).
 
-describe("service supervisor — secret refs (Taskana 4751 part 0)", () => {
+describe("service supervisor — secret refs (part 0)", () => {
   const SECRET_VALUE = "SECRET-VALUE-XYZ-9731";
 
   it("service env resolves secret refs at spawn", async () => {

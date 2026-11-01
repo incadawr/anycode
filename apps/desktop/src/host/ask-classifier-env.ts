@@ -1,5 +1,5 @@
 /**
- * Taskana 4702 Stage 1 / Taskana 4730: reads the ask-zone classifier record
+ * Stage 1 / reads the ask-zone classifier record
  * from the `ANYCODE_PERMISSION_CLASSIFIER` env var (a JSON mirror of
  * `settings.permissions.classifier`, written by host-env.ts).
  *
@@ -8,7 +8,7 @@
  * which means the classifier is OFF. The functions never throw and never return
  * a partial classifier.
  *
- * Taskana 4730: `kind:"model"` (implementation B) needs a ModelPort, which only
+ * `kind:"model"` (implementation B) needs a ModelPort, which only
  * the host boot can resolve (a connection id / model id -> port). It is
  * therefore parsed SHAPE-ONLY here (`parseAskClassifierEnvKind`); the host
  * index builds the classifier itself. `parseAskClassifierEnv` stays the
@@ -44,7 +44,7 @@ export interface AskClassifierBoot {
 }
 
 /**
- * Taskana 4730: the shape-only parse of a `kind:"model"` record. No classifier
+ * the shape-only parse of a `kind:"model"` record. No classifier
  * is built here — the host resolves the ModelPort (connection/model) and calls
  * `createModelAskClassifier` itself.
  */
@@ -69,7 +69,7 @@ function parseJson(raw: string | undefined): unknown | undefined {
 }
 
 /**
- * Taskana 4730: parses BOTH kinds. `kind:"command"` yields a ready boot (same
+ * parses BOTH kinds. `kind:"command"` yields a ready boot (same
  * fail-closed rules as parseAskClassifierEnv); `kind:"model"` yields the
  * shape-only record for the host to resolve. Everything else is undefined.
  */

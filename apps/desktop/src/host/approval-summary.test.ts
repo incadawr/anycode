@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { describeApproval } from "./approval-summary.js";
 
-describe("describeApproval (Taskana 4763)", () => {
+describe("describeApproval", () => {
   it("T5 Bash: multi-line command collapsed, long command truncated, secrets scrubbed", () => {
     expect(describeApproval("Bash", { command: "echo a\necho b" })).toBe("echo a ; echo b");
     const long = describeApproval("Bash", { command: "ls " + "a-b ".repeat(100) });

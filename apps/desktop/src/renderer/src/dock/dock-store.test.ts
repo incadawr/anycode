@@ -1,5 +1,5 @@
 /**
- * Dock store tests (Taskana 4703) — jsdom-free (App.test.ts header
+ * Dock store tests — jsdom-free (App.test.ts header
  * precedent): a Map-backed storage shim stands in for localStorage, so
  * `setWidth`'s persistence is asserted against real writes, not a DOM.
  */
@@ -155,7 +155,7 @@ describe("dock store", () => {
     expect(store.getState().splitTabId).toBe(null);
   });
 
-  // ── Taskana 4738: conversation-tab ownership (adopt/selectDockView) ──
+  // ── conversation-tab ownership (adopt/selectDockView) ──
 
   it("selectDockView returns the real triple for the owner and EMPTY_DOCK_VIEW for everyone else", () => {
     const store = createDockStore(memoryStorage());

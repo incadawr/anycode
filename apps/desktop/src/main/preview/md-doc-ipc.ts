@@ -1,5 +1,5 @@
 /**
- * Native DOM markdown-preview IPC (TASK.99 CUT.md CONTRACTS — M1 READ, M2
+ * Native DOM markdown-preview IPC (CUT.md CONTRACTS — M1 READ, M2
  * NAVIGATE). Mirrors panel-ipc.ts's structure exactly (PREVIEW_SET_CONTAINER
  * convention: shared constant -> preload method -> zod -> `ipcMain.handle`):
  * zod validates the renderer-supplied payload before it ever reaches

@@ -1,6 +1,6 @@
 /**
  * Control-plane contract for the host<->main preview channel (night-track
- * wave-1 cut §2.3, TASK.96 96-A). Mirrors shared/credentials.ts exactly:
+ * wave-1 cut §2.3, 96-A). Mirrors shared/credentials.ts exactly:
  * VALUE-ONLY module, zero imports, no zod (the parentPort proc channel is
  * trusted — zod only guards renderer IPC boundaries). Both the host
  * (utilityProcess) and main import this module, so it must never drag in
@@ -42,7 +42,7 @@ export type PreviewOp =
   | { kind: "screenshot"; previewId?: string }
   | { kind: "control"; request: PreviewControlRequest; allowRemote?: boolean };
 
-// ── browser control request (Taskana 4759; deliberate duplicate of core's
+// ── browser control request; deliberate duplicate of core's
 // PreviewControlRequest in packages/core/src/ports/preview.ts). No set-access
 // action exists here by design.
 
@@ -99,7 +99,7 @@ export interface PreviewScreenshotSuccess {
   width: number;
   height: number;
   /**
-   * Logical/CSS viewport size (DIP) at capture time (TASK.198 slice G) —
+   * Logical/CSS viewport size (DIP) at capture time (slice G) —
    * kept verbatim in sync with `packages/core/src/ports/preview.ts`'s own
    * `PreviewScreenshotSuccess.cssWidth/cssHeight` per this file's header
    * comment. Additive-optional: absent whenever the capture path could not

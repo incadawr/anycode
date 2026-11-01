@@ -1,5 +1,5 @@
 /**
- * Service candidate source (Taskana 4750a): builds the supervisor's desired set
+ * Service candidate source builds the supervisor's desired set
  * from the Plugins admin scan. Hermetic fake fs; no Electron, no real process.
  */
 import { describe, expect, it } from "vitest";
@@ -54,7 +54,7 @@ const deps = (fs: FileSystemPort, over: Partial<Parameters<typeof listServiceCan
   ...over,
 });
 
-describe("listServiceCandidates (Taskana 4750a)", () => {
+describe("listServiceCandidates", () => {
   it("a managed service carries its command, args and env VALUES to the supervisor only", async () => {
     const fs = makeFs(managedBridge());
     const out = await listServiceCandidates(deps(fs));
@@ -134,7 +134,7 @@ describe("listServiceCandidates (Taskana 4750a)", () => {
   });
 });
 
-describe("listServiceCandidates secret refs (Taskana 4751 part 0)", () => {
+describe("listServiceCandidates secret refs (part 0)", () => {
   const SECRET_SERVICES = [
     { name: "relay", command: "node", args: ["./relay.js"], env: { TOKEN: "${secret:BRIDGE_TOKEN}", USERS: "${secret:BRIDGE_USERS}" } },
   ];

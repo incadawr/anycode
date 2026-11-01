@@ -1,12 +1,12 @@
 /**
- * Candidate source for the service supervisor (Taskana 4750a). Builds the
+ * Candidate source for the service supervisor. Builds the
  * desired service set from the SAME admin scan the Plugins pane uses:
  *  - home scan (managed + legacy-user plugins), `enabled = row.status === "active"`;
  *  - one scan per distinct LIVE root-tab workspace, keeping only `project`-tier
  *    rows, each gated by that workspace's trust decision.
  * The service command/args/env VALUES are read here from the manifest and
  * handed only to the supervisor; no renderer-facing type ever carries them.
- * `${secret:NAME}` references (Taskana 4751 part 0) are resolved here too, for
+ * `${secret:NAME}` references (part 0) are resolved here too, for
  * services that are enabled, consented and eligible for a folder; an unset name
  * is reported as missing and blocks the spawn.
  */

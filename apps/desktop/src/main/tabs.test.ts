@@ -200,7 +200,7 @@ async function flush(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 25));
 }
 
-// ── TASK.102 CUT-S2 S2b/B3 fixtures: child-session control-plane messages ──
+// ── CUT-S2 S2b/B3 fixtures: child-session control-plane messages ──
 // Every fixture below is a WELL-FORMED wire message — tests drive the
 // manager exclusively via `host.emit("message", ...)` on a fake host's
 // process (anti-facade §5.2: never call a private spawn method directly),
@@ -242,7 +242,7 @@ function runCancel(requestId: string) {
   return { type: CHILD_RUN_CANCEL_TYPE, requestId } as const;
 }
 
-/** A valid ChildRunSend (Taskana 4153); caller supplies the childSessionId. */
+/** A valid ChildRunSend; caller supplies the childSessionId. */
 function runSend(requestId: string, childSessionId: string, text = "here are the other reviewers' edits") {
   return { type: CHILD_RUN_SEND_TYPE, requestId, childSessionId, text } as const;
 }
@@ -393,7 +393,7 @@ describe("createPinReservations — in-flight pin refcount (W10-FIX F3, layer a)
   });
 });
 
-describe("TabHostManager — session registration hook (Taskana 4747)", () => {
+describe("TabHostManager — session registration hook", () => {
   it("reports a new root tab's sessionId, with no parent", () => {
     const { fork } = dyingForkRig();
     const { window } = windowRig();
@@ -830,7 +830,7 @@ describe("TabHostManager — per-tab circuit breaker", () => {
     expect(forkSpy.mock.calls[0]?.[1]).toEqual(["--resume", "sess-R"]);
   });
 
-  // TASK.39: the draft (pre-session) engine model/preset choice.
+  // the draft (pre-session) engine model/preset choice.
   it("carries the draft engine model/preset on the spawn that CREATES the session — and never again", async () => {
     const forkSpy = vi.fn<HostForkFn>();
     const { hosts } = dyingForkRig();
@@ -890,7 +890,7 @@ describe("TabHostManager — per-tab circuit breaker", () => {
     expect(forkSpy.mock.calls[0]?.[1]).toEqual(["--session", "sess-J"]);
   });
 
-  // Codex-profiles TASK.50 (cut §2.6.4, §3.3): main resolves the picked
+  // Codex-profiles (cut §2.6.4, §3.3): main resolves the picked
   // profile against ITS registry (lane A) and hands tabs.ts READY argv values;
   // tabs.ts only forwards them. Unlike the draft model/preset (whose post-boot
   // authority is the session row), the profile has NO session-row fallback —
@@ -1364,7 +1364,7 @@ describe("TabHostManager — imported-session model override (codex-profiles S4-
   });
 });
 
-describe("TabHostManager — connection pinning (TASK.45 W10)", () => {
+describe("TabHostManager — connection pinning (W10)", () => {
   it("stamps ANYCODE_CONNECTION_ID from the tab's connectionId and keeps it across respawn", () => {
     const { hosts } = liveForkRig();
     const envs: NodeJS.ProcessEnv[] = [];
@@ -1529,7 +1529,7 @@ describe("TabHostManager — connection pinning (TASK.45 W10)", () => {
     expect("providerId" in payload).toBe(false);
   });
 
-  it("deliverTabPort stamps openedByAgent only for sessions the dep names (Taskana 4768)", () => {
+  it("deliverTabPort stamps openedByAgent only for sessions the dep names", () => {
     const { window, posted } = windowRig();
     const manager = new TabHostManager({
       fork: liveForkRig().fork, hostEntry: "/fake/host.js", createChannel: fakeChannel, getWindow: () => window, env: () => ({}), logger: silentLogger,
@@ -1595,7 +1595,7 @@ describe("TabHostManager — connection pinning (TASK.45 W10)", () => {
   });
 });
 
-describe("TabHostManager — provider health event binding (TASK.45 W11)", () => {
+describe("TabHostManager — provider health event binding (W11)", () => {
   it("binds a health event to the PINNED connection of the host that sent it", async () => {
     const { fork, hosts } = liveForkRig();
     const seen: Array<{ connectionId: string; event: ProviderHealthEvent }> = [];
@@ -1665,7 +1665,7 @@ describe("TabHostManager — provider health event binding (TASK.45 W11)", () =>
   });
 });
 
-describe("TabHostManager — provider quota event binding (Taskana 4090)", () => {
+describe("TabHostManager — provider quota event binding", () => {
   function quotaManager(seen: Array<{ connectionId: string; message: unknown }>) {
     const rig = liveForkRig();
     const manager = new TabHostManager({
@@ -1863,7 +1863,7 @@ describe("TabHostManager — preview control plane (night-track wave-1 cut §2.3
   });
 });
 
-describe("TabHostManager — dev-only host-kill lever (TASK.33 FIX-A)", () => {
+describe("TabHostManager — dev-only host-kill lever (FIX-A)", () => {
   it("returns ok:false unknown_tab for a missing tab", () => {
     const { fork } = liveForkRig();
     const { window } = windowRig();
@@ -2137,7 +2137,7 @@ describe("TabHostManager — canSpawn(\"claude\") follows doctor readiness (SLIC
 });
 
 /**
- * TASK.102 CUT-S2 §2.6.4 / §3 "S2b — B3": main-process admission, quotas,
+ * CUT-S2 §2.6.4 / §3 "S2b — B3": main-process admission, quotas,
  * spawn, and cascades for `Agent(tier:"session")` child sessions. Every test
  * below drives the manager exclusively via `host.emit("message", ...)` on a
  * fake host process (never a private method directly — anti-facade §5.2)
@@ -2146,8 +2146,8 @@ describe("TabHostManager — canSpawn(\"claude\") follows doctor readiness (SLIC
  * alike — in fork-call order, so `hosts[0]` is always the first root, and a
  * spawned child lands at whatever index its fork call landed at.
  */
-describe("TabHostManager — child-session admission is ATOMIC (TASK.102 CUT-S2 B3)", () => {
-  it("4 synchronous spawns from the SAME parent, no await between them, admit exactly 3 and PARK the 4th (TASK.147 срез 1) — it wakes once a slot frees and reaches its own terminal", () => {
+describe("TabHostManager — child-session admission is ATOMIC (CUT-S2 B3)", () => {
+  it("4 synchronous spawns from the SAME parent, no await between them, admit exactly 3 and PARK the 4th (срез 1) — it wakes once a slot frees and reaches its own terminal", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
     const manager = childManager(fork, window);
@@ -2167,7 +2167,7 @@ describe("TabHostManager — child-session admission is ATOMIC (TASK.102 CUT-S2 
     const accepted = events.filter((e) => e.kind === "accepted");
     expect(accepted).toHaveLength(CHILD_RUNS_PER_PARENT_MAX);
     expect(accepted.map((e) => e.requestId)).toEqual(["r1", "r2", "r3"]);
-    // TASK.147 срез 1: the cap no longer terminates a 4th request — it
+    // срез 1: the cap no longer terminates a 4th request — it
     // parks. No reply (neither accepted nor rejected) has gone out for it.
     expect(events.some((e) => e.requestId === "r4")).toBe(false);
     // 1 root + 3 admitted children forked; the 4th never reached fork at all.
@@ -2205,7 +2205,7 @@ describe("TabHostManager — child-session admission is ATOMIC (TASK.102 CUT-S2 
     expect(manager.getTab(r4ChildTabId)).toBeUndefined();
   });
 
-  it("TASK.116: a child's real death reason reaches the parent verbatim through ONE terminal; a duplicate terminal cannot overwrite it or emit a second", () => {
+  it("a child's real death reason reaches the parent verbatim through ONE terminal; a duplicate terminal cannot overwrite it or emit a second", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
     const manager = childManager(fork, window);
@@ -2225,7 +2225,7 @@ describe("TabHostManager — child-session admission is ATOMIC (TASK.102 CUT-S2 
     expect(manager.getTab(childTabId)).toBeUndefined();
   });
 
-  it("the 9th global spawn (spread across 3 parents, each under ITS OWN per-parent cap) PARKS on limit_global (TASK.147 срез 1) — and wakes when a DIFFERENT parent's slot frees, not just its own", () => {
+  it("the 9th global spawn (spread across 3 parents, each under ITS OWN per-parent cap) PARKS on limit_global (срез 1) — and wakes when a DIFFERENT parent's slot frees, not just its own", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
     const manager = childManager(fork, window);
@@ -2247,7 +2247,7 @@ describe("TabHostManager — child-session admission is ATOMIC (TASK.102 CUT-S2 
     }
 
     // A 9th spawn from the parent that still has per-parent room (2 of 3
-    // used) — blocked purely by the GLOBAL cap. TASK.147 срез 1: it parks,
+    // used) — blocked purely by the GLOBAL cap. срез 1: it parks,
     // it is not told `limit_global` yet.
     rootHosts[2]!.emit("message", spawnRequest({ requestId: "p2-overflow" }));
     expect(childRunEvents(rootHosts[2]!).some((e) => e.requestId === "p2-overflow")).toBe(false);
@@ -2256,7 +2256,7 @@ describe("TabHostManager — child-session admission is ATOMIC (TASK.102 CUT-S2 
     // Free a slot on PARENT 0 (`p0-0`, the first of the 8 children forked
     // above, at hosts[3]) — a DIFFERENT parent than the one the parked
     // request belongs to. The global cap is what was blocking it, and a
-    // global slot just freed no matter WHOSE child released it (TASK.147's
+ // global slot just freed no matter WHOSE child released it (
     // own "заявка могла ждать из-за ГЛОБАЛЬНОГО кэпа, а освободился слот у
     // ДРУГОГО родителя — такую тоже надо будить").
     hosts[3]!.emit("message", childTerminalMsg({ status: "completed" }));
@@ -2472,7 +2472,7 @@ describe("TabHostManager — child-session admission is ATOMIC (TASK.102 CUT-S2 
     expect(childRunEvents(rootHost).filter((e) => e.kind === "accepted")).toHaveLength(3);
   });
 
-  it("a resolved connection whose env is unavailable is refused not_ready before the fork, releasing the pin once (Taskana 4269)", async () => {
+  it("a resolved connection whose env is unavailable is refused not_ready before the fork, releasing the pin once", async () => {
     const hosts: FakeHost[] = [];
     const forkSpy = vi.fn<HostForkFn>(() => {
       const host = new FakeHost();
@@ -2516,7 +2516,7 @@ describe("TabHostManager — child-session admission is ATOMIC (TASK.102 CUT-S2 
     expect(releaseSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("cancelling a run holds its slot until the REAL reap — a 4th spawn stays PARKED (TASK.147 срез 1) until the cancelled child actually exits, then wakes it (not whoever asks next)", () => {
+  it("cancelling a run holds its slot until the REAL reap — a 4th spawn stays PARKED (срез 1) until the cancelled child actually exits, then wakes it (not whoever asks next)", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
     const manager = childManager(fork, window);
@@ -2533,7 +2533,7 @@ describe("TabHostManager — child-session admission is ATOMIC (TASK.102 CUT-S2 
     expect(child1Host.postMessage).toHaveBeenCalledWith({ type: "shutdown" });
 
     // Still no slot: cancelling still occupies it, so this parks rather
-    // than being told `limit_parent` (TASK.147 срез 1).
+    // than being told `limit_parent` (срез 1).
     rootHost.emit("message", spawnRequest({ requestId: "too-soon" }));
     expect(childRunEvents(rootHost).some((e) => e.requestId === "too-soon")).toBe(false);
 
@@ -2558,7 +2558,7 @@ describe("TabHostManager — child-session admission is ATOMIC (TASK.102 CUT-S2 
 });
 
 /**
- * TASK.147 срез 1: a spawn request exceeding the per-parent/global cap now
+ * срез 1: a spawn request exceeding the per-parent/global cap now
  * parks instead of being refused outright — the tests above (in "…admission
  * is ATOMIC") re-purpose the ORIGINAL cap tests to prove the park-then-wake
  * lifecycle end to end. These tests cover the three properties that lifecycle
@@ -2567,7 +2567,7 @@ describe("TabHostManager — child-session admission is ATOMIC (TASK.102 CUT-S2 
  * waiter app-wide (as opposed to `drainChildren`'s per-parent purge, already
  * covered by the "spawn around a root's close" suite below).
  */
-describe("TabHostManager — session-spawn queue (TASK.147 срез 1)", () => {
+describe("TabHostManager — session-spawn queue (срез 1)", () => {
   it("a duplicate (parentSessionId, spawnToolCallId) pair is refused spawn_failed WHILE the first spawn is still queued, not only while it is running", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
@@ -2621,7 +2621,7 @@ describe("TabHostManager — session-spawn queue (TASK.147 срез 1)", () => {
     expect(childRunEvents(rootHost).filter((e) => e.kind === "rejected")).toHaveLength(0);
 
     // One more, past the queue's own bound: refused outright, with the SAME
-    // frozen text a cap-exceeding spawn always got pre-TASK.147 — the
+    // frozen text a cap-exceeding spawn always got the
     // "Границы решения" texts stay reachable exactly on this path.
     rootHost.emit("message", spawnRequest({ requestId: "overflow" }));
     expect(childRunEvents(rootHost).find((e) => e.requestId === "overflow")).toEqual({
@@ -2718,7 +2718,7 @@ describe("TabHostManager — session-spawn queue (TASK.147 срез 1)", () => {
 
 });
 
-describe("TabHostManager — engine-aware spawnChild (TASK.102 CUT-S4 §3.2)", () => {
+describe("TabHostManager — engine-aware spawnChild (CUT-S4 §3.2)", () => {
   it("an engine child asks isEngineReady for THAT engine, not core — ready admits, naming the engine in fork args' --child-mode triple", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
@@ -2961,7 +2961,7 @@ describe("TabHostManager — engine-aware spawnChild (TASK.102 CUT-S4 §3.2)", (
     expect(hosts).toHaveLength(1);
   });
 
-  // TASK.102 S4 gate-fix (L1): tabs.ts:1249 states connectionId is "Never
+  // S4 gate-fix (L1): tabs.ts:1249 states connectionId is "Never
   // consulted for a non-core engine" — an omitted req.model must NOT fall
   // back to describeChildModel(connectionId), which reads the PARENT
   // connection's own ANYCODE_MODEL (a core model string) off the ambient env.
@@ -2988,7 +2988,7 @@ describe("TabHostManager — engine-aware spawnChild (TASK.102 CUT-S4 §3.2)", (
     expect((accepted as { model: string }).model).not.toBe("claude-opus-4-1");
   });
 
-  // TASK.102 S4 gate-fix (F4, latent): registry.ts's selectEnginePlugin treats
+  // S4 gate-fix (F4, latent): registry.ts's selectEnginePlugin treats
   // an absent ANYCODE_ENGINE as core, SILENTLY. Production's engineEnv always
   // stamps it (main/index.ts:1462), but a missing/misbehaving overlay must not
   // let a `claude` child boot a full core session on the ambient connection —
@@ -3053,7 +3053,7 @@ describe("TabHostManager — engine-aware spawnChild (TASK.102 CUT-S4 §3.2)", (
   });
 });
 
-describe("TabHostManager — a profile's effort reaches a core child's host (TASK.127)", () => {
+describe("TabHostManager — a profile's effort reaches a core child's host", () => {
   function rig() {
     const { hosts } = shutdownableForkRig();
     const forkSpy = vi.fn<HostForkFn>(() => {
@@ -3137,7 +3137,7 @@ describe("TabHostManager — a profile's effort reaches an engine child as --eng
   });
 });
 
-describe("TabHostManager — non-recursion lock #3: a child cannot spawn its own child (TASK.102 CUT-S2 §0.2)", () => {
+describe("TabHostManager — non-recursion lock #3: a child cannot spawn its own child (CUT-S2 §0.2)", () => {
   it("a spawn request from a tab that IS a child is rejected recursion, replied to on the CHILD's OWN process — the root never sees it, and nothing is forked", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
@@ -3165,7 +3165,7 @@ describe("TabHostManager — non-recursion lock #3: a child cannot spawn its own
   });
 });
 
-describe("TabHostManager — spawn around a root's close: seal + cascade drain (TASK.102 CUT-S2 §2.6.4/anti-facade §5.8)", () => {
+describe("TabHostManager — spawn around a root's close: seal + cascade drain (CUT-S2 §2.6.4/anti-facade §5.8)", () => {
   it("a spawn request that arrives after closeTab's synchronous seal is rejected closing — the seal precedes ANY await inside closeTab", async () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
@@ -3215,7 +3215,7 @@ describe("TabHostManager — spawn around a root's close: seal + cascade drain (
     expect(manager.listTabs().some((t) => t.childOf !== undefined)).toBe(false);
   });
 
-  it("close on a root with a QUEUED (not yet admitted) spawn kills the waiter too — rejected closing, no ghosts in childRuns/childrenByParentTab/childSpawnKeys (TASK.147 срез 1)", async () => {
+  it("close on a root with a QUEUED (not yet admitted) spawn kills the waiter too — rejected closing, no ghosts in childRuns/childrenByParentTab/childSpawnKeys (срез 1)", async () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
     const manager = childManager(fork, window);
@@ -3239,7 +3239,7 @@ describe("TabHostManager — spawn around a root's close: seal + cascade drain (
 
     // The waiter never forked (closing purges it before it could) and gets
     // the SAME `rejected closing` reply a spawn arriving after the seal
-    // already gets (TASK.147's "отвечай существующим CHILD_CLOSING_MESSAGE
+ // already gets ("отвечай существующим CHILD_CLOSING_MESSAGE
     // через тот же rejected-путь").
     expect(hosts).toHaveLength(hostsBeforeClose);
     expect(childRunEvents(rootHost).find((e) => e.requestId === "close-queued")).toEqual({
@@ -3308,7 +3308,7 @@ describe("TabHostManager — spawn around a root's close: seal + cascade drain (
   });
 });
 
-describe("TabHostManager — crashed root cancels its children BEFORE respawning (TASK.102 CUT-S2 §0.6)", () => {
+describe("TabHostManager — crashed root cancels its children BEFORE respawning (CUT-S2 §0.6)", () => {
   it("cancellation is synchronously INITIATED before the respawn's fork call", () => {
     const hosts: FakeHost[] = [];
     const order: string[] = [];
@@ -3374,7 +3374,7 @@ describe("TabHostManager — crashed root cancels its children BEFORE respawning
   });
 });
 
-describe("TabHostManager — child start-deadline (CHILD_START_DEADLINE_MS, TASK.102 CUT-S2 §2.3/§2.6.4)", () => {
+describe("TabHostManager — child start-deadline (CHILD_START_DEADLINE_MS, CUT-S2 §2.3/§2.6.4)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -3422,7 +3422,7 @@ describe("TabHostManager — child start-deadline (CHILD_START_DEADLINE_MS, TASK
     expect(terminal).toBeUndefined();
   });
 
-  it("TASK.147 срез 1: the deadline is NOT consumed while a request sits queued — it starts only at the REAL fork, never at park time", () => {
+  it("срез 1: the deadline is NOT consumed while a request sits queued — it starts only at the REAL fork, never at park time", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
     const manager = childManager(fork, window);
@@ -3467,7 +3467,7 @@ describe("TabHostManager — child start-deadline (CHILD_START_DEADLINE_MS, TASK
   });
 });
 
-describe("TabHostManager — child terminal + reap (TASK.102 CUT-S2 §0/§2.6.4)", () => {
+describe("TabHostManager — child terminal + reap (CUT-S2 §0/§2.6.4)", () => {
   it("a normal ChildTerminal relays EXACTLY once, frees the quota, and reaps the child tab; a duplicate terminal is a no-op", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
@@ -3500,8 +3500,8 @@ describe("TabHostManager — child terminal + reap (TASK.102 CUT-S2 §0/§2.6.4)
     expect(childRunEvents(rootHost).filter((e) => e.kind === "accepted")).toHaveLength(1 + 3);
   });
 
-  // TASK.219: the child's own model facts ride the terminal relay verbatim.
-  it("a ChildTerminal with model+responseModel relays both verbatim; a legacy terminal relays neither (TASK.219)", () => {
+  // the child's own model facts ride the terminal relay verbatim.
+  it("a ChildTerminal with model+responseModel relays both verbatim; a legacy terminal relays neither", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
     const manager = childManager(fork, window);
@@ -3527,7 +3527,7 @@ describe("TabHostManager — child terminal + reap (TASK.102 CUT-S2 §0/§2.6.4)
     expect(legacy && "responseModel" in legacy).toBe(false);
   });
 
-  // ── TASK 4239: malformed ChildTerminal handling ──
+  // ── malformed ChildTerminal handling ──
   // A ChildTerminal with a malformed KNOWN field fails fail-closed parsing
   // (parseChildTerminal -> null); before 4239 the dispatch branch silently
   // returned, leaving the ledger entry "running" forever (the slot leaked
@@ -3540,7 +3540,7 @@ describe("TabHostManager — child terminal + reap (TASK.102 CUT-S2 §0/§2.6.4)
     return { logger, warn };
   }
 
-  it("a malformed ChildTerminal (bad known field) warns once naming tab+run+error, finalizes the run as error 'malformed terminal', reaps the tab, frees the quota; a later VALID duplicate terminal is a no-op (TASK 4239)", () => {
+  it("a malformed ChildTerminal (bad known field) warns once naming tab+run+error, finalizes the run as error 'malformed terminal', reaps the tab, frees the quota; a later VALID duplicate terminal is a no-op", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
     const { logger, warn } = malformedLogger();
@@ -3577,7 +3577,7 @@ describe("TabHostManager — child terminal + reap (TASK.102 CUT-S2 §0/§2.6.4)
     expect(childRunEvents(rootHost).filter((e) => e.kind === "accepted")).toHaveLength(1 + 3);
   });
 
-  it("a duplicate MALFORMED terminal after the finalize is a no-op — one warn, one terminal, no double free (TASK 4239)", () => {
+  it("a duplicate MALFORMED terminal after the finalize is a no-op — one warn, one terminal, no double free", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
     const { logger, warn } = malformedLogger();
@@ -3599,7 +3599,7 @@ describe("TabHostManager — child terminal + reap (TASK.102 CUT-S2 §0/§2.6.4)
     expect(childRunEvents(rootHost).filter((e) => e.kind === "accepted")).toHaveLength(1 + 3);
   });
 
-  it("cancel precedence: a malformed terminal racing an in-flight cancel finalizes as cancelled with CHILD_CANCELLED_MESSAGE, warn names 'cancelled' (TASK 4239)", async () => {
+  it("cancel precedence: a malformed terminal racing an in-flight cancel finalizes as cancelled with CHILD_CANCELLED_MESSAGE, warn names 'cancelled'", async () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
     const { logger, warn } = malformedLogger();
@@ -3624,7 +3624,7 @@ describe("TabHostManager — child terminal + reap (TASK.102 CUT-S2 §0/§2.6.4)
     expect(manager.getTab(childTabId)).toBeUndefined();
   });
 
-  it("an unknown additive terminal key is accepted and stripped end-to-end: the run finalizes normally with no warning (TASK 4239)", () => {
+  it("an unknown additive terminal key is accepted and stripped end-to-end: the run finalizes normally with no warning", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
     const { logger, warn } = malformedLogger();
@@ -3647,7 +3647,7 @@ describe("TabHostManager — child terminal + reap (TASK.102 CUT-S2 §0/§2.6.4)
     expect(manager.getTab(childTabId)).toBeUndefined();
   });
 
-  it("stale/unauthorized sender: a malformed terminal emitted by the ROOT host (no childOf) neither warns nor finalizes anything (TASK 4239)", () => {
+  it("stale/unauthorized sender: a malformed terminal emitted by the ROOT host (no childOf) neither warns nor finalizes anything", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
     const { logger, warn } = malformedLogger();
@@ -3739,7 +3739,7 @@ describe("TabHostManager — child terminal + reap (TASK.102 CUT-S2 §0/§2.6.4)
  * the run's terminal transition is dropped; and ChildTerminal.
  * activitySuppressed is copied verbatim into the terminal ChildRunEvent.
  */
-describe("TabHostManager — ChildProgress/ChildTerminal relay matrix (TASK.102 CUT-S2 §10.7 п.6d)", () => {
+describe("TabHostManager — ChildProgress/ChildTerminal relay matrix (CUT-S2 §10.7 п.6d)", () => {
   it("a `progress` message from a live child with childOf relays EXACTLY one ChildRunEvent{kind:\"progress\"} carrying the run's requestId", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
@@ -3855,7 +3855,7 @@ describe("TabHostManager — ChildProgress/ChildTerminal relay matrix (TASK.102 
     expect(terminal).toMatchObject({ activitySuppressed: 7 });
   });
 
-  it("ChildTerminal.declaredDoneAtCeiling:true is relayed into the terminal ChildRunEvent; absent stays absent (TASK 4149)", () => {
+  it("ChildTerminal.declaredDoneAtCeiling:true is relayed into the terminal ChildRunEvent; absent stays absent", () => {
     for (const [id, overrides, expected] of [
       ["relay-done-ceiling", { status: "max_turns", declaredDoneAtCeiling: true }, true],
       ["relay-no-done-ceiling", { status: "max_turns" }, false],
@@ -3893,7 +3893,7 @@ describe("TabHostManager — ChildProgress/ChildTerminal relay matrix (TASK.102 
     expect(terminal && "activitySuppressed" in terminal).toBe(false);
   });
 
-  // N1 (Taskana 4704 re-review #3): the R2 safe error descriptor must reach
+  // N1 (re-review #3): the R2 safe error descriptor must reach
   // the parent host. Before this relay it was parsed and then dropped here,
   // so the infra classifier always fell back to the free-text first line.
   it("N1: ChildTerminal.errorDescriptor is relayed VERBATIM into the terminal ChildRunEvent; absent => key absent", () => {
@@ -3952,7 +3952,7 @@ describe("TabHostManager — ChildProgress/ChildTerminal relay matrix (TASK.102 
   });
 });
 
-describe("TabHostManager — children are invisible outside the manager (TASK.102 CUT-S2 §2.6.4)", () => {
+describe("TabHostManager — children are invisible outside the manager (CUT-S2 §2.6.4)", () => {
   it("count() and atCapacity() never see children, only roots", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
@@ -4089,7 +4089,7 @@ describe("TabHostManager — children are invisible outside the manager (TASK.10
   });
 });
 
-describe("TabHostManager — stale-generation child-session messages are ignored (TASK.102 CUT-S2 §2.6.4)", () => {
+describe("TabHostManager — stale-generation child-session messages are ignored (CUT-S2 §2.6.4)", () => {
   it("a spawn request from a root's OLD (already-respawned) process is silently ignored — no reply, no child forked", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
@@ -4151,7 +4151,7 @@ describe("TabHostManager — stale-generation child-session messages are ignored
   });
 });
 
-describe("TabHostManager — in-flight (parentSessionId, spawnToolCallId) dedup (TASK.102 CUT-S2 §10.5 п.3)", () => {
+describe("TabHostManager — in-flight (parentSessionId, spawnToolCallId) dedup (CUT-S2 §10.5 п.3)", () => {
   const DUPLICATE_SPAWN_MESSAGE =
     "Agent: a session-subagent for this Agent tool call is already running. Wait for it to finish before retrying.";
 
@@ -4248,7 +4248,7 @@ describe("TabHostManager — in-flight (parentSessionId, spawnToolCallId) dedup 
 });
 
 /**
- * TASK.102 CUT-S2 §10.8.2 п.5: four model-visible texts are now VERBATIM-
+ * CUT-S2 §10.8.2 п.5: four model-visible texts are now VERBATIM-
  * frozen cut members. These pins exist to catch a single wrong character —
  * each asserts the FULL string (`toEqual`/exact `finalText`), not
  * `expect.any(String)` or a substring match, so any drift from the ratified
@@ -4364,7 +4364,7 @@ describe("TabHostManager — §10.8.2 model-visible text verbatim pins", () => {
 });
 
 /**
- * TASK.102 fix-wave F1: `drainChildren`'s `for(;;)` loop re-polls
+ * fix-wave F1: `drainChildren`'s `for(;;)` loop re-polls
  * `childrenByParentTab` on every iteration and re-invokes `cancelChildRun` for
  * every child it still finds — including one it already asked to shut down.
  * On the child that is already `state === "closing"`, `cancelChildRun` used
@@ -4378,7 +4378,7 @@ describe("TabHostManager — §10.8.2 model-visible text verbatim pins", () => {
  * production exactly per the finding: cancel a child, then close its parent
  * before the child's real exit lands.
  */
-describe("TabHostManager — drainChildren must not starve the event loop on an already-closing child (TASK.102 CUT-S2 F1)", () => {
+describe("TabHostManager — drainChildren must not starve the event loop on an already-closing child (CUT-S2 F1)", () => {
   it("cancelChildRun revisiting an already-`closing` child (the drain loop's own repeat-visit case) resolves only via a REAL macrotask, never via microtasks alone", async () => {
     // liveForkRig: the child never auto-responds to the shutdown postMessage
     // (unlike shutdownableForkRig), so it stays "closing but not yet exited"
@@ -4429,7 +4429,7 @@ describe("TabHostManager — drainChildren must not starve the event loop on an 
 });
 
 /**
- * TASK.102 fix-wave F2: on the timeout branch, `shutdownTabHost` nulls
+ * fix-wave F2: on the timeout branch, `shutdownTabHost` nulls
  * `tab.proc` right after calling `child.kill()`, before the process has
  * actually exited. When that real exit arrives later, `handleChildExit`'s
  * staleness guard (`tab.proc !== child`) — meant to catch a genuinely
@@ -4438,7 +4438,7 @@ describe("TabHostManager — drainChildren must not starve the event loop on an 
  * and the `(parentSessionId, spawnToolCallId)` dedup key leak forever, and
  * the zombie child tab is never removed from `tabs`.
  */
-describe("TabHostManager — a force-killed child's late real exit still finalizes the run (TASK.102 CUT-S2 F2)", () => {
+describe("TabHostManager — a force-killed child's late real exit still finalizes the run (CUT-S2 F2)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -4495,13 +4495,13 @@ describe("TabHostManager — a force-killed child's late real exit still finaliz
 });
 
 /**
- * TASK.102 fix-wave F3: `finalizeChildRun` relays the parent's `terminal`
+ * fix-wave F3: `finalizeChildRun` relays the parent's `terminal`
  * ChildRunEvent but never tells the RENDERER that the child TAB's own host
  * exited — the `HOST_EXITED_ENVELOPE_TYPE` send that flips a
  * `ChildRelation.live` flag in the UI. A finished child therefore renders as
  * permanently live for the rest of the app's lifetime.
  */
-describe("TabHostManager — a finalized child notifies the renderer's host-exited channel (TASK.102 CUT-S2 F3)", () => {
+describe("TabHostManager — a finalized child notifies the renderer's host-exited channel (CUT-S2 F3)", () => {
   it("a normal ChildTerminal finalize sends HOST_EXITED for the CHILD's own tabId", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window, hostExited } = windowRig();
@@ -4541,7 +4541,7 @@ describe("TabHostManager — a finalized child notifies the renderer's host-exit
 });
 
 /**
- * TASK.102 fix-wave F5: `relocateTab` (a master's worktree migration) shuts
+ * fix-wave F5: `relocateTab` (a master's worktree migration) shuts
  * its own host down and respawns at the new workspace, but — unlike
  * `closeTab` and the crashed-root respawn path in `handleExit` — never calls
  * `drainChildren` first. Spec §0.6's "a dead root cancels its children" is
@@ -4549,7 +4549,7 @@ describe("TabHostManager — a finalized child notifies the renderer's host-exit
  * rehost: any live child of that master is left running against a parent
  * that has since moved to a different workspace/branch.
  */
-describe("TabHostManager — a master's worktree relocation drains its children first (TASK.102 CUT-S2 F5)", () => {
+describe("TabHostManager — a master's worktree relocation drains its children first (CUT-S2 F5)", () => {
   it("relocateTab cancels a live child BEFORE respawning the master at the new worktree — the child is reaped, not orphaned", async () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
@@ -4595,14 +4595,14 @@ describe("TabHostManager — a master's worktree relocation drains its children 
 });
 
 /**
- * TASK.102 fix-wave F6: `handleChildTerminal` relays whatever `status` the
+ * fix-wave F6: `handleChildTerminal` relays whatever `status` the
  * child self-reports, verbatim. A child that finishes its own turn right as
  * a cancel races in (ledger `state === "cancelling"`) can self-report
  * "completed" — the cut's prescribed `cancelled` transition is not forced,
  * so the parent sees a stale "completed" terminal for a run it just told
  * main to cancel.
  */
-describe("TabHostManager — a self-reported ChildTerminal racing a cancel does not override the forced `cancelled` transition (TASK.102 CUT-S2 F6)", () => {
+describe("TabHostManager — a self-reported ChildTerminal racing a cancel does not override the forced `cancelled` transition (CUT-S2 F6)", () => {
   it("ChildTerminal{status:'completed'} arriving while the ledger entry is still 'cancelling' is forced to status 'cancelled'", async () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();
@@ -4702,7 +4702,7 @@ describe("TabHostManager — cancelChildRun's unknown-tab branch (review T1a)", 
  * deadline check deterministically without needing thousands of real
  * macrotask turns to elapse.
  *
- * SUPERSEDED outcome (TASK.102 CUT-S2 §10.11.2, N2): T1's original fix left
+ * SUPERSEDED outcome (CUT-S2 §10.11.2, N2): T1's original fix left
  * the still-unreaped child tracked, on the theory that "a later drain
  * retries it" — ratified as false (`closeTab`'s very next line deletes the
  * parent; there may be no later drain at all). The deadline branch now
@@ -4991,7 +4991,7 @@ describe("TabHostManager — a force-killed ROOT's external engine process is st
 });
 
 /**
- * TASK.102 CUT-S2 §10.11.2 (N2) — the ratified verdict: an expired
+ * CUT-S2 §10.11.2 (N2) — the ratified verdict: an expired
  * `drainChildren` deadline is an ADMINISTRATIVE reap, not a silent "the next
  * drain retries it" (the removed comment's promise was false for `closeTab`,
  * whose very next line deletes the parent tab — there IS no next drain for
@@ -5002,7 +5002,7 @@ describe("TabHostManager — a force-killed ROOT's external engine process is st
  * `(parentSessionId, spawnToolCallId)` dedup key it was otherwise holding
  * forever.
  */
-describe("TabHostManager — drainChildren's deadline branch administratively tombstones every remaining child (TASK.102 CUT-S2 §10.11.2 N2)", () => {
+describe("TabHostManager — drainChildren's deadline branch administratively tombstones every remaining child (CUT-S2 §10.11.2 N2)", () => {
   it("(i) a force-killed child that never exits is finalized `cancelled`/CHILD_UNREAPED_MESSAGE, its tab/ledger/dedup-key are all gone, and a late real exit afterward is a harmless no-op (first-wins)", async () => {
     const { fork, hosts } = liveForkRig(); // never responds to shutdown, never exits
     const { window } = windowRig();
@@ -5158,7 +5158,7 @@ describe("TabHostManager — drainChildren's deadline branch administratively to
     newRootHost.emit("message", spawnRequest({ requestId: "n2ii-r4", spawnToolCallId: "n2ii-call-3" }));
     expect(childRunEvents(newRootHost).find((e) => e.requestId === "n2ii-r3")?.kind).toBe("accepted");
     expect(childRunEvents(newRootHost).find((e) => e.requestId === "n2ii-r4")?.kind).toBe("accepted");
-    // ...and a 4th PARKS rather than being refused outright (TASK.147 срез
+    // ...and a 4th PARKS rather than being refused outright (срез
     // 1) — no reply has gone out for it yet.
     newRootHost.emit("message", spawnRequest({ requestId: "n2ii-r5", spawnToolCallId: "n2ii-call-4" }));
     expect(childRunEvents(newRootHost).some((e) => e.requestId === "n2ii-r5")).toBe(false);
@@ -5399,9 +5399,9 @@ describe("TabHostManager — cancelChildRun's unknown-tab branch also frees the 
   });
 });
 
-// ── TASK.106 cut-2: rebindTab (§D1 — the relocateTab precedent) ────────────
+// ── cut-2: rebindTab (§D1 — the relocateTab precedent) ────────────
 
-describe("TabHostManager — rebindTab (TASK.106 cut-2)", () => {
+describe("TabHostManager — rebindTab (cut-2)", () => {
   /** A manager whose env() answers per-connection envs by id — rebind's own fail-closed seam. */
   function rebindManager(fork: HostForkFn, window: WindowLike, envs: Map<string, NodeJS.ProcessEnv>) {
     return new TabHostManager({
@@ -5715,7 +5715,7 @@ describe("TabHostManager — rebindTab (TASK.106 cut-2)", () => {
   });
 });
 
-describe("TabHostManager — recognizer live-config broadcast (TASK.198 E1 §1.2)", () => {
+describe("TabHostManager — recognizer live-config broadcast (E1 §1.2)", () => {
   it("delivers to every live root CORE tab, and skips a codex root, a child-session tab, and a dead proc", () => {
     const hosts: FakeHost[] = [];
     const fork: HostForkFn = () => {
@@ -5799,7 +5799,7 @@ describe("TabHostManager — recognizer live-config broadcast (TASK.198 E1 §1.2
   });
 });
 
-describe("TASK.194 model admission before fork", () => {
+describe("model admission before fork", () => {
   it("rejects an unavailable model before it can reach the child's HTTP request", () => {
     const { fork, hosts } = liveForkRig();
     const { window } = windowRig();
@@ -5819,7 +5819,7 @@ describe("TASK.194 model admission before fork", () => {
     const manager = childManager(fork, window, {
       validateChildModel,
       resolveProviderConnection: () => "anthropic-connection",
-      // Taskana 4269: an explicit provider now prepares its connection before
+      // an explicit provider now prepares its connection before
       // the fork (env primed + pin held).
       prepareChildConnection: async () => ({ ok: true, release: () => {} }),
     });
@@ -5848,7 +5848,7 @@ describe("session activity messages", () => {
   });
 });
 
-describe("TASK.242 owned process communication routing", () => {
+describe("owned process communication routing", () => {
   it("pins workspace/session and accepts a correlated response only from the recipient host", async () => {
     const rig = liveForkRig(); const manager = makeManager(rig.fork, windowRig().window);
     manager.createTab({ workspace: "/allowed", sessionId: "a", resume: false });
@@ -5999,10 +5999,10 @@ describe("TabHostManager — follow-up card alias", () => {
   });
 });
 
-// ── TASK.119 / TASK.147 slice 2: LIVE session-capacity limits (settings readers) ──
+// ── / slice 2: LIVE session-capacity limits (settings readers) ──
 
-describe("TabHostManager — live session limits (TASK.119 / TASK.147 срез 2)", () => {
-  it("DEFAULT_BREAKER_LIMITS.maxTabs is 20 (TASK.119 п.1)", () => {
+describe("TabHostManager — live session limits (срез 2)", () => {
+  it("DEFAULT_BREAKER_LIMITS.maxTabs is 20 (п.1)", () => {
     expect(DEFAULT_BREAKER_LIMITS.maxTabs).toBe(20);
   });
 
@@ -6141,10 +6141,10 @@ describe("TabHostManager — live session limits (TASK.119 / TASK.147 срез 2
   });
 });
 
-// TASK.180: the creating spawn's turn budget (req.maxTurns) rides the child's
+// the creating spawn's turn budget (req.maxTurns) rides the child's
 // argv as --child-max-turns <n> — only for a FRESH child, never a follow-up
 // (resumed) child or an ordinary tab.
-describe("TabHostManager — child turn budget argv (TASK.180)", () => {
+describe("TabHostManager — child turn budget argv", () => {
   function forkSpyRig() {
     const hosts: FakeHost[] = [];
     const forkSpy = vi.fn<HostForkFn>((_entry, _args, _opts) => {
@@ -6229,7 +6229,7 @@ describe("TabHostManager — child turn budget argv (TASK.180)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Taskana 4269: a profile selects its own connection. These exercise the LOAD-
+// a profile selects its own connection. These exercise the LOAD-
 // BEARING admission protocol in main/tabs.ts: the child-run ledger slot is
 // reserved SYNCHRONOUSLY before the preparation await (so caps stay exact), the
 // frozen connection id comes from prepareChildConnection under resolveResumePin's
@@ -6237,7 +6237,7 @@ describe("TabHostManager — child turn budget argv (TASK.180)", () => {
 // generation change. The env-recording fork lets us prove WHICH connection each
 // child actually booted on.
 
-describe("child spawn — profile-declared connection routing (Taskana 4269)", () => {
+describe("child spawn — profile-declared connection routing", () => {
   type PrepResult = { ok: true; release: () => void } | { ok: false };
 
   /** A controllable preparation: the test decides when (and how) it settles. */
@@ -7025,11 +7025,11 @@ describe("child spawn — profile-declared connection routing (Taskana 4269)", (
   });
 });
 
-// ── Taskana 4153 / TASK.216 wire: ChildRunSend — a parent host's follow-up to
+// ── / wire: ChildRunSend — a parent host's follow-up to
 // its OWN STILL-RUNNING child, delivered through communicationRequest into the
 // existing receiveAgentMessage/agentInbox path. Every test drives main purely
 // via host.emit("message", ...) on fake hosts, like the suites above.
-describe("TabHostManager — send to a running own child (Taskana 4153)", () => {
+describe("TabHostManager — send to a running own child", () => {
   /**
    * One root tab plus ONE still-running core child: spawnRequest accepted
    * (hosts[0] -> hosts[1]), child-ready emitted, NO terminal — the child tab
@@ -7155,7 +7155,7 @@ describe("TabHostManager — send to a running own child (Taskana 4153)", () => 
   });
 });
 
-describe("TabHostManager — workspace trust (Taskana 4736)", () => {
+describe("TabHostManager — workspace trust", () => {
   const HASH = "b".repeat(64);
 
   function rig(extra: { workspaceTrustOnce?: (ws: string) => string | undefined; limits?: object } = {}) {
@@ -7218,7 +7218,7 @@ describe("TabHostManager — workspace trust (Taskana 4736)", () => {
     expect(manager.getTab(tabId)?.rapidRespawns).toBe(0);
   });
 
-  // Taskana 4736 xfix D3: restartTabHost must use the graceful shutdown
+  // xfix D3: restartTabHost must use the graceful shutdown
   // handshake (HOST_SHUTDOWN posted, exit awaited with the existing
   // exitDeadlineMs deadline, force-kill only on timeout) — never a bare kill
   // that could orphan the host's own children mid-turn.
@@ -7263,7 +7263,7 @@ describe("TabHostManager — workspace trust (Taskana 4736)", () => {
     expect(env?.ANYCODE_WORKSPACE_TRUST_ONCE).toBe(HASH);
   });
 
-  // Taskana 4736 xfix D4: the parent's current decision must ride the CHILD's
+  // xfix D4: the parent's current decision must ride the CHILD's
   // fork too — children share the workspace and cannot answer the question
   // themselves, so the once hash (or the persisted record) is the only way a
   // child of a trusted-once parent boots trusted.
@@ -7295,10 +7295,10 @@ describe("TabHostManager — workspace trust (Taskana 4736)", () => {
   });
 });
 
-// Taskana 4752 part A: the session's tools (Bash, hooks, terminal, engines) see
+// part A: the session's tools (Bash, hooks, terminal, engines) see
 // ANYCODE_SESSION_ID (= the id list_sessions reports) and ANYCODE_SESSION_WORKSPACE,
 // stamped per fork so every spawn — first, resume, respawn — carries them.
-describe("TabHostManager — session tool env (Taskana 4752, part A)", () => {
+describe("TabHostManager — session tool env (part A)", () => {
   function envRig(baseEnv: NodeJS.ProcessEnv) {
     const envs: NodeJS.ProcessEnv[] = [];
     const hosts: FakeHost[] = [];
@@ -7362,9 +7362,9 @@ describe("TabHostManager — session tool env (Taskana 4752, part A)", () => {
   });
 });
 
-// Taskana 4752 part C: the MCP secret hand-off rides the fork env only when the
+// part C: the MCP secret hand-off rides the fork env only when the
 // tab's workspace has referenced+set secrets; a respawn reads the latest value.
-describe("TabHostManager — MCP secret hand-off env (Taskana 4752, part C)", () => {
+describe("TabHostManager — MCP secret hand-off env (part C)", () => {
   it("passes ANYCODE_MCP_SECRETS from the injected dep on the fork", () => {
     const { hosts } = liveForkRig();
     const envs: NodeJS.ProcessEnv[] = [];
@@ -7433,9 +7433,9 @@ describe("TabHostManager — MCP secret hand-off env (Taskana 4752, part C)", ()
   });
 });
 
-// Taskana 4759: "Full browser access" rides the fork env as an explicit "1"/"0" stamp,
+// "Full browser access" rides the fork env as an explicit "1"/"0" stamp,
 // recomputed on every spawn, and a trust question from the host notifies main.
-describe("TabHostManager — browser access env stamp (Taskana 4759) — test 49", () => {
+describe("TabHostManager — browser access env stamp — test 49", () => {
   function browserRig(browserFullAccess: (tabId: string) => boolean, onWorkspaceTrustPending?: (tabId: string) => void) {
     const hosts: FakeHost[] = [];
     const forkSpy = vi.fn<HostForkFn>(() => {

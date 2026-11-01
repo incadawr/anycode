@@ -1,5 +1,5 @@
 /**
- * "Full browser access for new sessions" (Taskana 4759 owner amendment): the
+ * "Full browser access for new sessions" (owner amendment): the
  * Settings → Permissions switch for `settings.browser.fullAccessDefault`. It only
  * seeds NEW root sessions; a session's own switch lives in its environment menu.
  * Written through the generic `settings-set` patch (the key is not a dedicated channel).

@@ -1,10 +1,10 @@
 /**
  * Detects a degenerate generation loop: the model repeating the same text
  * (or reasoning) fragment verbatim, tandem-style, without making forward
- * progress (TASK.210). Live incident: a subagent's final turn repeated a
+ * progress. Live incident: a subagent's final turn repeated a
  * ~296-char phrase 341 times — 46,148 of 58,088 chars of the finished text —
  * for 24m32s, and was only cut by the provider's own 131,072-output-token
- * ceiling. Constants and their justification live next to the TASK.124 block
+ * ceiling. Constants and their justification live next to the block
  * in types/config.ts.
  *
  * One instance covers ONE stream channel for ONE turn: the loop integrating
@@ -22,7 +22,7 @@
  * the amortized cost is bounded — O(WINDOW/STRIDE) linear passes over the
  * buffer per character fed, a few tens of comparisons in practice, not the
  * O(1)-per-character claim an earlier revision of this docstring made (codex
- * review correction, TASK.210 second pass) — see
+ * review correction, second pass) — see
  * DEGENERATION_CHECK_STRIDE_CHARS's own docstring in types/config.ts for the
  * corrected arithmetic. Still independent of total stream length, which is
  * the property that actually matters here. A period above

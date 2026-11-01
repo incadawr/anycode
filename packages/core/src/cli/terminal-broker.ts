@@ -215,7 +215,7 @@ function formatPlanApprovalAsk(plan: string, theme: CliTheme): string {
  * theme roles; the trailing answer prompt is plain. Original prose — never copied
  * from another product.
  *
- * Taskana 4070: a Bash ask additionally carries the SAME one-line per-command
+ * a Bash ask additionally carries the SAME one-line per-command
  * risk plaque the desktop modal shows (read-only pipeline / named write-capable
  * binary / unknown binary), painted with the `askHint` role on its own line
  * between the header and the y/n/a hint. The raw command stays in the header,
@@ -238,7 +238,7 @@ function formatAsk(request: PermissionRequest, theme: CliTheme): string {
   const destructive = request.metadata.destructive ? ", destructive" : "";
   const header = `[permission] ${name} (risk: ${risk}${destructive}) — ${previewInput(request.input)}`;
   const hint = `  y = allow once · n = deny · a = always allow ${name} this session (/allow ${name} <glob> for finer scope)`;
-  // Taskana 4070: fail-closed by construction — bashRiskPlaque returns null for
+  // fail-closed by construction — bashRiskPlaque returns null for
   // anything but a command-line tool with a string command.
   const plaque = bashRiskPlaque(request.toolName, request.input);
   const plaqueLine = plaque === null ? "" : `${theme.paint("askHint", `  ${plaque}`)}\n`;

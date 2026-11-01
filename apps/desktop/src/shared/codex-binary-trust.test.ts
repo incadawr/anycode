@@ -152,7 +152,7 @@ describe("checkCodexBinaryTrust — directory chain", () => {
   });
 });
 
-// TASK.103 — a consent record is authored main-side from a live stat (D-S4-5);
+// a consent record is authored main-side from a live stat (D-S4-5);
 // here it is a literal fixture, no fs involved. `FINGERPRINT_SIZE`/`_MTIME`
 // stand in for the raw stat values a real grant would capture.
 const FINGERPRINT_SIZE = 4096;
@@ -180,7 +180,7 @@ function consentFor(file: CodexPathStat, overrides: Partial<BinaryTrustConsent> 
   };
 }
 
-describe("consented binary trust (TASK.103)", () => {
+describe("consented binary trust", () => {
   it("BT1 consent lifts a directory-shape refusal; without consent the base refusal returns verbatim", () => {
     const file = fingerprintedFileStat("/opt/codex");
     const trustInput = input(file, [dirStat("/opt", { mode: 0o777 })]);

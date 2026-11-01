@@ -1,5 +1,5 @@
 /**
- * Node implementation of ArtifactStorePort (TASK.94).
+ * Node implementation of ArtifactStorePort.
  *
  * Layout: `<artifactsRoot>/<sessionId>/<toolCallId>`. The root is chosen by the
  * host OUTSIDE the workspace — beside anycode.sqlite and the shadow-git

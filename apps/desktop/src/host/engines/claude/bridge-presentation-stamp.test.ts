@@ -1,5 +1,5 @@
 /**
- * Taskana 4056 review (N2): the claude door's `tools/call` handler, lifted
+ * review (N2): the claude door's `tools/call` handler, lifted
  * out of host/index.ts verbatim (see bridge-presentation-stamp.ts's own
  * header for why a lift — not an import — is the established idiom here).
  * These tests pin the handler's after-abort discipline against a REAL
@@ -61,7 +61,7 @@ function stampOver(port: SessionSubagentPort) {
   return { stamp, seen };
 }
 
-describe("bridge door callTool — Taskana 4056 review N2 (no presentation stamp past the turn-end sweep)", () => {
+describe("bridge door callTool — review N2 (no presentation stamp past the turn-end sweep)", () => {
   it("a call aborted mid-run (Stop) that resolves LATE must NOT stamp a presentation — the turn-end sweep already ran", async () => {
     const rig = lateSettlingPort({ status: "cancelled", presentationWorthy: true });
     const { stamp } = stampOver(rig.port);
@@ -118,9 +118,9 @@ describe("bridge door callTool — Taskana 4056 review N2 (no presentation stamp
 });
 
 
-// Taskana 4764 C1/C2/C4: the door serves the browser tools (with or without
+// C1/C2/C4: the door serves the browser tools (with or without
 // an agent catalog) and routes browser_* names to the shared engine bridge.
-describe("bridge door — Taskana 4764 browser tools", () => {
+describe("bridge door — browser tools", () => {
   function fakeBrowser() {
     const calls: Array<{ name: string; args: unknown; signal: AbortSignal; toolUseId: string }> = [];
     const navigate = { canonical: "BrowserNavigate", claudeName: "browser_navigate", codexName: "anycode_browser_navigate", description: "d2", inputSchema: { type: "object" } };

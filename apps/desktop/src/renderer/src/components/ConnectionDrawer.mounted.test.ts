@@ -15,9 +15,9 @@ vi.mock("@xterm/xterm", () => ({ Terminal: class {} }));
 // @ts-expect-error jsdom has no bundled type declarations in this workspace.
 import { JSDOM } from "jsdom";
 const dom = new JSDOM("<!doctype html><html><body></body></html>", {url:"http://localhost"});
-Object.assign(globalThis, {window:dom.window, document:dom.window.document, HTMLElement:dom.window.HTMLElement, HTMLInputElement:dom.window.HTMLInputElement, HTMLSelectElement:dom.window.HTMLSelectElement, Event:dom.window.Event});
+Object.assign(globalThis, {window:dom.window, document:dom.window.document, HTMLElement:dom.window.HTMLElement, HTMLInputElement:dom.window.HTMLInputElement, HTMLSelectElement:dom.window.HTMLSelectElement, Event:dom.window.Event, requestAnimationFrame:(callback: FrameRequestCallback) => setTimeout(() => callback(Date.now()), 0), cancelAnimationFrame:(id: ReturnType<typeof setTimeout>) => clearTimeout(id)});
 const { createRoot } = await import("react-dom/client");
-const { ConnectionDrawerFields } = await import("./ConnectionDrawer.js");
+const { ConnectionDrawer, ConnectionDrawerFields } = await import("./ConnectionDrawer.js");
 import type { SettingsStoreApi } from "../settings-store.js";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -247,10 +247,10 @@ it("keeps the Advanced fields in a gapped column and gives the rate inputs the d
     // element no longer spaces its slotted contents in Chromium.
     expect(advanced.querySelector(":scope > .connection-drawer-advanced-body")).not.toBeNull();
     // The session-scope hint sits under Pricing.
-    expect(advanced.textContent).toContain("a session that is already open keeps the rates it started with");
+    expect(container.querySelector('[aria-label*="a session that is already open"]')).not.toBeNull();
     const pricing = [...container.querySelectorAll("select")].find(s => [...s.options].some(o => o.value === "rates"))!;
     await act(async () => { pricing.value = "rates"; pricing.dispatchEvent(new Event("change", {bubbles:true})); });
-    const rateInputs = [...container.querySelectorAll<HTMLInputElement>(".connection-drawer-rate-grid input[type=number]")];
+    const rateInputs = [...container.querySelectorAll<HTMLInputElement>('input[aria-label^="Connection fallback "][type=number]')];
     expect(rateInputs).toHaveLength(4);
     for (const input of rateInputs) {
       expect(input.classList.contains("settings-field-input")).toBe(true);
@@ -333,5 +333,327 @@ it("uses endpoint effort levels and saves an explicit reasoning denial", async (
     await act(async () => { support.value = "off"; support.dispatchEvent(new Event("change", {bubbles:true})); });
     await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
     expect(update).toHaveBeenCalledWith(expect.objectContaining({reasoningSupported:false}));
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+
+it("keeps manually selected models and shows a safe error when fetch IPC rejects", async () => {
+  const connection = { id:"c1", providerId:"glm", model:"glm-5.3", authOptional:true, modelsFetchedAt:"2026-01-01", visibleModels:["glm-5.3"] };
+  const rig = catalogRig(connection);
+  rig.fetchModels.mockRejectedValue(new Error("sensitive fixture detail"));
+  const { container, root } = await mountEdit(connection, rig);
+  try {
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Fetch models")!.click(); });
+    const manual = container.querySelector<HTMLInputElement>('input[aria-label="Manual model ID"]')!;
+    await typeInto(manual, "manual-choice");
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Add")!.click(); });
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Refresh")!.click(); });
+    expect(rig.fetchModels).toHaveBeenCalled();
+    expect(container.textContent).toContain("Your model selections are kept");
+    expect(container.textContent).not.toContain("sensitive fixture detail");
+    const choice = [...container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find(x => x.parentElement?.textContent?.includes("manual-choice"));
+    expect(choice?.checked).toBe(true);
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+
+async function mountDrawer(connection: Record<string, unknown>, rig: ReturnType<typeof catalogRig>, onClose: () => void) {
+  const proto = dom.window.HTMLDialogElement.prototype;
+  proto.showModal = function () { this.setAttribute("open", ""); };
+  proto.close = function () { this.removeAttribute("open"); };
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(createElement(ConnectionDrawer, {open:true, mode:"edit", editConnection:connection as never, catalog:CATALOG as never, connections:[connection] as never, secrets:[], readOnly:false, store:rig.store, customProvider:rig.customProvider, onClose})));
+  return {container, root};
+}
+
+it("uses a secondary Cancel and protects unsaved changes for Cancel, Escape, and Close", async () => {
+  const connection = { id:"c1", providerId:"glm", model:"glm-5.3" };
+  const rig = catalogRig(connection), onClose = vi.fn();
+  const {container, root} = await mountDrawer(connection, rig, onClose);
+  try {
+    expect([...container.querySelectorAll("button")].filter(b => b.classList.contains("settings-button-primary")).map(b => b.textContent?.trim())).toEqual(["Save"]);
+    await typeInto(container.querySelector('input[placeholder="e.g. Work, Personal"]')!, "changed");
+    const cancel = [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Cancel")!;
+    await act(async () => { cancel.focus(); cancel.click(); });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Discard unsaved changes?");
+    expect(document.activeElement?.textContent).toBe("Keep editing");
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Keep editing")!.click(); });
+    expect(document.activeElement).toBe(cancel);
+    expect((container.querySelector('input[placeholder="e.g. Work, Personal"]') as HTMLInputElement).value).toBe("changed");
+    await act(async () => { container.querySelector("dialog")!.dispatchEvent(new Event("cancel", {bubbles:false, cancelable:true})); });
+    expect(container.textContent).toContain("Discard unsaved changes?");
+    await act(async () => { container.querySelector("dialog")!.dispatchEvent(new Event("cancel", {bubbles:false, cancelable:true})); });
+    expect(container.textContent).not.toContain("Discard unsaved changes?");
+    expect(document.activeElement).toBe(cancel);
+    await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click(); });
+    expect(onClose).not.toHaveBeenCalled();
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Discard changes")!.click(); });
+    expect(onClose).toHaveBeenCalledOnce();
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it("clears the unsaved warning after Save succeeds but not after a failed Save", async () => {
+  const connection = { id:"c1", providerId:"glm", model:"glm-5.3" };
+  const rig = catalogRig(connection), onClose = vi.fn();
+  rig.update.mockResolvedValueOnce({ok:false, reason:"io_error"});
+  const {container, root} = await mountDrawer(connection, rig, onClose);
+  try {
+    await typeInto(container.querySelector('input[placeholder="e.g. Work, Personal"]')!, "changed");
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click(); });
+    expect(container.textContent).toContain("Discard unsaved changes?");
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Keep editing")!.click(); });
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click(); });
+    expect(onClose).toHaveBeenCalledOnce();
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it("asks for a provider before asking for a model in the empty form", async () => {
+  const rig = catalogRig({});
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(ConnectionDrawerFields, {mode:"add", catalog:CATALOG as never, connections:[], secrets:[], readOnly:false, store:rig.store})));
+    expect(container.textContent).toContain("Choose a provider to continue.");
+    expect(container.textContent).not.toContain("Enter a model ID to continue.");
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it("keeps newer edits dirty if they are made while Save is in flight", async () => {
+  const connection = { id:"c1", providerId:"glm", model:"glm-5.3" };
+  const rig = catalogRig(connection), onClose = vi.fn();
+  let finish!: (value: unknown) => void;
+  rig.update.mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
+  const {container, root} = await mountDrawer(connection, rig, onClose);
+  try {
+    const label = container.querySelector<HTMLInputElement>('input[placeholder="e.g. Work, Personal"]')!;
+    await typeInto(label, "first");
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    expect(container.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.disabled).toBe(true);
+    await typeInto(label, "newer");
+    await act(async () => { finish({ok:true, snapshot:rig.snapshot}); });
+    await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click(); });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Discard unsaved changes?");
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it("shows a stored key as set without displaying or rewriting it on a metadata save", async () => {
+  const connection = {id:"c1", providerId:"glm", model:"glm-5.3"};
+  const rig = catalogRig(connection);
+  const setSecret = vi.fn();
+  rig.store.setState({setSecret} as never);
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(ConnectionDrawerFields, {mode:"edit", editConnection:connection as never, catalog:CATALOG as never, connections:[connection] as never, secrets:[{key:"provider.connection.c1.apiKey", set:true, source:"vault", tier:"secure"}] as never, readOnly:false, store:rig.store, customProvider:rig.customProvider})));
+    const password = container.querySelector<HTMLInputElement>('input[type="password"]')!;
+    expect(password.value).toBe("");
+    expect(container.textContent).toContain("Replace key (never displayed once saved)");
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    expect(rig.update).toHaveBeenCalledOnce();
+    expect(setSecret).not.toHaveBeenCalled();
+    expect(password.value).toBe("");
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it("does not allow saving behind a pending discard confirmation", async () => {
+  const connection = {id:"c1", providerId:"glm", model:"glm-5.3"};
+  const rig = catalogRig(connection), onClose = vi.fn();
+  const {container, root} = await mountDrawer(connection, rig, onClose);
+  try {
+    await typeInto(container.querySelector('input[placeholder="e.g. Work, Personal"]')!, "changed");
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Cancel")!.click(); });
+    expect(container.querySelector("[inert]")).not.toBeNull();
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    expect(rig.update).not.toHaveBeenCalled();
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Discard changes")!.click(); });
+    expect(onClose).toHaveBeenCalledOnce();
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it("keeps the form dirty and does not report Saved while key storage consent is pending or declined", async () => {
+  const connection = {id:"c1", providerId:"glm", model:"glm-5.3"};
+  const rig = catalogRig(connection), onClose = vi.fn();
+  const setSecret = vi.fn().mockResolvedValue({ok:false, reason:"weak_storage_needs_consent"});
+  rig.store.setState({setSecret} as never);
+  const {container, root} = await mountDrawer(connection, rig, onClose);
+  try {
+    await typeInto(container.querySelector('input[type="password"]')!, "fixture-key");
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    expect(setSecret).toHaveBeenCalledOnce();
+    expect(container.querySelector(".connection-drawer-saved")).toBeNull();
+    expect(container.textContent).toContain("awaiting storage consent");
+    // Simulate dismissal of the separate consent UI without accepting storage.
+    await act(async () => { rig.store.setState({pendingConsent:null, secretConsentResolution:{key:"provider.connection.c1.apiKey", ok:false}} as never); });
+    expect(container.textContent).toContain("The API key was not saved");
+    await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click(); });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Discard unsaved changes?");
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it("does not mark a dismissed model picker draft as a saved-form change", async () => {
+  const connection = {id:"c1", providerId:"glm", model:"glm-5.3", modelsFetchedAt:"2026-01-01", visibleModels:["glm-5.3"]};
+  const rig = catalogRig(connection), onClose = vi.fn();
+  const {container, root} = await mountDrawer(connection, rig, onClose);
+  try {
+    await act(async () => { container.querySelector<HTMLButtonElement>(".connection-drawer-model-open")!.click(); });
+    const checkbox = [...container.querySelectorAll<HTMLInputElement>('.connection-drawer-popup-row input[type="checkbox"]')].find(input => !input.checked)!;
+    await act(async () => checkbox.click());
+    await act(async () => { container.querySelector('[aria-label="Filter models"]')!.dispatchEvent(new dom.window.KeyboardEvent("keydown", {key:"Escape", bubbles:true, cancelable:true})); });
+    await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click(); });
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(container.textContent).not.toContain("Discard unsaved changes?");
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+
+it("clears the warning only after a pending key retry actually succeeds", async () => {
+  const connection = {id:"c1", providerId:"glm", model:"glm-5.3"};
+  const rig = catalogRig(connection), onClose = vi.fn();
+  const setSecret = vi.fn().mockResolvedValue({ok:false, reason:"weak_storage_needs_consent"});
+  rig.store.setState({setSecret, secretConsentResolution:null} as never);
+  const {container, root} = await mountDrawer(connection, rig, onClose);
+  try {
+    await typeInto(container.querySelector('input[type="password"]')!, "fixture-key");
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    expect(container.textContent).toContain("awaiting storage consent");
+    await act(async () => { rig.store.setState({secretConsentResolution:{key:"provider.connection.c1.apiKey", ok:true}} as never); });
+    expect(container.textContent).not.toContain("awaiting storage consent");
+    expect(container.querySelector(".connection-drawer-saved")?.textContent).toContain("Saved");
+    await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click(); });
+    expect(onClose).toHaveBeenCalledOnce();
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it.each([true, false])("keeps a metadata failure visible when pending key consent resolves %s", async accepted => {
+  const connection = {id:"c1", providerId:"glm", model:"glm-5.3"};
+  const rig = catalogRig(connection), onClose = vi.fn();
+  rig.update.mockResolvedValueOnce({ok:false, reason:"io_error"});
+  const setSecret = vi.fn().mockResolvedValue({ok:false, reason:"weak_storage_needs_consent"});
+  rig.store.setState({setSecret, secretConsentResolution:null} as never);
+  const {container, root} = await mountDrawer(connection, rig, onClose);
+  try {
+    await typeInto(container.querySelector('input[type="password"]')!, "fixture-key");
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    expect(container.textContent).toContain("changes couldn't be saved");
+    await act(async () => { rig.store.setState({secretConsentResolution:{key:"provider.connection.c1.apiKey", ok:accepted}} as never); });
+    expect(container.textContent).toContain("changes couldn't be saved");
+    if (!accepted) expect(container.textContent).toContain("API key was not saved");
+    expect(container.querySelector(".connection-drawer-saved")).toBeNull();
+    await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click(); });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Discard unsaved changes?");
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it("prevents Cancel and Escape from declining consent while the key is being saved", async () => {
+  const { ConsentDialog } = await import("./ConsentDialog.js");
+  const proto = dom.window.HTMLDialogElement.prototype;
+  proto.showModal = function () { this.setAttribute("open", ""); };
+  proto.close = function () { this.removeAttribute("open"); };
+  const onDecline = vi.fn(), onAccept = vi.fn();
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(ConsentDialog, {open:true, busy:true, onAccept, onDecline})));
+    const buttons = [...container.querySelectorAll<HTMLButtonElement>("button")];
+    expect(buttons.every(button => button.disabled)).toBe(true);
+    expect(container.textContent).toContain("Saving…");
+    await act(async () => { container.querySelector("dialog")!.dispatchEvent(new Event("cancel", {cancelable:true})); });
+    expect(onDecline).not.toHaveBeenCalled();
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it("removes a resolved consent notice but keeps later form edits dirty", async () => {
+  const connection = {id:"c1", providerId:"glm", model:"glm-5.3"};
+  const rig = catalogRig(connection), onClose = vi.fn();
+  const setSecret = vi.fn().mockResolvedValue({ok:false, reason:"weak_storage_needs_consent"});
+  rig.store.setState({setSecret, secretConsentResolution:null} as never);
+  const {container, root} = await mountDrawer(connection, rig, onClose);
+  try {
+    await typeInto(container.querySelector('input[type="password"]')!, "fixture-key");
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    await typeInto(container.querySelector('input[placeholder="e.g. Work, Personal"]')!, "later edit");
+    await act(async () => { rig.store.setState({secretConsentResolution:{key:"provider.connection.c1.apiKey", ok:true}} as never); });
+    expect(container.textContent).not.toContain("awaiting storage consent");
+    expect(container.querySelector(".connection-drawer-saved")).toBeNull();
+    await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click(); });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Discard unsaved changes?");
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it.each([true, false])("handles OpenRouter consent %s while model refresh is still in flight", async accepted => {
+  const catalog = [{id:"openrouter", name:"OpenRouter", authKind:"api_key" as const, models:[{id:"fixture-model"}]}];
+  const snapshot = {settings:cloneDefaults(), readOnly:false, secrets:[], envOverrides:[], providerReady:true, catalog};
+  const create = vi.fn().mockResolvedValue({ok:true, createdConnectionId:"conn-fixture", snapshot});
+  const setSecret = vi.fn().mockResolvedValue({ok:false, reason:"weak_storage_needs_consent"});
+  let finishFetch!: (value:unknown) => void;
+  const fetchModels = vi.fn(() => new Promise(resolve => {finishFetch = resolve;}));
+  const store = createStore(() => ({snapshot, oauthPendingProviderId:null, secretConsentResolution:null, connectionCreate:create, setSecret, load:vi.fn()})) as unknown as SettingsStoreApi;
+  const onClose = vi.fn();
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(ConnectionDrawer, {open:true, mode:"add", catalog:catalog as never, connections:[], secrets:[], readOnly:false, store, customProvider:{fetchModels} as never, onClose})));
+    const provider = container.querySelector<HTMLSelectElement>("select")!;
+    await act(async () => {provider.value="openrouter"; provider.dispatchEvent(new Event("change", {bubbles:true}));});
+    await typeInto(container.querySelector('input[type="password"]')!, "fixture-key");
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Create connection")!.click(); });
+    expect(fetchModels).toHaveBeenCalledOnce();
+    await act(async () => { store.setState({secretConsentResolution:{key:"provider.connection.conn-fixture.apiKey", ok:accepted}} as never); });
+    await act(async () => { finishFetch({ok:false, reason:"network_error"}); });
+    expect(container.textContent).not.toContain("awaiting storage consent");
+    if (accepted) expect(container.querySelector(".connection-drawer-saved")).not.toBeNull();
+    else expect(container.textContent).toContain("The API key was not saved");
+    await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click(); });
+    if (accepted) expect(onClose).toHaveBeenCalledOnce();
+    else { expect(onClose).not.toHaveBeenCalled(); expect(container.textContent).toContain("Discard unsaved changes?"); }
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it("preserves a newer model choice made while an earlier Save is pending", async () => {
+  const connection = {id:"c1", providerId:"glm", model:"glm-5.3", modelsFetchedAt:"2026-01-01", visibleModels:["glm-5.3"]};
+  const rig = catalogRig(connection), onClose = vi.fn();
+  let finish!: (value: unknown) => void;
+  rig.update.mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
+  const {container, root} = await mountDrawer(connection, rig, onClose);
+  try {
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    expect(rig.update).toHaveBeenCalledOnce();
+    await act(async () => { container.querySelector<HTMLButtonElement>(".connection-drawer-model-open")!.click(); });
+    const newDefault = container.querySelector<HTMLButtonElement>('[aria-label="Set glm-5.2 as default"]')!;
+    await act(async () => newDefault.click());
+    await act(async () => { container.querySelector<HTMLButtonElement>(".connection-drawer-model-done")!.click(); });
+    await act(async () => { finish({ok:true, snapshot:rig.snapshot}); });
+    expect(container.querySelector('[data-model-id="glm-5.2"]')?.textContent).toContain("default");
+    expect(container.querySelector(".connection-drawer-saved")).toBeNull();
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    expect(rig.update).toHaveBeenCalledTimes(2);
+    expect(rig.update.mock.calls[1]![0]).toMatchObject({model:"glm-5.2", visibleModels:["glm-5.3", "glm-5.2"]});
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it("keeps a fetched model receipt chosen during an earlier Save", async () => {
+  const connection = {id:"c1", providerId:"glm", model:"glm-5.3", authOptional:true, modelsFetchedAt:"2026-01-01", visibleModels:["glm-5.3"]};
+  const rig = catalogRig(connection), onClose = vi.fn();
+  let finish!: (value: unknown) => void;
+  rig.update.mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
+  rig.fetchModels.mockResolvedValue({ok:true, models:[{id:"remote-model"}], source:{guard:"fixture-guard", targetUrl:"http://127.0.0.1/v1/models", baseUrl:"", transport:""}});
+  const {container, root} = await mountDrawer(connection, rig, onClose);
+  try {
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    await act(async () => { container.querySelector<HTMLButtonElement>(".connection-drawer-model-open")!.click(); });
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Refresh")!.click(); });
+    await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="Set remote-model as default"]')!.click(); });
+    await act(async () => { container.querySelector<HTMLButtonElement>(".connection-drawer-model-done")!.click(); });
+    await act(async () => { finish({ok:true, snapshot:rig.snapshot}); });
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    expect(rig.update.mock.calls[1]![0]).toMatchObject({model:"remote-model", fetchedModels:{guard:"fixture-guard", models:[{id:"remote-model"}]}});
   } finally { await act(async () => root.unmount()); container.remove(); }
 });

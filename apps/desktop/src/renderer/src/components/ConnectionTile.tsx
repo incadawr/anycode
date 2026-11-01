@@ -1,5 +1,5 @@
 /**
- * ConnectionTile (TASK.45 W12, cut §"Компактная сетка подключений"): one
+ * ConnectionTile (W12, cut §"Компактная сетка подключений"): one
  * selectable tile in the Provider pane's grid — provider name/label, default
  * model, health status dot+TEXT (never color alone), a selected/default
  * marker, and an overflow menu (Edit · Replace key/Sign in-out · Check ·
@@ -73,7 +73,7 @@ export interface LastHealthObservation {
 
 /**
  * Pure observation-age/freshness for a connection's advisory `lastHealth`
- * (TASK.140): TTL is 1 hour for `rate_limited` (a 429 reading goes stale fast)
+ * TTL is 1 hour for `rate_limited` (a 429 reading goes stale fast)
  * and 24 hours for every other status; at or beyond the TTL the observation is
  * stale and the tile must fall back to `unchecked`. A missing or unparseable
  * timestamp is never treated as fresh — it yields `unchecked` with unknown age.
@@ -129,11 +129,11 @@ export function observeLastHealth(
  * `lastHealth` the moment the credential is absent (a cleared/never-set key
  * must never keep showing a prior `ready`/`auth_invalid` reading) — mirrors
  * `computeProviderReady`'s own "credential set" gate. A present-but-
- * undecryptable vault entry (`set: true`, `source: "none"` — TASK.45 W12-FIX
+ * undecryptable vault entry (`set: true`, `source: "none"` — W12-FIX
  * §4) is equally unusable at runtime and gets the SAME treatment, never a
  * stale `ready`/`auth_invalid` reading either. Otherwise the connection's
  * advisory `lastHealth.status` — but only while that observation is FRESH
- * (TASK.140: 1h TTL for `rate_limited`, 24h otherwise; see
+ * (1h TTL for `rate_limited`, 24h otherwise; see
  * `observeLastHealth`) — falling back to `unchecked` for a stale, invalid or
  * absent observation. `now` defaults to the current clock; the tile passes its
  * minute-ticking local `now` state so an open tile ages on its own.
@@ -172,7 +172,7 @@ export function customProviderSecretKey(providerId: string): SecretKey {
 }
 
 /**
- * The vault key that gates a connection's credential in the UI (TASK.58): a
+ * The vault key that gates a connection's credential in the UI: a
  * `custom:<slug>` connection routes at the custom provider's OWN shared key
  * (`provider.<id>.apiKey`, exactly what `main/host-env.ts`'s `activeCredential`
  * reads for a custom id), every other connection at its own connection-scoped
@@ -190,7 +190,7 @@ export function connectionCredentialKey(
 }
 
 /**
- * TASK.70 (Taskana 4089): one brand = one card — a brand-grouped connection
+ * one brand = one card — a brand-grouped connection
  * shows the brand plus its mode, not the long parenthesised entry name.
  * Pure so tests cover the real selection (same discipline as
  * `tileStatusPresentation`); a brandless entry keeps its exact `name`, and a
@@ -224,7 +224,7 @@ export interface ConnectionTileProps {
   onKeyDownRoving(event: KeyboardEvent<HTMLButtonElement>): void;
 }
 
-/** The exact `{text, title, tone}` a tile's status element renders — pure, so tests cover the real selection (TASK.140). */
+/** The exact `{text, title, tone}` a tile's status element renders — pure, so tests cover the real selection. */
 export interface TileStatusPresentation {
   text: string;
   title: string | undefined;
@@ -232,7 +232,7 @@ export interface TileStatusPresentation {
 }
 
 /**
- * Pure presentation the tile's status element displays (TASK.140). `checking`
+ * Pure presentation the tile's status element displays. `checking`
  * wins first ("Checking…", no title). A credential override keeps
  * `Needs credential` as the CURRENT status but still reports the previous
  * observation — its age (or "age unknown"), staleness marked, in the text (or
@@ -266,10 +266,10 @@ export function tileStatusPresentation(
 }
 
 /**
- * The tile's quota line (Taskana 4090 / TASK.71): what the PROVIDER last
+ * The tile's quota line: what the PROVIDER last
  * reported about this connection's subscription window, straight from
  * response headers. `null` when nothing was ever reported — the caller
- * renders NO block for null (never a fabricated "0% left"; TASK.71 §5).
+ * renders NO block for null (never a fabricated "0% left"; §5).
  * The label comes from `windowDurationMins` when present, else the family
  * name in `source` (e.g. "requests" out of
  * "x-ratelimit-requests-remaining"), else "Limit" — no heuristics beyond
@@ -322,7 +322,7 @@ export function ConnectionTile({
   const firstMenuItemRef = useRef<HTMLButtonElement>(null);
   const confirmCancelRef = useRef<HTMLButtonElement>(null);
 
-  // Local clock (TASK.140): re-rendered every minute so an open tile AGES on
+  // Local clock: re-rendered every minute so an open tile AGES on
   // its own — a fresh `ready` decays to `unchecked` with no settings write and
   // no user action. Cleanup clears the interval on unmount.
   const [now, setNow] = useState(() => Date.now());
@@ -345,12 +345,12 @@ export function ConnectionTile({
     checking ? undefined : observeLastHealth(connection.lastHealth, now),
     checking,
   );
-  // TASK.70 (Taskana 4089): one brand = one card — the label the tile header
+  // one brand = one card — the label the tile header
   // actually renders (pure helper, tested directly).
   const providerLabel = connectionTileProviderLabel(catalogEntry);
   const authKind = catalogEntry?.authKind ?? "api_key";
   const replaceKeyLabel = authKind === "oauth" ? (credentialStatus?.set ? "Sign out" : "Sign in") : "Replace key";
-  // Taskana 4090: the provider-reported quota line — rendered ONLY when the
+  // the provider-reported quota line — rendered ONLY when the
   // provider actually reported something (null ⇒ no block, no "0%" placeholder).
   const quotaLine = connectionQuotaLine(connection.lastQuota, now);
   const quotaTitle =

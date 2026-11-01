@@ -1,5 +1,5 @@
 /**
- * System-proxy resolution (TASK.141 §4): what the OS — or the PAC script the OS
+ * System-proxy resolution (§4): what the OS — or the PAC script the OS
  * points at — would do for ONE target URL, flattened into the single proxy URL
  * an env-based model can express.
  *
@@ -34,7 +34,7 @@
  *    (design review B-10), but within one child the flattening stands.
  * 3. A LIVE CHILD NEVER SEES A NETWORK CHANGE. The env is composed at spawn
  *    time; refreshing the cache moves the NEXT spawn, never a running one — the
- *    same parity TASK.139 fixed for "a live session does not migrate".
+ *    same parity fixed for "a live session does not migrate".
  * 4. SOCKS IS NOT SILENCE. A SOCKS-only answer is reported as
  *    `socks_unsupported`, not as `direct`: the OS DOES have a proxy configured,
  *    we cannot express it in the env model (undici's env proxying is HTTP(S)

@@ -1,5 +1,5 @@
 /**
- * Host-side "Full browser access" flag (Taskana 4759). A UX hint only: when ON,
+ * Host-side "Full browser access" flag. A UX hint only: when ON,
  * the browser-control tools skip their approval escalation and set `allowRemote`
  * for remote origins. MAIN stays authoritative (PreviewHost reads its own live
  * switch for every decision), so a stale host flag can at worst ask main for an

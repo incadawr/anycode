@@ -46,7 +46,7 @@ if (args[0] === "--version") {
     // Never exits on its own — the version-preflight timeout must end it.
     setInterval(() => {}, 1_000);
   } else if (flag("--exit-127")) {
-    // Taskana 4092 (TASK.85): a nonzero preflight exit, used with a fake
+    // a nonzero preflight exit, used with a fake
     // spawner against a path with NO real file bytes (the negative control
     // for the 127/node-shebang classifier: exit code alone must not typed-
     // diagnose a path the classifier cannot read).
@@ -157,7 +157,7 @@ if (args[0] === "--version") {
         const result = device
           ? { type: "chatgptDeviceCode", verificationUrl: flag("--unsafe-login-url") ? "file:///tmp/auth" : "https://example.invalid/device", userCode: flag("--invalid-device-code") ? "secret\npoison" : "ABCD-1234", loginId: "login-1" }
           : { type: "chatgpt", authUrl: "https://example.invalid/auth", loginId: "login-1" };
-        // Taskana 4884: the REAL server MINTS the device code over the network,
+        // the REAL server MINTS the device code over the network,
         // so this response is the one login RPC that is not instant — observed
         // 0.3-4.7s against real binaries. This knob models that latency so a
         // test can prove AnyCode's own bound is sized for it.

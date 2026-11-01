@@ -1,12 +1,12 @@
 /**
- * Workspace trust decision channel (Taskana 4736). The renderer answers the
+ * Workspace trust decision channel. The renderer answers the
  * per-tab trust question with `{ tabId, decision }` only. Main owns the folder
  * and the hash (the tab's own record, reported by its host on the control
  * channel), persists `trust`/`deny` through the core decision store, keeps
  * `once` in memory for this app run, and restarts that tab's host so the boot
  * re-decides. The store file is written tmp+rename with mode 0600.
  *
- * Taskana 4739 adds Settings → Permissions list/forget: list returns ONLY
+ * adds Settings → Permissions list/forget: list returns ONLY
  * `{ key, decision, decidedAt }` rows (never the hash); forget takes a `key`
  * main itself listed and treats it as an opaque lookup handle into the
  * freshly-read store (never a path). Folder keys are realpath-canonical
@@ -63,7 +63,7 @@ export interface WorkspaceTrustTabs {
   ): { workspace: string; hash: string } | "unknown_tab" | "no_pending";
   clearWorkspaceTrustPending(tabId: string): void;
   /**
-   * Taskana 4736 xfix D3: async since the restart now performs the graceful
+   * xfix D3: async since the restart now performs the graceful
    * shutdown handshake (post HOST_SHUTDOWN, await exit, force-kill on
    * timeout) before returning — never a bare kill.
    */
@@ -71,7 +71,7 @@ export interface WorkspaceTrustTabs {
 }
 
 export interface WorkspaceTrustIpcDeps {
-  /** Taskana 4750a: fires after a decision lands (the service supervisor reconciles project-tier services). */
+  /** fires after a decision lands (the service supervisor reconciles project-tier services). */
   onDecided?(): void;
   fs: TrustStoreFs;
   /** The user's home; the store lives at `<home>/.anycode/workspace-trust.json`. */
@@ -82,7 +82,7 @@ export interface WorkspaceTrustIpcDeps {
   now?: () => string;
   logger?: { error(message: string): void };
   /**
-   * Taskana 4739: canonical folder keys are realpath-canonical when this is
+   * canonical folder keys are realpath-canonical when this is
    * present. Defaults to `node:fs`'s realpathSync in production; tests inject
    * a fake. Must stay SYNCHRONOUS — `workspaceTrustOnceFor` runs on the tab
    * fork path.
@@ -132,7 +132,7 @@ export async function handleWorkspaceTrustDecide(
     return { ok: false, reason: "no_pending" };
   }
 
-  // Taskana 4739: canonicalise BEFORE the write and BEFORE keying the
+  // canonicalise BEFORE the write and BEFORE keying the
   // once-approval, so a symlinked workspace and its target share one record.
   const key = canonicalWorkspaceKey(pending.workspace, deps.realpathSync);
 
@@ -173,7 +173,7 @@ export async function handleWorkspaceTrustDecide(
 }
 
 /**
- * Settings → Permissions list (Taskana 4739). Returns ONLY display rows
+ * Settings → Permissions list. Returns ONLY display rows
  * `{ key, decision, decidedAt }` — never the hash, never file contents.
  */
 export async function handleWorkspaceTrustList(
@@ -197,7 +197,7 @@ export async function handleWorkspaceTrustList(
 }
 
 /**
- * Settings → Permissions "Forget" (Taskana 4739). The `key` is an opaque
+ * Settings → Permissions "Forget". The `key` is an opaque
  * lookup handle into the FRESHLY-READ store — main never resolves it, never
  * uses it as a file path, and never logs it unescaped. A key that is not an
  * own property of the store's `folders` (including `__proto__`/`constructor`)

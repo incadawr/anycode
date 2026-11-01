@@ -1,5 +1,5 @@
 /**
- * Pure-logic tests for the Codex/engine model+preset controls (TASK.39). Like
+ * Pure-logic tests for the Codex/engine model+preset controls. Like
  * ModeMenu.test.ts/ModelPill.test.ts, this is `.test.ts` under a node
  * (no-jsdom) vitest env — every piece of decision logic is exported as a
  * plain function and covered directly rather than DOM-rendering the popover.

@@ -1,7 +1,7 @@
 /**
- * ConnectionDrawer (TASK.45 W12, cut §"Add/Edit flow"): the compact add/edit
+ * ConnectionDrawer (W12, cut §"Add/Edit flow"): the compact add/edit
  * surface for ONE provider connection — template → label → model → transport
- * (restricted to `supportedTransports`, TASK.43) → base URL (capability-gated)
+ * (restricted to `supportedTransports`) → base URL (capability-gated)
  * → credential (API key or OAuth). Split into `ConnectionDrawerFields` (the
  * actual form — no dialog chrome) and `ConnectionDrawer` (a native `<dialog>`
  * wrapper around it, same controlled showModal/close + focus-capture/restore
@@ -29,6 +29,7 @@
 import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import { useStore } from "zustand";
 import { findKnownModel, isGatewayProvider } from "@anycode/core/model-dictionary";
+import { getBuiltinCatalog } from "@anycode/core/catalog";
 import type {
   CatalogSummary,
   CatalogSummaryEntry,
@@ -65,15 +66,30 @@ import {
   selectProviderEntry,
   shouldShowBaseUrlField,
   showConnectionLabelField,
-  toggleSelectedModel,
   transportOptions,
   type CustomProviderBridge,
 } from "./SettingsScreen.js";
 import { X } from "./icons.js";
 import { startModelEffortLevels } from "./start-model-picker.js";
 
+export function retainedModelSelection(open: boolean, draft: readonly string[], pending: string[] | null): string[] | null {
+  return open ? [...draft] : pending;
+}
+
+export function hasPendingFetchConnectionChanges(input: { showBaseUrl: boolean; baseUrl: string; savedBaseUrl: string; transport: string; savedTransport: string; proxyRef: string; savedProxyRef: string; secretValue: string }): boolean {
+  return (input.showBaseUrl && input.baseUrl.trim() !== input.savedBaseUrl.trim()) || input.transport !== input.savedTransport || input.proxyRef !== input.savedProxyRef || input.secretValue !== "";
+}
+
+export function validVisibleModelIds(ids: readonly string[]): string[] {
+  return ids.filter(id => normalizeModelId(id) === id);
+}
+
+export function ownRateDraft<T>(drafts: Record<string, T>, id: string): T | undefined {
+  return Object.hasOwn(drafts, id) ? drafts[id] : undefined;
+}
+
 /**
- * The connection `connection-create` just minted (TASK.45 W12-FIX2 §1):
+ * The connection `connection-create` just minted (W12-FIX2 §1):
  * main is the authority — `result.createdConnectionId` on a successful
  * result IS the id, never a diff of the snapshot against a stale `before`
  * prop (that heuristic picked the WRONG connection whenever two unseen ids
@@ -102,7 +118,7 @@ export function resolveCustomKeyOutcome(result: CustomProviderMutationResult): {
     : { refused: true, detail: describeCustomProviderMutationError(result.reason), clearInput: false };
 }
 
-// ── TASK.183: durable manually entered connection models ──
+// ── durable manually entered connection models ──
 
 /**
  * Pre-flight of a raw Model-field value before any create/update/secret/list
@@ -297,6 +313,7 @@ export interface UpdateWithModelResult {
   metaOk: boolean;
   /** Whether a requested model-list append succeeded (true when none was requested). */
   appendOk: boolean;
+  staleFetch?: boolean;
 }
 
 /**
@@ -319,7 +336,7 @@ export async function updateConnectionAndPersistModel<U>(
     return { metaOk: false, appendOk: false };
   }
   if (!result.ok) {
-    return { metaOk: false, appendOk: false };
+    return result.reason === "stale_fetch" ? { metaOk: false, appendOk: false, staleFetch: true } : { metaOk: false, appendOk: false };
   }
   if (modelId === null) {
     return { metaOk: true, appendOk: true };
@@ -330,7 +347,7 @@ export async function updateConnectionAndPersistModel<U>(
 
 /**
  * The id of the custom-provider record a `customProvider.create` just minted
- * (TASK.58): the single id present in the returned full `providers` list that
+ * the single id present in the returned full `providers` list that
  * was NOT already among the records the drawer knew about (`before`). Fail-
  * closed (`undefined`) unless EXACTLY one is new — the create result carries no
  * authoritative created-id field of its own, so this is the diff, and a
@@ -349,7 +366,7 @@ export function resolveCreatedCustomProviderId(
 
 /**
  * The connection-scoped oauth sign-in args the drawer's credential section
- * dispatches (TASK.45 W12-FIX §1): a sign-in from this drawer always targets
+ * dispatches (W12-FIX §1): a sign-in from this drawer always targets
  * the connection currently being edited/created, never a provider-wide
  * bucket guess. `undefined` when there is no selected catalog entry or no
  * connection has been minted yet (the credential section only ever renders
@@ -368,7 +385,7 @@ export function resolveDrawerOAuthStartArgs(
 }
 
 /*
- * TASK.141: `proxyUrlSaveBlocked` / `PROXY_URL_ERROR` /
+ * `proxyUrlSaveBlocked` / `PROXY_URL_ERROR` /
  * `connectionCreateProxyField` are GONE, and with them the whole class of
  * mistake they existed to diagnose. A proxy URL is no longer typed at a scope
  * — the drawer picks a named profile out of the registry (`ProxyRefPicker`),
@@ -493,15 +510,15 @@ export function buildDrawerSavePayload(
 }
 
 /**
- * The connection-update payload the unified `save` sends (TASK.45 W12-FIX §3;
- * TASK.58 folded the former separate `saveMetadata` into `save`):
+ * The connection-update payload the unified `save` sends (W12-FIX §3;
+ * folded the former separate `saveMetadata` into `save`):
  * `transport` is sent UNCONDITIONALLY (never omitted) — the local state
  * already speaks the channel's `ProviderTransportId | ""` sentinel, so
  * omitting it on `""` would leave an existing explicit choice untouched
  * instead of clearing it back to catalog default, the exact asymmetry this
  * fix closes. `createConnection`'s payload is NOT this shape — at create time
  * an omitted transport already means "use the default", so it keeps the old
- * conditional-spread form. `maxOutputTokens` (TASK.150) follows the exact same
+ * conditional-spread form. `maxOutputTokens` follows the exact same
  * unconditional-send discipline as `transport`/`proxyRef`: the local state
  * already speaks the channel's `number | ""` clear sentinel (validated by
  * `maxOutputTokensField` before this is called), so omitting it on `""` would
@@ -534,8 +551,8 @@ export function buildConnectionUpdatePayload(params: {
     model: params.model.trim(),
     transport: params.transport,
     baseUrl: params.showBaseUrl ? params.baseUrl.trim() : "",
-    // Sent unconditionally, same rationale as `transport` (TASK.141, inherited
-    // from TASK.132's `proxyUrl`): choosing "Use application proxy" must CLEAR
+    // Sent unconditionally, same rationale as `transport` (inherited
+    // from the earlier `proxyUrl`): choosing "Use application proxy" must CLEAR
     // the persisted ref, and `""` is the channel's clear sentinel — omitting it
     // would leave the old choice in force. The legacy `proxyUrl` key is
     // deliberately NOT sent here: absent means "keep", which is what lets an
@@ -545,7 +562,7 @@ export function buildConnectionUpdatePayload(params: {
     // Sent unconditionally, same rationale as `transport`: `false` must CLEAR
     // a previously-persisted flag, not leave it untouched.
     authOptional: params.authOptional,
-    // Sent unconditionally (TASK.150), same rationale as `transport`/`proxyRef`:
+    // Sent unconditionally, same rationale as `transport`/`proxyRef`:
     // clearing the field back to blank must CLEAR the persisted cap, not leave
     // an old explicit value in force.
     maxOutputTokens: params.maxOutputTokens,
@@ -553,7 +570,7 @@ export function buildConnectionUpdatePayload(params: {
     ...(params.reasoningEffort !== undefined ? { reasoningEffort: params.reasoningEffort } : {}),
     ...(params.reasoningSupported !== undefined ? { reasoningSupported: params.reasoningSupported } : {}),
     ...(params.effortLevels !== undefined ? { effortLevels: params.effortLevels } : {}),
-    // Sent unconditionally (Taskana 4088), same rationale: "auto" must CLEAR
+    // Sent unconditionally, same rationale: "auto" must CLEAR
     // the saved override pair (`""` is main's clear sentinel), while "on"/"off"
     // persist it. The model binding is derived SERVER-SIDE, exactly like the
     // context-window pair.
@@ -575,7 +592,7 @@ export function buildConnectionUpdatePayload(params: {
 
 
 /**
- * Validates the "Max output tokens" field's raw string (TASK.150): main
+ * Validates the "Max output tokens" field's raw string: main
  * (`settings-ipc.ts`) accepts an integer in [1024, 1000000] or refuses with
  * `reason: "invalid"`, so the drawer validates client-side first to give a
  * specific, actionable error instead of a bare refusal toast. Blank (or
@@ -607,7 +624,7 @@ const MAX_OUTPUT_TOKENS_ERROR =
 
 /**
  * The click-to-fill presets offered under the "Max output tokens" field
- * (TASK.150 slice 3). Blank is a real entry rather than the absence of one:
+ * (slice 3). Blank is a real entry rather than the absence of one:
  * an empty field sends no cap at all and keeps tracking
  * `DEFAULT_MAX_OUTPUT_TOKENS`, whereas pinning today's identical number
  * freezes the connection if that default ever moves again.
@@ -761,12 +778,12 @@ export function advancedHasValues(v: {
   );
 }
 
-/** Local literal (TASK.159), same convention as host-env.ts's `ENV_MAX_OUTPUT_TOKENS` — renderer modules don't import main, let alone core. */
+/** Local literal, same convention as host-env.ts's `ENV_MAX_OUTPUT_TOKENS` — renderer modules don't import main, let alone core. */
 const ENV_MAX_OUTPUT_TOKENS = "ANYCODE_MAX_OUTPUT_TOKENS";
 
 /**
  * Hint under the "Max output tokens" field while ANYCODE_MAX_OUTPUT_TOKENS is
- * live (TASK.159): the env rung always beats what this field saves
+ * live: the env rung always beats what this field saves
  * (`fillFromSettings` never overwrites a boot-provided slot), so an edited cap
  * would silently do nothing — say so instead of letting the field pretend to
  * work. `null` (no hint) when the variable isn't overriding. Exported for
@@ -781,7 +798,7 @@ export function maxOutputTokensEnvHint(envOverrides: readonly string[]): string 
 
 /**
  * The number a BLANK "Max output tokens" field resolves to for the selected
- * model (TASK.159), naming what the old "(provider default)" placeholder left
+ * model, naming what the old "(provider default)" placeholder left
  * blind: a catalog model with a declared ceiling answers `catalog: N`,
  * anything without one answers the snapshot-projected core default
  * (`provider default: N`) — EXCEPT claude-* ids, which core deliberately sends
@@ -813,7 +830,7 @@ export function maxOutputTokensEffectiveHint(
 }
 
 /**
- * Validates the "Context window (tokens)" field's raw string (TASK.142): the
+ * Validates the "Context window (tokens)" field's raw string: the
  * same client-side pre-flight as `maxOutputTokensField` above, because main
  * (`settings-ipc.ts`) accepts an integer in [1024, 1000000] or refuses the whole
  * update with a bare `reason: "invalid"`. Blank is the channel's clear sentinel
@@ -831,12 +848,12 @@ const CONTEXT_WINDOW_ERROR =
 const CONTEXT_WINDOW_ERROR_MODEL =
   "Enter a model before setting a context window — the window is saved for one model.";
 
-/** Local literal (TASK.142), same convention as host-env.ts's `ENV_CONTEXT_WINDOW` — renderer modules don't import main, let alone core. */
+/** Local literal, same convention as host-env.ts's `ENV_CONTEXT_WINDOW` — renderer modules don't import main, let alone core. */
 const ENV_CONTEXT_WINDOW = "ANYCODE_CONTEXT_WINDOW";
 
 /**
  * Hint under the "Context window (tokens)" field while ANYCODE_CONTEXT_WINDOW is
- * live (TASK.142): the env rung always beats what this field saves, so an edited
+ * live: the env rung always beats what this field saves, so an edited
  * window would silently do nothing — say so instead of letting the field pretend
  * to work. `null` (no hint) when the variable isn't overriding. Exported for
  * direct testing (no jsdom in this package's vitest config, see file docstring).
@@ -849,7 +866,7 @@ export function contextWindowTokensEnvHint(envOverrides: readonly string[]): str
 
 /**
  * The number a BLANK "Context window (tokens)" field resolves to for the
- * selected model (TASK.142): a catalog model answers `catalog: N` where N is
+ * selected model: a catalog model answers `catalog: N` where N is
  * `min(contextWindow, usableContextWindow ?? contextWindow)`; a model the
  * catalog does not know answers the ASSUMED fallback
  * (snapshot-projected `unknownModelContextWindowTokens`). Named `assumed` on
@@ -879,7 +896,7 @@ export function contextWindowEffectiveHint(
 }
 
 /**
- * TASK.142: the raw window value the drawer starts with for a saved connection.
+ * the raw window value the drawer starts with for a saved connection.
  * Prefill only the selected model's map entry (or its legacy pair). A saved
  * window for another model must never appear to belong to this one. Exported for direct
  * testing (no jsdom in this package's vitest config, see file docstring).
@@ -895,7 +912,7 @@ export function contextWindowInitialRaw(connection: {
 }
 
 /**
- * TASK.142: the "Context window (tokens)" field's full state. `model` is the
+ * the "Context window (tokens)" field's full state. `model` is the
  * NORMALIZED model id the raw value belongs to, including while blank — the
  * reset decision compares against THIS, never against the original
  * saved binding, so a whitespace-only Model edit ("B" -> " B ") is not a change
@@ -935,7 +952,7 @@ export function contextWindowInitialField(
 }
 
 /**
- * TASK.142: the field state after a user route CHANGES the model. `nextModel` is
+ * the field state after a user route CHANGES the model. `nextModel` is
  * the model the route will actually save (the catalog-prefilled id on the
  * simplified create input, the raw input elsewhere); `saved` contains the
  * persisted windows looked up when navigating to another model. Semantics:
@@ -967,7 +984,7 @@ export function contextWindowAfterModelInput(
 }
 
 /**
- * TASK.142: the field state after the user edits the WINDOW text itself. The
+ * the field state after the user edits the WINDOW text itself. The
  * value is owned by whichever model is current at that moment — including an
  * EMPTY raw, which keeps the same owner so a later no-op Model edit preserves
  * the clear. This is the only path that binds a freshly typed window, and it is
@@ -983,15 +1000,15 @@ export function contextWindowAfterRawInput(
   return { raw, model: currentModel.trim() };
 }
 
-// ── Taskana 4088 (TASK.69): the per-model image-input select ──
+// ── the per-model image-input select ──
 
 /** The drawer's three-state select value: catalog/live resolve, force on, force off. */
 export type ImageInputSelection = "auto" | "on" | "off";
 
 /**
- * Taskana 4088: the wire value for a selection. "auto" maps to main's `""`
+ * the wire value for a selection. "auto" maps to main's `""`
  * clear sentinel (deletes the saved override pair), "on"/"off" persist it —
- * the TASK.150 maxOutputTokens discipline verbatim. Exported for direct
+ * the maxOutputTokens discipline verbatim. Exported for direct
  * testing (no jsdom).
  */
 export function imageInputToPayload(selection: ImageInputSelection): "on" | "off" | "" {
@@ -999,7 +1016,7 @@ export function imageInputToPayload(selection: ImageInputSelection): "on" | "off
 }
 
 /**
- * Taskana 4088 (cross-review): an explicit on/off override is bound to the
+ * (cross-review): an explicit on/off override is bound to the
  * model the save will SEND, and main refuses a non-empty override with a blank
  * effective model with a bare `reason: "invalid"` — the generic save failure.
  * Shared by create and update so both name the field. Returns the specific
@@ -1012,7 +1029,7 @@ export function imageInputModelPreflightError(selection: ImageInputSelection, mo
 }
 
 /**
- * Taskana 4088: the select value the drawer starts with for a saved
+ * the select value the drawer starts with for a saved
  * connection — the `contextWindowInitialRaw` rule: the saved override is
  * prefilled ONLY when it binds to the model now shown; a pair saved for
  * another model (or no pair) reads as "auto". Exported for direct testing.
@@ -1029,13 +1046,13 @@ export function imageInputInitialValue(connection: {
     : "auto";
 }
 
-/** Local literal (Taskana 4088), same convention as `ENV_CONTEXT_WINDOW` above — renderer modules don't import main, let alone core. */
+/** Local literal, same convention as `ENV_CONTEXT_WINDOW` above — renderer modules don't import main, let alone core. */
 // 4088-on-4118: ANYCODE_IMAGE_INPUT_MODELS is GONE; only the per-model
 // override still rides the fork env.
 const ENV_IMAGE_INPUT_MODEL_OVERRIDE = "ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE";
 
 /**
- * Taskana 4088: hint under the "Image input" select when the launching shell
+ * hint under the "Image input" select when the launching shell
  * set ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE (in main's PROVIDER_ENV_KEYS): a
  * shell value wins over the saved one, because buildHostEnv never overwrites
  * it. `null` when absent. Exported for direct testing (no jsdom).
@@ -1048,7 +1065,7 @@ export function imageInputEnvHint(envOverrides: readonly string[]): string | nul
 }
 
 /**
- * Taskana 4088: one line naming what "Auto" resolves to for the shown model:
+ * one line naming what "Auto" resolves to for the shown model:
  * the catalog's `imageInput: true` mark, or the connection's live-fetched
  * modality set (the `/v1/models` fetch's `architecture.input_modalities`).
  * An explicit on/off override suppresses the hint (the select already shows
@@ -1078,7 +1095,7 @@ export function imageInputEffectiveHint(
 
 /**
  * The Model field's offered list (datalist + click-to-fill chips): a stable
- * UNION (TASK.183) of this session's fetched ids, the ids persisted on the
+ * UNION of this session's fetched ids, the ids persisted on the
  * connection (manual additions + earlier fetches), then the catalog/curated
  * static hints not already present — decorated with the catalog entry's static
  * display names where known. Fetched first, persisted second, hints last;
@@ -1104,7 +1121,7 @@ export function liveModelSuggestions(
 
 /**
  * Model value after a catalog connection's model list becomes available with
- * the field still blank (TASK.108-A, owner 08.08): the curated list's FIRST
+ * the field still blank (owner 08.08): the curated list's FIRST
  * entry is the default. A connection persisted with an empty model looks
  * configured in the drawer yet fails `computeProviderReady`'s model gate at
  * tab-open time, with a toast that blames the API key. An explicit value is
@@ -1124,7 +1141,7 @@ export function createModelMissing(model: string, suggestions: readonly { id: st
 }
 
 /**
- * Whether Save must refuse a catalog connection's empty model (TASK.108-A):
+ * Whether Save must refuse a catalog connection's empty model:
  * the readiness gate requires a model on the active connection, so an empty
  * save manufactures the false "Configure a provider (API key + model)" toast
  * later. Only a catalog connection with a known model list is held to this —
@@ -1185,7 +1202,7 @@ export function providerSelectDisplayValue(effectiveProviderId: string, template
 }
 
 /**
- * TASK.70 (Taskana 4089): template options grouped one-brand-one-card. A
+ * template options grouped one-brand-one-card. A
  * brand-grouped entry renders as an <optgroup> labelled with the brand whose
  * options are the member modes (`modeLabel`); single-mode entries render as
  * plain options exactly as before, byte-identical for catalogs without brands.
@@ -1275,10 +1292,14 @@ export interface ConnectionDrawerFieldsProps {
   /** Where to steer initial focus (a11y) — "credential" for the tile menu's "Replace key"/"Sign in". */
   initialFocus?: "label" | "credential" | "context";
   store?: SettingsStoreApi;
-  /** Injectable custom-provider bridge (TASK.58); defaults to the real `window.anycode.customProvider`. */
+  /** Injectable custom-provider bridge; defaults to the real `window.anycode.customProvider`. */
   customProvider?: CustomProviderBridge;
-  /** Rendered after the form (ConnectionDrawer supplies a "Done" button; WelcomeScreen's embed omits it — App's own readiness gate unmounts Welcome once the first connection is ready). */
-  footer?: ReactNode;
+  /** Secondary action supplied by the drawer; the embedded form omits it. */
+  cancelAction?: ReactNode;
+  onCommitBegin?: () => number;
+  onCommitSuccess?: (version: number) => boolean;
+  onBusyChange?: (busy: boolean) => void;
+  interactionBlocked?: boolean;
   /** First-run form: keep connection tuning behind a disclosure. */
   simplified?: boolean;
   /**
@@ -1301,7 +1322,11 @@ export function ConnectionDrawerFields({
   initialFocus,
   store = useSettingsStore,
   customProvider,
-  footer,
+  cancelAction,
+  onCommitBegin,
+  onCommitSuccess,
+  onBusyChange,
+  interactionBlocked = false,
   simplified = false,
   onConnectionCreated,
 }: ConnectionDrawerFieldsProps) {
@@ -1310,7 +1335,9 @@ export function ConnectionDrawerFields({
   const contextWindowTokensInputRef = useRef<HTMLInputElement>(null);
   const secretInputRef = useRef<HTMLInputElement>(null);
   const oauthPendingProviderId = useStore(store, (s) => s.oauthPendingProviderId);
-  // TASK.141: the settings document behind the proxy picker's seed. Read here
+  const consentResolution = useStore(store, (s) => s.secretConsentResolution);
+  const pendingKeyCommit = useRef<{ key: SecretKey; version: number; previous: unknown; complete: boolean } | null>(null);
+  // the settings document behind the proxy picker's seed. Read here
   // (not inside the picker) because the drawer runs the picker CONTROLLED — the
   // ref rides the drawer's own create/update payloads instead of being written
   // by a channel of its own.
@@ -1322,7 +1349,7 @@ export function ConnectionDrawerFields({
   const [createdConnectionId, setCreatedConnectionId] = useState<string | null>(editConnection?.id ?? null);
   const [providerId, setProviderId] = useState<string>(editConnection?.providerId ?? "");
   const [label, setLabel] = useState(editConnection?.label ?? "");
-  // TASK.108-A: an existing catalog connection persisted with a blank model
+  // an existing catalog connection persisted with a blank model
   // (the live trap — readiness fails on it with a key-blaming toast) opens
   // with the curated default prefilled, so the very next Save heals it.
   const [model, setModel] = useState(() => {
@@ -1335,7 +1362,7 @@ export function ConnectionDrawerFields({
   });
   const [baseUrl, setBaseUrl] = useState(editConnection?.baseUrl ?? "");
   const [transport, setTransport] = useState<ProviderTransportId | "">(editConnection?.transport ?? "");
-  // TASK.141: the connection's rung is a REFERENCE now, seeded through the same
+  // the connection's rung is a REFERENCE now, seeded through the same
   // pure helper every other scope's picker uses (a dangling id reads as "No
   // proxy", a legacy `proxyUrl` string reads as the synthetic Legacy entry).
   const [proxyRef, setProxyRef] = useState(() =>
@@ -1383,16 +1410,16 @@ export function ConnectionDrawerFields({
   const modelPricingPayload = (): Record<string, TokenRates | ""> | null => {
     const entries: [string, TokenRates | ""][] = [];
     for (const id of dirtyRates) {
-      const draft = modelRates[id]!;
+      const draft = ownRateDraft(modelRates, id);
+      if (draft === undefined) { entries.push([id, ""]); continue; }
       const raw = [draft.input, draft.cachedInput, draft.output];
-      if ([...raw, draft.cacheWrite].every((v) => !v.trim())) { entries.push([id, ""]); continue; }
       const values = raw.map(Number), write = Number(draft.cacheWrite);
       if (normalizeModelId(id) !== id || raw.some((v) => !v.trim()) || values.some((v) => !Number.isFinite(v) || v < 0) || (draft.cacheWrite.trim() !== "" && (!Number.isFinite(write) || write < 0))) return null;
       entries.push([id, { input: values[0]!, cachedInput: values[1]!, output: values[2]!, ...(draft.cacheWrite.trim() ? { cacheWrite: write } : {}) }]);
     }
     return Object.fromEntries(entries);
   };
-  // TASK.150: stored as a string (it backs a plain `<input type="number">`) so
+  // stored as a string (it backs a plain `<input type="number">`) so
   // an in-progress edit (e.g. a momentarily-empty field) never gets coerced
   // through `Number()` before the user is done typing; `maxOutputTokensField`
   // does the actual parse/validate at save time.
@@ -1400,14 +1427,14 @@ export function ConnectionDrawerFields({
   const [maxOutputTokens, setMaxOutputTokens] = useState(
     editConnection?.maxOutputTokens === undefined ? "" : String(editConnection.maxOutputTokens),
   );
-  // TASK.142: per-model context window, stored as {raw, model} for the same
+  // per-model context window, stored as {raw, model} for the same
   // reason as `maxOutputTokens` below. Prefilled ONLY when the saved window is
   // bound to the connection's own model — a window saved for a DIFFERENT model
   // must not appear here. Every model-changing route goes through `changeModel`.
   const [contextWindow, setContextWindow] = useState<ContextWindowField>(() =>
     contextWindowInitialField(editConnection),
   );
-  // Taskana 4088: the per-model image-input select ("auto" | "on" | "off").
+  // the per-model image-input select ("auto" | "on" | "off").
   // Prefilled ONLY when the saved override binds to the connection's own model
   // (the contextWindowInitialRaw rule); "auto" clears the pair on save.
   const [reasoningSupported, setReasoningSupported] = useState(() =>
@@ -1459,9 +1486,18 @@ export function ConnectionDrawerFields({
   const [customBaseUrl, setCustomBaseUrl] = useState("");
   const [customKind, setCustomKind] = useState<CustomProviderRecord["kind"]>("openai-compatible");
   // Custom-provider model fetch/curation (the drawer's model step).
-  const [fetchedModels, setFetchedModels] = useState<{ id: string }[] | null>(null);
+  const [fetchedModels, setFetchedModels] = useState<Extract<FetchModelsOutcome, { ok: true }>["models"] | null>(null);
+  const [commitFetchedModels, setCommitFetchedModels] = useState(false);
+  const [fetchedSource, setFetchedSource] = useState<{ guard: string; targetUrl: string; baseUrl: string; transport: ProviderTransportId | "" } | null>(null);
   const [fetchingModels, setFetchingModels] = useState(false);
-  const [curating, setCurating] = useState(false);
+  const fetchGeneration = useRef(0);
+  const [modelPopupOpen, setModelPopupOpen] = useState(false);
+  const [modelFilter, setModelFilter] = useState("");
+  const [manualModel, setManualModel] = useState("");
+  const [draftDefaultModel, setDraftDefaultModel] = useState("");
+  const [visibleModelDraft, setVisibleModelDraft] = useState<string[]>([]);
+  const [pendingVisibleModels, setPendingVisibleModels] = useState<string[] | null>(null);
+  const modelSelectionRevision = useRef(0);
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [clearing, setClearing] = useState(false);
@@ -1481,6 +1517,19 @@ export function ConnectionDrawerFields({
       setSavedNotice(false);
     }, SAVED_NOTICE_MS);
   };
+  useEffect(() => {
+    const pending = pendingKeyCommit.current;
+    if (creating || saving || !pending || !consentResolution || consentResolution === pending.previous || consentResolution.key !== pending.key) return;
+    pendingKeyCommit.current = null;
+    if (consentResolution.ok) {
+      setError(current => current === "The API key is awaiting storage consent. If you decline, enter it again." ? null : current);
+      if (pending.complete && (onCommitBegin?.() ?? pending.version) === pending.version) {
+        if (onCommitSuccess?.(pending.version) ?? true) flashSavedNotice();
+      }
+    } else {
+      setError(current => current && current !== "The API key is awaiting storage consent. If you decline, enter it again." ? `${current} The API key was not saved. Enter it again to retry.` : "The API key was not saved. Enter it again to retry.");
+    }
+  }, [consentResolution, creating, saving]);
   useEffect(
     () => () => {
       if (savedNoticeTimer.current !== null) {
@@ -1571,7 +1620,7 @@ export function ConnectionDrawerFields({
   // `models` — the synthesized catalog entry mirrors it and re-derives after
   // each customProvider mutation reloads the snapshot.
   const curatedModelIds = selectedEntry?.models.map((m) => m.id) ?? [];
-  // What the Model field suggests (datalist + chips): the UNION (TASK.183) of
+  // What the Model field suggests (datalist + chips): the UNION of
   // this session's fetched ids, the ids persisted on the connection (manual
   // additions + earlier fetches), then the static catalog hints. A custom
   // record's session-only fetch result is NOT offered on its own: its checkbox
@@ -1594,7 +1643,7 @@ export function ConnectionDrawerFields({
   const setupMissingKey = simplified && showKeyInCreate && !noAuth &&
     selectedEntry?.authOptional !== true && secretValue.trim() === "";
   const keyFieldDisabled = readOnly || (isNewCustomEndpoint && noAuth);
-  // TASK.159 hints for the Max-output-tokens field (pure logic above): whether
+  // hints for the Max-output-tokens field (pure logic above): whether
   // the env rung currently silences this field, and what number a blank field
   // actually resolves to. Both read only state already in hand — the drawer's
   // own proxySnapshot and the projected catalog/snapshot.
@@ -1605,11 +1654,11 @@ export function ConnectionDrawerFields({
     proxySnapshot?.defaultMaxOutputTokens,
     maxOutputTokens,
   );
-  // TASK.142 hints for the Context-window field: same shape as the ceiling hints
+  // hints for the Context-window field: same shape as the ceiling hints
   // above — whether the env rung silences the field, and what window a blank
   // field resolves to (catalog min, else the assumed unknown-model fallback).
   const cwEnvHint = proxySnapshot === null ? null : contextWindowTokensEnvHint(proxySnapshot.envOverrides);
-  // TASK.142: the model id this form will actually SAVE. The simplified create
+  // the model id this form will actually SAVE. The simplified create
   // input saves the catalog-prefilled id (`modelAfterCatalogPrefill`); every
   // other route saves the raw text. Used both for the field's owner and for the
   // create-time "a window needs a model to bind to" gate, so the two never
@@ -1624,7 +1673,7 @@ export function ConnectionDrawerFields({
     proxySnapshot,
     contextWindow.raw,
   );
-  // Taskana 4088 hints for the Image-input select: what Auto resolves to for
+  // hints for the Image-input select: what Auto resolves to for
   // the model this form will save (catalog mark, else the connection's live
   // image-modality list), and whether the live feed rides the env right now.
   let imageInputHint = imageInputEffectiveHint(
@@ -1654,7 +1703,7 @@ export function ConnectionDrawerFields({
   const usageEnvHintText = proxySnapshot === null ? null : usageEnvHint(proxySnapshot.envOverrides);
 
   /**
-   * TASK.142: the ONE model-changing route. `next` is what goes into the Model
+   * the ONE model-changing route. `next` is what goes into the Model
    * input, `effective` is the id that will be saved, `saved` is the persisted
    * pair (for re-prefill when the user navigates back to the bound model). Every
    * user route — the simplified create input, the main Model input and the model
@@ -1693,7 +1742,7 @@ export function ConnectionDrawerFields({
 
   /** ADD: mint a NEW custom-provider record (key or keyless), then a connection pointing at it. */
   async function createNewCustomEndpoint(): Promise<void> {
-    // TASK.183: validate the raw model BEFORE the record, connection, secret or
+    // validate the raw model BEFORE the record, connection, secret or
     // list call — a nonblank malformed id makes no writes at all.
     const preflight = preflightModelId(model);
     if (preflight.kind === "invalid") {
@@ -1723,7 +1772,7 @@ export function ConnectionDrawerFields({
       kind: customKind,
       apiKey: secretValue,
       noAuth,
-      // TASK.183: manual ids now live on the CONNECTION's own `models[]`, never
+      // manual ids now live on the CONNECTION's own `models[]`, never
       // on the shared custom record — the record's curated set stays separate.
       selectedModels: [],
     });
@@ -1731,6 +1780,8 @@ export function ConnectionDrawerFields({
       setError('Enter a name and base URL, plus an API key or check "This endpoint doesn\'t need an API key".');
       return;
     }
+    const commitVersion = onCommitBegin?.() ?? 0;
+    onBusyChange?.(true);
     setCreating(true);
     setError(null);
     try {
@@ -1758,7 +1809,7 @@ export function ConnectionDrawerFields({
           ...(createModel !== undefined ? { model: createModel } : {}),
           ...(label.trim() ? { label: label.trim() } : {}),
           ...(transport ? { transport } : {}),
-          // TASK.132/TASK.141: the proxy control is rendered in this pre-create
+          // the proxy control is rendered in this pre-create
           // state too, so its value has to travel on THIS create as well —
           // omitting it here silently dropped the choice for every new custom
           // endpoint.
@@ -1788,15 +1839,18 @@ export function ConnectionDrawerFields({
       onConnectionCreated?.(outcome.createdConnectionId);
       if (outcome.partial) {
         setError(outcome.error ?? "Custom endpoint and connection created, but the model list couldn't be saved — retry with Save.");
+      } else {
+        onCommitSuccess?.(commitVersion);
       }
     } finally {
+      onBusyChange?.(false);
       setCreating(false);
     }
   }
 
   /** ADD: single primary action — create the connection AND (item 3) fold in the key's secret-set. */
   async function createConnection(): Promise<void> {
-    if (readOnly) {
+    if (readOnly || interactionBlocked) {
       return;
     }
     if (setupMissingModel) {
@@ -1810,7 +1864,7 @@ export function ConnectionDrawerFields({
     if (providerId === "") {
       return;
     }
-    // TASK.150: a BLANK cap already means "provider default" at create time
+    // a BLANK cap already means "provider default" at create time
     // (same asymmetry as `baseUrl`/`transport` just above), so it is simply
     // left out of the payload. A MALFORMED one is refused here rather than
     // dropped: `min`/`max` on a number input only constrain the spinner, not
@@ -1826,10 +1880,10 @@ export function ConnectionDrawerFields({
       setError(MAX_OUTPUT_TOKENS_ERROR);
       return;
     }
-    // TASK.142: the same pre-flight for the context window. A BLANK field means
+    // the same pre-flight for the context window. A BLANK field means
     // "catalog/assumed window" and is simply left out; a MALFORMED one is
     // refused rather than dropped. A numeric window additionally needs the model
-    // this create will actually SEND to bind to (TASK.183: EVERY create path now
+    // this create will actually SEND to bind to (EVERY create path now
     // sends the catalog-prefilled/entered id, not only the simplified one) —
     // main derives the binding from it and refuses the whole create otherwise,
     // so say which field to fix instead of letting main reject it opaquely.
@@ -1840,7 +1894,7 @@ export function ConnectionDrawerFields({
       setError(CONTEXT_WINDOW_ERROR);
       return;
     }
-    // TASK.183: ONE effective model for the create payload, the context-window
+    // ONE effective model for the create payload, the context-window
     // binding and the model-list append. A nonblank malformed id makes no
     // create, secret or list call; a blank keeps the pre-existing implicit
     // rules (no model sent).
@@ -1854,7 +1908,7 @@ export function ConnectionDrawerFields({
       setError(CONTEXT_WINDOW_ERROR_MODEL);
       return;
     }
-    // Taskana 4088: an explicit on/off override needs the model this create
+    // an explicit on/off override needs the model this create
     // will actually SEND (main derives the binding and refuses otherwise) —
     // same specific-message pre-flight as the context window above.
     const imageInputError = imageInputModelPreflightError(imageInput, createModel);
@@ -1864,6 +1918,8 @@ export function ConnectionDrawerFields({
     }
     // GitHub #1: create has no `""` sentinel — Automatic is simply absent.
     const usageCreateValue = usageSelectionCreateValue(usageSelection);
+    const commitVersion = onCommitBegin?.() ?? 0;
+    onBusyChange?.(true);
     setCreating(true);
     setError(null);
     try {
@@ -1887,7 +1943,7 @@ export function ConnectionDrawerFields({
           ...(reasoningSupported !== undefined ? { reasoningSupported } : {}),
           ...(effortLevels.length ? { effortLevels } : {}),
           ...(modelEffort !== "" ? { reasoningEffort: modelEffort } : {}),
-          // Taskana 4088: create keeps the conditional-spread form (create's
+          // create keeps the conditional-spread form (create's
           // schema has no "" sentinel — omission already means "auto"); only an
           // explicit choice travels, and the binding is server-derived.
           ...(imageInput !== "auto" ? { imageInputOverride: imageInput } : {}),
@@ -1908,25 +1964,29 @@ export function ConnectionDrawerFields({
       }
       setCreatedConnectionId(outcome.createdConnectionId);
       onConnectionCreated?.(outcome.createdConnectionId);
-      // TASK.108-A: the just-revealed Model field opens on the catalog default
+      // the just-revealed Model field opens on the catalog default
       // instead of blank, so the follow-up Save can't persist the empty-model
       // trap.
       if (!isCustomRecordProviderId(providerId)) {
         setModel((m) => modelAfterCatalogPrefill(m, selectedEntry?.models ?? []));
       }
-      // TASK.183: surface a partial failure (connection exists, list does not)
+      // surface a partial failure (connection exists, list does not)
       // WITHOUT losing a concurrent key error — compose one message.
       let message = outcome.partial
         ? (outcome.error ?? "Connection created, but its model list couldn't be saved — retry with Save.")
         : null;
+      let keyPending = false;
       // Item 3: fold the key's secret-set into Create for a keyed catalog
       // provider — a separate IPC channel, so custody stays intact and the
       // metadata schema never carries a credential.
       if (secretValue && authKind === "api_key" && !isCustomRecordProviderId(providerId)) {
         const value = secretValue;
+        const previousResolution = store.getState().secretConsentResolution;
         dispatchSecret({ type: "submitted" });
         const secretResult = await store.getState().setSecret(connectionSecretKey(outcome.createdConnectionId, "api_key"), value);
-        if (!secretResult.ok && secretResult.reason !== "weak_storage_needs_consent") {
+        keyPending = !secretResult.ok && secretResult.reason === "weak_storage_needs_consent";
+        if (keyPending) pendingKeyCommit.current = { key: connectionSecretKey(outcome.createdConnectionId, "api_key"), version: commitVersion, previous: previousResolution, complete: message === null };
+        if (!secretResult.ok && !keyPending) {
           message =
             message === null
               ? "Connection created, but the API key was refused — enter it again below."
@@ -1943,8 +2003,13 @@ export function ConnectionDrawerFields({
       }
       if (message !== null) {
         setError(message);
+      } else if (keyPending) {
+        setError("The API key is awaiting storage consent. If you decline, enter it again.");
+      } else {
+        onCommitSuccess?.(commitVersion);
       }
     } finally {
+      onBusyChange?.(false);
       setCreating(false);
     }
   }
@@ -1955,10 +2020,14 @@ export function ConnectionDrawerFields({
    * custody intact). Metadata and key failures are reported independently.
    */
   async function save(): Promise<void> {
-    if (readOnly || createdConnectionId === null) {
+    if (readOnly || interactionBlocked || createdConnectionId === null) {
       return;
     }
-    // TASK.183: a nonblank malformed model is refused before the metadata
+    if (modelPopupOpen || (pendingVisibleModels !== null && !pendingVisibleModels.includes(model.trim()))) {
+      setError("Finish choosing models and confirm a default before saving. Your selections are kept.");
+      return;
+    }
+    // a nonblank malformed model is refused before the metadata
     // update, the secret write or any list call (a valid, unknown id passes —
     // catalog membership is never validation).
     const preflight = preflightModelId(model);
@@ -1967,14 +2036,14 @@ export function ConnectionDrawerFields({
       return;
     }
     const selectedModelId = preflight.kind === "id" ? preflight.id : null;
-    // TASK.108-A: refuse to persist the empty-model trap on a catalog
+    // refuse to persist the empty-model trap on a catalog
     // connection — an empty model fails readiness later with a toast that
     // blames the API key.
     if (modelSaveBlocked(model, !isCustomRecordConnection && !isNewCustomEndpoint, modelSuggestions)) {
       setError("Pick a model before saving — without one this connection can't open a tab.");
       return;
     }
-    // TASK.150: refuse to send a malformed cap — main's own [1024, 1000000]
+    // refuse to send a malformed cap — main's own [1024, 1000000]
     // bound refuses the whole update with a bare `reason: "invalid"`, so this
     // gives the specific, actionable message instead (same pattern as the
     // `modelSaveBlocked` guard just above).
@@ -1988,7 +2057,7 @@ export function ConnectionDrawerFields({
       setError(MAX_OUTPUT_TOKENS_ERROR);
       return;
     }
-    // TASK.142: same pre-flight for the context window; a numeric one also needs
+    // same pre-flight for the context window; a numeric one also needs
     // a nonblank model to bind to, since main derives the binding server-side
     // from the model this update sends.
     const cw = contextWindowTokensField(contextWindow.raw);
@@ -2002,7 +2071,7 @@ export function ConnectionDrawerFields({
       setError(CONTEXT_WINDOW_ERROR_MODEL);
       return;
     }
-    // Taskana 4088 (cross-review): the same blank-model refusal on UPDATE — the
+    // (cross-review): the same blank-model refusal on UPDATE — the
     // sent model is `selectedModelId ?? model`, and main would otherwise reject
     // the whole save with the generic "couldn't be saved" message.
     const imageInputError = imageInputModelPreflightError(imageInput, selectedModelId ?? model);
@@ -2010,11 +2079,14 @@ export function ConnectionDrawerFields({
       setError(imageInputError);
       return;
     }
+    const commitVersion = onCommitBegin?.() ?? 0;
+    const savedSelectionRevision = modelSelectionRevision.current;
+    onBusyChange?.(true);
     setSaving(true);
     setError(null);
     setSavedNotice(false);
     try {
-      // TASK.183: metadata first (the selected model rides it), THEN append the
+      // metadata first (the selected model rides it), THEN append the
       // same normalized model to this connection's list. A failed metadata
       // update never appends.
       const outcome = await updateConnectionAndPersistModel(
@@ -2034,13 +2106,25 @@ export function ConnectionDrawerFields({
           imageInput,
           promptCacheEnabled,
           usage: usageSelection,
-        }, { contextWindowDirty, contextWindowTokens: cw.value, reasoningSupportedDirty, reasoningSupported, modelEffortDirty, modelEffort, imageInputDirty, effortLevelsDirty, effortLevels }), ...(catalogMatchDirty ? { catalogMatchDisabled: catalogMatchDisabled ? true as const : "" as const } : {}), pricing, modelPricing },
+        }, { contextWindowDirty, contextWindowTokens: cw.value, reasoningSupportedDirty, reasoningSupported, modelEffortDirty, modelEffort, imageInputDirty, effortLevelsDirty, effortLevels }), ...(isCustomRecordConnection && !showBaseUrl ? { baseUrl: undefined } : {}), ...(catalogMatchDirty ? { catalogMatchDisabled: catalogMatchDisabled ? true as const : "" as const } : {}), ...(pendingVisibleModels !== null ? { visibleModels: pendingVisibleModels } : {}), ...(commitFetchedModels && fetchedModels !== null && fetchedSource !== null ? { fetchedModels: { ...fetchedSource, models: fetchedModels } } : {}), pricing, modelPricing },
         selectedModelId !== null && shouldAppendModelToList(selectedModelId, catalogOfferedIds, isCustomRecordConnection)
           ? selectedModelId
           : null,
       );
-      if (outcome.metaOk) setDirtyRates(new Set());
+      if (outcome.staleFetch) {
+        setError("The connection, key or proxy changed after fetching. Fetch again or discard fetched metadata; your model selections are kept.");
+        return;
+      }
+      if (outcome.metaOk) {
+        setDirtyRates(new Set());
+        // An older request must not discard a model selection made while it ran.
+        if (modelSelectionRevision.current === savedSelectionRevision) {
+          setPendingVisibleModels(null);
+          setCommitFetchedModels(false);
+        }
+      }
       let keyRefused = false;
+      let keyPending = false;
       let keyRefusalDetail: string | null = null;
       if (secretValue && credentialKey !== undefined) {
         const mutation = buildKeyMutation(effectiveProviderId, credentialKey, secretValue);
@@ -2053,9 +2137,12 @@ export function ConnectionDrawerFields({
           }
         } else {
           // The settings store parks weak-storage consent and retries this channel.
+          const previousResolution = store.getState().secretConsentResolution;
           dispatchSecret({ type: "submitted" });
           const result = await store.getState().setSecret(mutation.key, mutation.value!);
-          keyRefused = !result.ok && result.reason !== "weak_storage_needs_consent";
+          keyPending = !result.ok && result.reason === "weak_storage_needs_consent";
+          if (keyPending && credentialKey !== undefined) pendingKeyCommit.current = { key: credentialKey, version: commitVersion, previous: previousResolution, complete: outcome.metaOk && outcome.appendOk };
+          keyRefused = !result.ok && !keyPending;
         }
       }
       // Compose ONE message so a concurrent key error is never overwritten by
@@ -2070,10 +2157,13 @@ export function ConnectionDrawerFields({
         setError(keyRefusalDetail ?? "The changes were saved, but the API key was refused.");
       } else if (!outcome.appendOk) {
         setError("The changes were saved, but the model list couldn't be saved — retry Save.");
+      } else if (keyPending && credentialKey !== undefined) {
+        setError("The API key is awaiting storage consent. If you decline, enter it again.");
       } else {
-        flashSavedNotice();
+        if (onCommitSuccess?.(commitVersion) ?? true) flashSavedNotice();
       }
     } finally {
+      onBusyChange?.(false);
       setSaving(false);
     }
   }
@@ -2085,7 +2175,7 @@ export function ConnectionDrawerFields({
     setClearing(true);
     setError(null);
     try {
-      // Taskana 4875 (GitHub #10): a custom:<id> connection's shared vault key
+      // (GitHub #10): a custom:<id> connection's shared vault key
       // is only clearable through custom-provider-update's keyed→keyless
       // transition (main drops the vault entry AND resets health/quota). The
       // generic secret-clear channel refuses non-connection keys `invalid` —
@@ -2117,70 +2207,53 @@ export function ConnectionDrawerFields({
    * and would keep an unticked model on offer. A catalog connection's fetch is
    * already merged onto the connection by main.
    */
+  function invalidateFetchedReceipt(): void {
+    modelSelectionRevision.current++;
+    fetchGeneration.current++;
+    setPendingVisibleModels(retainedModelSelection(modelPopupOpen, visibleModelDraft, pendingVisibleModels));
+    if (fetchedModels !== null || fetchingModels || commitFetchedModels) {
+      setError("Fetched metadata was discarded because the connection changed. Your model selections are kept.");
+    }
+    setFetchedModels(null); setFetchedSource(null); setCommitFetchedModels(false);
+  }
+
   async function doFetchModels(): Promise<void> {
     if (createdConnectionId === null) {
       return;
     }
+    if (proxySnapshot === null) {
+      setError("Connection settings are still loading. Your model selections are kept; try fetching again.");
+      return;
+    }
+    const savedProxyRef = proxyRefInitialValue({ kind: "connection", connectionId: createdConnectionId }, proxySnapshot.settings);
+    if (hasPendingFetchConnectionChanges({ showBaseUrl, baseUrl, savedBaseUrl: targetConnection?.baseUrl ?? "", transport, savedTransport: targetConnection?.transport ?? "", proxyRef, savedProxyRef, secretValue })) {
+      setError("Save changes to the address, transport, key or proxy before fetching models. Your selections are kept.");
+      return;
+    }
+    const generation = fetchGeneration.current;
     setFetchingModels(true);
     setError(null);
     try {
-      const outcome = isCustomRecordConnection
-        ? await resolvedCustomProvider().fetchModels({ id: effectiveProviderId })
-        : await resolvedCustomProvider().fetchModels({ connectionId: createdConnectionId });
+      const outcome = await resolvedCustomProvider().fetchModels({ connectionId: createdConnectionId, preview: true });
+      if (generation !== fetchGeneration.current) return;
       if (!outcome.ok) {
         setError(describeFetchModelsError(outcome.reason));
         return;
       }
-      setFetchedModels(outcome.models);
-      if (isCustomRecordConnection) {
-        // Every fetched id starts ticked; the checkbox list is the selector, so
-        // it is saved where the checkboxes read from. A fetched id the
-        // manual-entry validator refuses (inner whitespace, controls) is
-        // skipped: one odd vendor id must not block the rest.
-        const fetchedIds = outcome.models
-          .map((m) => normalizeModelId(m.id))
-          .filter((id): id is string => id !== null);
-        if (fetchedIds.length > 0) {
-          const saved = await persistCuratedModels(
-            resolvedCustomProvider(),
-            reloadSnapshot,
-            effectiveProviderId,
-            mergeCurationModelIds(fetchedIds, curatedModelIds, model),
-          );
-          if (!saved.ok) {
-            setError("Fetched models, but the list to show in the selector couldn't be saved — retry Fetch.");
-          }
-        }
-      } else {
-        // TASK.108-A: a fetch landing on a still-blank field picks the default
-        // from the MERGED offered list (fetched first, then any already-saved
-        // ids), so a saved manual model is never lost from the prefill.
-        const merged = mergeModelIds(outcome.models.map((m) => m.id), targetConnection?.models ?? []).map((id) => ({ id }));
-        setModel((m) => modelAfterCatalogPrefill(m, merged));
-        await reloadSnapshot();
+      if (!outcome.source || outcome.source.baseUrl !== (targetConnection?.baseUrl ?? "").trim() || outcome.source.transport !== (targetConnection?.transport ?? "")) {
+        setError("The endpoint changed while fetching models. Reopen the connection and retry.");
+        return;
       }
+      setFetchedSource(outcome.source ?? null);
+      const validModels = outcome.models.filter(item => validVisibleModelIds([item.id]).length > 0);
+      setFetchedModels(validModels);
+      if (targetConnection?.visibleModels === undefined && pendingVisibleModels === null) {
+        setVisibleModelDraft((current) => mergeModelIds(current, validModels.map(item => item.id)));
+      }
+    } catch {
+      if (generation === fetchGeneration.current) setError("Could not fetch models. Your model selections are kept; try again.");
     } finally {
       setFetchingModels(false);
-    }
-  }
-
-  /** Toggle a model in the record's curated `models[]` — the selector's source of truth. */
-  async function toggleModel(id: string): Promise<void> {
-    if (!isCustomRecordConnection) {
-      return;
-    }
-    const next = toggleSelectedModel(curatedModelIds, id);
-    setCurating(true);
-    setError(null);
-    try {
-      const result = await persistCuratedModels(resolvedCustomProvider(), reloadSnapshot, effectiveProviderId, next);
-      if (!result.ok) {
-        setError(result.reason === "threw"
-          ? "Couldn't update the model list — retry."
-          : describeCustomProviderMutationError(result.reason));
-      }
-    } finally {
-      setCurating(false);
     }
   }
 
@@ -2196,7 +2269,7 @@ export function ConnectionDrawerFields({
         placeholder="e.g. Work, Personal"
         onChange={(e) => setLabel(e.target.value)}
       />
-      <span className="settings-field-hint">A name for this saved connection only — the provider keeps its own name.</span>
+
     </label>
   );
   // On the new-custom-endpoint form the provider Name already identifies the
@@ -2205,11 +2278,53 @@ export function ConnectionDrawerFields({
 
   const maxOutputInputShown = maxOutputSegmentSelection(maxOutputTokens, maxOutputCustom) === "custom";
 
+  const pricingBlock = (
+      <section className="connection-drawer-pricing connection-drawer-band" data-section="04 · Money" aria-label="Pricing">
+        <div className="connection-drawer-pricing-heading">
+          <span className="settings-field-label">Pricing · USD / 1M tokens <FieldHelp text={sharedBillingEndpoint ? SHARED_BILLING_ONELINER : PRICING_ONELINER} /></span>
+          <select aria-label="Billing mode" className="settings-field-select" value={pricingMode} disabled={readOnly} onChange={(e) => setPricingMode(e.target.value as "unset" | "catalog" | "subscription" | "rates")}>
+            <option value="unset">{sharedBillingEndpoint ? "Unknown — choose how you are billed" : "Catalog or unknown"}</option>
+            {sharedBillingEndpoint && <option value="catalog">Catalog API rate</option>}
+            <option value="subscription">By subscription</option><option value="rates">Custom rates</option>
+          </select>
+        </div>
+        <div className="connection-drawer-pricing-scroll">
+          <table className="connection-drawer-pricing-table">
+            <thead><tr><th scope="col">Model</th>{["Input", "Cached input", "Output", "Cache write (optional)"].map(label => <th scope="col" key={label}>{label}</th>)}</tr></thead>
+            <tbody>
+              <tr><th scope="row">Connection fallback <small>{pricingMode === "rates" ? "Custom" : pricingMode === "subscription" ? "Subscription" : "Catalog or unknown"}</small></th>
+                {([["Input", priceInput, setPriceInput], ["Cached input", priceCached, setPriceCached], ["Output", priceOutput, setPriceOutput], ["Cache write (optional)", priceWrite, setPriceWrite]] as const).map(([label, value, set]) => <td key={label}><input aria-label={`Connection fallback ${label}`} className="settings-field-input" type="number" min="0" step="any" value={value} placeholder={label.startsWith("Cache write") ? "Not set" : "—"} disabled={readOnly || pricingMode !== "rates"} onChange={(e) => set(e.target.value)} /></td>)}
+              </tr>
+              {mergeModelIds(pendingVisibleModels ?? targetConnection?.visibleModels ?? modelSuggestions.map((item) => item.id), mergeModelIds(Object.keys(modelRates), normalizeModelId(model) ? [normalizeModelId(model)!] : [])).map((id) => {
+                const custom = Object.hasOwn(modelRates, id);
+                const empty = { input: "", cachedInput: "", output: "", cacheWrite: "" };
+                const provider = getBuiltinCatalog().providers.find(entry => entry.id === effectiveProviderId);
+                const normalizeUrl = (url: string) => url.trim().replace(/\/+$/, "").replace(/\/v1$/, "");
+                const actualUrl = baseUrl.trim() || provider?.baseUrl || "";
+                const catalogPrice = proxySnapshot !== null && !proxySnapshot.envOverrides.includes("ANYCODE_BASE_URL") && provider && actualUrl && normalizeUrl(actualUrl) === normalizeUrl(provider.baseUrl) && (pricingMode === "catalog" || (pricingMode === "unset" && !sharedBillingEndpoint)) ? provider.models.find(item => item.id === id)?.pricing : undefined;
+                const livePrice = pricingMode !== "rates" && pricingMode !== "subscription" ? targetConnection?.modelCapabilities?.[id]?.pricing : undefined;
+                const fallback = pricingMode === "rates" ? pricingPayload() : undefined;
+                const inherited = livePrice ?? (fallback && fallback.mode === "rates" ? fallback : undefined) ?? catalogPrice;
+                const inheritedDraft = inherited ? { input: String(inherited.input), cachedInput: String(inherited.cachedInput), output: String(inherited.output), cacheWrite: inherited.cacheWrite === undefined ? "" : String(inherited.cacheWrite) } : empty;
+                const draft = ownRateDraft(modelRates, id) ?? inheritedDraft;
+                const source = pricingMode === "subscription" ? "Subscription" : livePrice ? "Provider price" : fallback && fallback.mode === "rates" ? "Connection fallback" : catalogPrice?.tariff ? `Catalog peak: ${catalogPrice.tariff.peakUtcDays.map(day => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day]).join(", ")} ${catalogPrice.tariff.peakUtcHours.map(([start, end]) => `${String(start).padStart(2, "0")}–${String(end).padStart(2, "0")}`).join(", ")} UTC; other times ×${catalogPrice.tariff.offPeakMultiplier}` : catalogPrice ? "Catalog price" : "Unknown";
+                return <tr key={id}><th scope="row">{id}<small>{pricingMode === "subscription" ? (custom ? "Subscription · custom rate inactive" : "Subscription") : custom ? "Custom" : source}</small><button type="button" className="settings-button connection-drawer-rate-mode" disabled={readOnly || saving || pricingMode === "subscription"} aria-label={`${id} ${custom ? "use inherited price" : "set custom price"}`} onClick={() => { setModelRates(previous => { const next = { ...previous }; if (custom) delete next[id]; else next[id] = { ...inheritedDraft }; return next; }); setDirtyRates(previous => new Set(previous).add(id)); }}>{custom ? "Use inherited" : "Customize"}</button></th>
+                  {([ ["input", "Input"], ["cachedInput", "Cached input"], ["output", "Output"], ["cacheWrite", "Cache write (optional)"] ] as const).map(([key, label]) => <td key={key}><input aria-label={`${id} ${label}`} className="settings-field-input" type="number" min="0" step="any" placeholder={key === "cacheWrite" ? "Not set" : "—"} value={pricingMode === "subscription" ? "" : draft[key]} disabled={readOnly || saving || pricingMode === "subscription" || !custom} onChange={(e) => { const value = e.target.value; setModelRates((previous) => ({ ...previous, [id]: { ...draft, [key]: value } })); setDirtyRates((previous) => new Set(previous).add(id)); }} /></td>)}
+                </tr>;
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+  );
+
   // Everything tuning-related lives in ONE disclosure, rendered once and placed
   // before the primary button in both branches (pre-create and created).
   const advancedBlock = (
     <details
-      className="connection-drawer-advanced"
+      data-section="05 · Tune"
+      className="connection-drawer-advanced connection-drawer-band"
       open={advancedOpen}
       onToggle={(e) => setAdvancedOpen(e.currentTarget.open)}
     >
@@ -2222,28 +2337,6 @@ export function ConnectionDrawerFields({
           the rhythm now, in both engines. */}
       <div className="connection-drawer-advanced-body">
       {simplified && labelFieldVisible && labelField}
-      <label className="settings-field">
-        <span className="settings-field-label">Pricing</span>
-        <select className="settings-field-select" value={pricingMode} disabled={readOnly} onChange={(e) => setPricingMode(e.target.value as "unset" | "catalog" | "subscription" | "rates")}>
-          <option value="unset">{sharedBillingEndpoint ? "Unknown — choose how you are billed" : "Catalog or unknown"}</option>
-          {sharedBillingEndpoint && <option value="catalog">Catalog API rate</option>}
-          <option value="subscription">By subscription</option><option value="rates">Custom rates</option>
-        </select>
-        <div className="settings-field-hint">{sharedBillingEndpoint ? SHARED_BILLING_ONELINER : PRICING_ONELINER}</div>
-      </label>
-      {pricingMode === "rates" && <div className="connection-drawer-rate-grid">
-        {([["Input", priceInput, setPriceInput], ["Cached input", priceCached, setPriceCached], ["Output", priceOutput, setPriceOutput], ["Cache write (optional)", priceWrite, setPriceWrite]] as const).map(([label, value, set]) => <label className="settings-field" key={label}><span className="settings-field-label">{label} · USD / 1M tokens</span><input className="settings-field-input" type="number" min="0" step="any" value={value} disabled={readOnly} onChange={(e) => set(e.target.value)} /></label>)}
-      </div>}
-
-      <p className="settings-field-hint">Prices apply to future usage. Model rates override the connection fallback.</p>
-      <div className="connection-drawer-model-rates" aria-label="Per-model prices">
-        {mergeModelIds(modelSuggestions.map((item) => item.id), mergeModelIds(Object.keys(modelRates), normalizeModelId(model) ? [normalizeModelId(model)!] : [])).map((id) => {
-          const draft = (Object.hasOwn(modelRates, id) ? modelRates[id] : undefined) ?? { input: "", cachedInput: "", output: "", cacheWrite: "" };
-          return <fieldset key={id} disabled={readOnly || saving || pricingMode === "subscription"}><legend>{id}</legend>
-            {([ ["input", "Input"], ["cachedInput", "Cached input"], ["output", "Output"], ["cacheWrite", "Cache write (optional)"] ] as const).map(([key, label]) => <label className="settings-field" key={key}><span className="settings-field-label">{label} · USD / 1M tokens</span><input className="settings-field-input" type="number" min="0" step="any" aria-label={`${id} ${label} · USD / 1M tokens`} value={draft[key]} onChange={(e) => { const value = e.target.value; setModelRates((previous) => ({ ...previous, [id]: { ...draft, [key]: value } })); setDirtyRates((previous) => new Set(previous).add(id)); }} /></label>)}
-          </fieldset>;
-        })}
-      </div>
 
       <label className="settings-field">
         <span className="settings-field-label">Transport</span>
@@ -2251,7 +2344,12 @@ export function ConnectionDrawerFields({
           className="settings-field-select"
           value={transport}
           disabled={readOnly}
-          onChange={(e) => setTransport(e.target.value as ProviderTransportId | "")}
+          onChange={(e) => {
+            const next = e.target.value as ProviderTransportId | "";
+            if (next !== transport) { invalidateFetchedReceipt(); }
+            setTransport(next);
+            if (isNewCustomEndpoint && (next === "anthropic-messages" || (next === "" && customKind === "anthropic"))) setNoAuth(false);
+          }}
         >
           <option value="">(provider default)</option>
           {transportChoices.map((t) => (
@@ -2284,8 +2382,7 @@ export function ConnectionDrawerFields({
               <option value="implicit">Implicit · 30 minutes</option>
             </select>
           </label>
-          <div className="settings-field-hint">{PROMPT_CACHE_ONELINER}</div>
-        </>
+            </>
       )}
 
       {effectiveProviderId === "openrouter" && (
@@ -2316,8 +2413,7 @@ export function ConnectionDrawerFields({
               <option value="off">Off</option>
             </select>
           </label>
-          <div className="settings-field-hint">{USAGE_ONELINER}</div>
-          {usageEnvHintText !== null && (
+              {usageEnvHintText !== null && (
             <div className="settings-field-hint" role="note">
               {usageEnvHintText}
             </div>
@@ -2325,7 +2421,7 @@ export function ConnectionDrawerFields({
         </>
       )}
 
-      {/* TASK.150 / TASK.159: one segmented control. Default writes "" (the
+      {/* one segmented control. Default writes "" (the
           provider default), the presets write the same values the chips did,
           Custom reveals the number input. `step={1}` on the input on purpose:
           every whole number in [min, max] is accepted, and a coarser step would
@@ -2363,24 +2459,20 @@ export function ConnectionDrawerFields({
             onChange={(e) => setMaxOutputTokens(e.target.value)}
           />
         )}
-        <div className="settings-field-hint">{MAX_OUTPUT_ONELINER}</div>
-        {/* TASK.159: shown only while ANYCODE_MAX_OUTPUT_TOKENS overrides the rung — editing this field then does nothing. */}
-        {motEnvHint !== null && (
+          {motEnvHint !== null && (
           <div className="settings-field-hint" role="note">
             {motEnvHint}
           </div>
         )}
       </div>
 
-      {/* TASK.142: per-model context window. Same field shape as "Max output
+      {/* per-model context window. Same field shape as "Max output
           tokens" above (whole number in [1024, 1000000], blank = catalog/
           assumed window); a Model edit loads that model's own saved window. */}
+      <div className="connection-drawer-scope" title={MODEL_ONLY_BADGE_TITLE}>The following settings apply to this model only</div>
       <label className="settings-field">
         <span className="settings-field-label">
-          Context window (tokens) <FieldHelp text={CONTEXT_WINDOW_HELP} />{" "}
-          <span className="connection-drawer-badge" title={MODEL_ONLY_BADGE_TITLE}>
-            this model only
-          </span>
+          Context window (tokens) <FieldHelp text={CONTEXT_WINDOW_HELP} />
         </span>
         <input
           ref={contextWindowTokensInputRef}
@@ -2398,8 +2490,7 @@ export function ConnectionDrawerFields({
           }}
         />
       </label>
-      <div className="settings-field-hint">{CONTEXT_WINDOW_ONELINER}</div>
-      {/* TASK.142: shown only while ANYCODE_CONTEXT_WINDOW overrides the rung — editing this field then does nothing. */}
+      {/* shown only while ANYCODE_CONTEXT_WINDOW overrides the rung — editing this field then does nothing. */}
       {cwEnvHint !== null && (
         <div className="settings-field-hint" role="note">
           {cwEnvHint}
@@ -2421,14 +2512,16 @@ export function ConnectionDrawerFields({
       </label>}
       {!knownCatalogModel && (reasoningSupported || effortLevels.length > 0) && <fieldset className="settings-field">
         <legend className="settings-field-label">Supported effort levels (empty uses automatic levels)</legend>
+        <div className="connection-drawer-effort-levels">
         {(["off", "low", "medium", "high", "xhigh", "max"] as ReasoningEffort[]).map((level) => <label key={level}>
           <input type="checkbox" disabled={readOnly} checked={effortLevels.includes(level)} onChange={(e) => {
             setEffortLevelsDirty(true);
             setReasoningSupported(true);
             setReasoningSupportedDirty(true);
             setEffortLevels((levels) => e.target.checked ? [...levels, level] : levels.filter((item) => item !== level));
-          }} /> {level}
+          }} /> <span>{level}</span>
         </label>)}
+        </div>
       </fieldset>}
       <label className="settings-field">
         <span className="settings-field-label">Reasoning effort (this model)</span>
@@ -2440,7 +2533,7 @@ export function ConnectionDrawerFields({
         </select>
       </label>
 
-      {/* Taskana 4088 (TASK.69): per-model image input. Three states: Auto
+      {/* per-model image input. Three states: Auto
           (catalog mark, then the connection's live-fetched modality set —
           whichever vouches first), On/Off (a per-model override pair saved
           like the context-window pair above, binding derived server-side).
@@ -2448,10 +2541,7 @@ export function ConnectionDrawerFields({
           blind sibling (the glm-5.2 hazard) the moment the user switches. */}
       <label className="settings-field">
         <span className="settings-field-label">
-          Image input <FieldHelp text={IMAGE_INPUT_HELP} />{" "}
-          <span className="connection-drawer-badge" title={MODEL_ONLY_BADGE_TITLE}>
-            this model only
-          </span>
+          Image input <FieldHelp text={IMAGE_INPUT_HELP} />
         </span>
         <select
           className="settings-field-input"
@@ -2464,15 +2554,14 @@ export function ConnectionDrawerFields({
           <option value="off">Off</option>
         </select>
       </label>
-      <div className="settings-field-hint">{IMAGE_INPUT_ONELINER}</div>
-      {/* Taskana 4088: shown while the live-modality feed rides the env. */}
+      {/* shown while the live-modality feed rides the env. */}
       {imageInputFeedHint !== null && (
         <div className="settings-field-hint" role="note">
           {imageInputFeedHint}
         </div>
       )}
 
-      {/* TASK.141: one instance of the same picker the engine panes and the
+      {/* one instance of the same picker the engine panes and the
           Network pane render — CONTROLLED here, because a connection's ref
           rides this drawer's own create/update payload rather than a channel of
           its own. That is what removes the two-phase "create the connection,
@@ -2481,7 +2570,10 @@ export function ConnectionDrawerFields({
         scope={{ kind: "connection", connectionId: createdConnectionId ?? "" }}
         store={store}
         value={proxyRef}
-        onChange={setProxyRef}
+        onChange={(value) => {
+          if (value !== proxyRef) { invalidateFetchedReceipt(); }
+          setProxyRef(value);
+        }}
       />
       </div>
     </details>
@@ -2489,6 +2581,8 @@ export function ConnectionDrawerFields({
 
   return (
     <div className="connection-drawer-body">
+      <section className="connection-drawer-band connection-drawer-identity" data-section="01 · Who">
+      <h3>Identity</h3>
       <label className="settings-field">
         <span className="settings-field-label">Provider</span>
         <select
@@ -2497,7 +2591,7 @@ export function ConnectionDrawerFields({
           disabled={readOnly || templateLocked}
           onChange={(e) => {
             setProviderId(e.target.value);
-            // TASK.142: switching provider clears the model, so the per-model
+            // switching provider clears the model, so the per-model
             // window must go with it. Forced: the new model is empty, and an
             // already-empty owner must not make this look like a no-op.
             changeModel("", "", undefined, true);
@@ -2506,7 +2600,7 @@ export function ConnectionDrawerFields({
           <option value="" disabled>
             Choose a provider…
           </option>
-          {/* TASK.70 (Taskana 4089): one brand = one card — brand-grouped entries
+          {/* one brand = one card — brand-grouped entries
               render as a single <optgroup> (the brand card) whose options are the
               member modes; brandless entries render exactly as before. The option
               value is still the entry id, so selection/prefill is unchanged. */}
@@ -2554,7 +2648,7 @@ export function ConnectionDrawerFields({
               className="settings-field-select"
               value={customKind}
               disabled={readOnly}
-              onChange={(e) => setCustomKind(e.target.value as CustomProviderRecord["kind"])}
+              onChange={(e) => { const kind = e.target.value as CustomProviderRecord["kind"]; setCustomKind(kind); if (kind === "anthropic" && transport === "") setNoAuth(false); }}
             >
               <option value="openai-compatible">{customProviderKindLabel("openai-compatible")}</option>
               <option value="openai">{customProviderKindLabel("openai")}</option>
@@ -2576,11 +2670,13 @@ export function ConnectionDrawerFields({
             value={baseUrl}
             disabled={readOnly}
             placeholder="(provider default)"
-            onChange={(e) => setBaseUrl(e.target.value)}
+            onChange={(e) => { invalidateFetchedReceipt(); setBaseUrl(e.target.value); }}
           />
         </label>
       )}
 
+      </section>
+      {createdConnectionId === null && (selectedEntry || isNewCustomEndpoint) && <section className="connection-drawer-band" data-section="02 · What"><h3>Model</h3>
       {createdConnectionId === null && selectedEntry && (
         <label className="settings-field">
           <span className="settings-field-label">Model</span>
@@ -2588,7 +2684,7 @@ export function ConnectionDrawerFields({
             value={modelAfterCatalogPrefill(model, selectedEntry.models)} disabled={readOnly}
             placeholder="Enter a model ID"
             onChange={(e) =>
-              // TASK.142: the pre-create Model input saves the catalog-prefilled
+              // the pre-create Model input saves the catalog-prefilled
               // id, so the per-model window is owned by THAT id — route through
               // the shared change so A's number cannot ride onto B.
               changeModel(
@@ -2603,7 +2699,7 @@ export function ConnectionDrawerFields({
         </label>
       )}
 
-      {/* TASK.183: a brand-new custom endpoint gets the same pre-create free-text
+      {/* a brand-new custom endpoint gets the same pre-create free-text
           Model field even when the catalog carries no entry to synthesize
           suggestions from (raw value, no datalist). No duplicate field when
           `selectedEntry` exists — the block above already covers that case. */}
@@ -2614,19 +2710,20 @@ export function ConnectionDrawerFields({
             value={model} disabled={readOnly}
             placeholder="Enter a model ID"
             onChange={(e) =>
-              // TASK.142: same shared route — the entered id IS the effective id
+              // same shared route — the entered id IS the effective id
               // here, so the per-model window reset stays owned by it.
               changeModel(e.target.value, e.target.value, undefined)
             } />
         </label>
       )}
 
+      </section>}
       {isNewCustomEndpoint && (
-        <label className="settings-field-checkbox">
+        <label className="settings-field-checkbox connection-drawer-no-auth">
           <input
             type="checkbox"
             checked={noAuth}
-            disabled={readOnly}
+            disabled={readOnly || transport === "anthropic-messages" || (transport === "" && customKind === "anthropic")}
             onChange={(e) => {
               const checked = e.target.checked;
               setNoAuth(checked);
@@ -2642,7 +2739,7 @@ export function ConnectionDrawerFields({
           <span>This endpoint doesn't need an API key (local server, open proxy)</span>
         </label>
       )}
-      {noAuth && transport === "anthropic-messages" && (
+      {isNewCustomEndpoint && (transport === "anthropic-messages" || (transport === "" && customKind === "anthropic")) && (
         <div className="settings-field-hint" role="note">
           The Anthropic Messages transport always requires an API key — pick an OpenAI-family transport to run keyless.
         </div>
@@ -2670,8 +2767,10 @@ export function ConnectionDrawerFields({
               />
             </label>
           )}
+          {pricingBlock}
           {advancedBlock}
-          <div className="settings-field-row">
+          <div className="settings-field-row connection-drawer-actions">
+            {cancelAction}
             <button
               type="button"
               className="settings-button settings-button-primary"
@@ -2681,107 +2780,55 @@ export function ConnectionDrawerFields({
               {creating ? "Connecting…" : simplified && mode === "add" ? "Connect" : mode === "add" ? "Create connection" : "Save"}
             </button>
           </div>
-          {setupMissingModel && <p className="settings-field-hint">Enter a model ID to continue.</p>}
+          {providerId === "" ? <p className="settings-field-hint">Choose a provider to continue.</p> : setupMissingModel && <p className="settings-field-hint">Enter a model ID to continue.</p>}
           {setupMissingKey && <p className="settings-field-hint">Enter your API key to continue.</p>}
         </>
       ) : (
         <>
-          <label className="settings-field">
-            <span className="settings-field-label">Model</span>
-            <input
-              className="settings-field-input"
-              type="text"
-              list="connection-drawer-model-suggestions"
-              value={model}
-              disabled={readOnly}
-              placeholder="e.g. claude-sonnet-5"
-              onChange={(e) =>
-                // TASK.142: the shared model-change route. A whitespace-only
-                // edit (same normalized id) keeps the field; a real change
-                // clears it, or re-prefills when the user returns to the saved
-                // model.
-                changeModel(e.target.value, e.target.value, targetConnection)
+          <section className="connection-drawer-model-picker connection-drawer-band" data-section="02 · What" aria-label="Models">
+            <div className="connection-drawer-model-heading">
+              <h3>Model</h3>
+              <button type="button" className="settings-button connection-drawer-model-open" disabled={readOnly || fetchingModels} aria-expanded={modelPopupOpen} onClick={() => {
+                if (modelPopupOpen) { setModelPopupOpen(false); return; }
+                setVisibleModelDraft(validVisibleModelIds(pendingVisibleModels ?? targetConnection?.visibleModels ?? mergeModelIds(modelSuggestions.map(item => item.id), normalizeModelId(model) ? [normalizeModelId(model)!] : [])));
+                setModelFilter("");
+                setDraftDefaultModel(model.trim());
+                setModelPopupOpen(true);
+                if (fetchedModels === null && targetConnection?.modelsFetchedAt === undefined && (credentialStatus?.set || noAuth || selectedEntry?.authOptional)) void doFetchModels();
+              }}>Fetch models</button>
+            </div>
+            <div className="connection-drawer-model-chips" aria-label="Selected models">
+              {(pendingVisibleModels ?? targetConnection?.visibleModels ?? mergeModelIds(modelSuggestions.map(item => item.id), normalizeModelId(model) ? [normalizeModelId(model)!] : [])).map(id => <span key={id} data-model-id={id} className={`connection-drawer-model-chip${id === model.trim() ? " connection-drawer-model-chip-selected" : ""}`}>{id === model.trim() ? "★ " : ""}{id}{id === model.trim() ? " · default" : ""}</span>)}
+            </div>
+            {modelPopupOpen && <div className="connection-drawer-model-popup" role="group" aria-label="Choose models" onKeyDown={event => {
+              if (event.key === "Escape") {
+                const opener = event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(".connection-drawer-model-open");
+                event.preventDefault(); event.stopPropagation(); setModelPopupOpen(false);
+                requestAnimationFrame(() => opener?.focus());
               }
-            />
-            <datalist id="connection-drawer-model-suggestions">
-              {modelSuggestions.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name ?? m.id}
-                </option>
-              ))}
-            </datalist>
-          </label>
-
-          {/* Click-to-fill model chips for a catalog connection: static hints
-              before any fetch, the endpoint's live list after (capped — a
-              huge list stays reachable via the datalist's type-ahead). */}
-          {!isCustomRecordConnection && !isNewCustomEndpoint && modelSuggestions.length > 0 && (
-            <div className="connection-drawer-model-chips" role="group" aria-label="Available models">
-              {modelSuggestions.slice(0, MODEL_CHIP_CAP).map((m) => (
-                <button
-                  key={m.id}
-                  type="button"
-                  className={`connection-drawer-model-chip${model === m.id ? " connection-drawer-model-chip-selected" : ""}`}
-                  disabled={readOnly}
-                  onClick={() => changeModel(m.id, m.id, targetConnection)}
-                >
-                  {m.name ?? m.id}
-                </button>
-              ))}
-              {modelSuggestions.length > MODEL_CHIP_CAP && (
-                <span className="settings-field-hint">
-                  +{modelSuggestions.length - MODEL_CHIP_CAP} more — type in the Model field to search
-                </span>
-              )}
-            </div>
-          )}
-
-          {/* Models step: ONE "Fetch models" for both flavors — a custom
-              record curates its persisted `models[]` subset (checkboxes), a
-              catalog connection refreshes the live list feeding the chips/
-              datalist above (persisted onto the connection by main). The
-              literal `custom` sentinel has no endpoint of its own to ask. */}
-          {!isNewCustomEndpoint && (
-            <div className="connection-drawer-fetch-models">
-              <div className="settings-field-row">
-                <button
-                  type="button"
-                  className="settings-button"
-                  disabled={readOnly || fetchingModels || curating}
-                  onClick={() => void doFetchModels()}
-                >
-                  {fetchingModels ? "Fetching…" : "Fetch models"}
-                </button>
-                {!isCustomRecordConnection && fetchedModels === null && targetConnection?.modelsFetchedAt !== undefined && (
-                  <span className="settings-field-hint">{targetConnection.models?.length ?? 0} models loaded from the endpoint</span>
-                )}
+            }}>
+              {error !== null && <p className="settings-notice" role="alert">{error}</p>}
+              <div className="connection-drawer-model-heading"><strong>Choose models</strong><button type="button" className="settings-button" disabled={readOnly || fetchingModels} onClick={() => void doFetchModels()}>{fetchingModels ? "Fetching…" : "Refresh"}</button></div>
+              <input className="settings-field-input" aria-label="Filter models" autoFocus placeholder="Filter models" value={modelFilter} onChange={e => setModelFilter(e.target.value)} />
+              <div className="connection-drawer-popup-list">
+                {validVisibleModelIds(mergeModelIds(mergeModelIds(fetchedModels?.map(item => item.id) ?? [], modelSuggestions.map(item => item.id)), mergeModelIds(visibleModelDraft, normalizeModelId(model) ? [normalizeModelId(model)!] : []))).filter(id => id.toLowerCase().includes(modelFilter.toLowerCase())).map(id => <div className="connection-drawer-popup-row" key={id}>
+                  <label><input type="checkbox" checked={visibleModelDraft.includes(id)} disabled={readOnly || fetchingModels} onChange={e => setVisibleModelDraft(current => e.target.checked ? mergeModelIds(current, [id]) : current.filter(item => item !== id))} /> {id}</label>
+                  <button type="button" className="settings-button" aria-label={`Set ${id} as default`} aria-pressed={draftDefaultModel === id} disabled={readOnly || fetchingModels} onClick={() => { setVisibleModelDraft(current => mergeModelIds(current, [id])); setDraftDefaultModel(id); }}>{draftDefaultModel === id ? "★" : "☆"}</button>
+                </div>)}
               </div>
-              {isCustomRecordConnection && fetchedModels !== null && (
-                <fieldset className="settings-field connection-drawer-model-curation">
-                  <legend className="settings-field-label">Models to show in the selector</legend>
-                  <span className="settings-field-hint">Tick the models this connection offers. The current model is always listed and stays ticked.</span>
-                  {mergeCurationModelIds(fetchedModels.map((m) => m.id), curatedModelIds, model).map((id) => {
-                    const isCurrent = id === model.trim();
-                    return (
-                      <label key={id} className="settings-field-checkbox connection-drawer-model-curation-row">
-                        <input
-                          type="checkbox"
-                          checked={isCurrent || curatedModelIds.includes(id)}
-                          disabled={readOnly || curating || isCurrent}
-                          title={isCurrent ? "The connection's current model is always listed" : undefined}
-                          onChange={() => void toggleModel(id)}
-                        />
-                        {id}
-                        {isCurrent && <span className="settings-field-hint">current</span>}
-                      </label>
-                    );
-                  })}
-                </fieldset>
-              )}
-            </div>
-          )}
+              <div className="connection-drawer-popup-manual"><input className="settings-field-input" aria-label="Manual model ID" placeholder="Enter a model ID" value={manualModel} onChange={e => setManualModel(e.target.value)} /><button type="button" className="settings-button connection-drawer-model-add" disabled={readOnly || normalizeModelId(manualModel) === null} onClick={() => { const id = normalizeModelId(manualModel); if (id) { setVisibleModelDraft(current => mergeModelIds(current, [id])); setManualModel(""); } }}>Add</button></div>
+              <div className="connection-drawer-model-heading"><span>{visibleModelDraft.length} selected</span><button type="button" className="settings-button connection-drawer-model-done" disabled={readOnly || fetchingModels || visibleModelDraft.length === 0} onClick={() => {
+                modelSelectionRevision.current++;
+                const defaultModel = visibleModelDraft.includes(draftDefaultModel) ? draftDefaultModel : visibleModelDraft[0]!;
+                setPendingVisibleModels(visibleModelDraft);
+                setCommitFetchedModels(fetchedModels !== null);
+                changeModel(defaultModel, defaultModel, targetConnection);
+                setModelPopupOpen(false);
+              }}>Done</button></div>
+            </div>}
+          </section>
 
-          <section className="settings-section connection-drawer-credential">
+          <section className="settings-section connection-drawer-credential connection-drawer-band" data-section="03 · Trust">
             <div className="settings-section-title">
               {authKind === "oauth"
                 ? "Sign-in"
@@ -2789,6 +2836,7 @@ export function ConnectionDrawerFields({
                   ? "API key (optional)"
                   : "API key"}
             </div>
+            {effectiveProviderId.startsWith("custom:") && <p className="settings-field-hint">This key is shared by connections using this custom provider. Replacing or clearing it affects all of them.</p>}
             {authKind === "oauth" ? (
               <OAuthCredentialBlock
                 entry={selectedEntry as CatalogSummaryEntry}
@@ -2804,13 +2852,12 @@ export function ConnectionDrawerFields({
               />
             ) : (
               <>
-                <div className="settings-field-row">
-                  {credentialStatus && (
+                <div className="connection-drawer-key-row">
+                  {credentialStatus ? (
                     <span className={`settings-secret-status settings-secret-status-${describeSecretStatus(credentialStatus).tone}`}>
                       {describeSecretStatus(credentialStatus).text}
                     </span>
-                  )}
-                </div>
+                  ) : <span className="settings-secret-status">Not set</span>}
                 <label className="settings-field">
                   <span className="settings-field-label">
                     {/* Keyed on the credential's OWN status, not `mode` — a
@@ -2829,10 +2876,12 @@ export function ConnectionDrawerFields({
                     value={secretValue}
                     disabled={readOnly}
                     placeholder="sk-…"
-                    onChange={(e) => dispatchSecret({ type: "change", value: e.target.value })}
+                    onChange={(e) => {
+                      invalidateFetchedReceipt();
+                      dispatchSecret({ type: "change", value: e.target.value });
+                    }}
                   />
                 </label>
-                <div className="settings-field-row">
                   <button
                     type="button"
                     className="settings-button settings-button-danger"
@@ -2846,10 +2895,12 @@ export function ConnectionDrawerFields({
             )}
           </section>
 
+          {pricingBlock}
           {advancedBlock}
 
           {/* ONE Save (item 3): metadata + (if typed) the key, together. */}
-          <div className="settings-field-row">
+          <div className="settings-field-row connection-drawer-actions">
+            {cancelAction}
             <button
               type="button"
               className="settings-button settings-button-primary connection-drawer-save"
@@ -2867,13 +2918,13 @@ export function ConnectionDrawerFields({
         </>
       )}
 
-      {error !== null && (
-        <p className="settings-notice" role="alert">
+      {error !== null && !modelPopupOpen && (
+        <div className="settings-notice" role="alert">
           {error}
-        </p>
+          {commitFetchedModels && <button type="button" className="settings-button" onClick={() => { modelSelectionRevision.current++; setFetchedModels(null); setFetchedSource(null); setCommitFetchedModels(false); setError("Fetched metadata discarded. Your model selections are kept; save or fetch again."); }}>Discard fetched metadata</button>}
+        </div>
       )}
 
-      {footer}
     </div>
   );
 }
@@ -2889,7 +2940,7 @@ export interface ConnectionDrawerProps {
   initialFocus?: "label" | "credential" | "context";
   onClose(): void;
   store?: SettingsStoreApi;
-  /** Injectable custom-provider bridge (TASK.58); forwarded to the fields. */
+  /** Injectable custom-provider bridge; forwarded to the fields. */
   customProvider?: CustomProviderBridge;
 }
 
@@ -2909,6 +2960,24 @@ export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDr
   // is the id it reported, never a change in list length (a connection written
   // elsewhere must not turn an unsaved Add form into "Edit connection").
   const [createdId, setCreatedId] = useState<string | null>(null);
+  const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const editVersion = useRef(0);
+  const keepEditingRef = useRef<HTMLButtonElement>(null);
+  const closeTriggerRef = useRef<HTMLElement | null>(null);
+  const markDirty = () => { editVersion.current += 1; setDirty(true); };
+  const requestClose = () => {
+    if (busy) return;
+    if (dirty) {
+      closeTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      setConfirmDiscard(true);
+    } else onClose();
+  };
+  useEffect(() => {
+    if (confirmDiscard) keepEditingRef.current?.focus();
+    else if (closeTriggerRef.current?.isConnected) { closeTriggerRef.current.focus(); closeTriggerRef.current = null; }
+  }, [confirmDiscard]);
 
   useEffect(() => {
     if (!open) {
@@ -2923,7 +2992,7 @@ export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDr
   }, [open]);
 
   useEffect(() => {
-    if (open) setCreatedId(null);
+    if (open) { setCreatedId(null); setDirty(false); setConfirmDiscard(false); setBusy(false); editVersion.current = 0; }
   }, [open]);
 
   useEffect(() => {
@@ -2948,37 +3017,57 @@ export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDr
       className="connection-drawer"
       aria-label={connectionDrawerTitle(fieldsProps.mode, createdId !== null)}
       onCancel={(event) => {
-        // TASK.58 item 4: act only on THIS drawer's own Escape — the shared
+        // item 4: act only on THIS drawer's own Escape — the shared
         // guard also stops this cancel (which React propagates up the tree)
         // from reaching the parent SettingsDialog's onCancel.
         if (!isOwnDialogCancel(event)) {
           return;
         }
         event.preventDefault();
-        onClose();
+        if (confirmDiscard) setConfirmDiscard(false);
+        else requestClose();
+      }}
+      onChangeCapture={(event) => {
+        const target = event.target as HTMLElement;
+        if (!target.closest(".connection-drawer-model-popup")) markDirty();
+      }}
+      onClickCapture={(event) => {
+        const target = event.target as HTMLElement;
+        if (target.closest(".connection-drawer-rate-mode, .connection-drawer-model-done, .connection-drawer-segmented-btn")) markDirty();
       }}
     >
-      <div className="connection-drawer-header">
+      <div className="connection-drawer-header" inert={confirmDiscard || undefined} aria-hidden={confirmDiscard || undefined}>
         <span className="connection-drawer-title">{connectionDrawerTitle(fieldsProps.mode, createdId !== null)}</span>
-        <button type="button" className="connection-drawer-close" aria-label="Close" onClick={onClose}>
+        <button type="button" className="connection-drawer-close" aria-label="Close" disabled={busy} onClick={requestClose}>
           <X aria-hidden="true" />
         </button>
       </div>
       {/* Re-mounted (keyed) on every open so a prior connection's local form
           state (label/model/…) never leaks into the next Add/Edit — matches
           SettingsScreen's own `key={activePane}` remount discipline. */}
+      <div inert={confirmDiscard || undefined} aria-hidden={confirmDiscard || undefined}>
       <ConnectionDrawerFields
         key={fieldsProps.editConnection?.id ?? "add"}
         {...fieldsProps}
         onConnectionCreated={(connectionId) => setCreatedId(connectionId)}
-        footer={
-          <div className="connection-drawer-footer">
-            <button type="button" className="settings-button settings-button-primary" onClick={onClose}>
-              Done
-            </button>
-          </div>
-        }
+        cancelAction={<button type="button" className="settings-button" disabled={busy} onClick={requestClose}>Cancel</button>}
+        onCommitBegin={() => editVersion.current}
+        onCommitSuccess={(version) => {
+          if (version !== editVersion.current) return false;
+          setDirty(false);
+          return true;
+        }}
+        onBusyChange={setBusy}
+        interactionBlocked={confirmDiscard}
       />
+      </div>
+      {confirmDiscard && <div className="connection-drawer-discard" role="alertdialog" aria-modal="true" aria-labelledby="connection-discard-title">
+        <p id="connection-discard-title">Discard unsaved changes?</p>
+        <div className="settings-field-row">
+          <button ref={keepEditingRef} type="button" className="settings-button" onClick={() => setConfirmDiscard(false)}>Keep editing</button>
+          <button type="button" className="settings-button settings-button-danger" disabled={busy} onClick={() => { if (!busy) onClose(); }}>Discard changes</button>
+        </div>
+      </div>}
     </dialog>
   );
 }

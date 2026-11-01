@@ -1,5 +1,5 @@
 /**
- * SupervisorIdleWatchdog tests (taskana 4181). Hermetic: pure logic + injected
+ * SupervisorIdleWatchdog tests. Hermetic: pure logic + injected
  * thresholds, no session, no queue, no env reads — the class only ever sees
  * note*() calls and setTimeout, so the FULL vi.useFakeTimers() fake (not the
  * codebase's usual `toFake:["Date"]}` style) drives every scenario
@@ -53,7 +53,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("SupervisorIdleWatchdog (taskana 4181)", () => {
+describe("SupervisorIdleWatchdog", () => {
   it("fires the first reminder exactly at firstAfterMs when a turn settles with no marker and no live children", async () => {
     vi.useFakeTimers();
     const { reports, onIdle } = recorder();

@@ -1,5 +1,5 @@
 /**
- * Per-folder workspace trust decisions (Taskana 4736, design 2.3). One small
+ * Per-folder workspace trust decisions (design 2.3). One small
  * file `~/.anycode/workspace-trust.json`, shared by the desktop host and the
  * CLI, shaped `{ version: 1, folders: { [canonicalPath]: { decision, hash,
  * decidedAt } } }`. Reads are fail-soft (missing or corrupt = nothing trusted);
@@ -58,7 +58,7 @@ export function canonicalWorkspacePath(workspace: string): string {
 }
 
 /**
- * Canonical TRUST key (Taskana 4739): `realpathSync(resolve(workspace))` when a
+ * Canonical TRUST key: `realpathSync(resolve(workspace))` when a
  * realpath is injected and succeeds, so a symlinked workspace and its target
  * share one key. Fails SAFE, not loose: when realpath throws (missing dir,
  * EACCES, …) the key falls back to today's `resolve` behaviour — never to a
@@ -134,7 +134,7 @@ export async function writeTrustDecision(
 }
 
 /**
- * Removes ONE decision record (Taskana 4739, Settings → Permissions →
+ * Removes ONE decision record (Settings → Permissions →
  * "Forget"). The `key` is an opaque lookup handle into the freshly-read store
  * — never resolved, never used as a file path. Returns `true` when the record
  * existed and was removed; `false` (writing NOTHING) when the store is
@@ -157,7 +157,7 @@ export async function forgetTrustDecision(
 }
 
 /**
- * One-shot migration (Taskana 4739, decision 4): rewrites legacy
+ * One-shot migration (decision 4): rewrites legacy
  * non-realpath keys to their realpath so a symlink and its target converge on
  * one entry. Only keys whose realpath SUCCEEDS and DIFFERS are moved; on a
  * collision with an existing real-key record the one with the later

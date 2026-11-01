@@ -1,5 +1,5 @@
 /**
- * Main-side workspace-trust decision (Taskana 4736): the renderer sends a tab id
+ * Main-side workspace-trust decision: the renderer sends a tab id
  * and a decision ONLY. Main resolves the folder and hash from the tab's own
  * record, persists trust/deny per path+hash, keeps "trust once" in memory only,
  * and restarts that tab's host. The payload is strict: a path or hash is refused.
@@ -183,12 +183,12 @@ describe("handleWorkspaceTrustDecide", () => {
   });
 });
 
-// Taskana 4739: Settings → Permissions lists remembered trusted/denied folders
+// Settings → Permissions lists remembered trusted/denied folders
 // and forgets exactly one record. The renderer is untrusted (S1): list sends
 // NO payload, forget sends only a `key` it previously received from main's
 // list. Main treats the key as an opaque lookup handle (S3): it re-reads the
 // store from disk, never resolves the key as a path, never logs it unescaped.
-describe("handleWorkspaceTrustList (Taskana 4739)", () => {
+describe("handleWorkspaceTrustList", () => {
   it("returns ONLY {key, decision, decidedAt} per folder, sorted by key (S4: no hash anywhere)", async () => {
     const fs = makeFs();
     await writeTrustDecision(fs, STORE, "/work/b", "trusted", "hash-b", "2026-10-25T01:00:00.000Z");
@@ -258,7 +258,7 @@ describe("handleWorkspaceTrustList (Taskana 4739)", () => {
   });
 });
 
-describe("handleWorkspaceTrustForget (Taskana 4739)", () => {
+describe("handleWorkspaceTrustForget", () => {
   it("happy path: forgets via the core store fn and drops the once-approval for the same key (S5/S8)", async () => {
     const fs = makeFs();
     await writeTrustDecision(fs, STORE, WS, "trusted", "h1", "t0");
@@ -403,7 +403,7 @@ describe("handleWorkspaceTrustForget (Taskana 4739)", () => {
 // S6: decide and forget both mutate the store file with a read-modify-write;
 // main serialises them through one promise queue so neither can lose the
 // other's update.
-describe("workspace trust store write serialisation (Taskana 4739, S6)", () => {
+describe("workspace trust store write serialisation (S6)", () => {
   it("concurrent decide + forget both land (no lost update)", async () => {
     const fs = makeFs();
     await writeTrustDecision(fs, STORE, WS, "trusted", "h1", "t0");
@@ -452,11 +452,11 @@ describe("workspace trust store write serialisation (Taskana 4739, S6)", () => {
   });
 });
 
-// Taskana 4739 decision 3: decide canonicalises pending.workspace with
+// decision 3: decide canonicalises pending.workspace with
 // realpath BEFORE writing and BEFORE keying the once-approval, so a symlinked
 // workspace and its target share one record; workspaceTrustOnceFor finds a
 // once-approval via either name (it is SYNC — no fs await inside).
-describe("decide + once with a symlinked workspace (Taskana 4739)", () => {
+describe("decide + once with a symlinked workspace", () => {
   const LINK_WS = "/work/link-project";
   const REAL_WS = "/work/real-project";
   const realpathSync = (p: string) => (p === LINK_WS ? REAL_WS : p);

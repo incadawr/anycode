@@ -1,5 +1,5 @@
 /**
- * Unit tests for PreviewHost (night-track wave-1 cut §2.5, TASK.96 96-A): the
+ * Unit tests for PreviewHost (night-track wave-1 cut §2.5, 96-A): the
  * security-invariant suite this slice OWNS. Every Electron primitive is a
  * hand-written fake implementing `PreviewWindowLike`/`PreviewWebContentsLike`
  * — no Electron runtime is ever involved (mirrors tabs.test.ts's fake-fork
@@ -61,7 +61,7 @@ function fakeImage(opts?: { empty?: boolean; width?: number; height?: number }):
 }
 
 class FakeWebContents implements PreviewWebContentsLike {
-  /** Taskana 4759: scriptable CDP surface (browser control); tests drive it via `cdp`. */
+  /** scriptable CDP surface (browser control); tests drive it via `cdp`. */
   cdp = fakeCdp();
   goToOffsetCalls: Array<-1 | 1> = [];
   goToOffset(offset: -1 | 1): Promise<void> {
@@ -70,7 +70,7 @@ class FakeWebContents implements PreviewWebContentsLike {
   }
   destroyed = false;
   loadedUrls: string[] = [];
-  /** Taskana 4100 stage 4: every `reload()` call, in order (live-reload assertions). */
+  /** stage 4: every `reload()` call, in order (live-reload assertions). */
   reloadCalls = 0;
   executeJavaScriptCalls: string[] = [];
   executeJavaScriptImpl: (script: string) => Promise<unknown> = () => Promise.resolve(undefined);
@@ -102,7 +102,7 @@ class FakeWebContents implements PreviewWebContentsLike {
     this.loadedUrls.push(url);
     return Promise.resolve();
   }
-  /** Taskana 4100 stage 4: plain counter — reload() itself needs no URL argument. */
+  /** stage 4: plain counter — reload() itself needs no URL argument. */
   reload(): Promise<void> {
     this.reloadCalls += 1;
     return Promise.resolve();
@@ -271,7 +271,7 @@ class FakePanelView implements PreviewPanelViewLike {
 }
 
 /**
- * TASK.99 M3: fake `MdPreviewWindowLike` — deliberately much slimmer than
+ * M3: fake `MdPreviewWindowLike` — deliberately much slimmer than
  * `FakeWindow`/`FakePanelView` above (no `webContents` at all, mirroring the
  * real contract: preview-host.ts never runs `wireWindow`'s security wiring
  * against a dom-md window, since it is typed with nothing for that to wire
@@ -326,19 +326,19 @@ interface Rig {
   windows: FakeWindow[];
   /** Panel-container views (panel-track CUT.md §3 96-P1) — parallel to `windows` for the window container. */
   panelViews: FakePanelView[];
-  /** TASK.99 M3: md-preview windows, parallel to `windows`/`panelViews` for `createMdWindow`. */
+  /** M3: md-preview windows, parallel to `windows`/`panelViews` for `createMdWindow`. */
   mdWindows: FakeMdWindow[];
   posted: Array<{ tabId: string; message: PreviewResponseMessage | PreviewEventMessage }>;
-  /** Taskana 4778: the opts every `createWindow` call received (pop-out title/re-dock wiring). */
+  /** the opts every `createWindow` call received (pop-out title/re-dock wiring). */
   windowOpts: CreateWindowOpts[];
   /** Every `onPreviewsChanged` push, in order (D7's main -> renderer CHANGED contract). */
   changed: PreviewChangedPayload[];
   clock: { time: number };
   autoOpen: { enabled: boolean };
-  /** Taskana 4100 stage 4: mutable liveReloadEnabled() knob (mirrors autoOpen). */
+  /** stage 4: mutable liveReloadEnabled() knob (mirrors autoOpen). */
   liveReload: { enabled: boolean };
   /**
-   * Taskana 4100 stage 4: fake watcher registry keyed by watched path —
+   * stage 4: fake watcher registry keyed by watched path —
    * `events`/`errors` hold the callbacks the host registered; a test fires
    * `for (const e of w.events) e("change")` and asserts `w.closed`.
    */
@@ -358,7 +358,7 @@ interface Rig {
   /** Same "fires right after construction" rationale as `onWindowCreated`/`onPanelViewCreated`. */
   onMdWindowCreated?: (win: FakeMdWindow) => void;
   /**
-   * TASK.99 M4: in-memory dom-md source filesystem, keyed by REALPATH —
+   * M4: in-memory dom-md source filesystem, keyed by REALPATH —
    * `statMdSource`/`readMdSourceNoFollow` read from this map; an absent key
    * is an honest stat failure (mirrors a deleted/missing file). `sizeOverride`
    * lets a test simulate `too_large` without allocating a real >2MB buffer.
@@ -386,7 +386,7 @@ function makeRig(overrides?: Partial<PreviewHostDeps>): Rig {
   const changed: PreviewChangedPayload[] = [];
   const clock = { time: 1_000_000 };
   const autoOpen = { enabled: true };
-  // Taskana 4100 stage 4: default ON, mirroring main's own `?? true` fallback.
+  // stage 4: default ON, mirroring main's own `?? true` fallback.
   const liveReload = { enabled: true };
   const watchers = new Map<string, { events: Array<(e: "change" | "rename") => void>; errors: Array<(err: Error) => void>; closed: boolean }>();
   // Default "window" (cut §3 96-P1): every one of the 18 pre-existing
@@ -459,7 +459,7 @@ function makeRig(overrides?: Partial<PreviewHostDeps>): Rig {
     },
     autoOpenEnabled: () => autoOpen.enabled,
     liveReloadEnabled: () => liveReload.enabled,
-    // Taskana 4100 stage 4: hand-written fake watcher — the host's watchFile
+    // stage 4: hand-written fake watcher — the host's watchFile
     // dep driven with zero real fs (mirrors the Electron-free discipline of
     // every other dep in this rig).
     watchFile: (path, onEvent, onError) => {
@@ -713,7 +713,7 @@ describe("PreviewHost — lifecycle: closeForTab / closeAll", () => {
   });
 
   /**
-   * TASK.199: `closeAll()` runs INSIDE the main window's own `closed` handler,
+   * `closeAll()` runs INSIDE the main window's own `closed` handler,
    * where that window is already destroyed — and it pushes `onPreviewsChanged`
    * once per destroyed record. Wired the way main wires it (through
    * `sendToMainWindow`), those pushes are silent no-ops. Before the fix main
@@ -1458,7 +1458,7 @@ describe("PreviewHost — screenshot op", () => {
 });
 
 /**
- * TASK.99 M1 (CUT.md Gap 3 + CONTRACTS): opening a `.md` path no longer runs
+ * M1 (CUT.md Gap 3 + CONTRACTS): opening a `.md` path no longer runs
  * the old tmpdir HTML-render pipeline at all — it creates a
  * `viewKind:"dom-md"` record synchronously (no window/panelView, no
  * loadURL, no settle wait). These tests REPLACE the pre-M1 "markdown: never
@@ -1473,10 +1473,10 @@ describe("PreviewHost — screenshot op", () => {
  * deleted from `PreviewHostDeps`; `makeRig`'s deps object contains no such
  * field to (not) pass anymore.
  */
-describe("PreviewHost — markdown: dom-md record creation (TASK.99 M1, CUT.md Gap 3 + CONTRACTS)", () => {
+describe("PreviewHost — markdown: dom-md record creation (M1, CUT.md Gap 3 + CONTRACTS)", () => {
   it("creates a ready dom-md record synchronously — no window/panelView, no loadURL", async () => {
     const rig = makeRig();
-    // TASK.99 M3 (CUT-mandated flip): this test's intent is the OPEN
+    // M3 (CUT-mandated flip): this test's intent is the OPEN
     // mechanics (synchronous, no Electron container of the web kind), not
     // the displayMode/container relationship — pinned explicitly to "panel"
     // now that M3 honors displayMode for md too (rig defaults to "window",
@@ -1508,7 +1508,7 @@ describe("PreviewHost — markdown: dom-md record creation (TASK.99 M1, CUT.md G
     expect(rig.host.listForPanel(TAB).previews).toHaveLength(0);
   });
 
-  it("TASK.99 M3 (CUT-mandated flip of the M1 interim): displayMode 'window' opens DIRECTLY into a live window container, no forcing, no warning", async () => {
+  it("M3 (CUT-mandated flip of the M1 interim): displayMode 'window' opens DIRECTLY into a live window container, no forcing, no warning", async () => {
     const warn = vi.fn();
     const rig = makeRig({ logger: { log: vi.fn(), warn, error: vi.fn() } });
     rig.displayModeValue.value = "window";
@@ -1603,14 +1603,14 @@ describe("PreviewHost — markdown: dom-md record creation (TASK.99 M1, CUT.md G
 });
 
 /**
- * TASK.99 M3 (CUT.md GAP 1 + CONTRACTS): the window container itself —
+ * M3 (CUT.md GAP 1 + CONTRACTS): the window container itself —
  * displayMode-honored direct opens, setContainer transfer both directions,
  * teardown (closeForTab/closeAll/native onClosed), and the epoch guard on a
  * dom-md record's `mdWindow`. Fake `MdPreviewWindowLike` throughout
  * (`FakeMdWindow`) — no Electron runtime, same discipline as the rest of
  * this suite.
  */
-describe("PreviewHost — markdown: window container (TASK.99 M3, CUT.md GAP 1 + CONTRACTS)", () => {
+describe("PreviewHost — markdown: window container (M3, CUT.md GAP 1 + CONTRACTS)", () => {
   async function openedMdWindowRig(): Promise<{ rig: Rig; previewId: string }> {
     const rig = makeRig();
     rig.displayModeValue.value = "window";
@@ -1767,7 +1767,7 @@ describe("PreviewHost — markdown: window container (TASK.99 M3, CUT.md GAP 1 +
 });
 
 /**
- * TASK.99 M2 (CUT.md CONTRACTS): `commitMdNavigate` is the record-mutation
+ * M2 (CUT.md CONTRACTS): `commitMdNavigate` is the record-mutation
  * half of MD_PREVIEW_NAVIGATE — `md-doc.ts`'s `navigateMdDoc` closes over it
  * (main/index.ts wiring) and calls it ONLY after its own fresh containment/
  * read already succeeded. These tests exercise the REAL `PreviewHost`
@@ -1775,7 +1775,7 @@ describe("PreviewHost — markdown: window container (TASK.99 M3, CUT.md GAP 1 +
  * plain fake, proving `navigateMdDoc`'s call shape but not this method's own
  * mutation/refusal logic).
  */
-describe("PreviewHost — commitMdNavigate (TASK.99 M2, CUT.md CONTRACTS)", () => {
+describe("PreviewHost — commitMdNavigate (M2, CUT.md CONTRACTS)", () => {
   async function openedMdRig(): Promise<{ rig: Rig; previewId: string }> {
     const rig = makeRig();
     const opened = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.md` });
@@ -1821,7 +1821,7 @@ describe("PreviewHost — commitMdNavigate (TASK.99 M2, CUT.md CONTRACTS)", () =
     // visible-slot occupant (C) is closed. If the bump had NOT happened, B
     // (opened after A, before the navigate) would win the promoted slot
     // instead of A — this discriminates the bump from a no-op.
-    // TASK.99 M3 (CUT-mandated flip): pinned to "panel" — this test's D5
+    // M3 (CUT-mandated flip): pinned to "panel" — this test's D5
     // panel-slot-promotion assertions require a panel container, which the
     // rig's default displayMode no longer guarantees for md now that M3
     // honors it (a "window" default would put every one of these three
@@ -2627,7 +2627,7 @@ describe("PreviewHost — panel D18: UnknownVizError retry on promote-then-captu
   });
 });
 
-describe("PreviewHost — panel F1: empty-first-capture retry gated on `promoted` (D18 race class, TASK.99 M1 dom-md slot handoff)", () => {
+describe("PreviewHost — panel F1: empty-first-capture retry gated on `promoted` (D18 race class, M1 dom-md slot handoff)", () => {
   /** Two panel previews on one tab (D5): opening `second` moves the visible slot off `first`, so screenshotting `first` afterwards is a `promoted` call; screenshotting `second` is not. */
   async function openTwoPanelRecords(): Promise<{
     rig: Rig;
@@ -3142,7 +3142,7 @@ describe("PreviewHost — setContainer: D14 transfer panel -> window (96-P3)", (
 });
 
 /**
- * TASK.99 M4 (CUT.md GAP 2): BrowserRead for a dom-md preview — raw markdown
+ * M4 (CUT.md GAP 2): BrowserRead for a dom-md preview — raw markdown
  * source (no rendering machinery), honest selector refusal, custody mirrors
  * md-doc.ts's own MD_PREVIEW_READ handler (fresh containment + size cap +
  * O_NOFOLLOW read) via the SAME `resolveArtifact`/`statMdSource`/
@@ -3150,7 +3150,7 @@ describe("PreviewHost — setContainer: D14 transfer panel -> window (96-P3)", (
  * underlying primitives. Web-record read behavior is UNCHANGED — covered by
  * the pre-existing "PreviewHost — read op" describe block above, untouched.
  */
-describe("PreviewHost — markdown: BrowserRead (TASK.99 M4, CUT.md GAP 2)", () => {
+describe("PreviewHost — markdown: BrowserRead (M4, CUT.md GAP 2)", () => {
   async function openedMdPanelRig(sourceText = "# Hello\n\nSome *markdown*.\n"): Promise<{ rig: Rig; previewId: string; realPath: string }> {
     const rig = makeRig();
     rig.displayModeValue.value = "panel";
@@ -3266,7 +3266,7 @@ describe("PreviewHost — markdown: BrowserRead (TASK.99 M4, CUT.md GAP 2)", () 
 });
 
 /**
- * TASK.99 M4 (CUT.md GAP 2): BrowserScreenshot for a dom-md preview.
+ * M4 (CUT.md GAP 2): BrowserScreenshot for a dom-md preview.
  * PANEL leg: `deps.captureMainWindowRect(rect)` gated EXACTLY like
  * `applyPanel()`'s own visibility predicate, promote-then-unconditional-delay
  * on a slot handoff (never retry-driven, unlike D18's web-only UVE retry).
@@ -3276,7 +3276,7 @@ describe("PreviewHost — markdown: BrowserRead (TASK.99 M4, CUT.md GAP 2)", () 
  * UNCHANGED — covered by the pre-existing "PreviewHost — screenshot op" /
  * D13 / D18 / F1 describe blocks above, untouched.
  */
-describe("PreviewHost — markdown: BrowserScreenshot (TASK.99 M4, CUT.md GAP 2)", () => {
+describe("PreviewHost — markdown: BrowserScreenshot (M4, CUT.md GAP 2)", () => {
   const MD_FULL_BOUNDS: PreviewPanelBounds = { x: 10, y: 20, width: 300, height: 400 };
 
   async function openedMdPanelRig(): Promise<{ rig: Rig; previewId: string }> {
@@ -3442,7 +3442,7 @@ describe("PreviewHost — markdown: BrowserScreenshot (TASK.99 M4, CUT.md GAP 2)
 });
 
 /**
- * Taskana 4100 stage 4 (TASK.96 «Этап 4» live-reload): a file-backed preview
+ * stage 4 («Этап 4» live-reload): a file-backed preview
  * follows its artifact on disk. The rig's `watchers` map is a hand-written
  * fake of the `watchFile` dep (no real fs, no chokidar — mirrors this file's
  * Electron-free discipline); `vi.useFakeTimers()` drives the 150ms debounce.
@@ -3450,7 +3450,7 @@ describe("PreviewHost — markdown: BrowserScreenshot (TASK.99 M4, CUT.md GAP 2)
  * did-finish-load. dom-md records: `docVersion += 1` + pushChanged (the
  * renderer refetches on its own — md-view-state reconciliation).
  */
-describe("PreviewHost — live-reload (Taskana 4100, stage 4)", () => {
+describe("PreviewHost — live-reload (stage 4)", () => {
   /** Fires one fs-watch event at every listener the host registered for `path`. */
   function fireWatchEvent(rig: Rig, path: string, event: "change" | "rename"): void {
     for (const l of rig.watchers.get(path)?.events ?? []) l(event);
@@ -3712,9 +3712,9 @@ describe("PreviewHost — live-reload (Taskana 4100, stage 4)", () => {
   });
 });
 
-// ── Taskana 4759 (Phase A): browser control through PreviewHost ──
+// ── (Phase A): browser control through PreviewHost ──
 
-describe("PreviewHost — browser control (Taskana 4759, Phase A)", () => {
+describe("PreviewHost — browser control (Phase A)", () => {
   const TAB_2 = "tab-2";
   const quad = (x: number, y: number, w: number, h: number) => [x, y, x + w, y, x + w, y + h, x, y + h];
   const btnTree = () => ({
@@ -3918,9 +3918,9 @@ describe("PreviewHost — browser control (Taskana 4759, Phase A)", () => {
   });
 });
 
-// ── Taskana 4759 amendment: "Full browser access" is a live read in main ──
+// ── amendment: "Full browser access" is a live read in main ──
 
-describe("PreviewHost — Full browser access (Taskana 4759 amendment, live read)", () => {
+describe("PreviewHost — Full browser access (amendment, live read)", () => {
   const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
   async function controlRequest(rig: Rig, request: PreviewControlRequest, options: { allowRemote?: boolean } = {}): Promise<PreviewResult<PreviewControlSuccess>> {
     await rig.host.handleRequest(TAB, {
@@ -4010,9 +4010,9 @@ describe("PreviewHost — Full browser access (Taskana 4759 amendment, live read
   });
 });
 
-// Taskana 4759 (briefs 43-45a): the live switch is re-read at every decision, the
+// (briefs 43-45a): the live switch is re-read at every decision, the
 // hard limits hold while it is ON, and a forged "set access" op is refused.
-describe("PreviewHost — Full browser access, live limits and forged access ops (Taskana 4759)", () => {
+describe("PreviewHost — Full browser access, live limits and forged access ops", () => {
   const quadBox = (x: number, y: number, w: number, h: number) => [x, y, x + w, y, x + w, y + h, x, y + h];
   const passwordTree = () => ({
     nodes: [
@@ -4083,9 +4083,9 @@ describe("PreviewHost — Full browser access, live limits and forged access ops
   });
 });
 
-// Taskana 4778: a pane preview whose view is not painting must fail fast, and the
+// a pane preview whose view is not painting must fail fast, and the
 // pop-out window must be able to return the preview to the pane.
-describe("PreviewHost — hidden pane preview and pop-out re-dock (Taskana 4778)", () => {
+describe("PreviewHost — hidden pane preview and pop-out re-dock", () => {
   async function call(rig: Rig, op: PreviewOp): Promise<PreviewResult<PreviewControlSuccess>> {
     await rig.host.handleRequest(TAB, { type: PREVIEW_REQUEST_TYPE, requestId: `x-${Math.random()}`, op });
     const posted = rig.posted.at(-1)!;

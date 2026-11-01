@@ -71,7 +71,7 @@ export interface SkillAdminRow extends SkillMeta {
   /** True when this name appears in `skills.disabled` (project or user scope). */
   disabled: boolean;
   /**
-   * Taskana 4732 S1-A: the contributing plugin's discovery tier, present ONLY
+   * S1-A: the contributing plugin's discovery tier, present ONLY
    * on plugin-sourced rows (sourceKind === "plugin"). The Skills pane shows
    * it next to the plugin group header.
    */
@@ -85,7 +85,7 @@ export interface SkillAdminScanResult {
   problems: string[];
 }
 
-/** Options for scanSkillsAdmin: the Taskana 4732 plugin-world passthroughs. */
+/** Options for scanSkillsAdmin: the plugin-world passthroughs. */
 export interface ScanSkillsAdminOptions {
   workspace: string;
   home: string;
@@ -138,7 +138,7 @@ export async function scanSkillsAdmin(
   const disabled = await loadDisabledSkills(fs, { workspace, home });
 
   const rows: SkillAdminRow[] = discovery.metas.map((meta) => {
-    // Taskana 4732 S1-A: badge plugin-sourced rows with tier + version.
+    // S1-A: badge plugin-sourced rows with tier + version.
     if (meta.source.startsWith("plugin:")) {
       const info = pluginInfo.get(meta.source.slice("plugin:".length));
       if (info) {

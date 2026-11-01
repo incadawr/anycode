@@ -1,5 +1,5 @@
 /**
- * Language servers settings pane (Taskana 4743): catalog of well-known LSP
+ * Language servers settings pane: catalog of well-known LSP
  * servers with Found / Not installed detection, a copyable install hint,
  * one-click enable per project or for all projects, a configured-servers list
  * per scope, a custom-entry form, live status for the active tab, and the
@@ -62,11 +62,11 @@ export interface LspConfigBridge {
 }
 
 export interface LanguageServersPaneProps {
-  /** Scope reference (Taskana 4758): a tab id or a workspace id `ws_…`, resolved main-side; omit for the pre-tab case. */
+  /** Scope reference: a tab id or a workspace id `ws_…`, resolved main-side; omit for the pre-tab case. */
   tabId?: string;
   /** Injectable for tests / isolation; defaults to `window.anycode.lspConfig`. */
   bridge?: LspConfigBridge;
-  /** Taskana 4758: reports the pane's count for the scope chip (null while loading). */
+  /** reports the pane's count for the scope chip (null while loading). */
   onCountChange?: (count: number | null) => void;
   /**
    * The scope tab's store, when the caller sits outside that tab's
@@ -103,7 +103,7 @@ export function LanguageServersPane({ tabId, bridge = window.anycode.lspConfig, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bridge, tabId]);
 
-  // Taskana 4758: the scope chip's count = configured entries across scopes.
+  // the scope chip's count = configured entries across scopes.
   const configuredCount = status ? (status.entries.project ?? []).length + status.entries.user.length : null;
   useEffect(() => {
     onCountChange?.(configuredCount);

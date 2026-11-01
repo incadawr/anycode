@@ -1,12 +1,12 @@
 /**
- * Codex onboarding control plane (TASK.41, cut §2(g)/§3.8): the invoke-API
+ * Codex onboarding control plane (cut §2(g)/§3.8): the invoke-API
  * behind the Settings Codex card — recheck (discovery ladder + bounded
  * doctor), explicit file-picker override, and the native login flow
  * (start/cancel). Wires main/codex-binary.ts (discovery), main/codex-
  * doctor.ts (diagnosis), and main/codex-login.ts (sign-in) together, persists
  * ONLY path/status metadata into settings.codex (never a token — cut §2(g)),
  * and hands the caller a fresh snapshot on every successful step so the
- * renderer can re-render without a restart (TASK.41 п.5).
+ * renderer can re-render without a restart (п.5).
  *
  * CHANNEL NAMES ARE DUPLICATED LITERALS, not `shared/**` exports: every lane
  * in this track froze `shared/**` as read-only after block C0 (design cut §4
@@ -57,7 +57,7 @@ export const CODEX_USE_BINARY_CHANNEL = "anycode:codex-use-binary";
 export const CODEX_LOGIN_START_CHANNEL = "anycode:codex-login-start";
 export const CODEX_LOGIN_CANCEL_CHANNEL = "anycode:codex-login-cancel";
 export const CODEX_LOGIN_OPEN_DEVICE_PAGE_CHANNEL = "anycode:codex-login-open-device-page";
-// Profile control plane (TASK.50, cut §2/§4) — same duplicated-literal
+// Profile control plane (cut §2/§4) — same duplicated-literal
 // convention as the four above.
 export const CODEX_PROFILE_LIST_CHANNEL = "anycode:codex-profile-list";
 export const CODEX_PROFILE_CREATE_CHANNEL = "anycode:codex-profile-create";
@@ -65,7 +65,7 @@ export const CODEX_PROFILE_DELETE_CHANNEL = "anycode:codex-profile-delete";
 export const CODEX_PROFILE_SET_ACTIVE_CHANNEL = "anycode:codex-profile-set-active";
 /** The explicit "Re-link credential" action (amended §A1.2) — the ONLY path that repairs a wrong auth.json entry. */
 export const CODEX_PROFILE_REPAIR_LINK_CHANNEL = "anycode:codex-profile-repair-link";
-/** Push: main -> renderer, fired after every snapshot-changing step (TASK.41 п.5). No payload — listeners re-fetch (`listAvailableEngines`/`codex-recheck`), same shape as `updates.onUpdateStatus`/`window.onWindowState`. */
+/** Push: main -> renderer, fired after every snapshot-changing step (п.5). No payload — listeners re-fetch (`listAvailableEngines`/`codex-recheck`), same shape as `updates.onUpdateStatus`/`window.onWindowState`. */
 export const ENGINES_CHANGED_CHANNEL = "anycode:engines-changed";
 
 // ── wire shapes (duplicated structurally in anycode-window.d.ts; CodexDoctorReport itself is the frozen shared/codex-doctor.ts type, imported read-only) ──
@@ -78,7 +78,7 @@ export interface CodexOnboardingSnapshot {
   /** ISO timestamp of this check. */
   checkedAt: string;
   /**
-   * Taskana 4092 (TASK.85): the OTHER resolvable ladder candidates a card may
+   * the OTHER resolvable ladder candidates a card may
    * offer as explicit "use this instead" buttons. Absent when the ladder found
    * none (or the caller passed none) — never persisted, snapshot-only.
    */
@@ -96,7 +96,7 @@ export type CodexUseBinaryResult =
 export type CodexLoginStartResult =
   | { ok: true; snapshot: CodexOnboardingSnapshot }
   /**
-   * Taskana 4884: `detail` is a short, non-secret explanation of a `failed`
+   * `detail` is a short, non-secret explanation of a `failed`
    * outcome (which branch refused, and why) — it exists so the UI can say
    * something more useful than "Sign-in failed. Try again.", and so the main
    * log carries a breadcrumb. Never a token/credential; absent when there is
@@ -120,7 +120,7 @@ export interface CodexIpcDeps {
   bootEnv: NodeJS.ProcessEnv;
   /**
    * The effective `settings.codex.proxyUrl` for the doctor/login children
-   * (TASK.139), read fresh per call — `undefined` when unset, malformed, or
+   * read fresh per call — `undefined` when unset, malformed, or
    * overridden by a shell-exported proxy. Optional so every existing test deps
    * object stays valid and behaves exactly as before (no carrier ⇒ no override).
    *
@@ -130,14 +130,14 @@ export interface CodexIpcDeps {
    */
   engineProxyUrl?: () => string | undefined;
   /**
-   * Taskana 4685: MAIN's own credential-free relay URL, read fresh per call.
+   * MAIN's own credential-free relay URL, read fresh per call.
    * The doctor/login child-env builders swap a credentialed proxy family for
    * it (fail-closed drop when absent/undefined).
    */
   relayUrl?: () => string | undefined;
   /** Reads the currently-persisted `settings.codex.binaryPath`, fresh, every call (main is the sole writer; this module never caches it). */
   readBinaryPathSetting: () => Promise<string | undefined>;
-  /** TASK.103: reads the currently-persisted `settings.security.trustedBinaries`, fresh, every call — mirror of `readBinaryPathSetting`'s dep shape. Absent ⇒ `[]` (today's wall byte-for-byte, fail-closed by default direction). */
+  /** reads the currently-persisted `settings.security.trustedBinaries`, fresh, every call — mirror of `readBinaryPathSetting`'s dep shape. Absent ⇒ `[]` (today's wall byte-for-byte, fail-closed by default direction). */
   readTrustedBinaries?: () => readonly TrustedBinaryConsent[];
   /** Reads the persisted `settings.codex` profile slice fresh every call — the registry never caches settings state. */
   readCodexSettings: () => Promise<CodexProfilesSettingsSlice | undefined>;
@@ -177,27 +177,27 @@ export interface CodexIpcDeps {
   runDoctor?: (binaryPath: string, options?: RunCodexDoctorOptions) => Promise<CodexDoctorReport>;
   runLogin?: (binaryPath: string, options: RunCodexLoginOptions) => Promise<CodexLoginOutcome>;
   /**
-   * TASK.65: injectable monotonic clock for the doctor TTL cache (tests advance
+   * injectable monotonic clock for the doctor TTL cache (tests advance
    * it to cross `CODEX_DOCTOR_TTL_MS`); production defaults to `Date.now`. Only
    * the in-memory freshness math reads it — the persisted `lastCheck.at` still
    * comes from the snapshot's own ISO `checkedAt`, so nothing new crosses to disk.
    */
   now?: () => number;
   /**
-   * Taskana 4230: stamps the discovered binary (size+mtime) onto each cached
+   * stamps the discovered binary (size+mtime) onto each cached
    * verdict; the spawn-freshness guard compares it per spawn attempt.
    * Default: node fs statSync; null = unobservable (guard degrades to allow).
    */
   statBinary?: (path: string) => { size: number; mtimeMs: number } | null;
   /**
-   * Taskana 4230 (refresh-before-refuse): invoked when a doctor pass classifies
+   * (refresh-before-refuse): invoked when a doctor pass classifies
    * the binary as update_required, BEFORE the refusal is cached. Resolves true
    * when the active version-support policy changed (caller re-runs the doctor
    * once). Absent = legacy behavior, byte-identical.
    */
   refreshPolicyBeforeRefusal?: () => Promise<boolean>;
   /**
-   * Taskana 4092 (TASK.85): supplies the alternate-binary candidates stamped
+   * supplies the alternate-binary candidates stamped
    * onto snapshots. Optional so every existing deps object stays valid — absent
    * means no `alternates` key on the snapshot (byte-identical legacy shape).
    * `registerCodexIpc` wires the production default: the same discovery-ladder
@@ -210,13 +210,13 @@ export interface CodexIpcDeps {
 export interface CodexOnboardingController {
   /**
    * Diagnoses ONE profile (the active one when `profileId` is absent) against
-   * the discovered binary (cut §4.2: readiness = f(binary, profile)). TASK.65:
+   * the discovered binary (cut §4.2: readiness = f(binary, profile)).
    * a thin alias for `ensureChecked` — TTL-guarded by default, `force:true`
    * bypasses the cache (the Settings "Recheck all" action).
    */
   recheck(profileId?: string, options?: { force?: boolean }): Promise<CodexOnboardingSnapshot>;
   /**
-   * TASK.65: the ONE TTL-guarded entry every readiness probe funnels through —
+   * the ONE TTL-guarded entry every readiness probe funnels through —
    * the tab-gate hydrate, the boot prime, the StartScreen draft catalog, and
    * the Settings pane's mount refresh. A verdict stored less than
    * `CODEX_DOCTOR_TTL_MS` ago is REUSED without spawning the doctor (so a
@@ -229,7 +229,7 @@ export interface CodexOnboardingController {
   ensureChecked(profileId?: string, options?: { force?: boolean }): Promise<CodexOnboardingSnapshot>;
   pickBinary(): Promise<CodexPickBinaryResult>;
   /**
-   * Taskana 4092 (TASK.85): adopts a path main itself listed as an alternate
+   * adopts a path main itself listed as an alternate
    * in the latest doctor report for this window — the "Use <path>" button
    * behind the error card's candidate list (see `useBinary`'s own gate). A
    * user gesture per switch, exactly like `pickBinary`, just without the file
@@ -237,12 +237,12 @@ export interface CodexOnboardingController {
    * persists through the same `picker` source.
    */
   useBinary(binaryPath: string): Promise<CodexUseBinaryResult>;
-  /** Runs the native login INTO a profile's home (TASK.50 п.2); an authLink profile refuses `unsupported` (amended §A1). */
+  /** Runs the native login INTO a profile's home (п.2); an authLink profile refuses `unsupported` (amended §A1). */
   loginStart(profileId?: string, mode?: CodexLoginMode): Promise<CodexLoginStartResult>;
   loginCancel(): void;
   /** Opens the verification URL of the device-code login currently pending in main (never a renderer-supplied URL). */
   loginOpenDevicePage(): Promise<void>;
-  // ── profile control plane (TASK.50) ──
+  // ── profile control plane ──
   listProfiles(): Promise<CodexProfilesSnapshot>;
   createProfile(request: CodexProfileCreateRequest): Promise<CodexProfileCreateResult>;
   deleteProfile(id: string): Promise<CodexProfileGuardResult>;
@@ -255,7 +255,7 @@ export interface CodexOnboardingController {
    */
   readyFor(profileId?: string): boolean;
   /**
-   * TASK.64: has a doctor verdict EVER landed for this profile (absent id = the
+   * has a doctor verdict EVER landed for this profile (absent id = the
    * active one)? Splits `readyFor`'s fail-closed false into KNOWN-bad (a verdict
    * exists and is not ready) vs UNKNOWN (the fire-and-forget boot recheck has
    * not landed yet, or this non-active profile was never diagnosed) — the tab
@@ -264,7 +264,7 @@ export interface CodexOnboardingController {
    * so a bogus id stays unknown (every click re-resolves cheaply, no spawn).
    */
   hasVerdictFor(profileId?: string): boolean;
-  /** Taskana 4230 spawn-freshness guard: re-validates a cached READY verdict against the binary's current {size, mtimeMs} stamp. */
+  /** spawn-freshness guard: re-validates a cached READY verdict against the binary's current {size, mtimeMs} stamp. */
   verifySpawnFreshness(profileId?: string): Promise<boolean>;
   /**
    * The last cached doctor verdict for this profile (absent id = the active
@@ -324,7 +324,7 @@ function lastCheckOf(snapshot: CodexOnboardingSnapshot): { status: CodexDoctorRe
 const ACTIVE_PROFILE_KEY = "recheck:active";
 
 /**
- * TASK.65: how long a doctor verdict is reused before a fresh spawn. The doctor
+ * how long a doctor verdict is reused before a fresh spawn. The doctor
  * is an app-server round-trip (email/plan/quota + version), so a status probed
  * seconds ago must not re-spawn it on every settings re-entry / tab-gate check.
  * Mirrors the host-side credential cache's `CREDENTIAL_CACHE_TTL_MS` (60s).
@@ -342,7 +342,7 @@ export const CODEX_DOCTOR_TTL_MS = 60_000;
 const LOGIN_KEY = "login:active";
 
 /**
- * The SOURCE env every main-spawned codex child reads through (TASK.139):
+ * The SOURCE env every main-spawned codex child reads through:
  * `bootEnv` minus any ambient carrier, plus the engine-proxy carrier when one
  * applies. `buildDoctorChildEnv` turns that carrier into the real proxy family;
  * with no carrier the result is a plain copy of `bootEnv` and the child's env is
@@ -392,7 +392,7 @@ export function codexDoctorSourceEnv(
  */
 export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboardingController {
   const runDoctor = deps.runDoctor ?? runCodexDoctor;
-  // Taskana 4230 (supervisor #3 / reject #3): EVERY stat call site funnels
+  // (supervisor #3 / reject #3): EVERY stat call site funnels
   // through this one SAFE wrapper — an injected statBinary seam that throws
   // (or the real statSync on a vanished file) degrades to null
   // (unobservable), never rejects the recheck/refresh path it serves.
@@ -427,7 +427,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
    * e-mail/plan/quotas live here and in the renderer projection, nowhere
    * else. Keyed by profile id; `system` is the pseudo-profile's slot.
    *
-   * TASK.65: the stored value carries the full snapshot plus a NUMERIC
+   * the stored value carries the full snapshot plus a NUMERIC
    * `checkedAt` (from the injectable `now`) so `ensureChecked` can answer the
    * TTL question — `now() - checkedAt < CODEX_DOCTOR_TTL_MS` — without a spawn.
    * `checkedAt` is memory-only; the disk `lastCheck.at` still comes from the
@@ -466,7 +466,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
   const lifetime = new AbortController();
   let shuttingDown = false;
   /**
-   * Taskana 4092 follow-up: the alternates list of the LATEST doctor report
+   * follow-up: the alternates list of the LATEST doctor report
    * main produced (any route — recheck, pick, use, login), keyed by resolved
    * profile id. This is the single source the `useBinary` gate admits paths
    * from — a path main itself listed as an alternate in the latest report for
@@ -608,7 +608,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
   /**
    * Runs the doctor against ONE explicit path+source+profile, persists,
    * notifies, and returns the fresh snapshot. `discoveryTrustRefusal`
-   * (TASK.103, D-S4-6): when the caller's discovery ladder resolved NOTHING
+   * (D-S4-6): when the caller's discovery ladder resolved NOTHING
    * (`binaryPath === null`) because its highest-priority candidate was
    * refused by the trust gate — not because nothing was found — this
    * synthesizes an honest `{status:"error", trustRefusal}` instead of the
@@ -628,7 +628,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
      */
     discoveryTrustRefusal?: { binaryPath?: string; reason: string; staleConsent?: boolean; offerTrust: boolean },
     /**
-     * Taskana 4092 (TASK.85): alternate-binary candidates stamped onto the
+     * alternate-binary candidates stamped onto the
      * returned snapshot. `undefined` (or an empty array) keeps the legacy
      * snapshot shape — no `alternates` key. Callers thread the deps seam's
      * value; `discoverAndCheck` passes it only when the seam is present, so a
@@ -646,7 +646,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
       return shutdownSnapshot();
     }
     const consents = deps.readTrustedBinaries?.() ?? [];
-    // Taskana 4230 (supervisor #3): capture the binary stamp BEFORE the doctor
+    // (supervisor #3): capture the binary stamp BEFORE the doctor
     // run — an upgrade landing mid-probe must not be stamped as already judged.
     let binaryStamp = binaryPath !== null ? statBinary(binaryPath) : null;
     const report: CodexDoctorReport =
@@ -680,7 +680,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
             ...(deps.platform !== undefined ? { platform: deps.platform } : {}),
           });
     let effectiveReport: CodexDoctorReport = report;
-    // Taskana 4230 (refresh-before-refuse): a doctor pass that classifies the
+    // (refresh-before-refuse): a doctor pass that classifies the
     // binary as update_required gets ONE bounded, rate-limited forced manifest
     // refresh before the refusal is cached — a manifest update that widens the
     // supported range re-runs the doctor so the user sees the fresh verdict.
@@ -709,12 +709,12 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
       checkedAt: new Date().toISOString(),
       ...(alternates !== undefined && alternates.length > 0 ? { alternates } : {}),
     };
-    // TASK.65: stamp the numeric TTL clock alongside the snapshot. Only a real
+    // stamp the numeric TTL clock alongside the snapshot. Only a real
     // doctor run reaches here, so a cache entry always means "a verdict landed"
     // — a resolution refusal returns resolutionErrorSnapshot without caching,
     // keeping a bogus id UNKNOWN (hasVerdictFor stays false).
     reports.set(effectiveReport.profileId ?? SYSTEM_PROFILE_ID, { snapshot, checkedAt: now(), binaryStamp });
-    // Taskana 4092 follow-up: the same landing refreshes the alternates window
+    // follow-up: the same landing refreshes the alternates window
     // `useBinary` admits from. An explicit empty array (`pickBinary`/a Use)
     // CLEARS the slot — a fresh report replaces the previous list wholesale,
     // never merges into it; `undefined` (no caller-supplied list — login's
@@ -773,7 +773,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
           discovery.trustRefused === true && discovery.reason !== undefined
           ? { reason: discovery.reason, offerTrust: false }
           : undefined,
-      // Taskana 4092: thread ONLY the deps seam here. The ladder's own
+      // thread ONLY the deps seam here. The ladder's own
       // alternates payload is deliberately NOT used as an implicit default —
       // a deps without the seam keeps the legacy snapshot shape, and
       // `registerCodexIpc` injects the production default explicitly.
@@ -801,7 +801,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
   }
 
   /**
-   * TASK.65 TTL gate. A verdict stored less than `CODEX_DOCTOR_TTL_MS` ago is
+   * TTL gate. A verdict stored less than `CODEX_DOCTOR_TTL_MS` ago is
    * reused WITHOUT a doctor spawn unless `force`. The cache key is the resolved
    * profile id — `undefined` reads the last-known active slot, the same slot
    * `readyFor()`/`hasVerdictFor()` answer from — so a hit primed under an
@@ -821,7 +821,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
   }
 
   /**
-   * Taskana 4230 spawn-freshness guard: a cached READY verdict is valid only
+   * spawn-freshness guard: a cached READY verdict is valid only
    * while the binary file it judged is unchanged (size+mtime). A mismatch
    * force-rechecks (whose update_required path itself runs
    * refresh-before-refusal) and answers by the FRESH verdict. Unknown verdict,
@@ -885,7 +885,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
 
     async useBinary(binaryPath: string): Promise<CodexUseBinaryResult> {
       if (shuttingDown) return { ok: false, reason: "busy" };
-      // Taskana 4092 follow-up: the Use gate admits ONLY a path main itself
+      // follow-up: the Use gate admits ONLY a path main itself
       // listed as an alternate in the latest doctor report for this window —
       // the buttons the card actually rendered. Anything else is rejected
       // before the filesystem is ever touched: an unlisted path must go
@@ -984,11 +984,11 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
             signal: controller.signal,
             env: doctorSourceEnv(),
             ...(deps.relayUrl !== undefined ? { relayUrl: deps.relayUrl() } : {}),
-            // The login signs INTO the profile's home (TASK.50 п.2): the
+            // The login signs INTO the profile's home (п.2): the
             // runner overwrites any ambient CODEX_HOME with it, so codex
             // writes the credential into the profile tree, never ~/.codex.
             profile,
-            // TASK.103: codex-login.ts itself is untouched (D-S4-9's naming
+            // codex-login.ts itself is untouched (D-S4-9's naming
             // convention doesn't apply here, but the file-list's "no file
             // edits" discipline does) — its OWN default trust closure
             // carries no consents, so a consent-aware closure is passed
@@ -1000,7 +1000,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
           }),
         );
         if (!outcome.ok) {
-          // Taskana 4884: a failing login must leave a breadcrumb in MAIN's own
+          // a failing login must leave a breadcrumb in MAIN's own
           // log — the renderer shows the same text, but a user reporting
           // "sign-in fails" has to be diagnosable from the log alone.
           if (outcome.detail !== undefined) {
@@ -1039,7 +1039,7 @@ export function createCodexOnboardingController(deps: CodexIpcDeps): CodexOnboar
       await deps.openExternal(url);
     },
 
-    // ── profile control plane (TASK.50) — settings/fs mutations only, no spawns ──
+    // ── profile control plane — settings/fs mutations only, no spawns ──
 
     async listProfiles(): Promise<CodexProfilesSnapshot> {
       const listed = await registry.list();
@@ -1144,14 +1144,14 @@ function idArg(args: unknown): string {
   return typeof id === "string" ? id : "";
 }
 
-/** TASK.65: the renderer's explicit "Recheck all" sets `force:true` to bypass the doctor TTL cache; any non-true value (absent / mount-refresh) is TTL-guarded. */
+/** the renderer's explicit "Recheck all" sets `force:true` to bypass the doctor TTL cache; any non-true value (absent / mount-refresh) is TTL-guarded. */
 function forceArg(args: unknown): boolean {
   return (args as { force?: unknown } | undefined)?.force === true;
 }
 
-/** Wires the invoke channels onto ipcMain. Returns the controller so main/index.ts can also drive `recheck()` directly for the fire-and-forget boot-time check (TASK.41 п.1: discovery must run without the user visiting Settings first) and read `readyFor()` as the per-profile tab gate. */
+/** Wires the invoke channels onto ipcMain. Returns the controller so main/index.ts can also drive `recheck()` directly for the fire-and-forget boot-time check (п.1: discovery must run without the user visiting Settings first) and read `readyFor()` as the per-profile tab gate. */
 /**
- * Taskana 4092 (TASK.85): the production default for the alternates seam —
+ * the production default for the alternates seam —
  * the same discovery-ladder inputs `discoverAndCheck` walks (env override,
  * PATH/common/installed rungs; the settings rung is a fresh read there and is
  * deliberately the caller's to thread), projected through
@@ -1171,7 +1171,7 @@ function ladderAlternates(deps: CodexIpcDeps): Array<{ path: string; source: Cod
 }
 
 export function registerCodexIpc(deps: CodexIpcDeps): CodexOnboardingController {
-  // Taskana 4092: production default for the alternates seam (see
+  // production default for the alternates seam (see
   // `ladderAlternates`). An explicitly injected seam always wins.
   const controller = createCodexOnboardingController({
     ...deps,

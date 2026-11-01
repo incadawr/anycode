@@ -1,9 +1,9 @@
 /**
- * Proxy-profile registry contract (TASK.141, редакция 2): the named profiles a
+ * Proxy-profile registry contract (редакция 2): the named profiles a
  * user configures ONCE, plus the one-string reference every scope holds instead
  * of its own copy of the configuration.
  *
- * The whole slice rests on one inversion of TASK.132/139: a scope (the app, a
+ * The whole slice rests on one inversion of a scope (the app, a
  * connection, an engine) no longer carries proxy CONFIGURATION — it carries a
  * `proxyRef`, and every knob (mode, host/port, exemptions, credentials) lives on
  * the profile that ref names. Three states of a scope are therefore three values
@@ -52,9 +52,9 @@ export const PROXY_REF_SET_CHANNEL = "anycode:proxy-ref-set";
 /**
  * invoke channel: probe ONE profile against ONE named target (`ProxyCheckRequest`)
  * by SPAWNING a child with the profile's materialised env. Handled by
- * main/network-ipc.ts (TASK.141 lane B). A probe done with main's own `fetch`
+ * main/network-ipc.ts (lane B). A probe done with main's own `fetch`
  * would lie — main's global fetch reads `NODE_USE_ENV_PROXY` once at bootstrap
- * and ignores the proxy env afterwards (measured, TASK.132).
+ * and ignores the proxy env afterwards (measured).
  *
  * The probe is NOT equivalent-by-construction to a production spawn, and the
  * earlier claim that it is has been withdrawn (design review B-11): a real spawn
@@ -244,9 +244,9 @@ function pick(ref: string | undefined, legacyUrl: string | undefined): { ref?: s
 }
 
 /**
- * The FIRST scope in `chain` that says anything at all (TASK.141 §2). Below the
+ * The FIRST scope in `chain` that says anything at all (§2). Below the
  * shell — which still wins the whole proxy family atomically, one rung above
- * every ladder here (TASK.132's law, gated in main/host-env.ts) — the first
+ * every ladder here (law, gated in main/host-env.ts) — the first
  * EXPLICIT rung wins, and its outcome is allowed to be "direct".
  *
  * A rung is explicit when the scope carries a `proxyRef` OR a legacy `proxyUrl`
@@ -263,7 +263,7 @@ function pick(ref: string | undefined, legacyUrl: string | undefined): { ref?: s
  *
  * A MALFORMED legacy string is the deliberate exception: it is not a rung at
  * all, and the ladder keeps descending. That is not an inconsistency with the
- * law above — it is TASK.132's fail-soft semantics for that field preserved
+ * law above — it is's fail-soft semantics for that field preserved
  * byte-for-byte, which is what "legacy strings keep working with no user action"
  * requires. The two rules cannot collide in a document written before this
  * slice: nothing below a legacy string existed there to fall through to.
@@ -423,7 +423,7 @@ export interface SystemProxyResolver {
 
 /**
  * The two main-side caches every proxy materialisation reads through, plus the
- * target the materialisation is FOR (TASK.141 §4/§5, design review B-10).
+ * target the materialisation is FOR (§4/§5, design review B-10).
  * Injected rather than imported so host-env stays electron-free and
  * unit-testable, and so lane A can ship — and pin with tests — the "no cache ⇒
  * direct / no password" behaviour before lane B's modules exist.
@@ -454,7 +454,7 @@ export interface ProxyMaterializationDeps {
    */
   targetUrl?: string;
   /**
-   * Taskana 4685 rework: main's relay REGISTRY lookup — resolves the
+   * rework: main's relay REGISTRY lookup — resolves the
    * credential-free loopback relay URL for ONE credentialed upstream (the
    * value the caller is about to swap out). Injected as a FUNCTION (not the
    * single string the first 4685 cut had) because main can hold SEVERAL
@@ -546,7 +546,7 @@ export function isProxyProfileSecretKey(key: string): boolean {
 
 /**
  * A stable fingerprint of the network path a chain resolves to — the thing a
- * connection's `lastHealth` was measured THROUGH (TASK.141 §7). Two settings
+ * connection's `lastHealth` was measured THROUGH (§7). Two settings
  * documents that fingerprint the same for a chain route that chain's traffic
  * identically, so a mutation only needs to reset the health of the connections
  * whose fingerprint actually moved.
@@ -651,7 +651,7 @@ export interface ProxyCheckRequest {
 }
 
 /**
- * Verdict classes of the spawn-probe (TASK.141 §6, extended by design review
+ * Verdict classes of the spawn-probe (§6, extended by design review
  * B-11). `ok` = the TARGET answered THROUGH the proxy at all — a 401 from
  * Anthropic proves the proxy works.
  *

@@ -1,5 +1,5 @@
 /**
- * Production Electron adapter for the md-preview WINDOW container (TASK.99
+ * Production Electron adapter for the md-preview WINDOW container (
  * CUT.md GAP 1 + CONTRACTS, M3): the third file (after electron-adapter.ts's
  * preview window and panel-adapter.ts's WebContentsView) that touches real
  * Electron primitives for previews — and the first that creates a
@@ -54,7 +54,7 @@ export function createMdPreviewWindow(
   const win = new BrowserWindow({
     width: DEFAULT_WIDTH,
     height: DEFAULT_HEIGHT,
-    // Taskana 4100 stage 4 (TASK.96 «Этап 4»: always-on-top для
+    // stage 4 («Этап 4»: always-on-top для
     // превью-окон): a dom-md window is the same passive artifact viewer as
     // electron-adapter.ts's preview window — same constructor option, same
     // rationale ('floating' above the main window without fighting focus).

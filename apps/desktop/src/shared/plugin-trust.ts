@@ -1,5 +1,5 @@
 /**
- * Compiled-in OFFICIAL plugin channel trust anchors (Taskana 4732 S1-B,
+ * Compiled-in OFFICIAL plugin channel trust anchors (S1-B,
  * design §4): the ed25519 public keys the signed official plugin index is
  * verified against, the official index URL, and the extraction/network caps
  * the store and index client enforce.

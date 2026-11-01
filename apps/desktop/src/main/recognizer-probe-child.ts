@@ -1,5 +1,5 @@
 /**
- * The Vision panel probe's child entry (TASK.198 срез E2): a plain node
+ * The Vision panel probe's child entry (срез E2): a plain node
  * process (spawned with `ELECTRON_RUN_AS_NODE=1`, see recognizer-probe.ts's
  * module doc) that reads ONE `RecognizerProbeChildInput` from its own stdin,
  * calls `ask()` — the SAME one-shot vision primitive a live host uses
@@ -49,7 +49,7 @@ function emit(payload: unknown, exitCode: number): void {
 async function main(): Promise<void> {
   const raw = await readStdin();
   const input = JSON.parse(raw) as RecognizerProbeChildInput;
-  // TASK.203: the ask itself (and, when the input carries a telemetry target,
+  // the ask itself (and, when the input carries a telemetry target,
   // its session_start/usage records) lives in the shared execution helper —
   // which disposes the sink BEFORE returning, so the records are flushed to
   // disk before emit()'s process.exit below can end the process.

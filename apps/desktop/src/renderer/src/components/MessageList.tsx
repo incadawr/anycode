@@ -96,7 +96,7 @@ export function formatLoopEndLine(
 }
 
 /**
- * TASK.31 — Stack consecutive tool-call cards (design: pure renderer-derived
+ * Stack consecutive tool-call cards (design: pure renderer-derived
  * projection over `TranscriptBlock[]`). When the agent explores a project it
  * tends to fire a series of adjacent tool calls (Bash, Read, Grep, often a
  * MIXED run); grouping them into a collapsible stack declutters the feed
@@ -104,7 +104,7 @@ export function formatLoopEndLine(
  * the projection is a view-time transform only, computed each render. A
  * single-tool run is just a special case of this rule.
  *
- * Invariants (TASK.31.md §DoD):
+ * Invariants (§DoD):
  *  - adjacency, ANY toolName: every neighbouring terminal `tool_call` stacks,
  *    regardless of tool name. Any other kind, or a gap, closes the stack.
  *  - terminal-only: `proposed`/`running` cards never stack (active work must
@@ -152,7 +152,7 @@ export function stackLabel(count: number): string {
 }
 
 /**
- * Collapsed-stack header label (TASK.31 §DoD invariant 5 — "never masquerade
+ * Collapsed-stack header label (§DoD invariant 5 — "never masquerade
  * as one tool name"). For a single-tool run the tool name stands alone
  * (e.g. `Bash`); for a mixed run the header shows a compact rundown of the
  * DISTINCT member tool names in first-appearance order, capped at 2 names with
@@ -417,7 +417,7 @@ export { compactionRowText };
 
 /**
  * Empty-state gate: zero blocks, no running turn (a running zero-block turn
- * shows the WorkingRow instead) and NOT a replay surface (TASK.188 S14). On a
+ * shows the WorkingRow instead) and NOT a replay surface (S14). On a
  * rewound film an empty list is the opening frame, not an empty session: the
  * "What are we building?" onboarding is an invitation addressed to the author
  * of a blank session, and its chips write into the composer of the session
@@ -506,7 +506,7 @@ export function formatStreamRetryLine(
   return `Retry ${formatRetryAttempt(attempt, maxAttempts)} in ${formatDelaySeconds(delayMs)}: ${reason}`;
 }
 
-/** Taskana 4772: a retry delay in seconds, one decimal (`0.8 s`), mirroring cli/render.ts. */
+/** a retry delay in seconds, one decimal (`0.8 s`), mirroring cli/render.ts. */
 export function formatDelaySeconds(delayMs: number): string {
   return `${(delayMs / 1000).toFixed(1)} s`;
 }
@@ -517,13 +517,13 @@ export function formatRetryAttempt(attempt: number, _maxAttempts: number): strin
 }
 
 /**
- * Try-again button visibility (TASK.33 W8): shown ONLY on the specific
+ * Try-again button visibility (W8): shown ONLY on the specific
  * `loop_end` block the armed offer names (`RetryOffer.loopEndBlockId`) — an
  * older failed turn's button (still sitting in transcript history) never
  * reappears once a newer turn supersedes it. The retryable/hadModelOutput
  * gate itself is already baked into whether `retry` is non-null at all (the
  * store's `loop_end` reducer only arms it when both hold) — this predicate
- * just answers "is THIS the block it belongs to". TASK.33 W8-FIX #1: also
+ * just answers "is THIS the block it belongs to". W8-FIX #1: also
  * requires `connection === "ready"` — `setHostExited` (store.ts) preserves
  * the armed offer across a dropped connection, so without this the button
  * would stay clickable while there is no port to send on
@@ -535,7 +535,7 @@ export function showTryAgainButton(retry: RetryOffer | null, blockId: string, co
 }
 
 /**
- * Taskana 4111: the one-shot Continue offer shows ONLY on its own max_turns
+ * the one-shot Continue offer shows ONLY on its own max_turns
  * loop_end row, only when the connection is live and the prompt queue is
  * empty (a held queue's Resume banner is the continue then).
  */
@@ -554,7 +554,7 @@ export function showContinueButton(
 }
 
 /**
- * Standalone fallback Try-again row visibility (TASK.33 FIX-A): a host
+ * Standalone fallback Try-again row visibility (FIX-A): a host
  * respawn (`performReset` + hydration, store.ts) wipes the transcript and
  * rebuilds it from persisted history, whose block ids never include the
  * live-minted `loop_end:${turnId}` the armed offer names — so
@@ -575,7 +575,7 @@ export function showStandaloneRetry(
 }
 
 /**
- * Minimap scroll-spy core (TASK.48 / 4086 follow-up) — exported pure for unit
+ * Minimap scroll-spy core (4086 follow-up) — exported pure for unit
  * tests. Given the monotone `top`s of human bubbles and agent delivery cards
  * (one per minimap turn, DOM order == mark order)
  * and the container's box, returns the index of the last bubble whose top
@@ -727,22 +727,22 @@ export function MessageList({
   todoReminderState?: { count: number; threshold: number } | null;
   turn: TurnState;
   workspace: string | null;
-  /** TASK.33 W8-FIX #1: gates the rendered Try-again button on connection readiness. */
+  /** W8-FIX #1: gates the rendered Try-again button on connection readiness. */
   connection: ConnectionPhase;
-  /** TASK.33 W8 armed one-shot Try-again offer; null when nothing to offer. */
+  /** W8 armed one-shot Try-again offer; null when nothing to offer. */
   retry: RetryOffer | null;
-  /** TASK.33 W8: consumes `retry` and re-sends its content through the normal send/queue/busy path. */
+  /** W8: consumes `retry` and re-sends its content through the normal send/queue/busy path. */
   onTryAgain: () => void;
-  /** Taskana 4111: armed one-shot Continue offer on a max_turns loop_end; null when nothing to offer. */
+  /** armed one-shot Continue offer on a max_turns loop_end; null when nothing to offer. */
   continueOffer: { loopEndBlockId: string } | null;
-  /** Taskana 4111: consumes `continueOffer` and sends the fixed continuation message. */
+  /** consumes `continueOffer` and sends the fixed continuation message. */
   onContinue: () => void;
-  /** Taskana 4111: gates the Continue button off while a held queue's Resume banner is the continue. */
+  /** gates the Continue button off while a held queue's Resume banner is the continue. */
   promptQueueLength: number;
   /** Read-only transcript surface (e.g. child history): suppresses the transcript-empty onboarding. */
   readOnly?: boolean;
   /**
-   * Taskana 4742 §2.5: optional rewind plumbing for the tick rail's popover
+   * §2.5: optional rewind plumbing for the tick rail's popover
    * action. Absent (child panes, existing tests, engines without
    * supportsRewind) -> no Rewind buttons at all. The checkpoint list is the
    * tab store's on-demand `checkpoints`; `onRewind` sends the existing
@@ -774,7 +774,7 @@ export function MessageList({
   // `<TabContext.Provider>` (App.tsx's ActiveTabBody). Optional-chained since
   // no render test wraps this component in a provider.
   const tabId = useContext(TabContext)?.tabId ?? null;
-  // TASK.188 S14: "is this list a replay surface" is DERIVED here, from the
+  // S14: "is this list a replay surface" is DERIVED here, from the
   // same tab context, rather than passed down by each owner — the root's list
   // and a replayed child's pane are both rendered under the armed tab's
   // provider (the recorded child has no tab of its own), so one question
@@ -801,7 +801,7 @@ export function MessageList({
   const followRef = useRef(true);
   const [follow, setFollow] = useState(true);
 
-  // Taskana 4091 (TASK.84): the internal full-size image viewer. Opened by a
+  // the internal full-size image viewer. Opened by a
   // thumbnail click; the block id + clicked index are looked up from `blocks`
   // at render time, so a store replacement of the block (or its images)
   // while open is reflected without stale copies. Rendered as a SIBLING of
@@ -811,7 +811,7 @@ export function MessageList({
   const viewed = viewer !== null ? blocks.find((b) => b.id === viewer.blockId) : undefined;
   const viewedImages = viewed !== undefined && viewed.kind === "user_text" ? viewed.images ?? [] : [];
 
-  // Minimap (TASK.48 / Taskana 4086): pure projection over `blocks` — no new
+  // Minimap: pure projection over `blocks` — no new
   // store state. 4086 follow-up: the selector is INCREMENTAL — per-turn
   // summaries are memoized by the identity of each turn's blocks, so a
   // streaming delta to the tail reprojects only the turn being streamed
@@ -825,7 +825,7 @@ export function MessageList({
     turnsSelectorRef.current = createUserTurnsSelector();
   }
   const minimapMarks = useMemo(() => turnsSelectorRef.current!(blocks), [blocks]);
-  // Taskana 4742: per-mark checkpoint ids for the rail popover's Rewind
+  // per-mark checkpoint ids for the rail popover's Rewind
   // action (label + chronological matching, checkpoint-model.ts). Memoized on
   // [blocks, rewind?.checkpoints] — the checkpoints array is store-stable
   // between renders (replaced only on checkpoint_list), and blocks identity
@@ -1057,7 +1057,7 @@ export function MessageList({
       data-tab-id={tabId ?? undefined}
     >
       <TodoPanel transcript={blocks} onJumpToBlock={jumpToBlock} reminderState={todoReminderState} />
-      {/* TASK.48 / Taskana 4086 + 4742: LEFT-edge tick rail (evolved from
+      {/* + 4742: LEFT-edge tick rail (evolved from
           the right-edge dot pill). FIRST-child position (beside TodoPanel)
           on purpose: a `top`-sticky box only gets pushed DOWN to its inset,
           so as the last child it sat at the content end — off-screen unless
@@ -1117,7 +1117,7 @@ export function MessageList({
           the two live regions announce different things without double-speak. */}
       <div className="message-column" role="log" aria-live="polite" ref={columnRef}>
         {groupTranscriptBlocks(blocks).map((item) => {
-          // TASK.31: a `tool_stack` item renders the collapsible stack
+          // a `tool_stack` item renders the collapsible stack
           // (≥2 adjacent terminal cards, regardless of toolName). Everything else
           // (including a lone eligible card, or a proposed/running card) flows
           // through the per-kind switch below unchanged. The render-item key
@@ -1156,7 +1156,7 @@ export function MessageList({
           const block = item.block;
           switch (block.kind) {
             case "user_text":
-              // TASK.145 срез 2 (spec §4 point 3): a host-injected ("system"-
+              // срез 2 (spec §4 point 3): a host-injected ("system"-
               // origin) turn renders as a compact system card, never the
               // ordinary user bubble — the model still sees this as a
               // `role:"user"` turn (owner decision, unchanged), only the
@@ -1275,7 +1275,7 @@ export function MessageList({
                 </div>
               );
             }
-            // TASK.106 cut-2 §D5: the provider switch reads as what it is — a
+            // cut-2 §D5: the provider switch reads as what it is — a
             // session boundary (the host really was respawned), so it borrows
             // the loop-end divider's register rather than an error tint.
             case "connection_changed":
@@ -1289,7 +1289,7 @@ export function MessageList({
                   {block.effortResetTo !== undefined ? ` · effort reset to ${block.effortResetTo}` : ""}
                 </div>
               );
-            // TASK.227: a compaction is a thing that HAPPENED to this
+            // a compaction is a thing that HAPPENED to this
             // conversation, so it leaves a row where it happened instead of
             // only a toast that the next notice overwrites. Appended running
             // and patched in place when it ends — a tool_call's pending->result
@@ -1308,7 +1308,7 @@ export function MessageList({
               );
             case "preview_console":
               return <PreviewConsoleRow key={block.id} block={block} enter={enterIds.has(block.id)} />;
-            // Turn-ceiling grant (TASK.124 cut-1): minimal visibility row —
+            // Turn-ceiling grant (cut-1): minimal visibility row —
             // every extension of the turn cap must be visible, never silent.
             // The interactive "continue" affordance is cut-2.
             case "ceiling_grant":
@@ -1319,7 +1319,7 @@ export function MessageList({
                   {block.remaining.join("; ")}
                 </div>
               );
-            // Degenerate-generation guard (TASK.210): same "must be visible,
+            // Degenerate-generation guard: same "must be visible,
             // never silent" posture as ceiling_grant above — the model's own
             // output looped and this turn's stream was cut before it could
             // run the provider's output ceiling.
@@ -1361,8 +1361,8 @@ export function MessageList({
           ↓
         </button>
       )}
-      {/* Taskana 4091 (TASK.84): the full-size internal viewer — last child of
-          the root, a SIBLING of the role="log" column. Taskana 4091 follow-up:
+      {/* the full-size internal viewer — last child of
+          the root, a SIBLING of the role="log" column. follow-up:
           a real modal <dialog> (showModal) — App.tsx's global keydown ignores
           both Esc and mod-combos while any dialog[open] exists, so the shell's
           Esc-to-interrupt never fires while the viewer is open. */}

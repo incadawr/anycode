@@ -1,5 +1,5 @@
 /**
- * `isModelOutputEvent` — the W7a retry gate (TASK.33). Pins the full table so a
+ * `isModelOutputEvent` — the W7a retry gate. Pins the full table so a
  * new ModelStreamEvent variant cannot silently change which events keep the gate
  * open (retryable before-content window) vs close it (no auto-retry). The
  * behavioral consequences are exercised end-to-end in model-port.test.ts and
@@ -30,7 +30,7 @@ const NOT_MODEL_OUTPUT: ModelStreamEvent[] = [
   { type: "start" },
   { type: "error", error: new Error("boom") },
   { type: "stream_retry", attempt: 1, maxAttempts: 3, delayMs: 1, reason: "reset" },
-  // Taskana 4090: quota telemetry is transport metadata, not model output.
+  // quota telemetry is transport metadata, not model output.
   { type: "provider_quota", quota: { primary: { usedPercent: 42 }, sources: ["x-ratelimit-requests-remaining"] }, baseUrl: "https://api.example.com" },
 ];
 
@@ -45,9 +45,9 @@ describe("isModelOutputEvent", () => {
 });
 
 /**
- * `classifyProviderFailure` (TASK.33 W7b) — layers over `isRetryableStreamError`
+ * `classifyProviderFailure` (W7b) — layers over `isRetryableStreamError`
  * (retry.ts): known buckets never disagree with it (asserted per case below).
- * Since Taskana 4705 quota no longer auto-retries: `isRetryableStreamError`
+ * Since quota no longer auto-retries: `isRetryableStreamError`
  * refuses quota before the 429 status check, so quota's non-auto-retry
  * behavior is pinned by retry.test.ts (`isQuotaExhaustion` describe); the
  * divergence pins below cover the cases that still diverge.
@@ -69,7 +69,7 @@ function apiCallError(opts: {
 }
 
 describe("classifyProviderFailure", () => {
-  it("classifies a real connect-timeout APICallError (TASK.33 owner dogfood) as connect_timeout/retryable", () => {
+  it("classifies a real connect-timeout APICallError (owner dogfood) as connect_timeout/retryable", () => {
     const error = apiCallError({
       message: "Cannot connect to API: Connect Timeout Error",
       isRetryable: true,
@@ -193,7 +193,7 @@ describe("classifyProviderFailure", () => {
     const result = classifyProviderFailure(error);
 
     expect(result).toMatchObject({ code: "quota", retryable: false });
-    // Taskana 4705: quota no longer auto-retries — isRetryableStreamError now
+    // quota no longer auto-retries — isRetryableStreamError now
     // refuses quota (isQuotaExhaustion) before the 429 status check.
     expect(isQuotaExhaustion(error)).toBe(true);
     expect(isRetryableStreamError(error)).toBe(false);
@@ -243,14 +243,14 @@ describe("classifyProviderFailure", () => {
     expect(isRetryableStreamError(error)).toBe(true);
   });
 
-  it("classifies an undici mid-stream socket drop (UND_ERR_SOCKET) as network, retryable (Taskana 4705 review)", () => {
+  it("classifies an undici mid-stream socket drop (UND_ERR_SOCKET) as network, retryable (review)", () => {
     const error = Object.assign(new TypeError("terminated"), { cause: { code: "UND_ERR_SOCKET" } });
 
     expect(classifyProviderFailure(error)).toMatchObject({ code: "network", retryable: true });
     expect(isRetryableStreamError(error)).toBe(true);
   });
 
-  it("classifies a bare ENETUNREACH as network, retryable (Taskana 4772)", () => {
+  it("classifies a bare ENETUNREACH as network, retryable", () => {
     const error = Object.assign(new Error("connect ENETUNREACH 1.2.3.4:443"), { code: "ENETUNREACH" });
 
     expect(classifyProviderFailure(error)).toMatchObject({ code: "network", retryable: true });
@@ -281,7 +281,7 @@ describe("classifyProviderFailure", () => {
  * gate) INTENTIONALLY diverges from `isRetryableStreamError` (the auto-retry
  * decision). Each is a DOUBLE assert so it goes red if EITHER side is later
  * "fixed" to match the other: the divergence is the contract, not a bug
- * (W7b-FIX #2). Taskana 4705 removed the quota divergence (quota no longer
+ * (W7b-FIX #2). removed the quota divergence (quota no longer
  * auto-retries — see isQuotaExhaustion in retry.test.ts); (b) and (c) remain.
  */
 describe("classifyProviderFailure — intentional divergence from isRetryableStreamError (W7b-FIX #2 pins)", () => {

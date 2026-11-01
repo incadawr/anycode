@@ -1,5 +1,5 @@
 /**
- * Unit tests for the openai-chat-completions factory (TASK.43 §0.3/§0.5/§10.2
+ * Unit tests for the openai-chat-completions factory (§0.3/§0.5/§10.2
  * p1). Construction is side-effect free (no network until streamText), so
  * these assert the LanguageModel's static shape — model id, base URL
  * normalization delegation, and that apiKey/headers/includeUsage are truly
@@ -16,7 +16,7 @@ import {
   resolveIncludeUsage,
 } from "./openai-compatible.js";
 
-// Taskana 4090 (TASK.71): SDK factory options recorded while DELEGATING to
+// SDK factory options recorded while DELEGATING to
 // the real implementation (no behaviour change for existing tests) — for the
 // dormancy pin (no `fetch` key when no observer; a function when set).
 const mockCreateOpenAICompatible = vi.fn();
@@ -85,7 +85,7 @@ describe("createOpenAICompatibleLanguageModel", () => {
   });
 });
 
-describe("createOpenAICompatibleLanguageModel quota fetch wiring (Taskana 4090)", () => {
+describe("createOpenAICompatibleLanguageModel quota fetch wiring", () => {
   it("passes NO fetch key when onQuotaHeaders is unset (dormancy pin)", () => {
     createOpenAICompatibleLanguageModel(config());
     const options = mockCreateOpenAICompatible.mock.calls.at(-1)![0];
@@ -101,7 +101,7 @@ describe("createOpenAICompatibleLanguageModel quota fetch wiring (Taskana 4090)"
   });
 });
 
-describe("resolveIncludeUsage (TASK.158)", () => {
+describe("resolveIncludeUsage", () => {
   it("an explicit setting wins for every transport (true and false)", () => {
     for (const transport of ["openai-chat-completions", "anthropic-messages", "openai-responses"] as const) {
       expect(resolveIncludeUsage(transport, true)).toBe(true);

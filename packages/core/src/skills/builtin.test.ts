@@ -219,7 +219,7 @@ const SETUP_LOCAL = { kind: "local" as const, dir: "/repo/docs/user" };
 const ANYCODE_SETUP_SKILL = anycodeSetupSkill(SETUP_LOCAL);
 const SETUP_BUILTIN_SKILLS = anycodeSetupBuiltinSkills(SETUP_LOCAL);
 
-describe("anycode-setup builtin skill (Taskana 4707)", () => {
+describe("anycode-setup builtin skill", () => {
   it("discovers and lazily loads the always-on setup skill", async () => {
     const fs = fakeFs();
     const result = await discoverSkills(fs, [], { builtins: SETUP_BUILTIN_SKILLS });
@@ -239,7 +239,7 @@ describe("anycode-setup builtin skill (Taskana 4707)", () => {
     expect(loaded?.truncated).toBe(false);
   });
 
-  it("names the skill and carries the broadened trigger description (Taskana 4707)", () => {
+  it("names the skill and carries the broadened trigger description", () => {
     expect(ANYCODE_SETUP_SKILL.name).toBe("anycode-setup");
     expect(ANYCODE_SETUP_SKILL.description).toBe(
       "Use when the user asks how to set up or configure AnyCode, or why an MCP server, skill, subagent profile, permission, provider, Vision, Codex/Claude engine or setting is not taking effect. Read-only diagnosis; edits only through approved Write/Edit. Never prints API keys or secrets.",

@@ -236,7 +236,7 @@ describe("BrowserRead", () => {
     );
   });
 
-  it("embeds the console tail INSIDE the formatted model text (so the TASK.93 budget covers it)", () => {
+  it("embeds the console tail INSIDE the formatted model text (so the budget covers it)", () => {
     const withConsole: PreviewReadSuccess = {
       previewId: "preview-1",
       url: "file:///repo/index.html",

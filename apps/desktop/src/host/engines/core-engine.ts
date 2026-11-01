@@ -26,7 +26,7 @@ export interface CoreEngineOptions {
    */
   onBeforeTurn?: () => Promise<void>;
   /**
-   * TASK.162 (§0b adjudication): notifies the host that the USER selected a
+   * (§0b adjudication): notifies the host that the USER selected a
    * reasoning tier, so the host can keep its own `selectedEffort` cell current
    * for anything that must re-resolve against the selected tier later — the
    * child-model settings resolver at subagent spawn, above all.
@@ -63,7 +63,7 @@ export class CoreEngine implements SessionEngine {
   }
 
   /**
-   * Routes through the loop (TASK.37), not a bare config write: the loop
+   * Routes through the loop, not a bare config write: the loop
    * mutates the same shared config object AND the in-flight turn's dispatch
    * context, so a mid-turn change reaches the next permission check. Between
    * turns this is behavior-identical to the old `config.mode = mode`.
@@ -110,14 +110,14 @@ export class CoreEngine implements SessionEngine {
   }
 
   continueTurn(options: RunTurnOptions) {
-    // TASK.117: continueTurn's AgentLoop path appends no user frame, but the
+    // continueTurn's AgentLoop path appends no user frame, but the
     // resumed steps' assistant/tool items still get {turnId, step} stamps —
     // options pass through verbatim, exactly like runTurn above.
     return this.wrapSteerLifecycle(this.options.loop.continueTurn(options));
   }
 
   /**
-   * TASK.123 (Taskana 4110 rework): pending steer waiters — one entry per
+   * (rework): pending steer waiters — one entry per
    * in-flight `steer()` call, in send order, resolved with the step ordinal
    * the loop delivered the frame after. A turn that ends before the seam
    * flush kills its undelivered steers via `failUndeliveredSteers` from the
@@ -164,7 +164,7 @@ export class CoreEngine implements SessionEngine {
   }
 
   /**
-   * TASK.123 (Taskana 4110): force-delivers `input` into the RUNNING turn via
+   * force-delivers `input` into the RUNNING turn via
    * the loop's deferred-injection queue. Resolves only once the loop has
    * actually flushed the frame at the legal seam — `{ turnId: "core:step:N" }`
    * names the step whose results the frame follows (self-describing, never

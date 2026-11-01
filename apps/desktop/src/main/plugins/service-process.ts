@@ -1,5 +1,5 @@
 /**
- * Real child-process adapter for the service supervisor (Taskana 4750a). It
+ * Real child-process adapter for the service supervisor. It
  * wraps `node:child_process.spawn` behind the supervisor's `ServiceProcess`
  * port and owns the tree-kill policy:
  *  - POSIX: the child leads its own process group (`detached: true`); a tree

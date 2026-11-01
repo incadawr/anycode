@@ -54,7 +54,7 @@ function fakeBridge(overrides: Partial<SettingsBridge> = {}): SettingsBridge {
     setSecret: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() } satisfies SettingsMutationResult),
     clearSecret: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() } satisfies SettingsMutationResult),
     addRule: vi.fn().mockResolvedValue({ ok: true, snapshot: baseSnapshot() } satisfies SettingsMutationResult),
-    // TASK.103: mechanical addition ONLY — `SettingsBridge` gained a new
+    // mechanical addition ONLY — `SettingsBridge` gained a new
     // required member (settings-store.ts row 42); this file's own fixture
     // must satisfy the type, though nothing in PermissionsEditor.tsx itself
     // changed (D-S4-7: the trusted-binaries section is a sibling component).
@@ -192,10 +192,10 @@ describe("submitPermissionAdd", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Taskana 4730: the classifier control's pure builders.
+// the classifier control's pure builders.
 // ---------------------------------------------------------------------------
 
-describe("buildClassifierRecord (Taskana 4730)", () => {
+describe("buildClassifierRecord", () => {
   it("command kind: a non-blank command builds {enabled,kind,command}; blank stays undefined (off)", () => {
     expect(buildClassifierRecord("command", { command: "  /opt/da --json  ", connectionId: "", model: "" })).toEqual({
       enabled: true,
@@ -219,7 +219,7 @@ describe("buildClassifierRecord (Taskana 4730)", () => {
   });
 });
 
-describe("classifierFieldsFromRecord (Taskana 4730)", () => {
+describe("classifierFieldsFromRecord", () => {
   it("absent record => disabled defaults", () => {
     expect(classifierFieldsFromRecord(undefined)).toEqual({
       kind: "command",

@@ -1,5 +1,5 @@
 /**
- * Workspace trust (Taskana 4736). Decides whether a project folder's own
+ * Workspace trust. Decides whether a project folder's own
  * declarations (MCP servers, hooks, LSP servers, project-tier plugin MCP) may
  * start processes. Main-safe subpath `@anycode/core/workspace-trust`: no ai-SDK
  * imports, so the Electron main process can persist decisions through it.
@@ -54,7 +54,7 @@ export interface WorkspaceTrustOptions {
   /** Hash approved for this process only ("Trust once"); never persisted. */
   onceHash?: string;
   /**
-   * Optional realpath (Taskana 4739): when present the folder key is
+   * Optional realpath: when present the folder key is
    * `realpathSync(resolve(workspace))`, so a symlink and its target share one
    * trust record. Falls back to the legacy `resolve` key when realpath throws.
    * Without it the behaviour is byte-identical to pre-4739.
@@ -77,7 +77,7 @@ export async function resolveWorkspaceTrust(
   fs: FileSystemPort,
   opts: WorkspaceTrustOptions,
 ): Promise<WorkspaceTrustResult> {
-  // Taskana 4739: the folder key is the REAL path when a realpath is
+  // the folder key is the REAL path when a realpath is
   // injected; the legacy `resolve` key is kept for the read fallback below so
   // pre-4739 records keep working until the startup migration rewrites them.
   const folder = canonicalWorkspaceKey(opts.workspace, opts.realpathSync);

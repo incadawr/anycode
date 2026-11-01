@@ -1,5 +1,5 @@
 /**
- * SubagentStallClock tests (TASK.148 slice 1). Hermetic: no ModelPort, no
+ * SubagentStallClock tests (slice 1). Hermetic: no ModelPort, no
  * dispatcher — the class only ever sees noteProgress()/pause()/resume()/
  * dispose() calls and Date/setTimeout, so vi.useFakeTimers() (the FULL fake,
  * not the codebase's usual `toFake:["Date"]}` deadline-check style — this
@@ -21,7 +21,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("SubagentStallClock (TASK.148 slice 1)", () => {
+describe("SubagentStallClock (slice 1)", () => {
   it("reports exactly one stall notice once silence passes the threshold", async () => {
     vi.useFakeTimers();
     const { reports, onStall } = recorder();

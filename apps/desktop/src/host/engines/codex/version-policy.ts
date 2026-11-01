@@ -1,5 +1,5 @@
 /**
- * Which Codex versions THIS host will actually start (TASK.206).
+ * Which Codex versions THIS host will actually start.
  *
  * Deliberately NOT in protocol.ts. That module owns `SUPPORTED_CODEX_VERSION`,
  * which is a pinned fact about the WIRE CONTRACT — the app-server schema the
@@ -18,7 +18,7 @@
  *
  * FAIL-SAFE, not fail-open. "No policy travelled" — an older main that does not
  * stamp the carrier, a blank value, an unparseable payload — resolves to the
- * COMPILED WIRE PIN: exactly the check this host performed before TASK.206, no
+ * COMPILED WIRE PIN: exactly the check this host performed before, no
  * floor, ceiling `SUPPORTED_CODEX_VERSION`. Absence of a policy therefore means
  * the previous check, never the absence of a check.
  */

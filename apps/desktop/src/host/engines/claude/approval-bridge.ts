@@ -29,10 +29,10 @@ import type { EngineBridgeBroker, SettleOrigin } from "../../permission-broker.j
 import type { ControlRequestResponder, InboundControlRequest } from "./claude-client.js";
 import { CLAUDE_ANYCODE_MCP_TOOL_PREFIX, type ClaudeMcpBridge } from "./mcp-bridge.js";
 
-/** Control subtypes the CLI can initiate (contract §2.2). `can_use_tool` is bridged to the interactive broker; `mcp_message` is bridged to `ClaudeMcpBridge` (TASK.226 S3) when one is attached. */
+/** Control subtypes the CLI can initiate (contract §2.2). `can_use_tool` is bridged to the interactive broker; `mcp_message` is bridged to `ClaudeMcpBridge` (S3) when one is attached. */
 export const CLAUDE_CAN_USE_TOOL = "can_use_tool";
 
-/** TASK.226 S3: the CLI's own in-process MCP handshake and tool calls (probes.md P0/P1/P3), routed to `options.bridge` instead of the fail-closed default. */
+/** S3: the CLI's own in-process MCP handshake and tool calls (probes.md P0/P1/P3), routed to `options.bridge` instead of the fail-closed default. */
 export const CLAUDE_MCP_MESSAGE = "mcp_message";
 
 /**
@@ -67,9 +67,9 @@ function claudeToolMetadata(toolName: string): ToolMetadata {
 }
 
 /**
- * Taskana 4070: a Bash can_use_tool whose command line the shared classifier
+ * a Bash can_use_tool whose command line the shared classifier
  * proves read-only (and is not a shell expression) is presented readOnly/low,
- * mirroring the Codex bridge's commandExecutionMetadata (TASK.184). Presentation
+ * mirroring the Codex bridge's commandExecutionMetadata. Presentation
  * only — the decision still goes through the broker.
  */
 function commandAwareMetadata(toolName: string, input: Record<string, unknown>): ToolMetadata {
@@ -144,10 +144,10 @@ export interface ClaudeApprovalBridgeOptions {
   /** The session's active permission preset id; `read-only` refuses ExitPlanMode escalation. */
   activePresetId(): string;
   /**
-   * TASK.226 S3: when set, `mcp_message` is routed here instead of the fail-closed default, and the owned `mcp__anycode__agent` tool is auto-allowed (plan §2.6). Absent for engines/tests that never announce the door. */
+   * S3: when set, `mcp_message` is routed here instead of the fail-closed default, and the owned `mcp__anycode__agent` tool is auto-allowed (plan §2.6). Absent for engines/tests that never announce the door. */
   bridge?: ClaudeMcpBridge;
   /**
-   * Taskana 4294 (cross-review F1): the session's workspace root (the
+   * (cross-review F1): the session's workspace root (the
    * host boot's `workspace`, i.e. the process cwd the `claude` CLI was
    * spawned with). When set, Write/Edit/MultiEdit `can_use_tool` requests
    * carry dispatcher-equivalent `workspace` facts (realpath-resolved) so
@@ -160,7 +160,7 @@ export interface ClaudeApprovalBridgeOptions {
    */
   workspace?: string;
   /**
-   * Taskana 4764: the full CLI names (`mcp__anycode__browser_*`) of the door's
+   * the full CLI names (`mcp__anycode__browser_*`) of the door's
    * browser tools. When set (and a door exists), `can_use_tool` for these names
    * is answered `allow` immediately: the CLI's name-only gate cannot express
    * "remote only", so the REAL, input-aware approval gate runs in the bridge's
@@ -217,7 +217,7 @@ export class ClaudeApprovalBridge {
       return;
     }
     if (this.options.bridge !== undefined && (approval.toolName === `${CLAUDE_ANYCODE_MCP_TOOL_PREFIX}agent` || approval.toolName === `${CLAUDE_ANYCODE_MCP_TOOL_PREFIX}agent_status`)) {
-      // AnyCode's own MCP door (TASK.226 S3), not a third-party tool: the
+      // AnyCode's own MCP door (S3), not a third-party tool: the
       // child session spawned behind it has its own broker for whatever it
       // actually does (plan §2.6). Allowed before the pending latch below so
       // it never contends with a concurrent human-facing approval — probes.md
@@ -227,7 +227,7 @@ export class ClaudeApprovalBridge {
       return;
     }
     if (this.options.bridge !== undefined && this.options.browserToolNames?.has(approval.toolName)) {
-      // Taskana 4764: the door's browser tools. The CLI's `can_use_tool` only
+      // the door's browser tools. The CLI's `can_use_tool` only
       // knows a tool NAME and cannot express "remote only"; the real,
       // input-aware gate runs in the bridge's `callTool` (browser-bridge.ts
       // §2.3 step 2) through the same broker, so auto-allow here to avoid a
@@ -302,7 +302,7 @@ export class ClaudeApprovalBridge {
   }
 
   /**
-   * Taskana 4294 (cross-review F1): mints the SAME dispatch-site workspace
+   * (cross-review F1): mints the SAME dispatch-site workspace
    * facts the core dispatcher mints (resolveWorkspaceWriteFacts — realpath
    * root + symlink-resolved target, refusing relative/`..`/NUL-bearing
    * paths) for Write/Edit/MultiEdit approvals, so the broker's rule seam can
@@ -345,7 +345,7 @@ export class ClaudeApprovalBridge {
 }
 
 /**
- * Taskana 4294 (cross-review F1): true only for the approval shapes that
+ * (cross-review F1): true only for the approval shapes that
  * need workspace facts — a Write/Edit/MultiEdit with a wired workspace root
  * and a string `file_path`. Everything else keeps the original synchronous
  * path into the broker, preserving emit ordering for existing consumers.
@@ -360,7 +360,7 @@ function claudeNeedsWorkspaceFacts(
 
 /**
  * The target path of a Claude file-write approval: `file_path` for
- * Write/Edit/MultiEdit, `notebook_path` for NotebookEdit (Taskana 4294 review —
+ * Write/Edit/MultiEdit, `notebook_path` for NotebookEdit (review —
  * the broker confines NotebookEdit rules too). Undefined for anything else.
  */
 function claudeWriteTarget(toolName: string, input: Record<string, unknown>): unknown {

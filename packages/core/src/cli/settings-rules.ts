@@ -1,6 +1,6 @@
 /**
  * CLI-side read+write access to `~/.anycode/settings.json`'s
- * `permissions.alwaysAllow` section (design slice-P7.5-cut.md §3.1, TASK.8).
+ * `permissions.alwaysAllow` section (design slice-P7.5-cut.md §3.1).
  *
  * Desktop main (`apps/desktop/src/settings/files.ts`/`settings-ipc.ts`) is
  * the strict-schema, quarantine-on-corrupt writer of the WHOLE settings.json
@@ -36,7 +36,7 @@ const ANYCODE_DIR_MODE = 0o700;
 const SETTINGS_FILE_MODE = 0o644;
 /**
  * The current settings.json version this module CREATES (desktop
- * `CURRENT_SETTINGS_VERSION`, TASK.45 W9: v2). The append writer is
+ * `CURRENT_SETTINGS_VERSION`, W9: v2). The append writer is
  * structure-preserving (it only ever rewrites `permissions.alwaysAllow`), so it
  * ACCEPTS any already-supported version (1 or 2) and only refuses a
  * newer-than-CURRENT file — see `SUPPORTED_WRITE_VERSIONS`.

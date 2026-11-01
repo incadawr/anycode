@@ -70,7 +70,7 @@ function fakeHost(overrides: Partial<PreviewHostHandle> = {}): PreviewHostHandle
     listForPanel: vi.fn((tabId: string) => ({ tabId, previews: [], visiblePanelPreviewId: null })),
     setContainer: vi.fn(async () => ({ ok: true as const, reloaded: true })),
     getMdDocRef: vi.fn(() => undefined),
-    // TASK.99 M2: type-level fake addition only — this suite exercises the
+    // M2: type-level fake addition only — this suite exercises the
     // panel IPC, not md-doc navigate (covered by preview-host.test.ts's own
     // "commitMdNavigate" suite).
     commitMdNavigate: vi.fn(() => undefined),
@@ -348,7 +348,7 @@ function makeRealHost(): { host: PreviewHostHandle; panelViews: FakePanel[] } {
       panelViews.push(view);
       return view;
     },
-    // TASK.99 M3: this suite never opens a dom-md preview, so no test here
+    // M3: this suite never opens a dom-md preview, so no test here
     // exercises this dep — a minimal fake satisfies PreviewHostDeps' shape.
     createMdWindow: () => ({
       isDestroyed: () => false,
@@ -361,14 +361,14 @@ function makeRealHost(): { host: PreviewHostHandle; panelViews: FakePanel[] } {
     }),
     displayMode: () => "panel",
     resolveArtifact: async (_tabId, path) => ({ realPath: path }),
-    // TASK.99 M4: this suite never exercises dom-md read/screenshot either —
+    // M4: this suite never exercises dom-md read/screenshot either —
     // minimal fakes satisfying PreviewHostDeps' shape, same posture as
     // `createMdWindow` above.
     statMdSource: async () => undefined,
     readMdSourceNoFollow: async () => Buffer.alloc(0),
     captureMainWindowRect: async () => null,
     autoOpenEnabled: () => true,
-    // Taskana 4100 stage 4: live-reload is not exercised by this suite —
+    // stage 4: live-reload is not exercised by this suite —
     // honest additive defaults satisfying PreviewHostDeps' shape (same
     // posture as the M3/M4 minimal fakes above).
     liveReloadEnabled: () => false,

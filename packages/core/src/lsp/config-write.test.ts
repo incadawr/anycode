@@ -1,5 +1,5 @@
 /**
- * config-write tests (Taskana 4743): upsert/delete patch ONLY the `lspServers`
+ * config-write tests: upsert/delete patch ONLY the `lspServers`
  * array and preserve every other top-level key and every unrelated array item
  * (valid AND invalid ones — the array is user-editable); replace-by-name,
  * append, delete, delete-missing no-op; a non-array `lspServers` is refused
