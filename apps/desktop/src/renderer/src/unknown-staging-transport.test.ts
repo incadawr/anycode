@@ -9,6 +9,56 @@ const ready: HostToUiMessage = { type: "host_ready", workspace: "/synthetic", se
 const image = () => ({ name: "synthetic.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } });
 
 describe("unknown delivery over real MessageChannel", () => {
+  it("dismisses a branched tree bottom-up, blocks active descendants, and fences late events", () => {
+    const store = createDesktopStore({ schedule: () => {} });
+    store.getState().applyHostMessage(ready);
+    const saved = image();
+    store.getState().recordSentMessage("parent", [saved], "parent", undefined, undefined, undefined, undefined, true);
+    store.getState().applyHostMessage({ type: "turn_rejected", requestId: "parent", reason: "busy" });
+    const parent = store.getState().orchestrationDeliveries[0]!;
+    const rejectedChild = { ...parent, requestId: "child-a", parentRequestId: "parent", text: "child-a", ordinaryDirect: undefined };
+    const pendingChild = { ...parent, requestId: "child-b", parentRequestId: "parent", text: "child-b", status: "pending" as const, ordinaryDirect: undefined };
+    const grandchild = { ...parent, requestId: "grandchild", parentRequestId: "child-a", text: "grandchild", ordinaryDirect: undefined };
+    store.setState({ orchestrationDeliveries: [parent, rejectedChild, pendingChild, grandchild] });
+    store.getState().dismissRejectedDelivery("grandchild");
+    store.getState().dismissRejectedDelivery("parent");
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "rejected", images: [saved] });
+    store.getState().dismissRejectedDelivery("child-a");
+    store.getState().dismissRejectedDelivery("parent");
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "rejected", images: [saved] });
+    store.getState().applyHostMessage({ type: "turn_rejected", requestId: "child-b", reason: "busy" });
+    store.getState().dismissRejectedDelivery("child-b");
+    store.getState().dismissRejectedDelivery("parent");
+    expect(store.getState().orchestrationDeliveries).toMatchObject([
+      { requestId: "parent", dismissed: true, images: [] }, { requestId: "child-a", dismissed: true, images: [] },
+      { requestId: "child-b", dismissed: true, images: [] }, { requestId: "grandchild", dismissed: true, images: [] },
+    ]);
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "grandchild", turnId: "late-grandchild" });
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "grandchild")).toMatchObject({ status: "conflict", payloadOmitted: true });
+    expect(store.getState().claimRecoveryAttempt("parent", "unsafe", "retry", [saved], undefined)).toBe(false);
+  });
+
+  it("pins dismissed descendant correlation when an ancestor still owns a rejected payload", () => {
+    const store = createDesktopStore({ schedule: () => {} });
+    store.getState().applyHostMessage(ready);
+    const saved = image();
+    store.getState().recordSentMessage("parent", [saved], "parent", undefined, undefined, undefined, undefined, true);
+    store.getState().applyHostMessage({ type: "turn_rejected", requestId: "parent", reason: "busy" });
+    const parent = store.getState().orchestrationDeliveries[0]!;
+    store.setState({ orchestrationDeliveries: [parent, { ...parent, requestId: "child", parentRequestId: "parent", ordinaryDirect: undefined }] });
+    store.getState().dismissRejectedDelivery("child");
+    for (let i = 0; i < COMPLETED_DIRECT_CORRELATION_LIMIT + 10; i++) {
+      const id = `pressure-${i}`;
+      store.getState().recordSentMessage("completed", [saved], id, undefined, undefined, undefined, undefined, true);
+      store.getState().applyHostMessage({ type: "turn_started", requestId: id, turnId: id });
+      store.getState().applyHostMessage({ type: "agent_event", turnId: id, event: { type: "loop_end", reason: "completed", turns: 1 } });
+    }
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "child")).toMatchObject({ dismissed: true, parentRequestId: "parent" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "child", turnId: "late-child" });
+    store.getState().dismissRejectedDelivery("parent");
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "parent")).toMatchObject({ status: "rejected", images: [saved] });
+    expect(store.getState().claimRecoveryAttempt("parent", "unsafe", "retry", [saved], undefined)).toBe(false);
+  });
   it("cannot dismiss unknown, active, or rejected ancestors with dependent attempts", () => {
     const store = createDesktopStore({ schedule: () => {} });
     store.getState().applyHostMessage(ready);

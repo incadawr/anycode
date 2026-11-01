@@ -213,6 +213,38 @@ describe("dock resize handle placement (GitHub #31)", () => {
     expect(container.querySelector(".orchestration-delivery-restore")).toBeNull();
   });
 
+  it("dismisses a rejected parent after its rejected retry was discarded and dismissed, retaining late-event fences", async () => {
+    const ready = { type: "host_ready" as const, workspace: "/ws", sessionId: "a", mode: "build" as const, model: "m1", imageInput: true };
+    const image = { name: "parent.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } };
+    store.getState().applyHostMessage(ready);
+    store.getState().recordSentMessage("parent payload", [image], "parent", undefined, undefined, undefined, undefined, true);
+    store.getState().applyHostMessage({ type: "turn_rejected", requestId: "parent", reason: "busy" });
+    const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+    await mountBody();
+    await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+    const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "retry payload"); textarea.dispatchEvent(new Event("input", { bubbles: true })); });
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    const sent = send.mock.calls.find(([, message]) => message.type === "user_message")?.[1] as { requestId: string };
+    expect(sent.requestId).toBeTruthy();
+    await act(async () => store.getState().applyHostMessage({ type: "turn_rejected", requestId: sent.requestId, reason: "busy" }));
+    const row = (text: string) => [...container.querySelectorAll<HTMLElement>('[role="status"]')].find(element => element.textContent?.includes(text))!;
+    await act(async () => row("retry payload").querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+    const discard = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Discard this draft and start a new message")!;
+    await act(async () => discard.click());
+    await act(async () => row("retry payload").querySelector<HTMLButtonElement>(".orchestration-delivery-dismiss")!.click());
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === sent.requestId)).toMatchObject({ dismissed: true, payloadOmitted: true, status: "rejected" });
+    await act(async () => row("parent payload").querySelector<HTMLButtonElement>(".orchestration-delivery-dismiss")!.click());
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "parent")).toMatchObject({ dismissed: true, payloadOmitted: true, images: [] });
+    await act(async () => store.getState().applyHostMessage({ type: "turn_started", requestId: sent.requestId, turnId: "late-child" }));
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === sent.requestId)).toMatchObject({ status: "conflict", payloadOmitted: true });
+    expect(container.textContent).toContain("Conflicting delivery reports");
+    await act(async () => store.getState().applyHostMessage({ type: "turn_started", requestId: "parent", turnId: "late-parent" }));
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "parent")).toMatchObject({ status: "conflict", payloadOmitted: true });
+    expect(store.getState().claimRecoveryAttempt("parent", "unsafe-retry", "retry", [image], undefined)).toBe(false);
+    expect(send.mock.calls.filter(([, message]) => message.type === "user_message")).toHaveLength(1);
+  });
+
   it("shows a late conflict for a compacted direct delivery without offering a missing payload", async () => {
     store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", sessionId: "a", mode: "build", model: "m1" });
     const image = { name: "done.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } };

@@ -1050,7 +1050,14 @@ export interface OrchestrationDelivery {
 export const COMPLETED_DIRECT_CORRELATION_LIMIT = 256;
 
 function boundDeliveryTombstones(deliveries: readonly OrchestrationDelivery[]): readonly OrchestrationDelivery[] {
-  const evictable = deliveries.filter(item => item.payloadOmitted && (item.status === "started" || (item.status === "rejected" && item.dismissed)) && !deliveries.some(child => child.parentRequestId === item.requestId));
+  // Keep the entire correlation tree while any member still owns a payload or
+  // has an unresolved outcome. Evicting a dismissed descendant early could
+  // make its ancestor appear safe to retry before a late descendant event.
+  const evictable = deliveries.filter(item => {
+    if (!item.payloadOmitted || !(item.status === "started" || (item.status === "rejected" && item.dismissed)) || deliveries.some(child => child.parentRequestId === item.requestId)) return false;
+    const family = recoveryTreeIds(deliveries, item.requestId);
+    return family !== null && deliveries.every(entry => !family.has(entry.requestId) || (entry.payloadOmitted && (entry.status === "started" || (entry.status === "rejected" && entry.dismissed))));
+  });
   const remove = new Set(evictable.slice(0, Math.max(0, evictable.length - COMPLETED_DIRECT_CORRELATION_LIMIT)).map(item => item.requestId));
   return deliveries.filter(item => !remove.has(item.requestId));
 }
@@ -1113,12 +1120,25 @@ export function recoveryTreeBlocked(deliveries: readonly OrchestrationDelivery[]
 
 export function canDismissRejectedDelivery(state: DesktopState, requestId: string): boolean {
   const item = state.orchestrationDeliveries.find(entry => entry.requestId === requestId);
-  return !!item && item.status === "rejected" && item.origin !== "system" && !item.dismissed && !item.payloadOmitted &&
-    state.restoredComposerDraft?.deliveryRequestId !== requestId && state.composerRolePicker?.deliveryRequestId !== requestId &&
-    !state.orchestrationDeliveries.some(entry => entry.parentRequestId === requestId) &&
-    !state.promptQueue.some(entry => entry.recoverySourceId === requestId || entry.retryOf === requestId) &&
-    state.queueInFlight?.requestId !== requestId && state.queueInFlight?.item.recoverySourceId !== requestId &&
-    !state.pendingSteers.some(entry => entry.requestId === requestId);
+  if (!item || item.status !== "rejected" || item.origin === "system" || item.dismissed || item.payloadOmitted || item.retryQueued) return false;
+  if (!recoveryTreeIds(state.orchestrationDeliveries, requestId)) return false;
+  const descendants = new Set([requestId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const entry of state.orchestrationDeliveries) {
+      if (entry.parentRequestId && descendants.has(entry.parentRequestId) && !descendants.has(entry.requestId)) {
+        descendants.add(entry.requestId);
+        changed = true;
+      }
+    }
+  }
+  if (state.orchestrationDeliveries.some(entry => entry.requestId !== requestId && descendants.has(entry.requestId) && !(entry.status === "rejected" && entry.dismissed && entry.payloadOmitted && !entry.retryQueued))) return false;
+  return !descendants.has(state.restoredComposerDraft?.deliveryRequestId ?? "") &&
+    !descendants.has(state.composerRolePicker?.deliveryRequestId ?? "") &&
+    !state.promptQueue.some(entry => descendants.has(entry.recoverySourceId ?? "") || descendants.has(entry.retryOf ?? "")) &&
+    !descendants.has(state.queueInFlight?.requestId ?? "") && !descendants.has(state.queueInFlight?.item.recoverySourceId ?? "") &&
+    !state.pendingSteers.some(entry => descendants.has(entry.requestId));
 }
 
 function startedDeliveries(state: DesktopState, requestId: string, turnId: string): readonly OrchestrationDelivery[] {
