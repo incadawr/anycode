@@ -741,6 +741,9 @@ describe("dock resize handle placement (GitHub #31)", () => {
       await act(async () => emit({type:"turn_started",requestId:"ancestor",turnId:"late-ancestor"}));
       expect(target.getState().promptQueue[0]).toMatchObject({text:"retry draft",images:[image],recoverySourceId:"source",requiresRestore:true});
       await act(async () => emit({type:"agent_event",turnId:"late-ancestor",event:{type:"loop_end",reason:"completed",turns:1}}));
+      expect(target.getState().turn).toMatchObject({status:"running",turnId:"other-turn"});
+      expect(port.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type:"user_message",text:"following task"}));
+      await act(async () => emit({type:"agent_event",turnId:"other-turn",event:{type:"loop_end",reason:"completed",turns:1}}));
       expect(port.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type:"user_message",text:"retry draft"}));
       expect(port.postMessage).toHaveBeenCalledWith(expect.objectContaining({type:"user_message",text:"following task"}));
       await act(async () => container.querySelector<HTMLButtonElement>(".prompt-queue-restore")!.click());

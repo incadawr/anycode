@@ -5218,6 +5218,15 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           case "turn_started": {
             pendingSentMessages.delete(message.requestId);
             const knownDelivery = get().orchestrationDeliveries.find(item => item.requestId === message.requestId);
+            // A start for an unconfirmed pre-disconnect attempt can arrive
+            // while a different turn is active. Record both the start and the
+            // inconsistent overlap without replacing that active turn.
+            if (knownDelivery?.status === "unknown" && get().turn.status === "running" && get().turn.turnId !== message.turnId) {
+              set((state) => reconcileQueuedRetries(state.promptQueue, state.orchestrationDeliveries.map(item => item.requestId === message.requestId
+                ? { ...item, status: "conflict" as const, turnId: message.turnId, reviewed: false }
+                : item)));
+              return;
+            }
             // A replay (or a contradictory second start for a finished request)
             // must update correlation without reviving an already ended turn.
             // Keep this fence across host_ready resets via the delivery ledger.
