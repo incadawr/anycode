@@ -37,6 +37,7 @@ import { createConnectionModelSettings } from "./connection-model-settings.js";
  */
 
 import { MessageChannel } from "node:worker_threads";
+import { createDesktopStore } from "../renderer/src/store.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   AgentLoop,
@@ -9481,6 +9482,122 @@ describe("Session — provider usage audit", () => {
 // live mode.
 
 describe("Session — set_orchestrate (§3.7 / A1)", () => {
+  it("refuses enabling during relocation and permits it after relocation ends", async () => {
+    const engine = orchestrateEngine({});
+    const h = createHarness({ steps: [], engine });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      const session = h.session as unknown as { relocating: boolean };
+      session.relocating = true;
+      h.send({ type: "set_orchestrate", enabled: true });
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.filter(m => m.type === "host_ready").length === 2);
+      expect(engine.mode()).toBe("build");
+      expect(h.received.some(m => m.type === "orchestrate_changed")).toBe(false);
+      session.relocating = false;
+      h.send({ type: "set_orchestrate", enabled: true });
+      await h.waitUntil(() => h.received.some(m => m.type === "orchestrate_changed" && m.enabled));
+      expect(engine.mode()).toBe("plan");
+    } finally { h.close(); }
+  });
+  it("a reserved frame reusing a started ID is diagnostic only for host and renderer", async () => {
+    let release: (() => void) | undefined;
+    let calls = 0;
+    const h = createHarness({ steps: [], engine: orchestrateEngine({ onRunTurn: () => { calls++; }, park: () => new Promise<void>(resolve => { release = resolve; }) }) });
+    const store = createDesktopStore({ schedule: () => {} });
+    try {
+      h.send({ type: "ui_ready" });
+      const ready = await h.waitFor(isHostReady);
+      store.getState().applyHostMessage(ready);
+      store.getState().recordSentMessage("first", [], "shared", "enable", {});
+      h.send({ type: "user_message", requestId: "shared", text: "first" });
+      const started = await h.waitFor(isTurnStarted);
+      store.getState().applyHostMessage(started);
+      expect(store.getState().orchestrationDeliveries[0]?.status).toBe("started");
+      h.send({ type: "user_message", requestId: "shared", text: "second", orchestrate: "enable" });
+      const diagnostic = await h.waitFor((m): m is Of<"user_message_unavailable"> => m.type === "user_message_unavailable" && m.requestId === "shared");
+      store.getState().applyHostMessage(diagnostic);
+      store.getState().applyHostMessage(diagnostic);
+      expect(store.getState().orchestrationDeliveries[0]?.status).toBe("started");
+      expect(h.received.some(m => m.type === "turn_rejected" && m.requestId === "shared")).toBe(false);
+      expect(h.outbound.ringView()).not.toContainEqual(diagnostic);
+      expect(calls).toBe(1);
+      release?.();
+      await h.flush();
+      expect(calls).toBe(1);
+    } finally { release?.(); h.close(); }
+  });
+  it("does not report an existing turn rejected when a malformed frame reuses its ID", async () => {
+    let release: (() => void) | undefined;
+    const h = createHarness({ steps: [], engine: orchestrateEngine({ park: () => new Promise<void>(resolve => { release = resolve; }) }) });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "user_message", requestId: "same-id", text: "first" });
+      await h.waitFor(isTurnStarted);
+      h.send({ type: "user_message", requestId: "same-id", text: "other", orchestrate: "disable" } as unknown as UiToHostMessage);
+      await h.waitFor((m): m is Of<"user_message_invalid"> => m.type === "user_message_invalid" && m.requestId === "same-id");
+      expect(h.received.some(m => m.type === "turn_rejected" && m.requestId === "same-id")).toBe(false);
+      release?.();
+      await h.flush();
+    } finally { release?.(); h.close(); }
+  });
+  it("does not apply legacy toggle to a foreign engine", async () => {
+    const engine: SessionEngine = { ...orchestrateEngine({}), id: "claude" };
+    const modeChange = vi.spyOn(engine, "setMode");
+    const touch = vi.fn();
+    const h = createHarness({ steps: [], engine, onTouch: touch });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "set_orchestrate", enabled: true });
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.filter(m => m.type === "host_ready").length === 2);
+      expect(modeChange).not.toHaveBeenCalled();
+      expect(touch).not.toHaveBeenCalled();
+      expect(h.received.some(m => m.type === "orchestrate_changed")).toBe(false);
+    } finally { h.close(); }
+  });
+  it("refuses reserved intent for a busy child before presence or steer queuing", async () => {
+    let release: (() => void) | undefined;
+    const h = createSeamChild(() => orchestrateEngine({ park: () => new Promise<void>(resolve => { release = resolve; }) }));
+    const presence = vi.spyOn(h.broker, "noteHumanPresent");
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "set_orchestrate", enabled: true });
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.filter(m => m.type === "host_ready").length === 2);
+      expect(h.received.some(m => m.type === "orchestrate_changed")).toBe(false);
+      expect(h.session.startProgrammaticTurn("initial")).toEqual({ ok: true });
+      await h.waitFor(isTurnStarted);
+      h.send({ type: "user_message", requestId: "child-atomic", text: "must not queue", orchestrate: "enable" });
+      const result = await h.waitFor((m): m is Of<"user_message_unavailable"> => m.type === "user_message_unavailable" && m.requestId === "child-atomic");
+      expect(result.reason).toBe("orchestrate_unavailable");
+      expect(presence).not.toHaveBeenCalled();
+      release?.();
+      await h.waitUntil(() => h.onTerminal.mock.calls.length > 0);
+      expect(h.received.some(m => m.type === "turn_started" && m.requestId === "child-atomic")).toBe(false);
+    } finally { release?.(); h.close(); }
+  });
+  it("returns bounded direct invalid-message refusals without presence or persistence side effects", async () => {
+    const touch = vi.fn();
+    const h = createHarness({ steps: [], engine: orchestrateEngine({}), onTouch: touch });
+    const presence = vi.spyOn(h.broker, "noteHumanPresent");
+    try {
+      h.send({ type: "ui_ready" });
+      const ready = await h.waitFor(isHostReady);
+      expect(ready.orchestration).toEqual({ enabled: false, available: false, reason: "unavailable" });
+      h.send({ type: "user_message", requestId: "malformed", text: "private", orchestrate: "disable" } as unknown as UiToHostMessage);
+      const refusal = await h.waitFor((m): m is Of<"user_message_invalid"> => m.type === "user_message_invalid" && m.requestId === "malformed");
+      expect(refusal).toEqual({ type: "user_message_invalid", requestId: "malformed" });
+      expect(h.outbound.ringView()).not.toContainEqual(refusal);
+      expect(presence).not.toHaveBeenCalled();
+      expect(touch).not.toHaveBeenCalled();
+      expect(h.received.some(m => m.type === "turn_started")).toBe(false);
+    } finally { h.close(); }
+  });
   it("refuses repeated reserved operations while busy without a second turn", async () => {
     let release: (() => void) | undefined;
     const inputs: string[] = [];
@@ -9495,7 +9612,7 @@ describe("Session — set_orchestrate (§3.7 / A1)", () => {
       h.send({ type: "user_message", requestId: "future", text: "second", orchestrate: "enable" });
       h.send({ type: "set_orchestrate", enabled: true, requestId: "future-toggle" });
       await h.waitFor((m): m is Of<"orchestrate_result"> => m.type === "orchestrate_result" && m.requestId === "future-toggle");
-      expect(h.received.filter(m => m.type === "turn_rejected" && m.requestId === "future")).toHaveLength(2);
+      expect(h.received.filter(m => m.type === "user_message_unavailable" && m.requestId === "future")).toHaveLength(2);
       expect(h.received.filter(m => m.type === "turn_started")).toHaveLength(1);
       expect(engine.mode()).toBe("build");
       release?.();
@@ -9516,7 +9633,7 @@ describe("Session — set_orchestrate (§3.7 / A1)", () => {
       h.send({ type: "set_orchestrate", enabled: true, requestId: "toggle" });
       await h.waitFor((m): m is Of<"orchestrate_result"> => m.type === "orchestrate_result" && m.requestId === "toggle");
       await h.flush();
-      expect(h.received).toContainEqual({ type: "turn_rejected", requestId: "atomic", reason: "not_ready" });
+      expect(h.received).toContainEqual({ type: "user_message_unavailable", requestId: "atomic", reason: "orchestrate_unavailable" });
       expect(h.received).toContainEqual({ type: "orchestrate_result", requestId: "toggle", outcome: "rejected", reason: "unavailable" });
       expect(engine.mode()).toBe("build");
       expect(inputs).toEqual([]);
@@ -9525,7 +9642,7 @@ describe("Session — set_orchestrate (§3.7 / A1)", () => {
       h.send({ type: "ui_ready" });
       await h.waitUntil(() => h.received.slice(before).some(m => m.type === "host_ready"));
       await h.flush();
-      expect(h.received.slice(before).some(m => m.type === "orchestrate_result" || (m.type === "turn_rejected" && m.requestId === "atomic"))).toBe(false);
+      expect(h.received.slice(before).some(m => m.type === "orchestrate_result" || (m.type === "user_message_unavailable" && m.requestId === "atomic"))).toBe(false);
       h.send({ type: "user_message", requestId: "legacy", text: "ordinary" });
       await h.waitFor((m): m is Of<"turn_started"> => m.type === "turn_started" && m.requestId === "legacy");
       await h.flush();

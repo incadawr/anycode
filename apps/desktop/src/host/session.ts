@@ -1634,7 +1634,7 @@ export class Session {
    * goes through; no new persistence identity.
    */
   private boundPort: WirePort | null = null;
-  /** Per-process Session incarnation and per-bind token; neither is an auth credential. */
+  /** Per-Session incarnation and per-bind token; neither is an auth credential. */
   private readonly hostIncarnation = randomUUID();
   private boundGeneration: string | null = null;
   /**
@@ -2619,6 +2619,11 @@ export class Session {
   private route(raw: unknown): void {
     const parsed = uiToHostMessageSchema.safeParse(raw);
     if (!parsed.success) {
+      // A valid bounded correlation ID lets the caller recover its whole draft.
+      // Never reflect malformed payloads or unbounded data into a response.
+      if (raw !== null && typeof raw === "object" && "type" in raw && raw.type === "user_message" && "requestId" in raw && typeof raw.requestId === "string" && raw.requestId.length > 0 && raw.requestId.length <= 128) {
+        this.outbound.sendDirect({ type: "user_message_invalid", requestId: raw.requestId });
+      }
       // Fail-closed: garbage can never grant a permission or start a turn.
       console.warn("[host] dropped invalid UI message:", parsed.error.issues);
       return;
@@ -2641,7 +2646,7 @@ export class Session {
         this.handleUiSteerMessage(message.requestId, message.text);
         return;
       case "user_message":
-          if (message.orchestrate !== undefined) this.outbound.sendDirect({ type: "turn_rejected", requestId: message.requestId, reason: "not_ready" });
+          if (message.orchestrate !== undefined) this.outbound.sendDirect({ type: "user_message_unavailable", requestId: message.requestId, reason: "orchestrate_unavailable" });
           else this.outbound.emit({ type: "turn_rejected", requestId: message.requestId, reason: "not_ready" });
           break;
         case "set_orchestrate":
@@ -2702,6 +2707,7 @@ export class Session {
           mode: this.engine.mode(),
           model: this.model,
           sessionId: this.sessionId,
+          orchestration: { enabled: this.orchestrate, available: false, reason: "unavailable" },
           ...(message.orchestrationProtocol === 1 && this.boundGeneration !== null ? { orchestrationProtocol: { version: 1 as const, hostIncarnation: this.hostIncarnation, connectionId: this.boundGeneration, atomicSubmit: false as const, correlatedToggle: false as const } } : {}),
           ...(this.checkpointContextUsage !== null ? { contextUsage: this.checkpointContextUsage } : {}),
           reasoningEffort: this.engine.reasoningEffort() ?? "off",
@@ -2881,7 +2887,7 @@ export class Session {
         // Reserved for the future atomic admission path. Never silently turn an
         // unimplemented orchestration request into an ordinary user turn.
         if (message.orchestrate !== undefined) {
-          this.outbound.sendDirect({ type: "turn_rejected", requestId: message.requestId, reason: "not_ready" });
+          this.outbound.sendDirect({ type: "user_message_unavailable", requestId: message.requestId, reason: "orchestrate_unavailable" });
           break;
         }
         // Typed input is proof that a human is at the screen: it
@@ -5978,7 +5984,7 @@ export class Session {
    * `orchestrate_changed` so the renderer keeps tab-scoped state in sync.
    */
   private onSetOrchestrate(enabled: boolean): void {
-    if (this.busy) {
+    if (this.busy || (enabled && (this.relocating || this.child !== undefined || this.engine.id !== "core" || !this.engine.capabilities.supportsCorePermissions || this.engine.setMode === undefined))) {
       // Silent drop, exactly like a mid-turn set_mode/set_model — the
       // authoritative host-side refusal; the renderer disables the row too.
       return;
@@ -5995,7 +6001,9 @@ export class Session {
       this.orchestrate = false;
       const restore = this.preOrchestrateMode ?? "build";
       this.preOrchestrateMode = null;
-      this.onSetMode(restore, true);
+      // A session may have switched engines since enable. Clearing the flag
+      // must remain possible even when the current engine owns its modes.
+      if (this.engine.id === "core" && this.engine.capabilities.supportsCorePermissions && this.engine.setMode !== undefined) this.onSetMode(restore, true);
     }
     // §3.7: the host copies the flag onto the AgentLoopConfig (the dispatcher
     // threads it into every ToolContext — the Agent tool's default-detach).

@@ -16,11 +16,9 @@ import {
   taskListRequestSchema,
   taskOutputRequestSchema,
   uiToHostMessageSchema,
-  userMessageSchema,
-  setOrchestrateSchema,
-  uiReadySchema,
 } from "./protocol.js";
 import type { GitCommandOutcome, HostToUiMessage, WireEnvStatus, WireGitStatus } from "./protocol.js";
+import { userMessageSchema as oldUserMessageSchema, setOrchestrateSchema as oldSetOrchestrateSchema, uiReadySchema as oldUiReadySchema } from "./protocol-legacy-4f1e.fixture.js";
 
 describe("set_model protocol (slice P7.15 · F14)", () => {
   it("accepts a non-empty model id and fails closed on junk", () => {
@@ -357,8 +355,8 @@ describe("reserved orchestration wire forms", () => {
     const atomicTask = { ...legacyTask, orchestrate: "enable" };
     const legacyToggle = { type: "set_orchestrate", enabled: true };
     const correlatedToggle = { ...legacyToggle, requestId: "t" };
-    const oldTaskSchema = userMessageSchema.omit({ orchestrate: true });
-    const oldToggleSchema = setOrchestrateSchema.omit({ requestId: true });
+    const oldTaskSchema = oldUserMessageSchema;
+    const oldToggleSchema = oldSetOrchestrateSchema;
     for (const message of [legacyTask, atomicTask, legacyToggle, correlatedToggle]) expect(uiToHostMessageSchema.safeParse(message).success).toBe(true);
     expect(oldTaskSchema.safeParse(legacyTask).success).toBe(true);
     expect(oldTaskSchema.safeParse(atomicTask).success).toBe(false);
@@ -370,7 +368,7 @@ describe("reserved orchestration wire forms", () => {
     expect(uiToHostMessageSchema.safeParse({ type: "ui_ready" }).success).toBe(true);
     expect(uiToHostMessageSchema.safeParse({ type: "ui_ready", orchestrationProtocol: 1 }).success).toBe(true);
     expect(uiToHostMessageSchema.safeParse({ type: "ui_ready", orchestrationProtocol: 2 }).success).toBe(false);
-    expect(uiReadySchema.omit({ orchestrationProtocol: true }).safeParse({ type: "ui_ready", orchestrationProtocol: 1 }).success).toBe(false);
+    expect(oldUiReadySchema.safeParse({ type: "ui_ready", orchestrationProtocol: 1 }).success).toBe(false);
   });
 });
 

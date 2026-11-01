@@ -5059,6 +5059,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // This renderer does not issue correlated requests yet. Never treat
             // their direct outcome as authoritative orchestration state.
             return;
+          case "user_message_invalid":
+          case "user_message_unavailable":
+            // A malformed duplicate can reuse an active requestId; it is not
+            // evidence that any earlier turn with that ID was rejected.
+            return;
           case "reasoning_effort_changed":
             set({
               effortSelectionAck: {kind: "effort", model: get().model, effort: message.effort, requestId: message.requestId},
