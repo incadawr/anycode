@@ -342,6 +342,56 @@ it("commits previewed model facts only for the unchanged endpoint", async () => 
   expect(connection?.models).toBeUndefined();
 });
 
+it("saves a fetched list on a system proxy when the OS route held still", async () => {
+  // The preview that produced the guard resolved the system rung through the
+  // OS; if the save-time re-check did not, it would call the same unchanged
+  // route DIRECT and refuse with stale_fetch — making the list unsaveable.
+  const asked: string[] = [];
+  const systemProxy = {
+    cached: () => ({ kind: "unresolved" as const }),
+    resolve: async (url: string) => { asked.push(url); return { kind: "proxy" as const, url: "http://system-proxy.test:3128/" }; },
+  };
+  const deps = makeDeps({ catalogIds: CATALOG_IDS, systemProxy });
+  await handleConnectionCreate(deps, { providerId: "z-ai", baseUrl: "http://localhost:8000/v1" });
+  const raw = JSON.parse(await readFile(settingsPath, "utf8"));
+  raw.network = { proxyProfiles: [{ id: "proxy-system", name: "System", mode: "system" }] };
+  raw.provider.connections[0].proxyRef = "proxy-system";
+  await writeFile(settingsPath, JSON.stringify(raw));
+  const loaded = (await loadSettings(settingsPath)).settings;
+  const targetUrl = "http://localhost:8000/v1/models";
+  const prepared = await prepareModelFetchContext(loaded, loaded.provider.connections[0]!, vault, targetUrl, systemProxy);
+  if (!prepared.ok) throw new Error(prepared.reason);
+  if (prepared.route.kind !== "proxy") throw new Error("the fixture must route through the system proxy");
+  const fetchedModels = { guard: prepared.guard, targetUrl, baseUrl: "http://localhost:8000/v1", transport: "" as const, models: [{ id: "manual" }] };
+
+  expect((await handleConnectionUpdate(deps, { id: "conn-1", fetchedModels, visibleModels: ["manual"] })).ok).toBe(true);
+  expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.models).toEqual(["manual"]);
+  // Both the fetch-time and the save-time resolution asked the OS for THIS target.
+  expect(asked).toEqual([targetUrl, targetUrl]);
+});
+
+it("refuses to save when the system route moved between fetch and save", async () => {
+  let answer = 0;
+  const systemProxy = {
+    cached: () => ({ kind: "unresolved" as const }),
+    resolve: async () => ({ kind: "proxy" as const, url: `http://system-proxy-${++answer}.test:3128/` }),
+  };
+  const deps = makeDeps({ catalogIds: CATALOG_IDS, systemProxy });
+  await handleConnectionCreate(deps, { providerId: "z-ai", baseUrl: "http://localhost:8000/v1" });
+  const raw = JSON.parse(await readFile(settingsPath, "utf8"));
+  raw.network = { proxyProfiles: [{ id: "proxy-system", name: "System", mode: "system" }] };
+  raw.provider.connections[0].proxyRef = "proxy-system";
+  await writeFile(settingsPath, JSON.stringify(raw));
+  const loaded = (await loadSettings(settingsPath)).settings;
+  const targetUrl = "http://localhost:8000/v1/models";
+  const prepared = await prepareModelFetchContext(loaded, loaded.provider.connections[0]!, vault, targetUrl, systemProxy);
+  if (!prepared.ok) throw new Error(prepared.reason);
+  const fetchedModels = { guard: prepared.guard, targetUrl, baseUrl: "http://localhost:8000/v1", transport: "" as const, models: [{ id: "manual" }] };
+
+  expect(await handleConnectionUpdate(deps, { id: "conn-1", fetchedModels })).toEqual({ ok: false, reason: "stale_fetch" });
+  expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.models).toBeUndefined();
+});
+
 it("clears conditional OpenRouter pricing for a custom endpoint on refresh", async () => {
   await writeFile(settingsPath, JSON.stringify({ version: 2, provider: { activeConnectionId: "conn-1", custom: [{ id: "custom:router", name: "Router", baseUrl: "https://openrouter.ai/api/v1", kind: "openai-compatible", models: ["m"] }], connections: [{ id: "conn-1", providerId: "custom:router", modelCapabilities: { m: { pricing: { input: 1, cachedInput: 1, output: 2 } } } }] }, tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false } }));
   const loaded = (await loadSettings(settingsPath)).settings;
