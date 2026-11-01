@@ -55,6 +55,7 @@ export type CodexContinueRefusal =
   | "already_open"
   | "invalid_account"
   | "unknown_account"
+  | "source_session_changed"
   | "rollout_missing"
   /** The source could not be enumerated — NOT the same answer as "missing". */
   | "source_unreadable"
@@ -86,7 +87,10 @@ export interface CodexContinueDeps {
   accounts(): Promise<CodexAccountOption[]>;
   /** Absolute `sessions/` directory of an account, `null` when the account has no home. */
   sessionsDir(accountId: string): Promise<string | null>;
-  createSessionFromSource(sourceId: string, meta: Omit<SessionMeta, "createdAt" | "updatedAt">): Promise<SessionMeta | null>;
+  createSessionFromSource(
+    sourceId: string,
+    meta: Omit<SessionMeta, "createdAt" | "updatedAt">,
+  ): Promise<{ ok: true; session: SessionMeta } | { ok: false; reason: "source_missing" | "source_changed" }>;
   /**
    * Kill switch without a rebuild (`settings.codexContinueOnAnotherAccount`).
    * REQUIRED, not optional: an absent switch would silently enable the action.
@@ -146,16 +150,10 @@ export type CodexRolloutCopyResult =
 function rolloutThreadId(name: string): string | null {
   if (!ROLLOUT_FILE_PATTERN.test(name)) return null;
   const rest = name.slice("rollout-".length, -".jsonl".length);
-  // A thread id is a hyphenated UUID, so the uuid at the END of the name is the
-  // id — take it as a whole, never as a suffix test. `endsWith("-" + id)` was
-  // wrong: with a NON-uuid id (`abc`), `rollout-…-other-abc.jsonl` matched and
-  // the wrong conversation was copied.
-  const uuid = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.exec(rest);
-  if (uuid !== null) {
-    const before = rest.slice(0, rest.length - uuid[1]!.length);
-    return before.endsWith("-") ? uuid[1]! : null;
-  }
-  // Not a uuid: the only other shape we accept is `rollout-<19-char timestamp>-<id>`.
+  // The name is `rollout-<19-char timestamp>-<id>`; the id is EVERYTHING after
+  // that separator, compared whole. Deliberately no "a uuid at the end must be
+  // the id" shortcut: that misreads `…-prefix-<uuid>.jsonl` as `<uuid>`, which
+  // both invents a match for `<uuid>` and loses the real `prefix-<uuid>`.
   return rest.length > TIMESTAMP_PREFIX_LENGTH + 1 && rest[TIMESTAMP_PREFIX_LENGTH] === "-"
     ? rest.slice(TIMESTAMP_PREFIX_LENGTH + 1)
     : null;
@@ -167,6 +165,14 @@ function rolloutThreadId(name: string): string | null {
  */
 function isThreadRollout(name: string, threadId: string): boolean {
   return rolloutThreadId(name) === threadId;
+}
+
+/** True when the path exists at all (a missing root is not an unreadable tree). */
+async function pathExists(path: string): Promise<boolean> {
+  return fsp.stat(path).then(
+    () => true,
+    () => false,
+  );
 }
 
 /** Size + mtime of a file, the pair re-checked after the copy to prove it was stable. */
@@ -259,9 +265,11 @@ export async function copyCodexRolloutForThread(request: CodexRolloutCopyRequest
   try {
     existingTargets = await findRolloutsRelative(request.targetSessionsDir, request.threadId, MAX_SESSIONS_DEPTH);
   } catch (error) {
-    // A missing target home is simply "nothing there yet"; any other read
-    // failure means we cannot prove the thread is absent, so we refuse.
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    // ONLY a missing target ROOT means "nothing there yet". A nested directory
+    // disappearing mid-traversal must not discard matches already found
+    // elsewhere — that would call a non-empty home empty and publish a second
+    // rollout for a thread that already has one.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT" && !(await pathExists(request.targetSessionsDir))) {
       existingTargets = [];
     } else {
       return {
@@ -296,10 +304,31 @@ export async function copyCodexRolloutForThread(request: CodexRolloutCopyRequest
   // complete conversation forever after. The temp name is unique, so an
   // existing file at the FINAL name can only mean a real prior transfer.
   const tmpPath = join(request.targetSessionsDir, "tmp", `continue-${randomUUID()}.jsonl`);
+  // Cleanup must never delete a file this attempt did not create. The temp name
+  // is a UUID, so a collision means someone else's file is sitting there — that
+  // is not ours to remove, and it is not a reason to report `copy_failed`.
+  let ownsTemp = false;
   try {
     await fsp.mkdir(dirname(tmpPath), { recursive: true });
     await fsp.mkdir(dirname(target), { recursive: true });
-    await fsp.copyFile(source, tmpPath, fsConstants.COPYFILE_EXCL);
+    try {
+      await fsp.copyFile(source, tmpPath, fsConstants.COPYFILE_EXCL);
+      ownsTemp = true;
+    } catch (copyError) {
+      if ((copyError as NodeJS.ErrnoException).code === "EEXIST") {
+        // Someone else's file is at OUR uuid temp name: not ours to delete.
+        ownsTemp = false;
+        return {
+          ok: false,
+          reason: "copy_failed",
+          detail: "a temporary file for this transfer already existed; nothing was changed — try again",
+        };
+      }
+      // The exclusive create may have left a partial file behind, and that file
+      // IS ours: the flag is set so `finally` removes it.
+      ownsTemp = true;
+      throw copyError;
+    }
     const handle = await fsp.open(tmpPath, "r+");
     try {
       await handle.sync();
@@ -331,9 +360,8 @@ export async function copyCodexRolloutForThread(request: CodexRolloutCopyRequest
     await fsp.link(tmpPath, target);
     return { ok: true, relativePath };
   } catch (error) {
-    // `EEXIST` can only come from the exclusive temp create or from `link`, and
-    // by now the temp name is ours: the meaning is always "the final name is
-    // taken", never "the copy failed".
+    // By now the temp copy has succeeded, so `EEXIST` can only come from
+    // `link`: the FINAL name is taken.
     if ((error as NodeJS.ErrnoException).code === "EEXIST") {
       return {
         ok: false,
@@ -343,18 +371,21 @@ export async function copyCodexRolloutForThread(request: CodexRolloutCopyRequest
     }
     return { ok: false, reason: "copy_failed", detail: describeError(error) };
   } finally {
-    // Unconditional: a copy that died halfway leaves a partial temp file, and a
-    // partial file under `tmp/` is exactly what a later enumeration could pick
-    // up as a rollout. Best-effort, because throwing from `finally` would mask
-    // the real refusal.
-    await fsp.unlink(tmpPath).catch(() => {});
+    // A copy that died halfway leaves a partial temp file, and a partial file
+    // under `tmp/` is exactly what a later enumeration could pick up as a
+    // rollout — so it is removed whenever this attempt created it. Best-effort:
+    // throwing from `finally` would mask the real refusal, and a file we do not
+    // own is left alone.
+    if (ownsTemp) await fsp.unlink(tmpPath).catch(() => {});
   }
 }
 
 /** `ENOENT`/`EACCES`/… for a refusal detail, without ever echoing a path. */
 function errorCode(error: unknown): string {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
-  return typeof code === "string" ? code : "unknown error";
+  // Allowlist, not "any string": `code` is attacker-influenced in principle and
+  // this value is forwarded into a user-facing sentence.
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]{0,31}$/.test(code) ? code : "unknown error";
 }
 
 /**
@@ -521,11 +552,15 @@ export async function handleCodexContinueOnAccount(
         ...(target.id !== SYSTEM_CODEX_ACCOUNT_ID ? { codexProfileId: target.id } : {}),
         ...(meta.title !== undefined ? { title: meta.title } : {}),
       });
-      if (created === null) {
-        return refuse(
-          "unknown_session",
-          "The original session is no longer available. A copy was left on the target account and may be outdated or in use. A retry on that account will be blocked; choose another account or review the existing conversation.",
-        );
+      if (!created.ok) {
+        // A re-pointed source is NOT a deleted one: the conversation still
+        // exists, it is just no longer the one we copied, and saying "gone"
+        // would be a false account of the user's own history.
+        const retained =
+          " A copy was left on the target account and may be outdated or in use. A retry on that account will be blocked; choose another account or review the existing conversation.";
+        return created.reason === "source_changed"
+          ? refuse("source_session_changed", `The original session now points at a different conversation.${retained}`)
+          : refuse("unknown_session", `The original session is no longer available.${retained}`);
       }
     } catch {
       // A copied rollout is already published and another continuation may use it.

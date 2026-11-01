@@ -52,3 +52,25 @@ it.each([
     expect(container.querySelector(".usage-limit-account-hint")?.textContent).toBe(detail);
   } finally {await act(async()=>root.unmount()); container.remove();}
 });
+
+it("continues on the picked account and shows the takeover warning on SUCCESS", async () => {
+  const accounts = vi.fn(async () => [{id:"account-b",label:"Account B"}]);
+  const continueOn = vi.fn(async () => ({
+    ok: true as const,
+    warning: "An earlier transfer of this conversation did not report success, so a copy may be incomplete.",
+  }));
+  const controller: CodexContinueController = {accounts,continueOn};
+  const container=document.createElement("div"); document.body.append(container);
+  const root=createRoot(container);
+  try {
+    await act(async()=>{root.render(createElement(UsageLimitBlock,{block,enterClass:"",codexContinue:controller}));});
+    await act(async () => {container.querySelector<HTMLButtonElement>(".usage-limit-switch-account")!.click();});
+    const choice = container.querySelector<HTMLButtonElement>(".usage-limit-account-choice")!;
+    await act(async () => {choice.click();});
+    // The pick is actually sent, with the account the user chose...
+    expect(continueOn).toHaveBeenCalledWith("account-b");
+    // ...and a succeeded takeover is not silent: the warning reaches the UI.
+    expect(container.textContent).toContain("may be incomplete");
+    expect(container.querySelector(".usage-limit-account-picker")).toBeNull();
+  } finally {await act(async()=>root.unmount());container.remove();}
+});
