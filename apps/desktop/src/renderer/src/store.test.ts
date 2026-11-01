@@ -6269,6 +6269,26 @@ describe("desktop store — prompt queue (slice P7.14 · F15)", () => {
     return store;
   }
 
+  it("blocks recovery across siblings, descendants, and queued copies while leaving unrelated trees usable", () => {
+    const store = readyStore();
+    store.setState({orchestrationDeliveries:[
+      {requestId:"root",text:"root",images:[],status:"unknown",reviewed:true,restored:false},
+      {requestId:"left",parentRequestId:"root",text:"left",images:[],status:"rejected",reviewed:false,restored:false},
+      {requestId:"right",parentRequestId:"root",text:"right",images:[],status:"rejected",reviewed:false,restored:false},
+      {requestId:"grandchild",parentRequestId:"right",text:"grandchild",images:[],status:"pending",reviewed:false,restored:false},
+      {requestId:"unrelated",text:"other",images:[],status:"rejected",reviewed:false,restored:false},
+    ]});
+    expect(store.getState().claimRecoveryAttempt("left","blocked","left",[],{},{})).toBe(false);
+    for (const status of ["started","unknown","conflict"] as const) {
+      store.setState((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(item => item.requestId === "grandchild" ? {...item,status,reviewed:false} : item)}));
+      expect(store.getState().claimRecoveryAttempt("left",`blocked-${status}`,"left",[],{},{})).toBe(false);
+    }
+    expect(store.getState().claimRecoveryAttempt("unrelated","allowed","other",[],{},{})).toBe(true);
+    store.setState((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(item => item.requestId === "grandchild" ? {...item,status:"rejected"} : item),promptQueue:[{id:"queued",text:"retry",images:[],recoverySourceId:"right",trackDelivery:true}]}));
+    expect(store.getState().claimRecoveryAttempt("left","blocked-by-queue","left",[],{},{})).toBe(false);
+    expect(store.getState().orchestrationDeliveries.some(item => item.requestId === "blocked-by-queue")).toBe(false);
+  });
+
   it("enqueue/edit/delete are pure FIFO mutations keyed by minted id", () => {
     const store = readyStore();
     store.getState().enqueuePrompt({ text: "first", images: [] });
@@ -6314,8 +6334,10 @@ describe("desktop store — prompt queue (slice P7.14 · F15)", () => {
     expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["b"]);
     expect(store.getState().queueInFlight?.requestId).toBe("req-1");
 
-    // Paused also blocks a take even with inFlight cleared.
+    // Clear removes unsent items but cannot cancel the already posted request.
     store.getState().clearQueue();
+    expect(store.getState().queueInFlight?.requestId).toBe("req-1");
+    store.getState().applyHostMessage({type:"turn_started",requestId:"req-1",turnId:"t1"});
     store.getState().enqueuePrompt({ text: "c", images: [] });
     store.setState({ queuePaused: true });
     expect(store.getState().takeQueueHead("req-3")).toBeNull();
@@ -6440,7 +6462,7 @@ describe("desktop store — prompt queue (slice P7.14 · F15)", () => {
     expect(emptyFatal.getState().queuePaused).toBe(false);
   });
 
-  it("a respawned host_ready PRESERVES still-queued prompts and RESTORES the mid-flight item to the head, paused; a public reset() clears them", () => {
+  it("a respawn retains the mid-flight request as unknown and pauses remaining queued prompts", () => {
     const store = readyStore();
     store.getState().enqueuePrompt({ text: "in-flight", images: [] });
     store.getState().enqueuePrompt({ text: "still-queued", images: [] });
@@ -6452,11 +6474,8 @@ describe("desktop store — prompt queue (slice P7.14 · F15)", () => {
 
     // Respawn: a fresh host_ready lands on the same store.
     store.getState().applyHostMessage(HOST_READY);
-    // Both prompts survived (queue isn't in the session slice) and are held
-    // paused. The mid-flight item is RESTORED to the HEAD (a crash between drain
-    // and turn_started must not lose an already-typed prompt) — matching the
-    // turn_rejected restore pattern. (P7.14/F15 codex fix, supersedes W1 dev #3.)
-    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["in-flight", "still-queued"]);
+    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["still-queued"]);
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{requestId:"req-1",text:"in-flight",status:"unknown"}]);
     expect(store.getState().queueInFlight).toBeNull();
     expect(store.getState().queuePaused).toBe(true);
 
@@ -6479,7 +6498,7 @@ describe("desktop store — prompt queue (slice P7.14 · F15)", () => {
     ]);
   });
 
-  it("setHostExited RESTORES a non-null queueInFlight item to the head, clears inFlight, and pauses (crash mid-flight must not lose the prompt)", () => {
+  it("setHostExited retains an in-flight request as unknown and pauses the remaining queue", () => {
     const store = readyStore();
     store.getState().enqueuePrompt({ text: "drained", images: [] });
     store.getState().enqueuePrompt({ text: "behind", images: [] });
@@ -6490,7 +6509,8 @@ describe("desktop store — prompt queue (slice P7.14 · F15)", () => {
     store.getState().setHostExited();
 
     expect(store.getState().connection).toBe("host_exited");
-    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["drained", "behind"]);
+    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["behind"]);
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{requestId:"req-1",text:"drained",status:"unknown"}]);
     expect(store.getState().queueInFlight).toBeNull();
     expect(store.getState().queuePaused).toBe(true);
   });
@@ -6510,20 +6530,20 @@ describe("desktop store — prompt queue (slice P7.14 · F15)", () => {
     expect(empty.getState().queuePaused).toBe(false);
   });
 
-  it("host_ready(respawn) with a null queueInFlight (already restored by setHostExited) is a no-op restore — the head is not duplicated", () => {
+  it("host_ready preserves an unknown in-flight request without requeueing it", () => {
     const store = readyStore();
     store.getState().enqueuePrompt({ text: "drained", images: [] });
     store.getState().enqueuePrompt({ text: "behind", images: [] });
     store.getState().takeQueueHead("req-1");
 
-    // Crash path: setHostExited restores + clears inFlight, THEN host_ready lands.
+    // Crash path: setHostExited retains the unknown delivery, then host_ready lands.
     store.getState().setHostExited();
-    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["drained", "behind"]);
+    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["behind"]);
     expect(store.getState().queueInFlight).toBeNull();
 
-    // host_ready's own restore sees a null inFlight → does NOT re-prepend "drained".
     store.getState().applyHostMessage(HOST_READY);
-    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["drained", "behind"]);
+    expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["behind"]);
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{requestId:"req-1",text:"drained",status:"unknown"}]);
     expect(store.getState().queueInFlight).toBeNull();
     expect(store.getState().queuePaused).toBe(true);
   });
@@ -6547,7 +6567,7 @@ describe("desktop store — prompt queue (slice P7.14 · F15)", () => {
     store.getState().takeQueueHead("req-1");
     store.getState().clearQueue();
     expect(store.getState().promptQueue).toEqual([]);
-    expect(store.getState().queueInFlight).toBeNull();
+    expect(store.getState().queueInFlight?.requestId).toBe("req-1");
     expect(store.getState().queuePaused).toBe(false);
   });
 
@@ -9486,5 +9506,70 @@ describe("turn timing", () => {
     expect(store.getState().turn.startedAt).toBe(1234);
     store.getState().applyHostMessage({ type: "agent_event", turnId: "t", event: { type: "loop_end", reason: "completed", turns: 1 } });
     expect(store.getState().turn.startedAt).toBeUndefined();
+  });
+});
+
+describe("direct refusal recovery by request identity", () => {
+  it("retains a rejected direct orchestration draft with images while another queued request is in flight", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    const images = [{name:"a.png",sizeBytes:3,attachment:{mediaType:"image/png" as const,data:"YWJj"}}];
+    store.getState().recordSentMessage("direct", images, "direct-id", "enable");
+    store.getState().enqueuePrompt({text:"queued",images:[]});
+    store.getState().takeQueueHead("other-id");
+    store.getState().applyHostMessage({type:"turn_rejected",requestId:"direct-id",reason:"busy"});
+    expect(store.getState().queueInFlight?.requestId).toBe("other-id");
+    expect(store.getState().promptQueue).toHaveLength(0);
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{requestId:"direct-id",text:"direct",images,orchestrate:"enable",status:"rejected"}]);
+  });
+});
+
+
+describe("direct orchestration delivery reconciliation", () => {
+  it("retains the exact payload through host exit and reconnect and correlates only its request ID", () => {
+    const store = createDesktopStore();
+    const ready = {type:"host_ready" as const,workspace:"/ws",mode:"build" as const,model:"m",sessionId:"s"};
+    store.getState().applyHostMessage(ready);
+    const images = [{name:"a.png",sizeBytes:3,attachment:{mediaType:"image/png" as const,data:"YWJj"}}];
+    store.getState().recordSentMessage("original task",images,"req-a","enable");
+    store.setState({restoredComposerDraft:{text:"new edit",images:[]}});
+    store.getState().setHostExited();
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{requestId:"req-a",text:"original task",images,orchestrate:"enable",status:"unknown"}]);
+    store.getState().setAwaitingHostReady();
+    store.getState().applyHostMessage(ready);
+    store.getState().applyHostMessage({type:"turn_started",requestId:"other",turnId:"other-turn"});
+    expect(store.getState().orchestrationDeliveries[0]?.status).toBe("unknown");
+    expect(store.getState().restoredComposerDraft?.text).toBe("new edit");
+    store.getState().applyHostMessage({type:"turn_started",requestId:"req-a",turnId:"turn-a"});
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({status:"started",turnId:"turn-a"});
+    store.getState().applyHostMessage({type:"turn_rejected",requestId:"req-a",reason:"busy"});
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({status:"conflict",reviewed:false});
+    expect(store.getState().promptQueue).toEqual([]);
+    expect(store.getState().restoredComposerDraft?.text).toBe("new edit");
+  });
+
+  it("keeps an unresolved request across an explicit session reset and never infers success", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",mode:"build",model:"m",sessionId:"s"});
+    store.getState().recordSentMessage("task",[],"req-reset","enable");
+    store.getState().reset();
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{requestId:"req-reset",text:"task",orchestrate:"enable",status:"unknown"}]);
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/other",mode:"build",model:"m",sessionId:"other"});
+    expect(store.getState().orchestrationDeliveries[0]?.status).toBe("unknown");
+    expect(store.getState().promptQueue).toEqual([]);
+  });
+
+  it("treats rejection then a late start as conflict and keeps unrelated requests independent", () => {
+    const store = createDesktopStore();
+    store.getState().recordSentMessage("first",[],"req-a","enable");
+    store.getState().recordSentMessage("second",[],"req-b","enable");
+    store.getState().applyHostMessage({type:"turn_rejected",requestId:"req-a",reason:"busy"});
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{requestId:"req-a",status:"rejected"},{requestId:"req-b",status:"unknown"}]);
+    store.getState().applyHostMessage({type:"turn_started",requestId:"req-a",turnId:"late-turn"});
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{requestId:"req-a",status:"conflict"},{requestId:"req-b",status:"unknown"}]);
+    store.setState((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(item => item.requestId === "req-a" ? {...item,reviewed:true} : item)}));
+    store.getState().applyHostMessage({type:"turn_rejected",requestId:"req-a",reason:"busy"});
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({status:"conflict",reviewed:true});
+    expect(store.getState().promptQueue).toEqual([]);
   });
 });

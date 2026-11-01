@@ -87,6 +87,10 @@ export interface RolePickerDialogProps {
    * sat off screen under the Save button.
    */
   actionsNotice?: ReactNode;
+  /** Optional tab-scoped storage for an unfinished first-run dialog. */
+  draftStorage?: { load(): { draft: RolesDraft; seededDraft: RolesDraft | null } | undefined; save(draft: RolesDraft, seededDraft: RolesDraft | null): void; canEdit?(): boolean };
+  /** A save already in flight cannot be cancelled or repeated. */
+  saving?: boolean;
   onSave(roles: Partial<Record<PresetRole, RoleConfig>>): void;
   onSkip?(): void;
 }
@@ -102,6 +106,8 @@ export function RolePickerDialog({
   inline = false,
   profileOverrides,
   actionsNotice,
+  draftStorage,
+  saving = false,
   onSave,
   onSkip,
 }: RolePickerDialogProps) {
@@ -133,7 +139,7 @@ export function RolePickerDialog({
     initialRoles !== undefined
       ? toDraft(initialRoles)
       : toDraft(autoSelectPreset(engines, activeConnectionId ?? "").roles);
-  const [draft, setDraft] = useState<RolesDraft>(freshDraft);
+  const [draft, setDraft] = useState<RolesDraft>(() => draftStorage?.load()?.draft ?? freshDraft());
   // What the draft state ACTUALLY holds once every effect of a commit has run.
   // The follow effect must compare the seed against this, not against the
   // render's `draft` value: when `open` flips in the same commit as a readiness
@@ -146,7 +152,15 @@ export function RolePickerDialog({
   // a seeded draft may be replaced when readiness or the active connection
   // arrives later; remembering the ROUTES (not just the preset id) is what
   // lets an unchanged id still pick up a connection change.
-  const seededDraft = useRef<RolesDraft | null>(initialRoles === undefined ? freshDraft() : null);
+  const seededDraft = useRef<RolesDraft | null>(draftStorage?.load()?.seededDraft ?? (draftStorage?.load() ? null : initialRoles === undefined ? freshDraft() : null));
+  function updateDraft(update: RolesDraft | ((previous: RolesDraft) => RolesDraft), userEdit = true): void {
+    if (userEdit && (saving || draftStorage?.canEdit?.() === false)) return;
+    if (userEdit) seededDraft.current = null;
+    const next = typeof update === "function" ? update(draftRef.current) : update;
+    draftRef.current = next;
+    setDraft(next);
+    draftStorage?.save(next, seededDraft.current);
+  }
   // The highlighted chip follows the VALUES shown, never a click: a persisted
   // or edited chain that no preset describes highlights nothing.
   const activePreset = activePresetId(presets, fromDraft(draft).roles, engines);
@@ -165,10 +179,11 @@ export function RolePickerDialog({
   // component mounted; `open` flips per first-run attempt).
   useEffect(() => {
     if (open) {
-      const seeded = freshDraft();
-      setDraft(seeded);
+      const resumed = draftStorage?.load();
+      const seeded = resumed?.draft ?? freshDraft();
+      seededDraft.current = resumed ? resumed.seededDraft : initialRoles === undefined ? seeded : null;
+      updateDraft(seeded, false);
       draftRef.current = seeded;
-      seededDraft.current = initialRoles === undefined ? seeded : null;
     }
     const dialog = dialogRef.current;
     if (dialog && open && !inline && !dialog.open) {
@@ -183,7 +198,7 @@ export function RolePickerDialog({
   // and is never replaced, and a seed that merely kept its preset id still
   // picks up a new active connection.
   useEffect(() => {
-    if (!open || initialRoles !== undefined) return;
+    if (!open || saving || initialRoles !== undefined) return;
     const seeded = seededDraft.current;
     if (seeded === null) return;
     if (!sameDraftChoice(seeded, draftRef.current)) {
@@ -191,19 +206,22 @@ export function RolePickerDialog({
       // `customModel` counts: a "Custom…" input the user opened but has not
       // typed into yet is still an answer.
       seededDraft.current = null;
+      draftStorage?.save(draftRef.current, null);
       return;
     }
     const next = toDraft(autoPreset.roles);
     seededDraft.current = next;
     if (!sameRoleRoutes(fromDraft(draftRef.current).roles, fromDraft(next).roles)) {
-      setDraft(next);
+      updateDraft(next, false);
       draftRef.current = next;
+    } else {
+      draftStorage?.save(draftRef.current, next);
     }
     // `open` is deliberately NOT a dependency: the open effect above seeds the
     // draft, and following on the same commit would compare the new seed with
     // the draft from before opening and mistake that for an edit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoPreset.id, activeConnectionId]);
+  }, [autoPreset.id, activeConnectionId, saving]);
 
   const valid = draftValid(draft);
 
@@ -211,11 +229,11 @@ export function RolePickerDialog({
     // An explicit pick is the answer, not a seed: a later readiness change must
     // not overwrite it.
     seededDraft.current = null;
-    setDraft(toDraft(preset.roles));
+    updateDraft(toDraft(preset.roles));
   }
 
   function handleSave(): void {
-    if (!valid) {
+    if (!valid || saving) {
       return;
     }
     onSave(fromDraft(draft).roles);
@@ -236,6 +254,7 @@ export function RolePickerDialog({
           </div>
         )}
 
+        <fieldset disabled={saving} style={{border:0,padding:0,margin:0,minWidth:0}} aria-label="Role choices">
         <div className="role-picker-presets" role="radiogroup" aria-label="Presets">
           {presets.map((preset) => {
             const applicable = presetUnavailableReason(preset, engines) === null;
@@ -283,7 +302,7 @@ export function RolePickerDialog({
                 connections={connections}
                 modelSources={modelSources}
                 engineReadiness={engines}
-                onChange={(patch) => setDraft((d) => patchEntry(d, role, null, patch))}
+                onChange={(patch) => updateDraft((d) => patchEntry(d, role, null, patch))}
               />
               {draft[role].fallbacks.map((entry, index) => (
                 <EntryRow
@@ -293,16 +312,16 @@ export function RolePickerDialog({
                   connections={connections}
                   modelSources={modelSources}
                   engineReadiness={engines}
-                  onChange={(patch) => setDraft((d) => patchEntry(d, role, index, patch))}
-                  onRemove={() => setDraft((d) => removeFallback(d, role, index))}
-                  onMove={(delta) => setDraft((d) => moveFallback(d, role, index, delta))}
+                  onChange={(patch) => updateDraft((d) => patchEntry(d, role, index, patch))}
+                  onRemove={() => updateDraft((d) => removeFallback(d, role, index))}
+                  onMove={(delta) => updateDraft((d) => moveFallback(d, role, index, delta))}
                 />
               ))}
               <button
                 type="button"
                 className="role-picker-add-fallback"
                 data-testid={`role-add-fallback-${role}`}
-                onClick={() => setDraft((d) => addFallback(d, role))}
+                onClick={() => updateDraft((d) => addFallback(d, role))}
               >
                 <Plus /> Add fallback
               </button>
@@ -310,6 +329,7 @@ export function RolePickerDialog({
           ))}
         </div>
 
+        </fieldset>
         {!valid && (
           <div className="role-picker-error" role="alert">
             An entry cannot select more than one engine, connection, or provider.
@@ -317,9 +337,10 @@ export function RolePickerDialog({
         )}
 
         <div className="role-picker-actions">
+          {saving && <span role="status">Saving roles; this request cannot be cancelled.</span>}
           {actionsNotice}
           {skippable && (
-            <button type="button" className="role-picker-skip" data-testid="role-picker-skip" onClick={() => onSkip?.()}>
+            <button type="button" className="role-picker-skip" data-testid="role-picker-skip" disabled={saving} onClick={() => { if (!saving) onSkip?.(); }}>
               Skip
             </button>
           )}
@@ -327,10 +348,10 @@ export function RolePickerDialog({
             type="button"
             className="role-picker-save"
             data-testid="role-picker-save"
-            disabled={!valid}
+            disabled={!valid || saving}
             onClick={handleSave}
           >
-            {saveLabel}
+            {saving ? "Saving…" : saveLabel}
           </button>
         </div>
     </>
@@ -341,7 +362,9 @@ export function RolePickerDialog({
       {content}
     </section>
   ) : (
-    <dialog ref={dialogRef} className="role-picker-dialog" aria-label="Choose orchestration roles">
+    <dialog ref={dialogRef} className="role-picker-dialog" aria-label="Choose orchestration roles"
+      onCancel={(event) => { event.preventDefault(); }}
+      onClose={() => { const dialog = dialogRef.current; if (open && dialog?.isConnected && !dialog.open) dialog.showModal(); }}>
       {content}
     </dialog>
   );

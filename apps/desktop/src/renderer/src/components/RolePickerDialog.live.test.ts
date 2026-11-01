@@ -59,7 +59,7 @@ afterEach(() => {
   useTabsStore.setState({ availableEngines: originalEngines, tabs: originalTabs });
 });
 
-type Overrides = Partial<Pick<RolePickerDialogProps, "open" | "activeConnectionId" | "engines" | "initialRoles">>;
+type Overrides = Partial<Pick<RolePickerDialogProps, "open" | "activeConnectionId" | "engines" | "initialRoles" | "draftStorage">>;
 
 async function mount(overrides: Overrides = {}): Promise<void> {
   root = createRoot(container);
@@ -158,6 +158,20 @@ describe("readiness arrives while the dialog is open", () => {
     await rerender({ engines: { claudeReady: true, codexReady: true } });
     expect(orchestratorRoute()).toBe("engine:claude");
     expect(activeChip()).toBeUndefined();
+  });
+});
+
+describe("tab-restored draft provenance", () => {
+  it.each([false,true])("follows readiness after remount only if explicitly chosen: %s", async (chosen) => {
+    let saved: ReturnType<NonNullable<RolePickerDialogProps["draftStorage"]>["load"]>;
+    const draftStorage = {load: () => saved, save: (draft: NonNullable<typeof saved>["draft"], seededDraft: NonNullable<typeof saved>["seededDraft"]) => { saved = {draft,seededDraft}; }};
+    await mount({draftStorage, engines:{claudeReady:false,codexReady:false}});
+    expect(orchestratorRoute()).toBe("connection:conn-1");
+    if (chosen) click("role-preset-this-connection");
+    expect(saved?.seededDraft === null).toBe(chosen);
+    await act(async () => { root!.unmount(); root = undefined; });
+    await mount({draftStorage, engines:{claudeReady:true,codexReady:true}});
+    expect(orchestratorRoute()).toBe(chosen ? "connection:conn-1" : "engine:claude");
   });
 });
 

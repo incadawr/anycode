@@ -62,6 +62,17 @@ describe("session context window shortcut", () => {
     expect(connection.imageInputOverride).toBe("on");
   });
 
+  it("does not close a replacement editor when a save resolves after unmount", async () => {
+    let resolve!: (value: {ok:true; snapshot:SettingsSnapshot}) => void;
+    bridge.update.mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+    const {onClose, input, form} = await mount();
+    await enter(input, "96000");
+    await submit(form);
+    await act(async () => { root!.unmount(); root = undefined; });
+    await act(async () => resolve({ok:true,snapshot}));
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it("rejects an invalid window and respects read-only settings", async () => {
     const {input, form} = await mount();
     await enter(input, "1023");

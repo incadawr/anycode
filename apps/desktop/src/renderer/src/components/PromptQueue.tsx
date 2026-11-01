@@ -6,10 +6,9 @@
  * actions (Wave 1) and the tab-registry drainer — this component only calls
  * into them.
  */
-import { useState } from "react";
 import type { KeyboardEvent } from "react";
 import { useTabStore, useTabStoreApi } from "../tab-context.js";
-import type { QueuedPrompt } from "../store.js";
+import { systemRetrySafe, type QueuedPrompt } from "../store.js";
 import { X } from "./icons.js";
 
 /** "N img" badge for a queued item's attachment count; null when there are none. */
@@ -26,8 +25,11 @@ export function shouldShowPromptQueue(
   return queueLength > 0 || queuePaused || pendingSteerCount > 0;
 }
 
-export function PromptQueue() {
+export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, deliveryRequestId?: string) => boolean }) {
   const promptQueue = useTabStore((state) => state.promptQueue);
+  const deliveries = useTabStore((state) => state.orchestrationDeliveries);
+  const activeDeliveryId = useTabStore((state) => state.restoredComposerDraft?.deliveryRequestId);
+  const connection = useTabStore((state) => state.connection);
   const queuePaused = useTabStore((state) => state.queuePaused);
   // the banner must name the REAL reason the queue is held
   // ("turn limit" vs "cancelled/failed") — «Работа» §2.
@@ -36,29 +38,29 @@ export function PromptQueue() {
   // their turn_started. Host-owned — no renderer edit/delete controls.
   const pendingSteers = useTabStore((state) => state.pendingSteers);
   const tabStore = useTabStoreApi();
-  // At most one item is ever mid-edit — a second Edit click on another row
-  // simply reassigns this id, discarding the first row's uncommitted draft.
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState("");
+  const editing = useTabStore((state) => state.queueEditDraft);
 
-  if (!shouldShowPromptQueue(promptQueue.length, queuePaused, pendingSteers.length)) {
+  const visibleDeliveries = (deliveries ?? []).filter(item => item.status !== "started" || item.requestId === activeDeliveryId);
+  if (!shouldShowPromptQueue(promptQueue.length, queuePaused, pendingSteers.length) && visibleDeliveries.length === 0) {
     return null;
   }
 
   function startEdit(item: QueuedPrompt): void {
-    setEditingId(item.id);
-    setEditDraft(item.text);
+    const current = tabStore.getState().queueEditDraft;
+    if (current && current.id !== item.id) {
+      tabStore.getState().setNotice({ kind: "slash_command_rejected", text: "Save or cancel the current queue edit first." });
+      return;
+    }
+    tabStore.setState({queueEditDraft: { id: item.id, text: item.text }});
   }
 
   function cancelEdit(): void {
-    setEditingId(null);
-    setEditDraft("");
+    tabStore.setState({queueEditDraft: null});
   }
 
   function saveEdit(id: string): void {
-    tabStore.getState().editQueuedPrompt(id, editDraft);
-    setEditingId(null);
-    setEditDraft("");
+    const draft = tabStore.getState().queueEditDraft;
+    if (draft?.id === id) tabStore.getState().editQueuedPrompt(id, draft.text);
   }
 
   function handleEditKeyDown(event: KeyboardEvent<HTMLTextAreaElement>, id: string): void {
@@ -73,6 +75,26 @@ export function PromptQueue() {
 
   return (
     <div className="prompt-queue">
+      {visibleDeliveries.map((item) => <div key={item.requestId} className="prompt-queue-item" role="status">
+        <span className="prompt-queue-text">{item.text}</span>
+        <span className="prompt-queue-badge">{item.status === "pending" ? "Waiting for host response" : item.status === "unknown" ? "Delivery unknown — check history before retrying" : item.status === "rejected" ? "Host rejected this request" : item.status === "conflict" ? "Conflicting delivery reports — review before retrying" : "Turn started; a restored copy remains in the composer"}</span>
+        {item.images.length > 0 && <span className="prompt-queue-badge">{queueImageBadge(item.images.length)}</span>}
+        {item.origin === "system" && <span className="prompt-queue-badge">System report — check session history; it will not resend automatically.</span>}
+        {item.origin === "system" && item.status === "rejected" && !item.retryQueued && <button type="button" className="system-delivery-retry" disabled={connection !== "ready" || !systemRetrySafe(deliveries,item.requestId)} onClick={() => tabStore.getState().retryRejectedSystemDelivery(item.requestId)}>Retry rejected report</button>}
+        {item.origin === "system" && item.retryQueued && item.status === "rejected" && <span>Retry requested.</span>}
+        {item.origin !== "system" && item.requestId !== activeDeliveryId && (item.status === "unknown" || item.status === "rejected" || item.status === "conflict") && <button type="button" className="orchestration-delivery-restore" onClick={() => {
+          const state = tabStore.getState();
+          const current = state.orchestrationDeliveries.find(entry => entry.requestId === item.requestId);
+          if (!current || state.restoredComposerDraft?.deliveryRequestId === current.requestId || (current.status !== "unknown" && current.status !== "rejected" && current.status !== "conflict")) return;
+          if (onRestore?.({id:current.requestId,text:current.text,images:current.images,...(current.orchestrate ? {orchestrate:current.orchestrate} : {}),...(current.initialPicks ? {initialPicks:current.initialPicks} : {}),requiresRestore:true}, current.requestId) === true) {
+            tabStore.setState((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(entry => entry.requestId === current.requestId ? {...entry,restored:true} : entry)}));
+          }
+        }}>Restore for review</button>}
+        {!item.reviewed && (item.status === "unknown" || item.status === "conflict") && <button type="button" className="orchestration-delivery-reviewed" onClick={() => {
+          tabStore.setState((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(entry => entry.requestId === item.requestId && (entry.status === "unknown" || entry.status === "conflict") ? {...entry,reviewed:true} : entry)}));
+        }}>Mark delivery reviewed</button>}
+        {item.reviewed && (item.status === "unknown" || item.status === "conflict") && <span>Reviewed; delivery remains unconfirmed.</span>}
+      </div>)}
       {queuePaused && (
         <div className="prompt-queue-paused">
           <span className="prompt-queue-paused-text">
@@ -115,14 +137,17 @@ export function PromptQueue() {
             const ordinal = index + 1;
             return (
               <li key={item.id} className="prompt-queue-item">
-                {editingId === item.id ? (
+                {editing?.id === item.id ? (
                   <div className="prompt-queue-edit">
                     <textarea
                       className="prompt-queue-edit-textarea"
                       aria-label={`Edit queued message ${ordinal}`}
-                      value={editDraft}
+                      value={editing.text}
                       autoFocus
-                      onChange={(event) => setEditDraft(event.target.value)}
+                      onChange={(event) => {
+                        const text = event.target.value;
+                        tabStore.setState((state) => state.queueEditDraft?.id === item.id ? { queueEditDraft: { id: item.id, text } } : {});
+                      }}
                       onKeyDown={(event) => handleEditKeyDown(event, item.id)}
                     />
                     <div className="prompt-queue-edit-actions">
@@ -139,7 +164,12 @@ export function PromptQueue() {
                     <span className="prompt-queue-ordinal">{ordinal}</span>
                     <span className="prompt-queue-text">{item.text}</span>
                     {badge !== null && <span className="prompt-queue-badge">{badge}</span>}
-                    <button
+                    {(item.orchestrate === "enable" || item.requiresRestore === true) && (
+                      <button type="button" className="prompt-queue-restore" onClick={() => {
+                        if (onRestore?.(item,item.recoverySourceId) === true) tabStore.getState().deleteQueuedPrompt(item.id);
+                      }}>Restore draft</button>
+                    )}
+                    {!item.retryOf && <button
                       type="button"
                       className="prompt-queue-edit-button"
                       aria-label={`Edit queued message ${ordinal}`}
@@ -147,7 +177,7 @@ export function PromptQueue() {
                       onClick={() => startEdit(item)}
                     >
                       Edit
-                    </button>
+                    </button>}
                     <button
                       type="button"
                       className="prompt-queue-delete"

@@ -7530,7 +7530,7 @@ export function createAutomationFacade(
       // branch — records what actually went on the wire so a live smoke
       // driving turns through this facade can still exercise the Try-again
       // offer (arming requires `lastSentMessage`).
-      state.recordSentMessage(text, queuedImages);
+      state.recordSentMessage(text, queuedImages, requestId);
       const message: UiToHostMessage = {
         type: "user_message",
         requestId,
