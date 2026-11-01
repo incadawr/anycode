@@ -9,6 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Temporarily disable continuing a Codex conversation on another account; starting a new session remains available.
 - Redesign provider connection editing with a compact model picker and per-model pricing table.
 
 ### Fixed

@@ -53,9 +53,8 @@ export type CodexTabAccountResult =
   | { ok: false; reason: "unknown_tab" | "not_codex" };
 
 /**
- * The usage-limit banner's "continue on another account" reply. On success the
- * session row and tab already exist; a refusal always carries a sentence the
- * banner can show as-is (no codes in the UI).
+ * Compatibility reply for continuing on another account. The current main
+ * process refuses this operation; `detail` can be shown as-is.
  */
 export type CodexContinueResult =
   | { ok: true; sessionId: string; tabId: string }
