@@ -472,7 +472,7 @@ export function SessionSurface({ tabId, onToast, suppressPermissionModal = false
             </button>
           </div>
         )}
-        <Composer />
+        <Composer key={tabId} />
       </div>
 
       {/* Permission modal: self-connecting wrapper, renders only when THIS

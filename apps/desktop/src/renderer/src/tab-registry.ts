@@ -460,9 +460,9 @@ export function createTabRegistry(
   });
 
   function startInitial(entry: TabEntry, tabId: string, prompt: InitialPrompt, current: { model: string | null; mode: PermissionMode | null; effort: string | undefined; reasoningEffort: ReasoningEffort | undefined }, imageInput: boolean | undefined, imageFallback: boolean | undefined): void {
+    cancelPendingModel(tabId, entry);
     if ((prompt.images?.length ?? 0) > 0 && prompt.model !== undefined && prompt.model !== current.model) {
       if (!entry.connection) { holdInitial(entry, prompt, "Model selection could not be confirmed. Restore the draft to review its settings."); return; }
-      cancelPendingModel(tabId, entry);
       const requestId = crypto.randomUUID();
       const connection = entry.connection;
       const timer = setTimeout(() => cancelPendingModel(tabId, entry), 10_000);
@@ -471,7 +471,9 @@ export function createTabRegistry(
       return;
     }
     const blocked = isSendBlockedByModelImages(imageInput, imageFallback, prompt.images?.length ?? 0);
-    applyInitialPicks(entry, prompt.model, prompt.mode, prompt.effort, current, prompt.reasoningEffort, blocked ? false : prompt.orchestrate);
+    // Model selection may already have been staged to obtain its image verdict.
+    // All remaining picks and the turn are committed only after that verdict passes.
+    if (!blocked) applyInitialPicks(entry, prompt.model, prompt.mode, prompt.effort, current, prompt.reasoningEffort, prompt.orchestrate);
     dispatchInitialPrompt(entry, prompt.text, prompt.images ?? [], imageInput, imageFallback, prompt.orchestrate,
       { model: prompt.model, mode: prompt.mode, effort: prompt.effort, reasoningEffort: prompt.reasoningEffort });
   }
@@ -526,7 +528,9 @@ export function createTabRegistry(
       entry.store.getState().applyHostMessage(message);
       if (message.type === "model_changed") {
         const pending = pendingInitialModels.get(tabId);
-        if (pending && pending.connection === connection && message.requestId === pending.requestId) {
+        if (pending && pending.connection === connection && message.requestId !== pending.requestId) {
+          cancelPendingModel(tabId, entry);
+        } else if (pending && pending.connection === connection && message.requestId === pending.requestId) {
           clearTimeout(pending.timer); pendingInitialModels.delete(tabId);
           if (message.model !== pending.prompt.model || (message.imageInput === undefined && message.imageFallback !== true)) holdInitial(entry, pending.prompt, "Model selection could not be confirmed. Restore the draft to review its settings.");
           else {
@@ -830,6 +834,9 @@ export function createTabRegistry(
         console.warn("[tab-registry] dropping outgoing message, no active connection for tab", tabId, message);
         return;
       }
+      // A newer model choice invalidates the staged initial request before the
+      // choice reaches the host; a late acknowledgement must never dispatch it.
+      if (message.type === "set_model") cancelPendingModel(tabId, entry);
       if (!entry.isChild && (message.type === "user_message" || message.type === "steer_message")) {
         const sessionId = entry.store.getState().sessionId;
         if (sessionId) childRelationStore.getState().dismissFinishedApprovals(sessionId);

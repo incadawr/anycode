@@ -17,7 +17,7 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ActiveTabBody } from "../App.js";
+import { ActiveTabBody, SessionSurface } from "../App.js";
 import { createDesktopStore } from "../store.js";
 import type { DesktopStoreApi } from "../tab-registry.js";
 import { TabContext } from "../tab-context.js";
@@ -102,6 +102,56 @@ describe("dock resize handle placement (GitHub #31)", () => {
       childLayoutStore.getState().enterSplit("tab");
     });
   }
+
+  it("keeps distinct recovered drafts in their owning tab across real session-surface switches", async () => {
+    const other = createDesktopStore();
+    const imageA = {name:"a.png",sizeBytes:1,attachment:{mediaType:"image/png" as const,data:"YQ=="}};
+    const imageB = {name:"b.png",sizeBytes:1,attachment:{mediaType:"image/png" as const,data:"Yg=="}};
+    store.setState({restoredComposerDraft:{text:"draft A",images:[imageA],orchestrate:"enable"}});
+    other.setState({restoredComposerDraft:{text:"draft B",images:[imageB]}});
+    const renderTab = async (tabId: string, target: DesktopStoreApi) => {
+      await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId,store:target}}, createElement(SessionSurface, {tabId,onToast:() => {}}))));
+    };
+    const type = async (value: string) => {
+      const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+      await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(textarea,value); textarea.dispatchEvent(new Event("input",{bubbles:true})); });
+    };
+    await renderTab("a",store);
+    await type("edited A");
+    await renderTab("b",other);
+    expect(container.querySelector<HTMLTextAreaElement>(".composer-textarea")!.value).toBe("draft B");
+    expect(container.querySelector(".composer-image-pill-name")?.textContent).toBe("b.png");
+    expect(other.getState().restoredComposerDraft).toMatchObject({text:"draft B",images:[imageB]});
+    await type("edited B");
+    await renderTab("a",store);
+    expect(container.querySelector<HTMLTextAreaElement>(".composer-textarea")!.value).toBe("edited A");
+    expect(container.querySelector(".composer-image-pill-name")?.textContent).toBe("a.png");
+    expect(container.textContent).toContain("Orchestration intent retained");
+    expect(other.getState().restoredComposerDraft).toMatchObject({text:"edited B",images:[imageB]});
+    await renderTab("b",other);
+    expect(container.querySelector<HTMLTextAreaElement>(".composer-textarea")!.value).toBe("edited B");
+    expect(container.querySelector(".composer-image-pill-name")?.textContent).toBe("b.png");
+  });
+
+  it("preserves newly typed ordinary drafts independently when switching surfaces", async () => {
+    const other = createDesktopStore();
+    const renderTab = async (tabId: string, target: DesktopStoreApi) => {
+      await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId,store:target}}, createElement(SessionSurface, {tabId,onToast:() => {}}))));
+    };
+    const type = async (value: string) => {
+      const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+      await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(textarea,value); textarea.dispatchEvent(new Event("input",{bubbles:true})); });
+    };
+    await renderTab("a",store);
+    await type("ordinary A");
+    await renderTab("b",other);
+    expect(container.querySelector<HTMLTextAreaElement>(".composer-textarea")!.value).toBe("");
+    await type("ordinary B");
+    await renderTab("a",store);
+    expect(container.querySelector<HTMLTextAreaElement>(".composer-textarea")!.value).toBe("ordinary A");
+    await renderTab("b",other);
+    expect(container.querySelector<HTMLTextAreaElement>(".composer-textarea")!.value).toBe("ordinary B");
+  });
 
   it("renders the separator as a direct child of the grid, before the dock aside — never inside it", async () => {
     await mountBody();

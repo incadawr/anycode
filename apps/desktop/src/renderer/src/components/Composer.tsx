@@ -1341,7 +1341,9 @@ export function Composer() {
   const restoreInProgress = useRef(false);
   useEffect(() => { restoreInProgress.current = false; }, [text, attachedImages]);
   useLayoutEffect(() => {
-    if (!restoredOwned.current) return;
+    // All tab drafts need the same lifetime: a keyed Composer unmounts on
+    // tab switch, including when the user started typing without a restore.
+    restoredOwned.current = true;
     tabStore.setState({ restoredComposerDraft: {
       text: reconstitutePasteMarkers(text, pasteBlocks),
       images: attachedImages.map(({ name, sizeBytes, attachment }) => ({ name, sizeBytes, attachment })),

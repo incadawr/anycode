@@ -34,7 +34,7 @@ interface HarnessState {
   };
   apiMethods: Record<string, ReturnType<typeof vi.fn>>;
   sendToHost: ReturnType<typeof vi.fn>;
-  storeApi: { getState: () => Record<string, unknown> };
+  storeApi: { getState: () => Record<string, unknown>; setState: (state: Record<string, unknown>) => void };
   tabContext: { tabId: string };
 }
 
@@ -57,7 +57,7 @@ const harness = vi.hoisted((): HarnessState => ({
   },
   apiMethods: {},
   sendToHost: vi.fn(),
-  storeApi: { getState: () => ({}) },
+  storeApi: { getState: () => ({}), setState: () => {} },
   tabContext: { tabId: "tab-1" },
 }));
 
@@ -333,7 +333,7 @@ function resetHarness(): void {
     gitSetPanelOpen: vi.fn(),
   };
   harness.sendToHost = vi.fn();
-  harness.storeApi = { getState: () => ({ ...harness.storeState, ...harness.apiMethods }) };
+  harness.storeApi = { getState: () => ({ ...harness.storeState, ...harness.apiMethods }), setState: (state) => { Object.assign(harness.storeState, state); } };
 }
 
 /** Seed Composer's ten useState slots: text(0), pasteBlocks(1), attachedImages(2), imageError(3), caret(4), … */

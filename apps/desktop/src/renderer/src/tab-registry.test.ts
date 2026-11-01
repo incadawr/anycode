@@ -1256,7 +1256,7 @@ describe("tab-registry — queueInitialPrompt images", () => {
     registry.registerPort("tab-a", "/ws/a", asPort(port));
     registry.queueInitialPrompt("tab-a", "look", undefined, "plan", undefined, [IMAGE], undefined, true);
     port.emit({ ...HOST_READY("/ws/a", "sess-a"), imageInput: false });
-    expect(port.sent.map(m => (m as {type:string}).type)).toEqual(["ui_ready", "set_mode"]);
+    expect(port.sent.map(m => (m as {type:string}).type)).toEqual(["ui_ready"]);
     const state = registry.getStore("tab-a")!.getState();
     expect(state.promptQueue).toMatchObject([{text:"look",images:[IMAGE],orchestrate:"enable"}]);
     expect(state.takeQueueHead("retry")).toBeNull();
@@ -1280,6 +1280,34 @@ describe("tab-registry — queueInitialPrompt images", () => {
       expect(port.sent).not.toContainEqual(expect.objectContaining({type:"user_message"}));
       expect(registry.getStore("tab-a")!.getState().promptQueue).toMatchObject([{text:"look",images:[IMAGE],requiresRestore:true,initialPicks:{model:"selected",mode:"plan",reasoningEffort:"high"}}]);
     }
+  });
+
+  it("cancels the staged initial prompt before a newer model choice and ignores the old ack", () => {
+    const { registry } = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    registry.queueInitialPrompt("tab-a", "look", "model-a", "plan", "high", [IMAGE], "high");
+    port.emit({ ...HOST_READY("/ws/a", "sess-a"), imageInput:true });
+    const first = port.sent[1] as {type:string;model:string;requestId:string};
+    expect(first).toMatchObject({type:"set_model",model:"model-a"});
+    registry.sendToTab("tab-a", {type:"set_model",model:"model-b",requestId:"b"});
+    expect(port.sent[2]).toMatchObject({type:"set_model",model:"model-b",requestId:"b"});
+    port.emit({type:"model_changed",requestId:first.requestId,model:"model-a",reasoningEffort:"off",imageInput:true});
+    port.emit({type:"model_changed",requestId:"b",model:"model-b",reasoningEffort:"off",imageInput:true});
+    expect(port.sent.map(m => (m as {type:string}).type)).toEqual(["ui_ready","set_model","set_model"]);
+    expect(registry.getStore("tab-a")!.getState().promptQueue).toMatchObject([{text:"look",images:[IMAGE],requiresRestore:true,initialPicks:{model:"model-a",mode:"plan",effort:"high",reasoningEffort:"high"}}]);
+  });
+
+  it("stages only model selection before an unsupported image verdict", () => {
+    const { registry } = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    registry.queueInitialPrompt("tab-a", "look", "selected", "plan", "high", [IMAGE], "high", true);
+    port.emit({ ...HOST_READY("/ws/a", "sess-a"), imageInput:true });
+    const request = port.sent[1] as {requestId:string};
+    port.emit({type:"model_changed",requestId:request.requestId,model:"selected",reasoningEffort:"off",imageInput:false});
+    expect(port.sent.map(m => (m as {type:string}).type)).toEqual(["ui_ready","set_model"]);
+    expect(registry.getStore("tab-a")!.getState().promptQueue).toMatchObject([{text:"look",images:[IMAGE],orchestrate:"enable",initialPicks:{model:"selected",mode:"plan",effort:"high",reasoningEffort:"high"}}]);
   });
 
   it("retains the initial draft on model timeout and ignores a late acknowledgement", () => {
