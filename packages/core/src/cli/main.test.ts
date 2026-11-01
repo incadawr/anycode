@@ -49,6 +49,7 @@ import { SqlitePersistenceAdapter } from "../adapters/node/sqlite-persistence.js
 import { deriveSessionTitle, sanitizeTitleSource } from "../context/session-title.js";
 import type { ExtensionsBootstrap } from "../extensions/bootstrap.js";
 import { McpManager } from "../mcp/index.js";
+import { InMemoryHookRunner } from "../dispatch/index.js";
 import type { ModelPort, ModelRequest } from "../ports/index.js";
 import type { McpServerStatus, McpTransportFactory, McpWireTransport } from "../ports/mcp.js";
 import type { SkillMeta } from "../ports/skills.js";
@@ -1333,7 +1334,209 @@ async function seedSession(dbPath: string, workspace: string, firstLine: string)
   expect(exitCode).toBe(0);
 }
 
+async function createSyntheticRoot(dbPath: string, workspace: string, id: string, extras: {engineId?:string; externalSessionRef?:string} = {}, updatedAt = Date.now()): Promise<void> {
+  const persistence = new SqlitePersistenceAdapter(dbPath);
+  try { await persistence.createSession({id,workspace,model:"fixture",mode:"build",...extras}); }
+  finally { await persistence.close(); }
+  const db = new DatabaseSync(dbPath);
+  try { db.prepare("UPDATE sessions SET updated_at = ? WHERE id = ?").run(updatedAt,id); }
+  finally { db.close(); }
+}
+
 describe("CLI sessions/resume UX (design slice-4.4-cut.md §7)", () => {
+  it.each([
+    ["codex", {engineId:"codex"}], ["claude", {engineId:"claude"}], ["unknown", {engineId:"other"}],
+    ["empty engine", {engineId:""}], ["legacy native ref", {externalSessionRef:"native"}],
+    ["core with native ref", {engineId:"core",externalSessionRef:"native"}],
+  ])("fails closed on explicit resume of %s before MCP, hooks, and model", async (_label, extras) => {
+    const {workspace,dbPath,home} = setupTitleTestDirs();
+    await createSyntheticRoot(dbPath,workspace,"foreign",extras);
+    const model = new CountingModelPort();
+    const output = new PassThrough(); const errorOutput = new PassThrough(); const errors = collectOutput(errorOutput);
+    const mcp = vi.spyOn(McpManager.prototype,"start"); const hooks = vi.spyOn(InMemoryHookRunner.prototype,"register");
+    try {
+      expect(await runCli({argv:["--resume","foreign","-p","hello"],env:makeTitleTestEnv(dbPath,home),home,cwd:workspace,input:new PassThrough(),output,errorOutput,modelPort:model})).toBe(1);
+      expect(errors()).toContain("Cannot resume");
+      expect(mcp).not.toHaveBeenCalled(); expect(hooks).not.toHaveBeenCalled(); expect(model.calls).toBe(0);
+      expect(await listWorkspaceSessions(dbPath,workspace)).toHaveLength(1);
+    } finally { mcp.mockRestore(); hooks.mockRestore(); }
+  });
+
+  it.each([["legacy", {}], ["core", {engineId:"core"}]])("continues compatible %s sessions", async (_label, extras) => {
+    const {workspace,dbPath,home} = setupTitleTestDirs();
+    await createSyntheticRoot(dbPath,workspace,"compatible",extras);
+    const model = new CountingModelPort();
+    expect(await runCli({argv:["--resume","compatible","-p","hello"],env:makeTitleTestEnv(dbPath,home),home,cwd:workspace,input:new PassThrough(),output:new PassThrough(),errorOutput:new PassThrough(),modelPort:model})).toBe(0);
+    expect(model.calls).toBe(1);
+    expect((await listWorkspaceSessions(dbPath,workspace)).map(s => s.id)).toEqual(["compatible"]);
+  });
+
+  it("migrates and resumes a legacy v1 core database", async () => {
+    const {workspace,dbPath,home} = setupTitleTestDirs();
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+        INSERT INTO schema_migrations VALUES (1, 1);
+        CREATE TABLE sessions (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, model TEXT NOT NULL, mode TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, title TEXT);
+        CREATE TABLE history_items (seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES sessions(id), item_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (session_id, item_id));
+        CREATE INDEX idx_history_items_session ON history_items (session_id, seq)`);
+      db.prepare("INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?)").run("old-core",workspace,"test-model","default",1,1,null);
+    } finally { db.close(); }
+    const model = new CountingModelPort();
+    expect(await runCli({argv:["--resume","old-core","-p","hello"],env:makeTitleTestEnv(dbPath,home),home,cwd:workspace,input:new PassThrough(),output:new PassThrough(),errorOutput:new PassThrough(),modelPort:model})).toBe(0);
+    expect(model.calls).toBe(1);
+    expect((await listWorkspaceSessions(dbPath,workspace)).map(session => session.id)).toEqual(["old-core"]);
+  });
+
+  it("refuses --continue when the newest root belongs to another engine", async () => {
+    const {workspace,dbPath,home} = setupTitleTestDirs();
+    await createSyntheticRoot(dbPath,workspace,"core-old",{},100);
+    await createSyntheticRoot(dbPath,workspace,"foreign-new",{engineId:"claude"},200);
+    const model = new CountingModelPort(); const stderr = new PassThrough(); const errors = collectOutput(stderr);
+    const mcp = vi.spyOn(McpManager.prototype,"start"); const hooks = vi.spyOn(InMemoryHookRunner.prototype,"register");
+    try {
+      expect(await runCli({argv:["--continue","-p","hello"],env:makeTitleTestEnv(dbPath,home),home,cwd:workspace,input:new PassThrough(),output:new PassThrough(),errorOutput:stderr,modelPort:model})).toBe(1);
+      expect(errors()).toContain("Cannot resume"); expect(mcp).not.toHaveBeenCalled(); expect(hooks).not.toHaveBeenCalled(); expect(model.calls).toBe(0);
+      expect((await listWorkspaceSessions(dbPath,workspace)).map(s => s.id)).toEqual(["foreign-new","core-old"]);
+    } finally { mcp.mockRestore(); hooks.mockRestore(); }
+  });
+
+  it("starts a new core session by default even when a foreign session exists", async () => {
+    const {workspace,dbPath,home} = setupTitleTestDirs();
+    await createSyntheticRoot(dbPath,workspace,"foreign",{engineId:"codex"});
+    const model = new CountingModelPort();
+    expect(await runCli({argv:["-p","hello"],env:makeTitleTestEnv(dbPath,home),home,cwd:workspace,input:new PassThrough(),output:new PassThrough(),errorOutput:new PassThrough(),modelPort:model})).toBe(0);
+    const rows = await listWorkspaceSessions(dbPath,workspace);
+    expect(rows).toHaveLength(2); expect(rows.find(row => row.id === "foreign")?.engineId).toBe("codex"); expect(model.calls).toBe(1);
+  });
+
+  it("rejects a newer unknown database schema before MCP, hooks and model activity", async () => {
+    const {workspace,dbPath,home} = setupTitleTestDirs();
+    await createSyntheticRoot(dbPath,workspace,"core",{engineId:"core"});
+    const db = new DatabaseSync(dbPath);
+    try { db.prepare("INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)").run(9999,1); } finally { db.close(); }
+    const model = new CountingModelPort(); const stderr = new PassThrough(); const errors = collectOutput(stderr);
+    const mcp = vi.spyOn(McpManager.prototype,"start"); const hooks = vi.spyOn(InMemoryHookRunner.prototype,"register");
+    try {
+      expect(await runCli({argv:["--resume","core","-p","hello"],env:makeTitleTestEnv(dbPath,home),home,cwd:workspace,input:new PassThrough(),output:new PassThrough(),errorOutput:stderr,modelPort:model})).toBe(1);
+      expect(errors()).toContain("newer than supported"); expect(mcp).not.toHaveBeenCalled(); expect(hooks).not.toHaveBeenCalled(); expect(model.calls).toBe(0);
+    } finally { mcp.mockRestore(); hooks.mockRestore(); }
+  });
+
+  it("rejects an unknown migration even below the highest known version", async () => {
+    const {workspace,dbPath,home} = setupTitleTestDirs();
+    await createSyntheticRoot(dbPath,workspace,"core",{engineId:"core"});
+    const db = new DatabaseSync(dbPath);
+    try { db.prepare("INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)").run(28,1); } finally { db.close(); }
+    const model = new CountingModelPort(); const stderr = new PassThrough(); const errors = collectOutput(stderr);
+    const mcp = vi.spyOn(McpManager.prototype,"start");
+    try {
+      expect(await runCli({argv:["--resume","core","-p","hello"],env:makeTitleTestEnv(dbPath,home),home,cwd:workspace,input:new PassThrough(),output:new PassThrough(),errorOutput:stderr,modelPort:model})).toBe(1);
+      expect(errors()).toContain("unsupported migration"); expect(mcp).not.toHaveBeenCalled(); expect(model.calls).toBe(0);
+    } finally { mcp.mockRestore(); }
+  });
+
+  it.each([
+    ["resume", ["--resume","archived","-p","hello"], false],
+    ["continue", ["--continue","-p","hello"], false],
+    ["default", ["-p","hello"], false],
+    ["picker", ["--resume"], true],
+  ])("rejects an unrecognized archived session field before %s startup", async (_name, argv, interactive) => {
+    const {workspace,dbPath,home} = setupTitleTestDirs();
+    await createSyntheticRoot(dbPath,workspace,"archived",{engineId:"core"});
+    const db = new DatabaseSync(dbPath);
+    try { db.exec("ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0"); db.prepare("UPDATE sessions SET archived = 1 WHERE id = ?").run("archived"); }
+    finally { db.close(); }
+    const model = new CountingModelPort(); const stderr = new PassThrough(); const errors = collectOutput(stderr);
+    const mcp = vi.spyOn(McpManager.prototype,"start"); const hooks = vi.spyOn(InMemoryHookRunner.prototype,"register");
+    try {
+      expect(await runCli({argv,interactive,env:makeTitleTestEnv(dbPath,home),home,cwd:workspace,input:new PassThrough(),output:new PassThrough(),errorOutput:stderr,modelPort:model})).toBe(1);
+      expect(errors()).toContain("unsupported session fields"); expect(mcp).not.toHaveBeenCalled(); expect(hooks).not.toHaveBeenCalled(); expect(model.calls).toBe(0);
+      const verify = new DatabaseSync(dbPath,{readOnly:true});
+      try { expect(verify.prepare("SELECT archived FROM sessions WHERE id = ?").get("archived")).toMatchObject({archived:1}); } finally { verify.close(); }
+    } finally { mcp.mockRestore(); hooks.mockRestore(); }
+  });
+
+  it("refuses a missing explicit session rather than starting a different session", async () => {
+    const {workspace,dbPath,home} = setupTitleTestDirs();
+    const model = new CountingModelPort(); const stderr = new PassThrough(); const errors = collectOutput(stderr);
+    const mcp = vi.spyOn(McpManager.prototype,"start");
+    try {
+      expect(await runCli({argv:["--resume","missing","-p","hello"],env:makeTitleTestEnv(dbPath,home),home,cwd:workspace,input:new PassThrough(),output:new PassThrough(),errorOutput:stderr,modelPort:model})).toBe(1);
+      expect(errors()).toContain("not found"); expect(mcp).not.toHaveBeenCalled(); expect(model.calls).toBe(0);
+      expect(await listWorkspaceSessions(dbPath,workspace)).toEqual([]);
+    } finally { mcp.mockRestore(); }
+  });
+
+  it("refuses an incompatible programmatic resumeSessionId", async () => {
+    const {workspace,dbPath,home} = setupTitleTestDirs();
+    await createSyntheticRoot(dbPath,workspace,"foreign",{engineId:"claude"});
+    const model = new CountingModelPort(); const mcp = vi.spyOn(McpManager.prototype,"start");
+    try {
+      expect(await runCli({argv:["-p","hello"],resumeSessionId:"foreign",env:makeTitleTestEnv(dbPath,home),home,cwd:workspace,input:new PassThrough(),output:new PassThrough(),errorOutput:new PassThrough(),modelPort:model})).toBe(1);
+      expect(mcp).not.toHaveBeenCalled(); expect(model.calls).toBe(0);
+    } finally { mcp.mockRestore(); }
+  });
+
+  it("lets the picker choose an older core session despite a newer foreign row", async () => {
+    const {workspace,dbPath,home} = setupTitleTestDirs();
+    await createSyntheticRoot(dbPath,workspace,"core-old",{engineId:"core"},100);
+    await createSyntheticRoot(dbPath,workspace,"foreign-new",{engineId:"codex"},200);
+    const input = new PassThrough(); const output = new PassThrough(); const text = collectOutput(output);
+    const model = new CountingModelPort(); const mcp = vi.spyOn(McpManager.prototype,"start");
+    try {
+      const pending = runCli({argv:["--resume"],env:makeTitleTestEnv(dbPath,home),home,cwd:workspace,input,output,errorOutput:new PassThrough(),modelPort:model,interactive:true});
+      await vi.waitFor(() => expect(text()).toContain("pick a session"));
+      expect(text()).toContain("codex"); expect(text()).toContain("core"); expect(mcp).not.toHaveBeenCalled();
+      input.write("2\n");
+      await vi.waitFor(() => expect(text()).toContain("AnyCode CLI"));
+      input.write("/quit\n"); expect(await pending).toBe(0);
+      expect(text()).toContain("Resuming core-old"); expect(mcp).toHaveBeenCalledOnce(); expect((await listWorkspaceSessions(dbPath,workspace))).toHaveLength(2);
+    } finally { mcp.mockRestore(); }
+  });
+
+  it("labels foreign picker rows and refuses a selected foreign row before MCP", async () => {
+    const {workspace,dbPath,home} = setupTitleTestDirs();
+    await createSyntheticRoot(dbPath,workspace,"foreign",{engineId:"codex"});
+    const input = new PassThrough(); const output = new PassThrough(); const stderr = new PassThrough();
+    const text = collectOutput(output); const errors = collectOutput(stderr); const model = new CountingModelPort();
+    const mcp = vi.spyOn(McpManager.prototype,"start"); const hooks = vi.spyOn(InMemoryHookRunner.prototype,"register");
+    try {
+      const pending = runCli({argv:["--resume"],env:makeTitleTestEnv(dbPath,home),home,cwd:workspace,input,output,errorOutput:stderr,modelPort:model,interactive:true});
+      await vi.waitFor(() => expect(text()).toContain("pick a session"));
+      expect(text()).toContain("codex"); expect(mcp).not.toHaveBeenCalled(); expect(hooks).not.toHaveBeenCalled();
+      input.write("1\n"); expect(await pending).toBe(1); expect(errors()).toContain("Cannot resume"); expect(model.calls).toBe(0); expect(mcp).not.toHaveBeenCalled();
+    } finally { mcp.mockRestore(); hooks.mockRestore(); }
+  });
+
+  it("rechecks a picker selection if its engine changes while the user chooses", async () => {
+    const {workspace,dbPath,home} = setupTitleTestDirs();
+    await createSyntheticRoot(dbPath,workspace,"moving",{engineId:"core"});
+    const input = new PassThrough(); const output = new PassThrough(); const stderr = new PassThrough();
+    const text = collectOutput(output); const model = new CountingModelPort(); const mcp = vi.spyOn(McpManager.prototype,"start");
+    try {
+      const pending = runCli({argv:["--resume"],env:makeTitleTestEnv(dbPath,home),home,cwd:workspace,input,output,errorOutput:stderr,modelPort:model,interactive:true});
+      await vi.waitFor(() => expect(text()).toContain("pick a session"));
+      const db = new DatabaseSync(dbPath); try { db.prepare("UPDATE sessions SET engine_id = ? WHERE id = ?").run("claude","moving"); } finally { db.close(); }
+      input.write("1\n"); expect(await pending).toBe(1); expect(mcp).not.toHaveBeenCalled(); expect(model.calls).toBe(0);
+    } finally { mcp.mockRestore(); }
+  });
+
+  it("rejects a foreign-engine explicit resume before MCP and model activity", async () => {
+    const {workspace,dbPath,home} = setupTitleTestDirs();
+    const persistence = new SqlitePersistenceAdapter(dbPath);
+    await persistence.createSession({id:"foreign-session",workspace,model:"fixture",mode:"build",engineId:"codex"});
+    await persistence.close();
+    const port = new CountingModelPort();
+    const start = vi.spyOn(McpManager.prototype,"start");
+    try {
+      const code = await runCli({argv:["--resume","foreign-session","-p","synthetic prompt"],env:makeTitleTestEnv(dbPath,home),home,cwd:workspace,input:new PassThrough(),output:new PassThrough(),errorOutput:new PassThrough(),modelPort:port});
+      expect.soft(code).not.toBe(0);
+      expect.soft(start).not.toHaveBeenCalled();
+      expect.soft(port.calls).toBe(0);
+    } finally { start.mockRestore(); }
+  });
+
   it("scenario 1: run 2 --continue resumes run 1's session (no new row) with a Continuing notice", async () => {
     const { workspace, dbPath, home } = setupTitleTestDirs();
     await seedSession(dbPath, workspace, "Fix the flaky test");
