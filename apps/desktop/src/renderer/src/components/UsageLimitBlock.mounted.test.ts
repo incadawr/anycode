@@ -30,8 +30,10 @@ it("explains the temporary limitation without opening the account picker", async
   } finally {await act(async()=>root.unmount());container.remove();}
 });
 
-it("shows the existing conversation refusal to the user", async () => {
-  const detail = "This conversation already exists on the target account and may be outdated or in use. It was not opened or changed. Choose another account or review the existing conversation.";
+it.each([
+  "This conversation already exists on the target account and may be outdated or in use. It was not opened or changed. Choose another account or review the existing conversation.",
+  "The original session is no longer available. A copy was left on the target account and may be outdated or in use. A retry on that account will be blocked; choose another account or review the existing conversation.",
+])("shows continuation refusal details to the user", async (detail) => {
   const controller: CodexContinueController = {
     accounts: async () => [{ id:"account-b", label:"Account B" }],
     continueOn: async () => ({ok:false, detail}),
