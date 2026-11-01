@@ -24,7 +24,7 @@ import { lazy, Suspense, useContext, useEffect, useLayoutEffect, useRef, useStat
 import type { ClipboardEvent, DragEvent, FocusEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { CodexRateLimitsWire, ImageAttachment, ImageMediaType, PermissionMode } from "@anycode/core";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
-import { isSessionBusy, type ContextUsage, type DesktopState, type SessionTokens, type TurnState } from "../store.js";
+import { isSessionBusy, type ContextUsage, type DesktopState, type QueuedPrompt, type SessionTokens, type TurnState } from "../store.js";
 import { useSettingsStore } from "../settings-store.js";
 import { useTabsStore } from "../tabs-store.js";
 import type { ProviderConnection } from "../../../shared/settings.js";
@@ -1287,13 +1287,16 @@ function CtxPopover({
 }
 
 export function Composer() {
-  const [text, setText] = useState("");
+  const tabStore = useTabStoreApi();
+  const initialRestored = useRef(tabStore.getState().restoredComposerDraft ?? null);
+  const restoredOwned = useRef(initialRestored.current !== null);
+  const [text, setText] = useState(initialRestored.current?.text ?? "");
   const [pasteBlocks, setPasteBlocks] = useState<readonly PasteBlock[]>([]);
-  const [attachedImages, setAttachedImages] = useState<readonly DraftImage[]>([]);
+  const [attachedImages, setAttachedImages] = useState<readonly DraftImage[]>(initialRestored.current?.images.map((image, id) => ({ ...image, id: id + 1 })) ?? []);
   const [imageError, setImageError] = useState<string | null>(null);
   // Monotonic per mount — never reset (ids stay unambiguous across sends).
   const nextPasteIdRef = useRef(1);
-  const nextImageIdRef = useRef(1);
+  const nextImageIdRef = useRef((initialRestored.current?.images.length ?? 0) + 1);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // UI audit v0.0.49 §C2: the card's measured height is what keeps the toast
@@ -1333,6 +1336,28 @@ export function Composer() {
   // True when the mode menu's Orchestrate row (not a `/orchestrate` submit)
   // opened the first-run dialog: Save/Skip then only enable the flag.
   const [rolePickerForToggle, setRolePickerForToggle] = useState(false);
+  const [restoredOrchestrate, setRestoredOrchestrate] = useState(initialRestored.current?.orchestrate === "enable");
+  const [restoredPicks, setRestoredPicks] = useState(initialRestored.current?.initialPicks);
+  const completedImages = useTabStore((state) => state.completedComposerImages);
+  const pendingImages = useTabStore((state) => state.pendingComposerImages);
+  const restoreInProgress = useRef(false);
+  useEffect(() => { restoreInProgress.current = false; }, [text, attachedImages]);
+  useLayoutEffect(() => {
+    // All tab drafts need the same lifetime: a keyed Composer unmounts on
+    // tab switch, including when the user started typing without a restore.
+    restoredOwned.current = true;
+    const available = Math.max(0, COMPOSER_IMAGE_MAX_PER_MESSAGE - attachedImages.length);
+    const additions = (completedImages ?? []).slice(0, available).map(image => ({ ...image, id: nextImageIdRef.current++ }));
+    const merged = additions.length ? [...attachedImages, ...additions] : attachedImages;
+    if (additions.length) setAttachedImages(merged);
+    if ((completedImages?.length ?? 0) > available) tabStore.getState().setNotice({ kind: "image_attach_rejected", text: `Only ${COMPOSER_IMAGE_MAX_PER_MESSAGE} images can be attached.` });
+    tabStore.setState({ ...(completedImages?.length ? { completedComposerImages: [] } : {}), restoredComposerDraft: {
+      text: reconstitutePasteMarkers(text, pasteBlocks),
+      images: merged.map(({ name, sizeBytes, attachment }) => ({ name, sizeBytes, attachment })),
+      ...(restoredOrchestrate ? { orchestrate: "enable" as const } : {}),
+      ...(restoredPicks ? { initialPicks: restoredPicks } : {}),
+    } });
+  }, [tabStore, text, pasteBlocks, attachedImages, restoredOrchestrate, restoredPicks, completedImages]);
 
   useLayoutEffect(() => {
     if (pendingCaretRef.current !== null) {
@@ -1364,7 +1389,6 @@ export function Composer() {
     return () => window.removeEventListener(COMPOSER_INSERT_EVENT, onInsert);
   }, []);
 
-  const tabStore = useTabStoreApi();
   const sendToHost = useTabSend();
   const turn = useTabStore((state) => state.turn);
   const queueInFlight = useTabStore((state) => state.queueInFlight);
@@ -1462,7 +1486,8 @@ export function Composer() {
   const ready = connection === "ready";
   // Running no longer blocks send (F15 prompt queue): a send while running
   // enqueues instead of dispatching directly (handleSend below).
-  const canSend = ready && hasSendableDraft(text, attachedImages.length) && !attachmentsBlockedByModel;
+  const loadingImages = (pendingImages?.length ?? 0) > 0 || (completedImages?.length ?? 0) > 0;
+  const canSend = ready && hasSendableDraft(text, attachedImages.length) && !attachmentsBlockedByModel && !loadingImages;
 
   // Slash-menu derivation (cut §4.3): recomputed every render from the
   // CURRENT text+caret, never carried as a separate `open` boolean.
@@ -1565,6 +1590,7 @@ export function Composer() {
    * the prompt queue carries the task exactly like any other send.
    */
   function beginOrchestrateSubmit(taskText: string): void {
+    if (imagesStillLoading() || refuseOrchestrateAttachments()) return;
     const task = taskText.trim();
     if (!ready) {
       return;
@@ -1585,6 +1611,7 @@ export function Composer() {
 
   /** Enable orchestrate, then submit the stashed task as a normal user message. */
   function proceedOrchestrateSubmit(): void {
+    if (imagesStillLoading() || refuseOrchestrateAttachments()) return;
     sendToHost({ type: "set_orchestrate", enabled: true });
     const task = pendingOrchestrateTask;
     setPendingOrchestrateTask(null);
@@ -1609,12 +1636,13 @@ export function Composer() {
 
   /** Send one text as a user message through the same wire path handleSend's idle branch uses. */
   function submitOrchestrateTask(task: string): void {
+    if (imagesStillLoading() || refuseOrchestrateAttachments()) return;
     if (task.length === 0) {
       return;
     }
     const requestId = crypto.randomUUID();
     tabStore.getState().appendUserText(requestId, task);
-    tabStore.getState().recordSentMessage(task, []);
+    tabStore.getState().recordSentMessage(task, [], requestId, "enable");
     sendToHost({ type: "user_message", requestId, text: task });
   }
 
@@ -1703,6 +1731,7 @@ export function Composer() {
       tabStore.getState().setNotice({ kind: "slash_command_rejected", text: result.reason });
       return true;
     }
+    if (restoredOwned.current) { restoredOwned.current = false; setRestoredPicks(undefined); tabStore.setState((state) => ({ restoredComposerDraft: null, completedComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 })); }
     setText("");
     setPasteBlocks([]);
     setCaret(0);
@@ -1726,7 +1755,13 @@ export function Composer() {
     if (!item || item.disabled || slashQuery === null) {
       return;
     }
+    if (restoredOrchestrate && item.intent.kind !== "insert") {
+      tabStore.getState().setNotice({ kind: "slash_command_rejected", text: "This restored draft requires orchestration. Review it before starting a new orchestration." });
+      return;
+    }
     const intent = item.intent;
+    if (intent.kind !== "insert" && imagesStillLoading()) return;
+    if (intent.kind === "orchestrate_submit" && refuseOrchestrateAttachments()) return;
     if (intent.kind === "compact_now") {
       const verdict = resolveBareSlashSubmit("/compact", slashCtx, attachedImages.length, childSurface);
       if (verdict.kind === "refuse") {
@@ -1747,15 +1782,6 @@ export function Composer() {
     dispatchSlashIntent(item.intent, nextText);
   }
 
-  /** Thin wrapper: `readComposerImageFile` owns validation, this only mints the renderer-local list-key `id`. */
-  async function readDraftImage(file: File): Promise<{ ok: true; image: DraftImage } | { ok: false; reason: string }> {
-    const result = await readComposerImageFile(file);
-    if (!result.ok) {
-      return result;
-    }
-    return { ok: true, image: { id: nextImageIdRef.current++, ...result.image } };
-  }
-
   async function addImageFiles(files: readonly File[]): Promise<void> {
     const imageFiles = files.filter((file) => file.type.startsWith("image/") || file.name.match(/\.(png|jpe?g|gif|webp)$/i));
     if (imageFiles.length === 0 || !ready || !supportsImages) {
@@ -1769,40 +1795,61 @@ export function Composer() {
       tabStore.getState().setNotice({ kind: "image_attach_rejected", text: MODEL_IMAGE_ATTACH_BLOCKED_TEXT });
       return;
     }
-    const slots = COMPOSER_IMAGE_MAX_PER_MESSAGE - attachedImages.length;
+    const snapshot = tabStore.getState();
+    const slots = COMPOSER_IMAGE_MAX_PER_MESSAGE - attachedImages.length - snapshot.pendingComposerImages.length - snapshot.completedComposerImages.length;
     if (slots <= 0) {
-      setImageError(`Only ${COMPOSER_IMAGE_MAX_PER_MESSAGE} images can be attached.`);
-      tabStore.getState().setNotice({
-        kind: "image_attach_rejected",
-        text: `Only ${COMPOSER_IMAGE_MAX_PER_MESSAGE} images can be attached.`,
-      });
+      tabStore.getState().setNotice({ kind: "image_attach_rejected", text: `Only ${COMPOSER_IMAGE_MAX_PER_MESSAGE} images can be attached.` });
       return;
     }
-    const accepted: DraftImage[] = [];
-    let firstError: string | null = imageFiles.length > slots ? `Only ${COMPOSER_IMAGE_MAX_PER_MESSAGE} images can be attached.` : null;
-    for (const file of imageFiles.slice(0, slots)) {
-      try {
-        const result = await readDraftImage(file);
-        if (result.ok) {
-          accepted.push(result.image);
-        } else {
-          firstError ??= result.reason;
-        }
-      } catch (error) {
-        firstError ??= error instanceof Error ? error.message : String(error);
-      }
-    }
-    if (accepted.length > 0) {
-      setAttachedImages((current) => [...current, ...accepted]);
-      setImageError(null);
-    }
-    if (firstError !== null) {
-      setImageError(firstError);
-      tabStore.getState().setNotice({ kind: "image_attach_rejected", text: firstError });
+    const chosen = imageFiles.slice(0, slots).map(file => ({ file, id: crypto.randomUUID() }));
+    const generation = snapshot.composerImageGeneration;
+    tabStore.setState((state) => ({ pendingComposerImages: [...state.pendingComposerImages, ...chosen.map(({file,id}) => ({id,name:file.name || "image"}))] }));
+    if (imageFiles.length > slots) tabStore.getState().setNotice({ kind: "image_attach_rejected", text: `Only ${COMPOSER_IMAGE_MAX_PER_MESSAGE} images can be attached.` });
+    for (const {file,id} of chosen) {
+      if (tabStore.getState().composerImageGeneration !== generation) return;
+      let result: Awaited<ReturnType<typeof readComposerImageFile>>;
+      try { result = await readComposerImageFile(file); }
+      catch (error) { result = {ok:false, reason: error instanceof Error ? error.message : String(error)}; }
+      if (tabStore.getState().composerImageGeneration !== generation) return;
+      tabStore.setState((state) => ({
+        pendingComposerImages: state.pendingComposerImages.filter((item) => item.id !== id),
+        ...(result.ok ? { completedComposerImages: [...state.completedComposerImages, result.image] } : {}),
+      }));
+      if (!result.ok) tabStore.getState().setNotice({ kind: "image_attach_rejected", text: result.reason });
     }
   }
 
+  function imagesStillLoading(): boolean {
+    const state = tabStore.getState();
+    if ((state.pendingComposerImages?.length ?? 0) === 0 && (state.completedComposerImages?.length ?? 0) === 0) return false;
+    state.setNotice({ kind: "image_attach_rejected", text: "Wait for attachments to finish loading, or cancel loading before continuing." });
+    return true;
+  }
+
+  function refuseOrchestrateAttachments(): boolean {
+    const savedImages = tabStore.getState().restoredComposerDraft?.images.length ?? 0;
+    if (attachedImages.length === 0 && savedImages === 0) return false;
+    tabStore.getState().setNotice({ kind: "slash_command_rejected", text: "Remove attachments before using /orchestrate. Your draft has been kept." });
+    return true;
+  }
+
   function handleSend(): void {
+    if (imagesStillLoading()) return;
+    if (supportsCorePermissions && /^\s*\/orchestrate(?:\s|$)/.test(reconstitutePasteMarkers(text, pasteBlocks)) && refuseOrchestrateAttachments()) return;
+    if (restoredOrchestrate) {
+      tabStore.getState().setNotice({ kind: "slash_command_rejected", text: "This restored draft requires orchestration. Review it before starting a new orchestration." });
+      return;
+    }
+    if (restoredPicks) {
+      const current = tabStore.getState();
+      if ((restoredPicks.model !== undefined && restoredPicks.model !== current.model) ||
+          (restoredPicks.mode !== undefined && restoredPicks.mode !== current.mode) ||
+          (restoredPicks.effort !== undefined && restoredPicks.effort !== current.engine?.model?.effort) ||
+          (restoredPicks.reasoningEffort !== undefined && restoredPicks.reasoningEffort !== current.reasoningEffort)) {
+        current.setNotice({ kind: "slash_command_rejected", text: "Apply the original draft settings and wait for confirmation before sending." });
+        return;
+      }
+    }
     const outgoing = reconstitutePasteMarkers(text, pasteBlocks);
     // GitHub #14: a recognized whole-draft slash command is consumed (run or
     // visibly refused) BEFORE the canSend gate and before any queue/steer/
@@ -1871,7 +1918,7 @@ export function Composer() {
       tabStore.getState().appendUserText(requestId, outgoing, images.length > 0 ? images.map((image) => image.attachment) : undefined);
       // W8: snapshot what actually went on the wire so a later
       // terminal retryable failure can offer to replay this same content.
-      tabStore.getState().recordSentMessage(outgoing, images);
+      tabStore.getState().recordSentMessage(outgoing, images, requestId);
       sendToHost({
         type: "user_message",
         requestId,
@@ -1879,6 +1926,7 @@ export function Composer() {
         ...(images.length > 0 ? { images: images.map((image) => image.attachment) } : {}),
       });
     }
+    if (restoredOwned.current) { restoredOwned.current = false; setRestoredPicks(undefined); tabStore.setState((state) => ({ restoredComposerDraft: null, completedComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 })); }
     setText("");
     setPasteBlocks([]);
     setAttachedImages([]);
@@ -2043,7 +2091,9 @@ export function Composer() {
   const nativeEffort = engine?.model !== undefined
     ? nativeEffortControl(engine.model, pendingEngineChange?.model, pendingEngineChange?.effort, handleEngineEffortPick)
     : undefined;
-  const sendDisabledReason = !ready
+  const sendDisabledReason = loadingImages
+    ? "Wait for attachments to finish loading or cancel loading"
+    : !ready
     ? "Waiting for the session to connect"
     : attachmentsBlockedByModel
       ? MODEL_IMAGE_SEND_BLOCKED_TEXT
@@ -2059,7 +2109,25 @@ export function Composer() {
       onDrop={handleDrop}
     >
       <BackgroundAgents />
-      <PromptQueue />
+      <PromptQueue onRestore={(item: QueuedPrompt) => {
+        if (imagesStillLoading()) return false;
+        if (restoreInProgress.current || text.length > 0 || attachedImages.length > 0 || pasteBlocks.length > 0) {
+          tabStore.getState().setNotice({ kind: "slash_command_rejected", text: "Finish or clear the current draft before restoring another." });
+          return false;
+        }
+        restoreInProgress.current = true;
+        tabStore.setState((state) => ({ completedComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 }));
+        restoredOwned.current = true;
+        tabStore.setState({ restoredComposerDraft: { text: item.text, images: item.images, ...(item.orchestrate ? { orchestrate: item.orchestrate } : {}), ...(item.initialPicks ? { initialPicks: item.initialPicks } : {}) } });
+        setText(item.text);
+        setAttachedImages(item.images.map(image => ({ ...image, id: nextImageIdRef.current++ })));
+        setRestoredOrchestrate(item.orchestrate === "enable");
+        setRestoredPicks(item.initialPicks);
+        return true;
+      }} />
+      {Boolean(pendingImages?.length) && <div className="composer-hint" role="status">Loading attachments: {pendingImages!.map(image => image.name).join(", ")}. <button type="button" onClick={() => tabStore.setState((state) => ({ pendingComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 }))}>Cancel loading and exclude pending files</button></div>}
+      {restoredPicks && <div className="composer-hint">Original settings: {[restoredPicks.model, restoredPicks.mode, restoredPicks.effort, restoredPicks.reasoningEffort].filter(Boolean).join(" / ")}. Select these settings before sending. <button type="button" onClick={() => setRestoredPicks(undefined)}>Use current settings instead</button></div>}
+      {restoredOrchestrate && <div className="composer-hint">Orchestration intent retained. This draft will not be sent as an ordinary message. <button type="button" onClick={() => setRestoredOrchestrate(false)}>Remove orchestration intent</button></div>}
       <RolePickerDialog
         open={rolePickerOpen}
         connections={useSettingsStore.getState().snapshot?.settings.provider.connections ?? []}
@@ -2297,14 +2365,15 @@ export function Composer() {
                   className="composer-send"
                   aria-label="Queue message"
                   title={attachmentsBlockedByModel ? MODEL_IMAGE_SEND_BLOCKED_TEXT : "Queue message"}
-                  disabled={attachmentsBlockedByModel && !isBareCommand}
+                  disabled={loadingImages || (attachmentsBlockedByModel && !isBareCommand)}
                   onClick={handleSend}
                 >
                   <ArrowUp />
                 </button>
               )}
-              {engine?.id === "codex" && text.trim() && attachedImages.length === 0 && (
+              {engine?.id === "codex" && !loadingImages && !restoredOrchestrate && !restoredPicks && text.trim() && attachedImages.length === 0 && (
                 <button type="button" className="composer-send" aria-label="Steer active Codex turn" title="Steer active turn; acknowledgement does not prove model application" onClick={() => {
+                  if (imagesStillLoading()) return;
                   // GitHub #14: the explicit Codex steer must not leak a known
                   // bare command to the model either — classify first.
                   const outgoing = reconstitutePasteMarkers(text, pasteBlocks);
@@ -2312,6 +2381,7 @@ export function Composer() {
                     return;
                   }
                   sendToHost({ type: "steer_message", requestId: crypto.randomUUID(), text: outgoing });
+                  if (restoredOwned.current) { restoredOwned.current = false; setRestoredPicks(undefined); tabStore.setState((state) => ({ restoredComposerDraft: null, completedComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 })); }
                   setText("");
                   setPasteBlocks([]);
                 }}><ArrowUp /></button>
@@ -2332,7 +2402,7 @@ export function Composer() {
               className="composer-send"
               aria-label="Send"
               title={sendDisabledReason ?? (hintHidden ? undefined : hintText)}
-              disabled={!canSend && !isBareCommand}
+              disabled={loadingImages || (!canSend && !isBareCommand)}
               onClick={handleSend}
             >
               <ArrowUp />

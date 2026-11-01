@@ -981,6 +981,11 @@ export interface QueuedPromptImage {
 }
 
 export interface QueuedPrompt {
+  /** Retained only for explicit recovery; never resend as an ordinary turn. */
+  orchestrate?: "enable";
+  /** The whole draft needs a user's explicit recovery before sending. */
+  requiresRestore?: boolean;
+  initialPicks?: { model?: string; mode?: PermissionMode; effort?: string; reasoningEffort?: string };
   /** Queue identity for edit/delete; a refused steer retains its request id. */
   id: string;
   /** Final send text — paste markers already reconstituted at enqueue time. */
@@ -1015,6 +1020,7 @@ export interface QueuedPrompt {
  * transcript `user_text` block.
  */
 export interface LastSentMessage {
+  orchestrate?: "enable";
   text: string;
   images: readonly QueuedPromptImage[];
 }
@@ -1371,6 +1377,11 @@ export interface DesktopState {
    * a host respawn (see the section comment above `QueuedPrompt`).
    */
   promptQueue: readonly QueuedPrompt[];
+  /** Recovered composer draft; tab-scoped across component unmounts. */
+  restoredComposerDraft: { text: string; images: readonly QueuedPromptImage[]; orchestrate?: "enable"; initialPicks?: QueuedPrompt["initialPicks"] } | null;
+  composerImageGeneration: number;
+  completedComposerImages: readonly QueuedPromptImage[];
+  pendingComposerImages: readonly { id: string; name: string }[];
   /**
    * Cross-review F2 (2026-10-24): requestIds of the steers whose text was
    * ALREADY recovered into `promptQueue` from a `steer_requeued` message (the
@@ -1484,7 +1495,7 @@ export interface DesktopState {
    * (Composer's direct path; tab-registry's queue-drain and initial-prompt
    * paths) — NOT a new send path of its own.
    */
-  recordSentMessage(text: string, images: readonly QueuedPromptImage[]): void;
+  recordSentMessage(text: string, images: readonly QueuedPromptImage[], requestId?: string, orchestrate?: "enable"): void;
   /**
    * W8 one-shot consume: clears `retry` synchronously (so the button
    * cannot be clicked twice even while the resend is merely queued, not yet
@@ -2347,6 +2358,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
   const loopEndEmitted = new Set<string>();
   /** turnId -> when this renderer saw it start; consumed by that turn's loop_end footer. */
   const turnStartedAt = new Map<string, number>();
+  const pendingSentMessages = new Map<string, LastSentMessage>();
   /**
    * acceptance defect 2: the TRUNCATED-snapshot cut boundary — per
    * turnId, the oldest step the latest session_history still covers. Ring
@@ -4817,6 +4829,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       // Prompt-queue slots (slice P7.14): outside initialSessionSlice so a
       // host respawn preserves user-typed prompts (see QueuedPrompt comment).
       promptQueue: [],
+      restoredComposerDraft: null,
+      composerImageGeneration: 0,
+      completedComposerImages: [],
+      pendingComposerImages: [],
       queuePaused: false,
       queuePauseReason: "cancelled",
       continueOffer: null,
@@ -4986,6 +5002,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             set({ notice: { kind: "worktree_notice", text: message.message } });
             return;
           case "turn_started": {
+            pendingSentMessages.delete(message.requestId);
             if (presentationReplayActive && presentationReplayTurns?.has(message.turnId)) return;
             // fallback: a turn starting means post-switch content
             // is about to land — if the hydration boundary never arrived (no
@@ -5049,6 +5066,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // HEAD of the queue and pause so it isn't re-sent silently. The
             // existing notice explains the pause.
             const { queueInFlight, promptQueue } = get();
+            const direct = pendingSentMessages.get(message.requestId);
+            const restoreDirect = queueInFlight?.requestId !== message.requestId && direct !== undefined && !promptQueue.some(item => item.id === message.requestId)
+              ? { promptQueue: [{ id: message.requestId, ...direct }, ...promptQueue], queuePaused: true, queuePauseReason: "rejected" as const }
+              : null;
             const restore =
               queueInFlight && queueInFlight.requestId === message.requestId
                 ? {
@@ -5068,13 +5089,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                       ? "Message rejected: the current model does not accept image attachments."
                     : "Message rejected: the host is not ready yet.",
               },
-              ...(restore ?? {}),
+              ...(restore ?? restoreDirect ?? {}),
               // a rejected steer never becomes transcript text —
               // drop the matching pending entry, keep unrelated ones.
               ...(get().pendingSteers.some((entry) => entry.requestId === message.requestId)
                 ? { pendingSteers: get().pendingSteers.filter((entry) => entry.requestId !== message.requestId) }
                 : {}),
             });
+            pendingSentMessages.delete(message.requestId);
             return;
           }
           case "steer_requeued": {
@@ -6110,7 +6132,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         }
       },
 
-      recordSentMessage(text: string, images: readonly QueuedPromptImage[]): void {
+      recordSentMessage(text: string, images: readonly QueuedPromptImage[], requestId?: string, orchestrate?: "enable"): void {
+        if (requestId !== undefined) pendingSentMessages.set(requestId, { text, images, ...(orchestrate !== undefined ? { orchestrate } : {}) });
         set({ lastSentMessage: { text, images } });
       },
 
@@ -6167,6 +6190,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       },
 
       reset(): void {
+        pendingSentMessages.clear();
+        set((state) => ({ restoredComposerDraft: null, completedComposerImages: [], pendingComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 }));
         performReset();
         // a genuinely new session drops staged markers, the
         // boundary flags and the lifted session id along with the transcript.
@@ -6216,12 +6241,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         // reordering the user prompts relative to each other — FIFO stays
         // intact within each kind.
         // `promptQueue.length > 0` is already guaranteed by the guard above —
-        // the unpaused branch is always index 0 (plain FIFO head).
-        const takeIndex = queuePaused ? promptQueue.findIndex((prompt) => prompt.origin === "system") : 0;
+        // An unpaused queue also lets system reports bypass a held head.
+        const headHeld = promptQueue[0]?.orchestrate === "enable" || promptQueue[0]?.requiresRestore === true;
+        const takeIndex = queuePaused || headHeld ? promptQueue.findIndex((prompt) => prompt.origin === "system") : 0;
         if (takeIndex === -1) {
           return null;
         }
         const head = promptQueue[takeIndex]!;
+        if (head.orchestrate === "enable" || head.requiresRestore === true) return null;
         const rest = [...promptQueue.slice(0, takeIndex), ...promptQueue.slice(takeIndex + 1)];
         const sendId = get().steerRequeueSeen.includes(head.id) ? head.id : requestId;
         set({ promptQueue: rest, queueInFlight: { requestId: sendId, item: head } });

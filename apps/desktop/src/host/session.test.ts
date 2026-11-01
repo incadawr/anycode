@@ -4191,6 +4191,32 @@ describe("Session — model image-input verdict on the wire (W2)", () => {
     }
   });
 
+  it("reports the actual model and effective effort after an image capability probe", async () => {
+    let current = "scripted-model";
+    let h: ReturnType<typeof createHarness>;
+    h = createHarness({
+      steps: [], reasoningSupported: true,
+      imageInputEnabled: () => current === "scripted-model",
+      switchModel: (id) => {
+        current = id;
+        h.config.reasoningEffort = "high";
+        return {model:id, reasoningEffort:"high" as const};
+      },
+    });
+    try {
+      h.send({type:"ui_ready"});
+      await h.waitFor(isHostReady);
+      h.send({type:"set_model",model:"nonvision",requestId:"probe"});
+      const changed = await h.waitFor(isModelChanged);
+      expect(changed).toMatchObject({requestId:"probe",model:"nonvision",reasoningEffort:"high",imageInput:false});
+      expect(h.config.reasoningEffort).toBe("high");
+      h.send({type:"ui_ready"});
+      await h.waitUntil(() => h.received.filter(isHostReady).length === 2);
+      expect(h.received.filter(isHostReady).at(-1)).toMatchObject({model:"nonvision",reasoningEffort:"high",imageInput:false});
+      expect(h.received.some(m => m.type === "turn_started")).toBe(false);
+    } finally { h.close(); }
+  });
+
   it("model_changed re-reads the verdict for the NEW model: vision -> non-vision flips it, and back", async () => {
     // Mirrors the production wiring (host/index.ts): imageInputEnabled is a
     // closure over the CURRENT model, which switchModel advances BEFORE the

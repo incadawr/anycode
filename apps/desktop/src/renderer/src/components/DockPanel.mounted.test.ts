@@ -17,9 +17,10 @@
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ActiveTabBody } from "../App.js";
+import { ActiveTabBody, SessionSurface } from "../App.js";
 import { createDesktopStore } from "../store.js";
-import type { DesktopStoreApi } from "../tab-registry.js";
+import { createTabRegistry, tabRegistry, type DesktopStoreApi } from "../tab-registry.js";
+import { createTabsStore } from "../tabs-store.js";
 import { TabContext } from "../tab-context.js";
 import { childLayoutStore } from "../child-layout.js";
 import { useDockStore } from "../dock/dock-store.js";
@@ -102,6 +103,242 @@ describe("dock resize handle placement (GitHub #31)", () => {
       childLayoutStore.getState().enterSplit("tab");
     });
   }
+
+  it("keeps distinct recovered drafts in their owning tab across real session-surface switches", async () => {
+    const other = createDesktopStore();
+    const imageA = {name:"a.png",sizeBytes:1,attachment:{mediaType:"image/png" as const,data:"YQ=="}};
+    const imageB = {name:"b.png",sizeBytes:1,attachment:{mediaType:"image/png" as const,data:"Yg=="}};
+    store.setState({restoredComposerDraft:{text:"draft A",images:[imageA],orchestrate:"enable"}});
+    other.setState({restoredComposerDraft:{text:"draft B",images:[imageB]}});
+    const renderTab = async (tabId: string, target: DesktopStoreApi) => {
+      await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId,store:target}}, createElement(SessionSurface, {tabId,onToast:() => {}}))));
+    };
+    const type = async (value: string) => {
+      const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+      await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(textarea,value); textarea.dispatchEvent(new Event("input",{bubbles:true})); });
+    };
+    await renderTab("a",store);
+    await type("edited A");
+    await renderTab("b",other);
+    expect(container.querySelector<HTMLTextAreaElement>(".composer-textarea")!.value).toBe("draft B");
+    expect(container.querySelector(".composer-image-pill-name")?.textContent).toBe("b.png");
+    expect(other.getState().restoredComposerDraft).toMatchObject({text:"draft B",images:[imageB]});
+    await type("edited B");
+    await renderTab("a",store);
+    expect(container.querySelector<HTMLTextAreaElement>(".composer-textarea")!.value).toBe("edited A");
+    expect(container.querySelector(".composer-image-pill-name")?.textContent).toBe("a.png");
+    expect(container.textContent).toContain("Orchestration intent retained");
+    expect(other.getState().restoredComposerDraft).toMatchObject({text:"edited B",images:[imageB]});
+    await renderTab("b",other);
+    expect(container.querySelector<HTMLTextAreaElement>(".composer-textarea")!.value).toBe("edited B");
+    expect(container.querySelector(".composer-image-pill-name")?.textContent).toBe("b.png");
+  });
+
+  it("finishes an image read for its original tab after a surface switch", async () => {
+    const other = createDesktopStore();
+    const send = vi.spyOn(tabRegistry,"sendToTab").mockImplementation(() => {});
+    const ready = (sessionId: string) => ({type:"host_ready" as const, workspace:"/ws", sessionId, mode:"build" as const, model:"m1", imageInput:true});
+    store.getState().applyHostMessage(ready("a"));
+    other.getState().applyHostMessage(ready("b"));
+    const renderTab = async (tabId: string, target: DesktopStoreApi) => {
+      await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId,store:target}}, createElement(SessionSurface, {tabId,onToast:() => {}}))));
+    };
+    let finish!: (bytes: ArrayBuffer) => void;
+    const file = new File(["ignored"], "delayed.png", {type:"image/png"});
+    Object.defineProperty(file, "arrayBuffer", {value: () => new Promise<ArrayBuffer>(resolve => { finish = resolve; })});
+    store.setState({restoredComposerDraft:{text:"A edit",images:[{name:"old.png",sizeBytes:1,attachment:{mediaType:"image/png",data:"YQ=="}}]}});
+    await renderTab("a",store);
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input,"files",{configurable:true,value:[file]});
+    await act(async () => input.dispatchEvent(new Event("change", {bubbles:true})));
+    expect(finish).toBeTypeOf("function");
+    expect(container.textContent).toContain("Loading attachments: delayed.png");
+    expect(container.querySelector<HTMLButtonElement>(".composer-send")!.disabled).toBe(true);
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Remove old.png"]')!.click());
+    await renderTab("b",other);
+    expect(container.textContent).not.toContain("delayed.png");
+    await renderTab("a",store);
+    expect(container.textContent).toContain("Loading attachments: delayed.png");
+    expect(container.querySelector<HTMLButtonElement>(".composer-send")!.disabled).toBe(true);
+    await renderTab("b",other);
+    const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(textarea,"B edit"); textarea.dispatchEvent(new Event("input",{bubbles:true})); });
+    await act(async () => finish(new Uint8Array([137,80,78,71,13,10,26,10]).buffer));
+    expect(container.querySelector(".composer-image-pill-name")).toBeNull();
+    expect(other.getState().restoredComposerDraft).toMatchObject({text:"B edit",images:[]});
+    await renderTab("a",store);
+    expect(container.querySelector(".composer-image-pill-name")?.textContent).toBe("delayed.png");
+    expect(store.getState().restoredComposerDraft).toMatchObject({text:"A edit",images:[{name:"delayed.png"}]});
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    expect(send).toHaveBeenCalledWith("a",expect.objectContaining({type:"user_message",text:"A edit",images:[expect.objectContaining({mediaType:"image/png"})]}));
+    await renderTab("b",other);
+    expect(container.querySelector<HTMLTextAreaElement>(".composer-textarea")!.value).toBe("B edit");
+    expect(container.querySelector(".composer-image-pill-name")).toBeNull();
+  });
+
+  it("retains a completed image when the active orchestrator slash command is selected", async () => {
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",imageInput:true});
+    store.setState({orchestrateActive:true});
+    const send = vi.spyOn(tabRegistry,"sendToTab").mockImplementation(() => {});
+    let finish!: (bytes: ArrayBuffer) => void;
+    const file = new File(["ignored"], "task.png", {type:"image/png"});
+    Object.defineProperty(file,"arrayBuffer",{value: () => new Promise<ArrayBuffer>(resolve => { finish = resolve; })});
+    await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId:"a",store}}, createElement(SessionSurface, {tabId:"a",onToast:() => {}}))));
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input,"files",{configurable:true,value:[file]});
+    await act(async () => input.dispatchEvent(new Event("change",{bubbles:true})));
+    const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(textarea,"/orchestrate inspect image");
+      textarea.setSelectionRange(12,12);
+      textarea.dispatchEvent(new Event("input",{bubbles:true}));
+      textarea.dispatchEvent(new KeyboardEvent("keyup",{bubbles:true,key:"e"}));
+    });
+    const option = () => [...container.querySelectorAll<HTMLElement>('[role="option"]')].find(element => element.textContent?.includes("Orchestrate"))!;
+    expect(option()).toBeTruthy();
+    await act(async () => option().click());
+    expect(store.getState().notice?.text).toContain("Wait for attachments");
+    expect(textarea.value).toBe("/orchestrate inspect image");
+    await act(async () => finish(new Uint8Array([137,80,78,71,13,10,26,10]).buffer));
+    expect(container.querySelector(".composer-image-pill-name")?.textContent).toBe("task.png");
+    await act(async () => option().click());
+    expect(store.getState().notice?.text).toContain("Remove attachments before using /orchestrate");
+    expect(textarea.value).toBe("/orchestrate inspect image");
+    expect(store.getState().restoredComposerDraft).toMatchObject({text:"/orchestrate inspect image",images:[{name:"task.png"}]});
+    expect(send).not.toHaveBeenCalledWith("a",expect.objectContaining({type:"user_message"}));
+    expect(send).not.toHaveBeenCalledWith("a",expect.objectContaining({type:"set_orchestrate"}));
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    expect(textarea.value).toBe("/orchestrate inspect image");
+    expect(send).not.toHaveBeenCalledWith("a",expect.objectContaining({type:"user_message"}));
+  });
+
+  it("hides the mounted Codex steer when a file read begins", async () => {
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",imageInput:true,engine:{id:"codex",capabilities:{supportsCorePermissions:false,supportsRewind:false,supportsWorkflow:false,supportsGitMutations:false,supportsContextUsage:false,supportsContextBreakdown:false,supportsInteractiveApprovals:true,costAccounting:false,supportsModelSelection:false,supportsReasoningEffort:false,supportsImages:true,supportsTasks:false,supportsFileSnapshots:false,supportsManualCompact:false}}});
+    store.setState({turn:{status:"running",turnId:"turn",requestId:"request"}});
+    const send = vi.spyOn(tabRegistry,"sendToTab").mockImplementation(() => {});
+    let finish!: (bytes:ArrayBuffer) => void;
+    const file = new File(["ignored"],"pending.png",{type:"image/png"});
+    Object.defineProperty(file,"arrayBuffer",{value:() => new Promise<ArrayBuffer>(resolve => {finish=resolve;})});
+    await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId:"a",store}}, createElement(SessionSurface, {tabId:"a",onToast:() => {}}))));
+    const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(textarea,"keep this"); textarea.dispatchEvent(new Event("input",{bubbles:true})); });
+    const steer = container.querySelector<HTMLButtonElement>('[aria-label="Steer active Codex turn"]')!;
+    expect(steer).toBeTruthy();
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input,"files",{configurable:true,value:[file]});
+    await act(async () => { input.dispatchEvent(new Event("change",{bubbles:true})); steer.click(); });
+    expect(store.getState().pendingComposerImages).toHaveLength(1);
+    expect(container.querySelector('[aria-label="Steer active Codex turn"]')).toBeNull();
+    expect(textarea.value).toBe("keep this");
+    expect(send).not.toHaveBeenCalledWith("a",expect.objectContaining({type:"steer_message"}));
+    expect(send).not.toHaveBeenCalledWith("a",expect.objectContaining({type:"user_message"}));
+    await act(async () => finish(new Uint8Array([137,80,78,71,13,10,26,10]).buffer));
+    expect(container.querySelector(".composer-image-pill-name")?.textContent).toBe("pending.png");
+  });
+
+  it("requires explicit cancellation before sending without a pending file", async () => {
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",imageInput:true});
+    const send = vi.spyOn(tabRegistry,"sendToTab").mockImplementation(() => {});
+    let finish!: (bytes: ArrayBuffer) => void;
+    const file = new File(["ignored"], "late.png", {type:"image/png"});
+    Object.defineProperty(file, "arrayBuffer", {value: () => new Promise<ArrayBuffer>(resolve => { finish = resolve; })});
+    await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId:"a",store}}, createElement(SessionSurface, {tabId:"a",onToast:() => {}}))));
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input,"files",{configurable:true,value:[file]});
+    await act(async () => input.dispatchEvent(new Event("change", {bubbles:true})));
+    const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(textarea,"send now"); textarea.dispatchEvent(new Event("input",{bubbles:true})); });
+    expect(container.querySelector<HTMLButtonElement>(".composer-send")!.disabled).toBe(true);
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    expect(send).not.toHaveBeenCalledWith("a",expect.objectContaining({type:"user_message"}));
+    const cancel = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Cancel loading and exclude pending files")!;
+    await act(async () => cancel.click());
+    expect(container.querySelector<HTMLButtonElement>(".composer-send")!.disabled).toBe(false);
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    expect(send).toHaveBeenCalledWith("a",expect.objectContaining({type:"user_message",text:"send now"}));
+    await act(async () => finish(new Uint8Array([137,80,78,71,13,10,26,10]).buffer));
+    expect(container.querySelector(".composer-image-pill-name")).toBeNull();
+    expect(store.getState().completedComposerImages).toEqual([]);
+    expect(store.getState().restoredComposerDraft?.images ?? []).toEqual([]);
+  });
+
+  it("refuses draft restore while an attachment is still loading", async () => {
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",imageInput:true});
+    store.getState().enqueuePrompt({text:"queued",images:[],requiresRestore:true});
+    let finish!: (bytes: ArrayBuffer) => void;
+    const file = new File(["ignored"], "pending.png", {type:"image/png"});
+    Object.defineProperty(file, "arrayBuffer", {value: () => new Promise<ArrayBuffer>(resolve => { finish = resolve; })});
+    await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId:"a",store}}, createElement(SessionSurface, {tabId:"a",onToast:() => {}}))));
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input,"files",{configurable:true,value:[file]});
+    await act(async () => input.dispatchEvent(new Event("change", {bubbles:true})));
+    await act(async () => container.querySelector<HTMLButtonElement>(".prompt-queue-restore")!.click());
+    expect(store.getState().promptQueue).toMatchObject([{text:"queued"}]);
+    expect(store.getState().notice?.text).toContain("Wait for attachments");
+    const cancel = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Cancel loading and exclude pending files")!;
+    await act(async () => cancel.click());
+    await act(async () => container.querySelector<HTMLButtonElement>(".prompt-queue-restore")!.click());
+    expect(container.querySelector<HTMLTextAreaElement>(".composer-textarea")!.value).toBe("queued");
+    await act(async () => finish(new Uint8Array([137,80,78,71,13,10,26,10]).buffer));
+    expect(container.querySelector(".composer-image-pill-name")).toBeNull();
+  });
+
+  it("releases the hold and displays a failure if reading fails", async () => {
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",imageInput:true});
+    let fail!: (error: Error) => void;
+    const file = new File(["ignored"], "bad.png", {type:"image/png"});
+    Object.defineProperty(file, "arrayBuffer", {value: () => new Promise<ArrayBuffer>((_resolve,reject) => { fail = reject; })});
+    await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId:"a",store}}, createElement(SessionSurface, {tabId:"a",onToast:() => {}}))));
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input,"files",{configurable:true,value:[file]});
+    await act(async () => input.dispatchEvent(new Event("change", {bubbles:true})));
+    expect(container.textContent).toContain("Loading attachments: bad.png");
+    await act(async () => fail(new Error("read failed")));
+    expect(store.getState().pendingComposerImages).toEqual([]);
+    expect(store.getState().notice?.text).toBe("read failed");
+    expect(container.textContent).not.toContain("Loading attachments: bad.png");
+  });
+
+  it("invalidates outstanding reads when their tab is closed", async () => {
+    const registry = createTabRegistry(createTabsStore());
+    const port = {onmessage:null,postMessage:()=>{},addEventListener:()=>{},removeEventListener:()=>{}} as unknown as MessagePort;
+    registry.registerPort("closing-tab","/ws",port);
+    const closing = registry.getStore("closing-tab")!;
+    closing.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",imageInput:true});
+    let finish!: (bytes: ArrayBuffer) => void;
+    const file = new File(["ignored"], "closing.png", {type:"image/png"});
+    Object.defineProperty(file, "arrayBuffer", {value: () => new Promise<ArrayBuffer>(resolve => { finish = resolve; })});
+    await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId:"closing-tab",store:closing}}, createElement(SessionSurface, {tabId:"closing-tab",onToast:() => {}}))));
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input,"files",{configurable:true,value:[file]});
+    await act(async () => input.dispatchEvent(new Event("change", {bubbles:true})));
+    expect(closing.getState().pendingComposerImages).toHaveLength(1);
+    await act(async () => { root.render(null); registry.disposeTab("closing-tab"); });
+    await act(async () => finish(new Uint8Array([137,80,78,71,13,10,26,10]).buffer));
+    expect(registry.getStore("closing-tab")).toBeUndefined();
+    expect(closing.getState().pendingComposerImages).toEqual([]);
+    expect(closing.getState().completedComposerImages).toEqual([]);
+  });
+
+  it("preserves newly typed ordinary drafts independently when switching surfaces", async () => {
+    const other = createDesktopStore();
+    const renderTab = async (tabId: string, target: DesktopStoreApi) => {
+      await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId,store:target}}, createElement(SessionSurface, {tabId,onToast:() => {}}))));
+    };
+    const type = async (value: string) => {
+      const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+      await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(textarea,value); textarea.dispatchEvent(new Event("input",{bubbles:true})); });
+    };
+    await renderTab("a",store);
+    await type("ordinary A");
+    await renderTab("b",other);
+    expect(container.querySelector<HTMLTextAreaElement>(".composer-textarea")!.value).toBe("");
+    await type("ordinary B");
+    await renderTab("a",store);
+    expect(container.querySelector<HTMLTextAreaElement>(".composer-textarea")!.value).toBe("ordinary A");
+    await renderTab("b",other);
+    expect(container.querySelector<HTMLTextAreaElement>(".composer-textarea")!.value).toBe("ordinary B");
+  });
 
   it("renders the separator as a direct child of the grid, before the dock aside — never inside it", async () => {
     await mountBody();

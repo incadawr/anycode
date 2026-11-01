@@ -1249,6 +1249,84 @@ describe("tab-registry — queueInitialPrompt core reasoning-effort seam", () =>
 describe("tab-registry — queueInitialPrompt images", () => {
   const IMAGE = { name: "a.png", sizeBytes: 10, attachment: { mediaType: "image/png" as const, data: "AA==" } };
 
+  it("retains an unsupported orchestrated first message with its image and settings without sending text", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    registry.queueInitialPrompt("tab-a", "look", undefined, "plan", undefined, [IMAGE], undefined, true);
+    port.emit({ ...HOST_READY("/ws/a", "sess-a"), imageInput: false });
+    expect(port.sent.map(m => (m as {type:string}).type)).toEqual(["ui_ready"]);
+    const state = registry.getStore("tab-a")!.getState();
+    expect(state.promptQueue).toMatchObject([{text:"look",images:[IMAGE],orchestrate:"enable"}]);
+    expect(state.takeQueueHead("retry")).toBeNull();
+  });
+
+  it.each([true, false, undefined])("waits for selected model image capability %s before dispatch", (accepts) => {
+    const { registry } = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    registry.queueInitialPrompt("tab-a", "look", "selected", "plan", undefined, [IMAGE], "high");
+    port.emit({ ...HOST_READY("/ws/a", "sess-a"), imageInput: accepts === true ? false : true });
+    const request = port.sent.find((m) => (m as {type:string}).type === "set_model") as {requestId:string};
+    expect(request.requestId).toBeTruthy();
+    expect(port.sent).not.toContainEqual(expect.objectContaining({type:"user_message"}));
+    port.emit({type:"model_changed",requestId:request.requestId,model:"selected",reasoningEffort:"off", ...(accepts === undefined ? {} : {imageInput:accepts})});
+    if (accepts === true) {
+      expect(port.sent).toContainEqual(expect.objectContaining({type:"user_message",text:"look",images:[IMAGE.attachment]}));
+      expect(port.sent).toContainEqual(expect.objectContaining({type:"set_mode",mode:"plan"}));
+      expect(port.sent).toContainEqual(expect.objectContaining({type:"set_reasoning_effort",effort:"high"}));
+    } else {
+      expect(port.sent).not.toContainEqual(expect.objectContaining({type:"user_message"}));
+      expect(registry.getStore("tab-a")!.getState().promptQueue).toMatchObject([{text:"look",images:[IMAGE],requiresRestore:true,initialPicks:{model:"selected",mode:"plan",reasoningEffort:"high"}}]);
+    }
+  });
+
+  it("cancels the staged initial prompt before a newer model choice and ignores the old ack", () => {
+    const { registry } = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    registry.queueInitialPrompt("tab-a", "look", "model-a", "plan", "high", [IMAGE], "high");
+    port.emit({ ...HOST_READY("/ws/a", "sess-a"), imageInput:true });
+    const first = port.sent[1] as {type:string;model:string;requestId:string};
+    expect(first).toMatchObject({type:"set_model",model:"model-a"});
+    registry.sendToTab("tab-a", {type:"set_model",model:"model-b",requestId:"b"});
+    expect(port.sent[2]).toMatchObject({type:"set_model",model:"model-b",requestId:"b"});
+    port.emit({type:"model_changed",requestId:first.requestId,model:"model-a",reasoningEffort:"off",imageInput:true});
+    port.emit({type:"model_changed",requestId:"b",model:"model-b",reasoningEffort:"off",imageInput:true});
+    expect(port.sent.map(m => (m as {type:string}).type)).toEqual(["ui_ready","set_model","set_model"]);
+    expect(registry.getStore("tab-a")!.getState().promptQueue).toMatchObject([{text:"look",images:[IMAGE],requiresRestore:true,initialPicks:{model:"model-a",mode:"plan",effort:"high",reasoningEffort:"high"}}]);
+  });
+
+  it("stages only model selection before an unsupported image verdict", () => {
+    const { registry } = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    registry.queueInitialPrompt("tab-a", "look", "selected", "plan", "high", [IMAGE], "high", true);
+    port.emit({ ...HOST_READY("/ws/a", "sess-a"), imageInput:true });
+    const request = port.sent[1] as {requestId:string};
+    port.emit({type:"model_changed",requestId:request.requestId,model:"selected",reasoningEffort:"high",imageInput:false});
+    expect(registry.getStore("tab-a")!.getState()).toMatchObject({model:"selected",reasoningEffort:"high",notice:{kind:"image_attach_rejected",text:expect.stringContaining("Model switched to selected; effective reasoning effort is high.")}});
+    expect(port.sent.map(m => (m as {type:string}).type)).toEqual(["ui_ready","set_model"]);
+    expect(registry.getStore("tab-a")!.getState().promptQueue).toMatchObject([{text:"look",images:[IMAGE],orchestrate:"enable",initialPicks:{model:"selected",mode:"plan",effort:"high",reasoningEffort:"high"}}]);
+  });
+
+  it("retains the initial draft on model timeout and ignores a late acknowledgement", () => {
+    vi.useFakeTimers();
+    try {
+      const { registry } = createTestRegistry(createTabsStore());
+      const port = new FakeMessagePort();
+      registry.registerPort("tab-a", "/ws/a", asPort(port));
+      registry.queueInitialPrompt("tab-a", "look", "selected", "plan", undefined, [IMAGE], "high");
+      port.emit({ ...HOST_READY("/ws/a", "sess-a"), imageInput:true });
+      const request = port.sent.find((m) => (m as {type:string}).type === "set_model") as {requestId:string};
+      vi.advanceTimersByTime(10_000);
+      port.emit({type:"model_changed",requestId:request.requestId,model:"selected",reasoningEffort:"off",imageInput:true});
+      expect(port.sent).not.toContainEqual(expect.objectContaining({type:"user_message"}));
+      expect(registry.getStore("tab-a")!.getState().promptQueue).toMatchObject([{text:"look",images:[IMAGE],requiresRestore:true,initialPicks:{model:"selected",mode:"plan",reasoningEffort:"high"}}]);
+    } finally { vi.useRealTimers(); }
+  });
+
   it("delivers images on the first user_message and records them via recordSentMessage when the boot model accepts them", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);
@@ -1269,7 +1347,7 @@ describe("tab-registry — queueInitialPrompt images", () => {
     expect(findBlock(transcript, "user_text")?.images).toEqual([IMAGE.attachment]);
   });
 
-  it("honest block: drops images and raises image_attach_rejected when the boot model cannot accept them — the text still sends", () => {
+  it("retains the whole initial draft when the boot model cannot accept images", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);
     const port = new FakeMessagePort();
@@ -1278,20 +1356,15 @@ describe("tab-registry — queueInitialPrompt images", () => {
     registry.queueInitialPrompt("tab-a", "look at this", undefined, undefined, undefined, [IMAGE]);
     port.emit(CODEX_HOST_READY("/ws/a", "sess-a", { imageInput: false }));
 
-    const userMessage = port.sent[1] as { type: string; text: string; images?: unknown[] };
-    expect(userMessage).toMatchObject({ type: "user_message", text: "look at this" });
-    expect(userMessage.images).toBeUndefined();
-    expect(registry.getStore("tab-a")?.getState().lastSentMessage).toEqual({ text: "look at this", images: [] });
+    expect(port.sent.map(m => (m as {type:string}).type)).toEqual(["ui_ready"]);
+    expect(registry.getStore("tab-a")?.getState().promptQueue).toMatchObject([{text:"look at this",images:[IMAGE],requiresRestore:true}]);
     expect(registry.getStore("tab-a")?.getState().notice).toEqual({
       kind: "image_attach_rejected",
       text: MODEL_IMAGE_ATTACH_BLOCKED_TEXT,
     });
 
     const transcript = registry.getStore("tab-a")?.getState().transcript ?? [];
-    // parity with deliveredImages=[]: the blocked echo carries the
-    // raw text and NO images key (nothing to thumbnail — nothing was sent).
-    expect(findBlock(transcript, "user_text")?.text).toBe("look at this");
-    expect(findBlock(transcript, "user_text")?.images).toBeUndefined();
+    expect(findBlock(transcript, "user_text")).toBeUndefined();
   });
 
   it("срез D: a configured recognizer fallback on the boot host_ready delivers images to a blind model instead of honestly blocking them", () => {
@@ -1331,9 +1404,8 @@ describe("tab-registry — queueInitialPrompt images", () => {
 
     registry.queueInitialPrompt("tab-a", "look at this", undefined, undefined, undefined, [IMAGE]);
 
-    const userMessage = port.sent[1] as { type: string; text: string; images?: unknown[] };
-    expect(userMessage).toMatchObject({ type: "user_message", text: "look at this" });
-    expect(userMessage.images).toBeUndefined();
+    expect(port.sent.map(m => (m as {type:string}).type)).toEqual(["ui_ready"]);
+    expect(registry.getStore("tab-a")?.getState().promptQueue).toMatchObject([{text:"look at this",images:[IMAGE],requiresRestore:true}]);
     expect(registry.getStore("tab-a")?.getState().notice).toEqual({
       kind: "image_attach_rejected",
       text: MODEL_IMAGE_ATTACH_BLOCKED_TEXT,
@@ -1362,6 +1434,18 @@ describe("tab-registry — queueInitialPrompt images", () => {
 });
 
 describe("tab-registry — prompt-queue drainer (slice P7.14 · F15)", () => {
+  it("delivers system reports behind a held initial draft through the real subscriber", () => {
+    const tabsStore = createTabsStore();
+    const { registry } = createTestRegistry(tabsStore);
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    port.emit(HOST_READY("/ws/a", "sess-a"));
+    const store = registry.getStore("tab-a")!;
+    store.getState().enqueuePrompt({text:"held",images:[],requiresRestore:true});
+    store.getState().enqueuePrompt({text:"report",images:[],origin:"system",originId:"report-id"});
+    expect(port.sent).toContainEqual(expect.objectContaining({type:"user_message",text:"report",origin:"system"}));
+    expect(store.getState().promptQueue).toMatchObject([{text:"held",requiresRestore:true}]);
+  });
   /** Filters port.sent down to the user_message drains (skips the ui_ready handshake). */
   function userMessages(port: FakeMessagePort): Array<{ requestId: string; text: string; images?: unknown[] }> {
     return port.sent.filter((m) => (m as { type: string }).type === "user_message") as Array<{

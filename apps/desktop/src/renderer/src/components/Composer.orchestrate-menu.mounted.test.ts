@@ -71,6 +71,69 @@ HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement): voi
 };
 
 describe("Composer — mode menu's Orchestrate row", () => {
+  it("restores an ordinary held draft and its attachment without sending automatically", async () => {
+    const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+    const store = createDesktopStore(); store.getState().applyHostMessage(coreReady("build"));
+    const image = {name:"ordinary.png",sizeBytes:3,attachment:{mediaType:"image/png" as const,data:"YWJj"}};
+    store.getState().enqueuePrompt({text:"ordinary",images:[image],requiresRestore:true});
+    const container = document.createElement("div"); document.body.append(container);
+    let root = createRoot(container);
+    try {
+      await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId:"tab-1",store}}, createElement(Composer))));
+      await act(async () => container.querySelector<HTMLButtonElement>(".prompt-queue-restore")!.click());
+      expect(container.querySelector<HTMLTextAreaElement>(".composer-textarea")!.value).toBe("ordinary");
+      expect(container.querySelector(".composer-image-pill-name")?.textContent).toBe("ordinary.png");
+      expect(send).not.toHaveBeenCalledWith("tab-1", expect.objectContaining({type:"user_message"}));
+      await act(async () => container.querySelector<HTMLButtonElement>('.composer-send')!.click());
+      expect(send).toHaveBeenCalledWith("tab-1", expect.objectContaining({type:"user_message",text:"ordinary",images:[image.attachment]}));
+    } finally { await act(async () => root.unmount()); }
+  });
+  it("restores a held orchestration draft only into an empty composer and never sends it as an ordinary turn", async () => {
+    useSettingsStore.setState({ snapshot: { settings: cloneDefaults(), secrets: [], providerReady: true, envOverrides: [], readOnly: false, catalog: [] } });
+    const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+    const store = createDesktopStore();
+    store.getState().applyHostMessage(coreReady("build"));
+    const image = {name:"a.png",sizeBytes:3,attachment:{mediaType:"image/png" as const,data:"YWJj"}};
+    store.getState().enqueuePrompt({text:"recover me",images:[image],orchestrate:"enable",initialPicks:{model:"glm-5.3",mode:"build",reasoningEffort:"high"}});
+    store.getState().enqueuePrompt({text:"next message",images:[]});
+    const container = document.createElement("div"); document.body.append(container);
+    let root = createRoot(container);
+    try {
+      await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId:"tab-1",store}}, createElement(Composer))));
+      let textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+      const type = async (text: string) => { await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(textarea,text); textarea.dispatchEvent(new Event("input",{bubbles:true})); }); };
+      await type("new edit");
+      await act(async () => container.querySelector<HTMLButtonElement>(".prompt-queue-restore")!.click());
+      expect(textarea.value).toBe("new edit");
+      expect(store.getState().promptQueue).toHaveLength(2);
+      await type("");
+      await act(async () => container.querySelector<HTMLButtonElement>(".prompt-queue-restore")!.click());
+      expect(textarea.value).toBe("recover me");
+      expect(container.querySelector(".composer-image-pill-name")?.textContent).toBe("a.png");
+      expect(container.textContent).toContain("Orchestration intent retained");
+      expect(store.getState().promptQueue).toHaveLength(1);
+      await type("recover me edited");
+      await act(async () => root.unmount());
+      root = createRoot(container);
+      await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId:"tab-1",store}}, createElement(Composer))));
+      textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+      expect(textarea.value).toBe("recover me edited");
+      expect(store.getState().restoredComposerDraft?.initialPicks).toEqual({model:"glm-5.3",mode:"build",reasoningEffort:"high"});
+      expect(container.textContent).toContain("glm-5.3 / build / high");
+      expect(container.querySelector(".composer-image-pill-name")?.textContent).toBe("a.png");
+      expect(container.textContent).toContain("Orchestration intent retained");
+      await act(async () => container.querySelector<HTMLButtonElement>('.composer-send')!.click());
+      expect(send).not.toHaveBeenCalledWith("tab-1", expect.objectContaining({type:"user_message"}));
+      const removeIntent = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Remove orchestration intent")!;
+      await act(async () => removeIntent.click());
+      await act(async () => container.querySelector<HTMLButtonElement>('.composer-send')!.click());
+      expect(send).not.toHaveBeenCalledWith("tab-1", expect.objectContaining({type:"user_message"}));
+      await act(async () => store.setState({reasoningEffort:"high"}));
+      await act(async () => container.querySelector<HTMLButtonElement>('.composer-send')!.click());
+      expect(send).toHaveBeenCalledWith("tab-1", expect.objectContaining({type:"user_message",text:"recover me edited",images:[image.attachment]}));
+      await act(async () => { expect(store.getState().takeQueueHead("next")?.text).toBe("next message"); });
+    } finally { await act(async () => root.unmount()); }
+  });
   it("asks for roles on the first enable, then enables and shows Orchestrate on the chip", async () => {
     // No roles in the settings snapshot: exactly the first-run state.
     useSettingsStore.setState({ snapshot: { settings: cloneDefaults(), secrets: [], providerReady: true, envOverrides: [], readOnly: false, catalog: [] } });
