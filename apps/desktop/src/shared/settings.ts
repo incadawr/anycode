@@ -870,8 +870,12 @@ export interface AnycodeSettings {
   };
   /**
    * Kill switch for "Continue this conversation on another account"
-   * Absent or `"on"` = the action is offered; `"off"` = main
-   * answers `temporarily_unavailable` and never touches the filesystem.
+   * `"on"` = the action is offered; absent or `"off"` = main answers
+   * `temporarily_unavailable` and never touches the filesystem.
+   *
+   * Opt-in, because the source rollout cannot yet be proven quiescent: another
+   * AnyCode instance may be writing it without holding any claim. Turning this
+   * on is an explicit acceptance of that risk.
    *
    * This exists because the feature was switched off in code once already
    * (`f0bcfa1e`); a settings value makes the next pause a one-line change

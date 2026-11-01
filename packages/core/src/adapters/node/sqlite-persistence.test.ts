@@ -7,7 +7,13 @@ import { Worker } from "node:worker_threads";
 import { spawn } from "node:child_process";
 import { SqlitePersistenceAdapter, WriteBehindHistorySink, type HistorySinkLogger } from "./sqlite-persistence.js";
 import type { CheckpointRecord } from "../../ports/checkpoints.js";
-import type { ContinuationClaim, PersistencePort, SessionDeleteSummary, SessionMeta } from "../../ports/persistence.js";
+import type {
+  ContinuationClaim,
+  CreateSessionFromSourceResult,
+  PersistencePort,
+  SessionDeleteSummary,
+  SessionMeta,
+} from "../../ports/persistence.js";
 import { COMPACTION_RECORD_MAX_PER_SESSION } from "../../types/compaction.js";
 import type { HistoryItem } from "../../types/history.js";
 import { ConversationHistory } from "../../context/history.js";
@@ -3096,7 +3102,7 @@ describe("WriteBehindHistorySink", () => {
     createSession(): Promise<SessionMeta> {
       throw new Error("not used in this test");
     }
-    createSessionFromSource(): Promise<SessionMeta | null> {
+    createSessionFromSource(): Promise<CreateSessionFromSourceResult> {
       throw new Error("not used in this test");
     }
     claimContinuation(): Promise<ContinuationClaim> {
@@ -3431,15 +3437,16 @@ describe("SqlitePersistenceAdapter — session delete", () => {
     const adapter = new SqlitePersistenceAdapter(":memory:");
     await seedFullSession(adapter, "source", "original-ref", engine);
     const successor = {id:"successor",workspace:"/w",model:"m",mode:"build" as const,engineId:engine,externalSessionRef:"original-ref"};
-    expect(await adapter.createSessionFromSource("missing", successor)).toBeNull();
-    expect(await adapter.createSessionFromSource("source", {...successor,externalSessionRef:"changed-ref"})).toBeNull();
-    expect(await adapter.createSessionFromSource("source", {...successor,engineId:engine === "codex" ? "claude" : "codex"})).toBeNull();
-    expect((await adapter.createSessionFromSource("source", successor))?.id).toBe("successor");
+    expect(await adapter.createSessionFromSource("missing", successor)).toEqual({ ok: false, reason: "source_missing" });
+    expect(await adapter.createSessionFromSource("source", {...successor,externalSessionRef:"changed-ref"})).toEqual({ ok: false, reason: "source_changed" });
+    expect(await adapter.createSessionFromSource("source", {...successor,engineId:engine === "codex" ? "claude" : "codex"})).toEqual({ ok: false, reason: "source_changed" });
+    const made = await adapter.createSessionFromSource("source", successor);
+    expect(made.ok && made.session.id).toBe("successor");
     const first = await adapter.deleteSession("source");
     expect(engine === "codex" ? first.counts.codexThreadItems : first.counts.claudeTranscriptItems).toBe(0);
     const last = await adapter.deleteSession("successor");
     expect(engine === "codex" ? last.counts.codexThreadItems : last.counts.claudeTranscriptItems).toBe(1);
-    expect(await adapter.createSessionFromSource("source", successor)).toBeNull();
+    expect(await adapter.createSessionFromSource("source", successor)).toEqual({ ok: false, reason: "source_missing" });
     await adapter.close();
   });
 
@@ -3456,9 +3463,9 @@ describe("SqlitePersistenceAdapter — session delete", () => {
       await new Promise<void>((resolve,reject) => { child.stdout.once("data",()=>resolve()); child.once("error",reject); child.once("exit",()=>reject(new Error("fixture exited before lock"))); });
       const successor = {id:"successor",workspace:"/w",model:"m",mode:"build" as const,engineId:"codex" as const,externalSessionRef:"racing-ref"};
       // The immediate transaction waits for the competing commit before reading.
-      expect(await adapter.createSessionFromSource("source", successor)).toBeNull();
+      expect(await adapter.createSessionFromSource("source", successor)).toEqual({ ok: false, reason: "source_missing" });
       expect(await done).toBe(0);
-      expect(await adapter.createSessionFromSource("source", successor)).toBeNull();
+      expect(await adapter.createSessionFromSource("source", successor)).toEqual({ ok: false, reason: "source_missing" });
       expect(await adapter.getSessionById("successor")).toBeNull();
       expect(await adapter.listCodexThreadItems("racing-ref")).toHaveLength(0);
     } finally {child.kill(); await adapter.close();}
@@ -3476,7 +3483,7 @@ describe("SqlitePersistenceAdapter — session delete", () => {
       await new Promise<void>((resolve,reject)=>{worker.once("error",reject);worker.on("message",msg=>{if(msg === "locked") resolve();});});
       const start=Date.now();
       const created=await adapter.createSessionFromSource("source",{id:"successor",workspace:"/w",model:"m",mode:"build",engineId:"codex",externalSessionRef:"writer-ref"});
-      expect(created?.id).toBe("successor");
+      expect(created.ok && created.session.id).toBe("successor");
       expect(Date.now()-start).toBeGreaterThanOrEqual(100);
       expect(await exited).toBe(0);
       expect((await adapter.deleteSession("source")).counts.codexThreadItems).toBe(0);

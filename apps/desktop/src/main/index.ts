@@ -3004,7 +3004,10 @@ void app.whenReady().then(async () => {
       sessionsDir: async (accountId) => codexSessionsDirForAccount(accountId),
       createSessionFromSource: (sourceId, meta) => store.createSessionFromSource(sourceId, meta),
       // The kill switch is read per request, so flipping it needs no restart.
-      enabled: () => settings?.codexContinueOnAnotherAccount !== "off",
+      // Opt-in, not opt-out: the source rollout cannot yet be proven quiescent
+      // (a second AnyCode instance writing it holds no claim), so the action is
+      // offered only when the user explicitly turns it on.
+      enabled: () => settings?.codexContinueOnAnotherAccount === "on",
       claimContinuation: (threadId, accountId, ttlMs) => store.claimContinuation(threadId, accountId, ttlMs),
       holdsContinuation: (threadId, accountId, token) => store.holdsContinuation(threadId, accountId, token),
       releaseContinuation: (threadId, accountId, token) => store.releaseContinuation(threadId, accountId, token),

@@ -38,6 +38,8 @@ export type {
 export type { ModelPort, ModelRequest } from "./model.js";
 export type {
   ContinuationClaim,
+  ContinuationClaimStatus,
+  CreateSessionFromSourceResult,
   PersistencePort,
   SessionMeta,
   SessionMetaPatch,

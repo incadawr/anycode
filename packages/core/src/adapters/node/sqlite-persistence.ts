@@ -29,6 +29,7 @@ import type {
 } from "../../ports/checkpoints.js";
 import type {
   ContinuationClaim,
+  CreateSessionFromSourceResult,
   PersistencePort,
   SessionDeleteSummary,
   SessionMeta,
@@ -1085,12 +1086,33 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
 
   /** Atomically transfer a native reference only while its source still owns it.
    * Reserve the writer before reading so another writer cannot invalidate the snapshot. */
-  async createSessionFromSource(sourceId: string, meta: Omit<SessionMeta, "createdAt" | "updatedAt">): Promise<SessionMeta | null> {
-    if ((meta.engineId !== "codex" && meta.engineId !== "claude") || !meta.externalSessionRef) return null;
+  async createSessionFromSource(
+    sourceId: string,
+    meta: Omit<SessionMeta, "createdAt" | "updatedAt">,
+  ): Promise<CreateSessionFromSourceResult> {
+    if ((meta.engineId !== "codex" && meta.engineId !== "claude") || !meta.externalSessionRef) {
+      return { ok: false, reason: "source_missing" };
+    }
     return this.transaction((db) => {
-      const source = db.prepare("SELECT 1 FROM sessions WHERE id = ? AND engine_id = ? AND external_session_ref = ? AND parent_session_id IS NULL")
-        .get(sourceId, meta.engineId!, meta.externalSessionRef!);
-      return source ? this.createSessionInDb(db, meta) : null;
+      const source = db
+        .prepare(
+          "SELECT id, engine_id, external_session_ref, parent_session_id FROM sessions WHERE id = ?",
+        )
+        .get(sourceId) as
+        | { id: string; engine_id: string; external_session_ref: string | null; parent_session_id: string | null }
+        | undefined;
+      if (source === undefined) return { ok: false as const, reason: "source_missing" as const };
+      // Still there, but no longer the same conversation: a re-pointed or
+      // re-parented row is a DIFFERENT failure from a deleted one, and the
+      // user-facing text has to say which happened.
+      if (
+        source.parent_session_id !== null ||
+        source.engine_id !== meta.engineId ||
+        source.external_session_ref !== meta.externalSessionRef
+      ) {
+        return { ok: false as const, reason: "source_changed" as const };
+      }
+      return { ok: true as const, session: this.createSessionInDb(db, meta) };
     }, "immediate");
   }
 

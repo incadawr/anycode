@@ -9,7 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Continue a Codex conversation on another account again: the usage-limit banner's account picker is back, with a settings switch (`codexContinueOnAnotherAccount`) to pause it without a rebuild.
+- Continue a Codex conversation on another account again, behind an opt-in settings switch (`codexContinueOnAnotherAccount`). It stays off by default because a rollout being written by another process cannot yet be proven idle.
 - Redesign provider connection editing with a compact model picker and per-model pricing table.
 
 ### Fixed
