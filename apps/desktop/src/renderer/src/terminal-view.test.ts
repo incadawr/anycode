@@ -458,3 +458,36 @@ describe("terminal-view — clear/getSelection/hasSelection/subscribeSelection (
     expect(() => view.subscribeSelection("ghost", () => {})()).not.toThrow();
   });
 });
+
+
+describe("accent theme overrides", () => {
+  it.each(["dark", "light"] as const)("reads hex and rgb in %s without mutating the ANSI base", async resolved => {
+    const { withAccent } = await import("./terminal-view.js");
+    const base = { cursor: "fallback", selectionBackground: "fallback", blue: "ANSI blue", background: "surface" };
+    const snapshot = { ...base };
+    for (const css of ["#e9b949", "rgb(233, 185, 73)"]) {
+      expect(withAccent(base, css, resolved)).toEqual({ ...base, cursor: css, selectionBackground: `rgba(233, 185, 73, ${resolved === "dark" ? 0.25 : 0.18})` });
+      expect(base).toEqual(snapshot);
+    }
+    for (const css of ["", "oops", "#fff", "rgb(999, 0, 0)"]) expect(withAccent(base, css, resolved)).toBe(base);
+  });
+});
+
+it("injects the accent reader at construction and rereads it for every live theme update", () => {
+  const rig = createFakeRig();
+  const term = Object.assign(new FakeTerminal(), { options: { theme: {} } });
+  const createTerminal = vi.fn(() => term);
+  const readCss = vi.fn(() => "#e9b949");
+  const view = createTerminalView({ ...rig.factories, createTerminal }, readCss);
+  view.ensure("accent", () => {});
+  expect(createTerminal).toHaveBeenCalledWith(readCss);
+  view.applyTheme?.("dark");
+  expect(term.options.theme).toMatchObject({ cursor: "#e9b949", selectionBackground: "rgba(233, 185, 73, 0.25)", blue: "#4da3ff", brightBlue: "#6cb4ff", cursorAccent: "#101010" });
+  readCss.mockReturnValue("rgb(0, 113, 102)");
+  view.applyTheme?.("light");
+  expect(term.options.theme).toMatchObject({ cursor: "rgb(0, 113, 102)", selectionBackground: "rgba(0, 113, 102, 0.18)", blue: "#0e6fc9", brightBlue: "#3a8fd9", cursorAccent: "#f1f1f1" });
+  readCss.mockReturnValue("");
+  view.applyTheme?.("dark");
+  expect(term.options.theme).toMatchObject({ cursor: "#4da3ff", selectionBackground: "rgba(77, 163, 255, 0.25)" });
+  view.reset();
+});

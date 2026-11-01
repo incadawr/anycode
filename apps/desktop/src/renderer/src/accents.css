@@ -1,0 +1,59 @@
+/* accents.css — accent overrides on top of tokens.css (specificity 0,3,0 beats 0,2,0).
+   `current` = no data-accent attribute (tokens.css values). Swatch selectors let the
+   Appearance picker paint each option in its own accent without a second value table. */
+
+/* ── dark ───────────────────────────────────────────────────── */
+:root[data-theme="dark"] .accent-swatch[data-accent="current"] {
+  --accent: #4da3ff; --accent-hover: #6cb4ff; --on-accent: #0a1626;
+  --accent-soft: rgba(77, 163, 255, 0.14); --focus-ring: rgba(77, 163, 255, 0.75);
+}
+:root[data-theme="dark"][data-accent="gold"],
+:root[data-theme="dark"] .accent-swatch[data-accent="gold"] {
+  --accent: #e9b949; --accent-hover: #f9c95b; --on-accent: #1a1000;
+  --accent-soft: rgba(233, 185, 73, 0.14); --focus-ring: rgba(233, 185, 73, 0.75);
+  --warning: #fd904c; --warning-soft: rgba(253, 144, 76, 0.14);
+}
+:root[data-theme="dark"][data-accent="indigo"],
+:root[data-theme="dark"] .accent-swatch[data-accent="indigo"] {
+  --accent: #898fff; --accent-hover: #979fff; --on-accent: #0e0f23;
+  --accent-soft: rgba(137, 143, 255, 0.14); --focus-ring: rgba(137, 143, 255, 0.75);
+}
+:root[data-theme="dark"][data-accent="teal"],
+:root[data-theme="dark"] .accent-swatch[data-accent="teal"] {
+  --accent: #2dd4bf; --accent-hover: #46e4cf; --on-accent: #001713;
+  --accent-soft: rgba(45, 212, 191, 0.14); --focus-ring: rgba(45, 212, 191, 0.75);
+}
+:root[data-theme="dark"][data-accent="ember"],
+:root[data-theme="dark"] .accent-swatch[data-accent="ember"] {
+  --accent: #ff8a4c; --accent-hover: #ff9a5c; --on-accent: #1f0b03;
+  --accent-soft: rgba(255, 138, 76, 0.14); --focus-ring: rgba(255, 138, 76, 0.75);
+  --warning: #f0c030; --warning-soft: rgba(240, 192, 48, 0.14);
+}
+
+/* ── light ──────────────────────────────────────────────────── */
+:root[data-theme="light"] .accent-swatch[data-accent="current"] {
+  --accent: #0e6fc9; --accent-hover: #0b5ca8; --on-accent: #ffffff;
+  --accent-soft: rgba(14, 111, 201, 0.1); --focus-ring: rgba(14, 111, 201, 0.8);
+}
+:root[data-theme="light"][data-accent="gold"],
+:root[data-theme="light"] .accent-swatch[data-accent="gold"] {
+  --accent: #845e04; --accent-hover: #704b00; --on-accent: #ffffff;
+  --accent-soft: rgba(132, 94, 4, 0.1); --focus-ring: rgba(132, 94, 4, 0.8);
+  --warning: #a04400; --warning-soft: rgba(160, 68, 0, 0.1);
+}
+:root[data-theme="light"][data-accent="indigo"],
+:root[data-theme="light"] .accent-swatch[data-accent="indigo"] {
+  --accent: #4a50d4; --accent-hover: #3a3abd; --on-accent: #ffffff;
+  --accent-soft: rgba(74, 80, 212, 0.1); --focus-ring: rgba(74, 80, 212, 0.8);
+}
+:root[data-theme="light"][data-accent="teal"],
+:root[data-theme="light"] .accent-swatch[data-accent="teal"] {
+  --accent: #007166; --accent-hover: #005e53; --on-accent: #ffffff;
+  --accent-soft: rgba(0, 113, 102, 0.1); --focus-ring: rgba(0, 113, 102, 0.8);
+}
+:root[data-theme="light"][data-accent="ember"],
+:root[data-theme="light"] .accent-swatch[data-accent="ember"] {
+  --accent: #a84700; --accent-hover: #923300; --on-accent: #ffffff;
+  --accent-soft: rgba(168, 71, 0, 0.1); --focus-ring: rgba(168, 71, 0, 0.8);
+  --warning: #7a6200; --warning-soft: rgba(122, 98, 0, 0.1);
+}

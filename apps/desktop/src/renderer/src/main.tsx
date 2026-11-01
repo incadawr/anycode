@@ -1,3 +1,4 @@
+import { applyAccent, readAccent, bindAccentStorageSync } from "./accent.js";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.js";
@@ -24,6 +25,8 @@ document.documentElement.dataset.platform = window.anycode?.platform ?? "darwin"
 // still treats absent-attribute as comfortable, so no index.html pre-boot
 // default is needed (unlike theme) — the stamp is what enforces the default.
 applyDensity(readDensity());
+applyAccent(readAccent());
+bindAccentStorageSync(window);
 
 const container = document.getElementById("root");
 if (!container) {
@@ -37,6 +40,12 @@ if (!container) {
 // electron.vite.config.ts stays single-entry either way (the LAW of GAP 1).
 const view = new URLSearchParams(location.search).get("view");
 
-createRoot(container).render(
-  <StrictMode>{view === "md-preview" ? <MdPreviewWindowApp /> : <App />}</StrictMode>,
-);
+if (import.meta.env.DEV && view === "ui-gallery") {
+  void import("./ui/gallery/Gallery.js").then(({ Gallery }) => {
+    createRoot(container).render(<StrictMode><Gallery /></StrictMode>);
+  });
+} else {
+  createRoot(container).render(
+    <StrictMode>{view === "md-preview" ? <MdPreviewWindowApp /> : <App />}</StrictMode>,
+  );
+}

@@ -7,6 +7,16 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.62] — 2026-11-01
+
+### Added
+
+- Choose the accent color (Blue, Gold, Indigo, Teal, Ember) in Settings → Appearance; the choice is saved on this device.
+
+### Changed
+
+- Panels that referenced undefined background, border, and radius tokens now use the intended surfaces and corners, slightly changing their appearance.
+
 ## [0.0.61] — 2026-11-01
 
 ### Changed
