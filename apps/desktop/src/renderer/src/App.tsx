@@ -49,6 +49,7 @@ import { Composer, shouldEnqueue } from "./components/Composer.js";
 import type { UiToHostMessage } from "../../shared/protocol.js";
 import { FOCUS_MODE_MENU_EVENT } from "./components/ModeMenu.js";
 import { RUN_ACTION_EVENT } from "./slash-menu.js";
+import { useCodexContinue } from "./codex-continue.js";
 import { ConnectedPermissionModal } from "./components/PermissionModal.js";
 import { ParentChildPermissionModal } from "./components/ParentChildPermissionModal.js";
 import { Collapse as CollapseIcon } from "./components/icons.js";
@@ -397,6 +398,9 @@ export function SessionSurface({ tabId, onToast, suppressPermissionModal = false
   // pane's own session); read-only history panes render MessageList
   // directly with no `rewind` prop and never see a button.
   const engine = useTabStore((state) => state.engine);
+  // The usage-limit banner's "continue on another account": present only for a
+  // Codex session, where the accounts (and their homes) exist at all.
+  const codexContinue = useCodexContinue(tabId, engine?.id === "codex");
   const supportsRewind = engine?.capabilities.supportsRewind ?? true;
   const checkpoints = useTabStore((state) => state.checkpoints);
   const lastRewindResult = useTabStore((state) => state.lastRewindResult);
@@ -457,6 +461,7 @@ export function SessionSurface({ tabId, onToast, suppressPermissionModal = false
           onContinue={handleContinue}
           promptQueueLength={promptQueueLength}
           {...(rewindProp !== undefined ? { rewind: rewindProp } : {})}
+          {...(codexContinue !== undefined ? { codexContinue } : {})}
         />
 
         {waitingForNetwork && turn.status === "running" && (

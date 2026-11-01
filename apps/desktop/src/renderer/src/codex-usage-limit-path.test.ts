@@ -54,7 +54,7 @@ function renderTranscript(store: ReturnType<typeof createDesktopStore>): string 
 }
 
 describe("Codex usage limit — production path to the banner", () => {
-  it("a Codex turn failure explains the temporary limitation and new-session option", () => {
+  it("a Codex turn failure offers the account picker through the real store→MessageList path", () => {
     const store = createDesktopStore();
     seedTurn(store);
     applyFailure(store, "codex");
@@ -62,9 +62,10 @@ describe("Codex usage limit — production path to the banner", () => {
     const blocks = store.getState().transcript.filter((block) => block.kind === "usage_limit");
     expect(blocks).toHaveLength(1);
     expect(blocks[0]).toMatchObject({ kind: "usage_limit", notice: { kind: "usage_limit", code: 429, engine: "codex" } });
-    expect(renderTranscript(store)).toContain("temporarily unavailable");
-    expect(renderTranscript(store)).toContain("start a new session on another Codex account");
-    expect(renderTranscript(store)).not.toContain("usage-limit-account-choice");
+    // The controller is wired, so the banner carries a live picker instead of a
+    // sentence saying the feature is gone ( restore).
+    expect(renderTranscript(store)).toContain("usage-limit-switch-account");
+    expect(renderTranscript(store)).not.toContain("temporarily unavailable");
   });
 
   it("the same failure on another engine stays a plain error block — no Codex remedy is offered", () => {

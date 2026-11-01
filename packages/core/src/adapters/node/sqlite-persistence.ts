@@ -27,6 +27,7 @@ import type {
   CheckpointStore,
 } from "../../ports/checkpoints.js";
 import type {
+  ContinuationClaim,
   PersistencePort,
   SessionDeleteSummary,
   SessionMeta,
@@ -447,6 +448,18 @@ const MIGRATIONS: readonly Migration[] = [
     "ALTER TABLE provider_usage ADD COLUMN time_to_first_token_ms REAL",
   ] },
   { version: 31, statements: ["ALTER TABLE sessions ADD COLUMN codex_fast INTEGER"] },
+  {
+    version: 32,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS codex_continuation_claims (
+         thread_id TEXT NOT NULL,
+         account_id TEXT NOT NULL,
+         claimed_at INTEGER NOT NULL,
+         expires_at INTEGER NOT NULL,
+         PRIMARY KEY (thread_id, account_id)
+       )`,
+    ],
+  },
 ];
 
 /**
@@ -1076,6 +1089,39 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       const source = db.prepare("SELECT 1 FROM sessions WHERE id = ? AND engine_id = ? AND external_session_ref = ? AND parent_session_id IS NULL")
         .get(sourceId, meta.engineId!, meta.externalSessionRef!);
       return source ? this.createSessionInDb(db, meta) : null;
+    }, "immediate");
+  }
+
+  /**
+   * `(thread_id, account_id)` claim in `BEGIN IMMEDIATE`, so the read of the
+   * current holder and the write of the new one cannot interleave with another
+   * host process. TTL, not a heartbeat: a claim is short-lived by construction
+   * (it covers one copy + one insert), so an expiry means the holder died.
+   */
+  async claimContinuation(threadId: string, accountId: string, ttlMs: number): Promise<ContinuationClaim> {
+    return this.transaction((db) => {
+      const now = Date.now();
+      const existing = db
+        .prepare("SELECT expires_at FROM codex_continuation_claims WHERE thread_id = ? AND account_id = ?")
+        .get(threadId, accountId) as { expires_at: number } | undefined;
+      if (existing !== undefined && existing.expires_at > now) return "held" as const;
+      db.prepare(
+        `INSERT INTO codex_continuation_claims (thread_id, account_id, claimed_at, expires_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(thread_id, account_id) DO UPDATE SET
+           claimed_at = excluded.claimed_at,
+           expires_at = excluded.expires_at`,
+      ).run(threadId, accountId, now, now + ttlMs);
+      return existing === undefined ? ("claimed" as const) : ("taken_over" as const);
+    }, "immediate");
+  }
+
+  async releaseContinuation(threadId: string, accountId: string): Promise<void> {
+    this.transaction((db) => {
+      db.prepare("DELETE FROM codex_continuation_claims WHERE thread_id = ? AND account_id = ?").run(
+        threadId,
+        accountId,
+      );
     }, "immediate");
   }
 
