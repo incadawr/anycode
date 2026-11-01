@@ -1030,24 +1030,82 @@ export interface OrchestrationDelivery {
   originId?: string;
   retryQueued?: boolean;
   parentRequestId?: string;
-  status: "pending" | "unknown" | "rejected" | "started" | "conflict";
+  status: "pending" | "unknown" | "rejected" | "started" | "finished" | "conflict";
+  terminalReason?: "completed" | "error" | "cancelled" | "max_turns";
   restored: boolean;
   reviewed: boolean;
   turnId?: string;
+  /** Ordinary direct sends may compact only after a confirmed completed turn. */
+  ordinaryDirect?: true;
+  /** Payload was released after completion; only correlation is retained. */
+  payloadOmitted?: true;
+  /** Once delivery is unknown, retain its full payload even after late start. */
+  preservePayload?: true;
+  /** User explicitly discarded a settled payload; correlation remains bounded. */
+  dismissed?: true;
+  /** A confirmed child-surface steer follows the same bounded retention policy. */
+  childSteer?: true;
+}
+
+/** Bounded correlation horizon for ordinary, confirmed and completed sends. */
+export const COMPLETED_DIRECT_CORRELATION_LIMIT = 256;
+
+function boundDeliveryTombstones(deliveries: readonly OrchestrationDelivery[], state: DesktopState): readonly OrchestrationDelivery[] {
+  // Pin whole families with payload, unresolved outcomes, or live references.
+  // A fully settled family can be truncated to the correlation horizon; its
+  // remaining roots stay tombstones and therefore cannot become retryable.
+  const visited = new Set<string>();
+  const eligible = new Set<string>();
+  for (const item of deliveries) {
+    if (visited.has(item.requestId)) continue;
+    const family = recoveryTreeIds(deliveries, item.requestId);
+    if (!family) { visited.add(item.requestId); continue; }
+    for (const id of family) visited.add(id);
+    const referenced = family.has(state.restoredComposerDraft?.deliveryRequestId ?? "") ||
+      family.has(state.composerRolePicker?.deliveryRequestId ?? "") ||
+      state.promptQueue.some(entry => family.has(entry.recoverySourceId ?? "") || family.has(entry.retryOf ?? "")) ||
+      family.has(state.queueInFlight?.requestId ?? "") || family.has(state.queueInFlight?.item.recoverySourceId ?? "") ||
+      state.pendingSteers.some(entry => family.has(entry.requestId));
+    if (!referenced && deliveries.every(entry => !family.has(entry.requestId) ||
+      (entry.payloadOmitted && !entry.retryQueued && (entry.status === "started" || ((entry.status === "rejected" || entry.status === "finished") && entry.dismissed))))) {
+      for (const id of family) eligible.add(id);
+    }
+  }
+  const evictable = deliveries.filter(item => eligible.has(item.requestId));
+  const remove = new Set(evictable.slice(0, Math.max(0, evictable.length - COMPLETED_DIRECT_CORRELATION_LIMIT)).map(item => item.requestId));
+  return deliveries.filter(item => !remove.has(item.requestId)).map(item => {
+    if (!item.parentRequestId || !remove.has(item.parentRequestId)) return item;
+    const { parentRequestId: _removedParent, ...retained } = item;
+    return retained;
+  });
+}
+
+function compactCompletedDirect(state: DesktopState, turnId: string, reason: string): readonly OrchestrationDelivery[] {
+  const deliveries = state.orchestrationDeliveries.map(item => {
+    const linked = state.restoredComposerDraft?.deliveryRequestId === item.requestId ||
+      state.orchestrationDeliveries.some(child => child.parentRequestId === item.requestId) ||
+      state.promptQueue.some(queued => queued.recoverySourceId === item.requestId) ||
+      state.queueInFlight?.item.recoverySourceId === item.requestId;
+    return (reason === "completed" || reason === "error" || reason === "cancelled" || reason === "max_turns") && (item.ordinaryDirect || item.childSteer) && item.status === "started" && item.turnId === turnId && item.requestId === state.turn.requestId && !item.preservePayload && !item.restored && !linked
+      ? { ...item, text: "", images: [], payloadOmitted: true as const }
+      : item;
+  });
+  return boundDeliveryTombstones(deliveries, state);
 }
 
 function deliveryStarted(item: OrchestrationDelivery, turnId: string): OrchestrationDelivery {
-  if (item.status === "conflict") return item;
-  if (item.status === "rejected" || (item.status === "started" && item.turnId !== turnId)) return { ...item, status: "conflict", reviewed: false };
+  if (item.status === "conflict") return item.turnId ? item : { ...item, turnId };
+  if (item.status === "finished" && item.turnId === turnId) return item;
+  if (item.status === "rejected" || ((item.status === "started" || item.status === "finished") && item.turnId !== turnId)) return { ...item, turnId: item.turnId ?? turnId, status: "conflict", reviewed: false, dismissed: undefined };
   return { ...item, status: "started", turnId };
 }
 function deliveryRejected(item: OrchestrationDelivery): OrchestrationDelivery {
   if (item.status === "conflict") return item;
-  if (item.status === "started") return { ...item, status: "conflict", reviewed: false };
+  if (item.status === "started" || item.status === "finished") return { ...item, status: "conflict", reviewed: false, dismissed: undefined };
   return { ...item, status: "rejected" };
 }
 function deliveryUnknown(item: OrchestrationDelivery): OrchestrationDelivery {
-  return item.status === "pending" ? { ...item, status: "unknown" } : item;
+  return item.status === "pending" ? { ...item, status: "unknown", preservePayload: true } : item;
 }
 
 function recoveryTreeIds(deliveries: readonly OrchestrationDelivery[], requestId: string): Set<string> | null {
@@ -1076,7 +1134,38 @@ export function recoveryTreeBlocked(deliveries: readonly OrchestrationDelivery[]
   const ids = recoveryTreeIds(deliveries,requestId);
   if (!ids) return true;
   return deliveries.some(item => ids.has(item.requestId) && !(item.requestId === ignorePendingId && item.status === "pending") &&
-    (item.status === "pending" || item.status === "started" || ((item.status === "unknown" || item.status === "conflict") && !item.reviewed)));
+    (item.payloadOmitted || item.dismissed || item.status === "pending" || item.status === "started" || item.status === "finished" || ((item.status === "unknown" || item.status === "conflict") && !item.reviewed)));
+}
+
+export function canDismissRejectedDelivery(state: DesktopState, requestId: string): boolean {
+  const item = state.orchestrationDeliveries.find(entry => entry.requestId === requestId);
+  if (!item || (item.status !== "rejected" && item.status !== "finished") || item.origin === "system" || item.dismissed || item.payloadOmitted || item.retryQueued) return false;
+  if (!recoveryTreeIds(state.orchestrationDeliveries, requestId)) return false;
+  const descendants = new Set([requestId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const entry of state.orchestrationDeliveries) {
+      if (entry.parentRequestId && descendants.has(entry.parentRequestId) && !descendants.has(entry.requestId)) {
+        descendants.add(entry.requestId);
+        changed = true;
+      }
+    }
+  }
+  if (state.orchestrationDeliveries.some(entry => entry.requestId !== requestId && descendants.has(entry.requestId) && !(entry.status === "finished" && !entry.retryQueued) && !(entry.status === "rejected" && entry.dismissed && entry.payloadOmitted && !entry.retryQueued))) return false;
+  return !descendants.has(state.restoredComposerDraft?.deliveryRequestId ?? "") &&
+    !descendants.has(state.composerRolePicker?.deliveryRequestId ?? "") &&
+    !state.promptQueue.some(entry => descendants.has(entry.recoverySourceId ?? "") || descendants.has(entry.retryOf ?? "")) &&
+    !descendants.has(state.queueInFlight?.requestId ?? "") && !descendants.has(state.queueInFlight?.item.recoverySourceId ?? "") &&
+    !state.pendingSteers.some(entry => descendants.has(entry.requestId));
+}
+
+function startedDeliveries(state: DesktopState, requestId: string, turnId: string): readonly OrchestrationDelivery[] {
+  const existing = state.orchestrationDeliveries.find(item => item.requestId === requestId);
+  if (existing) return state.orchestrationDeliveries.map(item => item.requestId === requestId ? deliveryStarted(item, turnId) : item);
+  const steer = state.pendingSteers.find(item => item.requestId === requestId);
+  if (!steer || state.uiSteerPending.includes(requestId)) return state.orchestrationDeliveries;
+  return [...state.orchestrationDeliveries, { requestId, text: steer.sentMessage.text, images: steer.sentMessage.images.map(image => ({ ...image, attachment: { ...image.attachment } })), status: "started", turnId, restored: false, reviewed: false, childSteer: true }];
 }
 
 export function recoveryAdmissionBlocked(state: Pick<DesktopState,"orchestrationDeliveries" | "promptQueue" | "queueInFlight">, requestId: string, opts?: {ignorePendingId?:string; ignoreQueueId?:string; ignoreInFlightId?:string}): boolean {
@@ -1103,14 +1192,17 @@ function reconcileQueuedRetries(queue: readonly QueuedPrompt[], deliveries: read
 }
 
 /** Preserve the wire id and payload when a queued turn loses its transport. */
-function holdInFlightUnknown(state: DesktopState): Pick<DesktopState, "queueInFlight" | "orchestrationDeliveries" | "promptQueue"> {
+function holdInFlightUnknown(state: DesktopState): Pick<DesktopState, "queueInFlight" | "orchestrationDeliveries" | "promptQueue" | "pendingSteers" | "uiSteerPending"> {
   const current = state.queueInFlight;
   const cancelledRetries = new Set(state.promptQueue.flatMap(item => item.retryOf ? [item.retryOf] : []));
   const promptQueue = state.promptQueue.filter(item => !item.retryOf);
   const deliveries = state.orchestrationDeliveries.map(item => cancelledRetries.has(item.requestId) ? {...deliveryUnknown(item),retryQueued:false} : deliveryUnknown(item));
-  if (!current || deliveries.some(item => item.requestId === current.requestId)) return {queueInFlight:null,orchestrationDeliveries:deliveries,promptQueue};
+  for (const steer of state.pendingSteers) {
+    if (!deliveries.some(item => item.requestId === steer.requestId)) deliveries.push({ requestId: steer.requestId, text: steer.sentMessage.text, images: steer.sentMessage.images.map(image => ({ ...image, attachment: { ...image.attachment } })), status: "unknown", restored: false, reviewed: false });
+  }
+  if (!current || deliveries.some(item => item.requestId === current.requestId)) return {queueInFlight:null,orchestrationDeliveries:deliveries,promptQueue,pendingSteers:[],uiSteerPending:[]};
   const item = current.item;
-  return {queueInFlight:null,promptQueue,orchestrationDeliveries:[...deliveries,{
+  return {queueInFlight:null,promptQueue,pendingSteers:[],uiSteerPending:[],orchestrationDeliveries:[...deliveries,{
     requestId:current.requestId,text:item.text,images:item.images.map(image => ({...image,attachment:{...image.attachment}})),
     ...(item.orchestrate ? {orchestrate:item.orchestrate} : {}),...(item.initialPicks ? {initialPicks:{...item.initialPicks}} : {}),
     ...(item.recoverySourceId ? {parentRequestId:item.recoverySourceId} : {}),
@@ -1608,7 +1700,8 @@ export interface DesktopState {
    * (Composer's direct path; tab-registry's queue-drain and initial-prompt
    * paths) — NOT a new send path of its own.
    */
-  recordSentMessage(text: string, images: readonly QueuedPromptImage[], requestId?: string, orchestrate?: "enable", initialPicks?: QueuedPrompt["initialPicks"], parentRequestId?: string, systemOriginId?: string): void;
+  recordSentMessage(text: string, images: readonly QueuedPromptImage[], requestId?: string, orchestrate?: "enable", initialPicks?: QueuedPrompt["initialPicks"], parentRequestId?: string, systemOriginId?: string, trackDirect?: boolean): void;
+  dismissRejectedDelivery(requestId: string): void;
   claimRecoveryAttempt(sourceId: string, requestId: string, text: string, images: readonly QueuedPromptImage[], picks: QueuedPrompt["initialPicks"], opts?: {orchestrate?:"enable"; pickerId?:string; bindDraft?:boolean}): boolean;
   enqueueRecoveryPrompt(sourceId: string, item: Omit<QueuedPrompt,"id" | "recoverySourceId">): boolean;
   markOrchestrationDeliveryUnknown(requestId: string): void;
@@ -4224,6 +4317,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             const nextQueue = [...state.promptQueue, ...queueAdditions];
             return {
               turn: { status: "idle", turnId: null, requestId: null },
+              orchestrationDeliveries: compactCompletedDirect({ ...state, orchestrationDeliveries: state.orchestrationDeliveries.map(item => (event.reason === "completed" || event.reason === "error" || event.reason === "cancelled" || event.reason === "max_turns") && (item.status === "started" || item.status === "conflict") && item.turnId === turnId && item.requestId === state.turn.requestId ? { ...item, ...(item.status === "started" && item.parentRequestId ? { status: "finished" as const } : {}), terminalReason: event.reason } : item) }, turnId, event.reason),
               pendingSteers: state.pendingSteers.filter((entry) => !uiPending.includes(entry.requestId)),
               promptQueue: nextQueue,
               uiSteerPending: [],
@@ -4987,6 +5081,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // new-task/full reset, below): that path must still clear `retry`,
             // so the preservation lives here, not inside `performReset` itself.
             const armedRetry = get().retry;
+            set((state) => state.connection === "ready" ? {} : holdInFlightUnknown(state));
             performReset();
             // the respawn reset discards the old transcript, so
             // the previous hydration boundary is void — markers arriving before
@@ -5122,8 +5217,41 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             return;
           case "turn_started": {
             pendingSentMessages.delete(message.requestId);
+            const knownDelivery = get().orchestrationDeliveries.find(item => item.requestId === message.requestId);
+            const activeTurn = get().turn;
+            // Null requestId does not prove that an incoming request owns a
+            // legacy running turn, even when its turnId happens to match.
+            const busyForAnotherRequest = isSessionBusy(activeTurn.status) &&
+              (activeTurn.status !== "running" || activeTurn.turnId !== message.turnId || activeTurn.requestId !== message.requestId);
+            // Any known request starting over a different active turn or
+            // manual compaction is contradictory. Preserve the active owner
+            // and the delivery payload; no automatic retry is safe here.
+            if (knownDelivery && busyForAnotherRequest) {
+              set((state) => {
+                const deliveries = state.orchestrationDeliveries.map(item => {
+                  if (item.requestId !== message.requestId) return item;
+                  if (item.terminalReason || item.status === "finished" || item.status === "conflict") return deliveryStarted(item, message.turnId);
+                  return { ...item, status: "conflict" as const, turnId: item.turnId ?? message.turnId, reviewed: false, dismissed: undefined, preservePayload: true as const };
+                });
+                return {
+                  ...reconcileQueuedRetries(state.promptQueue, deliveries),
+                  ...(state.queueInFlight?.requestId === message.requestId ? { queueInFlight: null } : {}),
+                  pendingSteers: state.pendingSteers.filter(entry => entry.requestId !== message.requestId),
+                  uiSteerPending: state.uiSteerPending.filter(id => id !== message.requestId),
+                };
+              });
+              return;
+            }
+            // A replay (or a contradictory second start for a finished request)
+            // must update correlation without reviving an already ended turn.
+            // Keep this fence across host_ready resets via the delivery ledger.
+            if (knownDelivery?.terminalReason || loopEndEmitted.has(`loop_end:${message.turnId}`) ||
+              (knownDelivery?.turnId && (knownDelivery.status === "conflict" || knownDelivery.turnId !== message.turnId))) {
+              set((state) => reconcileQueuedRetries(state.promptQueue, startedDeliveries(state, message.requestId, message.turnId)));
+              return;
+            }
             if (presentationReplayActive && presentationReplayTurns?.has(message.turnId)) {
-              set((state) => reconcileQueuedRetries(state.promptQueue,state.orchestrationDeliveries.map(item => item.requestId === message.requestId ? deliveryStarted(item,message.turnId) : item)));
+              set((state) => reconcileQueuedRetries(state.promptQueue,startedDeliveries(state,message.requestId,message.turnId)));
               return;
             }
             // fallback: a turn starting means post-switch content
@@ -5152,7 +5280,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               turnStartedAt.set(message.turnId, message.startedAt ?? Date.now());
             }
             set({
-              ...reconcileQueuedRetries(get().promptQueue,get().orchestrationDeliveries.map(item => item.requestId === message.requestId ? deliveryStarted(item,message.turnId) : item)),
+              ...reconcileQueuedRetries(get().promptQueue,startedDeliveries(get(),message.requestId,message.turnId)),
               turn: { status: "running", turnId: message.turnId, requestId: message.requestId, startedAt: turnStartedAt.get(message.turnId) },
               latestTurnId: message.turnId,
               // W8: a new turn starting — whether via the Try-again
@@ -5191,8 +5319,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             const { queueInFlight, promptQueue } = get();
             const direct = pendingSentMessages.get(message.requestId);
             const delivery = get().orchestrationDeliveries.find(item => item.requestId === message.requestId);
+            const rejectedSteer = get().pendingSteers.find(item => item.requestId === message.requestId);
             const rejectedSystem = queueInFlight?.requestId === message.requestId && queueInFlight.item.origin === "system" ? queueInFlight.item : undefined;
-            const restoreDirect = delivery === undefined && queueInFlight?.requestId !== message.requestId && direct !== undefined && !promptQueue.some(item => item.id === message.requestId)
+            const restoreDirect = delivery === undefined && rejectedSteer === undefined && queueInFlight?.requestId !== message.requestId && direct !== undefined && !promptQueue.some(item => item.id === message.requestId)
               ? { promptQueue: [{ id: message.requestId, ...direct }, ...promptQueue], queuePaused: true, queuePauseReason: "rejected" as const }
               : null;
             const restore =
@@ -5204,7 +5333,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                     queueInFlight: null,
                   }
                 : null;
-            const updatedDeliveries = delivery ? get().orchestrationDeliveries.map(item => item.requestId === message.requestId ? deliveryRejected(item) : item) : rejectedSystem ? [...get().orchestrationDeliveries,{requestId:message.requestId,text:rejectedSystem.text,images:rejectedSystem.images,origin:"system" as const,...(rejectedSystem.originId ? {originId:rejectedSystem.originId} : {}),status:"rejected" as const,restored:false,reviewed:false}] : get().orchestrationDeliveries;
+            const updatedDeliveries = delivery ? get().orchestrationDeliveries.map(item => item.requestId === message.requestId ? deliveryRejected(item) : item) : rejectedSystem ? [...get().orchestrationDeliveries,{requestId:message.requestId,text:rejectedSystem.text,images:rejectedSystem.images,origin:"system" as const,...(rejectedSystem.originId ? {originId:rejectedSystem.originId} : {}),status:"rejected" as const,restored:false,reviewed:false}] : rejectedSteer ? [...get().orchestrationDeliveries,{requestId:message.requestId,text:rejectedSteer.sentMessage.text,images:rejectedSteer.sentMessage.images.map(image => ({...image,attachment:{...image.attachment}})),status:"rejected" as const,restored:false,reviewed:false}] : get().orchestrationDeliveries;
             set({
               ...((rejectedSystem || (delivery && queueInFlight?.requestId === message.requestId)) ? {queueInFlight:null} : {}),
               notice: {
@@ -5221,13 +5350,16 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               // a rejected steer never becomes transcript text —
               // drop the matching pending entry, keep unrelated ones.
               ...(get().pendingSteers.some((entry) => entry.requestId === message.requestId)
-                ? { pendingSteers: get().pendingSteers.filter((entry) => entry.requestId !== message.requestId) }
+                ? { pendingSteers: get().pendingSteers.filter((entry) => entry.requestId !== message.requestId), uiSteerPending: get().uiSteerPending.filter(id => id !== message.requestId) }
                 : {}),
             });
             pendingSentMessages.delete(message.requestId);
             return;
           }
           case "steer_requeued": {
+            // An unconfirmed steer held after disconnect must never be
+            // automatically re-enqueued by a replay from either incarnation.
+            if (get().orchestrationDeliveries.some(item => item.requestId === message.requestId && item.status !== "pending")) return;
             // rework (Opus defect 1): the host could not deliver
             // this UI steer into the running turn (idle/pre-loop, Stop raced,
             // ceiling/deadline, superseded, shutting down). NEVER dropped: the
@@ -5481,9 +5613,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // survivors, and a later steer_requeued for a restored id takes
             // the ordinary pending-entry path above.
             if (message.pendingSteers !== undefined && Array.isArray(message.pendingSteers)) {
+              const heldIds = new Set(get().orchestrationDeliveries.filter(item => item.status !== "pending").map(item => item.requestId));
               const restored = message.pendingSteers.filter(
                 (entry): entry is { requestId: string; text: string } =>
-                  typeof entry?.requestId === "string" && typeof entry?.text === "string",
+                  typeof entry?.requestId === "string" && typeof entry?.text === "string" && !heldIds.has(entry.requestId),
               );
               set((state) => ({
                 pendingSteers: restored.map((entry) => ({
@@ -6143,7 +6276,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         // appended by the matching turn_started (delivery position), so the
         // queued text never interleaves optimistically with the running turn's
         // streamed output.
-        set((state) => ({ pendingSteers: [...state.pendingSteers, { requestId, text, ...(images?.length ? { images } : {}), sentMessage }] }));
+        const savedImages = sentMessage.images.map(image => ({ ...image, attachment: { ...image.attachment } }));
+        set((state) => ({ pendingSteers: [...state.pendingSteers, { requestId, text, ...(images?.length ? { images: images.map(image => ({ ...image })) } : {}), sentMessage: { ...sentMessage, images: savedImages } }] }));
       },
 
       requeuePendingSteer(requestId: string, index?: number): void {
@@ -6260,12 +6394,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         }
       },
 
-      recordSentMessage(text: string, images: readonly QueuedPromptImage[], requestId?: string, orchestrate?: "enable", initialPicks?: QueuedPrompt["initialPicks"], parentRequestId?: string, systemOriginId?: string): void {
+      recordSentMessage(text: string, images: readonly QueuedPromptImage[], requestId?: string, orchestrate?: "enable", initialPicks?: QueuedPrompt["initialPicks"], parentRequestId?: string, systemOriginId?: string, trackDirect = false): void {
         if (requestId !== undefined) pendingSentMessages.set(requestId, { text, images, ...(orchestrate !== undefined ? { orchestrate } : {}) });
         set((state) => ({
           lastSentMessage: { text, images },
-          ...((orchestrate === "enable" || initialPicks !== undefined) && requestId !== undefined && !state.orchestrationDeliveries.some(item => item.requestId === requestId) ? {
-            orchestrationDeliveries: [...state.orchestrationDeliveries, {requestId,text,images:images.map(image => ({...image,attachment:{...image.attachment}})),...(orchestrate ? {orchestrate} : {}),...(initialPicks ? {initialPicks:{...initialPicks}} : {}),...(parentRequestId ? {parentRequestId} : {}),...(systemOriginId ? {origin:"system" as const,originId:systemOriginId} : {}),status:state.connection === "ready" ? "pending" as const : "unknown" as const,restored:false,reviewed:false}],
+          ...((trackDirect || orchestrate === "enable" || initialPicks !== undefined) && requestId !== undefined && !state.orchestrationDeliveries.some(item => item.requestId === requestId) ? {
+            orchestrationDeliveries: [...state.orchestrationDeliveries, {requestId,text,images:images.map(image => ({...image,attachment:{...image.attachment}})),...(trackDirect ? {ordinaryDirect:true as const} : {}),...(orchestrate ? {orchestrate} : {}),...(initialPicks ? {initialPicks:{...initialPicks}} : {}),...(parentRequestId ? {parentRequestId} : {}),...(systemOriginId ? {origin:"system" as const,originId:systemOriginId} : {}),status:state.connection === "ready" ? "pending" as const : "unknown" as const,...(state.connection !== "ready" ? {preservePayload:true as const} : {}),restored:false,reviewed:false}],
           } : {}),
         }));
       },
@@ -6301,6 +6435,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
 
       markOrchestrationDeliveryUnknown(requestId: string): void {
         set((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(item => item.requestId === requestId ? deliveryUnknown(item) : item)}));
+      },
+
+      dismissRejectedDelivery(requestId: string): void {
+        set((state) => {
+          if (!canDismissRejectedDelivery(state, requestId)) return {};
+          return { orchestrationDeliveries: boundDeliveryTombstones(state.orchestrationDeliveries.map(item => item.requestId === requestId ? { ...item, text: "", images: [], payloadOmitted: true as const, dismissed: true as const } : item), state) };
+        });
       },
 
       retryRejectedSystemDelivery(requestId: string): void {

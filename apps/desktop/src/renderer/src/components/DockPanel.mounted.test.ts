@@ -99,6 +99,194 @@ describe("dock resize handle placement (GitHub #31)", () => {
     );
   }
 
+  it.each(["direct", "child-steer"] as const)("restores an unknown %s with attachment only after the current edit is cleared", async (kind) => {
+    const ready = { type: "host_ready" as const, workspace: "/ws", sessionId: "a", mode: "build" as const, model: "m1", imageInput: true };
+    const image = { name: "saved.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } };
+    store.getState().applyHostMessage(ready);
+    if (kind === "direct") store.getState().recordSentMessage("original", [image], "attempt", undefined, undefined, undefined, undefined, true);
+    else store.getState().recordPendingSteer("attempt", "original", [image.attachment], { text: "original", images: [image] });
+    store.getState().setPortClosed();
+    store.getState().applyHostMessage(ready);
+    const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+    await mountBody();
+    const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+    const type = async (value: string) => act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, value); textarea.dispatchEvent(new Event("input", { bubbles: true })); });
+    await type("new edit");
+    await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+    expect(textarea.value).toBe("new edit");
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ requestId: "attempt", status: "unknown", images: [image] });
+    await type("");
+    await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+    expect(textarea.value).toBe("original");
+    expect(store.getState().restoredComposerDraft).toMatchObject({ text: "original", images: [image], deliveryRequestId: "attempt" });
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    expect(send).not.toHaveBeenCalledWith("tab", expect.objectContaining({ type: "user_message" }));
+  });
+
+  it("keeps the direct attempt linked to the draft if send throws after possible delivery", async () => {
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", sessionId: "a", mode: "build", model: "m1", imageInput: true });
+    const image = { name: "saved.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } };
+    store.setState({ restoredComposerDraft: { text: "direct", images: [image] } });
+    const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation((_tab, message) => { if (message.type === "user_message") throw new Error("synthetic possible delivery"); });
+    await mountBody();
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{ text: "direct", images: [image], status: "unknown" }]);
+    expect(store.getState().restoredComposerDraft?.deliveryRequestId).toBe(store.getState().orchestrationDeliveries[0]?.requestId);
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    expect(send.mock.calls.filter(([, message]) => message.type === "user_message")).toHaveLength(1);
+  });
+
+  it("stages a real Composer direct send before disconnect and restores its attachment", async () => {
+    const ready = { type: "host_ready" as const, workspace: "/ws", sessionId: "a", mode: "build" as const, model: "m1", imageInput: true };
+    const image = { name: "sent.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } };
+    store.getState().applyHostMessage(ready);
+    store.setState({ restoredComposerDraft: { text: "actual send", images: [image] } });
+    const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+    await mountBody();
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    const sent = send.mock.calls.find(([, message]) => message.type === "user_message")?.[1];
+    expect(sent).toMatchObject({ type: "user_message", text: "actual send", images: [image.attachment] });
+    await act(async () => { store.getState().setPortClosed(); store.getState().applyHostMessage(ready); });
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{ requestId: (sent as { requestId: string }).requestId, text: "actual send", images: [image], status: "unknown" }]);
+    await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+    expect(store.getState().restoredComposerDraft).toMatchObject({ text: "actual send", images: [image], deliveryRequestId: (sent as { requestId: string }).requestId });
+    expect(send.mock.calls.filter(([, message]) => message.type === "user_message")).toHaveLength(1);
+  });
+
+  it("stages a real child Composer steer with attachment before disconnect", async () => {
+    const ready = { type: "host_ready" as const, workspace: "/ws", sessionId: "child", mode: "build" as const, model: "m1", imageInput: true };
+    const image = { name: "steer.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } };
+    store.getState().applyHostMessage(ready);
+    store.getState().setChildSurface();
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "running", turnId: "turn" });
+    store.setState({ restoredComposerDraft: { text: "child steer", images: [image] } });
+    const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+    await mountBody();
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    const sent = send.mock.calls.find(([, message]) => message.type === "user_message")?.[1];
+    expect(sent).toMatchObject({ type: "user_message", text: "child steer", images: [image.attachment] });
+    await act(async () => { store.getState().setPortClosed(); store.getState().applyHostMessage(ready); });
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{ requestId: (sent as { requestId: string }).requestId, text: "child steer", images: [image], status: "unknown" }]);
+    await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+    expect(store.getState().restoredComposerDraft).toMatchObject({ text: "child steer", images: [image] });
+    expect(send.mock.calls.filter(([, message]) => message.type === "user_message")).toHaveLength(1);
+  });
+
+  it("holds an explicitly rejected child steer with attachment for manual review", async () => {
+    const ready = { type: "host_ready" as const, workspace: "/ws", sessionId: "child", mode: "build" as const, model: "m1", imageInput: true };
+    const image = { name: "rejected.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } };
+    store.getState().applyHostMessage(ready);
+    store.getState().setChildSurface();
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "running", turnId: "turn" });
+    store.setState({ restoredComposerDraft: { text: "child rejected", images: [image] } });
+    const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+    await mountBody();
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    const sent = send.mock.calls.find(([, message]) => message.type === "user_message")?.[1] as { requestId: string };
+    await act(async () => store.getState().applyHostMessage({ type: "turn_rejected", requestId: sent.requestId, reason: "unsupported_images" }));
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{ requestId: sent.requestId, text: "child rejected", images: [image], status: "rejected" }]);
+    expect(store.getState().promptQueue).toEqual([]);
+    await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+    expect(store.getState().restoredComposerDraft).toMatchObject({ text: "child rejected", images: [image], deliveryRequestId: sent.requestId });
+    expect(send.mock.calls.filter(([, message]) => message.type === "user_message")).toHaveLength(1);
+  });
+
+  it("dismisses rejected payload only after its restored draft is discarded and reports a late start", async () => {
+    const ready = { type: "host_ready" as const, workspace: "/ws", sessionId: "child", mode: "build" as const, model: "m1", imageInput: true };
+    const image = { name: "rejected.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } };
+    store.getState().applyHostMessage(ready);
+    store.getState().recordPendingSteer("rejected-steer", "keep until dismissed", [image.attachment], { text: "keep until dismissed", images: [image] });
+    store.getState().applyHostMessage({ type: "turn_rejected", requestId: "rejected-steer", reason: "busy" });
+    await mountBody();
+    await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+    await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-dismiss")!.click());
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "rejected", images: [image] });
+    expect(store.getState().restoredComposerDraft?.deliveryRequestId).toBe("rejected-steer");
+    const discard = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Discard this draft and start a new message")!;
+    await act(async () => discard.click());
+    await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-dismiss")!.click());
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "rejected", dismissed: true, payloadOmitted: true, text: "", images: [] });
+    expect(container.querySelector(".orchestration-delivery-dismiss")).toBeNull();
+    await act(async () => store.getState().applyHostMessage({ type: "turn_started", requestId: "rejected-steer", turnId: "late" }));
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "conflict", payloadOmitted: true });
+    expect(container.textContent).toContain("Conflicting delivery reports");
+    expect(container.querySelector(".orchestration-delivery-restore")).toBeNull();
+  });
+
+  it("dismisses a rejected parent after its rejected retry was discarded and dismissed, retaining late-event fences", async () => {
+    const ready = { type: "host_ready" as const, workspace: "/ws", sessionId: "a", mode: "build" as const, model: "m1", imageInput: true };
+    const image = { name: "parent.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } };
+    store.getState().applyHostMessage(ready);
+    store.getState().recordSentMessage("parent payload", [image], "parent", undefined, undefined, undefined, undefined, true);
+    store.getState().applyHostMessage({ type: "turn_rejected", requestId: "parent", reason: "busy" });
+    const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+    await mountBody();
+    await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+    const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "retry payload"); textarea.dispatchEvent(new Event("input", { bubbles: true })); });
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    const sent = send.mock.calls.find(([, message]) => message.type === "user_message")?.[1] as { requestId: string };
+    expect(sent.requestId).toBeTruthy();
+    await act(async () => store.getState().applyHostMessage({ type: "turn_rejected", requestId: sent.requestId, reason: "busy" }));
+    const row = (text: string) => [...container.querySelectorAll<HTMLElement>('[role="status"]')].find(element => element.textContent?.includes(text))!;
+    await act(async () => row("retry payload").querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+    const discard = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Discard this draft and start a new message")!;
+    await act(async () => discard.click());
+    await act(async () => row("retry payload").querySelector<HTMLButtonElement>(".orchestration-delivery-dismiss")!.click());
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === sent.requestId)).toMatchObject({ dismissed: true, payloadOmitted: true, status: "rejected" });
+    await act(async () => row("parent payload").querySelector<HTMLButtonElement>(".orchestration-delivery-dismiss")!.click());
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "parent")).toMatchObject({ dismissed: true, payloadOmitted: true, images: [] });
+    await act(async () => store.getState().applyHostMessage({ type: "turn_started", requestId: sent.requestId, turnId: "late-child" }));
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === sent.requestId)).toMatchObject({ status: "conflict", payloadOmitted: true });
+    expect(container.textContent).toContain("Conflicting delivery reports");
+    await act(async () => store.getState().applyHostMessage({ type: "turn_started", requestId: "parent", turnId: "late-parent" }));
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "parent")).toMatchObject({ status: "conflict", payloadOmitted: true });
+    expect(store.getState().claimRecoveryAttempt("parent", "unsafe-retry", "retry", [image], undefined)).toBe(false);
+    expect(send.mock.calls.filter(([, message]) => message.type === "user_message")).toHaveLength(1);
+  });
+
+  it.each([ ["completed", "Turn completed"], ["error", "Turn failed"], ["cancelled", "Turn cancelled"], ["max_turns", "Turn reached its turn limit"] ] as const)("retains a recovery payload after %s and allows explicit dismissal", async (reason, label) => {
+    const image = { name: "parent.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } };
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", sessionId: "a", mode: "build", model: "m1", imageInput: true });
+    store.getState().recordSentMessage("parent payload", [image], "parent", undefined, undefined, undefined, undefined, true);
+    store.getState().applyHostMessage({ type: "turn_rejected", requestId: "parent", reason: "busy" });
+    const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+    await mountBody();
+    await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+    const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "retry payload"); textarea.dispatchEvent(new Event("input", { bubbles: true })); });
+    await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+    const sent = send.mock.calls.find(([, message]) => message.type === "user_message")?.[1] as { requestId: string };
+    await act(async () => {
+      store.getState().applyHostMessage({ type: "turn_started", requestId: sent.requestId, turnId: "retry-turn" });
+      store.getState().applyHostMessage({ type: "agent_event", turnId: "retry-turn", event: { type: "loop_end", reason, turns: 1 } });
+    });
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === sent.requestId)).toMatchObject({ status: "finished", terminalReason: reason, text: "retry payload", images: [image] });
+    const row = (text: string) => [...container.querySelectorAll<HTMLElement>('[role="status"]')].find(element => element.textContent?.includes(text))!;
+    await act(async () => row("parent payload").querySelector<HTMLButtonElement>(".orchestration-delivery-dismiss")!.click());
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "parent")).toMatchObject({ dismissed: true, images: [] });
+    expect(row("retry payload").textContent).toContain(label);
+    await act(async () => row("retry payload").querySelector<HTMLButtonElement>(".orchestration-delivery-dismiss")!.click());
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === sent.requestId)).toMatchObject({ status: "finished", terminalReason: reason, dismissed: true, payloadOmitted: true, images: [] });
+    await act(async () => store.getState().applyHostMessage({ type: "turn_rejected", requestId: sent.requestId, reason: "busy" }));
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === sent.requestId)).toMatchObject({ status: "conflict", payloadOmitted: true });
+    expect(store.getState().claimRecoveryAttempt("parent", "unsafe", "retry", [image], undefined)).toBe(false);
+    expect(send.mock.calls.filter(([, message]) => message.type === "user_message")).toHaveLength(1);
+  });
+
+  it("shows a late conflict for a compacted direct delivery without offering a missing payload", async () => {
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", sessionId: "a", mode: "build", model: "m1" });
+    const image = { name: "done.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } };
+    store.getState().recordSentMessage("completed message", [image], "done", undefined, undefined, undefined, undefined, true);
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "done", turnId: "turn-done" });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "turn-done", event: { type: "loop_end", reason: "completed", turns: 1 } });
+    store.getState().applyHostMessage({ type: "turn_rejected", requestId: "done", reason: "busy" });
+    await mountBody();
+    expect(container.textContent).toContain("Earlier completed message (payload released)");
+    expect(container.textContent).toContain("Conflicting delivery reports");
+    expect(container.querySelector(".orchestration-delivery-restore")).toBeNull();
+  });
+
   /** Opens the subagents dock tab: layout B's child view, then Split (the
       same reducer chain the breadcrumb's "Split" button drives). */
   async function openDockTab(): Promise<void> {
@@ -553,6 +741,9 @@ describe("dock resize handle placement (GitHub #31)", () => {
       await act(async () => emit({type:"turn_started",requestId:"ancestor",turnId:"late-ancestor"}));
       expect(target.getState().promptQueue[0]).toMatchObject({text:"retry draft",images:[image],recoverySourceId:"source",requiresRestore:true});
       await act(async () => emit({type:"agent_event",turnId:"late-ancestor",event:{type:"loop_end",reason:"completed",turns:1}}));
+      expect(target.getState().turn).toMatchObject({status:"running",turnId:"other-turn"});
+      expect(port.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type:"user_message",text:"following task"}));
+      await act(async () => emit({type:"agent_event",turnId:"other-turn",event:{type:"loop_end",reason:"completed",turns:1}}));
       expect(port.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type:"user_message",text:"retry draft"}));
       expect(port.postMessage).toHaveBeenCalledWith(expect.objectContaining({type:"user_message",text:"following task"}));
       await act(async () => container.querySelector<HTMLButtonElement>(".prompt-queue-restore")!.click());

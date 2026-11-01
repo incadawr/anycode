@@ -9541,7 +9541,8 @@ describe("direct orchestration delivery reconciliation", () => {
     expect(store.getState().orchestrationDeliveries[0]?.status).toBe("unknown");
     expect(store.getState().restoredComposerDraft?.text).toBe("new edit");
     store.getState().applyHostMessage({type:"turn_started",requestId:"req-a",turnId:"turn-a"});
-    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({status:"started",turnId:"turn-a"});
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({status:"conflict",turnId:"turn-a",images});
+    expect(store.getState().turn).toMatchObject({status:"running",requestId:"other",turnId:"other-turn"});
     store.getState().applyHostMessage({type:"turn_rejected",requestId:"req-a",reason:"busy"});
     expect(store.getState().orchestrationDeliveries[0]).toMatchObject({status:"conflict",reviewed:false});
     expect(store.getState().promptQueue).toEqual([]);

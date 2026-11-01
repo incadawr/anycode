@@ -8,7 +8,7 @@
  */
 import type { KeyboardEvent } from "react";
 import { useTabStore, useTabStoreApi } from "../tab-context.js";
-import { systemRetrySafe, type QueuedPrompt } from "../store.js";
+import { canDismissRejectedDelivery, systemRetrySafe, type QueuedPrompt } from "../store.js";
 import { X } from "./icons.js";
 
 /** "N img" badge for a queued item's attachment count; null when there are none. */
@@ -40,7 +40,7 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, de
   const tabStore = useTabStoreApi();
   const editing = useTabStore((state) => state.queueEditDraft);
 
-  const visibleDeliveries = (deliveries ?? []).filter(item => item.status !== "started" || item.requestId === activeDeliveryId);
+  const visibleDeliveries = (deliveries ?? []).filter(item => !item.dismissed && (item.status !== "started" || item.requestId === activeDeliveryId));
   if (!shouldShowPromptQueue(promptQueue.length, queuePaused, pendingSteers.length) && visibleDeliveries.length === 0) {
     return null;
   }
@@ -76,13 +76,13 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, de
   return (
     <div className="prompt-queue">
       {visibleDeliveries.map((item) => <div key={item.requestId} className="prompt-queue-item" role="status">
-        <span className="prompt-queue-text">{item.text}</span>
-        <span className="prompt-queue-badge">{item.status === "pending" ? "Waiting for host response" : item.status === "unknown" ? "Delivery unknown — check history before retrying" : item.status === "rejected" ? "Host rejected this request" : item.status === "conflict" ? "Conflicting delivery reports — review before retrying" : "Turn started; a restored copy remains in the composer"}</span>
+        <span className="prompt-queue-text">{item.payloadOmitted ? "Earlier completed message (payload released)" : item.text}</span>
+        <span className="prompt-queue-badge">{item.status === "pending" ? "Waiting for host response" : item.status === "unknown" ? "Delivery unknown — check history before retrying" : item.status === "rejected" ? "Host rejected this request" : item.status === "conflict" ? "Conflicting delivery reports — review before retrying" : item.status === "finished" ? `Turn ${item.terminalReason === "max_turns" ? "reached its turn limit" : item.terminalReason === "error" ? "failed" : item.terminalReason}; payload is retained until dismissed` : "Turn started; a restored copy remains in the composer"}</span>
         {item.images.length > 0 && <span className="prompt-queue-badge">{queueImageBadge(item.images.length)}</span>}
         {item.origin === "system" && <span className="prompt-queue-badge">System report — check session history; it will not resend automatically.</span>}
         {item.origin === "system" && item.status === "rejected" && !item.retryQueued && <button type="button" className="system-delivery-retry" disabled={connection !== "ready" || !systemRetrySafe(deliveries,item.requestId)} onClick={() => tabStore.getState().retryRejectedSystemDelivery(item.requestId)}>Retry rejected report</button>}
         {item.origin === "system" && item.retryQueued && item.status === "rejected" && <span>Retry requested.</span>}
-        {item.origin !== "system" && item.requestId !== activeDeliveryId && (item.status === "unknown" || item.status === "rejected" || item.status === "conflict") && <button type="button" className="orchestration-delivery-restore" onClick={() => {
+        {item.origin !== "system" && !item.payloadOmitted && item.requestId !== activeDeliveryId && (item.status === "unknown" || item.status === "rejected" || item.status === "conflict") && <button type="button" className="orchestration-delivery-restore" onClick={() => {
           const state = tabStore.getState();
           const current = state.orchestrationDeliveries.find(entry => entry.requestId === item.requestId);
           if (!current || state.restoredComposerDraft?.deliveryRequestId === current.requestId || (current.status !== "unknown" && current.status !== "rejected" && current.status !== "conflict")) return;
@@ -90,6 +90,14 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, de
             tabStore.setState((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(entry => entry.requestId === current.requestId ? {...entry,restored:true} : entry)}));
           }
         }}>Restore for review</button>}
+        {item.origin !== "system" && (item.status === "rejected" || item.status === "finished") && !item.payloadOmitted && <button type="button" className="orchestration-delivery-dismiss" onClick={() => {
+          const state = tabStore.getState();
+          if (!canDismissRejectedDelivery(state, item.requestId)) {
+            state.setNotice({ kind: "slash_command_rejected", text: "Finish or discard the linked draft and dependent attempts before dismissing this message." });
+            return;
+          }
+          state.dismissRejectedDelivery(item.requestId);
+        }}>{item.status === "finished" ? "Dismiss finished message" : "Dismiss rejected message"}</button>}
         {!item.reviewed && (item.status === "unknown" || item.status === "conflict") && <button type="button" className="orchestration-delivery-reviewed" onClick={() => {
           tabStore.setState((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(entry => entry.requestId === item.requestId && (entry.status === "unknown" || entry.status === "conflict") ? {...entry,reviewed:true} : entry)}));
         }}>Mark delivery reviewed</button>}

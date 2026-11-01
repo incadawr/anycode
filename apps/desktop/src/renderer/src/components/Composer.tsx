@@ -1933,6 +1933,22 @@ export function Composer() {
     }
   }
 
+  function sendNewSteer(requestId: string, draftText: string, images: readonly QueuedPrompt["images"][number][], message: Parameters<typeof sendToHost>[0], beforeSend: () => void): boolean {
+    const connection = slashTabId ? tabRegistry.getLiveHostConnection(slashTabId, tabStore) : null;
+    beforeSend();
+    try {
+      if (!connection) throw new Error("connection unavailable");
+      sendToHost(message);
+      if (!slashTabId || tabRegistry.getLiveHostConnection(slashTabId, tabStore) !== connection) throw new Error("connection changed");
+      return true;
+    } catch {
+      tabStore.getState().setPortClosed();
+      bindRecoveryAttempt(requestId, draftText, images);
+      tabStore.getState().setNotice({ kind: "slash_command_rejected", text: "Delivery is unconfirmed. Review the retained message before retrying." });
+      return false;
+    }
+  }
+
   function imagesStillLoading(): boolean {
     const state = tabStore.getState();
     if ((state.pendingComposerImages?.length ?? 0) === 0 && (state.completedComposerImages?.length ?? 0) === 0) return false;
@@ -1996,7 +2012,7 @@ export function Composer() {
         ...(images.length > 0 ? { images: images.map((image) => image.attachment) } : {}),
       } as const;
       if (recoverySourceId) { if (!sendRecoveryAttempt(requestId,recoverySourceId,outgoing,images,message,recordSteer)) return; }
-      else {recordSteer(); sendToHost(message);}
+      else if (!sendNewSteer(requestId, outgoing, images, message, recordSteer)) return;
     } else if (!childSurface && turn.status !== "idle" && images.length === 0 && steerSupported && !recoverySourceId) {
       // a supported running CORE session takes the
       // message as a mid-turn steer (optimistic pendingSteer bubble; the
@@ -2006,9 +2022,10 @@ export function Composer() {
       // UI-owned (`markUiSteer`) so a turn end / steer_requeued without
       // delivery re-queues it into the prompt queue — the text is never lost.
       const requestId = crypto.randomUUID();
-      tabStore.getState().recordPendingSteer(requestId, outgoing, undefined, { text: outgoing, images: [] });
-      tabStore.getState().markUiSteer(requestId);
-      sendToHost({ type: "steer_message", requestId, text: outgoing });
+      if (!sendNewSteer(requestId, outgoing, [], { type: "steer_message", requestId, text: outgoing }, () => {
+        tabStore.getState().recordPendingSteer(requestId, outgoing, undefined, { text: outgoing, images: [] });
+        tabStore.getState().markUiSteer(requestId);
+      })) return;
     } else if (shouldEnqueue(turn.status, queueInFlight, childSurface)) {
       // NOT truly idle: either a turn is running, or a queued item was already
       // drained and is still in flight (turn momentarily "idle" but its
@@ -2044,7 +2061,21 @@ export function Composer() {
       } as const;
       const append = () => tabStore.getState().appendUserText(requestId, outgoing, images.length > 0 ? images.map((image) => image.attachment) : undefined);
       if (recoverySourceId) { if (!sendRecoveryAttempt(requestId,recoverySourceId,outgoing,images,message,append)) return; }
-      else { append(); tabStore.getState().recordSentMessage(outgoing, images, requestId); sendToHost(message); }
+      else {
+        const connection = slashTabId ? tabRegistry.getLiveHostConnection(slashTabId, tabStore) : null;
+        tabStore.getState().recordSentMessage(outgoing, images, requestId, undefined, undefined, undefined, undefined, true);
+        bindRecoveryAttempt(requestId, outgoing, images);
+        try {
+          if (!connection) throw new Error("connection unavailable");
+          append();
+          sendToHost(message);
+          if (!slashTabId || tabRegistry.getLiveHostConnection(slashTabId, tabStore) !== connection) throw new Error("connection changed");
+        } catch {
+          tabStore.getState().markOrchestrationDeliveryUnknown(requestId);
+          tabStore.getState().setNotice({ kind: "slash_command_rejected", text: "Delivery is unconfirmed. Review the retained message before retrying." });
+          return;
+        }
+      }
     }
     if (restoredOwned.current) { restoredOwned.current = false; setRestoredPicks(undefined); setRestoredDeliveryId(undefined); tabStore.setState((state) => ({ restoredComposerDraft: null, completedComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 })); }
     setText("");

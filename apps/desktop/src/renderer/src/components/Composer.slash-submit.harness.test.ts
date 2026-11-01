@@ -15,6 +15,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+type HarnessUpdate = Record<string, unknown> | ((state: Record<string, unknown>) => Record<string, unknown>);
+
 interface HarnessState {
   state: Record<string, unknown[]>;
   refs: Record<string, Array<{ current: unknown }>>;
@@ -34,7 +36,8 @@ interface HarnessState {
   };
   apiMethods: Record<string, ReturnType<typeof vi.fn>>;
   sendToHost: ReturnType<typeof vi.fn>;
-  storeApi: { getState: () => Record<string, unknown>; setState: (state: Record<string, unknown>) => void };
+  liveConnection: object | null;
+  storeApi: { getState: () => Record<string, unknown>; setState: (state: HarnessUpdate) => void };
   tabContext: { tabId: string };
 }
 
@@ -57,6 +60,7 @@ const harness = vi.hoisted((): HarnessState => ({
   },
   apiMethods: {},
   sendToHost: vi.fn(),
+  liveConnection: {},
   storeApi: { getState: () => ({}), setState: () => {} },
   tabContext: { tabId: "tab-1" },
 }));
@@ -129,7 +133,7 @@ vi.mock("react", async (importOriginal) => {
 });
 
 // Store/tab/settings seams — the harness owns their state and spies.
-vi.mock("../tab-registry.js", () => ({ tabRegistry: { getLiveHostConnection: () => ({}) } }));
+vi.mock("../tab-registry.js", () => ({ tabRegistry: { getLiveHostConnection: () => harness.liveConnection } }));
 
 vi.mock("../store.js", () => ({
   isSessionBusy: (status: string): boolean => status !== "idle",
@@ -295,6 +299,7 @@ function makeStoreState(overrides: Record<string, unknown> = {}): Record<string,
     steering: { supported: false },
     transcript: [],
     orchestrateActive: false,
+    orchestrationDeliveries: [],
     ...overrides,
   };
 }
@@ -327,7 +332,16 @@ function resetHarness(): void {
   };
   harness.apiMethods = {
     appendUserText: vi.fn(),
-    recordSentMessage: vi.fn(),
+    recordSentMessage: vi.fn((text: string, images: readonly unknown[], requestId?: string, orchestrate?: string, initialPicks?: unknown, _parent?: unknown, _origin?: unknown, trackDirect?: boolean) => {
+      if (requestId && (trackDirect || orchestrate === "enable" || initialPicks)) {
+        const entries = harness.storeState.orchestrationDeliveries as Array<Record<string, unknown>>;
+        if (!entries.some(entry => entry.requestId === requestId)) entries.push({ requestId, text, images: structuredClone(images), status: "pending", restored: false, reviewed: false });
+      }
+    }),
+    markOrchestrationDeliveryUnknown: vi.fn((requestId: string) => {
+      const entries = harness.storeState.orchestrationDeliveries as Array<Record<string, unknown>>;
+      harness.storeState.orchestrationDeliveries = entries.map(entry => entry.requestId === requestId && entry.status === "pending" ? { ...entry, status: "unknown", preservePayload: true } : entry);
+    }),
     enqueuePrompt: vi.fn(),
     recordPendingSteer: vi.fn(),
     markUiSteer: vi.fn(),
@@ -335,7 +349,8 @@ function resetHarness(): void {
     gitSetPanelOpen: vi.fn(),
   };
   harness.sendToHost = vi.fn();
-  harness.storeApi = { getState: () => ({ ...harness.storeState, ...harness.apiMethods }), setState: (state) => { Object.assign(harness.storeState, state); } };
+  harness.liveConnection = {};
+  harness.storeApi = { getState: () => ({ ...harness.storeState, ...harness.apiMethods }), setState: (update) => { Object.assign(harness.storeState, typeof update === "function" ? update(harness.storeState) : update); } };
 }
 
 /** Seed Composer's ten useState slots: text(0), pasteBlocks(1), attachedImages(2), imageError(3), caret(4), … */
@@ -620,6 +635,28 @@ describe("Composer slash-submit wiring (GitHub #14)", () => {
 
     expect(harness.apiMethods.setNotice).not.toHaveBeenCalled();
     expect(harness.apiMethods.appendUserText).toHaveBeenCalledWith(expect.any(String), "/usr/local/bin/node", undefined);
+    expect(harness.sendToHost).toHaveBeenCalledTimes(1);
+    expect(harness.apiMethods.markOrchestrationDeliveryUnknown).not.toHaveBeenCalled();
+    expect(harness.storeState.orchestrationDeliveries).toMatchObject([{ text: "/usr/local/bin/node", status: "pending" }]);
+  });
+
+  it.each(["changed connection", "send throws"])("retains a direct draft as unknown when %s", (failure) => {
+    seed("/usr/local/bin/node", 19);
+    const image = { name: "synthetic.png", sizeBytes: 1, attachment: { mediaType: "image/png", data: "YQ==" } };
+    harness.state["composer"]![2] = [{ ...image, id: 1 }];
+    const tree = mountComposer();
+    harness.sendToHost.mockImplementation(() => {
+      if (failure === "send throws") throw new Error("synthetic send failure");
+      harness.liveConnection = {};
+    });
+    (findTextarea(tree)!.props.onKeyDown as (event: ReturnType<typeof keyDown>) => void)(keyDown());
+    const sent = harness.sendToHost.mock.calls[0]![0] as { requestId: string; text: string };
+    expect(sent.text).toBe("/usr/local/bin/node");
+    expect(harness.apiMethods.markOrchestrationDeliveryUnknown).toHaveBeenCalledExactlyOnceWith(sent.requestId);
+    expect(harness.storeState.orchestrationDeliveries).toMatchObject([{ requestId: sent.requestId, text: sent.text, images: [image], status: "unknown", preservePayload: true }]);
+    expect(harness.storeState.restoredComposerDraft).toMatchObject({ deliveryRequestId: sent.requestId, text: sent.text, images: [image] });
+    expect(harness.state["composer"]?.[0]).toBe(sent.text);
+    expect(harness.apiMethods.setNotice).toHaveBeenCalledWith(expect.objectContaining({ text: expect.stringContaining("Delivery is unconfirmed") }));
     expect(harness.sendToHost).toHaveBeenCalledTimes(1);
   });
 
