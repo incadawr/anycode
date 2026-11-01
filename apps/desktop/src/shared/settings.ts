@@ -869,13 +869,16 @@ export interface AnycodeSettings {
     fullAccessDefault: "off" | "on";
   };
   /**
-   * Kill switch for "Continue this conversation on another account"
-   * `"on"` = the action is offered; absent or `"off"` = main answers
+   * Kill switch for "Continue this conversation on another account".
+   * Absent or `"on"` = the action is offered; `"off"` = main answers
    * `temporarily_unavailable` and never touches the filesystem.
    *
-   * Opt-in, because the source rollout cannot yet be proven quiescent: another
-   * AnyCode instance may be writing it without holding any claim. Turning this
-   * on is an explicit acceptance of that risk.
+   * KNOWN LIMIT, stated plainly: the claims this feature takes serialize
+   * transfers, not ordinary session writers. A rollout being written by a
+   * second AnyCode instance — or by any other tool on the same `CODEX_HOME` —
+   * is not detected. What is guaranteed is narrower and true: one AnyCode
+   * writer at a time, an atomic publish, and a refusal instead of silent
+   * history loss. Do not read this as global single-writer correctness.
    *
    * This exists because the feature was switched off in code once already
    * (`f0bcfa1e`); a settings value makes the next pause a one-line change
@@ -883,6 +886,19 @@ export interface AnycodeSettings {
    */
   codexContinueOnAnotherAccount?: "off" | "on";
 }
+
+/**
+ * Is "Continue this conversation on another account" offered right now?
+ *
+ * On unless explicitly `"off"`: the action shipped and worked before, so the
+ * setting is an emergency brake, not a gate on first use. Read per request, so
+ * flipping it needs no restart. `null` (settings not loaded yet) counts as
+ * absent, i.e. offered.
+ */
+export function isCodexContinueEnabled(settings: AnycodeSettings | null | undefined): boolean {
+  return settings?.codexContinueOnAnotherAccount !== "off";
+}
+
 
 /**
  * One Codex account profile (codex-profiles cut §2.3, amended §A1.1).

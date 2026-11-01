@@ -922,8 +922,8 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
     communication: communicationSettingsSchema,
     // (additive-optional; version NOT bumped): the default "Full browser access" switch.
     browser: browserSettingsSchema,
-    // Kill switch for "continue on another account"
-    // additive-optional; version NOT bumped). Declared explicitly rather than
+    // Kill switch for "continue on another account" (on unless "off"), an
+    // additive-optional field: version NOT bumped. Declared explicitly rather than
     // left to `.passthrough()` so it validates and survives a read-modify-write
     // cycle — an undeclared field would silently round-trip until the first
     // wholesale rewrite dropped it.
