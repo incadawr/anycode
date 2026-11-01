@@ -12,7 +12,7 @@
  */
 import { mkdir, mkdtemp, open, readdir, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SqlitePersistenceAdapter, type ContinuationClaim, type SessionMeta } from "@anycode/core";
 import type { CodexAccountOption } from "../shared/codex-account.js";
@@ -194,16 +194,22 @@ describe("handleCodexContinueOnAccount", () => {
    * Cross-process claim state, shared by every harness in one test: that is the
    * whole point of the claim — two "processes" must collide on it.
    */
-  let claims: Map<string, number>;
+  let claims: Map<string, { expiresAt: number; token: string }>;
   let released: string[];
   let clock: number;
+  let tokens = 0;
   const claimKey = (threadId: string, accountId: string): string => `${threadId}\u0000${accountId}`;
   const claim = async (threadId: string, accountId: string, ttlMs: number): Promise<ContinuationClaim> => {
     const key = claimKey(threadId, accountId);
     const held = claims.get(key);
-    if (held !== undefined && held > clock) return "held";
-    claims.set(key, clock + ttlMs);
-    return held === undefined ? "claimed" : "taken_over";
+    if (held !== undefined && held.expiresAt > clock) return { status: "held", token: null };
+    const token = `token-${++tokens}`;
+    claims.set(key, { expiresAt: clock + ttlMs, token });
+    return { status: held === undefined ? "claimed" : "taken_over", token };
+  };
+  const holds = async (threadId: string, accountId: string, token: string): Promise<boolean> => {
+    const held = claims.get(claimKey(threadId, accountId));
+    return held !== undefined && held.token === token && held.expiresAt > clock;
   };
 
   beforeEach(() => {
@@ -258,9 +264,11 @@ describe("handleCodexContinueOnAccount", () => {
       },
       enabled: () => true,
       claimContinuation: (threadId, accountId, ttlMs) => claim(threadId, accountId, ttlMs),
-      releaseContinuation: async (threadId, accountId) => {
-        released.push(`${threadId}\u0000${accountId}`);
-        claims.delete(`${threadId}\u0000${accountId}`);
+      holdsContinuation: (threadId, accountId, token) => holds(threadId, accountId, token),
+      releaseContinuation: async (threadId, accountId, token) => {
+        released.push(`${threadId}\u0000${accountId}\u0000${token}`);
+        // Only the OWNER may delete: a superseded holder must not free the pair.
+        if (claims.get(claimKey(threadId, accountId))?.token === token) claims.delete(claimKey(threadId, accountId));
       },
       createSessionFromSource: async (_sourceId, meta) => {
         created.push(meta);
@@ -549,7 +557,7 @@ describe("handleCodexContinueOnAccount", () => {
   });
 
   it("refuses while another process holds a live claim and never copies into the shared home", async () => {
-    claims.set(claimKey(THREAD_ID, "account-b"), clock + CONTINUATION_CLAIM_TTL_MS);
+    claims.set(claimKey(THREAD_ID, "account-b"), { expiresAt: clock + CONTINUATION_CLAIM_TTL_MS, token: "other" });
     const h = await harness();
 
     const result = await handleCodexContinueOnAccount(h.deps, { tabId: "tab-1", accountId: "account-b" });
@@ -562,7 +570,7 @@ describe("handleCodexContinueOnAccount", () => {
   });
 
   it("takes over an EXPIRED claim but says the earlier transfer may be incomplete", async () => {
-    claims.set(claimKey(THREAD_ID, "account-b"), clock - 1);
+    claims.set(claimKey(THREAD_ID, "account-b"), { expiresAt: clock - 1, token: "stale" });
     const h = await harness({ createSessionFromSource: async () => null });
 
     const result = await handleCodexContinueOnAccount(h.deps, { tabId: "tab-1", accountId: "account-b" });
@@ -577,8 +585,10 @@ describe("handleCodexContinueOnAccount", () => {
 
     expect(await handleCodexContinueOnAccount(h.deps, { tabId: "tab-1", accountId: "account-b" })).toMatchObject({ ok: true });
 
-    expect(released).toEqual([claimKey(THREAD_ID, "account-b")]);
+    // BOTH ends are released, by token (source claim, then target claim).
+    expect(released).toHaveLength(2);
     expect(claims.has(claimKey(THREAD_ID, "account-b"))).toBe(false);
+    expect(claims.has(claimKey(THREAD_ID, "account-a"))).toBe(false);
   });
 
   it("releases the claim on every refusal, so one failure cannot wedge the action", async () => {
@@ -586,7 +596,8 @@ describe("handleCodexContinueOnAccount", () => {
 
     await handleCodexContinueOnAccount(h.deps, { tabId: "tab-1", accountId: "account-b" });
 
-    expect(released).toEqual([claimKey(THREAD_ID, "account-b")]);
+    expect(released).toHaveLength(2);
+    expect(claims.size).toBe(0);
   });
 
   it("copies through a temp file and leaves no temp behind (a half-written rollout must never sit at the target name)", async () => {
@@ -595,6 +606,38 @@ describe("handleCodexContinueOnAccount", () => {
 
     const leftovers = await readdir(join(h.accountBSessionsDir, "tmp")).catch(() => ["no tmp dir"]);
     expect(leftovers).toEqual([]);
+  });
+
+  it("refuses when another window is already continuing FROM this account", async () => {
+    // The source end is claimed too: a second process reading the same rollout
+    // while it grows is the same race as a second writer into the target.
+    const h = await harness({
+      // Simulate a second process holding the SOURCE end of this thread.
+      claimContinuation: async (threadId, accountId) =>
+        accountId === "account-a" ? { status: "held", token: null } : { status: "claimed", token: "t1" },
+    });
+
+    const result = await handleCodexContinueOnAccount(h.deps, { tabId: "tab-1", accountId: "account-b" });
+
+    expect(result).toMatchObject({ ok: false, reason: "already_open" });
+    expect(result.ok ? "" : result.detail).toContain("from this account");
+    expect(h.created).toEqual([]);
+  });
+
+  it("carries the takeover warning on SUCCESS instead of dropping it", async () => {
+    const h = await harness({
+      // Another attempt's claim expired: we take it over, and that must be said.
+      claimContinuation: async (_threadId, accountId) =>
+        accountId === "account-b"
+          ? { status: "taken_over", token: "t2" }
+          : { status: "claimed", token: "t1" },
+      holdsContinuation: async () => true,
+    });
+
+    const result = await handleCodexContinueOnAccount(h.deps, { tabId: "tab-1", accountId: "account-b" });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(result.ok ? result.warning : "").toContain("did not report success");
   });
 });
 
@@ -623,7 +666,8 @@ describe("registerCodexContinueIpc", () => {
     accounts: async () => [],
     sessionsDir: async () => null,
     enabled: () => true,
-    claimContinuation: async () => "claimed",
+    claimContinuation: async () => ({ status: "claimed" as const, token: "t" }),
+    holdsContinuation: async () => true,
     releaseContinuation: async () => {},
     createSessionFromSource: async () => null,
     deleteSession: async () => {},
@@ -666,5 +710,70 @@ describe("registerCodexContinueIpc", () => {
       ok: false,
       reason: "temporarily_unavailable",
     });
+  });
+});
+
+describe("copyCodexRolloutForThread — fail-closed details", () => {
+  it("refuses when the target already holds the thread under a DIFFERENT date path", async () => {
+    const source = join(root, "a", "sessions");
+    const target = join(root, "b", "sessions");
+    await seedRollout(source);
+    // A previous continue at another moment, or a native import. Checking only
+    // the source-relative pathname would create a SECOND rollout for one thread.
+    await mkdir(join(target, "2025", "01", "01"), { recursive: true });
+    await writeFile(join(target, "2025", "01", "01", `rollout-2025-01-01T00-00-00-${THREAD_ID}.jsonl`), "OLD-COPY");
+
+    const result = await copyCodexRolloutForThread({ sourceSessionsDir: source, targetSessionsDir: target, threadId: THREAD_ID });
+
+    expect(result).toMatchObject({ ok: false, reason: "target_exists" });
+    // ...and the old copy is untouched.
+    expect(await readFile(join(target, "2025", "01", "01", `rollout-2025-01-01T00-00-00-${THREAD_ID}.jsonl`), "utf8")).toBe("OLD-COPY");
+  });
+
+  it("does not treat a non-uuid thread id as a loose suffix", async () => {
+    const source = join(root, "a", "sessions");
+    const target = join(root, "b", "sessions");
+    await seedRollout(source);
+    await mkdir(join(source, "extra"), { recursive: true });
+    await writeFile(join(source, "extra", "rollout-2026-10-29T09-00-00-other-abc.jsonl"), "OTHER");
+
+    // `abc` is a suffix of `other-abc`; a suffix test would match the wrong file.
+    const result = await copyCodexRolloutForThread({ sourceSessionsDir: source, targetSessionsDir: target, threadId: "abc" });
+
+    expect(result).toMatchObject({ ok: false, reason: "rollout_missing" });
+  });
+
+  it("refuses to publish when the claim was lost while the copy was in flight", async () => {
+    const source = join(root, "a", "sessions");
+    const target = join(root, "b", "sessions");
+    await seedRollout(source);
+
+    const result = await copyCodexRolloutForThread({
+      sourceSessionsDir: source,
+      targetSessionsDir: target,
+      threadId: THREAD_ID,
+      beforePublish: async () => false,
+    });
+
+    expect(result).toMatchObject({ ok: false, reason: "claim_lost" });
+    // Nothing may be reachable under the final name after a lost claim.
+    expect(await readFile(join(target, ROLLOUT_RELATIVE), "utf8").catch(() => "absent")).toBe("absent");
+  });
+
+  it("never echoes a filesystem path in a copy failure", async () => {
+    const source = join(root, "a", "sessions");
+    const target = join(root, "b", "sessions");
+    await seedRollout(source);
+    // Make the target home impossible to write into by planting a FILE where a
+    // directory must be created; Node's message would name both paths.
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(join(target), "not a directory");
+
+    const result = await copyCodexRolloutForThread({ sourceSessionsDir: source, targetSessionsDir: target, threadId: THREAD_ID });
+
+    expect(result.ok).toBe(false);
+    const detail = result.ok ? "" : result.detail;
+    expect(detail).not.toContain(root);
+    expect(detail).not.toContain("/Users/");
   });
 });

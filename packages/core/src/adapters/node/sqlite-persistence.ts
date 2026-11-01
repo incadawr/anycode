@@ -16,6 +16,7 @@
  * PersistencePort without ever blocking or throwing into the turn.
  */
 
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -454,6 +455,7 @@ const MIGRATIONS: readonly Migration[] = [
       `CREATE TABLE IF NOT EXISTS codex_continuation_claims (
          thread_id TEXT NOT NULL,
          account_id TEXT NOT NULL,
+         token TEXT NOT NULL,
          claimed_at INTEGER NOT NULL,
          expires_at INTEGER NOT NULL,
          PRIMARY KEY (thread_id, account_id)
@@ -1058,24 +1060,34 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       const existing = db
         .prepare("SELECT expires_at FROM codex_continuation_claims WHERE thread_id = ? AND account_id = ?")
         .get(threadId, accountId) as { expires_at: number } | undefined;
-      if (existing !== undefined && existing.expires_at > now) return "held" as const;
+      if (existing !== undefined && existing.expires_at > now) return { status: "held" as const, token: null };
+      // A fresh token per claim: releasing by thread+account alone would let a
+      // slow, already-superseded owner delete its successor's claim.
+      const token = randomUUID();
       db.prepare(
-        `INSERT INTO codex_continuation_claims (thread_id, account_id, claimed_at, expires_at)
-         VALUES (?, ?, ?, ?)
+        `INSERT INTO codex_continuation_claims (thread_id, account_id, token, claimed_at, expires_at)
+         VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(thread_id, account_id) DO UPDATE SET
+           token = excluded.token,
            claimed_at = excluded.claimed_at,
            expires_at = excluded.expires_at`,
-      ).run(threadId, accountId, now, now + ttlMs);
-      return existing === undefined ? ("claimed" as const) : ("taken_over" as const);
+      ).run(threadId, accountId, token, now, now + ttlMs);
+      return { status: existing === undefined ? ("claimed" as const) : ("taken_over" as const), token };
     }, "immediate");
   }
 
-  async releaseContinuation(threadId: string, accountId: string): Promise<void> {
+  async holdsContinuation(threadId: string, accountId: string, token: string): Promise<boolean> {
+    const row = this.open()
+      .prepare("SELECT 1 AS ok FROM codex_continuation_claims WHERE thread_id = ? AND account_id = ? AND token = ? AND expires_at > ?")
+      .get(threadId, accountId, token, Date.now()) as { ok: number } | undefined;
+    return row !== undefined;
+  }
+
+  async releaseContinuation(threadId: string, accountId: string, token: string): Promise<void> {
     this.transaction((db) => {
-      db.prepare("DELETE FROM codex_continuation_claims WHERE thread_id = ? AND account_id = ?").run(
-        threadId,
-        accountId,
-      );
+      db.prepare(
+        "DELETE FROM codex_continuation_claims WHERE thread_id = ? AND account_id = ? AND token = ?",
+      ).run(threadId, accountId, token);
     }, "immediate");
   }
 

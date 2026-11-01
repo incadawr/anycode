@@ -863,7 +863,7 @@ describe("usage limit — Codex account escape hatch", () => {
   it("offers the account picker instead of a dead-end hint", () => {
     const codexBlocks: TranscriptBlock[] = [{kind:"usage_limit",id:"codex",notice:{kind:"usage_limit",code:429,engine:"codex"}}];
     const html=renderToStaticMarkup(createElement(MessageList,{...base,blocks:codexBlocks,codexContinue:controller()}));
-    // The restore (TASK.5077): the banner's action is a real picker again, not a
+    // The banner's action is a real picker again, not a
     // sentence saying the feature does not exist.
     // Closed by default: the affordance is there, the list opens on click.
     expect(html).toContain("usage-limit-switch-account");

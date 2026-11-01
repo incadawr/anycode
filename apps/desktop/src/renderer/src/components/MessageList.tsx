@@ -656,8 +656,12 @@ export function UsageLimitBlock({
       // Success opens the conversation in a NEW tab and leaves this one alone:
       // keeping the picker armed invited a second click, i.e. a second tab
       // resuming the same thread on the same account.
-      if (result.ok) setPickerOpen(false);
-      else setError(result.detail);
+      if (result.ok) {
+        setPickerOpen(false);
+        // A takeover succeeded, but an earlier attempt died midway: the
+        // conversation may be truncated, so the fact is shown, not swallowed.
+        setError(result.warning ?? null);
+      } else setError(result.detail);
     } catch {
       setError("Could not continue on that account.");
     } finally {

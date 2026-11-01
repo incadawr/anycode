@@ -870,7 +870,7 @@ export interface AnycodeSettings {
   };
   /**
    * Kill switch for "Continue this conversation on another account"
-   * (TASK.5077). Absent or `"on"` = the action is offered; `"off"` = main
+   * Absent or `"on"` = the action is offered; `"off"` = main
    * answers `temporarily_unavailable` and never touches the filesystem.
    *
    * This exists because the feature was switched off in code once already

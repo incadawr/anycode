@@ -38,10 +38,14 @@ const ROLLOUT_FILE_PATTERN = /^rollout-[A-Za-z0-9._-]+\.jsonl$/;
 const THREAD_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 /** `sessions/YYYY/MM/DD/` is three levels deep; anything deeper is not a rollout tree. */
 const MAX_SESSIONS_DEPTH = 3;
+/** Length of the `YYYY-MM-DDThh-mm-ss` prefix in a rollout file name. */
+const TIMESTAMP_PREFIX_LENGTH = 19;
 
 export type CodexContinueRefusal =
   /** The kill switch (`settings.codexContinueOnAnotherAccount`) is off. */
   | "temporarily_unavailable"
+  /** Every copy refusal is also a refusal of the whole action. */
+  | CodexRolloutCopyRefusal
   | "unknown_tab"
   | "not_codex"
   | "not_resumable"
@@ -64,7 +68,8 @@ export type CodexContinueRefusal =
   | "tab_failed";
 
 export type CodexContinueResult =
-  | { ok: true; sessionId: string; tabId: string }
+  /** `warning` is present when the transfer succeeded but an earlier attempt had died midway. */
+  | { ok: true; sessionId: string; tabId: string; warning?: string }
   | { ok: false; reason: CodexContinueRefusal; detail: string };
 
 export interface CodexContinueRequest {
@@ -93,7 +98,9 @@ export interface CodexContinueDeps {
    * AnyCode instance, and a missing claim would be a silent hole.
    */
   claimContinuation(threadId: string, accountId: string, ttlMs: number): Promise<ContinuationClaim>;
-  releaseContinuation(threadId: string, accountId: string): Promise<void>;
+  /** Re-confirms ownership just before publishing; a lost claim must not publish. */
+  holdsContinuation(threadId: string, accountId: string, token: string): Promise<boolean>;
+  releaseContinuation(threadId: string, accountId: string, token: string): Promise<void>;
   /** Deletion is not used when tab creation has an uncertain outcome. */
   deleteSession(sessionId: string): Promise<unknown>;
   /** Opens the app's normal resume path for a freshly created session row. */
@@ -111,6 +118,13 @@ export interface CodexRolloutCopyRequest {
   sourceSessionsDir: string;
   targetSessionsDir: string;
   threadId: string;
+  /**
+   * Asked once, immediately BEFORE the copy is published. Returning false
+   * aborts: a transfer that outlived its claim must not publish, because the
+   * claim it is holding no longer excludes anyone (it was taken over, and the
+   * new owner may now be writing the same paths).
+   */
+  beforePublish?(): Promise<boolean>;
 }
 
 export type CodexRolloutCopyRefusal =
@@ -118,26 +132,41 @@ export type CodexRolloutCopyRefusal =
   | "source_unreadable"
   | "rollout_ambiguous"
   | "target_exists"
+  | "target_unreadable"
   | "source_changed"
+  /** The claim was lost (expired and taken over) while the copy was in flight. */
+  | "claim_lost"
   | "copy_failed";
 
 export type CodexRolloutCopyResult =
   | { ok: true; relativePath: string }
   | { ok: false; reason: CodexRolloutCopyRefusal; detail: string };
 
+/** The thread id a rollout file CLAIMS to hold, or `null` if the name is not one. */
+function rolloutThreadId(name: string): string | null {
+  if (!ROLLOUT_FILE_PATTERN.test(name)) return null;
+  const rest = name.slice("rollout-".length, -".jsonl".length);
+  // A thread id is a hyphenated UUID, so the uuid at the END of the name is the
+  // id — take it as a whole, never as a suffix test. `endsWith("-" + id)` was
+  // wrong: with a NON-uuid id (`abc`), `rollout-…-other-abc.jsonl` matched and
+  // the wrong conversation was copied.
+  const uuid = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.exec(rest);
+  if (uuid !== null) {
+    const before = rest.slice(0, rest.length - uuid[1]!.length);
+    return before.endsWith("-") ? uuid[1]! : null;
+  }
+  // Not a uuid: the only other shape we accept is `rollout-<19-char timestamp>-<id>`.
+  return rest.length > TIMESTAMP_PREFIX_LENGTH + 1 && rest[TIMESTAMP_PREFIX_LENGTH] === "-"
+    ? rest.slice(TIMESTAMP_PREFIX_LENGTH + 1)
+    : null;
+}
+
 /**
- * True when `name` is a rollout file for EXACTLY `threadId`.
- *
- * The id must be the final `-`-separated segment before `.jsonl`, because a
- * Codex rollout is named `rollout-<timestamp>-<threadId>.jsonl` and the thread
- * id is itself a hyphenated UUID. A substring test (`includes`) matched
- * `…-<other-id>-…` whenever one uuid happened to contain another, which copies
- * the WRONG conversation; it is not a cosmetic bug.
+ * True when `name` is a rollout file for EXACTLY `threadId`: the id is compared
+ * whole, never as a substring or a loose suffix.
  */
 function isThreadRollout(name: string, threadId: string): boolean {
-  if (!ROLLOUT_FILE_PATTERN.test(name)) return false;
-  const suffix = `-${threadId}.jsonl`;
-  return name.length > suffix.length && name.endsWith(suffix);
+  return rolloutThreadId(name) === threadId;
 }
 
 /** Size + mtime of a file, the pair re-checked after the copy to prove it was stable. */
@@ -221,6 +250,36 @@ export async function copyCodexRolloutForThread(request: CodexRolloutCopyRequest
   const source = join(request.sourceSessionsDir, relativePath);
   const target = join(request.targetSessionsDir, relativePath);
 
+  // The same thread may already sit in the target home under a DIFFERENT
+  // timestamp or date directory (a previous continue at another moment, or a
+  // native import). Checking only the source-relative pathname would create a
+  // SECOND rollout for one thread while a host may already be resuming the
+  // first — two histories for one conversation. Any match is a refusal.
+  let existingTargets: string[];
+  try {
+    existingTargets = await findRolloutsRelative(request.targetSessionsDir, request.threadId, MAX_SESSIONS_DEPTH);
+  } catch (error) {
+    // A missing target home is simply "nothing there yet"; any other read
+    // failure means we cannot prove the thread is absent, so we refuse.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      existingTargets = [];
+    } else {
+      return {
+        ok: false,
+        reason: "target_unreadable",
+        detail: `the target account's sessions directory could not be read (${errorCode(error)}); it was NOT assumed to be empty, so nothing was changed`,
+      };
+    }
+  }
+  if (existingTargets.length > 0) {
+    return {
+      ok: false,
+      reason: "target_exists",
+      detail:
+        "This conversation already exists on the target account and may be outdated or in use. It was not opened or changed. Choose another account or review the existing conversation.",
+    };
+  }
+
   let before: { size: number; mtimeMs: number };
   try {
     before = await statSnapshot(source);
@@ -237,12 +296,10 @@ export async function copyCodexRolloutForThread(request: CodexRolloutCopyRequest
   // complete conversation forever after. The temp name is unique, so an
   // existing file at the FINAL name can only mean a real prior transfer.
   const tmpPath = join(request.targetSessionsDir, "tmp", `continue-${randomUUID()}.jsonl`);
-  let tmpCreated = false;
   try {
     await fsp.mkdir(dirname(tmpPath), { recursive: true });
     await fsp.mkdir(dirname(target), { recursive: true });
     await fsp.copyFile(source, tmpPath, fsConstants.COPYFILE_EXCL);
-    tmpCreated = true;
     const handle = await fsp.open(tmpPath, "r+");
     try {
       await handle.sync();
@@ -261,10 +318,23 @@ export async function copyCodexRolloutForThread(request: CodexRolloutCopyRequest
         detail: "the conversation was still being written while it was copied; nothing was placed on the target account — try again once the session is idle",
       };
     }
+    // Ownership is re-confirmed at the LAST possible moment: after a takeover
+    // this process holds nothing, and publishing would race the new owner.
+    if (request.beforePublish !== undefined && !(await request.beforePublish())) {
+      return {
+        ok: false,
+        reason: "claim_lost",
+        detail:
+          "the transfer took too long and another window took it over; nothing was placed on the target account — check that account before trying again",
+      };
+    }
     await fsp.link(tmpPath, target);
     return { ok: true, relativePath };
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST" && tmpCreated) {
+    // `EEXIST` can only come from the exclusive temp create or from `link`, and
+    // by now the temp name is ours: the meaning is always "the final name is
+    // taken", never "the copy failed".
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
       return {
         ok: false,
         reason: "target_exists",
@@ -273,7 +343,11 @@ export async function copyCodexRolloutForThread(request: CodexRolloutCopyRequest
     }
     return { ok: false, reason: "copy_failed", detail: describeError(error) };
   } finally {
-    if (tmpCreated) await fsp.unlink(tmpPath).catch(() => {});
+    // Unconditional: a copy that died halfway leaves a partial temp file, and a
+    // partial file under `tmp/` is exactly what a later enumeration could pick
+    // up as a rollout. Best-effort, because throwing from `finally` would mask
+    // the real refusal.
+    await fsp.unlink(tmpPath).catch(() => {});
   }
 }
 
@@ -283,8 +357,15 @@ function errorCode(error: unknown): string {
   return typeof code === "string" ? code : "unknown error";
 }
 
+/**
+ * A refusal sentence for a failed copy that never echoes a PATH. Node's
+ * `copyFile`/`link`/`mkdir` messages routinely contain both the source and the
+ * destination (`ENOENT: no such file or directory, copyfile '/Users/...' ->
+ * '/Users/...'`), and this string is forwarded verbatim to the renderer and
+ * shown in the banner.
+ */
 function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return `the conversation could not be copied (${errorCode(error)}); nothing was placed on the target account`;
 }
 
 /**
@@ -359,17 +440,37 @@ export async function handleCodexContinueOnAccount(
   // `isThreadOpen` only sees THIS process's tabs, so a second AnyCode instance
   // could start the same transfer at the same moment: two writers into one
   // rollout. The persisted claim is what makes that impossible.
-  let claim: ContinuationClaim;
+  //
+  // BOTH ends are claimed, not just the target: a second process could
+  // otherwise continue FROM the same source concurrently, and whichever copy
+  // landed last would be resuming a rollout the other one was reading while it
+  // grew. `isThreadOpen` cannot see that process either.
+  let targetClaim: ContinuationClaim;
+  let sourceClaim: ContinuationClaim;
   try {
-    claim = await deps.claimContinuation(threadId, target.id, CONTINUATION_CLAIM_TTL_MS);
+    sourceClaim = await deps.claimContinuation(threadId, currentAccountId, CONTINUATION_CLAIM_TTL_MS);
+    if (sourceClaim.status === "held") {
+      return {
+        ok: false,
+        reason: "already_open",
+        detail: "this conversation is already being continued from this account by another window",
+      };
+    }
+    targetClaim = await deps.claimContinuation(threadId, target.id, CONTINUATION_CLAIM_TTL_MS);
   } catch {
+    // Whatever was taken so far must not be left behind; the source claim is
+    // released defensively because we cannot tell which step threw.
+    if (sourceClaim! !== undefined && sourceClaim.token !== null) {
+      await deps.releaseContinuation(threadId, currentAccountId, sourceClaim.token).catch(() => {});
+    }
     return {
       ok: false,
       reason: "copy_failed",
-      detail: "Could not confirm that this conversation is not already being transferred to that account. Nothing was changed.",
+      detail: "Could not confirm that this conversation is not already being transferred. Nothing was changed.",
     };
   }
-  if (claim === "held") {
+  if (targetClaim.status === "held") {
+    await deps.releaseContinuation(threadId, currentAccountId, sourceClaim.token!).catch(() => {});
     return {
       ok: false,
       reason: "already_open",
@@ -380,9 +481,10 @@ export async function handleCodexContinueOnAccount(
   // its copy may be incomplete. Saying nothing would let the user trust a
   // truncated conversation; every refusal below therefore carries this note.
   const staleNote =
-    claim === "taken_over"
-      ? " An earlier transfer to that account did not report success, so a copy there may be incomplete."
+    targetClaim.status === "taken_over" || sourceClaim.status === "taken_over"
+      ? " An earlier transfer of this conversation did not report success, so a copy may be incomplete."
       : "";
+  const staleWarning = staleNote.trim();
   const refuse = (reason: CodexContinueRefusal, detail: string): CodexContinueResult => ({
     ok: false,
     reason,
@@ -390,7 +492,14 @@ export async function handleCodexContinueOnAccount(
   });
 
   try {
-    const copied = await copyCodexRolloutForThread({ sourceSessionsDir, targetSessionsDir, threadId });
+    const copied = await copyCodexRolloutForThread({
+      sourceSessionsDir,
+      targetSessionsDir,
+      threadId,
+      beforePublish: async () =>
+        (await deps.holdsContinuation(threadId, target.id, targetClaim.token!)) &&
+        (await deps.holdsContinuation(threadId, currentAccountId, sourceClaim.token!)),
+    });
     if (!copied.ok) {
       return refuse(
         copied.reason,
@@ -444,12 +553,27 @@ export async function handleCodexContinueOnAccount(
         `Opening was refused (${opened.reason}). The session WAS created on that account and was not deleted — open it from the session list before retrying.`,
       );
     }
-    return { ok: true, sessionId, tabId: opened.tabId };
+    // A takeover is not a refusal, but it is not silent either: it means an
+    // earlier attempt died midway, so the conversation the user is about to
+    // open may itself be truncated. Carrying it on the SUCCESS result is the
+    // only way that fact reaches someone whose transfer worked.
+    return staleWarning === ""
+      ? { ok: true, sessionId, tabId: opened.tabId }
+      : { ok: true, sessionId, tabId: opened.tabId, warning: staleWarning };
   } finally {
     // The claim guards the TRANSFER, not the session's lifetime. Releasing it on
     // success too keeps a finished continue from blocking the next one for a
     // whole TTL (a re-run is refused by `target_exists`, which is the real gate).
-    await deps.releaseContinuation(threadId, target.id).catch(() => {});
+    //
+    // Released BY TOKEN: a process whose claim already expired and was taken
+    // over must not delete its successor's claim, or a third attempt would find
+    // the pair free while the second process is still transferring.
+    if (sourceClaim.token !== null) {
+      await deps.releaseContinuation(threadId, currentAccountId, sourceClaim.token).catch(() => {});
+    }
+    if (targetClaim.token !== null) {
+      await deps.releaseContinuation(threadId, target.id, targetClaim.token).catch(() => {});
+    }
   }
 }
 
