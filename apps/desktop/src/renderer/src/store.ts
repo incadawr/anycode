@@ -983,6 +983,8 @@ export interface QueuedPromptImage {
 export interface QueuedPrompt {
   /** Retained only for explicit recovery; never resend as an ordinary turn. */
   orchestrate?: "enable";
+  /** The whole draft needs a user's explicit recovery before sending. */
+  requiresRestore?: boolean;
   /** Queue identity for edit/delete; a refused steer retains its request id. */
   id: string;
   /** Final send text — paste markers already reconstituted at enqueue time. */
@@ -6234,7 +6236,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           return null;
         }
         const head = promptQueue[takeIndex]!;
-        if (head.orchestrate === "enable") return null;
+        if (head.orchestrate === "enable" || head.requiresRestore === true) return null;
         const rest = [...promptQueue.slice(0, takeIndex), ...promptQueue.slice(takeIndex + 1)];
         const sendId = get().steerRequeueSeen.includes(head.id) ? head.id : requestId;
         set({ promptQueue: rest, queueInFlight: { requestId: sendId, item: head } });

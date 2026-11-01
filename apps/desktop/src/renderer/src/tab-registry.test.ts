@@ -1282,7 +1282,7 @@ describe("tab-registry — queueInitialPrompt images", () => {
     expect(findBlock(transcript, "user_text")?.images).toEqual([IMAGE.attachment]);
   });
 
-  it("honest block: drops images and raises image_attach_rejected when the boot model cannot accept them — the text still sends", () => {
+  it("retains the whole initial draft when the boot model cannot accept images", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);
     const port = new FakeMessagePort();
@@ -1291,20 +1291,15 @@ describe("tab-registry — queueInitialPrompt images", () => {
     registry.queueInitialPrompt("tab-a", "look at this", undefined, undefined, undefined, [IMAGE]);
     port.emit(CODEX_HOST_READY("/ws/a", "sess-a", { imageInput: false }));
 
-    const userMessage = port.sent[1] as { type: string; text: string; images?: unknown[] };
-    expect(userMessage).toMatchObject({ type: "user_message", text: "look at this" });
-    expect(userMessage.images).toBeUndefined();
-    expect(registry.getStore("tab-a")?.getState().lastSentMessage).toEqual({ text: "look at this", images: [] });
+    expect(port.sent.map(m => (m as {type:string}).type)).toEqual(["ui_ready"]);
+    expect(registry.getStore("tab-a")?.getState().promptQueue).toMatchObject([{text:"look at this",images:[IMAGE],requiresRestore:true}]);
     expect(registry.getStore("tab-a")?.getState().notice).toEqual({
       kind: "image_attach_rejected",
       text: MODEL_IMAGE_ATTACH_BLOCKED_TEXT,
     });
 
     const transcript = registry.getStore("tab-a")?.getState().transcript ?? [];
-    // parity with deliveredImages=[]: the blocked echo carries the
-    // raw text and NO images key (nothing to thumbnail — nothing was sent).
-    expect(findBlock(transcript, "user_text")?.text).toBe("look at this");
-    expect(findBlock(transcript, "user_text")?.images).toBeUndefined();
+    expect(findBlock(transcript, "user_text")).toBeUndefined();
   });
 
   it("срез D: a configured recognizer fallback on the boot host_ready delivers images to a blind model instead of honestly blocking them", () => {
@@ -1344,9 +1339,8 @@ describe("tab-registry — queueInitialPrompt images", () => {
 
     registry.queueInitialPrompt("tab-a", "look at this", undefined, undefined, undefined, [IMAGE]);
 
-    const userMessage = port.sent[1] as { type: string; text: string; images?: unknown[] };
-    expect(userMessage).toMatchObject({ type: "user_message", text: "look at this" });
-    expect(userMessage.images).toBeUndefined();
+    expect(port.sent.map(m => (m as {type:string}).type)).toEqual(["ui_ready"]);
+    expect(registry.getStore("tab-a")?.getState().promptQueue).toMatchObject([{text:"look at this",images:[IMAGE],requiresRestore:true}]);
     expect(registry.getStore("tab-a")?.getState().notice).toEqual({
       kind: "image_attach_rejected",
       text: MODEL_IMAGE_ATTACH_BLOCKED_TEXT,

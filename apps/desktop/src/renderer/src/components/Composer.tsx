@@ -24,7 +24,7 @@ import { lazy, Suspense, useContext, useEffect, useLayoutEffect, useRef, useStat
 import type { ClipboardEvent, DragEvent, FocusEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { CodexRateLimitsWire, ImageAttachment, ImageMediaType, PermissionMode } from "@anycode/core";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
-import { isSessionBusy, type ContextUsage, type DesktopState, type SessionTokens, type TurnState } from "../store.js";
+import { isSessionBusy, type ContextUsage, type DesktopState, type QueuedPrompt, type SessionTokens, type TurnState } from "../store.js";
 import { useSettingsStore } from "../settings-store.js";
 import { useTabsStore } from "../tabs-store.js";
 import type { ProviderConnection } from "../../../shared/settings.js";
@@ -1333,6 +1333,9 @@ export function Composer() {
   // True when the mode menu's Orchestrate row (not a `/orchestrate` submit)
   // opened the first-run dialog: Save/Skip then only enable the flag.
   const [rolePickerForToggle, setRolePickerForToggle] = useState(false);
+  const [restoredOrchestrate, setRestoredOrchestrate] = useState(false);
+  const restoreInProgress = useRef(false);
+  useEffect(() => { restoreInProgress.current = false; }, [text, attachedImages]);
 
   useLayoutEffect(() => {
     if (pendingCaretRef.current !== null) {
@@ -1726,6 +1729,10 @@ export function Composer() {
     if (!item || item.disabled || slashQuery === null) {
       return;
     }
+    if (restoredOrchestrate && item.intent.kind !== "insert") {
+      tabStore.getState().setNotice({ kind: "slash_command_rejected", text: "This restored draft requires orchestration. Review it before starting a new orchestration." });
+      return;
+    }
     const intent = item.intent;
     if (intent.kind === "compact_now") {
       const verdict = resolveBareSlashSubmit("/compact", slashCtx, attachedImages.length, childSurface);
@@ -1803,6 +1810,10 @@ export function Composer() {
   }
 
   function handleSend(): void {
+    if (restoredOrchestrate) {
+      tabStore.getState().setNotice({ kind: "slash_command_rejected", text: "This restored draft requires orchestration. Review it before starting a new orchestration." });
+      return;
+    }
     const outgoing = reconstitutePasteMarkers(text, pasteBlocks);
     // GitHub #14: a recognized whole-draft slash command is consumed (run or
     // visibly refused) BEFORE the canSend gate and before any queue/steer/
@@ -2059,7 +2070,18 @@ export function Composer() {
       onDrop={handleDrop}
     >
       <BackgroundAgents />
-      <PromptQueue />
+      <PromptQueue onRestore={(item: QueuedPrompt) => {
+        if (restoreInProgress.current || text.length > 0 || attachedImages.length > 0 || pasteBlocks.length > 0) {
+          tabStore.getState().setNotice({ kind: "slash_command_rejected", text: "Finish or clear the current draft before restoring another." });
+          return false;
+        }
+        restoreInProgress.current = true;
+        setText(item.text);
+        setAttachedImages(item.images.map(image => ({ ...image, id: nextImageIdRef.current++ })));
+        setRestoredOrchestrate(item.orchestrate === "enable");
+        return true;
+      }} />
+      {restoredOrchestrate && <div className="composer-hint">Orchestration intent retained. This draft will not be sent as an ordinary message. <button type="button" onClick={() => setRestoredOrchestrate(false)}>Remove orchestration intent</button></div>}
       <RolePickerDialog
         open={rolePickerOpen}
         connections={useSettingsStore.getState().snapshot?.settings.provider.connections ?? []}
@@ -2303,7 +2325,7 @@ export function Composer() {
                   <ArrowUp />
                 </button>
               )}
-              {engine?.id === "codex" && text.trim() && attachedImages.length === 0 && (
+              {engine?.id === "codex" && !restoredOrchestrate && text.trim() && attachedImages.length === 0 && (
                 <button type="button" className="composer-send" aria-label="Steer active Codex turn" title="Steer active turn; acknowledgement does not prove model application" onClick={() => {
                   // GitHub #14: the explicit Codex steer must not leak a known
                   // bare command to the model either — classify first.

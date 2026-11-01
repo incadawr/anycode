@@ -372,11 +372,8 @@ export function createTabRegistry(
    * model's live vision verdict (`host_ready.imageInput`, or the tab's
    * already-live store field for the already-ready shortcut) — gated through
    * the SAME `isSendBlockedByModelImages` predicate Composer's own send-gate
-   * uses, so a model that cannot take images never receives them on the
-   * FIRST turn either. Unlike Composer's gate (which disables Send entirely
-   * so the user can react before sending), there is no live composer to react
-   * from here: the text still goes out — the prompt is not stranded — and
-   * only the images are dropped, with a notice explaining why.
+   * uses. If the model cannot accept the images, retain the whole draft for
+   * explicit recovery instead of sending only its text.
    */
   function dispatchInitialPrompt(
     entry: TabEntry,
@@ -387,15 +384,12 @@ export function createTabRegistry(
     orchestrate?: boolean,
   ): void {
     const blocked = isSendBlockedByModelImages(imageInput, imageFallback, images.length);
-    if (blocked && orchestrate === true) {
-      entry.store.getState().enqueuePrompt({ text, images, orchestrate: "enable" });
+    if (blocked) {
+      entry.store.getState().enqueuePrompt({ text, images, requiresRestore: true, ...(orchestrate === true ? { orchestrate: "enable" as const } : {}) });
       entry.store.getState().setNotice({ kind: "image_attach_rejected", text: MODEL_IMAGE_ATTACH_BLOCKED_TEXT });
       return;
     }
-    const deliveredImages = blocked ? [] : images;
-    if (blocked) {
-      entry.store.getState().setNotice({ kind: "image_attach_rejected", text: MODEL_IMAGE_ATTACH_BLOCKED_TEXT });
-    }
+    const deliveredImages = images;
     const requestId = crypto.randomUUID();
     entry.store.getState().appendUserText(requestId, text, deliveredImages.length > 0 ? deliveredImages.map((image) => image.attachment) : undefined);
     // W8: snapshot what actually went on the wire so a later terminal
@@ -541,7 +535,7 @@ export function createTabRegistry(
           // F5#1b D3: a task-scoped model pick that differs from the boot
           // model is switched BEFORE the initial prompt, same port ⇒ in-order
           // delivery; the host is idle at host_ready so the busy-guard passes.
-          if (!(pending.orchestrate === true && isSendBlockedByModelImages(message.imageInput, message.imageFallback, pending.images?.length ?? 0))) {
+          if (!isSendBlockedByModelImages(message.imageInput, message.imageFallback, pending.images?.length ?? 0)) {
           applyInitialPicks(
             entry,
             pending.model,
@@ -900,8 +894,8 @@ export function createTabRegistry(
         // model (set at host_ready, kept current by model_changed), so compare
         // against THAT instead of a boot-time message.
         const state = entry.store.getState();
-        if (orchestrate === true && isSendBlockedByModelImages(state.imageInput, state.imageFallback, images?.length ?? 0)) {
-          dispatchInitialPrompt(entry, text, images ?? [], state.imageInput, state.imageFallback, true);
+        if (isSendBlockedByModelImages(state.imageInput, state.imageFallback, images?.length ?? 0)) {
+          dispatchInitialPrompt(entry, text, images ?? [], state.imageInput, state.imageFallback, orchestrate);
           return;
         }
         applyInitialPicks(

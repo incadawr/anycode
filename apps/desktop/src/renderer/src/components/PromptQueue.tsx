@@ -26,7 +26,7 @@ export function shouldShowPromptQueue(
   return queueLength > 0 || queuePaused || pendingSteerCount > 0;
 }
 
-export function PromptQueue() {
+export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt) => boolean }) {
   const promptQueue = useTabStore((state) => state.promptQueue);
   const queuePaused = useTabStore((state) => state.queuePaused);
   // the banner must name the REAL reason the queue is held
@@ -139,6 +139,11 @@ export function PromptQueue() {
                     <span className="prompt-queue-ordinal">{ordinal}</span>
                     <span className="prompt-queue-text">{item.text}</span>
                     {badge !== null && <span className="prompt-queue-badge">{badge}</span>}
+                    {(item.orchestrate === "enable" || item.requiresRestore === true) && (
+                      <button type="button" className="prompt-queue-restore" onClick={() => {
+                        if (onRestore?.(item) === true) tabStore.getState().deleteQueuedPrompt(item.id);
+                      }}>Restore draft</button>
+                    )}
                     <button
                       type="button"
                       className="prompt-queue-edit-button"
