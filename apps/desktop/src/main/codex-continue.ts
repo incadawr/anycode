@@ -219,12 +219,12 @@ export async function handleCodexContinueOnAccount(
       ...(meta.title !== undefined ? { title: meta.title } : {}),
     });
     if (created === null) {
-      return { ok: false, reason: "unknown_session", detail: "the original session is no longer available" };
+      return { ok: false, reason: "unknown_session", detail: "The original session is no longer available. A copy was left on the target account and may be outdated or in use. A retry on that account will be blocked; choose another account or review the existing conversation." };
     }
-  } catch (error) {
+  } catch {
     // A copied rollout is already published and another continuation may use it.
     // Retain it even on failure; creating it does not grant exclusive ownership.
-    return { ok: false, reason: "copy_failed", detail: error instanceof Error ? error.message : String(error) };
+    return { ok: false, reason: "copy_failed", detail: "Could not register the new session. A copy was left on the target account and may be outdated or in use. A retry on that account will be blocked; choose another account or review the existing conversation." };
   }
   let opened: Awaited<ReturnType<CodexContinueDeps["openResumeTab"]>>;
   try {
