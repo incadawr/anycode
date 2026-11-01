@@ -9,6 +9,53 @@ const ready: HostToUiMessage = { type: "host_ready", workspace: "/synthetic", se
 const image = () => ({ name: "synthetic.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } });
 
 describe("unknown delivery over real MessageChannel", () => {
+  it.each(["started-first", "rejected-first"] as const)("keeps conflicted %s turn terminal and does not replace a newer active turn", (order) => {
+    const store = createDesktopStore({ schedule: () => {} });
+    store.getState().applyHostMessage(ready);
+    const saved = image();
+    store.getState().recordSentMessage("A", [saved], "A", undefined, undefined, undefined, undefined, true);
+    const started = () => store.getState().applyHostMessage({ type: "turn_started", requestId: "A", turnId: "turn-A" });
+    const rejected = () => store.getState().applyHostMessage({ type: "turn_rejected", requestId: "A", reason: "busy" });
+    if (order === "started-first") { started(); rejected(); } else { rejected(); started(); }
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "conflict", turnId: "turn-A", images: [saved] });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "turn-A", event: { type: "loop_end", reason: "error", turns: 1 } });
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "conflict", terminalReason: "error", turnId: "turn-A", images: [saved] });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "B", turnId: "turn-B" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "A", turnId: "different-A" });
+    expect(store.getState().turn).toMatchObject({ status: "running", requestId: "B", turnId: "turn-B" });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "turn-A", event: { type: "loop_end", reason: "error", turns: 1 } });
+    expect(store.getState().turn).toMatchObject({ status: "running", requestId: "B", turnId: "turn-B" });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "turn-B", event: { type: "loop_end", reason: "completed", turns: 1 } });
+    expect(store.getState().turn.status).toBe("idle");
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "conflict", terminalReason: "error", images: [saved] });
+  });
+
+  it("does not replace a running turn when one request reports a different turn before ending", () => {
+    const store = createDesktopStore({ schedule: () => {} });
+    store.getState().applyHostMessage(ready);
+    const saved = image();
+    store.getState().recordSentMessage("A", [saved], "A", undefined, undefined, undefined, undefined, true);
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "A", turnId: "turn-A" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "A", turnId: "different-A" });
+    expect(store.getState().turn).toMatchObject({ status: "running", turnId: "turn-A" });
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "conflict", turnId: "turn-A", images: [saved] });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "turn-A", event: { type: "loop_end", reason: "cancelled", turns: 1 } });
+    expect(store.getState().turn.status).toBe("idle");
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "conflict", turnId: "turn-A", terminalReason: "cancelled", images: [saved] });
+  });
+
+  it("preserves a different active turn when a rejected request has a late first start", () => {
+    const store = createDesktopStore({ schedule: () => {} });
+    store.getState().applyHostMessage(ready);
+    store.getState().recordSentMessage("A", [image()], "A", undefined, undefined, undefined, undefined, true);
+    store.getState().applyHostMessage({ type: "turn_rejected", requestId: "A", reason: "busy" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "B", turnId: "turn-B" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "A", turnId: "turn-A" });
+    expect(store.getState().turn).toMatchObject({ status: "running", requestId: "B", turnId: "turn-B" });
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "conflict", turnId: "turn-A" });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "turn-B", event: { type: "loop_end", reason: "completed", turns: 1 } });
+    expect(store.getState().turn.status).toBe("idle");
+  });
   it("keeps a completed recovery payload when a late rejection conflicts", () => {
     const store = createDesktopStore({ schedule: () => {} });
     store.getState().applyHostMessage(ready);

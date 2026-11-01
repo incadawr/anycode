@@ -1094,9 +1094,9 @@ function compactCompletedDirect(state: DesktopState, turnId: string, reason: str
 }
 
 function deliveryStarted(item: OrchestrationDelivery, turnId: string): OrchestrationDelivery {
-  if (item.status === "conflict") return item;
+  if (item.status === "conflict") return item.turnId ? item : { ...item, turnId };
   if (item.status === "finished" && item.turnId === turnId) return item;
-  if (item.status === "rejected" || ((item.status === "started" || item.status === "finished") && item.turnId !== turnId)) return { ...item, status: "conflict", reviewed: false, dismissed: undefined };
+  if (item.status === "rejected" || ((item.status === "started" || item.status === "finished") && item.turnId !== turnId)) return { ...item, turnId: item.turnId ?? turnId, status: "conflict", reviewed: false, dismissed: undefined };
   return { ...item, status: "started", turnId };
 }
 function deliveryRejected(item: OrchestrationDelivery): OrchestrationDelivery {
@@ -4317,7 +4317,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             const nextQueue = [...state.promptQueue, ...queueAdditions];
             return {
               turn: { status: "idle", turnId: null, requestId: null },
-              orchestrationDeliveries: compactCompletedDirect({ ...state, orchestrationDeliveries: state.orchestrationDeliveries.map(item => (event.reason === "completed" || event.reason === "error" || event.reason === "cancelled" || event.reason === "max_turns") && item.status === "started" && item.turnId === turnId ? { ...item, ...(item.parentRequestId ? { status: "finished" as const } : {}), terminalReason: event.reason } : item) }, turnId, event.reason),
+              orchestrationDeliveries: compactCompletedDirect({ ...state, orchestrationDeliveries: state.orchestrationDeliveries.map(item => (event.reason === "completed" || event.reason === "error" || event.reason === "cancelled" || event.reason === "max_turns") && (item.status === "started" || item.status === "conflict") && item.turnId === turnId ? { ...item, ...(item.status === "started" && item.parentRequestId ? { status: "finished" as const } : {}), terminalReason: event.reason } : item) }, turnId, event.reason),
               pendingSteers: state.pendingSteers.filter((entry) => !uiPending.includes(entry.requestId)),
               promptQueue: nextQueue,
               uiSteerPending: [],
@@ -5221,7 +5221,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // A replay (or a contradictory second start for a finished request)
             // must update correlation without reviving an already ended turn.
             // Keep this fence across host_ready resets via the delivery ledger.
-            if (knownDelivery?.terminalReason || loopEndEmitted.has(`loop_end:${message.turnId}`)) {
+            if (knownDelivery?.terminalReason || loopEndEmitted.has(`loop_end:${message.turnId}`) ||
+              (knownDelivery?.turnId && (knownDelivery.status === "conflict" || knownDelivery.turnId !== message.turnId)) ||
+              (knownDelivery?.status === "rejected" && get().turn.status === "running" && get().turn.turnId !== message.turnId)) {
               set((state) => reconcileQueuedRetries(state.promptQueue, startedDeliveries(state, message.requestId, message.turnId)));
               return;
             }
