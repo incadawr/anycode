@@ -14,30 +14,18 @@ const block: Extract<TranscriptBlock, { kind: "usage_limit" }> = {
   notice: { kind: "usage_limit", code: 429, engine: "codex" },
 };
 
-it("closes the account picker once the continue succeeded, so the same conversation is not opened twice", async () => {
-  const continueOn = vi.fn(async () => ({ ok: true as const }));
-  const controller: CodexContinueController = {
-    accounts: async () => [{ id: "account-b", label: "Account B" }],
-    continueOn,
-  };
-  const container = document.createElement("div");
-  document.body.append(container);
-  const root = createRoot(container);
+it("explains the temporary limitation without opening the account picker", async () => {
+  const accounts = vi.fn(async () => [{id:"account-b",label:"Account B"}]);
+  const continueOn = vi.fn(async () => ({ok:true as const}));
+  const controller: CodexContinueController = {accounts,continueOn};
+  const container=document.createElement("div"); document.body.append(container);
+  const root=createRoot(container);
   try {
-    await act(async () => {
-      root.render(createElement(UsageLimitBlock, { block, enterClass: " enter", codexContinue: controller }));
-    });
-    await act(async () => {
-      container.querySelector<HTMLButtonElement>(".usage-limit-switch-account")!.click();
-    });
-    await act(async () => {
-      container.querySelector<HTMLButtonElement>(".usage-limit-account-choice")!.click();
-    });
-
-    expect(continueOn).toHaveBeenCalledWith("account-b");
+    await act(async()=>{root.render(createElement(UsageLimitBlock,{block,enterClass:"",codexContinue:controller}));});
+    expect(container.textContent).toContain("temporarily unavailable");
+    expect(container.textContent).toContain("start a new session on another Codex account");
     expect(container.querySelector(".usage-limit-account-picker")).toBeNull();
-  } finally {
-    await act(async () => root.unmount());
-    container.remove();
-  }
+    expect(container.querySelector(".usage-limit-switch-account")).toBeNull();
+    expect(accounts).not.toHaveBeenCalled(); expect(continueOn).not.toHaveBeenCalled();
+  } finally {await act(async()=>root.unmount());container.remove();}
 });

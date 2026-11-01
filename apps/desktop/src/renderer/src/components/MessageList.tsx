@@ -26,7 +26,6 @@ import type {
   TurnState,
 } from "../store.js";
 import type { WireCheckpointMeta } from "../../../shared/protocol.js";
-import type { CodexAccountOption } from "../../../shared/codex-account.js";
 import type { CodexContinueController } from "../codex-continue.js";
 import { TabContext } from "../tab-context.js";
 import { isReplaySurface, replayStore } from "../replay.js";
@@ -610,61 +609,12 @@ export function topmostVisibleUserIndex(
   return candidate;
 }
 
-/**
- * The usage-limit banner, including the Codex "continue on another account"
- * picker. Its own component because the picker needs local state, and the
- * transcript renders blocks from inside a `.map` callback (no hooks there).
- */
-export function UsageLimitBlock({
-  block,
-  enterClass,
-  codexContinue,
-}: {
+/** Usage-limit notice for the current session. */
+export function UsageLimitBlock({ block, enterClass }: {
   block: Extract<TranscriptBlock, { kind: "usage_limit" }>;
   enterClass: string;
   codexContinue?: CodexContinueController;
 }) {
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [choices, setChoices] = useState<readonly CodexAccountOption[] | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  async function openPicker(): Promise<void> {
-    if (codexContinue === undefined) return;
-    setError(null);
-    setPickerOpen(true);
-    if (choices !== null) return;
-    setLoading(true);
-    try {
-      const list = await codexContinue.accounts();
-      setChoices(list);
-      if (list.length === 0) setError("No other Codex account is configured. Add one in Settings → Codex.");
-    } catch {
-      setError("Could not read the Codex accounts.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function pick(accountId: string): Promise<void> {
-    if (codexContinue === undefined) return;
-    setError(null);
-    setBusyId(accountId);
-    try {
-      const result = await codexContinue.continueOn(accountId);
-      // Success opens the conversation in a NEW tab and leaves this one alone:
-      // keeping the picker armed invited a second click, i.e. a second tab
-      // resuming the same thread on the same account.
-      if (result.ok) setPickerOpen(false);
-      else setError(result.detail);
-    } catch {
-      setError("Could not continue on that account.");
-    } finally {
-      setBusyId(null);
-    }
-  }
-
   const resetAt = block.notice.resetAt;
   return (
     <div className={`message message-error${enterClass}`} role="alert">
@@ -674,36 +624,9 @@ export function UsageLimitBlock({
           ? `Provider quota is exhausted. Resets at ${formatUsageLimitReset(resetAt)} (local time).`
           : "Provider quota is exhausted."}
       </div>
-      {codexContinue !== undefined && !pickerOpen && (
-        <button
-          type="button"
-          className="usage-limit-switch-account"
-          title="Continue this conversation on another Codex account — a new tab opens there; this one keeps its account"
-          onClick={() => void openPicker()}
-        >
-          Continue on another account
-        </button>
+      {block.notice.engine === "codex" && (
+        <div className="usage-limit-account-hint">Continuing this conversation on another account is temporarily unavailable. You can start a new session on another Codex account.</div>
       )}
-      {codexContinue !== undefined && pickerOpen && (
-        <div className="usage-limit-account-picker" role="group" aria-label="Continue on another Codex account">
-          {loading && <div className="usage-limit-account-hint">Reading accounts…</div>}
-          {choices?.map((account) => (
-            <button
-              key={account.id}
-              type="button"
-              className="usage-limit-account-choice"
-              disabled={busyId !== null}
-              onClick={() => void pick(account.id)}
-            >
-              {busyId === account.id ? "Opening…" : `Continue on ${account.label}`}
-            </button>
-          ))}
-          <button type="button" className="usage-limit-switch-account" onClick={() => setPickerOpen(false)}>
-            Cancel
-          </button>
-        </div>
-      )}
-      {error !== null && <div className="usage-limit-account-hint">{error}</div>}
     </div>
   );
 }
@@ -752,15 +675,7 @@ export function MessageList({
     checkpoints: readonly WireCheckpointMeta[];
     onRewind(checkpointId: string): void;
   };
-  /**
-   * the Codex usage-limit escape hatch. Present only on a Codex
-   * session (the surface knows the engine): the `usage_limit` block then offers
-   * "Continue on another account", listing the accounts this tab does NOT run
-   * on. Picking one asks main to copy the thread's rollout into that account's
-   * home and opens a NEW tab resuming the thread there — the exhausted tab is
-   * left as it is. Absent -> no button, so a core/Claude quota error never
-   * suggests a Codex-only remedy.
-   */
+  /** Compatibility prop; account continuation is temporarily unavailable. */
   codexContinue?: CodexContinueController;
 }) {
   // codex P7.3-F2 finding 2: the automation transcript-scroll probe
