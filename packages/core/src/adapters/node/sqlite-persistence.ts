@@ -1944,11 +1944,11 @@ export class WriteBehindHistorySink implements HistorySink {
   }
 
   append(items: readonly HistoryItem[]): void {
-    this.enqueue("append", () => this.persistence.appendHistory(this.sessionId, items));
+    this.enqueueSnapshot("append", items, (snapshot) => this.persistence.appendHistory(this.sessionId, snapshot));
   }
 
   replaceAll(items: readonly HistoryItem[]): void {
-    this.enqueue("replaceAll", () => this.persistence.replaceHistory(this.sessionId, items));
+    this.enqueueSnapshot("replaceAll", items, (snapshot) => this.persistence.replaceHistory(this.sessionId, snapshot));
   }
 
   flush(): Promise<void> {
@@ -1970,6 +1970,18 @@ export class WriteBehindHistorySink implements HistorySink {
     throw new Error(`WriteBehindHistorySink: persistence failed for session ${this.sessionId}`, {
       cause: this.lastFailure,
     });
+  }
+
+  private enqueueSnapshot(op: "append" | "replaceAll", items: readonly HistoryItem[], write: (snapshot: readonly HistoryItem[]) => Promise<void>): void {
+    try {
+      // Match SQLite's per-item JSON representation while detaching nested data
+      // before the caller can mutate it or append to a replaced history array.
+      const snapshot = items.map((item) => JSON.parse(JSON.stringify(item)) as HistoryItem);
+      this.enqueue(op, () => write(snapshot));
+    } catch (error) {
+      // Keep serialization failures in the same ordered, fail-soft queue.
+      this.enqueue(op, async () => { throw error; });
+    }
   }
 
   private enqueue(op: "append" | "replaceAll", run: () => Promise<void>): void {
