@@ -170,14 +170,14 @@
   padding: var(--sp-1) var(--sp-2);
   cursor: pointer;
   border: 1px solid var(--border);
-  background: var(--bg-1);
+  background: var(--bg-card);
   color: var(--text-1);
 }
 
 .minimap-preview-rewind:hover,
 .minimap-preview-confirm-cancel:hover,
 .minimap-preview-confirm-confirm:hover {
-  background: var(--bg-2);
+  background: var(--bg-hover);
 }
 
 .minimap-preview-confirm-text {

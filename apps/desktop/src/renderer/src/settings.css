@@ -1035,7 +1035,7 @@
 /* Provider-reported subscription quota line:
    rendered only when the provider last reported something. */
 .connection-quota {
-  color: var(--text-muted, inherit);
+  color: var(--text-3);
   font-size: 12px;
 }
 
@@ -1198,7 +1198,7 @@
   gap: var(--sp-2);
   padding: var(--sp-3);
   border: 1px solid var(--border);
-  border-radius: var(--r-2, 8px);
+  border-radius: var(--r-md);
 }
 
 .connection-drawer-model-curation > legend {
@@ -3313,7 +3313,7 @@
 }
 
 .lsp-install-command {
-  font-family: var(--mono-font, monospace);
+  font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-2);
   overflow-wrap: anywhere;
@@ -3438,3 +3438,14 @@
 .connection-drawer-discard { position: sticky; bottom: 0; z-index: 5; padding: 12px 16px; background: var(--bg-overlay); border-top: 1px solid var(--border-strong); box-shadow: var(--shadow-dialog); }
 .connection-drawer-discard p { margin: 0 0 8px; color: var(--text-1); }
 .connection-drawer-discard .settings-field-row { justify-content: flex-end; }
+
+/* Device-local accent choices; each swatch inherits its own token overrides. */
+.accent-picker { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-1); }
+.accent-swatch {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--r-full);
+  background: var(--accent); color: var(--on-accent); cursor: pointer;
+  font-size: var(--fs-lg); font-weight: var(--w-semibold);
+}
+.accent-swatch[aria-checked="true"] { box-shadow: 0 0 0 2px var(--bg-overlay), 0 0 0 4px var(--text-1); }
+.accent-swatch:focus-visible { outline-offset: 5px; }

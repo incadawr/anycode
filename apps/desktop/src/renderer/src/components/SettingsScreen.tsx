@@ -64,6 +64,8 @@
  * via `tabRegistry`, the same two primitives App.tsx itself already uses to
  * pick `activeStore` — no new prop/context plumbing needed.
  */
+import { AccentPicker } from "./AccentPicker.js";
+import { ACCENT_KEY, applyAccent, type Accent } from "../accent.js";
 import { useCallback, useEffect, useRef, useState, type ComponentType, type KeyboardEvent, type SVGProps } from "react";
 import { useStore } from "zustand";
 import type { McpServerStatus, TelemetryStatus } from "@anycode/core";
@@ -1700,6 +1702,12 @@ export function SettingsScreen({
     }
   }
 
+  // Device-local, like density and notifications: available even when the vault is read-only.
+  function changeAccent(next: Accent): void {
+    applyAccent(next);
+    try { localStorage.setItem(ACCENT_KEY, next); } catch { /* Session choice still applies. */ }
+  }
+
   function toggleDensity(): void {
     const next: Density = density === "compact" ? "comfortable" : "compact";
     setDensity(next);
@@ -2109,6 +2117,10 @@ export function SettingsScreen({
                     <option value="dark">Dark</option>
                   </select>
                 </label>
+                <div className="settings-field">
+                  <span className="settings-field-label">Accent</span>
+                  <AccentPicker onChange={changeAccent} />
+                </div>
                 <div className="settings-field">
                   <span className="settings-field-label">Density</span>
                   <div className="settings-field-row">
