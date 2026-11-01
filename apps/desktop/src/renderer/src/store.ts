@@ -1030,7 +1030,7 @@ export interface OrchestrationDelivery {
   originId?: string;
   retryQueued?: boolean;
   parentRequestId?: string;
-  status: "pending" | "unknown" | "rejected" | "started" | "conflict";
+  status: "pending" | "unknown" | "rejected" | "started" | "completed" | "conflict";
   restored: boolean;
   reviewed: boolean;
   turnId?: string;
@@ -1040,7 +1040,7 @@ export interface OrchestrationDelivery {
   payloadOmitted?: true;
   /** Once delivery is unknown, retain its full payload even after late start. */
   preservePayload?: true;
-  /** User explicitly discarded a rejected payload; correlation remains bounded. */
+  /** User explicitly discarded a settled payload; correlation remains bounded. */
   dismissed?: true;
   /** A confirmed child-surface steer follows the same bounded retention policy. */
   childSteer?: true;
@@ -1049,17 +1049,34 @@ export interface OrchestrationDelivery {
 /** Bounded correlation horizon for ordinary, confirmed and completed sends. */
 export const COMPLETED_DIRECT_CORRELATION_LIMIT = 256;
 
-function boundDeliveryTombstones(deliveries: readonly OrchestrationDelivery[]): readonly OrchestrationDelivery[] {
-  // Keep the entire correlation tree while any member still owns a payload or
-  // has an unresolved outcome. Evicting a dismissed descendant early could
-  // make its ancestor appear safe to retry before a late descendant event.
-  const evictable = deliveries.filter(item => {
-    if (!item.payloadOmitted || !(item.status === "started" || (item.status === "rejected" && item.dismissed)) || deliveries.some(child => child.parentRequestId === item.requestId)) return false;
+function boundDeliveryTombstones(deliveries: readonly OrchestrationDelivery[], state: DesktopState): readonly OrchestrationDelivery[] {
+  // Pin whole families with payload, unresolved outcomes, or live references.
+  // A fully settled family can be truncated to the correlation horizon; its
+  // remaining roots stay tombstones and therefore cannot become retryable.
+  const visited = new Set<string>();
+  const eligible = new Set<string>();
+  for (const item of deliveries) {
+    if (visited.has(item.requestId)) continue;
     const family = recoveryTreeIds(deliveries, item.requestId);
-    return family !== null && deliveries.every(entry => !family.has(entry.requestId) || (entry.payloadOmitted && (entry.status === "started" || (entry.status === "rejected" && entry.dismissed))));
-  });
+    if (!family) { visited.add(item.requestId); continue; }
+    for (const id of family) visited.add(id);
+    const referenced = family.has(state.restoredComposerDraft?.deliveryRequestId ?? "") ||
+      family.has(state.composerRolePicker?.deliveryRequestId ?? "") ||
+      state.promptQueue.some(entry => family.has(entry.recoverySourceId ?? "") || family.has(entry.retryOf ?? "")) ||
+      family.has(state.queueInFlight?.requestId ?? "") || family.has(state.queueInFlight?.item.recoverySourceId ?? "") ||
+      state.pendingSteers.some(entry => family.has(entry.requestId));
+    if (!referenced && deliveries.every(entry => !family.has(entry.requestId) ||
+      (entry.payloadOmitted && !entry.retryQueued && (entry.status === "started" || ((entry.status === "rejected" || entry.status === "completed") && entry.dismissed))))) {
+      for (const id of family) eligible.add(id);
+    }
+  }
+  const evictable = deliveries.filter(item => eligible.has(item.requestId));
   const remove = new Set(evictable.slice(0, Math.max(0, evictable.length - COMPLETED_DIRECT_CORRELATION_LIMIT)).map(item => item.requestId));
-  return deliveries.filter(item => !remove.has(item.requestId));
+  return deliveries.filter(item => !remove.has(item.requestId)).map(item => {
+    if (!item.parentRequestId || !remove.has(item.parentRequestId)) return item;
+    const { parentRequestId: _removedParent, ...retained } = item;
+    return retained;
+  });
 }
 
 function compactCompletedDirect(state: DesktopState, turnId: string): readonly OrchestrationDelivery[] {
@@ -1072,17 +1089,18 @@ function compactCompletedDirect(state: DesktopState, turnId: string): readonly O
       ? { ...item, text: "", images: [], payloadOmitted: true as const }
       : item;
   });
-  return boundDeliveryTombstones(deliveries);
+  return boundDeliveryTombstones(deliveries, state);
 }
 
 function deliveryStarted(item: OrchestrationDelivery, turnId: string): OrchestrationDelivery {
   if (item.status === "conflict") return item;
-  if (item.status === "rejected" || (item.status === "started" && item.turnId !== turnId)) return { ...item, status: "conflict", reviewed: false, dismissed: undefined };
+  if (item.status === "completed" && item.turnId === turnId) return item;
+  if (item.status === "rejected" || ((item.status === "started" || item.status === "completed") && item.turnId !== turnId)) return { ...item, status: "conflict", reviewed: false, dismissed: undefined };
   return { ...item, status: "started", turnId };
 }
 function deliveryRejected(item: OrchestrationDelivery): OrchestrationDelivery {
   if (item.status === "conflict") return item;
-  if (item.status === "started") return { ...item, status: "conflict", reviewed: false };
+  if (item.status === "started" || item.status === "completed") return { ...item, status: "conflict", reviewed: false, dismissed: undefined };
   return { ...item, status: "rejected" };
 }
 function deliveryUnknown(item: OrchestrationDelivery): OrchestrationDelivery {
@@ -1115,12 +1133,12 @@ export function recoveryTreeBlocked(deliveries: readonly OrchestrationDelivery[]
   const ids = recoveryTreeIds(deliveries,requestId);
   if (!ids) return true;
   return deliveries.some(item => ids.has(item.requestId) && !(item.requestId === ignorePendingId && item.status === "pending") &&
-    (item.payloadOmitted || item.dismissed || item.status === "pending" || item.status === "started" || ((item.status === "unknown" || item.status === "conflict") && !item.reviewed)));
+    (item.payloadOmitted || item.dismissed || item.status === "pending" || item.status === "started" || item.status === "completed" || ((item.status === "unknown" || item.status === "conflict") && !item.reviewed)));
 }
 
 export function canDismissRejectedDelivery(state: DesktopState, requestId: string): boolean {
   const item = state.orchestrationDeliveries.find(entry => entry.requestId === requestId);
-  if (!item || item.status !== "rejected" || item.origin === "system" || item.dismissed || item.payloadOmitted || item.retryQueued) return false;
+  if (!item || (item.status !== "rejected" && item.status !== "completed") || item.origin === "system" || item.dismissed || item.payloadOmitted || item.retryQueued) return false;
   if (!recoveryTreeIds(state.orchestrationDeliveries, requestId)) return false;
   const descendants = new Set([requestId]);
   let changed = true;
@@ -1133,7 +1151,7 @@ export function canDismissRejectedDelivery(state: DesktopState, requestId: strin
       }
     }
   }
-  if (state.orchestrationDeliveries.some(entry => entry.requestId !== requestId && descendants.has(entry.requestId) && !(entry.status === "rejected" && entry.dismissed && entry.payloadOmitted && !entry.retryQueued))) return false;
+  if (state.orchestrationDeliveries.some(entry => entry.requestId !== requestId && descendants.has(entry.requestId) && !(entry.status === "completed" && !entry.retryQueued) && !(entry.status === "rejected" && entry.dismissed && entry.payloadOmitted && !entry.retryQueued))) return false;
   return !descendants.has(state.restoredComposerDraft?.deliveryRequestId ?? "") &&
     !descendants.has(state.composerRolePicker?.deliveryRequestId ?? "") &&
     !state.promptQueue.some(entry => descendants.has(entry.recoverySourceId ?? "") || descendants.has(entry.retryOf ?? "")) &&
@@ -4298,7 +4316,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             const nextQueue = [...state.promptQueue, ...queueAdditions];
             return {
               turn: { status: "idle", turnId: null, requestId: null },
-              orchestrationDeliveries: compactCompletedDirect(state, turnId),
+              orchestrationDeliveries: compactCompletedDirect({ ...state, orchestrationDeliveries: state.orchestrationDeliveries.map(item => event.reason === "completed" && item.parentRequestId && item.status === "started" && item.turnId === turnId ? { ...item, status: "completed" as const } : item) }, turnId),
               pendingSteers: state.pendingSteers.filter((entry) => !uiPending.includes(entry.requestId)),
               promptQueue: nextQueue,
               uiSteerPending: [],
@@ -6388,7 +6406,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       dismissRejectedDelivery(requestId: string): void {
         set((state) => {
           if (!canDismissRejectedDelivery(state, requestId)) return {};
-          return { orchestrationDeliveries: boundDeliveryTombstones(state.orchestrationDeliveries.map(item => item.requestId === requestId ? { ...item, text: "", images: [], payloadOmitted: true as const, dismissed: true as const } : item)) };
+          return { orchestrationDeliveries: boundDeliveryTombstones(state.orchestrationDeliveries.map(item => item.requestId === requestId ? { ...item, text: "", images: [], payloadOmitted: true as const, dismissed: true as const } : item), state) };
         });
       },
 

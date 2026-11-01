@@ -9,6 +9,60 @@ const ready: HostToUiMessage = { type: "host_ready", workspace: "/synthetic", se
 const image = () => ({ name: "synthetic.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } });
 
 describe("unknown delivery over real MessageChannel", () => {
+  it("keeps a completed recovery payload when a late rejection conflicts", () => {
+    const store = createDesktopStore({ schedule: () => {} });
+    store.getState().applyHostMessage(ready);
+    const saved = image();
+    store.getState().recordSentMessage("parent", [saved], "parent", undefined, undefined, undefined, undefined, true);
+    store.getState().applyHostMessage({ type: "turn_rejected", requestId: "parent", reason: "busy" });
+    expect(store.getState().claimRecoveryAttempt("parent", "child", "retry", [saved], undefined)).toBe(true);
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "child", turnId: "child-turn" });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "child-turn", event: { type: "loop_end", reason: "completed", turns: 1 } });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "child", turnId: "child-turn" });
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "child")).toMatchObject({ status: "completed", images: [saved] });
+    store.getState().applyHostMessage({ type: "turn_rejected", requestId: "child", reason: "busy" });
+    store.getState().dismissRejectedDelivery("parent");
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{ requestId: "parent", status: "rejected", images: [saved] }, { requestId: "child", status: "conflict", images: [saved] }]);
+    expect(store.getState().claimRecoveryAttempt("parent", "unsafe", "retry", [saved], undefined)).toBe(false);
+  });
+  it("bounds a fully dismissed chain of 300 while retaining recent correlation", () => {
+    const store = createDesktopStore({ schedule: () => {} });
+    store.getState().applyHostMessage(ready);
+    const saved = image();
+    const chain = Array.from({ length: 300 }, (_, i) => ({
+      requestId: `chain-${i}`, ...(i ? { parentRequestId: `chain-${i - 1}` } : {}),
+      text: i === 299 ? "last" : "", images: i === 299 ? [saved] : [], status: "rejected" as const,
+      restored: false, reviewed: false, ...(i === 299 ? {} : { dismissed: true as const, payloadOmitted: true as const }),
+    }));
+    store.setState({ orchestrationDeliveries: chain });
+    store.getState().dismissRejectedDelivery("chain-299");
+    const retained = store.getState().orchestrationDeliveries;
+    expect(retained).toHaveLength(COMPLETED_DIRECT_CORRELATION_LIMIT);
+    expect(retained[0]).toMatchObject({ requestId: "chain-44", dismissed: true, payloadOmitted: true });
+    expect(retained[0]!.parentRequestId).toBeUndefined();
+    expect(store.getState().claimRecoveryAttempt("chain-44", "unsafe", "retry", [saved], undefined)).toBe(false);
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "chain-299", turnId: "late" });
+    expect(store.getState().orchestrationDeliveries.at(-1)).toMatchObject({ requestId: "chain-299", status: "conflict", payloadOmitted: true });
+  });
+
+  it("pins a large unresolved family even when other tombstones exceed the horizon", () => {
+    const store = createDesktopStore({ schedule: () => {} });
+    store.getState().applyHostMessage(ready);
+    const saved = image();
+    const chain = Array.from({ length: 300 }, (_, i) => ({
+      requestId: `pinned-${i}`, ...(i ? { parentRequestId: `pinned-${i - 1}` } : {}),
+      text: i ? "" : "unknown", images: i ? [] : [saved], status: i ? "rejected" as const : "unknown" as const,
+      restored: false, reviewed: false, ...(i ? { dismissed: true as const, payloadOmitted: true as const } : {}),
+    }));
+    const independent = Array.from({ length: 270 }, (_, i) => ({ requestId: `other-${i}`, text: "", images: [], status: "rejected" as const, restored: false, reviewed: false, dismissed: true as const, payloadOmitted: true as const }));
+    store.setState({ orchestrationDeliveries: [...chain, ...independent, { requestId: "trigger", text: "trigger", images: [saved], status: "rejected", restored: false, reviewed: false }] });
+    store.getState().dismissRejectedDelivery("trigger");
+    expect(store.getState().orchestrationDeliveries.filter(item => item.requestId.startsWith("pinned-"))).toHaveLength(300);
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "pinned-0")).toMatchObject({ status: "unknown", images: [saved] });
+    expect(store.getState().orchestrationDeliveries.filter(item => item.requestId.startsWith("other-") || item.requestId === "trigger")).toHaveLength(COMPLETED_DIRECT_CORRELATION_LIMIT);
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "pinned-299", turnId: "late" });
+    expect(store.getState().claimRecoveryAttempt("pinned-0", "unsafe", "retry", [saved], undefined)).toBe(false);
+  });
   it("dismisses a branched tree bottom-up, blocks active descendants, and fences late events", () => {
     const store = createDesktopStore({ schedule: () => {} });
     store.getState().applyHostMessage(ready);
