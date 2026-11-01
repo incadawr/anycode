@@ -22,6 +22,7 @@ It intentionally differs from local `working-docs/`:
 - [Channel plugins](channel-plugins.md) — author guide for plugin services that
   bridge an outside channel to Sessions API sessions, with the
   [channel-echo example](../../examples/channel-echo/).
+- [UI conventions](ui.md) — tokens, component kit adoption, and color ratchet.
 - [Test gates](test-gates.md) — development, landing, and CI checks.
 - [Release policy](release.md) — versioning, alpha/beta stages, and the changelog.
 - [Authoring plugins](plugins-authoring.md) — the plugin manifest v1 spec, the

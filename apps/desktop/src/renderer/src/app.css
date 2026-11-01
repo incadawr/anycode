@@ -1084,7 +1084,7 @@ body {
   width: 100%;
   padding: var(--sp-1) var(--sp-2);
   border: none;
-  border-radius: var(--r-1);
+  border-radius: var(--r-sm);
   background: none;
   color: var(--text-3);
   font: inherit;
@@ -1343,7 +1343,7 @@ body {
   flex-direction: column;
   margin-top: 4px;
   padding-top: 4px;
-  border-top: 1px solid var(--border-1);
+  border-top: 1px solid var(--border);
 }
 
 .sidebar-project-menu-subitem {
@@ -2956,7 +2956,7 @@ body {
    after the label so it adds no height. */
 .block-time {
   margin-left: var(--sp-2);
-  font-weight: var(--w-regular, 400);
+  font-weight: var(--w-normal);
   text-transform: none;
   letter-spacing: 0;
   font-variant-numeric: tabular-nums;
@@ -7204,7 +7204,7 @@ body {
 .lsp-state-disposed,
 .lsp-state-not_started {
   color: var(--text-3);
-  background: var(--bg-elevated);
+  background: var(--bg-inset);
 }
 
 /* missing-binary display state — a warning the user can act on
@@ -7230,7 +7230,7 @@ body {
   margin: var(--sp-1) 0 0;
   padding: var(--sp-2);
   border-radius: var(--r-sm);
-  background: var(--bg-elevated);
+  background: var(--bg-inset);
   color: var(--text-2);
   font-family: var(--font-mono);
   font-size: var(--fs-2xs);
@@ -7266,7 +7266,7 @@ body {
   padding: 0 var(--sp-1);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
-  background: var(--bg-elevated);
+  background: var(--bg-inset);
   color: var(--text-2);
   font-family: var(--font-mono);
   font-size: var(--fs-2xs);
@@ -7339,7 +7339,7 @@ body {
   padding: 0 var(--sp-1);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
-  background: var(--bg-elevated);
+  background: var(--bg-inset);
   color: var(--text-3);
   font-family: var(--font-mono);
   font-size: var(--fs-2xs);
@@ -8097,7 +8097,7 @@ body {
   padding: 0 var(--sp-1);
   border-radius: var(--r-sm);
   border: 1px solid var(--border);
-  background: var(--bg-elevated);
+  background: var(--bg-inset);
   color: var(--text-2);
   font-size: var(--fs-2xs);
   font-weight: var(--w-medium);
@@ -8121,7 +8121,7 @@ body {
 .background-tasks-status-killed {
   border-color: var(--border);
   color: var(--text-3);
-  background: var(--bg-elevated);
+  background: var(--bg-inset);
 }
 
 .background-tasks-elapsed {
@@ -8174,7 +8174,7 @@ body {
   padding: var(--sp-2);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
-  background: var(--bg-elevated);
+  background: var(--bg-inset);
   color: var(--text-2);
   font-family: var(--font-mono);
   font-size: var(--fs-2xs);

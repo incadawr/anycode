@@ -152,3 +152,63 @@
     animation-iteration-count: 1 !important;
   }
 }
+
+/* ── ui kit bridge: aliases and control geometry ────────────── */
+:root {
+  --sp-7: 3rem;
+  --r-ctl: var(--r-sm);
+  --r-card: var(--r-md);
+  --r-surface: var(--r-lg);
+  --r-chip: var(--r-xs);
+  --r-code: var(--r-xs);
+  --ctl-h-sm: 1.75rem;
+  --ctl-h-md: 2rem;
+  --ctl-h-lg: 2.5rem;
+  --ctl-r: var(--r-ctl);
+  --ctl-icon-sm: 1.75rem;
+  --ctl-icon-md: 2rem;
+  --tap-min: 1.5rem;
+  --badge-h: 1.25rem;
+  --chip-h: var(--ctl-h-sm);
+  --switch-w: 2rem;
+  --switch-h: 1.125rem;
+  --switch-knob: 0.75rem;
+  --dialog-w: 35rem;
+  --dialog-w-wide: 55rem;
+  --drawer-w: 40rem;
+  --popover-max-w: 20rem;
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 1px;
+  --spin-dur: 900ms;
+  --track-tight: -0.015em;
+  --bg-control: var(--bg-inset);
+  --bg-selected: var(--accent-soft);
+  --neutral-soft: var(--bg-hover);
+  --accent-border: var(--accent);
+  --accent-strong: color-mix(in srgb, var(--accent) 55%, transparent);
+  --focus-ring-soft: color-mix(in srgb, var(--accent) 55%, transparent);
+  --success-border: color-mix(in srgb, var(--success) 40%, transparent);
+  --warning-border: color-mix(in srgb, var(--warning) 40%, transparent);
+  --danger-border: color-mix(in srgb, var(--danger) 40%, transparent);
+  --bg-scrim: rgba(0,0,0,.55);
+  --bg-scrim-light: rgba(0,0,0,.35);
+  --shadow-popup: var(--shadow-menu);
+}
+:root[data-theme="dark"] {
+  --border-control: rgba(255,255,255,0.35);
+  --info: #7fb2e5;
+  --info-soft: rgba(127,178,229,0.14);
+  --info-border: color-mix(in srgb, var(--info) 40%, transparent);
+  --on-danger: #1a0a0a;
+  --shadow-1: 0 1px 2px rgba(0,0,0,.3);
+  --shadow-2: 0 8px 24px rgba(0,0,0,.4);
+}
+:root[data-theme="light"] {
+  --border-control: rgba(10,10,10,0.44);
+  --info: #2b5fa8;
+  --info-soft: rgba(43,95,168,0.10);
+  --info-border: color-mix(in srgb, var(--info) 40%, transparent);
+  --on-danger: #ffffff;
+  --shadow-1: 0 1px 2px rgba(0,0,0,.06);
+  --shadow-2: 0 8px 24px rgba(0,0,0,.12);
+}

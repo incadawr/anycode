@@ -32,6 +32,7 @@
  * recreate" criterion) without touching `@xterm/xterm` OR `document` at all;
  * production code (the `terminalView` singleton below) uses the real classes.
  */
+import { subscribeAccent } from "./accent.js";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { getResolvedTheme, subscribeResolvedTheme, type ResolvedTheme } from "./theme.js";
@@ -47,12 +48,9 @@ export const TERMINAL_SCROLLBACK_LINES = 5000;
  * the remaining ANSI slots are conventional palette colors (tokens.css has no
  * semantic slot for e.g. ANSI magenta/cyan) with `black`/`red`/`green`/`yellow`/
  * `blue` nudged toward `--danger`/`--success`/`--warning`/`--accent` where a
- * token exists. Kept as plain constants (not read from computed CSS custom
- * properties) — this module has no reliable DOM node to read them from at
- * construction time, and hand-rolled xterm addon regressions from
- * `getComputedStyle` timing aren't worth it for a best-effort polish task.
- * Keep in sync with tokens.css's dark/light blocks by hand (same
- * keep-in-sync discipline as the app's other duplicated literals).
+ * token exists. Cursor and selection now read the accent token from the root.
+ * All other colors deliberately remain literals, including the ANSI palette;
+ * the constants also provide fallbacks when computed CSS is unavailable.
  */
 const DARK_XTERM_THEME: ITheme = {
   background: "#101010",
@@ -102,8 +100,19 @@ const LIGHT_XTERM_THEME: ITheme = {
   brightWhite: "#ffffff",
 };
 
-function xtermThemeFor(resolved: ResolvedTheme): ITheme {
-  return resolved === "dark" ? DARK_XTERM_THEME : LIGHT_XTERM_THEME;
+export function readAccentCss(): string {
+  if (typeof document === "undefined" || typeof getComputedStyle === "undefined") return "";
+  return getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
+}
+export function withAccent(base: ITheme, accentCss: string, resolved: ResolvedTheme): ITheme {
+  const hex = /^#([0-9a-f]{6})$/i.exec(accentCss);
+  const rgb = /^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/i.exec(accentCss);
+  const channels = hex ? [0, 2, 4].map(i => parseInt(hex[1]!.slice(i, i + 2), 16)) : rgb ? rgb.slice(1).map(Number) : null;
+  if (!channels || channels.some(c => c > 255)) return base;
+  return { ...base, cursor: accentCss, selectionBackground: `rgba(${channels.join(", ")}, ${resolved === "dark" ? 0.25 : 0.18})` };
+}
+function xtermThemeFor(resolved: ResolvedTheme, readCss: () => string = readAccentCss): ITheme {
+  return withAccent(resolved === "dark" ? DARK_XTERM_THEME : LIGHT_XTERM_THEME, readCss(), resolved);
 }
 
 /**
@@ -141,17 +150,17 @@ export interface FitAddonLike {
 }
 
 export interface TerminalFactories {
-  createTerminal(): TerminalLike;
+  createTerminal(readCss?: () => string): TerminalLike;
   createFitAddon(): FitAddonLike;
   createHolder(): HTMLDivElement;
 }
 
 const defaultFactories: TerminalFactories = {
-  createTerminal: () =>
+  createTerminal: (readCss = readAccentCss) =>
     new Terminal({
       scrollback: TERMINAL_SCROLLBACK_LINES,
       cursorBlink: true,
-      theme: xtermThemeFor(getResolvedTheme()),
+      theme: xtermThemeFor(getResolvedTheme(), readCss),
     }) as unknown as TerminalLike,
   createFitAddon: () => new FitAddon() as unknown as FitAddonLike,
   createHolder: () => {
@@ -236,7 +245,7 @@ export interface TerminalView {
 }
 
 /** Builds an isolated terminal-view registry; `factories` is injectable so tests never touch real `@xterm/xterm` or `document`. */
-export function createTerminalView(factories: TerminalFactories = defaultFactories): TerminalView {
+export function createTerminalView(factories: TerminalFactories = defaultFactories, readCss: () => string = readAccentCss): TerminalView {
   const records = new Map<string, TerminalRecord>();
 
   function notifyDead(record: TerminalRecord, dead: boolean): void {
@@ -256,7 +265,7 @@ export function createTerminalView(factories: TerminalFactories = defaultFactori
         existing.onInput = onInput;
         return;
       }
-      const term = factories.createTerminal();
+      const term = factories.createTerminal(readCss);
       const fit = factories.createFitAddon();
       term.loadAddon(fit);
       const holder = factories.createHolder();
@@ -393,7 +402,7 @@ export function createTerminalView(factories: TerminalFactories = defaultFactori
     },
 
     applyTheme(resolved): void {
-      const theme = xtermThemeFor(resolved);
+      const theme = xtermThemeFor(resolved, readCss);
       for (const record of records.values()) {
         if (record.term.options) {
           record.term.options.theme = theme;
@@ -413,3 +422,5 @@ export const terminalView = createTerminalView();
 // terminals created after a flip already pick up the new theme via
 // `defaultFactories.createTerminal`'s `getResolvedTheme()` read.
 subscribeResolvedTheme((resolved) => terminalView.applyTheme?.(resolved));
+
+subscribeAccent(() => terminalView.applyTheme?.(getResolvedTheme()));
