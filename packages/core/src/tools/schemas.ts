@@ -318,8 +318,11 @@ export const agentInputSchema = z.object({
     .min(1)
     .optional()
     .describe(
-      "Session tier only: id of the provider connection to run the child session on " +
-        "(defaults to this session's own connection). Invalid for inline tier.",
+      "Session tier only: the CATALOG provider id to run the child session on " +
+        "(for example \"z-ai\", \"kimi\", \"custom:<uuid>\"; defaults to this " +
+        "session's own connection). This is connection.providerId, NOT connection.id " +
+        "— a value starting with \"conn-\" never matches. A model passed alongside it " +
+        "must belong to that connection. Invalid for inline tier.",
     ),
   model: z
     .string()

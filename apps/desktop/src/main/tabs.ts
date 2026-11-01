@@ -247,7 +247,7 @@ const RESUMABLE_CHILDREN_MAX = 64;
 const FOLLOW_UP_ALIASES_MAX = 256;
 
 function childProviderNotReadyMessage(provider: string): string {
-  return `Agent: provider connection "${provider}" is not available in this host. Omit "provider" to use the parent session's connection.`;
+  return `Agent: no provider connection matches providerId "${provider}". "provider" takes the CATALOG provider id (for example "z-ai", "kimi", "custom:<uuid>"), not the connection id from the connection list. Omit "provider" to use the parent session's connection.`;
 }
 
 /**
