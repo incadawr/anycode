@@ -5223,21 +5223,30 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // legacy running turn, even when its turnId happens to match.
             const busyForAnotherRequest = isSessionBusy(activeTurn.status) &&
               (activeTurn.status !== "running" || activeTurn.turnId !== message.turnId || activeTurn.requestId !== message.requestId);
-            // A start for an unconfirmed pre-disconnect attempt can arrive
-            // while another turn or manual compaction owns the session.
-            // Record the inconsistent overlap without replacing its state.
-            if (knownDelivery?.status === "unknown" && busyForAnotherRequest) {
-              set((state) => reconcileQueuedRetries(state.promptQueue, state.orchestrationDeliveries.map(item => item.requestId === message.requestId
-                ? { ...item, status: "conflict" as const, turnId: message.turnId, reviewed: false }
-                : item)));
+            // Any known request starting over a different active turn or
+            // manual compaction is contradictory. Preserve the active owner
+            // and the delivery payload; no automatic retry is safe here.
+            if (knownDelivery && busyForAnotherRequest) {
+              set((state) => {
+                const deliveries = state.orchestrationDeliveries.map(item => {
+                  if (item.requestId !== message.requestId) return item;
+                  if (item.terminalReason || item.status === "finished" || item.status === "conflict") return deliveryStarted(item, message.turnId);
+                  return { ...item, status: "conflict" as const, turnId: item.turnId ?? message.turnId, reviewed: false, dismissed: undefined, preservePayload: true as const };
+                });
+                return {
+                  ...reconcileQueuedRetries(state.promptQueue, deliveries),
+                  ...(state.queueInFlight?.requestId === message.requestId ? { queueInFlight: null } : {}),
+                  pendingSteers: state.pendingSteers.filter(entry => entry.requestId !== message.requestId),
+                  uiSteerPending: state.uiSteerPending.filter(id => id !== message.requestId),
+                };
+              });
               return;
             }
             // A replay (or a contradictory second start for a finished request)
             // must update correlation without reviving an already ended turn.
             // Keep this fence across host_ready resets via the delivery ledger.
             if (knownDelivery?.terminalReason || loopEndEmitted.has(`loop_end:${message.turnId}`) ||
-              (knownDelivery?.turnId && (knownDelivery.status === "conflict" || knownDelivery.turnId !== message.turnId)) ||
-              (knownDelivery?.status === "rejected" && busyForAnotherRequest)) {
+              (knownDelivery?.turnId && (knownDelivery.status === "conflict" || knownDelivery.turnId !== message.turnId))) {
               set((state) => reconcileQueuedRetries(state.promptQueue, startedDeliveries(state, message.requestId, message.turnId)));
               return;
             }

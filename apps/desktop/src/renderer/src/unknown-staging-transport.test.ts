@@ -9,6 +9,118 @@ const ready: HostToUiMessage = { type: "host_ready", workspace: "/synthetic", se
 const image = () => ({ name: "synthetic.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } });
 
 describe("unknown delivery over real MessageChannel", () => {
+  it.each(["turn-A", "turn-B"])("keeps B when pending A reports %s", (lateTurnId) => {
+    const store = createDesktopStore({ schedule: () => {} });
+    const saved = image();
+    store.getState().applyHostMessage(ready);
+    store.getState().recordSentMessage("A", [saved], "A", undefined, undefined, undefined, undefined, true);
+    store.getState().recordSentMessage("B", [], "B", undefined, undefined, undefined, undefined, true);
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "B", turnId: "turn-B" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "A", turnId: lateTurnId });
+    expect(store.getState().turn).toMatchObject({ status: "running", requestId: "B", turnId: "turn-B" });
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "A")).toMatchObject({ status: "conflict", turnId: lateTurnId, images: [saved] });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "turn-B", event: { type: "loop_end", reason: "completed", turns: 1 } });
+    expect(store.getState().turn.status).toBe("idle");
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "A")?.terminalReason).toBeUndefined();
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "B")?.terminalReason).toBe("completed");
+    expect(store.getState().claimRecoveryAttempt("A", "unsafe", "retry", [saved], undefined)).toBe(false);
+  });
+
+  it.each(["turn-A", "turn-B"])("preserves B against pending A start %s over MessageChannel", async (lateTurnId) => {
+    const registry = createTabRegistry(createTabsStore());
+    const channel = new MessageChannel();
+    const sent: Array<{type: string; requestId?: string}> = [];
+    channel.port2.on("message", message => sent.push(message));
+    try {
+      registry.registerPort("tab", "/synthetic", channel.port1 as unknown as MessagePort);
+      channel.port2.postMessage(ready);
+      await vi.waitFor(() => expect(registry.getStore("tab")?.getState().connection).toBe("ready"));
+      const store = registry.getStore("tab")!;
+      const saved = image();
+      store.getState().recordSentMessage("A", [saved], "A", undefined, undefined, undefined, undefined, true);
+      registry.sendToTab("tab", { type: "user_message", requestId: "A", text: "A", images: [saved.attachment] });
+      store.getState().recordSentMessage("B", [], "B", undefined, undefined, undefined, undefined, true);
+      registry.sendToTab("tab", { type: "user_message", requestId: "B", text: "B" });
+      await vi.waitFor(() => expect(sent.filter(item => item.type === "user_message")).toHaveLength(2));
+      channel.port2.postMessage({ type: "turn_started", requestId: "B", turnId: "turn-B" });
+      channel.port2.postMessage({ type: "turn_started", requestId: "A", turnId: lateTurnId });
+      await vi.waitFor(() => expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "A")).toMatchObject({ status: "conflict", images: [saved] }));
+      expect(store.getState().turn).toMatchObject({ status: "running", requestId: "B", turnId: "turn-B" });
+      channel.port2.postMessage({ type: "agent_event", turnId: "turn-B", event: { type: "loop_end", reason: "completed", turns: 1 } });
+      await vi.waitFor(() => expect(store.getState().turn.status).toBe("idle"));
+      expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "A")?.terminalReason).toBeUndefined();
+      expect(sent.filter(item => item.type === "user_message").map(item => item.requestId)).toEqual(["A", "B"]);
+    } finally { registry.disposeTab("tab"); channel.port1.close(); channel.port2.close(); }
+  });
+
+  it("preserves manual compaction when pending A starts", () => {
+    const store = createDesktopStore({ schedule: () => {} });
+    const saved = image();
+    store.getState().applyHostMessage(ready);
+    store.getState().recordSentMessage("A", [saved], "A", undefined, undefined, undefined, undefined, true);
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "manual-compaction", event: { type: "compaction_start", trigger: "manual" } });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "A", turnId: "turn-A" });
+    expect(store.getState().turn.status).toBe("compacting");
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "conflict", images: [saved] });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "manual-compaction", event: { type: "compaction_end", ok: true, postTokens: 1, durationMs: 1 } });
+    expect(store.getState().turn.status).toBe("idle");
+  });
+
+  it("keeps a legacy null-request running turn when pending A reports its turn ID", () => {
+    const store = createDesktopStore({ schedule: () => {} });
+    store.getState().applyHostMessage(ready);
+    store.getState().recordSentMessage("A", [image()], "A", undefined, undefined, undefined, undefined, true);
+    store.setState({ turn: { status: "running", turnId: "shared", requestId: null } });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "A", turnId: "shared" });
+    expect(store.getState().turn).toMatchObject({ status: "running", requestId: null, turnId: "shared" });
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "conflict", images: [image()] });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "shared", event: { type: "loop_end", reason: "completed", turns: 1 } });
+    expect(store.getState().orchestrationDeliveries[0]?.terminalReason).toBeUndefined();
+  });
+
+  it("accepts a pending delivery when both active IDs match", () => {
+    const store = createDesktopStore({ schedule: () => {} });
+    const saved = image();
+    store.getState().applyHostMessage(ready);
+    store.getState().recordSentMessage("A", [saved], "A", undefined, undefined, undefined, undefined, true);
+    store.setState({ turn: { status: "running", requestId: "A", turnId: "turn-A" } });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "A", turnId: "turn-A" });
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "started", turnId: "turn-A", images: [saved] });
+    expect(store.getState().turn).toMatchObject({ status: "running", requestId: "A", turnId: "turn-A" });
+  });
+
+  it.each(["pending", "unknown", "rejected", "started", "finished", "conflict"] as const)("preserves the active owner for a known %s delivery during compaction", (status) => {
+    const store = createDesktopStore({ schedule: () => {} });
+    const saved = image();
+    store.getState().applyHostMessage(ready);
+    store.getState().recordSentMessage("A", [saved], "A", undefined, undefined, undefined, undefined, true);
+    store.setState(state => ({ orchestrationDeliveries: state.orchestrationDeliveries.map(item => ({ ...item, status, ...(status === "started" || status === "finished" || status === "conflict" ? { turnId: "old-A" } : {}), ...(status === "finished" ? { terminalReason: "completed" as const } : {}) })) }));
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "manual-compaction", event: { type: "compaction_start", trigger: "manual" } });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "A", turnId: "late-A" });
+    expect(store.getState().turn.status).toBe("compacting");
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "conflict", images: [saved], text: "A" });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "manual-compaction", event: { type: "compaction_end", ok: true, postTokens: 1, durationMs: 1 } });
+    expect(store.getState().turn.status).toBe("idle");
+  });
+
+  it("retires conflicting in-flight and steer slots without requeueing the preserved payload", () => {
+    const store = createDesktopStore({ schedule: () => {} });
+    const saved = image();
+    store.getState().applyHostMessage(ready);
+    store.getState().recordSentMessage("A", [saved], "A", undefined, undefined, undefined, undefined, true);
+    store.getState().recordPendingSteer("A", "A", [saved.attachment], { text: "A", images: [saved] });
+    store.getState().markUiSteer("A");
+    store.setState({ queueInFlight: { requestId: "A", item: { id: "queued-A", text: "A", images: [saved] } } });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "B", turnId: "turn-B" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "A", turnId: "turn-A" });
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "conflict", images: [saved] });
+    expect(store.getState().queueInFlight).toBeNull();
+    expect(store.getState().pendingSteers).toEqual([]);
+    expect(store.getState().uiSteerPending).toEqual([]);
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "turn-B", event: { type: "loop_end", reason: "completed", turns: 1 } });
+    expect(store.getState().promptQueue).toEqual([]);
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "conflict", images: [saved] });
+  });
   it.each(["unknown", "rejected"] as const)("keeps request B and terminal attribution when %s A reports B's turn ID", (status) => {
     const store = createDesktopStore({ schedule: () => {} });
     const saved = image();
