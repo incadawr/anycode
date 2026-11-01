@@ -33,7 +33,7 @@ import {
 } from "../adapters/node/index.js";
 // Not re-exported from adapters/node/index.js (barrel is frozen to 1.1); imported
 // directly from their owning module per task 1.7's file ownership.
-import { SqlitePersistenceAdapter, WriteBehindHistorySink } from "../adapters/node/sqlite-persistence.js";
+import { SqlitePersistenceAdapter, WriteBehindHistorySink, readCliSessionPreflight } from "../adapters/node/sqlite-persistence.js";
 // Registered only by this CLI wiring (design slice-4.7-cut.md §2.9/L1): the
 // shadow-git checkpoint service. Imported directly from its owning module
 // (checkpoints/ is not in the ports barrel), same pattern as the sqlite adapter.
@@ -605,14 +605,38 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
   // hooks, plugins, MCP, or other process-bearing resources. Never fall back to
   // a new session for an explicitly requested missing or incompatible id.
   const dbPath = envConfig.dbPath ?? join(home, ".anycode", "anycode.sqlite");
-  const persistence = new SqlitePersistenceAdapter(dbPath, { strictSessionSchema: true });
-  registerPersistence(persistence);
   const requestedResumeId = options?.resumeSessionId ?? parsedArgs.resumeSessionId;
   const wantPicker = parsedArgs.resumePicker && requestedResumeId === undefined;
   const wantContinue = parsedArgs.continueSession && requestedResumeId === undefined && !wantPicker;
   if (parsedArgs.continueSession && (requestedResumeId !== undefined || wantPicker)) {
     bootWrite("[warn] --continue ignored: --resume was given\n");
   }
+  let preflightSelected: ReturnType<typeof readCliSessionPreflight>[number] | undefined;
+  try {
+    const rows = readCliSessionPreflight(dbPath, requestedResumeId !== undefined
+      ? {id:requestedResumeId,limit:1}
+      : wantContinue ? {workspace:cwd,limit:1} : wantPicker ? {workspace:cwd,limit:SESSIONS_PICKER_LIMIT} : {limit:0});
+    if (requestedResumeId !== undefined || wantContinue) preflightSelected = rows[0];
+    else if (wantPicker && rows.length) {
+      const pick = await promptSessionSelection({sessions:rows,input,output,theme});
+      if (pick.kind === "abort") return 130;
+      if (pick.kind === "resume") preflightSelected = pick.session;
+    }
+    if (requestedResumeId !== undefined && !preflightSelected) {
+      errWrite("Cannot resume: the requested root session was not found. Choose an existing session or start a new session explicitly.\n");
+      return 1;
+    }
+    if (preflightSelected && ((preflightSelected.engineId !== undefined && preflightSelected.engineId !== "core") || preflightSelected.externalSessionRef !== undefined)) {
+      errWrite("Cannot resume: this session belongs to another engine or has incompatible native session metadata. Choose a core session or start a new session explicitly.\n");
+      return 1;
+    }
+    if (wantPicker && !rows.length) bootWrite("[sessions] no sessions for this workspace; starting a new session\n");
+  } catch (error) {
+    errWrite(`Cannot open session database: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+  const persistence = new SqlitePersistenceAdapter(dbPath, { strictSessionSchema: true, cliAdmission: {id:preflightSelected?.id,...(wantContinue ? {latestWorkspace:cwd} : {})} });
+  registerPersistence(persistence);
   let resumedSession: Awaited<ReturnType<typeof persistence.getRootSession>> = null;
   let resumedHistory: Awaited<ReturnType<typeof persistence.loadHistory>> = [];
   try {
@@ -626,22 +650,18 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
         return 1;
       }
     } else if (wantContinue) {
-      const [last] = await persistence.listRootSessions({ workspace: cwd, limit: 1 });
-      if (last) resumedSession = last;
+      if (preflightSelected) {
+        resumedSession = await persistence.getRootSession(preflightSelected.id);
+        if (!resumedSession) { errWrite("Cannot resume: the selected session is no longer available. Choose again.\n"); return 1; }
+      }
       else bootWrite("[warn] no previous session for this workspace; starting a new session\n");
     } else if (wantPicker) {
-      const metas = await persistence.listRootSessions({ workspace: cwd, limit: SESSIONS_PICKER_LIMIT });
-      if (metas.length === 0) bootWrite("[sessions] no sessions for this workspace; starting a new session\n");
-      else {
-        const pick = await promptSessionSelection({ sessions: metas, input, output, theme });
-        if (pick.kind === "abort") { await persistence.close(); return 130; }
-        if (pick.kind === "resume") {
-          resumedSession = await persistence.getRootSession(pick.session.id);
-          if (!resumedSession) {
-            errWrite("Cannot resume: the selected session is no longer available. Choose again.\n");
-            await persistence.close();
-            return 1;
-          }
+      if (preflightSelected) {
+        resumedSession = await persistence.getRootSession(preflightSelected.id);
+        if (!resumedSession) {
+          errWrite("Cannot resume: the selected session is no longer available. Choose again.\n");
+          await persistence.close();
+          return 1;
         }
       }
     }
