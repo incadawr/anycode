@@ -3006,7 +3006,8 @@ void app.whenReady().then(async () => {
       // The kill switch is read per request, so flipping it needs no restart.
       enabled: () => settings?.codexContinueOnAnotherAccount !== "off",
       claimContinuation: (threadId, accountId, ttlMs) => store.claimContinuation(threadId, accountId, ttlMs),
-      releaseContinuation: (threadId, accountId) => store.releaseContinuation(threadId, accountId),
+      holdsContinuation: (threadId, accountId, token) => store.holdsContinuation(threadId, accountId, token),
+      releaseContinuation: (threadId, accountId, token) => store.releaseContinuation(threadId, accountId, token),
       deleteSession: (sessionId) => store.deleteSession(sessionId),
       openResumeTab: async (sessionId) => {
         const created = await handleCreate(tabIpcDeps, { kind: "resume", sessionId });

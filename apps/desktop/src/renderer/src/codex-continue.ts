@@ -27,7 +27,7 @@ export interface CodexContinueController {
   /** The choices to show; the exhausted account is already excluded. */
   accounts(): Promise<readonly CodexAccountOption[]>;
   /** Opens the new tab. A refusal's `detail` is shown in the banner as-is. */
-  continueOn(accountId: string): Promise<{ ok: true } | { ok: false; detail: string }>;
+  continueOn(accountId: string): Promise<{ ok: true; warning?: string } | { ok: false; detail: string }>;
 }
 
 /**
@@ -58,7 +58,9 @@ export function useCodexContinue(tabId: string, enabled: boolean): CodexContinue
       },
       async continueOn(accountId: string) {
         const result = await api.continueOnAccount(tabId, accountId);
-        return result.ok ? { ok: true as const } : { ok: false as const, detail: result.detail };
+        return result.ok
+          ? { ok: true as const, ...(result.warning !== undefined ? { warning: result.warning } : {}) }
+          : { ok: false as const, detail: result.detail };
       },
     };
   }, [tabId, enabled]);

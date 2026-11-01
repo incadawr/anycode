@@ -3102,6 +3102,9 @@ describe("WriteBehindHistorySink", () => {
     claimContinuation(): Promise<ContinuationClaim> {
       throw new Error("not used in this test");
     }
+    holdsContinuation(): Promise<boolean> {
+      throw new Error("not used in this test");
+    }
     releaseContinuation(): Promise<void> {
       throw new Error("not used in this test");
     }
@@ -3991,38 +3994,38 @@ describe("context snapshot bookkeeping", () => {
   });
 });
 
-describe("SqlitePersistenceAdapter — continuation claims ( §2.4)", () => {
+describe("SqlitePersistenceAdapter — continuation claims", () => {
   const TTL = 60_000;
 
   it("grants a fresh claim, then holds it against a second claimant", async () => {
     const adapter = new SqlitePersistenceAdapter(":memory:");
-    expect(await adapter.claimContinuation("thread-1", "account-b", TTL)).toBe("claimed");
-    expect(await adapter.claimContinuation("thread-1", "account-b", TTL)).toBe("held");
+    expect(await adapter.claimContinuation("thread-1", "account-b", TTL)).toMatchObject({ status: "claimed" });
+    expect(await adapter.claimContinuation("thread-1", "account-b", TTL)).toEqual({ status: "held", token: null });
     // A different account is a different transfer and must not be blocked.
-    expect(await adapter.claimContinuation("thread-1", "account-c", TTL)).toBe("claimed");
+    expect(await adapter.claimContinuation("thread-1", "account-c", TTL)).toMatchObject({ status: "claimed" });
     await adapter.close();
   });
 
   it("releases a claim so the same pair can be claimed again", async () => {
     const adapter = new SqlitePersistenceAdapter(":memory:");
-    await adapter.claimContinuation("thread-1", "account-b", TTL);
-    await adapter.releaseContinuation("thread-1", "account-b");
-    expect(await adapter.claimContinuation("thread-1", "account-b", TTL)).toBe("claimed");
+    const held = await adapter.claimContinuation("thread-1", "account-b", TTL);
+    await adapter.releaseContinuation("thread-1", "account-b", held.token!);
+    expect(await adapter.claimContinuation("thread-1", "account-b", TTL)).toMatchObject({ status: "claimed" });
     await adapter.close();
   });
 
   it("takes over an EXPIRED claim and says so, instead of reporting it as fresh", async () => {
     const adapter = new SqlitePersistenceAdapter(":memory:");
-    expect(await adapter.claimContinuation("thread-1", "account-b", -1)).toBe("claimed");
-    expect(await adapter.claimContinuation("thread-1", "account-b", TTL)).toBe("taken_over");
+    expect(await adapter.claimContinuation("thread-1", "account-b", -1)).toMatchObject({ status: "claimed" });
+    expect(await adapter.claimContinuation("thread-1", "account-b", TTL)).toMatchObject({ status: "taken_over" });
     // ...and the takeover is now a live claim like any other.
-    expect(await adapter.claimContinuation("thread-1", "account-b", TTL)).toBe("held");
+    expect(await adapter.claimContinuation("thread-1", "account-b", TTL)).toEqual({ status: "held", token: null });
     await adapter.close();
   });
 
   it("treats releasing an absent claim as a no-op", async () => {
     const adapter = new SqlitePersistenceAdapter(":memory:");
-    await expect(adapter.releaseContinuation("never", "account-b")).resolves.toBeUndefined();
+    await expect(adapter.releaseContinuation("never", "account-b", "no-token")).resolves.toBeUndefined();
     await adapter.close();
   });
 
@@ -4030,13 +4033,40 @@ describe("SqlitePersistenceAdapter — continuation claims ( §2.4)", () => {
     const dir = await mkdtemp(join(tmpdir(), "claims-"));
     const file = join(dir, "claims.sqlite");
     const first = new SqlitePersistenceAdapter(file);
-    expect(await first.claimContinuation("thread-1", "account-b", TTL)).toBe("claimed");
+    expect(await first.claimContinuation("thread-1", "account-b", TTL)).toMatchObject({ status: "claimed" });
     // The point of the claim: the in-process `isThreadOpen` guard cannot see
     // another host process, so the guard has to live in the shared file.
     const second = new SqlitePersistenceAdapter(file);
-    expect(await second.claimContinuation("thread-1", "account-b", TTL)).toBe("held");
+    expect(await second.claimContinuation("thread-1", "account-b", TTL)).toEqual({ status: "held", token: null });
     await first.close();
     await second.close();
     await rm(dir, { recursive: true, force: true });
+  });
+});
+
+describe("SqlitePersistenceAdapter — claim ownership across an expiry", () => {
+  it("a superseded holder cannot release its successor's claim, so a third claimant is refused", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    // A claims with a TTL that is already over: it dies mid-transfer.
+    const a = await adapter.claimContinuation("thread-1", "account-b", -1);
+    expect(a).toMatchObject({ status: "claimed" });
+    // B takes over the expired claim.
+    const b = await adapter.claimContinuation("thread-1", "account-b", 60_000);
+    expect(b).toMatchObject({ status: "taken_over" });
+    expect(b.token).not.toBe(a.token);
+    // A finally reaches its `finally` block. By token, this must be a no-op:
+    // without ownership, A would free the pair and C could start while B works.
+    await adapter.releaseContinuation("thread-1", "account-b", a.token!);
+    expect(await adapter.claimContinuation("thread-1", "account-b", 60_000)).toEqual({ status: "held", token: null });
+    expect(await adapter.holdsContinuation("thread-1", "account-b", b.token!)).toBe(true);
+    expect(await adapter.holdsContinuation("thread-1", "account-b", a.token!)).toBe(false);
+    await adapter.close();
+  });
+
+  it("reports a dead claim as not held even before anyone takes it over", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    const dead = await adapter.claimContinuation("thread-1", "account-b", -1);
+    expect(await adapter.holdsContinuation("thread-1", "account-b", dead.token!)).toBe(false);
+    await adapter.close();
   });
 });

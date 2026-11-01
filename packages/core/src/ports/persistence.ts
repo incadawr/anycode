@@ -142,9 +142,20 @@ export type SessionMetaPatch = Partial<
 /**
  * Outcome of `claimContinuation`. `taken_over` is distinct from `claimed` on
  * purpose: an expired claim means the previous transfer was abandoned midway,
- * which is a fact the refusal text must not hide.
+ * which is a fact the text must not hide. `held` means a live claim exists.
  */
-export type ContinuationClaim = "claimed" | "taken_over" | "held";
+export type ContinuationClaimStatus = "claimed" | "taken_over" | "held";
+
+/**
+ * A claim and the token proving who holds it. The token is what makes expiry
+ * safe: an owner whose claim expired (and was taken over) must not be able to
+ * delete the NEW owner's claim on its way out, nor to publish its stale copy.
+ */
+export interface ContinuationClaim {
+  status: ContinuationClaimStatus;
+  /** `null` when `status` is `held` — the caller owns nothing. */
+  token: string | null;
+}
 
 export interface SessionDeleteSummary {
   deleted: string[];
@@ -187,10 +198,17 @@ export interface PersistencePort {
    */
   claimContinuation(threadId: string, accountId: string, ttlMs: number): Promise<ContinuationClaim>;
   /**
-   * Drop one claim. Idempotent: releasing an absent or another process's
-   * expired claim is a no-op, never an error.
+   * True only while `token` still owns a LIVE claim. A transfer that outlived
+   * its TTL must check this before publishing: after a takeover the copy it
+   * made is no longer authoritative and another process may be writing.
    */
-  releaseContinuation(threadId: string, accountId: string): Promise<void>;
+  holdsContinuation(threadId: string, accountId: string, token: string): Promise<boolean>;
+  /**
+   * Drop the claim IF `token` still owns it. Idempotent, and — the reason the
+   * token is required — a slow owner whose claim was taken over cannot delete
+   * the new owner's claim.
+   */
+  releaseContinuation(threadId: string, accountId: string, token: string): Promise<void>;
   /**
    * UX-facing selection (S2a §2.4): ONLY root sessions
    * (`parentSessionId` absent). This is the SOLE list any picker, history
