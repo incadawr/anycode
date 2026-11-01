@@ -2663,6 +2663,7 @@ export class Session {
         return;
       case "user_message":
           if (message.orchestrate !== undefined) this.outbound.sendDirect({ type: "user_message_unavailable", requestId: message.requestId, reason: "orchestrate_unavailable" });
+          else if (this.postureBlocked()) this.outbound.sendDirect({ type: "user_message_unavailable", requestId: message.requestId, reason: "posture_unavailable" });
           else this.outbound.emit({ type: "turn_rejected", requestId: message.requestId, reason: "not_ready" });
           break;
         case "set_orchestrate":

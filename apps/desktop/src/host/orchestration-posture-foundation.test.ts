@@ -22,6 +22,54 @@ const internal = (session: Session): Internals => session as unknown as Internal
 const diagnostic = (id: string) => (message: HostToUiMessage): message is Extract<HostToUiMessage, {type: "user_message_unavailable"}> => message.type === "user_message_unavailable" && message.requestId === id;
 
 describe("dormant orchestration posture admission foundation", () => {
+  it.each(["transitioning", "quarantined"] as const)("keeps repeated started ID frame-level after admissions close in %s", async (posture) => {
+    const h = createHarness({ steps: [], gated: { parkAfterIndex: 0 } });
+    try {
+      h.send({ type: "ui_ready" });
+      const ready = await h.waitFor((m): m is Extract<HostToUiMessage, {type:"host_ready"}> => m.type === "host_ready");
+      h.send({ type: "user_message", requestId: "same", text: "first" });
+      const started = await h.waitFor((m): m is Extract<HostToUiMessage, {type:"turn_started"}> => m.type === "turn_started" && m.requestId === "same");
+      internal(h.session).orchestrationPosture = posture;
+      h.session.closeAdmissions();
+      h.send({ type: "user_message", requestId: "same", text: "repeated frame" });
+      h.send({ type: "set_orchestrate", enabled: true, requestId: "sentinel" });
+      await h.waitFor((m): m is Extract<HostToUiMessage, {type:"orchestrate_result"}> => m.type === "orchestrate_result" && m.requestId === "sentinel");
+      const refused = h.received.find(diagnostic("same"));
+      expect(refused).toMatchObject({ type: "user_message_unavailable", requestId: "same", reason: "posture_unavailable" });
+      expect(h.received.filter(m => m.type === "turn_rejected" && m.requestId === "same")).toEqual([]);
+      const store = createDesktopStore({ schedule: () => {} });
+      store.getState().applyHostMessage(ready);
+      store.getState().recordSentMessage("first", [], "same", undefined, undefined, undefined, undefined, true);
+      store.getState().applyHostMessage(started);
+      store.getState().applyHostMessage(refused!);
+      expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ requestId: "same", status: "started", turnId: started.turnId, text: "first" });
+    } finally { h.gated?.release(); h.close(); }
+  });
+
+  it("keeps the legacy shutdown rejection in stable posture", async () => {
+    const h = createHarness({ steps: [] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor((m): m is Extract<HostToUiMessage, {type:"host_ready"}> => m.type === "host_ready");
+      h.session.closeAdmissions();
+      h.send({ type: "user_message", requestId: "legacy", text: "message" });
+      expect(await h.waitFor((m): m is Extract<HostToUiMessage, {type:"turn_rejected"}> => m.type === "turn_rejected" && m.requestId === "legacy")).toMatchObject({ reason: "not_ready" });
+      expect(h.received.find(diagnostic("legacy"))).toBeUndefined();
+    } finally { h.close(); }
+  });
+
+  it.each(["stable", "quarantined"] as const)("keeps the reserved intent diagnostic during shutdown in %s", async (posture) => {
+    const h = createHarness({ steps: [] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor((m): m is Extract<HostToUiMessage, {type:"host_ready"}> => m.type === "host_ready");
+      internal(h.session).orchestrationPosture = posture;
+      h.session.closeAdmissions();
+      h.send({ type: "user_message", requestId: "reserved", text: "task", orchestrate: "enable" });
+      expect(await h.waitFor(diagnostic("reserved"))).toMatchObject({ reason: "orchestrate_unavailable" });
+      expect(h.received.filter(m => m.type === "turn_rejected" && m.requestId === "reserved")).toEqual([]);
+    } finally { h.close(); }
+  });
   it.each(["transitioning", "quarantined"] as const)("holds direct, system and initial frames in %s without claiming terminal rejection", async (posture) => {
     const h = createHarness({ steps: [] });
     const run = vi.spyOn(h.engine, "runTurn");
