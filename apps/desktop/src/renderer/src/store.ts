@@ -1381,6 +1381,7 @@ export interface DesktopState {
   restoredComposerDraft: { text: string; images: readonly QueuedPromptImage[]; orchestrate?: "enable"; initialPicks?: QueuedPrompt["initialPicks"] } | null;
   composerImageGeneration: number;
   completedComposerImages: readonly QueuedPromptImage[];
+  pendingComposerImages: readonly { id: string; name: string }[];
   /**
    * Cross-review F2 (2026-10-24): requestIds of the steers whose text was
    * ALREADY recovered into `promptQueue` from a `steer_requeued` message (the
@@ -4831,6 +4832,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       restoredComposerDraft: null,
       composerImageGeneration: 0,
       completedComposerImages: [],
+      pendingComposerImages: [],
       queuePaused: false,
       queuePauseReason: "cancelled",
       continueOffer: null,
@@ -6189,7 +6191,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
 
       reset(): void {
         pendingSentMessages.clear();
-        set((state) => ({ restoredComposerDraft: null, completedComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 }));
+        set((state) => ({ restoredComposerDraft: null, completedComposerImages: [], pendingComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 }));
         performReset();
         // a genuinely new session drops staged markers, the
         // boundary flags and the lifted session id along with the transcript.

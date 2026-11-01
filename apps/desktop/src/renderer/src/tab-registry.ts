@@ -799,6 +799,7 @@ export function createTabRegistry(
         tabsStore.getState().removeTab(tabId);
         return;
       }
+      entry.store.setState((state) => ({ pendingComposerImages: [], completedComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 }));
       const pendingModel = pendingInitialModels.get(tabId);
       if (pendingModel) { clearTimeout(pendingModel.timer); pendingInitialModels.delete(tabId); }
       entry.unsubscribeMessages?.();
@@ -904,6 +905,7 @@ export function createTabRegistry(
     reset(): void {
       for (const pending of pendingInitialModels.values()) clearTimeout(pending.timer);
       pendingInitialModels.clear();
+      for (const entry of entries.values()) entry.store.setState((state) => ({ pendingComposerImages: [], completedComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 }));
       entries.clear();
       closedTabIds.clear();
       agentTitles.clear();

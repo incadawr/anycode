@@ -24,7 +24,7 @@ import { lazy, Suspense, useContext, useEffect, useLayoutEffect, useRef, useStat
 import type { ClipboardEvent, DragEvent, FocusEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { CodexRateLimitsWire, ImageAttachment, ImageMediaType, PermissionMode } from "@anycode/core";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
-import { isSessionBusy, type ContextUsage, type DesktopState, type QueuedPrompt, type QueuedPromptImage, type SessionTokens, type TurnState } from "../store.js";
+import { isSessionBusy, type ContextUsage, type DesktopState, type QueuedPrompt, type SessionTokens, type TurnState } from "../store.js";
 import { useSettingsStore } from "../settings-store.js";
 import { useTabsStore } from "../tabs-store.js";
 import type { ProviderConnection } from "../../../shared/settings.js";
@@ -1339,6 +1339,7 @@ export function Composer() {
   const [restoredOrchestrate, setRestoredOrchestrate] = useState(initialRestored.current?.orchestrate === "enable");
   const [restoredPicks, setRestoredPicks] = useState(initialRestored.current?.initialPicks);
   const completedImages = useTabStore((state) => state.completedComposerImages);
+  const pendingImages = useTabStore((state) => state.pendingComposerImages);
   const restoreInProgress = useRef(false);
   useEffect(() => { restoreInProgress.current = false; }, [text, attachedImages]);
   useLayoutEffect(() => {
@@ -1485,7 +1486,8 @@ export function Composer() {
   const ready = connection === "ready";
   // Running no longer blocks send (F15 prompt queue): a send while running
   // enqueues instead of dispatching directly (handleSend below).
-  const canSend = ready && hasSendableDraft(text, attachedImages.length) && !attachmentsBlockedByModel;
+  const loadingImages = (pendingImages?.length ?? 0) > 0 || (completedImages?.length ?? 0) > 0;
+  const canSend = ready && hasSendableDraft(text, attachedImages.length) && !attachmentsBlockedByModel && !loadingImages;
 
   // Slash-menu derivation (cut §4.3): recomputed every render from the
   // CURRENT text+caret, never carried as a separate `open` boolean.
@@ -1608,6 +1610,7 @@ export function Composer() {
 
   /** Enable orchestrate, then submit the stashed task as a normal user message. */
   function proceedOrchestrateSubmit(): void {
+    if (imagesStillLoading()) return;
     sendToHost({ type: "set_orchestrate", enabled: true });
     const task = pendingOrchestrateTask;
     setPendingOrchestrateTask(null);
@@ -1755,6 +1758,7 @@ export function Composer() {
       return;
     }
     const intent = item.intent;
+    if (intent.kind !== "insert" && imagesStillLoading()) return;
     if (intent.kind === "compact_now") {
       const verdict = resolveBareSlashSubmit("/compact", slashCtx, attachedImages.length, childSurface);
       if (verdict.kind === "refuse") {
@@ -1788,42 +1792,39 @@ export function Composer() {
       tabStore.getState().setNotice({ kind: "image_attach_rejected", text: MODEL_IMAGE_ATTACH_BLOCKED_TEXT });
       return;
     }
-    const slots = COMPOSER_IMAGE_MAX_PER_MESSAGE - attachedImages.length;
+    const snapshot = tabStore.getState();
+    const slots = COMPOSER_IMAGE_MAX_PER_MESSAGE - attachedImages.length - snapshot.pendingComposerImages.length - snapshot.completedComposerImages.length;
     if (slots <= 0) {
-      setImageError(`Only ${COMPOSER_IMAGE_MAX_PER_MESSAGE} images can be attached.`);
-      tabStore.getState().setNotice({
-        kind: "image_attach_rejected",
-        text: `Only ${COMPOSER_IMAGE_MAX_PER_MESSAGE} images can be attached.`,
-      });
+      tabStore.getState().setNotice({ kind: "image_attach_rejected", text: `Only ${COMPOSER_IMAGE_MAX_PER_MESSAGE} images can be attached.` });
       return;
     }
-    const generation = tabStore.getState().composerImageGeneration;
-    const accepted: QueuedPromptImage[] = [];
-    let firstError: string | null = imageFiles.length > slots ? `Only ${COMPOSER_IMAGE_MAX_PER_MESSAGE} images can be attached.` : null;
-    for (const file of imageFiles.slice(0, slots)) {
-      try {
-        const result = await readComposerImageFile(file);
-        if (result.ok) {
-          accepted.push(result.image);
-        } else {
-          firstError ??= result.reason;
-        }
-      } catch (error) {
-        firstError ??= error instanceof Error ? error.message : String(error);
-      }
-    }
-    if (accepted.length > 0) {
-      tabStore.setState((state) => state.composerImageGeneration === generation
-        ? { completedComposerImages: [...state.completedComposerImages, ...accepted] }
-        : {});
-    }
-    if (firstError !== null) {
+    const chosen = imageFiles.slice(0, slots).map(file => ({ file, id: crypto.randomUUID() }));
+    const generation = snapshot.composerImageGeneration;
+    tabStore.setState((state) => ({ pendingComposerImages: [...state.pendingComposerImages, ...chosen.map(({file,id}) => ({id,name:file.name || "image"}))] }));
+    if (imageFiles.length > slots) tabStore.getState().setNotice({ kind: "image_attach_rejected", text: `Only ${COMPOSER_IMAGE_MAX_PER_MESSAGE} images can be attached.` });
+    for (const {file,id} of chosen) {
       if (tabStore.getState().composerImageGeneration !== generation) return;
-      tabStore.getState().setNotice({ kind: "image_attach_rejected", text: firstError });
+      let result: Awaited<ReturnType<typeof readComposerImageFile>>;
+      try { result = await readComposerImageFile(file); }
+      catch (error) { result = {ok:false, reason: error instanceof Error ? error.message : String(error)}; }
+      if (tabStore.getState().composerImageGeneration !== generation) return;
+      tabStore.setState((state) => ({
+        pendingComposerImages: state.pendingComposerImages.filter((item) => item.id !== id),
+        ...(result.ok ? { completedComposerImages: [...state.completedComposerImages, result.image] } : {}),
+      }));
+      if (!result.ok) tabStore.getState().setNotice({ kind: "image_attach_rejected", text: result.reason });
     }
   }
 
+  function imagesStillLoading(): boolean {
+    const state = tabStore.getState();
+    if ((state.pendingComposerImages?.length ?? 0) === 0 && (state.completedComposerImages?.length ?? 0) === 0) return false;
+    state.setNotice({ kind: "image_attach_rejected", text: "Wait for attachments to finish loading, or cancel loading before continuing." });
+    return true;
+  }
+
   function handleSend(): void {
+    if (imagesStillLoading()) return;
     if (restoredOrchestrate) {
       tabStore.getState().setNotice({ kind: "slash_command_rejected", text: "This restored draft requires orchestration. Review it before starting a new orchestration." });
       return;
@@ -2079,7 +2080,9 @@ export function Composer() {
   const nativeEffort = engine?.model !== undefined
     ? nativeEffortControl(engine.model, pendingEngineChange?.model, pendingEngineChange?.effort, handleEngineEffortPick)
     : undefined;
-  const sendDisabledReason = !ready
+  const sendDisabledReason = loadingImages
+    ? "Wait for attachments to finish loading or cancel loading"
+    : !ready
     ? "Waiting for the session to connect"
     : attachmentsBlockedByModel
       ? MODEL_IMAGE_SEND_BLOCKED_TEXT
@@ -2096,6 +2099,7 @@ export function Composer() {
     >
       <BackgroundAgents />
       <PromptQueue onRestore={(item: QueuedPrompt) => {
+        if (imagesStillLoading()) return false;
         if (restoreInProgress.current || text.length > 0 || attachedImages.length > 0 || pasteBlocks.length > 0) {
           tabStore.getState().setNotice({ kind: "slash_command_rejected", text: "Finish or clear the current draft before restoring another." });
           return false;
@@ -2110,6 +2114,7 @@ export function Composer() {
         setRestoredPicks(item.initialPicks);
         return true;
       }} />
+      {Boolean(pendingImages?.length) && <div className="composer-hint" role="status">Loading attachments: {pendingImages!.map(image => image.name).join(", ")}. <button type="button" onClick={() => tabStore.setState((state) => ({ pendingComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 }))}>Cancel loading and exclude pending files</button></div>}
       {restoredPicks && <div className="composer-hint">Original settings: {[restoredPicks.model, restoredPicks.mode, restoredPicks.effort, restoredPicks.reasoningEffort].filter(Boolean).join(" / ")}. Select these settings before sending. <button type="button" onClick={() => setRestoredPicks(undefined)}>Use current settings instead</button></div>}
       {restoredOrchestrate && <div className="composer-hint">Orchestration intent retained. This draft will not be sent as an ordinary message. <button type="button" onClick={() => setRestoredOrchestrate(false)}>Remove orchestration intent</button></div>}
       <RolePickerDialog
@@ -2349,14 +2354,15 @@ export function Composer() {
                   className="composer-send"
                   aria-label="Queue message"
                   title={attachmentsBlockedByModel ? MODEL_IMAGE_SEND_BLOCKED_TEXT : "Queue message"}
-                  disabled={attachmentsBlockedByModel && !isBareCommand}
+                  disabled={loadingImages || (attachmentsBlockedByModel && !isBareCommand)}
                   onClick={handleSend}
                 >
                   <ArrowUp />
                 </button>
               )}
-              {engine?.id === "codex" && !restoredOrchestrate && !restoredPicks && text.trim() && attachedImages.length === 0 && (
+              {engine?.id === "codex" && !loadingImages && !restoredOrchestrate && !restoredPicks && text.trim() && attachedImages.length === 0 && (
                 <button type="button" className="composer-send" aria-label="Steer active Codex turn" title="Steer active turn; acknowledgement does not prove model application" onClick={() => {
+                  if (imagesStillLoading()) return;
                   // GitHub #14: the explicit Codex steer must not leak a known
                   // bare command to the model either — classify first.
                   const outgoing = reconstitutePasteMarkers(text, pasteBlocks);
@@ -2385,7 +2391,7 @@ export function Composer() {
               className="composer-send"
               aria-label="Send"
               title={sendDisabledReason ?? (hintHidden ? undefined : hintText)}
-              disabled={!canSend && !isBareCommand}
+              disabled={loadingImages || (!canSend && !isBareCommand)}
               onClick={handleSend}
             >
               <ArrowUp />
