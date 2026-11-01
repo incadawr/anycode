@@ -1004,10 +1004,10 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     return db;
   }
 
-  /** Runs fn inside BEGIN/COMMIT; any throw (from fn or a statement) triggers ROLLBACK before rethrowing. */
-  private transaction<T>(fn: (db: DatabaseSync) => T): T {
+  /** Runs fn in a transaction; failures roll back. Immediate mode reserves the writer before reading. */
+  private transaction<T>(fn: (db: DatabaseSync) => T, mode: "deferred" | "immediate" = "deferred"): T {
     const db = this.open();
-    db.exec("BEGIN");
+    db.exec(mode === "immediate" ? "BEGIN IMMEDIATE" : "BEGIN");
     try {
       const result = fn(db);
       db.exec("COMMIT");
@@ -1022,14 +1022,15 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     return this.createSessionInDb(this.open(), meta);
   }
 
-  /** Atomically transfer a native reference only while its source still owns it. */
+  /** Atomically transfer a native reference only while its source still owns it.
+   * Reserve the writer before reading so another writer cannot invalidate the snapshot. */
   async createSessionFromSource(sourceId: string, meta: Omit<SessionMeta, "createdAt" | "updatedAt">): Promise<SessionMeta | null> {
     if ((meta.engineId !== "codex" && meta.engineId !== "claude") || !meta.externalSessionRef) return null;
     return this.transaction((db) => {
       const source = db.prepare("SELECT 1 FROM sessions WHERE id = ? AND engine_id = ? AND external_session_ref = ? AND parent_session_id IS NULL")
         .get(sourceId, meta.engineId!, meta.externalSessionRef!);
       return source ? this.createSessionInDb(db, meta) : null;
-    });
+    }, "immediate");
   }
 
   private createSessionInDb(db: DatabaseSync, meta: Omit<SessionMeta, "createdAt" | "updatedAt">): SessionMeta {

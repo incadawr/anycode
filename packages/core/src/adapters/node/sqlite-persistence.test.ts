@@ -3238,16 +3238,33 @@ describe("SqlitePersistenceAdapter — session delete", () => {
     try {
       await new Promise<void>((resolve,reject) => { child.stdout.once("data",()=>resolve()); child.once("error",reject); child.once("exit",()=>reject(new Error("fixture exited before lock"))); });
       const successor = {id:"successor",workspace:"/w",model:"m",mode:"build" as const,engineId:"codex" as const,externalSessionRef:"racing-ref"};
-      // A snapshot-upgrade failure is also safe: the transaction rolls back.
-      let outcome = null;
-      try { outcome = await adapter.createSessionFromSource("source", successor); }
-      catch (error) { expect([5, 517]).toContain((error as {errcode?:number}).errcode); }
-      expect(outcome).toBeNull();
+      // The immediate transaction waits for the competing commit before reading.
+      expect(await adapter.createSessionFromSource("source", successor)).toBeNull();
       expect(await done).toBe(0);
       expect(await adapter.createSessionFromSource("source", successor)).toBeNull();
       expect(await adapter.getSessionById("successor")).toBeNull();
       expect(await adapter.listCodexThreadItems("racing-ref")).toHaveLength(0);
     } finally {child.kill(); await adapter.close();}
+  }, 15000);
+
+  it("waits for a competing writer before registering an unchanged source", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "source-writer-"));
+    deleteTmpDir = tmp;
+    const dbPath = join(tmp,"test.sqlite");
+    const adapter = new SqlitePersistenceAdapter(dbPath);
+    await seedFullSession(adapter,"source","writer-ref");
+    const worker = new Worker(BUSY_LOCK_WORKER_SRC, {eval:true,workerData:{dbPath,holdMs:350}});
+    const exited = new Promise<number>(resolve => worker.once("exit",resolve));
+    try {
+      await new Promise<void>((resolve,reject)=>{worker.once("error",reject);worker.on("message",msg=>{if(msg === "locked") resolve();});});
+      const start=Date.now();
+      const created=await adapter.createSessionFromSource("source",{id:"successor",workspace:"/w",model:"m",mode:"build",engineId:"codex",externalSessionRef:"writer-ref"});
+      expect(created?.id).toBe("successor");
+      expect(Date.now()-start).toBeGreaterThanOrEqual(100);
+      expect(await exited).toBe(0);
+      expect((await adapter.deleteSession("source")).counts.codexThreadItems).toBe(0);
+      expect(await adapter.listCodexThreadItems("writer-ref")).toHaveLength(1);
+    } finally {await worker.terminate(); await adapter.close();}
   }, 15000);
 
   it("retains a shared thread when deleting a subtree and cleans it after the surviving root", async () => {

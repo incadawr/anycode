@@ -10,11 +10,11 @@
  *    refusal reasons, and the new session row (the target account is what its
  *    tab's argv will be built from).
  */
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionMeta } from "@anycode/core";
+import { SqlitePersistenceAdapter, type SessionMeta } from "@anycode/core";
 import type { CodexAccountOption } from "../shared/codex-account.js";
 import {
   copyCodexRolloutForThread,
@@ -297,6 +297,22 @@ describe("handleCodexContinueOnAccount", () => {
     expect(await readFile(join(h.accountBSessionsDir, ROLLOUT_RELATIVE), "utf8")).toBe("existing-fixture");
   });
 
+  it("refuses a target still being written without reading, replacing or opening it", async () => {
+    const h=await harness();
+    const target=join(h.accountBSessionsDir,ROLLOUT_RELATIVE);
+    await mkdir(join(h.accountBSessionsDir,"2026","10","30"),{recursive:true});
+    const writer=await open(target,"wx");
+    try {
+      await writer.write("partial");
+      const result=await handleCodexContinueOnAccount(h.deps,{tabId:"tab-1",accountId:"account-b"});
+      expect(result).toMatchObject({ok:false,reason:"rollout_exists"});
+      expect(h.created).toEqual([]); expect(h.opened).toEqual([]);
+      expect(await readFile(target,"utf8")).toBe("partial");
+      await writer.write("-completed");
+      expect(await readFile(target,"utf8")).toBe("partial-completed");
+    } finally {await writer.close();}
+  });
+
   it("refuses retry after a failed registration if the source rollout has advanced", async () => {
     let attempts = 0;
     const h = await harness({createSessionFromSource:async (_source,meta) => {
@@ -321,6 +337,28 @@ describe("handleCodexContinueOnAccount", () => {
     expect(hostStarted).toBe(true);
     expect(h.deleted).toEqual([]);
     expect(await readFile(join(h.accountBSessionsDir, ROLLOUT_RELATIVE), "utf8")).toBe(ROLLOUT_TEXT);
+  });
+
+  it("preserves shared SQLite history when source is deleted after a host starts and opening throws", async () => {
+    const store = new SqlitePersistenceAdapter(join(root,"synthetic.sqlite"));
+    await store.createSession({...META, workspace:"/ws"});
+    await store.recordCodexThreadItem(THREAD_ID, {itemId:"synthetic-item",turnOrdinal:0,positionInTurn:0,seqInTurn:0,command:"fixture"});
+    let hostStarted = false;
+    const h = await harness({
+      session: id => store.getRootSession(id),
+      createSessionFromSource: (id,meta) => store.createSessionFromSource(id,meta),
+      deleteSession: id => store.deleteSession(id),
+      openResumeTab: async () => {hostStarted=true; await store.deleteSession("session-1"); throw new Error("post-fork failure");},
+    });
+    try {
+      const result = await handleCodexContinueOnAccount(h.deps, {tabId:"tab-1",accountId:"account-b"});
+      expect(result).toMatchObject({ok:false,reason:"tab_failed",detail:expect.stringContaining("Could not confirm")});
+      expect(hostStarted).toBe(true);
+      expect(await store.getRootSession("session-1")).toBeNull();
+      expect(await store.getRootSession("new-session-id")).not.toBeNull();
+      expect(await store.listCodexThreadItems(THREAD_ID)).toHaveLength(1);
+      expect(await readFile(join(h.accountBSessionsDir,ROLLOUT_RELATIVE),"utf8")).toBe(ROLLOUT_TEXT);
+    } finally {await store.close();}
   });
 
   it("retains the session when the tab reports it is already open", async () => {
