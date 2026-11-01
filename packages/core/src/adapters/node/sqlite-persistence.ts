@@ -902,8 +902,8 @@ function assertCliSchemaCompatible(db: DatabaseSync): void {
       if (!known.has(version)) throw new Error("Database contains an unsupported migration; update AnyCode before opening sessions.");
     }
   }
-  const columns = db.prepare("PRAGMA table_info(sessions)").all() as unknown as Array<{name:string}>;
-  if (columns.some(column => !CLI_SUPPORTED_SESSION_COLUMNS.has(column.name))) {
+  const columns = db.prepare("PRAGMA table_xinfo(sessions)").all() as unknown as Array<{name:string; hidden:number}>;
+  if (columns.some(column => column.hidden !== 0 || !CLI_SUPPORTED_SESSION_COLUMNS.has(column.name))) {
     throw new Error("Session database contains unsupported session fields; update AnyCode before opening sessions.");
   }
 }
@@ -1042,6 +1042,21 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       | SessionRow
       | undefined;
     return row ? rowToSessionMeta(row) : null;
+  }
+
+  /** A consistent read snapshot, not a lease against subsequent writers. */
+  async loadCliCoreRootSnapshot(id: string): Promise<{ session: SessionMeta; history: HistoryItem[] } | null> {
+    return this.transaction((db) => {
+      assertCliSchemaCompatible(db);
+      const row = db.prepare("SELECT * FROM sessions WHERE id = ? AND parent_session_id IS NULL").get(id) as SessionRow | undefined;
+      if (!row) return null;
+      const session = rowToSessionMeta(row);
+      if ((session.engineId !== undefined && session.engineId !== "core") || session.externalSessionRef !== undefined) {
+        throw new Error("Cannot resume: this session belongs to another engine or has incompatible native session metadata. Choose a core session or start a new session explicitly.");
+      }
+      const rows = db.prepare("SELECT data FROM history_items WHERE session_id = ? ORDER BY seq ASC").all(id) as unknown as { data: string }[];
+      return { session, history: rows.map((item) => JSON.parse(item.data) as HistoryItem) };
+    });
   }
 
   /**
