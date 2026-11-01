@@ -193,8 +193,9 @@ export interface PersistencePort {
    * `checkpoints`/`codex_thread_items`/`claude_transcript_items` rows, all in
    * ONE transaction (a mid-cascade failure rolls back everything, including
    * the earlier deletes in the same call). `externalSessionRefs` is every
-   * deleted row's native engine ref (for a future native-side cleanup
-   * consumer) — never interpreted or acted on here.
+   * deleted row's native engine ref, including refs still used by surviving
+   * sessions; consumers must not treat it as proof of exclusive ownership.
+   * Shared shadow rows remain until their final same-engine owner is deleted.
    */
   deleteSessionTree(rootId: string): Promise<{ deletedSessionIds: string[]; externalSessionRefs: string[] }>;
   touchSession(id: string, patch?: SessionMetaPatch): Promise<void>;
