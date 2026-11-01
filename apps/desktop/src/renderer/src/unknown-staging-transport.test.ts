@@ -9,6 +9,53 @@ const ready: HostToUiMessage = { type: "host_ready", workspace: "/synthetic", se
 const image = () => ({ name: "synthetic.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } });
 
 describe("unknown delivery over real MessageChannel", () => {
+  it.each(["unknown", "rejected"] as const)("keeps request B and terminal attribution when %s A reports B's turn ID", (status) => {
+    const store = createDesktopStore({ schedule: () => {} });
+    const saved = image();
+    store.getState().applyHostMessage(ready);
+    store.getState().recordSentMessage("A", [saved], "A", undefined, undefined, undefined, undefined, true);
+    if (status === "unknown") store.getState().markOrchestrationDeliveryUnknown("A");
+    else store.getState().applyHostMessage({ type: "turn_rejected", requestId: "A", reason: "busy" });
+    store.getState().recordSentMessage("B", [], "B", undefined, undefined, undefined, undefined, true);
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "B", turnId: "shared" });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "A", turnId: "shared" });
+    expect(store.getState().turn).toMatchObject({ status: "running", requestId: "B", turnId: "shared" });
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "A")).toMatchObject({ status: "conflict", turnId: "shared", images: [saved] });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "shared", event: { type: "loop_end", reason: "completed", turns: 1 } });
+    expect(store.getState().turn.status).toBe("idle");
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "A")).toMatchObject({ status: "conflict", images: [saved] });
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "A")?.terminalReason).toBeUndefined();
+    expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "B")).toMatchObject({ terminalReason: "completed" });
+  });
+
+  it("does not infer ownership of a legacy running turn with null requestId", () => {
+    const store = createDesktopStore({ schedule: () => {} });
+    const saved = image();
+    store.getState().applyHostMessage(ready);
+    store.getState().recordSentMessage("A", [saved], "A", undefined, undefined, undefined, undefined, true);
+    store.getState().markOrchestrationDeliveryUnknown("A");
+    store.setState({ turn: { status: "running", turnId: "shared", requestId: null } });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "A", turnId: "shared" });
+    expect(store.getState().turn).toMatchObject({ status: "running", requestId: null, turnId: "shared" });
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "conflict", images: [saved] });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "shared", event: { type: "loop_end", reason: "completed", turns: 1 } });
+    expect(store.getState().turn.status).toBe("idle");
+    expect(store.getState().orchestrationDeliveries[0]?.terminalReason).toBeUndefined();
+  });
+
+  it("accepts a late start matching both IDs of the active turn", () => {
+    const store = createDesktopStore({ schedule: () => {} });
+    const saved = image();
+    store.getState().applyHostMessage(ready);
+    store.getState().recordSentMessage("A", [saved], "A", undefined, undefined, undefined, undefined, true);
+    store.getState().markOrchestrationDeliveryUnknown("A");
+    store.setState({ turn: { status: "running", turnId: "turn-A", requestId: "A" } });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "A", turnId: "turn-A" });
+    expect(store.getState().turn).toMatchObject({ status: "running", requestId: "A", turnId: "turn-A" });
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "started", turnId: "turn-A", images: [saved] });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "turn-A", event: { type: "loop_end", reason: "completed", turns: 1 } });
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ terminalReason: "completed", images: [saved] });
+  });
   it.each([true, false])("preserves manual compaction (ok=%s) during a late unknown start", (ok) => {
     const store = createDesktopStore({ schedule: () => {} });
     const saved = image();
@@ -104,7 +151,7 @@ describe("unknown delivery over real MessageChannel", () => {
     expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "started", turnId: "turn-A", images: [saved], preservePayload: true });
   });
 
-  it("reaches a late unknown A start over a reconnected MessageChannel while B is active", async () => {
+  it.each(["turn-A", "turn-B"])("reaches a late unknown A start (%s) over a reconnected MessageChannel while B is active", async (lateTurnId) => {
     const registry = createTabRegistry(createTabsStore());
     const first = new MessageChannel();
     const second = new MessageChannel();
@@ -131,11 +178,12 @@ describe("unknown delivery over real MessageChannel", () => {
       await vi.waitFor(() => expect(sent.some(message => message.type === "user_message" && message.requestId === "B")).toBe(true));
       second.port2.postMessage({ type: "turn_started", requestId: "B", turnId: "turn-B" });
       await vi.waitFor(() => expect(store.getState().turn).toMatchObject({ status: "running", requestId: "B" }));
-      second.port2.postMessage({ type: "turn_started", requestId: "A", turnId: "turn-A" });
-      await vi.waitFor(() => expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "A")).toMatchObject({ status: "conflict", turnId: "turn-A", images: [saved] }));
+      second.port2.postMessage({ type: "turn_started", requestId: "A", turnId: lateTurnId });
+      await vi.waitFor(() => expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "A")).toMatchObject({ status: "conflict", turnId: lateTurnId, images: [saved] }));
       expect(store.getState().turn).toMatchObject({ status: "running", requestId: "B", turnId: "turn-B" });
       second.port2.postMessage({ type: "agent_event", turnId: "turn-B", event: { type: "loop_end", reason: "completed", turns: 1 } });
       await vi.waitFor(() => expect(store.getState().turn.status).toBe("idle"));
+      expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "A")?.terminalReason).toBeUndefined();
       expect(sent.filter(message => message.type === "user_message").map(message => message.requestId)).toEqual(["A", "B"]);
       expect(store.getState().claimRecoveryAttempt("A", "unsafe", "retry", [saved], undefined)).toBe(false);
     } finally { registry.disposeTab("tab"); first.port1.close(); first.port2.close(); second.port1.close(); second.port2.close(); }

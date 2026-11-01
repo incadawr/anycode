@@ -1086,7 +1086,7 @@ function compactCompletedDirect(state: DesktopState, turnId: string, reason: str
       state.orchestrationDeliveries.some(child => child.parentRequestId === item.requestId) ||
       state.promptQueue.some(queued => queued.recoverySourceId === item.requestId) ||
       state.queueInFlight?.item.recoverySourceId === item.requestId;
-    return (reason === "completed" || reason === "error" || reason === "cancelled" || reason === "max_turns") && (item.ordinaryDirect || item.childSteer) && item.status === "started" && item.turnId === turnId && !item.preservePayload && !item.restored && !linked
+    return (reason === "completed" || reason === "error" || reason === "cancelled" || reason === "max_turns") && (item.ordinaryDirect || item.childSteer) && item.status === "started" && item.turnId === turnId && item.requestId === state.turn.requestId && !item.preservePayload && !item.restored && !linked
       ? { ...item, text: "", images: [], payloadOmitted: true as const }
       : item;
   });
@@ -4317,7 +4317,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             const nextQueue = [...state.promptQueue, ...queueAdditions];
             return {
               turn: { status: "idle", turnId: null, requestId: null },
-              orchestrationDeliveries: compactCompletedDirect({ ...state, orchestrationDeliveries: state.orchestrationDeliveries.map(item => (event.reason === "completed" || event.reason === "error" || event.reason === "cancelled" || event.reason === "max_turns") && (item.status === "started" || item.status === "conflict") && item.turnId === turnId ? { ...item, ...(item.status === "started" && item.parentRequestId ? { status: "finished" as const } : {}), terminalReason: event.reason } : item) }, turnId, event.reason),
+              orchestrationDeliveries: compactCompletedDirect({ ...state, orchestrationDeliveries: state.orchestrationDeliveries.map(item => (event.reason === "completed" || event.reason === "error" || event.reason === "cancelled" || event.reason === "max_turns") && (item.status === "started" || item.status === "conflict") && item.turnId === turnId && item.requestId === state.turn.requestId ? { ...item, ...(item.status === "started" && item.parentRequestId ? { status: "finished" as const } : {}), terminalReason: event.reason } : item) }, turnId, event.reason),
               pendingSteers: state.pendingSteers.filter((entry) => !uiPending.includes(entry.requestId)),
               promptQueue: nextQueue,
               uiSteerPending: [],
@@ -5218,10 +5218,15 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           case "turn_started": {
             pendingSentMessages.delete(message.requestId);
             const knownDelivery = get().orchestrationDeliveries.find(item => item.requestId === message.requestId);
+            const activeTurn = get().turn;
+            // Null requestId does not prove that an incoming request owns a
+            // legacy running turn, even when its turnId happens to match.
+            const busyForAnotherRequest = isSessionBusy(activeTurn.status) &&
+              (activeTurn.status !== "running" || activeTurn.turnId !== message.turnId || activeTurn.requestId !== message.requestId);
             // A start for an unconfirmed pre-disconnect attempt can arrive
             // while another turn or manual compaction owns the session.
             // Record the inconsistent overlap without replacing its state.
-            if (knownDelivery?.status === "unknown" && isSessionBusy(get().turn.status) && get().turn.turnId !== message.turnId) {
+            if (knownDelivery?.status === "unknown" && busyForAnotherRequest) {
               set((state) => reconcileQueuedRetries(state.promptQueue, state.orchestrationDeliveries.map(item => item.requestId === message.requestId
                 ? { ...item, status: "conflict" as const, turnId: message.turnId, reviewed: false }
                 : item)));
@@ -5232,7 +5237,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // Keep this fence across host_ready resets via the delivery ledger.
             if (knownDelivery?.terminalReason || loopEndEmitted.has(`loop_end:${message.turnId}`) ||
               (knownDelivery?.turnId && (knownDelivery.status === "conflict" || knownDelivery.turnId !== message.turnId)) ||
-              (knownDelivery?.status === "rejected" && isSessionBusy(get().turn.status) && get().turn.turnId !== message.turnId)) {
+              (knownDelivery?.status === "rejected" && busyForAnotherRequest)) {
               set((state) => reconcileQueuedRetries(state.promptQueue, startedDeliveries(state, message.requestId, message.turnId)));
               return;
             }
