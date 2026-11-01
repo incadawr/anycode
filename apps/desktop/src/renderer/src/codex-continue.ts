@@ -1,4 +1,16 @@
-/** Dormant controller retained for compatibility while continuation is unavailable. */
+/**
+ * The usage-limit banner's "Continue on another account" controller.
+ *
+ * The banner shows a picker of the OTHER Codex accounts (the one the tab runs
+ * on is not an option — it is the one that just ran out). Picking one asks main
+ * to copy the thread's rollout into that account's own `CODEX_HOME` and open a
+ * NEW tab resuming the thread there; this tab keeps its account, which is why
+ * the action is "continue", never "switch".
+ *
+ * All identity stays in main: the renderer sends a registry id it read from
+ * `listProfiles()`/`tabAccount()`, and main re-validates it against its own
+ * list before touching a single path.
+ */
 import { useMemo } from "react";
 import type { CodexAccountOption } from "../../shared/codex-account.js";
 import { SYSTEM_CODEX_ACCOUNT_ID } from "../../shared/codex-account.js";

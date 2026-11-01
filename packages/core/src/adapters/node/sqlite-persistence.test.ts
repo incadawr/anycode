@@ -7,7 +7,7 @@ import { Worker } from "node:worker_threads";
 import { spawn } from "node:child_process";
 import { SqlitePersistenceAdapter, WriteBehindHistorySink, type HistorySinkLogger } from "./sqlite-persistence.js";
 import type { CheckpointRecord } from "../../ports/checkpoints.js";
-import type { PersistencePort, SessionDeleteSummary, SessionMeta } from "../../ports/persistence.js";
+import type { ContinuationClaim, PersistencePort, SessionDeleteSummary, SessionMeta } from "../../ports/persistence.js";
 import { COMPACTION_RECORD_MAX_PER_SESSION } from "../../types/compaction.js";
 import type { HistoryItem } from "../../types/history.js";
 
@@ -755,7 +755,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31, 32]);
     expect(
       migrated.prepare(
         `SELECT project_root, continuation_pending, worktree_exit_notice_pending, worktree_cleanup_branch
@@ -826,7 +826,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31, 32]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["connection_id"]));
@@ -879,7 +879,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31, 32]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["codex_profile_id"]));
@@ -957,7 +957,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31, 32]);
     migrated.close();
   });
 
@@ -1012,7 +1012,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31, 32]);
     expect(
       (migrated.prepare("PRAGMA table_info(sessions)").all() as { name: string }[]).map(({ name }) => name),
     ).toEqual(expect.arrayContaining(["parent_session_id", "spawn_tool_call_id"]));
@@ -1286,7 +1286,7 @@ describe("SqlitePersistenceAdapter", () => {
       (migrated.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map(
         ({ version }) => version,
       ),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31, 32]);
     migrated.close();
   });
 
@@ -2928,6 +2928,15 @@ describe("WriteBehindHistorySink", () => {
     createSession(): Promise<SessionMeta> {
       throw new Error("not used in this test");
     }
+    createSessionFromSource(): Promise<SessionMeta | null> {
+      throw new Error("not used in this test");
+    }
+    claimContinuation(): Promise<ContinuationClaim> {
+      throw new Error("not used in this test");
+    }
+    releaseContinuation(): Promise<void> {
+      throw new Error("not used in this test");
+    }
     getRootSession(): Promise<SessionMeta | null> {
       throw new Error("not used in this test");
     }
@@ -3579,7 +3588,7 @@ describe("SqlitePersistenceAdapter — provider_usage audit", () => {
       await first.recordProviderUsage(makeUsage());
       await first.close();
       const raw = new DatabaseSync(path);
-      raw.exec("ALTER TABLE provider_usage DROP COLUMN generation_duration_ms; ALTER TABLE provider_usage DROP COLUMN time_to_first_token_ms; ALTER TABLE sessions DROP COLUMN codex_fast; DELETE FROM schema_migrations WHERE version IN (30, 31)");
+      raw.exec("ALTER TABLE provider_usage DROP COLUMN generation_duration_ms; ALTER TABLE provider_usage DROP COLUMN time_to_first_token_ms; ALTER TABLE sessions DROP COLUMN codex_fast; DELETE FROM schema_migrations WHERE version >= 30");
       raw.close();
       const reopened = new SqlitePersistenceAdapter(path);
       expect((await reopened.listProviderUsage("s1"))[0]).not.toHaveProperty("generationDurationMs");
@@ -3774,5 +3783,55 @@ describe("context snapshot bookkeeping", () => {
       expect(await second.listProviderUsage("s1")).toHaveLength(1);
       await second.close();
     } finally { await first.close(); await rm(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe("SqlitePersistenceAdapter — continuation claims ( §2.4)", () => {
+  const TTL = 60_000;
+
+  it("grants a fresh claim, then holds it against a second claimant", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    expect(await adapter.claimContinuation("thread-1", "account-b", TTL)).toBe("claimed");
+    expect(await adapter.claimContinuation("thread-1", "account-b", TTL)).toBe("held");
+    // A different account is a different transfer and must not be blocked.
+    expect(await adapter.claimContinuation("thread-1", "account-c", TTL)).toBe("claimed");
+    await adapter.close();
+  });
+
+  it("releases a claim so the same pair can be claimed again", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    await adapter.claimContinuation("thread-1", "account-b", TTL);
+    await adapter.releaseContinuation("thread-1", "account-b");
+    expect(await adapter.claimContinuation("thread-1", "account-b", TTL)).toBe("claimed");
+    await adapter.close();
+  });
+
+  it("takes over an EXPIRED claim and says so, instead of reporting it as fresh", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    expect(await adapter.claimContinuation("thread-1", "account-b", -1)).toBe("claimed");
+    expect(await adapter.claimContinuation("thread-1", "account-b", TTL)).toBe("taken_over");
+    // ...and the takeover is now a live claim like any other.
+    expect(await adapter.claimContinuation("thread-1", "account-b", TTL)).toBe("held");
+    await adapter.close();
+  });
+
+  it("treats releasing an absent claim as a no-op", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    await expect(adapter.releaseContinuation("never", "account-b")).resolves.toBeUndefined();
+    await adapter.close();
+  });
+
+  it("keeps claims in the database (a second adapter on the same file sees the first one's claim)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "claims-"));
+    const file = join(dir, "claims.sqlite");
+    const first = new SqlitePersistenceAdapter(file);
+    expect(await first.claimContinuation("thread-1", "account-b", TTL)).toBe("claimed");
+    // The point of the claim: the in-process `isThreadOpen` guard cannot see
+    // another host process, so the guard has to live in the shared file.
+    const second = new SqlitePersistenceAdapter(file);
+    expect(await second.claimContinuation("thread-1", "account-b", TTL)).toBe("held");
+    await first.close();
+    await second.close();
+    await rm(dir, { recursive: true, force: true });
   });
 });

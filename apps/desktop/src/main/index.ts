@@ -272,7 +272,7 @@ import {
 import { SYSTEM_PROFILE_ID, codexProfilesRoot, resolveCodexProfile } from "./codex-profiles.js";
 import { SYSTEM_CODEX_ACCOUNT, type CodexAccountOption } from "../shared/codex-account.js";
 import { CODEX_TAB_ACCOUNT_CHANNEL, handleCodexTabAccount } from "./codex-tab-account.js";
-import { CODEX_CONTINUE_CHANNEL, handleCodexContinueOnAccount } from "./codex-continue.js";
+import { registerCodexContinueIpc } from "./codex-continue.js";
 import { registerCodexRolloutIpc } from "./codex-rollout-ipc.js";
 import { registerCodexInstallIpc } from "./codex-install.js";
 import { runCodexManagedUpgrade } from "./codex-managed-upgrade.js";
@@ -2994,43 +2994,39 @@ void app.whenReady().then(async () => {
   // new tab goes through tab-ipc's resume path — the same gate (readiness,
   // capacity, argv resolution) a tab reopened from the session list takes.
   // The exhausted tab is untouched: its account cannot change under a live host.
-  ipcMain.handle(CODEX_CONTINUE_CHANNEL, async (_event, raw: unknown) => {
-    if (raw === null || typeof raw !== "object") return { ok: false, reason: "unknown_tab", detail: "malformed request" };
-    const value = raw as { tabId?: unknown; accountId?: unknown };
-    if (typeof value.tabId !== "string" || value.tabId === "" || typeof value.accountId !== "string" || value.accountId === "") {
-      return { ok: false, reason: "unknown_tab", detail: "malformed request" };
-    }
+  registerCodexContinueIpc(ipcMain, () => {
     const store = persistence;
-    if (store === null) return { ok: false, reason: "unknown_session", detail: "storage is not ready yet" };
-    return handleCodexContinueOnAccount(
-      {
-        tab: (tabId) => manager?.getTab(tabId),
-        session: (sessionId) => store.getRootSession(sessionId),
-        accounts: async () => listCodexAccounts(),
-        sessionsDir: async (accountId) => codexSessionsDirForAccount(accountId),
-        createSessionFromSource: (sourceId, meta) => store.createSessionFromSource(sourceId, meta),
-        deleteSession: (sessionId) => store.deleteSession(sessionId),
-        openResumeTab: async (sessionId) => {
-          const created = await handleCreate(tabIpcDeps, { kind: "resume", sessionId });
-          return created.ok ? { ok: true, tabId: created.tabId } : { ok: false, reason: created.reason };
-        },
-        // A thread already resumed by a live root tab on the target account is
-        // refused: a second continue would fork a second host on one rollout.
-        isThreadOpen: async (threadId, accountId) => {
-          for (const summary of manager?.listTabs() ?? []) {
-            if (summary.childOf !== undefined) continue;
-            const host = manager?.getTab(summary.tabId);
-            if (host?.engine !== "codex") continue;
-            if ((host.codexProfile?.id ?? SYSTEM_CODEX_ACCOUNT.id) !== accountId) continue;
-            const row = await store.getRootSession(summary.sessionId);
-            if (row?.externalSessionRef === threadId) return true;
-          }
-          return false;
-        },
-        randomUUID,
+    if (store === null) return null;
+    return {
+      tab: (tabId) => manager?.getTab(tabId),
+      session: (sessionId) => store.getRootSession(sessionId),
+      accounts: async () => listCodexAccounts(),
+      sessionsDir: async (accountId) => codexSessionsDirForAccount(accountId),
+      createSessionFromSource: (sourceId, meta) => store.createSessionFromSource(sourceId, meta),
+      // The kill switch is read per request, so flipping it needs no restart.
+      enabled: () => settings?.codexContinueOnAnotherAccount !== "off",
+      claimContinuation: (threadId, accountId, ttlMs) => store.claimContinuation(threadId, accountId, ttlMs),
+      releaseContinuation: (threadId, accountId) => store.releaseContinuation(threadId, accountId),
+      deleteSession: (sessionId) => store.deleteSession(sessionId),
+      openResumeTab: async (sessionId) => {
+        const created = await handleCreate(tabIpcDeps, { kind: "resume", sessionId });
+        return created.ok ? { ok: true, tabId: created.tabId } : { ok: false, reason: created.reason };
       },
-      { tabId: value.tabId, accountId: value.accountId },
-    );
+      // A thread already resumed by a live root tab on the target account is
+      // refused: a second continue would fork a second host on one rollout.
+      isThreadOpen: async (threadId, accountId) => {
+        for (const summary of manager?.listTabs() ?? []) {
+          if (summary.childOf !== undefined) continue;
+          const host = manager?.getTab(summary.tabId);
+          if (host?.engine !== "codex") continue;
+          if ((host.codexProfile?.id ?? SYSTEM_CODEX_ACCOUNT.id) !== accountId) continue;
+          const row = await store.getRootSession(summary.sessionId);
+          if (row?.externalSessionRef === threadId) return true;
+        }
+        return false;
+      },
+      randomUUID,
+    };
   });
 
   // Window control plane (design/ui-track custom-titlebar §4): the four caption

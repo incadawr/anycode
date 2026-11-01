@@ -14,7 +14,7 @@ const block: Extract<TranscriptBlock, { kind: "usage_limit" }> = {
   notice: { kind: "usage_limit", code: 429, engine: "codex" },
 };
 
-it("explains the temporary limitation without opening the account picker", async () => {
+it("opens the account picker and lists only the OTHER accounts", async () => {
   const accounts = vi.fn(async () => [{id:"account-b",label:"Account B"}]);
   const continueOn = vi.fn(async () => ({ok:true as const}));
   const controller: CodexContinueController = {accounts,continueOn};
@@ -22,11 +22,16 @@ it("explains the temporary limitation without opening the account picker", async
   const root=createRoot(container);
   try {
     await act(async()=>{root.render(createElement(UsageLimitBlock,{block,enterClass:"",codexContinue:controller}));});
-    expect(container.textContent).toContain("temporarily unavailable");
-    expect(container.textContent).toContain("start a new session on another Codex account");
-    expect(container.querySelector(".usage-limit-account-picker")).toBeNull();
-    expect(container.querySelector(".usage-limit-switch-account")).toBeNull();
-    expect(accounts).not.toHaveBeenCalled(); expect(continueOn).not.toHaveBeenCalled();
+    // The button is the affordance the disable removed ( restore)...
+    expect(container.querySelector(".usage-limit-switch-account")).not.toBeNull();
+    expect(container.textContent).not.toContain("temporarily unavailable");
+    // ...and the accounts are only fetched when it is actually used.
+    expect(accounts).not.toHaveBeenCalled();
+    await act(async () => {container.querySelector<HTMLButtonElement>(".usage-limit-switch-account")!.click();});
+    expect(accounts).toHaveBeenCalledTimes(1);
+    expect(container.querySelector(".usage-limit-account-picker")).not.toBeNull();
+    expect(container.textContent).toContain("Account B");
+    expect(continueOn).not.toHaveBeenCalled();
   } finally {await act(async()=>root.unmount());container.remove();}
 });
 

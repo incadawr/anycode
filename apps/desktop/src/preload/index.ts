@@ -884,8 +884,9 @@ contextBridge.exposeInMainWorld("anycode", {
     // a path (main resolves it from its own live tab/registry state).
     tabAccount: (tabId: string): Promise<CodexTabAccountResult> =>
       ipcRenderer.invoke(CODEX_TAB_ACCOUNT_CHANNEL, tabId) as Promise<CodexTabAccountResult>,
-    // Kept for compatibility: main currently refuses continuation before any
-    // account lookup or file operation, with a user-facing `detail`.
+    // The usage-limit banner's action: copy the thread's rollout into the
+    // target account's home and open a NEW tab resuming it there. Never swaps
+    // the live tab's account. Refusals carry a user-facing `detail`.
     continueOnAccount: (tabId: string, accountId: string): Promise<CodexContinueResult> =>
       ipcRenderer.invoke(CODEX_CONTINUE_CHANNEL, { tabId, accountId }) as Promise<CodexContinueResult>,
     // (cut §7, amended §A4): the binary/manifest control plane.

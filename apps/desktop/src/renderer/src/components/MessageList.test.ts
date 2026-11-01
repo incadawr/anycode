@@ -860,12 +860,15 @@ describe("usage limit — Codex account escape hatch", () => {
     continueOn: async () => ({ ok: true }),
   });
 
-  it("explains that Codex continuation is unavailable without an account picker", () => {
+  it("offers the account picker instead of a dead-end hint", () => {
     const codexBlocks: TranscriptBlock[] = [{kind:"usage_limit",id:"codex",notice:{kind:"usage_limit",code:429,engine:"codex"}}];
     const html=renderToStaticMarkup(createElement(MessageList,{...base,blocks:codexBlocks,codexContinue:controller()}));
-    expect(html).toContain("temporarily unavailable");
-    expect(html).toContain("start a new session on another Codex account");
-    expect(html).not.toContain("usage-limit-account-choice");
+    // The restore: the banner's action is a real picker again, not a
+    // sentence saying the feature does not exist.
+    // Closed by default: the affordance is there, the list opens on click.
+    expect(html).toContain("usage-limit-switch-account");
+    expect(html).not.toContain("usage-limit-account-picker");
+    expect(html).not.toContain("temporarily unavailable");
   });
 
   it("does not show the Codex notice for non-Codex quota errors", () => {

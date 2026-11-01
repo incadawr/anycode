@@ -36,7 +36,13 @@ export type {
   GitStatusSummary,
 } from "./git.js";
 export type { ModelPort, ModelRequest } from "./model.js";
-export type { PersistencePort, SessionMeta, SessionMetaPatch, SessionWorktree } from "./persistence.js";
+export type {
+  ContinuationClaim,
+  PersistencePort,
+  SessionMeta,
+  SessionMetaPatch,
+  SessionWorktree,
+} from "./persistence.js";
 export type { HttpPort, HttpTextRequest, HttpTextResponse } from "./http.js";
 export type {
   SubagentOutcome,

@@ -868,6 +868,16 @@ export interface AnycodeSettings {
   browser?: {
     fullAccessDefault: "off" | "on";
   };
+  /**
+   * Kill switch for "Continue this conversation on another account"
+   *. Absent or `"on"` = the action is offered; `"off"` = main
+   * answers `temporarily_unavailable` and never touches the filesystem.
+   *
+   * This exists because the feature was switched off in code once already
+   * (`f0bcfa1e`); a settings value makes the next pause a one-line change
+   * instead of a rebuild.
+   */
+  codexContinueOnAnotherAccount?: "off" | "on";
 }
 
 /**
