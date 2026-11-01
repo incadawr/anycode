@@ -10128,3 +10128,66 @@ describe("child status transcript", () => {
     } finally { h.close(); }
   });
 });
+
+describe("dormant child posture admission foundation", () => {
+  type ChildPostureTestState = {
+    orchestrationPosture: "stable" | "quarantined";
+    programmaticTurnStarted: boolean;
+    childTerminalFinalized: boolean;
+    steerQueue: Array<{requestId: string; text: string; images?: ImageAttachment[]; origin?: "system"}>;
+    drainAgentInbox(settledChild?: boolean): boolean;
+    startNextQueuedSteerTurn(): "started" | "empty" | "blocked";
+    onChildTurnSettled(): Promise<"terminal" | "drained" | "blocked"> | undefined;
+    finalizeChildTerminal(): Promise<"terminal" | "drained" | "blocked">;
+  };
+
+  it("returns typed blocked without consuming queued human/system steers or latching child start", async () => {
+    const h = createChildHarness({ steps: [] });
+    try {
+      const state = h.session as unknown as ChildPostureTestState;
+      const queued = [{ requestId: "human", text: "human" }, { requestId: "system", text: "report", origin: "system" as const }];
+      state.steerQueue = [...queued];
+      state.orchestrationPosture = "quarantined";
+      expect(h.session.startProgrammaticTurn("initial")).toEqual({ ok: false, reason: "Session posture unavailable" });
+      expect(state.programmaticTurnStarted).toBe(false);
+      expect(state.startNextQueuedSteerTurn()).toBe("blocked");
+      expect(await state.onChildTurnSettled()).toBe("blocked");
+      expect(state.steerQueue).toEqual(queued);
+      expect(state.childTerminalFinalized).toBe(false);
+      expect(h.onTerminal).not.toHaveBeenCalled();
+    } finally { h.close(); }
+  });
+
+  it("rechecks after child history flush before draining or terminal publication", async () => {
+    let enter!: () => void; const entered = new Promise<void>(resolve => { enter = resolve; });
+    let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+    const h = createChildHarness({ steps: [], flushHistoryImpl: async () => { enter(); await gate; } });
+    try {
+      const state = h.session as unknown as ChildPostureTestState;
+      const queued = [{ requestId: "system", text: "report", origin: "system" as const }];
+      state.steerQueue = [...queued];
+      const terminal = state.finalizeChildTerminal();
+      await entered;
+      state.orchestrationPosture = "quarantined";
+      release();
+      expect(await terminal).toBe("blocked");
+      expect(state.steerQueue).toEqual(queued);
+      expect(state.childTerminalFinalized).toBe(false);
+      expect(h.onTerminal).not.toHaveBeenCalled();
+    } finally { release(); h.close(); }
+  });
+
+  it("rechecks posture after the inbox drain before shifting a queued steer", () => {
+    const h = createChildHarness({ steps: [] });
+    try {
+      const state = h.session as unknown as ChildPostureTestState;
+      const queued = [{ requestId: "system", text: "report", origin: "system" as const }];
+      state.steerQueue = [...queued];
+      const drain = vi.spyOn(state, "drainAgentInbox").mockImplementation(() => { state.orchestrationPosture = "quarantined"; return false; });
+      expect(state.startNextQueuedSteerTurn()).toBe("blocked");
+      expect(state.steerQueue).toEqual(queued);
+      expect(h.onTerminal).not.toHaveBeenCalled();
+      drain.mockRestore();
+    } finally { h.close(); }
+  });
+});
