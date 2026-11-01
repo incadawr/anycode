@@ -6314,8 +6314,10 @@ describe("desktop store — prompt queue (slice P7.14 · F15)", () => {
     expect(store.getState().promptQueue.map((p) => p.text)).toEqual(["b"]);
     expect(store.getState().queueInFlight?.requestId).toBe("req-1");
 
-    // Paused also blocks a take even with inFlight cleared.
+    // Clear removes unsent items but cannot cancel the already posted request.
     store.getState().clearQueue();
+    expect(store.getState().queueInFlight?.requestId).toBe("req-1");
+    store.getState().applyHostMessage({type:"turn_started",requestId:"req-1",turnId:"t1"});
     store.getState().enqueuePrompt({ text: "c", images: [] });
     store.setState({ queuePaused: true });
     expect(store.getState().takeQueueHead("req-3")).toBeNull();
@@ -6545,7 +6547,7 @@ describe("desktop store — prompt queue (slice P7.14 · F15)", () => {
     store.getState().takeQueueHead("req-1");
     store.getState().clearQueue();
     expect(store.getState().promptQueue).toEqual([]);
-    expect(store.getState().queueInFlight).toBeNull();
+    expect(store.getState().queueInFlight?.requestId).toBe("req-1");
     expect(store.getState().queuePaused).toBe(false);
   });
 

@@ -29,6 +29,7 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, de
   const promptQueue = useTabStore((state) => state.promptQueue);
   const deliveries = useTabStore((state) => state.orchestrationDeliveries);
   const activeDeliveryId = useTabStore((state) => state.restoredComposerDraft?.deliveryRequestId);
+  const connection = useTabStore((state) => state.connection);
   const queuePaused = useTabStore((state) => state.queuePaused);
   // the banner must name the REAL reason the queue is held
   // ("turn limit" vs "cancelled/failed") — «Работа» §2.
@@ -79,6 +80,8 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, de
         <span className="prompt-queue-badge">{item.status === "pending" ? "Waiting for host response" : item.status === "unknown" ? "Delivery unknown — check history before retrying" : item.status === "rejected" ? "Host rejected this request" : item.status === "conflict" ? "Conflicting delivery reports — review before retrying" : "Turn started; a restored copy remains in the composer"}</span>
         {item.images.length > 0 && <span className="prompt-queue-badge">{queueImageBadge(item.images.length)}</span>}
         {item.origin === "system" && <span className="prompt-queue-badge">System report — check session history; it will not resend automatically.</span>}
+        {item.origin === "system" && item.status === "rejected" && !item.retryQueued && <button type="button" className="system-delivery-retry" disabled={connection !== "ready"} onClick={() => tabStore.getState().retryRejectedSystemDelivery(item.requestId)}>Retry rejected report</button>}
+        {item.origin === "system" && item.retryQueued && item.status === "rejected" && <span>Retry requested.</span>}
         {item.origin !== "system" && item.requestId !== activeDeliveryId && (item.status === "unknown" || item.status === "rejected" || item.status === "conflict") && <button type="button" className="orchestration-delivery-restore" onClick={() => {
           const state = tabStore.getState();
           const current = state.orchestrationDeliveries.find(entry => entry.requestId === item.requestId);
@@ -166,7 +169,7 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, de
                         if (onRestore?.(item) === true) tabStore.getState().deleteQueuedPrompt(item.id);
                       }}>Restore draft</button>
                     )}
-                    <button
+                    {!item.retryOf && <button
                       type="button"
                       className="prompt-queue-edit-button"
                       aria-label={`Edit queued message ${ordinal}`}
@@ -174,7 +177,7 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, de
                       onClick={() => startEdit(item)}
                     >
                       Edit
-                    </button>
+                    </button>}
                     <button
                       type="button"
                       className="prompt-queue-delete"

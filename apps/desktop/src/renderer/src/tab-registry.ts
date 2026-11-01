@@ -445,6 +445,9 @@ export function createTabRegistry(
     const inFlight = entry.store.getState().queueInFlight;
     if (!inFlight || inFlight.item !== item || liveConnection(entry) !== connection) return;
     const requestId = inFlight.requestId;
+    const retryStillRejected = () => !item.retryOf || entry.store.getState().orchestrationDeliveries.some(delivery => delivery.requestId === item.retryOf && delivery.status === "rejected" && delivery.retryQueued);
+    const cancelRetry = () => entry.store.setState((state) => state.queueInFlight?.requestId === requestId ? {queueInFlight:null} : {});
+    if (!retryStillRejected()) { cancelRetry(); return; }
     // срез 2: `item.origin` (set only for a detached-child report,
     // QueuedPrompt.origin's own doc) rides onto BOTH the local transcript
     // append (live system-card render) and the wire `user_message` (host
@@ -455,8 +458,9 @@ export function createTabRegistry(
       .appendUserText(requestId, item.text, item.images.length > 0 ? item.images.map((image) => image.attachment) : undefined, item.origin);
     // W8: snapshot what actually went on the wire so a later terminal
     // retryable failure can offer to replay this same content.
-    entry.store.getState().recordSentMessage(item.text, item.images, requestId, item.orchestrate);
+    entry.store.getState().recordSentMessage(item.text, item.images, requestId, item.orchestrate, item.trackDelivery ? item.initialPicks ?? {} : undefined);
     if (liveConnection(entry) !== connection) { entry.store.getState().markOrchestrationDeliveryUnknown(requestId); return; }
+    if (!retryStillRejected()) { cancelRetry(); return; }
     try {
       connection.send({
         type: "user_message", requestId, text: item.text,

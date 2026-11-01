@@ -1947,13 +1947,14 @@ export function Composer() {
         text: outgoing,
         images,
       });
+      if (restoredDeliveryId) tabStore.getState().recordSentMessage(outgoing,images,requestId,undefined,restoredPicks ?? {});
       sendToHost({
         type: "user_message",
         requestId,
         text: outgoing,
         ...(images.length > 0 ? { images: images.map((image) => image.attachment) } : {}),
       });
-    } else if (!childSurface && turn.status !== "idle" && images.length === 0 && steerSupported) {
+    } else if (!childSurface && turn.status !== "idle" && images.length === 0 && steerSupported && !restoredDeliveryId) {
       // a supported running CORE session takes the
       // message as a mid-turn steer (optimistic pendingSteer bubble; the
       // user_injected event confirms delivery into the turn; the queue is the
@@ -1973,7 +1974,7 @@ export function Composer() {
       // tab-registry drainer sends it once the tab is truly idle and unpaused.
       // Direct-sending in the in-flight window would let the host busy-reject
       // it (a drained item was already accepted) and lose the prompt.
-      tabStore.getState().enqueuePrompt({ text: outgoing, images });
+      tabStore.getState().enqueuePrompt({ text: outgoing, images, ...(restoredDeliveryId ? {trackDelivery:true,initialPicks:restoredPicks ?? {}} : {}) });
     } else {
       const requestId = crypto.randomUUID();
       // The wire protocol never echoes the user's own message back (§3 — only
@@ -1989,7 +1990,7 @@ export function Composer() {
       tabStore.getState().appendUserText(requestId, outgoing, images.length > 0 ? images.map((image) => image.attachment) : undefined);
       // W8: snapshot what actually went on the wire so a later
       // terminal retryable failure can offer to replay this same content.
-      tabStore.getState().recordSentMessage(outgoing, images, requestId);
+      tabStore.getState().recordSentMessage(outgoing, images, requestId, undefined, restoredDeliveryId ? restoredPicks ?? {} : undefined);
       sendToHost({
         type: "user_message",
         requestId,

@@ -375,6 +375,76 @@ describe("dock resize handle placement (GitHub #31)", () => {
     expect(store.getState().orchestrationDeliveries).toMatchObject([{requestId:"system-wire-id",originId:"report-id",status:"unknown"}]);
   });
 
+  it("retains a newly edited recovery send and its attachment when the port closes", async () => {
+    vi.mocked(tabRegistry.getLiveHostConnection).mockRestore();
+    class Port {
+      onmessage: ((event:MessageEvent) => void) | null = null;
+      postMessage = vi.fn();
+      listeners = new Set<() => void>();
+      addEventListener(type:string, listener:() => void) { if (type === "close") this.listeners.add(listener); }
+      removeEventListener(type:string, listener:() => void) { if (type === "close") this.listeners.delete(listener); }
+      close() { for (const listener of this.listeners) listener(); }
+      emit(data:unknown) { this.onmessage!({data} as MessageEvent); }
+    }
+    const tabId = "edited-recovery-delivery"; const first = new Port();
+    tabRegistry.registerPort(tabId,"/ws",first as unknown as MessagePort);
+    const target = tabRegistry.getStore(tabId)!;
+    const ready = {type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",imageInput:true};
+    first.emit(ready);
+    const image = {name:"recover.png",sizeBytes:1,attachment:{mediaType:"image/png" as const,data:"YQ=="}};
+    target.getState().recordSentMessage("original",[image],"old-request",undefined,{});
+    target.getState().markOrchestrationDeliveryUnknown("old-request");
+    try {
+      await act(async () => root.render(createElement(TabContext.Provider,{value:{tabId,store:target}},createElement(SessionSurface,{tabId,onToast:()=>{}}))));
+      await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+      await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-reviewed")!.click());
+      const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+      await act(async () => {Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(textarea,"edited retry"); textarea.dispatchEvent(new Event("input",{bubbles:true}));});
+      await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+      const sent = first.postMessage.mock.calls.map(([message]) => message as {type:string;requestId?:string;text?:string}).find(message => message.type === "user_message" && message.text === "edited retry")!;
+      expect(sent.requestId).toBeTruthy(); expect(sent.requestId).not.toBe("old-request");
+      expect(target.getState().orchestrationDeliveries).toMatchObject([{requestId:"old-request",status:"unknown"},{requestId:sent.requestId,text:"edited retry",images:[image],status:"pending"}]);
+      await act(async () => first.close());
+      expect(target.getState().orchestrationDeliveries[1]).toMatchObject({requestId:sent.requestId,text:"edited retry",images:[image],status:"unknown"});
+      const replacement = new Port();
+      await act(async () => {tabRegistry.registerPort(tabId,"/ws",replacement as unknown as MessagePort); replacement.emit(ready);});
+      expect(replacement.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type:"user_message"}));
+      const row = [...container.querySelectorAll<HTMLElement>('[role="status"]')].find(element => element.textContent?.includes("edited retry"))!;
+      await act(async () => row.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+      expect(target.getState().restoredComposerDraft).toMatchObject({text:"edited retry",images:[image],deliveryRequestId:sent.requestId});
+    } finally { tabRegistry.disposeTab(tabId); }
+  });
+
+  it("offers a system retry only after a late confirmed rejection", async () => {
+    vi.mocked(tabRegistry.getLiveHostConnection).mockRestore();
+    class Port {
+      onmessage: ((event:MessageEvent) => void) | null = null; postMessage = vi.fn(); listeners = new Set<() => void>();
+      addEventListener(type:string, listener:() => void) { if (type === "close") this.listeners.add(listener); }
+      removeEventListener(type:string, listener:() => void) { if (type === "close") this.listeners.delete(listener); }
+      close() { for (const listener of this.listeners) listener(); }
+      emit(data:unknown) { this.onmessage!({data} as MessageEvent); }
+    }
+    const tabId = "system-retry-mounted"; const first = new Port();
+    tabRegistry.registerPort(tabId,"/ws",first as unknown as MessagePort);
+    const target = tabRegistry.getStore(tabId)!;
+    const ready = {type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1"}; first.emit(ready);
+    try {
+      await act(async () => root.render(createElement(TabContext.Provider,{value:{tabId,store:target}},createElement(SessionSurface,{tabId,onToast:()=>{}}))));
+      await act(async () => first.emit({type:"child_report",id:"report-id",text:"system report"}));
+      const sent = first.postMessage.mock.calls.map(([message]) => message as {type:string;requestId?:string}).find(message => message.type === "user_message")!;
+      await act(async () => first.close());
+      const replacement = new Port();
+      await act(async () => {tabRegistry.registerPort(tabId,"/ws",replacement as unknown as MessagePort); replacement.emit(ready);});
+      expect(container.querySelector(".system-delivery-retry")).toBeNull();
+      await act(async () => replacement.emit({type:"turn_rejected",requestId:sent.requestId,reason:"busy"}));
+      expect(replacement.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type:"user_message"}));
+      await act(async () => container.querySelector<HTMLButtonElement>(".system-delivery-retry")!.click());
+      expect(replacement.postMessage).toHaveBeenCalledWith(expect.objectContaining({type:"user_message",text:"system report",origin:"system"}));
+      expect(target.getState().queueInFlight?.item.originId).toBe("report-id");
+      expect(container.querySelector(".system-delivery-retry")).toBeNull();
+    } finally {tabRegistry.disposeTab(tabId);}
+  });
+
   it("renders the following queued message after a requeued steer is acknowledged", async () => {
     vi.mocked(tabRegistry.getLiveHostConnection).mockRestore();
     const tabId = "requeued-steer-mounted";

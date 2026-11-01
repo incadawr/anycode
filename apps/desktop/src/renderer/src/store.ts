@@ -983,6 +983,10 @@ export interface QueuedPromptImage {
 }
 
 export interface QueuedPrompt {
+  /** Recovery sends need their own delivery record, independently of the original. */
+  trackDelivery?: boolean;
+  /** Explicit system-report retry, conditional on the original still being rejected. */
+  retryOf?: string;
   /** Retained only for explicit recovery; never resend as an ordinary turn. */
   orchestrate?: "enable";
   /** The whole draft needs a user's explicit recovery before sending. */
@@ -1022,6 +1026,7 @@ export interface OrchestrationDelivery {
   initialPicks?: QueuedPrompt["initialPicks"];
   origin?: "system";
   originId?: string;
+  retryQueued?: boolean;
   status: "pending" | "unknown" | "rejected" | "started" | "conflict";
   restored: boolean;
   reviewed: boolean;
@@ -1043,12 +1048,14 @@ function deliveryUnknown(item: OrchestrationDelivery): OrchestrationDelivery {
 }
 
 /** Preserve the wire id and payload when a queued turn loses its transport. */
-function holdInFlightUnknown(state: DesktopState): Pick<DesktopState, "queueInFlight" | "orchestrationDeliveries"> {
+function holdInFlightUnknown(state: DesktopState): Pick<DesktopState, "queueInFlight" | "orchestrationDeliveries" | "promptQueue"> {
   const current = state.queueInFlight;
-  const deliveries = state.orchestrationDeliveries.map(deliveryUnknown);
-  if (!current || deliveries.some(item => item.requestId === current.requestId)) return {queueInFlight:null,orchestrationDeliveries:deliveries};
+  const cancelledRetries = new Set(state.promptQueue.flatMap(item => item.retryOf ? [item.retryOf] : []));
+  const promptQueue = state.promptQueue.filter(item => !item.retryOf);
+  const deliveries = state.orchestrationDeliveries.map(item => cancelledRetries.has(item.requestId) ? {...deliveryUnknown(item),retryQueued:false} : deliveryUnknown(item));
+  if (!current || deliveries.some(item => item.requestId === current.requestId)) return {queueInFlight:null,orchestrationDeliveries:deliveries,promptQueue};
   const item = current.item;
-  return {queueInFlight:null,orchestrationDeliveries:[...deliveries,{
+  return {queueInFlight:null,promptQueue,orchestrationDeliveries:[...deliveries,{
     requestId:current.requestId,text:item.text,images:item.images.map(image => ({...image,attachment:{...image.attachment}})),
     ...(item.orchestrate ? {orchestrate:item.orchestrate} : {}),...(item.initialPicks ? {initialPicks:{...item.initialPicks}} : {}),
     ...(item.origin ? {origin:item.origin} : {}),...(item.originId ? {originId:item.originId} : {}),status:"unknown",restored:false,reviewed:false,
@@ -1547,6 +1554,7 @@ export interface DesktopState {
    */
   recordSentMessage(text: string, images: readonly QueuedPromptImage[], requestId?: string, orchestrate?: "enable", initialPicks?: QueuedPrompt["initialPicks"]): void;
   markOrchestrationDeliveryUnknown(requestId: string): void;
+  retryRejectedSystemDelivery(requestId: string): void;
   /**
    * W8 one-shot consume: clears `retry` synchronously (so the button
    * cannot be clicked twice even while the resend is merely queued, not yet
@@ -1624,7 +1632,7 @@ export interface DesktopState {
   takeQueueHead(requestId: string): QueuedPrompt | null;
   /** Clears the paused flag so the drainer can resume (Resume button). */
   resumeQueue(): void;
-  /** Empties the queue, clears any in-flight item, and un-pauses (Clear button / new session). */
+  /** Empties unsent items and un-pauses; a posted in-flight request stays correlated. */
   clearQueue(): void;
 }
 
@@ -4944,7 +4952,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                 ...holdInFlightUnknown(state),
                 // a respawn is a failure, not a turn limit — never
                 // leave a stale "max_turns" reason on the new pause.
-                ...(state.promptQueue.length > 0 ? { queuePaused: true, queuePauseReason: "error" as const } : {}),
+                ...(state.promptQueue.some(item => !item.retryOf) ? { queuePaused: true, queuePauseReason: "error" as const } : {}),
                 ...(armedRetry !== null ? { retry: armedRetry } : {}),
               };
             });
@@ -5046,7 +5054,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           case "turn_started": {
             pendingSentMessages.delete(message.requestId);
             if (presentationReplayActive && presentationReplayTurns?.has(message.turnId)) {
-              set((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(item => item.requestId === message.requestId ? deliveryStarted(item,message.turnId) : item)}));
+              set((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(item => item.requestId === message.requestId ? deliveryStarted(item,message.turnId) : item),promptQueue:state.promptQueue.filter(item => item.retryOf !== message.requestId)}));
               return;
             }
             // fallback: a turn starting means post-switch content
@@ -5076,6 +5084,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             }
             set({
               orchestrationDeliveries: get().orchestrationDeliveries.map(item => item.requestId === message.requestId ? deliveryStarted(item,message.turnId) : item),
+              promptQueue: get().promptQueue.filter(item => item.retryOf !== message.requestId),
               turn: { status: "running", turnId: message.turnId, requestId: message.requestId, startedAt: turnStartedAt.get(message.turnId) },
               latestTurnId: message.turnId,
               // W8: a new turn starting — whether via the Try-again
@@ -5114,11 +5123,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             const { queueInFlight, promptQueue } = get();
             const direct = pendingSentMessages.get(message.requestId);
             const delivery = get().orchestrationDeliveries.find(item => item.requestId === message.requestId);
+            const rejectedSystem = queueInFlight?.requestId === message.requestId && queueInFlight.item.origin === "system" ? queueInFlight.item : undefined;
             const restoreDirect = delivery === undefined && queueInFlight?.requestId !== message.requestId && direct !== undefined && !promptQueue.some(item => item.id === message.requestId)
               ? { promptQueue: [{ id: message.requestId, ...direct }, ...promptQueue], queuePaused: true, queuePauseReason: "rejected" as const }
               : null;
             const restore =
-              queueInFlight && queueInFlight.requestId === message.requestId
+              queueInFlight && queueInFlight.requestId === message.requestId && !rejectedSystem && !delivery
                 ? {
                     promptQueue: [queueInFlight.item, ...promptQueue],
                     queuePaused: true,
@@ -5127,7 +5137,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                   }
                 : null;
             set({
-              ...(delivery ? {orchestrationDeliveries:get().orchestrationDeliveries.map(item => item.requestId === message.requestId ? deliveryRejected(item) : item)} : {}),
+              ...(delivery ? {orchestrationDeliveries:get().orchestrationDeliveries.map(item => item.requestId === message.requestId ? deliveryRejected(item) : item)} : rejectedSystem ? {orchestrationDeliveries:[...get().orchestrationDeliveries,{requestId:message.requestId,text:rejectedSystem.text,images:rejectedSystem.images,origin:"system" as const,...(rejectedSystem.originId ? {originId:rejectedSystem.originId} : {}),status:"rejected" as const,restored:false,reviewed:false}]} : {}),
+              ...((rejectedSystem || (delivery && queueInFlight?.requestId === message.requestId)) ? {queueInFlight:null} : {}),
               notice: {
                 kind: "turn_rejected",
                 text:
@@ -6007,7 +6018,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
 
       setPortClosed(): void {
         set((state) => ({connection:"awaiting_port",...holdInFlightUnknown(state),
-          ...(state.promptQueue.length > 0 ? {queuePaused:true,queuePauseReason:"error" as const} : {})}));
+          ...(state.promptQueue.some(item => !item.retryOf) ? {queuePaused:true,queuePauseReason:"error" as const} : {})}));
       },
 
       setAwaitingHostReady(): void {
@@ -6045,7 +6056,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // and Retry now never posts into a dead port.
             networkWaitEpisodes: { parent: 0, subagent: 0 },
             waitingForNetwork: false,
-            ...(state.promptQueue.length > 0 ? { queuePaused: true, queuePauseReason: "error" as const } : {}),
+            ...(state.promptQueue.some(item => !item.retryOf) ? { queuePaused: true, queuePauseReason: "error" as const } : {}),
           };
         });
       },
@@ -6194,6 +6205,15 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         set((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(item => item.requestId === requestId ? deliveryUnknown(item) : item)}));
       },
 
+      retryRejectedSystemDelivery(requestId: string): void {
+        set((state) => {
+          const delivery = state.orchestrationDeliveries.find(item => item.requestId === requestId);
+          if (!delivery || delivery.origin !== "system" || delivery.status !== "rejected" || delivery.retryQueued || state.connection !== "ready") return {};
+          const retry: QueuedPrompt = {id:crypto.randomUUID(),text:delivery.text,images:delivery.images.map(image => ({...image,attachment:{...image.attachment}})),origin:"system",...(delivery.originId ? {originId:delivery.originId} : {}),retryOf:requestId};
+          return {orchestrationDeliveries:state.orchestrationDeliveries.map(item => item.requestId === requestId ? {...item,retryQueued:true} : item),promptQueue:[...state.promptQueue,retry]};
+        });
+      },
+
       consumeRetry(): RetryOffer | null {
         const offer = get().retry;
         if (offer !== null) {
@@ -6248,7 +6268,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
 
       reset(): void {
         pendingSentMessages.clear();
-        set((state) => ({ restoredComposerDraft: null, orchestrationDeliveries: state.orchestrationDeliveries.map(deliveryUnknown), composerRolePicker: null, contextWindowDraft: null, completedComposerImages: [], pendingComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 }));
+        set((state) => ({ restoredComposerDraft: null, ...holdInFlightUnknown(state), promptQueue:[], queueEditDraft:null, queuePaused:false, composerRolePicker: null, contextWindowDraft: null, completedComposerImages: [], pendingComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 }));
         performReset();
         // a genuinely new session drops staged markers, the
         // boundary flags and the lifted session id along with the transcript.
@@ -6269,13 +6289,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
 
       editQueuedPrompt(id: string, text: string): void {
         set((state) => ({
-          promptQueue: state.promptQueue.map((prompt) => (prompt.id === id ? { ...prompt, text } : prompt)),
+          promptQueue: state.promptQueue.map((prompt) => (prompt.id === id && !prompt.retryOf ? { ...prompt, text } : prompt)),
           queueEditDraft: state.queueEditDraft?.id === id ? null : state.queueEditDraft,
         }));
       },
 
       deleteQueuedPrompt(id: string): void {
-        set((state) => ({ promptQueue: state.promptQueue.filter((prompt) => prompt.id !== id), queueEditDraft: state.queueEditDraft?.id === id ? null : state.queueEditDraft }));
+        set((state) => { const retryOf = state.promptQueue.find(prompt => prompt.id === id)?.retryOf; return { promptQueue: state.promptQueue.filter((prompt) => prompt.id !== id), queueEditDraft: state.queueEditDraft?.id === id ? null : state.queueEditDraft, ...(retryOf ? {orchestrationDeliveries:state.orchestrationDeliveries.map(item => item.requestId === retryOf ? {...item,retryQueued:false} : item)} : {}) }; });
       },
 
       takeQueueHead(requestId: string): QueuedPrompt | null {
@@ -6307,6 +6327,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         }
         const head = promptQueue[takeIndex]!;
         if (head.orchestrate === "enable" || head.requiresRestore === true) return null;
+        if (head.retryOf && !get().orchestrationDeliveries.some(item => item.requestId === head.retryOf && item.status === "rejected" && item.retryQueued)) {
+          set({promptQueue:[...promptQueue.slice(0,takeIndex),...promptQueue.slice(takeIndex+1)]});
+          return null;
+        }
         const rest = [...promptQueue.slice(0, takeIndex), ...promptQueue.slice(takeIndex + 1)];
         const sendId = get().steerRequeueSeen.includes(head.id) ? head.id : requestId;
         set({ promptQueue: rest, queueInFlight: { requestId: sendId, item: head } });
@@ -6318,7 +6342,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       },
 
       clearQueue(): void {
-        set({ promptQueue: [], queueEditDraft: null, queueInFlight: null, queuePaused: false });
+        set((state) => { const cancelled = new Set(state.promptQueue.flatMap(item => item.retryOf ? [item.retryOf] : [])); return { promptQueue: [], queueEditDraft: null, queuePaused: false, orchestrationDeliveries:state.orchestrationDeliveries.map(item => cancelled.has(item.requestId) ? {...item,retryQueued:false} : item) }; });
       },
     };
   });
