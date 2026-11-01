@@ -1442,7 +1442,9 @@ describe("tab-registry — ready host connection identity", () => {
     const store = registry.getStore("tab-a")!;
     const initial = registry.getLiveHostConnection("tab-a",store);
     expect(initial).not.toBeNull();
+    store.getState().recordSentMessage("task",[],"req-a","enable");
     first.close();
+    expect(store.getState().orchestrationDeliveries[0]?.status).toBe("unknown");
     expect(registry.getLiveHostConnection("tab-a",store)).toBeNull();
     const replacement = new FakeMessagePort();
     registry.registerPort("tab-a","/ws/a",asPort(replacement));

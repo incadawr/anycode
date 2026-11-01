@@ -9499,7 +9499,57 @@ describe("direct refusal recovery by request identity", () => {
     store.getState().takeQueueHead("other-id");
     store.getState().applyHostMessage({type:"turn_rejected",requestId:"direct-id",reason:"busy"});
     expect(store.getState().queueInFlight?.requestId).toBe("other-id");
-    expect(store.getState().promptQueue).toMatchObject([{id:"direct-id",text:"direct",images,orchestrate:"enable"}]);
-    expect(store.getState().queuePaused).toBe(true);
+    expect(store.getState().promptQueue).toHaveLength(0);
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{requestId:"direct-id",text:"direct",images,orchestrate:"enable",status:"rejected"}]);
+  });
+});
+
+
+describe("direct orchestration delivery reconciliation", () => {
+  it("retains the exact payload through host exit and reconnect and correlates only its request ID", () => {
+    const store = createDesktopStore();
+    const ready = {type:"host_ready" as const,workspace:"/ws",mode:"build" as const,model:"m",sessionId:"s"};
+    store.getState().applyHostMessage(ready);
+    const images = [{name:"a.png",sizeBytes:3,attachment:{mediaType:"image/png" as const,data:"YWJj"}}];
+    store.getState().recordSentMessage("original task",images,"req-a","enable");
+    store.setState({restoredComposerDraft:{text:"new edit",images:[]}});
+    store.getState().setHostExited();
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{requestId:"req-a",text:"original task",images,orchestrate:"enable",status:"unknown"}]);
+    store.getState().setAwaitingHostReady();
+    store.getState().applyHostMessage(ready);
+    store.getState().applyHostMessage({type:"turn_started",requestId:"other",turnId:"other-turn"});
+    expect(store.getState().orchestrationDeliveries[0]?.status).toBe("unknown");
+    expect(store.getState().restoredComposerDraft?.text).toBe("new edit");
+    store.getState().applyHostMessage({type:"turn_started",requestId:"req-a",turnId:"turn-a"});
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({status:"started",turnId:"turn-a"});
+    store.getState().applyHostMessage({type:"turn_rejected",requestId:"req-a",reason:"busy"});
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({status:"conflict",reviewed:false});
+    expect(store.getState().promptQueue).toEqual([]);
+    expect(store.getState().restoredComposerDraft?.text).toBe("new edit");
+  });
+
+  it("keeps an unresolved request across an explicit session reset and never infers success", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",mode:"build",model:"m",sessionId:"s"});
+    store.getState().recordSentMessage("task",[],"req-reset","enable");
+    store.getState().reset();
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{requestId:"req-reset",text:"task",orchestrate:"enable",status:"unknown"}]);
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/other",mode:"build",model:"m",sessionId:"other"});
+    expect(store.getState().orchestrationDeliveries[0]?.status).toBe("unknown");
+    expect(store.getState().promptQueue).toEqual([]);
+  });
+
+  it("treats rejection then a late start as conflict and keeps unrelated requests independent", () => {
+    const store = createDesktopStore();
+    store.getState().recordSentMessage("first",[],"req-a","enable");
+    store.getState().recordSentMessage("second",[],"req-b","enable");
+    store.getState().applyHostMessage({type:"turn_rejected",requestId:"req-a",reason:"busy"});
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{requestId:"req-a",status:"rejected"},{requestId:"req-b",status:"unknown"}]);
+    store.getState().applyHostMessage({type:"turn_started",requestId:"req-a",turnId:"late-turn"});
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{requestId:"req-a",status:"conflict"},{requestId:"req-b",status:"unknown"}]);
+    store.setState((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(item => item.requestId === "req-a" ? {...item,reviewed:true} : item)}));
+    store.getState().applyHostMessage({type:"turn_rejected",requestId:"req-a",reason:"busy"});
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({status:"conflict",reviewed:true});
+    expect(store.getState().promptQueue).toEqual([]);
   });
 });

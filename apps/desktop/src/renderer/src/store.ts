@@ -1013,6 +1013,32 @@ export interface QueuedPrompt {
   originId?: string;
 }
 
+/** Renderer-lifetime evidence for an orchestration request; no delivery is inferred from a local send. */
+export interface OrchestrationDelivery {
+  requestId: string;
+  text: string;
+  images: readonly QueuedPromptImage[];
+  orchestrate: "enable";
+  status: "pending" | "unknown" | "rejected" | "started" | "conflict";
+  restored: boolean;
+  reviewed: boolean;
+  turnId?: string;
+}
+
+function deliveryStarted(item: OrchestrationDelivery, turnId: string): OrchestrationDelivery {
+  if (item.status === "conflict") return item;
+  if (item.status === "rejected" || (item.status === "started" && item.turnId !== turnId)) return { ...item, status: "conflict", reviewed: false };
+  return { ...item, status: "started", turnId };
+}
+function deliveryRejected(item: OrchestrationDelivery): OrchestrationDelivery {
+  if (item.status === "conflict") return item;
+  if (item.status === "started") return { ...item, status: "conflict", reviewed: false };
+  return { ...item, status: "rejected" };
+}
+function deliveryUnknown(item: OrchestrationDelivery): OrchestrationDelivery {
+  return item.status === "pending" ? { ...item, status: "unknown" } : item;
+}
+
 /**
  * W8 one-shot "Try again": the exact text+images actually put on the
  * wire, snapshotted at send time by `recordSentMessage` (Composer's direct
@@ -1379,6 +1405,7 @@ export interface DesktopState {
    * a host respawn (see the section comment above `QueuedPrompt`).
    */
   promptQueue: readonly QueuedPrompt[];
+  orchestrationDeliveries: readonly OrchestrationDelivery[];
   /** Uncommitted queue edit, owned by this tab and this queue item. */
   queueEditDraft: { id: string; text: string } | null;
   composerRolePicker: { id: string; task: string | null; forToggle: boolean; draft?: RolesDraft; seededDraft?: RolesDraft | null; saveOperation?: string; completionClaim?: string } | null;
@@ -1502,6 +1529,7 @@ export interface DesktopState {
    * paths) — NOT a new send path of its own.
    */
   recordSentMessage(text: string, images: readonly QueuedPromptImage[], requestId?: string, orchestrate?: "enable"): void;
+  markOrchestrationDeliveryUnknown(requestId: string): void;
   /**
    * W8 one-shot consume: clears `retry` synchronously (so the button
    * cannot be clicked twice even while the resend is merely queued, not yet
@@ -4835,6 +4863,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       // Prompt-queue slots (slice P7.14): outside initialSessionSlice so a
       // host respawn preserves user-typed prompts (see QueuedPrompt comment).
       promptQueue: [],
+      orchestrationDeliveries: [],
       queueEditDraft: null,
       composerRolePicker: null,
       contextWindowDraft: null,
@@ -4909,6 +4938,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               return {
                 queueInFlight: null,
                 promptQueue,
+                orchestrationDeliveries: state.orchestrationDeliveries.map(deliveryUnknown),
                 // a respawn is a failure, not a turn limit — never
                 // leave a stale "max_turns" reason on the new pause.
                 ...(promptQueue.length > 0 ? { queuePaused: true, queuePauseReason: "error" as const } : {}),
@@ -5012,7 +5042,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             return;
           case "turn_started": {
             pendingSentMessages.delete(message.requestId);
-            if (presentationReplayActive && presentationReplayTurns?.has(message.turnId)) return;
+            if (presentationReplayActive && presentationReplayTurns?.has(message.turnId)) {
+              set((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(item => item.requestId === message.requestId ? deliveryStarted(item,message.turnId) : item)}));
+              return;
+            }
             // fallback: a turn starting means post-switch content
             // is about to land — if the hydration boundary never arrived (no
             // session_history at all), flush staged markers NOW so they
@@ -5039,6 +5072,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               turnStartedAt.set(message.turnId, message.startedAt ?? Date.now());
             }
             set({
+              orchestrationDeliveries: get().orchestrationDeliveries.map(item => item.requestId === message.requestId ? deliveryStarted(item,message.turnId) : item),
               turn: { status: "running", turnId: message.turnId, requestId: message.requestId, startedAt: turnStartedAt.get(message.turnId) },
               latestTurnId: message.turnId,
               // W8: a new turn starting — whether via the Try-again
@@ -5076,7 +5110,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // existing notice explains the pause.
             const { queueInFlight, promptQueue } = get();
             const direct = pendingSentMessages.get(message.requestId);
-            const restoreDirect = queueInFlight?.requestId !== message.requestId && direct !== undefined && !promptQueue.some(item => item.id === message.requestId)
+            const delivery = get().orchestrationDeliveries.find(item => item.requestId === message.requestId);
+            const restoreDirect = delivery === undefined && queueInFlight?.requestId !== message.requestId && direct !== undefined && !promptQueue.some(item => item.id === message.requestId)
               ? { promptQueue: [{ id: message.requestId, ...direct }, ...promptQueue], queuePaused: true, queuePauseReason: "rejected" as const }
               : null;
             const restore =
@@ -5089,6 +5124,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                   }
                 : null;
             set({
+              ...(delivery ? {orchestrationDeliveries:get().orchestrationDeliveries.map(item => item.requestId === message.requestId ? deliveryRejected(item) : item)} : {}),
               notice: {
                 kind: "turn_rejected",
                 text:
@@ -5966,7 +6002,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       },
 
       setAwaitingHostReady(): void {
-        set({ connection: "awaiting_host_ready", hostFailure: null });
+        set((state) => ({ connection: "awaiting_host_ready", hostFailure: null, orchestrationDeliveries: state.orchestrationDeliveries.map(deliveryUnknown) }));
       },
 
       setPinnedConnection(pinnedConnection: { connectionId: string; providerId: string }): void {
@@ -5994,6 +6030,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             state.queueInFlight !== null ? [state.queueInFlight.item, ...state.promptQueue] : state.promptQueue;
           return {
             connection: "host_exited",
+            orchestrationDeliveries: state.orchestrationDeliveries.map(deliveryUnknown),
             // GitHub #6: only the missing-folder refusal is terminal; every other
             // exit keeps the reconnecting path open, so the flag follows the call.
             workspaceMissing: missingWorkspace,
@@ -6143,7 +6180,16 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
 
       recordSentMessage(text: string, images: readonly QueuedPromptImage[], requestId?: string, orchestrate?: "enable"): void {
         if (requestId !== undefined) pendingSentMessages.set(requestId, { text, images, ...(orchestrate !== undefined ? { orchestrate } : {}) });
-        set({ lastSentMessage: { text, images } });
+        set((state) => ({
+          lastSentMessage: { text, images },
+          ...(orchestrate === "enable" && requestId !== undefined && !state.orchestrationDeliveries.some(item => item.requestId === requestId) ? {
+            orchestrationDeliveries: [...state.orchestrationDeliveries, {requestId,text,images:images.map(image => ({...image,attachment:{...image.attachment}})),orchestrate:"enable" as const,status:state.connection === "ready" ? "pending" as const : "unknown" as const,restored:false,reviewed:false}],
+          } : {}),
+        }));
+      },
+
+      markOrchestrationDeliveryUnknown(requestId: string): void {
+        set((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(item => item.requestId === requestId ? deliveryUnknown(item) : item)}));
       },
 
       consumeRetry(): RetryOffer | null {
@@ -6200,7 +6246,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
 
       reset(): void {
         pendingSentMessages.clear();
-        set((state) => ({ restoredComposerDraft: null, composerRolePicker: null, contextWindowDraft: null, completedComposerImages: [], pendingComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 }));
+        set((state) => ({ restoredComposerDraft: null, orchestrationDeliveries: state.orchestrationDeliveries.map(deliveryUnknown), composerRolePicker: null, contextWindowDraft: null, completedComposerImages: [], pendingComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 }));
         performReset();
         // a genuinely new session drops staged markers, the
         // boundary flags and the lifted session id along with the transcript.

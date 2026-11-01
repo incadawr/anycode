@@ -490,7 +490,10 @@ export function createTabRegistry(
     entry.unsubscribeExpiry = null;
     const connection = connectHost(port);
     entry.connection = connection;
-    const onConnectionClosed = () => { unusableHostConnections.add(connection); };
+    const onConnectionClosed = () => {
+      unusableHostConnections.add(connection);
+      if (entry.connection === connection) entry.store.setState((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(item => item.status === "pending" ? {...item,status:"unknown" as const} : item)}));
+    };
     if (typeof port.addEventListener === "function") port.addEventListener("close", onConnectionClosed, {once:true});
     else unusableHostConnections.add(connection);
     if (entry.isChild) {

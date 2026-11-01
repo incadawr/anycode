@@ -238,6 +238,68 @@ describe("dock resize handle placement (GitHub #31)", () => {
     }
   });
 
+  it("holds a posted orchestration as delivery unknown across exit and reconciles late outcomes without overwriting edits", async () => {
+    vi.mocked(tabRegistry.getLiveHostConnection).mockRestore();
+    const previous = useSettingsStore.getState();
+    useSettingsStore.setState({snapshot:{settings:cloneDefaults(),secrets:[],providerReady:true,envOverrides:[],readOnly:false,catalog:[]}});
+    const originalShow = HTMLDialogElement.prototype.showModal;
+    HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+    const makePort = () => ({onmessage:null as ((event:MessageEvent) => void) | null,postMessage:vi.fn(),addEventListener:()=>{},removeEventListener:()=>{}});
+    const first = makePort();
+    const tabId = "delivery-unknown-test";
+    const ready = {type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1"};
+    tabRegistry.registerPort(tabId,"/ws",first as unknown as MessagePort);
+    const target = tabRegistry.getStore(tabId)!;
+    first.onmessage!({data:ready} as MessageEvent);
+    target.setState({composerRolePicker:{id:"picker",task:"original task",forToggle:false},restoredComposerDraft:{text:"original task",images:[]}});
+    try {
+      await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId,store:target}}, createElement(SessionSurface, {tabId,onToast:() => {}}))));
+      await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="role-picker-skip"]')!.click());
+      const sent = first.postMessage.mock.calls.map(([message]) => message as {type:string;requestId?:string;text?:string}).find(message => message.type === "user_message")!;
+      expect(sent).toMatchObject({type:"user_message",text:"original task"});
+      expect(target.getState().orchestrationDeliveries).toMatchObject([{requestId:sent.requestId,text:"original task",images:[],orchestrate:"enable",status:"pending"}]);
+      await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+      expect(first.postMessage.mock.calls.filter(([message]) => (message as {type:string}).type === "user_message")).toHaveLength(1);
+      const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+      const type = async (value:string) => { await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(textarea,value); textarea.dispatchEvent(new Event("input",{bubbles:true})); }); };
+      await type("/orchestrate original task");
+      await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+      expect(first.postMessage.mock.calls.filter(([message]) => (message as {type:string}).type === "user_message")).toHaveLength(1);
+      await type("new user edit");
+      await act(async () => tabRegistry.markHostExited(tabId));
+      expect(target.getState().orchestrationDeliveries[0]?.status).toBe("unknown");
+      const replacement = makePort();
+      await act(async () => { tabRegistry.registerPort(tabId,"/ws",replacement as unknown as MessagePort); replacement.onmessage!({data:ready} as MessageEvent); });
+      expect(container.textContent).toContain("Delivery unknown");
+      expect(textarea.value).toBe("new user edit");
+      expect(replacement.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type:"user_message"}));
+      await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+      expect(textarea.value).toBe("new user edit");
+      expect(target.getState().orchestrationDeliveries[0]?.restored).toBe(false);
+      await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-reviewed")!.click());
+      expect(target.getState().orchestrationDeliveries[0]).toMatchObject({status:"unknown",reviewed:true});
+      expect(replacement.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type:"user_message"}));
+      await type("");
+      await act(async () => container.querySelector<HTMLButtonElement>(".orchestration-delivery-restore")!.click());
+      expect(textarea.value).toBe("original task");
+      expect(target.getState().restoredComposerDraft?.orchestrate).toBe("enable");
+      expect(target.getState().orchestrationDeliveries[0]?.restored).toBe(true);
+      await act(async () => replacement.onmessage!({data:{type:"turn_started",requestId:sent.requestId,turnId:"late-turn"}} as MessageEvent));
+      expect(target.getState().orchestrationDeliveries[0]).toMatchObject({status:"started",restored:true});
+      expect(textarea.value).toBe("original task");
+      expect(container.textContent).toContain("Turn started; a restored copy remains");
+      await act(async () => replacement.onmessage!({data:{type:"turn_rejected",requestId:sent.requestId,reason:"busy"}} as MessageEvent));
+      expect(target.getState().orchestrationDeliveries[0]?.status).toBe("conflict");
+      expect(textarea.value).toBe("original task");
+      expect(target.getState().promptQueue).toEqual([]);
+      expect(replacement.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type:"user_message"}));
+    } finally {
+      tabRegistry.disposeTab(tabId);
+      HTMLDialogElement.prototype.showModal = originalShow;
+      useSettingsStore.setState({snapshot:previous.snapshot});
+    }
+  });
+
   it("retains the task and intent when the host exits before role save resolves", async () => {
     vi.mocked(tabRegistry.getLiveHostConnection).mockRestore();
     const previous = useSettingsStore.getState();

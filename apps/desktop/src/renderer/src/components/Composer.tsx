@@ -1603,7 +1603,7 @@ export function Composer() {
    * the prompt queue carries the task exactly like any other send.
    */
   function beginOrchestrateSubmit(taskText: string): void {
-    if (rolePickerAlreadyOpen() || imagesStillLoading() || refuseOrchestrateAttachments()) return;
+    if (unresolvedOrchestration(taskText) || rolePickerAlreadyOpen() || imagesStillLoading() || refuseOrchestrateAttachments()) return;
     const task = taskText.trim();
     if (!ready) {
       return;
@@ -1652,7 +1652,7 @@ export function Composer() {
       retain("Session disconnected or changed. The task and orchestration intent are retained; review the picker before continuing.");
       return;
     }
-    if (!picker.forToggle && (imagesStillLoading() || refuseOrchestrateAttachments())) return;
+    if (!picker.forToggle && (imagesStillLoading() || refuseOrchestrateAttachments() || unresolvedOrchestration(picker.task ?? ""))) return;
     const claim = crypto.randomUUID();
     tabStore.setState((state) => state.composerRolePicker?.id === id && !state.composerRolePicker.saveOperation && !state.composerRolePicker.completionClaim
       ? {composerRolePicker:{...state.composerRolePicker,completionClaim:claim}} : {});
@@ -1661,16 +1661,20 @@ export function Composer() {
       retain("Session disconnected or changed. The task and orchestration intent are retained; review the picker before continuing.");
       return;
     }
+    let deliveryRequestId: string | undefined;
     try {
       sendToHost({type:"set_orchestrate",enabled:true});
       if (!picker.forToggle && picker.task) {
         if (!connected()) throw new Error("connection changed");
         const requestId = crypto.randomUUID();
+        deliveryRequestId = requestId;
+        tabStore.getState().recordSentMessage(picker.task,[],requestId,"enable");
+        if (!connected()) throw new Error("connection changed");
         sendToHost({type:"user_message",requestId,text:picker.task});
         tabStore.getState().appendUserText(requestId,picker.task);
-        tabStore.getState().recordSentMessage(picker.task,[],requestId,"enable");
       }
     } catch {
+      if (deliveryRequestId) tabStore.getState().markOrchestrationDeliveryUnknown(deliveryRequestId);
       retain("Delivery was not confirmed. The task and orchestration intent are retained; review the session before retrying.");
       return;
     }
@@ -1819,6 +1823,7 @@ export function Composer() {
     const isInsert = intent.kind === "insert";
     const replacement = intent.kind === "insert" ? intent.text : "";
     const nextText = text.slice(0, slashQuery.start) + replacement + text.slice(tokenEnd);
+    if (intent.kind === "orchestrate_submit" && unresolvedOrchestration(nextText)) return;
     setText(nextText);
     setCaret(slashQuery.start + replacement.length);
     pendingCaretRef.current = slashQuery.start + replacement.length;
@@ -1871,6 +1876,14 @@ export function Composer() {
     return true;
   }
 
+  function unresolvedOrchestration(text: string): boolean {
+    const candidate = text.trim();
+    if (!candidate) return false;
+    const unresolved = tabStore.getState().orchestrationDeliveries?.some(item => item.text.trim() === candidate && (item.status === "pending" || ((item.status === "unknown" || item.status === "conflict") && !item.reviewed)));
+    if (unresolved) tabStore.getState().setNotice({kind:"slash_command_rejected",text:"This orchestration may already have started. Check its delivery status before sending again."});
+    return !!unresolved;
+  }
+
   function imagesStillLoading(): boolean {
     const state = tabStore.getState();
     if ((state.pendingComposerImages?.length ?? 0) === 0 && (state.completedComposerImages?.length ?? 0) === 0) return false;
@@ -1903,6 +1916,8 @@ export function Composer() {
       }
     }
     const outgoing = reconstitutePasteMarkers(text, pasteBlocks);
+    const orchestrationText = /^\s*\/orchestrate(?:\s+|$)/.test(outgoing) ? outgoing.replace(/^\s*\/orchestrate(?:\s+|$)/, "") : outgoing;
+    if (unresolvedOrchestration(orchestrationText)) return;
     // GitHub #14: a recognized whole-draft slash command is consumed (run or
     // visibly refused) BEFORE the canSend gate and before any queue/steer/
     // append side effect — it is never delivered to the model as a prompt.

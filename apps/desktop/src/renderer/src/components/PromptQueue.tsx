@@ -27,6 +27,7 @@ export function shouldShowPromptQueue(
 
 export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt) => boolean }) {
   const promptQueue = useTabStore((state) => state.promptQueue);
+  const deliveries = useTabStore((state) => state.orchestrationDeliveries);
   const queuePaused = useTabStore((state) => state.queuePaused);
   // the banner must name the REAL reason the queue is held
   // ("turn limit" vs "cancelled/failed") — «Работа» §2.
@@ -37,7 +38,8 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt) =>
   const tabStore = useTabStoreApi();
   const editing = useTabStore((state) => state.queueEditDraft);
 
-  if (!shouldShowPromptQueue(promptQueue.length, queuePaused, pendingSteers.length)) {
+  const visibleDeliveries = (deliveries ?? []).filter(item => item.status !== "started" || item.restored);
+  if (!shouldShowPromptQueue(promptQueue.length, queuePaused, pendingSteers.length) && visibleDeliveries.length === 0) {
     return null;
   }
 
@@ -71,6 +73,22 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt) =>
 
   return (
     <div className="prompt-queue">
+      {visibleDeliveries.map((item) => <div key={item.requestId} className="prompt-queue-item" role="status">
+        <span className="prompt-queue-text">{item.text}</span>
+        <span className="prompt-queue-badge">{item.status === "pending" ? "Waiting for host response" : item.status === "unknown" ? "Delivery unknown — check history before retrying" : item.status === "rejected" ? "Host rejected this request" : item.status === "conflict" ? "Conflicting delivery reports — review before retrying" : "Turn started; a restored copy remains in the composer"}</span>
+        {item.images.length > 0 && <span className="prompt-queue-badge">{queueImageBadge(item.images.length)}</span>}
+        {!item.restored && (item.status === "unknown" || item.status === "rejected" || item.status === "conflict") && <button type="button" className="orchestration-delivery-restore" onClick={() => {
+          const current = tabStore.getState().orchestrationDeliveries.find(entry => entry.requestId === item.requestId);
+          if (!current || current.restored || (current.status !== "unknown" && current.status !== "rejected" && current.status !== "conflict")) return;
+          if (onRestore?.({id:current.requestId,text:current.text,images:current.images,orchestrate:"enable",requiresRestore:true}) === true) {
+            tabStore.setState((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(entry => entry.requestId === current.requestId ? {...entry,restored:true} : entry)}));
+          }
+        }}>Restore for review</button>}
+        {!item.reviewed && (item.status === "unknown" || item.status === "conflict") && <button type="button" className="orchestration-delivery-reviewed" onClick={() => {
+          tabStore.setState((state) => ({orchestrationDeliveries:state.orchestrationDeliveries.map(entry => entry.requestId === item.requestId && (entry.status === "unknown" || entry.status === "conflict") ? {...entry,reviewed:true} : entry)}));
+        }}>Mark delivery reviewed</button>}
+        {item.reviewed && (item.status === "unknown" || item.status === "conflict") && <span>Reviewed; delivery remains unconfirmed.</span>}
+      </div>)}
       {queuePaused && (
         <div className="prompt-queue-paused">
           <span className="prompt-queue-paused-text">
