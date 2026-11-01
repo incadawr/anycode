@@ -13,7 +13,7 @@ vi.mock("react", async (importOriginal) => {
   };
 });
 vi.mock("../tab-context.js", () => ({ TabContext: {}, useTabSend: () => harness.send, useTabStore: (select: any) => select(harness.state), useTabStoreApi: () => ({ getState: () => harness.state }) }));
-vi.mock("../tabs-store.js", () => ({ useTabsStore: (select: any) => select({ tabs: [] }) }));
+vi.mock("../tabs-store.js", () => ({ useTabsStore: Object.assign((select: any) => select({ tabs: [] }), { subscribe: () => () => {} }) }));
 // `useSettingsStore` is both a selector hook and a store handle: GitHub #33's
 // successful switch re-reads the snapshot main just wrote.
 vi.mock("../settings-store.js", () => ({ useSettingsStore: Object.assign((select: any) => select(harness.settings), { getState: () => harness.settings }) }));

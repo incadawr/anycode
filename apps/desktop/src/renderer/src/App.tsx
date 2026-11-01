@@ -291,7 +291,7 @@ export function dispatchTryAgain(
   }
   const requestId = crypto.randomUUID();
   state.appendUserText(requestId, offer.text, offer.images.length > 0 ? offer.images.map((image) => image.attachment) : undefined);
-  state.recordSentMessage(offer.text, offer.images);
+  state.recordSentMessage(offer.text, offer.images, requestId);
   sendToHost({
     type: "user_message",
     requestId,
@@ -330,7 +330,7 @@ export function dispatchContinue(
   }
   const requestId = crypto.randomUUID();
   store.getState().appendUserText(requestId, CONTINUE_AFTER_CEILING_TEXT);
-  store.getState().recordSentMessage(CONTINUE_AFTER_CEILING_TEXT, []);
+  store.getState().recordSentMessage(CONTINUE_AFTER_CEILING_TEXT, [], requestId);
   sendToHost({ type: "user_message", requestId, text: CONTINUE_AFTER_CEILING_TEXT });
   return "sent";
 }
@@ -472,7 +472,7 @@ export function SessionSurface({ tabId, onToast, suppressPermissionModal = false
             </button>
           </div>
         )}
-        <Composer />
+        <Composer key={tabId} />
       </div>
 
       {/* Permission modal: self-connecting wrapper, renders only when THIS

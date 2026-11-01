@@ -713,7 +713,7 @@ describe("submitStartDraft — codex draft-model agreement", () => {
  * before any of that; its prompt must still reach the host exactly once, on the
  * first `host_ready` — the queue, not the delivery, is what waits.
  */
-class FakeUiPort {
+class FakeUiPort extends EventTarget {
   onmessage: ((event: MessageEvent<HostToUiMessage>) => void) | null = null;
   readonly sent: UiToHostMessage[] = [];
 
@@ -759,6 +759,26 @@ describe("submitStartDraft — a deferred first fork (GitHub #6)", () => {
     const prompts = port.sent.filter((message) => message.type === "user_message");
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toMatchObject({ type: "user_message", text: "hello deferred" });
+  });
+
+  it("holds the initial draft when the port closes before host_ready", async () => {
+    const tabsStore = createTabsStore();
+    const registry = createTabRegistry(tabsStore);
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftPrompt("keep this draft");
+    const port = new FakeUiPort();
+    registry.registerPort("t1", "/ws/a", port as unknown as MessagePort);
+    expect(await submitStartDraft({
+      createTab: async () => ({ ok: true, tabId: "t1", workspace: "/ws/a" }),
+      registry,
+      tabsStore,
+    })).toEqual({ ok: true, tabId: "t1" });
+    port.dispatchEvent(new Event("close"));
+    port.emit({ type: "host_ready", workspace: "/ws/a", mode: "build", model: "m1", sessionId: "sess-a" });
+    expect(port.sent.filter((message) => message.type === "user_message")).toHaveLength(0);
+    expect(registry.getStore("t1")!.getState().promptQueue).toMatchObject([
+      { text: "keep this draft", images: [], requiresRestore: true },
+    ]);
   });
 });
 

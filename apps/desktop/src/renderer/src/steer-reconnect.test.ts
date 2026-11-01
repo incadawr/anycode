@@ -28,7 +28,10 @@ describe("rendered reconnect (Session -> fresh desktopStore)", () => {
     });
     let offset = 0;
     let listener: ((event: MessageEvent<HostToUiMessage>) => void) | null = null;
+    const portEvents = new EventTarget();
     const port = {
+      addEventListener: portEvents.addEventListener.bind(portEvents),
+      removeEventListener: portEvents.removeEventListener.bind(portEvents),
       get onmessage() { return listener; },
       set onmessage(value: typeof listener) { listener = value; },
       postMessage(message: UiToHostMessage) { h.send(message); },
@@ -86,7 +89,10 @@ describe("rendered reconnect (Session -> fresh desktopStore)", () => {
       let offset = 0;
       const sent: UiToHostMessage[] = [];
       let listener: ((event: MessageEvent<HostToUiMessage>) => void) | null = null;
+      const portEvents = new EventTarget();
       const port = {
+        addEventListener: portEvents.addEventListener.bind(portEvents),
+        removeEventListener: portEvents.removeEventListener.bind(portEvents),
         get onmessage() { return listener; },
         set onmessage(value: typeof listener) { listener = value; },
         postMessage(message: UiToHostMessage) { sent.push(message); h.send(message); },

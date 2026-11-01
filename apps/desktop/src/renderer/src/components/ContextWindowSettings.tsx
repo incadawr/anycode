@@ -5,26 +5,30 @@ import { useSettingsStore } from "../settings-store.js";
 import { X } from "./icons.js";
 
 /** This shortcut edits one model's window, without changing connection defaults. */
-export default function ContextWindowSettings({ snapshot, connection, model, onClose }: {
+export default function ContextWindowSettings({ snapshot, connection, model, initialRaw, onRawChange, onClose }: {
   snapshot: SettingsSnapshot;
   connection: ProviderConnection;
   model: string;
+  initialRaw?: string;
+  onRawChange?(raw: string): void;
   onClose(): void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const initial = modelOverrideFor(connection, model)?.contextWindowTokens;
-  const [raw, setRaw] = useState(initial === undefined ? "" : String(initial));
+  const [raw, setRaw] = useState(initialRaw ?? (initial === undefined ? "" : String(initial)));
+  const mounted = useRef(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const update = useSettingsStore((state) => state.connectionUpdate);
   const parsed = contextWindowTokensField(raw);
 
   useEffect(() => {
+    mounted.current = true;
     const previous = document.activeElement as HTMLElement | null;
     dialogRef.current?.showModal();
     inputRef.current?.focus();
-    return () => { if (previous?.isConnected) previous.focus(); };
+    return () => { mounted.current = false; if (previous?.isConnected) previous.focus(); };
   }, []);
 
   async function save(): Promise<void> {
@@ -33,12 +37,14 @@ export default function ContextWindowSettings({ snapshot, connection, model, onC
     setError(null);
     try {
       const result = await update({ id: connection.id, modelOverrideModel: model, contextWindowTokens: parsed.value });
+      if (!mounted.current) return;
       if (result.ok) onClose();
       else setError(result.reason === "not_found" ? "This connection no longer exists." : "The context window could not be saved.");
     } catch {
+      if (!mounted.current) return;
       setError("The context window could not be saved.");
     } finally {
-      setSaving(false);
+      if (mounted.current) setSaving(false);
     }
   }
 
@@ -54,7 +60,7 @@ export default function ContextWindowSettings({ snapshot, connection, model, onC
         <span className="settings-field-label">Context window (tokens)</span>
         <input ref={inputRef} className="settings-field-input" aria-label="Context window (tokens)"
           type="number" min={1024} max={1000000} step={1} value={raw} disabled={snapshot.readOnly || saving}
-          placeholder="Default" onChange={(event) => { setRaw(event.target.value); setError(null); }} />
+          placeholder="Default" onChange={(event) => { setRaw(event.target.value); onRawChange?.(event.target.value); setError(null); }} />
       </label>
       <p className="settings-field-hint">Blank uses the catalog window or the assumed fallback. Applies on the next turn or model switch.</p>
       {!parsed.ok && <p role="alert">Enter a whole number from 1024 to 1000000, or leave blank.</p>}
