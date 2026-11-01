@@ -1634,6 +1634,9 @@ export class Session {
    * goes through; no new persistence identity.
    */
   private boundPort: WirePort | null = null;
+  /** Per-process Session incarnation and per-bind token; neither is an auth credential. */
+  private readonly hostIncarnation = randomUUID();
+  private boundGeneration: string | null = null;
   /**
    * armed when the CURRENT port closes with no successor bound —
    * a renderer reload closes the old port and main re-posts a fresh one on
@@ -1917,6 +1920,7 @@ export class Session {
 
   /** Attaches (or retargets) the UI wire: routes inbound messages, denies on close. */
   bindPort(port: WirePort): void {
+    const generation = randomUUID();
     // Slice P7.25/F3 W1-FIX: a freshly (re)attached port is not-yet-ready by
     // definition — a renderer reconnect (reload/crash) calls bindPort with a
     // NEW port before it has sent its own ui_ready. Without this reset the
@@ -1931,15 +1935,21 @@ export class Session {
     // IS the successor of a completed renderer reload, so its predecessor's
     // close described the reload, not a dead session.
     this.boundPort = port;
+    this.boundGeneration = generation;
     if (this.reconnectGraceTimer !== null) {
       clearTimeout(this.reconnectGraceTimer);
       this.reconnectGraceTimer = null;
     }
     this.outbound.attach(port);
     port.onMessage((raw) => {
+      // A predecessor can still have queued inbound messages after rebind.
+      // Fence before parsing, acknowledgement, broker, or other side effects.
+      if (this.boundPort !== port || this.boundGeneration !== generation) return;
       this.route(raw);
     });
     port.onClose(() => {
+      if (this.boundPort !== port || this.boundGeneration !== generation) return;
+      this.boundGeneration = null;
       // review F3: a closed port can deliver no further
       // progress — the liveness interval stops speaking for a dead wire.
       // (Before the reload-grace branch below: even a reload-adjacent close
@@ -1955,7 +1965,7 @@ export class Session {
       //  - a close during SHUTDOWN: shutdown() owns the terminal settlement
       //    (denyAll("shutting down", "shutdown")) — a disconnect-origin
       //    settle here would race it and misattribute the denial.
-      if (this.shuttingDown || this.boundPort !== port) {
+      if (this.shuttingDown) {
         return;
       }
       // Current port closed and no successor bound yet. The reload fix:
@@ -2631,7 +2641,11 @@ export class Session {
         this.handleUiSteerMessage(message.requestId, message.text);
         return;
       case "user_message":
-          this.outbound.emit({ type: "turn_rejected", requestId: message.requestId, reason: "not_ready" });
+          if (message.orchestrate !== undefined) this.outbound.sendDirect({ type: "turn_rejected", requestId: message.requestId, reason: "not_ready" });
+          else this.outbound.emit({ type: "turn_rejected", requestId: message.requestId, reason: "not_ready" });
+          break;
+        case "set_orchestrate":
+          if (message.requestId !== undefined) this.outbound.sendDirect({ type: "orchestrate_result", requestId: message.requestId, outcome: "rejected", reason: "unavailable" });
           break;
         case "exit_worktree":
           this.outbound.sendDirect({
@@ -2688,7 +2702,7 @@ export class Session {
           mode: this.engine.mode(),
           model: this.model,
           sessionId: this.sessionId,
-          orchestrationProtocol: { atomicSubmit: false, correlatedToggle: false },
+          ...(message.orchestrationProtocol === 1 && this.boundGeneration !== null ? { orchestrationProtocol: { version: 1 as const, hostIncarnation: this.hostIncarnation, connectionId: this.boundGeneration, atomicSubmit: false as const, correlatedToggle: false as const } } : {}),
           ...(this.checkpointContextUsage !== null ? { contextUsage: this.checkpointContextUsage } : {}),
           reasoningEffort: this.engine.reasoningEffort() ?? "off",
           ...(bootEffortAdjustment !== undefined ? { effortAdjustment: bootEffortAdjustment } : {}),

@@ -445,7 +445,7 @@ export interface WireBackgroundChild {
 export type UiToHostMessage =
   | { type: "approval_recover" }
   | { type: "approval_visibility"; requestId: string; visible: boolean }
-  | { type: "ui_ready" } // handshake; host replies host_ready + replay
+  | { type: "ui_ready"; orchestrationProtocol?: 1 } // handshake; host replies host_ready + replay
   | {
       type: "user_message";
       requestId: string;
@@ -593,7 +593,7 @@ export type HostToUiMessage =
       model: string;
       sessionId: string;
       /** Absence on older hosts also means unsupported. */
-      orchestrationProtocol?: { atomicSubmit: boolean; correlatedToggle: boolean };
+      orchestrationProtocol?: { version: 1; hostIncarnation: string; connectionId: string; atomicSubmit: false; correlatedToggle: false };
       contextUsage?: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" };
       reasoningEffort?: ReasoningEffort;
       effortAdjustment?: { from: ReasoningEffort; to: ReasoningEffort };
@@ -1141,6 +1141,7 @@ const permissionModeSchema = z.enum(PERMISSION_MODES);
 export const uiReadySchema = z
   .object({
     type: z.literal("ui_ready"),
+    orchestrationProtocol: z.literal(1).optional(),
   })
   .strict();
 

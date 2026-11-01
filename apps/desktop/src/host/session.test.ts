@@ -9509,9 +9509,9 @@ describe("Session — set_orchestrate (§3.7 / A1)", () => {
     const engine = orchestrateEngine({ onRunTurn: (input) => inputs.push(input) });
     const h = createHarness({ steps: [], engine });
     try {
-      h.send({ type: "ui_ready" });
+      h.send({ type: "ui_ready", orchestrationProtocol: 1 });
       const ready = await h.waitFor(isHostReady);
-      expect(ready.orchestrationProtocol).toEqual({ atomicSubmit: false, correlatedToggle: false });
+      expect(ready.orchestrationProtocol).toEqual({ version: 1, hostIncarnation: expect.any(String), connectionId: expect.any(String), atomicSubmit: false, correlatedToggle: false });
       h.send({ type: "user_message", requestId: "atomic", text: "task", orchestrate: "enable", images: [{ mediaType: "image/png", data: "YQ==" }] });
       h.send({ type: "set_orchestrate", enabled: true, requestId: "toggle" });
       await h.waitFor((m): m is Of<"orchestrate_result"> => m.type === "orchestrate_result" && m.requestId === "toggle");

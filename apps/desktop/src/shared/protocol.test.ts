@@ -18,6 +18,7 @@ import {
   uiToHostMessageSchema,
   userMessageSchema,
   setOrchestrateSchema,
+  uiReadySchema,
 } from "./protocol.js";
 import type { GitCommandOutcome, HostToUiMessage, WireEnvStatus, WireGitStatus } from "./protocol.js";
 
@@ -366,6 +367,10 @@ describe("reserved orchestration wire forms", () => {
     expect(uiToHostMessageSchema.safeParse({ ...legacyTask, orchestrate: "disable" }).success).toBe(false);
     expect(uiToHostMessageSchema.safeParse({ ...legacyToggle, requestId: "" }).success).toBe(false);
     expect(uiToHostMessageSchema.safeParse({ ...legacyToggle, requestId: "x".repeat(129) }).success).toBe(false);
+    expect(uiToHostMessageSchema.safeParse({ type: "ui_ready" }).success).toBe(true);
+    expect(uiToHostMessageSchema.safeParse({ type: "ui_ready", orchestrationProtocol: 1 }).success).toBe(true);
+    expect(uiToHostMessageSchema.safeParse({ type: "ui_ready", orchestrationProtocol: 2 }).success).toBe(false);
+    expect(uiReadySchema.omit({ orchestrationProtocol: true }).safeParse({ type: "ui_ready", orchestrationProtocol: 1 }).success).toBe(false);
   });
 });
 

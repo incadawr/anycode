@@ -107,6 +107,73 @@ async function reloadRenderer(h: Harness): Promise<ReboundPort> {
   return b;
 }
 
+describe("connection incarnation fence", () => {
+  it("rejects a stale binding even if the same WirePort object is rebound", () => {
+    const h = createHarness({ steps: [finishStep()] });
+    const inbound: Array<(raw: unknown) => void> = [];
+    const closes: Array<() => void> = [];
+    const delivered: HostToUiMessage[] = [];
+    const wire: WirePort = { post: message => delivered.push(message as HostToUiMessage), onMessage: cb => { inbound.push(cb); }, onClose: cb => { closes.push(cb); } };
+    try {
+      h.session.bindPort(wire);
+      h.session.bindPort(wire);
+      inbound[0]!({ type: "set_orchestrate", enabled: true });
+      closes[0]!();
+      inbound[1]!({ type: "ui_ready", orchestrationProtocol: 1 });
+      expect(h.engine.mode()).toBe("build");
+      expect(delivered.some(m => m.type === "orchestrate_changed")).toBe(false);
+      expect(delivered.some(m => m.type === "host_ready" && m.orchestrationProtocol?.version === 1)).toBe(true);
+      closes[1]!();
+      const count = delivered.length;
+      inbound[1]!({ type: "set_orchestrate", enabled: true });
+      expect(delivered).toHaveLength(count);
+      expect(h.engine.mode()).toBe("build");
+    } finally { h.close(); void h.session.shutdown(); }
+  });
+
+  it("ignores a superseded port's legacy toggle and user turn before side effects", async () => {
+    const h = createHarness({ steps: [finishStep()] });
+    let b: ReboundPort | null = null;
+    try {
+      h.send({ type: "ui_ready", orchestrationProtocol: 1 });
+      const first = await h.waitFor(isHostReady);
+      b = bindSecondRenderer(h);
+      h.send({ type: "set_orchestrate", enabled: true });
+      h.send({ type: "user_message", requestId: "stale", text: "stale task" });
+      b.send({ type: "ui_ready", orchestrationProtocol: 1 });
+      await until(() => b!.delivered.some(isHostReady));
+      // Allow messages already queued on the predecessor to be delivered.
+      await letCloseLand();
+      const next = b.delivered.find(isHostReady)!;
+      expect(next.orchestrationProtocol?.hostIncarnation).toBe(first.orchestrationProtocol?.hostIncarnation);
+      expect(next.orchestrationProtocol?.connectionId).not.toBe(first.orchestrationProtocol?.connectionId);
+      expect(next.orchestrationProtocol?.atomicSubmit).toBe(false);
+      expect(h.engine.mode()).toBe("build");
+      expect(b.delivered.some(m => m.type === "orchestrate_changed" || m.type === "turn_started")).toBe(false);
+      b.send({ type: "user_message", requestId: "current", text: "current" });
+      await until(() => b!.delivered.some(m => m.type === "turn_started" && m.requestId === "current"));
+    } finally { h.close(); b?.closePhysical(); }
+  });
+
+  it("returns the reserved correlated refusal during shutdown on the current port", async () => {
+    const h = createHarness({ steps: [finishStep()] });
+    try {
+      h.send({ type: "ui_ready" });
+      const ready = await h.waitFor(isHostReady);
+      expect(ready.orchestrationProtocol).toBeUndefined();
+      h.session.closeAdmissions();
+      h.send({ type: "set_orchestrate", enabled: true, requestId: "closing" });
+      h.send({ type: "user_message", requestId: "closing-task", text: "retain", orchestrate: "enable" });
+      const result = await h.waitFor((m): m is Of<"orchestrate_result"> => m.type === "orchestrate_result" && m.requestId === "closing");
+      const refusal = await h.waitFor((m): m is Of<"turn_rejected"> => m.type === "turn_rejected" && m.requestId === "closing-task");
+      expect(result).toEqual({ type: "orchestrate_result", requestId: "closing", outcome: "rejected", reason: "unavailable" });
+      expect(h.engine.mode()).toBe("build");
+      expect(h.outbound.ringView()).not.toContainEqual(result);
+      expect(h.outbound.ringView()).not.toContainEqual(refusal);
+    } finally { h.close(); }
+  });
+});
+
 describe("— renderer reload keeps the SAME parked ask (real port close → rebind → ui_ready)", () => {
   it(
     "reload keeps the parked requestId; allow settles it (origin ui), the Write executes, the turn completes, no resurrection",
