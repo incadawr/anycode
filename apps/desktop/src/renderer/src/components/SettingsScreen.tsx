@@ -562,7 +562,6 @@ const FETCH_MODELS_ERROR_TEXT: Record<FetchModelsFailureReason, string> = {
   // a manually entered model id cannot be persisted because the
   // settings file is (or a newer-version file leaves it) read-only.
   read_only: "This settings file is read-only, so the model list can't be saved.",
-  system_proxy_unsupported: "Fetching models is unavailable with a system proxy because its route can change. Enter model IDs manually.",
   stale_fetch: "The connection, key or proxy changed during fetching. Your model selections are kept; fetch again.",
 };
 

@@ -359,7 +359,6 @@ export type FetchModelsFailureReason =
   | "error_payload"
   | "empty_models"
   | "read_only"
-  | "system_proxy_unsupported"
   | "stale_fetch";
 
 // a successful fetch may carry live per-model capabilities
