@@ -77,6 +77,8 @@ export interface SessionsTableOptions {
   numbered?: boolean;
   /** /sessions: suffixes "*" onto the id cell of the session matching this id. */
   currentId?: string;
+  /** Picker: label engine ownership before the user chooses. */
+  showEngine?: boolean;
   /** /sessions all: appends a workspace column. */
   showWorkspace?: boolean;
   /** Dim header role (paint-after-padEnd, design §2.2/A18). */
@@ -101,6 +103,7 @@ export function renderSessionsTable(metas: SessionMeta[], opts: SessionsTableOpt
     ...(numbered ? ["#"] : []),
     "id",
     "title",
+    ...(opts.showEngine ? ["engine"] : []),
     "mode",
     "updated",
     ...(showWorkspace ? ["workspace"] : []),
@@ -111,6 +114,7 @@ export function renderSessionsTable(metas: SessionMeta[], opts: SessionsTableOpt
       ...(numbered ? [String(index + 1)] : []),
       idCell,
       formatTitleCell(meta.title),
+      ...(opts.showEngine ? [meta.engineId === undefined && meta.externalSessionRef === undefined ? "core (legacy)" : meta.engineId === "core" && meta.externalSessionRef === undefined ? "core" : meta.engineId === "codex" || meta.engineId === "claude" ? meta.engineId : "incompatible"] : []),
       meta.mode,
       formatRelativeTime(meta.updatedAt, opts.now),
       ...(showWorkspace ? [meta.workspace] : []),
@@ -159,7 +163,7 @@ export async function promptSessionSelection(opts: SessionPickerOptions): Promis
   const { sessions, input, output, theme } = opts;
   const now = opts.now ?? Date.now();
   const total = sessions.length;
-  output.write(renderSessionsTable(sessions, { numbered: true, now, theme }));
+  output.write(renderSessionsTable(sessions, { numbered: true, showEngine: true, now, theme }));
 
   const rl = createInterface({ input, output });
   try {

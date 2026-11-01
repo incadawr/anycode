@@ -33,7 +33,7 @@ import {
 } from "../adapters/node/index.js";
 // Not re-exported from adapters/node/index.js (barrel is frozen to 1.1); imported
 // directly from their owning module per task 1.7's file ownership.
-import { SqlitePersistenceAdapter, WriteBehindHistorySink } from "../adapters/node/sqlite-persistence.js";
+import { SqlitePersistenceAdapter, WriteBehindHistorySink, readCliSessionPreflight } from "../adapters/node/sqlite-persistence.js";
 // Registered only by this CLI wiring (design slice-4.7-cut.md §2.9/L1): the
 // shadow-git checkpoint service. Imported directly from its owning module
 // (checkpoints/ is not in the ports barrel), same pattern as the sqlite adapter.
@@ -341,10 +341,11 @@ export interface CliOptions {
  * reaped, before MCP/LSP teardown) is unaffected by this second close.
  */
 export async function runCli(options?: Partial<CliOptions>): Promise<number> {
+  let persistence: SqlitePersistenceAdapter | undefined;
   try {
-    return await runCliInner(options);
+    return await runCliInner(options, (instance) => { persistence = instance; });
   } finally {
-    closeProxyRelay();
+    try { await persistence?.close(); } finally { closeProxyRelay(); }
   }
 }
 
@@ -429,7 +430,7 @@ function describeUntrustedSkip(trust: WorkspaceTrustResult): string {
   );
 }
 
-async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
+async function runCliInner(options: Partial<CliOptions> | undefined, registerPersistence: (instance: SqlitePersistenceAdapter) => void): Promise<number> {
   const argv = options?.argv ?? process.argv.slice(2);
   const parsedArgs = parseCliArgs(argv);
 
@@ -597,6 +598,100 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
   }
 
   const envConfig = loadEnvConfig(env);
+
+  // Persistence wiring (task 1.7). SqlitePersistenceAdapter opens/migrates the
+  // database before selecting a session.
+  // Select and validate a root session before model construction, proxy relays,
+  // hooks, plugins, MCP, or other process-bearing resources. Never fall back to
+  // a new session for an explicitly requested missing or incompatible id.
+  const dbPath = envConfig.dbPath ?? join(home, ".anycode", "anycode.sqlite");
+  const requestedResumeId = options?.resumeSessionId ?? parsedArgs.resumeSessionId;
+  const wantPicker = parsedArgs.resumePicker && requestedResumeId === undefined;
+  const wantContinue = parsedArgs.continueSession && requestedResumeId === undefined && !wantPicker;
+  if (parsedArgs.continueSession && (requestedResumeId !== undefined || wantPicker)) {
+    bootWrite("[warn] --continue ignored: --resume was given\n");
+  }
+  let preflightSelected: ReturnType<typeof readCliSessionPreflight>[number] | undefined;
+  try {
+    const rows = readCliSessionPreflight(dbPath, requestedResumeId !== undefined
+      ? {id:requestedResumeId,limit:1}
+      : wantContinue ? {workspace:cwd,limit:1} : wantPicker ? {workspace:cwd,limit:SESSIONS_PICKER_LIMIT} : {limit:0});
+    if (requestedResumeId !== undefined || wantContinue) preflightSelected = rows[0];
+    else if (wantPicker && rows.length) {
+      const pick = await promptSessionSelection({sessions:rows,input,output,theme});
+      if (pick.kind === "abort") return 130;
+      if (pick.kind === "resume") preflightSelected = pick.session;
+    }
+    if (requestedResumeId !== undefined && !preflightSelected) {
+      errWrite("Cannot resume: the requested root session was not found. Choose an existing session or start a new session explicitly.\n");
+      return 1;
+    }
+    if (preflightSelected && ((preflightSelected.engineId !== undefined && preflightSelected.engineId !== "core") || preflightSelected.externalSessionRef !== undefined)) {
+      errWrite("Cannot resume: this session belongs to another engine or has incompatible native session metadata. Choose a core session or start a new session explicitly.\n");
+      return 1;
+    }
+    if (wantPicker && !rows.length) bootWrite("[sessions] no sessions for this workspace; starting a new session\n");
+  } catch (error) {
+    errWrite(`Cannot open session database: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+  const persistence = new SqlitePersistenceAdapter(dbPath, { strictSessionSchema: true, cliAdmission: {id:preflightSelected?.id,...(wantContinue ? {latestWorkspace:cwd} : {})} });
+  registerPersistence(persistence);
+  let resumedSession: Awaited<ReturnType<typeof persistence.getRootSession>> = null;
+  let resumedHistory: Awaited<ReturnType<typeof persistence.loadHistory>> = [];
+  try {
+    // Even a new session must not write into an unsupported future schema.
+    await persistence.listRootSessions({ limit: 0 });
+    if (requestedResumeId !== undefined) {
+      resumedSession = await persistence.getRootSession(requestedResumeId);
+      if (!resumedSession) {
+        errWrite("Cannot resume: the requested root session was not found. Choose an existing session or start a new session explicitly.\n");
+        await persistence.close();
+        return 1;
+      }
+    } else if (wantContinue) {
+      if (preflightSelected) {
+        resumedSession = await persistence.getRootSession(preflightSelected.id);
+        if (!resumedSession) { errWrite("Cannot resume: the selected session is no longer available. Choose again.\n"); return 1; }
+      }
+      else bootWrite("[warn] no previous session for this workspace; starting a new session\n");
+    } else if (wantPicker) {
+      if (preflightSelected) {
+        resumedSession = await persistence.getRootSession(preflightSelected.id);
+        if (!resumedSession) {
+          errWrite("Cannot resume: the selected session is no longer available. Choose again.\n");
+          await persistence.close();
+          return 1;
+        }
+      }
+    }
+    if (resumedSession && ((resumedSession.engineId !== undefined && resumedSession.engineId !== "core") || resumedSession.externalSessionRef !== undefined)) {
+      errWrite("Cannot resume: this session belongs to another engine or has incompatible native session metadata. Choose a core session or start a new session explicitly.\n");
+      await persistence.close();
+      return 1;
+    }
+    if (resumedSession) {
+      // Snapshot the admission metadata and history together before any external
+      // startup. This is not a lifetime lock against another process changing
+      // the session after the snapshot has been read.
+      const snapshot = await persistence.loadCliCoreRootSnapshot(resumedSession.id);
+      if (!snapshot) {
+        errWrite("Cannot resume: the selected session is no longer available. Choose again.\n");
+        return 1;
+      }
+      resumedSession = snapshot.session;
+      resumedHistory = snapshot.history;
+    }
+    if (resumedSession && wantContinue) {
+      bootWrite(`Continuing ${shortSessionId(resumedSession.id)} — ${resumedSession.title ?? "(untitled)"} (${formatRelativeTime(resumedSession.updatedAt, Date.now())})\n`);
+    } else if (resumedSession && wantPicker) {
+      bootWrite(`Resuming ${shortSessionId(resumedSession.id)} — ${resumedSession.title ?? "(untitled)"}\n`);
+    }
+  } catch (error) {
+    await persistence.close();
+    errWrite(`Cannot open session database: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
 
   // Catalog entry resolved early so the model port can branch reasoning-effort
   // mapping by provider (GLM enum vs Claude budgetTokens) and the boot budget
@@ -1150,71 +1245,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
     bootWrite(`[warn] extensions: ${problem}\n`);
   }
 
-  // ===========================================================================
-  // Persistence wiring (task 1.7). SqlitePersistenceAdapter opens/migrates the
-  // ANYCODE_DB_PATH database (default ~/.anycode/anycode.sqlite). --resume
-  // <sessionId> loads that session's prior meta+history instead of starting a
-  // fresh one; ConversationHistory is seeded with it and given a
-  // WriteBehindHistorySink so every subsequent append/compaction swap is
-  // queued to disk without ever blocking a turn (design §2.1/§2.4, R8). Task
-  // 1.8 sews the rest of AgentLoop's persistence-facing behavior on top.
-  const dbPath = envConfig.dbPath ?? join(home, ".anycode", "anycode.sqlite");
-  const persistence = new SqlitePersistenceAdapter(dbPath);
-
-
-  // explicit `--resume <id>` wins over the picker, which wins over `--continue`;
-  // a `--continue` given alongside ANY `--resume` (explicit id OR bare-picker)
-  // is ignored with a warn (deterministic — continue never sneaks in on a bad
-  // `--resume <id>`). An explicit `--resume <id>` that resolves stays SILENT on
-  // success (L1 byte-invariant), and its "no session found" warn text is the
-  // verbatim pre-4.4 line; only the new continue/picker paths print a notice.
-  const requestedResumeId = options?.resumeSessionId ?? parsedArgs.resumeSessionId;
-  const wantPicker = parsedArgs.resumePicker && requestedResumeId === undefined;
-  if (parsedArgs.continueSession && (requestedResumeId !== undefined || wantPicker)) {
-    bootWrite("[warn] --continue ignored: --resume was given\n");
-  }
-  const wantContinue = parsedArgs.continueSession && requestedResumeId === undefined && !wantPicker;
-
-  let resumedSession = requestedResumeId ? await persistence.getRootSession(requestedResumeId) : null;
-  if (requestedResumeId && !resumedSession) {
-    bootWrite(`[warn] no session found for --resume ${requestedResumeId}; starting a new session instead\n`);
-  }
-  if (!resumedSession && wantContinue) {
-
-    const [last] = await persistence.listRootSessions({ workspace: cwd, limit: 1 });
-    if (last) {
-      resumedSession = last;
-      bootWrite(
-        `Continuing ${shortSessionId(last.id)} — ${last.title ?? "(untitled)"} (${formatRelativeTime(last.updatedAt, Date.now())})\n`,
-      );
-    } else {
-      bootWrite("[warn] no previous session for this workspace; starting a new session\n");
-    }
-  }
-  if (!resumedSession && wantPicker) {
-
-    // --resume in an interactive terminal (the early-guard above rejected the
-    // non-interactive case). MCP is already started (§2.6) but the write-behind
-    // history sink is not created yet (below), so an abort only has to dispose
-    // MCP + close the DB — there is nothing queued to flush — before exiting 130.
-    const metas = await persistence.listRootSessions({ workspace: cwd, limit: SESSIONS_PICKER_LIMIT });
-    if (metas.length === 0) {
-      bootWrite("[sessions] no sessions for this workspace; starting a new session\n");
-    } else {
-      const pick = await promptSessionSelection({ sessions: metas, input, output, theme });
-      if (pick.kind === "abort") {
-        await mcpManager.dispose();
-        await persistence.close();
-        return 130;
-      }
-      if (pick.kind === "resume") {
-        resumedSession = pick.session;
-        bootWrite(`Resuming ${shortSessionId(pick.session.id)} — ${pick.session.title ?? "(untitled)"}\n`);
-      }
-    }
-  }
-
-
+  // Session selection and admission ran before process-bearing resources were started.
   // resume restores the persisted mode when it is not explicitly overridden
   // (options.mode / an explicit valid --mode). yolo is NEVER restored — that
   // escalation happens only by an explicit action (/mode yolo, --yolo), so a
@@ -1256,7 +1287,7 @@ async function runCliInner(options?: Partial<CliOptions>): Promise<number> {
   let pendingTitleText: string | null = null;
   let titleWork: Promise<void> | null = null;
 
-  const initialHistoryItems = resumedSession ? await persistence.loadHistory(session.id) : [];
+  const initialHistoryItems = resumedHistory;
   const historySink = new WriteBehindHistorySink(persistence, session.id);
   const history = new ConversationHistory({
     initial: initialHistoryItems,

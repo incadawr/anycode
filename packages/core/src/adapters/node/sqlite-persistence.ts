@@ -16,7 +16,7 @@
  * PersistencePort without ever blocking or throwing into the turn.
  */
 
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { HistorySink } from "../../context/history.js";
@@ -490,12 +490,29 @@ function touchSessionActivity(db: DatabaseSync, sessionId: string, items: readon
 const SESSION_LAST_ACTIVITY_SQL =
   "COALESCE((SELECT MAX(json_extract(h.data, '$.createdAt')) FROM history_items h WHERE h.session_id = s.id), s.updated_at)";
 
+class RollbackFailure extends AggregateError {}
+
+function rollbackAndRethrow(db: DatabaseSync, original: unknown): never {
+  try {
+    db.exec("ROLLBACK");
+  } catch (rollbackError) {
+    // Node 22 does not expose sqlite3_get_autocommit / transaction state.
+    // Even the usual no-active-transaction message is not proof of rollback;
+    // preserve the original diagnostic but quarantine on every rollback error.
+    const describe = (error: unknown): string => error instanceof Error ? error.message : String(error);
+    const message = rollbackError instanceof Error && rollbackError.message === "cannot rollback - no transaction is active"
+      ? describe(original) : `${describe(original)}; rollback failed: ${describe(rollbackError)}`;
+    throw new RollbackFailure([original, rollbackError], message, {cause: original});
+  }
+  throw original;
+}
+
 /**
  * Idempotent migration runner: tracks applied versions in schema_migrations
  * and runs each pending migration's statements inside its own BEGIN/COMMIT
  * (a failure rolls back that migration's DDL and rethrows).
  */
-function migrate(db: DatabaseSync): void {
+function migrate(db: DatabaseSync, strictSessionSchema = false, outerTransaction = false): void {
   db.exec(
     `CREATE TABLE IF NOT EXISTS schema_migrations (
       version INTEGER PRIMARY KEY,
@@ -506,12 +523,16 @@ function migrate(db: DatabaseSync): void {
     .prepare("SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations")
     .get() as { version: number } | undefined;
   const current = row?.version ?? 0;
+  const supported = MIGRATIONS.at(-1)!.version;
+  if (strictSessionSchema && current > supported) {
+    throw new Error(`Database schema ${current} is newer than supported schema ${supported}; update AnyCode before opening sessions.`);
+  }
 
   for (const migration of MIGRATIONS) {
     if (migration.version <= current) {
       continue;
     }
-    db.exec("BEGIN");
+    if (!outerTransaction) db.exec("BEGIN");
     try {
       for (const statement of migration.statements) {
         db.exec(statement);
@@ -520,9 +541,9 @@ function migrate(db: DatabaseSync): void {
         migration.version,
         Date.now(),
       );
-      db.exec("COMMIT");
+      if (!outerTransaction) db.exec("COMMIT");
     } catch (err) {
-      db.exec("ROLLBACK");
+      if (!outerTransaction) rollbackAndRethrow(db, err);
       throw err;
     }
   }
@@ -874,14 +895,114 @@ function rowToClaudeTranscriptItem(row: ClaudeTranscriptItemRow): ClaudeTranscri
   };
 }
 
+// CLI resume must fail closed if a newer or out-of-band session lifecycle
+// field exists. This intentionally requires an explicit admission update when
+// the session schema grows; older schemas are checked before migration too.
+const CLI_SUPPORTED_SESSION_COLUMNS = new Set([
+  "id", "workspace", "model", "mode", "created_at", "updated_at", "title",
+  "engine_id", "external_session_ref", "project_root", "worktree_id", "worktree_path", "worktree_branch", "worktree_base_ref", "worktree_owned_by_anycode",
+  "continuation_pending", "continuation_mode", "worktree_exit_notice_pending", "worktree_cleanup_path", "worktree_cleanup_mode", "worktree_cleanup_owned_by_anycode",
+  "worktree_cleanup_branch", "worktree_transition_json", "connection_id", "codex_profile_id", "codex_fast", "parent_session_id", "spawn_tool_call_id",
+  "next_image_ref", "pending_child_reports_json", "context_usage_json",
+]);
+
+function assertCliSchemaCompatible(db: DatabaseSync): void {
+  const migrations = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get();
+  if (migrations) {
+    const rows = db.prepare("SELECT version FROM schema_migrations").all() as unknown as Array<{version:number}>;
+    // Versions 13–15 belong to the historic orchestrator branch and occur in
+    // existing development databases. Unknown session fields are still rejected.
+    const known = new Set([...MIGRATIONS.map(migration => migration.version), 13, 14, 15]);
+    for (const {version} of rows) {
+      if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 0) throw new Error("Database schema version is invalid; cannot open sessions safely.");
+      if (version > MIGRATIONS.at(-1)!.version) throw new Error("Database schema is newer than supported; update AnyCode before opening sessions.");
+      if (!known.has(version)) throw new Error("Database contains an unsupported migration; update AnyCode before opening sessions.");
+    }
+  }
+  const columns = db.prepare("PRAGMA table_xinfo(sessions)").all() as unknown as Array<{name:string; hidden:number}>;
+  if (columns.some(column => column.hidden !== 0 || !CLI_SUPPORTED_SESSION_COLUMNS.has(column.name))) {
+    throw new Error("Session database contains unsupported session fields; update AnyCode before opening sessions.");
+  }
+}
+
+type CliAdmission = { id?: string; latestWorkspace?: string };
+
+/** Reads old and current schemas without migrating or writing the database. */
+function cliPreflightRows(db: DatabaseSync, opts: { id?: string; workspace?: string; limit?: number } = {}): SessionMeta[] {
+  assertCliSchemaCompatible(db);
+  const columns = db.prepare("PRAGMA table_xinfo(sessions)").all() as unknown as Array<{name:string}>;
+  if (columns.length === 0) {
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
+    if (tables.length) throw new Error("Session database has no sessions table; cannot open safely.");
+    return [];
+  }
+  const names = new Set(columns.map(column => column.name));
+  const hasMigrations = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'").get();
+  if (!hasMigrations) throw new Error("Session database has no migration history; cannot open safely.");
+  const version = (db.prepare("SELECT COALESCE(MAX(version),0) AS version FROM schema_migrations").get() as {version:number}).version;
+  if (["id","workspace","model","mode","created_at","updated_at","title"].some(name => !names.has(name)) ||
+      (version >= 3 && (!names.has("engine_id") || !names.has("external_session_ref"))) ||
+      (version >= 16 && !names.has("parent_session_id"))) throw new Error("Session database schema is incomplete; cannot open safely.");
+  const parent = names.has("parent_session_id") ? "s.parent_session_id IS NULL" : "1=1";
+  let sql = `SELECT s.*, ${SESSION_LAST_ACTIVITY_SQL} AS last_activity FROM sessions s WHERE ${parent}`;
+  const params: (string | number)[] = [];
+  if (opts.id !== undefined) { sql += " AND s.id = ?"; params.push(opts.id); }
+  if (opts.workspace !== undefined) { sql += " AND s.workspace = ?"; params.push(opts.workspace); }
+  sql += " ORDER BY last_activity DESC";
+  if (opts.limit !== undefined) { sql += " LIMIT ?"; params.push(opts.limit); }
+  return (db.prepare(sql).all(...params) as unknown as Array<SessionRow & {last_activity:number}>)
+    .map(row => rowToSessionMeta({...row,updated_at:row.last_activity}));
+}
+
+export function readCliSessionPreflight(dbPath: string, opts: { id?: string; workspace?: string; limit?: number } = {}): SessionMeta[] {
+  if (dbPath === ":memory:" || !existsSync(dbPath)) return [];
+  const db = new DatabaseSync(dbPath, {readOnly:true});
+  try { return cliPreflightRows(db, opts); } finally { db.close(); }
+}
+
+function assertCliAdmission(db: DatabaseSync, admission: CliAdmission): void {
+  const selected = admission.latestWorkspace !== undefined
+    ? cliPreflightRows(db, {workspace:admission.latestWorkspace,limit:1})[0]
+    : admission.id !== undefined ? cliPreflightRows(db, {id:admission.id,limit:1})[0] : undefined;
+  if (admission.latestWorkspace !== undefined && selected?.id !== admission.id) throw new Error("Latest session changed before admission; choose again.");
+  if (admission.id !== undefined && !selected) throw new Error("Selected session is no longer available; choose again.");
+  if (selected && ((selected.engineId !== undefined && selected.engineId !== "core") || selected.externalSessionRef !== undefined)) {
+    throw new Error("Cannot resume: this session belongs to another engine or has incompatible native session metadata. Choose a core session or start a new session explicitly.");
+  }
+}
+
 export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStore {
   private db: DatabaseSync | undefined;
+  private quarantined = false;
+
+  private assertUsable(): void {
+    if (this.quarantined) throw new Error("SQLite adapter is quarantined after a rollback or connection cleanup failure; close it and check database state before reopening.");
+  }
+
+  private failTransaction(db: DatabaseSync, original: unknown): never {
+    try {
+      rollbackAndRethrow(db, original);
+    } catch (error) {
+      if (error instanceof RollbackFailure) {
+        this.quarantined = true;
+        try {
+          db.close();
+          if (this.db === db) this.db = undefined;
+        } catch (closeError) {
+          // Keep the quarantined handle so close() may retry cleanup.
+          throw new AggregateError([error, closeError], `${error.message}; connection cleanup failed: ${closeError instanceof Error ? closeError.message : String(closeError)}`, {cause:error});
+        }
+      }
+      throw error;
+    }
+  }
 
   /** dbPath: file path or ":memory:"; the database is opened lazily on first use. */
-  constructor(private readonly dbPath: string) {}
+  constructor(private readonly dbPath: string, private readonly options?: { strictSessionSchema?: boolean; cliAdmission?: CliAdmission }) {}
 
   /** Opens (once) + migrates the database, creating the parent directory for file-backed paths. */
   private open(): DatabaseSync {
+    this.assertUsable();
     if (this.db) {
       return this.db;
     }
@@ -895,10 +1016,37 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     // waiting for the first writer to release it. Must be set before the WAL
     // pragma and migrate() — both take a write lock on open and are exactly
     // where the live smoke caught concurrently-forked children colliding.
-    db.exec("PRAGMA busy_timeout = 5000;");
-    // WAL is a no-op on :memory: databases (sqlite keeps them in "memory" journal mode); harmless.
-    db.exec("PRAGMA journal_mode = WAL;");
-    migrate(db);
+    try {
+      db.exec("PRAGMA busy_timeout = 5000;");
+      if (this.options?.strictSessionSchema === true) assertCliSchemaCompatible(db);
+      if (this.options?.cliAdmission) {
+        // Recheck the read-only selection while excluding SQLite writers, and
+        // keep that lock through all migrations. This is not a session lease:
+        // another process may modify the database after COMMIT.
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          assertCliSchemaCompatible(db);
+          assertCliAdmission(db, this.options.cliAdmission);
+          migrate(db, this.options.strictSessionSchema === true, true);
+          db.exec("COMMIT");
+        } catch (error) { rollbackAndRethrow(db, error); }
+        // WAL is a no-op on :memory: databases.
+        db.exec("PRAGMA journal_mode = WAL;");
+      } else {
+        db.exec("PRAGMA journal_mode = WAL;");
+        migrate(db, this.options?.strictSessionSchema === true);
+      }
+      if (this.options?.strictSessionSchema === true) assertCliSchemaCompatible(db);
+    } catch (error) {
+      if (error instanceof RollbackFailure) this.quarantined = true;
+      try { db.close(); }
+      catch (closeError) {
+        this.quarantined = true;
+        this.db = db;
+        throw new AggregateError([error,closeError], `${error instanceof Error ? error.message : String(error)}; connection cleanup failed: ${closeError instanceof Error ? closeError.message : String(closeError)}`, {cause:error});
+      }
+      throw error;
+    }
     this.db = db;
     return db;
   }
@@ -912,8 +1060,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       db.exec("COMMIT");
       return result;
     } catch (err) {
-      db.exec("ROLLBACK");
-      throw err;
+      this.failTransaction(db, err);
     }
   }
 
@@ -1001,6 +1148,21 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       | SessionRow
       | undefined;
     return row ? rowToSessionMeta(row) : null;
+  }
+
+  /** A consistent read snapshot, not a lease against subsequent writers. */
+  async loadCliCoreRootSnapshot(id: string): Promise<{ session: SessionMeta; history: HistoryItem[] } | null> {
+    return this.transaction((db) => {
+      assertCliSchemaCompatible(db);
+      const row = db.prepare(`SELECT s.*, ${SESSION_LAST_ACTIVITY_SQL} AS last_activity FROM sessions s WHERE s.id = ? AND s.parent_session_id IS NULL`).get(id) as (SessionRow & {last_activity:number}) | undefined;
+      if (!row) return null;
+      const session = rowToSessionMeta({...row,updated_at:row.last_activity});
+      if ((session.engineId !== undefined && session.engineId !== "core") || session.externalSessionRef !== undefined) {
+        throw new Error("Cannot resume: this session belongs to another engine or has incompatible native session metadata. Choose a core session or start a new session explicitly.");
+      }
+      const rows = db.prepare("SELECT data FROM history_items WHERE session_id = ? ORDER BY seq ASC").all(id) as unknown as { data: string }[];
+      return { session, history: rows.map((item) => JSON.parse(item.data) as HistoryItem) };
+    });
   }
 
   /**
@@ -1275,6 +1437,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   }
 
   async claimWorktree(id: string, target: string, patch: SessionMetaPatch): Promise<boolean> {
+    this.assertUsable();
     if (
       (patch.worktree === undefined || patch.worktree === null || patch.workspace === undefined) &&
       patch.worktreeCleanup?.path !== target
@@ -1312,7 +1475,8 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
           transition?.worktree.path === target;
       });
       if (conflict) {
-        db.exec("ROLLBACK");
+        // This branch performed only reads; committing releases the lock.
+        db.exec("COMMIT");
         return false;
       }
       if (patch.worktree !== undefined && patch.worktree !== null && patch.workspace !== undefined) {
@@ -1358,12 +1522,12 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       db.exec("COMMIT");
       return true;
     } catch (error) {
-      try { db.exec("ROLLBACK"); } catch { /* preserve original error */ }
-      throw error;
+      this.failTransaction(db, error);
     }
   }
 
   async appendHistory(sessionId: string, items: readonly HistoryItem[]): Promise<void> {
+    this.assertUsable();
     if (items.length === 0) {
       return;
     }
@@ -1438,6 +1602,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
    * the next reopen.
    */
   async discardCompactionRecords(sessionId: string, ids: readonly string[]): Promise<void> {
+    this.assertUsable();
     if (ids.length === 0) return;
     this.transaction((tx) => {
       const placeholders = ids.map(() => "?").join(", ");
@@ -1864,6 +2029,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
    * roots that actually left the table; unknown ids are a no-op.
    */
   async deleteSessions(ids: readonly string[]): Promise<SessionDeleteSummary> {
+    this.assertUsable();
     const summary = SqlitePersistenceAdapter.emptyDeleteSummary();
     if (ids.length === 0) {
       return summary;
@@ -1910,7 +2076,8 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   }
 
   async close(): Promise<void> {
-    this.db?.close();
+    try { this.db?.close(); }
+    catch (error) { this.quarantined = true; throw error; }
     this.db = undefined;
   }
 }
