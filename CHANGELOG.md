@@ -9,13 +9,13 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Continue a Codex conversation on another account is available again. The transfer is now fail-closed: a conversation is copied by its exact thread id rather than by a partial match, it is published atomically so a half-written file can never be picked up, and it is registered atomically so the same conversation cannot be opened twice. A settings switch (`codexContinueOnAnotherAccount`, `"off"`) pauses the action if needed; note that a Codex rollout written concurrently by another program is not detected, so the safe behaviour is refusing, not overwriting.
+- Continue a Codex conversation on another account is available again, and the transfer no longer guesses: a conversation is copied by its exact thread id rather than by a partial match, never published half-written, never opened twice, and two competing transfers of one conversation refuse each other. A settings switch (`codexContinueOnAnotherAccount`, `"off"`) pauses the action if needed. Limit worth knowing: a rollout being written at the same moment by another program can go undetected — the size and modification-time check only narrows that window, it does not close it.
 - Redesign provider connection editing with a compact model picker and per-model pricing table.
 
 ### Fixed
 
 - Continue on another account now refuses rather than guesses: a rollout is matched by its exact thread-id segment (a rollout that merely contained the id could be copied instead), an unreadable sessions folder is reported as such instead of "missing", and two rollouts claiming one thread are refused as ambiguous.
-- A continued conversation is published only when complete: the copy is written to a temp file, synced and linked into place, and the source is re-checked, so a conversation still being written is refused instead of resumed with a truncated tail.
+- A continued conversation is no longer published half-written: the copy is written to a temp file, synced and linked into place, and the source is re-checked, so a conversation that changed mid-copy is refused instead of resumed with a truncated tail.
 - Prevent continuing a Codex conversation from an existing target copy that may be stale, and retain its session if opening the new tab has an uncertain outcome.
 - Preserve shared engine history when deleting one of the sessions that references it.
 - Connection editing now protects unsaved changes when closing and keeps disabled price values readable.
