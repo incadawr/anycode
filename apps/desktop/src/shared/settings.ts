@@ -874,11 +874,15 @@ export interface AnycodeSettings {
    * `temporarily_unavailable` and never touches the filesystem.
    *
    * KNOWN LIMIT, stated plainly: the claims this feature takes serialize
-   * transfers, not ordinary session writers. A rollout being written by a
+   * TRANSFERS, not ordinary session writers. A rollout being written by a
    * second AnyCode instance — or by any other tool on the same `CODEX_HOME` —
-   * is not detected. What is guaranteed is narrower and true: one AnyCode
-   * writer at a time, an atomic publish, and a refusal instead of silent
-   * history loss. Do not read this as global single-writer correctness.
+   * can go undetected, including after the size/mtime snapshot is taken, so a
+   * copy may resume from a snapshot that was still growing.
+   *
+   * What IS checked: concurrent transfers of the same thread refuse each other,
+   * the copy is published atomically so a half-written file is never picked up,
+   * and a changed source is re-checked before the copy is accepted. Do not read
+   * this as single-writer correctness.
    *
    * This exists because the feature was switched off in code once already
    * (`f0bcfa1e`); a settings value makes the next pause a one-line change
