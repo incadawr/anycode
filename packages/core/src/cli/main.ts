@@ -614,6 +614,7 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
     bootWrite("[warn] --continue ignored: --resume was given\n");
   }
   let resumedSession: Awaited<ReturnType<typeof persistence.getRootSession>> = null;
+  let resumedHistory: Awaited<ReturnType<typeof persistence.loadHistory>> = [];
   try {
     // Even a new session must not write into an unsupported future schema.
     await persistence.listRootSessions({ limit: 0 });
@@ -648,6 +649,18 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
       errWrite("Cannot resume: this session belongs to another engine or has incompatible native session metadata. Choose a core session or start a new session explicitly.\n");
       await persistence.close();
       return 1;
+    }
+    if (resumedSession) {
+      // Snapshot the admission metadata and history together before any external
+      // startup. This is not a lifetime lock against another process changing
+      // the session after the snapshot has been read.
+      const snapshot = await persistence.loadCliCoreRootSnapshot(resumedSession.id);
+      if (!snapshot) {
+        errWrite("Cannot resume: the selected session is no longer available. Choose again.\n");
+        return 1;
+      }
+      resumedSession = snapshot.session;
+      resumedHistory = snapshot.history;
     }
     if (resumedSession && wantContinue) {
       bootWrite(`Continuing ${shortSessionId(resumedSession.id)} — ${resumedSession.title ?? "(untitled)"} (${formatRelativeTime(resumedSession.updatedAt, Date.now())})\n`);
@@ -1254,7 +1267,7 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
   let pendingTitleText: string | null = null;
   let titleWork: Promise<void> | null = null;
 
-  const initialHistoryItems = resumedSession ? await persistence.loadHistory(session.id) : [];
+  const initialHistoryItems = resumedHistory;
   const historySink = new WriteBehindHistorySink(persistence, session.id);
   const history = new ConversationHistory({
     initial: initialHistoryItems,
