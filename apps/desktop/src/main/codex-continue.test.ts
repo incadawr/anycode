@@ -281,11 +281,25 @@ describe("handleCodexContinueOnAccount", () => {
     const createSessionFromSource = vi.fn(async () => null);
     const h = await harness({createSessionFromSource});
     const result = await handleCodexContinueOnAccount(h.deps, { tabId:"tab-1", accountId:"account-b" });
-    expect(result).toMatchObject({ok:false, reason:"unknown_session"});
+    expect(result).toMatchObject({ok:false, reason:"unknown_session", detail:expect.stringContaining("A retry on that account will be blocked")});
+    expect(result.ok ? "" : result.detail).toContain("A copy was left on the target account");
     expect(createSessionFromSource).toHaveBeenCalledWith("session-1", expect.objectContaining({externalSessionRef:THREAD_ID}));
     expect(h.opened).toEqual([]);
     expect(h.deleted).toEqual([]);
     expect(await readFile(join(h.accountBSessionsDir, ROLLOUT_RELATIVE), "utf8")).toBe(ROLLOUT_TEXT);
+  });
+
+  it("explains the retained copy after registration throws and refuses a retry", async () => {
+    const createSessionFromSource = vi.fn(async () => {throw new Error("synthetic-private-detail");});
+    const h=await harness({createSessionFromSource});
+    const first=await handleCodexContinueOnAccount(h.deps,{tabId:"tab-1",accountId:"account-b"});
+    expect(first).toMatchObject({ok:false,reason:"copy_failed",detail:expect.stringContaining("A copy was left on the target account")});
+    expect(first.ok ? "" : first.detail).toContain("A retry on that account will be blocked");
+    expect(JSON.stringify(first)).not.toContain("synthetic-private-detail");
+    expect(await handleCodexContinueOnAccount(h.deps,{tabId:"tab-1",accountId:"account-b"})).toMatchObject({ok:false,reason:"rollout_exists"});
+    expect(createSessionFromSource).toHaveBeenCalledOnce();
+    expect(h.opened).toEqual([]);
+    expect(await readFile(join(h.accountBSessionsDir,ROLLOUT_RELATIVE),"utf8")).toBe(ROLLOUT_TEXT);
   });
 
   it("refuses an existing rollout before source registration", async () => {
