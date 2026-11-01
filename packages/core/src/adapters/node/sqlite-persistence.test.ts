@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
+import { spawn } from "node:child_process";
 import { SqlitePersistenceAdapter, WriteBehindHistorySink, type HistorySinkLogger } from "./sqlite-persistence.js";
 import type { CheckpointRecord } from "../../ports/checkpoints.js";
 import type { PersistencePort, SessionDeleteSummary, SessionMeta } from "../../ports/persistence.js";
@@ -3208,6 +3209,46 @@ describe("SqlitePersistenceAdapter — session delete", () => {
     expect(await list()).toHaveLength(0);
     await adapter.close();
   });
+
+  it.each(["codex", "claude"] as const)("atomically registers a successor only for the unchanged %s source", async (engine) => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    await seedFullSession(adapter, "source", "original-ref", engine);
+    const successor = {id:"successor",workspace:"/w",model:"m",mode:"build" as const,engineId:engine,externalSessionRef:"original-ref"};
+    expect(await adapter.createSessionFromSource("missing", successor)).toBeNull();
+    expect(await adapter.createSessionFromSource("source", {...successor,externalSessionRef:"changed-ref"})).toBeNull();
+    expect(await adapter.createSessionFromSource("source", {...successor,engineId:engine === "codex" ? "claude" : "codex"})).toBeNull();
+    expect((await adapter.createSessionFromSource("source", successor))?.id).toBe("successor");
+    const first = await adapter.deleteSession("source");
+    expect(engine === "codex" ? first.counts.codexThreadItems : first.counts.claudeTranscriptItems).toBe(0);
+    const last = await adapter.deleteSession("successor");
+    expect(engine === "codex" ? last.counts.codexThreadItems : last.counts.claudeTranscriptItems).toBe(1);
+    expect(await adapter.createSessionFromSource("source", successor)).toBeNull();
+    await adapter.close();
+  });
+
+  it("cannot register a stale successor while another process deletes its source", async () => {
+    const tmp = await mkdtemp(join(tmpdir(), "source-race-"));
+    deleteTmpDir = tmp;
+    const dbPath = join(tmp, "test.sqlite");
+    const adapter = new SqlitePersistenceAdapter(dbPath);
+    await seedFullSession(adapter, "source", "racing-ref");
+    const script = `const {DatabaseSync}=require("node:sqlite"); const db=new DatabaseSync(process.argv[1]); db.exec("BEGIN IMMEDIATE; DELETE FROM history_items WHERE session_id='source'; DELETE FROM checkpoints WHERE session_id='source'; DELETE FROM codex_thread_items WHERE thread_id='racing-ref'; DELETE FROM sessions WHERE id='source';"); process.stdout.write("locked"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,500); db.exec("COMMIT"); db.close();`;
+    const child = spawn(process.execPath, ["--no-warnings", "-e", script, dbPath], {env:{PATH:"/usr/bin:/bin"},stdio:["ignore","pipe","inherit"]});
+    const done = new Promise<number | null>((resolve, reject) => {child.once("error",reject); child.once("exit",resolve);});
+    try {
+      await new Promise<void>((resolve,reject) => { child.stdout.once("data",()=>resolve()); child.once("error",reject); child.once("exit",()=>reject(new Error("fixture exited before lock"))); });
+      const successor = {id:"successor",workspace:"/w",model:"m",mode:"build" as const,engineId:"codex" as const,externalSessionRef:"racing-ref"};
+      // A snapshot-upgrade failure is also safe: the transaction rolls back.
+      let outcome = null;
+      try { outcome = await adapter.createSessionFromSource("source", successor); }
+      catch (error) { expect([5, 517]).toContain((error as {errcode?:number}).errcode); }
+      expect(outcome).toBeNull();
+      expect(await done).toBe(0);
+      expect(await adapter.createSessionFromSource("source", successor)).toBeNull();
+      expect(await adapter.getSessionById("successor")).toBeNull();
+      expect(await adapter.listCodexThreadItems("racing-ref")).toHaveLength(0);
+    } finally {child.kill(); await adapter.close();}
+  }, 15000);
 
   it("retains a shared thread when deleting a subtree and cleans it after the surviving root", async () => {
     const adapter = new SqlitePersistenceAdapter(":memory:");
