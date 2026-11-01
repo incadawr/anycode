@@ -9,6 +9,69 @@ const ready: HostToUiMessage = { type: "host_ready", workspace: "/synthetic", se
 const image = () => ({ name: "synthetic.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } });
 
 describe("unknown delivery over real MessageChannel", () => {
+  it.each([true, false])("preserves manual compaction (ok=%s) during a late unknown start", (ok) => {
+    const store = createDesktopStore({ schedule: () => {} });
+    const saved = image();
+    store.getState().applyHostMessage(ready);
+    store.getState().recordSentMessage("A payload", [saved], "A", undefined, undefined, undefined, undefined, true);
+    store.getState().markOrchestrationDeliveryUnknown("A");
+    store.getState().applyHostMessage(ready);
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "manual-compaction", event: { type: "compaction_start", trigger: "manual" } });
+    expect(store.getState().turn.status).toBe("compacting");
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "A", turnId: "turn-A" });
+    expect(store.getState().turn.status).toBe("compacting");
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "conflict", requestId: "A", turnId: "turn-A", text: "A payload", images: [saved] });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "manual-compaction", event: { type: "compaction_end", ok, durationMs: 1, ...(ok ? { postTokens: 1 } : { error: "synthetic" }) } });
+    expect(store.getState().turn.status).toBe("idle");
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "A", turnId: "turn-A" });
+    expect(store.getState().turn.status).toBe("idle");
+    expect(store.getState().claimRecoveryAttempt("A", "unsafe", "retry", [saved], undefined)).toBe(false);
+  });
+
+  it("keeps manual compaction when a rejected request receives a contradictory start", () => {
+    const store = createDesktopStore({ schedule: () => {} });
+    const saved = image();
+    store.getState().applyHostMessage(ready);
+    store.getState().recordSentMessage("A", [saved], "A", undefined, undefined, undefined, undefined, true);
+    store.getState().applyHostMessage({ type: "turn_rejected", requestId: "A", reason: "busy" });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "manual-compaction", event: { type: "compaction_start", trigger: "manual" } });
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "A", turnId: "turn-A" });
+    expect(store.getState().turn.status).toBe("compacting");
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "conflict", turnId: "turn-A", images: [saved] });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "manual-compaction", event: { type: "compaction_end", ok: true, postTokens: 1, durationMs: 1 } });
+    expect(store.getState().turn.status).toBe("idle");
+  });
+
+  it("preserves manual compaction across a late unknown start on a reconnected MessageChannel", async () => {
+    const registry = createTabRegistry(createTabsStore());
+    const first = new MessageChannel();
+    const second = new MessageChannel();
+    const sent: Array<{type: string; requestId?: string}> = [];
+    first.port2.on("message", message => sent.push(message));
+    second.port2.on("message", message => sent.push(message));
+    try {
+      registry.registerPort("tab", "/synthetic", first.port1 as unknown as MessagePort);
+      first.port2.postMessage(ready);
+      await vi.waitFor(() => expect(registry.getStore("tab")?.getState().connection).toBe("ready"));
+      const store = registry.getStore("tab")!;
+      const saved = image();
+      store.getState().recordSentMessage("A", [saved], "A", undefined, undefined, undefined, undefined, true);
+      registry.sendToTab("tab", { type: "user_message", requestId: "A", text: "A", images: [saved.attachment] });
+      await vi.waitFor(() => expect(sent.some(message => message.type === "user_message" && message.requestId === "A")).toBe(true));
+      first.port2.close();
+      await vi.waitFor(() => expect(store.getState().connection).toBe("awaiting_port"));
+      registry.registerPort("tab", "/synthetic", second.port1 as unknown as MessagePort);
+      second.port2.postMessage(ready);
+      second.port2.postMessage({ type: "agent_event", turnId: "manual-compaction", event: { type: "compaction_start", trigger: "manual" } });
+      await vi.waitFor(() => expect(store.getState().turn.status).toBe("compacting"));
+      second.port2.postMessage({ type: "turn_started", requestId: "A", turnId: "turn-A" });
+      await vi.waitFor(() => expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "conflict", turnId: "turn-A", images: [saved] }));
+      expect(store.getState().turn.status).toBe("compacting");
+      second.port2.postMessage({ type: "agent_event", turnId: "manual-compaction", event: { type: "compaction_end", ok: true, postTokens: 1, durationMs: 1 } });
+      await vi.waitFor(() => expect(store.getState().turn.status).toBe("idle"));
+      expect(sent.filter(message => message.type === "user_message").map(message => message.requestId)).toEqual(["A"]);
+    } finally { registry.disposeTab("tab"); first.port1.close(); first.port2.close(); second.port1.close(); second.port2.close(); }
+  });
   it("keeps active B when an unknown A receives its first late start", () => {
     const store = createDesktopStore({ schedule: () => {} });
     const saved = image();

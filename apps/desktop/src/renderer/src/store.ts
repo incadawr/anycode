@@ -5219,9 +5219,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             pendingSentMessages.delete(message.requestId);
             const knownDelivery = get().orchestrationDeliveries.find(item => item.requestId === message.requestId);
             // A start for an unconfirmed pre-disconnect attempt can arrive
-            // while a different turn is active. Record both the start and the
-            // inconsistent overlap without replacing that active turn.
-            if (knownDelivery?.status === "unknown" && get().turn.status === "running" && get().turn.turnId !== message.turnId) {
+            // while another turn or manual compaction owns the session.
+            // Record the inconsistent overlap without replacing its state.
+            if (knownDelivery?.status === "unknown" && isSessionBusy(get().turn.status) && get().turn.turnId !== message.turnId) {
               set((state) => reconcileQueuedRetries(state.promptQueue, state.orchestrationDeliveries.map(item => item.requestId === message.requestId
                 ? { ...item, status: "conflict" as const, turnId: message.turnId, reviewed: false }
                 : item)));
@@ -5232,7 +5232,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // Keep this fence across host_ready resets via the delivery ledger.
             if (knownDelivery?.terminalReason || loopEndEmitted.has(`loop_end:${message.turnId}`) ||
               (knownDelivery?.turnId && (knownDelivery.status === "conflict" || knownDelivery.turnId !== message.turnId)) ||
-              (knownDelivery?.status === "rejected" && get().turn.status === "running" && get().turn.turnId !== message.turnId)) {
+              (knownDelivery?.status === "rejected" && isSessionBusy(get().turn.status) && get().turn.turnId !== message.turnId)) {
               set((state) => reconcileQueuedRetries(state.promptQueue, startedDeliveries(state, message.requestId, message.turnId)));
               return;
             }
