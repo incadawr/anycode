@@ -1,4 +1,5 @@
 import { providerProxyConfig } from "./provider-proxy-config.mjs";
+import { protectMainNavigation } from "./main-navigation.js";
 import { resolveCoreConnectionForModel } from "../shared/core-model-connection.js";
 import { initializeIsolatedSmoke, isolatedSmokeStorage } from "./isolated-smoke.js";
 import { closeSessionForAgent } from "./communication-close-session.js";
@@ -58,7 +59,7 @@ import {
 } from "./workspace-trust-ipc.js";
 import { canonicalWorkspaceKey, defaultTrustStorePath, migrateTrustStoreKeys, readTrustStore } from "@anycode/core/workspace-trust";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   BrowserWindow,
   Menu,
@@ -776,6 +777,10 @@ function resolveRendererIndex(): string {
   return join(__dirname, "../renderer/index.html");
 }
 
+function resolveRendererUrl(): string {
+  return process.env["ELECTRON_RENDERER_URL"] ?? pathToFileURL(resolveRendererIndex()).href;
+}
+
 /**
  * M3 (CUT.md GAP 1): loads the md-preview WINDOW's `BrowserWindow`
  * with the SAME renderer bundle `createWindow()` loads for the main window,
@@ -917,6 +922,8 @@ function createWindow(): void {
   // sidebar cap); win32 hides its caption bar; every other platform is fully
   // frameless. backgroundColor kills the white flash on a frameless resize.
   const platform = process.platform;
+  const rendererDevServerUrl = process.env["ELECTRON_RENDERER_URL"];
+  const rendererUrl = resolveRendererUrl();
   win = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -933,8 +940,11 @@ function createWindow(): void {
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
+      additionalArguments: [`--anycode-renderer-url=${rendererUrl}`],
     },
   });
+
+  protectMainNavigation(win.webContents, rendererUrl, shell.openExternal);
 
   win.on("closed", () => {
     // Preview windows are their own real BrowserWindows: with any still open,
@@ -983,7 +993,6 @@ function createWindow(): void {
     previewHost?.setPanelBounds(null);
   });
 
-  const rendererDevServerUrl = process.env["ELECTRON_RENDERER_URL"];
   if (rendererDevServerUrl !== undefined) {
     void win.loadURL(rendererDevServerUrl);
   } else {
@@ -2344,7 +2353,7 @@ void app.whenReady().then(async () => {
     // M3 (CUT.md GAP 1/CONTRACTS): the md-preview window container —
     // SAME preload path as the main window (resolvePreloadPath()), dev/
     // packaged URL construction closed over via loadMdPreviewWindow above.
-    createMdWindow: (opts) => createMdPreviewWindow(opts, { preloadPath: resolvePreloadPath(), loadRenderer: loadMdPreviewWindow }),
+    createMdWindow: (opts) => createMdPreviewWindow(opts, { preloadPath: resolvePreloadPath(), rendererUrl: resolveRendererUrl(), loadRenderer: loadMdPreviewWindow }),
     // D4: live read of settings.preview.displayMode, consulted only when
     // openForTab creates a NEW record. Absent -> "panel" (task decision),
     // same absent-default posture as autoOpenEnabled below.

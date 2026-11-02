@@ -140,7 +140,7 @@ function collectErrorText(err: unknown, depth = 0): string[] {
 
 /** Minimal fake BrowserWindow (same as index.appVersion-wiring.test.ts). */
 class FakeBrowserWindow {
-  webContents = { on: vi.fn(), send: vi.fn() };
+  webContents = { setWindowOpenHandler: vi.fn(), on: vi.fn(), send: vi.fn() };
   on = vi.fn();
   isMaximized = vi.fn(() => false);
   isFullScreen = vi.fn(() => false);
