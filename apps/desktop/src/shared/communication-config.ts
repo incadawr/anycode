@@ -73,6 +73,7 @@ export type CommunicationMutationReason =
   | "read_only"
   | "invalid"
   | "io_error"
+  | "folder_changed"
   | "env_controlled"
   | "cancelled"
   | "not_a_directory"

@@ -83,7 +83,7 @@ export interface CommunicationIpcDeps {
   /** Synchronous realpath used only to canonicalise the sidebar's workspace identity. */
   realpathSync(path: string): string;
   homedir(): string;
-  offerEmptyFolderTrust(workspace: string): Promise<void>;
+  offerEmptyFolderTrust(workspace: string): Promise<void | "folder_changed">;
   stat(path: string): Promise<{ isDirectory(): boolean }>;
 }
 
@@ -266,7 +266,9 @@ export async function handleAgentProjectsSet(deps: CommunicationIpcDeps, raw: un
   if (deps.env() !== undefined && deps.env() !== "") return { ok: false, reason: "env_controlled" };
   if (parsed.data.enabled) {
     try {
-      await deps.offerEmptyFolderTrust(parsed.data.workspace);
+      if (await deps.offerEmptyFolderTrust(parsed.data.workspace) === "folder_changed") {
+        return { ok: false, reason: "folder_changed" };
+      }
     } catch {
       return { ok: false, reason: "io_error" };
     }

@@ -1442,7 +1442,9 @@ export function Sidebar({
                       if (result.ok) {
                         setAgentAllowed(item.next);
                       } else {
-                        setNotice("Couldn't change the agent setting for this project.");
+                        setNotice(result.reason === "folder_changed"
+                          ? "The folder changed while you were confirming trust. Try again."
+                          : "Couldn't change the agent setting for this project.");
                         setNoticeAction(null);
                       }
                     },
