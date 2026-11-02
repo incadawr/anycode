@@ -5012,6 +5012,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         // follow-up card with the settings UI, so the transcript stays
         // byte-identical for now.
         case "permission_auto_decided":
+        case "reasoning_replay_metadata":
           return;
 
         default: {

@@ -69,6 +69,7 @@ export type ModelStreamEvent =
     providerMetadata?: Record<string, Record<string, unknown>>;
     source?: ReasoningSource;
   }
+  | { type: "reasoning_replay_metadata"; id: string; providerMetadata: Record<string, Record<string, unknown>>; source: ReasoningSource }
   | { type: "tool_input_start"; id: string; toolName: string }
   | { type: "tool_input_delta"; id: string; delta: string }
   | { type: "tool_input_end"; id: string }

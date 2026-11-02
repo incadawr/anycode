@@ -240,6 +240,19 @@ describe("reasoning replay over the real SDK wire (GitHub #41)", () => {
     expect(assistant).not.toHaveProperty("reasoning_content");
   });
 
+  it("replays details arriving after the visible reasoning block closes", async () => {
+    const chunks: Chunk[] = [
+      { choices: [{ index: 0, delta: { role: "assistant", reasoning: "Think", reasoning_details: [{ index: 0, type: "reasoning.text", text: "Think" }] }, finish_reason: null }] },
+      OPENAI_THINK_THEN_TOOL[1]!,
+      { choices: [{ index: 0, delta: { reasoning_details: [{ index: 0, signature: "late" }] }, finish_reason: null }] },
+      OPENAI_THINK_THEN_TOOL[2]!,
+    ];
+    const fixture = await startServer([openAiSse(chunks), openAiSse(OPENAI_TEXT)]);
+    const port = new AiSdkModelPort({ transport: "openai-chat-completions", baseUrl: fixture.baseUrl, apiKey: "test", model: "test", providerName: "OpenRouter", retry: { maxRetries: 0, stallTimeoutMs: 0 } });
+    await run(makeLoop(port), "read");
+    expect(assistantMessages(fixture.bodies[1]!)[0]).toMatchObject({ reasoning_details: [{ index: 0, type: "reasoning.text", text: "Think", signature: "late" }] });
+  });
+
   it("OpenRouter retains encrypted-only reasoning", async () => {
     const chunks: Chunk[] = [
       { choices: [{ index: 0, delta: { role: "assistant", reasoning_details: [{ index: 0, type: "reasoning.encrypted", data: "secret-block" }] }, finish_reason: null }] },

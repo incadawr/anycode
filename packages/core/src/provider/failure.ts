@@ -28,6 +28,7 @@ export function isModelOutputEvent(e: ModelStreamEvent): boolean {
     case "finish":
       return true;
     case "start":
+    case "reasoning_replay_metadata":
     case "error":
     case "stream_retry":
     // a quota observation is transport telemetry, not model
