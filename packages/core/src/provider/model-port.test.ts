@@ -10,6 +10,7 @@ import { APICallError, TypeValidationError } from "ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelRequest } from "../ports/model.js";
 import type { DiagnosticEvent } from "../types/diagnostics.js";
+import type { AgentEvent } from "../types/events.js";
 import type { AnthropicEndpointConfig } from "./anthropic.js";
 import type { EndpointConfig } from "./endpoint.js";
 
@@ -415,19 +416,29 @@ describe("OpenRouter reasoning lifecycle", () => {
   const start = (id: string) => part({ type: "reasoning-start", id });
   const end = (id: string) => part({ type: "reasoning-end", id });
 
-  it.each([part({ type: "text-delta", id: "t", text: "answer" }), part({ type: "tool-input-start", id: "t", toolName: "Read" })])("closes reasoning before answer or tool output", async (next) => {
+  const modes = [
+    { name: "none", settings: { reasoningHistory: "none" as const }, replay: false },
+    { name: "off", settings: { preserveReasoning: false }, replay: false },
+    { name: "full", settings: { reasoningHistory: "full" as const }, replay: true },
+  ];
+
+  it.each(modes.flatMap(mode => [part({ type: "text-delta", id: "t", text: "answer" }), part({ type: "tool-input-start", id: "t", toolName: "Read" })].map(next => ({ ...mode, next }))))("closes reasoning before answer or tool output with $name", async ({ settings, replay, next }) => {
     mockStreamText.mockReturnValueOnce(fakeResult([start("r"), next, end("r"), part(finishPart)]));
-    const events = await collect(new AiSdkModelPort(config).streamText(baseRequest));
+    const events = await collect(new AiSdkModelPort({ ...config, ...settings }).streamText(baseRequest));
     expect(events.map(e => e.type).slice(0, 3)).toEqual(["reasoning_start", "reasoning_end", next.kind === "part" && next.part.type === "text-delta" ? "text_delta" : "tool_input_start"]);
     expect(events.filter(e => e.type === "reasoning_end")).toHaveLength(1);
+    expect(events.find(e => e.type === "reasoning_end")).toEqual(replay ? expect.objectContaining({ source: expect.any(Object) }) : { type: "reasoning_end", id: "r" });
   });
 
-  it("closes a block when the stream throws or aborts", async () => {
+  it.each(modes)("closes a block when the stream aborts with $name", async ({ settings, replay }) => {
     const controller = new AbortController();
-    mockStreamText.mockReturnValueOnce({ fullStream: (async function* () { yield { type: "reasoning-start", id: "r" }; controller.abort(); throw new Error("aborted"); })() });
-    const events: string[] = [];
-    try { for await (const event of new AiSdkModelPort(config).streamText({ ...baseRequest, abortSignal: controller.signal })) events.push(event.type); } catch { /* abort propagates */ }
-    expect(events).toEqual(["reasoning_start", "reasoning_end"]);
+    mockStreamText.mockReturnValueOnce({ fullStream: (async function* () { yield { type: "reasoning-start", id: "r" }; yield { type: "reasoning-delta", id: "r", text: "thinking" }; controller.abort(); throw new Error("aborted"); })() });
+    const events: AgentEvent[] = [];
+    let thrown = false;
+    try { for await (const event of new AiSdkModelPort({ ...config, ...settings }).streamText({ ...baseRequest, abortSignal: controller.signal })) events.push(event); } catch { thrown = true; }
+    expect(thrown).toBe(true);
+    expect(events.map(e => e.type)).toEqual(["reasoning_start", "reasoning_delta", "reasoning_end"]);
+    expect(events[2]).toEqual(replay ? expect.objectContaining({ source: expect.any(Object) }) : { type: "reasoning_end", id: "r" });
   });
 
   it("closes a block before an error event", async () => {
