@@ -2937,20 +2937,19 @@ body {
 
 .message-label {
   font-size: var(--fs-2xs);
-  font-weight: var(--w-semibold);
-  text-transform: uppercase;
-  letter-spacing: var(--track-label);
+  font-weight: var(--w-normal);
   color: var(--text-3);
   margin-bottom: 0.2rem;
 }
 
 /* User messages: compact accent-soft card, right-shifted (design §2.1). */
 .message-user {
-  align-self: flex-end;
-  max-width: 85%;
-  padding: var(--sp-2) var(--sp-3);
+  align-self: stretch;
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--border-strong);
   border-radius: var(--r-md);
-  background: var(--accent-soft);
+  background: var(--bg-card);
   color: var(--text-1);
 }
 
@@ -3752,7 +3751,9 @@ body {
 /* ── reasoning ── */
 
 .reasoning-block {
-  font-size: var(--fs-sm);
+  border-left: 2px solid var(--border-strong);
+  padding-left: var(--sp-3);
+  font-size: var(--fs-xs);
   color: var(--text-2);
 }
 
@@ -3861,6 +3862,7 @@ body {
   align-items: center;
   gap: var(--sp-2);
   width: 100%;
+  min-height: 36px;
   padding: var(--sp-2) var(--sp-3);
   background: none;
   border: none;
@@ -3900,9 +3902,10 @@ body {
 }
 
 .tool-call-name {
-  color: var(--text-2);
-  font-weight: var(--w-medium);
-  font-size: var(--fs-sm);
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-weight: var(--w-normal);
+  font-size: var(--fs-xs);
   flex: none;
 }
 
@@ -4359,7 +4362,7 @@ body {
    the textarea is focused — the a11y-equivalent visible focus the design wants
    (the footer chip/send button keep their own global :focus-visible ring). */
 .composer:has(.composer-textarea:focus) {
-  border-color: var(--accent);
+  border-color: var(--focus-ring);
 }
 
 /* New sessions keep their repository context next to the prompt where it is
@@ -4498,7 +4501,7 @@ body {
 .composer-textarea {
   field-sizing: content;
   resize: none;
-  min-height: 2.5rem;
+  min-height: 52px;
   max-height: 12rem;
   overflow-y: auto;
   padding: var(--sp-1) var(--sp-1);
@@ -5405,27 +5408,27 @@ body {
 }
 
 .mode-chip-build {
-  background: var(--accent-soft);
-  color: var(--accent);
-  border-color: transparent;
+  background: var(--neutral-soft);
+  color: var(--text-2);
+  border-color: var(--border);
 }
 
 .mode-chip-edit {
-  background: var(--accent-soft);
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: var(--neutral-soft);
+  color: var(--text-2);
+  border-color: var(--border);
 }
 
 .mode-chip-auto {
-  background: var(--warning-soft);
-  color: var(--warning);
-  border-color: transparent;
+  background: var(--neutral-soft);
+  color: var(--text-2);
+  border-color: var(--border);
 }
 
 .mode-chip-yolo {
-  background: var(--danger-soft);
-  color: var(--danger);
-  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  background: var(--neutral-soft);
+  color: var(--text-2);
+  border-color: var(--border);
 }
 
 /* Fixed-position (NOT absolute) because `.composer-footer-left` carries
@@ -5518,7 +5521,7 @@ body {
    the plan tint (the session IS in plan permission — host-side truth) and
    gains an accent ring marking the active orchestration posture. */
 .mode-chip-orchestrate {
-  box-shadow: inset 0 0 0 1px var(--accent);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
 }
 
 /* ── GUI-P1: sidebar project menu popover + relocated model chip ── */
