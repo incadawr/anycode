@@ -657,3 +657,44 @@ it("keeps a fetched model receipt chosen during an earlier Save", async () => {
     expect(rig.update.mock.calls[1]![0]).toMatchObject({model:"remote-model", fetchedModels:{guard:"fixture-guard", models:[{id:"remote-model"}]}});
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
+
+it("previews models and reports key and list outcomes in the add form", async () => {
+  const rig = catalogRig({});
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(ConnectionDrawerFields, {mode:"add", catalog:CATALOG as never, connections:[], secrets:[], readOnly:false, store:rig.store, customProvider:rig.customProvider})));
+    const select = container.querySelector<HTMLSelectElement>('select')!;
+    await act(async () => { select.value = "glm"; select.dispatchEvent(new Event("change", {bubbles:true})); });
+    await typeInto(container.querySelector<HTMLInputElement>('input[type="password"]')!, "fixture-key");
+    const button = [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Fetch models")!;
+    rig.fetchModels.mockResolvedValueOnce({ok:true, models:[{id:"remote"}]});
+    await act(async () => button.click());
+    expect(container.textContent).toContain("Key accepted. 1 model available.");
+    expect(container.querySelector('option[value="remote"]')).not.toBeNull();
+    rig.fetchModels.mockResolvedValueOnce({ok:false, reason:"empty_models"});
+    await act(async () => button.click());
+    expect(container.textContent).toContain("Key accepted. Model list unavailable.");
+    rig.fetchModels.mockResolvedValueOnce({ok:false, reason:"models_not_supported"});
+    await act(async () => button.click());
+    expect(container.textContent).toContain("The key could not be checked.");
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it("selects and clears only filtered models and requires a selection", async () => {
+  const connection = {id:"c1", providerId:"glm", model:"glm-5.3", modelsFetchedAt:"2026-01-01", visibleModels:["glm-5.3", "glm-5.2"]};
+  const rig = catalogRig(connection);
+  const {container, root} = await mountEdit(connection, rig);
+  const click = async (label: string) => act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === label)!.click(); });
+  try {
+    await click("Fetch models");
+    await typeInto(container.querySelector<HTMLInputElement>('input[aria-label="Filter models"]')!, "5.2");
+    await click("Clear all");
+    expect(container.textContent).toContain("1 selected");
+    await click("Select all");
+    expect(container.textContent).toContain("2 selected");
+    await typeInto(container.querySelector<HTMLInputElement>('input[aria-label="Filter models"]')!, "");
+    await click("Clear all");
+    expect(container.querySelector<HTMLButtonElement>(".connection-drawer-model-done")!.disabled).toBe(true);
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});

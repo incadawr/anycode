@@ -14,6 +14,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Fetch models while adding a keyed connection, and select or clear filtered models in the model picker.
 - Choose the accent color (Blue, Gold, Indigo, Teal, Ember) in Settings → Appearance; the choice is saved on this device.
 
 ### Changed

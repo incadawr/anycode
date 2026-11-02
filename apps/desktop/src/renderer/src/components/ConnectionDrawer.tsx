@@ -1488,6 +1488,7 @@ export function ConnectionDrawerFields({
   const [customKind, setCustomKind] = useState<CustomProviderRecord["kind"]>("openai-compatible");
   // Custom-provider model fetch/curation (the drawer's model step).
   const [fetchedModels, setFetchedModels] = useState<Extract<FetchModelsOutcome, { ok: true }>["models"] | null>(null);
+  const [createFetchNotice, setCreateFetchNotice] = useState<string | null>(null);
   const [commitFetchedModels, setCommitFetchedModels] = useState(false);
   const [fetchedSource, setFetchedSource] = useState<{ guard: string; targetUrl: string; baseUrl: string; transport: ProviderTransportId | "" } | null>(null);
   const [fetchingModels, setFetchingModels] = useState(false);
@@ -1644,6 +1645,7 @@ export function ConnectionDrawerFields({
   const setupMissingKey = simplified && showKeyInCreate && !noAuth &&
     selectedEntry?.authOptional !== true && secretValue.trim() === "";
   const keyFieldDisabled = readOnly || (isNewCustomEndpoint && noAuth);
+  const filteredPickerModels = validVisibleModelIds(mergeModelIds(mergeModelIds(fetchedModels?.map(item => item.id) ?? [], modelSuggestions.map(item => item.id)), mergeModelIds(visibleModelDraft, normalizeModelId(model) ? [normalizeModelId(model)!] : []))).filter(id => id.toLowerCase().includes(modelFilter.toLowerCase()));
   // hints for the Max-output-tokens field (pure logic above): whether
   // the env rung currently silences this field, and what number a blank field
   // actually resolves to. Both read only state already in hand — the drawer's
@@ -2218,8 +2220,41 @@ export function ConnectionDrawerFields({
     setFetchedModels(null); setFetchedSource(null); setCommitFetchedModels(false);
   }
 
+  useEffect(() => {
+    if (createdConnectionId === null) {
+      fetchGeneration.current++;
+      setCreateFetchNotice(null);
+      setFetchedModels(null);
+    }
+  }, [createdConnectionId, providerId, baseUrl, customBaseUrl, customKind, transport, secretValue]);
+
   async function doFetchModels(): Promise<void> {
     if (createdConnectionId === null) {
+      const entry = getBuiltinCatalog().providers.find(item => item.id === providerId);
+      const explicitBase = isNewCustomEndpoint ? customBaseUrl.trim() : baseUrl.trim();
+      const modelsUrl = !explicitBase ? entry?.modelsUrl : undefined;
+      const requestBase = modelsUrl ? modelsUrl.replace(/\/models\/?$/, "") : explicitBase || selectedEntry?.catalogBaseUrl || "";
+      const kind = modelsUrl ? "openai-compatible" : (isNewCustomEndpoint ? customKind : (transport || selectedEntry?.defaultTransport) === "anthropic-messages" ? "anthropic" : "openai-compatible");
+      const generation = fetchGeneration.current;
+      setFetchingModels(true); setError(null); setCreateFetchNotice(null); setFetchedModels(null);
+      try {
+        const outcome = await resolvedCustomProvider().fetchModels({ baseUrl: requestBase, apiKey: secretValue, kind });
+        if (generation !== fetchGeneration.current) return;
+        if (outcome.ok) {
+          setFetchedModels(outcome.models.filter(item => validVisibleModelIds([item.id]).length > 0));
+          setCreateFetchNotice(outcome.models.length ? `Key accepted. ${outcome.models.length} model${outcome.models.length === 1 ? "" : "s"} available.` : "Key accepted. Model list unavailable.");
+        } else if (outcome.reason === "empty_models") {
+          setCreateFetchNotice("Key accepted. Model list unavailable.");
+        } else if (outcome.reason === "models_not_supported" || outcome.reason === "invalid_response") {
+          setCreateFetchNotice("Model list unavailable. The key could not be checked.");
+        } else {
+          setError(describeFetchModelsError(outcome.reason));
+        }
+      } catch {
+        if (generation === fetchGeneration.current) setError("Could not fetch models. Try again.");
+      } finally {
+        setFetchingModels(false);
+      }
       return;
     }
     if (proxySnapshot === null) {
@@ -2695,7 +2730,7 @@ export function ConnectionDrawerFields({
               )
             } />
           <datalist id="welcome-model-suggestions">
-            {selectedEntry.models.map((m) => <option key={m.id} value={m.id}>{m.name ?? m.id}</option>)}
+            {modelSuggestions.map((m) => <option key={m.id} value={m.id}>{m.name ?? m.id}</option>)}
           </datalist>
         </label>
       )}
@@ -2768,6 +2803,10 @@ export function ConnectionDrawerFields({
               />
             </label>
           )}
+          {showKeyInCreate && !noAuth && <div className="connection-drawer-fetch-models">
+            <Button type="button" disabled={readOnly || fetchingModels || !secretValue.trim()} onClick={() => void doFetchModels()}>{fetchingModels ? "Fetching…" : "Fetch models"}</Button>
+            {createFetchNotice !== null && <p className="settings-field-hint" role="status">{createFetchNotice}</p>}
+          </div>}
           {pricingBlock}
           {advancedBlock}
           <div className="settings-field-row connection-drawer-actions">
@@ -2811,8 +2850,9 @@ export function ConnectionDrawerFields({
               {error !== null && <p className="settings-notice" role="alert">{error}</p>}
               <div className="connection-drawer-model-heading"><strong>Choose models</strong><Button type="button" disabled={readOnly || fetchingModels} onClick={() => void doFetchModels()}>{fetchingModels ? "Fetching…" : "Refresh"}</Button></div>
               <input className="settings-field-input" aria-label="Filter models" autoFocus placeholder="Filter models" value={modelFilter} onChange={e => setModelFilter(e.target.value)} />
+              <div className="connection-drawer-model-heading"><Button type="button" disabled={readOnly || fetchingModels} onClick={() => setVisibleModelDraft(current => mergeModelIds(current, filteredPickerModels))}>Select all</Button><Button type="button" disabled={readOnly || fetchingModels} onClick={() => setVisibleModelDraft(current => current.filter(id => !filteredPickerModels.includes(id)))}>Clear all</Button></div>
               <div className="connection-drawer-popup-list">
-                {validVisibleModelIds(mergeModelIds(mergeModelIds(fetchedModels?.map(item => item.id) ?? [], modelSuggestions.map(item => item.id)), mergeModelIds(visibleModelDraft, normalizeModelId(model) ? [normalizeModelId(model)!] : []))).filter(id => id.toLowerCase().includes(modelFilter.toLowerCase())).map(id => <div className="connection-drawer-popup-row" key={id}>
+                {filteredPickerModels.map(id => <div className="connection-drawer-popup-row" key={id}>
                   <label><input type="checkbox" checked={visibleModelDraft.includes(id)} disabled={readOnly || fetchingModels} onChange={e => setVisibleModelDraft(current => e.target.checked ? mergeModelIds(current, [id]) : current.filter(item => item !== id))} /> {id}</label>
                   <Button size="sm" type="button" aria-label={`Set ${id} as default`} aria-pressed={draftDefaultModel === id} disabled={readOnly || fetchingModels} onClick={() => { setVisibleModelDraft(current => mergeModelIds(current, [id])); setDraftDefaultModel(id); }}>{draftDefaultModel === id ? "★" : "☆"}</Button>
                 </div>)}
