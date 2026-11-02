@@ -80,6 +80,7 @@
   --accent:      #E9B949;
   --accent-hover:#F3CB72;
   --accent-soft: rgba(233, 185, 73, 0.14);
+  --mark-bg: color-mix(in srgb, var(--accent) 25%, transparent);
   --on-accent:   #221A05;
 
   --success:      #7FD1A6;  --success-soft: rgba(127, 209, 166, 0.12);
@@ -123,6 +124,7 @@
   --accent:       #8A6410;
   --accent-hover: #6E4F0A;
   --accent-soft:  rgba(138, 100, 16, 0.12);
+  --mark-bg: color-mix(in srgb, var(--accent) 32%, transparent);
   --on-accent:    #FFFDF7;
 
   --success: #1F7A4D; --success-soft: rgba(31, 122, 77, 0.10);
@@ -211,6 +213,8 @@
   --focus-ring-offset: 1px;
   --spin-dur: 900ms;
   --track-tight: -0.015em;
+  /* Text on accent-tinted surfaces must remain legible in both themes. */
+  --accent-soft-text: var(--text-1);
   --accent-border: var(--accent);
   --accent-strong: color-mix(in srgb, var(--accent) 55%, transparent);
   --focus-ring-soft: color-mix(in srgb, var(--accent) 55%, transparent);

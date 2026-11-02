@@ -141,7 +141,7 @@
 }
 .ak-iconbtn--on {
   background: var(--bg-selected);
-  color: var(--accent);
+  color: var(--accent-soft-text);
   border-color: var(--accent-border);
 }
 .ak-iconbtn:disabled {
@@ -197,7 +197,7 @@
 .ak-chip--selected {
   background: var(--accent-soft);
   border-color: var(--accent-border);
-  color: var(--accent);
+  color: var(--accent-soft-text);
 }
 .ak-chip--selected .ak-chip__icon {
   color: currentColor;
@@ -214,7 +214,7 @@
 .ak-chip--edit {
   background: var(--accent-soft);
   border-color: transparent;
-  color: var(--accent);
+  color: var(--accent-soft-text);
 }
 .ak-chip--edit {
   border-color: var(--accent-border);
@@ -260,7 +260,7 @@
 .ak-badge--run,
 .ak-badge--accent {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-soft-text);
 }
 .ak-badge--warn,
 .ak-badge--warning {
@@ -461,7 +461,7 @@
 .ak-seg__item[aria-pressed="true"],
 .ak-seg__item[aria-checked="true"] {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-soft-text);
   box-shadow: inset 0 0 0 1px var(--accent-strong);
 }
 .ak-seg__item:disabled {

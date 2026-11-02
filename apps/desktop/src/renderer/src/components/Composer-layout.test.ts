@@ -9,6 +9,42 @@ import { formatTurnStepSummary, formatUsageCostLedger, ctxPopoverAnchorFromRect,
 
 const chrome = process.env.CHROME_BIN ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
+describe("main window controls", () => {
+  it.skipIf(!existsSync(chrome))("keeps composer controls usable and workflow states distinct in both themes", () => {
+    const cssRoot = resolve(import.meta.dirname, "..");
+    const css = ["tokens.css", "app.css", "tool-cards.css", "ui/ui.css"].map(file => readFileSync(resolve(cssRoot, file), "utf8")).join("\n");
+    const directory = mkdtempSync(resolve(tmpdir(), "anycode-control-layout-"));
+    try {
+      const file = resolve(directory, "fixture.html");
+      writeFileSync(file, `<!doctype html><html data-theme="dark"><style>${css}</style><body>
+        <div class="composer-footer"><button class="mode-chip mode-chip-build">Build</button><button class="model-pill-chip">Model</button><button class="composer-attach">+</button></div>
+        <span class="workflow-tick substatus-running"></span><span class="workflow-tick substatus-queued"></span>
+        <span class="ak-chip--selected">Selected</span><pre id="result"></pre>
+        <script>
+          const read = () => {
+            const style = selector => getComputedStyle(document.querySelector(selector));
+            const controls = ['.mode-chip', '.model-pill-chip', '.composer-attach'].map(selector => { const s=style(selector); return {height:s.height, background:s.backgroundColor, border:s.borderTopColor}; });
+            return {controls, controlBg:style('html').getPropertyValue('--bg-control').trim(), running:style('.substatus-running').borderRadius, queued:style('.substatus-queued').borderRadius, text:style('.ak-chip--selected').color, text1:style('html').getPropertyValue('--text-1').trim()};
+          };
+          const dark=read(); document.documentElement.dataset.theme='light'; const light=read(); document.querySelector('#result').textContent=JSON.stringify({dark,light});
+        </script></body></html>`);
+      const run = spawnSync(chrome, ["--headless", "--no-sandbox", "--disable-gpu", "--disable-background-networking", "--no-first-run", `--user-data-dir=${directory}/profile`, "--dump-dom", `file://${file}`], {encoding:"utf8", timeout:30_000});
+      expect(run.status, run.stderr).toBe(0);
+      const match = run.stdout.match(/<pre id="result">([^<]+)<\/pre>/);
+      expect(match).not.toBeNull();
+      const result = JSON.parse(match![1]!) as Record<string, {controls:Array<{height:string; background:string; border:string}>; running:string; queued:string; text:string}>;
+      for (const state of Object.values(result)) {
+        expect(state.controls.map(control => control.height)).toEqual(["28px", "28px", "28px"]);
+        expect(new Set(state.controls.map(control => control.background)).size).toBe(1);
+        expect(new Set(state.controls.map(control => control.border)).size).toBe(1);
+        expect(state.running).not.toBe(state.queued);
+      }
+      expect(result.dark!.text).toBe("rgb(236, 233, 227)");
+      expect(result.light!.text).toBe("rgb(28, 26, 23)");
+    } finally { rmSync(directory, {recursive:true, force:true}); }
+  }, 60_000);
+});
+
 describe("cost popover layout", () => {
   it.skipIf(!existsSync(chrome))("renders every cost row without clipping at 280px", () => {
     const step = { turnId: "turn", step: 1, createdAt: 1, finishReason: "stop", transportRetries: 0 };

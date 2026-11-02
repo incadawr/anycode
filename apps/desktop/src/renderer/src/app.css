@@ -4586,9 +4586,9 @@ body {
   width: 28px;
   height: 28px;
   padding: 0;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-control);
   border-radius: var(--r-full);
-  background: var(--bg-inset);
+  background: var(--bg-control);
   color: var(--text-2);
   cursor: pointer;
   flex-shrink: 0;
@@ -5442,6 +5442,13 @@ body {
   border-color: var(--border);
 }
 
+/* Composer controls share the same 28px surface in every mode. */
+.composer-footer .mode-chip {
+  height: var(--ctl-h-sm);
+  background: var(--bg-control);
+  border-color: var(--border-control);
+}
+
 /* Fixed-position (NOT absolute) because `.composer-footer-left` carries
    `overflow:hidden` (P7.13 narrow-width containment) — a plain `absolute;
    bottom:100%` popover is clipped by that ancestor regardless of z-index
@@ -5599,6 +5606,10 @@ body {
    mirroring .session-header-chip's size tokens (--fs-xs, --r-full, 1px --border,
    capped width + ellipsis). Class name is FROZEN. */
 .composer-model-chip {
+  display: inline-flex;
+  align-items: center;
+  height: var(--ctl-h-sm);
+  background: var(--bg-control);
   flex-shrink: 1;
   max-width: 22ch;
   overflow: hidden;
@@ -5606,7 +5617,7 @@ body {
   white-space: nowrap;
   padding: 0.15rem var(--sp-2);
   border-radius: var(--r-full);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-control);
   color: var(--text-2);
   font-size: var(--fs-xs);
 }
@@ -5640,12 +5651,13 @@ body {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
+  height: var(--ctl-h-sm);
   min-width: 0;
   max-width: 100%;
   padding: 0.15rem var(--sp-2);
   border-radius: var(--r-full);
-  border: 1px solid var(--border);
-  background: transparent;
+  border: 1px solid var(--border-control);
+  background: var(--bg-control);
   color: var(--text-2);
   font-size: var(--fs-xs);
   cursor: pointer;
@@ -8009,7 +8021,7 @@ body {
    priority, child-layout.ts) — the accent tint keeps it visually distinct. */
 .child-split-badge-waiting_permission {
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-soft-text);
 }
 
 /* Container for the expanded row's own surface (App.tsx-composed `children`:
