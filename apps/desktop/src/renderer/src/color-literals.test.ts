@@ -7,8 +7,8 @@ import { maskComments } from "./source-comments.test-utils.js";
 // Measured on the UI track after the accent slice and its review fixes.
 // Reductions must update this map: never retain unused allowance.
 const BASELINE: Record<string, number> = {
-  "src/app.css": 6,
-  "src/settings.css": 16,
+  "src/app.css": 3,
+  "src/settings.css": 15,
   "src/components/icons.tsx": 6,
   "src/terminal-view.ts": 43,
 };
