@@ -26,6 +26,7 @@
     "./telemetry-admin": "./src/telemetry/admin.ts",
     "./network-failure": "./src/provider/network-failure.ts",
     "./provider/quota": "./src/provider/quota.ts",
+    "./connection-resolver": "./src/routing/core-model-connection.ts",
     "./catalog": "./src/provider/catalog-data.ts",
     "./model-dictionary": "./src/provider/model-dictionary.ts"
   },
