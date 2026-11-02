@@ -1,6 +1,6 @@
 /** Capture the main window using a disposable, isolated automation profile. */
 import { spawn } from 'node:child_process';
-import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +10,8 @@ import { connectIsolatedCdp } from './isolated-cdp.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const profile = mkdtempSync(join(tmpdir(), 'anycode-main-window-'));
+const output = process.argv[2] ? resolve(process.argv[2]) : '/tmp/mock-shots/terra';
+mkdirSync(output, { recursive: true });
 const binary = join(profile, 'unavailable-engine');
 writeFileSync(binary, '#!/bin/sh\nexit 1\n', { mode: 0o700 });
 const env = buildSmokeEnv(process.env, profile, 0, binary);
@@ -63,11 +65,12 @@ try {
       if (!selected.ok) throw Error(`Select ${id}: ${JSON.stringify(selected)}`);
       await sleep(500);
       const shot = await call('Page.captureScreenshot', { format: 'png' });
-      writeFileSync(join(profile, `${theme}${name}.png`), Buffer.from(shot.data, 'base64'));
+      writeFileSync(join(output, `${theme}${name}.png`), Buffer.from(shot.data, 'base64'));
     }
   }
-  console.log(`Screenshots: ${profile}/dark.png ${profile}/light.png`);
+  console.log(`Screenshots: ${output} (dark, light, markdown and web)`);
   console.log('Local HTML preview:', web.ok ? 'opened' : 'unavailable');
+  console.log('Web preview body is not captured: it is a separate WebContentsView; the PNG shows the renderer and preview header only.');
 } finally {
   cdp?.ws?.close();
   if (app.exitCode === null && app.signalCode === null) try { process.kill(-app.pid, 'SIGTERM'); } catch {}
