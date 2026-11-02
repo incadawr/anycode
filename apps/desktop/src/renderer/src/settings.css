@@ -1212,11 +1212,15 @@
 }
 
 .connection-drawer-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0.7rem 0.9rem;
   border-bottom: 1px solid var(--border);
+  background: var(--bg-overlay);
 }
 
 .connection-drawer-title {
