@@ -1176,6 +1176,20 @@ describe("request overhead and model anchors", () => {
 });
 
 describe("reasoning replay context regressions", () => {
+  it("counts reloaded OpenRouter encrypted details toward compaction", () => {
+    const source = { transport: "openai-chat-completions", provider: "OpenRouter", baseUrl: "https://openrouter.ai", model: "test" };
+    const make = (size: number) => {
+      const history = buildHistory([{ role: "assistant", content: [{ type: "reasoning", text: "", source, providerMetadata: { openrouter: { reasoningDetails: [{ type: "reasoning.encrypted", data: "A".repeat(size) }] } } }] }]);
+      const reloaded = new ConversationHistory({ initial: JSON.parse(JSON.stringify(history.items)) });
+      const port: ModelPort = { streamText: () => new ScriptedModelPort([]).streamText({ messages: [], tools: [] }), reasoningReplaySource: () => source };
+      return makeManager(reloaded, port, { contextWindowTokens: 10000, outputReserveTokens: 0, compactThresholdPercent: 50, compactBufferTokens: 0 });
+    };
+    const small = make(100);
+    const large = make(100_000);
+    expect(large.estimate().tokens).toBeGreaterThan(small.estimate().tokens + 20_000);
+    expect(small.shouldAutoCompact()).toBe(false);
+    expect(large.shouldAutoCompact()).toBe(true);
+  });
   const route = { transport: "anthropic-messages", provider: "Z.AI (GLM)", baseUrl: "https://z/", model: "one" };
   const thought = (id: string, text = LONG_TEXT): ChatMessage => ({ role: "assistant", content: [
     { type: "reasoning", text, source: route, providerMetadata: { anthropic: { signature: "sig" } } },
