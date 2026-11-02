@@ -7,6 +7,16 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.63] — 2026-11-02
+
+### Changed
+
+- Settings panels and the provider connection editor use the shared UI kit: one look for buttons, fields, switches, badges and notices across Appearance, Network, Codex, Claude, Roles, Subagents, Skills, MCP servers, Plugins, Language servers, Vision, Profile, Shortcuts, Permissions and Sessions API.
+
+### Fixed
+
+- Keyboard use in settings: radio groups no longer change the selection when focused, segmented controls take one Tab stop and move with the arrow keys, and Escape in a menu inside a dialog closes only the menu.
+
 ## [0.0.62] — 2026-11-01
 
 ### Added
