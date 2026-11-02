@@ -3099,8 +3099,7 @@ async function boot(): Promise<void> {
     // of host that wires a `SessionSubagentPort` below (lock #2, right after
     // `config` is built) to back it. A child-mode boot keeps the plain
     // default registry (`restrictedAgentInputSchema` — `tier` is a
-    // single-value `"inline"` enum, `provider` is absent from `properties`
-    // entirely): a model talking to a child cannot even DISCOVER the session
+    // single-value `"inline"` enum): a model talking to a child cannot even DISCOVER the session
     // tier exists, let alone reach it — a child structurally cannot spawn its
     // own child session.
     const fsAdapter = new NodeFileSystemAdapter();
@@ -3124,12 +3123,13 @@ async function boot(): Promise<void> {
         ? createDefaultToolRegistry({ agent: { sessionTier: true }, ...(archMapEnabled ? { archMap: true } : {}) })
         : createDefaultToolRegistry(archMapEnabled ? { archMap: true } : undefined);
 
-    registry.register(createListConnectionsTool(() => {
+    const readConnectionTargets = () => {
       const raw = JSON.parse(readFileSync(hostSettingsPathOverride() ?? defaultSettingsPath(), "utf8"));
       const parsed = parseSettings(raw);
       if (parsed.status !== "ok") throw new Error("Invalid settings");
       return listConnectionTargets(parsed.settings, process.env[ENV_CONNECTION_ID] || parsed.settings.provider.activeConnectionId, currentModel);
-    }));
+    };
+    registry.register(createListConnectionsTool(readConnectionTargets));
 
     // adaptive turn budget (ANYCODE_ADAPTIVE_TURN_BUDGET, mirror of
     // `tools.adaptiveTurnBudget`). OFF => no ceiling key, no subagentBudget,
@@ -4419,6 +4419,7 @@ async function boot(): Promise<void> {
             return derived.length > 0 ? [...ext.profiles, ...derived] : ext.profiles;
           },
           env: systemPromptEnv,
+          readConnectionTargets,
           memorySection: ext.memorySection,
           // cheap-model default for inline explore children
           // (ANYCODE_EXPLORE_MODEL). Assigned directly (not conditional-spread):

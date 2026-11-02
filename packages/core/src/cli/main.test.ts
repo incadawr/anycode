@@ -5863,3 +5863,36 @@ it("applies shell-declared effort to a child model on a loopback endpoint", asyn
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 }, 15000);
+
+describe("CLI connection discovery", () => {
+  it("registers the tool and sends its secret-free result to the model", async () => {
+    const requests: ModelRequest[] = [];
+    const port: ModelPort = {
+      streamText(request) {
+        requests.push(request);
+        const first = requests.length === 1;
+        return (async function* () {
+          if (first) {
+            yield { type: "tool_call", toolCall: { id: "list", name: "ListConnections", input: {} } } as ModelStreamEvent;
+            yield { type: "finish", finishReason: "tool_calls", usage: {} } as ModelStreamEvent;
+          } else {
+            yield { type: "finish", finishReason: "stop", usage: {} } as ModelStreamEvent;
+          }
+        })();
+      },
+    };
+    const settingsPath = isolatedSettingsPath();
+    const result = await runCli({
+      argv: ["-p", "list routes"],
+      env: { ANYCODE_API_KEY: "fake-cli-secret", ANYCODE_BASE_URL: "https://fake-user:fake-pass@example.test", ANYCODE_MODEL: "local-model", ANYCODE_DB_PATH: ":memory:", ANYCODE_SETTINGS_PATH: settingsPath },
+      home: dirname(settingsPath), cwd: process.cwd(), input: new PassThrough(), output: new PassThrough(), errorOutput: new PassThrough(), modelPort: port,
+    });
+    expect(result).toBe(0);
+    expect(requests[0]!.tools.map(tool => tool.name)).toContain("ListConnections");
+    expect(requests.length).toBeGreaterThanOrEqual(2);
+    const transcript = JSON.stringify(requests[1]!.messages);
+    expect(transcript).toContain("local-model");
+    expect(transcript).toContain("CLI connection");
+    for (const secret of ["fake-cli-secret", "fake-user", "fake-pass", "example.test"]) expect(transcript).not.toContain(secret);
+  });
+});

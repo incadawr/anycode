@@ -9,7 +9,7 @@ export function listConnectionTargets(settings: AnycodeSettings, connectionId?: 
     connections: settings.provider.connections.map(connection => {
       const catalog = getBuiltinCatalog().providers.find(p => p.id === connection.providerId);
       const custom = settings.provider.custom?.find(p => p.id === connection.providerId);
-      const ids = [...new Set([connection.model, ...(connection.models ?? []), ...(custom?.models ?? []), ...(catalog?.models.map(m => m.id) ?? [])].filter((id): id is string => Boolean(id)))];
+      const ids = [...new Set([connection.model, ...(connection.id === connectionId ? [model] : []), ...(connection.models ?? []), ...(custom?.models ?? []), ...(catalog?.models.map(m => m.id) ?? [])].filter((id): id is string => Boolean(id)))];
       return {
         id: connection.id,
         label: connection.label,

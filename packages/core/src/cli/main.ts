@@ -1,3 +1,4 @@
+import { cliConnectionTargets } from "./connection-targets.js";
 /**
  * CLI harness: readline REPL over the agent loop.
  * Wiring (implemented in task 0.2, integrated in 0.6):
@@ -114,6 +115,7 @@ import {
   bashKillTool,
   bashOutputTool,
   createDefaultToolRegistry,
+  createListConnectionsTool,
   createWebSearchTool,
   diagnosticsEditTool,
   diagnosticsWriteTool,
@@ -884,6 +886,8 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
   );
 
   const registry = createDefaultToolRegistry(archMapEnabled ? { archMap: true } : undefined);
+  const readConnectionTargets = () => cliConnectionTargets(envConfig, catalogEntry, providerTransport, currentModel);
+  registry.register(createListConnectionsTool(readConnectionTargets));
 
   // mcpManager.start()/toolNames snapshot below, so the tool name reaches the
 
@@ -1617,6 +1621,7 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
       // fallback to the parent's model.
       {
         profiles: ext.profiles,
+        readConnectionTargets,
         env: systemPromptEnv,
         memorySection: ext.memorySection,
         // cheap-model default for inline explore children

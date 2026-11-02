@@ -23,6 +23,8 @@ import { HeuristicTokenizer } from "../context/tokenizer.js";
 import { InMemoryTodoStore } from "../tools/todo-store.js";
 import { ProfilePermissionEngine } from "../permissions/rules.js";
 import { ToolRegistry, createDefaultToolRegistry } from "../tools/registry.js";
+import { createListConnectionsTool, type ConnectionTargets } from "../tools/list-connections.js";
+import { resolveInlineRoute } from "../routing/inline-route.js";
 import {
   SUBAGENT_WRAPUP_DEGRADED_PREFIX,
   SUBAGENT_WRAPUP_FAILED_NOTICE,
@@ -116,6 +118,7 @@ export interface ResolvedChildModelSettings {
  * built-in (built-in always wins in resolution).
  */
 export interface SubagentRunnerOptions {
+  readConnectionTargets?: () => ConnectionTargets;
   /** One recorder per inline child; called for each completed model request. */
   createUsageRecorder?: (model: string | undefined) => (usage: TokenUsage) => void;
   /**
@@ -280,6 +283,8 @@ export function buildChildConfig(
      * its silent skip in buildPersonaRegistry.
      */
     webSearchTool?: AnyToolDefinition;
+    readConnectionTargets?: () => ConnectionTargets;
+    routeModel?: string;
     /**
      * Capability settings resolved for the CHILD's own model.
      * Present => WHOLESALE replacement of the three parent-derived rows below
@@ -338,6 +343,13 @@ export function buildChildConfig(
   // lock #1: SPAWN_TOOLS = Agent + Workflow are dropped). Built once so its name
   // snapshot drives the child's tool-discipline section AND is the child registry.
   const registry = buildPersonaRegistry(effectivePersona, extras?.webSearchTool);
+  if (extras?.readConnectionTargets && effectivePersona.tools.some(name => ["Read", "Git", "Grep", "Glob", "ListConnections"].includes(name))) {
+    const readTargets = extras.readConnectionTargets;
+    registry.register(createListConnectionsTool(() => {
+      const targets = readTargets();
+      return { ...targets, current: { ...targets.current, model: extras.routeModel ?? targets.current.model } };
+    }));
+  }
   // §2.2, reaffirmed: same precedence as the
   // model-override resolution in run() (request > persona default) — the
   // spawn identity stamped onto every telemetry record this child produces,
@@ -693,6 +705,7 @@ export function createSubagentRunner(
   }
 
   return {
+    supportsInlineProvider: opts?.readConnectionTargets !== undefined,
     listAgentTypes(): string[] {
       // dedupe — an overridable role name (planner/executor/
       // reviewer) can now appear both as a built-in and as a profile; the
@@ -960,7 +973,19 @@ export function createSubagentRunner(
         }
         chainEntries = walkable;
       }
-      let requestedModel: string | undefined = req.model ?? persona.model ?? exploreDefault;
+      let routeModel: string | undefined;
+      if ((req.provider !== undefined || req.model !== undefined) && opts?.readConnectionTargets) {
+        let route;
+        try { route = resolveInlineRoute(opts.readConnectionTargets(), req.provider, req.model); }
+        catch { route = { ok: false as const, detail: "Connection information is unavailable." }; }
+        if (!route.ok) {
+          return { status: "error", finalText: `Agent: ${route.detail}`, truncated: false, turns: 0, toolCalls: 0, durationMs: Date.now() - startedAt };
+        }
+        routeModel = route.model;
+      } else if (req.provider !== undefined) {
+        return { status: "error", finalText: "Agent: provider selection is unavailable in this host.", truncated: false, turns: 0, toolCalls: 0, durationMs: Date.now() - startedAt };
+      }
+      let requestedModel: string | undefined = routeModel ?? req.model ?? persona.model ?? exploreDefault;
       // §3.2 (generalised from the 4131 follow-up): route entries
       // are HOST-CONFIGURED conveniences, not the caller's intent. If resolving
       // a chain entry fails (the id is disallowed/unknown on the ACTIVE
@@ -1074,9 +1099,20 @@ export function createSubagentRunner(
         const rm = childModelPort?.lastResponseModel;
         return typeof rm === "string" && rm.length > 0 ? { responseModel: rm } : {};
       };
+      const explicitModelFailure = (id: string) => {
+        let candidates = "unknown";
+        try {
+          const targets = opts?.readConnectionTargets?.();
+          candidates = targets?.connections.find(connection => connection.id === targets.current.connectionId)?.models.map(model => model.id).join(", ") || "none";
+        } catch { /* Connection details are unavailable. */ }
+        return { status: "error" as const, finalText: `Agent: model ${JSON.stringify(id)} is unavailable; available models: ${candidates}`, truncated: false, turns: 0, toolCalls: 0, durationMs: Date.now() - startedAt };
+      };
       if (requestedModel !== undefined || chainEntries.length > 0) {
         const resolve = opts?.resolveChildModelPort;
         if (resolve === undefined && requestedModel !== undefined) {
+          if ((req.model !== undefined || routeModel !== undefined) && opts?.readConnectionTargets) {
+            return explicitModelFailure(requestedModel);
+          }
           return {
             status: "error",
             finalText:
@@ -1100,7 +1136,7 @@ export function createSubagentRunner(
         // `model:` keeps the honest error — EXCEPT the settings-derived role
         // primary (F4: personaCarriesRoute re-opened the walk for exactly
         // that case, so the primary is the chain head, not an explicit id).
-        const isExplicitId = req.model !== undefined || (persona.model !== undefined && !personaCarriesRoute);
+        const isExplicitId = req.model !== undefined || routeModel !== undefined || (persona.model !== undefined && !personaCarriesRoute);
         if (!isExplicitId && chainEntries.length > 0 && resolve !== undefined) {
           const failures: string[] = [];
           for (const entry of chainEntries) {
@@ -1151,6 +1187,9 @@ export function createSubagentRunner(
           try {
             childModelPort = resolve(requestedModel);
           } catch (error) {
+            if ((req.model !== undefined || routeModel !== undefined) && opts?.readConnectionTargets) {
+              return explicitModelFailure(requestedModel);
+            }
             if (exploreDefault !== undefined && requestedModel === exploreDefault) {
               roleFallbackNotice = `Agent: explore default model "${exploreDefault}" is not available on this connection; ran on the parent's model.`;
               requestedModel = undefined;
@@ -1197,6 +1236,9 @@ export function createSubagentRunner(
               persona.effort,
             );
           } catch (error) {
+            if ((req.model !== undefined || routeModel !== undefined) && opts?.readConnectionTargets) {
+              return explicitModelFailure(requestedModel);
+            }
             if (exploreDefault !== undefined && requestedModel === exploreDefault) {
               roleFallbackNotice = `Agent: explore default model "${exploreDefault}" is not available on this connection; ran on the parent's model.`;
               requestedModel = undefined;
@@ -1344,7 +1386,7 @@ export function createSubagentRunner(
             : parent.modelPort === undefined
               ? undefined
               : subagentScopedModelPort(parent.modelPort);
-        const childConfig = buildChildConfig(parent, persona, req, {
+        const childConfig = buildChildConfig(parent, persona, routeModel !== undefined ? { ...req, model: routeModel } : req, {
           env: opts?.env,
           memorySection: opts?.memorySection,
           // the root loop's human-context thunk when the parent
@@ -1353,6 +1395,8 @@ export function createSubagentRunner(
           // askClassifier at all (parent.askClassifier absent).
           ...(humanUserContext !== undefined ? { humanUserContext } : {}),
           ...(opts?.webSearchTool !== undefined ? { webSearchTool: opts.webSearchTool } : {}),
+          ...(opts?.readConnectionTargets !== undefined ? { readConnectionTargets: opts.readConnectionTargets } : {}),
+          ...(requestedModel !== undefined ? { routeModel: requestedModel } : {}),
           // Wall-clock budget anchored at run() entry, i.e. BEFORE the semaphore
           // wait above: the dispatcher bills the Agent call from the moment the
           // handler was invoked, so time spent queued is time already spent.

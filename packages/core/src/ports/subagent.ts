@@ -44,6 +44,7 @@ export interface SubagentRequest {
    * error-outcome instead of silently falling back to the parent's model.
    */
   model?: string;
+  provider?: string;
 }
 
 /**
@@ -286,6 +287,7 @@ export type EngineProfileInfo = {
 };
 
 export interface SubagentPort {
+  supportsInlineProvider?: boolean;
   run(req: SubagentRequest, opts: SubagentRunOptions): Promise<SubagentOutcome>;
   /**
    * Agent-type names this port can run: built-in personas + md-profiles (slice

@@ -100,8 +100,7 @@ export interface CreateAgentToolOptions {
    * true: the FULL declaration (`agentInputSchema` — `tier`/`provider` reach
    * "session") for the root desktop host, the only concrete
    * SessionSubagentPort implementer (CUT-S2 §2.6.1). false/absent (default):
-   * the RESTRICTED declaration (`restrictedAgentInputSchema` — no `provider`
-   * key, `tier` can only ever be `"inline"`) for CLI, every child session,
+   * the RESTRICTED declaration (`restrictedAgentInputSchema` — `tier` can only ever be `"inline"`) for CLI, every child session,
    * and any other host that never wires a SessionSubagentPort — the schema
    * itself is non-recursion lock #1 of 3 (CUT-S2 §0.2/§5.13): a model talking
    * to a restricted host cannot even DISCOVER the session tier exists.
@@ -154,10 +153,8 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
       const agentType = input.agent_type ?? DEFAULT_AGENT_TYPE;
       const tier = input.tier ?? "inline";
 
-      // provider is session-tier only (design §2.1/CUT-S2 §1 p.2). Checked
-      // BEFORE agent_type/availability so a malformed inline call fails fast
-      // with the precise reason, independent of what ports the host wired.
-      if (input.provider !== undefined && tier !== "session") {
+      // Hosts without inline route discovery can only select providers for session children.
+      if (input.provider !== undefined && tier !== "session" && !ctx.subagents?.supportsInlineProvider) {
         return {
           ok: false,
           errorKind: "invalid_input",
@@ -423,6 +420,7 @@ async function runInlineTier(
         description: input.description,
         prompt: input.prompt,
         ...(input.model !== undefined ? { model: input.model } : {}),
+        ...(input.provider !== undefined ? { provider: input.provider } : {}),
       },
       {
         signal: ctx.abortSignal,
