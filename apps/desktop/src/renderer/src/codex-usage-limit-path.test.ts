@@ -11,6 +11,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@anycode/core";
 import { sanitizeAgentEvent } from "../../host/serialize.js";
+import { TurnTranslator } from "../../host/engines/codex/event-translator.js";
 import { createDesktopStore } from "./store.js";
 import { MessageList } from "./components/MessageList.js";
 import type { CodexContinueController } from "./codex-continue.js";
@@ -66,6 +67,16 @@ describe("Codex usage limit — production path to the banner", () => {
     // sentence saying the feature is gone.
     expect(renderTranscript(store)).toContain("usage-limit-switch-account");
     expect(renderTranscript(store)).not.toContain("temporarily unavailable");
+  });
+
+  it("renders the retry time from a failed Codex turn", () => {
+    const store = createDesktopStore();
+    seedTurn(store);
+    const translator = new TurnTranslator({ threadId: "thread", turnId: "native", turn: 1 });
+    const events = translator.onNotification({ method: "turn/completed", params: { threadId: "thread", turn: { id: "native", status: "failed", error: { message: "You've hit your usage limit. Try again at 1:13 PM.", codexErrorInfo: "usageLimitExceeded" } } } });
+    for (const event of events) store.getState().applyHostMessage({ type: "agent_event", turnId: "t1", event: sanitizeAgentEvent(event, "codex") });
+    expect(renderTranscript(store)).toContain("Try again at 1:13 PM.");
+    expect(renderTranscript(store)).toContain("usage-limit-switch-account");
   });
 
   it("the same failure on another engine stays a plain error block — no Codex remedy is offered", () => {

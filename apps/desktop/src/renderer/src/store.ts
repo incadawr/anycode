@@ -4662,6 +4662,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                     ...(event.retry !== undefined ? { retry: event.retry } : {}),
                   },
             );
+            if (quota && event.error.code === "codex_usage_limit" && /\bTry again at\b/.test(event.error.message)) {
+              appendBlock({ kind: "error", id: `error:${turnId}:${errorSeq}`, error: event.error });
+            }
           }
           errorSeq += 1;
           set({ lastErrorRetry: event.retry ?? null });

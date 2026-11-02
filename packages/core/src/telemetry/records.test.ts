@@ -505,6 +505,9 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
     });
   });
 
+  it("records classified Codex error text", () => {
+    expect(telemetryRecordFor({ type: "error", error: new Error("private"), safe: { code: "codex_usage_limit", message: "Try again at 1:13 PM." } })).toEqual({ t: "error", message: "Try again at 1:13 PM." });
+  });
   it("error (value dropped, presence-only)", () => {
     const event: AgentEvent = { type: "error", error: SENTINEL };
     expect(telemetryRecordFor(event)).toEqual({ t: "error" });
