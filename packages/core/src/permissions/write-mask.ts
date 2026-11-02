@@ -1,6 +1,7 @@
 /** Validate a deliberately scoped absolute write mask. */
 export function isValidWriteMask(pattern: string, home?: string): boolean {
   if (!pattern.startsWith("/") || pattern.includes("~") || /[\\(){}\[\]]/.test(pattern)) return false;
+  pattern = pattern.replace(/^\/System\/Volumes\/Data(?=\/|$)/, "");
   const parts = pattern.split("/");
   if (parts.some((part) => part === "." || part === "..")) return false;
   const firstGlob = parts.findIndex((part) => /[*?]/.test(part));

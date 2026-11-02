@@ -221,6 +221,14 @@ describe("shouldAutoAcceptPatch — always-allow rule fallback", () => {
     ).resolves.toBe(false);
   });
 
+  it("requires every outside target to match a scoped write rule", async () => {
+    const rules = new SessionPermissionRules();
+    rules.add({ toolName: "Write", pattern: `${OTHER}/**` });
+    const change = (path: string) => ({ path, kind: { type: "add" }, diff: "+x" });
+    await expect(shouldAutoAcceptPatch(ctx({ workspaceWritesAllowed: false, rules }), item([change(join(OTHER, "x"))]), null)).resolves.toBe(true);
+    await expect(shouldAutoAcceptPatch(ctx({ workspaceWritesAllowed: false, rules }), item([change(join(OTHER, "x")), change(join(WS, "y"))]), null)).resolves.toBe(false);
+  });
+
   it("a Bash-only rule never vouches for a patch", async () => {
     const rules = new SessionPermissionRules();
     rules.add({ toolName: "Bash" });

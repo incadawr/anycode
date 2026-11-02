@@ -127,20 +127,19 @@ export function ConnectedChildPermissionModal() {
     return true;
   };
 
-  function handleAllow(remember?: { pattern?: string }): void {
+  async function handleAllow(remember?: { pattern?: string }): Promise<void> {
     if (!forwarded || !claim()) return;
-    const answered = respondChildPermission(forwarded, "allow", childStore, (childTabId, message) =>
-      tabRegistry.sendToTab(childTabId, message),
-    remember);
-    if (!answered) {
+    try {
+      if (allowRemember && remember) {
+        const result = await window.anycode.settings.addRule(buildAlwaysAllowRule(forwarded.request.toolName, remember.pattern));
+        if (!result.ok) throw new Error(result.reason);
+      }
+      const answered = respondChildPermission(forwarded, "allow", childStore, (childTabId, message) =>
+        tabRegistry.sendToTab(childTabId, message), remember);
+      if (!answered) submitted.current = null;
+    } catch (error) {
       submitted.current = null;
-      return;
-    }
-    if (allowRemember && remember) {
-      const rule = buildAlwaysAllowRule(forwarded.request.toolName, remember.pattern);
-      void window.anycode.settings.addRule(rule).catch((error: unknown) => {
-        console.warn("[ChildPermissionModal] addRule failed — rule remains session-only", error);
-      });
+      throw error;
     }
   }
 
