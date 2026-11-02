@@ -12,7 +12,7 @@ it("offers named radios, roving focus, selection checkmark and wrapped keyboard 
   function Harness() { return createElement(AccentPicker, {onChange: (a: Accent) => { changed(a); applyAccent(a); }}); }
   const radios = () => [...container.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
   function check(value: string) {
-    expect(radios()).toHaveLength(5); expect(radios().filter(b => b.getAttribute("aria-checked") === "true")).toHaveLength(1);
+    expect(radios()).toHaveLength(6); expect(radios().filter(b => b.getAttribute("aria-checked") === "true")).toHaveLength(1);
     for (const b of radios()) { expect(b.getAttribute("aria-label")).toBeTruthy(); expect(b.tabIndex).toBe(b.dataset.accent === value ? 0 : -1); }
     expect(radios().find(b => b.dataset.accent === value)?.textContent).toContain("✓");
   }
@@ -20,11 +20,11 @@ it("offers named radios, roving focus, selection checkmark and wrapped keyboard 
     await act(async () => root.render(createElement(Harness)));
     expect(container.querySelector('[role="radiogroup"]')?.getAttribute("aria-label")).toBe("Accent color"); check("current");
     radios()[0]!.focus();
-    for (const [key, expected] of [["ArrowLeft","ember"],["ArrowRight","current"],["ArrowDown","gold"],["ArrowUp","current"],["End","ember"],["Home","current"]] as const) {
+    for (const [key, expected] of [["ArrowLeft","ember"],["ArrowRight","current"],["ArrowDown","blue"],["ArrowUp","current"],["End","ember"],["Home","current"]] as const) {
       await act(async () => document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", {key, bubbles:true, cancelable:true})));
       check(expected); expect((document.activeElement as HTMLElement).dataset.accent).toBe(expected); expect(changed).toHaveBeenLastCalledWith(expected);
     }
-    await act(async () => radios()[3]!.click()); expect(changed).toHaveBeenLastCalledWith("teal"); check("teal");
+    await act(async () => radios().find(button => button.dataset.accent === "teal")!.click()); expect(changed).toHaveBeenLastCalledWith("teal"); check("teal");
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
 

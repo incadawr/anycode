@@ -1,6 +1,6 @@
 import { useRef, useSyncExternalStore } from "react";
 import { ACCENTS, nextAccent, readAppliedAccent, subscribeAccent, type Accent } from "../accent.js";
-const labels: Record<Accent, string> = { current: "Blue (default)", gold: "Gold", indigo: "Indigo", teal: "Teal", ember: "Ember" };
+const labels: Record<Accent, string> = { current: "Gold (default)", blue: "Blue", gold: "Gold", indigo: "Indigo", teal: "Teal", ember: "Ember" };
 export function AccentPicker({ onChange }: { onChange: (accent: Accent) => void }): React.JSX.Element {
   const value = useSyncExternalStore(subscribeAccent, readAppliedAccent);
   const buttons = useRef<Partial<Record<Accent, HTMLButtonElement>>>({});
