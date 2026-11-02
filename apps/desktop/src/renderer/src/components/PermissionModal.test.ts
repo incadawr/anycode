@@ -89,6 +89,13 @@ describe("canRememberPermission", () => {
  */
 
 describe("suggestAlwaysAllowPattern", () => {
+  it("keeps workspace writes scoped to the session and suggests outside directories", () => {
+    for (const tool of ["Write", "Edit", "MultiEdit"]) {
+      expect(suggestAlwaysAllowPattern(tool, { file_path: "/ws/project/a.txt" }, "/ws/project/")).toBe("");
+      expect(suggestAlwaysAllowPattern(tool, { file_path: "/ws/project-other/a.txt" }, "/ws/project")).toBe("/ws/project-other/**");
+    }
+  });
+
   it("suggests '<first token> *' for a Bash command", () => {
     expect(suggestAlwaysAllowPattern("Bash", { command: "git status" })).toBe("git *");
     expect(suggestAlwaysAllowPattern("Bash", { command: "npm test" })).toBe("npm *");

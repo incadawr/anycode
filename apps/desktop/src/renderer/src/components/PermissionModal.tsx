@@ -371,6 +371,9 @@ export function suggestAlwaysAllowPattern(toolName: string, input: unknown, work
   if (["Write", "Edit", "MultiEdit"].includes(toolName)) {
     const file = record.file_path;
     if (typeof file !== "string" || !file.startsWith("/")) return "";
+    if (file.split("/").some((part) => part === "." || part === "..")) return "";
+    const root = workspace?.replace(/\/+$/, "") || (workspace === "/" ? "/" : "");
+    if (root && (root === "/" || file === root || file.startsWith(`${root}/`))) return "";
     const directory = file.slice(0, file.lastIndexOf("/"));
     const mask = `${directory}/**`;
     return isValidWriteMask(mask) ? mask : "";
