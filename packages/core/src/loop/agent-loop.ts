@@ -1413,6 +1413,10 @@ export class AgentLoop {
               abortSignal: turnAbort.signal,
             });
             for await (const event of stream) {
+              if (event.type === "reasoning_replay_metadata") {
+                reasoningCapture.observe(event);
+                continue;
+              }
               if (event.type === "error") {
                 const { retry, safe } = buildErrorMetadata(event.error, attemptsMade, maxAttempts, hadModelOutput, replayBlocked);
                 yield { ...event, retry, safe };

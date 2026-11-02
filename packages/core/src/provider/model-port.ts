@@ -1127,7 +1127,8 @@ export class AiSdkModelPort implements ModelPort {
       const reasoningMetadata = new Map<string, Record<string, Record<string, unknown>>>();
       const openRouterDetails: Record<string, unknown>[] = [];
       let openRouterDetailsPresent = false;
-      let openRouterReasoningEnd: Extract<ModelStreamEvent, { type: "reasoning_end" }> | undefined;
+      const openRouterOpen = new Set<string>();
+      let openRouterLastId: string | undefined;
       const captureOpenRouter = reasoningSource?.provider === "OpenRouter" && this.config.transport === "openai-chat-completions";
       let lastWireActivityAt = Number.NEGATIVE_INFINITY;
       const onResponseActivity = this.config.transport === "openai-responses" && policy.stallTimeoutMs > 0
@@ -1229,13 +1230,18 @@ export class AiSdkModelPort implements ModelPort {
           if (reasoningSource !== undefined) collectReasoningMetadata(reasoningMetadata, outcome.value);
           if (captureOpenRouter && collectOpenRouterDetails(openRouterDetails, outcome.value)) openRouterDetailsPresent = true;
           if (captureOpenRouter && outcome.value.type === "finish-step") {
-            const details = openRouterDetails.every((item) => typeof item.index === "number")
-              ? [...openRouterDetails].sort((a, b) => (a.index as number) - (b.index as number))
-              : [...openRouterDetails];
-            if (openRouterReasoningEnd !== undefined || openRouterDetailsPresent) {
-              const end = openRouterReasoningEnd ?? { type: "reasoning_end" as const, id: "openrouter-details" };
-              if (openRouterReasoningEnd === undefined) yield { type: "reasoning_start", id: end.id };
-              yield { ...end, source: reasoningSource, ...(openRouterDetailsPresent ? { providerMetadata: { openrouter: { reasoningDetails: details } } } : {}) };
+            for (const id of openRouterOpen) yield { type: "reasoning_end", id, source: reasoningSource };
+            openRouterOpen.clear();
+            if (openRouterDetailsPresent) {
+              const details = openRouterDetails.every((item) => typeof item.index === "number")
+                ? [...openRouterDetails].sort((a, b) => (a.index as number) - (b.index as number))
+                : [...openRouterDetails];
+              const id = openRouterLastId ?? "openrouter-details";
+              if (openRouterLastId === undefined) {
+                yield { type: "reasoning_start", id };
+                yield { type: "reasoning_end", id, source: reasoningSource };
+              }
+              yield { type: "reasoning_replay_metadata", id, source: reasoningSource!, providerMetadata: { openrouter: { reasoningDetails: details } } };
             }
           }
           let event = translateStreamPart(outcome.value, {
@@ -1246,9 +1252,17 @@ export class AiSdkModelPort implements ModelPort {
           if (event === null) {
             continue;
           }
-          if (event.type === "reasoning_end" && captureOpenRouter) {
-            openRouterReasoningEnd = event;
-            continue;
+          if (captureOpenRouter) {
+            if (event.type === "reasoning_start") {
+              openRouterOpen.add(event.id);
+              openRouterLastId = event.id;
+            } else if (event.type === "reasoning_end") {
+              if (!openRouterOpen.delete(event.id)) continue;
+              event = { ...event, source: reasoningSource };
+            } else if (["text_start", "text_delta", "tool_input_start", "tool_call"].includes(event.type)) {
+              for (const id of openRouterOpen) yield { type: "reasoning_end", id, source: reasoningSource };
+              openRouterOpen.clear();
+            }
           }
           if (event.type === "reasoning_end" && reasoningSource !== undefined) {
             const metadata = reasoningMetadata.get(event.id);
@@ -1280,6 +1294,10 @@ export class AiSdkModelPort implements ModelPort {
               this.onDiagnostic({ kind: "provider_stream_artifact", signature });
             }
             continue;
+          }
+          if (event.type === "error" && captureOpenRouter) {
+            for (const id of openRouterOpen) yield { type: "reasoning_end", id, source: reasoningSource };
+            openRouterOpen.clear();
           }
           if (event.type === "error") event = { ...event, error: contextualizeNetworkFailure(contextualizeMiniMaxBalance(event.error, this.config.providerName, attemptKey), this.config.baseUrl) };
           // this pass IS a probe retry (started by a previous
@@ -1346,6 +1364,8 @@ export class AiSdkModelPort implements ModelPort {
           }
         }
       } catch (rawError) {
+        for (const id of openRouterOpen) yield { type: "reasoning_end", id, source: reasoningSource };
+        openRouterOpen.clear();
         const error = contextualizeNetworkFailure(contextualizeMiniMaxBalance(rawError, this.config.providerName, attemptKey), this.config.baseUrl);
         // mirror of the error-part branch above, for a failure that
         // surfaced as a THROWN exception (e.g. a synchronous validation
@@ -1381,6 +1401,9 @@ export class AiSdkModelPort implements ModelPort {
       } finally {
         disposeLink();
       }
+
+      for (const id of openRouterOpen) yield { type: "reasoning_end", id, source: reasoningSource };
+      openRouterOpen.clear();
 
       // resolve a deferred probe-retry failure OUTSIDE the
       // try/catch above — deliberately, so a rollback's `throw` propagates

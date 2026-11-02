@@ -410,6 +410,39 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("OpenRouter reasoning lifecycle", () => {
+  const config: EndpointConfig = { transport: "openai-chat-completions", baseUrl: "https://openrouter.ai/api/v1", apiKey: "test", model: "test", providerName: "OpenRouter", retry: { maxRetries: 0, stallTimeoutMs: 0 } };
+  const start = (id: string) => part({ type: "reasoning-start", id });
+  const end = (id: string) => part({ type: "reasoning-end", id });
+
+  it.each([part({ type: "text-delta", id: "t", text: "answer" }), part({ type: "tool-input-start", id: "t", toolName: "Read" })])("closes reasoning before answer or tool output", async (next) => {
+    mockStreamText.mockReturnValueOnce(fakeResult([start("r"), next, end("r"), part(finishPart)]));
+    const events = await collect(new AiSdkModelPort(config).streamText(baseRequest));
+    expect(events.map(e => e.type).slice(0, 3)).toEqual(["reasoning_start", "reasoning_end", next.kind === "part" && next.part.type === "text-delta" ? "text_delta" : "tool_input_start"]);
+    expect(events.filter(e => e.type === "reasoning_end")).toHaveLength(1);
+  });
+
+  it("closes a block when the stream throws or aborts", async () => {
+    const controller = new AbortController();
+    mockStreamText.mockReturnValueOnce({ fullStream: (async function* () { yield { type: "reasoning-start", id: "r" }; controller.abort(); throw new Error("aborted"); })() });
+    const events: string[] = [];
+    try { for await (const event of new AiSdkModelPort(config).streamText({ ...baseRequest, abortSignal: controller.signal })) events.push(event.type); } catch { /* abort propagates */ }
+    expect(events).toEqual(["reasoning_start", "reasoning_end"]);
+  });
+
+  it("closes a block before an error event", async () => {
+    mockStreamText.mockReturnValueOnce(fakeResult([start("r"), part({ type: "error", error: new Error("failed") })]));
+    const events = await collect(new AiSdkModelPort(config).streamText(baseRequest));
+    expect(events.map(e => e.type)).toEqual(["reasoning_start", "reasoning_end", "error"]);
+  });
+
+  it("closes every reasoning block", async () => {
+    mockStreamText.mockReturnValueOnce(fakeResult([start("a"), end("a"), start("b"), end("b"), part(finishPart)]));
+    const events = await collect(new AiSdkModelPort(config).streamText(baseRequest));
+    expect(events.filter(e => e.type === "reasoning_end").map(e => e.id)).toEqual(["a", "b"]);
+  });
+});
+
 describe("AiSdkModelPort — happy path", () => {
   // GitHub #2 review follow-up: the generation window opens on the first
   // OUTPUT TOKEN, not on the first stream chunk. A `start-step` (or a raw
