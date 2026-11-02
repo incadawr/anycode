@@ -74,6 +74,7 @@ function rig(over: { env?: string; picked?: string | undefined; script?: string 
   const deps: CommunicationIpcDeps = {
     settingsPath,
     agentProjects,
+    offerEmptyFolderTrust: async (folder) => ({ folder: realpathSync(folder) }),
     realpathSync,
     homedir: () => realpathSync(dir),
     logger: { warn: () => {}, error: () => {} },
@@ -91,6 +92,28 @@ function rig(over: { env?: string; picked?: string | undefined; script?: string 
 }
 
 describe("Sessions API IPC — writes go through the dedicated channel", () => {
+  it("does not enable a different target after the trust offer", async () => {
+    const { deps, agentProjects } = rig();
+    deps.offerEmptyFolderTrust = async () => ({ folder: workspaceA });
+    deps.realpathSync = () => workspaceB;
+    expect(await handleAgentProjectsSet(deps, { workspace: workspaceA, enabled: true })).toEqual({ ok: false, reason: "folder_changed" });
+    expect(agentProjects.isAllowed(workspaceB)).toBe(false);
+  });
+  it("does not enable the project when its folder changes during trust confirmation", async () => {
+    const { deps, agentProjects } = rig();
+    deps.offerEmptyFolderTrust = async () => "folder_changed";
+    expect(await handleAgentProjectsSet(deps, { workspace: workspaceA, enabled: true })).toEqual({ ok: false, reason: "folder_changed" });
+    expect(agentProjects.isAllowed(workspaceA)).toBe(false);
+  });
+  it("offers folder trust when the project switch is enabled", async () => {
+    const { deps } = rig();
+    const offer = vi.fn(async (folder: string) => ({ folder: deps.realpathSync(folder) }));
+    deps.offerEmptyFolderTrust = offer;
+    await handleAgentProjectsSet(deps, { workspace: workspaceA, enabled: true });
+    expect(offer).toHaveBeenCalledWith(workspaceA);
+    await handleAgentProjectsSet(deps, { workspace: workspaceA, enabled: false });
+    expect(offer).toHaveBeenCalledTimes(1);
+  });
   it("get reflects the saved block and reports envControlled false", async () => {
     const { deps } = rig();
     const result = await handleCommunicationGet(deps, {});

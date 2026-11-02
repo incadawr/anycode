@@ -83,6 +83,7 @@ export interface CommunicationIpcDeps {
   /** Synchronous realpath used only to canonicalise the sidebar's workspace identity. */
   realpathSync(path: string): string;
   homedir(): string;
+  offerEmptyFolderTrust(workspace: string): Promise<{ folder: string } | "folder_changed">;
   stat(path: string): Promise<{ isDirectory(): boolean }>;
 }
 
@@ -263,7 +264,19 @@ export async function handleAgentProjectsSet(deps: CommunicationIpcDeps, raw: un
   const parsed = agentProjectSetSchema.safeParse(raw);
   if (!parsed.success || !isAbsolute(parsed.data.workspace)) return { ok: false, reason: "invalid" };
   if (deps.env() !== undefined && deps.env() !== "") return { ok: false, reason: "env_controlled" };
-  if (!deps.agentProjects.setAllowed(parsed.data.workspace, parsed.data.enabled)) return { ok: false, reason: "io_error" };
+  let key = parsed.data.workspace;
+  if (parsed.data.enabled) {
+    try {
+      const result = await deps.offerEmptyFolderTrust(parsed.data.workspace);
+      if (result === "folder_changed" || deps.realpathSync(parsed.data.workspace) !== result.folder || deps.realpathSync(result.folder) !== result.folder) {
+        return { ok: false, reason: "folder_changed" };
+      }
+      key = result.folder;
+    } catch {
+      return { ok: false, reason: "io_error" };
+    }
+  }
+  if (!(parsed.data.enabled ? deps.agentProjects.setAllowedExactKey(key, true) : deps.agentProjects.setAllowed(key, false))) return { ok: false, reason: "io_error" };
   const loaded = await loadSettings(deps.settingsPath, deps.logger);
   return { ok: true, view: await viewOf(deps, blockOf(loaded.settings)) };
 }

@@ -1225,7 +1225,9 @@ describe("Sessions API create_session", () => {
 
   it("create_session: not_trusted when the creator reports an untrusted folder", async () => {
     const f = await createFixture({ creator: async () => ({ ok: false, reason: "not_trusted" }) });
-    expect(errorText(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } }))).toMatch(/^create_session not_trusted/);
+    const error = errorText(await f.client.callTool({ name: "create_session", arguments: { workspace: f.dir } }));
+    expect(error).toMatch(/^create_session not_trusted/);
+    expect(error).toContain("project sidebar menu");
   });
 
   it("create_session: not_ready is mapped to its own code", async () => {

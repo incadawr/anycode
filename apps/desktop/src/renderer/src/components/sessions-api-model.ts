@@ -114,6 +114,7 @@ export function mutationRefusalText(reason: CommunicationMutationReason): string
     case "read_only": return "Settings are read-only (saved by a newer AnyCode).";
     case "invalid": return "That value is not valid.";
     case "io_error": return "The settings could not be saved or the folder could not be read.";
+    case "folder_changed": return "The folder changed while you were confirming trust. Try again.";
     case "env_controlled": return SESSIONS_API_ENV_NOTE + ".";
     case "cancelled": return "";
     case "not_a_directory": return "That path is not a folder.";

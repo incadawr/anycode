@@ -6,8 +6,14 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
+import { realpathSync } from "node:fs";
+import { mkdtemp, mkdir, rm, symlink, unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   handleWorkspaceTrustDecide,
+  offerEmptyFolderTrust,
+  confirmEmptyFolderTrust,
   handleWorkspaceTrustForget,
   handleWorkspaceTrustList,
   workspaceTrustOnceFor,
@@ -96,6 +102,85 @@ function makeDeps(overrides: Partial<WorkspaceTrustIpcDeps> = {}) {
   };
   return { deps, restarts, cleared };
 }
+
+describe("offerEmptyFolderTrust", () => {
+  it("refuses a missing folder without asking or writing trust", async () => {
+    const fs = makeFs();
+    const projectFs = { ...fs, stat: async () => ({ size: 0, mtimeMs: 0, isFile: false, isDirectory: true }), mkdir: async () => {}, readdir: async () => [] };
+    const confirm = vi.fn(async () => true);
+    await expect(offerEmptyFolderTrust(projectFs, fs, WS, HOME, () => { throw new Error("missing"); }, confirm)).rejects.toThrow();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(fs.writes).toEqual([]);
+  });
+
+  it("refuses a link changed during the second probe", async () => {
+    const fs = makeFs();
+    let target = "/a";
+    let probes = 0;
+    const projectFs = { ...fs, stat: async () => ({ size: 0, mtimeMs: 0, isFile: false, isDirectory: true }), mkdir: async () => {}, readdir: async () => [], exists: async (path: string) => {
+      if (path.includes(".mcp.json") && ++probes === 2) target = "/b";
+      return false;
+    } };
+    const result = await offerEmptyFolderTrust(projectFs, fs, "/link", HOME, (p) => p === "/link" ? target : p, async () => true);
+    expect(result).toBe("folder_changed");
+    expect(fs.writes).toEqual([]);
+  });
+
+  it("refuses trust when a symlink changes during confirmation", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "trust-switch-"));
+    try {
+      const a = join(dir, "a"), b = join(dir, "b"), link = join(dir, "link");
+      await mkdir(a);
+      await mkdir(b);
+      await symlink(a, link);
+      const fs = makeFs();
+      const projectFs = { ...fs, stat: async (p: string) => ({ size: 0, mtimeMs: 0, isFile: p !== WS && !p.endsWith("/a") && !p.endsWith("/b"), isDirectory: p === WS || p.endsWith("/a") || p.endsWith("/b") }), mkdir: async () => {}, readdir: async () => [] };
+      let shownFolder = "";
+      const result = await offerEmptyFolderTrust(projectFs, fs, link, HOME, realpathSync, async (shown) => {
+        shownFolder = shown;
+        await unlink(link);
+        await symlink(b, link);
+        return true;
+      });
+      expect(fs.writes).toEqual([]);
+      expect(shownFolder).toBe(realpathSync(a));
+      expect(result).toBe("folder_changed");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+  it("shows a safe-default confirmation with the folder and trust action", async () => {
+    const show = vi.fn(async () => ({ response: 0 }));
+    expect(await confirmEmptyFolderTrust(WS, show)).toBe(true);
+    expect(show).toHaveBeenCalledWith(expect.objectContaining({
+      buttons: ["Trust folder", "Not now"], defaultId: 1, cancelId: 1,
+      detail: expect.stringContaining(WS),
+    }));
+    show.mockResolvedValue({ response: 1 });
+    expect(await confirmEmptyFolderTrust(WS, show)).toBe(false);
+  });
+  it("asks the owner and stores a valid decision only on consent", async () => {
+    const fs = makeFs();
+    const projectFs = { ...fs, stat: async (p: string) => ({ size: 0, mtimeMs: 0, isFile: p !== WS && !p.endsWith("/a") && !p.endsWith("/b"), isDirectory: p === WS || p.endsWith("/a") || p.endsWith("/b") }), mkdir: async () => {}, readdir: async () => [] };
+    const confirm = vi.fn(async () => false);
+    await offerEmptyFolderTrust(projectFs, fs, WS, HOME, (p) => p, confirm);
+    expect(confirm).toHaveBeenCalledWith(WS);
+    expect((await readTrustStore(fs, STORE)).folders).toEqual({});
+    confirm.mockResolvedValue(true);
+    await offerEmptyFolderTrust(projectFs, fs, WS, HOME, (p) => p, confirm);
+    expect((await readTrustStore(fs, STORE)).folders[WS]).toMatchObject({ decision: "trusted", hash: expect.stringMatching(/^[a-f0-9]{64}$/) });
+  });
+
+  it("does not trust if declarations appear during confirmation", async () => {
+    const fs = makeFs();
+    const projectFs = { ...fs, stat: async (p: string) => ({ size: 0, mtimeMs: 0, isFile: p !== WS && !p.endsWith("/a") && !p.endsWith("/b"), isDirectory: p === WS || p.endsWith("/a") || p.endsWith("/b") }), mkdir: async () => {}, readdir: async () => [] };
+    await offerEmptyFolderTrust(projectFs, fs, WS, HOME, (p) => p, async () => {
+      fs.files.set(`${WS}/.mcp.json`, JSON.stringify({ mcpServers: { test: { command: "test" } } }));
+      return true;
+    });
+    expect((await readTrustStore(fs, STORE)).folders).toEqual({});
+  });
+});
 
 describe("handleWorkspaceTrustDecide", () => {
   it("'trust' persists trusted for the tab's own folder and hash, then restarts that tab", async () => {

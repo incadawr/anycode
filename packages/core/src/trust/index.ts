@@ -64,7 +64,7 @@ export interface WorkspaceTrustOptions {
 
 export interface WorkspaceTrustResult {
   state: WorkspaceTrustState;
-  /** Hash of the current project spawn set ("" when there is none). */
+  /** Hash of the current project spawn set, including an empty set. */
   hash: string;
   /** Displayable items the decision applies to (no env/header values). */
   items: ProjectSpawnItem[];
