@@ -6063,3 +6063,23 @@ it("lets the port factory accept explicit models absent from discovery", async (
   expect(result.status).toBe("completed");
   expect(resolve).toHaveBeenCalledWith("child");
 });
+
+it("uses the explicit model for child telemetry and adaptive budget when a provider selects another model", async () => {
+  const telemetry = makeRecordingPort();
+  const budget = makeBudgetPort(64);
+  const child = new ScriptedModelPort(() => textStep("done"));
+  const resolve = vi.fn(() => child);
+  const runner = createSubagentRunner(makeParent({
+    mode: "yolo", ceiling: { adaptive: true }, subagentBudget: budget.port,
+    subagentEventTap: spawn => buildSubagentTelemetryTap(telemetry.port, "session", spawn),
+  }), {
+    readConnectionTargets: () => ({ current: { connectionId: "a", model: "one" }, connections: [{ id: "a", providerId: "provider", readiness: "unknown", models: [{ id: "one", default: true }, { id: "two", default: false }] }] }),
+    resolveChildModelPort: resolve,
+  });
+  const outcome = await runner.run({ ...REQ, provider: "two", model: "one" }, {});
+  expect(outcome.status).toBe("completed");
+  expect(resolve).toHaveBeenCalledWith("one");
+  expect(budget.learnedKeys).toContainEqual({ role: "general-purpose", model: "one" });
+  expect(telemetry.records.length).toBeGreaterThan(0);
+  expect(telemetry.records.every(record => record.sub?.model === "one")).toBe(true);
+});

@@ -1386,7 +1386,7 @@ export function createSubagentRunner(
             : parent.modelPort === undefined
               ? undefined
               : subagentScopedModelPort(parent.modelPort);
-        const childConfig = buildChildConfig(parent, persona, routeModel !== undefined ? { ...req, model: routeModel } : req, {
+        const childConfig = buildChildConfig(parent, persona, requestedModel !== undefined ? { ...req, model: requestedModel } : req, {
           env: opts?.env,
           memorySection: opts?.memorySection,
           // the root loop's human-context thunk when the parent
