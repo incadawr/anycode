@@ -777,6 +777,7 @@ const fetchModelsSchema = z.union([
   z.object({ connectionId: z.string().min(1), addModels: z.array(z.string()).min(1) }).strict(),
   z.object({ id: z.string().min(1) }).strict(),
   z.object({ connectionId: z.string().min(1), preview: z.literal(true).optional() }).strict(),
+  z.object({ draft: z.literal(true), baseUrl: z.string().min(1), apiKey: z.string().optional(), kind: kindSchema.optional(), catalogProviderId: z.string().min(1).optional(), useCatalogModelsUrl: z.boolean().optional(), proxyRef: z.string().min(1).optional() }).strict(),
   z.object({ baseUrl: z.string().min(1), apiKey: z.string().optional(), kind: kindSchema.optional() }).strict(),
 ]);
 
@@ -1047,6 +1048,22 @@ export async function handleCustomProviderFetchModels(deps: ProviderIpcDeps, raw
       return { ok: false, reason: "invalid_request" };
     }
     return fetchModels(resolved);
+  }
+  if ("draft" in parsed.data) {
+    const draft = parsed.data;
+    const catalog = draft.catalogProviderId ? findCatalogEntry(draft.catalogProviderId) : undefined;
+    if (draft.catalogProviderId && (!catalog || catalog.id === "custom")) return { ok: false, reason: "invalid_request" };
+    const baseUrl = catalog ? catalogModelsBaseUrl(draft.baseUrl) : draft.baseUrl;
+    const modelsUrl = draft.useCatalogModelsUrl ? catalog?.modelsUrl : undefined;
+    const targetUrl = modelsUrl ? modelsUrl.replace(/\/+$/, "") : `${baseUrl.replace(/\/+$/, "")}${MODELS_PATH}`;
+    const prepared = await withSettingsFileLock(deps.settingsPath, async () => {
+      const loaded = await loadSettings(deps.settingsPath, deps.logger);
+      const connection: ProviderConnection = { id: randomUUID(), providerId: catalog?.id ?? "custom", ...(draft.proxyRef ? { proxyRef: draft.proxyRef } : {}) };
+      const settings = { ...loaded.settings, provider: { ...loaded.settings.provider, connections: [...loaded.settings.provider.connections, connection] } };
+      return prepareModelFetchContext(settings, connection, deps.vault, targetUrl, deps.systemProxy);
+    });
+    if (!prepared.ok || (prepared.route.kind === "direct" && prepared.route.why === "dangling-ref") || !deps.preparedConnectionFetch) return { ok: false, reason: "network_error" };
+    return fetchModels({ baseUrl, apiKey: draft.apiKey, kind: draft.kind, ...(modelsUrl ? { modelsUrl } : {}), fetchImpl: deps.preparedConnectionFetch(prepared.route) });
   }
   return fetchModels({ baseUrl: parsed.data.baseUrl, apiKey: parsed.data.apiKey, kind: parsed.data.kind });
 }

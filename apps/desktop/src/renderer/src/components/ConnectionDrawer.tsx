@@ -2226,19 +2226,19 @@ export function ConnectionDrawerFields({
       setCreateFetchNotice(null);
       setFetchedModels(null);
     }
-  }, [createdConnectionId, providerId, baseUrl, customBaseUrl, customKind, transport, secretValue]);
+  }, [createdConnectionId, providerId, baseUrl, customBaseUrl, customKind, transport, secretValue, proxyRef]);
 
   async function doFetchModels(): Promise<void> {
     if (createdConnectionId === null) {
       const entry = getBuiltinCatalog().providers.find(item => item.id === providerId);
       const explicitBase = isNewCustomEndpoint ? customBaseUrl.trim() : baseUrl.trim();
       const modelsUrl = !explicitBase ? entry?.modelsUrl : undefined;
-      const requestBase = modelsUrl ? modelsUrl.replace(/\/models\/?$/, "") : explicitBase || selectedEntry?.catalogBaseUrl || "";
+      const requestBase = explicitBase || selectedEntry?.catalogBaseUrl || "";
       const kind = modelsUrl ? "openai-compatible" : (isNewCustomEndpoint ? customKind : (transport || selectedEntry?.defaultTransport) === "anthropic-messages" ? "anthropic" : "openai-compatible");
       const generation = fetchGeneration.current;
       setFetchingModels(true); setError(null); setCreateFetchNotice(null); setFetchedModels(null);
       try {
-        const outcome = await resolvedCustomProvider().fetchModels({ baseUrl: requestBase, apiKey: secretValue, kind });
+        const outcome = await resolvedCustomProvider().fetchModels({ draft: true, baseUrl: requestBase, apiKey: secretValue, kind, ...(!isNewCustomEndpoint ? { catalogProviderId: providerId, useCatalogModelsUrl: !!modelsUrl } : {}), ...connectionCreateProxyRefField(proxyRef) });
         if (generation !== fetchGeneration.current) return;
         if (outcome.ok) {
           setFetchedModels(outcome.models.filter(item => validVisibleModelIds([item.id]).length > 0));

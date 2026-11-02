@@ -670,6 +670,7 @@ it("previews models and reports key and list outcomes in the add form", async ()
     const button = [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Fetch models")!;
     rig.fetchModels.mockResolvedValueOnce({ok:true, models:[{id:"remote"}]});
     await act(async () => button.click());
+    expect(rig.fetchModels).toHaveBeenCalledWith(expect.objectContaining({draft:true, catalogProviderId:"glm", baseUrl:expect.any(String)}));
     expect(container.textContent).toContain("Key accepted. 1 model available.");
     expect(container.querySelector('option[value="remote"]')).not.toBeNull();
     rig.fetchModels.mockResolvedValueOnce({ok:false, reason:"empty_models"});
