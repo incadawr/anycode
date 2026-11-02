@@ -71,10 +71,12 @@ export function toSdkMessages(
       case "assistant": {
         const content = toSdkAssistantContent(message.content, transport, reasoningReplay);
         if (reasoningReplay?.provider === "OpenRouter" && !reasoningReplay.replayFactual) {
-          const details = message.content.flatMap((part) =>
+          const detailsParts = message.content.filter((part) =>
+            part.type === "reasoning" && shouldReplayReasoning(part, transport, reasoningReplay) && Array.isArray(part.providerMetadata?.openrouter?.reasoningDetails));
+          const details = detailsParts.flatMap((part) =>
             part.type === "reasoning" && shouldReplayReasoning(part, transport, reasoningReplay) && Array.isArray(part.providerMetadata?.openrouter?.reasoningDetails)
               ? part.providerMetadata.openrouter.reasoningDetails : []);
-          if (details.length > 0) {
+          if (detailsParts.length > 0) {
             return {
               role: "assistant",
               content: content.filter((part) => part.type !== "reasoning"),
