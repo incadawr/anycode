@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { mkdtemp, mkdir, realpath, rm, symlink } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { NodeFileSystemAdapter } from "../adapters/node/node-file-system.js";
@@ -28,6 +29,8 @@ describe("absolute write masks", () => {
       expect(resolveWriteMask(`/System/Volumes/Data${homedir()}/**`)).toBeUndefined();
       expect(resolveWriteMask("/System/Volumes/Data/private/tmp/**")).toBeUndefined();
       for (const path of ["/System/Volumes", "/System", "/Volumes", "/private", "/private/var"]) {
+        // These directories exist only on macOS; a mask under a missing directory is not an alias of anything.
+        if (!existsSync(path)) continue;
         expect(resolveWriteMask(`${path}/**`), path).toBeUndefined();
         try {
           await symlink(path, join(dir, "container"));
