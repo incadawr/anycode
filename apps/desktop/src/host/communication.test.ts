@@ -209,6 +209,34 @@ describe("public result retrieval", () => {
       expect(wire).toMatchObject({ event: { error: { message: "Try again at 1:13 PM." } } });
     } finally { f.h.close(); }
   });
+  it.each(["codex", "claude"] as const)("preserves a completed %s answer after an error", async (id) => {
+    const f = fixture();
+    Object.defineProperty(f.engine, "id", { value: id });
+    f.engine.runTurn = async function* () {
+      yield* textStep("COMPLETED_ANSWER");
+      yield { type: "error", error: new Error("network"), safe: { code: "network", message: "Network error" } };
+      yield { type: "loop_end", reason: "error", turns: 1 };
+    };
+    try {
+      await f.h.session.receiveAgentMessage(f.make("answer-before-error"));
+      await f.h.waitUntil(() => f.h.session.communicationResult().latestResult !== null);
+      expect(f.h.session.communicationResult().latestResult).toMatchObject({ terminalReason: "error", publicAnswer: "COMPLETED_ANSWER" });
+    } finally { f.h.close(); }
+  });
+
+  it("does not substitute an error for a non-Codex turn without an answer", async () => {
+    const f = fixture();
+    Object.defineProperty(f.engine, "id", { value: "claude" });
+    f.engine.runTurn = async function* () {
+      yield { type: "error", error: new Error("network"), safe: { code: "network", message: "Network error" } };
+      yield { type: "loop_end", reason: "error", turns: 1 };
+    };
+    try {
+      await f.h.session.receiveAgentMessage(f.make("claude-error"));
+      await f.h.waitUntil(() => f.h.session.communicationResult().latestResult !== null);
+      expect(f.h.session.communicationResult().latestResult?.publicAnswer).toBeNull();
+    } finally { f.h.close(); }
+  });
   it("get_session_status and get_session_result report the same state at one moment", async () => {
     const f = fixture();
     f.engine.runTurn = async function* () {
