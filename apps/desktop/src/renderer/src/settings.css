@@ -1846,7 +1846,8 @@
 }
 
 .consent-decline-button,
-.consent-accept-button {
+.consent-accept-button,
+.consent-dialog-actions > button:not([class]) {
   min-height: var(--ctl-h-md);
   padding: 0 var(--sp-3);
   border-radius: var(--ctl-r);
@@ -1854,6 +1855,32 @@
   font-size: var(--fs-sm);
   font-weight: var(--w-medium);
   cursor: pointer;
+}
+
+.consent-dialog-actions > button:not([class]) {
+  background: var(--bg-control);
+  border-color: var(--border-strong);
+  color: var(--text-2);
+}
+
+.consent-dialog-actions > button:not([class]):hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.consent-dialog-actions > button:not([class]):last-child {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--on-accent);
+}
+
+.consent-dialog-actions > button:not([class]):last-child:hover {
+  background: var(--accent-hover);
+}
+
+.consent-dialog-actions > button:not([class]):focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
 }
 
 .consent-decline-button {
