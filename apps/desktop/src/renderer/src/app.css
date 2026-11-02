@@ -860,7 +860,7 @@ body {
   width: 100%;
   padding: var(--sp-2) var(--sp-3);
   background: var(--bg-card);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-control);
   border-radius: var(--r-sm);
   color: var(--text-1);
   font: inherit;
@@ -876,7 +876,7 @@ body {
 
 .sidebar-new-session-icon {
   flex-shrink: 0;
-  color: var(--accent);
+  color: var(--text-2);
 }
 
 .sidebar-new-session-label {
@@ -909,9 +909,10 @@ body {
    right 26px = 4 (--sp-1 button inset) + 16 (12px glyph + 2×2px pad) + 6 (gap). */
 .sidebar-search-input {
   width: 100%;
+  height: var(--ctl-h-md);
   padding: var(--sp-1) 26px var(--sp-1) 28px;
-  background: var(--bg-inset);
-  border: 1px solid var(--border);
+  background: var(--bg-control);
+  border: 1px solid var(--border-control);
   border-radius: var(--r-sm);
   color: var(--text-1);
   font: inherit;
@@ -967,16 +968,14 @@ body {
 }
 
 .sidebar-group {
-  margin-top: var(--sp-3);
+  margin-bottom: var(--sp-1);
 }
 
 .sidebar-group-label {
   margin: 0 0 var(--sp-1);
-  font-size: var(--fs-2xs);
-  font-weight: var(--w-semibold);
-  text-transform: uppercase;
-  letter-spacing: var(--track-label);
-  color: var(--text-3);
+  font-size: var(--fs-xs);
+  font-weight: var(--w-medium);
+  color: var(--text-2);
 }
 
 .sidebar-group-toggle {
@@ -984,7 +983,8 @@ body {
   align-items: center;
   gap: var(--sp-2);
   width: 100%;
-  padding: var(--sp-1) var(--sp-2);
+  height: 28px;
+  padding: 0 6px;
   background: none;
   border: none;
   border-radius: var(--r-xs);
@@ -1082,13 +1082,14 @@ body {
 .sidebar-group-more {
   display: block;
   width: 100%;
-  padding: var(--sp-1) var(--sp-2);
+  height: 26px;
+  padding: 0 6px 0 22px;
   border: none;
   border-radius: var(--r-sm);
   background: none;
   color: var(--text-3);
   font: inherit;
-  font-size: var(--fs-2xs);
+  font-size: var(--fs-xs);
   text-align: left;
   cursor: pointer;
 }
@@ -1108,10 +1109,11 @@ body {
 .sidebar-row {
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
+  gap: 6px;
   flex: 1;
   min-width: 0;
-  padding: var(--sp-2);
+  height: 32px;
+  padding: 0 4px 0 22px;
   background: none;
   border: none;
   border-radius: var(--r-sm);
@@ -1142,7 +1144,7 @@ body {
 }
 
 .sidebar-row-open[aria-current="true"] {
-  box-shadow: inset 2px 0 0 var(--accent);
+  box-shadow: none;
 }
 
 .sidebar-row-open .sidebar-row-title {
@@ -1180,9 +1182,9 @@ body {
 /* The tab-level orchestrate flag: same badge shape as `agent`, accent-tinted
    so it reads as the tab's mode rather than metadata about how it was opened. */
 .session-header-orchestrate {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
-  background: var(--accent-soft);
+  color: var(--text-2);
+  border-color: var(--border);
+  background: var(--neutral-soft);
 }
 
 .sidebar-row-worktree {
