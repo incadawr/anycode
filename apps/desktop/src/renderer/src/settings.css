@@ -3429,3 +3429,20 @@
 }
 .accent-swatch[aria-checked="true"] { box-shadow: 0 0 0 2px var(--bg-overlay), 0 0 0 4px var(--text-1); }
 .accent-swatch:focus-visible { outline-offset: 5px; }
+.accent-swatch { position: relative; }
+.accent-swatch-tooltip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + var(--sp-2));
+  transform: translateX(-50%);
+  z-index: 10;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--bg-overlay);
+  color: var(--text-1);
+  box-shadow: var(--shadow-popup);
+  font: var(--w-normal) var(--fs-xs)/var(--lh-tight) var(--font-ui);
+  white-space: nowrap;
+  pointer-events: none;
+}
