@@ -32,6 +32,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Refreshed the main window with the updated dark and light design palette, sidebar, conversation, composer, and dock.
+
 - Panels that referenced undefined background, border, and radius tokens now use the intended surfaces and corners, slightly changing their appearance.
 
 ## [0.0.61] — 2026-11-01
