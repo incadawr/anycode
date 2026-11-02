@@ -47,7 +47,7 @@
 
 import picomatch from "picomatch";
 import { homedir } from "node:os";
-import { resolveWriteMask } from "./write-mask-node.js";
+import { canonicalWritePath, resolveWriteMask } from "./write-mask-node.js";
 import type {
   PermissionEngine,
   PermissionRequest,
@@ -546,7 +546,8 @@ export class SessionPermissionRules {
       if (rule.toolName !== request.toolName) return false;
       const pattern = rule.pattern ? resolveWriteMask(rule.pattern, homedir()) : undefined;
       if (pattern) {
-        const target = request.workspace?.resolvedPath;
+        const rawTarget = request.workspace?.resolvedPath;
+        const target = typeof rawTarget === "string" && rawTarget.startsWith("/") ? canonicalWritePath(rawTarget) : undefined;
         return typeof target === "string" && target.startsWith("/") && picomatch(pattern, { nonegate: true, noext: true, dot: true })(target);
       }
       return isProvablyInsideWorkspace(request.workspace) && ruleMatches(rule, request.toolName, request.input);

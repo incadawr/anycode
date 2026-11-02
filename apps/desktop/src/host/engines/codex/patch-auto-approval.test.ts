@@ -229,6 +229,13 @@ describe("shouldAutoAcceptPatch — always-allow rule fallback", () => {
     await expect(shouldAutoAcceptPatch(ctx({ workspaceWritesAllowed: false, rules }), item([change(join(OTHER, "x")), change(join(WS, "y"))]), null)).resolves.toBe(false);
   });
 
+  it("matches a missing directory through a temporary path alias", async () => {
+    const rules = new SessionPermissionRules();
+    rules.add({ toolName: "Write", pattern: `${OTHER.replace(/^\/private\/tmp\//, "/tmp/")}/new/**` });
+    const change = { path: join(OTHER, "new", "file"), kind: { type: "add" }, diff: "+x" };
+    await expect(shouldAutoAcceptPatch(ctx({ workspaceWritesAllowed: false, rules }), item([change]), null)).resolves.toBe(true);
+  });
+
   it("a Bash-only rule never vouches for a patch", async () => {
     const rules = new SessionPermissionRules();
     rules.add({ toolName: "Bash" });
