@@ -31,7 +31,7 @@ it("offers a directory mask and explains a blank write rule", async () => {
   HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
   const container = document.createElement("div"); document.body.append(container);
   const root = createRoot(container);
-  const request = { requestId: "1", toolName: "Write", input: { file_path: "/private/tmp/project/a.txt" }, mode: "build", metadata: { name: "Write", description: "", readOnly: false, destructive: false, riskLevel: "medium", sideEffectScope: "process" } } as import("../store.js").PermissionUiRequest;
+  const request = { requestId: "1", workspaceWriteInside: false, toolName: "Write", input: { file_path: "/private/tmp/project/a.txt" }, mode: "build", metadata: { name: "Write", description: "", readOnly: false, destructive: false, riskLevel: "medium", sideEffectScope: "process" } } as import("../store.js").PermissionUiRequest;
   try {
     await act(async () => root.render(createElement(PermissionModal, { request, workspace: "/workspace", onAllow: vi.fn(), onDeny: vi.fn() })));
     await act(async () => container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());

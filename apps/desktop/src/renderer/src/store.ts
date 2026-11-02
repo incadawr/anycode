@@ -686,6 +686,7 @@ export function findOpenCompaction(transcript: readonly TranscriptBlock[]): numb
 }
 
 export interface PermissionUiRequest {
+  workspaceWriteInside?: boolean;
   deadline?: number;
   requestId: string;
   toolName: string;
@@ -5220,6 +5221,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                 input: message.input,
                 mode: message.mode,
                 metadata: message.metadata,
+                workspaceWriteInside: message.workspaceWriteInside,
               },
             });
             return;
@@ -5368,6 +5370,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                       input: message.permission.input,
                       mode: message.permission.mode,
                       metadata: message.permission.metadata,
+                      workspaceWriteInside: message.permission.workspaceWriteInside,
                     },
                   }
                 : {}),
