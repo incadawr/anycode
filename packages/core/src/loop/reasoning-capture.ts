@@ -42,6 +42,7 @@ export class ReasoningCapture {
       case "reasoning_delta":
         this.block(event.id).text += event.text;
         break;
+      case "reasoning_replay_metadata":
       case "reasoning_end": {
         if (event.source === undefined) break;
         if (event.source.transport === "anthropic-messages" && !event.source.replayUnsigned &&
