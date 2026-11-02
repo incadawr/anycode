@@ -70,3 +70,5 @@ export type { ModelClassifierOptions } from "./model-classifier.js";
 // engine-session broker decorator both emit through this).
 export { consultAskClassifier, isPermissionAutoDecidedEvent } from "./ask-classifier-consult.js";
 export type { AskClassifierConsultConfig, AskClassifierConsultation } from "./ask-classifier-consult.js";
+
+export { isValidWriteMask } from "./write-mask.js";

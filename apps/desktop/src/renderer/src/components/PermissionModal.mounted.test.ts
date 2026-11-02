@@ -26,3 +26,21 @@ it("shows a deadline-derived countdown and announces the expiry policy", async (
     vi.useRealTimers();
   }
 });
+
+it("offers a directory mask and explains a blank write rule", async () => {
+  HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  const request = { requestId: "1", toolName: "Write", input: { file_path: "/private/tmp/project/a.txt" }, mode: "build", metadata: { name: "Write", description: "", readOnly: false, destructive: false, riskLevel: "medium", sideEffectScope: "process" } } as import("../store.js").PermissionUiRequest;
+  try {
+    await act(async () => root.render(createElement(PermissionModal, { request, workspace: "/workspace", onAllow: vi.fn(), onDeny: vi.fn() })));
+    await act(async () => container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="Always-allow pattern"]')!;
+    expect(input.value).toBe("/private/tmp/project/**");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(container.textContent).toContain("will not apply outside the session workspace");
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});

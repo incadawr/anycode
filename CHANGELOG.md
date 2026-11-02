@@ -9,6 +9,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Always-allow write rules can use a scoped absolute path mask outside the workspace.
+
 - Model previews for new connections use the provider endpoint and selected proxy, including for loopback endpoints.
 - Folder trust and agent-opened tasks now require an existing directory and stop if a symlink changes its target during confirmation.
 

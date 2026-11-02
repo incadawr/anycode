@@ -201,6 +201,7 @@ export function toWireToolMeta(metadata: ToolMetadata): WireToolMeta {
  */
 export interface PermissionRuleMatcher {
   matches(toolName: string, input: unknown): boolean;
+  matchesRequest?(request: PermissionRequest): boolean;
 }
 
 interface PendingAsk {
@@ -330,19 +331,10 @@ export class IpcPermissionBroker implements PermissionBroker {
    */
   private ruleAllows(request: PermissionRequest): boolean {
     if (this.rules === null) return false;
-    // (cross-review F1): a persisted rule never authorises a
-    // file write the caller could not PROVE lands inside the session
-    // workspace. On a core boot this is already enforced upstream by
-    // RuleAwarePermissionEngine (packages/core rules.ts, dispatcher-minted
-    // facts); on an engine boot (claude/codex, `supportsCorePermissions`
-    // false) this broker is the ONLY gate, so the identical confinement is
-    // applied here: Write/Edit/MultiEdit (and the codex bridge's
-    // CodexApplyPatch — a file write whose only rule shape is the bare
-    // tool-level one) ride a rule only when `request.workspace` proves
-    // containment, facts minted the same way the dispatcher does. Outside or
-    // unprovable => the rule cannot vouch: the ask stands (interactive ->
-    // modal, unattended/no-client -> deny). Never invents a deny — a
-    // non-matching rule was already an ask.
+    // Use the core request matcher for write rules, including resolved path masks.
+    if (WORKSPACE_CONFINED_WRITE_TOOLS.has(request.toolName) && this.rules.matchesRequest) {
+      return this.rules.matchesRequest(request);
+    }
     if (brokerConfinedWriteTool(request.toolName) && !isProvablyInsideWorkspace(request.workspace)) {
       return false;
     }

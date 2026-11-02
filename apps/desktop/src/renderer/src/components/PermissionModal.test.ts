@@ -95,7 +95,7 @@ describe("suggestAlwaysAllowPattern", () => {
   });
 
   it("returns undefined for non-Bash tools — design §5: bare tool-level rule, no pattern field shown", () => {
-    expect(suggestAlwaysAllowPattern("Write", { file_path: "/x" })).toBeUndefined();
+    expect(suggestAlwaysAllowPattern("Write", { file_path: "/x" })).toBe("");
     expect(suggestAlwaysAllowPattern("Read", { file_path: "/x" })).toBeUndefined();
   });
 

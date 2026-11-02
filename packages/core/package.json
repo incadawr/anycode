@@ -8,6 +8,7 @@
   },
   "exports": {
     ".": "./src/index.ts",
+    "./permissions/write-mask": "./src/permissions/write-mask.ts",
     "./permissions/safe-command": "./src/permissions/safe-command.ts",
     "./permissions/bash-risk-plaque": "./src/permissions/bash-risk-plaque.ts",
     "./persistence": "./src/adapters/node/sqlite-persistence.ts",
