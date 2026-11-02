@@ -50,6 +50,8 @@ import { homedir, tmpdir } from "node:os";
 import {
   nodeTrustStoreFs,
   queueStoreMutation,
+  offerEmptyFolderTrust,
+  confirmEmptyFolderTrust,
   registerWorkspaceTrustIpc,
   workspaceTrustOnceFor,
 } from "./workspace-trust-ipc.js";
@@ -3649,6 +3651,12 @@ void app.whenReady().then(async () => {
       sessions: communicationSessions,
       approvals: communicationApprovals,
       agentProjects: communicationAgentProjects,
+      offerEmptyFolderTrust: (workspace) => offerEmptyFolderTrust(
+        new NodeLspConfigFs(), nodeTrustStoreFs, workspace,
+        selfCheckProfile ?? resolveSubagentsHome(process.env, app.isPackaged) ?? homedir(),
+        realpathSync,
+        (folder) => confirmEmptyFolderTrust(folder, (options) => dialog.showMessageBox(win!, options)),
+      ),
       realpathSync,
       homedir: () => homedir(),
       tabs: () => (manager?.listTabs() ?? []).map((tab) => ({ tabId: tab.tabId, sessionId: tab.sessionId })),
