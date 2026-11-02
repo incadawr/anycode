@@ -19,7 +19,7 @@
  * GIT_BARE_ONLY_SUBCOMMANDS, WRITE_CAPABLE_FLAGS) are the shipped "strictest
  * reasonable default": slice 5.2 reads them to seed its OS-sandbox profile and
  * U1-P5 tunes their composition. This module performs zero I/O and depends on
- * the one exported Bash splitter (`splitBashSegments` from `./rules.js`, the
+ * the one exported Bash splitter (`splitBashSegments` from `./command-grammar.js`, the
  * ONE splitter — invariant 2) and no other core types.
  *
  * (`classifyBashCommandLine`, below `classifyBashCommand`): widens
@@ -67,7 +67,7 @@
  *    read-only by nature (not merely "denylist a few flags") before it is trusted.
  */
 
-import { splitBashSegments } from "./rules.js";
+import { splitBashSegments } from "./command-grammar.js";
 
 export type BashCommandClass = "read-only" | "unknown";
 
@@ -541,10 +541,10 @@ export function classifyBashCommandLine(command: string): BashCommandLineClassif
   return { class: "read-only", shellExpression: true };
 }
 
-// the scoped-runner grammar lives once in rules.ts; re-exported here so
+// the scoped-runner grammar lives once in command-grammar.ts; re-exported here so
 // the desktop renderer reaches it through this EXISTING package.json subpath
 // (the exports map is frozen outside's allowed paths). This module
-// already imports splitBashSegments from ./rules.js, so no new dependency edge.
+// already imports splitBashSegments from ./command-grammar.js, so no new dependency edge.
 export {
   SCOPED_PATTERN_PREFIX,
   SCOPED_RUNNER_BINARIES,
@@ -552,5 +552,5 @@ export {
   formatScopedRunnerPattern,
   parseScopedRunnerPattern,
   recognizeScopedRunnerCommand,
-} from "./rules.js";
-export type { ScopedRunnerRule } from "./rules.js";
+} from "./command-grammar.js";
+export type { ScopedRunnerRule } from "./command-grammar.js";
