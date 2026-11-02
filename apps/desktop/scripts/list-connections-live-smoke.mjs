@@ -76,7 +76,7 @@ async function run() {
       [`provider.connection.${glmId}.apiKey`]: { cipher: "plaintext", value: glm.ANYCODE_API_KEY },
       [`provider.connection.${dsId}.apiKey`]: { cipher: "plaintext", value: ds.ANYCODE_API_KEY },
     } }), { mode: 0o600 });
-    const env = { ...process.env, ANYCODE_AUTOMATION: "1", ANYCODE_USER_DATA_DIR: join(profile, "user-data"), ANYCODE_DB_PATH: join(profile, "db.sqlite"), ANYCODE_AUTOMATION_INFO: join(profile, "automation.json"), ANYCODE_SETTINGS_PATH: join(profile, "settings.json"), ANYCODE_SECRETS_PATH: join(profile, "secrets.json"), ANYCODE_WORKSPACE: workspace };
+    const env = { ...process.env, ANYCODE_AUTOMATION: "1", ANYCODE_USER_DATA_DIR: join(profile, "user-data"), ANYCODE_DB_PATH: join(profile, "db.sqlite"), ANYCODE_AUTOMATION_INFO: join(profile, "automation.json"), ANYCODE_SETTINGS_PATH: join(profile, "settings.json"), ANYCODE_SECRETS_PATH: join(profile, "secrets.json"), ANYCODE_WORKSPACE: workspace, ANYCODE_TELEMETRY_DIR: join(profile, "telemetry"), ANYCODE_SUBAGENTS_HOME: profile, ANYCODE_PROFILE_HOME: profile, ANYCODE_CODEX_PROFILES_HOME: profile, ANYCODE_MCP_IMPORT_HOME: profile, ANYCODE_SKILLS_IMPORT_HOME: profile, CODEX_HOME: join(profile, "codex-home"), CLAUDE_CONFIG_DIR: join(profile, "claude-home") };
     for (const key of ["ANYCODE_API_KEY", "ANYCODE_BASE_URL", "ANYCODE_MODEL", "ANYCODE_REASONING_EFFORT", "ANYCODE_AUTOMATION_PORT"]) delete env[key];
     if (port) env.ANYCODE_AUTOMATION_PORT = port;
     const started = Date.now();
@@ -97,7 +97,7 @@ async function run() {
   check(wait.matched, "parent tab not ready");
   pass("isolated profile booted with GLM active and DeepSeek configured");
   step = 2;
-  const prompt = `Call ListConnections first. From its result find the connection labelled "${label}". Then call Agent with tier "session", connection set to that returned connection's id, agent_type "general-purpose", a short description, and a prompt asking the child to reply DONE without tools. Make both real tool calls.`;
+  const prompt = `Call ListConnections first. From its result find the connection labelled "${label}". Then call Agent with tier "session", provider set to that returned connection's id, agent_type "general-purpose", a short description, and a prompt asking the child to reply DONE without tools. Make both real tool calls.`;
   let snapshot;
   for (let attempt = 0; attempt < 2; attempt++) {
     const sent = await request("POST", `/tabs/${tabId}/prompt`, { text: attempt ? `Retry now: ${prompt}` : prompt });
@@ -107,10 +107,8 @@ async function run() {
       const blocks = s.snapshot?.states?.[tabId]?.transcript ?? [];
       const list = blocks.find(b => b.kind === "tool_call" && b.toolName === "ListConnections" && b.modelText !== null);
       const agents = blocks.filter(b => b.kind === "tool_call" && b.toolName === "Agent");
-      const agent = agents.length === 1 && agents[0].input?.tier === "session" && agents[0].input?.connection === dsId ? agents[0] : null;
-      const parent = s.tabs?.find(t => t.tabId === tabId);
-      const runs = s.childRuns?.filter(r => r.parentSessionId === parent?.sessionId) ?? [];
-      return list && agent && blocks.indexOf(list) < blocks.indexOf(agent) && runs.length === 1 && typeof runs[0].pid === "number" ? { s, list, agent, entry: runs[0] } : null;
+      const agent = agents.length === 1 && agents[0].input?.tier === "session" && agents[0].input?.provider === dsId ? agents[0] : null;
+      return list && agent && blocks.indexOf(list) < blocks.indexOf(agent) ? { s, list, agent } : null;
     }, attempt ? 90000 : 60000);
     if (snapshot) break;
     if (!attempt) { try { await request("POST", `/tabs/${tabId}/stop`, {}); await request("POST", "/wait", { tabId, until: { turnStatus: "idle" }, timeoutMs: 30000 }); } catch {} }
@@ -127,11 +125,11 @@ async function run() {
   check(data.connections.some(c => c.id === glmId && c.providerId === "z-ai") && data.connections.some(c => c.id === dsId && c.providerId === "deepseek" && c.label === label), "ListConnections result lacks seeded connections");
   pass("tool result lists both connections without keys, URLs, or secret fields");
   step = 4;
-  const entry = snapshot.entry;
   const parent = snapshot.s.tabs?.find(t => t.tabId === tabId);
-  check(entry && parent && typeof entry.pid === "number" && typeof parent.pid === "number" && entry.pid !== parent.pid && entry.parentSessionId === parent.sessionId, "child process was not admitted under the parent");
-  const row = await poll(async () => { const result = await request("GET", "/child-runs"); check(result.ok, "child-runs unavailable"); return result.sessions?.find(s => s.id === entry.childSessionId); }, 30000);
-  check(row && row.connectionId === dsId && row.connectionId !== glmId && row.parentSessionId === entry.parentSessionId, "persisted child row does not carry the DeepSeek route");
-  pass("distinct child process started and its persisted row carries the DeepSeek connection id");
+  const childId = /child session ([0-9a-f-]{36})/i.exec(snapshot.agent.modelText ?? "")?.[1];
+  check(parent && childId, "Agent result did not report a child session under the parent");
+  const row = await poll(async () => { const result = await request("GET", "/child-runs"); check(result.ok, "child-runs unavailable"); return result.sessions?.find(s => s.id === childId); }, 30000);
+  check(row && row.connectionId === dsId && row.connectionId !== glmId && row.parentSessionId === parent.sessionId, "persisted child row does not carry the DeepSeek route");
+  pass("child session started and its persisted row carries the DeepSeek connection id");
 }
 try { await run(); } catch (err) { console.error(`[step ${step}] FAIL ${err.message}`); process.exitCode = 1; } finally { await teardown(); }
