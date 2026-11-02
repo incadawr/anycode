@@ -9,6 +9,44 @@ import { formatTurnStepSummary, formatUsageCostLedger, ctxPopoverAnchorFromRect,
 
 const chrome = process.env.CHROME_BIN ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
+describe("main window controls", () => {
+  it.skipIf(!existsSync(chrome))("keeps composer controls usable and workflow states distinct in both themes", () => {
+    const cssRoot = resolve(import.meta.dirname, "..");
+    const css = ["tokens.css", "app.css", "tool-cards.css", "ui/ui.css"].map(file => readFileSync(resolve(cssRoot, file), "utf8")).join("\n");
+    const directory = mkdtempSync(resolve(tmpdir(), "anycode-control-layout-"));
+    try {
+      const file = resolve(directory, "fixture.html");
+      writeFileSync(file, `<!doctype html><html data-theme="dark"><style>${css}</style><body>
+        <div class="composer-footer"><button class="mode-chip mode-chip-build">Build</button><button class="model-pill-chip">Model</button><button class="composer-attach">+</button></div>
+        <div class="workflow-ticks" style="width:30px;max-width:none"><span class="workflow-tick substatus-running"></span>${'<span class="workflow-tick substatus-queued"></span>'.repeat(8)}</div>
+        <span class="ak-chip--selected">Selected</span><pre id="result"></pre>
+        <script>
+          const read = () => {
+            const style = selector => getComputedStyle(document.querySelector(selector));
+            const controls = ['.mode-chip', '.model-pill-chip', '.composer-attach'].map(selector => { const s=style(selector); return {height:s.height, background:s.backgroundColor, border:s.borderTopColor}; });
+            return {controls, controlBg:style('html').getPropertyValue('--bg-control').trim(), running:style('.substatus-running').borderRadius, queued:style('.substatus-queued').borderRadius, runningWidth:document.querySelector('.substatus-running').getBoundingClientRect().width, queuedWidth:document.querySelector('.substatus-queued').getBoundingClientRect().width, text:style('.ak-chip--selected').color, text1:style('html').getPropertyValue('--text-1').trim()};
+          };
+          const dark=read(); document.documentElement.dataset.theme='light'; const light=read(); document.querySelector('#result').textContent=JSON.stringify({dark,light});
+        </script></body></html>`);
+      const run = spawnSync(chrome, ["--headless", "--no-sandbox", "--disable-gpu", "--disable-background-networking", "--no-first-run", `--user-data-dir=${directory}/profile`, "--dump-dom", `file://${file}`], {encoding:"utf8", timeout:30_000});
+      expect(run.status, run.stderr).toBe(0);
+      const match = run.stdout.match(/<pre id="result">([^<]+)<\/pre>/);
+      expect(match).not.toBeNull();
+      const result = JSON.parse(match![1]!) as Record<string, {controls:Array<{height:string; background:string; border:string}>; running:string; queued:string; runningWidth:number; queuedWidth:number; text:string}>;
+      for (const state of Object.values(result)) {
+        expect(state.controls.map(control => control.height)).toEqual(["28px", "28px", "28px"]);
+        expect(new Set(state.controls.map(control => control.background)).size).toBe(1);
+        expect(new Set(state.controls.map(control => control.border)).size).toBe(1);
+        expect(state.running).not.toBe(state.queued);
+        expect(state.queuedWidth).toBe(2);
+        expect(state.runningWidth).toBeGreaterThanOrEqual(6);
+      }
+      expect(result.dark!.text).toBe("rgb(236, 233, 227)");
+      expect(result.light!.text).toBe("rgb(28, 26, 23)");
+    } finally { rmSync(directory, {recursive:true, force:true}); }
+  }, 60_000);
+});
+
 describe("cost popover layout", () => {
   it.skipIf(!existsSync(chrome))("renders every cost row without clipping at 280px", () => {
     const step = { turnId: "turn", step: 1, createdAt: 1, finishReason: "stop", transportRetries: 0 };
@@ -230,7 +268,7 @@ describe("cost popover layout", () => {
   }, 60_000);
 
   it.skipIf(!existsSync(chrome))("tints the usage bar warning / danger near the limit", () => {
-    // The fill is the accent by default; at ≥80% / ≥95% the popover carries
+    // The fill is neutral by default; at ≥80% / ≥95% the popover carries
     // the same warning/danger class as its trigger and the fill must resolve
     // `currentColor` to that tint. The rule lives in app.css, so a comment
     // above it that the parser does not treat as a comment silently drops it
@@ -247,7 +285,7 @@ describe("cost popover layout", () => {
         ${popover("", 20)}
         ${popover(" composer-ctx-meter-warning", 85)}
         ${popover(" composer-ctx-meter-danger", 97)}
-        <div id="accent" style="background: var(--accent)"></div>
+        <div id="accent" style="background: var(--text-2)"></div>
         <pre id="result"></pre><script>
           const read = pop => ({ color: getComputedStyle(pop).color, fill: getComputedStyle(pop.querySelector('.ctx-popover-bar-fill')).backgroundColor });
           document.querySelector('#result').textContent = JSON.stringify({
@@ -263,7 +301,7 @@ describe("cost popover layout", () => {
       const [normal, warning, danger] = result.cases;
       // The tokens resolve in a themed document: the accent is a real colour.
       expect(result.accent).toMatch(/^rgb\(/);
-      // Below the limit the fill is the accent, not the inherited text colour.
+      // Below the limit the fill is neutral, not the inherited text colour.
       expect(normal!.fill).toBe(result.accent);
       expect(normal!.color).not.toBe(result.accent);
       // At the limit it is the popover's own colour (currentColor), not the accent.

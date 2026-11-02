@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { ACCENTS, ACCENT_KEY, parseAccent, accentAttrValue, readAccent, applyAccent, subscribeAccent, nextAccent, bindAccentStorageSync } from "./accent.js";
+import { ACCENTS, VISIBLE_ACCENTS, ACCENT_KEY, parseAccent, accentAttrValue, readAccent, applyAccent, subscribeAccent, nextAccent, bindAccentStorageSync } from "./accent.js";
 afterEach(() => vi.unstubAllGlobals());
 it("parses stored accents and derives the root attribute", () => {
   for (const a of ACCENTS) { expect(parseAccent(a)).toBe(a); expect(accentAttrValue(a)).toBe(a === "current" ? null : a); }
@@ -8,6 +8,7 @@ it("parses stored accents and derives the root attribute", () => {
 it("reads storage safely and applies without a DOM", () => {
   expect(readAccent()).toBe("current"); expect(() => applyAccent("gold")).not.toThrow();
   vi.stubGlobal("localStorage", { getItem: () => "gold" }); expect(readAccent()).toBe("gold");
+  vi.stubGlobal("localStorage", { getItem: () => "blue" }); expect(readAccent()).toBe("blue");
   vi.stubGlobal("localStorage", { getItem: () => { throw Error(); } }); expect(readAccent()).toBe("current");
 });
 it("stamps, removes and notifies with unsubscribe", () => {
@@ -18,12 +19,14 @@ it("stamps, removes and notifies with unsubscribe", () => {
   off(); applyAccent("gold"); expect(cb).toHaveBeenCalledTimes(2);
 });
 it("navigates every option in both directions with wrapping and endpoints", () => {
-  ACCENTS.forEach((a, i) => {
-    for (const key of ["ArrowRight", "ArrowDown"]) expect(nextAccent(a, key)).toBe(ACCENTS[(i + 1) % 5]);
-    for (const key of ["ArrowLeft", "ArrowUp"]) expect(nextAccent(a, key)).toBe(ACCENTS[(i + 4) % 5]);
+  VISIBLE_ACCENTS.forEach((a, i) => {
+    for (const key of ["ArrowRight", "ArrowDown"]) expect(nextAccent(a, key)).toBe(VISIBLE_ACCENTS[(i + 1) % VISIBLE_ACCENTS.length]);
+    for (const key of ["ArrowLeft", "ArrowUp"]) expect(nextAccent(a, key)).toBe(VISIBLE_ACCENTS[(i + VISIBLE_ACCENTS.length - 1) % VISIBLE_ACCENTS.length]);
     expect(nextAccent(a, "Home")).toBe("current"); expect(nextAccent(a, "End")).toBe("ember");
     for (const key of ["Tab", "Enter", " ", "Escape"]) expect(nextAccent(a, key)).toBeNull();
   });
+  expect(nextAccent("gold", "ArrowRight")).toBe("blue");
+  expect(nextAccent("gold", "ArrowLeft")).toBe("ember");
 });
 it("syncs only accent storage events and removes its listener", () => {
   const addEventListener = vi.fn(), removeEventListener = vi.fn(), setAttribute = vi.fn(), removeAttribute = vi.fn();

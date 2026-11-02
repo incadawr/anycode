@@ -18,13 +18,15 @@ it("offers named radios, roving focus, selection checkmark and wrapped keyboard 
   }
   try {
     await act(async () => root.render(createElement(Harness)));
-    expect(container.querySelector('[role="radiogroup"]')?.getAttribute("aria-label")).toBe("Accent color"); check("current");
+    expect(container.querySelector('[role="radiogroup"]')?.getAttribute("aria-label")).toBe("Accent color");
+    expect(radios().map(button => button.getAttribute("aria-label"))).toEqual(["Gold (default)", "Blue", "Indigo", "Teal", "Ember"]);
+    check("current");
     radios()[0]!.focus();
-    for (const [key, expected] of [["ArrowLeft","ember"],["ArrowRight","current"],["ArrowDown","gold"],["ArrowUp","current"],["End","ember"],["Home","current"]] as const) {
+    for (const [key, expected] of [["ArrowLeft","ember"],["ArrowRight","current"],["ArrowDown","blue"],["ArrowUp","current"],["End","ember"],["Home","current"]] as const) {
       await act(async () => document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", {key, bubbles:true, cancelable:true})));
       check(expected); expect((document.activeElement as HTMLElement).dataset.accent).toBe(expected); expect(changed).toHaveBeenLastCalledWith(expected);
     }
-    await act(async () => radios()[3]!.click()); expect(changed).toHaveBeenLastCalledWith("teal"); check("teal");
+    await act(async () => radios().find(button => button.dataset.accent === "teal")!.click()); expect(changed).toHaveBeenLastCalledWith("teal"); check("teal");
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
 
@@ -43,9 +45,33 @@ it("follows external applyAccent and storage sync while mounted", async () => {
   try {
     await act(async () => root.render(createElement(AccentPicker, { onChange })));
     check("current");
-    await act(async () => applyAccent("gold")); check("gold");
+    await act(async () => applyAccent("gold")); check("current");
+    expect(document.documentElement.getAttribute("data-accent")).toBe("gold");
+    await act(async () => window.dispatchEvent(new StorageEvent("storage", { key: ACCENT_KEY, newValue: "blue" }))); check("blue");
+    await act(async () => window.dispatchEvent(new StorageEvent("storage", { key: ACCENT_KEY, newValue: "gold" }))); check("current");
+    expect(document.documentElement.getAttribute("data-accent")).toBe("gold");
     await act(async () => window.dispatchEvent(new StorageEvent("storage", { key: ACCENT_KEY, newValue: "teal" }))); check("teal");
     await act(async () => applyAccent("current")); check("current");
     expect(onChange).not.toHaveBeenCalled();
   } finally { unbind(); await act(async () => root.unmount()); container.remove(); applyAccent("current"); }
+});
+
+it("shows the colour name immediately on hover and keyboard focus", async () => {
+  applyAccent("current");
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(AccentPicker, {onChange: () => {}})));
+    const blue = container.querySelector<HTMLButtonElement>('[data-accent="blue"]')!;
+    expect(blue.getAttribute("aria-label")).toBe("Blue");
+    expect(blue.querySelector(".accent-swatch-tooltip")).toBeNull();
+    await act(async () => blue.dispatchEvent(new MouseEvent("mouseover", {bubbles: true})));
+    expect(blue.querySelector(".accent-swatch-tooltip")?.textContent).toBe("Blue");
+    await act(async () => blue.dispatchEvent(new MouseEvent("mouseout", {bubbles: true})));
+    expect(blue.querySelector(".accent-swatch-tooltip")).toBeNull();
+    await act(async () => blue.focus());
+    expect(blue.querySelector(".accent-swatch-tooltip")?.textContent).toBe("Blue");
+    await act(async () => blue.blur());
+    expect(blue.querySelector(".accent-swatch-tooltip")).toBeNull();
+  } finally { await act(async () => root.unmount()); container.remove(); }
 });

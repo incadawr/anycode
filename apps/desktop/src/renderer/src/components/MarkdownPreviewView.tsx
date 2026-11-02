@@ -32,18 +32,7 @@
  * labels and the transfer copy and has no probe keyed on any of them, so
  * none needed updating.
  *
- * Owner smoke-test follow-up (mode toggle -> icons): the `Rendered | Source`
- * pair was the last piece of button TEXT left in this row — it is now an
- * icon pair too (`FileIcon`/`Code`), still rendered as one segmented
- * `role="group"` control (`.md-preview-view-mode-toggle`) with the active
- * half carrying `.active` + `aria-pressed`, exactly as the text version did;
- * only the button CONTENT changed, not the "two modes, one grouped control"
- * structure. `title`/`aria-label` on each half carry the word its icon
- * replaces (`mdViewModeLabel`, md-view-state.ts) so the meaning stays
- * reachable on hover and to assistive tech. `automation.ts` has no probe
- * keyed on the "Rendered"/"Source" button text or on
- * `.md-preview-mode-btn`/`.md-preview-view-mode-toggle` (grepped), so
- * nothing there needed updating either.
+ * The Rendered / Source segmented control keeps its existing mode behavior.
  *
  * Owner smoke-test fix: the Rendered branch below runs the doc's source text
  * through `stripLeadingFrontmatter` (md-view-state.ts) before handing it to
@@ -54,7 +43,7 @@
  */
 import { useCallback, useEffect, useMemo, useReducer, type ReactNode } from "react";
 import { Markdown, MdDocContext } from "./Markdown.js";
-import { Code, FileIcon, Folder, Maximize, Refresh, Restore, X } from "./icons.js";
+import { Folder, Maximize, Refresh, Restore, X } from "./icons.js";
 import {
   eventForNavigateResult,
   eventForReadResult,
@@ -181,7 +170,7 @@ export function MarkdownPreviewView({ tabId, previewId, container, sourcePath, d
             aria-label={mdViewModeLabel("rendered")}
             onClick={() => dispatch({ type: "TOGGLE" })}
           >
-            <FileIcon />
+            Rendered
           </button>
           <button
             type="button"
@@ -191,7 +180,7 @@ export function MarkdownPreviewView({ tabId, previewId, container, sourcePath, d
             aria-label={mdViewModeLabel("source")}
             onClick={() => dispatch({ type: "TOGGLE" })}
           >
-            <Code />
+            Source
           </button>
         </div>
         <button type="button" className="md-preview-icon-btn" title="Reload" aria-label="Reload" onClick={reload}>

@@ -3379,7 +3379,7 @@
 .connection-drawer-effort-levels label { position: relative; }
 .connection-drawer-effort-levels input { position: absolute; opacity: 0; }
 .connection-drawer-effort-levels span { display: block; padding: 4px 8px; border-radius: 4px; color: var(--text-2); cursor: pointer; }
-.connection-drawer-effort-levels input:checked + span { background: var(--accent-soft); color: var(--accent); }
+.connection-drawer-effort-levels input:checked + span { background: var(--accent-soft); color: var(--accent-soft-text); }
 .connection-drawer-effort-levels input:focus-visible + span { outline: 2px solid var(--focus-ring); }
 .connection-drawer-advanced-body > .settings-field:not(fieldset) { display: grid; grid-template-columns: minmax(9rem, 11rem) minmax(0, 1fr); align-items: center; gap: 8px 12px; }
 .connection-drawer-advanced-body > fieldset.settings-field { border: 0; padding: 0; margin: 0; }
@@ -3420,7 +3420,7 @@
 .connection-drawer-discard .settings-field-row { justify-content: flex-end; }
 
 /* Device-local accent choices; each swatch inherits its own token overrides. */
-.accent-picker { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-1); }
+.accent-picker { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-1) var(--sp-1) 36px; }
 .accent-swatch {
   display: inline-flex; align-items: center; justify-content: center;
   width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--r-full);
@@ -3429,3 +3429,21 @@
 }
 .accent-swatch[aria-checked="true"] { box-shadow: 0 0 0 2px var(--bg-overlay), 0 0 0 4px var(--text-1); }
 .accent-swatch:focus-visible { outline-offset: 5px; }
+.accent-swatch { position: relative; }
+.accent-swatch-tooltip {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + var(--sp-2));
+  bottom: auto;
+  transform: translateX(-50%);
+  z-index: 10;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--bg-overlay);
+  color: var(--text-1);
+  box-shadow: var(--shadow-popup);
+  font: var(--w-normal) var(--fs-xs)/var(--lh-tight) var(--font-ui);
+  white-space: nowrap;
+  pointer-events: none;
+}

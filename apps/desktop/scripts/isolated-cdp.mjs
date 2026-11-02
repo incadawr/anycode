@@ -63,12 +63,13 @@ export async function connectIsolatedCdp({ profile, env, launcher, wait, openSoc
     pending.delete(message.id); clearTimeout(entry.timer);
     message.error ? entry.reject(new Error("Browser automation command failed")) : entry.resolve(message.result);
   };
-  function call(method, params = {}) {
+  function call(method, params = {}, targetSessionId) {
     const id = ++nextId;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { pending.delete(id); reject(new Error("Browser automation command timed out")); }, 10000);
       pending.set(id, {resolve, reject, timer});
-      ws.send(JSON.stringify({id, method, params, ...(!method.startsWith("Target.") && !method.startsWith("Browser.") && sessionId ? {sessionId} : {})}));
+      const destination = targetSessionId ?? (!method.startsWith("Target.") && !method.startsWith("Browser.") ? sessionId : undefined);
+      ws.send(JSON.stringify({id, method, params, ...(destination ? {sessionId: destination} : {})}));
     });
   }
   try {
