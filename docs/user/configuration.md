@@ -208,8 +208,16 @@ thinking must be established separately before running an experiment.
 
 The summary includes goal, verified facts, decision and constraints, unverified
 hypotheses, and next intended action. Its length is conservatively limited to
-`N` UTF-8 bytes (an upper bound for byte-based tokenizers), so it can be shorter
-than `N` model tokens. Compactor usage is stored with the summary and reported
+`N` UTF-8 bytes (an upper bound for byte-based tokenizers), keeping complete
+field lines only, so it can be shorter than `N` model tokens. The compactor
+receives a separate output budget for its own low-effort reasoning. Empty or
+unusable output is treated as a compactor failure. Compactor usage is stored with the summary and reported
 separately as `reasoningCompactorUsage` on the response's `context_usage` trace
 event; it does not replace the main response's context usage. Compactor failures
-propagate to the caller rather than silently changing the experiment mode.
+preserve the completed response and original reasoning for audit and report
+`reasoningCompactorStatus: failed`. Cancellation also preserves that response,
+reports `cancelled`, and follows normal turn cancellation. In factual mode,
+reasoning without a usable stored summary is omitted from replay, including
+older history and responses whose compaction failed. Unset and `full` always
+replay the original under the existing provider policy, even if a summary is
+stored.

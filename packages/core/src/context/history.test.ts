@@ -236,3 +236,25 @@ describe("messageTokenText with reasoning (GitHub #41)", () => {
     );
   });
 });
+
+it("estimates the current reasoning replay mode instead of the stored summary", () => {
+  const source = { transport: "openai-chat-completions", baseUrl: "http://fake.invalid", model: "fake" };
+  const history = new ConversationHistory({ tokenizer: { count: text => text.length } });
+  const original = { type: "reasoning" as const, text: "original reasoning", source };
+  history.append({ role: "assistant", content: [{
+    ...original,
+    factualSummary: { text: "Goal: fix.", model: "fake", tokenCap: 100, usage: {} },
+  }] });
+  const tokenizer = { count: (text: string) => text.length };
+  expect(history.totalTokenEstimateForRoute(source)).toBe(
+    estimateMessageTokens(tokenizer, { role: "assistant", content: [original] }),
+  );
+  expect(history.totalTokenEstimateForRoute({ ...source, replayFactual: true })).toBe(
+    estimateMessageTokens(tokenizer, { role: "assistant", content: [{ ...original, text: "Goal: fix." }] }),
+  );
+  const unsummarized = new ConversationHistory({ tokenizer });
+  unsummarized.append({ role: "assistant", content: [original] });
+  expect(unsummarized.totalTokenEstimateForRoute({ ...source, replayFactual: true })).toBe(
+    estimateMessageTokens(tokenizer, { role: "assistant", content: [] }),
+  );
+});

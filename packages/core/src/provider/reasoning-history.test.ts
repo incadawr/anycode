@@ -26,7 +26,7 @@ it("retains provider gates in every mode", () => {
   }
 });
 it("summarizes once, keeps the audit original, bounds bytes and records separate usage", async () => {
-  generate.mockResolvedValue({ text: "Goal: fix. Verified facts: none. Unverified: pending.", usage: { inputTokens: 100, outputTokens: 15, totalTokens: 115 } });
+  generate.mockResolvedValue({ text: "Goal: fix.\nVerified facts: none.\nUnverified: pending.", usage: { inputTokens: 100, outputTokens: 15, totalTokens: 115 } });
   const port = new AiSdkModelPort({ ...config, reasoningHistory: "factual_40", reasoningCompactorModel: "compactor" });
   const compacted = await port.compactReasoning(parts);
   expect(await port.compactReasoning(compacted)).toEqual(compacted);
@@ -39,9 +39,9 @@ it("summarizes once, keeps the audit original, bounds bytes and records separate
   expect(Object.isFrozen(first.factualSummary)).toBe(true);
   expect(JSON.stringify(toSdkMessages([{ role: "assistant", content: compacted }], config.transport, reasoningReplaySource({ ...config, reasoningHistory: "full" })))).toContain("original reasoning");
   for (const transport of ["anthropic-messages", "openai-chat-completions"] as const) {
-    const route = { ...source, transport, replayUnsigned: true };
+    const route = { ...source, transport, replayUnsigned: true, replayFactual: true };
     const mapped = toSdkMessages([{ role: "assistant", content: [{ ...first, source: route, providerMetadata: { anthropic: { signature: "original signature" } } }] }], transport, route);
-    expect(JSON.stringify(mapped)).toContain(first.factualSummary!.text);
+    expect(JSON.stringify(mapped)).toContain(JSON.stringify(first.factualSummary!.text));
     expect(JSON.stringify(mapped)).not.toContain("original signature");
     expect(JSON.stringify(mapped)).not.toContain("original reasoning");
   }
@@ -56,4 +56,40 @@ it("uses one immutable summary for all reasoning blocks, including after hydrati
   expect(await port.compactReasoning(hydrated)).toEqual(hydrated);
   expect(generate).toHaveBeenCalledTimes(1);
   expect(compacted.filter(p => p.type === "reasoning").map(p => p.factualSummary?.text).join("").length).toBeLessThanOrEqual(100);
+});
+
+it("unset replay ignores stored summaries byte for byte, while factual omits unsummarized parts", () => {
+  const summarized: AssistantPart[] = parts.map(part => part.type === "reasoning" ? {
+    ...part,
+    factualSummary: { text: "Goal: summary.", tokenCap: 100, model: "fake", usage: {} },
+  } : part);
+  for (const transport of ["anthropic-messages", "openai-chat-completions"] as const) {
+    const route = { ...source, transport, replayUnsigned: true };
+    const original = parts.map(part => part.type === "reasoning" ? { ...part, source: route } : part);
+    const stored = summarized.map(part => part.type === "reasoning" ? { ...part, source: route } : part);
+    const map = (content: AssistantPart[], replay = route) => JSON.stringify(
+      toSdkMessages([{ role: "assistant", content }], transport, replay),
+    );
+    expect(map(stored)).toBe(map(original));
+    expect(map(original, { ...route, replayFactual: true })).not.toContain("original reasoning");
+    expect(map(stored, { ...route, replayFactual: true })).toContain("Goal: summary.");
+  }
+});
+
+it.each(["", "  ", "a".repeat(101)])("rejects unusable summary %j without mutating originals", async text => {
+  generate.mockResolvedValueOnce({ text, usage: { inputTokens: 12, outputTokens: 3 } });
+  const port = new AiSdkModelPort({ ...config, reasoningHistory: "factual_100" });
+  await expect(port.compactReasoning(parts)).rejects.toMatchObject({
+    usage: { inputTokens: 12, outputTokens: 3 },
+  });
+  expect(parts[0]).not.toHaveProperty("factualSummary");
+});
+
+it("retains complete lines and reserves separate reasoning headroom", async () => {
+  generate.mockResolvedValueOnce({ text: "Goal: fix.\n" + "x".repeat(100), usage: {} });
+  const port = new AiSdkModelPort({ ...config, reasoningHistory: "factual_20" });
+  const compacted = await port.compactReasoning(parts);
+  expect(compacted[0]).toMatchObject({ factualSummary: { text: "Goal: fix." } });
+  expect(generate.mock.lastCall![0].maxOutputTokens).toBeGreaterThan(20);
+  expect(generate.mock.lastCall![0].system).toContain("at most 20 tokens");
 });
