@@ -383,6 +383,7 @@
   display: flex;
   flex: 1;
   min-height: 0;                 /* the sidebar-scroll law: without this the pane can't shrink */
+  background: var(--bg-app);
 }
 
 .settings-rail {
@@ -392,6 +393,7 @@
   flex-direction: column;
   min-height: 0;
   border-right: 1px solid var(--border);
+  background: var(--bg-sidebar);
 }
 
 /* Drag band (custom-titlebar law, settings.css:522's `.update-banner`
@@ -465,9 +467,10 @@
 .settings-search-input {
   width: 100%;
   padding: var(--sp-1) var(--sp-2) var(--sp-1) 28px;
-  background: var(--bg-inset);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
+  min-height: var(--ctl-h-md);
+  background: var(--bg-control);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-ctl);
   color: var(--text-1);
   font: inherit;
   font-size: var(--fs-sm);
@@ -550,13 +553,13 @@
 
 /* State attribute drives the style — same idiom as .sidebar-row[aria-current="true"]. */
 .settings-nav-item[aria-selected="true"] {
-  background: var(--bg-active);
-  color: var(--text-1);
+  background: var(--accent-soft);
+  color: var(--accent-soft-text);
   font-weight: var(--w-medium);
 }
 
 .settings-nav-item[aria-selected="true"] svg {
-  color: var(--text-1);
+  color: var(--accent);
 }
 
 .settings-nav-empty {
@@ -616,7 +619,7 @@
   padding: var(--sp-4) var(--sp-5) var(--sp-5);
   display: flex;
   flex-direction: column;
-  gap: 1.25rem;                  /* the old .settings-screen section rhythm, re-homed */
+  gap: var(--sp-5);
 }
 
 .settings-banner-readonly {
@@ -630,7 +633,7 @@
 .settings-section {
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: var(--sp-3);
 }
 
 .settings-section-title {
@@ -684,12 +687,15 @@
 
 .settings-field-input,
 .settings-field-select {
-  background: var(--bg-inset);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  color: var(--text);
-  font-size: var(--fs-md);
-  padding: 0.35rem 0.5rem;
+  min-width: 0;
+  min-height: var(--ctl-h-md);
+  background: var(--bg-control);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-ctl);
+  color: var(--text-1);
+  font: inherit;
+  font-size: var(--fs-sm);
+  padding: var(--sp-1) var(--sp-2);
   flex: 1;
 }
 
@@ -742,19 +748,22 @@
 }
 
 .settings-button {
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  color: var(--text);
+  min-height: var(--ctl-h-md);
+  background: var(--bg-control);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-ctl);
+  color: var(--text-2);
   cursor: pointer;
+  font: inherit;
   font-size: var(--fs-sm);
-  padding: 0.35rem 0.8rem;
+  font-weight: var(--w-medium);
+  padding: var(--sp-1) var(--sp-3);
   white-space: nowrap;
 }
 
 .settings-button:hover:not(:disabled) {
-  border-color: var(--border-strong);
-  background: var(--bg-hover);
+  border-color: var(--text-3);
+  color: var(--text-1);
 }
 
 .settings-button:disabled {
@@ -771,6 +780,7 @@
 .settings-button-primary:hover:not(:disabled) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
+  color: var(--on-accent);
 }
 
 .settings-button-danger {
@@ -780,6 +790,7 @@
 }
 
 .settings-button-danger:hover:not(:disabled) {
+  color: var(--danger);
   background: var(--danger-soft);
   border-color: var(--danger);
 }
@@ -1400,9 +1411,9 @@
   gap: var(--sp-2);
   min-width: 0;
   padding: 0.35rem 0.5rem;
-  background: var(--bg-inset);
+  background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-card);
 }
 
 .settings-mcp-name {
@@ -1503,9 +1514,9 @@
   align-items: center;
   gap: 0.5rem;
   padding: 0.35rem 0.5rem;
-  background: var(--bg-inset);
+  background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-card);
   font-size: var(--fs-sm);
 }
 
@@ -2021,9 +2032,9 @@
   gap: var(--sp-3);
   min-width: 0;
   padding: 0.5rem 0.6rem;
-  background: var(--bg-inset);
+  background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-card);
 }
 
 .mcp-row-main {
