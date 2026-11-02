@@ -515,7 +515,9 @@ async function step9SplitLeg(ctx) {
 
 async function step10Audit(ctx) {
   const evalPage = async (expression) => {
-    const result = await ctx.cdp.call("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
+    const retained = `window.__dockAuditPromise = Promise.resolve(${expression}); window.__dockAuditPromise`;
+    const result = await ctx.cdp.call("Runtime.evaluate", { expression: retained, returnByValue: true, awaitPromise: true });
+    await ctx.cdp.call("Runtime.evaluate", { expression: "delete window.__dockAuditPromise" });
     if (result.exceptionDetails) throw new Error("renderer evaluation failed");
     return result.result.value;
   };
