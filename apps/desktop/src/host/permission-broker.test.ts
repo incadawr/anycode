@@ -6,7 +6,10 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeTool } from "@anycode/core";
+import { writeTool, NodeFileSystemAdapter, resolveWorkspaceWriteFacts } from "@anycode/core";
+import { mkdtemp, mkdir, symlink, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { SessionPermissionRules } from "@anycode/core";
 import type { PermissionRequest } from "@anycode/core";
 import type { HostToUiMessage } from "../shared/protocol.js";
@@ -67,6 +70,32 @@ describe("IpcPermissionBroker matrix", () => {
       expect(req.metadata).toEqual(toWireToolMeta(writeTool.metadata));
     }
     broker.denyAll("cleanup", "shutdown");
+  });
+
+  it("sends resolved workspace containment for aliases and restored approvals", async () => {
+    const base = await mkdtemp(join(tmpdir(), "permission-alias-"));
+    try {
+      const root = join(base, "root");
+      const alias = join(base, "alias");
+      await mkdir(root);
+      await symlink(root, alias, "dir");
+      const fs = new NodeFileSystemAdapter();
+      for (const [target, expected] of [[join(alias, "a.txt"), true], [join(base, "outside.txt"), false]] as const) {
+        const workspace = await resolveWorkspaceWriteFacts(fs, root, target);
+        expect(workspace).toBeDefined();
+        const { broker, emitted } = makeBroker();
+        void broker.requestPermission({ ...request, input: { file_path: target }, workspace });
+        expect(emitted.find((m) => m.type === "permission_request")).toMatchObject({ workspaceWriteInside: expected });
+        expect(broker.approvalState().pending).toMatchObject({ workspaceWriteInside: expected });
+        broker.denyAll("cleanup", "shutdown");
+      }
+      const { broker, emitted } = makeBroker();
+      void broker.requestPermission(request);
+      expect(emitted.find((m) => m.type === "permission_request")).toHaveProperty("workspaceWriteInside", undefined);
+      broker.denyAll("cleanup", "shutdown");
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
   });
 
   it("allow: resolves to allow and settles origin=ui", async () => {

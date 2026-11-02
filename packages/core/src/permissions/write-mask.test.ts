@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { mkdtemp, mkdir, realpath, rm, symlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeFileSystemAdapter } from "../adapters/node/node-file-system.js";
 import { resolveWorkspaceWriteFacts } from "../util/path-containment.js";
@@ -17,6 +17,15 @@ describe("absolute write masks", () => {
       expect(isValidWriteMask(mask, homedir()), mask).toBe(false);
     }
     expect(isValidWriteMask("/private/tmp/project/**", homedir())).toBe(true);
+  });
+
+  it("rejects broad macOS aliases and temporary directories", () => {
+    expect(resolveWriteMask("/etc/**")).toBeUndefined();
+    if (process.platform === "darwin") {
+      for (const path of ["/private/etc", "/private/var", "/var/folders", tmpdir().replace(/\/$/, "")]) {
+        if (existsSync(path)) expect(resolveWriteMask(`${path}/**`), path).toBeUndefined();
+      }
+    }
   });
 
   it("rejects filesystem aliases of broad directories", async () => {
