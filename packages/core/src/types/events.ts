@@ -345,6 +345,7 @@ export type AgentEvent =
       type: "context_usage";
       /** Separately billed reasoning compactor calls for this response. */
       reasoningCompactorUsage?: TokenUsage[];
+      reasoningCompactorStatus?: "failed" | "cancelled";
       estimatedTokens: number;
       budgetTokens: number;
       source: "provider" | "estimate";

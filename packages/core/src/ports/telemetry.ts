@@ -33,7 +33,7 @@
  * trusting the type.
  */
 
-import type { CeilingRefusalReason, FinishReason, LoopEndReason } from "../types/events.js";
+import type { CeilingRefusalReason, FinishReason, LoopEndReason, TokenUsage } from "../types/events.js";
 import type { ToolCallStatus } from "../types/tools.js";
 import type { PermissionMode } from "../types/permissions.js";
 
@@ -57,7 +57,14 @@ export type TelemetryEventRecord =
   | { t: "compaction_start"; trigger: "auto" | "manual" }
   | { t: "compaction_end"; ok: boolean; preTokens?: number; postTokens?: number; durationMs: number }
   | { t: "microcompact"; clearedToolResults: number; savedTokens: number }
-  | { t: "context_usage"; estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" }
+  | {
+      t: "context_usage";
+      estimatedTokens: number;
+      budgetTokens: number;
+      source: "provider" | "estimate";
+      reasoningCompactorUsage?: TokenUsage[];
+      reasoningCompactorStatus?: "failed" | "cancelled";
+    }
   | { t: "subagent_start"; agentType: string; model?: string; engine?: string; route?: string; fallbackReason?: string }
   | {
       t: "subagent_end";

@@ -2765,6 +2765,16 @@ class VisionTelemetryModelPort implements ModelPort {
     private readonly report: (usage: TokenUsage) => void,
   ) {}
 
+  async compactReasoning(
+    ...args: Parameters<NonNullable<ModelPort["compactReasoning"]>>
+  ): ReturnType<NonNullable<ModelPort["compactReasoning"]>> {
+    return this.inner.compactReasoning?.(...args) ?? args[0];
+  }
+
+  reasoningReplaySource(effort?: ModelRequest["reasoningEffort"]) {
+    return this.inner.reasoningReplaySource?.(effort);
+  }
+
   get modelId(): string | undefined {
     return this.inner.modelId;
   }

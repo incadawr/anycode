@@ -7,7 +7,7 @@
  * provider layer only.
  */
 
-import type { ChatMessage, ReasoningSource } from "../types/history.js";
+import type { AssistantPart, ChatMessage, ReasoningSource } from "../types/history.js";
 import type { ModelStreamEvent } from "../types/events.js";
 import type { ToolDeclaration } from "../types/tools.js";
 import type { ReasoningEffort } from "../types/config.js";
@@ -30,7 +30,7 @@ export interface ModelRequest {
 }
 
 export interface ModelPort {
-  compactReasoning?(parts: import("../types/history.js").AssistantPart[], signal?: AbortSignal): Promise<import("../types/history.js").AssistantPart[]>;
+  compactReasoning?(parts: AssistantPart[], signal?: AbortSignal): Promise<AssistantPart[]>;
   streamText(request: ModelRequest): AsyncIterable<ModelStreamEvent>;
   /** Route on which reasoning will be replayed for this effort. */
   reasoningReplaySource?(effort?: ReasoningEffort): ReasoningSource | undefined;

@@ -11,7 +11,7 @@
  * before loop_end.
  */
 
-import type { ChatMessage, HistoryItem, ReasoningSource } from "../types/history.js";
+import type { AssistantPart, ChatMessage, HistoryItem, ReasoningSource } from "../types/history.js";
 import { shouldReplayReasoning } from "../provider/sdk-mapping.js";
 import { IMAGE_TOKEN_ESTIMATE } from "../types/config.js";
 import { HeuristicTokenizer, type Tokenizer } from "./tokenizer.js";
@@ -92,7 +92,15 @@ export class ConversationHistory {
       const parts = item.message.content;
       const first = parts.find((part) => part.type === "reasoning");
       const allow = route?.transport !== "anthropic-messages" || first === undefined || shouldReplayReasoning(first, route.transport, route);
-      const content = parts.filter((part) => part.type !== "reasoning" || (allow && route !== undefined && shouldReplayReasoning(part, route.transport, route)));
+      const content = parts.flatMap((part): AssistantPart[] => {
+        if (part.type !== "reasoning") return [part];
+        if (!allow || route === undefined || !shouldReplayReasoning(part, route.transport, route)) return [];
+        return [{
+          ...part,
+          text: route.replayFactual ? part.factualSummary!.text : part.text,
+          providerMetadata: route.replayFactual ? undefined : part.providerMetadata,
+        }];
+      });
       return total + estimateMessageTokens(this.tokenizer, { role: "assistant", content });
     }, 0);
   }
@@ -143,7 +151,7 @@ export function messageTokenText(message: ChatMessage): string {
       return message.content
         .map((part) => {
           if (part.type === "tool_call") return `${part.toolName} ${safeStringify(part.input)}`;
-          if (part.type === "reasoning") return `${part.factualSummary?.text ?? part.text}${part.factualSummary === undefined ? redactedPayload(part.providerMetadata) : ""}`;
+          if (part.type === "reasoning") return `${part.text}${redactedPayload(part.providerMetadata)}`;
           return part.text;
         })
         .join("\n");
