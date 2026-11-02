@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.66] — 2026-11-03
+
 ### Fixed
 
 - Always-allow write rules can use a scoped absolute path mask outside the workspace. Path aliases and new directories are handled consistently, and broad system and home scopes are rejected.
@@ -23,6 +25,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Dialogs and utility panels use the same visual style as the main window.
 - Settings use the same look as the main window.
+- New always-allow write rules must use an absolute path mask; relative patterns such as `src/**` can no longer be added (existing ones keep working inside the workspace).
 
 ## [0.0.65] — 2026-11-02
 
