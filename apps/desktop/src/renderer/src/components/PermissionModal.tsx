@@ -80,7 +80,7 @@ export interface PermissionModalProps {
   /** The active permission request (store.permission), or null when none is pending — controls the dialog's mount/visibility. */
   request: PermissionUiRequest | null;
   /** Called on the Allow button. `remember` is present iff the "Always allow" checkbox was checked (slice 2.2). Does not close the modal itself — that happens when `request` goes back to null (design: permission_settled clears it). */
-  onAllow(remember?: { pattern?: string }): void;
+  onAllow(remember?: { pattern?: string }): void | Promise<void>;
   /** Called on Deny, the close ("×") button, and Esc (fail-closed). Same non-closing contract as onAllow. */
   onDeny(): void;
   /** External engines can ask once without ever accepting a core remember rule. */
@@ -471,6 +471,10 @@ export function PermissionModal({
   const denyRef = useRef<HTMLButtonElement>(null);
   const [alwaysAllow, setAlwaysAllow] = useState(false);
   const [pattern, setPattern] = useState("");
+  const [home, setHome] = useState<string>();
+  useEffect(() => { void window.anycode?.homeDirectory?.().then(setHome).catch(() => {}); }, []);
+  const [saveError, setSaveError] = useState("");
+  const [saving, setSaving] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (request?.deadline === undefined) return;
@@ -566,10 +570,15 @@ export function PermissionModal({
   const editOldCapped = editOld !== null ? capPreviewLines(editOld, DIFF_SIDE_MAX_LINES) : null;
   const editNewCapped = editNew !== null ? capPreviewLines(editNew, DIFF_SIDE_MAX_LINES) : null;
 
-  const invalidWriteMask = ["Write", "Edit", "MultiEdit"].includes(request.toolName) && pattern.trim() !== "" && !isValidWriteMask(pattern.trim());
+  const invalidWriteMask = ["Write", "Edit", "MultiEdit"].includes(request.toolName) && pattern.trim() !== "" && !isValidWriteMask(pattern.trim(), home);
   function fireAllow(): void {
     if (showRemember && alwaysAllow && invalidWriteMask) return;
-    onAllow(showRemember && alwaysAllow ? { pattern: suggestedPattern !== undefined ? pattern : undefined } : undefined);
+    if (saving) return;
+    setSaveError("");
+    setSaving(true);
+    Promise.resolve().then(() => onAllow(showRemember && alwaysAllow ? { pattern: suggestedPattern !== undefined ? pattern : undefined } : undefined))
+      .catch(() => setSaveError("Could not save the always-allow rule. Check the mask and try again."))
+      .finally(() => setSaving(false));
   }
 
   function handleDialogKeyDown(event: KeyboardEvent<HTMLDialogElement>): void {
@@ -817,6 +826,7 @@ export function PermissionModal({
           {alwaysAllow && ["Write", "Edit", "MultiEdit"].includes(request.toolName) && pattern.trim() === "" && (
             <div className="permission-remember-scope">A rule without an absolute path mask will not apply outside the session workspace.</div>
           )}
+          {saveError && <div role="alert">{saveError}</div>}
           {alwaysAllow && invalidWriteMask && <div role="alert">Enter a narrowly scoped absolute path mask, or leave it blank for workspace-only access.</div>}
           {alwaysAllow && (
             <div className="permission-remember-scope">
@@ -830,7 +840,7 @@ export function PermissionModal({
         <button type="button" ref={denyRef} className="permission-deny-button" onClick={onDeny}>
           {presentation.denyLabel}
         </button>
-        <button type="button" className="permission-allow-button" onClick={fireAllow} disabled={showRemember && alwaysAllow && invalidWriteMask}>
+        <button type="button" className="permission-allow-button" onClick={fireAllow} disabled={saving || (showRemember && alwaysAllow && invalidWriteMask)}>
           {presentation.allowLabel}
           <span className="permission-allow-kbd" aria-hidden="true">
             {platform === "darwin" ? "⌘⏎" : "Ctrl+Enter"}
@@ -894,17 +904,13 @@ export function ConnectedPermissionModal() {
 
   const allowRemember = canRememberPermission(engine);
 
-  function handleAllow(remember?: { pattern?: string }): void {
-    if (!request) {
-      return;
+  async function handleAllow(remember?: { pattern?: string }): Promise<void> {
+    if (!request) return;
+    if (allowRemember && remember) {
+      const result = await window.anycode.settings.addRule(buildAlwaysAllowRule(request.toolName, remember.pattern));
+      if (!result.ok) throw new Error(result.reason);
     }
     sendToHost(buildPermissionAllowMessage(request.requestId, request.toolName, remember));
-    if (allowRemember && remember) {
-      const rule = buildAlwaysAllowRule(request.toolName, remember.pattern);
-      window.anycode.settings.addRule(rule).catch((error: unknown) => {
-        console.warn("[PermissionModal] addRule failed — rule remains session-only", error);
-      });
-    }
   }
 
   return (

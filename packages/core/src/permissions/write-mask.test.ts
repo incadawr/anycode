@@ -7,6 +7,7 @@ import { resolveWorkspaceWriteFacts } from "../util/path-containment.js";
 import { writeTool } from "../tools/index.js";
 import { ModePermissionEngine } from "./engine.js";
 import { RuleAwarePermissionEngine, SessionPermissionRules } from "./rules.js";
+import { resolveWriteMask } from "./write-mask-node.js";
 import { isValidWriteMask } from "./write-mask.js";
 
 describe("absolute write masks", () => {
@@ -15,6 +16,18 @@ describe("absolute write masks", () => {
       expect(isValidWriteMask(mask, homedir()), mask).toBe(false);
     }
     expect(isValidWriteMask("/private/tmp/project/**", homedir())).toBe(true);
+  });
+
+  it("rejects filesystem aliases of broad directories", async () => {
+    const dir = await mkdtemp(join(await realpath("/tmp"), "mask-alias-"));
+    try {
+      await symlink(homedir(), join(dir, "home"));
+      await symlink(await realpath("/tmp"), join(dir, "tmp"));
+      expect(resolveWriteMask(`${dir}/home/**`)).toBeUndefined();
+      expect(resolveWriteMask(`${dir}/tmp/**`)).toBeUndefined();
+      expect(resolveWriteMask(`/System/Volumes/Data${homedir()}/**`)).toBeUndefined();
+      expect(resolveWriteMask("/System/Volumes/Data/private/tmp/**")).toBeUndefined();
+    } finally { await rm(dir, { recursive: true, force: true }); }
   });
 
   it("matches the resolved target within a chosen directory and rejects sibling and symlink escapes", async () => {
@@ -33,6 +46,10 @@ describe("absolute write masks", () => {
         return engine.check(request).decision;
       };
       expect(await check(join(allowed, "new.txt"))).toBe("allow");
+      expect(await check(join(allowed, ".env"))).toBe("allow");
+      rules.add({ toolName: "Edit", pattern: `${allowed.replace(/^\/private\/tmp\//, "/tmp/")}/**` });
+      const aliasRequest = { toolName: "Edit", input: { file_path: join(allowed, "alias.txt") }, metadata: writeTool.metadata, mode: "build" as const, workspace: await resolveWorkspaceWriteFacts(new NodeFileSystemAdapter(), ws, join(allowed, "alias.txt")) };
+      expect(engine.check(aliasRequest).decision).toBe("allow");
       expect(await check(join(sibling, "new.txt"))).toBe("ask");
       expect(await check(join(allowed, "escape", "new.txt"))).toBe("ask");
     } finally { await rm(dir, { recursive: true, force: true }); }

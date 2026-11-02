@@ -5,12 +5,10 @@
  * child in edit/auto/yolo gets `workspace` (acceptEdits) and a core child in
  * edit mode auto-allows contained Write/Edit. This module gives the codex
  * bridge the SAME rules, under the same fail-closed discipline: every target
- * path must be realpath-provably inside the session workspace (the exact
- * facts the core dispatcher mints via `resolveWorkspaceWriteFacts`), the
- * active preset must be workspace-write, every change must be an add/update
- * (the only kinds the parity rule covers — see AUTO_ACCEPTABLE_CHANGE_KINDS),
- * and either the inherited mode pre-authorises workspace writes or an
- * always-allow Edit/Write rule covers every target. Anything it cannot prove
+ * path must have realpath-resolved workspace facts, the active preset must be
+ * workspace-write, every change must be an add/update, and either the
+ * inherited mode pre-authorises the contained write or an always-allow
+ * Edit/Write rule covers the target. Anything it cannot prove
  * with certainty fails closed to a normal ask.
  */
 
@@ -104,11 +102,10 @@ export async function isPathProvablyInsideWorkspace(fs: FileSystemPort, workspac
 
 /**
  * true iff a file-change approval may be accepted without asking, under the
- * SAME rules a core child gets: the patch lands provably inside the session workspace,
- * every change is an add/update (cross-review M1: a delete asks — the parity rule covers
+ * SAME rules a core child gets: every target is resolved, every change is an add/update (cross-review M1: a delete asks — the parity rule covers
  * file edits only, exactly core's Write/Edit-only containment and Claude's acceptEdits),
- * AND (the inherited mode allows workspace writes OR an always-allow Edit/Write rule
- * covers every target). Never for a grantRoot request, never outside a workspace-write
+ * AND each target is covered by the inherited workspace mode or an always-allow
+ * Edit/Write rule. Never for a grantRoot request, never outside a workspace-write
  * preset.
  */
 export async function shouldAutoAcceptPatch(
@@ -129,10 +126,14 @@ export async function shouldAutoAcceptPatch(
     return false;
   }
   for (const target of targets) {
-    if (!(await isPathProvablyInsideWorkspace(ctx.fs, ctx.workspace, target))) return false;
+    const workspace = await resolveWorkspaceWriteFacts(ctx.fs, ctx.workspace, target);
+    if (!workspace) return false;
+    if (ctx.workspaceWritesAllowed && dirname(workspace.root) !== workspace.root && isWithinWorkspace(workspace.resolvedPath, workspace.root)) continue;
+    const rules = ctx.rules;
+    if (!rules?.matchesRequest) return false;
+    const input = { file_path: target };
+    const metadata = { name: "Write", description: "", readOnly: false, destructive: false, concurrentSafe: false, needsApproval: true, timeoutMs: 120000, riskLevel: "medium" as const, sideEffectScope: "filesystem" as const };
+    if (!["Edit", "Write"].some((toolName) => rules.matchesRequest!({ toolName, input, workspace, metadata, mode: "build" }))) return false;
   }
-  if (ctx.workspaceWritesAllowed) return true;
-  const rules = ctx.rules;
-  if (rules === null) return false;
-  return targets.every((t) => rules.matches("Edit", { file_path: t }) || rules.matches("Write", { file_path: t }));
+  return true;
 }
