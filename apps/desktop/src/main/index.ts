@@ -1,3 +1,4 @@
+import { providerProxyConfig } from "./provider-proxy-config.mjs";
 import { resolveCoreConnectionForModel } from "../shared/core-model-connection.js";
 import { initializeIsolatedSmoke, isolatedSmokeStorage } from "./isolated-smoke.js";
 import { closeSessionForAgent } from "./communication-close-session.js";
@@ -1464,7 +1465,7 @@ const fetchForProxyChain = createProxyChainFetch({
   materializationFor: proxyMaterializationFor,
   requestFactory: proxyRequestFactory,
   setProxyFor: (partition, rules) =>
-    session.fromPartition(partition, { cache: false }).setProxy({ mode: "fixed_servers", proxyRules: rules }),
+    session.fromPartition(partition, { cache: false }).setProxy(providerProxyConfig(rules)),
 });
 const connectionProxyFetch = (connectionId: string) => fetchForProxyChain(hostForkProxyChain(connectionId));
 
