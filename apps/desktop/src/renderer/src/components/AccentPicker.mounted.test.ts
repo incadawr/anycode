@@ -49,3 +49,23 @@ it("follows external applyAccent and storage sync while mounted", async () => {
     expect(onChange).not.toHaveBeenCalled();
   } finally { unbind(); await act(async () => root.unmount()); container.remove(); applyAccent("current"); }
 });
+
+it("shows the colour name immediately on hover and keyboard focus", async () => {
+  applyAccent("current");
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(AccentPicker, {onChange: () => {}})));
+    const blue = container.querySelector<HTMLButtonElement>('[data-accent="blue"]')!;
+    expect(blue.getAttribute("aria-label")).toBe("Blue");
+    expect(blue.querySelector(".accent-swatch-tooltip")).toBeNull();
+    await act(async () => blue.dispatchEvent(new MouseEvent("mouseover", {bubbles: true})));
+    expect(blue.querySelector(".accent-swatch-tooltip")?.textContent).toBe("Blue");
+    await act(async () => blue.dispatchEvent(new MouseEvent("mouseout", {bubbles: true})));
+    expect(blue.querySelector(".accent-swatch-tooltip")).toBeNull();
+    await act(async () => blue.focus());
+    expect(blue.querySelector(".accent-swatch-tooltip")?.textContent).toBe("Blue");
+    await act(async () => blue.blur());
+    expect(blue.querySelector(".accent-swatch-tooltip")).toBeNull();
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
