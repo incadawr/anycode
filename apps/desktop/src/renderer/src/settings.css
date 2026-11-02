@@ -3379,7 +3379,7 @@
 .connection-drawer-effort-levels label { position: relative; }
 .connection-drawer-effort-levels input { position: absolute; opacity: 0; }
 .connection-drawer-effort-levels span { display: block; padding: 4px 8px; border-radius: 4px; color: var(--text-2); cursor: pointer; }
-.connection-drawer-effort-levels input:checked + span { background: var(--accent-soft); color: var(--accent); }
+.connection-drawer-effort-levels input:checked + span { background: var(--accent-soft); color: var(--accent-soft-text); }
 .connection-drawer-effort-levels input:focus-visible + span { outline: 2px solid var(--focus-ring); }
 .connection-drawer-advanced-body > .settings-field:not(fieldset) { display: grid; grid-template-columns: minmax(9rem, 11rem) minmax(0, 1fr); align-items: center; gap: 8px 12px; }
 .connection-drawer-advanced-body > fieldset.settings-field { border: 0; padding: 0; margin: 0; }

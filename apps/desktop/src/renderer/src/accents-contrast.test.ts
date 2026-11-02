@@ -58,8 +58,7 @@ for (const theme of ["dark","light"] as const) {
    const base=baseFor(theme), own=declarations(blockFor(theme,key)[0]!.body), t={...base,...own};
    expect([t["--accent"]!,t["--accent-hover"]!,t["--on-accent"]!,...(own["--warning"]!?[own["--warning"]!]:[])]).toEqual(pins[theme][index]);
    const surfaces=["app","sidebar","card","overlay","inset"].map(s=>hex2rgb(base[`--bg-${s}`]!));
-   // The approved light gold soft fill retains the existing reduced soft-fill gate.
-   const legacy=theme==="light"&&(key==="current" || key==="blue");
+   const legacy=theme==="light"&&key==="blue";
    const accent=hex2rgb(t["--accent"]!), hover=hex2rgb(t["--accent-hover"]!), on=hex2rgb(t["--on-accent"]!);
    const soft=rgba(t["--accent-soft"]!), ring=rgba(t["--focus-ring"]!);
    for(const surface of surfaces) {
@@ -68,7 +67,9 @@ for (const theme of ["dark","light"] as const) {
      expect(cr(over(ring.slice(0,3),ring[3],surface),surface)).toBeGreaterThanOrEqual(3);
    }
    expect(cr(on,accent)).toBeGreaterThanOrEqual(4.5); expect(cr(on,hover)).toBeGreaterThanOrEqual(4.5);
-   surfaces.slice(0,4).forEach((surface,i)=>expect(softContrast(accent,soft,surface)).toBeGreaterThanOrEqual(softMinimum(legacy,i)));
+   // Tinted controls use --accent-soft-text (an alias of --text-1), not --accent.
+   const softText=hex2rgb(base["--text-1"]!);
+   surfaces.forEach(surface=>expect(softContrast(softText,soft,surface)).toBeGreaterThanOrEqual(4.5));
    // The canonical palette and the retained optional accents have known closer
    // pairs. Pin their actual distance as a regression floor; status also needs
    // a text label or glyph and must never depend on color alone.
@@ -88,12 +89,12 @@ for (const theme of ["dark","light"] as const) {
 
 it("soft gate composites the real soft token over the surface before checking foreground contrast", () => {
   const t = { ...baseFor("dark"), ...declarations(blockFor("dark", "gold")[0]!.body) };
-  const foreground = hex2rgb(t["--accent"]!), soft = rgba(t["--accent-soft"]!);
+  const foreground = hex2rgb(t["--text-1"]!), soft = rgba(t["--accent-soft"]!);
   const surface = hex2rgb(t["--bg-overlay"]!);
   const actual = softContrast(foreground, soft, surface);
   const composite = soft.slice(0, 3).map((channel, i) => channel * soft[3] + surface[i]! * (1 - soft[3])) as RGB;
   expect(actual).toBeCloseTo(cr(foreground, composite), 10);
-  expect(actual).toBeGreaterThanOrEqual(softMinimum(false, 3));
+  expect(actual).toBeGreaterThanOrEqual(4.5);
   // The old mistake (testing the translucent fill against the surface) must fail this gate.
   expect(cr(composite, surface)).toBeLessThan(softMinimum(false, 3));
   expect([0, 1, 2, 3].map(i => softMinimum(false, i))).toEqual([4.5, 4.5, 4.5, 4]);
