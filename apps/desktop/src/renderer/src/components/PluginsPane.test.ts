@@ -1,17 +1,12 @@
+// @vitest-environment jsdom
 /**
- * Pure-logic tests for the PluginsPane + PluginInstallSheet wiring (
- * 4732 S1-C). Same no-jsdom rationale as McpServersPane.test.ts: this
- * package's vitest config runs `environment: "node"`, so hook-bearing
- * components can't mount — instead the pane's hook-FREE presentational
- * pieces (`PluginsUnavailableCard`, `PluginsPaneBody`, `InstallDialogBody`)
- * and the pure guards are called directly and their React element trees are
- * inspected. Host/fragment elements are walked depth-first and their text
- * collected; COMPONENT elements are INVOKED once (they are hook-free by
- * construction) so a card's own subtree is asserted too — the direct-call
- * idiom SettingsScreen.test.ts's walk/mountUnit already established.
+ * Plugins settings wiring: mount the presentational pieces with React so
+ * kit hooks and native event handlers run normally. Assertions cover the
+ * same text, state, and bridge callbacks as the original tree-walking tests.
  */
-import { Fragment, type ReactElement } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { act, type ReactElement } from "react";
+import { createRoot } from "react-dom/client";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   PluginInstallPreview,
   PluginRowView,
@@ -23,59 +18,34 @@ import { filterPluginRows, pluginsEmptyKind } from "./plugins-pane-model.js";
 
 type AnyElement = { type: unknown; props: Record<string, unknown> };
 
-function isElement(value: unknown): value is AnyElement {
-  return typeof value === "object" && value !== null && "type" in value && "props" in value;
+const roots: ReturnType<typeof createRoot>[] = [];
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+afterEach(() => { for (const root of roots.splice(0)) act(() => root.unmount()); });
+
+function renderElements(element: unknown): AnyElement[] {
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  roots.push(root);
+  act(() => root.render(element as ReactElement));
+  return [...container.querySelectorAll<HTMLElement>("*")].map(node => ({
+    type: node.tagName.toLowerCase(),
+    props: {
+      ...Object.fromEntries([...node.attributes].map(attribute => [attribute.name, attribute.name === "aria-checked" ? attribute.value === "true" : attribute.value])),
+      className: node.className,
+      children: node.textContent,
+      onClick: () => act(() => node.click()),
+    },
+  }));
 }
 
-/**
- * Renders an element tree to a flat string of its text content + a few
- * attribute values the assertions need (className, data-* flags). Component
- * elements are invoked (they must be hook-free), fragments/host elements
- * walked — one level of laziness each, same contract as the source walk in
- * SettingsScreen.test.ts.
- */
 function renderToString(root: unknown): string {
-  const parts: string[] = [];
-  function visit(node: unknown): void {
-    if (Array.isArray(node)) {
-      for (const child of node) {
-        visit(child);
-      }
-      return;
-    }
-    if (typeof node === "string" || typeof node === "number" || typeof node === "boolean") {
-      if (typeof node === "string") {
-        parts.push(node);
-      }
-      return;
-    }
-    if (!isElement(node)) {
-      return;
-    }
-    const { type, props } = node;
-    if (props.className !== undefined) {
-      parts.push(String(props.className));
-    }
-    for (const [key, value] of Object.entries(props)) {
-      if (key.startsWith("data-") && value !== undefined) {
-        parts.push(`${key}=${String(value)}`);
-      }
-    }
-    if (typeof type === "function") {
-      // Hook-free component: invoke it and walk the returned tree.
-      const rendered = (type as (p: Record<string, unknown>) => unknown)(props);
-      visit(rendered);
-      return;
-    }
-    if (type === Fragment || typeof type === "string") {
-      visit(props.children);
-    }
-  }
-  visit(root);
-  return parts.join(" ");
+  if (typeof root === "string" || typeof root === "number") return String(root);
+  return renderElements(root).map(({ props }) => [props.children, props.className,
+    ...Object.entries(props).filter(([key]) => key.startsWith("data-")).map(([key, value]) => `${key}=${value}`),
+  ].join(" ")).join(" ");
 }
 
-/** Calls a hook-free component and flattens its element tree to a string. */
+/** Mounts the body produced by the pane and collects text and state attributes. */
 function call(component: () => ReactElement): string {
   return renderToString(component());
 }
@@ -365,22 +335,7 @@ describe("describeSourceForSheet", () => {
 // ── background services in the pane ──
 
 function findElements(root: unknown, predicate: (el: AnyElement) => boolean): AnyElement[] {
-  const found: AnyElement[] = [];
-  function visit(node: unknown): void {
-    if (Array.isArray(node)) {
-      node.forEach(visit);
-      return;
-    }
-    if (!isElement(node)) return;
-    if (predicate(node)) found.push(node);
-    visit(node.props.children);
-    // Component elements are invoked (hook-free by construction) so their subtree is searched too.
-    if (typeof node.type === "function") {
-      visit((node.type as (props: Record<string, unknown>) => unknown)(node.props));
-    }
-  }
-  visit(root);
-  return found;
+  return renderElements(root).filter(predicate);
 }
 
 function serviceRow(overrides: Partial<PluginRowView> = {}): PluginRowView {

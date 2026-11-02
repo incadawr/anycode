@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cloneElement, useState, type ButtonHTMLAttributes, type ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { Badge, Banner, Button, Chip, ContextRing, Drawer, EmptyState, Field, IconButton, Input, MenuItem, Modal, Popover, SearchInput, SegmentedControl, Select, Switch, Textarea, Toast, ToastStack, ToolCard } from "./index.js";
+import { Badge, Banner, Button, Chip, ContextRing, Drawer, EmptyState, Field, IconButton, Input, Menu, MenuItem, Modal, Popover, SearchInput, SegmentedControl, Select, Switch, Textarea, Toast, ToastStack, ToolCard } from "./index.js";
 import { accessibleName, byRole, click, createElement as h, key, mount } from "./ui.test-utils.js";
 
 const noop = () => {};
@@ -20,6 +20,7 @@ const cases: { name:string; render:()=>ReactElement; selector:string; text:strin
   { name:"Drawer", render:()=>h(Drawer,{open:true,onClose:noop,title:"Connection"},"Body"), selector:"[role=dialog]", text:"Connection", disabled:()=>h(Drawer,{open:true,onClose:noop,title:"Connection"},action) },
   { name:"Popover", render:()=>h(Popover,{open:true,onClose:noop,position:{x:0,y:0},heading:"Access",children:h(MenuItem,{label:"Plan"})}), selector:"[role=menu]", text:"Access", disabled:()=>h(Popover,{open:true,onClose:noop,position:{x:0,y:0},children:h(MenuItem,{label:"Plan",disabled:true})}) },
   { name:"MenuItem", render:()=>h(MenuItem,{label:"Plan"}), selector:"button", text:"Plan", disabled:()=>h(MenuItem,{label:"Plan",disabled:true}) },
+  { name:"Menu", render:()=>h(Menu,{label:"Actions",children:h(MenuItem,{label:"Plan"})}), selector:".ak-menu__trigger", text:"Actions", disabled:()=>h(Menu,{label:"Actions",disabled:true,children:h(MenuItem,{label:"Plan"})}) },
   { name:"Field", render:()=>h(Field,{label:"Field",children:props=>h("input",props)}), selector:"input", text:"Field", disabled:()=>h(Field,{label:"Field",children:props=>h("input",{...props,disabled:true})}) },
 ];
 for (const c of cases) describe(c.name,()=>{
@@ -95,4 +96,15 @@ for(const kind of ["Banner","EmptyState"] as const) it(`${kind} preserves a disa
   const onClick=vi.fn(),action=h(Button,{disabled:true,onClick},"Unavailable");
   const element=kind==="Banner"?h(Banner,{action,children:"Message"}):h(EmptyState,{title:"Empty",action});
   const {container}=mount(element);click(byRole(container,"button","Unavailable"));expect(onClick).not.toHaveBeenCalled();
+});
+
+it("single segmented control roves and selects with arrows", () => {
+  const onChange = vi.fn();
+  const {container, render} = mount(h(SegmentedControl, {label:"Mode", value:"a", onChange, options:[{value:"a",label:"A"},{value:"b",label:"B",disabled:true},{value:"c",label:"C"}]}));
+  const radios = [...container.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
+  expect(radios.map(r => r.tabIndex)).toEqual([0,-1,-1]);
+  radios[0]!.focus(); key("ArrowRight",radios[0]!);
+  expect(onChange).toHaveBeenCalledExactlyOnceWith("c"); expect(document.activeElement).toBe(radios[2]);
+  render(h(SegmentedControl, {label:"Mode", value:"c", onChange, options:[{value:"a",label:"A"},{value:"b",label:"B",disabled:true},{value:"c",label:"C"}]}));
+  expect(radios.map(r => r.tabIndex)).toEqual([-1,-1,0]);
 });

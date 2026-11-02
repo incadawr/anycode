@@ -12,6 +12,8 @@ export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement
   disabled?: boolean;
   /** Иконка слева от подписи (aria-hidden). */
   icon?: ReactNode;
+  /** Иконка слева от подписи (aria-hidden). Основное имя; `icon` — устаревший синоним. */
+  leadingIcon?: ReactNode;
   children?: ReactNode;
 }
 
@@ -20,6 +22,7 @@ export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement
  * Размеры: sm | md | lg.
  * disabled → opacity .45, форма не меняется.
  * loading → aria-busy="true", текст заменяется спиннером (дублируется текстом для скринридера).
+ * `type` по умолчанию — "button" (кнопка не отправляет форму по случайности).
  */
 export function Button({
   variant = "secondary",
@@ -27,6 +30,7 @@ export function Button({
   loading = false,
   disabled = false,
   icon,
+  leadingIcon,
   className,
   children,
   type = "button",
@@ -57,9 +61,9 @@ export function Button({
     >
       {loading ? (
         <IconSpinner size={size === "lg" ? 16 : 14} className="ak-btn__spinner" />
-      ) : (
-        icon
-      )}
+      ) : leadingIcon ?? icon ? (
+        <span className="ak-btn__icon" aria-hidden="true">{leadingIcon ?? icon}</span>
+      ) : null}
       {children}
     </button>
   );

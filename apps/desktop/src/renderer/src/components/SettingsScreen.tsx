@@ -1,3 +1,4 @@
+import { Badge, Button, Select, Switch } from "../ui/index.js";
 /**
  * Settings UI (slice 2.2, design/slice-2.2-cut.md §2/§3, ruling
  * reviews/slice-2.2-forks-ruling.md §1/§2; provider-section v2 + OAuth-UX,
@@ -985,14 +986,13 @@ function CustomProvidersSection({ providers, readOnly, onChanged, bridge }: Cust
                 {describeCustomProvider(p)}
               </span>
             </div>
-            <button
+            <Button size="sm" variant="danger"
               type="button"
-              className="settings-button settings-button-danger"
               disabled={readOnly || busy}
               onClick={() => void remove(p.id)}
             >
               Delete
-            </button>
+            </Button>
           </li>
         ))}
       </ul>
@@ -2002,9 +2002,9 @@ export function SettingsScreen({
                   <div className="settings-field-error" role="alert">{sessionLimitsError}</div>
                 )}
                 <div className="settings-field-row">
-                  <button type="button" className="settings-button settings-button-primary" disabled={readOnly} onClick={() => void saveTools()}>
+                  <Button size="sm" variant="primary" type="button" disabled={readOnly} onClick={() => void saveTools()}>
                     Save tools settings
-                  </button>
+                  </Button>
                 </div>
               </section>
             )}
@@ -2065,9 +2065,7 @@ export function SettingsScreen({
                       {(() => {
                         const described = describeTelemetryRow(envStatus.telemetry);
                         return (
-                          <span className={`settings-secret-status settings-secret-status-${described.tone}`}>
-                            {described.text}
-                          </span>
+                          <Badge status={described.tone === "muted" ? "neutral" : described.tone} label={described.text} />
                         );
                       })()}
                     </div>
@@ -2083,9 +2081,7 @@ export function SettingsScreen({
                       {(() => {
                         const described = describeRepoMapRow(envStatus.repoMap);
                         return (
-                          <span className={`settings-secret-status settings-secret-status-${described.tone}`}>
-                            {described.text}
-                          </span>
+                          <Badge status={described.tone === "muted" ? "neutral" : described.tone} label={described.text} />
                         );
                       })()}
                     </div>
@@ -2104,19 +2100,11 @@ export function SettingsScreen({
             <>
               <section className="settings-section">
                 <div className="settings-section-title">Appearance</div>
-                <label className="settings-field">
-                  <span className="settings-field-label">Theme</span>
-                  <select
-                    className="settings-field-select"
+                <Select label="Theme" options={[{ value: "system", label: "System" }, { value: "light", label: "Light" }, { value: "dark", label: "Dark" }]}
                     value={theme}
                     disabled={readOnly}
                     onChange={(e) => changeTheme(e.target.value as "system" | "light" | "dark")}
-                  >
-                    <option value="system">System</option>
-                    <option value="light">Light</option>
-                    <option value="dark">Dark</option>
-                  </select>
-                </label>
+                   />
                 <div className="settings-field">
                   <span className="settings-field-label">Accent</span>
                   <AccentPicker onChange={changeAccent} />
@@ -2124,16 +2112,12 @@ export function SettingsScreen({
                 <div className="settings-field">
                   <span className="settings-field-label">Density</span>
                   <div className="settings-field-row">
-                    <button
+                    <Switch
                       type="button"
-                      role="switch"
-                      aria-checked={density === "compact"}
+                      checked={density === "compact"}
                       aria-labelledby="settings-density-caption"
-                      className={`settings-switch${density === "compact" ? " settings-switch-on" : ""}`}
-                      onClick={toggleDensity}
-                    >
-                      <span className="settings-switch-thumb" />
-                    </button>
+                      onCheckedChange={toggleDensity}
+                     />
                     <span id="settings-density-caption" className="settings-switch-caption">
                       Compact — tighter spacing and smaller interface text
                     </span>
@@ -2142,16 +2126,12 @@ export function SettingsScreen({
                 <div className="settings-field">
                   <span className="settings-field-label">Notifications</span>
                   <div className="settings-field-row">
-                    <button
+                    <Switch
                       type="button"
-                      role="switch"
-                      aria-checked={notifyTurnEnd}
+                      checked={notifyTurnEnd}
                       aria-labelledby="settings-notify-turn-caption"
-                      className={`settings-switch${notifyTurnEnd ? " settings-switch-on" : ""}`}
-                      onClick={toggleNotifyTurnEnd}
-                    >
-                      <span className="settings-switch-thumb" />
-                    </button>
+                      onCheckedChange={toggleNotifyTurnEnd}
+                     />
                     <span id="settings-notify-turn-caption" className="settings-switch-caption">
                       Notify when a turn finishes in the background
                     </span>
@@ -2160,17 +2140,13 @@ export function SettingsScreen({
                 <div className="settings-field">
                   <span className="settings-field-label">Preview</span>
                   <div className="settings-field-row">
-                    <button
+                    <Switch
                       type="button"
-                      role="switch"
-                      aria-checked={autoOpenPreview}
+                      checked={autoOpenPreview}
                       aria-labelledby="settings-auto-open-preview-caption"
-                      className={`settings-switch${autoOpenPreview ? " settings-switch-on" : ""}`}
                       disabled={readOnly}
-                      onClick={toggleAutoOpenPreview}
-                    >
-                      <span className="settings-switch-thumb" />
-                    </button>
+                      onCheckedChange={toggleAutoOpenPreview}
+                     />
                     <span id="settings-auto-open-preview-caption" className="settings-switch-caption">
                       Automatically open a preview window for HTML/Markdown files the agent writes
                     </span>
@@ -2215,17 +2191,13 @@ export function SettingsScreen({
                 <div className="settings-field">
                   <span className="settings-field-label">Live reload</span>
                   <div className="settings-field-row">
-                    <button
+                    <Switch
                       type="button"
-                      role="switch"
-                      aria-checked={liveReload}
+                      checked={liveReload}
                       aria-labelledby="settings-live-reload-caption"
-                      className={`settings-switch${liveReload ? " settings-switch-on" : ""}`}
                       disabled={readOnly}
-                      onClick={toggleLiveReload}
-                    >
-                      <span className="settings-switch-thumb" />
-                    </button>
+                      onCheckedChange={toggleLiveReload}
+                     />
                     <span id="settings-live-reload-caption" className="settings-switch-caption">
                       Reload file previews automatically when the file changes on disk
                     </span>
@@ -2268,44 +2240,40 @@ export function SettingsScreen({
                 </div>
                 <div className="settings-field-row">
                   {updateStatus.kind === "downloaded" ? (
-                    <button
+                    <Button size="sm" variant="primary"
                       type="button"
-                      className="settings-button settings-button-primary"
                       onClick={() => void store.getState().installUpdate()}
                     >
                       Restart to install
-                    </button>
+                    </Button>
                   ) : updateStatus.kind === "available" ? (
                     updateStatus.manualOnly ? (
                       // defect 2: darwin has no Developer ID yet — an
                       // in-app Download button would only fail (Squirrel.Mac
                       // rejects the ad-hoc signature mismatch), so this opens
                       // the release page instead of downloading anything.
-                      <button
+                      <Button size="sm" variant="primary"
                         type="button"
-                        className="settings-button settings-button-primary"
                         onClick={() => void store.getState().openReleasesUpdate()}
                       >
                         Open GitHub Releases
-                      </button>
+                      </Button>
                     ) : (
-                      <button
+                      <Button size="sm" variant="primary"
                         type="button"
-                        className="settings-button settings-button-primary"
                         onClick={() => void store.getState().downloadUpdate()}
                       >
                         Download v{updateStatus.version}
-                      </button>
+                      </Button>
                     )
                   ) : (
-                    <button
+                    <Button size="sm" variant="secondary"
                       type="button"
-                      className="settings-button"
                       disabled={updateStatus.kind === "checking" || updateStatus.kind === "downloading"}
                       onClick={() => void store.getState().checkForUpdates()}
                     >
                       Check for updates
-                    </button>
+                    </Button>
                   )}
                 </div>
               </section>
@@ -2356,20 +2324,20 @@ export function OAuthCredentialBlock({ entry, status, pending, readOnly, onSignI
       {pending ? (
         <div className="settings-field-row">
           <span className="settings-oauth-pending">Waiting for browser sign-in…</span>
-          <button type="button" className="settings-button" onClick={onCancel}>
+          <Button variant="secondary" type="button" onClick={onCancel}>
             Cancel
-          </button>
+          </Button>
         </div>
       ) : (
         <div className="settings-field-row">
           {status?.set ? (
-            <button type="button" className="settings-button settings-button-danger" disabled={readOnly} onClick={onSignOut}>
+            <Button variant="danger" type="button" data-automation="clear-key" disabled={readOnly} onClick={onSignOut}>
               Sign out
-            </button>
+            </Button>
           ) : (
-            <button type="button" className="settings-button settings-button-primary" disabled={readOnly} onClick={onSignIn}>
+            <Button variant="primary" type="button" disabled={readOnly} onClick={onSignIn}>
               Sign in with {entry.name}
-            </button>
+            </Button>
           )}
         </div>
       )}

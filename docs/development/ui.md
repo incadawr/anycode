@@ -28,3 +28,21 @@ Run the guards from the repository root:
 ```sh
 pnpm --filter @anycode/desktop exec vitest run src/renderer/src/color-literals.test.ts src/renderer/src/tokens-defined.test.ts src/renderer/src/raw-controls.test.ts src/renderer/src/ui-boundary.test.ts
 ```
+
+## Overlays, menus and toasts
+
+- `Modal` uses a native `<dialog>` in the top layer. Its slots are `headerExtra`,
+  `children` (scrollable body), and `footer`; sizes are `sm`, `md`, and `lg`
+  (`wide` aliases `lg`). The title and subtitle supply `aria-labelledby` and
+  `aria-describedby`. Focus stays inside, Escape closes it, and focus returns
+  to the trigger when it closes.
+- `Drawer` is a side panel with a sticky header and footer, a scrollable body,
+  and `md` and `lg` sizes.
+- Overlay backdrops use `--bg-scrim`; do not add color literals to the kit.
+- `Menu` provides a trigger and a `role="menu"` menu with `MenuItem` and
+  `MenuSeparator`. Arrow keys and Home/End navigate; Escape returns focus.
+- `Popover` is manually positioned and constrained to the viewport.
+- `Toast` supports `info`, `ok`, `success`, `run`, `warn`, `warning`, `bad`,
+  `error`, and `neutral` tones. It uses polite status announcements, except
+  errors use assertive alerts. `duration` enables auto-dismissal and the timer
+  is cleared on unmount. `ToastStack` optionally labels its region.

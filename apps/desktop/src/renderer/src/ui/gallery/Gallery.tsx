@@ -11,11 +11,14 @@ import {
   Input,
   Modal,
   Popover,
+  Menu,
   MenuItem,
   MenuSeparator,
   SearchInput,
   SegmentedControl,
   Select,
+  Checkbox,
+  RadioGroup,
   Switch,
   Textarea,
   Toast,
@@ -75,11 +78,15 @@ export function Gallery(): React.ReactElement {
   const [density, setDensity] = useState<"comfortable" | "compact">("comfortable");
 
   const [switchOn, setSwitchOn] = useState(true);
+  const [checkboxOn, setCheckboxOn] = useState(true);
+  const [checkboxMixed, setCheckboxMixed] = useState(false);
+  const [radioValue, setRadioValue] = useState("light");
   const [segSingle, setSegSingle] = useState<"all" | "chat" | "code">("all");
   const [segMulti, setSegMulti] = useState<string[]>(["low"]);
   const [mode, setMode] = useState<AccessMode>("edit");
   const [toolOpen, setToolOpen] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+  const [smallModalOpen, setSmallModalOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [popOpen, setPopOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -92,7 +99,7 @@ export function Gallery(): React.ReactElement {
   useEffect(() => { document.documentElement.dataset.density = density; }, [density]);
   return (
     <div
-      className="ak-gallery"
+      className="ak-root ak-gallery"
       data-theme={theme}
       data-density={density}
       style={{ height: "100vh", overflow: "auto", boxSizing: "border-box", color: "var(--text-1)", background: "var(--bg-app)", padding: "var(--sp-6)" }}
@@ -143,6 +150,17 @@ export function Gallery(): React.ReactElement {
           </Row>
         </Section>
 
+        <Section title="Button states">
+          <Row label="leading icon">
+            <Button variant="primary" leadingIcon={<IconSearch size={14} />}>Search</Button>
+            <Button variant="secondary" leadingIcon={<IconSearch size={14} />}>Search</Button>
+          </Row>
+          <Row label="focus / active">
+            <Button variant="primary">Focus me</Button>
+            <Button variant="danger" disabled>Danger disabled</Button>
+          </Row>
+        </Section>
+
         <Section title="IconButton / Chip">
           <Row label="iconbutton">
             <IconButton label="Search" icon={<IconSearch size={14} />} />
@@ -155,18 +173,26 @@ export function Gallery(): React.ReactElement {
               <Chip key={m} mode={m} onClick={() => setMode(m)} aria-pressed={mode === m} />
             ))}
             <Chip label="neutral" />
+            <Chip label="selected" selected />
             <Chip label="disabled" disabled />
+            <Chip mode="yolo" selected />
           </Row>
         </Section>
 
         <Section title="Badge">
           <Row label="statuses">
-            <Badge status="ok" label="Ready" />
-            <Badge status="run" label="Running" />
-            <Badge status="warn" label="Needs credential" />
-            <Badge status="bad" label="Denied" />
+            <Badge status="success" label="Ready" />
+            <Badge status="accent" label="Running" />
+            <Badge status="warning" label="Needs credential" />
+            <Badge status="danger" label="Denied" />
             <Badge status="info" label="Information" />
             <Badge status="neutral" label="Idle" />
+          </Row>
+          <Row label="legacy">
+            <Badge status="ok" label="Ready (ok)" />
+            <Badge status="run" label="Running (run)" />
+            <Badge status="warn" label="Warn (warn)" />
+            <Badge status="bad" label="Bad (bad)" />
           </Row>
         </Section>
 
@@ -178,8 +204,13 @@ export function Gallery(): React.ReactElement {
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
             />
+            <Input label="Compact input" size="sm" />
+            <Select label="Compact select" size="sm" options={[{ value: "auto", label: "Auto" }]} />
             <Input label="With error" error="Key is required" defaultValue="" />
             <Input label="Disabled" disabled defaultValue="locked" />
+            <Input label="Read only" readOnly defaultValue="fixed" />
+            <Input label="Required" required defaultValue="" hint="Needed to sign requests" />
+            <Input label="With hint" hint="Use the short name" defaultValue="" />
             <Select
               label="Pricing"
               value={selectValue}
@@ -203,6 +234,7 @@ export function Gallery(): React.ReactElement {
         <Section title="Switch / SegmentedControl">
           <Row label="switch">
             <Switch checked={switchOn} onCheckedChange={setSwitchOn} label="Auto-update" />
+            <Switch checked={false} onCheckedChange={() => undefined} label="Off" />
             <Switch checked={false} onCheckedChange={() => undefined} label="Disabled" disabled />
           </Row>
           <Row label="single">
@@ -232,6 +264,25 @@ export function Gallery(): React.ReactElement {
           </Row>
         </Section>
 
+        <Section title="Choice (Checkbox / RadioGroup)">
+          <Row label="checkbox">
+            <Checkbox label="Auto-update" checked={checkboxOn} onCheckedChange={setCheckboxOn} />
+            <Checkbox label="Unchecked" checked={false} onCheckedChange={() => undefined} />
+            <Checkbox label="Indeterminate" indeterminate checked={checkboxMixed} onCheckedChange={setCheckboxMixed} />
+            <Checkbox label="Disabled" disabled />
+          </Row>
+          <RadioGroup
+            label="Theme"
+            options={[
+              { value: "light", label: "light" },
+              { value: "dark", label: "dark" },
+              { value: "system", label: "system", disabled: true },
+            ]}
+            value={radioValue}
+            onValueChange={setRadioValue}
+          />
+        </Section>
+
         <Section title="ToolCard">
           <ToolCard
             name="read_file"
@@ -245,8 +296,12 @@ export function Gallery(): React.ReactElement {
 
         <Section title="Banner / EmptyState / ContextRing">
           <Banner tone="info" title="Heads up">Composer popovers use position: fixed.</Banner>
-          <Banner tone="warn" title="Credential missing">Provider “acme” needs an API key.</Banner>
-          <Banner tone="bad" title="Failed">The session could not be restored.</Banner>
+          <Banner tone="success" title="Saved">The session was stored.</Banner>
+          <Banner tone="warning" title="Credential missing">Provider “acme” needs an API key.</Banner>
+          <Banner tone="danger" title="Failed">The session could not be restored.</Banner>
+          <Banner tone="info" title="Dismissible" action={<Button variant="ghost">Reload</Button>} closable onDismiss={() => undefined}>
+            This notice can be closed.
+          </Banner>
           <Row label="ring">
             <ContextRing value={0.42} label="42% of context used" />
             <ContextRing value={0.78} tone="warn" label="78% of context used" />
@@ -257,6 +312,11 @@ export function Gallery(): React.ReactElement {
             description="Start a session to see your conversations here."
             action={<Button variant="primary">New session</Button>}
           />
+          <EmptyState
+            headingLevel={4}
+            title="No MCP servers configured yet"
+            description="Add a server to see it here."
+          />
         </Section>
 
         <Section title="Overlays">
@@ -264,6 +324,12 @@ export function Gallery(): React.ReactElement {
             <Button variant="secondary" onClick={() => setModalOpen(true)}>Open modal</Button>
             <Button variant="secondary" onClick={() => setDrawerOpen(true)}>Open drawer</Button>
             <span ref={node => { popTrigger.current = node?.querySelector("button") ?? null; }}><Button variant="secondary" onClick={() => setPopOpen((v) => !v)}>Toggle popover</Button></span>
+            <Menu label="Menu" heading="Actions">
+              <MenuItem label="plan" description="read only" onSelect={() => undefined} />
+              <MenuItem label="build" description="write" checkable selected onSelect={() => undefined} />
+              <MenuSeparator />
+              <MenuItem label="yolo" description="no prompts" disabled onSelect={() => undefined} />
+            </Menu>
           </Row>
           {popOpen ? (
             <Popover
@@ -285,9 +351,13 @@ export function Gallery(): React.ReactElement {
         <Section title="Toast">
           <Row label="toasts">
             <Toast status="ok" message="Saved" onDismiss={() => undefined} />
+            <Toast status="success" message="Saved (success alias)" onDismiss={() => undefined} />
             <Toast status="warn" message="Key expired" assertive onDismiss={() => undefined} />
+            <Toast status="warning" message="Key expired (warning alias)" onDismiss={() => undefined} />
             <Toast status="bad" message="Connection lost" onDismiss={() => undefined} />
+            <Toast status="error" message="Connection lost (error alias)" onDismiss={() => undefined} />
             <Toast status="info" message="Update available" action={{ label: "Reload", onClick: () => undefined }} />
+            <Toast status="info" message="Auto-closing in 4s" duration={4000} onAutoHide={() => undefined} />
           </Row>
         </Section>
       </div>
@@ -297,6 +367,7 @@ export function Gallery(): React.ReactElement {
         onClose={() => setModalOpen(false)}
         title="Confirm run"
         subtitle="The agent will modify files in this workspace."
+        headerExtra={<Badge status="warn" label="needs review" />}
         footer={
           <>
             <Button variant="ghost" onClick={() => setModalOpen(false)}>Cancel</Button>
@@ -307,10 +378,21 @@ export function Gallery(): React.ReactElement {
         <Banner tone="warn">Press Esc to close — focus is trapped inside the dialog.</Banner>
       </Modal>
 
+      <Modal
+        open={smallModalOpen}
+        onClose={() => setSmallModalOpen(false)}
+        title="Small dialog"
+        size="sm"
+        footer={<Button variant="primary" onClick={() => setSmallModalOpen(false)}>Ok</Button>}
+      >
+        <p>Short confirmation with the sm size.</p>
+      </Modal>
+
       <Drawer
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         title="Connection"
+        subtitle="Provider settings"
         footer={<Button variant="primary" onClick={() => setDrawerOpen(false)}>Done</Button>}
       >
         <Input label="Name" defaultValue="acme" />

@@ -1,3 +1,4 @@
+import { Button, IconButton, Input, Select, Textarea } from "../ui/index.js";
 /**
  * Subagents settings pane (P7.21/F21 W3, design/slice-P7.21-cut.md §1/§4 W3):
  * the Subagents management page — a read-only "Built-in subagents"
@@ -723,21 +724,13 @@ export function SubagentsPane({ tabId, workspace, bridge = window.anycode.subage
           <option value="plugin">Plugin</option>
         </select>
         <div className="skills-pane-actions mcp-pane-actions">
-          <button type="button" className="skills-icon-button mcp-icon-button" aria-label="Create subagent" onClick={openCreate}>
-            <Plus />
-          </button>
-          <button
-            type="button"
-            className="skills-icon-button mcp-icon-button"
-            aria-label="Open subagents folder"
+          <IconButton label="Create subagent" icon={<Plus />} onClick={openCreate}/>
+          <IconButton
+            label="Open subagents folder"
             disabled={!firstRevealableRow(snapshot?.rows ?? [])}
             onClick={() => void revealRoot()}
-          >
-            <Folder />
-          </button>
-          <button type="button" className="skills-icon-button mcp-icon-button" aria-label="Refresh subagents" onClick={() => void refresh()}>
-            <Spinner />
-          </button>
+           icon={<Folder />} />
+          <IconButton label="Refresh subagents" onClick={() => void refresh()} icon={<Spinner />} />
         </div>
       </div>
 
@@ -857,29 +850,21 @@ export function SubagentsPane({ tabId, workspace, bridge = window.anycode.subage
                         {confirmDeleteKey === key ? (
                           <span className="mcp-confirm-row">
                             <span className="mcp-confirm-text">Delete "{row.name}"?</span>
-                            <button type="button" className="settings-button settings-button-danger" onClick={() => void deleteRow(row)}>
+                            <Button type="button" variant="danger" size="sm" onClick={() => void deleteRow(row)}>
                               Delete
-                            </button>
-                            <button type="button" className="settings-button" onClick={() => setConfirmDeleteKey(null)}>
+                            </Button>
+                            <Button type="button" onClick={() => setConfirmDeleteKey(null)}>
                               Cancel
-                            </button>
+                            </Button>
                           </span>
                         ) : (
                           <>
-                            <button type="button" className="skills-icon-button mcp-icon-button" aria-label={`Edit ${row.name}`} onClick={() => void openEdit(row)}>
-                              <Pencil />
-                            </button>
-                            <button type="button" className="skills-icon-button mcp-icon-button" aria-label={`Reveal ${row.name}`} onClick={() => void revealRow(row)}>
-                              <Folder />
-                            </button>
-                            <button
-                              type="button"
-                              className="skills-icon-button mcp-icon-button mcp-icon-button-danger"
-                              aria-label={`Delete ${row.name}`}
+                            <IconButton label={`Edit ${row.name}`} icon={<Pencil />} onClick={() => void openEdit(row)} />
+                            <IconButton label={`Reveal ${row.name}`} onClick={() => void revealRow(row)} icon={<Folder />} />
+                            <IconButton
+                              label={`Delete ${row.name}`}
                               onClick={() => setConfirmDeleteKey(key)}
-                            >
-                              <Trash />
-                            </button>
+                             icon={<Trash />} />
                           </>
                         )}
                       </div>
@@ -1058,51 +1043,10 @@ function SubagentEditorDialog({
         <span className="mcp-dialog-title">{mode === "create" ? "New subagent" : "Edit subagent"}</span>
       </div>
       <div className="mcp-dialog-body">
-        <label className="settings-field">
-          <span className="settings-field-label">Name</span>
-          <input className="settings-field-input" type="text" value={fields.name} onChange={(e) => set("name", e.target.value)} />
-          {nameInvalid && (
-            <span className="skills-field-invalid">Use letters, numbers, "-", or "_" — must start with a letter or number.</span>
-          )}
-        </label>
-        <label className="settings-field">
-          <span className="settings-field-label">Description</span>
-          <input className="settings-field-input" type="text" value={fields.description} onChange={(e) => set("description", e.target.value)} />
-          {descriptionInvalid && <span className="skills-field-invalid">Description must be a single line.</span>}
-        </label>
-        <label className="settings-field">
-          <span className="settings-field-label">Engine</span>
-          <select
-            className="settings-field-select"
-            value={fields.engine}
-            onChange={(e) => set("engine", e.target.value as SubagentEngine | "")}
-          >
-            {SUBAGENT_ENGINE_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <span className="subagents-tools-hint">
-            Empty = this child runs as part of the parent's session. Codex/Claude = the child runs as a separate
-            CLI process of that engine, with its own tools and permissions.
-          </span>
-        </label>
-        <label className="settings-field">
-          <span className="settings-field-label">Model</span>
-          <select className="settings-field-select" value={fields.model} onChange={(e) => set("model", e.target.value)}>
-            {modelOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <span className="subagents-tools-hint">
-            {fields.engine === ""
-              ? "Children spawn on this model id. Empty = the parent's model."
-              : "The model this engine runs the child on. Empty = the engine's own default."}
-          </span>
-        </label>
+        <Input size="sm" label="Name" type="text" value={fields.name} onChange={(e) => set("name", e.target.value)} error={nameInvalid ? 'Use letters, numbers, "-", or "_" — must start with a letter or number.' : undefined} />
+        <Input size="sm" label="Description" type="text" value={fields.description} onChange={(e) => set("description", e.target.value)} error={descriptionInvalid ? "Description must be a single line." : undefined} />
+        <Select size="sm" label="Engine" value={fields.engine} onChange={(e) => set("engine", e.target.value as SubagentEngine | "")} options={SUBAGENT_ENGINE_OPTIONS.map((option) => ({ value: option.value, label: option.label }))} hint="Empty = this child runs as part of the parent's session. Codex/Claude = the child runs as a separate CLI process of that engine, with its own tools and permissions." />
+        <Select size="sm" label="Model" value={fields.model} onChange={(e) => set("model", e.target.value)} options={modelOptions} hint={fields.engine === "" ? "Children spawn on this model id. Empty = the parent's model." : "The model this engine runs the child on. Empty = the engine's own default."} />
 
         {/* the create-mode scope radio is gone — the write
             target is the pane's header scope bar (ScopeSwitcher), restated
@@ -1139,10 +1083,7 @@ function SubagentEditorDialog({
         </div>
 
         {editorTab === "edit" ? (
-          <label className="settings-field">
-            <span className="settings-field-label">System prompt (body)</span>
-            <textarea className="settings-field-input mcp-textarea subagents-body-textarea" value={fields.body} onChange={(e) => set("body", e.target.value)} />
-          </label>
+          <Textarea label="System prompt (body)" mono tall value={fields.body} onChange={(e) => set("body", e.target.value)} />
         ) : (
           <div className="subagents-preview-pane" data-subagents-preview-loading={previewLoading}>
             {previewLoading ? (
@@ -1173,12 +1114,12 @@ function SubagentEditorDialog({
         )}
       </div>
       <div className="mcp-dialog-actions">
-        <button type="button" className="settings-button" onClick={onCancel}>
+        <Button type="button" onClick={onCancel}>
           Cancel
-        </button>
-        <button type="button" className="settings-button settings-button-primary" disabled={!canSave} onClick={onSubmit}>
+        </Button>
+        <Button type="button" variant="primary" disabled={!canSave} onClick={onSubmit}>
           Save
-        </button>
+        </Button>
       </div>
     </dialog>
   );

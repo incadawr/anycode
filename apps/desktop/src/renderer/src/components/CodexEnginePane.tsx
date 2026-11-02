@@ -26,6 +26,7 @@
  * sentinel-leak PoC).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Button } from "../ui/index.js";
 import type { CodexDeviceCodeProgress, CodexLoginMode } from "../../../shared/codex-login.js";
 import type { CodexDoctorReport } from "../../../shared/codex-doctor.js";
 import type { CodexQuotaCredits, CodexQuotaWindow, CodexRateLimits } from "../../../shared/codex-quota.js";
@@ -661,50 +662,50 @@ function CodexProfileRow(props: CodexProfileRowProps) {
             {props.deviceCode && <div role="status">
               Open {props.deviceCode.verificationUrl} and enter <code>{props.deviceCode.userCode}</code> there.
               <span className="settings-field-row">
-                <button type="button" className="settings-button" onClick={props.onOpenDevicePage}>Open page</button>
-                <button type="button" className="settings-button" onClick={() => props.onCopyDeviceText?.(props.deviceCode!.verificationUrl, "link")}>Copy link</button>
-                <button type="button" className="settings-button" onClick={() => props.onCopyDeviceText?.(props.deviceCode!.userCode, "code")}>Copy code</button>
+                <Button size="sm" type="button" onClick={props.onOpenDevicePage}>Open page</Button>
+                <Button size="sm" type="button" onClick={() => props.onCopyDeviceText?.(props.deviceCode!.verificationUrl, "link")}>Copy link</Button>
+                <Button size="sm" type="button" onClick={() => props.onCopyDeviceText?.(props.deviceCode!.userCode, "code")}>Copy code</Button>
               </span>
             </div>}
-            <button type="button" className="settings-button" onClick={props.onCancelSignIn}>
+            <Button size="sm" type="button" onClick={props.onCancelSignIn}>
               Cancel
-            </button>
+            </Button>
           </>
         ) : (
           canSignIn(props.report, props.profile) && (
             <>
-            <button type="button" className="settings-button settings-button-primary" disabled={props.busy} onClick={props.onSignIn}>
+            <Button size="sm" type="button" variant="primary" disabled={props.busy} onClick={props.onSignIn}>
               Sign in
-            </button>
-            <button type="button" className="settings-button" disabled={props.busy} onClick={props.onDeviceSignIn}>Sign in with a code</button>
+            </Button>
+            <Button size="sm" type="button" disabled={props.busy} onClick={props.onDeviceSignIn}>Sign in with a code</Button>
             </>
           )
         )}
         {showRepair && (
-          <button type="button" className="settings-button" disabled={props.busy} onClick={props.onRepairLink}>
+          <Button size="sm" type="button" disabled={props.busy} onClick={props.onRepairLink}>
             Re-link credential
-          </button>
+          </Button>
         )}
         {props.onMakeDefault !== undefined && props.isDefault !== true && (
-          <button type="button" className="settings-button" disabled={props.busy} onClick={props.onMakeDefault}>
+          <Button size="sm" type="button" disabled={props.busy} onClick={props.onMakeDefault}>
             Make default
-          </button>
+          </Button>
         )}
         {props.profile !== undefined &&
           (props.confirmingDelete ? (
             <>
               <span>Delete this profile?</span>
-              <button type="button" className="settings-button settings-button-danger" disabled={props.busy} onClick={props.onDelete}>
+              <Button size="sm" type="button" variant="danger" disabled={props.busy} onClick={props.onDelete}>
                 Confirm delete
-              </button>
-              <button type="button" className="settings-button" onClick={props.onCancelDelete}>
+              </Button>
+              <Button size="sm" type="button" onClick={props.onCancelDelete}>
                 Cancel
-              </button>
+              </Button>
             </>
           ) : (
-            <button type="button" className="settings-button" disabled={props.busy} onClick={props.onConfirmDelete}>
+            <Button size="sm" type="button" disabled={props.busy} onClick={props.onConfirmDelete}>
               Delete
-            </button>
+            </Button>
           ))}
       </div>
     </li>
@@ -1065,31 +1066,31 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
       <div className="settings-field-row">
         {signingInId ? <>
           <span role="status">Waiting for sign-in…</span>
-          <button type="button" className="settings-button" onClick={() => void bridge.loginCancel()}>Cancel</button>
+          <Button size="sm" type="button" onClick={() => void bridge.loginCancel()}>Cancel</Button>
         </> : <>
           {(binaryActions.showInstall || binaryActions.showUpdate) ?
-            <button type="button" className="settings-button settings-button-primary" disabled={busy || checking} onClick={() => void installBinary()}>{busy ? "Installing…" : binaryActions.showUpdate ? "Update Codex" : "Install Codex"}</button> :
+            <Button size="sm" type="button" variant="primary" disabled={busy || checking} onClick={() => void installBinary()}>{busy ? "Installing…" : binaryActions.showUpdate ? "Update Codex" : "Install Codex"}</Button> :
             canSignIn(report, profile) ? <>
-              <button type="button" className="settings-button settings-button-primary" disabled={busy || checking} onClick={() => void signInProfile(activeProfileId)}>Sign in with ChatGPT</button>
-              <button type="button" className="settings-button" disabled={busy || checking} onClick={() => void signInProfile(activeProfileId, "device")}>Sign in with a code</button>
-            </> : <button type="button" className="settings-button settings-button-primary" disabled={busy || checking} onClick={() => void refreshAll()}>Check again</button>}
+              <Button size="sm" type="button" variant="primary" disabled={busy || checking} onClick={() => void signInProfile(activeProfileId)}>Sign in with ChatGPT</Button>
+              <Button size="sm" type="button" disabled={busy || checking} onClick={() => void signInProfile(activeProfileId, "device")}>Sign in with a code</Button>
+            </> : <Button size="sm" type="button" variant="primary" disabled={busy || checking} onClick={() => void refreshAll()}>Check again</Button>}
         </>}
       </div>
       {signingInId && deviceCode?.profileId === signingInId && <div className="settings-section" role="status">
         <p>Open <strong>{deviceCode.verificationUrl}</strong> and enter this code on that page:</p>
         <code>{deviceCode.userCode}</code>
         <div className="settings-field-row">
-          <button type="button" className="settings-button settings-button-primary" onClick={() => void bridge.loginOpenDevicePage?.()}>Open page</button>
-          <button type="button" className="settings-button" onClick={() => copyDeviceText(deviceCode.verificationUrl, "link")}>Copy link</button>
-          <button type="button" className="settings-button" onClick={() => copyDeviceText(deviceCode.userCode, "code")}>Copy code</button>
+          <Button size="sm" type="button" variant="primary" onClick={() => void bridge.loginOpenDevicePage?.()}>Open page</Button>
+          <Button size="sm" type="button" onClick={() => copyDeviceText(deviceCode.verificationUrl, "link")}>Copy link</Button>
+          <Button size="sm" type="button" onClick={() => copyDeviceText(deviceCode.userCode, "code")}>Copy code</Button>
         </div>
         <p className="settings-field-hint">Device-code login may need to be enabled in your ChatGPT security or workspace settings.</p>
       </div>}
       <details className="connection-drawer-advanced"><summary>Advanced troubleshooting</summary>
         <p>{binarySnapshot?.binaryPath ?? "No Codex executable found"}</p>
         <p>{support ? `Supported: ${support.supportedRange}. Recommended: ${support.recommended}.` : "Checking supported versions…"}</p>
-        <button type="button" className="settings-button" disabled={busy || !!signingInId} onClick={() => void pick()}>Choose executable…</button>
-        {trustRefusal && <button type="button" className="settings-button" onClick={() => setTrustDialogOpen(true)}>Review executable trust…</button>}
+        <Button size="sm" type="button" disabled={busy || !!signingInId} onClick={() => void pick()}>Choose executable…</Button>
+        {trustRefusal && <Button size="sm" type="button" onClick={() => setTrustDialogOpen(true)}>Review executable trust…</Button>}
       </details>
       <BinaryTrustDialog open={trustDialogOpen && trustRefusal !== null} binaryPath={trustRefusal?.binaryPath ?? ""} reason={trustRefusal?.reason ?? ""} staleConsent={trustRefusal?.staleConsent ?? false} onAccept={() => void acceptTrust()} onDecline={() => setTrustDialogOpen(false)} />
     </section>;
@@ -1110,9 +1111,9 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
       {alternateBinaryChoices(binarySnapshot).length > 0 && (binarySnapshot?.report.status === "error" || binarySnapshot?.report.status === "update_required") && (
         <div className="settings-field-row">
           {alternateBinaryChoices(binarySnapshot).map((alt) => (
-            <button key={alt.path} type="button" className="settings-button" disabled={busy} onClick={() => void useAlternate(alt.path)}>
+            <Button size="sm" key={alt.path} type="button" disabled={busy} onClick={() => void useAlternate(alt.path)}>
               Use {alt.path}
-            </button>
+            </Button>
           ))}
         </div>
       )}
@@ -1138,31 +1139,31 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
         </div>
       )}
       <div className="settings-field-row">
-        <button type="button" className="settings-button" disabled={busy} onClick={() => void refreshAll()}>
+        <Button size="sm" type="button" disabled={busy} onClick={() => void refreshAll()}>
           Recheck all
-        </button>
-        <button type="button" className="settings-button" disabled={busy} onClick={() => void pick()}>
+        </Button>
+        <Button size="sm" type="button" disabled={busy} onClick={() => void pick()}>
           Choose binary…
-        </button>
+        </Button>
         {binaryActions.showInstall && support && (
-          <button type="button" className="settings-button settings-button-primary" disabled={busy} onClick={() => void installBinary(support.recommended)}>
+          <Button size="sm" type="button" variant="primary" disabled={busy} onClick={() => void installBinary(support.recommended)}>
             Install Codex {support.recommended}
-          </button>
+          </Button>
         )}
         {binaryActions.showUpdate && support && (
-          <button type="button" className="settings-button settings-button-primary" disabled={busy} onClick={() => void installBinary(support.recommended)}>
+          <Button size="sm" type="button" variant="primary" disabled={busy} onClick={() => void installBinary(support.recommended)}>
             Update to {support.recommended}
-          </button>
+          </Button>
         )}
         {binaryActions.showUseAnyway && (
-          <button type="button" className="settings-button" disabled={busy} onClick={() => void acceptRiskForBinary()}>
+          <Button size="sm" type="button" disabled={busy} onClick={() => void acceptRiskForBinary()}>
             Use anyway
-          </button>
+          </Button>
         )}
         {trustRefusal !== null && (
-          <button
+          <Button size="sm"
             type="button"
-            className="settings-button"
+            
             disabled={busy}
             // structured facts for the automation facade
             // (`realCodexPaneDom().trust()`) — never read by string-matching
@@ -1174,11 +1175,11 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
             onClick={() => setTrustDialogOpen(true)}
           >
             Trust this binary…
-          </button>
+          </Button>
         )}
-        <button type="button" className="settings-button" disabled={busy} onClick={() => void refreshManifest()}>
+        <Button size="sm" type="button" disabled={busy} onClick={() => void refreshManifest()}>
           Refresh manifest
-        </button>
+        </Button>
       </div>
 
       <div className="settings-section-title">Accounts</div>
@@ -1188,9 +1189,9 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
       <div className="settings-mcp-detail codex-default-account-hint">
         New sessions start on the account marked Default.
         {systemRow.offerMakeSystemDefault && (
-          <button type="button" className="settings-button" disabled={busy} onClick={() => void makeDefault(SYSTEM_PROFILE_ID)}>
+          <Button size="sm" type="button" disabled={busy} onClick={() => void makeDefault(SYSTEM_PROFILE_ID)}>
             Use the System account instead
-          </button>
+          </Button>
         )}
       </div>
       <ul className="settings-mcp-list codex-profile-grid">
@@ -1244,9 +1245,9 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
       </ul>
       <div className="settings-field-row">
         {!hasMainAuthLinkProfile(profiles) && (
-          <button type="button" className="settings-button" disabled={busy || atProfileLimit} onClick={() => void useCurrentAccount()}>
+          <Button size="sm" type="button" disabled={busy || atProfileLimit} onClick={() => void useCurrentAccount()}>
             Use current account
-          </button>
+          </Button>
         )}
         {addingAccount ? (
           <>
@@ -1258,31 +1259,31 @@ export function CodexEnginePane({ bridge = window.anycode.codex, onRequestCloseS
               onChange={(event) => setNewLabel(event.target.value)}
               autoFocus
             />
-            <button type="button" className="settings-button settings-button-primary" disabled={busy || newLabel.trim() === ""} onClick={() => void submitAddAccount()}>
+            <Button size="sm" type="button" variant="primary" disabled={busy || newLabel.trim() === ""} onClick={() => void submitAddAccount()}>
               Create & sign in
-            </button>
-            <button
+            </Button>
+            <Button size="sm"
               type="button"
-              className="settings-button"
+              
               onClick={() => {
                 setAddingAccount(false);
                 setNewLabel("");
               }}
             >
               Cancel
-            </button>
+            </Button>
           </>
         ) : (
-          <button type="button" className="settings-button" disabled={busy || atProfileLimit} onClick={() => setAddingAccount(true)}>
+          <Button size="sm" type="button" disabled={busy || atProfileLimit} onClick={() => setAddingAccount(true)}>
             Add account…
-          </button>
+          </Button>
         )}
       </div>
       {atProfileLimit && <p className="settings-page-description">At most {MAX_CODEX_PROFILES} profiles are supported.</p>}
       <div className="settings-field-row">
-        <button type="button" className="settings-button" onClick={() => setImportOpen(true)}>
+        <Button size="sm" type="button" onClick={() => setImportOpen(true)}>
           Import a Codex session…
-        </button>
+        </Button>
       </div>
       {importOpen && (
         <CodexRolloutImportDialog open={importOpen} onClose={() => setImportOpen(false)} profiles={profiles} onRequestCloseSettings={onRequestCloseSettings} />

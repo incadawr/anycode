@@ -1796,7 +1796,7 @@ export interface VisionPaneConnectionOption {
 export interface VisionPaneState {
   /** Whether `.vision-pane` is currently mounted (Settings open with the "vision" pane selected). */
   mounted: boolean;
-  /** The badge's own reading — `true` iff `.vision-pane-state-badge` carries `vision-pane-state-badge-on` ("On"). */
+  /** Whether the Vision badge reports an enabled fallback. */
   enabled: boolean;
   /** `.vision-pane-current-pair`'s rendered text ("<label> · <modelId>"), or `null` when the badge reads "Off" (the component renders no pair span at all in that branch). */
   currentPairText: string | null;
@@ -2341,6 +2341,7 @@ export interface ProviderDrawerDomState {
   primaryButtonLabel: string | null;
   primaryButtonEnabled: boolean;
   saveKeyEnabled: boolean;
+  oauthSignInUnavailable?: boolean;
   clearKeyEnabled: boolean;
 }
 
@@ -4177,7 +4178,7 @@ function realWorkflowTicksDom(): WorkflowTicksDom {
  * `{activePane === "mcp" && <McpServersPane/>}` guard), so `mounted()` is an
  * unambiguous reading.
  */
-function realMcpPaneDom(): McpPaneDom {
+export function realMcpPaneDom(): McpPaneDom {
   function pane(): HTMLElement | null {
     return document.querySelector<HTMLElement>(".mcp-pane");
   }
@@ -4220,8 +4221,8 @@ function realMcpPaneDom(): McpPaneDom {
   }
   /** The `.settings-field` whose own `.settings-field-label` text matches — same structural identification a sighted user relies on (SubagentsPane precedent). */
   function formField(label: string): HTMLElement | null {
-    for (const field of formDialog()?.querySelectorAll<HTMLElement>(".settings-field") ?? []) {
-      if (field.querySelector(".settings-field-label")?.textContent?.trim() === label) {
+    for (const field of formDialog()?.querySelectorAll<HTMLElement>(".settings-field, .ak-field") ?? []) {
+      if (field.querySelector(".settings-field-label, .ak-field__label")?.textContent?.trim() === label) {
         return field;
       }
     }
@@ -4254,7 +4255,7 @@ function realMcpPaneDom(): McpPaneDom {
       return li ? parseRow(li).enabled : undefined;
     },
     clickRowToggle: (name) => {
-      const button = rowEl(name)?.querySelector<HTMLButtonElement>(".settings-switch");
+      const button = rowEl(name)?.querySelector<HTMLButtonElement>('[role="switch"]');
       if (!button) {
         return false;
       }
@@ -4299,7 +4300,7 @@ function realMcpPaneDom(): McpPaneDom {
         ?.click();
     },
     clickApplyButton: () => {
-      const button = importDialog()?.querySelector<HTMLButtonElement>(".mcp-dialog-actions .settings-button-primary");
+      const button = importDialog()?.querySelector<HTMLButtonElement>(".mcp-dialog-actions .ak-btn--primary");
       if (!button || button.disabled) {
         return false;
       }
@@ -4319,12 +4320,12 @@ function realMcpPaneDom(): McpPaneDom {
       if (!field) {
         return false;
       }
-      const input = field.querySelector<HTMLInputElement>("input.settings-field-input");
+      const input = field.querySelector<HTMLInputElement>("input");
       if (input) {
         setNativeInputValue(input, value);
         return true;
       }
-      const textarea = field.querySelector<HTMLTextAreaElement>("textarea.settings-field-input");
+      const textarea = field.querySelector<HTMLTextAreaElement>("textarea");
       if (textarea) {
         setNativeTextAreaValue(textarea, value);
         return true;
@@ -4333,11 +4334,11 @@ function realMcpPaneDom(): McpPaneDom {
     },
     formTextValue: (label) => {
       const field = formField(label);
-      const input = field?.querySelector<HTMLInputElement>("input.settings-field-input");
+      const input = field?.querySelector<HTMLInputElement>("input");
       if (input) {
         return input.value;
       }
-      return field?.querySelector<HTMLTextAreaElement>("textarea.settings-field-input")?.value ?? null;
+      return field?.querySelector<HTMLTextAreaElement>("textarea")?.value ?? null;
     },
     clickFormRadio: (group, value) => {
       const input = formRadio(group, value);
@@ -4356,7 +4357,7 @@ function realMcpPaneDom(): McpPaneDom {
     },
     formRadioChecked: (group, value) => formRadio(group, value)?.checked ?? false,
     clickFormSubmit: () => {
-      const button = formDialog()?.querySelector<HTMLButtonElement>(".mcp-dialog-actions .settings-button-primary");
+      const button = formDialog()?.querySelector<HTMLButtonElement>(".mcp-dialog-actions .ak-btn--primary");
       if (!button || button.disabled) {
         return false;
       }
@@ -4376,7 +4377,7 @@ function realMcpPaneDom(): McpPaneDom {
  * .tsx`'s own `{activePane === "skills" && <SkillsPane/>}` guard), so
  * `mounted()` is an unambiguous reading.
  */
-function realSkillsPaneDom(): SkillsPaneDom {
+export function realSkillsPaneDom(): SkillsPaneDom {
   function pane(): HTMLElement | null {
     return document.querySelector<HTMLElement>(".skills-pane");
   }
@@ -4411,7 +4412,7 @@ function realSkillsPaneDom(): SkillsPaneDom {
     },
     rowExists: (name) => rowEl(name) !== null,
     clickRowToggle: (name) => {
-      const button = rowEl(name)?.querySelector<HTMLButtonElement>(".settings-switch");
+      const button = rowEl(name)?.querySelector<HTMLButtonElement>('[role="switch"]');
       if (!button) {
         return false;
       }
@@ -4428,7 +4429,7 @@ function realSkillsPaneDom(): SkillsPaneDom {
     },
     confirmDeleteVisible: (name) => (rowEl(name)?.querySelector(".mcp-confirm-row") ?? null) !== null,
     clickRowConfirmDelete: (name) => {
-      const button = rowEl(name)?.querySelector<HTMLButtonElement>(".mcp-confirm-row .settings-button-danger");
+      const button = rowEl(name)?.querySelector<HTMLButtonElement>(".mcp-confirm-row .ak-btn--danger");
       if (!button) {
         return false;
       }
@@ -4474,7 +4475,7 @@ function realSkillsPaneDom(): SkillsPaneDom {
       document.querySelector<HTMLButtonElement>('.skills-pane .skills-icon-button[aria-label="Import skills"]')?.click();
     },
     clickApplyButton: () => {
-      const button = importDialog()?.querySelector<HTMLButtonElement>(".mcp-dialog-actions .settings-button-primary");
+      const button = importDialog()?.querySelector<HTMLButtonElement>(".mcp-dialog-actions .ak-btn--primary");
       if (!button || button.disabled) {
         return false;
       }
@@ -4564,7 +4565,7 @@ function parseEffectiveToolsLine(line: string | null): string[] | null {
  * `.settings-field-label` text matches, the same structural identification a
  * sighted user relies on.
  */
-function realSubagentsPaneDom(): SubagentsPaneDom {
+export function realSubagentsPaneDom(): SubagentsPaneDom {
   function pane(): HTMLElement | null {
     return document.querySelector<HTMLElement>(".subagents-pane");
   }
@@ -4589,8 +4590,8 @@ function realSubagentsPaneDom(): SubagentsPaneDom {
     return document.querySelector<HTMLElement>(".subagents-editor-dialog");
   }
   function fieldByLabel(labelText: string): HTMLElement | null {
-    const fields = Array.from(dialog()?.querySelectorAll<HTMLElement>(".settings-field") ?? []);
-    return fields.find((el) => el.querySelector(".settings-field-label")?.textContent?.trim() === labelText) ?? null;
+    const fields = Array.from(dialog()?.querySelectorAll<HTMLElement>(".settings-field, .ak-field") ?? []);
+    return fields.find((el) => el.querySelector(".settings-field-label, .ak-field__label")?.textContent?.trim() === labelText) ?? null;
   }
   function nameInput(): HTMLInputElement | null {
     return fieldByLabel("Name")?.querySelector<HTMLInputElement>("input") ?? null;
@@ -4598,24 +4599,24 @@ function realSubagentsPaneDom(): SubagentsPaneDom {
   function descriptionInput(): HTMLInputElement | null {
     return fieldByLabel("Description")?.querySelector<HTMLInputElement>("input") ?? null;
   }
-  function modelInput(): HTMLInputElement | null {
-    return fieldByLabel("Model")?.querySelector<HTMLInputElement>("input") ?? null;
+  function modelInput(): HTMLSelectElement | null {
+    return fieldByLabel("Model")?.querySelector<HTMLSelectElement>("select") ?? null;
   }
   function bodyTextarea(): HTMLTextAreaElement | null {
-    return dialog()?.querySelector<HTMLTextAreaElement>(".subagents-body-textarea") ?? null;
+    return fieldByLabel("System prompt (body)")?.querySelector<HTMLTextAreaElement>("textarea") ?? null;
   }
   function toolChips(): HTMLLabelElement[] {
     return Array.from(dialog()?.querySelectorAll<HTMLLabelElement>(".subagents-tool-chip") ?? []);
   }
   function saveButton(): HTMLButtonElement | null {
-    return dialog()?.querySelector<HTMLButtonElement>(".mcp-dialog-actions .settings-button-primary") ?? null;
+    return dialog()?.querySelector<HTMLButtonElement>(".mcp-dialog-actions .ak-btn--primary") ?? null;
   }
   return {
     mounted: () => pane() !== null,
     rows: () => Array.from(pane()?.querySelectorAll<HTMLLIElement>(".skills-row") ?? []).map(parseRow),
     rowExists: (name) => rowEl(name) !== null,
     clickCreateButton: () => {
-      document.querySelector<HTMLButtonElement>('.subagents-pane .skills-icon-button[aria-label="Create subagent"]')?.click();
+      document.querySelector<HTMLButtonElement>('.subagents-pane [aria-label="Create subagent"]')?.click();
     },
     clickRowEdit: (name) => {
       const button = rowEl(name)?.querySelector<HTMLButtonElement>(`[aria-label="Edit ${CSS.escape(name)}"]`);
@@ -4635,7 +4636,7 @@ function realSubagentsPaneDom(): SubagentsPaneDom {
     },
     confirmDeleteVisible: (name) => (rowEl(name)?.querySelector(".mcp-confirm-row") ?? null) !== null,
     clickRowConfirmDelete: (name) => {
-      const button = rowEl(name)?.querySelector<HTMLButtonElement>(".mcp-confirm-row .settings-button-danger");
+      const button = rowEl(name)?.querySelector<HTMLButtonElement>(".mcp-confirm-row .ak-btn--danger");
       if (!button) {
         return false;
       }
@@ -4701,7 +4702,8 @@ function realSubagentsPaneDom(): SubagentsPaneDom {
       if (!input) {
         return false;
       }
-      setNativeInputValue(input, value);
+      if (![...input.options].some((option) => option.value === value && !option.disabled)) return false;
+      setNativeSelectValue(input, value);
       return true;
     },
     setName: (value) => {
@@ -4974,7 +4976,7 @@ function realProfilePaneDom(): ProfilePaneDom {
  * classes for how this probe tells apart the two DIFFERENT elements that can
  * carry the bare `settings-notice` class within this one pane).
  */
-function realVisionPaneDom(): VisionPaneDom {
+export function realVisionPaneDom(): VisionPaneDom {
   function pane(): HTMLElement | null {
     return document.querySelector<HTMLElement>(".vision-pane");
   }
@@ -4998,7 +5000,7 @@ function realVisionPaneDom(): VisionPaneDom {
   }
   return {
     mounted: () => pane() !== null,
-    enabled: () => (pane()?.querySelector(".vision-pane-state-badge")?.classList.contains("vision-pane-state-badge-on") ?? false),
+    enabled: () => (pane()?.querySelector('[data-automation="vision-state"] .ak-badge')?.getAttribute("data-tone") === "success"),
     currentPairText: () => pane()?.querySelector(".vision-pane-current-pair")?.textContent?.trim() ?? null,
     connectionOptions: () =>
       // The placeholder ("Select a connection…") carries `value=""` — the
@@ -5093,7 +5095,7 @@ function realVisionPaneDom(): VisionPaneDom {
       if (!el) {
         return null;
       }
-      return { ok: el.classList.contains("settings-notice-ok"), text: el.textContent?.trim() ?? "" };
+      return { ok: el.classList.contains("ak-banner--success"), text: el.textContent?.trim() ?? "" };
     },
   };
 }
@@ -5204,7 +5206,7 @@ function realComposerSlashDom(): ComposerSlashDom {
  * `.shortcuts-badge-remove`, so `clickEditSlot`/`clickRemoveSlot` on a
  * currently-recording slot faithfully return `false` rather than mis-firing.
  */
-function realShortcutsPaneDom(): ShortcutsPaneDom {
+export function realShortcutsPaneDom(): ShortcutsPaneDom {
   function pane(): HTMLElement | null {
     return document.querySelector<HTMLElement>(".shortcuts-pane");
   }
@@ -5222,7 +5224,7 @@ function realShortcutsPaneDom(): ShortcutsPaneDom {
         bindings: badges
           .filter((badge) => !badge.classList.contains("shortcuts-badge-recording"))
           .map((badge) => badge.querySelector(".shortcuts-badge-chord")?.textContent?.trim() ?? ""),
-        overridden: el.querySelector(".shortcuts-reset-button") !== null,
+        overridden: el.querySelector("[data-automation='shortcuts-reset']") !== null,
         unassigned: el.querySelector(".shortcuts-unassigned") !== null,
         recording: el.querySelector(".shortcuts-badge-recording") !== null,
       };
@@ -5235,7 +5237,7 @@ function realShortcutsPaneDom(): ShortcutsPaneDom {
     recordingChipText: () =>
       pane()?.querySelector<HTMLElement>(".shortcuts-badge-recording .shortcuts-badge-chord")?.textContent?.trim() ?? null,
     clickAdd: (action) => {
-      const btn = rowEl(action)?.querySelector<HTMLButtonElement>(".shortcuts-add-button") ?? null;
+      const btn = rowEl(action)?.querySelector<HTMLButtonElement>("[data-automation='shortcuts-add']") ?? null;
       if (!btn || btn.disabled) {
         return false;
       }
@@ -5261,7 +5263,7 @@ function realShortcutsPaneDom(): ShortcutsPaneDom {
       return true;
     },
     clickReset: (action) => {
-      const btn = rowEl(action)?.querySelector<HTMLButtonElement>(".shortcuts-reset-button") ?? null;
+      const btn = rowEl(action)?.querySelector<HTMLButtonElement>("[data-automation='shortcuts-reset']") ?? null;
       if (!btn || btn.disabled) {
         return false;
       }
@@ -5280,7 +5282,7 @@ function realShortcutsPaneDom(): ShortcutsPaneDom {
  * `ProviderSettings` directly, never `SettingsScreen` itself), so `mounted()`
  * is an unambiguous open/closed read.
  */
-function realSettingsDom(): SettingsDom {
+export function realSettingsDom(): SettingsDom {
   function screen(): HTMLDivElement | null {
     return document.querySelector<HTMLDivElement>(".settings-screen");
   }
@@ -5291,7 +5293,7 @@ function realSettingsDom(): SettingsDom {
     return screen()?.querySelector<HTMLInputElement>('input[aria-label="Pattern"]') ?? null;
   }
   function addButton(): HTMLButtonElement | null {
-    return screen()?.querySelector<HTMLButtonElement>(".settings-rule-add .settings-button-primary") ?? null;
+    return screen()?.querySelector<HTMLButtonElement>(".settings-rule-add .ak-btn--primary") ?? null;
   }
   return {
     mounted: () => screen() !== null,
@@ -5487,7 +5489,7 @@ function realTranscriptBlockDom(): TranscriptBlockDom {
  * its caption text is auth-kind/status-dependent ("API key" vs "Replace
  * key…").
  */
-function realProviderPaneDom(): ProviderPaneDom {
+export function realProviderPaneDom(): ProviderPaneDom {
   function grid(): HTMLElement | null {
     return document.querySelector<HTMLElement>(".connection-grid");
   }
@@ -5527,8 +5529,8 @@ function realProviderPaneDom(): ProviderPaneDom {
     // "Save"; post-creation it is the single unified "Save" — both
     // carry `-primary`.
     return (
-      body.querySelector<HTMLButtonElement>(":scope > .settings-field-row .settings-button-primary") ??
-      body.querySelector<HTMLButtonElement>(":scope > .settings-field-row .settings-button")
+      body.querySelector<HTMLButtonElement>(":scope > .connection-drawer-actions .ak-btn--primary") ??
+      body.querySelector<HTMLButtonElement>(":scope > .connection-drawer-actions .ak-btn")
     );
   }
   // The credential input — post-creation it lives in `.connection-drawer-credential`
@@ -5609,7 +5611,7 @@ function realProviderPaneDom(): ProviderPaneDom {
     },
     clickConfirmDelete(connectionId: string): boolean {
       const btn =
-        tileEl(connectionId)?.querySelector<HTMLButtonElement>(".connection-tile-confirm-actions .settings-button-danger") ?? null;
+        tileEl(connectionId)?.querySelector<HTMLButtonElement>(".connection-tile-confirm-actions .ak-btn--danger") ?? null;
       if (!btn) {
         return false;
       }
@@ -5636,11 +5638,9 @@ function realProviderPaneDom(): ProviderPaneDom {
       const authKind: "api_key" | "oauth" = sec?.querySelector(".settings-oauth-block") ? "oauth" : "api_key";
       const credentialStatusEl = sec?.querySelector<HTMLElement>('[class*="settings-secret-status"]') ?? null;
       const primary = primaryTopButton(body);
-      // the old separate credential "Save key" is gone — the unified
-      // post-creation "Save" now carries the key; report ITS enabled state
-      // here so the `/save-key` route's readiness gate stays truthful.
-      const saveKeyBtn = unifiedSaveButton(body);
-      const clearKeyBtn = sec?.querySelector<HTMLButtonElement>(".settings-button-danger") ?? null;
+      // API keys use the unified Save; OAuth uses its own Sign in button.
+      const saveKeyBtn = authKind === "oauth" ? sec?.querySelector<HTMLButtonElement>(".settings-oauth-block .ak-btn--primary") ?? null : unifiedSaveButton(body);
+      const clearKeyBtn = sec?.querySelector<HTMLButtonElement>('[data-automation="clear-key"]') ?? null;
       return {
         embedded,
         stage,
@@ -5668,6 +5668,7 @@ function realProviderPaneDom(): ProviderPaneDom {
         primaryButtonLabel: primary?.textContent ?? null,
         primaryButtonEnabled: primary !== null && !primary.disabled,
         saveKeyEnabled: saveKeyBtn !== null && !saveKeyBtn.disabled,
+        oauthSignInUnavailable: authKind === "oauth" && saveKeyBtn === null,
         clearKeyEnabled: clearKeyBtn !== null && !clearKeyBtn.disabled,
       };
     },
@@ -5802,8 +5803,10 @@ function realProviderPaneDom(): ProviderPaneDom {
         return false;
       }
       const sec = credentialSection(body);
-      const oauthSignIn = sec?.querySelector<HTMLButtonElement>(".settings-oauth-block .settings-button-primary") ?? null;
-      const btn = oauthSignIn ?? unifiedSaveButton(body);
+      const oauthBlock = sec?.querySelector(".settings-oauth-block");
+      const oauthSignIn = oauthBlock?.querySelector<HTMLButtonElement>(".ak-btn--primary") ?? null;
+      if (oauthBlock && !oauthSignIn) return false;
+      const btn = oauthBlock ? oauthSignIn : unifiedSaveButton(body);
       if (!btn || btn.disabled) {
         return false;
       }
@@ -5813,7 +5816,7 @@ function realProviderPaneDom(): ProviderPaneDom {
     clickDrawerClearKey(): boolean {
       const body = drawerBody();
       const sec = body && credentialSection(body);
-      const btn = sec?.querySelector<HTMLButtonElement>(".settings-button-danger") ?? null;
+      const btn = sec?.querySelector<HTMLButtonElement>('[data-automation="clear-key"]') ?? null;
       if (!btn || btn.disabled) {
         return false;
       }
@@ -6483,7 +6486,7 @@ async function redactRolloutRow(row: CodexImportRolloutRowDomFacts): Promise<Cod
  * …") — byte-parity with the on-screen copy, the only render-side source
  * these facts have.
  */
-function realCodexPaneDom(): CodexPaneDom {
+export function realCodexPaneDom(): CodexPaneDom {
   function pane(): HTMLElement | null {
     return document.querySelector<HTMLElement>("#settings-pane-codex .settings-section");
   }
@@ -6508,7 +6511,7 @@ function realCodexPaneDom(): CodexPaneDom {
     return actionButtons().find((b) => (b.textContent ?? "").trim() === label) ?? null;
   }
   function installButtonEl(): HTMLButtonElement | null {
-    return actionRow()?.querySelector<HTMLButtonElement>(".settings-button-primary") ?? null;
+    return actionRow()?.querySelector<HTMLButtonElement>(".ak-btn--primary") ?? null;
   }
   function parseRow(li: HTMLLIElement): CodexPaneRowState {
     const status = li.querySelector<HTMLElement>(".settings-secret-status");
@@ -10457,6 +10460,7 @@ export function createAutomationFacade(
       if (d === null) {
         return { ok: false, reason: "drawer_not_open" };
       }
+      if (d.oauthSignInUnavailable) return { ok: false, reason: "oauth_sign_in_unavailable" };
       if (!d.saveKeyEnabled) {
         return { ok: false, reason: "save_key_disabled" };
       }

@@ -1,3 +1,4 @@
+import { useId } from "react";
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 
 export interface SwitchProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "onChange" | "value"> {
@@ -15,6 +16,9 @@ export interface SwitchProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement
 /**
  * Switch. Роль `switch`, состояние — aria-checked.
  * Управляется клавиатурой (Space/Enter) через нативный <button>.
+ * Имя: `label` → aria-labelledby на отдельный узел подписи (тот же паттерн,
+ * что у Checkbox/Radio), при отсутствии label — aria-label.
+ * Геометрия совпадает с .settings-switch приложения: 32×18, ползунок 12px.
  */
 export function Switch({
   checked,
@@ -27,13 +31,15 @@ export function Switch({
   type = "button",
   ...rest
 }: SwitchProps): React.ReactElement {
+  const labelId = useId();
   const classes = ["ak-switch", className ?? ""].filter(Boolean).join(" ");
 
   const control = (
     <button
       type={type}
       role="switch"
-      aria-label={label}
+      aria-labelledby={label ? labelId : undefined}
+      aria-label={label ? undefined : rest["aria-label"]}
       className={classes}
       aria-checked={checked}
       aria-describedby={describedBy}
@@ -46,9 +52,13 @@ export function Switch({
   if (!label && !children) return control;
 
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--sp-2)" }}>
+    <span className="ak-switch__row">
       {control}
-      {label ? <span style={{ fontSize: "var(--fs-sm)", color: "var(--text-1)" }}>{label}</span> : null}
+      {label ? (
+        <span className="ak-switch__label" id={labelId}>
+          {label}
+        </span>
+      ) : null}
       {children}
     </span>
   );

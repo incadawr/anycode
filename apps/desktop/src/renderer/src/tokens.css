@@ -174,8 +174,10 @@
   --switch-h: 1.125rem;
   --switch-knob: 0.75rem;
   --dialog-w: 35rem;
+  --dialog-w-sm: 22rem;
   --dialog-w-wide: 55rem;
   --drawer-w: 40rem;
+  --drawer-w-lg: 55rem;
   --popover-max-w: 20rem;
   --focus-ring-width: 2px;
   --focus-ring-offset: 1px;

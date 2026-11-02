@@ -12,6 +12,7 @@
  * tile's outer element is a plain `role="group"` container, mirroring
  * ModelPill's popover-trigger-as-sibling pattern.
  */
+import { Button } from "../ui/index.js";
 import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import type { CatalogSummaryEntry, ProviderConnection, ProviderHealthStatus, SecretKey, SecretStatus } from "../../../shared/settings.js";
@@ -522,16 +523,16 @@ export function ConnectionTile({
               <button type="button" ref={confirmCancelRef} className="settings-button" onClick={() => setConfirmingDelete(false)}>
                 Cancel
               </button>
-              <button
+              <Button variant="danger"
                 type="button"
-                className="settings-button settings-button-danger"
+
                 onClick={() => {
                   closeMenu(true);
                   onDelete();
                 }}
               >
                 Delete
-              </button>
+              </Button>
             </div>
           </div>
         )}

@@ -92,3 +92,21 @@ it("Drawer restores trigger on unmount and traps past hidden body controls",()=>
   const close=byRole(container,"button","Close");close.focus();key("Tab",close,true);expect(document.activeElement).toBe(byRole(container,"button","Visible"));
   unmount();expect(document.activeElement).toBe(button);button.remove();
 });
+
+it("Popover Escape stops propagation past document", () => {
+  const close = vi.fn(), outer = vi.fn();
+  window.addEventListener("keydown", outer);
+  mount(menu(close));
+  key("Escape");
+  expect(close).toHaveBeenCalledOnce();
+  expect(outer).not.toHaveBeenCalled();
+  window.removeEventListener("keydown", outer);
+});
+
+for (const kind of ["Modal", "Drawer"] as const) it(`Escape closes a popover inside ${kind} before its parent`, () => {
+  const closeParent=vi.fn(), closeMenu=vi.fn();
+  const props={open:true,title:"Parent",onClose:closeParent};
+  const {container}=mount(kind === "Modal" ? h(Modal,props,menu(closeMenu)) : h(Drawer,props,menu(closeMenu)));
+  const row=byRole(container,"menuitem","A"); row.focus(); key("Escape",row);
+  expect(closeMenu).toHaveBeenCalledOnce(); expect(closeParent).not.toHaveBeenCalled();
+});

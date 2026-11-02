@@ -20,6 +20,7 @@
  * config is read once per host boot, so changes apply to NEW sessions and
  * tabs; project entries start only after the folder is trusted.
  */
+import { Button, Input } from "../ui/index.js";
 import { useContext, useEffect, useState } from "react";
 import { formatLspExtensions, formatLspState } from "./LspPanel.js";
 import {
@@ -212,14 +213,13 @@ export function LanguageServersPane({ tabId, bridge = window.anycode.lspConfig, 
                     {!row.entry.found && (
                       <div className="mcp-row-hint lsp-install-hint">
                         <span className="lsp-install-command">{row.entry.installHint}</span>
-                        <button
+                        <Button size="sm"
                           type="button"
-                          className="settings-button"
                           aria-label={`Copy install command for ${row.entry.label}`}
                           onClick={() => copyInstallHint(row.entry.id, row.entry.installHint)}
                         >
                           {copiedId === row.entry.id ? "Copied" : "Copy"}
-                        </button>
+                        </Button>
                       </div>
                     )}
                     {row.notInstalled && (row.enabled.project || row.enabled.user) && (
@@ -233,14 +233,13 @@ export function LanguageServersPane({ tabId, bridge = window.anycode.lspConfig, 
                     return (
                       <>
                         {action.inheritedNote !== null && <span className="mcp-row-hint">{action.inheritedNote}</span>}
-                        <button
+                        <Button size="sm" variant={action.kind === "enable" ? "primary" : "secondary"}
                           type="button"
-                          className={action.kind === "enable" ? "settings-button settings-button-primary" : "settings-button"}
                           aria-label={action.ariaLabel}
                           onClick={() => (action.kind === "enable" ? enable(row, action.scope) : disable(row.entry.id, action.scope))}
                         >
                           {action.label}
-                        </button>
+                        </Button>
                       </>
                     );
                   })()}
@@ -277,9 +276,8 @@ export function LanguageServersPane({ tabId, bridge = window.anycode.lspConfig, 
         <div className="mcp-section-title">Custom server</div>
         {form === null ? (
           <div className="settings-field-row">
-            <button
+            <Button
               type="button"
-              className="settings-button"
               aria-label="Add a custom language server"
               onClick={() => {
                 setFormError(null);
@@ -287,7 +285,7 @@ export function LanguageServersPane({ tabId, bridge = window.anycode.lspConfig, 
               }}
             >
               Add custom server
-            </button>
+            </Button>
           </div>
         ) : (
           <CustomServerForm
@@ -351,14 +349,13 @@ function LiveLspStatus() {
           </ul>
           {hasCrashedLspServer(liveServers) && (
             <div className="settings-field-row">
-              <button
+              <Button
                 type="button"
-                className="settings-button"
                 aria-label="Restart crashed servers"
                 onClick={() => send({ type: "lsp_restart_request" })}
               >
                 Restart crashed servers
-              </button>
+              </Button>
             </div>
           )}
         </>
@@ -404,14 +401,13 @@ function ScopeEntryList({
                 </div>
               </div>
               <div className="mcp-row-controls">
-                <button
+                <Button variant="danger" size="sm"
                   type="button"
-                  className="settings-button settings-button-danger"
                   aria-label={`Remove ${entry.name}`}
                   onClick={() => onRemove(entry.name)}
                 >
                   Remove
-                </button>
+                </Button>
               </div>
             </li>
           ))}
@@ -444,49 +440,33 @@ function CustomServerForm({
 
   return (
     <div className="lsp-custom-form" aria-label="Add a custom language server">
-      <label className="settings-field">
-        <span className="settings-field-label">Name</span>
-        <input
-          className="settings-field-input"
+      <Input size="sm" label="Name"
           type="text"
           value={fields.name}
           placeholder="my-server"
           onChange={(e) => set("name", e.target.value)}
+          error={errors.name}
         />
-        {errors.name && <span className="settings-field-error">{errors.name}</span>}
-      </label>
-      <label className="settings-field">
-        <span className="settings-field-label">Command (one executable name or absolute path)</span>
-        <input
-          className="settings-field-input"
+      <Input size="sm" label="Command (one executable name or absolute path)"
           type="text"
           value={fields.command}
           placeholder="my-language-server"
           onChange={(e) => set("command", e.target.value)}
+          error={errors.command}
         />
-        {errors.command && <span className="settings-field-error">{errors.command}</span>}
-      </label>
-      <label className="settings-field">
-        <span className="settings-field-label">Arguments (quoted tokens allowed)</span>
-        <input
-          className="settings-field-input"
+      <Input size="sm" label="Arguments (quoted tokens allowed)"
           type="text"
           value={fields.argsText}
           placeholder="--stdio"
           onChange={(e) => set("argsText", e.target.value)}
         />
-      </label>
-      <label className="settings-field">
-        <span className="settings-field-label">File extensions (comma or space separated)</span>
-        <input
-          className="settings-field-input"
+      <Input size="sm" label="File extensions (comma or space separated)"
           type="text"
           value={fields.extensionsText}
           placeholder=".zig, .zir"
           onChange={(e) => set("extensionsText", e.target.value)}
+          error={errors.extensions}
         />
-        {errors.extensions && <span className="settings-field-error">{errors.extensions}</span>}
-      </label>
       <div className="settings-field">
         <span className="settings-field-label">Scope</span>
         <div className="mcp-radio-row">
@@ -511,17 +491,16 @@ function CustomServerForm({
         </div>
       )}
       <div className="settings-field-row">
-        <button type="button" className="settings-button" onClick={onCancel}>
+        <Button type="button" onClick={onCancel}>
           Cancel
-        </button>
-        <button
+        </Button>
+        <Button variant="primary"
           type="button"
-          className="settings-button settings-button-primary"
           disabled={!canSubmitCustomForm(fields)}
           onClick={onSubmit}
         >
           Add server
-        </button>
+        </Button>
       </div>
     </div>
   );

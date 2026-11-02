@@ -722,7 +722,9 @@ describe("Provider connections pane thin facade commands forward method + args (
 
   it("settingsProviderDrawerSaveKey -> callFacade('settingsProviderDrawerSaveKey', [])", async () => {
     const deps = fakeDeps();
-    await settingsProviderDrawerSaveKey(deps);
+    const refusal = { ok: false, reason: "oauth_sign_in_unavailable" };
+    vi.mocked(deps.callFacade).mockResolvedValueOnce(refusal);
+    await expect(settingsProviderDrawerSaveKey(deps)).resolves.toEqual(refusal);
     expect(deps.callFacade).toHaveBeenCalledWith("settingsProviderDrawerSaveKey", []);
   });
 

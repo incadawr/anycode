@@ -1,3 +1,4 @@
+import { Button, IconButton } from "../ui/index.js";
 import { useEffect, useRef, useState } from "react";
 import type { ProviderConnection, SettingsSnapshot } from "../../../shared/settings.js";
 import { contextWindowTokensField, modelOverrideFor } from "../../../shared/model-overrides.js";
@@ -46,7 +47,7 @@ export default function ContextWindowSettings({ snapshot, connection, model, onC
     onCancel={(event) => { event.preventDefault(); onClose(); }}>
     <div className="connection-drawer-header">
       <span className="connection-drawer-title">Context window</span>
-      <button type="button" className="connection-drawer-close" aria-label="Close" onClick={onClose}><X aria-hidden="true" /></button>
+      <IconButton className="connection-drawer-close" label="Close" onClick={onClose} icon={<X aria-hidden="true" />} />
     </div>
     <form className="connection-drawer-body" onSubmit={(event) => { event.preventDefault(); void save(); }}>
       <p className="settings-field-hint">Model: {model}</p>
@@ -60,7 +61,7 @@ export default function ContextWindowSettings({ snapshot, connection, model, onC
       {!parsed.ok && <p role="alert">Enter a whole number from 1024 to 1000000, or leave blank.</p>}
       {error !== null && <p role="alert">{error}</p>}
       <div className="connection-drawer-footer">
-        <button type="submit" className="settings-button settings-button-primary" disabled={snapshot.readOnly || saving || !parsed.ok}>{saving ? "Saving…" : "Save"}</button>
+        <Button variant="primary" type="submit" disabled={snapshot.readOnly || saving || !parsed.ok}>{saving ? "Saving…" : "Save"}</Button>
       </div>
     </form>
   </dialog>;

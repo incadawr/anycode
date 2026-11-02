@@ -21,6 +21,7 @@
  * another recheck, forever).
  */
 import { useCallback, useEffect, useState } from "react";
+import { Button } from "../ui/index.js";
 import type { ClaudeDoctorReport } from "../../../shared/claude-doctor.js";
 import type { SettingsMutationResult } from "../../../shared/settings.js";
 import { describeMutationFailure } from "../settings-store.js";
@@ -343,14 +344,14 @@ export function ClaudeEnginePane({ bridge = window.anycode.claude, onboarding = 
     <p role="status">{status.headline}</p>
     <p className="settings-page-description">{snapshot?.report.status === "signed_out" ? "Sign in with your Claude account. A Terminal window will open and guide you through browser sign-in." : status.detail}</p>
     {notice && <p className="settings-notice" role="alert">{notice}</p>}
-    {signingIn ? <div role="status"><p>{CLAUDE_LOGIN_IN_PROGRESS_COPY}</p><button type="button" className="settings-button" onClick={() => cancelClaudeSignIn(bridge)}>Cancel</button></div> :
-      <button type="button" className="settings-button settings-button-primary" disabled={checking || busy} onClick={() => canShowSignInButton(snapshot?.report) ? void signIn() : void refresh()}>{canShowSignInButton(snapshot?.report) ? "Sign in with Claude" : "Check again"}</button>}
+    {signingIn ? <div role="status"><p>{CLAUDE_LOGIN_IN_PROGRESS_COPY}</p><Button size="sm" onClick={() => cancelClaudeSignIn(bridge)}>Cancel</Button></div> :
+      <Button size="sm" variant="primary" disabled={checking || busy} onClick={() => canShowSignInButton(snapshot?.report) ? void signIn() : void refresh()}>{canShowSignInButton(snapshot?.report) ? "Sign in with Claude" : "Check again"}</Button>}
     {snapshot?.report.status === "not_installed" && <p>Install Claude Code on this computer, then check again. If you already installed it, choose its executable below.</p>}
     <details className="connection-drawer-advanced"><summary>Advanced troubleshooting</summary>
       <p>{snapshot?.binaryPath ?? "No Claude Code executable found"}</p>
       <code>{CLAUDE_PROFILE_LOGIN_COMMAND}</code>
-      <button type="button" className="settings-button" disabled={busy || signingIn} onClick={() => void pick()}>Choose executable…</button>
-      {trustRefusal && <button type="button" className="settings-button" onClick={() => setTrustDialogOpen(true)}>Review executable trust…</button>}
+      <Button size="sm" disabled={busy || signingIn} onClick={() => void pick()}>Choose executable…</Button>
+      {trustRefusal && <Button size="sm" onClick={() => setTrustDialogOpen(true)}>Review executable trust…</Button>}
     </details>
     <BinaryTrustDialog open={trustDialogOpen && trustRefusal !== null} binaryPath={trustRefusal?.binaryPath ?? ""} reason={trustRefusal?.reason ?? ""} staleConsent={trustRefusal?.staleConsent ?? false} onAccept={() => void acceptTrust()} onDecline={() => setTrustDialogOpen(false)} />
   </section>;
@@ -378,19 +379,18 @@ export function ClaudeEnginePane({ bridge = window.anycode.claude, onboarding = 
             {signingIn ? (
               <>
                 <span className="settings-oauth-pending">{CLAUDE_LOGIN_IN_PROGRESS_COPY}</span>
-                <button type="button" className="settings-button" onClick={() => cancelClaudeSignIn(bridge)}>
+                <Button size="sm" onClick={() => cancelClaudeSignIn(bridge)}>
                   Cancel
-                </button>
+                </Button>
               </>
             ) : (
-              <button
-                type="button"
-                className="settings-button settings-button-primary"
+              <Button size="sm"
+                variant="primary"
                 disabled={signInButtonDisabled(checking, busy, signingIn)}
                 onClick={() => void signIn()}
               >
                 Use my Claude subscription
-              </button>
+              </Button>
             )}
           </div>
           <p className="settings-page-description">
@@ -403,16 +403,16 @@ export function ClaudeEnginePane({ bridge = window.anycode.claude, onboarding = 
       )}
       {canShowReadyTrace(checking ? undefined : snapshot?.report) && <p className="settings-page-description">{CLAUDE_READY_QUOTA_TRACE}</p>}
       <div className="settings-field-row">
-        <button type="button" className="settings-button" disabled={busy || checking || signingIn} onClick={() => void refresh()}>
+        <Button size="sm" disabled={busy || checking || signingIn} onClick={() => void refresh()}>
           Recheck
-        </button>
-        <button type="button" className="settings-button" disabled={busy || signingIn} onClick={() => void pick()}>
+        </Button>
+        <Button size="sm" disabled={busy || signingIn} onClick={() => void pick()}>
           Choose binary…
-        </button>
+        </Button>
         {trustRefusal !== null && (
-          <button type="button" className="settings-button" disabled={busy} onClick={() => setTrustDialogOpen(true)}>
+          <Button size="sm" disabled={busy} onClick={() => setTrustDialogOpen(true)}>
             Trust this binary…
-          </button>
+          </Button>
         )}
       </div>
       <BinaryTrustDialog

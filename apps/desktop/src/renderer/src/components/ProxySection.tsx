@@ -25,6 +25,7 @@
  * the terminal and language servers do not receive a proxy URL that contains
  * credentials at all — the hint states exactly that split.
  */
+import { Button, Input, Select } from "../ui/index.js";
 import { useState } from "react";
 import type { ProviderConnection, SecretStatus } from "../../../shared/settings.js";
 import type { ProxyCheckVerdict, ProxyProfile, ProxyProfileUpsertRequest } from "../../../shared/proxy.js";
@@ -531,21 +532,15 @@ export function ProxySection({
     <section className="settings-section">
       <div className="settings-section-title">{profile === undefined ? "New proxy profile" : "Edit proxy profile"}</div>
 
-      <label className="settings-field">
-        <span className="settings-field-label">Name</span>
-        <input
-          className="settings-field-input"
+      <Input size="sm" label="Name"
           type="text"
           value={draft.name}
           disabled={readOnly}
           placeholder="e.g. Corporate"
           onChange={(e) => patch({ name: e.target.value })}
+          hint={<> Scopes reference this profile by name. Renaming it never moves the password — that is stored under the
+          profile's id. </>}
         />
-        <span className="settings-field-hint">
-          Scopes reference this profile by name. Renaming it never moves the password — that is stored under the
-          profile's id.
-        </span>
-      </label>
 
       {/* "No proxy" is deliberately NOT a mode here: it is a property of a
           SCOPE (the picker's own entry), never of a profile. A profile always
@@ -583,30 +578,22 @@ export function ProxySection({
 
       {manual && (
         <>
-          <label className="settings-field">
-            <span className="settings-field-label">Host name</span>
-            <input
-              className="settings-field-input"
+          <Input size="sm" label="Host name"
               type="text"
               value={draft.host}
               disabled={readOnly}
               placeholder="proxy.example.com"
               onChange={(e) => patch({ host: e.target.value })}
-            />
-          </label>
+        />
 
-          <label className="settings-field">
-            <span className="settings-field-label">Port number</span>
-            <input
-              className="settings-field-input"
+          <Input size="sm" label="Port number"
               type="text"
               inputMode="numeric"
               value={draft.port}
               disabled={readOnly}
               placeholder="3128"
               onChange={(e) => patch({ port: e.target.value })}
-            />
-          </label>
+        />
 
           <label className="settings-field-checkbox">
             <input
@@ -620,103 +607,76 @@ export function ProxySection({
         </>
       )}
 
-      <label className="settings-field">
-        <span className="settings-field-label">No proxy for:</span>
-        <input
-          className="settings-field-input"
+      <Input size="sm" label="No proxy for:"
           type="text"
           value={draft.noProxy}
           disabled={readOnly}
           placeholder={PROXY_NO_PROXY_PLACEHOLDER}
           onChange={(e) => patch({ noProxy: e.target.value })}
-        />
-        <span className="settings-field-hint">
-          Comma-separated <code>NO_PROXY</code> host suffixes — <code>{PROXY_NO_PROXY_PLACEHOLDER}</code>. Wildcards
+          hint={<> Comma-separated <code>NO_PROXY</code> host suffixes — <code>{PROXY_NO_PROXY_PLACEHOLDER}</code>. Wildcards
           such as <code>192.168.*</code> match nothing and are not a supported syntax. These are ADDED to the built-in
-          loopback exemptions, never a replacement for them, so a local model server always stays direct.
-        </span>
-      </label>
+          loopback exemptions, never a replacement for them, so a local model server always stays direct. </>}
+        />
 
       <div className="settings-section-title">Proxy authentication</div>
 
-      <label className="settings-field">
-        <span className="settings-field-label">Login</span>
-        <input
-          className="settings-field-input"
+      <Input size="sm" label="Login"
           type="text"
           value={draft.login}
           disabled={readOnly}
           autoComplete="off"
           onChange={(e) => patch({ login: e.target.value })}
         />
-      </label>
 
-      <label className="settings-field">
-        <span className="settings-field-label">Password</span>
-        <input
-          className="settings-field-input"
+      <Input size="sm" label="Password"
           type="password"
           value={draft.password}
           disabled={readOnly}
           autoComplete="new-password"
           placeholder={draft.passwordSet && !draft.passwordCleared ? PROXY_PASSWORD_PLACEHOLDER : ""}
           onChange={(e) => patch({ password: e.target.value, passwordCleared: false })}
-        />
-        <span className="settings-field-hint">
-          Stored in the encrypted vault under this profile's id, never in settings.json. The full proxy URL goes to the
+          hint={<> Stored in the encrypted vault under this profile's id, never in settings.json. The full proxy URL goes to the
           Claude/Codex engines and the model connection; the agent's shell commands, the terminal and language servers
           go through a local credential-free relay instead, so they keep working behind this proxy without ever seeing
-          the password.
-        </span>
-      </label>
+          the password. </>}
+        />
 
       {(draft.passwordSet || draft.password !== "") && (
         <div className="settings-field-row">
-          <button
+          <Button
             type="button"
-            className="settings-button"
             disabled={readOnly || saving}
             onClick={() => patch({ password: "", passwordCleared: true })}
           >
             Clear password
-          </button>
+          </Button>
           {draft.passwordCleared && <span className="settings-field-hint">Cleared on save.</span>}
         </div>
       )}
 
       <div className="settings-section-title">Check</div>
 
-      <label className="settings-field">
-        <span className="settings-field-label">Target</span>
-        <select
-          className="settings-field-select"
+        <Select size="sm"
+          label="Target"
           value={checkTarget}
           disabled={readOnly}
           onChange={(e) => setCheckTarget(e.target.value)}
-        >
-          <option value="">(active connection)</option>
-          {connections.map((connection) => (
-            <option key={connection.id} value={connection.id}>
-              {proxyCheckTargetLabel(connection)}
-            </option>
-          ))}
-        </select>
-        <span className="settings-field-hint">
+          options={[{ value: "", label: "(active connection)" }, ...connections.map((connection) => ({ value: connection.id, label: proxyCheckTargetLabel(connection) }))]}
+          hint={<>
           Spawns a child with this profile's environment and makes one request, with no retries. It is not a replay of
           a real agent spawn — those end in the Codex/Claude CLI, with their own certificate handling — but it uses the
           same materialisation and reports whether the proxy was actually used.
-        </span>
-      </label>
+          </>}
+        />
 
       <div className="settings-field-row">
-        <button
+        <Button
           type="button"
-          className="settings-button"
           disabled={readOnly || checking || draft.id === undefined}
           onClick={() => void handleCheck()}
         >
           {checking ? "Checking…" : "Check Connection"}
-        </button>
+        </Button>
         {draft.id === undefined && <span className="settings-field-hint">Save the profile first.</span>}
       </div>
 
@@ -729,17 +689,16 @@ export function ProxySection({
       )}
 
       <div className="settings-field-row">
-        <button
+        <Button variant="primary"
           type="button"
-          className="settings-button settings-button-primary"
           disabled={readOnly || saving}
           onClick={() => void handleSave()}
         >
           {saving ? "Saving…" : "Save profile"}
-        </button>
-        <button type="button" className="settings-button" disabled={saving} onClick={onCancel}>
+        </Button>
+        <Button type="button" disabled={saving} onClick={onCancel}>
           Cancel
-        </button>
+        </Button>
       </div>
     </section>
   );

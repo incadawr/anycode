@@ -80,15 +80,15 @@ describe("SessionsApiPaneView", () => {
 
   it("the enable control is a switch labelled Allow external agents, wired to its state", () => {
     const html = render(props());
-    expect(html).toMatch(/<button type="button" role="switch" aria-checked="false"[^>]*class="settings-switch"/);
+    expect(html).toMatch(/<button(?=[^>]*role="switch")(?=[^>]*aria-checked="false")(?=[^>]*aria-labelledby="sessions-api-enable-caption")[^>]*>/);
     expect(html).toContain("Allow external agents");
-    expect(render(props({ view: base({ enabled: true }) }))).toMatch(/role="switch" aria-checked="true"/);
+    expect(render(props({ view: base({ enabled: true }) }))).toMatch(/<button(?=[^>]*role="switch")(?=[^>]*aria-checked="true")[^>]*>/);
   });
 
   it("the env override disables the switch, the folder controls and the port field, and says why", () => {
     const html = render(props({ envControlled: true }));
     expect(html).toContain("Controlled by ANYCODE_COMMUNICATION_CONFIG");
-    expect(html).toMatch(/<button[^>]*role="switch"[^>]*disabled=""/);
+    expect(html).toMatch(/<button(?=[^>]*role="switch")(?=[^>]*disabled="")[^>]*>/);
     expect(buttonTag(html, "Add folder…")).toContain("disabled");
     expect(buttonTag(html, "Apply")).toContain("disabled");
   });
@@ -197,8 +197,8 @@ describe("SessionsApiPaneView", () => {
   });
 
   it("the new-sessions default switch reflects the saved value", () => {
-    expect(render(props({ view: base({ defaultSessionAccess: "on" }) }))).toMatch(/aria-checked="true"[^>]*aria-labelledby="sessions-api-default-caption"/);
-    expect(render(props())).toMatch(/aria-checked="false"[^>]*aria-labelledby="sessions-api-default-caption"/);
+    expect(render(props({ view: base({ defaultSessionAccess: "on" }) }))).toMatch(/<button(?=[^>]*aria-checked="true")(?=[^>]*aria-labelledby="sessions-api-default-caption")[^>]*>/);
+    expect(render(props())).toMatch(/<button(?=[^>]*aria-checked="false")(?=[^>]*aria-labelledby="sessions-api-default-caption")[^>]*>/);
   });
 });
 
@@ -221,7 +221,7 @@ describe("SessionsApiPaneView agent projects", () => {
     expect(html).toContain("/srv/api");
     expect(html).not.toContain("No project allows agents");
     expect((html.match(/aria-label="Turn off agents opening tasks in [^"]*"/g) ?? [])).toHaveLength(2);
-    expect(render(props({ envControlled: true, view: base({ agentProjects: [{ key: "/srv/api", name: "api", displayPath: "/srv/api" }] }) }))).toMatch(/<button[^>]*aria-label="Turn off agents opening tasks in api"[^>]*disabled=""/);
+    expect(render(props({ envControlled: true, view: base({ agentProjects: [{ key: "/srv/api", name: "api", displayPath: "/srv/api" }] }) }))).toMatch(/<button(?=[^>]*aria-label="Turn off agents opening tasks in api")(?=[^>]*disabled="")[^>]*>/);
     const source = readFileSync(new URL("./SessionsApiPane.tsx", import.meta.url), "utf8");
     expect(source).toMatch(/bridge\.agentProjectsOff\(key\)/);
   });
@@ -247,7 +247,7 @@ describe("SessionsApiPane Advanced layout (regression: state labels and spacing)
     expect(group).toContain('<label class="settings-field-label" for="sessions-api-port">Port</label>');
     // Immediate siblings: label, then the input (no wrapper container in between).
     expect(group).toMatch(/for="sessions-api-port">Port<\/label><input id="sessions-api-port"/);
-    expect(buttonTag(group, "Apply")).toContain("settings-button");
+    expect(buttonTag(group, "Apply")).toContain("ak-btn");
   });
 
   it("adjacent Advanced rows are separated by an explicit row rhythm", () => {
