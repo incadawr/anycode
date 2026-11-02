@@ -9,6 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Keep dock panel state when switching tabs, and update preview tab titles as they change.
 - Closing the Review dock tab or using its close shortcut now works.
 - Always-allow write rules can use a scoped absolute path mask outside the workspace. Path aliases and new directories are handled consistently, and broad system and home scopes are rejected.
 - Prevent external pages from replacing the main application window or opening uncontrolled child windows.
