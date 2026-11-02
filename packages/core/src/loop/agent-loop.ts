@@ -1565,19 +1565,20 @@ export class AgentLoop {
         // count anchors the delta correctly (design §2.5), then append the
         // assistant message and report context_usage.
         this.context.noteUsage(usage);
+        let assistantParts = degenerationVerdict ? buildAssistantParts(textParts.join(""), toolCalls) : reasoningCapture.weave(buildAssistantParts(textParts.join(""), toolCalls));
+        if (this.config.modelPort.compactReasoning !== undefined) assistantParts = await this.config.modelPort.compactReasoning(assistantParts, signal);
         this.history.append(
           {
             role: "assistant",
             // A degenerate step's reasoning is a loop, not worth replaying.
-            content: degenerationVerdict
-              ? buildAssistantParts(textParts.join(""), toolCalls)
-              : reasoningCapture.weave(buildAssistantParts(textParts.join(""), toolCalls)),
+            content: assistantParts,
           },
           ...(turnId !== undefined ? [{ turnId, step: turn }] as const : []),
         );
         const usageEstimate = this.context.estimate();
         yield {
           type: "context_usage",
+          ...(assistantParts.some(p => p.type === "reasoning" && p.factualSummary !== undefined) ? { reasoningCompactorUsage: assistantParts.flatMap(p => p.type === "reasoning" && p.factualSummary !== undefined ? [p.factualSummary.usage] : []) } : {}),
           estimatedTokens: usageEstimate.tokens,
           budgetTokens: this.budgetTokens,
           source: usageEstimate.source,

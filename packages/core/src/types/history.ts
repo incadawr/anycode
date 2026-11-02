@@ -28,6 +28,8 @@ export interface AssistantToolCallPart {
  */
 export interface ReasoningSource {
   transport: string;
+  /** Explicit full replay ignores any stored factual summary. */
+  replayOriginal?: boolean;
   /** The route accepts unsigned Anthropic thinking blocks. */
   replayUnsigned?: boolean;
   /** Catalog entry name; absent for a custom endpoint. */
@@ -42,6 +44,8 @@ export interface ReasoningSource {
  */
 export interface AssistantReasoningPart {
   type: "reasoning";
+  /** Original text and metadata remain untouched for audit. */
+  factualSummary?: Readonly<{ text: string; tokenCap: number; model: string; usage: import("./events.js").TokenUsage }>;
   text: string;
   /** Provider metadata kept verbatim (anthropic `signature` / `redactedData`). */
   providerMetadata?: Record<string, Record<string, unknown>>;

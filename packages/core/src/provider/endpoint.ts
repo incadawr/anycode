@@ -105,6 +105,8 @@ export interface EndpointConfig {
    * custom endpoints; other catalog providers remain off.
    */
   preserveReasoning?: boolean;
+  reasoningHistory?: "none" | "full" | `factual_${number}`;
+  reasoningCompactorModel?: string;
   /**
    * Optional response-header quota observer: when set, the
    * transport factories wrap the SDK fetch so every response's headers are

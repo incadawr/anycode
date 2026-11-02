@@ -195,6 +195,8 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundC
   const reasoningEffort = readReasoningEffort(env);
   const includeUsage = readOptionalBoolean(env, ENV_INCLUDE_USAGE);
   const preserveReasoning = readOptionalBoolean(env, ENV_PRESERVE_REASONING);
+  const reasoningHistory = readReasoningHistory(env);
+  const reasoningCompactorModel = env.ANYCODE_REASONING_COMPACTOR_MODEL?.trim() || undefined;
   const adaptiveTurnBudget = readOptionalBoolean(env, ENV_ADAPTIVE_TURN_BUDGET);
   const promptCache = readPromptCacheOptions(env);
 
@@ -224,6 +226,8 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundC
     imageInput,
     providerTransport,
     includeUsage,
+    ...(reasoningHistory !== undefined ? { reasoningHistory } : {}),
+    ...(reasoningCompactorModel !== undefined ? { reasoningCompactorModel } : {}),
     ...(preserveReasoning !== undefined ? { preserveReasoning } : {}),
   };
 }
@@ -380,4 +384,12 @@ function readPositiveInteger(env: NodeJS.ProcessEnv, name: string): number | und
     throw new Error(`Invalid ${name}: "${parsed}" is not a positive integer`);
   }
   return parsed;
+}
+
+export function readReasoningHistory(env: NodeJS.ProcessEnv): "none" | "full" | `factual_${number}` | undefined {
+  const value = env.ANYCODE_REASONING_HISTORY;
+  if (value === undefined || value === "") return undefined;
+  if (value === "none" || value === "full") return value;
+  if (/^factual_[1-9][0-9]*$/.test(value) && Number.isSafeInteger(Number(value.slice(8)))) return value as `factual_${number}`;
+  throw new Error("Invalid ANYCODE_REASONING_HISTORY: expected none, full or factual_N with a positive safe integer cap");
 }

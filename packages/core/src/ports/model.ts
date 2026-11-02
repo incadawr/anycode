@@ -30,6 +30,7 @@ export interface ModelRequest {
 }
 
 export interface ModelPort {
+  compactReasoning?(parts: import("../types/history.js").AssistantPart[], signal?: AbortSignal): Promise<import("../types/history.js").AssistantPart[]>;
   streamText(request: ModelRequest): AsyncIterable<ModelStreamEvent>;
   /** Route on which reasoning will be replayed for this effort. */
   reasoningReplaySource?(effort?: ReasoningEffort): ReasoningSource | undefined;
