@@ -30,6 +30,7 @@ import {
 import type { ReactNode } from "react";
 import type { Token, Tokens } from "marked";
 import { decodeMarkedText, fenceLabel, lexMarkdown } from "../markdown/lex.js";
+import { focusExistingPreview } from "../dock/dock-store.js";
 import { isLocalMdHref, resolveDocRelative } from "../markdown/doc-links.js";
 import { classifyHtmlToken } from "../markdown/html-token.js";
 import { findPathSpans } from "../markdown/path-spans.js";
@@ -776,6 +777,7 @@ function MdLink({ href, children, adorned = true }: { href: string; children: Re
     }
     if (isPreviewableArtifactHref(href) && tabId !== null && api !== undefined) {
       void api.preview(tabId, href).then((result) => {
+        if (result.ok) focusExistingPreview(tabId, result.value.previewId);
         setPreviewError(result.ok ? null : result.error);
       });
     } else {
