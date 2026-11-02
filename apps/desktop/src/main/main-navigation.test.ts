@@ -12,11 +12,21 @@ describe("main window navigation", () => {
     expect(isRendererUrl("file:///app/other.html", "file:///app/index.html")).toBe(false);
   });
 
-  it("blocks external navigation and redirects and denies new windows", () => {
-    const handlers: Record<string, (event: any) => unknown> = {};
-    const wc = { on: (name: string, fn: (event: any) => unknown) => { handlers[name] = fn; }, setWindowOpenHandler: (fn: (event: any) => unknown) => { handlers.open = fn; } };
+  it("blocks external navigation and redirects and denies new windows", async () => {
+    const handlers: Record<string, (...args: any[]) => unknown> = {};
+    const wc = { on: (name: string, fn: (...args: any[]) => unknown) => { handlers[name] = fn; }, setWindowOpenHandler: (fn: (event: any) => unknown) => { handlers.open = fn; }, stop: vi.fn(), isDestroyed: () => false, loadURL: vi.fn().mockResolvedValue(undefined) };
     const open = vi.fn().mockResolvedValue(undefined);
     protectMainNavigation(wc as unknown as WebContents, "file:///app/index.html", open);
+    for (const url of ["about:blank", "about:blank?x", "about:blank#x", "javascript:1", "data:text/html,x", "blob:https://example.com/id"]) {
+      handlers["did-start-navigation"]!({ url, isMainFrame: true, isSameDocument: false });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    expect(wc.stop).toHaveBeenCalledTimes(6);
+    handlers["did-start-navigation"]!({ url: "about:blank", isMainFrame: false, isSameDocument: false });
+    handlers["did-start-navigation"]!({ url: "file:///app/index.html#x", isMainFrame: true, isSameDocument: true });
+    expect(wc.stop).toHaveBeenCalledTimes(6);
+    handlers["did-navigate"]!({}, "about:blank");
+    expect(wc.loadURL).toHaveBeenCalledWith("file:///app/index.html");
     const navigate = (name: string, url: string, isMainFrame = true) => {
       const event = { url, isMainFrame, preventDefault: vi.fn() };
       handlers[name]!(event);
@@ -24,6 +34,10 @@ describe("main window navigation", () => {
     };
     expect(navigate("will-navigate", "file:///app/index.html?x=1")).not.toHaveBeenCalled();
     expect(navigate("will-navigate", "https://example.com/")).toHaveBeenCalled();
+    handlers["did-start-navigation"]!({ url: "https://example.com/", isMainFrame: true, isSameDocument: false });
+    navigate("will-navigate", "https://example.com/");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(wc.stop).toHaveBeenCalledTimes(6);
     expect(navigate("will-redirect", "https://example.com/")).toHaveBeenCalled();
     expect(navigate("will-redirect", "https://example.com/", false)).not.toHaveBeenCalled();
     for (const url of ["file:///etc/passwd", "javascript:alert(1)", "data:text/html,x"]) {
@@ -32,6 +46,6 @@ describe("main window navigation", () => {
     for (const url of ["https://example.com/", "http://example.com/", "mailto:a@example.com", "file:///etc/passwd", "javascript:alert(1)", "data:text/html,x", "custom:x"]) {
       expect(handlers.open!({ url })).toEqual({ action: "deny" });
     }
-    expect(open.mock.calls.map(([url]) => url)).toEqual(["https://example.com/", "https://example.com/", "http://example.com/", "mailto:a@example.com"]);
+    expect(open.mock.calls.map(([url]) => url)).toEqual(["https://example.com/", "https://example.com/", "https://example.com/", "http://example.com/", "mailto:a@example.com"]);
   });
 });

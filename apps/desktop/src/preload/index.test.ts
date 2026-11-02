@@ -40,6 +40,18 @@ vi.mock("electron", () => ({
 
 import { PORT_ENVELOPE_TYPE, HOST_EXITED_ENVELOPE_TYPE } from "../shared/envelopes.js";
 
+it("does not expose the bridge or forward ports in an untrusted document", async () => {
+  const { contextBridge } = await import("electron");
+  vi.mocked(contextBridge.exposeInMainWorld).mockClear();
+  mockListeners.clear();
+  vi.resetModules();
+  vi.stubGlobal("window", { location: { href: "about:blank" } });
+  vi.stubGlobal("process", { ...process, argv: ["--anycode-renderer-url=file:///app/index.html"] });
+  await import("./index.js");
+  expect(contextBridge.exposeInMainWorld).not.toHaveBeenCalled();
+  expect(mockListeners.size).toBe(0);
+});
+
 /** The exact shape `deliverTabPort` (main/tabs.ts) stamps for a child-session tab's port delivery. */
 const CHILD_FIELD = {
   parentTabId: "tab-master",
@@ -52,7 +64,8 @@ describe("preload PORT_ENVELOPE_TYPE forwarding", () => {
   beforeEach(async () => {
     mockListeners.clear();
     vi.resetModules();
-    (globalThis as unknown as { window?: { postMessage: ReturnType<typeof vi.fn> } }).window = { postMessage: vi.fn() };
+    vi.stubGlobal("window", { postMessage: vi.fn(), location: { href: "file:///app/index.html" } });
+    vi.stubGlobal("process", { ...process, argv: ["--anycode-renderer-url=file:///app/index.html"] });
     await import("./index.js");
   });
 
