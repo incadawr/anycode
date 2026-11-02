@@ -241,6 +241,8 @@ export function buildCliEndpointConfig(args: {
     // so the selected level rides the wire) from one that declared nothing
     // (⇒ budgets only, no unknown field).
     ...(envConfig.effortLevels !== undefined ? { declaredEffortLevels: envConfig.effortLevels } : {}),
+    ...(envConfig.reasoningHistory !== undefined ? { reasoningHistory: envConfig.reasoningHistory } : {}),
+    ...(envConfig.reasoningCompactorModel !== undefined ? { reasoningCompactorModel: envConfig.reasoningCompactorModel } : {}),
     ...(envConfig.preserveReasoning !== undefined ? { preserveReasoning: envConfig.preserveReasoning } : {}),
     ...(Object.keys(retryOverride).length > 0 ? { retry: retryOverride } : {}),
     ...(includeUsageResolved ? { includeUsage: true as const } : {}),

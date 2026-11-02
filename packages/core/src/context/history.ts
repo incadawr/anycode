@@ -143,7 +143,7 @@ export function messageTokenText(message: ChatMessage): string {
       return message.content
         .map((part) => {
           if (part.type === "tool_call") return `${part.toolName} ${safeStringify(part.input)}`;
-          if (part.type === "reasoning") return `${part.text}${redactedPayload(part.providerMetadata)}`;
+          if (part.type === "reasoning") return `${part.factualSummary?.text ?? part.text}${part.factualSummary === undefined ? redactedPayload(part.providerMetadata) : ""}`;
           return part.text;
         })
         .join("\n");
