@@ -127,6 +127,12 @@ describe("ConversationHistory", () => {
 });
 
 describe("estimateMessageTokens (design §2-C3/R13/L4)", () => {
+  it("counts OpenRouter details without counting mirrored plaintext twice", () => {
+    const tokenizer = { count: (text: string) => text.length };
+    const details = [{ type: "reasoning.text", text: "thinking" }, { type: "reasoning.encrypted", data: "cipher" }];
+    const message = { role: "assistant" as const, content: [{ type: "reasoning" as const, text: "thinking", providerMetadata: { openrouter: { reasoningDetails: details } } }] };
+    expect(estimateMessageTokens(tokenizer, message)).toBe(JSON.stringify(details).length);
+  });
   const tokenizer = new HeuristicTokenizer();
   const img = (): ImageAttachment => ({ mediaType: "image/png", data: "AAAA", sourcePath: "/x.png" });
 

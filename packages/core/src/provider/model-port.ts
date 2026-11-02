@@ -796,20 +796,31 @@ function collectReasoningMetadata(
   into.set(part.id, merged);
 }
 
-/** Reassemble OpenRouter's indexed reasoning detail deltas from raw SSE chunks. */
-function collectOpenRouterDetails(details: Map<number, Record<string, unknown>>, part: TextStreamPart<ToolSet>): void {
+/** Reassemble OpenRouter detail deltas only when their identity is known. */
+function collectOpenRouterDetails(details: Record<string, unknown>[], part: TextStreamPart<ToolSet>): void {
   if (part.type !== "raw" || !isRecord(part.rawValue) || !Array.isArray(part.rawValue.choices)) return;
   const choice = part.rawValue.choices[0];
   if (!isRecord(choice) || !isRecord(choice.delta) || !Array.isArray(choice.delta.reasoning_details)) return;
-  for (const [position, value] of choice.delta.reasoning_details.entries()) {
+  for (const value of choice.delta.reasoning_details) {
     if (!isRecord(value)) continue;
-    const index = typeof value.index === "number" ? value.index : position;
-    const previous = details.get(index) ?? {};
+    const index = typeof value.index === "number" ? value.index : undefined;
+    let match = index === undefined ? -1 : details.findIndex((item) => item.index === index);
+    if (match < 0 && typeof value.id === "string" && value.id !== "") {
+      match = details.findIndex((item) => item.id === value.id &&
+        (index === undefined || item.index === undefined) &&
+        (typeof value.type !== "string" || typeof item.type !== "string" || item.type === value.type));
+    }
+    if (match < 0 && index === undefined && typeof value.type === "string" && typeof value.signature === "string" && value.signature !== "") {
+      match = details.findIndex((item) => item.signature === value.signature && item.type === value.type &&
+        (value.id == null || item.id == null || item.id === value.id));
+    }
+    if (match < 0) { details.push({ ...value }); continue; }
+    const previous = details[match]!;
     const merged = { ...previous, ...value };
     for (const key of ["text", "summary", "data", "signature"]) {
-      if (typeof previous[key] === "string" && typeof value[key] === "string") merged[key] = previous[key] + value[key];
+      if (typeof previous[key] === "string" && typeof value[key] === "string" && !(key === "signature" && previous[key] === value[key])) merged[key] = previous[key] + value[key];
     }
-    details.set(index, merged);
+    details[match] = merged;
   }
 }
 
@@ -1108,7 +1119,7 @@ export class AiSdkModelPort implements ModelPort {
       // Per-attempt, so an abandoned attempt never lends metadata to a replay (GitHub #41).
       const reasoningSource = this.reasoningReplaySource(request.reasoningEffort);
       const reasoningMetadata = new Map<string, Record<string, Record<string, unknown>>>();
-      const openRouterDetails = new Map<number, Record<string, unknown>>();
+      const openRouterDetails: Record<string, unknown>[] = [];
       let openRouterReasoningEnd: Extract<ModelStreamEvent, { type: "reasoning_end" }> | undefined;
       const captureOpenRouter = reasoningSource?.provider === "OpenRouter" && this.config.transport === "openai-chat-completions";
       let lastWireActivityAt = Number.NEGATIVE_INFINITY;
@@ -1211,7 +1222,9 @@ export class AiSdkModelPort implements ModelPort {
           if (reasoningSource !== undefined) collectReasoningMetadata(reasoningMetadata, outcome.value);
           if (captureOpenRouter) collectOpenRouterDetails(openRouterDetails, outcome.value);
           if (captureOpenRouter && outcome.value.type === "finish-step") {
-            const details = [...openRouterDetails.entries()].sort(([a], [b]) => a - b).map(([, value]) => value);
+            const details = openRouterDetails.every((item) => typeof item.index === "number")
+              ? [...openRouterDetails].sort((a, b) => (a.index as number) - (b.index as number))
+              : [...openRouterDetails];
             if (openRouterReasoningEnd !== undefined || details.length > 0) {
               const end = openRouterReasoningEnd ?? { type: "reasoning_end" as const, id: "openrouter-details" };
               if (openRouterReasoningEnd === undefined) yield { type: "reasoning_start", id: end.id };

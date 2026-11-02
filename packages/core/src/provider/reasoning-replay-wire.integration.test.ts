@@ -145,6 +145,26 @@ function assistantMessages(body: Record<string, unknown>): WireMessage[] {
 }
 
 describe("reasoning replay over the real SDK wire (GitHub #41)", () => {
+  it("keeps distinct unindexed blocks and assembles matching indexed and identified deltas", async () => {
+    const chunks: Chunk[] = [
+      { choices: [{ index: 0, delta: { role: "assistant", reasoning_details: [{ id: "enc-1", type: "reasoning.encrypted", data: "A" }] }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: { reasoning_details: [{ id: "enc-2", type: "reasoning.encrypted", data: "B" }] }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: { reasoning_details: [{ index: 3, id: "text-1", type: "reasoning.text", text: "hello" }] }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: { reasoning_details: [{ id: "text-1", type: "reasoning.text", text: " world" }, { index: 3, text: "!" }, { type: "reasoning.encrypted", data: "C" }] }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: { reasoning_details: [{ type: "reasoning.encrypted", data: "D" }] }, finish_reason: null }] },
+      ...OPENAI_THINK_THEN_TOOL.slice(1),
+    ];
+    const fixture = await startServer([openAiSse(chunks), openAiSse(OPENAI_TEXT)]);
+    const port = new AiSdkModelPort({ transport: "openai-chat-completions", baseUrl: fixture.baseUrl, apiKey: "test", model: "test", providerName: "OpenRouter", retry: { maxRetries: 0, stallTimeoutMs: 0 } });
+    await run(makeLoop(port), "read");
+    expect(assistantMessages(fixture.bodies[1]!)[0]).toMatchObject({ reasoning_details: [
+      { id: "enc-1", type: "reasoning.encrypted", data: "A" },
+      { id: "enc-2", type: "reasoning.encrypted", data: "B" },
+      { index: 3, id: "text-1", type: "reasoning.text", text: "hello world!" },
+      { type: "reasoning.encrypted", data: "C" },
+      { type: "reasoning.encrypted", data: "D" },
+    ] });
+  });
   it("OpenRouter retains streamed reasoning details and replays the complete blocks", async () => {
     const chunks: Chunk[] = [
       { choices: [{ index: 0, delta: { role: "assistant", reasoning: "Think ", reasoning_details: [{ index: 0, type: "reasoning.text", format: "unknown", id: "r1", text: "Think " }] }, finish_reason: null }] },
