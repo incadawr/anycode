@@ -1,6 +1,6 @@
 // Accent is a device-local preference, independent of vault settings.
 export const ACCENT_KEY = "anycode.appearance.accent";
-export const ACCENTS = ["current", "gold", "indigo", "teal", "ember"] as const;
+export const ACCENTS = ["current", "blue", "gold", "indigo", "teal", "ember"] as const;
 export type Accent = typeof ACCENTS[number];
 export function parseAccent(raw: string | null): Accent {
   return ACCENTS.includes(raw as Accent) ? raw as Accent : "current";

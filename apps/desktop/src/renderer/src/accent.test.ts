@@ -19,8 +19,8 @@ it("stamps, removes and notifies with unsubscribe", () => {
 });
 it("navigates every option in both directions with wrapping and endpoints", () => {
   ACCENTS.forEach((a, i) => {
-    for (const key of ["ArrowRight", "ArrowDown"]) expect(nextAccent(a, key)).toBe(ACCENTS[(i + 1) % 5]);
-    for (const key of ["ArrowLeft", "ArrowUp"]) expect(nextAccent(a, key)).toBe(ACCENTS[(i + 4) % 5]);
+    for (const key of ["ArrowRight", "ArrowDown"]) expect(nextAccent(a, key)).toBe(ACCENTS[(i + 1) % ACCENTS.length]);
+    for (const key of ["ArrowLeft", "ArrowUp"]) expect(nextAccent(a, key)).toBe(ACCENTS[(i + ACCENTS.length - 1) % ACCENTS.length]);
     expect(nextAccent(a, "Home")).toBe("current"); expect(nextAccent(a, "End")).toBe("ember");
     for (const key of ["Tab", "Enter", " ", "Escape"]) expect(nextAccent(a, key)).toBeNull();
   });
