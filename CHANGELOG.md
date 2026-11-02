@@ -9,6 +9,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Close hidden subagent menus so they cannot intercept shortcuts or hide previews.
+
 - Reopening a preview focuses its dock tab, and closing a preview selects the adjacent tab consistently.
 - Keep dock panel state when switching tabs, and update preview tab titles as they change.
 - Closing the Review dock tab or using its close shortcut now works.
