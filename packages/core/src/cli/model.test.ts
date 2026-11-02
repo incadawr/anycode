@@ -218,3 +218,24 @@ describe("formatModelInfo", () => {
     );
   });
 });
+
+it("delegates reasoning compaction through the CLI media and switchable wrapper chain", async () => {
+  const { createMediaProjectionPort } = await import("../provider/media-projection.js");
+  const { AiSdkModelPort } = await import("../provider/model-port.js");
+  const { vi } = await import("vitest");
+  const raw = new AiSdkModelPort({
+    transport: "openai-chat-completions", baseUrl: "http://fake.invalid",
+    model: "fake", apiKey: "fake", preserveReasoning: true,
+    reasoningHistory: "factual_100",
+  });
+  const compact = vi.spyOn(raw, "compactReasoning").mockResolvedValue([]);
+  const switchable = new SwitchableModelPort(raw);
+  const wrapped = createMediaProjectionPort(switchable, () => false);
+  const signal = new AbortController().signal;
+  expect(await wrapped.compactReasoning!([], signal)).toEqual([]);
+  expect(compact).toHaveBeenCalledWith([], signal);
+  expect(wrapped.reasoningReplaySource!()).toMatchObject({ replayFactual: true });
+  switchable.setPort(new ScriptedModelPort([]));
+  const parts: [] = [];
+  expect(await wrapped.compactReasoning!(parts, signal)).toBe(parts);
+});

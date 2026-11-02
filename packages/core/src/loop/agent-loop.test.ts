@@ -5459,3 +5459,101 @@ describe("AgentLoop.runTurn — provider_quota forwarding", () => {
     expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
   });
 });
+
+describe("reasoning compactor failure persistence", () => {
+  it.each(["failed", "cancelled", "empty"] as const)("persists completed response on %s compaction", async mode => {
+    const { ReasoningCompactionError } = await import("../provider/reasoning-compactor.js");
+    const controller = new AbortController();
+    const source = { transport: "openai-chat-completions", baseUrl: "http://fake.invalid", model: "fake" };
+    const raw = new MockModelPort([[
+      { type: "reasoning_start", id: "r" },
+      { type: "reasoning_delta", id: "r", text: "original reasoning" },
+      { type: "reasoning_end", id: "r", source },
+      { type: "text_delta", id: "t", text: "answer" },
+      { type: "tool_call", toolCall: { id: "c", name: "Mock", input: { value: "x" } } },
+      { type: "finish", finishReason: "tool_calls", usage: {} },
+    ], [{ type: "finish", finishReason: "stop", usage: {} }]]);
+    const modelPort: ModelPort = {
+      streamText: request => raw.streamText(request),
+      compactReasoning: async () => {
+        if (mode === "cancelled") controller.abort();
+        if (mode === "empty") throw new ReasoningCompactionError({ inputTokens: 12, outputTokens: 3 });
+        throw new Error("fake compactor failure");
+      },
+    };
+    const loop = makeLoop({ modelPort });
+    const events = await collect(loop.runTurn("go", { signal: controller.signal }));
+    const assistant = loop.history.toMessages().find(message => message.role === "assistant");
+    expect(assistant).toMatchObject({ content: [
+      { type: "reasoning", text: "original reasoning" },
+      { type: "text", text: "answer" },
+      { type: "tool_call", toolCallId: "c" },
+    ] });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "context_usage", reasoningCompactorStatus: mode === "cancelled" ? "cancelled" : "failed",
+      ...(mode === "empty" ? { reasoningCompactorUsage: [{ inputTokens: 12, outputTokens: 3 }] } : {}),
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "loop_end", reason: mode === "cancelled" ? "cancelled" : "completed",
+    }));
+    expect(loop.history.unansweredToolCallIds()).toEqual([]);
+  });
+});
+
+it("persists and traces a factual summary through the CLI wrapper chain", async () => {
+  const { SwitchableModelPort } = await import("../cli/model.js");
+  const { compactReasoningParts } = await import("../provider/reasoning-compactor.js");
+  const { telemetryRecordFor } = await import("../telemetry/records.js");
+  const source = {
+    transport: "openai-chat-completions", baseUrl: "http://fake.invalid",
+    model: "fake", replayFactual: true,
+  };
+  const raw = new MockModelPort([[
+    { type: "reasoning_start", id: "r" },
+    { type: "reasoning_delta", id: "r", text: "original reasoning" },
+    { type: "reasoning_end", id: "r", source },
+    { type: "text_delta", id: "t", text: "answer" },
+    { type: "finish", finishReason: "stop", usage: {} },
+  ]]);
+  const compactReasoning = vi.fn(async parts => compactReasoningParts(
+    parts, 100, "fake", async () => ({
+      text: "Goal: fix.", usage: { inputTokens: 12, outputTokens: 3, totalTokens: 15 },
+    }),
+  ));
+  const modelPort = createMediaProjectionPort(new SwitchableModelPort({
+    streamText: request => raw.streamText(request), compactReasoning,
+  }), () => false);
+  const records: unknown[] = [];
+  const loop = makeLoop({
+    modelPort, eventTap: event => { records.push(telemetryRecordFor(event)); },
+  });
+  await collect(loop.runTurn("go"));
+  expect(compactReasoning).toHaveBeenCalledTimes(1);
+  expect(loop.history.toMessages()[1]).toMatchObject({ content: [
+    { type: "reasoning", text: "original reasoning", factualSummary: { text: "Goal: fix." } },
+    { type: "text", text: "answer" },
+  ] });
+  expect(records).toContainEqual(expect.objectContaining({
+    t: "context_usage",
+    reasoningCompactorUsage: [expect.objectContaining({ inputTokens: 12, outputTokens: 3, totalTokens: 15 })],
+  }));
+});
+
+it("persists a finished response when cancellation arrives before compaction starts", async () => {
+  const controller = new AbortController();
+  const modelPort: ModelPort = {
+    async *streamText() {
+      yield { type: "text_delta", id: "t", text: "completed answer" };
+      yield { type: "finish", finishReason: "stop", usage: {} };
+      controller.abort();
+    },
+    compactReasoning: vi.fn(async parts => parts),
+  };
+  const loop = makeLoop({ modelPort });
+  const events = await collect(loop.runTurn("go", { signal: controller.signal }));
+  expect(loop.history.toMessages()[1]).toEqual({
+    role: "assistant", content: [{ type: "text", text: "completed answer" }],
+  });
+  expect(modelPort.compactReasoning).not.toHaveBeenCalled();
+  expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "cancelled" }));
+});
