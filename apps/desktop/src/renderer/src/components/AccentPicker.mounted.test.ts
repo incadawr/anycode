@@ -12,13 +12,15 @@ it("offers named radios, roving focus, selection checkmark and wrapped keyboard 
   function Harness() { return createElement(AccentPicker, {onChange: (a: Accent) => { changed(a); applyAccent(a); }}); }
   const radios = () => [...container.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
   function check(value: string) {
-    expect(radios()).toHaveLength(6); expect(radios().filter(b => b.getAttribute("aria-checked") === "true")).toHaveLength(1);
+    expect(radios()).toHaveLength(5); expect(radios().filter(b => b.getAttribute("aria-checked") === "true")).toHaveLength(1);
     for (const b of radios()) { expect(b.getAttribute("aria-label")).toBeTruthy(); expect(b.tabIndex).toBe(b.dataset.accent === value ? 0 : -1); }
     expect(radios().find(b => b.dataset.accent === value)?.textContent).toContain("✓");
   }
   try {
     await act(async () => root.render(createElement(Harness)));
-    expect(container.querySelector('[role="radiogroup"]')?.getAttribute("aria-label")).toBe("Accent color"); check("current");
+    expect(container.querySelector('[role="radiogroup"]')?.getAttribute("aria-label")).toBe("Accent color");
+    expect(radios().map(button => button.getAttribute("aria-label"))).toEqual(["Gold (default)", "Blue", "Indigo", "Teal", "Ember"]);
+    check("current");
     radios()[0]!.focus();
     for (const [key, expected] of [["ArrowLeft","ember"],["ArrowRight","current"],["ArrowDown","blue"],["ArrowUp","current"],["End","ember"],["Home","current"]] as const) {
       await act(async () => document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", {key, bubbles:true, cancelable:true})));
@@ -43,7 +45,11 @@ it("follows external applyAccent and storage sync while mounted", async () => {
   try {
     await act(async () => root.render(createElement(AccentPicker, { onChange })));
     check("current");
-    await act(async () => applyAccent("gold")); check("gold");
+    await act(async () => applyAccent("gold")); check("current");
+    expect(document.documentElement.getAttribute("data-accent")).toBe("gold");
+    await act(async () => window.dispatchEvent(new StorageEvent("storage", { key: ACCENT_KEY, newValue: "blue" }))); check("blue");
+    await act(async () => window.dispatchEvent(new StorageEvent("storage", { key: ACCENT_KEY, newValue: "gold" }))); check("current");
+    expect(document.documentElement.getAttribute("data-accent")).toBe("gold");
     await act(async () => window.dispatchEvent(new StorageEvent("storage", { key: ACCENT_KEY, newValue: "teal" }))); check("teal");
     await act(async () => applyAccent("current")); check("current");
     expect(onChange).not.toHaveBeenCalled();
