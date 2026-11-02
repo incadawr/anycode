@@ -104,6 +104,28 @@ function makeDeps(overrides: Partial<WorkspaceTrustIpcDeps> = {}) {
 }
 
 describe("offerEmptyFolderTrust", () => {
+  it("refuses a missing folder without asking or writing trust", async () => {
+    const fs = makeFs();
+    const projectFs = { ...fs, stat: async () => ({ size: 0, mtimeMs: 0, isFile: false, isDirectory: true }), mkdir: async () => {}, readdir: async () => [] };
+    const confirm = vi.fn(async () => true);
+    await expect(offerEmptyFolderTrust(projectFs, fs, WS, HOME, () => { throw new Error("missing"); }, confirm)).rejects.toThrow();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(fs.writes).toEqual([]);
+  });
+
+  it("refuses a link changed during the second probe", async () => {
+    const fs = makeFs();
+    let target = "/a";
+    let probes = 0;
+    const projectFs = { ...fs, stat: async () => ({ size: 0, mtimeMs: 0, isFile: false, isDirectory: true }), mkdir: async () => {}, readdir: async () => [], exists: async (path: string) => {
+      if (path.includes(".mcp.json") && ++probes === 2) target = "/b";
+      return false;
+    } };
+    const result = await offerEmptyFolderTrust(projectFs, fs, "/link", HOME, (p) => p === "/link" ? target : p, async () => true);
+    expect(result).toBe("folder_changed");
+    expect(fs.writes).toEqual([]);
+  });
+
   it("refuses trust when a symlink changes during confirmation", async () => {
     const dir = await mkdtemp(join(tmpdir(), "trust-switch-"));
     try {
@@ -112,7 +134,7 @@ describe("offerEmptyFolderTrust", () => {
       await mkdir(b);
       await symlink(a, link);
       const fs = makeFs();
-      const projectFs = { ...fs, stat: async () => ({ size: 0, mtimeMs: 0, isFile: true, isDirectory: false }), mkdir: async () => {}, readdir: async () => [] };
+      const projectFs = { ...fs, stat: async (p: string) => ({ size: 0, mtimeMs: 0, isFile: p !== WS && !p.endsWith("/a") && !p.endsWith("/b"), isDirectory: p === WS || p.endsWith("/a") || p.endsWith("/b") }), mkdir: async () => {}, readdir: async () => [] };
       let shownFolder = "";
       const result = await offerEmptyFolderTrust(projectFs, fs, link, HOME, realpathSync, async (shown) => {
         shownFolder = shown;
@@ -139,7 +161,7 @@ describe("offerEmptyFolderTrust", () => {
   });
   it("asks the owner and stores a valid decision only on consent", async () => {
     const fs = makeFs();
-    const projectFs = { ...fs, stat: async () => ({ size: 0, mtimeMs: 0, isFile: true, isDirectory: false }), mkdir: async () => {}, readdir: async () => [] };
+    const projectFs = { ...fs, stat: async (p: string) => ({ size: 0, mtimeMs: 0, isFile: p !== WS && !p.endsWith("/a") && !p.endsWith("/b"), isDirectory: p === WS || p.endsWith("/a") || p.endsWith("/b") }), mkdir: async () => {}, readdir: async () => [] };
     const confirm = vi.fn(async () => false);
     await offerEmptyFolderTrust(projectFs, fs, WS, HOME, (p) => p, confirm);
     expect(confirm).toHaveBeenCalledWith(WS);
@@ -151,7 +173,7 @@ describe("offerEmptyFolderTrust", () => {
 
   it("does not trust if declarations appear during confirmation", async () => {
     const fs = makeFs();
-    const projectFs = { ...fs, stat: async () => ({ size: 0, mtimeMs: 0, isFile: true, isDirectory: false }), mkdir: async () => {}, readdir: async () => [] };
+    const projectFs = { ...fs, stat: async (p: string) => ({ size: 0, mtimeMs: 0, isFile: p !== WS && !p.endsWith("/a") && !p.endsWith("/b"), isDirectory: p === WS || p.endsWith("/a") || p.endsWith("/b") }), mkdir: async () => {}, readdir: async () => [] };
     await offerEmptyFolderTrust(projectFs, fs, WS, HOME, (p) => p, async () => {
       fs.files.set(`${WS}/.mcp.json`, JSON.stringify({ mcpServers: { test: { command: "test" } } }));
       return true;

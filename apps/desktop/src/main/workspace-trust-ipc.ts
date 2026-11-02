@@ -130,18 +130,26 @@ export async function offerEmptyFolderTrust(
   home: string,
   realpathSync: (path: string) => string,
   confirm: (workspace: string) => Promise<boolean>,
-): Promise<void | "folder_changed"> {
+): Promise<{ folder: string } | "folder_changed"> {
   const storePath = defaultTrustStorePath(home);
-  const probe = () => resolveWorkspaceTrust(fs, { workspace, home, storePath, realpathSync });
+  const folder = realpathSync(workspace);
+  if (!(await fs.stat(folder)).isDirectory) throw new Error("Workspace is not a directory");
+  const unchanged = () => {
+    try { return realpathSync(workspace) === folder && realpathSync(folder) === folder; } catch { return false; }
+  };
+  if (!unchanged()) return "folder_changed";
+  const probe = () => resolveWorkspaceTrust(fs, { workspace: folder, home, storePath, realpathSync });
   const initial = await probe();
   const store = await readTrustStore(storeFs, storePath);
-  if (initial.items.length || store.folders[initial.folder]?.decision === "trusted") return;
-  if (!(await confirm(initial.folder))) return;
+  if (!unchanged()) return "folder_changed";
+  if (initial.items.length || store.folders[folder]?.decision === "trusted") return { folder };
+  if (!(await confirm(folder))) return unchanged() ? { folder } : "folder_changed";
   return await queueStoreMutation(async () => {
     const current = await probe();
-    if (current.folder !== initial.folder) return "folder_changed" as const;
-    if (current.items.length) return;
-    await writeTrustDecision(storeFs, storePath, initial.folder, "trusted", current.hash);
+    if (!unchanged() || current.folder !== folder) return "folder_changed" as const;
+    if (current.items.length) return { folder };
+    await writeTrustDecision(storeFs, storePath, folder, "trusted", current.hash);
+    return unchanged() ? { folder } : "folder_changed" as const;
   });
 }
 

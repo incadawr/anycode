@@ -9,7 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- Folder trust confirmation now stops if a symlink changes its target while the dialog is open.
+- Folder trust and agent-opened tasks now require an existing directory and stop if a symlink changes its target during confirmation.
 
 - Folders without project settings can now be trusted when enabling agent-opened tasks. Invalid trust records no longer hide other remembered folders.
 
