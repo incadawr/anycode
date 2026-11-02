@@ -9,10 +9,20 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Always-allow write rules can use a scoped absolute path mask outside the workspace. Path aliases and new directories are handled consistently, and broad system and home scopes are rejected.
+- Prevent external pages from replacing the main application window or opening uncontrolled child windows.
+- Model previews for new connections use the provider endpoint and selected proxy, including for loopback endpoints.
 - Folder trust and agent-opened tasks now require an existing directory and stop if a symlink changes its target during confirmation.
-
 - Folders without project settings can now be trusted when enabling agent-opened tasks. Invalid trust records no longer hide other remembered folders.
-- Codex turn failures now show their error details, including usage-limit retry times, in the transcript and session results.
+- Preserve signed OpenRouter reasoning blocks and empty reasoning details when continuing conversations.
+- Preserve separate OpenRouter reasoning blocks in streams and count their replayed payloads when checking context limits.
+- Preserve OpenRouter reasoning across model steps when the upstream provider supports replay.
+- Codex turn failures now show classified errors and validated usage-limit retry times without exposing server details. Completed answers remain available after a later error.
+
+### Changed
+
+- Dialogs and utility panels use the same visual style as the main window.
+- Settings use the same look as the main window.
 
 ## [0.0.65] — 2026-11-02
 
@@ -51,8 +61,6 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Dialogs and utility panels use the same visual style as the main window.
-- Settings use the same look as the main window.
 - Refreshed the main window with the updated dark and light design palette, sidebar, conversation, composer, and dock.
 
 - Panels that referenced undefined background, border, and radius tokens now use the intended surfaces and corners, slightly changing their appearance.

@@ -23,7 +23,7 @@ writeFileSync(hook, `if (process.type === 'browser') setImmediate(() => { const 
 const server = createServer((req, res) => { res.writeHead(200, { "content-type": "text/html" }); res.end("<!doctype html><title>Navigation fixture</title><p id=marker>Local fixture</p>"); });
 await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
 const target = `http://127.0.0.1:${server.address().port}/fixture`;
-const env = { ...buildSmokeEnv(process.env, profile, 0, binary), ELECTRON_DISABLE_SANDBOX: "1", NODE_OPTIONS: `--require=${hook}` };
+const env = { ...buildSmokeEnv(process.env, profile, 0, binary), HOME: profile, ELECTRON_DISABLE_SANDBOX: "1", NODE_OPTIONS: `--require=${hook}` };
 const app = launchSmokeElectron(spawn, { env, detached: true, stdio: ["ignore", "ignore", "inherit"] });
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function wait(fn, timeout = 60000) {
@@ -80,6 +80,24 @@ try {
     assert.equal(r.result.value, "Dock preview works");
     await call("Target.detachFromTarget", { sessionId: session });
     console.log("PASS: dock WebContentsView loads fixture in panel");
+
+    const markdown = join(fixture, "preview.md");
+    writeFileSync(markdown, "# Markdown bridge fixture\n");
+    const md = await api("POST", `/tabs/${tab.tabId}/previews`, { path: markdown });
+    assert.equal(md.ok, true, JSON.stringify(md));
+    const mdId = md.value.previewId;
+    const transfer = await api("POST", `/tabs/${tab.tabId}/previews/${mdId}/container`, { target: "window" });
+    assert.equal(transfer.ok, true, JSON.stringify(transfer));
+    const mdPage = await wait(async () => (await call("Target.getTargets")).targetInfos.find(t => t.url.includes("view=md-preview") && t.url.includes(mdId)));
+    const mdSession = (await call("Target.attachToTarget", { targetId: mdPage.targetId, flatten: true })).sessionId;
+    const mdEvaluate = async expression => (await cdp.call("Runtime.evaluate", { expression, returnByValue: true }, mdSession)).result.value;
+    await wait(async () => (await mdEvaluate("typeof window.anycode")) === "object");
+    console.log("PASS: detached Markdown preview has bridge");
+    await cdp.call("Page.navigate", { url: "about:blank" }, mdSession);
+    await wait(async () => (await mdEvaluate("location.href")) === "about:blank");
+    assert.equal(await mdEvaluate("typeof window.anycode"), "undefined");
+    console.log("PASS: untrusted about:blank has no bridge");
+    await call("Target.detachFromTarget", { sessionId: mdSession });
   }
   const initialTargets = new Set((await call("Target.getTargets")).targetInfos.map(t => t.targetId));
   await evaluate(`window.open(${JSON.stringify(target)}, '_blank'); true`);
