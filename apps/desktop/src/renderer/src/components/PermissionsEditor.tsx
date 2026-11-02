@@ -1,3 +1,4 @@
+import { isValidWriteMask } from "@anycode/core/permissions/write-mask";
 import { Button } from "../ui/index.js";
 /**
  * Grouped always-allow rules editor (Settings "Permissions" pane, slice
@@ -114,7 +115,7 @@ export async function submitPermissionAdd(
   pattern: string,
 ): Promise<SettingsMutationResult | null> {
   const trimmedTool = toolName.trim();
-  if (!trimmedTool) {
+  if (!trimmedTool || (["Write", "Edit", "MultiEdit"].includes(trimmedTool) && pattern.trim() !== "" && !isValidWriteMask(pattern.trim()))) {
     return null;
   }
   return store.getState().addRule(buildAlwaysAllowRule(trimmedTool, pattern));
@@ -209,7 +210,8 @@ export function PermissionsEditor({ store = useSettingsStore }: PermissionsEdito
   const rules = snapshot.settings.permissions.alwaysAllow;
   const groups = groupAlwaysAllowRules(rules);
   const toolOptions = permissionToolOptions(rules);
-  const canAdd = !readOnly && canSubmitPermissionAdd(toolInput);
+  const invalidWriteMask = ["Write", "Edit", "MultiEdit"].includes(toolInput.trim()) && patternInput.trim() !== "" && !isValidWriteMask(patternInput.trim());
+  const canAdd = !readOnly && canSubmitPermissionAdd(toolInput) && !invalidWriteMask;
 
   async function handleAdd(): Promise<void> {
     const result = await submitPermissionAdd(store, toolInput, patternInput);
@@ -304,6 +306,8 @@ export function PermissionsEditor({ store = useSettingsStore }: PermissionsEdito
           Add
         </Button>
       </div>
+
+      {invalidWriteMask && <div role="alert">Enter a narrowly scoped absolute path mask, or leave it blank for workspace-only access.</div>}
 
       {/*
         the ask-zone classifier (default OFF). A classifier

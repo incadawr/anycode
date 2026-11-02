@@ -42,6 +42,7 @@
  * deny simply means "keep planning", which is what its label now says.
  */
 import { useEffect, useRef, useState } from "react";
+import { isValidWriteMask } from "@anycode/core/permissions/write-mask";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
 import type { KeyboardEvent } from "react";
 import type { RiskLevel } from "@anycode/core";
@@ -366,10 +367,15 @@ function capPreviewLines(text: string, maxLines: number): CappedPreview {
  * seen by the user is therefore already clean.
  */
 export function suggestAlwaysAllowPattern(toolName: string, input: unknown, workspace?: string | null): string | undefined {
-  if (!isCommandLineTool(toolName)) {
-    return undefined;
-  }
   const record = input !== null && typeof input === "object" ? (input as Record<string, unknown>) : {};
+  if (["Write", "Edit", "MultiEdit"].includes(toolName)) {
+    const file = record.file_path;
+    if (typeof file !== "string" || !file.startsWith("/")) return "";
+    const directory = file.slice(0, file.lastIndexOf("/"));
+    const mask = `${directory}/**`;
+    return isValidWriteMask(mask) ? mask : "";
+  }
+  if (!isCommandLineTool(toolName)) return undefined;
   if (typeof record.command !== "string") {
     return undefined;
   }
@@ -560,7 +566,9 @@ export function PermissionModal({
   const editOldCapped = editOld !== null ? capPreviewLines(editOld, DIFF_SIDE_MAX_LINES) : null;
   const editNewCapped = editNew !== null ? capPreviewLines(editNew, DIFF_SIDE_MAX_LINES) : null;
 
+  const invalidWriteMask = ["Write", "Edit", "MultiEdit"].includes(request.toolName) && pattern.trim() !== "" && !isValidWriteMask(pattern.trim());
   function fireAllow(): void {
+    if (showRemember && alwaysAllow && invalidWriteMask) return;
     onAllow(showRemember && alwaysAllow ? { pattern: suggestedPattern !== undefined ? pattern : undefined } : undefined);
   }
 
@@ -806,6 +814,10 @@ export function PermissionModal({
               onChange={(event) => setPattern(event.target.value)}
             />
           )}
+          {alwaysAllow && ["Write", "Edit", "MultiEdit"].includes(request.toolName) && pattern.trim() === "" && (
+            <div className="permission-remember-scope">A rule without an absolute path mask will not apply outside the session workspace.</div>
+          )}
+          {alwaysAllow && invalidWriteMask && <div role="alert">Enter a narrowly scoped absolute path mask, or leave it blank for workspace-only access.</div>}
           {alwaysAllow && (
             <div className="permission-remember-scope">
               Saves a rule to Settings → Always-allow rules. Applies now and in future tasks.
@@ -818,7 +830,7 @@ export function PermissionModal({
         <button type="button" ref={denyRef} className="permission-deny-button" onClick={onDeny}>
           {presentation.denyLabel}
         </button>
-        <button type="button" className="permission-allow-button" onClick={fireAllow}>
+        <button type="button" className="permission-allow-button" onClick={fireAllow} disabled={showRemember && alwaysAllow && invalidWriteMask}>
           {presentation.allowLabel}
           <span className="permission-allow-kbd" aria-hidden="true">
             {platform === "darwin" ? "⌘⏎" : "Ctrl+Enter"}

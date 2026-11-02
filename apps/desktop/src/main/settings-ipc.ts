@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import { isValidWriteMask } from "@anycode/core/permissions/write-mask";
 /**
  * Settings + secret-vault control-plane IPC (design slice-2.2-cut.md §3, ruling
  * §4). Registers `ipcMain.handle` for the five frozen channels from
@@ -1359,7 +1361,7 @@ export async function handleClearSecret(deps: SettingsIpcDeps, raw: unknown): Pr
  */
 export async function handleAddRule(deps: SettingsIpcDeps, raw: unknown): Promise<SettingsMutationResult> {
   const parsed = ruleAddSchema.safeParse(raw);
-  if (!parsed.success) {
+  if (!parsed.success || (["Write", "Edit", "MultiEdit"].includes(parsed.data.toolName) && parsed.data.pattern !== undefined && !isValidWriteMask(parsed.data.pattern, homedir()))) {
     return { ok: false, reason: "invalid" };
   }
   return withSettingsFileLock(deps.settingsPath, async () => {
