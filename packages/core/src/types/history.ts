@@ -22,7 +22,31 @@ export interface AssistantToolCallPart {
   input: unknown;
 }
 
-export type AssistantPart = AssistantTextPart | AssistantToolCallPart;
+/**
+ * The route that produced a reasoning part. Reasoning is replayed only to the
+ * same route: signatures are provider-bound (GitHub #41).
+ */
+export interface ReasoningSource {
+  transport: string;
+  /** Catalog entry name; absent for a custom endpoint. */
+  provider?: string;
+  baseUrl: string;
+  model: string;
+}
+
+/**
+ * Model reasoning kept for replay on the next request (GitHub #41). Never part
+ * of "the assistant's text": final answers, reports and titles skip it.
+ */
+export interface AssistantReasoningPart {
+  type: "reasoning";
+  text: string;
+  /** Provider metadata kept verbatim (anthropic `signature` / `redactedData`). */
+  providerMetadata?: Record<string, Record<string, unknown>>;
+  source?: ReasoningSource;
+}
+
+export type AssistantPart = AssistantTextPart | AssistantToolCallPart | AssistantReasoningPart;
 
 export interface ToolResultPart {
   type: "tool_result";

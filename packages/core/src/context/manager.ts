@@ -173,12 +173,31 @@ export class ContextManager {
       return null;
     }
     const clearable = new Set(toolItemIndices.slice(0, toolItemIndices.length - keep));
+    // Old reasoning goes too (GitHub #41): assistant items before both the
+    // first kept tool result and the latest user message. The current turn's
+    // reasoning stays, since the tool loop needs it.
+    let lastUserIndex = -1;
+    for (let i = items.length - 1; i >= 0; i -= 1) {
+      if (items[i]!.message.role === "user") {
+        lastUserIndex = i;
+        break;
+      }
+    }
+    const reasoningCutoff = Math.min(toolItemIndices[toolItemIndices.length - keep] ?? items.length, lastUserIndex);
 
     let clearedToolResults = 0;
     let savedTokens = 0;
     let mutated = false;
 
     const next: HistoryItem[] = items.map((item, index) => {
+      if (item.message.role === "assistant" && index < reasoningCutoff && item.message.content.some((part) => part.type === "reasoning")) {
+        mutated = true;
+        const message: ChatMessage = { role: "assistant", content: item.message.content.filter((part) => part.type !== "reasoning") };
+        const oldEstimate = item.tokenEstimate ?? estimateMessageTokens(this.deps.tokenizer, item.message);
+        const newEstimate = estimateMessageTokens(this.deps.tokenizer, message);
+        savedTokens += oldEstimate - newEstimate;
+        return { ...item, message, tokenEstimate: newEstimate };
+      }
       if (!clearable.has(index) || item.message.role !== "tool") {
         return item;
       }
@@ -272,7 +291,7 @@ export class ContextManager {
 
     const prefixMessages: ChatMessage[] = [];
     for (let i = 0; i < boundary; i += 1) {
-      prefixMessages.push(items[i]!.message);
+      prefixMessages.push(withoutReasoning(items[i]!.message));
     }
     const tail = items.slice(boundary);
 
@@ -380,6 +399,12 @@ export class ContextManager {
       ...(modelId !== undefined ? { model: modelId } : {}),
     };
   }
+}
+
+/** The summarizer needs what was said and done, not the old reasoning (GitHub #41). */
+function withoutReasoning(message: ChatMessage): ChatMessage {
+  if (message.role !== "assistant" || !message.content.some((part) => part.type === "reasoning")) return message;
+  return { role: "assistant", content: message.content.filter((part) => part.type !== "reasoning") };
 }
 
 /** Detects a DOMException/AbortError-shaped rejection so aborts aren't treated as errors. */

@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Z.AI (GLM), MiniMax, Xiaomi MiMo and DeepSeek now get their own reasoning back on later requests, in tool loops and across turns, as these providers require. Reasoning is sent only to the model and connection that produced it, and reloaded sessions show it as collapsed blocks. Set `ANYCODE_PRESERVE_REASONING=on|off` to override this for a connection (#41).
+
 ## [0.0.63] — 2026-11-02
 
 ### Changed

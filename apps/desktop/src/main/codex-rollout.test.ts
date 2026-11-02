@@ -54,7 +54,7 @@ function allText(items: readonly HistoryItem[]): string {
     .map((item) => {
       const message: ChatMessage = item.message;
       if (message.role === "user") return message.content;
-      if (message.role === "assistant") return message.content.map((part) => (part.type === "text" ? part.text : JSON.stringify(part.input))).join("\n");
+      if (message.role === "assistant") return message.content.map((part) => (part.type === "tool_call" ? JSON.stringify(part.input) : part.text)).join("\n");
       return message.content.map((part) => part.text).join("\n");
     })
     .join("\n");

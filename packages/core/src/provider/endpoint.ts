@@ -101,6 +101,11 @@ export interface EndpointConfig {
    */
   declaredEffortLevels?: readonly ReasoningEffort[];
   /**
+   * Connection-level override of reasoning replay (GitHub #41). Absent = the
+   * catalog entry named by `providerName` decides; custom endpoints are off.
+   */
+  preserveReasoning?: boolean;
+  /**
    * Optional response-header quota observer: when set, the
    * transport factories wrap the SDK fetch so every response's headers are
    * offered to it. The callback must never throw into the transport — a quota

@@ -10,6 +10,7 @@ import type { CatalogProviderEntry } from "./catalog.js";
 import { assertBrandContract, assertTransportContract, resolveEndpoint, tariffAt } from "./catalog.js";
 import {
   CUSTOM_PROVIDER_ID,
+  catalogPreservesReasoning,
   catalogProviderIds,
   findCatalogEntry,
   getBuiltinCatalog,
@@ -830,5 +831,30 @@ describe("current model lineups (checked 2026-10-27)", () => {
         expect(retired.has(model.id), `${entry.id}/${model.id} is retired`).toBe(false);
       }
     }
+  });
+});
+
+describe("preserveReasoning (GitHub #41)", () => {
+  it("is on only for providers that document reasoning replay", () => {
+    const on = getBuiltinCatalog().providers.filter((entry) => entry.preserveReasoning === true).map((entry) => entry.id);
+    expect(on.sort()).toEqual([
+      "deepseek",
+      "minimax",
+      "minimax-cn",
+      "xiaomi-mimo-ams",
+      "xiaomi-mimo-api",
+      "xiaomi-mimo-cn",
+      "xiaomi-mimo-sgp",
+      "z-ai",
+    ]);
+  });
+
+  it("is looked up by entry name; unknown and custom endpoints are off", () => {
+    expect(catalogPreservesReasoning("Z.AI (GLM)")).toBe(true);
+    expect(catalogPreservesReasoning("MiniMax (China)")).toBe(true);
+    expect(catalogPreservesReasoning("DeepSeek")).toBe(true);
+    expect(catalogPreservesReasoning("Anthropic")).toBe(false);
+    expect(catalogPreservesReasoning("Some Gateway")).toBe(false);
+    expect(catalogPreservesReasoning(undefined)).toBe(false);
   });
 });

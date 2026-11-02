@@ -117,8 +117,9 @@ export function messageTokenText(message: ChatMessage): string {
       return message.content;
     case "assistant":
       return message.content
+        // Reasoning is stored only on routes that replay it, so it counts.
         .map((part) =>
-          part.type === "text" ? part.text : `${part.toolName} ${safeStringify(part.input)}`,
+          part.type === "tool_call" ? `${part.toolName} ${safeStringify(part.input)}` : part.text,
         )
         .join("\n");
     case "tool":

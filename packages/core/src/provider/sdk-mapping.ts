@@ -8,10 +8,14 @@
  * the `instructions` option.
  */
 
-import { jsonSchema, tool, type ModelMessage, type ToolSet } from "ai";
+import { jsonSchema, tool, type ModelMessage, type ProviderMetadata, type ToolSet } from "ai";
 import type {
   AssistantPart,
+  AssistantReasoningPart,
+  AssistantTextPart,
+  AssistantToolCallPart,
   ChatMessage,
+  ReasoningSource,
   ToolResultPart,
 } from "../types/history.js";
 import type { ToolDeclaration } from "../types/tools.js";
@@ -29,10 +33,14 @@ import type { ProviderTransport } from "./catalog.js";
  * transport as a required parameter means adding a protocol cannot forget this
  * seam — a silently image-free (or JSON-stringified-base64) tool result is a
  * token bomb that no type error would have caught.
+ *
+ * `reasoningReplay` is the calling route's identity when it replays reasoning
+ * (GitHub #41); absent = every reasoning part is dropped.
  */
 export function toSdkMessages(
   messages: readonly ChatMessage[],
   transport: ProviderTransport,
+  reasoningReplay?: ReasoningSource,
 ): ModelMessage[] {
   return messages.map((message): ModelMessage => {
     switch (message.role) {
@@ -60,8 +68,22 @@ export function toSdkMessages(
           ],
         };
       }
-      case "assistant":
-        return { role: "assistant", content: message.content.map(toSdkAssistantPart) };
+      case "assistant": {
+        const content = toSdkAssistantContent(message.content, transport, reasoningReplay);
+        // Chat-completions providers that preserve reasoning (DeepSeek) reject a
+        // tool-call message without `reasoning_content`, and the SDK omits the
+        // field when it is empty. Its message-level openaiCompatible options
+        // are spread onto the wire message, so send "" there.
+        if (
+          transport === "openai-chat-completions" &&
+          reasoningReplay !== undefined &&
+          content.some((part) => part.type === "tool-call") &&
+          !content.some((part) => part.type === "reasoning")
+        ) {
+          return { role: "assistant", content, providerOptions: { openaiCompatible: { reasoning_content: "" } } };
+        }
+        return { role: "assistant", content };
+      }
       case "tool":
         return { role: "tool", content: message.content.map((part) => toSdkToolResultPart(part, transport)) };
     }
@@ -85,7 +107,56 @@ export function toSdkTools(declarations: readonly ToolDeclaration[]): ToolSet {
   return toolSet;
 }
 
-function toSdkAssistantPart(part: AssistantPart) {
+/**
+ * Reasoning parts go out only when replay is on for this route
+ * (`reasoningReplay` set), the transport can carry them, and the part was
+ * produced by this same route. Anthropic needs a signature or redacted data;
+ * a bare thinking block would be rejected or dropped by the SDK anyway.
+ */
+function toSdkAssistantContent(
+  parts: readonly AssistantPart[],
+  transport: ProviderTransport,
+  reasoningReplay: ReasoningSource | undefined,
+) {
+  const out = [];
+  for (const part of parts) {
+    if (part.type === "reasoning") {
+      if (shouldReplayReasoning(part, transport, reasoningReplay)) {
+        out.push({
+          type: "reasoning" as const,
+          text: part.text,
+          ...(part.providerMetadata !== undefined
+            ? { providerOptions: part.providerMetadata as ProviderMetadata }
+            : {}),
+        });
+      }
+      continue;
+    }
+    out.push(toSdkAssistantPart(part));
+  }
+  return out;
+}
+
+function shouldReplayReasoning(
+  part: AssistantReasoningPart,
+  transport: ProviderTransport,
+  current: ReasoningSource | undefined,
+): boolean {
+  if (current === undefined || part.source === undefined) return false;
+  if (!sameReasoningSource(part.source, current)) return false;
+  if (transport === "anthropic-messages") {
+    const anthropic = part.providerMetadata?.anthropic;
+    return typeof anthropic?.signature === "string" || typeof anthropic?.redactedData === "string";
+  }
+  if (transport === "openai-chat-completions") return part.text.length > 0;
+  return false;
+}
+
+export function sameReasoningSource(a: ReasoningSource, b: ReasoningSource): boolean {
+  return a.transport === b.transport && a.provider === b.provider && a.baseUrl === b.baseUrl && a.model === b.model;
+}
+
+function toSdkAssistantPart(part: AssistantTextPart | AssistantToolCallPart) {
   if (part.type === "text") {
     return { type: "text" as const, text: part.text };
   }

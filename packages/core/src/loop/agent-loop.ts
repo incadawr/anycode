@@ -35,6 +35,7 @@ import type {
   TokenUsage,
 } from "../types/events.js";
 import type { AssistantPart, ChatMessage } from "../types/history.js";
+import { ReasoningCapture } from "./reasoning-capture.js";
 import type { ImageAttachment } from "../types/images.js";
 import type { ToolCallOutcome } from "../types/tools.js";
 import type { HookRunner } from "../types/hooks.js";
@@ -1366,6 +1367,7 @@ export class AgentLoop {
 
         const textParts: string[] = [];
         const toolCalls: ProposedToolCall[] = [];
+        const reasoningCapture = new ReasoningCapture();
         let finishReason: FinishReason = "unknown";
         let usage: TokenUsage = {};
         let streamErrored = false;
@@ -1418,6 +1420,7 @@ export class AgentLoop {
               if (isModelOutputEvent(event)) {
                 hadModelOutput = true;
               }
+              reasoningCapture.observe(event);
               switch (event.type) {
                 case "text_delta": {
                   textParts.push(event.text);
@@ -1467,6 +1470,7 @@ export class AgentLoop {
                   // and detectors are cleared before the replay.
                   textParts.length = 0;
                   toolCalls.length = 0;
+                  reasoningCapture.reset();
                   finishReason = "unknown";
                   usage = {};
                   streamErrored = false;
@@ -1560,7 +1564,13 @@ export class AgentLoop {
         // assistant message and report context_usage.
         this.context.noteUsage(usage);
         this.history.append(
-          { role: "assistant", content: buildAssistantParts(textParts.join(""), toolCalls) },
+          {
+            role: "assistant",
+            // A degenerate step's reasoning is a loop, not worth replaying.
+            content: degenerationVerdict
+              ? buildAssistantParts(textParts.join(""), toolCalls)
+              : reasoningCapture.weave(buildAssistantParts(textParts.join(""), toolCalls)),
+          },
           ...(turnId !== undefined ? [{ turnId, step: turn }] as const : []),
         );
         const usageEstimate = this.context.estimate();

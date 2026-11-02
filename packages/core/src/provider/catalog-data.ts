@@ -159,6 +159,7 @@ const ENTRIES: CatalogProviderEntry[] = [
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
+    preserveReasoning: true,
     // (2026-08-15): refreshed to the live docs.z.ai model line (guides/llm
     // sidebar + each page's spec box and code samples). Fresh-first so the first
     // chip — the empty-model prefill — is the newest model. reasoning/effortLevels
@@ -265,6 +266,7 @@ const ENTRIES: CatalogProviderEntry[] = [
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
+    preserveReasoning: true,
     models: [
       // (2026-10-10): rows replaced from the supplied authoritative
       // live GET /models facts. Default effort is high — carried as
@@ -293,6 +295,7 @@ const ENTRIES: CatalogProviderEntry[] = [
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
+    preserveReasoning: true,
     models: MIMO_MODELS,
   },
   {
@@ -304,6 +307,7 @@ const ENTRIES: CatalogProviderEntry[] = [
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
+    preserveReasoning: true,
     models: MIMO_MODELS,
   },
   {
@@ -315,6 +319,7 @@ const ENTRIES: CatalogProviderEntry[] = [
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
+    preserveReasoning: true,
     models: MIMO_MODELS,
   },
   {
@@ -326,6 +331,7 @@ const ENTRIES: CatalogProviderEntry[] = [
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
+    preserveReasoning: true,
     models: MIMO_MODELS,
   },
   {
@@ -469,6 +475,7 @@ const ENTRIES: CatalogProviderEntry[] = [
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
+    preserveReasoning: true,
     models: MINIMAX_MODELS,
   },
   {
@@ -484,6 +491,7 @@ const ENTRIES: CatalogProviderEntry[] = [
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
+    preserveReasoning: true,
     models: MINIMAX_MODELS,
   },
   {
@@ -595,6 +603,15 @@ export function catalogProviderIds(): string[] {
 /** Look up one entry by id; undefined when the id is not in the catalog. */
 export function findCatalogEntry(id: string): CatalogProviderEntry | undefined {
   return ENTRIES.find((entry) => entry.id === id);
+}
+
+/**
+ * Whether reasoning is replayed to a catalog entry, looked up by entry NAME
+ * (the model port only knows `providerName`). Unknown or custom = false.
+ */
+export function catalogPreservesReasoning(providerName: string | undefined): boolean {
+  if (providerName === undefined) return false;
+  return ENTRIES.find((entry) => entry.name === providerName)?.preserveReasoning === true;
 }
 
 /** True when `id` names the user-supplied custom endpoint. */

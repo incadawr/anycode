@@ -114,6 +114,11 @@ export interface CoreEnvConfig {
    * applied by `resolveIncludeUsage`, never here.
    */
   includeUsage?: boolean;
+  /**
+   * Reasoning-replay override (ANYCODE_PRESERVE_REASONING, GitHub #41).
+   * Undefined = the catalog entry decides (custom endpoints: off).
+   */
+  preserveReasoning?: boolean;
 }
 
 /** Main-loop turn budget when not overridden (subagents get a lower budget in Phase 3). */

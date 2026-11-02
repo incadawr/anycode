@@ -1880,6 +1880,11 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
         blocks.push({ kind: "assistant_text", id, text: part.text });
         return;
       }
+      if (part.type === "reasoning") {
+        // Replayable reasoning (GitHub #41) shows as a finished, collapsed block.
+        if (part.text !== "") blocks.push({ kind: "reasoning", id, text: part.text, collapsed: true });
+        return;
+      }
       const result = results.get(part.toolCallId);
       // Persisted subagent card (slice S1, CUT-S1 §3 W5 point 1):
       // the paired tool_result's `presentation.subagent` is the durable

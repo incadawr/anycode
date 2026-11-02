@@ -74,6 +74,8 @@ export const ENV_IMAGE_INPUT = "ANYCODE_IMAGE_INPUT";
 export const ENV_IMAGE_INPUT_MODEL_OVERRIDE = "ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE";
 export const ENV_PROVIDER_TRANSPORT = "ANYCODE_PROVIDER_TRANSPORT";
 export const ENV_INCLUDE_USAGE = "ANYCODE_INCLUDE_USAGE";
+/** Connection-level override of the catalog `preserveReasoning` flag (GitHub #41). */
+export const ENV_PRESERVE_REASONING = "ANYCODE_PRESERVE_REASONING";
 /**
  * Opt-in prompt-cache override (GitHub #15): JSON of the enabled value
  * (`{"mode":"implicit","ttl":"30m"}` or `{"mode":"implicit"}`) or the literal
@@ -192,6 +194,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundC
   const imageInput = readImageInputOverride(env);
   const reasoningEffort = readReasoningEffort(env);
   const includeUsage = readOptionalBoolean(env, ENV_INCLUDE_USAGE);
+  const preserveReasoning = readOptionalBoolean(env, ENV_PRESERVE_REASONING);
   const adaptiveTurnBudget = readOptionalBoolean(env, ENV_ADAPTIVE_TURN_BUDGET);
   const promptCache = readPromptCacheOptions(env);
 
@@ -221,6 +224,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundC
     imageInput,
     providerTransport,
     includeUsage,
+    ...(preserveReasoning !== undefined ? { preserveReasoning } : {}),
   };
 }
 

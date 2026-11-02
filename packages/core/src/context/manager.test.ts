@@ -495,6 +495,61 @@ describe("ContextManager.maybeMicrocompact", () => {
   });
 });
 
+describe("reasoning parts under context pressure (GitHub #41)", () => {
+  const source = { transport: "anthropic-messages", baseUrl: "http://z", model: "glm-5.3" };
+  function thinkingCall(id: string, thought = LONG_TEXT): ChatMessage {
+    return {
+      role: "assistant",
+      content: [
+        { type: "reasoning", text: thought, providerMetadata: { anthropic: { signature: `sig-${id}` } }, source },
+        { type: "tool_call", toolCallId: id, toolName: "Read", input: {} },
+      ],
+    };
+  }
+
+  it("microcompact strips old turns' reasoning but keeps the current turn's", () => {
+    const messages: ChatMessage[] = [userMsg("old turn")];
+    for (let i = 0; i < 6; i += 1) {
+      messages.push(thinkingCall(`old${i}`));
+      messages.push(toolResult(`old${i}`, LONG_TEXT));
+    }
+    messages.push(userMsg("current turn"));
+    messages.push(thinkingCall("cur"));
+    messages.push(toolResult("cur", "short"));
+    const history = buildHistory(messages);
+    const manager = makeManager(history, new ScriptedModelPort([]), {
+      microcompactKeepRecentToolResults: 2,
+      microcompactMinSavingsTokens: 256,
+    });
+    manager.noteUsage({ inputTokens: 150_000 });
+
+    expect(manager.maybeMicrocompact()).not.toBeNull();
+
+    const assistants = history.items.filter((item) => item.message.role === "assistant");
+    const hasReasoning = assistants.map((item) =>
+      item.message.role === "assistant" && item.message.content.some((part) => part.type === "reasoning"));
+    expect(hasReasoning).toEqual([false, false, false, false, false, false, true]);
+    expect(history.unansweredToolCallIds()).toEqual([]);
+    // Estimates follow the rewrite.
+    const stripped = assistants[0]!;
+    expect(stripped.tokenEstimate).toBe(new HeuristicTokenizer().count("Read {}"));
+  });
+
+  it("compaction does not send old reasoning to the summarizer", async () => {
+    const messages: ChatMessage[] = [];
+    for (let t = 0; t < 4; t += 1) {
+      messages.push(userMsg(`turn ${t}`));
+      messages.push(thinkingCall(`c${t}`, `secret thought ${t}`));
+      messages.push(toolResult(`c${t}`, `result ${t}`));
+    }
+    const port = new ScriptedModelPort(summaryScript("CONDENSED"));
+    const manager = makeManager(buildHistory(messages), port, { keepRecentMessages: 3 });
+
+    expect((await manager.runCompaction({})).ok).toBe(true);
+    expect(JSON.stringify(port.requests[0]!.messages)).not.toContain("secret thought");
+  });
+});
+
 describe("ContextManager.shouldAutoCompact", () => {
   const tightConfig: Partial<ContextBudgetConfig> = {
     contextWindowTokens: 1_000,
