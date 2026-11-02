@@ -69,7 +69,7 @@ export async function runSelfCheck(win: CheckWindow, root: string, allowUnavaila
     if (!await evaluate("!!document.querySelector('.welcome-setup')")) throw new Error("Selected setup pane is missing");
   }
   if (!await evaluate("!!document.querySelector('.connection-drawer-body') && !document.querySelector('.connection-drawer-advanced').open")) throw new Error("API setup advanced controls should be collapsed");
-  if (!await evaluate("document.querySelector('.welcome-setup .settings-button-primary').disabled")) throw new Error("Missing credential did not block Connect");
+  if (!await evaluate("document.querySelector('.welcome-setup .ak-btn--primary').disabled")) throw new Error("Missing credential did not block Connect");
   await evaluate("[...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Open settings').click()");
   await new Promise(resolve => setTimeout(resolve, 250));
   if (!await evaluate("!!document.querySelector('.settings-dialog')?.open")) throw new Error("First-run settings escape is unavailable");
