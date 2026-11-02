@@ -1,3 +1,4 @@
+import { listConnectionTargets } from "./list-connections.js";
 import { SET_SESSION_FAST_OPERATION } from "../shared/communication.js";
 import { startHostWithActivity } from "./activity-forwarding.js";
 import { contextSnapshotOptions } from "./context-snapshot.js";
@@ -221,6 +222,7 @@ import {
   createCommandHook,
   createDefaultTokenizer,
   createDefaultToolRegistry,
+  createListConnectionsTool,
   createInspectImageTool,
   createMediaProjectionPort,
   createSkillPort,
@@ -3121,6 +3123,13 @@ async function boot(): Promise<void> {
       args.child === undefined
         ? createDefaultToolRegistry({ agent: { sessionTier: true }, ...(archMapEnabled ? { archMap: true } : {}) })
         : createDefaultToolRegistry(archMapEnabled ? { archMap: true } : undefined);
+
+    registry.register(createListConnectionsTool(() => {
+      const raw = JSON.parse(readFileSync(hostSettingsPathOverride() ?? defaultSettingsPath(), "utf8"));
+      const parsed = parseSettings(raw);
+      if (parsed.status !== "ok") throw new Error("Invalid settings");
+      return listConnectionTargets(parsed.settings, process.env[ENV_CONNECTION_ID] || parsed.settings.provider.activeConnectionId, currentModel);
+    }));
 
     // adaptive turn budget (ANYCODE_ADAPTIVE_TURN_BUDGET, mirror of
     // `tools.adaptiveTurnBudget`). OFF => no ceiling key, no subagentBudget,
