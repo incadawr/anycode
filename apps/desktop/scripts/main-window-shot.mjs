@@ -64,13 +64,32 @@ try {
       const selected = await api('POST', `/dock/tabs/${encodeURIComponent(id)}/click`, {});
       if (!selected.ok) throw Error(`Select ${id}: ${JSON.stringify(selected)}`);
       await sleep(500);
-      const shot = await call('Page.captureScreenshot', { format: 'png' });
+      let shot = await call('Page.captureScreenshot', { format: 'png' });
+      if (name === '-web') {
+        const targets = (await call('Target.getTargets')).targetInfos;
+        const target = targets.find(t => t.type === 'page' && t.url.includes('mini-presentation.html'));
+        if (!target) throw Error('Web preview CDP target unavailable');
+        const {sessionId} = await call('Target.attachToTarget', {targetId: target.targetId, flatten: true});
+        try {
+          const bounds = await evaluate(`(() => { const r=document.querySelector('.preview-panel-body').getBoundingClientRect(); return {x:r.x,y:r.y,width:r.width,height:r.height}; })()`);
+          const child = await cdp.call('Page.captureScreenshot', {format:'png'}, sessionId);
+          const composite = await evaluate(`(async () => { const load = src => new Promise((resolve,reject) => { const img = new Image(); img.onload=()=>resolve(img); img.onerror=reject; img.src='data:image/png;base64,'+src; }); const [main,web] = await Promise.all([load(${JSON.stringify(shot.data)}),load(${JSON.stringify(child.data)})]); const canvas=document.createElement('canvas'); canvas.width=main.width; canvas.height=main.height; const ctx=canvas.getContext('2d'); ctx.drawImage(main,0,0); const r=${JSON.stringify(bounds)}; ctx.drawImage(web,r.x,r.y,r.width,r.height); return canvas.toDataURL('image/png').split(',')[1]; })()`);
+          shot = {data:composite};
+        } finally { await call('Target.detachFromTarget', {sessionId}); }
+      }
       writeFileSync(join(output, `${theme}${name}.png`), Buffer.from(shot.data, 'base64'));
     }
   }
   console.log(`Screenshots: ${output} (dark, light, markdown and web)`);
   console.log('Local HTML preview:', web.ok ? 'opened' : 'unavailable');
-  console.log('Web preview body is not captured: it is a separate WebContentsView; the PNG shows the renderer and preview header only.');
+  await evaluate(`document.documentElement.dataset.theme='dark'; document.querySelector('.sidebar-settings').click()`);
+  await poll(() => evaluate(`!!document.querySelector('#settings-tab-appearance')`));
+  await evaluate(`document.querySelector('#settings-tab-appearance').click()`);
+  await poll(() => evaluate(`!!document.querySelector('.accent-swatch[data-accent="blue"]')`));
+  await evaluate(`document.querySelector('.accent-swatch[data-accent="blue"]').focus()`);
+  await sleep(300);
+  const tooltip = await call('Page.captureScreenshot', {format:'png'});
+  writeFileSync(join(output, 'dark-appearance-tooltip.png'), Buffer.from(tooltip.data, 'base64'));
 } finally {
   cdp?.ws?.close();
   if (app.exitCode === null && app.signalCode === null) try { process.kill(-app.pid, 'SIGTERM'); } catch {}

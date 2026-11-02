@@ -69,6 +69,10 @@ describe("isolated browser ownership", () => {
     await cdp.call("Runtime.evaluate", {expression:"1"});
     expect(connectedUrl).toBe(`ws://127.0.0.1:54321${browserPath}`);
     expect(sent.at(-1)).toMatchObject({method:"Runtime.evaluate", sessionId:"session-1"});
+    await cdp.call("Page.captureScreenshot", {format:"png"}, "preview-session");
+    expect(sent.at(-1)).toMatchObject({method:"Page.captureScreenshot", sessionId:"preview-session"});
+    await cdp.call("Runtime.evaluate", {expression:"2"});
+    expect(sent.at(-1)).toMatchObject({method:"Runtime.evaluate", sessionId:"session-1"});
     cdp.ws.close();
     env.REMOTE_DEBUGGING_PORT = "9222";
     await expect(connectIsolatedCdp({profile:root, env, launcher:{pid:100}, wait, openSocket:socket, run})).rejects.toThrow("dynamically allocated");
