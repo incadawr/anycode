@@ -188,3 +188,36 @@ Use `/effort high` to change the selected level in the CLI. Valid levels are
 `ANYCODE_IMAGE_INPUT`, this shell setting applies to all models, including child
 models, and takes precedence over per-model settings, catalog data and fetched
 metadata. An invalid value is ignored with a warning.
+
+### Reasoning history experiments
+
+`ANYCODE_REASONING_HISTORY` selects reasoning replay for new responses:
+
+- Unset: use the existing catalog policy and `ANYCODE_PRESERVE_REASONING` override.
+- `none`: omit reasoning from provider requests.
+- `full`: replay the original reasoning under the existing provider policy.
+- `factual_N`: generate one factual summary per response at low effort, then replay
+  that fixed summary. `N` must be a positive integer, for example `factual_500`.
+
+The compactor uses the current endpoint and model. Set
+`ANYCODE_REASONING_COMPACTOR_MODEL` to select another model on that endpoint.
+Original reasoning and metadata remain in history for audit; modified text is
+sent without the original signature. Provider and route gates still apply;
+Responses reasoning replay remains disabled. Endpoint compatibility with changed
+thinking must be established separately before running an experiment.
+
+The summary includes goal, verified facts, decision and constraints, unverified
+hypotheses, and next intended action. Its length is conservatively limited to
+`N` UTF-8 bytes (an upper bound for byte-based tokenizers), keeping complete
+field lines only, so it can be shorter than `N` model tokens. The compactor
+receives a separate output budget for its own low-effort reasoning. Empty or
+unusable output is treated as a compactor failure. Compactor usage is stored with the summary and reported
+separately as `reasoningCompactorUsage` on the response's `context_usage` trace
+event; it does not replace the main response's context usage. Compactor failures
+preserve the completed response and original reasoning for audit and report
+`reasoningCompactorStatus: failed`. Cancellation also preserves that response,
+reports `cancelled`, and follows normal turn cancellation. In factual mode,
+reasoning without a usable stored summary is omitted from replay, including
+older history and responses whose compaction failed. Unset and `full` always
+replay the original under the existing provider policy, even if a summary is
+stored.

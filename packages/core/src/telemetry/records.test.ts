@@ -898,3 +898,15 @@ describe("buildEngineTelemetryTap", () => {
     expect(records).toHaveLength(0);
   });
 });
+
+it("records separate compactor usage and failure status without copying arbitrary fields", () => {
+  const record = telemetryRecordFor({
+    type: "context_usage", estimatedTokens: 100, budgetTokens: 1000, source: "provider",
+    reasoningCompactorStatus: "failed",
+    reasoningCompactorUsage: [{ inputTokens: 12, outputTokens: 3, totalTokens: 15 }],
+  });
+  expect(record).toMatchObject({
+    t: "context_usage", reasoningCompactorStatus: "failed",
+    reasoningCompactorUsage: [{ inputTokens: 12, outputTokens: 3, totalTokens: 15 }],
+  });
+});

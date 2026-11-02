@@ -5,6 +5,7 @@
  * shapes at the boundary.
  */
 
+import type { TokenUsage } from "./events.js";
 import type { ToolCallStatus } from "./tools.js";
 import type { ImageAttachment } from "./images.js";
 import type { ToolResultPresentation } from "./subagent-card.js";
@@ -28,6 +29,8 @@ export interface AssistantToolCallPart {
  */
 export interface ReasoningSource {
   transport: string;
+  /** Only factual mode selects a stored summary; unset preserves original replay. */
+  replayFactual?: boolean;
   /** The route accepts unsigned Anthropic thinking blocks. */
   replayUnsigned?: boolean;
   /** Catalog entry name; absent for a custom endpoint. */
@@ -42,6 +45,13 @@ export interface ReasoningSource {
  */
 export interface AssistantReasoningPart {
   type: "reasoning";
+  /** Original text and metadata remain untouched for audit. */
+  factualSummary?: Readonly<{
+    text: string;
+    tokenCap: number;
+    model: string;
+    usage: TokenUsage;
+  }>;
   text: string;
   /** Provider metadata kept verbatim (anthropic `signature` / `redactedData`). */
   providerMetadata?: Record<string, Record<string, unknown>>;

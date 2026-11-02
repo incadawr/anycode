@@ -119,6 +119,8 @@ export interface CoreEnvConfig {
    * Applies to enabled catalog providers and custom endpoints; other catalog providers remain off.
    */
   preserveReasoning?: boolean;
+  reasoningHistory?: "none" | "full" | `factual_${number}`;
+  reasoningCompactorModel?: string;
 }
 
 /** Main-loop turn budget when not overridden (subagents get a lower budget in Phase 3). */

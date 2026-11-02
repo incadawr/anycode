@@ -343,6 +343,9 @@ export type AgentEvent =
   /** Emitted after each finish (design §2.5): provider usage wins over the local estimate. */
   | {
       type: "context_usage";
+      /** Separately billed reasoning compactor calls for this response. */
+      reasoningCompactorUsage?: TokenUsage[];
+      reasoningCompactorStatus?: "failed" | "cancelled";
       estimatedTokens: number;
       budgetTokens: number;
       source: "provider" | "estimate";

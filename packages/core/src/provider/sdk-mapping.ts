@@ -124,15 +124,17 @@ function toSdkAssistantContent(
   for (const part of parts) {
     if (part.type === "reasoning") {
       if (allowReasoning && shouldReplayReasoning(part, transport, reasoningReplay)) {
-        const anthropic = part.providerMetadata?.anthropic;
+        const summary = reasoningReplay?.replayFactual ? part.factualSummary : undefined;
+        const metadata = summary === undefined ? part.providerMetadata : undefined;
+        const anthropic = metadata?.anthropic;
         const needsSignature = transport === "anthropic-messages" && reasoningReplay?.replayUnsigned === true &&
           typeof anthropic?.signature !== "string" && typeof anthropic?.redactedData !== "string";
         const providerOptions = needsSignature
-          ? { ...part.providerMetadata, anthropic: { ...anthropic, signature: "" } }
-          : part.providerMetadata;
+          ? { ...metadata, anthropic: { ...anthropic, signature: "" } }
+          : metadata;
         out.push({
           type: "reasoning" as const,
-          text: part.text,
+          text: summary?.text ?? part.text,
           ...(providerOptions !== undefined ? { providerOptions: providerOptions as ProviderMetadata } : {}),
         });
       }
@@ -149,12 +151,15 @@ export function shouldReplayReasoning(
   current: ReasoningSource | undefined,
 ): boolean {
   if (current === undefined || part.source === undefined) return false;
+  if (current.replayFactual && !part.factualSummary?.text.trim()) return false;
   if (!sameReasoningSource(part.source, current)) return false;
   if (transport === "anthropic-messages") {
     const anthropic = part.providerMetadata?.anthropic;
     return current.replayUnsigned === true || typeof anthropic?.signature === "string" || typeof anthropic?.redactedData === "string";
   }
-  if (transport === "openai-chat-completions") return part.text.length > 0;
+  if (transport === "openai-chat-completions") {
+    return current.replayFactual ? Boolean(part.factualSummary?.text.trim()) : part.text.length > 0;
+  }
   return false;
 }
 

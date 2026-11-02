@@ -31,9 +31,10 @@ import { contextualizeNetworkFailure } from "./network-failure.js";
  * `#includeUsageDisabledForEndpoint`).
  */
 
-import { stepCountIs, streamText } from "ai";
+import { generateText, stepCountIs, streamText } from "ai";
 import type { LanguageModel, TextStreamPart, ToolSet } from "ai";
-import type { ReasoningSource } from "../types/history.js";
+import { compactReasoningParts } from "./reasoning-compactor.js";
+import type { AssistantPart, ReasoningSource } from "../types/history.js";
 import { catalogPreservesReasoning, isCatalogProviderName } from "./catalog-data.js";
 import type { ModelPort, ModelRequest } from "../ports/model.js";
 import { consoleDiagnosticSink, type DiagnosticSink } from "../types/diagnostics.js";
@@ -765,12 +766,14 @@ function rawResponseModelOf(part: unknown): string | undefined {
  * `store: false` its reasoning items would need encrypted content.
  */
 export function reasoningReplaySource(config: EndpointConfig): ReasoningSource | undefined {
+  if (config.reasoningHistory === "none") return undefined;
   if (config.transport !== "anthropic-messages" && config.transport !== "openai-chat-completions") return undefined;
   const catalogEnabled = catalogPreservesReasoning(config.providerName);
   if (isCatalogProviderName(config.providerName) && !catalogEnabled) return undefined;
   if (!(config.preserveReasoning ?? catalogEnabled)) return undefined;
   return {
     transport: config.transport,
+    ...(config.reasoningHistory?.startsWith("factual_") ? { replayFactual: true } : {}),
     ...(config.transport === "anthropic-messages" ? { replayUnsigned: true } : {}),
     ...(config.providerName !== undefined ? { provider: config.providerName } : {}),
     baseUrl: config.baseUrl,
@@ -829,6 +832,27 @@ export class AiSdkModelPort implements ModelPort {
    * model or connection switch (a fresh port) never sends foreign reasoning.
    */
   readonly #reasoningSource: ReasoningSource | undefined;
+
+  async compactReasoning(parts: AssistantPart[], signal?: AbortSignal): Promise<AssistantPart[]> {
+    const mode = this.config.reasoningHistory;
+    if (!mode?.startsWith("factual_") || this.#reasoningSource === undefined) return parts;
+    const modelId = this.config.reasoningCompactorModel ?? this.config.model;
+    return compactReasoningParts(parts, Number(mode.slice(8)), modelId, async (prompt, system) => {
+      const model = await new AiSdkModelPort({ ...this.config, model: modelId })
+        .buildAttemptModel(this.config.includeUsage);
+      return generateText({
+        model,
+        ...reasoningRequestOptions({
+          messages: [], tools: [], reasoningEffort: "low",
+          maxOutputTokens: Number(mode.slice(8)) + 8192,
+        }, this.config.providerName, this.config.transport, undefined, modelId, this.config.declaredEffortLevels),
+        abortSignal: signal,
+        maxRetries: 0,
+        system,
+        prompt,
+      });
+    });
+  }
 
   reasoningReplaySource(effort?: ModelRequest["reasoningEffort"]): ReasoningSource | undefined {
     const options = reasoningRequestOptions({ messages: [], tools: [], reasoningEffort: effort }, this.config.providerName, this.config.transport, this.config.promptCache, this.config.model, this.config.declaredEffortLevels);

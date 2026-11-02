@@ -58,6 +58,18 @@ export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | nu
         estimatedTokens: event.estimatedTokens,
         budgetTokens: event.budgetTokens,
         source: event.source,
+        ...(event.reasoningCompactorStatus !== undefined
+          ? { reasoningCompactorStatus: event.reasoningCompactorStatus } : {}),
+        ...(event.reasoningCompactorUsage !== undefined ? {
+          reasoningCompactorUsage: event.reasoningCompactorUsage.map(usage => ({
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            totalTokens: usage.totalTokens,
+            cachedInputTokens: usage.cachedInputTokens,
+            cacheWriteTokens: usage.cacheWriteTokens,
+            costUsd: usage.costUsd,
+          })),
+        } : {}),
       };
     case "subagent_start":
       // §3.10: `route` (the host's entryKey identity) and
