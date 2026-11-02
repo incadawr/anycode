@@ -761,7 +761,7 @@ describe("CLI extensions wiring (design slice-3.3-cut.md §6/slice-3.4-cut.md §
       expectedRegistry.register(backgroundCapableBashTool, { silentDuplicateWarning: true });
       expectedRegistry.register(bashOutputTool);
       expectedRegistry.register(bashKillTool);
-      const expectedToolNames = expectedRegistry.list();
+      const expectedToolNames = [...expectedRegistry.list(), "ListConnections"].sort();
       const expectedEnv: SystemPromptEnv = {
         workingDirectory: cwd,
         platform: process.platform,
@@ -2568,7 +2568,7 @@ describe("CLI /model + multi-provider wiring e2e (design slice-4.6-cut.md §7)",
 
     expect(await runPromise).toBe(0);
     const text = getText();
-    expect(text).toContain('Agent: model override "glm-4.7" is not supported in this host; retry without the model field.');
+    expect(text).toContain('Agent: model "glm-4.7" is unavailable; available models:');
     // The error returns BEFORE the semaphore/spawn, so no subagent ever starts.
     expect(text).not.toContain("[subagent call-1] start");
   });
