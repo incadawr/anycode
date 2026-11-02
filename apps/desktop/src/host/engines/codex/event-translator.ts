@@ -4,7 +4,7 @@
  * interpret unobserved protocol families.
  */
 
-import { scrubApprovalText, type AgentEvent, type CodexRateLimitsWire, type FinishReason, type ToolCallOutcome, type ToolCallStatus } from "@anycode/core";
+import { type AgentEvent, type CodexRateLimitsWire, type FinishReason, type ToolCallOutcome, type ToolCallStatus } from "@anycode/core";
 import type { JsonRpcNotification } from "./protocol.js";
 import type { TurnItemIndex } from "./turn-item-index.js";
 import { CollabAgentCardIndex } from "./collab-agent-index.js";
@@ -185,15 +185,34 @@ function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" ? value as Record<string, unknown> : null;
 }
 
-function codexTurnError(value: Record<string, unknown> | null, fallback: string): Extract<AgentEvent, { type: "error" }> {
-  const message = typeof value?.message === "string" && value.message.length > 0 ? value.message : fallback;
+const CODEX_ERROR_MESSAGES: Record<string, string> = {
+  contextWindowExceeded: "Codex exceeded the context window.",
+  sessionBudgetExceeded: "Codex exceeded the session budget.",
+  serverOverloaded: "The Codex server is overloaded.",
+  cyberPolicy: "The request was blocked by the Codex security policy.",
+  internalServerError: "The Codex server encountered an internal error.",
+  unauthorized: "Codex authorization failed.",
+  badRequest: "Codex rejected the request.",
+  threadRollbackFailed: "Codex could not roll back the thread.",
+  sandboxError: "The Codex sandbox encountered an error.",
+  httpConnectionFailed: "Codex could not connect to the server.",
+  responseStreamConnectionFailed: "Codex could not connect to the response stream.",
+  responseStreamDisconnected: "The Codex response stream disconnected.",
+  responseTooManyFailedAttempts: "Codex exceeded the response retry limit.",
+  activeTurnNotSteerable: "The active Codex turn cannot be steered.",
+};
+
+function codexTurnError(value: Record<string, unknown> | null): Extract<AgentEvent, { type: "error" }> {
   const info = value?.codexErrorInfo;
-  const usageLimit = info === "usageLimitExceeded" || info === "usage_limit_exceeded";
-  const retry = usageLimit ? message.match(/\btry again at\s+(\d{1,2}:\d{2}\s*(?:AM|PM))/i) : null;
-  const safeMessage = usageLimit
-    ? `This account has reached its usage limit.${retry ? ` Try again at ${retry[1]}.` : ""}`
-    : scrubApprovalText(message).replace(/https?:\/\/\S+/gi, "[address redacted]").slice(0, 1000);
-  return { type: "error", error: new Error(message), safe: { code: usageLimit ? "codex_usage_limit" : "codex_error", message: safeMessage } };
+  const key = typeof info === "string" ? info : Object.keys(record(info) ?? {}).find((k) => Object.hasOwn(CODEX_ERROR_MESSAGES, k));
+  const usageLimit = key === "usageLimitExceeded" || key === "usage_limit_exceeded";
+  let safeMessage = key && Object.hasOwn(CODEX_ERROR_MESSAGES, key) ? CODEX_ERROR_MESSAGES[key]! : "Codex ended the turn with an error";
+  if (usageLimit) {
+    const message = typeof value?.message === "string" ? value.message : "";
+    const retry = /\btry again at ([1-9]|1[0-2]):([0-5][0-9]) ?(AM|PM)\b/i.exec(message);
+    safeMessage = `This account has reached its usage limit.${retry ? ` Try again at ${Number(retry[1])}:${retry[2]} ${retry[3]!.toUpperCase()}.` : ""}`;
+  }
+  return { type: "error", error: new Error(safeMessage), safe: { code: usageLimit ? "codex_usage_limit" : "codex_error", message: safeMessage } };
 }
 
 function matchingTurn(params: unknown, threadId: string, turnId: string): Record<string, unknown> | null {
@@ -1073,7 +1092,7 @@ export class TurnTranslator {
   /**
    * `error` notifications (cut §2(i)): `willRetry` is the discriminator
    * between a retry (routed to `engine_notice`, level "retry" — the turn
-   * keeps running) and a terminal error (the ORIGINAL safe message from
+   * keeps running) and a terminal error (a classified safe message for
    * Codex — auth/quota/network/sandbox stay distinguishable — surfaced as
    * `{type:"error"}`, followed by `finish()`'s honest `turn_end`/`loop_end`
    * once `turn/completed` arrives; never a faceless `loop_end:"error"` alone).
@@ -1086,7 +1105,7 @@ export class TurnTranslator {
     }
     if (this.errorEmitted || typeof errorValue?.message !== "string" || errorValue.message.length === 0) return [];
     this.errorEmitted = true;
-    return [codexTurnError(errorValue, "Codex reported an error.")];
+    return [codexTurnError(errorValue)];
   }
 
   private finish(params: Record<string, unknown>): AgentEvent[] {
@@ -1098,17 +1117,14 @@ export class TurnTranslator {
     const loopReason = status === "completed" ? "completed" : status === "interrupted" ? "cancelled" : "error";
     const finishReason: FinishReason = status === "completed" ? "stop" : status === "interrupted" ? "other" : "error";
     const events: AgentEvent[] = [];
-    // A terminal failure surfaces with its ORIGINAL safe message even when no
+    // A terminal failure surfaces with a classified safe message even when no
     // separate `error` notification preceded `turn/completed` (cut §2(i)) —
     // never just a faceless loop_end:"error". `errorEmitted` prevents a
     // double-report when the live `error` notification already fired.
     if (loopReason === "error" && !this.errorEmitted) {
       const turnError = record(turn?.error);
-      const message = typeof turnError?.message === "string" && turnError.message.length > 0
-        ? turnError.message
-        : status === "failed" ? "Codex turn failed." : "Codex protocol returned an unsupported turn status.";
       this.errorEmitted = true;
-      events.push(codexTurnError(turnError, message));
+      events.push(codexTurnError(turnError));
     }
     for (const id of this.openText) events.push({ type: "text_end", id });
     this.openText.clear();

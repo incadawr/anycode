@@ -9,7 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- Codex turn failures now show their error details, including usage-limit retry times, in the transcript and session results.
+- Codex turn failures now show classified errors and validated usage-limit retry times without exposing server details. Completed answers remain available after a later error.
 
 - Z.AI (GLM), MiniMax, Xiaomi MiMo and DeepSeek now get their own reasoning back on later requests, in tool loops and across turns, so the model keeps its earlier thinking. Reasoning is sent only to the provider and model that produced it, and reloaded sessions show it as collapsed blocks. Set `ANYCODE_PRESERVE_REASONING=on|off` to override this for supported providers and custom connections (#41).
 - Conversation history written by this version cannot be read by older versions.

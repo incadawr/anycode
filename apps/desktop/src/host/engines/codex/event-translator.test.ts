@@ -281,7 +281,7 @@ describe("TurnTranslator — renderer invariants", () => {
 describe("TurnTranslator — errors and retries (cut §2(i))", () => {
   it.each([
     ["usageLimitExceeded", "You've hit your usage limit. Try again at 1:13 PM.", "This account has reached its usage limit. Try again at 1:13 PM.", "codex_usage_limit"],
-    ["other", "The server rejected this request.", "The server rejected this request.", "codex_error"],
+    ["other", "The server rejected this request.", "Codex ended the turn with an error", "codex_error"],
   ])("surfaces a completed turn error for %s", (info, message, safeMessage, code) => {
     const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
     const events = translator.onNotification({ method: "turn/completed", params: { threadId: THREAD_ID, turn: { id: TURN_ID, status: "failed", error: { message, codexErrorInfo: info, additionalDetails: null } } } });
@@ -303,10 +303,38 @@ describe("TurnTranslator — errors and retries (cut §2(i))", () => {
     ]);
   });
 
-  it("scrubs credentials and addresses from generic errors", () => {
+  it.each([
+    "contextWindowExceeded", "sessionBudgetExceeded", "usageLimitExceeded", "usage_limit_exceeded", "serverOverloaded", "cyberPolicy", "internalServerError", "unauthorized", "badRequest", "threadRollbackFailed", "sandboxError", "other", "unknown", null,
+    { httpConnectionFailed: { httpStatusCode: 500 } }, { responseStreamConnectionFailed: {} }, { responseStreamDisconnected: {} }, { responseTooManyFailedAttempts: {} }, { activeTurnNotSteerable: {} },
+  ])("never exposes server text for error classification %s", (info) => {
     const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
-    const events = translator.onNotification({ method: "turn/completed", params: { threadId: THREAD_ID, turn: { id: TURN_ID, status: "failed", error: { message: "Failed at https://example.test/secret\ntoken=private-value", codexErrorInfo: "other" } } } });
-    expect(events[0]).toMatchObject({ safe: { message: "Failed at [address redacted]\ntoken[redacted]" } });
+    const message = "/Users/alice/private/client.txt alice@example.test acct_123456 abc123 Try again at 1:13 PM" + " ".repeat(40000);
+    const events = translator.onNotification({ method: "turn/completed", params: { threadId: THREAD_ID, turn: { id: TURN_ID, status: "failed", error: { message, codexErrorInfo: info } } } });
+    const event = events[0] as Extract<AgentEvent, { type: "error" }>;
+    expect(event.safe!.message.length).toBeLessThan(1000);
+    for (const secret of ["/Users/alice/private/client.txt", "alice@example.test", "acct_123456", "abc123"]) {
+      expect(event.safe!.message).not.toContain(secret);
+      expect((event.error as Error).message).not.toContain(secret);
+    }
+  });
+
+  it.each([
+    ["contextWindowExceeded", "Codex exceeded the context window."],
+    ["unauthorized", "Codex authorization failed."],
+    ["serverOverloaded", "The Codex server is overloaded."],
+    ["badRequest", "Codex rejected the request."],
+    [{ httpConnectionFailed: { httpStatusCode: 500 } }, "Codex could not connect to the server."],
+    ["other", "Codex ended the turn with an error"],
+  ])("classifies %s without using server text", (info, expected) => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    const events = translator.onNotification({ method: "turn/completed", params: { threadId: THREAD_ID, turn: { id: TURN_ID, status: "failed", error: { message: "private", codexErrorInfo: info } } } });
+    expect(events[0]).toMatchObject({ safe: { message: expected } });
+  });
+
+  it.each(["Try again at 99:99 PM", "Try again at 0:13 PM", "Try again at 1:13" + " ".repeat(40000) + "PM"])('rejects invalid retry time', (message) => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    const events = translator.onNotification({ method: "turn/completed", params: { threadId: THREAD_ID, turn: { id: TURN_ID, status: "failed", error: { message, codexErrorInfo: "usageLimitExceeded" } } } });
+    expect(events[0]).toMatchObject({ safe: { message: "This account has reached its usage limit." } });
   });
 
   it("surfaces the message for the policyCapacityUnavailable error code", () => {
@@ -316,7 +344,7 @@ describe("TurnTranslator — errors and retries (cut §2(i))", () => {
       params: { threadId: THREAD_ID, turnId: TURN_ID, error: { message: "Capacity unavailable", codexErrorInfo: "policyCapacityUnavailable", additionalDetails: null }, willRetry: false },
     });
     expect(events).toMatchObject([{ type: "error", error: expect.any(Error) }]);
-    expect((events[0] as { error: Error }).error.message).toBe("Capacity unavailable");
+    expect((events[0] as { error: Error }).error.message).toBe("Codex ended the turn with an error");
   });
 
   it("surfaces the message for the modelNotFound error code", () => {
@@ -326,10 +354,10 @@ describe("TurnTranslator — errors and retries (cut §2(i))", () => {
       params: { threadId: THREAD_ID, turnId: TURN_ID, error: { message: "Model not found", codexErrorInfo: "modelNotFound", additionalDetails: null }, willRetry: false },
     });
     expect(events).toMatchObject([{ type: "error", error: expect.any(Error) }]);
-    expect((events[0] as { error: Error }).error.message).toBe("Model not found");
+    expect((events[0] as { error: Error }).error.message).toBe("Codex ended the turn with an error");
   });
 
-  it("a terminal error notification (willRetry:false) surfaces with its ORIGINAL safe message, followed by an honest loop_end reason", () => {
+  it("a terminal error notification surfaces a classified message followed by an honest loop_end reason", () => {
     const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
     // Real fixture shape: contract/fixtures/w1-p6-start-echo-and-error.jsonl.
     const errorEvents = translator.onNotification({
@@ -345,7 +373,7 @@ describe("TurnTranslator — errors and retries (cut §2(i))", () => {
     // silently discarded — no {type:"error"} event would ever be emitted here.
     expect(errorEvents).toMatchObject([{ type: "error", error: expect.any(Error) }]);
     expect((errorEvents[0] as { error: Error }).error.message).toBe(
-      "The 'bogus-model' model is not supported when using Codex with a ChatGPT account.",
+      "Codex ended the turn with an error",
     );
 
     const finishEvents = translator.onNotification({
@@ -367,7 +395,7 @@ describe("TurnTranslator — errors and retries (cut §2(i))", () => {
     // Pre-fix: finish() never inspected turn.error at all — this would have
     // been a completely faceless loop_end:"error" with zero explanation.
     expect(events[0]).toMatchObject({ type: "error", error: expect.any(Error) });
-    expect((events[0] as { error: Error }).error.message).toBe("sandbox denied this operation");
+    expect((events[0] as { error: Error }).error.message).toBe("Codex ended the turn with an error");
     expect(events.at(-1)).toEqual({ type: "loop_end", reason: "error", turns: 1 });
   });
 
