@@ -2,6 +2,8 @@
 export const ACCENT_KEY = "anycode.appearance.accent";
 export const ACCENTS = ["current", "blue", "gold", "indigo", "teal", "ember"] as const;
 export type Accent = typeof ACCENTS[number];
+// Keep the legacy gold value readable without rendering a duplicate swatch.
+export const VISIBLE_ACCENTS = ["current", "blue", "indigo", "teal", "ember"] as const;
 export function parseAccent(raw: string | null): Accent {
   return ACCENTS.includes(raw as Accent) ? raw as Accent : "current";
 }
@@ -27,10 +29,11 @@ export function subscribeAccent(cb: () => void): () => void {
   return () => { listeners.delete(cb); };
 }
 export function nextAccent(current: Accent, key: string): Accent | null {
-  if (key === "Home") return ACCENTS[0];
-  if (key === "End") return ACCENTS[ACCENTS.length - 1]!;
+  if (key === "Home") return VISIBLE_ACCENTS[0];
+  if (key === "End") return VISIBLE_ACCENTS[VISIBLE_ACCENTS.length - 1]!;
   const step = key === "ArrowRight" || key === "ArrowDown" ? 1 : key === "ArrowLeft" || key === "ArrowUp" ? -1 : 0;
-  return step ? ACCENTS[(ACCENTS.indexOf(current) + step + ACCENTS.length) % ACCENTS.length]! : null;
+  const visible = current === "gold" ? "current" : current;
+  return step ? VISIBLE_ACCENTS[(VISIBLE_ACCENTS.indexOf(visible) + step + VISIBLE_ACCENTS.length) % VISIBLE_ACCENTS.length]! : null;
 }
 export function bindAccentStorageSync(win: Pick<Window, "addEventListener" | "removeEventListener">): () => void {
   const onStorage = (event: StorageEvent) => {

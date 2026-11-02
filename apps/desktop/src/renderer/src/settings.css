@@ -3420,7 +3420,7 @@
 .connection-drawer-discard .settings-field-row { justify-content: flex-end; }
 
 /* Device-local accent choices; each swatch inherits its own token overrides. */
-.accent-picker { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-1); }
+.accent-picker { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-1) var(--sp-1) 36px; }
 .accent-swatch {
   display: inline-flex; align-items: center; justify-content: center;
   width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--r-full);
@@ -3433,7 +3433,8 @@
 .accent-swatch-tooltip {
   position: absolute;
   left: 50%;
-  bottom: calc(100% + var(--sp-2));
+  top: calc(100% + var(--sp-2));
+  bottom: auto;
   transform: translateX(-50%);
   z-index: 10;
   padding: var(--sp-1) var(--sp-2);

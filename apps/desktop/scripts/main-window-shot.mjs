@@ -57,7 +57,7 @@ try {
   console.log('Transcript layout:', await evaluate(`JSON.stringify([...document.querySelectorAll('.message-list')].map(e=>({empty:!!e.querySelector('.transcript-empty'),blocks:e.querySelectorAll('.message').length,rect:e.getBoundingClientRect().toJSON()})))`));
   await evaluate(`document.documentElement.removeAttribute('data-density')`);
   await evaluate(`(async()=>{const s=document.createElement('style'); s.textContent='*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important}'; document.head.append(s); await document.fonts.ready; document.activeElement?.blur();})()`);
-  for (const theme of ['dark', 'light']) {
+  if (!process.argv.includes('--appearance-only')) for (const theme of ['dark', 'light']) {
     await evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`);
     await sleep(400);
     for (const [name, id] of [['', 'git'], ['-markdown', `preview:${md.value.previewId}`], ...(web.ok ? [['-web', `preview:${web.value.previewId}`]] : [])]) {
@@ -80,7 +80,7 @@ try {
       writeFileSync(join(output, `${theme}${name}.png`), Buffer.from(shot.data, 'base64'));
     }
   }
-  console.log(`Screenshots: ${output} (dark, light, markdown and web)`);
+  if (!process.argv.includes('--appearance-only')) console.log(`Screenshots: ${output} (dark, light, markdown and web)`);
   console.log('Local HTML preview:', web.ok ? 'opened' : 'unavailable');
   await evaluate(`document.documentElement.dataset.theme='dark'; document.querySelector('.sidebar-settings').click()`);
   await poll(() => evaluate(`!!document.querySelector('#settings-tab-appearance')`));
@@ -88,6 +88,8 @@ try {
   await poll(() => evaluate(`!!document.querySelector('.accent-swatch[data-accent="blue"]')`));
   await evaluate(`document.querySelector('.accent-swatch[data-accent="blue"]').focus()`);
   await sleep(300);
+  const tooltipLayout = await evaluate(`(() => { const tip=document.querySelector('.accent-swatch-tooltip').getBoundingClientRect(); const labels=[...document.querySelectorAll('.settings-field-label')].filter(e=>['Accent','Density'].includes(e.textContent.trim())).map(e=>e.getBoundingClientRect()); return {below:tip.top >= document.querySelector('.accent-swatch[data-accent="blue"]').getBoundingClientRect().bottom, overlaps:labels.some(r=>tip.left<r.right && tip.right>r.left && tip.top<r.bottom && tip.bottom>r.top)}; })()`);
+  if (!tooltipLayout.below || tooltipLayout.overlaps) throw Error(`Tooltip overlaps a field label: ${JSON.stringify(tooltipLayout)}`);
   const tooltip = await call('Page.captureScreenshot', {format:'png'});
   writeFileSync(join(output, 'dark-appearance-tooltip.png'), Buffer.from(tooltip.data, 'base64'));
 } finally {
