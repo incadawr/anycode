@@ -1226,7 +1226,7 @@ body {
 }
 
 .sidebar-row-dot-attention {
-  color: var(--accent);
+  color: var(--info);
 }
 
 .sidebar-row-spinner {
@@ -1988,9 +1988,9 @@ body {
 
 .session-header-panel-toggle-active,
 .session-header-terminal-toggle-active {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: var(--accent-soft);
+  color: var(--text-1);
+  border-color: var(--border-strong);
+  background: var(--bg-active);
 }
 
 /* ── window controls (win/linux caption buttons, design/ui-track
@@ -2428,7 +2428,7 @@ body {
   min-width: 0;
   max-width: 28rem;
   padding: 0.2rem var(--sp-2);
-  border: 1px solid var(--accent);
+  border: 1px solid var(--border-strong);
   border-radius: var(--r-full);
   color: var(--text-1);
   font-size: var(--fs-xs);
@@ -3632,14 +3632,14 @@ body {
 
 /* Links — accent, click-guarded (see slice-R1-cut §6). */
 .md-link {
-  color: var(--accent);
+  color: var(--info);
   text-decoration: underline;
   text-underline-offset: 2px;
-  text-decoration-color: var(--accent-soft);
+  text-decoration-color: var(--info-soft);
   cursor: pointer;
 }
 .md-link:hover {
-  color: var(--accent-hover);
+  color: var(--info);
   text-decoration-color: currentColor;
 }
 .md-copied-hint {
@@ -4039,7 +4039,7 @@ body {
   color: var(--text-ghost);            /* cancelled/skipped default */
 }
 .substatus-glyph svg { width: 12px; height: 12px; }
-.substatus-running   > .substatus-glyph { color: var(--accent); }
+.substatus-running   > .substatus-glyph { color: var(--text-2); }
 .substatus-completed > .substatus-glyph { color: var(--success); }
 .substatus-error     > .substatus-glyph,
 .substatus-failed    > .substatus-glyph { color: var(--danger); }
@@ -4114,8 +4114,8 @@ body {
    from the warning/success/danger trio above, so it never reads as just
    another ordinary status color. */
 .tool-call-child-badge-waiting_permission {
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: var(--warning-soft);
+  color: var(--warning);
 }
 
 /* the waiting_permission badge rendered with an onOpen handler is
@@ -6838,8 +6838,8 @@ body {
 }
 
 .git-panel-tab-active {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
+  color: var(--text-1);
+  border-bottom-color: var(--text-1);
 }
 
 .git-panel-note {
