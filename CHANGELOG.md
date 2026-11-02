@@ -11,9 +11,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Keep suggested write permissions scoped to the workspace for files inside it, and reject broad macOS directory aliases and temporary directories.
 - Close OpenRouter reasoning indicators when answers or tool calls begin, and when streams end unexpectedly, including when reasoning replay is disabled.
-
 - Close hidden subagent menus so they cannot intercept shortcuts or hide previews.
-
 - Reopening a preview focuses its dock tab, and closing a preview selects the adjacent tab consistently.
 - Keep dock panel state when switching tabs, and update preview tab titles as they change.
 - Closing the Review dock tab or using its close shortcut now works.
