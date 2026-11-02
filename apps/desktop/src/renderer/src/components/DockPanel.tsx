@@ -1,7 +1,7 @@
 /**
  * The right-side tabbed dock (docs/development/dock.md):
  * one column, one tab per side surface (preview:<id> / subagents / git), a
- * scrollable tab strip, and the ACTIVE tab's body only. Geometry (width
+ * scrollable tab strip, and preserved bodies for open tabs. Geometry (width
  * clamp, column/drawer mode) is computed by the caller (App.tsx) from the
  * measured session-content width and injected — this component stays
  * presentational. Close/focus semantics route through the SAME authority a
@@ -20,7 +20,7 @@ import { TabContext } from "../tab-context.js";
 import type { DesktopStoreApi } from "../tab-registry.js";
 import { selectDockView, useDockStore } from "../dock/dock-store.js";
 import { childLayoutStore } from "../child-layout.js";
-import { DOCK_SPLIT_MIN_PX, isSplittableTab, type DockMode, type DockTab } from "../dock/dock-layout.js";
+import { isSplittableTab, type DockMode, type DockTab } from "../dock/dock-layout.js";
 import { usePreviewStore } from "../preview/preview-store.js";
 import type { ToastKind } from "../toasts.js";
 import { ChildSplitPane, type ChildSplitRow } from "./ChildSplitPane.js";
@@ -92,10 +92,6 @@ export function DockPanel({ mode, width, onToast, subagents, canSplitNow, splitT
   const splitRight = useDockStore((state) => state.splitRight);
   const mergeSplit = useDockStore((state) => state.mergeSplit);
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
-  // Stage 2: the pinned tab stays in the strip (marked) and its content is
-  // the ONLY thing the secondary pane renders — `renderTabBody` is the one
-  // body renderer both panes share.
-  const splitTab = splitTabId !== null ? (tabs.find((tab) => tab.id === splitTabId) ?? null) : null;
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLElement>): void {
     if ((event.metaKey || event.ctrlKey) && event.key === "w") {
@@ -228,28 +224,28 @@ export function DockPanel({ mode, width, onToast, subagents, canSplitNow, splitT
         })}
       </div>
       <div className="dock-body">
-        {renderTabBody(activeTab, true)}
-        {splitTab !== null && (
-          // Stage 2 secondary pane: absolute right of the primary body inside
-          // the dock, fixed DOCK_SPLIT_MIN_PX, border-left. NO drag between
-          // panes (out of scope by design — the "Split right" button is the
-          // only lever, §8.5).
-          <div className="dock-split-pane" data-split-tab-id={splitTab.id}>
-            <div className="dock-split-pane-header">
-              <span className="dock-tab-title">{splitTab.title}</span>
-              <button
-                type="button"
-                className="dock-split-merge"
-                aria-label="Merge split pane"
-                title="Merge back into tabs"
-                onClick={() => mergeSplit()}
-              >
-                <X />
-              </button>
+        {activeTab === null && renderTabBody(null, false)}
+        {tabs.map((tab) => {
+          const active = tab.id === activeTabId;
+          const pinned = tab.id === splitTabId;
+          return (
+            <div key={tab.id} className={pinned ? "dock-split-pane" : "dock-split-pane-body"} data-split-tab-id={pinned ? tab.id : undefined} style={!active && !pinned ? { display: "none" } : undefined}>
+              {pinned && <div className="dock-split-pane-header">
+                <span className="dock-tab-title">{tab.title}</span>
+                <button
+                  type="button"
+                  className="dock-split-merge"
+                  aria-label="Merge split pane"
+                  title="Merge back into tabs"
+                  onClick={() => mergeSplit()}
+                >
+                  <X />
+                </button>
+              </div>}
+              <div className="dock-split-pane-body">{renderTabBody(tab, active)}</div>
             </div>
-            <div className="dock-split-pane-body">{renderTabBody(splitTab, false)}</div>
-          </div>
-        )}
+          );
+        })}
       </div>
       {/* GitHub #31: the resize handle is NOT rendered here. As a child of the
           column-flex .dock-panel it was a full-width 0px-tall strip with no

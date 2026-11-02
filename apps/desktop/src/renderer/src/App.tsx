@@ -809,6 +809,8 @@ export function ActiveTabBody({ tabId, sidebarCollapsed, onToggleSidebar, onToas
         } else {
           useDockStore.getState().openBackground(tab);
         }
+      } else {
+        useDockStore.getState().updateTitle(tab.id, tab.title);
       }
     }
     // Drop tabs whose preview vanished.

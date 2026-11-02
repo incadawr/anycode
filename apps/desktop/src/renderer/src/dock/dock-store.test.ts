@@ -23,6 +23,16 @@ const TAB_MD = { id: "preview:md", kind: "preview" as const, title: "doc.md" };
 const TAB_GIT = { id: "git", kind: "git" as const, title: "Review" };
 
 describe("dock store", () => {
+  it("updates an existing title without moving focus or creating tabs", () => {
+    const store = createDockStore(memoryStorage());
+    store.getState().open(TAB_MD);
+    store.getState().open(TAB_GIT);
+    store.getState().updateTitle(TAB_MD.id, "renamed.md");
+    expect(store.getState().tabs).toEqual([{ ...TAB_MD, title: "renamed.md" }, TAB_GIT]);
+    expect(store.getState().activeTabId).toBe(TAB_GIT.id);
+    store.getState().updateTitle("missing", "ignored");
+    expect(store.getState().tabs).toHaveLength(2);
+  });
   it("opens tabs append+focus; an existing tab is re-focused, not duplicated", () => {
     const store = createDockStore(memoryStorage());
     store.getState().open(TAB_MD);

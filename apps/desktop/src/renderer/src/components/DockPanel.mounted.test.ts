@@ -27,6 +27,7 @@ import { TabContext } from "../tab-context.js";
 import { childLayoutStore } from "../child-layout.js";
 import { useDockStore } from "../dock/dock-store.js";
 import { DOCK_SPLIT_MIN_PX, DOCK_WIDTH_STORAGE_KEY, DOCK_WIDTH_MAX, DOCK_WIDTH_MIN, dockMinWidth } from "../dock/dock-layout.js";
+import { usePreviewStore } from "../preview/preview-store.js";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -88,6 +89,7 @@ describe("dock resize handle placement (GitHub #31)", () => {
 
   afterEach(async () => {
     await act(async () => root.unmount());
+    usePreviewStore.setState({ byTab: {} });
     container.remove();
     document.body.className = "";
     vi.restoreAllMocks();
@@ -308,6 +310,40 @@ describe("dock resize handle placement (GitHub #31)", () => {
     });
     expect(store.getState().git.panelOpen).toBe(false);
   });
+
+  it("preserves Markdown view mode and scroll when switching dock tabs", async () => {
+    await mountBody();
+    await act(async () => {
+      usePreviewStore.getState().applyChanged({ tabId: "tab", visiblePanelPreviewId: "md", previews: [{ previewId: "md", tabId: "tab", url: "file:///doc.md", sourcePath: "/doc.md", title: "doc.md", status: "ready", container: "panel", viewKind: "dom-md" }] });
+    });
+    await act(async () => useDockStore.getState().open({ id: "git", kind: "git", title: "Review" }));
+    await act(async () => useDockStore.getState().focus("preview:md"));
+    const source = container.querySelector<HTMLButtonElement>('[aria-label="Source"]')!;
+    await act(async () => source.click());
+    const body = container.querySelector<HTMLElement>(".md-preview-view-body")!;
+    body.scrollTop = 120;
+    await act(async () => useDockStore.getState().focus("git"));
+    await act(async () => useDockStore.getState().focus("preview:md"));
+    expect(container.querySelector('[aria-label="Source"]')?.getAttribute("aria-pressed")).toBe("true");
+    expect(container.querySelector<HTMLElement>(".md-preview-view-body")).toBe(body);
+    expect(body.scrollTop).toBe(120);
+    await act(async () => useDockStore.getState().focus("git"));
+    await act(async () => useDockStore.getState().splitRight("preview:md", true));
+    expect(container.querySelector<HTMLElement>(".md-preview-view-body")).toBe(body);
+    await act(async () => useDockStore.getState().focus("preview:md"));
+    expect(container.querySelector<HTMLElement>(".md-preview-view-body")).toBe(body);
+  });
+
+  it("updates a preview tab title without changing focus", async () => {
+    await mountBody();
+    const preview = { previewId: "web", tabId: "tab", url: "http://localhost/", title: "First", status: "ready" as const, container: "panel" as const, viewKind: "web" as const };
+    await act(async () => usePreviewStore.getState().applyChanged({ tabId: "tab", visiblePanelPreviewId: "web", previews: [preview] }));
+    await act(async () => useDockStore.getState().open({ id: "git", kind: "git", title: "Review" }));
+    await act(async () => usePreviewStore.getState().applyChanged({ tabId: "tab", visiblePanelPreviewId: "web", previews: [{ ...preview, title: "Second" }] }));
+    expect(container.querySelector('[data-tab-id="preview:web"] .dock-tab-title')?.textContent).toBe("Second");
+    expect(useDockStore.getState().activeTabId).toBe("git");
+  });
+
 
   it("restores an unfinished role picker and task in its original tab", async () => {
     const originalSnapshot = useSettingsStore.getState().snapshot;
