@@ -318,8 +318,7 @@ export const agentInputSchema = z.object({
     .min(1)
     .optional()
     .describe(
-      "Session tier only: id of the provider connection to run the child session on " +
-        "(defaults to this session's own connection). Call ListConnections to see valid values. Invalid for inline tier.",
+      "Connection selector for the child (defaults to this session's connection). Call ListConnections to see valid values. Inline children must use the current connection.",
     ),
   model: z
     .string()
@@ -372,18 +371,7 @@ export const agentInputSchema = z.object({
 
 export type AgentInput = z.output<typeof agentInputSchema>;
 
-/**
- * RESTRICTED declaration (CUT-S2 §2.1/§5.13): used by `createAgentTool()`
- * (default, `sessionTier` absent/false) — CLI, any child session, any host
- * without a SessionSubagentPort. Deliberately a SEPARATE zod object, not the
- * full schema with `tier`/`provider` merely marked optional: the
- * non-recursion lock #1 must hold at the SERIALIZED JSON declaration a model
- * sees (z.toJSONSchema), so `"session"` and `"provider"` must be physically
- * ABSENT from `properties`, not just unset at runtime. `tier` is still a
- * (single-value) enum rather than dropped outright — CUT-S2 §1 p.5: a model
- * that hallucinates `tier:"session"` here gets a schema-validation error, not
- * a silently-downgraded inline run (zod-strip would hide the mismatch).
- */
+/** Inline-only declaration; provider selection stays on the current connection. */
 export const restrictedAgentInputSchema = z
   .object({
     description: agentInputSchema.shape.description,
@@ -391,13 +379,9 @@ export const restrictedAgentInputSchema = z
     agent_type: agentInputSchema.shape.agent_type,
     tier: z.enum(["inline"]).optional().describe('Only "inline" subagents are available in this context.'),
     model: agentInputSchema.shape.model,
+    provider: z.string().min(1).optional().describe("Connection selector; inline children must use the current connection. Call ListConnections to see valid values."),
   })
-  // `.strict()`, not the plain object (F15): a bare z.object() STRIPS unknown
-  // keys by default (zod's own behavior) rather than rejecting them, so a
-  // smuggled/hallucinated `provider` on a restricted host would silently do
-  // nothing instead of failing loud. The non-recursion lock must reject
-  // unrecognized input the same way it already rejects `tier:"session"`
-  // above, not quietly drop it.
+  // Reject unknown fields rather than silently dropping them.
   .strict();
 
 export type RestrictedAgentInput = z.output<typeof restrictedAgentInputSchema>;

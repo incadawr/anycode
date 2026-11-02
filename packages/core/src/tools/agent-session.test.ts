@@ -62,11 +62,11 @@ function portReturning(outcome: SessionSubagentOutcome): SessionSubagentPort {
 // caught here because the check is on the wire shape, not the code shape.
 
 describe("createAgentTool — restricted vs. full declaration (CUT-S2 §2.1/§5.13)", () => {
-  it("restricted (default, sessionTier absent) has NO provider key and NO \"session\" anywhere in the serialized JSON schema", () => {
+  it("restricted (default, sessionTier absent) has a provider key and NO \"session\" anywhere in the serialized JSON schema", () => {
     const restricted = createAgentTool();
     const jsonSchema = z.toJSONSchema(restricted.inputSchema) as { properties?: Record<string, unknown> };
     expect(jsonSchema.properties).toBeDefined();
-    expect(Object.keys(jsonSchema.properties ?? {})).not.toContain("provider");
+    expect(Object.keys(jsonSchema.properties ?? {})).toContain("provider");
     // Whole-schema scan (not just top-level keys): catches "session" leaking
     // in anywhere — enum values, descriptions, nested refs.
     expect(JSON.stringify(jsonSchema)).not.toContain("session");
@@ -109,17 +109,11 @@ describe("createAgentTool — restricted vs. full declaration (CUT-S2 §2.1/§5.
     expect(restrictedAgentInputSchema.safeParse({ description: "d", prompt: "p" }).success).toBe(true);
   });
 
-  // F15: a plain z.object() strips unknown keys by default (zod's own
-  // default behavior) rather than rejecting them — a restricted host would
-  // silently swallow a smuggled/hallucinated "provider" instead of the model
-  // ever finding out the field did nothing. The restricted schema is the
-  // non-recursion lock's SERIALIZED-SCHEMA half; it must reject unrecognized
-  // input the same way it rejects tier:"session" above, not silently drop it.
-  it("restricted schema REJECTS an unrecognized key (e.g. a smuggled provider) instead of silently stripping it", () => {
+  it("restricted schema rejects an unrecognized key instead of silently stripping it", () => {
     const smuggled = restrictedAgentInputSchema.safeParse({
       description: "d",
       prompt: "p",
-      provider: "anthropic-2",
+      unrecognized: "anthropic-2",
     });
     expect(smuggled.success).toBe(false);
   });

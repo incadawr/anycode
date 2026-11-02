@@ -10,7 +10,7 @@ describe("connection targets", () => {
     const connection = Object.assign(connectionFixture({ id: "z-ai", connectionId: "conn-a", model: "glm-5" }), {
       apiKey: "fake-api-key", token: "fake-token", headers: { authorization: "fake-header" },
       baseUrl: "https://fake-user:fake-password@example.com", proxyUrl: "https://proxy-user:proxy-password@example.com",
-      models: ["extra"], modelCapabilities: { extra: { imageInput: true, contextWindow: 12345, effortLevels: ["high"] } },
+      models: [], modelCapabilities: { extra: { imageInput: true, contextWindow: 12345, effortLevels: ["high"] } },
       lastHealth: { status: "ready", at: "now", safeCode: "fake-health-secret" },
     });
     const settings = { version: 2, provider: providerV2Multi("conn-a", [connection]), tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false } } as AnycodeSettings;

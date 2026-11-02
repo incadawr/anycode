@@ -5989,3 +5989,65 @@ describe("buildChildConfig — md-profile permissions.allow/deny overlay", () =>
     expect(empty.permissionEngine).toBe(parent.permissionEngine);
   });
 });
+
+describe("inline connection discovery", () => {
+  const readConnectionTargets = () => ({
+    current: { connectionId: "a", model: "one" },
+    connections: [{ id: "a", providerId: "provider", readiness: "unknown", models: [{ id: "one", default: true }, { id: "two", default: false }] }],
+  });
+
+  it("registers discovery for read-only child personas and reports the child's model", async () => {
+    const child = buildChildConfig(makeParent(), getPersona("explore"), REQ, { readConnectionTargets, routeModel: "two" });
+    const tool = child.registry.get("ListConnections");
+    expect(tool).toBeDefined();
+    const result = await tool!.handler({}, {} as ToolContext);
+    expect(result).toMatchObject({ ok: true, output: { current: { connectionId: "a", model: "two" } } });
+    expect(child.registry.has("Agent")).toBe(false);
+    expect(child.registry.has("Bash")).toBe(false);
+  });
+
+  it("propagates candidate errors through the Agent tool and never runs a child", async () => {
+    const model = new ScriptedModelPort(() => textStep("unexpected"));
+    const runner = createSubagentRunner(makeParent({ modelPort: model }), { readConnectionTargets });
+    const ctx = { subagents: runner, toolCallId: "route", abortSignal: new AbortController().signal } as ToolContext;
+    const invalidModel = await agentTool.handler({ description: "child", prompt: "work", model: "missing" }, ctx);
+    const invalidProvider = await agentTool.handler({ description: "child", prompt: "work", provider: "missing" }, ctx);
+    expect(invalidModel).toMatchObject({ ok: false, error: expect.stringContaining("one, two") });
+    expect(invalidProvider).toMatchObject({ ok: false, error: expect.stringContaining("a (provider: one, two)") });
+    expect(model.calls).toBe(0);
+  });
+});
+
+it("runs inline discovery using the selected child model", async () => {
+  const child = new ScriptedModelPort(req => lastRole(req) === "user" ? toolStep("list", "ListConnections", {}) : textStep("done"));
+  const readConnectionTargets = () => ({
+    current: { connectionId: "a", model: "one" },
+    connections: [{ id: "a", providerId: "provider", readiness: "unknown", models: [{ id: "one", default: true }, { id: "two", default: false }] }],
+  });
+  const runner = createSubagentRunner(makeParent({ modelPort: child, mode: "yolo" }), { readConnectionTargets, resolveChildModelPort: () => child });
+  const result = await runner.run({ ...REQ, provider: "two" }, {});
+  expect(result.status).toBe("completed");
+  expect(child.requests[0]!.tools.map(tool => tool.name)).toContain("ListConnections");
+  expect(JSON.stringify(child.requests[1]!.messages)).toContain('\\"model\\":\\"two\\"');
+});
+
+it("returns model candidates without exposing a failed port's error", async () => {
+  const readConnectionTargets = () => ({
+    current: { connectionId: "a", model: "one" },
+    connections: [{ id: "a", providerId: "provider", readiness: "unknown", models: [{ id: "one", default: true }, { id: "two", default: false }] }],
+  });
+  const runner = createSubagentRunner(makeParent(), { readConnectionTargets, resolveChildModelPort: () => { throw new Error("fake-port-secret"); } });
+  const result = await runner.run({ ...REQ, model: "two" }, {});
+  expect(result.status).toBe("error");
+  expect(result.finalText).toContain("one, two");
+  expect(result.finalText).not.toContain("fake-port-secret");
+});
+
+it("reports candidates when a host cannot create an inline model port", async () => {
+  const runner = createSubagentRunner(makeParent(), { readConnectionTargets: () => ({
+    current: { connectionId: "a", model: "one" },
+    connections: [{ id: "a", providerId: "provider", readiness: "unknown", models: [{ id: "one", default: true }] }],
+  }) });
+  const result = await runner.run({ ...REQ, model: "one" }, {});
+  expect(result).toMatchObject({ status: "error", finalText: expect.stringContaining("available models: one") });
+});
