@@ -55,75 +55,75 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  
-  --bg-app:      #0B0C0F;   
-  --bg-sidebar:  #0E0F13;   
-  --bg-card:     #121317;   
-  --bg-overlay:  #17181E;   
-  --bg-control:  #1D1F26;   
-  --bg-inset:    #08090C;   
-  --bg-scrim:    rgba(4, 5, 7, 0.62);  
 
-  --bg-hover:  rgba(255, 255, 255, 0.05);  
-  --bg-active: rgba(255, 255, 255, 0.09);  
-  --bg-selected: rgba(233, 185, 73, 0.10);  
+  --bg-app:      #0B0C0F;
+  --bg-sidebar:  #0E0F13;
+  --bg-card:     #121317;
+  --bg-overlay:  #17181E;
+  --bg-control:  #1D1F26;
+  --bg-inset:    #08090C;
+  --bg-scrim:    rgba(4, 5, 7, 0.62);
 
-  --border:        rgba(255, 255, 255, 0.07);  
-  --border-strong: rgba(255, 255, 255, 0.16);  
-  --border-control: rgba(255, 255, 255, 0.37); 
+  --bg-hover:  rgba(255, 255, 255, 0.05);
+  --bg-active: rgba(255, 255, 255, 0.09);
+  --bg-selected: rgba(233, 185, 73, 0.10);
 
-  --text-1:     #ECE9E3;   
-  --text-2:     #A2A6B0;   
-  --text-3:     #8B90A0;   
-  --text-ghost: rgba(236, 233, 227, 0.40);  
+  --border:        rgba(255, 255, 255, 0.07);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --border-control: rgba(255, 255, 255, 0.37);
 
-  --accent:      #E9B949;  
-  --accent-hover:#F3CB72;  
-  --accent-soft: rgba(233, 185, 73, 0.14);  
-  --on-accent:   #221A05;  
+  --text-1:     #ECE9E3;
+  --text-2:     #A2A6B0;
+  --text-3:     #8B90A0;
+  --text-ghost: rgba(236, 233, 227, 0.40);
+
+  --accent:      #E9B949;
+  --accent-hover:#F3CB72;
+  --accent-soft: rgba(233, 185, 73, 0.14);
+  --on-accent:   #221A05;
 
   --success:      #7FD1A6;  --success-soft: rgba(127, 209, 166, 0.12);
-  --warning:      #F08A3C;  --warning-soft: rgba(240, 138, 60, 0.12);  
+  --warning:      #F08A3C;  --warning-soft: rgba(240, 138, 60, 0.12);
   --danger:       #FF7A7A;  --danger-soft:  rgba(255, 122, 122, 0.12);
-  --info:         #7FB2E5;  --info-soft:    rgba(127, 178, 229, 0.12);  
-  --neutral-soft: rgba(255, 255, 255, 0.06);                            
+  --info:         #7FB2E5;  --info-soft:    rgba(127, 178, 229, 0.12);
+  --neutral-soft: rgba(255, 255, 255, 0.06);
 
-  --focus-ring: rgba(233, 185, 73, 0.80);  
+  --focus-ring: rgba(233, 185, 73, 0.80);
 
   --shadow-menu:     0 4px 16px rgba(0, 0, 0, 0.50), 0 0 0 1px rgba(255, 255, 255, 0.06);
   --shadow-dialog:   0 16px 48px rgba(0, 0, 0, 0.60);
   --shadow-composer: 0 2px 12px rgba(0, 0, 0, 0.30);
-  --shadow-popup:    0 12px 32px rgba(0, 0, 0, 0.50);  
+  --shadow-popup:    0 12px 32px rgba(0, 0, 0, 0.50);
 }
 
 :root[data-theme="light"] {
   color-scheme: light;
 
-  --bg-app:      #FAF9F6;   
-  --bg-sidebar:  #F3F1EC;   
-  --bg-card:     #FFFFFF;   
-  --bg-overlay:  #FFFFFF;   
-  --bg-control:  #FFFFFF;   
-  --bg-inset:    #F1EFEA;   
-  --bg-scrim:    rgba(28, 24, 18, 0.34);  
+  --bg-app:      #FAF9F6;
+  --bg-sidebar:  #F3F1EC;
+  --bg-card:     #FFFFFF;
+  --bg-overlay:  #FFFFFF;
+  --bg-control:  #FFFFFF;
+  --bg-inset:    #F1EFEA;
+  --bg-scrim:    rgba(28, 24, 18, 0.34);
 
-  --bg-hover:  rgba(28, 24, 18, 0.045);  
-  --bg-active: rgba(28, 24, 18, 0.08);   
+  --bg-hover:  rgba(28, 24, 18, 0.045);
+  --bg-active: rgba(28, 24, 18, 0.08);
   --bg-selected: rgba(138, 100, 16, 0.10);
 
-  --border:        rgba(28, 24, 18, 0.10);  
-  --border-strong: rgba(28, 24, 18, 0.22);  
-  --border-control: rgba(28, 24, 18, 0.54); 
+  --border:        rgba(28, 24, 18, 0.10);
+  --border-strong: rgba(28, 24, 18, 0.22);
+  --border-control: rgba(28, 24, 18, 0.54);
 
-  --text-1:     #1C1A17;                        
-  --text-2:     rgba(28, 26, 23, 0.74);         
-  --text-3:     rgba(28, 26, 23, 0.72);         
-  --text-ghost: rgba(28, 26, 23, 0.65);         
+  --text-1:     #1C1A17;
+  --text-2:     rgba(28, 26, 23, 0.74);
+  --text-3:     rgba(28, 26, 23, 0.72);
+  --text-ghost: rgba(28, 26, 23, 0.65);
 
-  --accent:       #8A6410;   
-  --accent-hover: #6E4F0A;   
+  --accent:       #8A6410;
+  --accent-hover: #6E4F0A;
   --accent-soft:  rgba(138, 100, 16, 0.12);
-  --on-accent:    #FFFDF7;   
+  --on-accent:    #FFFDF7;
 
   --success: #1F7A4D; --success-soft: rgba(31, 122, 77, 0.10);
   --warning: #9A4E10; --warning-soft: rgba(154, 78, 16, 0.10);
@@ -131,7 +131,7 @@
   --info:    #2B5FA8; --info-soft:    rgba(43, 95, 168, 0.10);
   --neutral-soft: rgba(28, 24, 18, 0.05);
 
-  --focus-ring: rgba(138, 100, 16, 0.78);  
+  --focus-ring: rgba(138, 100, 16, 0.78);
 
   --shadow-menu:     0 4px 16px rgba(28, 24, 18, 0.10), 0 0 0 1px rgba(28, 24, 18, 0.05);
   --shadow-dialog:   0 16px 48px rgba(28, 24, 18, 0.18);
