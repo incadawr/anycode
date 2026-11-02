@@ -145,6 +145,119 @@ function assistantMessages(body: Record<string, unknown>): WireMessage[] {
 }
 
 describe("reasoning replay over the real SDK wire (GitHub #41)", () => {
+  it("preserves signed blocks that reuse an index", async () => {
+    const chunks: Chunk[] = [
+      { choices: [{ index: 0, delta: { role: "assistant", reasoning_details: [{ index: 0, type: "reasoning.text", text: "First block." }] }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: { reasoning_details: [{ index: 0, type: "reasoning.text", text: "", signature: "sig-A" }] }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: { reasoning_details: [{ index: 0, type: "reasoning.text", text: "Second block." }] }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: { reasoning_details: [{ index: 0, type: "reasoning.text", text: "", signature: "sig-B" }] }, finish_reason: null }] },
+      ...OPENAI_THINK_THEN_TOOL.slice(1),
+    ];
+    const fixture = await startServer([openAiSse(chunks), openAiSse(OPENAI_TEXT)]);
+    const port = new AiSdkModelPort({ transport: "openai-chat-completions", baseUrl: fixture.baseUrl, apiKey: "test", model: "test", providerName: "OpenRouter", retry: { maxRetries: 0, stallTimeoutMs: 0 } });
+    await run(makeLoop(port), "read");
+    expect(assistantMessages(fixture.bodies[1]!)[0]).toMatchObject({ reasoning_details: [
+      { index: 0, type: "reasoning.text", text: "First block.", signature: "sig-A" },
+      { index: 0, type: "reasoning.text", text: "Second block.", signature: "sig-B" },
+    ] });
+  });
+
+  it("keeps accumulated text when a signature delta has null text", async () => {
+    const chunks: Chunk[] = [
+      { choices: [{ index: 0, delta: { role: "assistant", reasoning_details: [{ index: 0, type: "reasoning.text", text: "A thought" }] }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: { reasoning_details: [{ index: 0, text: null, signature: "sig" }] }, finish_reason: null }] },
+      ...OPENAI_THINK_THEN_TOOL.slice(1),
+    ];
+    const fixture = await startServer([openAiSse(chunks), openAiSse(OPENAI_TEXT)]);
+    const port = new AiSdkModelPort({ transport: "openai-chat-completions", baseUrl: fixture.baseUrl, apiKey: "test", model: "test", providerName: "OpenRouter", retry: { maxRetries: 0, stallTimeoutMs: 0 } });
+    await run(makeLoop(port), "read");
+    expect(assistantMessages(fixture.bodies[1]!)[0]).toMatchObject({ reasoning_details: [{ index: 0, type: "reasoning.text", text: "A thought", signature: "sig" }] });
+  });
+
+  it("keeps blocks with conflicting IDs separate even when they share an index", async () => {
+    const chunks: Chunk[] = [
+      { choices: [{ index: 0, delta: { role: "assistant", reasoning_details: [{ index: 0, id: "a", type: "reasoning.text", text: "first" }] }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: { reasoning_details: [{ index: 0, id: "b", type: "reasoning.text", text: "second" }] }, finish_reason: null }] },
+      ...OPENAI_THINK_THEN_TOOL.slice(1),
+    ];
+    const fixture = await startServer([openAiSse(chunks), openAiSse(OPENAI_TEXT)]);
+    const port = new AiSdkModelPort({ transport: "openai-chat-completions", baseUrl: fixture.baseUrl, apiKey: "test", model: "test", providerName: "OpenRouter", retry: { maxRetries: 0, stallTimeoutMs: 0 } });
+    await run(makeLoop(port), "read");
+    expect(assistantMessages(fixture.bodies[1]!)[0]).toMatchObject({ reasoning_details: [
+      { index: 0, id: "a", text: "first" }, { index: 0, id: "b", text: "second" },
+    ] });
+  });
+
+  it("captures and replays an explicitly empty details array", async () => {
+    const chunks: Chunk[] = [
+      { choices: [{ index: 0, delta: { role: "assistant", reasoning_details: [] }, finish_reason: null }] },
+      ...OPENAI_THINK_THEN_TOOL.slice(1),
+    ];
+    const fixture = await startServer([openAiSse(chunks), openAiSse(OPENAI_TEXT)]);
+    const port = new AiSdkModelPort({ transport: "openai-chat-completions", baseUrl: fixture.baseUrl, apiKey: "test", model: "test", providerName: "OpenRouter", retry: { maxRetries: 0, stallTimeoutMs: 0 } });
+    const loop = makeLoop(port);
+    await run(loop, "read");
+    expect(loop.history.toMessages()).toContainEqual(expect.objectContaining({ role: "assistant", content: expect.arrayContaining([
+      expect.objectContaining({ type: "reasoning", providerMetadata: { openrouter: { reasoningDetails: [] } } }),
+    ]) }));
+    expect(assistantMessages(fixture.bodies[1]!)[0]).toMatchObject({ reasoning_details: [] });
+  });
+
+  it("keeps distinct unindexed blocks and assembles matching indexed and identified deltas", async () => {
+    const chunks: Chunk[] = [
+      { choices: [{ index: 0, delta: { role: "assistant", reasoning_details: [{ id: "enc-1", type: "reasoning.encrypted", data: "A" }] }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: { reasoning_details: [{ id: "enc-2", type: "reasoning.encrypted", data: "B" }] }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: { reasoning_details: [{ index: 3, id: "text-1", type: "reasoning.text", text: "hello" }] }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: { reasoning_details: [{ id: "text-1", type: "reasoning.text", text: " world" }, { index: 3, text: "!" }, { type: "reasoning.encrypted", data: "C" }] }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: { reasoning_details: [{ type: "reasoning.encrypted", data: "D" }] }, finish_reason: null }] },
+      ...OPENAI_THINK_THEN_TOOL.slice(1),
+    ];
+    const fixture = await startServer([openAiSse(chunks), openAiSse(OPENAI_TEXT)]);
+    const port = new AiSdkModelPort({ transport: "openai-chat-completions", baseUrl: fixture.baseUrl, apiKey: "test", model: "test", providerName: "OpenRouter", retry: { maxRetries: 0, stallTimeoutMs: 0 } });
+    await run(makeLoop(port), "read");
+    expect(assistantMessages(fixture.bodies[1]!)[0]).toMatchObject({ reasoning_details: [
+      { id: "enc-1", type: "reasoning.encrypted", data: "A" },
+      { id: "enc-2", type: "reasoning.encrypted", data: "B" },
+      { index: 3, id: "text-1", type: "reasoning.text", text: "hello world!" },
+      { type: "reasoning.encrypted", data: "C" },
+      { type: "reasoning.encrypted", data: "D" },
+    ] });
+  });
+  it("OpenRouter retains streamed reasoning details and replays the complete blocks", async () => {
+    const chunks: Chunk[] = [
+      { choices: [{ index: 0, delta: { role: "assistant", reasoning: "Think ", reasoning_details: [{ index: 0, type: "reasoning.text", format: "unknown", id: "r1", text: "Think " }] }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: { reasoning: "first.", reasoning_details: [{ index: 0, type: "reasoning.text", format: "unknown", id: "r1", text: "first." }, { index: 1, type: "reasoning.encrypted", format: "test", data: "cipher" }] }, finish_reason: null }] },
+      ...OPENAI_THINK_THEN_TOOL.slice(1),
+    ];
+    const fixture = await startServer([openAiSse(chunks), openAiSse(OPENAI_TEXT)]);
+    const port = new AiSdkModelPort({ transport: "openai-chat-completions", baseUrl: fixture.baseUrl, apiKey: "test", model: "test", providerName: "OpenRouter", retry: { maxRetries: 0, stallTimeoutMs: 0 } });
+    await run(makeLoop(port), "read");
+    const assistant = assistantMessages(fixture.bodies[1]!)[0];
+    expect(assistant).toMatchObject({ reasoning_details: [
+      { index: 0, type: "reasoning.text", format: "unknown", id: "r1", text: "Think first." },
+      { index: 1, type: "reasoning.encrypted", format: "test", data: "cipher" },
+    ] });
+    expect(assistant).not.toHaveProperty("reasoning_content");
+  });
+
+  it("OpenRouter retains encrypted-only reasoning", async () => {
+    const chunks: Chunk[] = [
+      { choices: [{ index: 0, delta: { role: "assistant", reasoning_details: [{ index: 0, type: "reasoning.encrypted", data: "secret-block" }] }, finish_reason: null }] },
+      ...OPENAI_THINK_THEN_TOOL.slice(1),
+    ];
+    const fixture = await startServer([openAiSse(chunks), openAiSse(OPENAI_TEXT)]);
+    const port = new AiSdkModelPort({ transport: "openai-chat-completions", baseUrl: fixture.baseUrl, apiKey: "test", model: "test", providerName: "OpenRouter", retry: { maxRetries: 0, stallTimeoutMs: 0 } });
+    await run(makeLoop(port), "read");
+    expect(assistantMessages(fixture.bodies[1]!)[0]).toMatchObject({ reasoning_details: [{ index: 0, type: "reasoning.encrypted", data: "secret-block" }] });
+  });
+
+  it("OpenRouter replays plaintext when details are absent", async () => {
+    const fixture = await startServer([openAiSse(OPENAI_THINK_THEN_TOOL), openAiSse(OPENAI_TEXT)]);
+    const port = new AiSdkModelPort({ transport: "openai-chat-completions", baseUrl: fixture.baseUrl, apiKey: "test", model: "test", providerName: "OpenRouter", retry: { maxRetries: 0, stallTimeoutMs: 0 } });
+    await run(makeLoop(port), "read");
+    expect(assistantMessages(fixture.bodies[1]!)[0]).toMatchObject({ reasoning_content: "Need to read the file first." });
+  });
+
   it("anthropic-messages + z-ai: the next request carries the signed thinking block before tool_use", async () => {
     const fixture = await startServer([anthropicSse(ANTHROPIC_THINK_THEN_TOOL), anthropicSse(ANTHROPIC_THINK_THEN_TEXT)]);
     const loop = makeLoop(zaiPort(fixture.baseUrl));

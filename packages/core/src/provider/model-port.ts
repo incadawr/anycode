@@ -796,6 +796,40 @@ function collectReasoningMetadata(
   into.set(part.id, merged);
 }
 
+/** Reassemble OpenRouter detail deltas only when their identity is known. */
+function collectOpenRouterDetails(details: Record<string, unknown>[], part: TextStreamPart<ToolSet>): boolean {
+  if (part.type !== "raw" || !isRecord(part.rawValue) || !Array.isArray(part.rawValue.choices)) return false;
+  const choice = part.rawValue.choices[0];
+  if (!isRecord(choice) || !isRecord(choice.delta) || !Array.isArray(choice.delta.reasoning_details)) return false;
+  for (const value of choice.delta.reasoning_details) {
+    if (!isRecord(value)) continue;
+    const index = typeof value.index === "number" ? value.index : undefined;
+    let match = index === undefined ? -1 : details.findLastIndex((item) => item.index === index);
+    if (match < 0 && typeof value.id === "string" && value.id !== "") {
+      match = details.findLastIndex((item) => item.id === value.id &&
+        (index === undefined || item.index === undefined) &&
+        (typeof value.type !== "string" || typeof item.type !== "string" || item.type === value.type));
+    }
+    if (match < 0 && index === undefined && typeof value.type === "string" && typeof value.signature === "string" && value.signature !== "") {
+      match = details.findLastIndex((item) => item.signature === value.signature && item.type === value.type &&
+        (value.id == null || item.id == null || item.id === value.id));
+    }
+    if (match >= 0 && ((typeof details[match]!.signature === "string" && details[match]!.signature !== "" &&
+      typeof value.text === "string" && value.text !== "" && value.signature !== details[match]!.signature) || ["id", "signature", "type"].some((key) =>
+      typeof details[match]![key] === "string" && details[match]![key] !== "" &&
+      typeof value[key] === "string" && value[key] !== "" && details[match]![key] !== value[key]))) match = -1;
+    if (match < 0) { details.push({ ...value }); continue; }
+    const previous = details[match]!;
+    const merged = { ...previous, ...value };
+    for (const key of ["text", "summary", "data", "signature"]) {
+      if (value[key] == null && previous[key] !== undefined) merged[key] = previous[key];
+      if (typeof previous[key] === "string" && typeof value[key] === "string" && !(key === "signature" && previous[key] === value[key])) merged[key] = previous[key] + value[key];
+    }
+    details[match] = merged;
+  }
+  return true;
+}
+
 export class AiSdkModelPort implements ModelPort {
   /** Provider's model claim from the most recent raw `message_start` seen by this port. */
   #lastResponseModel: string | undefined;
@@ -1091,6 +1125,10 @@ export class AiSdkModelPort implements ModelPort {
       // Per-attempt, so an abandoned attempt never lends metadata to a replay (GitHub #41).
       const reasoningSource = this.reasoningReplaySource(request.reasoningEffort);
       const reasoningMetadata = new Map<string, Record<string, Record<string, unknown>>>();
+      const openRouterDetails: Record<string, unknown>[] = [];
+      let openRouterDetailsPresent = false;
+      let openRouterReasoningEnd: Extract<ModelStreamEvent, { type: "reasoning_end" }> | undefined;
+      const captureOpenRouter = reasoningSource?.provider === "OpenRouter" && this.config.transport === "openai-chat-completions";
       let lastWireActivityAt = Number.NEGATIVE_INFINITY;
       const onResponseActivity = this.config.transport === "openai-responses" && policy.stallTimeoutMs > 0
         ? (): void => { lastWireActivityAt = Date.now(); } : undefined;
@@ -1189,12 +1227,27 @@ export class AiSdkModelPort implements ModelPort {
             stepRawUsage = outcome.value.usage.raw;
           }
           if (reasoningSource !== undefined) collectReasoningMetadata(reasoningMetadata, outcome.value);
+          if (captureOpenRouter && collectOpenRouterDetails(openRouterDetails, outcome.value)) openRouterDetailsPresent = true;
+          if (captureOpenRouter && outcome.value.type === "finish-step") {
+            const details = openRouterDetails.every((item) => typeof item.index === "number")
+              ? [...openRouterDetails].sort((a, b) => (a.index as number) - (b.index as number))
+              : [...openRouterDetails];
+            if (openRouterReasoningEnd !== undefined || openRouterDetailsPresent) {
+              const end = openRouterReasoningEnd ?? { type: "reasoning_end" as const, id: "openrouter-details" };
+              if (openRouterReasoningEnd === undefined) yield { type: "reasoning_start", id: end.id };
+              yield { ...end, source: reasoningSource, ...(openRouterDetailsPresent ? { providerMetadata: { openrouter: { reasoningDetails: details } } } : {}) };
+            }
+          }
           let event = translateStreamPart(outcome.value, {
             transport: this.config.transport,
             stepRawUsage,
             openRouter: new URL(this.config.baseUrl).hostname === "openrouter.ai",
           });
           if (event === null) {
+            continue;
+          }
+          if (event.type === "reasoning_end" && captureOpenRouter) {
+            openRouterReasoningEnd = event;
             continue;
           }
           if (event.type === "reasoning_end" && reasoningSource !== undefined) {

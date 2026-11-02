@@ -138,6 +138,11 @@ function redactedPayload(metadata: unknown): string {
   return typeof anthropic?.redactedData === "string" ? anthropic.redactedData : "";
 }
 
+function openRouterDetails(metadata: unknown): string | undefined {
+  const details = (metadata as { openrouter?: { reasoningDetails?: unknown } } | undefined)?.openrouter?.reasoningDetails;
+  return Array.isArray(details) && details.length > 0 ? safeStringify(details) : undefined;
+}
+
 /**
  * Flattens a message into the text that drives its token estimate. Exported so
  * the ContextManager recomputes item estimates identically when it rewrites
@@ -151,7 +156,7 @@ export function messageTokenText(message: ChatMessage): string {
       return message.content
         .map((part) => {
           if (part.type === "tool_call") return `${part.toolName} ${safeStringify(part.input)}`;
-          if (part.type === "reasoning") return `${part.text}${redactedPayload(part.providerMetadata)}`;
+          if (part.type === "reasoning") return openRouterDetails(part.providerMetadata) ?? `${part.text}${redactedPayload(part.providerMetadata)}`;
           return part.text;
         })
         .join("\n");
@@ -168,7 +173,13 @@ export function messageTokenText(message: ChatMessage): string {
  * an image-free message returns exactly the old text-only number (L4).
  */
 export function estimateMessageTokens(tokenizer: Tokenizer, message: ChatMessage): number {
-  return tokenizer.count(messageTokenText(message)) + imageCount(message) * IMAGE_TOKEN_ESTIMATE;
+  const detailsFloor = message.role !== "assistant" ? 0 : message.content.reduce((total, part) => {
+    if (part.type !== "reasoning") return total;
+    const details = openRouterDetails(part.providerMetadata);
+    if (details === undefined) return total;
+    return total + Math.max(0, Math.ceil(new TextEncoder().encode(details).length / 3.5) - tokenizer.count(details));
+  }, 0);
+  return tokenizer.count(messageTokenText(message)) + detailsFloor + imageCount(message) * IMAGE_TOKEN_ESTIMATE;
 }
 
 /** Number of image attachments carried by a message: user-message images + the sum over tool parts. */

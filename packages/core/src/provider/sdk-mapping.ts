@@ -70,6 +70,20 @@ export function toSdkMessages(
       }
       case "assistant": {
         const content = toSdkAssistantContent(message.content, transport, reasoningReplay);
+        if (reasoningReplay?.provider === "OpenRouter" && !reasoningReplay.replayFactual) {
+          const detailsParts = message.content.filter((part) =>
+            part.type === "reasoning" && shouldReplayReasoning(part, transport, reasoningReplay) && Array.isArray(part.providerMetadata?.openrouter?.reasoningDetails));
+          const details = detailsParts.flatMap((part) =>
+            part.type === "reasoning" && shouldReplayReasoning(part, transport, reasoningReplay) && Array.isArray(part.providerMetadata?.openrouter?.reasoningDetails)
+              ? part.providerMetadata.openrouter.reasoningDetails : []);
+          if (detailsParts.length > 0) {
+            return {
+              role: "assistant",
+              content: content.filter((part) => part.type !== "reasoning"),
+              providerOptions: { openaiCompatible: { reasoning_details: details as ProviderMetadata[string][string] } },
+            };
+          }
+        }
         // Chat-completions providers that preserve reasoning (DeepSeek) reject a
         // tool-call message without `reasoning_content`, and the SDK omits the
         // field when it is empty. Its message-level openaiCompatible options
@@ -158,7 +172,7 @@ export function shouldReplayReasoning(
     return current.replayUnsigned === true || typeof anthropic?.signature === "string" || typeof anthropic?.redactedData === "string";
   }
   if (transport === "openai-chat-completions") {
-    return current.replayFactual ? Boolean(part.factualSummary?.text.trim()) : part.text.length > 0;
+    return current.replayFactual ? Boolean(part.factualSummary?.text.trim()) : part.text.length > 0 || (current.provider === "OpenRouter" && Array.isArray(part.providerMetadata?.openrouter?.reasoningDetails));
   }
   return false;
 }

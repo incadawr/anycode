@@ -17,6 +17,7 @@ import type {
 import { COMPACTION_RECORD_MAX_PER_SESSION } from "../../types/compaction.js";
 import type { HistoryItem } from "../../types/history.js";
 import { ConversationHistory } from "../../context/history.js";
+import { toSdkMessages } from "../../provider/sdk-mapping.js";
 
 function makeItem(overrides: Partial<HistoryItem> = {}): HistoryItem {
   return {
@@ -1323,6 +1324,7 @@ describe("SqlitePersistenceAdapter", () => {
             { type: "reasoning", text: "plan first", providerMetadata: { anthropic: { signature: "sig-1" } }, source },
             { type: "text", text: "checking" },
             { type: "reasoning", text: "", providerMetadata: { anthropic: { redactedData: "opaque" } }, source },
+            { type: "reasoning", text: "", providerMetadata: { openrouter: { reasoningDetails: [] } }, source: { transport: "openai-chat-completions", provider: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", model: "test" } },
             { type: "tool_call", toolCallId: "tc1", toolName: "Read", input: { path: "/a.ts" } },
           ],
         },
@@ -1331,6 +1333,11 @@ describe("SqlitePersistenceAdapter", () => {
 
     await adapter.appendHistory(session.id, items);
     expect(await adapter.loadHistory(session.id)).toEqual(items);
+
+    const reloaded = await adapter.loadHistory(session.id);
+    expect(toSdkMessages(reloaded.map((item) => item.message), "openai-chat-completions", {
+      transport: "openai-chat-completions", provider: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1", model: "test",
+    })[1]).toMatchObject({ providerOptions: { openaiCompatible: { reasoning_details: [] } } });
 
     // The compaction path (replaceHistory) keeps the same shape.
     await adapter.replaceHistory(session.id, items);

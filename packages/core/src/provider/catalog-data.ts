@@ -534,6 +534,7 @@ const ENTRIES: CatalogProviderEntry[] = [
   {
     id: "openrouter",
     name: "OpenRouter",
+    preserveReasoning: true,
     baseUrl: "https://openrouter.ai/api/v1",
     defaultTransport: "openai-chat-completions",
     supportedTransports: ["openai-chat-completions", "openai-responses"],
