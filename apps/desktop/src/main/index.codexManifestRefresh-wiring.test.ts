@@ -55,6 +55,7 @@ class FakeBrowserWindow {
   // `isDestroyed` on both the window and its webContents models a LIVE window
   // (sendToMainWindow asks before touching `.webContents`).
   webContents = {
+    setWindowOpenHandler: vi.fn(),
     on: vi.fn(),
     send: vi.fn((channel: string) => {
       sentChannels.push(channel);

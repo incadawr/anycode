@@ -75,7 +75,7 @@ class FakeBrowserWindow {
   // `isDestroyed` on both the window and its webContents models a LIVE window:
   // a real BrowserWindow always answers it, destroyed or not, and
   // sendToMainWindow asks before touching `.webContents`.
-  webContents = { on: vi.fn(), send: vi.fn(), isDestroyed: vi.fn(() => false) };
+  webContents = { setWindowOpenHandler: vi.fn(), on: vi.fn(), send: vi.fn(), isDestroyed: vi.fn(() => false) };
   isDestroyed = vi.fn(() => false);
   on = vi.fn();
   isMaximized = vi.fn(() => false);

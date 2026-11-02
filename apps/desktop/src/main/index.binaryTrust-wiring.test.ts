@@ -41,7 +41,7 @@ const { ipcHandlers } = vi.hoisted(() => ({
 
 /** Minimal fake BrowserWindow: accepts every call createWindow()/wireWindowStateEvents() make, fires nothing. */
 class FakeBrowserWindow {
-  webContents = { on: vi.fn(), send: vi.fn() };
+  webContents = { setWindowOpenHandler: vi.fn(), on: vi.fn(), send: vi.fn() };
   on = vi.fn();
   isMaximized = vi.fn(() => false);
   isFullScreen = vi.fn(() => false);

@@ -37,7 +37,7 @@ class FakeHostProcess {
 }
 
 class FakeBrowserWindow {
-  webContents = { on: vi.fn(), send: vi.fn(), postMessage: vi.fn() };
+  webContents = { setWindowOpenHandler: vi.fn(), on: vi.fn(), send: vi.fn(), postMessage: vi.fn() };
   on = vi.fn();
   isMaximized = vi.fn(() => false);
   isFullScreen = vi.fn(() => false);

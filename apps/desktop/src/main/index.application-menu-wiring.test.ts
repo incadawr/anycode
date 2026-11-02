@@ -53,7 +53,7 @@ function hasReloadEntries(template: unknown[]): boolean {
 }
 
 class FakeBrowserWindow {
-  webContents = { on: vi.fn(), send: vi.fn(), reload: vi.fn(), reloadIgnoringCache: vi.fn(), toggleDevTools: vi.fn() };
+  webContents = { setWindowOpenHandler: vi.fn(), on: vi.fn(), send: vi.fn(), reload: vi.fn(), reloadIgnoringCache: vi.fn(), toggleDevTools: vi.fn() };
   on = vi.fn();
   isMaximized = vi.fn(() => false);
   isFullScreen = vi.fn(() => false);

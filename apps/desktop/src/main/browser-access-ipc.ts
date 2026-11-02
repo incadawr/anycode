@@ -109,6 +109,8 @@ export function createBrowserAccessNotifier(deps: {
 }
 
 export function registerBrowserAccessIpc(deps: BrowserAccessIpcDeps): void {
-  ipcMain.handle(BROWSER_ACCESS_GET_CHANNEL, (event, raw: unknown) => handleBrowserAccessGet(deps, raw, event.sender));
-  ipcMain.handle(BROWSER_ACCESS_SET_CHANNEL, (event, raw: unknown) => handleBrowserAccessSet(deps, raw, event.sender));
+  ipcMain.handle(BROWSER_ACCESS_GET_CHANNEL, (event, raw: unknown) =>
+    handleBrowserAccessGet(deps, raw, event.senderFrame === event.sender.mainFrame ? event.sender : null));
+  ipcMain.handle(BROWSER_ACCESS_SET_CHANNEL, (event, raw: unknown) =>
+    handleBrowserAccessSet(deps, raw, event.senderFrame === event.sender.mainFrame ? event.sender : null));
 }

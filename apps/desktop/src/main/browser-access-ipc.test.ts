@@ -3,11 +3,15 @@
  * Pure handlers over a fake deps bag (no ipcMain), like communication-ipc.test.ts.
  */
 import { describe, expect, it, vi } from "vitest";
+import { BROWSER_ACCESS_GET_CHANNEL, BROWSER_ACCESS_SET_CHANNEL } from "../shared/browser-access.js";
+const handlers = vi.hoisted(() => new Map<string, (...args: any[]) => any>());
+vi.mock("electron", () => ({ ipcMain: { handle: (channel: string, handler: (...args: any[]) => any) => handlers.set(channel, handler) } }));
 import {
   createBrowserAccessNotifier,
   effectiveTabState,
   handleBrowserAccessGet,
   handleBrowserAccessSet,
+  registerBrowserAccessIpc,
   type BrowserAccessIpcDeps,
 } from "./browser-access-ipc.js";
 import { createBrowserAccessStore, type BrowserAccessStore } from "./browser-access.js";
@@ -38,6 +42,17 @@ function rig(options: { trust?: Record<string, unknown>; onChanged?: (tabId: str
 }
 
 describe("browser access IPC — test 45(b): only the main window may call it", () => {
+  it("rejects subframes even when they share the main webContents", () => {
+    const { deps, on } = rig();
+    const mainFrame = {};
+    const sender = Object.assign(MAIN, { mainFrame });
+    registerBrowserAccessIpc(deps);
+    const event = { sender, senderFrame: {} };
+    expect(handlers.get(BROWSER_ACCESS_GET_CHANNEL)!(event, {})).toEqual({ ok: false, reason: "not_main_window" });
+    expect(handlers.get(BROWSER_ACCESS_SET_CHANNEL)!(event, { tabId: "tab-1", enabled: true })).toEqual({ ok: false, reason: "not_main_window" });
+    expect(on.size).toBe(0);
+    expect(handlers.get(BROWSER_ACCESS_SET_CHANNEL)!({ sender, senderFrame: mainFrame }, { tabId: "tab-1", enabled: true }).ok).toBe(true);
+  });
   it("refuses a preview webContents, an undefined sender, and does not mutate", () => {
     const { deps, on } = rig();
     expect(handleBrowserAccessSet(deps, { tabId: "tab-1", enabled: true }, PREVIEW)).toEqual({ ok: false, reason: "not_main_window" });
