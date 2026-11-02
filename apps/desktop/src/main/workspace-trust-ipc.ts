@@ -130,17 +130,18 @@ export async function offerEmptyFolderTrust(
   home: string,
   realpathSync: (path: string) => string,
   confirm: (workspace: string) => Promise<boolean>,
-): Promise<void> {
+): Promise<void | "folder_changed"> {
   const storePath = defaultTrustStorePath(home);
   const probe = () => resolveWorkspaceTrust(fs, { workspace, home, storePath, realpathSync });
   const initial = await probe();
   const store = await readTrustStore(storeFs, storePath);
   if (initial.items.length || store.folders[initial.folder]?.decision === "trusted") return;
-  if (!(await confirm(workspace))) return;
-  await queueStoreMutation(async () => {
+  if (!(await confirm(initial.folder))) return;
+  return await queueStoreMutation(async () => {
     const current = await probe();
+    if (current.folder !== initial.folder) return "folder_changed" as const;
     if (current.items.length) return;
-    await writeTrustDecision(storeFs, storePath, current.folder, "trusted", current.hash);
+    await writeTrustDecision(storeFs, storePath, initial.folder, "trusted", current.hash);
   });
 }
 

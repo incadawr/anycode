@@ -92,6 +92,12 @@ function rig(over: { env?: string; picked?: string | undefined; script?: string 
 }
 
 describe("Sessions API IPC — writes go through the dedicated channel", () => {
+  it("does not enable the project when its folder changes during trust confirmation", async () => {
+    const { deps, agentProjects } = rig();
+    deps.offerEmptyFolderTrust = async () => "folder_changed";
+    expect(await handleAgentProjectsSet(deps, { workspace: workspaceA, enabled: true })).toEqual({ ok: false, reason: "folder_changed" });
+    expect(agentProjects.isAllowed(workspaceA)).toBe(false);
+  });
   it("offers folder trust when the project switch is enabled", async () => {
     const { deps } = rig();
     const offer = vi.fn(async () => {});

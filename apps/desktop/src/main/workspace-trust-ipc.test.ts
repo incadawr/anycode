@@ -6,6 +6,10 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
+import { realpathSync } from "node:fs";
+import { mkdtemp, mkdir, rm, symlink, unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   handleWorkspaceTrustDecide,
   offerEmptyFolderTrust,
@@ -100,6 +104,29 @@ function makeDeps(overrides: Partial<WorkspaceTrustIpcDeps> = {}) {
 }
 
 describe("offerEmptyFolderTrust", () => {
+  it("refuses trust when a symlink changes during confirmation", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "trust-switch-"));
+    try {
+      const a = join(dir, "a"), b = join(dir, "b"), link = join(dir, "link");
+      await mkdir(a);
+      await mkdir(b);
+      await symlink(a, link);
+      const fs = makeFs();
+      const projectFs = { ...fs, stat: async () => ({ size: 0, mtimeMs: 0, isFile: true, isDirectory: false }), mkdir: async () => {}, readdir: async () => [] };
+      let shownFolder = "";
+      const result = await offerEmptyFolderTrust(projectFs, fs, link, HOME, realpathSync, async (shown) => {
+        shownFolder = shown;
+        await unlink(link);
+        await symlink(b, link);
+        return true;
+      });
+      expect(fs.writes).toEqual([]);
+      expect(shownFolder).toBe(realpathSync(a));
+      expect(result).toBe("folder_changed");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
   it("shows a safe-default confirmation with the folder and trust action", async () => {
     const show = vi.fn(async () => ({ response: 0 }));
     expect(await confirmEmptyFolderTrust(WS, show)).toBe(true);
