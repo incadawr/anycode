@@ -27,6 +27,14 @@ describe("absolute write masks", () => {
       expect(resolveWriteMask(`${dir}/tmp/**`)).toBeUndefined();
       expect(resolveWriteMask(`/System/Volumes/Data${homedir()}/**`)).toBeUndefined();
       expect(resolveWriteMask("/System/Volumes/Data/private/tmp/**")).toBeUndefined();
+      for (const path of ["/System/Volumes", "/System", "/Volumes", "/private", "/private/var"]) {
+        expect(resolveWriteMask(`${path}/**`), path).toBeUndefined();
+        try {
+          await symlink(path, join(dir, "container"));
+          expect(resolveWriteMask(`${dir}/container/**`), path).toBeUndefined();
+          await rm(join(dir, "container"));
+        } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      }
     } finally { await rm(dir, { recursive: true, force: true }); }
   });
 
@@ -47,6 +55,15 @@ describe("absolute write masks", () => {
       };
       expect(await check(join(allowed, "new.txt"))).toBe("allow");
       expect(await check(join(allowed, ".env"))).toBe("allow");
+      rules.add({ toolName: "Write", pattern: `${allowed.replace(/^\/private\/tmp\//, "/tmp/")}/missing/**` });
+      expect(await check(join(allowed, "missing", "new.txt"))).toBe("allow");
+      if (process.platform === "darwin") {
+        expect(await check(`/System/Volumes/Data${allowed}/new.txt`)).toBe("allow");
+        rules.add({ toolName: "Edit", pattern: `${allowed.toUpperCase()}/**` });
+        const caseTarget = join(allowed, "case.txt");
+        const caseRequest = { toolName: "Edit", input: { file_path: caseTarget }, metadata: writeTool.metadata, mode: "build" as const, workspace: await resolveWorkspaceWriteFacts(new NodeFileSystemAdapter(), ws, caseTarget) };
+        if (await realpath(allowed.toUpperCase()).catch(() => undefined)) expect(engine.check(caseRequest).decision).toBe("allow");
+      }
       rules.add({ toolName: "Edit", pattern: `${allowed.replace(/^\/private\/tmp\//, "/tmp/")}/**` });
       const aliasRequest = { toolName: "Edit", input: { file_path: join(allowed, "alias.txt") }, metadata: writeTool.metadata, mode: "build" as const, workspace: await resolveWorkspaceWriteFacts(new NodeFileSystemAdapter(), ws, join(allowed, "alias.txt")) };
       expect(engine.check(aliasRequest).decision).toBe("allow");

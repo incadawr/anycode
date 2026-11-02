@@ -146,6 +146,12 @@ describe("canSubmitPermissionAdd", () => {
 });
 
 describe("submitPermissionAdd", () => {
+  it("rejects the host home as a write mask", async () => {
+    const bridge = fakeBridge();
+    const store = createSettingsStore(bridge);
+    expect(await submitPermissionAdd(store, "Write", "/mnt/profiles/current/**", "/mnt/profiles/current")).toBeNull();
+    expect(bridge.addRule).not.toHaveBeenCalled();
+  });
   it("does not call the bridge for a blank tool name", async () => {
     const bridge = fakeBridge();
     const store = createSettingsStore(bridge);
