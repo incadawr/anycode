@@ -97,7 +97,7 @@ export function resolveCoreConnectionForModel(
     const providerPrefix = slash > 0 ? value.slice(0, slash) : "";
     const providerModel = slash > 0 ? value.slice(slash + 1) : "";
     for (const connection of connections) {
-      if (connection.id === value) add(connection);
+      if (connection.id === value || (connection.providerId !== "" && connection.providerId === value)) add(connection);
       if (connection.label !== undefined && connection.label !== "" && connection.label === value) add(connection);
       if (offeredModels(connection).includes(value)) add(connection, value);
       if (providerPrefix !== "" && providerModel !== "" && connection.providerId === providerPrefix) {
