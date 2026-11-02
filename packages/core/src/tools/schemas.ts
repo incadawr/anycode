@@ -319,14 +319,14 @@ export const agentInputSchema = z.object({
     .optional()
     .describe(
       "Session tier only: id of the provider connection to run the child session on " +
-        "(defaults to this session's own connection). Invalid for inline tier.",
+        "(defaults to this session's own connection). Call ListConnections to see valid values. Invalid for inline tier.",
     ),
   model: z
     .string()
     .min(1)
     .optional()
     .describe(
-      "Exact model id to run the subagent on (defaults to the parent's model); if this host cannot honor it the call fails with an explanation",
+      "Exact model id to run the subagent on (defaults to the parent's model); if this host cannot honor it the call fails with an explanation. Call ListConnections to see available models.",
     ),
   /**
    * срез 1: session-tier-only, mirrors the `provider` field's
