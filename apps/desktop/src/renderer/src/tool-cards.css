@@ -409,7 +409,8 @@
    `.substatus-<kind> > .substatus-glyph`, a CHILD combinator, so any rule
    leaning on ancestry dies silently the moment the markup gains a level —
    the regression that already killed the step rows' colour once. */
-.workflow-tick.substatus-running   { background: var(--text-2); border-radius: var(--r-full); }
+/* Keep the rounded running marker visibly distinct even when the strip shrinks. */
+.workflow-tick.substatus-running   { min-width: 6px; background: var(--text-2); border-radius: var(--r-full); }
 .workflow-tick.substatus-completed { background: var(--success); }
 .workflow-tick.substatus-queued    { background: var(--text-3); }
 .workflow-tick.substatus-error,

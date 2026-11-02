@@ -60,7 +60,7 @@ const markup = (footerWidth: number): string => `<!doctype html><html data-theme
       previewCell: { width: cell.borderLeftWidth, style: cell.borderLeftStyle },
       previewHead: { width: th.borderBottomWidth, background: th.backgroundColor },
       transcriptCell: { width: transcriptCell.borderLeftWidth, style: transcriptCell.borderLeftStyle },
-      sidebar: { current: current.boxShadow, open: open.boxShadow, accent },
+      sidebar: { current: current.boxShadow, open: open.boxShadow, currentBg: current.backgroundColor, openBg: open.backgroundColor, accent },
     });
   </script></body></html>`;
 
@@ -80,7 +80,7 @@ describe("UI audit C8/C9/C12 — computed styles over the shipped CSS", () => {
         previewCell: { width: string; style: string };
         previewHead: { width: string; background: string };
         transcriptCell: { width: string; style: string };
-        sidebar: { current: string; open: string; accent: string };
+        sidebar: { current: string; open: string; currentBg: string; openBg: string; accent: string };
       };
 
       // C8 — a short model name in a footer with room must not be ellipsized.
@@ -95,10 +95,10 @@ describe("UI audit C8/C9/C12 — computed styles over the shipped CSS", () => {
       expect(result.previewHead.background).not.toBe("rgba(0, 0, 0, 0)");
       expect(result.transcriptCell).toEqual({ width: "0px", style: "none" });
 
-      // C12 — exactly one row (the current tab) wears the accent bar; another
-      // open tab is marked, but differently.
+      // C12 — the active row is neutral and remains distinct from open background rows.
       expect(result.sidebar.current).not.toBe(result.sidebar.open);
-      expect(result.sidebar.current).toContain("2px");
+      expect(result.sidebar.current).toBe("none");
+      expect(result.sidebar.currentBg).not.toBe(result.sidebar.openBg);
       expect(result.sidebar.open).toContain("2px");
     } finally {
       rmSync(directory, { recursive: true, force: true });
