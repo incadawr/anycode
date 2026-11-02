@@ -7,6 +7,18 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.65] — 2026-11-02
+
+### Added
+
+- The model can list configured connections and their models without keys or URLs, and route a subagent to a chosen connection by its returned id.
+- Experimental reasoning-history modes are available through `ANYCODE_REASONING_HISTORY`; they are off by default and do not change behavior unless enabled.
+
+### Changed
+
+- Refined the main window design across the sidebar, conversation, composer, dock tabs and preview headers. Gold is the new default accent alongside Blue, Indigo, Teal and Ember; accent names appear immediately on hover or focus.
+- The connection dialog header stays pinned while the form scrolls.
+
 ## [0.0.64] — 2026-11-02
 
 ### Fixed
