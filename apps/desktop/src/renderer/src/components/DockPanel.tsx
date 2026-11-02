@@ -99,7 +99,7 @@ export function DockPanel({ mode, width, onToast, subagents, canSplitNow, splitT
       event.stopPropagation();
       if (activeTab) {
         closeDockTab(activeTab, tabId, store);
-        close(activeTab.id);
+        if (activeTab.kind !== "preview") close(activeTab.id);
       }
     }
   }
@@ -214,7 +214,7 @@ export function DockPanel({ mode, width, onToast, subagents, canSplitNow, splitT
                 title={`Close ${tab.title}`}
                 onClick={() => {
                   closeDockTab(tab, tabId, store);
-                  close(tab.id);
+                  if (tab.kind !== "preview") close(tab.id);
                 }}
               >
                 <X />

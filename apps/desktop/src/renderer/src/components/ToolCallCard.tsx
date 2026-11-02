@@ -35,6 +35,7 @@ import { useCallback, useContext, useEffect, useId, useRef, useState, useSyncExt
 import type { TokenUsage } from "@anycode/core";
 import type { SubagentSubStatus, ToolCallBlock, WorkflowStepStatus, WorkflowSubStatus } from "../store.js";
 import { TabContext } from "../tab-context.js";
+import { focusExistingPreview } from "../dock/dock-store.js";
 import { isPreviewableDocPath } from "../../../shared/previewable.js";
 import { useTabsStore } from "../tabs-store.js";
 import { childBadgeKind, childLayoutStore, type ChildBadgeKind } from "../child-layout.js";
@@ -1861,6 +1862,7 @@ function useArtifactPreviewAction(path: string | null): ArtifactPreviewAction | 
     error,
     open: () => {
       void api.preview(tabId, path).then((result) => {
+        if (result.ok) focusExistingPreview(tabId, result.value.previewId);
         setError(result.ok ? null : result.error);
       });
     },

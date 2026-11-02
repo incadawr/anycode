@@ -156,6 +156,12 @@ export function createDockStore(storage: DockStorage = typeof window === "undefi
 
 export const useDockStore = createDockStore();
 
+/** Focus an already open preview only while its conversation owns the dock. */
+export function focusExistingPreview(tabId: string, previewId: string): void {
+  const dock = useDockStore.getState();
+  if (dock.ownerTabId === tabId) dock.focus(`preview:${previewId}`);
+}
+
 /**
  * the owner-gated view of the dock for one conversation tab.
  * Frozen module singleton for every NON-owner (zustand selectors must not

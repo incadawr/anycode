@@ -28,6 +28,7 @@ import { childLayoutStore } from "../child-layout.js";
 import { useDockStore } from "../dock/dock-store.js";
 import { DOCK_SPLIT_MIN_PX, DOCK_WIDTH_STORAGE_KEY, DOCK_WIDTH_MAX, DOCK_WIDTH_MIN, dockMinWidth } from "../dock/dock-layout.js";
 import { usePreviewStore } from "../preview/preview-store.js";
+import { Markdown } from "./Markdown.js";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -342,6 +343,40 @@ describe("dock resize handle placement (GitHub #31)", () => {
     await act(async () => usePreviewStore.getState().applyChanged({ tabId: "tab", visiblePanelPreviewId: "web", previews: [{ ...preview, title: "Second" }] }));
     expect(container.querySelector('[data-tab-id="preview:web"] .dock-tab-title')?.textContent).toBe("Second");
     expect(useDockStore.getState().activeTabId).toBe("git");
+  });
+
+  it("focuses an existing preview when its artifact link is clicked", async () => {
+    const preview = vi.fn().mockResolvedValue({ ok: true, value: { previewId: "md" } });
+    const artifacts = new Proxy({ preview }, { get(target, key) { return Reflect.get(target, key) ?? anyBridge; } });
+    (window as { anycode?: unknown }).anycode = new Proxy(anyBridge as object, { get(target, key) { return key === "artifacts" ? artifacts : Reflect.get(target, key); } });
+    try {
+      useDockStore.setState({ ownerTabId: "tab", tabs: [{ id: "preview:md", kind: "preview", title: "doc.md" }, { id: "git", kind: "git", title: "Review" }], activeTabId: "git" });
+      await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab", store } }, createElement(Markdown, { text: "[doc](/doc.md)" }))));
+      await act(async () => container.querySelector<HTMLAnchorElement>("a.md-link")!.click());
+      expect(preview).toHaveBeenCalledWith("tab", "/doc.md");
+      expect(useDockStore.getState().activeTabId).toBe("preview:md");
+    } finally {
+      (window as { anycode?: unknown }).anycode = anyBridge;
+    }
+  });
+
+  it("selects the right neighbour when the active preview closes", async () => {
+    const select = vi.fn().mockResolvedValue({ ok: true });
+    const previewPanel = new Proxy({ select, close: vi.fn().mockResolvedValue({ ok: true }) }, { get(target, key) { return Reflect.get(target, key) ?? anyBridge; } });
+    (window as { anycode?: unknown }).anycode = new Proxy(anyBridge as object, { get(target, key) { return key === "previewPanel" ? previewPanel : Reflect.get(target, key); } });
+    try {
+      await mountBody();
+      const previews = ["a", "b", "c"].map((id) => ({ previewId: id, tabId: "tab", url: `http://localhost/${id}`, title: id, status: "ready" as const, container: "panel" as const, viewKind: "web" as const }));
+      await act(async () => usePreviewStore.getState().applyChanged({ tabId: "tab", visiblePanelPreviewId: "b", previews }));
+      await act(async () => useDockStore.getState().focus("preview:b"));
+      await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Close b"]')!.click());
+      expect(useDockStore.getState().activeTabId).toBe("preview:b");
+      await act(async () => usePreviewStore.getState().applyChanged({ tabId: "tab", visiblePanelPreviewId: "a", previews: [previews[0]!, previews[2]!] }));
+      expect(useDockStore.getState().activeTabId).toBe("preview:c");
+      expect(select).toHaveBeenCalledWith("tab", "c");
+    } finally {
+      (window as { anycode?: unknown }).anycode = anyBridge;
+    }
   });
 
 
