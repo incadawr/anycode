@@ -18,6 +18,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Refreshed the main window with the updated dark and light design palette, sidebar, conversation, composer, and dock.
+
 - Panels that referenced undefined background, border, and radius tokens now use the intended surfaces and corners, slightly changing their appearance.
 - Continue a Codex conversation on another account is available again, and the transfer no longer guesses: a conversation is copied by its exact thread id rather than by a partial match, never published half-written, never opened twice, and two competing transfers of one conversation refuse each other. A settings switch (`codexContinueOnAnotherAccount`, `"off"`) pauses the action if needed. Limit worth knowing: a rollout being written at the same moment by another program can go undetected — the size and modification-time check only narrows that window, it does not close it.
 - Redesign provider connection editing with a compact model picker and per-model pricing table.

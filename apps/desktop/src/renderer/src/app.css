@@ -318,7 +318,8 @@ body {
   align-items: center;
   gap: var(--sp-2);
   flex-shrink: 0;
-  padding: var(--sp-2) var(--sp-3);
+  min-height: 36px;
+  padding: 0 var(--sp-2) 0 var(--sp-3);
   border-bottom: 1px solid var(--border);
 }
 
@@ -329,8 +330,8 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-1);
-  font-size: var(--fs-sm);
-  font-weight: var(--w-semibold);
+  font-size: var(--fs-xs);
+  font-weight: var(--w-medium);
 }
 
 .preview-panel-picker {
@@ -413,10 +414,12 @@ body {
 
 .dock-tab-strip {
   display: flex;
-  gap: 1px;
+  gap: 2px;
+  height: var(--header-h);
+  align-items: flex-start;
   flex-shrink: 0;
   overflow-x: auto;
-  padding: var(--sp-1) var(--sp-2);
+  padding: 6px var(--sp-2) 0;
   border-bottom: 1px solid var(--border);
 }
 
@@ -426,10 +429,12 @@ body {
   gap: var(--sp-1);
   max-width: 12rem;
   flex-shrink: 0;
-  padding: var(--sp-1) var(--sp-2);
-  color: var(--text-2);
+  height: 28px;
+  padding: 0 4px 0 10px;
+  color: var(--text-3);
   background: transparent;
-  border-bottom: 2px solid transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
   border-radius: var(--r-sm) var(--r-sm) 0 0;
   font-size: var(--fs-xs);
   white-space: nowrap;
@@ -444,8 +449,8 @@ body {
    close), each a keyboard tab stop; the active look rides the wrapper. */
 .dock-tab-active {
   color: var(--text-1);
-  border-bottom-color: var(--text-1);
-  font-weight: var(--w-semibold);
+  background: var(--bg-card);
+  border-color: var(--border);
 }
 
 .dock-tab-select {
@@ -463,7 +468,7 @@ body {
 .dock-tab-select:focus-visible,
 .dock-tab-split:focus-visible,
 .dock-tab-close:focus-visible {
-  outline: 1px solid var(--text-1);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -628,7 +633,8 @@ body {
   align-items: center;
   gap: var(--sp-2);
   flex-shrink: 0;
-  padding: var(--sp-2) var(--sp-3);
+  min-height: 36px;
+  padding: 0 var(--sp-2) 0 var(--sp-3);
   border-bottom: 1px solid var(--border);
 }
 
@@ -639,15 +645,15 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-1);
-  font-size: var(--fs-sm);
-  font-weight: var(--w-semibold);
+  font-size: var(--fs-xs);
+  font-weight: var(--w-medium);
 }
 
 .md-preview-view-mode-toggle {
   display: inline-flex;
   gap: 1px;
   padding: 1px;
-  background: var(--bg);
+  background: var(--bg-control);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   flex-shrink: 0;
