@@ -7,6 +7,7 @@ import { TurnTranslator } from "./event-translator.js";
 import { CollabAgentCardIndex } from "./collab-agent-index.js";
 import type { JsonRpcNotification } from "./protocol.js";
 import { TurnItemIndex, fileChangesOf } from "./turn-item-index.js";
+import { sanitizeAgentEvent } from "../../serialize.js";
 
 const THREAD_ID = "synthetic-thread";
 const TURN_ID = "synthetic-turn";
@@ -279,6 +280,36 @@ describe("TurnTranslator — renderer invariants", () => {
 });
 
 describe("TurnTranslator — errors and retries (cut §2(i))", () => {
+  it("recognizes a usage limit without metadata and refines an earlier generic error", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    translator.onNotification({ method: "error", params: { threadId: THREAD_ID, turnId: TURN_ID, error: { message: "private" }, willRetry: false } });
+    const events = translator.onNotification({ method: "turn/completed", params: { threadId: THREAD_ID, turn: { id: TURN_ID, status: "failed", error: { message: "You've hit your usage limit. Try again at 1:13 PM.", codexErrorInfo: null } } } });
+    expect(events[0]).toMatchObject({ safe: { code: "codex_usage_limit", message: "This account has reached its usage limit. Try again at 1:13 PM." } });
+    expect(sanitizeAgentEvent(events[0]!, "codex")).toMatchObject({ notice: { kind: "usage_limit", engine: "codex" } });
+    const other = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    other.onNotification({ method: "error", params: { threadId: THREAD_ID, turnId: TURN_ID, error: { message: "private" }, willRetry: false } });
+    expect(other.onNotification({ method: "turn/completed", params: { threadId: THREAD_ID, turn: { id: TURN_ID, status: "failed", error: { message: "private", codexErrorInfo: "usageLimitExceeded" } } } })[0]).toMatchObject({ safe: { code: "codex_usage_limit" } });
+  });
+
+  it.each([
+    ["Try again at 2026-11-03 13:13:00", new Date(2026, 10, 3, 13, 13, 0).getTime()],
+    ["resets at 1783853597", 1783853597000],
+  ])("preserves a validated reset in %s", (retry, resetAt) => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    const events = translator.onNotification({ method: "turn/completed", params: { threadId: THREAD_ID, turn: { id: TURN_ID, status: "failed", error: { message: `usage limit ${retry} /private/a alice@example.test acct_123` } } } });
+    expect(events[0]).toMatchObject({ safe: { message: `This account has reached its usage limit. Try again at ${new Date(resetAt).toISOString().replace(".000Z", "Z")}.` } });
+    const wire = sanitizeAgentEvent(events[0]!, "codex");
+    expect(wire).toMatchObject({ notice: { resetAt } });
+    expect(JSON.stringify(wire)).not.toMatch(/\/private\/a|alice@example\.test|acct_123/);
+  });
+
+  it("rejects invalid calendar resets", () => {
+    const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
+    const events = translator.onNotification({ method: "turn/completed", params: { threadId: THREAD_ID, turn: { id: TURN_ID, status: "failed", error: { message: "usage limit Try again at 2026-02-30 13:13:00" } } } });
+    expect(sanitizeAgentEvent(events[0]!, "codex")).toMatchObject({ notice: { kind: "usage_limit" } });
+    expect(sanitizeAgentEvent(events[0]!, "codex")).not.toHaveProperty("notice.resetAt");
+  });
+
   it.each([
     ["usageLimitExceeded", "You've hit your usage limit. Try again at 1:13 PM.", "This account has reached its usage limit. Try again at 1:13 PM.", "codex_usage_limit"],
     ["other", "The server rejected this request.", "Codex ended the turn with an error", "codex_error"],
@@ -403,10 +434,11 @@ describe("TurnTranslator — errors and retries (cut §2(i))", () => {
     const translator = new TurnTranslator({ threadId: THREAD_ID, turnId: TURN_ID, turn: 1 });
     const events = translator.onNotification({
       method: "error",
-      params: { threadId: THREAD_ID, turnId: TURN_ID, error: { message: "network hiccup, retrying" }, willRetry: true },
+      params: { threadId: THREAD_ID, turnId: TURN_ID, error: { message: "network hiccup /private/a alice@example.test acct_123" }, willRetry: true },
     });
     // Pre-fix: unhandled -> []. A retry must never look like a failure.
-    expect(events).toEqual([{ type: "engine_notice", level: "retry", message: "network hiccup, retrying" }]);
+    expect(events).toEqual([{ type: "engine_notice", level: "retry", message: "Codex ended the turn with an error" }]);
+    expect(JSON.stringify(sanitizeAgentEvent(events[0]!, "codex"))).not.toMatch(/\/private\/a|alice@example\.test|acct_123/);
     expect(events.some((event) => event.type === "error")).toBe(false);
 
     // The turn is still alive afterwards — completes normally.
