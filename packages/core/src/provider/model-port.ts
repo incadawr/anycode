@@ -796,6 +796,23 @@ function collectReasoningMetadata(
   into.set(part.id, merged);
 }
 
+/** Reassemble OpenRouter's indexed reasoning detail deltas from raw SSE chunks. */
+function collectOpenRouterDetails(details: Map<number, Record<string, unknown>>, part: TextStreamPart<ToolSet>): void {
+  if (part.type !== "raw" || !isRecord(part.rawValue) || !Array.isArray(part.rawValue.choices)) return;
+  const choice = part.rawValue.choices[0];
+  if (!isRecord(choice) || !isRecord(choice.delta) || !Array.isArray(choice.delta.reasoning_details)) return;
+  for (const [position, value] of choice.delta.reasoning_details.entries()) {
+    if (!isRecord(value)) continue;
+    const index = typeof value.index === "number" ? value.index : position;
+    const previous = details.get(index) ?? {};
+    const merged = { ...previous, ...value };
+    for (const key of ["text", "summary", "data", "signature"]) {
+      if (typeof previous[key] === "string" && typeof value[key] === "string") merged[key] = previous[key] + value[key];
+    }
+    details.set(index, merged);
+  }
+}
+
 export class AiSdkModelPort implements ModelPort {
   /** Provider's model claim from the most recent raw `message_start` seen by this port. */
   #lastResponseModel: string | undefined;
@@ -1091,6 +1108,9 @@ export class AiSdkModelPort implements ModelPort {
       // Per-attempt, so an abandoned attempt never lends metadata to a replay (GitHub #41).
       const reasoningSource = this.reasoningReplaySource(request.reasoningEffort);
       const reasoningMetadata = new Map<string, Record<string, Record<string, unknown>>>();
+      const openRouterDetails = new Map<number, Record<string, unknown>>();
+      let openRouterReasoningEnd: Extract<ModelStreamEvent, { type: "reasoning_end" }> | undefined;
+      const captureOpenRouter = reasoningSource?.provider === "OpenRouter" && this.config.transport === "openai-chat-completions";
       let lastWireActivityAt = Number.NEGATIVE_INFINITY;
       const onResponseActivity = this.config.transport === "openai-responses" && policy.stallTimeoutMs > 0
         ? (): void => { lastWireActivityAt = Date.now(); } : undefined;
@@ -1189,12 +1209,25 @@ export class AiSdkModelPort implements ModelPort {
             stepRawUsage = outcome.value.usage.raw;
           }
           if (reasoningSource !== undefined) collectReasoningMetadata(reasoningMetadata, outcome.value);
+          if (captureOpenRouter) collectOpenRouterDetails(openRouterDetails, outcome.value);
+          if (captureOpenRouter && outcome.value.type === "finish-step") {
+            const details = [...openRouterDetails.entries()].sort(([a], [b]) => a - b).map(([, value]) => value);
+            if (openRouterReasoningEnd !== undefined || details.length > 0) {
+              const end = openRouterReasoningEnd ?? { type: "reasoning_end" as const, id: "openrouter-details" };
+              if (openRouterReasoningEnd === undefined) yield { type: "reasoning_start", id: end.id };
+              yield { ...end, source: reasoningSource, ...(details.length > 0 ? { providerMetadata: { openrouter: { reasoningDetails: details } } } : {}) };
+            }
+          }
           let event = translateStreamPart(outcome.value, {
             transport: this.config.transport,
             stepRawUsage,
             openRouter: new URL(this.config.baseUrl).hostname === "openrouter.ai",
           });
           if (event === null) {
+            continue;
+          }
+          if (event.type === "reasoning_end" && captureOpenRouter) {
+            openRouterReasoningEnd = event;
             continue;
           }
           if (event.type === "reasoning_end" && reasoningSource !== undefined) {

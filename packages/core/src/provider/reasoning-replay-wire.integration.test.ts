@@ -145,6 +145,41 @@ function assistantMessages(body: Record<string, unknown>): WireMessage[] {
 }
 
 describe("reasoning replay over the real SDK wire (GitHub #41)", () => {
+  it("OpenRouter retains streamed reasoning details and replays the complete blocks", async () => {
+    const chunks: Chunk[] = [
+      { choices: [{ index: 0, delta: { role: "assistant", reasoning: "Think ", reasoning_details: [{ index: 0, type: "reasoning.text", format: "unknown", id: "r1", text: "Think " }] }, finish_reason: null }] },
+      { choices: [{ index: 0, delta: { reasoning: "first.", reasoning_details: [{ index: 0, type: "reasoning.text", format: "unknown", id: "r1", text: "first." }, { index: 1, type: "reasoning.encrypted", format: "test", data: "cipher" }] }, finish_reason: null }] },
+      ...OPENAI_THINK_THEN_TOOL.slice(1),
+    ];
+    const fixture = await startServer([openAiSse(chunks), openAiSse(OPENAI_TEXT)]);
+    const port = new AiSdkModelPort({ transport: "openai-chat-completions", baseUrl: fixture.baseUrl, apiKey: "test", model: "test", providerName: "OpenRouter", retry: { maxRetries: 0, stallTimeoutMs: 0 } });
+    await run(makeLoop(port), "read");
+    const assistant = assistantMessages(fixture.bodies[1]!)[0];
+    expect(assistant).toMatchObject({ reasoning_details: [
+      { index: 0, type: "reasoning.text", format: "unknown", id: "r1", text: "Think first." },
+      { index: 1, type: "reasoning.encrypted", format: "test", data: "cipher" },
+    ] });
+    expect(assistant).not.toHaveProperty("reasoning_content");
+  });
+
+  it("OpenRouter retains encrypted-only reasoning", async () => {
+    const chunks: Chunk[] = [
+      { choices: [{ index: 0, delta: { role: "assistant", reasoning_details: [{ index: 0, type: "reasoning.encrypted", data: "secret-block" }] }, finish_reason: null }] },
+      ...OPENAI_THINK_THEN_TOOL.slice(1),
+    ];
+    const fixture = await startServer([openAiSse(chunks), openAiSse(OPENAI_TEXT)]);
+    const port = new AiSdkModelPort({ transport: "openai-chat-completions", baseUrl: fixture.baseUrl, apiKey: "test", model: "test", providerName: "OpenRouter", retry: { maxRetries: 0, stallTimeoutMs: 0 } });
+    await run(makeLoop(port), "read");
+    expect(assistantMessages(fixture.bodies[1]!)[0]).toMatchObject({ reasoning_details: [{ index: 0, type: "reasoning.encrypted", data: "secret-block" }] });
+  });
+
+  it("OpenRouter replays plaintext when details are absent", async () => {
+    const fixture = await startServer([openAiSse(OPENAI_THINK_THEN_TOOL), openAiSse(OPENAI_TEXT)]);
+    const port = new AiSdkModelPort({ transport: "openai-chat-completions", baseUrl: fixture.baseUrl, apiKey: "test", model: "test", providerName: "OpenRouter", retry: { maxRetries: 0, stallTimeoutMs: 0 } });
+    await run(makeLoop(port), "read");
+    expect(assistantMessages(fixture.bodies[1]!)[0]).toMatchObject({ reasoning_content: "Need to read the file first." });
+  });
+
   it("anthropic-messages + z-ai: the next request carries the signed thinking block before tool_use", async () => {
     const fixture = await startServer([anthropicSse(ANTHROPIC_THINK_THEN_TOOL), anthropicSse(ANTHROPIC_THINK_THEN_TEXT)]);
     const loop = makeLoop(zaiPort(fixture.baseUrl));

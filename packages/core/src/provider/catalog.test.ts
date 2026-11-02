@@ -841,6 +841,7 @@ describe("preserveReasoning (GitHub #41)", () => {
       "deepseek",
       "minimax",
       "minimax-cn",
+      "openrouter",
       "xiaomi-mimo-ams",
       "xiaomi-mimo-api",
       "xiaomi-mimo-cn",
