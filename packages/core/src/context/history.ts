@@ -107,6 +107,15 @@ export class ConversationHistory {
 }
 
 /**
+ * A redacted thinking block keeps its payload in provider metadata with an
+ * empty `text`, but replay sends the payload in full, so it must count.
+ */
+function redactedPayload(metadata: unknown): string {
+  const anthropic = (metadata as { anthropic?: { redactedData?: unknown } } | undefined)?.anthropic;
+  return typeof anthropic?.redactedData === "string" ? anthropic.redactedData : "";
+}
+
+/**
  * Flattens a message into the text that drives its token estimate. Exported so
  * the ContextManager recomputes item estimates identically when it rewrites
  * messages (microcompact / compaction summary) outside of append().
@@ -118,9 +127,11 @@ export function messageTokenText(message: ChatMessage): string {
     case "assistant":
       return message.content
         // Reasoning is stored only on routes that replay it, so it counts.
-        .map((part) =>
-          part.type === "tool_call" ? `${part.toolName} ${safeStringify(part.input)}` : part.text,
-        )
+        .map((part) => {
+          if (part.type === "tool_call") return `${part.toolName} ${safeStringify(part.input)}`;
+          if (part.type === "reasoning") return `${part.text}${redactedPayload(part.providerMetadata)}`;
+          return part.text;
+        })
         .join("\n");
     case "tool":
       return message.content.map((part) => part.text).join("\n");

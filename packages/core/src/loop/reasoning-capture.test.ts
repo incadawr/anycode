@@ -52,6 +52,89 @@ describe("ReasoningCapture (GitHub #41)", () => {
     ]);
   });
 
+  it("keeps text on both sides of a reasoning block as separate parts (review of #41)", () => {
+    const capture = new ReasoningCapture();
+    feed(capture, [
+      { type: "text_delta", id: "t1", text: "Before." },
+      { type: "reasoning_start", id: "r1" },
+      { type: "reasoning_delta", id: "r1", text: "Reason." },
+      { type: "reasoning_end", id: "r1", providerMetadata: sig("s1"), source },
+      { type: "text_delta", id: "t2", text: "After." },
+      { type: "tool_call", toolCall: { id: "c1", name: "Read", input: {} } },
+    ]);
+    // The loop joins all text into one leading part; weave must split it back.
+    expect(capture.weave([text("Before.After."), call("c1")])).toEqual([
+      text("Before."),
+      { type: "reasoning", text: "Reason.", providerMetadata: sig("s1"), source },
+      text("After."),
+      call("c1"),
+    ]);
+  });
+
+  it("replays thinking -> text -> thinking -> text in order", () => {
+    const capture = new ReasoningCapture();
+    feed(capture, [
+      { type: "reasoning_start", id: "r1" },
+      { type: "reasoning_delta", id: "r1", text: "one" },
+      { type: "reasoning_end", id: "r1", providerMetadata: sig("s1"), source },
+      { type: "text_delta", id: "t1", text: "A" },
+      { type: "reasoning_start", id: "r2" },
+      { type: "reasoning_delta", id: "r2", text: "two" },
+      { type: "reasoning_end", id: "r2", providerMetadata: sig("s2"), source },
+      { type: "text_delta", id: "t2", text: "B" },
+    ]);
+    expect(capture.weave([text("AB")])).toEqual([
+      { type: "reasoning", text: "one", providerMetadata: sig("s1"), source },
+      text("A"),
+      { type: "reasoning", text: "two", providerMetadata: sig("s2"), source },
+      text("B"),
+    ]);
+  });
+
+  it("merges text back together across a block that was not kept", () => {
+    const capture = new ReasoningCapture();
+    feed(capture, [
+      { type: "reasoning_start", id: "r1" },
+      { type: "reasoning_delta", id: "r1", text: "kept" },
+      { type: "reasoning_end", id: "r1", providerMetadata: sig("s1"), source },
+      { type: "text_delta", id: "t1", text: "A" },
+      { type: "reasoning_start", id: "r2" },
+      { type: "reasoning_delta", id: "r2", text: "cut off" },
+      { type: "text_delta", id: "t2", text: "B" },
+    ]);
+    expect(capture.weave([text("AB")])).toEqual([
+      { type: "reasoning", text: "kept", providerMetadata: sig("s1"), source },
+      text("AB"),
+    ]);
+  });
+
+  it("falls back to the loop's text if the stream text does not match", () => {
+    const capture = new ReasoningCapture();
+    feed(capture, [
+      { type: "reasoning_start", id: "r1" },
+      { type: "reasoning_delta", id: "r1", text: "r" },
+      { type: "reasoning_end", id: "r1", providerMetadata: sig("s1"), source },
+    ]);
+    expect(capture.weave([text("loop text"), call("c1")])).toEqual([
+      { type: "reasoning", text: "r", providerMetadata: sig("s1"), source },
+      text("loop text"),
+      call("c1"),
+    ]);
+  });
+
+  it("keeps the empty text part of a step that has only reasoning", () => {
+    const capture = new ReasoningCapture();
+    feed(capture, [
+      { type: "reasoning_start", id: "r1" },
+      { type: "reasoning_delta", id: "r1", text: "just thinking" },
+      { type: "reasoning_end", id: "r1", providerMetadata: sig("s1"), source },
+    ]);
+    expect(capture.weave([text("")])).toEqual([
+      { type: "reasoning", text: "just thinking", providerMetadata: sig("s1"), source },
+      text(""),
+    ]);
+  });
+
   it("keeps nothing when reasoning_end has no source (a route that does not replay)", () => {
     const capture = new ReasoningCapture();
     feed(capture, [
@@ -84,6 +167,7 @@ describe("ReasoningCapture (GitHub #41)", () => {
       { type: "reasoning_start", id: "r1" },
       { type: "reasoning_delta", id: "r1", text: "fresh" },
       { type: "reasoning_end", id: "r1", providerMetadata: sig("new"), source },
+      { type: "text_delta", id: "t", text: "ok" },
     ]);
     expect(capture.weave([text("ok")])).toEqual([
       { type: "reasoning", text: "fresh", providerMetadata: sig("new"), source },
@@ -150,5 +234,25 @@ describe("AgentLoop stores replayable reasoning (GitHub #41)", () => {
     for await (const _event of plain.runTurn("hi")) { /* drain */ }
     const plainAssistant = plain.history.items.find((item) => item.message.role === "assistant")!;
     expect(assistant.tokenEstimate!).toBeGreaterThan(plainAssistant.tokenEstimate!);
+  });
+
+  it("stores text before and after a reasoning block as two parts", async () => {
+    const port = scriptedPort([[
+      { type: "text_delta", id: "1", text: "Before." },
+      { type: "reasoning_start", id: "r" },
+      { type: "reasoning_delta", id: "r", text: "Reason." },
+      { type: "reasoning_end", id: "r", providerMetadata: sig("s"), source },
+      { type: "text_delta", id: "2", text: "After." },
+      finish,
+    ]]);
+    const loop = loopFor(port);
+    for await (const _event of loop.runTurn("hi")) { /* drain */ }
+
+    const assistant = loop.history.items.find((item) => item.message.role === "assistant")!;
+    expect(assistant.message.content).toEqual([
+      { type: "text", text: "Before." },
+      { type: "reasoning", text: "Reason.", providerMetadata: sig("s"), source },
+      { type: "text", text: "After." },
+    ]);
   });
 });
