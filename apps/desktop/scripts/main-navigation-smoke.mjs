@@ -39,8 +39,27 @@ try {
   cdp = await connectIsolatedCdp({ profile, env, launcher: app, wait });
   const call = (method, params = {}) => cdp.call(method, params);
   const evaluate = async expression => { const r = await call("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw new Error(JSON.stringify(r.exceptionDetails)); return r.result.value; };
+  console.log("Initial renderer:", await evaluate("JSON.stringify({url:location.href, bridge:typeof window.anycode})"));
   await wait(() => evaluate("!!window.anycode && !!document.querySelector('.sidebar-settings')"));
   const renderer = await evaluate("location.href");
+  if (!before) {
+    for (const [name, expression] of [
+      ["about anchor", "(()=>{const a=document.createElement('a');a.href='about:blank';document.body.append(a);a.click()})()"],
+      ["about query", "location.href='about:blank?x'"],
+      ["about fragment", "location.href='about:blank#x'"],
+      ["about self", "window.open('about:blank','_self'); null"],
+      ["javascript anchor", "(()=>{const a=document.createElement('a');a.href='javascript:1';document.body.append(a);a.click()})()"],
+      ["data anchor", "(()=>{const a=document.createElement('a');a.href='data:text/html,<p>Changed</p>';document.body.append(a);a.click()})()"],
+      ["blob", "location.href=URL.createObjectURL(new Blob(['<p>Changed</p>'],{type:'text/html'}))"],
+    ]) {
+      await evaluate(`setTimeout(() => { ${expression}; }, 50); true`);
+      await sleep(1200);
+      await wait(() => evaluate("!!window.anycode && !!document.querySelector('.sidebar-settings')").catch(() => false));
+      assert.equal(await evaluate("location.href"), renderer, `${name} replaced the renderer`);
+      assert.equal(await evaluate("typeof window.anycode"), "object");
+      console.log(`PASS after: ${name} cannot replace renderer`);
+    }
+  }
   const info = await wait(() => { try { return JSON.parse(readFileSync(join(profile, "automation.json"), "utf8")); } catch { return null; } });
   const api = async (method, path, body) => { const r = await cdp.automation(info, path, method, body); if (!r.ok) throw new Error(`${method} ${path} failed`); return r.result; };
 

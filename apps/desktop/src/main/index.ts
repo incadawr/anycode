@@ -918,6 +918,8 @@ function createWindow(): void {
   // sidebar cap); win32 hides its caption bar; every other platform is fully
   // frameless. backgroundColor kills the white flash on a frameless resize.
   const platform = process.platform;
+  const rendererDevServerUrl = process.env["ELECTRON_RENDERER_URL"];
+  const rendererUrl = rendererDevServerUrl ?? pathToFileURL(resolveRendererIndex()).href;
   win = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -934,11 +936,11 @@ function createWindow(): void {
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
+      additionalArguments: [`--anycode-renderer-url=${rendererUrl}`],
     },
   });
 
-  const rendererDevServerUrl = process.env["ELECTRON_RENDERER_URL"];
-  protectMainNavigation(win.webContents, rendererDevServerUrl ?? pathToFileURL(resolveRendererIndex()).href, shell.openExternal);
+  protectMainNavigation(win.webContents, rendererUrl, shell.openExternal);
 
   win.on("closed", () => {
     // Preview windows are their own real BrowserWindows: with any still open,

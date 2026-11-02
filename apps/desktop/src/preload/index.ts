@@ -17,6 +17,7 @@
  * Sandboxed CJS build — nothing else belongs here.
  */
 import { contextBridge, ipcRenderer } from "electron";
+import { isRendererUrl } from "../main/main-navigation.js";
 import { TAB_CLOSED_ENVELOPE_TYPE, HOST_EXITED_ENVELOPE_TYPE, PORT_ENVELOPE_TYPE, type PortEnvelope } from "../shared/envelopes.js";
 import {
   MCP_CONFIG_DELETE_CHANNEL,
@@ -672,6 +673,8 @@ export type ClaudeLoginStartResult =
 // { tabId, workspace }, the host-exited envelope carries { tabId }; preload just
 // re-stamps the `type` and re-posts (still window.postMessage, since
 
+const rendererUrl = process.argv.find((arg) => arg.startsWith("--anycode-renderer-url="))?.slice("--anycode-renderer-url=".length);
+if (rendererUrl && isRendererUrl(window.location.href, rendererUrl)) {
 ipcRenderer.on(
   PORT_ENVELOPE_TYPE,
   (
@@ -1422,3 +1425,4 @@ contextBridge.exposeInMainWorld("anycode", {
     },
   },
 });
+}
