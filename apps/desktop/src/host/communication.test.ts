@@ -192,6 +192,23 @@ describe("public result retrieval", () => {
       expect(f.h.session.communicationResult().latestResult?.publicAnswer).toBe("UNFINISHED_TEXT");
     } finally { f.h.close(); }
   });
+  it("returns a safe error for a failed turn", async () => {
+    const f = fixture();
+    f.engine.runTurn = async function* () {
+      yield { type: "error", error: new Error("private raw error"), safe: { code: "codex_usage_limit", message: "Try again at 1:13 PM." } };
+      yield { type: "loop_end", reason: "error", turns: 1 };
+    };
+    try {
+      f.h.send({ type: "ui_ready" });
+      await f.h.waitFor(isHostReady);
+      await f.h.session.receiveAgentMessage(f.make("failed"));
+      await f.h.waitUntil(() => f.h.session.communicationResult().latestResult !== null);
+      expect(f.h.session.communicationResult().latestResult).toMatchObject({ terminalReason: "error", publicAnswer: "Try again at 1:13 PM." });
+      await f.h.waitUntil(() => f.h.received.some((m) => m.type === "agent_event" && m.event.type === "error"));
+      const wire = f.h.received.find((m) => m.type === "agent_event" && m.event.type === "error");
+      expect(wire).toMatchObject({ event: { error: { message: "Try again at 1:13 PM." } } });
+    } finally { f.h.close(); }
+  });
   it("get_session_status and get_session_result report the same state at one moment", async () => {
     const f = fixture();
     f.engine.runTurn = async function* () {

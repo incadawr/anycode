@@ -12,7 +12,7 @@ import type { TelemetryEventRecord, TelemetryPort } from "../ports/telemetry.js"
  *  variant not listed — including any FUTURE variant — maps to null
  *  (fail-closed). Text-bearing fields (deltas, inputs, outputs, error
  *  messages, descriptions, labels, retry reasons, workflow names) are
- *  deliberately dropped. */
+ *  deliberately dropped, except classified Codex error messages. */
 export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | null {
   switch (event.type) {
     case "turn_end":
@@ -182,7 +182,7 @@ export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | nu
         ...(event.error !== undefined ? { error: true as const } : {}),
       };
     case "error":
-      return { t: "error" };
+      return { t: "error", ...((event.safe?.code === "codex_usage_limit" || event.safe?.code === "codex_error") ? { message: event.safe.message } : {}) };
     case "checkpoint_created":
       return { t: "checkpoint_created" };
     case "checkpoint_failed":

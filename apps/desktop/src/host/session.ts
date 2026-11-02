@@ -5276,8 +5276,9 @@ export class Session {
     const publicText = new Map<string, { text: string; truncated: boolean }>();
     let lastCompletedText: { text: string; truncated: boolean } | null = null;
     let nativeTurnId: string | null = null;
+    let turnErrorText: string | null = null;
     const recordResult = (terminalReason: SessionPublicResult["terminalReason"]) => {
-      this.latestPublicResult = { source: "live_turn", turnId, requestId, nativeTurnId, terminalReason, publicAnswer: lastCompletedText?.text ?? null, truncated: lastCompletedText?.truncated ?? false, completedAt: Date.now() };
+      this.latestPublicResult = { source: "live_turn", turnId, requestId, nativeTurnId, terminalReason, publicAnswer: terminalReason === "error" ? turnErrorText ?? lastCompletedText?.text ?? null : lastCompletedText?.text ?? null, truncated: terminalReason === "error" && turnErrorText !== null ? false : lastCompletedText?.truncated ?? false, completedAt: Date.now() };
       this.rememberTurnResult(turnId, this.latestPublicResult);
       // thread this turn's final assistant text OUT of runTurn
       // for the supervisor idle-watchdog's noteTurnSettled call — the accept
@@ -5358,6 +5359,10 @@ export class Session {
           // Core providers can finish a text stream without a separate text_end.
           for (const complete of publicText.values()) if (complete.text) lastCompletedText = { ...complete };
           publicText.clear();
+        }
+        if (event.type === "error") {
+          const wire = sanitizeAgentEvent(event, this.engine.id);
+          if (wire.type === "error") turnErrorText = wire.error.message;
         }
         if (event.type === "loop_end") recordResult(event.reason);
         // the foreign-engine telemetry seam — see SessionOptions.
