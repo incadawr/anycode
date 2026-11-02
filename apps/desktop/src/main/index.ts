@@ -777,6 +777,10 @@ function resolveRendererIndex(): string {
   return join(__dirname, "../renderer/index.html");
 }
 
+function resolveRendererUrl(): string {
+  return process.env["ELECTRON_RENDERER_URL"] ?? pathToFileURL(resolveRendererIndex()).href;
+}
+
 /**
  * M3 (CUT.md GAP 1): loads the md-preview WINDOW's `BrowserWindow`
  * with the SAME renderer bundle `createWindow()` loads for the main window,
@@ -919,7 +923,7 @@ function createWindow(): void {
   // frameless. backgroundColor kills the white flash on a frameless resize.
   const platform = process.platform;
   const rendererDevServerUrl = process.env["ELECTRON_RENDERER_URL"];
-  const rendererUrl = rendererDevServerUrl ?? pathToFileURL(resolveRendererIndex()).href;
+  const rendererUrl = resolveRendererUrl();
   win = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -2349,7 +2353,7 @@ void app.whenReady().then(async () => {
     // M3 (CUT.md GAP 1/CONTRACTS): the md-preview window container —
     // SAME preload path as the main window (resolvePreloadPath()), dev/
     // packaged URL construction closed over via loadMdPreviewWindow above.
-    createMdWindow: (opts) => createMdPreviewWindow(opts, { preloadPath: resolvePreloadPath(), loadRenderer: loadMdPreviewWindow }),
+    createMdWindow: (opts) => createMdPreviewWindow(opts, { preloadPath: resolvePreloadPath(), rendererUrl: resolveRendererUrl(), loadRenderer: loadMdPreviewWindow }),
     // D4: live read of settings.preview.displayMode, consulted only when
     // openForTab creates a NEW record. Absent -> "panel" (task decision),
     // same absent-default posture as autoOpenEnabled below.

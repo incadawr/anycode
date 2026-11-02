@@ -36,6 +36,7 @@ import type { MdPreviewWindowLike } from "./preview-host.js";
 export interface MdWindowAdapterDeps {
   /** The main window's own resolved preload path (main/index.ts's `resolvePreloadPath()`) — CUT.md GAP 1's "same preload path" requirement. */
   preloadPath: string;
+  rendererUrl: string;
   /**
    * Loads the SAME renderer bundle `win` should show under
    * `?view=md-preview&tabId=...&previewId=...` (CUT.md GAP 1: dev
@@ -62,6 +63,7 @@ export function createMdPreviewWindow(
     title: "Markdown Preview",
     webPreferences: {
       preload: deps.preloadPath,
+      additionalArguments: [`--anycode-renderer-url=${deps.rendererUrl}`],
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
