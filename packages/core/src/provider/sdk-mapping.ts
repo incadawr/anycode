@@ -157,7 +157,9 @@ export function shouldReplayReasoning(
     const anthropic = part.providerMetadata?.anthropic;
     return current.replayUnsigned === true || typeof anthropic?.signature === "string" || typeof anthropic?.redactedData === "string";
   }
-  if (transport === "openai-chat-completions") return part.text.length > 0;
+  if (transport === "openai-chat-completions") {
+    return current.replayFactual ? Boolean(part.factualSummary?.text.trim()) : part.text.length > 0;
+  }
   return false;
 }
 
