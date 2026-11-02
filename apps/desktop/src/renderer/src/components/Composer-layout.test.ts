@@ -18,13 +18,13 @@ describe("main window controls", () => {
       const file = resolve(directory, "fixture.html");
       writeFileSync(file, `<!doctype html><html data-theme="dark"><style>${css}</style><body>
         <div class="composer-footer"><button class="mode-chip mode-chip-build">Build</button><button class="model-pill-chip">Model</button><button class="composer-attach">+</button></div>
-        <span class="workflow-tick substatus-running"></span><span class="workflow-tick substatus-queued"></span>
+        <div class="workflow-ticks" style="width:30px;max-width:none"><span class="workflow-tick substatus-running"></span>${'<span class="workflow-tick substatus-queued"></span>'.repeat(8)}</div>
         <span class="ak-chip--selected">Selected</span><pre id="result"></pre>
         <script>
           const read = () => {
             const style = selector => getComputedStyle(document.querySelector(selector));
             const controls = ['.mode-chip', '.model-pill-chip', '.composer-attach'].map(selector => { const s=style(selector); return {height:s.height, background:s.backgroundColor, border:s.borderTopColor}; });
-            return {controls, controlBg:style('html').getPropertyValue('--bg-control').trim(), running:style('.substatus-running').borderRadius, queued:style('.substatus-queued').borderRadius, text:style('.ak-chip--selected').color, text1:style('html').getPropertyValue('--text-1').trim()};
+            return {controls, controlBg:style('html').getPropertyValue('--bg-control').trim(), running:style('.substatus-running').borderRadius, queued:style('.substatus-queued').borderRadius, runningWidth:document.querySelector('.substatus-running').getBoundingClientRect().width, queuedWidth:document.querySelector('.substatus-queued').getBoundingClientRect().width, text:style('.ak-chip--selected').color, text1:style('html').getPropertyValue('--text-1').trim()};
           };
           const dark=read(); document.documentElement.dataset.theme='light'; const light=read(); document.querySelector('#result').textContent=JSON.stringify({dark,light});
         </script></body></html>`);
@@ -32,12 +32,14 @@ describe("main window controls", () => {
       expect(run.status, run.stderr).toBe(0);
       const match = run.stdout.match(/<pre id="result">([^<]+)<\/pre>/);
       expect(match).not.toBeNull();
-      const result = JSON.parse(match![1]!) as Record<string, {controls:Array<{height:string; background:string; border:string}>; running:string; queued:string; text:string}>;
+      const result = JSON.parse(match![1]!) as Record<string, {controls:Array<{height:string; background:string; border:string}>; running:string; queued:string; runningWidth:number; queuedWidth:number; text:string}>;
       for (const state of Object.values(result)) {
         expect(state.controls.map(control => control.height)).toEqual(["28px", "28px", "28px"]);
         expect(new Set(state.controls.map(control => control.background)).size).toBe(1);
         expect(new Set(state.controls.map(control => control.border)).size).toBe(1);
         expect(state.running).not.toBe(state.queued);
+        expect(state.queuedWidth).toBe(2);
+        expect(state.runningWidth).toBeGreaterThanOrEqual(6);
       }
       expect(result.dark!.text).toBe("rgb(236, 233, 227)");
       expect(result.light!.text).toBe("rgb(28, 26, 23)");
