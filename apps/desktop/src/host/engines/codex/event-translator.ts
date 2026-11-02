@@ -8,6 +8,7 @@ import { type AgentEvent, type CodexRateLimitsWire, type FinishReason, type Tool
 import type { JsonRpcNotification } from "./protocol.js";
 import type { TurnItemIndex } from "./turn-item-index.js";
 import { CollabAgentCardIndex } from "./collab-agent-index.js";
+import { parseCodexUsageLimitNotice } from "../../../shared/usage-limit.js";
 
 /** One sub-tool-call a single native item projects to — a `fileChange` with N files projects to N of these. */
 type ToolProjection = { toolCallId: string; toolName: string; input: unknown };
@@ -202,15 +203,30 @@ const CODEX_ERROR_MESSAGES: Record<string, string> = {
   activeTurnNotSteerable: "The active Codex turn cannot be steered.",
 };
 
+function retryDate(message: string): string | undefined {
+  const epoch = /resets?[ _]?at["'\s:=]+(\d{10})\b/i.exec(message);
+  if (epoch) return new Date(Number(epoch[1]) * 1000).toISOString().replace(".000Z", "Z");
+  const wall = /\b(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?(Z|[+-]\d{2}:?\d{2})?(?![\d:])/i.exec(message);
+  if (!wall) return undefined;
+  const [, y, m, d, h, min, s = "00", zone] = wall;
+  const parts = [y, m, d, h, min, s].map(Number);
+  const [year, month, day, hour, minute, second] = parts as [number, number, number, number, number, number];
+  const check = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+  if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day || check.getUTCHours() !== hour || check.getUTCMinutes() !== minute || check.getUTCSeconds() !== second) return undefined;
+  const time = zone ? Date.parse(`${y}-${m}-${d}T${h}:${min}:${s}${zone}`) : new Date(year, month - 1, day, hour, minute, second).getTime();
+  return Number.isFinite(time) ? new Date(time).toISOString().replace(".000Z", "Z") : undefined;
+}
+
 function codexTurnError(value: Record<string, unknown> | null): Extract<AgentEvent, { type: "error" }> {
   const info = value?.codexErrorInfo;
   const key = typeof info === "string" ? info : Object.keys(record(info) ?? {}).find((k) => Object.hasOwn(CODEX_ERROR_MESSAGES, k));
-  const usageLimit = key === "usageLimitExceeded" || key === "usage_limit_exceeded";
+  const message = typeof value?.message === "string" ? value.message : "";
+  const usageLimit = key === "usageLimitExceeded" || key === "usage_limit_exceeded" || parseCodexUsageLimitNotice(message) !== null;
   let safeMessage = key && Object.hasOwn(CODEX_ERROR_MESSAGES, key) ? CODEX_ERROR_MESSAGES[key]! : "Codex ended the turn with an error";
   if (usageLimit) {
-    const message = typeof value?.message === "string" ? value.message : "";
     const retry = /\btry again at ([1-9]|1[0-2]):([0-5][0-9]) ?(AM|PM)\b/i.exec(message);
-    safeMessage = `This account has reached its usage limit.${retry ? ` Try again at ${Number(retry[1])}:${retry[2]} ${retry[3]!.toUpperCase()}.` : ""}`;
+    const date = retryDate(message);
+    safeMessage = `This account has reached its usage limit.${date ? ` Try again at ${date}.` : retry ? ` Try again at ${Number(retry[1])}:${retry[2]} ${retry[3]!.toUpperCase()}.` : ""}`;
   }
   return { type: "error", error: new Error(safeMessage), safe: { code: usageLimit ? "codex_usage_limit" : "codex_error", message: safeMessage } };
 }
@@ -423,6 +439,7 @@ export class TurnTranslator {
   private lastPlanKey: string | null = null;
   /** Latches the ONE terminal `{type:"error"}` event a turn may ever emit (cut §2(i)) — a live `error` notification and a fallback in `finish()` must never double-report the same failure. */
   private errorEmitted = false;
+  private genericErrorEmitted = false;
 
   constructor(private readonly options: TurnTranslatorOptions) {
     this.collab = options.collab ?? new CollabAgentCardIndex();
@@ -1099,13 +1116,14 @@ export class TurnTranslator {
    */
   private onError(params: Record<string, unknown>): AgentEvent[] {
     const errorValue = record(params.error);
-    const message = typeof errorValue?.message === "string" && errorValue.message.length > 0 ? errorValue.message : "Codex reported an error.";
     if (params.willRetry === true) {
-      return [{ type: "engine_notice", level: "retry", message }];
+      return [{ type: "engine_notice", level: "retry", message: codexTurnError(errorValue).safe!.message }];
     }
     if (this.errorEmitted || typeof errorValue?.message !== "string" || errorValue.message.length === 0) return [];
     this.errorEmitted = true;
-    return [codexTurnError(errorValue)];
+    const event = codexTurnError(errorValue);
+    this.genericErrorEmitted = event.safe!.message === "Codex ended the turn with an error";
+    return [event];
   }
 
   private finish(params: Record<string, unknown>): AgentEvent[] {
@@ -1121,10 +1139,11 @@ export class TurnTranslator {
     // separate `error` notification preceded `turn/completed` (cut §2(i)) —
     // never just a faceless loop_end:"error". `errorEmitted` prevents a
     // double-report when the live `error` notification already fired.
-    if (loopReason === "error" && !this.errorEmitted) {
+    if (loopReason === "error" && (!this.errorEmitted || this.genericErrorEmitted)) {
       const turnError = record(turn?.error);
+      const event = codexTurnError(turnError);
       this.errorEmitted = true;
-      events.push(codexTurnError(turnError));
+      if (!this.genericErrorEmitted || event.safe!.message !== "Codex ended the turn with an error") events.push(event);
     }
     for (const id of this.openText) events.push({ type: "text_end", id });
     this.openText.clear();
