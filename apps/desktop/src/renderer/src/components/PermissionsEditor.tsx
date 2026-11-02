@@ -1,3 +1,4 @@
+import { Button } from "../ui/index.js";
 /**
  * Grouped always-allow rules editor (Settings "Permissions" pane, slice
  * P7.16 §4.1/§5 W3, design/slice-P7.16-cut.md). Replaces the flat
@@ -295,14 +296,13 @@ export function PermissionsEditor({ store = useSettingsStore }: PermissionsEdito
           disabled={readOnly}
           onChange={(e) => setPatternInput(e.target.value)}
         />
-        <button
+        <Button size="sm" variant="primary"
           type="button"
-          className="settings-button settings-button-primary"
           disabled={!canAdd}
           onClick={() => void handleAdd()}
         >
           Add
-        </button>
+        </Button>
       </div>
 
       {/*
@@ -366,9 +366,8 @@ export function PermissionsEditor({ store = useSettingsStore }: PermissionsEdito
               />
             </>
           )}
-          <button
+          <Button size="sm" variant="primary"
             type="button"
-            className="settings-button settings-button-primary"
             disabled={readOnly || buildClassifierRecord(classifierKind, {
               command: classifierCommand,
               connectionId: classifierConnectionId,
@@ -386,10 +385,9 @@ export function PermissionsEditor({ store = useSettingsStore }: PermissionsEdito
             }}
           >
             Save
-          </button>
-          <button
+          </Button>
+          <Button size="sm" variant="secondary"
             type="button"
-            className="settings-button"
             disabled={readOnly || storedClassifier === undefined}
             onClick={() => {
               // null crosses the bridge (deepMerge skips undefined), and the
@@ -404,7 +402,7 @@ export function PermissionsEditor({ store = useSettingsStore }: PermissionsEdito
             }}
           >
             Remove
-          </button>
+          </Button>
         </div>
       )}
       {classifierEnabled && (

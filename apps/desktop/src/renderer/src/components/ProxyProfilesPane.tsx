@@ -17,6 +17,7 @@
  * Tests are `.test.ts` (node, no jsdom — see ProxySection's docstring), so the
  * pane's rules live in exported pure helpers.
  */
+import { Button } from "../ui/index.js";
 import { useState } from "react";
 import { useStore } from "zustand";
 import type { AnycodeSettings } from "../../../shared/settings.js";
@@ -134,9 +135,8 @@ export function ProxyProfilesPane({ store = useSettingsStore }: ProxyProfilesPan
                   <span className="settings-mcp-detail">
                     {consumers.length === 0 ? "Not referenced" : `Used by ${consumers.join(", ")}`}
                   </span>
-                  <button
+                  <Button size="sm"
                     type="button"
-                    className="settings-button"
                     disabled={readOnly}
                     onClick={() => {
                       setError(null);
@@ -144,15 +144,14 @@ export function ProxyProfilesPane({ store = useSettingsStore }: ProxyProfilesPan
                     }}
                   >
                     Edit
-                  </button>
-                  <button
+                  </Button>
+                  <Button size="sm" variant="danger"
                     type="button"
-                    className="settings-button settings-button-danger"
                     disabled={readOnly || deleting !== null}
                     onClick={() => void handleDelete(profile.id)}
                   >
                     {deleting === profile.id ? "Deleting…" : "Delete"}
-                  </button>
+                  </Button>
                 </div>
               );
             })}
@@ -166,9 +165,8 @@ export function ProxyProfilesPane({ store = useSettingsStore }: ProxyProfilesPan
         )}
 
         <div className="settings-field-row">
-          <button
+          <Button size="sm" variant="primary"
             type="button"
-            className="settings-button settings-button-primary"
             disabled={readOnly}
             onClick={() => {
               setError(null);
@@ -176,7 +174,7 @@ export function ProxyProfilesPane({ store = useSettingsStore }: ProxyProfilesPan
             }}
           >
             New profile
-          </button>
+          </Button>
         </div>
       </section>
 

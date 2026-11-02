@@ -1,3 +1,4 @@
+import { Button, IconButton, Switch, Input, Textarea } from "../ui/index.js";
 /**
  * MCP Servers settings pane (P7.19/F22 W3/W3-FIX, design/slice-P7.19-cut.md
  * §1/§4 W3): replaces the old status-only thin list (slice 3.2/R16) with a
@@ -605,14 +606,13 @@ export function McpSecretsPanel({
           {sortedSecretNames(names).map((secretName) => (
             <li key={secretName} className="mcp-secret-row">
               <code className="settings-mcp-name">{secretReferenceSnippet(secretName)}</code>
-              <button
+              <Button
                 type="button"
-                className="settings-button"
                 aria-label={`Delete secret ${secretName}`}
                 onClick={() => onDelete(secretName)}
               >
                 Delete
-              </button>
+              </Button>
             </li>
           ))}
         </ul>
@@ -636,9 +636,9 @@ export function McpSecretsPanel({
           value={value}
           onChange={(e) => setValue(e.target.value)}
         />
-        <button type="submit" className="settings-button settings-button-primary" disabled={!canSave}>
+        <Button variant="primary" type="submit" disabled={!canSave}>
           Save secret
-        </button>
+        </Button>
         {nameError !== undefined && <span className="settings-field-hint" role="alert">{nameError}</span>}
       </form>
       {error !== null && (
@@ -857,14 +857,11 @@ export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConf
       {visibleProblems.map((problem) => (
         <div key={problem} className="mcp-problem-strip" role="alert">
           <span>{problem}</span>
-          <button
+          <IconButton
             type="button"
-            className="mcp-problem-dismiss"
-            aria-label="Dismiss"
+            label="Dismiss"
             onClick={() => setDismissedProblems((prev) => new Set(prev).add(problem))}
-          >
-            <X />
-          </button>
+           icon={<X />} />
         </div>
       ))}
 
@@ -883,12 +880,12 @@ export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConf
                 <div className="settings-mcp-empty">{emptyKind === "no_match" ? "No servers match your search." : "No MCP servers configured yet."}</div>
                 {emptyKind === "none" && (
                   <div className="mcp-empty-actions">
-                    <button type="button" className="settings-button settings-button-primary" onClick={openAddForm}>
+                    <Button variant="primary" type="button" onClick={openAddForm}>
                       Add server
-                    </button>
-                    <button type="button" className="settings-button" onClick={() => void openImportDialog()}>
+                    </Button>
+                    <Button type="button" onClick={() => void openImportDialog()}>
                       Import
-                    </button>
+                    </Button>
                   </div>
                 )}
               </div>
@@ -1009,7 +1006,7 @@ interface McpRowItemProps {
   onPromote?: () => void;
 }
 
-function McpRowItem({
+export function McpRowItem({
   row,
   confirmDelete,
   onToggle,
@@ -1042,31 +1039,27 @@ function McpRowItem({
 
       <div className="mcp-row-controls">
         {isCompat ? (
-          <button type="button" className="settings-button mcp-promote-button" onClick={onPromote}>
+          <Button size="sm" type="button" onClick={onPromote}>
             Import to project
-          </button>
+          </Button>
         ) : confirmDelete ? (
           <span className="mcp-confirm-row">
             <span className="mcp-confirm-text">Delete "{entry.name}"?</span>
-            <button type="button" className="settings-button settings-button-danger" onClick={onConfirmDelete}>
+            <Button size="sm" variant="danger" type="button" onClick={onConfirmDelete}>
               Delete
-            </button>
-            <button type="button" className="settings-button" onClick={onCancelDelete}>
+            </Button>
+            <Button size="sm" type="button" onClick={onCancelDelete}>
               Cancel
-            </button>
+            </Button>
           </span>
         ) : (
           <>
-            <button
+            <Switch
               type="button"
-              role="switch"
-              aria-checked={entry.enabled}
+              checked={entry.enabled}
               aria-label={`${entry.enabled ? "Disable" : "Enable"} ${entry.name}`}
-              className={`settings-switch${entry.enabled ? " settings-switch-on" : ""}`}
-              onClick={onToggle}
-            >
-              <span className="settings-switch-thumb" />
-            </button>
+              onCheckedChange={onToggle}
+             />
             <button type="button" className="mcp-icon-button" aria-label={`Edit ${entry.name}`} onClick={onEdit}>
               <Pencil />
             </button>
@@ -1156,16 +1149,13 @@ export function McpFormDialog({ mode, fields, error, scopeMode, onChange, onCanc
         <span className="mcp-dialog-title">{mode === "add" ? "Add MCP server" : `Edit ${fields.name}`}</span>
       </div>
       <div className="mcp-dialog-body">
-        <label className="settings-field">
-          <span className="settings-field-label">Name</span>
-          <input
-            className="settings-field-input"
+        <Input size="sm" label="Name"
+
             type="text"
             value={fields.name}
             disabled={mode === "edit"}
             onChange={(e) => set("name", e.target.value)}
           />
-        </label>
 
         {/* the scope radio is gone — the write target is the
             pane's header scope bar (ScopeSwitcher), restated here as a hint so
@@ -1194,40 +1184,28 @@ export function McpFormDialog({ mode, fields, error, scopeMode, onChange, onCanc
 
         {fields.transport === "stdio" ? (
           <>
-            <label className="settings-field">
-              <span className="settings-field-label">Command</span>
-              <input
-                className="settings-field-input"
+            <Input size="sm" label="Command"
+
                 type="text"
                 value={fields.command}
                 placeholder="node"
                 onChange={(e) => set("command", e.target.value)}
               />
-            </label>
-            <label className="settings-field">
-              <span className="settings-field-label">Arguments (one per line)</span>
-              <textarea
-                className="settings-field-input mcp-textarea"
+            <Textarea label="Arguments (one per line)"
+                className="mcp-textarea"
                 value={fields.argsText}
                 onChange={(e) => set("argsText", e.target.value)}
               />
-            </label>
-            <label className="settings-field">
-              <span className="settings-field-label">Working directory (optional)</span>
-              <input className="settings-field-input" type="text" value={fields.cwd} onChange={(e) => set("cwd", e.target.value)} />
-            </label>
+            <Input size="sm" label="Working directory (optional)" type="text" value={fields.cwd} onChange={(e) => set("cwd", e.target.value)} />
           </>
         ) : (
-          <label className="settings-field">
-            <span className="settings-field-label">URL</span>
-            <input
-              className="settings-field-input"
+          <Input size="sm" label="URL"
+
               type="text"
               value={fields.url}
               placeholder="https://…"
               onChange={(e) => set("url", e.target.value)}
             />
-          </label>
         )}
 
         <div className="settings-field">
@@ -1263,15 +1241,13 @@ export function McpFormDialog({ mode, fields, error, scopeMode, onChange, onCanc
                     value={row.value}
                     onChange={(e) => setEnvValue(index, e.target.value)}
                   />
-                  <button type="button" className="mcp-icon-button" aria-label="Remove variable" onClick={() => removeEnvRow(index)}>
-                    <X />
-                  </button>
+                  <IconButton type="button" label="Remove variable" onClick={() => removeEnvRow(index)} icon={<X />} />
                 </div>
               ),
             )}
-            <button type="button" className="settings-button" onClick={addEnvRow}>
+            <Button type="button" onClick={addEnvRow}>
               Add variable
-            </button>
+            </Button>
           </div>
           <span className="settings-field-hint">
             Typed values are saved in the config file as written. For a token, prefer a reference:{" "}
@@ -1280,16 +1256,12 @@ export function McpFormDialog({ mode, fields, error, scopeMode, onChange, onCanc
         </div>
 
         <div className="settings-field-row">
-          <button
+          <Switch
             type="button"
-            role="switch"
-            aria-checked={fields.enabled}
+            checked={fields.enabled}
             aria-labelledby="mcp-form-enabled-caption"
-            className={`settings-switch${fields.enabled ? " settings-switch-on" : ""}`}
-            onClick={() => set("enabled", !fields.enabled)}
-          >
-            <span className="settings-switch-thumb" />
-          </button>
+            onCheckedChange={() => set("enabled", !fields.enabled)}
+           />
           <span id="mcp-form-enabled-caption" className="settings-switch-caption">
             Enabled
           </span>
@@ -1302,12 +1274,12 @@ export function McpFormDialog({ mode, fields, error, scopeMode, onChange, onCanc
         )}
       </div>
       <div className="mcp-dialog-actions">
-        <button type="button" className="settings-button" onClick={onCancel}>
+        <Button type="button" onClick={onCancel}>
           Cancel
-        </button>
-        <button type="button" className="settings-button settings-button-primary" disabled={!canSubmit} onClick={onSubmit}>
+        </Button>
+        <Button variant="primary" type="button" disabled={!canSubmit} onClick={onSubmit}>
           {mode === "add" ? "Add server" : "Save changes"}
-        </button>
+        </Button>
       </div>
     </dialog>
   );
@@ -1328,7 +1300,7 @@ interface McpImportDialogProps {
   onClose: () => void;
 }
 
-function McpImportDialog({
+export function McpImportDialog({
   scan,
   selection,
   consent,
@@ -1438,17 +1410,16 @@ function McpImportDialog({
         )}
       </div>
       <div className="mcp-dialog-actions">
-        <button type="button" className="settings-button" onClick={onClose}>
+        <Button type="button" onClick={onClose}>
           Close
-        </button>
-        <button
+        </Button>
+        <Button variant="primary"
           type="button"
-          className="settings-button settings-button-primary"
           disabled={selectedImportIds(selection).length === 0}
           onClick={onApply}
         >
           {importFooterLabel(selection)}
-        </button>
+        </Button>
       </div>
     </dialog>
   );

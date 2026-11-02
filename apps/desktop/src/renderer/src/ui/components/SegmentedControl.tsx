@@ -1,3 +1,6 @@
+import { useRef } from "react";
+import { useRovingTabindex } from "./useRovingTabindex.js";
+
 export interface SegmentedOption<T extends string> {
   value: T;
   label: string;
@@ -38,6 +41,18 @@ export function SegmentedControl<T extends string>(
 ): React.ReactElement {
   const { options, label, className } = props;
   const isMulti = props.multiple === true;
+  const buttons = useRef<(HTMLButtonElement | null)[]>([]);
+  const selectedIndex = isMulti ? -1 : options.findIndex(option => option.value === props.value && !option.disabled);
+  const roving = useRovingTabindex({
+    count: options.length, orientation: "both", activeIndex: selectedIndex,
+    isDisabled: index => Boolean(options[index]?.disabled),
+    onActiveIndexChange: index => {
+      if (!isMulti && options[index]) {
+        props.onChange(options[index].value);
+        buttons.current[index]?.focus();
+      }
+    },
+  });
   const classes = ["ak-seg", className ?? ""].filter(Boolean).join(" ");
 
   return (
@@ -46,7 +61,7 @@ export function SegmentedControl<T extends string>(
       role={isMulti ? "group" : "radiogroup"}
       aria-label={label}
     >
-      {options.map((option) => {
+      {options.map((option, index) => {
         if (isMulti) {
           const selected = props.value.includes(option.value);
           return (
@@ -75,6 +90,9 @@ export function SegmentedControl<T extends string>(
             role="radio"
             className="ak-seg__item"
             aria-checked={selected}
+            ref={element => { buttons.current[index] = element; }}
+            tabIndex={roving.tabIndexFor(index)}
+            onKeyDown={roving.onKeyDown(index)}
             disabled={option.disabled}
             onClick={() => props.onChange(option.value)}
           >

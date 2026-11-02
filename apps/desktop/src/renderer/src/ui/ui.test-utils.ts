@@ -17,16 +17,23 @@ export function mount(element: ReactElement) {
 export const click = (element: HTMLElement) => act(() => element.click());
 export const key = (value: string, target: Element | null = document.activeElement, shiftKey = false) =>
   act(() => { target?.dispatchEvent(new KeyboardEvent("keydown", {key:value, shiftKey, bubbles:true, cancelable:true})); });
+/** Текст элемента без содержимого, скрытого от скринридера (aria-hidden). */
+function visibleText(el: Element | null): string {
+  if (!el) return "";
+  const clone = el.cloneNode(true) as Element;
+  for (const hidden of clone.querySelectorAll("[aria-hidden=\"true\"]")) hidden.remove();
+  return clone.textContent ?? "";
+}
 export function accessibleName(el: Element): string {
   const labelledby = el.getAttribute("aria-labelledby");
-  if (labelledby) return labelledby.split(/\s+/).map(id => document.getElementById(id)?.textContent ?? "").join(" ");
+  if (labelledby) return labelledby.split(/\s+/).map(id => visibleText(document.getElementById(id))).join(" ").trim();
   if (el.hasAttribute("aria-label")) return el.getAttribute("aria-label")!;
   if (el instanceof HTMLInputElement || el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement)
-    return [...(el.labels ?? [])].map(label => label.textContent).join(" ").trim();
-  return el.textContent?.trim() ?? "";
+    return [...(el.labels ?? [])].map(label => visibleText(label)).join(" ").trim();
+  return visibleText(el).trim();
 }
 export function byRole(root: ParentNode, role: string, name?: string | RegExp): HTMLElement {
-  const implicit: Record<string, string> = { button: "button", dialog: "dialog", textbox: 'input:not([type]),input[type=text],textarea', searchbox:'input[type=search]', combobox:'select', img:'svg[role=img]' };
+  const implicit: Record<string, string> = { button: "button", dialog: "dialog", textbox: 'input:not([type]),input[type=text],textarea', searchbox:'input[type=search]', combobox:'select', img:'svg[role=img]', checkbox:'input[type=checkbox]', radio:'input[type=radio]', switch:'button[role=switch]' };
   const elements = [...root.querySelectorAll<HTMLElement>(`[role="${role}"]${implicit[role] ? ','+implicit[role] : ''}`)]
     .filter(el => !el.hasAttribute("role") || el.getAttribute("role") === role);
   const found = elements.find(el => name === undefined || (typeof name === "string" ? accessibleName(el) === name : name.test(accessibleName(el))));

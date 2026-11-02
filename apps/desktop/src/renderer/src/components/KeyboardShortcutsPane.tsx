@@ -26,6 +26,7 @@
  * state); the listener is attached/removed by the recording-keyed effect, so
  * there is never a leaked handler.
  */
+import { Button } from "../ui/index.js";
 import { useEffect, useMemo, useState } from "react";
 import { useStore } from "zustand";
 import type { DesktopPlatform } from "../../../shared/window.js";
@@ -437,23 +438,21 @@ export function KeyboardShortcutsPane({ store = useSettingsStore }: KeyboardShor
                   {recording?.action === row.action && recording.slotIndex === row.bindings.length && (
                     <RecordingChip error={recordError} />
                   )}
-                  <button
+                  <Button size="sm" data-automation="shortcuts-add"
                     type="button"
-                    className="settings-button shortcuts-add-button"
                     disabled={readOnly}
                     onClick={() => startRecording(row.action, row.bindings.length)}
                   >
                     + Add
-                  </button>
+                  </Button>
                   {row.overridden && (
-                    <button
+                    <Button size="sm" data-automation="shortcuts-reset"
                       type="button"
-                      className="settings-button shortcuts-reset-button"
                       disabled={readOnly}
                       onClick={() => void handleReset(row.action)}
                     >
                       Reset
-                    </button>
+                    </Button>
                   )}
                   <button
                     type="button"

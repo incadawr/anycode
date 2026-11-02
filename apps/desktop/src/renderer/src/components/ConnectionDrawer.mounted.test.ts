@@ -372,7 +372,7 @@ it("uses a secondary Cancel and protects unsaved changes for Cancel, Escape, and
   const rig = catalogRig(connection), onClose = vi.fn();
   const {container, root} = await mountDrawer(connection, rig, onClose);
   try {
-    expect([...container.querySelectorAll("button")].filter(b => b.classList.contains("settings-button-primary")).map(b => b.textContent?.trim())).toEqual(["Save"]);
+    expect([...container.querySelectorAll("button")].filter(b => b.classList.contains("ak-btn--primary")).map(b => b.textContent?.trim())).toEqual(["Save"]);
     await typeInto(container.querySelector('input[placeholder="e.g. Work, Personal"]')!, "changed");
     const cancel = [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Cancel")!;
     await act(async () => { cancel.focus(); cancel.click(); });

@@ -1,4 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, type ReactNode, type RefObject } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, type ReactNode, type RefObject } from "react";
+
+export const MenuCloseContext = createContext<(() => void) | null>(null);
 
 export interface PopoverPosition { x: number; y: number }
 export interface PopoverProps {
@@ -46,7 +48,7 @@ export function Popover({ open, onClose, position, heading, children, className,
       if (!ref.current?.contains(node) && !trigger.current?.contains(node)) onClose();
     };
     // Escape has one owner, including when focus was moved outside the menu.
-    const key = (event: KeyboardEvent) => { if (event.key === "Escape") { event.preventDefault(); onClose(); } };
+    const key = (event: KeyboardEvent) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onClose(); } };
     document.addEventListener("mousedown", pointer); document.addEventListener("keydown", key);
     return () => { document.removeEventListener("mousedown", pointer); document.removeEventListener("keydown", key); };
   }, [open, onClose]);
@@ -54,6 +56,7 @@ export function Popover({ open, onClose, position, heading, children, className,
   return <div ref={ref} className={["ak-popover", className].filter(Boolean).join(" ")} role="menu" aria-label={heading}
     onFocus={event => { for (const row of rowsIn(event.currentTarget)) row.tabIndex = row === (event.target as Element) ? 0 : -1; }}
     onKeyDown={event => {
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onClose(); return; }
       const rows = rowsIn(event.currentTarget); if (!rows.length) return;
       const index = rows.indexOf(document.activeElement as HTMLButtonElement);
       let next: number;
@@ -76,13 +79,20 @@ export interface MenuItemProps {
   selected?: boolean;
   checkable?: boolean;
   disabled?: boolean;
+  /** Пункт — текущий (aria-current="true"). */
+  active?: boolean;
   onSelect?: () => void;
   children?: ReactNode;
 }
-export function MenuItem({ label, description, selected = false, checkable = false, disabled = false, onSelect, children }: MenuItemProps): React.ReactElement {
+/**
+ * Пункт меню. Роль фиксирована: `menuitem` либо `menuitemcheckbox`
+ * (тогда `aria-checked`). `selected` — отмеченный пункт, `active` — текущий.
+ */
+export function MenuItem({ label, description, selected = false, checkable = false, disabled = false, active = false, onSelect, children }: MenuItemProps): React.ReactElement {
+  const closeMenu = useContext(MenuCloseContext);
   return <button type="button" role={checkable ? "menuitemcheckbox" : "menuitem"} aria-checked={checkable ? selected : undefined}
-    aria-disabled={disabled || undefined} disabled={disabled} tabIndex={-1}
-    className={["ak-popover__row", selected ? "is-on" : ""].filter(Boolean).join(" ")} onClick={onSelect}>
+    aria-disabled={disabled || undefined} aria-current={active ? "true" : undefined} disabled={disabled} tabIndex={-1}
+    className={["ak-popover__row", selected ? "is-on" : "", active ? "is-active" : ""].filter(Boolean).join(" ")} onClick={() => { onSelect?.(); closeMenu?.(); }}>
     {children}<span>{label}</span>{description && <span className="ak-popover__desc">{description}</span>}
   </button>;
 }

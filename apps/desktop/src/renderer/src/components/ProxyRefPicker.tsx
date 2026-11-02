@@ -22,6 +22,7 @@
  * Tests are `.test.ts` (node, no jsdom) — every rule below is an exported pure
  * function; see ProxySection.tsx's docstring for the full rationale.
  */
+import { Button } from "../ui/index.js";
 import { useState } from "react";
 import { useStore } from "zustand";
 import type { AnycodeSettings } from "../../../shared/settings.js";
@@ -364,9 +365,9 @@ export function ProxyRefPicker({ scope, store = useSettingsStore, value, onChang
 
       {!controlled && (
         <div className="settings-field-row">
-          <button type="button" className="settings-button" disabled={readOnly || saving} onClick={() => void handleSave()}>
+          <Button type="button" disabled={readOnly || saving} onClick={() => void handleSave()}>
             Save
-          </button>
+          </Button>
         </div>
       )}
 

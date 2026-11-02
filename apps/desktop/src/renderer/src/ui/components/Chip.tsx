@@ -11,6 +11,8 @@ export interface ChipProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   label?: string;
   /** Переопределить иконку режима. */
   icon?: ReactNode;
+  /** Выбранное состояние: `aria-pressed="true"` + акцентная подсветка. */
+  selected?: boolean;
   disabled?: boolean;
   children?: ReactNode;
 }
@@ -39,6 +41,7 @@ export function Chip({
   mode,
   label,
   icon,
+  selected,
   disabled = false,
   className,
   children,
@@ -48,6 +51,7 @@ export function Chip({
   const classes = [
     "ak-chip",
     mode ? `ak-chip--${mode}` : "",
+    selected ? "ak-chip--selected" : "",
     className ?? "",
   ]
     .filter(Boolean)
@@ -66,7 +70,13 @@ export function Chip({
   );
 
   return (
-    <button type={type} className={classes} disabled={disabled} {...rest}>
+    <button
+      type={type}
+      className={classes}
+      disabled={disabled}
+      aria-pressed={selected}
+      {...rest}
+    >
       {content}
       {children}
     </button>

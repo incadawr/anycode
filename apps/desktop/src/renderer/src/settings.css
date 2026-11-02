@@ -831,20 +831,6 @@
   color: var(--text-2);
 }
 
-.vision-pane-state-badge {
-  font-size: var(--fs-xs);
-  padding: 0.15rem 0.55rem;
-  border-radius: var(--r-full);
-  background: var(--bg-inset);
-  color: var(--text-2);
-  white-space: nowrap;
-}
-
-.vision-pane-state-badge-on {
-  background: var(--success-soft);
-  color: var(--success);
-}
-
 .settings-env-warning {
   font-size: var(--fs-xs);
   color: var(--warning);
@@ -1423,12 +1409,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.settings-mcp-transport {
-  flex: none;
-  font-size: var(--fs-2xs);
-  color: var(--text-3);
 }
 
 .settings-mcp-detail {

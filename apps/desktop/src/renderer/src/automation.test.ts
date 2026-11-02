@@ -5072,12 +5072,12 @@ describe("automation facade — MCP pane add-server driver (item 4)", () => {
     };
     const formDialogObj: Record<string, unknown> = {
       querySelectorAll: (sel: string) => {
-        if (sel === ".settings-field") {
+        if (sel === ".settings-field, .ak-field") {
           return renderedFieldLabels().map((label) => ({
             querySelector: (s: string) =>
-              s === ".settings-field-label"
+              s === ".settings-field-label, .ak-field__label"
                 ? { textContent: ` ${label} ` }
-                : s === "input.settings-field-input" || s === "textarea.settings-field-input"
+                : s === "input" || s === "textarea"
                   ? textInputs.get(label)
                   : null,
           }));
@@ -5089,7 +5089,7 @@ describe("automation facade — MCP pane add-server driver (item 4)", () => {
         return [];
       },
       querySelector: (sel: string) => {
-        if (sel === ".mcp-dialog-actions .settings-button-primary") {
+        if (sel === ".mcp-dialog-actions .ak-btn--primary") {
           // canSubmit gates on name + command/url, read from COMMITTED state —
           // exactly the real `canSubmitMcpForm` gate the plan leans on.
           return {
@@ -9014,6 +9014,13 @@ describe("automation facade — provider connections grid/drawer probe/driver (W
   });
 
   describe("settingsProviderDrawerSaveKey / settingsProviderDrawerClearKey", () => {
+    it("SaveKey reports unavailable OAuth sign-in", async () => {
+      const dom = fakeProviderPaneDom({ drawer: drawerState({ authKind: "oauth", saveKeyEnabled: false, oauthSignInUnavailable: true }) });
+      const facade = buildFacade(settingsStoreWith(null), dom);
+      await expect(facade.settingsProviderDrawerSaveKey()).resolves.toEqual({ ok: false, reason: "oauth_sign_in_unavailable" });
+      expect(dom.clickDrawerSaveKey).not.toHaveBeenCalled();
+    });
+
     it("SaveKey refuses with save_key_disabled without clicking when disabled", async () => {
       const dom = fakeProviderPaneDom({ drawer: drawerState({ saveKeyEnabled: false }) });
       const facade = buildFacade(settingsStoreWith(null), dom);
