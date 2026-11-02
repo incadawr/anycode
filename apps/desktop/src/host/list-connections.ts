@@ -1,15 +1,17 @@
 import { getBuiltinCatalog } from "@anycode/core/catalog";
-import type { ConnectionTargets } from "@anycode/core";
+import { resolveEffortLevels, resolveImageInput, type ConnectionTargets } from "@anycode/core";
+import { connectionRoutingSettings } from "../shared/child-model.js";
+import { createConnectionModelSettings } from "./connection-model-settings.js";
 import type { AnycodeSettings } from "../shared/settings.js";
 
 /** Project only routing information; never return connection records themselves. */
 export function listConnectionTargets(settings: AnycodeSettings, connectionId?: string, model?: string): ConnectionTargets {
   return {
     current: { connectionId, model },
-    connections: settings.provider.connections.map(connection => {
+    connections: connectionRoutingSettings(settings, connectionId, model).provider.connections.map(connection => {
       const catalog = getBuiltinCatalog().providers.find(p => p.id === connection.providerId);
-      const custom = settings.provider.custom?.find(p => p.id === connection.providerId);
-      const ids = [...new Set([connection.model, ...(connection.id === connectionId ? [model] : []), ...(connection.models ?? []), ...(custom?.models ?? []), ...(catalog?.models.map(m => m.id) ?? [])].filter((id): id is string => Boolean(id)))];
+      const ids = connection.models;
+      const effective = createConnectionModelSettings({ connection, catalogEntry: catalog, liveCapabilitiesFor: id => connection.modelCapabilities?.[id] });
       return {
         id: connection.id,
         label: connection.label,
@@ -17,15 +19,13 @@ export function listConnectionTargets(settings: AnycodeSettings, connectionId?: 
         transport: connection.transport ?? catalog?.defaultTransport,
         readiness: connection.lastHealth?.status ?? "unknown",
         models: ids.map(id => {
-          const entry = catalog?.models.find(m => m.id === id);
-          const live = connection.modelCapabilities?.[id];
-          const override = connection.modelOverrides?.[id];
-          const imageInput = connection.imageInputModel === id && connection.imageInputOverride !== undefined
-            ? connection.imageInputOverride === "on" : live?.imageInput ?? entry?.imageInput;
+          const imageOverride = connection.imageInputModel === id && connection.imageInputOverride !== undefined
+            ? connection.imageInputOverride : undefined;
           return {
-            id, imageInput,
-            contextWindow: override?.contextWindowTokens ?? live?.contextWindow ?? entry?.contextWindow,
-            effortLevels: override?.effortLevels ?? live?.effortLevels ?? entry?.effortLevels,
+            id,
+            imageInput: resolveImageInput(id, effective.entryFor(id), imageOverride, modelId => connection.modelCapabilities?.[modelId]?.imageInput),
+            contextWindow: effective.contextFor(id).tokens,
+            effortLevels: resolveEffortLevels(id, effective.entryFor(id), effective.capabilitiesFor(id), effective.effortLevelsFor(id)),
             default: id === connection.model,
           };
         }),

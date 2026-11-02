@@ -19,7 +19,7 @@ import { BROWSER_ACCESS_CHANGED_CHANNEL, BROWSER_ACCESS_HOST_MESSAGE_TYPE } from
 import { stdioAdapterForHost } from "./communication-adapter.js";
 import { createSelfCheckProfile, selfCheckEnvironment, runSelfCheck, selfCheckStorage, selfCheckBinaryFs, checkReloadProtection } from "./self-check.js";
 import { buildApplicationMenuTemplate, confirmReloadIfBusy, isReloadAccelerator } from "./application-menu.js";
-import { assertChildModel, connectionChildModels } from "../shared/child-model.js";
+import { assertChildModel, connectionChildModels, connectionRoutingSettings } from "../shared/child-model.js";
 /**
 
  * thin process: no agent logic. It owns the window, workspace/env resolution,
@@ -2671,7 +2671,7 @@ void app.whenReady().then(async () => {
         return result.ok ? `Model ${JSON.stringify(model)} is unavailable on this connection.` : result.detail;
       }
     },
-    resolveChildRoute: (value) => resolveCoreConnectionForModel(currentSettings(), value),
+    resolveChildRoute: (value) => resolveCoreConnectionForModel(connectionRoutingSettings(currentSettings(), currentSettings().provider.activeConnectionId, bootEnv.ANYCODE_MODEL), value),
     resolveProviderConnection: (provider) =>
       settings === null ? undefined : resolveProviderConnection(settings, provider)?.id,
     // a profile's EXACT `connection:` id, checked against the live

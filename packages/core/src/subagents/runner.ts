@@ -976,7 +976,7 @@ export function createSubagentRunner(
       let routeModel: string | undefined;
       if ((req.provider !== undefined || req.model !== undefined) && opts?.readConnectionTargets) {
         let route;
-        try { route = resolveInlineRoute(opts.readConnectionTargets(), req.provider, req.model); }
+        try { route = resolveInlineRoute(opts.readConnectionTargets(), req.provider); }
         catch { route = { ok: false as const, detail: "Connection information is unavailable." }; }
         if (!route.ok) {
           return { status: "error", finalText: `Agent: ${route.detail}`, truncated: false, turns: 0, toolCalls: 0, durationMs: Date.now() - startedAt };
@@ -985,7 +985,7 @@ export function createSubagentRunner(
       } else if (req.provider !== undefined) {
         return { status: "error", finalText: "Agent: provider selection is unavailable in this host.", truncated: false, turns: 0, toolCalls: 0, durationMs: Date.now() - startedAt };
       }
-      let requestedModel: string | undefined = routeModel ?? req.model ?? persona.model ?? exploreDefault;
+      let requestedModel: string | undefined = req.model ?? routeModel ?? persona.model ?? exploreDefault;
       // §3.2 (generalised from the 4131 follow-up): route entries
       // are HOST-CONFIGURED conveniences, not the caller's intent. If resolving
       // a chain entry fails (the id is disallowed/unknown on the ACTIVE
