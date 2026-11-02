@@ -1424,6 +1424,54 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     return { deps, calls };
   }
 
+  it.each([
+    ["anthropic", "https://api.anthropic.com", "https://api.anthropic.com/v1/models"],
+    ["kimi", "https://api.kimi.com/coding", "https://api.kimi.com/coding/v1/models"],
+    ["openai", "https://api.openai.com/v1", "https://api.openai.com/v1/models"],
+  ])("fetches the resolved draft catalog URL for %s", async (catalogProviderId, baseUrl, expected) => {
+    const requests: string[] = [];
+    const { deps } = makeCatalogDeps({
+      fetchModels: fetchCustomProviderModels,
+      preparedConnectionFetch: () => async input => {
+        requests.push(String(input));
+        return new Response(JSON.stringify({ data: [{ id: "model" }] }), { status: 200 });
+      },
+    });
+    const result = await handleCustomProviderFetchModels(deps, { draft: true, catalogProviderId, baseUrl, apiKey: "fixture", kind: "openai-compatible" });
+    expect(result.ok).toBe(true);
+    expect(requests).toEqual([expected]);
+  });
+
+  it("uses a catalog models URL for an unmodified draft", async () => {
+    const network = vi.fn(async (_input: string | URL | Request) => new Response(JSON.stringify({ data: [{ id: "model" }] }), { status: 200 }));
+    const { deps } = makeCatalogDeps({ fetchModels: fetchCustomProviderModels, preparedConnectionFetch: () => network });
+    const result = await handleCustomProviderFetchModels(deps, { draft: true, catalogProviderId: "deepseek", baseUrl: "https://api.deepseek.com", useCatalogModelsUrl: true });
+    expect(result.ok).toBe(true);
+    expect(String(network.mock.calls[0]![0])).toBe("https://api.deepseek.com/models");
+  });
+
+  it("uses the draft proxy and rejects an invalid proxy without fetching", async () => {
+    await seedConnection({ id: "existing", providerId: "kimi" });
+    const raw = JSON.parse(await readFile(settingsPath, "utf8"));
+    raw.network = { proxyProfiles: [{ id: "proxy-one", name: "One", mode: "manual", url: "http://proxy.test:8080" }] };
+    await writeFile(settingsPath, JSON.stringify(raw));
+    const routes: unknown[] = [];
+    const network = vi.fn(async () => new Response(JSON.stringify({ data: [{ id: "model" }] }), { status: 200 }));
+    const { deps } = makeCatalogDeps({ fetchModels: fetchCustomProviderModels, preparedConnectionFetch: route => { routes.push(route); return network; } });
+    const draft = { draft: true, catalogProviderId: "kimi", baseUrl: "https://api.kimi.com/coding", apiKey: "fixture" };
+    expect((await handleCustomProviderFetchModels(deps, { ...draft, proxyRef: "proxy-one" })).ok).toBe(true);
+    expect(routes[0]).toMatchObject({ kind: "proxy", proxy: { url: "http://proxy.test:8080/" } });
+    expect(network).toHaveBeenCalledOnce();
+    expect(await handleCustomProviderFetchModels(deps, { ...draft, proxyRef: "missing" })).toEqual({ ok: false, reason: "network_error" });
+    expect(network).toHaveBeenCalledOnce();
+    expect(routes).toHaveLength(1);
+    const unavailable = vi.fn(async () => { throw new Error("proxy unavailable"); });
+    deps.preparedConnectionFetch = () => unavailable;
+    expect(await handleCustomProviderFetchModels(deps, { ...draft, proxyRef: "proxy-one" })).toEqual({ ok: false, reason: "network_error" });
+    expect(unavailable).toHaveBeenCalledOnce();
+    expect(network).toHaveBeenCalledOnce();
+  });
+
   it("previews fetched models without mutating the connection", async () => {
     await seedConnection({ id: "conn-1", providerId: "kimi", models: ["old"] });
     const { deps } = makeCatalogDeps();
