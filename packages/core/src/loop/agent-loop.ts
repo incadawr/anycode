@@ -35,6 +35,7 @@ import type {
   TokenUsage,
 } from "../types/events.js";
 import type { AssistantPart, ChatMessage } from "../types/history.js";
+import { ReasoningCompactionError } from "../provider/reasoning-compactor.js";
 import { ReasoningCapture } from "./reasoning-capture.js";
 import type { ImageAttachment } from "../types/images.js";
 import type { ToolCallOutcome } from "../types/tools.js";
@@ -1535,7 +1536,7 @@ export class AgentLoop {
           disposeTurnAbortLink();
         }
 
-        if (signal?.aborted) {
+        if (signal?.aborted && !sawFinish) {
           yield* this.emitLoopEnd("cancelled", turn, signal, turnId, turn);
           return;
         }
@@ -1565,8 +1566,27 @@ export class AgentLoop {
         // count anchors the delta correctly (design §2.5), then append the
         // assistant message and report context_usage.
         this.context.noteUsage(usage);
-        let assistantParts = degenerationVerdict ? buildAssistantParts(textParts.join(""), toolCalls) : reasoningCapture.weave(buildAssistantParts(textParts.join(""), toolCalls));
-        if (this.config.modelPort.compactReasoning !== undefined) assistantParts = await this.config.modelPort.compactReasoning(assistantParts, signal);
+        let assistantParts = degenerationVerdict
+          ? buildAssistantParts(textParts.join(""), toolCalls)
+          : reasoningCapture.weave(buildAssistantParts(textParts.join(""), toolCalls));
+        let reasoningCompactorStatus: "failed" | "cancelled" | undefined;
+        let reasoningCompactorUsage: TokenUsage[] = [];
+        try {
+          if (signal?.aborted) throw signal.reason;
+          if (this.config.modelPort.compactReasoning !== undefined) {
+            assistantParts = await this.config.modelPort.compactReasoning(assistantParts, signal);
+          }
+          reasoningCompactorUsage = assistantParts.flatMap(part =>
+            part.type === "reasoning" && part.factualSummary !== undefined
+              ? [part.factualSummary.usage] : [],
+          );
+        } catch (error) {
+          // A completed response must survive compactor failure, including cancellation.
+          reasoningCompactorStatus = signal?.aborted ? "cancelled" : "failed";
+          if (error instanceof ReasoningCompactionError && error.usage !== undefined) {
+            reasoningCompactorUsage = [error.usage];
+          }
+        }
         this.history.append(
           {
             role: "assistant",
@@ -1578,11 +1598,17 @@ export class AgentLoop {
         const usageEstimate = this.context.estimate();
         yield {
           type: "context_usage",
-          ...(assistantParts.some(p => p.type === "reasoning" && p.factualSummary !== undefined) ? { reasoningCompactorUsage: assistantParts.flatMap(p => p.type === "reasoning" && p.factualSummary !== undefined ? [p.factualSummary.usage] : []) } : {}),
+          ...(reasoningCompactorUsage.length > 0 ? { reasoningCompactorUsage } : {}),
+          ...(reasoningCompactorStatus !== undefined ? { reasoningCompactorStatus } : {}),
           estimatedTokens: usageEstimate.tokens,
           budgetTokens: this.budgetTokens,
           source: usageEstimate.source,
         };
+
+        if (signal?.aborted) {
+          yield* this.emitLoopEnd("cancelled", turn, signal, turnId, turn);
+          return;
+        }
 
         // Sentinel: a step with no proposed tool calls ends the loop.
         if (toolCalls.length === 0) {

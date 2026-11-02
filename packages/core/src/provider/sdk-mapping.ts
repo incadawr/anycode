@@ -124,7 +124,7 @@ function toSdkAssistantContent(
   for (const part of parts) {
     if (part.type === "reasoning") {
       if (allowReasoning && shouldReplayReasoning(part, transport, reasoningReplay)) {
-        const summary = reasoningReplay?.replayOriginal ? undefined : part.factualSummary;
+        const summary = reasoningReplay?.replayFactual ? part.factualSummary : undefined;
         const metadata = summary === undefined ? part.providerMetadata : undefined;
         const anthropic = metadata?.anthropic;
         const needsSignature = transport === "anthropic-messages" && reasoningReplay?.replayUnsigned === true &&
@@ -151,6 +151,7 @@ export function shouldReplayReasoning(
   current: ReasoningSource | undefined,
 ): boolean {
   if (current === undefined || part.source === undefined) return false;
+  if (current.replayFactual && !part.factualSummary?.text.trim()) return false;
   if (!sameReasoningSource(part.source, current)) return false;
   if (transport === "anthropic-messages") {
     const anthropic = part.providerMetadata?.anthropic;

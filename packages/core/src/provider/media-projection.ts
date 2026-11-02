@@ -13,7 +13,7 @@
 
 import type { ModelPort, ModelRequest } from "../ports/model.js";
 import type { ModelStreamEvent } from "../types/events.js";
-import type { ChatMessage } from "../types/history.js";
+import type { AssistantPart, ChatMessage } from "../types/history.js";
 
 /** Wire-only replacement text for an omitted image; carries the ref when the attachment has one (plan §3). */
 function omittedImageNote(ref: number | undefined): string {
@@ -85,6 +85,10 @@ class MediaProjectionModelPort implements ModelPort {
     private readonly inner: ModelPort,
     private readonly imageInputAllowed: () => boolean,
   ) {}
+
+  async compactReasoning(parts: AssistantPart[], signal?: AbortSignal): Promise<AssistantPart[]> {
+    return this.inner.compactReasoning?.(parts, signal) ?? parts;
+  }
 
   reasoningReplaySource(effort?: ModelRequest["reasoningEffort"]) {
     return this.inner.reasoningReplaySource?.(effort);

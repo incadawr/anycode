@@ -386,10 +386,14 @@ function readPositiveInteger(env: NodeJS.ProcessEnv, name: string): number | und
   return parsed;
 }
 
-export function readReasoningHistory(env: NodeJS.ProcessEnv): "none" | "full" | `factual_${number}` | undefined {
+export function readReasoningHistory(
+  env: NodeJS.ProcessEnv,
+): "none" | "full" | `factual_${number}` | undefined {
   const value = env.ANYCODE_REASONING_HISTORY;
   if (value === undefined || value === "") return undefined;
   if (value === "none" || value === "full") return value;
-  if (/^factual_[1-9][0-9]*$/.test(value) && Number.isSafeInteger(Number(value.slice(8)))) return value as `factual_${number}`;
+  if (/^factual_[1-9][0-9]*$/.test(value) && Number.isSafeInteger(Number(value.slice(8)))) {
+    return value as `factual_${number}`;
+  }
   throw new Error("Invalid ANYCODE_REASONING_HISTORY: expected none, full or factual_N with a positive safe integer cap");
 }

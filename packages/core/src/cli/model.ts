@@ -7,6 +7,7 @@
  * into core type-only plus the one normalizeAnthropicBaseUrl value import).
  */
 
+import type { AssistantPart } from "../types/history.js";
 import type { ModelPort, ModelRequest } from "../ports/model.js";
 import type { ModelStreamEvent } from "../types/events.js";
 import type { CatalogModel, CatalogProviderEntry, ProviderCatalog } from "../provider/catalog.js";
@@ -36,6 +37,10 @@ export class SwitchableModelPort implements ModelPort {
   /** Replaces the underlying port for all subsequent `streamText` calls. */
   setPort(next: ModelPort): void {
     this.current = next;
+  }
+
+  async compactReasoning(parts: AssistantPart[], signal?: AbortSignal): Promise<AssistantPart[]> {
+    return this.current.compactReasoning?.(parts, signal) ?? parts;
   }
 
   reasoningReplaySource(effort?: ModelRequest["reasoningEffort"]) {
