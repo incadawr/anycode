@@ -687,6 +687,17 @@
 
 .settings-field-input,
 .settings-field-select {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-size: var(--fs-md);
+  padding: 0.35rem 0.5rem;
+  flex: 1;
+}
+
+:where(.settings-screen) .settings-field-input:where(:not(.connection-drawer *)),
+:where(.settings-screen) .settings-field-select:where(:not(.connection-drawer *)) {
   min-width: 0;
   min-height: var(--ctl-h-md);
   background: var(--bg-control);
@@ -748,6 +759,22 @@
 }
 
 .settings-button {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  padding: 0.35rem 0.8rem;
+  white-space: nowrap;
+}
+
+.settings-button:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+:where(.settings-screen) .settings-button:where(:not(.connection-drawer *)) {
   min-height: var(--ctl-h-md);
   background: var(--bg-control);
   border: 1px solid var(--border-strong);
@@ -761,7 +788,8 @@
   white-space: nowrap;
 }
 
-.settings-button:hover:not(:disabled) {
+:where(.settings-screen) .settings-button:where(:not(.connection-drawer *)):hover:not(:disabled) {
+  background: var(--bg-control);
   border-color: var(--text-3);
   color: var(--text-1);
 }
@@ -780,6 +808,9 @@
 .settings-button-primary:hover:not(:disabled) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
+}
+
+:where(.settings-screen) .settings-button-primary:where(:not(.connection-drawer *)):hover:not(:disabled) {
   color: var(--on-accent);
 }
 
@@ -790,9 +821,12 @@
 }
 
 .settings-button-danger:hover:not(:disabled) {
-  color: var(--danger);
   background: var(--danger-soft);
   border-color: var(--danger);
+}
+
+:where(.settings-screen) .settings-button-danger:where(:not(.connection-drawer *)):hover:not(:disabled) {
+  color: var(--danger);
 }
 
 /* ── secret status badge: soft-pill, no hard border (UI-6 handoff pattern) ── */
