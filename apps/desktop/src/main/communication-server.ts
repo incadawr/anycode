@@ -106,7 +106,7 @@ export type CreateSessionRequest = {
 export type CreateSessionOutcome = { ok: true; sessionId: string; tabId: string; handle?: string } | { ok: false; reason: Exclude<CreateSessionRefusal, "rate_limited">; detail?: string };
 const CREATE_REFUSAL_TEXT: { [K in CreateSessionRefusal]: string } = {
   not_allowed: "the project does not allow agents to open tasks (sidebar project menu, off by default)",
-  not_trusted: "the folder is not trusted in AnyCode",
+  not_trusted: "the folder is not trusted in AnyCode; use the project sidebar menu to turn on Allow agents to open tasks here and trust the folder, or open the folder and approve its project settings",
   folder_not_found: "the workspace folder does not exist",
   rate_limited: `at most ${CREATE_SESSION_RATE_LIMIT} sessions per minute`,
   too_many: `at most ${MAX_AGENT_OPENED_TABS} agent-opened sessions alive at once`,

@@ -29,6 +29,8 @@ import { startCommunicationServer } from "./communication-server.js";
 import { SqlitePersistenceAdapter } from "@anycode/core";
 import { AGENT_MESSAGE_HEADER_PREFIX } from "../shared/communication.js";
 import { createSessionForAgent, type CreateSessionByAgentDeps } from "./create-session-by-agent.js";
+import { offerEmptyFolderTrust } from "./workspace-trust-ipc.js";
+import { readTrustStore, defaultTrustStorePath } from "@anycode/core/workspace-trust";
 import { primeNewSessionPin, type ResumePinResult } from "./session-pin.js";
 import { TabHostManager, type HostForkFn, type WindowLike } from "./tabs.js";
 import type { SessionAccessStore } from "./communication-sessions.js";
@@ -251,6 +253,22 @@ function rig(options: {
 }
 
 describe("create_session — the production creation path primes a non-active connection before the fork", () => {
+  it("opens an empty folder after the owner trusts it", async () => {
+    const files = new Map<string, string>();
+    const fs = {
+      exists: async (p: string) => files.has(p),
+      readFile: async (p: string) => { const value = files.get(p); if (value === undefined) throw new Error("missing"); return value; },
+      writeFile: async (p: string, value: string) => { files.set(p, value); },
+      rename: async (from: string, to: string) => { files.set(to, files.get(from)!); files.delete(from); },
+      stat: async () => ({ size: 0, mtimeMs: 0, isFile: true, isDirectory: false }),
+      mkdir: async () => {}, readdir: async () => [],
+    };
+    const r = rig();
+    const deps = r.deps({ readTrustStore: () => readTrustStore(fs, defaultTrustStorePath("/home/test")) });
+    expect(await createSessionForAgent({ workspace: "/ws" }, deps)).toEqual({ ok: false, reason: "not_trusted" });
+    await offerEmptyFolderTrust(fs, fs, "/ws", "/home/test", (p) => p, async () => true);
+    expect((await createSessionForAgent({ workspace: "/ws" }, deps)).ok).toBe(true);
+  });
   it("a core `model` naming the NON-active GLM connection forks with THAT connection's env", async () => {
     const r = rig();
     const outcome = await createSessionForAgent({ workspace: "/ws", engine: "core", model: "glm-5.3" }, r.deps());
@@ -652,6 +670,7 @@ describe("agent title resume wiring (production create_session → handle rename
         stdioScriptPath: () => null,
         realpath: async (path) => path,
         agentProjects: createAgentProjectsStore({ file: join(dir, "projects.json"), realpathSync: (path) => path }),
+        offerEmptyFolderTrust: async () => {},
         realpathSync: (path) => path,
         homedir: () => dir,
         stat: async () => ({ isDirectory: () => true }),

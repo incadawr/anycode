@@ -74,6 +74,7 @@ function rig(over: { env?: string; picked?: string | undefined; script?: string 
   const deps: CommunicationIpcDeps = {
     settingsPath,
     agentProjects,
+    offerEmptyFolderTrust: async () => {},
     realpathSync,
     homedir: () => realpathSync(dir),
     logger: { warn: () => {}, error: () => {} },
@@ -91,6 +92,15 @@ function rig(over: { env?: string; picked?: string | undefined; script?: string 
 }
 
 describe("Sessions API IPC — writes go through the dedicated channel", () => {
+  it("offers folder trust when the project switch is enabled", async () => {
+    const { deps } = rig();
+    const offer = vi.fn(async () => {});
+    deps.offerEmptyFolderTrust = offer;
+    await handleAgentProjectsSet(deps, { workspace: workspaceA, enabled: true });
+    expect(offer).toHaveBeenCalledWith(workspaceA);
+    await handleAgentProjectsSet(deps, { workspace: workspaceA, enabled: false });
+    expect(offer).toHaveBeenCalledTimes(1);
+  });
   it("get reflects the saved block and reports envControlled false", async () => {
     const { deps } = rig();
     const result = await handleCommunicationGet(deps, {});

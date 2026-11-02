@@ -24,9 +24,11 @@ import {
   defaultTrustStorePath,
   forgetTrustDecision,
   readTrustStore,
+  resolveWorkspaceTrust,
   writeTrustDecision,
   type TrustStoreFs,
 } from "@anycode/core/workspace-trust";
+import type { FileSystemPort } from "@anycode/core";
 import {
   WORKSPACE_TRUST_DECIDE_CHANNEL,
   WORKSPACE_TRUST_FORGET_CHANNEL,
@@ -104,6 +106,42 @@ export function queueStoreMutation<T>(op: () => Promise<T>): Promise<T> {
   // error; later ops must not be skipped).
   storeMutations.tail = next.catch(() => undefined);
   return next;
+}
+
+export async function confirmEmptyFolderTrust(
+  workspace: string,
+  show: (options: { type: "question"; buttons: string[]; defaultId: number; cancelId: number; message: string; detail: string }) => Promise<{ response: number }>,
+): Promise<boolean> {
+  const answer = await show({
+    type: "question",
+    buttons: ["Trust folder", "Not now"],
+    defaultId: 1,
+    cancelId: 1,
+    message: "Trust this folder?",
+    detail: `Agents can open tasks here only if the folder is trusted. This folder currently declares no project settings.\n\n${workspace}`,
+  });
+  return answer.response === 0;
+}
+
+export async function offerEmptyFolderTrust(
+  fs: FileSystemPort,
+  storeFs: TrustStoreFs,
+  workspace: string,
+  home: string,
+  realpathSync: (path: string) => string,
+  confirm: (workspace: string) => Promise<boolean>,
+): Promise<void> {
+  const storePath = defaultTrustStorePath(home);
+  const probe = () => resolveWorkspaceTrust(fs, { workspace, home, storePath, realpathSync });
+  const initial = await probe();
+  const store = await readTrustStore(storeFs, storePath);
+  if (initial.items.length || store.folders[initial.folder]?.decision === "trusted") return;
+  if (!(await confirm(workspace))) return;
+  await queueStoreMutation(async () => {
+    const current = await probe();
+    if (current.items.length) return;
+    await writeTrustDecision(storeFs, storePath, current.folder, "trusted", current.hash);
+  });
 }
 
 /** The in-memory "trust once" hash for a workspace, if the user approved it this run. */

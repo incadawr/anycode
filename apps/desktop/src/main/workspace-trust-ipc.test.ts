@@ -8,6 +8,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   handleWorkspaceTrustDecide,
+  offerEmptyFolderTrust,
+  confirmEmptyFolderTrust,
   handleWorkspaceTrustForget,
   handleWorkspaceTrustList,
   workspaceTrustOnceFor,
@@ -96,6 +98,40 @@ function makeDeps(overrides: Partial<WorkspaceTrustIpcDeps> = {}) {
   };
   return { deps, restarts, cleared };
 }
+
+describe("offerEmptyFolderTrust", () => {
+  it("shows a safe-default confirmation with the folder and trust action", async () => {
+    const show = vi.fn(async () => ({ response: 0 }));
+    expect(await confirmEmptyFolderTrust(WS, show)).toBe(true);
+    expect(show).toHaveBeenCalledWith(expect.objectContaining({
+      buttons: ["Trust folder", "Not now"], defaultId: 1, cancelId: 1,
+      detail: expect.stringContaining(WS),
+    }));
+    show.mockResolvedValue({ response: 1 });
+    expect(await confirmEmptyFolderTrust(WS, show)).toBe(false);
+  });
+  it("asks the owner and stores a valid decision only on consent", async () => {
+    const fs = makeFs();
+    const projectFs = { ...fs, stat: async () => ({ size: 0, mtimeMs: 0, isFile: true, isDirectory: false }), mkdir: async () => {}, readdir: async () => [] };
+    const confirm = vi.fn(async () => false);
+    await offerEmptyFolderTrust(projectFs, fs, WS, HOME, (p) => p, confirm);
+    expect(confirm).toHaveBeenCalledWith(WS);
+    expect((await readTrustStore(fs, STORE)).folders).toEqual({});
+    confirm.mockResolvedValue(true);
+    await offerEmptyFolderTrust(projectFs, fs, WS, HOME, (p) => p, confirm);
+    expect((await readTrustStore(fs, STORE)).folders[WS]).toMatchObject({ decision: "trusted", hash: expect.stringMatching(/^[a-f0-9]{64}$/) });
+  });
+
+  it("does not trust if declarations appear during confirmation", async () => {
+    const fs = makeFs();
+    const projectFs = { ...fs, stat: async () => ({ size: 0, mtimeMs: 0, isFile: true, isDirectory: false }), mkdir: async () => {}, readdir: async () => [] };
+    await offerEmptyFolderTrust(projectFs, fs, WS, HOME, (p) => p, async () => {
+      fs.files.set(`${WS}/.mcp.json`, JSON.stringify({ mcpServers: { test: { command: "test" } } }));
+      return true;
+    });
+    expect((await readTrustStore(fs, STORE)).folders).toEqual({});
+  });
+});
 
 describe("handleWorkspaceTrustDecide", () => {
   it("'trust' persists trusted for the tab's own folder and hash, then restarts that tab", async () => {
