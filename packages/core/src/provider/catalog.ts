@@ -207,6 +207,13 @@ export interface CatalogProviderEntry {
    * `anthropic-messages` (desktop's readiness gate, cut Risk #3).
    */
   authOptional?: boolean;
+  /**
+   * Replay the model's reasoning to this endpoint on later requests (GitHub
+   * #41): interleaved thinking in a tool loop and preserved thinking across
+   * turns. Only for providers that document it. Absent = off, which is also
+   * the default for custom endpoints (ANYCODE_PRESERVE_REASONING overrides).
+   */
+  preserveReasoning?: boolean;
 }
 
 export interface ProviderCatalog {

@@ -1799,8 +1799,7 @@ const defaultScheduler: FrameScheduler = {
 //     persisted, an honest limitation (design §8).
 //   - `tool` message -> no block of its own; it is only consumed above for
 //     pairing.
-//   - reasoning is never part of `ChatMessage` (Phase 1 does not persist it)
-//     -> absent from the hydrated transcript, by construction.
+//   - persisted reasoning -> a collapsed reasoning block.
 // Block id = `${item.id}:${partIdx}` (`item.id` is the persisted item's own
 // stable uuid) — a `user` item has exactly one part, so its id is
 // `${item.id}:0`.
@@ -1878,6 +1877,11 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
       const id = `${item.id}:${partIdx}`;
       if (part.type === "text") {
         blocks.push({ kind: "assistant_text", id, text: part.text });
+        return;
+      }
+      if (part.type === "reasoning") {
+        // Replayable reasoning (GitHub #41) shows as a finished, collapsed block.
+        if (part.text !== "") blocks.push({ kind: "reasoning", id, text: part.text, collapsed: true });
         return;
       }
       const result = results.get(part.toolCallId);

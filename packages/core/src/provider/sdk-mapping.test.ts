@@ -7,9 +7,9 @@
  */
 
 import { describe, expect, it } from "vitest";
-import type { ChatMessage } from "../types/history.js";
+import type { AssistantPart, AssistantReasoningPart, ChatMessage, ReasoningSource } from "../types/history.js";
 import type { ImageAttachment } from "../types/images.js";
-import { OPENAI_TOOL_RESULT_IMAGE_OMITTED_NOTE, toSdkMessages } from "./sdk-mapping.js";
+import { OPENAI_TOOL_RESULT_IMAGE_OMITTED_NOTE, sameReasoningSource, toSdkMessages } from "./sdk-mapping.js";
 
 const IMG: ImageAttachment = { mediaType: "image/png", data: "QUJD" };
 
@@ -211,5 +211,100 @@ describe("toSdkMessages presentation invisibility (slice S1 W3, CUT-S1 §3 W3 it
       "anthropic-messages",
     );
     expect(withPresentation).toEqual(withoutPresentation);
+  });
+});
+
+describe("toSdkMessages: reasoning replay (GitHub #41)", () => {
+  const zai: ReasoningSource = { transport: "anthropic-messages", provider: "Z.AI (GLM)", baseUrl: "https://api.z.ai/api/anthropic", model: "glm-5.3" };
+  const signed: AssistantReasoningPart = { type: "reasoning", text: "think", providerMetadata: { anthropic: { signature: "sig" } }, source: zai };
+  const call = { type: "tool_call" as const, toolCallId: "c1", toolName: "Read", input: {} };
+  const assistant = (...content: AssistantPart[]): ChatMessage =>
+    ({ role: "assistant", content });
+
+  it("emits a signed reasoning part, in order, when the source matches", () => {
+    const [message] = toSdkMessages([assistant(signed, call)], "anthropic-messages", zai);
+    expect(message).toEqual({
+      role: "assistant",
+      content: [
+        { type: "reasoning", text: "think", providerOptions: { anthropic: { signature: "sig" } } },
+        { type: "tool-call", toolCallId: "c1", toolName: "Read", input: {} },
+      ],
+    });
+  });
+
+  it("keeps redacted thinking", () => {
+    const redacted: AssistantReasoningPart = { type: "reasoning", text: "", providerMetadata: { anthropic: { redactedData: "blob" } }, source: zai };
+    const [message] = toSdkMessages([assistant(redacted, call)], "anthropic-messages", zai);
+    expect((message!.content as unknown[])[0]).toEqual({ type: "reasoning", text: "", providerOptions: { anthropic: { redactedData: "blob" } } });
+  });
+
+  it("drops reasoning when replay is off for the route", () => {
+    const [message] = toSdkMessages([assistant(signed, call)], "anthropic-messages");
+    expect(message!.content).toEqual([{ type: "tool-call", toolCallId: "c1", toolName: "Read", input: {} }]);
+  });
+
+  it("drops reasoning from another model, endpoint, provider or transport", () => {
+    for (const current of [
+      { ...zai, model: "glm-5.3-flash" },
+      { ...zai, baseUrl: "https://other.example/anthropic" },
+      { ...zai, provider: "MiniMax" },
+      { transport: "anthropic-messages", baseUrl: zai.baseUrl, model: zai.model },
+    ]) {
+      const [message] = toSdkMessages([assistant(signed, call)], "anthropic-messages", current);
+      expect(message!.content, JSON.stringify(current)).toHaveLength(1);
+    }
+  });
+
+  it("drops unsigned reasoning on anthropic-messages and parts with no source", () => {
+    const unsigned: AssistantReasoningPart = { type: "reasoning", text: "think", source: zai };
+    const sourceless: AssistantReasoningPart = { type: "reasoning", text: "think", providerMetadata: { anthropic: { signature: "sig" } } };
+    const [message] = toSdkMessages([assistant(unsigned, sourceless, call)], "anthropic-messages", zai);
+    expect(message!.content).toHaveLength(1);
+  });
+
+  it("replays unsigned MiMo thinking with an empty signature on an enabled route", () => {
+    const mimo = { transport: "anthropic-messages", provider: "Xiaomi MiMo", baseUrl: "https://mimo", model: "mimo-v2.6-pro", replayUnsigned: true };
+    const unsigned: AssistantReasoningPart = { type: "reasoning", text: "think", source: mimo };
+    const [message] = toSdkMessages([assistant(unsigned, signed, call)], "anthropic-messages", mimo);
+    expect(message!.content).toEqual([
+      { type: "reasoning", text: "think", providerOptions: { anthropic: { signature: "" } } },
+      { type: "tool-call", toolCallId: "c1", toolName: "Read", input: {} },
+    ]);
+  });
+
+  it("drops all Anthropic reasoning when the first block is not replayable", () => {
+    const unsigned: AssistantReasoningPart = { type: "reasoning", text: "unsigned", source: zai };
+    const [message] = toSdkMessages([assistant(unsigned, signed, call)], "anthropic-messages", zai);
+    expect(message!.content).toEqual([{ type: "tool-call", toolCallId: "c1", toolName: "Read", input: {} }]);
+  });
+
+  it("emits plain reasoning on openai-chat-completions, never on openai-responses", () => {
+    const chat: ReasoningSource = { transport: "openai-chat-completions", baseUrl: "http://gw/v1", model: "glm-5.3" };
+    const part: AssistantReasoningPart = { type: "reasoning", text: "think", source: chat };
+    const [onChat] = toSdkMessages([assistant(part, call)], "openai-chat-completions", chat);
+    expect((onChat!.content as unknown[])[0]).toEqual({ type: "reasoning", text: "think" });
+
+    const responses: ReasoningSource = { ...chat, transport: "openai-responses" };
+    const [onResponses] = toSdkMessages([assistant({ ...part, source: responses }, call)], "openai-responses", responses);
+    expect(onResponses!.content).toHaveLength(1);
+  });
+
+  it("chat-completions with replay on: a tool-call message without reasoning gets reasoning_content \"\"", () => {
+    const chat: ReasoningSource = { transport: "openai-chat-completions", baseUrl: "http://gw/v1", model: "deepseek" };
+    const [toolTurn] = toSdkMessages([assistant(call)], "openai-chat-completions", chat);
+    expect(toolTurn).toMatchObject({ providerOptions: { openaiCompatible: { reasoning_content: "" } } });
+    // Text-only turns, routes with replay off and anthropic are untouched.
+    expect(toSdkMessages([assistant({ type: "text", text: "hi" })], "openai-chat-completions", chat)[0]).not.toHaveProperty("providerOptions");
+    expect(toSdkMessages([assistant(call)], "openai-chat-completions")[0]).not.toHaveProperty("providerOptions");
+    expect(toSdkMessages([assistant(call)], "anthropic-messages", zai)[0]).not.toHaveProperty("providerOptions");
+    // With real reasoning the SDK sends it; no override that could blank it.
+    const withReasoning = toSdkMessages([assistant({ type: "reasoning", text: "t", source: chat }, call)], "openai-chat-completions", chat)[0];
+    expect(withReasoning).not.toHaveProperty("providerOptions");
+  });
+
+  it("sameReasoningSource compares every field", () => {
+    expect(sameReasoningSource(zai, { ...zai })).toBe(true);
+    expect(sameReasoningSource(zai, { ...zai, model: "x" })).toBe(false);
+    expect(sameReasoningSource(zai, { ...zai, baseUrl: zai.baseUrl + "///" })).toBe(true);
   });
 });

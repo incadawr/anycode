@@ -2997,6 +2997,7 @@ async function boot(): Promise<void> {
           // budgets and no field it never advertised. Conditional, so an
           // undeclared connection keeps today's request bytes.
           ...(envConfig.effortLevels !== undefined ? { declaredEffortLevels: envConfig.effortLevels } : {}),
+          ...(envConfig.preserveReasoning !== undefined ? { preserveReasoning: envConfig.preserveReasoning } : {}),
           ...(resolveApiKey !== undefined ? { resolveApiKey } : {}),
           ...(includeUsage ? { includeUsage: true } : {}),
           // GitHub #15: forward the parsed prompt-cache policy into EVERY port

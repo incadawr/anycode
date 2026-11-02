@@ -11,7 +11,8 @@
  * before loop_end.
  */
 
-import type { ChatMessage, HistoryItem } from "../types/history.js";
+import type { ChatMessage, HistoryItem, ReasoningSource } from "../types/history.js";
+import { shouldReplayReasoning } from "../provider/sdk-mapping.js";
 import { IMAGE_TOKEN_ESTIMATE } from "../types/config.js";
 import { HeuristicTokenizer, type Tokenizer } from "./tokenizer.js";
 
@@ -82,6 +83,20 @@ export class ConversationHistory {
     return total;
   }
 
+  /** Estimate the messages actually sent on the current route, ignoring stale caches for reasoning. */
+  totalTokenEstimateForRoute(route: ReasoningSource | undefined): number {
+    return this.list.reduce((total, item) => {
+      if (item.message.role !== "assistant" || !item.message.content.some((part) => part.type === "reasoning")) {
+        return total + (item.tokenEstimate ?? estimateMessageTokens(this.tokenizer, item.message));
+      }
+      const parts = item.message.content;
+      const first = parts.find((part) => part.type === "reasoning");
+      const allow = route?.transport !== "anthropic-messages" || first === undefined || shouldReplayReasoning(first, route.transport, route);
+      const content = parts.filter((part) => part.type !== "reasoning" || (allow && route !== undefined && shouldReplayReasoning(part, route.transport, route)));
+      return total + estimateMessageTokens(this.tokenizer, { role: "assistant", content });
+    }, 0);
+  }
+
   /** toolCallIds of assistant tool_call parts that have no matching tool_result (§2.10). */
   unansweredToolCallIds(): string[] {
     const answered = new Set<string>();
@@ -107,6 +122,15 @@ export class ConversationHistory {
 }
 
 /**
+ * A redacted thinking block keeps its payload in provider metadata with an
+ * empty `text`, but replay sends the payload in full, so it must count.
+ */
+function redactedPayload(metadata: unknown): string {
+  const anthropic = (metadata as { anthropic?: { redactedData?: unknown } } | undefined)?.anthropic;
+  return typeof anthropic?.redactedData === "string" ? anthropic.redactedData : "";
+}
+
+/**
  * Flattens a message into the text that drives its token estimate. Exported so
  * the ContextManager recomputes item estimates identically when it rewrites
  * messages (microcompact / compaction summary) outside of append().
@@ -117,9 +141,11 @@ export function messageTokenText(message: ChatMessage): string {
       return message.content;
     case "assistant":
       return message.content
-        .map((part) =>
-          part.type === "text" ? part.text : `${part.toolName} ${safeStringify(part.input)}`,
-        )
+        .map((part) => {
+          if (part.type === "tool_call") return `${part.toolName} ${safeStringify(part.input)}`;
+          if (part.type === "reasoning") return `${part.text}${redactedPayload(part.providerMetadata)}`;
+          return part.text;
+        })
         .join("\n");
     case "tool":
       return message.content.map((part) => part.text).join("\n");

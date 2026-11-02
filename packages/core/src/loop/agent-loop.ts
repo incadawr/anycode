@@ -35,6 +35,7 @@ import type {
   TokenUsage,
 } from "../types/events.js";
 import type { AssistantPart, ChatMessage } from "../types/history.js";
+import { ReasoningCapture } from "./reasoning-capture.js";
 import type { ImageAttachment } from "../types/images.js";
 import type { ToolCallOutcome } from "../types/tools.js";
 import type { HookRunner } from "../types/hooks.js";
@@ -719,6 +720,7 @@ export class AgentLoop {
       history: this.history,
       tokenizer,
       modelPort: config.modelPort,
+      reasoningEffort: () => config.reasoningEffort,
       config: budget,
       requestOverheadTokens: () => tokenizer.count(config.systemPrompt ?? "") +
         estimateToolDeclarationTokens(toToolDeclarations(config.registry), tokenizer),
@@ -1096,6 +1098,7 @@ export class AgentLoop {
     // outcome after the snapshot but before the first write-effect tool.
     const preTurnCompactionSeq = this.config.checkpoints !== undefined ? this.config.compactionBoundary?.() : undefined;
 
+    let turnStartItemId: string | undefined;
     if (userInput !== undefined) {
       let promptText = userInput;
       try {
@@ -1128,14 +1131,14 @@ export class AgentLoop {
         }
       }
 
-      this.history.append(
+      turnStartItemId = this.history.append(
         {
           role: "user",
           content: promptText,
           ...(attachments?.length ? { images: attachments } : {}),
         },
         { origin: options?.origin, ...(turnId !== undefined ? { turnId, step: 0 } : {}) },
-      );
+      ).id;
     }
 
     // Two sanctioned mid-turn mode mutations exist: (1) a broker-approved
@@ -1323,7 +1326,7 @@ export class AgentLoop {
         // Compaction at iteration start (design §2.6): microcompact first, then
         // token-pressure LLM auto-compaction. The turn signal is linked so Stop
         // during compaction cancels cleanly and leaves the history untouched.
-        const micro = this.context.maybeMicrocompact();
+        const micro = this.context.maybeMicrocompact(turnId, turnStartItemId);
         if (micro) {
           yield {
             type: "microcompact",
@@ -1366,6 +1369,7 @@ export class AgentLoop {
 
         const textParts: string[] = [];
         const toolCalls: ProposedToolCall[] = [];
+        const reasoningCapture = new ReasoningCapture();
         let finishReason: FinishReason = "unknown";
         let usage: TokenUsage = {};
         let streamErrored = false;
@@ -1418,6 +1422,7 @@ export class AgentLoop {
               if (isModelOutputEvent(event)) {
                 hadModelOutput = true;
               }
+              reasoningCapture.observe(event);
               switch (event.type) {
                 case "text_delta": {
                   textParts.push(event.text);
@@ -1467,6 +1472,7 @@ export class AgentLoop {
                   // and detectors are cleared before the replay.
                   textParts.length = 0;
                   toolCalls.length = 0;
+                  reasoningCapture.reset();
                   finishReason = "unknown";
                   usage = {};
                   streamErrored = false;
@@ -1560,7 +1566,13 @@ export class AgentLoop {
         // assistant message and report context_usage.
         this.context.noteUsage(usage);
         this.history.append(
-          { role: "assistant", content: buildAssistantParts(textParts.join(""), toolCalls) },
+          {
+            role: "assistant",
+            // A degenerate step's reasoning is a loop, not worth replaying.
+            content: degenerationVerdict
+              ? buildAssistantParts(textParts.join(""), toolCalls)
+              : reasoningCapture.weave(buildAssistantParts(textParts.join(""), toolCalls)),
+          },
           ...(turnId !== undefined ? [{ turnId, step: turn }] as const : []),
         );
         const usageEstimate = this.context.estimate();

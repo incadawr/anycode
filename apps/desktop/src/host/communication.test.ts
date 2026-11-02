@@ -237,7 +237,7 @@ describe("public result retrieval", () => {
   it("recovers only public assistant text from history and does not invent terminal status or correlation", () => {
     const h = createHarness({ steps: [], bootHistory: [
       { id: "human", createdAt: 0, message: { role: "user", content: "PRIVATE_HUMAN_INPUT" } },
-      { id: "answer", createdAt: 1, message: { role: "assistant", content: [{ type: "tool_call", toolCallId: "call", toolName: "Bash", input: { command: "PRIVATE_TOOL_INPUT" } }, { type: "text", text: "RECOVERED_PUBLIC_ANSWER" }] } },
+      { id: "answer", createdAt: 1, message: { role: "assistant", content: [{ type: "tool_call", toolCallId: "call", toolName: "Bash", input: { command: "PRIVATE_TOOL_INPUT" } }, { type: "text", text: "RECOVERED_PUBLIC_" }, { type: "reasoning", text: "PRIVATE_THINKING" }, { type: "text", text: "ANSWER" }] } },
       { id: "tool", createdAt: 2, message: { role: "tool", content: [{ type: "tool_result", toolCallId: "call", toolName: "Bash", text: "PRIVATE_TOOL_OUTPUT", status: "success" }] } },
       { id: "internal-summary", createdAt: 3, kind: "compact_summary", message: { role: "assistant", content: [{ type: "text", text: "PRIVATE_INTERNAL_COMPACT_SUMMARY" }] } },
     ] });

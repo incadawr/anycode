@@ -38,6 +38,10 @@ export class SwitchableModelPort implements ModelPort {
     this.current = next;
   }
 
+  reasoningReplaySource(effort?: ModelRequest["reasoningEffort"]) {
+    return this.current.reasoningReplaySource?.(effort);
+  }
+
   streamText(request: ModelRequest): AsyncIterable<ModelStreamEvent> {
     return this.current.streamText(request);
   }
