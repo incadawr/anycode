@@ -1308,6 +1308,36 @@ describe("SqlitePersistenceAdapter", () => {
     expect(loaded).toEqual(items);
   });
 
+  it("round-trips assistant reasoning parts with provider metadata and source, in order (GitHub #41)", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    const session = await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+    const source = { transport: "anthropic-messages", provider: "Z.AI (GLM)", baseUrl: "https://api.z.ai/api/anthropic", model: "glm-5.3" };
+    const items: HistoryItem[] = [
+      makeItem({ id: "u1", createdAt: 10, message: { role: "user", content: "hi" } }),
+      makeItem({
+        id: "a1",
+        createdAt: 11,
+        message: {
+          role: "assistant",
+          content: [
+            { type: "reasoning", text: "plan first", providerMetadata: { anthropic: { signature: "sig-1" } }, source },
+            { type: "text", text: "checking" },
+            { type: "reasoning", text: "", providerMetadata: { anthropic: { redactedData: "opaque" } }, source },
+            { type: "tool_call", toolCallId: "tc1", toolName: "Read", input: { path: "/a.ts" } },
+          ],
+        },
+      }),
+    ];
+
+    await adapter.appendHistory(session.id, items);
+    expect(await adapter.loadHistory(session.id)).toEqual(items);
+
+    // The compaction path (replaceHistory) keeps the same shape.
+    await adapter.replaceHistory(session.id, items);
+    expect(await adapter.loadHistory(session.id)).toEqual(items);
+    await adapter.close();
+  });
+
   it("round-trips appended HistoryItems exactly through JSON serialization (tmp-file DB)", async () => {
     tmpDir = await mkdtemp(join(tmpdir(), "anycode-sqlite-"));
     const dbPath = join(tmpDir, "anycode.sqlite");

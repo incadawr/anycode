@@ -23,10 +23,12 @@ export type {
 } from "./tools.js";
 export type {
   AssistantPart,
+  AssistantReasoningPart,
   AssistantTextPart,
   AssistantToolCallPart,
   ChatMessage,
   HistoryItem,
+  ReasoningSource,
   ToolResultPart,
 } from "./history.js";
 export {

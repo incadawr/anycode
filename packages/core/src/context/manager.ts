@@ -31,6 +31,7 @@ export interface ContextManagerDeps {
   modelPort: ModelPort;
   config: ContextBudgetConfig;
   requestOverheadTokens?: () => number;
+  reasoningEffort?: () => ModelRequest["reasoningEffort"];
 }
 
 export type RunCompactionResult =
@@ -101,7 +102,7 @@ export class ContextManager {
   noteUsage(usage: TokenUsage): void {
     if (typeof usage.inputTokens === "number" && usage.inputTokens >= 0) {
       this.providerTokens = usage.inputTokens;
-      this.baselineEstimate = this.deps.history.totalTokenEstimate();
+      this.baselineEstimate = this.deps.history.totalTokenEstimateForRoute(this.deps.modelPort.reasoningReplaySource?.(this.deps.reasoningEffort?.()));
     }
   }
 
@@ -112,7 +113,7 @@ export class ContextManager {
    * for the bulk. Without one: the pure local estimate.
    */
   estimate(): { tokens: number; source: "provider" | "estimate" } {
-    const raw = this.deps.history.totalTokenEstimate();
+    const raw = this.deps.history.totalTokenEstimateForRoute(this.deps.modelPort.reasoningReplaySource?.(this.deps.reasoningEffort?.()));
     if (this.providerTokens !== null) {
       const delta = raw - this.baselineEstimate;
       return { tokens: Math.max(0, this.providerTokens + delta), source: "provider" };
@@ -156,7 +157,7 @@ export class ContextManager {
    * when pressure is below the microcompact threshold, nothing is clearable, or
    * the savings fall below the configured minimum.
    */
-  maybeMicrocompact(): { clearedToolResults: number; savedTokens: number } | null {
+  maybeMicrocompact(turnId?: string, turnStartItemId?: string): { clearedToolResults: number; savedTokens: number } | null {
     if (this.estimate().tokens < microcompactThresholdTokens(this.deps.config)) {
       return null;
     }
@@ -173,12 +174,26 @@ export class ContextManager {
       return null;
     }
     const clearable = new Set(toolItemIndices.slice(0, toolItemIndices.length - keep));
+    // Keep all reasoning from the current turn, including before steering frames.
+    const turnStart = items.findIndex((item) => turnStartItemId !== undefined ? item.id === turnStartItemId :
+      turnId !== undefined && item.turnId === turnId && item.step === 0 && item.message.role === "user");
+    const lastUserIndex = items.findLastIndex((item) => item.message.role === "user" && item.origin !== "system");
+    const reasoningCutoff = Math.min(toolItemIndices[toolItemIndices.length - keep] ?? items.length, turnStart >= 0 ? turnStart : (turnId !== undefined || turnStartItemId !== undefined ? 0 : lastUserIndex));
 
     let clearedToolResults = 0;
     let savedTokens = 0;
+    let toolSavedTokens = 0;
     let mutated = false;
 
     const next: HistoryItem[] = items.map((item, index) => {
+      if (item.message.role === "assistant" && index < reasoningCutoff && item.message.content.some((part) => part.type === "reasoning")) {
+        mutated = true;
+        const message: ChatMessage = { role: "assistant", content: item.message.content.filter((part) => part.type !== "reasoning") };
+        const oldEstimate = item.tokenEstimate ?? estimateMessageTokens(this.deps.tokenizer, item.message);
+        const newEstimate = estimateMessageTokens(this.deps.tokenizer, message);
+        savedTokens += oldEstimate - newEstimate;
+        return { ...item, message, tokenEstimate: newEstimate };
+      }
       if (!clearable.has(index) || item.message.role !== "tool") {
         return item;
       }
@@ -204,10 +219,11 @@ export class ContextManager {
         item.tokenEstimate ?? estimateMessageTokens(this.deps.tokenizer, item.message);
       const newEstimate = estimateMessageTokens(this.deps.tokenizer, message);
       savedTokens += oldEstimate - newEstimate;
+      toolSavedTokens += oldEstimate - newEstimate;
       return { ...item, message, tokenEstimate: newEstimate, kind: "microcompact_cleared" };
     });
 
-    if (!mutated || savedTokens < this.deps.config.microcompactMinSavingsTokens) {
+    if (!mutated || clearedToolResults === 0 || toolSavedTokens < this.deps.config.microcompactMinSavingsTokens) {
       return null;
     }
     this.deps.history.replaceAll(next);
@@ -272,7 +288,7 @@ export class ContextManager {
 
     const prefixMessages: ChatMessage[] = [];
     for (let i = 0; i < boundary; i += 1) {
-      prefixMessages.push(items[i]!.message);
+      prefixMessages.push(withoutReasoning(items[i]!.message));
     }
     const tail = items.slice(boundary);
 
@@ -380,6 +396,12 @@ export class ContextManager {
       ...(modelId !== undefined ? { model: modelId } : {}),
     };
   }
+}
+
+/** The summarizer needs what was said and done, not the old reasoning (GitHub #41). */
+function withoutReasoning(message: ChatMessage): ChatMessage {
+  if (message.role !== "assistant" || !message.content.some((part) => part.type === "reasoning")) return message;
+  return { role: "assistant", content: message.content.filter((part) => part.type !== "reasoning") };
 }
 
 /** Detects a DOMException/AbortError-shaped rejection so aborts aren't treated as errors. */

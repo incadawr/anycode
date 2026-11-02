@@ -86,6 +86,7 @@ describe("renderImportPrompt", () => {
           role: "assistant",
           content: [
             { type: "text", text: "first" },
+            { type: "reasoning", text: "hidden" },
             { type: "tool_call", toolCallId: "t1", toolName: "Read", input: {} },
             { type: "text", text: "second" },
           ],
@@ -93,7 +94,7 @@ describe("renderImportPrompt", () => {
       }),
     ]);
     const prompt = renderImportPrompt("core", "claude", plan, workspace);
-    expect(prompt).toContain(`# assistant first\nsecond`);
+    expect(prompt).toContain(`# assistant firstsecond`);
   });
 
   it("renders a tool item from the FIRST part only, capped at 500 chars; later parts skipped", () => {

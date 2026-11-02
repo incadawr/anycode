@@ -30,6 +30,15 @@
  */
 
 import { afterEach, expect, it, vi } from "vitest";
+
+vi.mock("../tools/to-model-tools.js", () => ({
+  toToolDeclarations: () => [],
+}));
+
+import { AgentLoop } from "../loop/agent-loop.js";
+import type { CorePorts } from "../ports/index.js";
+import type { HookRunner } from "../types/hooks.js";
+import type { ToolRegistry } from "../tools/registry.js";
 import { findCatalogEntry } from "./catalog-data.js";
 import { resolveEffortLevels } from "./capabilities.js";
 import { AiSdkModelPort } from "./model-port.js";
@@ -108,4 +117,138 @@ it("sends exactly the measured effort enum per MiMo reasoning level, with no thi
       }
     }
   }
+});
+
+/**
+ * GitHub #41: MiMo keeps its reasoning between requests (Xiaomi recommends
+ * sending all previous reasoning back). On the anthropic transport that is a
+ * signed `thinking` block; the tool loop's second request must carry it.
+ */
+it("replays MiMo's signed thinking before tool_use on the next request, on every MiMo entry", async () => {
+  const sse = (list: Record<string, unknown>[]): string =>
+    list.map((chunk) => `event: ${chunk.type}\ndata: ${JSON.stringify(chunk)}\n\n`).join("");
+  const thinkThenTool = [
+    { type: "message_start", message: { id: "msg_1", model: "mimo-v2.6-pro", role: "assistant", usage: { input_tokens: 5 } } },
+    { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "Look at the file." } },
+    { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "mimo-sig" } },
+    { type: "content_block_stop", index: 0 },
+    { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "toolu_1", name: "Read", input: {} } },
+    { type: "content_block_stop", index: 1 },
+    { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 9 } },
+    { type: "message_stop" },
+  ];
+  const text = [
+    { type: "message_start", message: { id: "msg_2", model: "mimo-v2.6-pro", role: "assistant", usage: { input_tokens: 5 } } },
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "done" } },
+    { type: "content_block_stop", index: 0 },
+    { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+    { type: "message_stop" },
+  ];
+
+  for (const mode of ["api", "sgp", "cn", "ams"]) {
+    const entry = findCatalogEntry(`xiaomi-mimo-${mode}`)!;
+    expect(entry.preserveReasoning, entry.id).toBe(true);
+    const bodies: Record<string, unknown>[] = [];
+    vi.stubGlobal("fetch", async (_input: unknown, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(sse(bodies.length === 1 ? thinkThenTool : text), { headers: { "content-type": "text/event-stream" } });
+    });
+    const port = new AiSdkModelPort({
+      transport: "anthropic-messages", baseUrl: "http://127.0.0.1:9", apiKey: "test-key",
+      model: "mimo-v2.6-pro", providerName: entry.name, retry: { maxRetries: 0, stallTimeoutMs: 0 },
+    });
+    const loop = new AgentLoop({
+      modelPort: port,
+      reasoningEffort: "high",
+      registry: { get: () => undefined } as unknown as ToolRegistry,
+      hooks: { register: () => {}, runPreToolUse: async () => ({}), runUserPromptSubmit: async () => ({}), runObservers: async () => {} } as unknown as HookRunner,
+      permissionEngine: { check: () => ({ decision: "allow" }) },
+      permissionBroker: { requestPermission: async () => ({ behavior: "deny", reason: "no client" }) },
+      mode: "build",
+      ports: {} as CorePorts,
+      cwd: "/work",
+    });
+    for await (const _event of loop.runTurn("read a.txt")) { /* drain */ }
+
+    expect(bodies, entry.id).toHaveLength(2);
+    const assistant = (bodies[1]!.messages as { role: string; content: unknown }[]).find((message) => message.role === "assistant");
+    expect(assistant?.content, entry.id).toEqual([
+      { type: "thinking", thinking: "Look at the file.", signature: "mimo-sig" },
+      { type: "tool_use", id: "toolu_1", name: "Read", input: {} },
+    ]);
+    vi.unstubAllGlobals();
+  }
+});
+
+it("omits stored thinking when MiMo thinking is disabled", async () => {
+  const bodies: Record<string, unknown>[] = [];
+  vi.stubGlobal("fetch", async (_input: unknown, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return new Response(chunks.map((chunk) => `event: ${chunk.type}\ndata: ${JSON.stringify(chunk)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
+  });
+  const baseUrl = "http://127.0.0.1:9";
+  const providerName = findCatalogEntry("xiaomi-mimo-api")!.name;
+  const model = "mimo-v2.6-pro";
+  const port = new AiSdkModelPort({ transport: "anthropic-messages", baseUrl, apiKey: "test", model, providerName, retry: { maxRetries: 0, stallTimeoutMs: 0 } });
+  const messages = [
+    { role: "user" as const, content: "hi" },
+    { role: "assistant" as const, content: [
+      { type: "reasoning" as const, text: "thought", source: { transport: "anthropic-messages", baseUrl, provider: providerName, model }, providerMetadata: { anthropic: { signature: "sig" } } },
+      { type: "text" as const, text: "answer" },
+    ] },
+    { role: "user" as const, content: "continue" },
+  ];
+  for (const effort of ["off", "high"] as const) {
+    for await (const _ of port.streamText({ messages, tools: [], reasoningEffort: effort })) { /* drain */ }
+  }
+  expect(bodies[0]!.thinking).toEqual({ type: "disabled" });
+  expect(JSON.stringify(bodies[0]!.messages)).not.toContain("thought");
+  expect(JSON.stringify(bodies[1]!.messages)).toContain("thought");
+});
+
+it("replay off produces the complete pre-replay request body unchanged", async () => {
+  const bodies: string[] = [];
+  vi.stubGlobal("fetch", async (_input: unknown, init?: RequestInit) => {
+    bodies.push(String(init?.body));
+    return new Response(chunks.map((chunk) => `event: ${chunk.type}\ndata: ${JSON.stringify(chunk)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
+  });
+  const baseUrl = "http://127.0.0.1:9";
+  const port = new AiSdkModelPort({ transport: "anthropic-messages", baseUrl, apiKey: "test", model: "custom", preserveReasoning: false, retry: { maxRetries: 0, stallTimeoutMs: 0 } });
+  const text = { type: "text" as const, text: "answer" };
+  const thought = { type: "reasoning" as const, text: "thought", source: { transport: "anthropic-messages", baseUrl, model: "custom" }, providerMetadata: { anthropic: { signature: "sig" } } };
+  for (const content of [[text], [thought, text]]) {
+    for await (const _ of port.streamText({ system: "system", messages: [{ role: "user", content: "hi" }, { role: "assistant", content }, { role: "user", content: "continue" }], tools: [], maxOutputTokens: 123 })) { /* drain */ }
+  }
+  expect(bodies[1]).toBe(bodies[0]);
+});
+
+it("limits the global override to enabled catalog providers and custom endpoints", () => {
+  for (const [providerName, override, enabled] of [
+    ["OpenAI", true, false], ["Anthropic", true, false], ["Z.AI (GLM)", true, true],
+    ["Z.AI (GLM)", false, false], [undefined, true, true], ["Custom gateway", true, true], [undefined, undefined, false],
+  ] as const) {
+    const port = new AiSdkModelPort({ transport: "anthropic-messages", baseUrl: "http://127.0.0.1:9", apiKey: "test", model: "model", providerName, preserveReasoning: override });
+    expect(port.reasoningReplaySource("high") !== undefined, String(providerName)).toBe(enabled);
+  }
+});
+
+it("sends stored unsigned MiMo thinking on the SDK wire", async () => {
+  const bodies: Record<string, unknown>[] = [];
+  vi.stubGlobal("fetch", async (_input: unknown, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return new Response(chunks.map((chunk) => `event: ${chunk.type}\ndata: ${JSON.stringify(chunk)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
+  });
+  const baseUrl = "http://127.0.0.1:9";
+  const provider = findCatalogEntry("xiaomi-mimo-api")!.name;
+  const model = "mimo-v2.6-pro";
+  const port = new AiSdkModelPort({ transport: "anthropic-messages", baseUrl, apiKey: "test", model, providerName: provider, retry: { maxRetries: 0, stallTimeoutMs: 0 } });
+  for await (const _ of port.streamText({ reasoningEffort: "high", tools: [], messages: [
+    { role: "user", content: "hi" },
+    { role: "assistant", content: [{ type: "reasoning", text: "unsigned thought", source: { transport: "anthropic-messages", baseUrl, provider, model } }, { type: "text", text: "answer" }] },
+    { role: "user", content: "continue" },
+  ] })) { /* drain */ }
+  const assistant = (bodies[0]!.messages as { role: string; content: unknown[] }[]).find((item) => item.role === "assistant");
+  expect(assistant!.content[0]).toEqual({ type: "thinking", thinking: "unsigned thought", signature: "" });
 });

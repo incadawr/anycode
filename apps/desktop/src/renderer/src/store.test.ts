@@ -5412,6 +5412,28 @@ describe("desktop store — session_history hydration (task 2.1.5, design §3.3)
     ]);
   });
 
+  it("projectHistoryToBlocks shows stored reasoning as a collapsed block in place, never as assistant text (GitHub #41)", () => {
+    const source = { transport: "anthropic-messages", baseUrl: "http://z", model: "glm-5.3" };
+    const blocks = projectHistoryToBlocks([
+      {
+        id: "r1",
+        createdAt: 1,
+        message: {
+          role: "assistant",
+          content: [
+            { type: "reasoning", text: "plan", providerMetadata: { anthropic: { signature: "s" } }, source },
+            { type: "text", text: "Answer." },
+            { type: "reasoning", text: "", providerMetadata: { anthropic: { redactedData: "x" } }, source },
+          ],
+        },
+      },
+    ]);
+    expect(blocks).toEqual([
+      { kind: "reasoning", id: "r1:0", text: "plan", collapsed: true },
+      { kind: "assistant_text", id: "r1:1", text: "Answer." },
+    ]);
+  });
+
   it("preserves restored user image attachments for transcript rendering", () => {
     const images = [{ mediaType: "image/png" as const, data: "UE5H" }];
     expect(projectHistoryToBlocks([{ id: "image", createdAt: 1, message: { role: "user", content: "Look:", images } }])).toEqual([

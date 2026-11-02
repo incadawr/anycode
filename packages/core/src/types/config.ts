@@ -114,6 +114,11 @@ export interface CoreEnvConfig {
    * applied by `resolveIncludeUsage`, never here.
    */
   includeUsage?: boolean;
+  /**
+   * Global reasoning-replay override (ANYCODE_PRESERVE_REASONING).
+   * Applies to enabled catalog providers and custom endpoints; other catalog providers remain off.
+   */
+  preserveReasoning?: boolean;
 }
 
 /** Main-loop turn budget when not overridden (subagents get a lower budget in Phase 3). */

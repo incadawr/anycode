@@ -101,6 +101,11 @@ export interface EndpointConfig {
    */
   declaredEffortLevels?: readonly ReasoningEffort[];
   /**
+   * Global reasoning replay override. Applies to enabled catalog providers and
+   * custom endpoints; other catalog providers remain off.
+   */
+  preserveReasoning?: boolean;
+  /**
    * Optional response-header quota observer: when set, the
    * transport factories wrap the SDK fetch so every response's headers are
    * offered to it. The callback must never throw into the transport — a quota

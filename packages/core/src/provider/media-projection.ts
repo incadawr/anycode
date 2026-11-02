@@ -86,6 +86,10 @@ class MediaProjectionModelPort implements ModelPort {
     private readonly imageInputAllowed: () => boolean,
   ) {}
 
+  reasoningReplaySource(effort?: ModelRequest["reasoningEffort"]) {
+    return this.inner.reasoningReplaySource?.(effort);
+  }
+
   streamText(request: ModelRequest): AsyncIterable<ModelStreamEvent> {
     const projected = projectMessagesForMedia(request.messages, this.imageInputAllowed());
     return this.inner.streamText(

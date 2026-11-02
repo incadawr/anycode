@@ -70,7 +70,7 @@ function renderImportItem(item: HistoryItem): string {
         return candidate !== null && candidate.type === "text" && typeof candidate.text === "string";
       })
       .map((part) => part.text)
-      .join("\n");
+      .join("");
     return `# assistant ${text}`;
   }
   if (role === "tool" && Array.isArray(content)) {

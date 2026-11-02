@@ -7,7 +7,7 @@
  * provider layer only.
  */
 
-import type { ChatMessage } from "../types/history.js";
+import type { ChatMessage, ReasoningSource } from "../types/history.js";
 import type { ModelStreamEvent } from "../types/events.js";
 import type { ToolDeclaration } from "../types/tools.js";
 import type { ReasoningEffort } from "../types/config.js";
@@ -31,6 +31,8 @@ export interface ModelRequest {
 
 export interface ModelPort {
   streamText(request: ModelRequest): AsyncIterable<ModelStreamEvent>;
+  /** Route on which reasoning will be replayed for this effort. */
+  reasoningReplaySource?(effort?: ReasoningEffort): ReasoningSource | undefined;
   /**
    * Identity readback: the id this port was constructed for. Constructed-port
    * identity, NOT execution identity — no production port canonicalizes ids.

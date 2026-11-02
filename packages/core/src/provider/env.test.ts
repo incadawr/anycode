@@ -19,6 +19,7 @@ import {
   ENV_PROMPT_CACHE_OPTIONS,
   ENV_ADAPTIVE_TURN_BUDGET,
   ENV_INCLUDE_USAGE,
+  ENV_PRESERVE_REASONING,
   ENV_MAX_TURNS,
   ENV_MODEL,
   ENV_STALL_TIMEOUT_MS,
@@ -390,6 +391,14 @@ describe("loadEnvConfig", () => {
       } finally {
         warnSpy.mockRestore();
       }
+    });
+  });
+
+  describe("ANYCODE_PRESERVE_REASONING (GitHub #41)", () => {
+    it("is absent when unset and parsed as a boolean override when set", () => {
+      expect(loadEnvConfig(envWith({ [ENV_API_KEY]: "k", [ENV_MODEL]: "m" }))).not.toHaveProperty("preserveReasoning");
+      expect(loadEnvConfig(envWith({ [ENV_API_KEY]: "k", [ENV_MODEL]: "m", [ENV_PRESERVE_REASONING]: "on" })).preserveReasoning).toBe(true);
+      expect(loadEnvConfig(envWith({ [ENV_API_KEY]: "k", [ENV_MODEL]: "m", [ENV_PRESERVE_REASONING]: "0" })).preserveReasoning).toBe(false);
     });
   });
 

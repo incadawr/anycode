@@ -1863,7 +1863,7 @@ export class Session {
     this.latestTurnId = [...publicHistory].reverse().find((item) => item.turnId !== undefined)?.turnId ?? null;
     for (const item of [...publicHistory].reverse()) {
       if (item.message.role !== "assistant" || (item.kind !== undefined && item.kind !== "normal")) continue;
-      const text = item.message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+      const text = item.message.content.filter((part) => part.type === "text").map((part) => part.text).join("");
       if (!text) continue;
       this.latestPublicResult = { source: "history_recovery", turnId: null, requestId: null, nativeTurnId: null, historyItemId: item.id, terminalReason: "unknown", publicAnswer: text.slice(0, 32000), truncated: text.length > 32000, completedAt: null };
       break;

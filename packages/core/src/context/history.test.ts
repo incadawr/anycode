@@ -216,3 +216,23 @@ describe("estimateMessageTokens (design §2-C3/R13/L4)", () => {
     expect((withImg.tokenEstimate ?? 0) - (plain.tokenEstimate ?? 0)).toBe(IMAGE_TOKEN_ESTIMATE);
   });
 });
+
+describe("messageTokenText with reasoning (GitHub #41)", () => {
+  const source = { transport: "anthropic-messages" as const, baseUrl: "http://z", model: "glm-5.3" };
+
+  it("counts a redacted thinking block's payload, which has no text", () => {
+    const payload = "x".repeat(4000);
+    const message: ChatMessage = {
+      role: "assistant",
+      content: [
+        { type: "reasoning", text: "", providerMetadata: { anthropic: { redactedData: payload } }, source },
+        { type: "text", text: "ok" },
+      ],
+    };
+    expect(messageTokenText(message)).toContain(payload);
+    const bare: ChatMessage = { role: "assistant", content: [{ type: "text", text: "ok" }] };
+    expect(estimateMessageTokens(new HeuristicTokenizer(), message)).toBeGreaterThan(
+      estimateMessageTokens(new HeuristicTokenizer(), bare) + 500,
+    );
+  });
+});

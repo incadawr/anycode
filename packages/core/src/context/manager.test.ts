@@ -495,6 +495,61 @@ describe("ContextManager.maybeMicrocompact", () => {
   });
 });
 
+describe("reasoning parts under context pressure (GitHub #41)", () => {
+  const source = { transport: "anthropic-messages", baseUrl: "http://z", model: "glm-5.3" };
+  function thinkingCall(id: string, thought = LONG_TEXT): ChatMessage {
+    return {
+      role: "assistant",
+      content: [
+        { type: "reasoning", text: thought, providerMetadata: { anthropic: { signature: `sig-${id}` } }, source },
+        { type: "tool_call", toolCallId: id, toolName: "Read", input: {} },
+      ],
+    };
+  }
+
+  it("microcompact strips old turns' reasoning but keeps the current turn's", () => {
+    const messages: ChatMessage[] = [userMsg("old turn")];
+    for (let i = 0; i < 6; i += 1) {
+      messages.push(thinkingCall(`old${i}`));
+      messages.push(toolResult(`old${i}`, LONG_TEXT));
+    }
+    messages.push(userMsg("current turn"));
+    messages.push(thinkingCall("cur"));
+    messages.push(toolResult("cur", "short"));
+    const history = buildHistory(messages);
+    const manager = makeManager(history, new ScriptedModelPort([]), {
+      microcompactKeepRecentToolResults: 2,
+      microcompactMinSavingsTokens: 256,
+    });
+    manager.noteUsage({ inputTokens: 150_000 });
+
+    expect(manager.maybeMicrocompact()).not.toBeNull();
+
+    const assistants = history.items.filter((item) => item.message.role === "assistant");
+    const hasReasoning = assistants.map((item) =>
+      item.message.role === "assistant" && item.message.content.some((part) => part.type === "reasoning"));
+    expect(hasReasoning).toEqual([false, false, false, false, false, false, true]);
+    expect(history.unansweredToolCallIds()).toEqual([]);
+    // Estimates follow the rewrite.
+    const stripped = assistants[0]!;
+    expect(stripped.tokenEstimate).toBe(new HeuristicTokenizer().count("Read {}"));
+  });
+
+  it("compaction does not send old reasoning to the summarizer", async () => {
+    const messages: ChatMessage[] = [];
+    for (let t = 0; t < 4; t += 1) {
+      messages.push(userMsg(`turn ${t}`));
+      messages.push(thinkingCall(`c${t}`, `secret thought ${t}`));
+      messages.push(toolResult(`c${t}`, `result ${t}`));
+    }
+    const port = new ScriptedModelPort(summaryScript("CONDENSED"));
+    const manager = makeManager(buildHistory(messages), port, { keepRecentMessages: 3 });
+
+    expect((await manager.runCompaction({})).ok).toBe(true);
+    expect(JSON.stringify(port.requests[0]!.messages)).not.toContain("secret thought");
+  });
+});
+
 describe("ContextManager.shouldAutoCompact", () => {
   const tightConfig: Partial<ContextBudgetConfig> = {
     contextWindowTokens: 1_000,
@@ -1118,4 +1173,61 @@ describe("request overhead and model anchors", () => {
     expect(manager.estimate()).toEqual({ tokens: history.totalTokenEstimate() + 600, source: "estimate" });
   });
 
+});
+
+describe("reasoning replay context regressions", () => {
+  const route = { transport: "anthropic-messages", provider: "Z.AI (GLM)", baseUrl: "https://z/", model: "one" };
+  const thought = (id: string, text = LONG_TEXT): ChatMessage => ({ role: "assistant", content: [
+    { type: "reasoning", text, source: route, providerMetadata: { anthropic: { signature: "sig" } } },
+    { type: "tool_call", toolCallId: id, toolName: "Read", input: {} },
+  ] });
+
+  it("estimates only the route's replay after a model or endpoint switch", () => {
+    const unsigned: ChatMessage = { role: "assistant", content: [
+      { type: "reasoning", text: "x".repeat(8000), source: route },
+      { type: "tool_call", toolCallId: "a", toolName: "Read", input: {} },
+    ] };
+    const history = buildHistory([userMsg("hello"), unsigned, toolResult("a", "ok")]);
+    let current = { ...route, replayUnsigned: true };
+    const port: ModelPort = { streamText: () => new ScriptedModelPort([]).streamText({ messages: [], tools: [] }), reasoningReplaySource: () => current };
+    const manager = makeManager(history, port, { contextWindowTokens: 1000, outputReserveTokens: 0, compactThresholdPercent: 50, compactBufferTokens: 0 });
+    expect(manager.shouldAutoCompact()).toBe(true);
+    manager.noteUsage({ inputTokens: 3000 });
+    current = { ...route, replayUnsigned: true, model: "two" };
+    manager.invalidateProviderAnchor();
+    expect(manager.estimate().tokens).toBeLessThan(500);
+    expect(manager.shouldAutoCompact()).toBe(false);
+    current = { ...route, replayUnsigned: true, baseUrl: "https://other" };
+    expect(manager.estimate().tokens).toBeLessThan(500);
+    current = { ...route, replayUnsigned: true, baseUrl: "https://z" };
+    expect(manager.shouldAutoCompact()).toBe(true);
+  });
+
+  it("keeps the current turn's reasoning before steering and system frames", () => {
+    const history = new ConversationHistory();
+    history.append(userMsg("old"), { turnId: "old", step: 0 });
+    history.append(thought("old"), { turnId: "old", step: 1 });
+    history.append(toolResult("old", LONG_TEXT), { turnId: "old", step: 1 });
+    history.append(userMsg("start"), { turnId: "current", step: 0 });
+    history.append(thought("current"), { turnId: "current", step: 1 });
+    history.append(toolResult("current", LONG_TEXT), { turnId: "current", step: 1 });
+    history.append(userMsg("steer"), { turnId: "current", step: 1 });
+    history.append(userMsg("host"), { origin: "system", turnId: "current", step: 1 });
+    history.append(thought("latest"), { turnId: "current", step: 2 });
+    history.append(toolResult("latest", "short"), { turnId: "current", step: 2 });
+    const manager = makeManager(history, new ScriptedModelPort([]), { microcompactKeepRecentToolResults: 1, microcompactMinSavingsTokens: 1 });
+    manager.noteUsage({ inputTokens: 150_000 });
+    expect(manager.maybeMicrocompact("current")).not.toBeNull();
+    const assistants = history.items.filter((item) => item.message.role === "assistant");
+    expect(assistants.map((item) => item.message.role === "assistant" && item.message.content.some((part) => part.type === "reasoning"))).toEqual([false, true, true]);
+  });
+
+  it("does not rewrite reasoning when tool savings alone miss the minimum", () => {
+    const history = buildHistory([userMsg("old"), thought("old", "x".repeat(20000)), toolResult("old", "x".repeat(400)), userMsg("new"), thought("new"), toolResult("new", "short")]);
+    const manager = makeManager(history, new ScriptedModelPort([]), { microcompactKeepRecentToolResults: 1, microcompactMinSavingsTokens: 200 });
+    manager.noteUsage({ inputTokens: 150_000 });
+    const before = JSON.stringify(history.items);
+    expect(manager.maybeMicrocompact()).toBeNull();
+    expect(JSON.stringify(history.items)).toBe(before);
+  });
 });

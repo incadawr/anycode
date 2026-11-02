@@ -8,6 +8,7 @@
 import type { ToolCallOutcome } from "./tools.js";
 import type { WorkspaceTransition } from "../ports/worktrees.js";
 import type { ProviderQuotaUpdate } from "../provider/quota.js";
+import type { ReasoningSource } from "./history.js";
 
 export interface TokenUsage {
   costUsd?: number;
@@ -58,7 +59,16 @@ export type ModelStreamEvent =
   | { type: "text_end"; id: string }
   | { type: "reasoning_start"; id: string }
   | { type: "reasoning_delta"; id: string; text: string }
-  | { type: "reasoning_end"; id: string }
+  /**
+   * `providerMetadata` (merged over the block's start/delta/end) and `source`
+   * are set only on a route that replays reasoning (GitHub #41).
+   */
+  | {
+    type: "reasoning_end";
+    id: string;
+    providerMetadata?: Record<string, Record<string, unknown>>;
+    source?: ReasoningSource;
+  }
   | { type: "tool_input_start"; id: string; toolName: string }
   | { type: "tool_input_delta"; id: string; delta: string }
   | { type: "tool_input_end"; id: string }

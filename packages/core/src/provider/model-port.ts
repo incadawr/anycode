@@ -32,7 +32,9 @@ import { contextualizeNetworkFailure } from "./network-failure.js";
  */
 
 import { stepCountIs, streamText } from "ai";
-import type { LanguageModel } from "ai";
+import type { LanguageModel, TextStreamPart, ToolSet } from "ai";
+import type { ReasoningSource } from "../types/history.js";
+import { catalogPreservesReasoning, isCatalogProviderName } from "./catalog-data.js";
 import type { ModelPort, ModelRequest } from "../ports/model.js";
 import { consoleDiagnosticSink, type DiagnosticSink } from "../types/diagnostics.js";
 import type { ModelStreamEvent } from "../types/events.js";
@@ -757,6 +759,40 @@ function rawResponseModelOf(part: unknown): string | undefined {
   return typeof model === "string" && model !== "" ? model : undefined;
 }
 
+/**
+ * The route identity used for reasoning replay, or undefined when this route
+ * does not replay reasoning. openai-responses is out of scope: with
+ * `store: false` its reasoning items would need encrypted content.
+ */
+export function reasoningReplaySource(config: EndpointConfig): ReasoningSource | undefined {
+  if (config.transport !== "anthropic-messages" && config.transport !== "openai-chat-completions") return undefined;
+  const catalogEnabled = catalogPreservesReasoning(config.providerName);
+  if (isCatalogProviderName(config.providerName) && !catalogEnabled) return undefined;
+  if (!(config.preserveReasoning ?? catalogEnabled)) return undefined;
+  return {
+    transport: config.transport,
+    ...(config.transport === "anthropic-messages" ? { replayUnsigned: true } : {}),
+    ...(config.providerName !== undefined ? { provider: config.providerName } : {}),
+    baseUrl: config.baseUrl,
+    model: config.model,
+  };
+}
+
+/** Merges reasoning provider metadata per block id; the latest value wins, like the SDK. */
+function collectReasoningMetadata(
+  into: Map<string, Record<string, Record<string, unknown>>>,
+  part: TextStreamPart<ToolSet>,
+): void {
+  if (part.type !== "reasoning-start" && part.type !== "reasoning-delta" && part.type !== "reasoning-end") return;
+  const metadata = part.providerMetadata;
+  if (metadata === undefined) return;
+  const merged = { ...(into.get(part.id) ?? {}) };
+  for (const [provider, values] of Object.entries(metadata)) {
+    merged[provider] = { ...(merged[provider] ?? {}), ...(values as Record<string, unknown>) };
+  }
+  into.set(part.id, merged);
+}
+
 export class AiSdkModelPort implements ModelPort {
   /** Provider's model claim from the most recent raw `message_start` seen by this port. */
   #lastResponseModel: string | undefined;
@@ -787,10 +823,24 @@ export class AiSdkModelPort implements ModelPort {
    */
   #includeUsageDisabledForEndpoint = false;
 
+  /**
+   * This port's route identity when it replays reasoning (GitHub #41), else
+   * undefined. Stamped on captured reasoning and compared on replay, so a
+   * model or connection switch (a fresh port) never sends foreign reasoning.
+   */
+  readonly #reasoningSource: ReasoningSource | undefined;
+
+  reasoningReplaySource(effort?: ModelRequest["reasoningEffort"]): ReasoningSource | undefined {
+    const options = reasoningRequestOptions({ messages: [], tools: [], reasoningEffort: effort }, this.config.providerName, this.config.transport, this.config.promptCache, this.config.model, this.config.declaredEffortLevels);
+    const thinking = (options.providerOptions as { anthropic?: { thinking?: { type?: string } } } | undefined)?.anthropic?.thinking;
+    return thinking?.type === "disabled" ? undefined : this.#reasoningSource;
+  }
+
   constructor(
     private readonly config: EndpointConfig,
     private readonly onDiagnostic: DiagnosticSink = consoleDiagnosticSink,
   ) {
+    this.#reasoningSource = reasoningReplaySource(config);
     // rebind the config's observer through a port-owned shim so
     // the latest update lands in `#lastQuota` before being forwarded — the
     // shim is built HERE (port-owned), while the factories only ever see the
@@ -1014,6 +1064,9 @@ export class AiSdkModelPort implements ModelPort {
       const warnedArtifacts = new Set<string>();
       // Per-attempt recovery and byte liveness prevent cross-talk on retries (GitHub #27).
       const reasoningTextRecovery = this.config.transport === "openai-responses" ? new ResponsesReasoningTextRecovery() : undefined;
+      // Per-attempt, so an abandoned attempt never lends metadata to a replay (GitHub #41).
+      const reasoningSource = this.reasoningReplaySource(request.reasoningEffort);
+      const reasoningMetadata = new Map<string, Record<string, Record<string, unknown>>>();
       let lastWireActivityAt = Number.NEGATIVE_INFINITY;
       const onResponseActivity = this.config.transport === "openai-responses" && policy.stallTimeoutMs > 0
         ? (): void => { lastWireActivityAt = Date.now(); } : undefined;
@@ -1047,7 +1100,7 @@ export class AiSdkModelPort implements ModelPort {
           // System prompt goes out-of-band: ai@7 rejects system-role messages
           // inside `messages`, and its `system` option is deprecated for `instructions`.
           instructions: request.system,
-          messages: toSdkMessages(request.messages, this.config.transport),
+          messages: toSdkMessages(request.messages, this.config.transport, reasoningSource),
           tools: toSdkTools(request.tools),
           // One SDK step per ModelPort call; the multi-turn loop lives in AgentLoop.
           stopWhen: stepCountIs(1),
@@ -1111,6 +1164,7 @@ export class AiSdkModelPort implements ModelPort {
           if (outcome.value.type === "finish-step") {
             stepRawUsage = outcome.value.usage.raw;
           }
+          if (reasoningSource !== undefined) collectReasoningMetadata(reasoningMetadata, outcome.value);
           let event = translateStreamPart(outcome.value, {
             transport: this.config.transport,
             stepRawUsage,
@@ -1118,6 +1172,11 @@ export class AiSdkModelPort implements ModelPort {
           });
           if (event === null) {
             continue;
+          }
+          if (event.type === "reasoning_end" && reasoningSource !== undefined) {
+            const metadata = reasoningMetadata.get(event.id);
+            reasoningMetadata.delete(event.id);
+            event = { ...event, source: reasoningSource, ...(metadata !== undefined ? { providerMetadata: metadata } : {}) };
           }
           // Output may begin with reasoning or a tool block, not text; any of
           // them opens the generation window. `finish` itself is not a token,
