@@ -5504,6 +5504,10 @@ it("persists and traces a factual summary through the CLI wrapper chain", async 
   const { SwitchableModelPort } = await import("../cli/model.js");
   const { compactReasoningParts } = await import("../provider/reasoning-compactor.js");
   const { telemetryRecordFor } = await import("../telemetry/records.js");
+  const summary = [
+    "Goal/stage: fix.", "Verified facts: none.", "Decision/constraints: stay local.",
+    "Unverified hypotheses: none.", "Next intended action: read.",
+  ].join("\n");
   const source = {
     transport: "openai-chat-completions", baseUrl: "http://fake.invalid",
     model: "fake", replayFactual: true,
@@ -5516,8 +5520,8 @@ it("persists and traces a factual summary through the CLI wrapper chain", async 
     { type: "finish", finishReason: "stop", usage: {} },
   ]]);
   const compactReasoning = vi.fn(async parts => compactReasoningParts(
-    parts, 100, "fake", async () => ({
-      text: "Goal: fix.", usage: { inputTokens: 12, outputTokens: 3, totalTokens: 15 },
+    parts, 500, "fake", async () => ({
+      text: summary, usage: { inputTokens: 12, outputTokens: 3, totalTokens: 15 },
     }),
   ));
   const modelPort = createMediaProjectionPort(new SwitchableModelPort({
@@ -5530,7 +5534,7 @@ it("persists and traces a factual summary through the CLI wrapper chain", async 
   await collect(loop.runTurn("go"));
   expect(compactReasoning).toHaveBeenCalledTimes(1);
   expect(loop.history.toMessages()[1]).toMatchObject({ content: [
-    { type: "reasoning", text: "original reasoning", factualSummary: { text: "Goal: fix." } },
+    { type: "reasoning", text: "original reasoning", factualSummary: { text: summary } },
     { type: "text", text: "answer" },
   ] });
   expect(records).toContainEqual(expect.objectContaining({
@@ -5547,6 +5551,10 @@ it("persists a finished response when cancellation arrives before compaction sta
       yield { type: "finish", finishReason: "stop", usage: {} };
       controller.abort();
     },
+    reasoningReplaySource: () => ({
+      transport: "openai-chat-completions", baseUrl: "http://fake.invalid",
+      model: "fake", replayFactual: true,
+    }),
     compactReasoning: vi.fn(async parts => parts),
   };
   const loop = makeLoop({ modelPort });
@@ -5556,4 +5564,35 @@ it("persists a finished response when cancellation arrives before compaction sta
   });
   expect(modelPort.compactReasoning).not.toHaveBeenCalled();
   expect(events).toContainEqual(expect.objectContaining({ type: "loop_end", reason: "cancelled" }));
+});
+
+it("keeps baseline history and later requests when unset mode is cancelled after finish", async () => {
+  const controller = new AbortController();
+  const requests: ModelRequest[] = [];
+  const modelPort: ModelPort = {
+    async *streamText(request) {
+      requests.push(request);
+      if (requests.length === 1) {
+        yield { type: "text_delta", id: "t", text: "completed answer" };
+        yield { type: "tool_call", toolCall: { id: "c", name: "Mock", input: { value: "x" } } };
+        yield { type: "finish", finishReason: "tool_calls", usage: {} };
+        controller.abort();
+      } else {
+        yield { type: "finish", finishReason: "stop", usage: {} };
+      }
+    },
+    compactReasoning: vi.fn(async parts => parts),
+  };
+  const { SwitchableModelPort } = await import("../cli/model.js");
+  const loop = makeLoop({
+    modelPort: createMediaProjectionPort(new SwitchableModelPort(modelPort), () => false),
+  });
+  const events = await collect(loop.runTurn("first", { signal: controller.signal }));
+  expect(loop.history.toMessages()).toEqual([{ role: "user", content: "first" }]);
+  expect(events.some(event => event.type === "tool_result")).toBe(false);
+  expect(modelPort.compactReasoning).not.toHaveBeenCalled();
+  await collect(loop.runTurn("second"));
+  expect(requests[1]!.messages).toEqual([
+    { role: "user", content: "first" }, { role: "user", content: "second" },
+  ]);
 });

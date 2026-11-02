@@ -1536,7 +1536,9 @@ export class AgentLoop {
           disposeTurnAbortLink();
         }
 
-        if (signal?.aborted && !sawFinish) {
+        const factualCompaction = this.config.modelPort
+          .reasoningReplaySource?.(this.config.reasoningEffort)?.replayFactual === true;
+        if (signal?.aborted && (!sawFinish || !factualCompaction)) {
           yield* this.emitLoopEnd("cancelled", turn, signal, turnId, turn);
           return;
         }
