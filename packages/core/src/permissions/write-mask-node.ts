@@ -1,5 +1,5 @@
 import { lstatSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { isValidWriteMask } from "./write-mask.js";
 
@@ -46,6 +46,7 @@ export function resolveWriteMask(pattern: string, home = homedir()): string | un
   try {
     const candidate = statSync(canonical);
     const blockedPaths = [home, "/Users", "/home", "/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp", "/System/Volumes/Data", "/Volumes"];
+    if (process.platform === "darwin") blockedPaths.push("/var/folders", tmpdir());
     for (const container of ["/Volumes", "/System/Volumes"]) {
       try {
         blockedPaths.push(...readdirSync(container).map((entry) => join(container, entry)));
@@ -69,5 +70,6 @@ export function resolveWriteMask(pattern: string, home = homedir()): string | un
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") return undefined;
   }
   const resolved = `${canonical}/${parts.slice(end).join("/")}`;
-  return isValidWriteMask(resolved, home) ? resolved : undefined;
+  const validationPath = process.platform === "darwin" ? resolved.replace(/^\/private(?=\/(?:etc|var|tmp)(?:\/|$))/, "") : resolved;
+  return isValidWriteMask(validationPath, home) ? resolved : undefined;
 }

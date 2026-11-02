@@ -9,6 +9,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Keep suggested write permissions scoped to the workspace for files inside it, and reject broad macOS directory aliases and temporary directories.
+
 - Always-allow write rules can use a scoped absolute path mask outside the workspace. Path aliases and new directories are handled consistently, and broad system and home scopes are rejected.
 - Prevent external pages from replacing the main application window or opening uncontrolled child windows.
 
