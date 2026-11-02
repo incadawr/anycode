@@ -16,7 +16,8 @@
  *  - ⌘W/Ctrl+W while the dock holds focus closes the ACTIVE tab.
  */
 import { useContext, type ReactNode } from "react";
-import { TabContext, useTabStoreApi } from "../tab-context.js";
+import { TabContext } from "../tab-context.js";
+import type { DesktopStoreApi } from "../tab-registry.js";
 import { selectDockView, useDockStore } from "../dock/dock-store.js";
 import { childLayoutStore } from "../child-layout.js";
 import { DOCK_SPLIT_MIN_PX, isSplittableTab, type DockMode, type DockTab } from "../dock/dock-layout.js";
@@ -44,7 +45,7 @@ export interface DockPanelProps {
   };
 }
 
-function closeDockTab(tab: DockTab, tabId: string): void {
+function closeDockTab(tab: DockTab, tabId: string, store: DesktopStoreApi): void {
   if (tab.kind === "preview") {
     const previewId = tab.id.slice("preview:".length);
     window.anycode.previewPanel.close(tabId, previewId).catch((error: unknown) => {
@@ -57,7 +58,7 @@ function closeDockTab(tab: DockTab, tabId: string): void {
     return;
   }
   if (tab.id === "git") {
-    useTabStoreApi().getState().gitSetPanelOpen(false);
+    store.getState().gitSetPanelOpen(false);
   }
 }
 
@@ -77,7 +78,7 @@ export function DockPanel({ mode, width, onToast, subagents, canSplitNow, splitT
   if (!ctx) {
     throw new Error("DockPanel must be used within a <TabContext.Provider>");
   }
-  const { tabId } = ctx;
+  const { tabId, store } = ctx;
 
   // the tab set renders ONLY through the owner-gated
   // `selectDockView` — the store is global across conversation tabs, and an
@@ -101,7 +102,7 @@ export function DockPanel({ mode, width, onToast, subagents, canSplitNow, splitT
       event.preventDefault();
       event.stopPropagation();
       if (activeTab) {
-        closeDockTab(activeTab, tabId);
+        closeDockTab(activeTab, tabId, store);
         close(activeTab.id);
       }
     }
@@ -216,7 +217,7 @@ export function DockPanel({ mode, width, onToast, subagents, canSplitNow, splitT
                 aria-label={`Close ${tab.title}`}
                 title={`Close ${tab.title}`}
                 onClick={() => {
-                  closeDockTab(tab, tabId);
+                  closeDockTab(tab, tabId, store);
                   close(tab.id);
                 }}
               >

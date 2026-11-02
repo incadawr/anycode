@@ -296,6 +296,19 @@ describe("dock resize handle placement (GitHub #31)", () => {
     });
   }
 
+  it.each(["button", "shortcut"])("closes Review using the %s", async (method) => {
+    await mountBody();
+    await act(async () => {
+      store.getState().gitSetPanelOpen(true);
+      useDockStore.getState().open({ id: "git", kind: "git", title: "Review" });
+    });
+    await act(async () => {
+      if (method === "button") container.querySelector<HTMLButtonElement>('[aria-label="Close Review"]')!.click();
+      else container.querySelector<HTMLElement>(".dock-panel")!.dispatchEvent(new KeyboardEvent("keydown", { key: "w", metaKey: true, bubbles: true }));
+    });
+    expect(store.getState().git.panelOpen).toBe(false);
+  });
+
   it("restores an unfinished role picker and task in its original tab", async () => {
     const originalSnapshot = useSettingsStore.getState().snapshot;
     useSettingsStore.setState({snapshot:{settings:cloneDefaults(),secrets:[],providerReady:true,envOverrides:[],readOnly:false,catalog:[]}});
