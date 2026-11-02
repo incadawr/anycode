@@ -90,10 +90,10 @@ function projectHash(files: Record<string, string>): Promise<string> {
 }
 
 describe("collectProjectSpawnConfig", () => {
-  it("returns no items and an empty hash when nothing project-level spawns", async () => {
+  it("returns no items and a valid hash when nothing project-level spawns", async () => {
     const result = await collectProjectSpawnConfig(makeFs({}), WS, HOME);
     expect(result.items).toEqual([]);
-    expect(result.hash).toBe("");
+    expect(result.hash).toMatch(/^[a-f0-9]{64}$/);
   });
 
   it("produces the same hash regardless of JSON key order", async () => {
@@ -184,7 +184,7 @@ describe("collectProjectSpawnConfig", () => {
       HOME,
     );
     expect(result.items).toEqual([]);
-    expect(result.hash).toBe("");
+    expect(result.hash).toMatch(/^[a-f0-9]{64}$/);
   });
 
   // xfix D1: the Claude engine spawns with cwd = workspace, so
@@ -268,7 +268,7 @@ describe("collectProjectSpawnConfig", () => {
         HOME,
       );
       expect(result.items).toEqual([]);
-      expect(result.hash).toBe("");
+      expect(result.hash).toMatch(/^[a-f0-9]{64}$/);
     });
 
     it("claude settings items combine with .anycode items in one hash", async () => {
@@ -282,12 +282,24 @@ describe("collectProjectSpawnConfig", () => {
       const userSettings = "/home/u/.claude/settings.json";
       const result = await collectProjectSpawnConfig(makeFs({ [userSettings]: HOOK_SETTINGS }), WS, HOME);
       expect(result.items).toEqual([]);
-      expect(result.hash).toBe("");
+      expect(result.hash).toMatch(/^[a-f0-9]{64}$/);
     });
   });
 });
 
 describe("workspace trust store", () => {
+  it("keeps valid decisions when another record is malformed", async () => {
+    const valid = { decision: "trusted", hash: "abc", decidedAt: "today" };
+    const fs = makeFs({ [STORE]: JSON.stringify({ version: 1, folders: { "/good": valid, "/bad": { ...valid, hash: "" } } }) });
+    expect(await readTrustStore(fs, STORE)).toEqual({ version: 1, folders: { "/good": valid } });
+  });
+
+  it("persists a valid decision for an empty folder", async () => {
+    const fs = makeFs({});
+    const result = await resolveWorkspaceTrust(fs, { workspace: WS, home: HOME, storePath: STORE });
+    await writeTrustDecision(fs, STORE, result.folder, "trusted", result.hash);
+    expect((await readTrustStore(fs, STORE)).folders[WS]).toMatchObject({ decision: "trusted", hash: result.hash });
+  });
   it("is fail-soft: a corrupt store trusts nothing", async () => {
     const fs = makeFs({ [STORE]: "{not json" });
     const store = await readTrustStore(fs, STORE);

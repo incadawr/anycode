@@ -283,7 +283,7 @@ export async function collectProjectSpawnConfig(
   home: string,
 ): Promise<ProjectSpawnConfig> {
   if (resolve(workspace) === resolve(home)) {
-    return { items: [], hash: "" };
+    return { items: [], hash: createHash("sha256").update(canonicalJson({ version: 1, items: [] })).digest("hex") };
   }
 
   const projectConfigPath = configPathOf(workspace);
@@ -317,7 +317,7 @@ export async function collectProjectSpawnConfig(
   }
 
   if (collected.length === 0) {
-    return { items: [], hash: "" };
+    return { items: [], hash: createHash("sha256").update(canonicalJson({ version: 1, items: [] })).digest("hex") };
   }
 
   // xfix m3: bytewise `<` compare, not localeCompare — the hash must be

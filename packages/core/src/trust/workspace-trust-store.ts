@@ -40,7 +40,7 @@ const recordSchema = z.object({
 
 const storeSchema = z.object({
   version: z.literal(1),
-  folders: z.record(z.string(), recordSchema),
+  folders: z.record(z.string(), z.unknown()),
 });
 
 /** `~/.anycode/workspace-trust.json` for the given home directory. */
@@ -91,7 +91,13 @@ export async function readTrustStore(
   try {
     if (!(await fs.exists(storePath))) return emptyTrustStore();
     const parsed = storeSchema.safeParse(JSON.parse(await fs.readFile(storePath)));
-    return parsed.success ? parsed.data : emptyTrustStore();
+    if (!parsed.success) return emptyTrustStore();
+    const folders: WorkspaceTrustStore["folders"] = {};
+    for (const [key, value] of Object.entries(parsed.data.folders)) {
+      const record = recordSchema.safeParse(value);
+      if (record.success) Object.defineProperty(folders, key, { value: record.data, enumerable: true, writable: true, configurable: true });
+    }
+    return { version: 1, folders };
   } catch {
     return emptyTrustStore();
   }
