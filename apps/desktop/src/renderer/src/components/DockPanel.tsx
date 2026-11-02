@@ -242,7 +242,7 @@ export function DockPanel({ mode, width, onToast, subagents, canSplitNow, splitT
                   <X />
                 </button>
               </div>}
-              <div className="dock-split-pane-body">{renderTabBody(tab, active)}</div>
+              <div className="dock-split-pane-body">{(tab.id !== "subagents" || active || pinned) && renderTabBody(tab, active)}</div>
             </div>
           );
         })}
