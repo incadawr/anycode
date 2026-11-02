@@ -1,14 +1,10 @@
 /**
  * TelemetryPort (slice 6.6, design slice-6.6-cut.md §2-B1): a local, opt-in,
- * append-only observability sink. The frozen record union below IS the
- * privacy theorem — every field of every variant is a name/enum/number/
- * boolean by type, so a free-form text field (a prompt, tool args/output, an
- * error message, a description, a label, a retry reason) is structurally
- * unrepresentable here; a new/unknown AgentEvent variant is dropped
- * (fail-closed) by the mapper in telemetry/records.ts rather than widening
- * this union. Written by adapters/node/node-telemetry.ts (JsonlTelemetrySink);
- * consumed only by CLI/host wiring — CorePorts does NOT carry this port, so
- * tool handlers can never see or write to it.
+ * append-only observability sink. Records are a whitelist of structured fields.
+ * Classified Codex error messages are the only error text carried; other raw
+ * errors, prompts and tool contents remain excluded. Written by
+ * adapters/node/node-telemetry.ts (JsonlTelemetrySink) and consumed by CLI/host
+ * wiring; tool handlers cannot write to it.
  *
  * Telemetry track additions: `session_start.engine` /
  * `.parentSession`, `subagent_start.model` / `.engine`, and the envelope's
@@ -37,9 +33,7 @@ import type { CeilingRefusalReason, FinishReason, LoopEndReason, TokenUsage } fr
 import type { ToolCallStatus } from "../types/tools.js";
 import type { PermissionMode } from "../types/permissions.js";
 
-/** One JSONL line. EVERY field is a name/enum/number/boolean by type — no
- *  field can carry free-form text (prompts, tool args/outputs, error messages,
- *  descriptions, labels, reasons are structurally unrepresentable). */
+/** One JSONL line; classified Codex errors are the only error text retained. */
 export type TelemetryEventRecord =
   | { t: "turn_end"; turn: number; finishReason: FinishReason }
   | {
@@ -123,7 +117,7 @@ export type TelemetryEventRecord =
    * `nextAction` (the model's free text) are deliberately NOT carried here.
    */
   | { t: "ceiling_grant"; round: number; granted: number; totalGranted: number }
-  | { t: "error" }
+  | { t: "error"; message?: string }
   | { t: "checkpoint_created" }
   | { t: "checkpoint_failed" }
   /**

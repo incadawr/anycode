@@ -4,7 +4,7 @@
  * interpret unobserved protocol families.
  */
 
-import type { AgentEvent, CodexRateLimitsWire, FinishReason, ToolCallOutcome, ToolCallStatus } from "@anycode/core";
+import { scrubApprovalText, type AgentEvent, type CodexRateLimitsWire, type FinishReason, type ToolCallOutcome, type ToolCallStatus } from "@anycode/core";
 import type { JsonRpcNotification } from "./protocol.js";
 import type { TurnItemIndex } from "./turn-item-index.js";
 import { CollabAgentCardIndex } from "./collab-agent-index.js";
@@ -183,6 +183,17 @@ export interface TurnTranslatorOptions {
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" ? value as Record<string, unknown> : null;
+}
+
+function codexTurnError(value: Record<string, unknown> | null, fallback: string): Extract<AgentEvent, { type: "error" }> {
+  const message = typeof value?.message === "string" && value.message.length > 0 ? value.message : fallback;
+  const info = value?.codexErrorInfo;
+  const usageLimit = info === "usageLimitExceeded" || info === "usage_limit_exceeded";
+  const retry = usageLimit ? message.match(/\btry again at\s+(\d{1,2}:\d{2}\s*(?:AM|PM))/i) : null;
+  const safeMessage = usageLimit
+    ? `This account has reached its usage limit.${retry ? ` Try again at ${retry[1]}.` : ""}`
+    : scrubApprovalText(message).replace(/https?:\/\/\S+/gi, "[address redacted]").slice(0, 1000);
+  return { type: "error", error: new Error(message), safe: { code: usageLimit ? "codex_usage_limit" : "codex_error", message: safeMessage } };
 }
 
 function matchingTurn(params: unknown, threadId: string, turnId: string): Record<string, unknown> | null {
@@ -1073,9 +1084,9 @@ export class TurnTranslator {
     if (params.willRetry === true) {
       return [{ type: "engine_notice", level: "retry", message }];
     }
-    if (this.errorEmitted) return [];
+    if (this.errorEmitted || typeof errorValue?.message !== "string" || errorValue.message.length === 0) return [];
     this.errorEmitted = true;
-    return [{ type: "error", error: new Error(message) }];
+    return [codexTurnError(errorValue, "Codex reported an error.")];
   }
 
   private finish(params: Record<string, unknown>): AgentEvent[] {
@@ -1097,7 +1108,7 @@ export class TurnTranslator {
         ? turnError.message
         : status === "failed" ? "Codex turn failed." : "Codex protocol returned an unsupported turn status.";
       this.errorEmitted = true;
-      events.push({ type: "error", error: new Error(message) });
+      events.push(codexTurnError(turnError, message));
     }
     for (const id of this.openText) events.push({ type: "text_end", id });
     this.openText.clear();

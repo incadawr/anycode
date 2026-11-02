@@ -7,6 +7,11 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Folders without project settings can now be trusted when enabling agent-opened tasks. Invalid trust records no longer hide other remembered folders.
+- Codex turn failures now show their error details, including usage-limit retry times, in the transcript and session results.
+
 ## [0.0.65] — 2026-11-02
 
 ### Added
@@ -22,8 +27,6 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ## [0.0.64] — 2026-11-02
 
 ### Fixed
-
-- Folders without project settings can now be trusted when enabling agent-opened tasks. Invalid trust records no longer hide other remembered folders.
 
 - Z.AI (GLM), MiniMax, Xiaomi MiMo and DeepSeek now get their own reasoning back on later requests, in tool loops and across turns, so the model keeps its earlier thinking. Reasoning is sent only to the provider and model that produced it, and reloaded sessions show it as collapsed blocks. Set `ANYCODE_PRESERVE_REASONING=on|off` to override this for supported providers and custom connections (#41).
 - Conversation history written by this version cannot be read by older versions.
@@ -42,7 +45,6 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- Fetch models while adding a keyed connection, and select or clear filtered models in the model picker.
 - Choose the accent color (Blue, Gold, Indigo, Teal, Ember) in Settings → Appearance; the choice is saved on this device.
 
 ### Changed
