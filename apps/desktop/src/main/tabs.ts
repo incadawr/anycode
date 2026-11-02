@@ -823,6 +823,7 @@ export interface TabHostManagerDeps {
    * a cross-connection spawn, which is the safe default.
    */
   resolveProviderConnection?: (provider: string) => string | undefined;
+  resolveChildRoute?: (value: string) => { ok: true; connectionId: string; model?: string } | { ok: false; detail: string };
   /** Existence check against the live connections registry for a profile-declared exact connection id. */
   resolveChildConnection?: (connectionId: string) => string | undefined;
   /**
@@ -834,7 +835,7 @@ export interface TabHostManagerDeps {
   prepareChildConnection?: (connectionId: string) =>
     Promise<{ ok: true; release: () => void } | { ok: false }>;
   /** Reject a core model override before creating a child or sending a request. */
-  validateChildModel?: (model: string, connectionId: string | undefined) => void;
+  validateChildModel?: (model: string, connectionId: string | undefined) => string | void;
   /**
    * Preview control-plane delegate (night-track wave-1 cut §2.3/§2.5,
    * 96-A): main routes a host's `PREVIEW_REQUEST_TYPE`/`PREVIEW_ARTIFACTS_TYPE`
@@ -2365,7 +2366,16 @@ export class TabHostManager {
       return;
     }
     let connectionId = resumable !== undefined ? resumable.connectionId : parentTab.connectionId;
-    if (req.provider !== undefined) {
+    let resolvedProviderModel: string | undefined;
+    if (req.provider !== undefined && this.deps.resolveChildRoute !== undefined) {
+      const resolved = this.deps.resolveChildRoute(req.provider);
+      if (!resolved.ok) {
+        reject("not_ready", `Agent: ${resolved.detail}`);
+        return;
+      }
+      connectionId = resolved.connectionId;
+      resolvedProviderModel = resolved.model;
+    } else if (req.provider !== undefined) {
       // Explicit resolve, synchronous (deps doc: main already holds the
       // connections registry in memory) — an unknown/deleted provider id
       // fails closed rather than silently falling back to the parent's own
@@ -2388,10 +2398,13 @@ export class TabHostManager {
       connectionId = resolved;
     }
 
-    if (engine === "core" && req.model !== undefined) {
-      try { this.deps.validateChildModel?.(req.model, connectionId); }
-      catch {
-        reject("not_ready", "Agent: this model is not available on the selected connection. Use its exact model ID and select a matching provider/connection, or retry without a model override.");
+    const requestedModel = req.model ?? resolvedProviderModel;
+    if (engine === "core" && requestedModel !== undefined) {
+      let detail: string | void;
+      try { detail = this.deps.validateChildModel?.(requestedModel, connectionId); }
+      catch { detail = "Model validation failed."; }
+      if (detail !== undefined) {
+        reject("not_ready", `Agent: this model is not available on the selected connection; select a matching provider/connection. ${detail}`);
         return;
       }
     }
@@ -2404,7 +2417,7 @@ export class TabHostManager {
     // before this request was even known to fit under cap (срез 1).
     const childTabId = this.genId();
     const childSessionId = req.resumeChildSessionId ?? this.genId();
-    const modelOverride = resumable !== undefined ? resumable.modelOverride : req.model;
+    const modelOverride = resumable !== undefined ? resumable.modelOverride : requestedModel;
     // A follow-up keeps the tier its child was started on, like the model.
     const effortOverride = resumable !== undefined ? resumable.effortOverride : req.effort;
     const entry: ChildRunLedgerEntry = {

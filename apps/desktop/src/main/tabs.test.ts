@@ -5854,6 +5854,31 @@ describe("TabHostManager — recognizer live-config broadcast (E1 §1.2)", () =>
 });
 
 describe("model admission before fork", () => {
+  it("returns route candidates for an ambiguous provider before forking", () => {
+    const { fork, hosts } = liveForkRig();
+    const manager = childManager(fork, windowRig().window, {
+      resolveChildRoute: () => ({ ok: false, detail: 'matches more than one connection: conn-a; conn-b' }),
+    });
+    manager.createTab({ workspace: "/ws", sessionId: "route-root", resume: false });
+    hosts[0]!.emit("message", spawnRequest({ provider: "shared" }));
+    expect(hosts).toHaveLength(1);
+    expect(childRunEvents(hosts[0]!)).toMatchObject([{ kind: "rejected", message: expect.stringContaining("conn-a; conn-b") }]);
+  });
+  it("validates the model selected through a provider route", async () => {
+    const { fork, hosts } = liveForkRig();
+    const validateChildModel = vi.fn();
+    const manager = childManager(fork, windowRig().window, {
+      resolveChildRoute: () => ({ ok: true, connectionId: "conn-target", model: "target-model" }),
+      validateChildModel,
+      prepareChildConnection: async () => ({ ok: true, release: () => {} }),
+    });
+    manager.createTab({ workspace: "/ws", sessionId: "route-root", resume: false });
+    hosts[0]!.emit("message", spawnRequest({ provider: "target-model" }));
+    await flush();
+    expect(validateChildModel).toHaveBeenCalledWith("target-model", "conn-target");
+    expect(hosts).toHaveLength(2);
+  });
+
   it("rejects an unavailable model before it can reach the child's HTTP request", () => {
     const { fork, hosts } = liveForkRig();
     const { window } = windowRig();

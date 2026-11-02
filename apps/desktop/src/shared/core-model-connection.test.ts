@@ -31,6 +31,18 @@ describe("resolveCoreConnectionForModel", () => {
     expect(resolveCoreConnectionForModel(settings, "conn-zai")).toEqual({ ok: true, connectionId: "conn-zai" });
   });
 
+  it("selects a unique provider id and reports ambiguous providers", () => {
+    expect(resolveCoreConnectionForModel(settingsWith(undefined, [deepseek, zai]), "zai"))
+      .toEqual({ ok: true, connectionId: "conn-zai" });
+    const duplicate = connectionFixture({ id: "zai", connectionId: "conn-other", model: "glm-6" });
+    const result = resolveCoreConnectionForModel(settingsWith(undefined, [zai, duplicate]), "zai");
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected refusal");
+    expect(result.reason).toBe("ambiguous");
+    expect(result.detail).toContain("conn-zai");
+    expect(result.detail).toContain("conn-other");
+  });
+
   it("selects a connection by its exact label", () => {
     const labelled = connectionFixture({ id: "zai", connectionId: "conn-labelled", label: "Work GLM", model: "glm-5" });
     const settings = settingsWith(undefined, [deepseek, labelled]);

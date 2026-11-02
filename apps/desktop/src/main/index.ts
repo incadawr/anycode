@@ -1,3 +1,4 @@
+import { resolveCoreConnectionForModel } from "../shared/core-model-connection.js";
 import { initializeIsolatedSmoke, isolatedSmokeStorage } from "./isolated-smoke.js";
 import { closeSessionForAgent } from "./communication-close-session.js";
 import { TAB_CLOSED_ENVELOPE_TYPE } from "../shared/envelopes.js";
@@ -2663,8 +2664,14 @@ void app.whenReady().then(async () => {
       const connection = connectionId === undefined ? activeConnection(current) : connectionById(current, connectionId);
       const custom = current.provider.custom?.find(entry => entry.id === connection?.providerId);
       const catalog = getBuiltinCatalog().providers.find(entry => entry.id === connection?.providerId);
-      assertChildModel(model, connectionChildModels(connection, custom?.models ?? [], catalog?.models.map(item => item.id) ?? [], connection?.id === current.provider.activeConnectionId ? bootEnv.ANYCODE_MODEL : undefined));
+      const models = connectionChildModels(connection, custom?.models ?? [], catalog?.models.map(item => item.id) ?? [], connection?.id === current.provider.activeConnectionId ? bootEnv.ANYCODE_MODEL : undefined);
+      try { assertChildModel(model, models); }
+      catch {
+        const result = resolveCoreConnectionForModel({ provider: { ...current.provider, connections: connection ? [{ ...connection, models }] : [] } }, model);
+        return result.ok ? `Model ${JSON.stringify(model)} is unavailable on this connection.` : result.detail;
+      }
     },
+    resolveChildRoute: (value) => resolveCoreConnectionForModel(currentSettings(), value),
     resolveProviderConnection: (provider) =>
       settings === null ? undefined : resolveProviderConnection(settings, provider)?.id,
     // a profile's EXACT `connection:` id, checked against the live
