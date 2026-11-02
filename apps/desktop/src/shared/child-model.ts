@@ -1,3 +1,5 @@
+import { getBuiltinCatalog } from "@anycode/core/catalog";
+import type { AnycodeSettings } from "./settings.js";
 import type { ProviderConnection } from "./settings.js";
 
 export function connectionChildModels(connection: ProviderConnection | undefined, customModels: readonly string[], catalogModels: readonly string[], environmentModel?: string): string[] {
@@ -17,4 +19,13 @@ export function readAllowedChildModels(raw: string | undefined, currentModel: st
     if (Array.isArray(value) && value.every(id => typeof id === "string")) return [...new Set([currentModel, ...value])];
   } catch { /* only the configured model is known */ }
   return [currentModel];
+}
+
+/** Enrich connections with the same model inventory used for child admission. */
+export function connectionRoutingSettings(settings: AnycodeSettings, connectionId?: string, model?: string) {
+  return { provider: { connections: settings.provider.connections.map(connection => {
+    const custom = settings.provider.custom?.find(entry => entry.id === connection.providerId);
+    const catalog = getBuiltinCatalog().providers.find(entry => entry.id === connection.providerId);
+    return { ...connection, models: connectionChildModels(connection, custom?.models ?? [], catalog?.models.map(entry => entry.id) ?? [], connection.id === connectionId ? model : undefined) };
+  }) } };
 }

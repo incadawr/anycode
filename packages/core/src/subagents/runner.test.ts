@@ -6051,3 +6051,15 @@ it("reports candidates when a host cannot create an inline model port", async ()
   const result = await runner.run({ ...REQ, model: "one" }, {});
   expect(result).toMatchObject({ status: "error", finalText: expect.stringContaining("available models: one") });
 });
+
+it("lets the port factory accept explicit models absent from discovery", async () => {
+  const child = new ScriptedModelPort(() => textStep("done"));
+  const resolve = vi.fn(() => child);
+  const runner = createSubagentRunner(makeParent({ mode: "yolo" }), {
+    readConnectionTargets: () => ({ current: { connectionId: "a", model: "parent" }, connections: [{ id: "a", providerId: "custom", readiness: "unknown", models: [{ id: "parent", default: true }] }] }),
+    resolveChildModelPort: resolve,
+  });
+  const result = await runner.run({ ...REQ, model: "child" }, {});
+  expect(result.status).toBe("completed");
+  expect(resolve).toHaveBeenCalledWith("child");
+});
