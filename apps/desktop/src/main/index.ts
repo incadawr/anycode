@@ -1,4 +1,5 @@
 import { providerProxyConfig } from "./provider-proxy-config.mjs";
+import { protectMainNavigation } from "./main-navigation.js";
 import { resolveCoreConnectionForModel } from "../shared/core-model-connection.js";
 import { initializeIsolatedSmoke, isolatedSmokeStorage } from "./isolated-smoke.js";
 import { closeSessionForAgent } from "./communication-close-session.js";
@@ -58,7 +59,7 @@ import {
 } from "./workspace-trust-ipc.js";
 import { canonicalWorkspaceKey, defaultTrustStorePath, migrateTrustStoreKeys, readTrustStore } from "@anycode/core/workspace-trust";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   BrowserWindow,
   Menu,
@@ -936,6 +937,9 @@ function createWindow(): void {
     },
   });
 
+  const rendererDevServerUrl = process.env["ELECTRON_RENDERER_URL"];
+  protectMainNavigation(win.webContents, rendererDevServerUrl ?? pathToFileURL(resolveRendererIndex()).href, shell.openExternal);
+
   win.on("closed", () => {
     // Preview windows are their own real BrowserWindows: with any still open,
     // Electron would NOT consider "all windows closed" once the main window
@@ -983,7 +987,6 @@ function createWindow(): void {
     previewHost?.setPanelBounds(null);
   });
 
-  const rendererDevServerUrl = process.env["ELECTRON_RENDERER_URL"];
   if (rendererDevServerUrl !== undefined) {
     void win.loadURL(rendererDevServerUrl);
   } else {

@@ -9,6 +9,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Prevent external pages from replacing the main application window or opening uncontrolled child windows.
+
 - Model previews for new connections use the provider endpoint and selected proxy, including for loopback endpoints.
 - Folder trust and agent-opened tasks now require an existing directory and stop if a symlink changes its target during confirmation.
 
