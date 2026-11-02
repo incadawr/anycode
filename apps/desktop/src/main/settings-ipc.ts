@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import { resolveWriteMask } from "@anycode/core/permissions/write-mask-node";
 /**
  * Settings + secret-vault control-plane IPC (design slice-2.2-cut.md §3, ruling
  * §4). Registers `ipcMain.handle` for the five frozen channels from
@@ -1359,7 +1361,7 @@ export async function handleClearSecret(deps: SettingsIpcDeps, raw: unknown): Pr
  */
 export async function handleAddRule(deps: SettingsIpcDeps, raw: unknown): Promise<SettingsMutationResult> {
   const parsed = ruleAddSchema.safeParse(raw);
-  if (!parsed.success) {
+  if (!parsed.success || (["Write", "Edit", "MultiEdit"].includes(parsed.data.toolName) && parsed.data.pattern !== undefined && !resolveWriteMask(parsed.data.pattern, homedir()))) {
     return { ok: false, reason: "invalid" };
   }
   return withSettingsFileLock(deps.settingsPath, async () => {
@@ -2787,6 +2789,7 @@ export function registerSettingsIpc(deps: Omit<SettingsIpcDeps, "vault"> & { vau
   ipcMain.handle(SETTINGS_SET_CHANNEL, (_event, raw: unknown) => handleSet(deps, raw));
   ipcMain.handle(SECRET_SET_CHANNEL, (_event, raw: unknown) => handleSetSecret(deps, raw));
   ipcMain.handle(SECRET_CLEAR_CHANNEL, (_event, raw: unknown) => handleClearSecret(deps, raw));
+  ipcMain.handle("anycode:home-directory", () => homedir());
   ipcMain.handle(PERMISSION_RULE_ADD_CHANNEL, (_event, raw: unknown) => handleAddRule(deps, raw));
   ipcMain.handle(BINARY_TRUST_GRANT_CHANNEL, (_event, raw: unknown) => handleBinaryTrustGrant(deps, raw));
   ipcMain.handle(BINARY_TRUST_REVOKE_CHANNEL, (_event, raw: unknown) => handleBinaryTrustRevoke(deps, raw));

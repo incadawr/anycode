@@ -1122,3 +1122,21 @@ describe("child approval presentation", () => {
     expect(broker.isUnattended).toBe(true);
   });
 });
+
+
+it("applies the same resolved write mask as the core engine", async () => {
+  const { SessionPermissionRules, RuleAwarePermissionEngine, ModePermissionEngine } = await import("@anycode/core");
+  const rules = new SessionPermissionRules();
+  rules.add({ toolName: "Write", pattern: "/private/tmp/project/**" });
+  const engine = new RuleAwarePermissionEngine(new ModePermissionEngine(), rules);
+  for (const [target, allowed] of [["/private/tmp/project/file", true], ["/private/tmp/project-sibling/file", false]] as const) {
+    const req = { ...request, input: { file_path: target }, workspace: { root: "/workspace", resolvedPath: target } };
+    const emitted: HostToUiMessage[] = [];
+    const broker = new IpcPermissionBroker((message) => emitted.push(message), undefined, rules);
+    const result = broker.requestPermission(req);
+    expect(engine.check(req).decision).toBe(allowed ? "allow" : "ask");
+    expect(emitted.some((message) => message.type === "permission_request")).toBe(!allowed);
+    if (!allowed) broker.handleResponse(requestId(emitted), "deny");
+    expect((await result).behavior).toBe(allowed ? "allow" : "deny");
+  }
+});

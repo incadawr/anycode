@@ -1,3 +1,4 @@
+import { isValidWriteMask } from "@anycode/core/permissions/write-mask";
 import { Button } from "../ui/index.js";
 /**
  * Grouped always-allow rules editor (Settings "Permissions" pane, slice
@@ -23,7 +24,7 @@ import { Button } from "../ui/index.js";
  * these helpers directly, the same discipline as every other component test
  * in this directory.
  */
-import { useState, type ComponentType, type SVGProps } from "react";
+import { useEffect, useState, type ComponentType, type SVGProps } from "react";
 import { useStore } from "zustand";
 import type { AlwaysAllowRule, PermissionClassifierSettings, SettingsMutationResult } from "../../../shared/settings.js";
 import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
@@ -112,9 +113,10 @@ export async function submitPermissionAdd(
   store: SettingsStoreApi,
   toolName: string,
   pattern: string,
+  home?: string,
 ): Promise<SettingsMutationResult | null> {
   const trimmedTool = toolName.trim();
-  if (!trimmedTool) {
+  if (!trimmedTool || (["Write", "Edit", "MultiEdit"].includes(trimmedTool) && pattern.trim() !== "" && !isValidWriteMask(pattern.trim(), home))) {
     return null;
   }
   return store.getState().addRule(buildAlwaysAllowRule(trimmedTool, pattern));
@@ -181,6 +183,8 @@ export function PermissionsEditor({ store = useSettingsStore }: PermissionsEdito
   const snapshot = useStore(store, (s) => s.snapshot);
   const [toolInput, setToolInput] = useState("");
   const [patternInput, setPatternInput] = useState("");
+  const [home, setHome] = useState<string>();
+  useEffect(() => { void window.anycode?.homeDirectory?.().then(setHome).catch(() => {}); }, []);
   // classifier control state — initialized from the stored
   // record, kept as plain strings, submitted through setPatch on Save.
   const storedClassifier = snapshot?.settings.permissions.classifier;
@@ -209,10 +213,11 @@ export function PermissionsEditor({ store = useSettingsStore }: PermissionsEdito
   const rules = snapshot.settings.permissions.alwaysAllow;
   const groups = groupAlwaysAllowRules(rules);
   const toolOptions = permissionToolOptions(rules);
-  const canAdd = !readOnly && canSubmitPermissionAdd(toolInput);
+  const invalidWriteMask = ["Write", "Edit", "MultiEdit"].includes(toolInput.trim()) && patternInput.trim() !== "" && !isValidWriteMask(patternInput.trim(), home);
+  const canAdd = !readOnly && canSubmitPermissionAdd(toolInput) && !invalidWriteMask;
 
   async function handleAdd(): Promise<void> {
-    const result = await submitPermissionAdd(store, toolInput, patternInput);
+    const result = await submitPermissionAdd(store, toolInput, patternInput, home);
     if (result?.ok) {
       setToolInput("");
       setPatternInput("");
@@ -304,6 +309,8 @@ export function PermissionsEditor({ store = useSettingsStore }: PermissionsEdito
           Add
         </Button>
       </div>
+
+      {invalidWriteMask && <div role="alert">Enter a narrowly scoped absolute path mask, or leave it blank for workspace-only access.</div>}
 
       {/*
         the ask-zone classifier (default OFF). A classifier

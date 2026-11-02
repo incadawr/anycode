@@ -751,6 +751,7 @@ ipcRenderer.on(TERMINAL_PORT_ENVELOPE_TYPE, (event, payload: { tabId: string }) 
 // no ports, no arbitrary channels, no decrypted secret ever crosses back — a
 // value only travels in via setSecret.
 contextBridge.exposeInMainWorld("anycode", {
+  homeDirectory: () => ipcRenderer.invoke("anycode:home-directory") as Promise<string>,
   // the answer to a folder's project-trust question. The payload is a
   // tab id and a decision ONLY; main resolves the folder and the hash itself.
   // list/forget for Settings → Permissions. The renderer can only
