@@ -113,7 +113,7 @@ import { extractSnapshotPath, isSnapshotTool, readSnapshot } from "./snapshot-ho
 import { PreviewArtifactCollector } from "./preview-artifacts.js";
 import { describeError, sanitizeAgentEvent } from "./serialize.js";
 import { recordErrorDiagnostic } from "./error-diagnostics.js";
-import { toWireToolMeta } from "./permission-broker.js";
+import { toWireToolMeta, workspaceWriteInside } from "./permission-broker.js";
 import type { SessionEngine } from "./engines/session-engine.js";
 import { wakeNetworkWaiters } from "./network-wait.js";
 import { ENGINE_SWITCH_TURN_ID, planEngineSwitchImport, renderImportPrompt } from "./engine-switch.js";
@@ -3702,6 +3702,7 @@ export class Session {
               input: shown.request.input,
               mode: shown.request.mode,
               metadata: toWireToolMeta(shown.request.metadata),
+              workspaceWriteInside: workspaceWriteInside(shown.request),
             },
           }
         : {}),

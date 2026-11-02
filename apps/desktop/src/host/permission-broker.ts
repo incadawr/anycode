@@ -47,6 +47,7 @@ import { randomUUID } from "node:crypto";
 import {
   WORKSPACE_CONFINED_WRITE_TOOLS,
   isProvablyInsideWorkspace,
+  isWithinWorkspace,
   NodeFileSystemAdapter,
 } from "@anycode/core";
 import type {
@@ -56,6 +57,11 @@ import type {
   ToolMetadata,
 } from "@anycode/core";
 import type { HostToUiMessage, WireToolMeta } from "../shared/protocol.js";
+
+export function workspaceWriteInside(request: PermissionRequest): boolean | undefined {
+  const facts = request.workspace;
+  return facts ? isWithinWorkspace(facts.resolvedPath, facts.root) : undefined;
+}
 
 /** Ask deadline; a request with no answer by then is denied (fail-closed). */
 export const PERMISSION_ASK_TIMEOUT_MS = 120_000;
@@ -459,6 +465,7 @@ export class IpcPermissionBroker implements PermissionBroker {
           input: shown.request.input,
           mode: shown.request.mode,
           metadata: toWireToolMeta(shown.request.metadata),
+          workspaceWriteInside: workspaceWriteInside(shown.request),
           ...(entry.presentedAt !== null && entry.presentedTimeoutMs !== null
             ? { deadline: entry.presentedAt + entry.presentedTimeoutMs } : {}),
         }
@@ -539,6 +546,7 @@ export class IpcPermissionBroker implements PermissionBroker {
       input: entry.request.input,
       mode: entry.request.mode,
       metadata: toWireToolMeta(entry.request.metadata),
+      workspaceWriteInside: workspaceWriteInside(entry.request),
     });
   }
 

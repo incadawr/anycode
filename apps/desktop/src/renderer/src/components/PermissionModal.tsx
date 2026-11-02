@@ -366,14 +366,13 @@ function capPreviewLines(text: string, maxLines: number): CappedPreview {
  * used to be picked as the binary, producing a garbage rule. The suggestion
  * seen by the user is therefore already clean.
  */
-export function suggestAlwaysAllowPattern(toolName: string, input: unknown, workspace?: string | null): string | undefined {
+export function suggestAlwaysAllowPattern(toolName: string, input: unknown, workspace?: string | null, workspaceWriteInside?: boolean): string | undefined {
   const record = input !== null && typeof input === "object" ? (input as Record<string, unknown>) : {};
   if (["Write", "Edit", "MultiEdit"].includes(toolName)) {
     const file = record.file_path;
     if (typeof file !== "string" || !file.startsWith("/")) return "";
     if (file.split("/").some((part) => part === "." || part === "..")) return "";
-    const root = workspace?.replace(/\/+$/, "") || (workspace === "/" ? "/" : "");
-    if (root && (root === "/" || file === root || file.startsWith(`${root}/`))) return "";
+    if (workspaceWriteInside !== false) return "";
     const directory = file.slice(0, file.lastIndexOf("/"));
     const mask = `${directory}/**`;
     return isValidWriteMask(mask) ? mask : "";
@@ -530,7 +529,7 @@ export function PermissionModal({
   // hides the pattern input entirely below.
   useEffect(() => {
     setAlwaysAllow(false);
-    setPattern(request ? (suggestAlwaysAllowPattern(request.toolName, request.input, workspace) ?? "") : "");
+    setPattern(request ? (suggestAlwaysAllowPattern(request.toolName, request.input, workspace, request.workspaceWriteInside) ?? "") : "");
     // Keyed on requestId, not `request` itself or `suggestAlwaysAllowPattern`'s
     // inputs — intentionally re-runs only when the pending request actually
     // changes, not on every render of the same one. A changed workspace (new
@@ -542,7 +541,7 @@ export function PermissionModal({
   }
 
   const input = summarizeInput(request.toolName, request.input);
-  const suggestedPattern = suggestAlwaysAllowPattern(request.toolName, request.input, workspace);
+  const suggestedPattern = suggestAlwaysAllowPattern(request.toolName, request.input, workspace, request.workspaceWriteInside);
   const title = formatPermissionTitle(request.toolName);
   const platform = window.anycode?.platform ?? "darwin";
   // an ExitPlanMode ask is presented as a plan review — markdown body,
