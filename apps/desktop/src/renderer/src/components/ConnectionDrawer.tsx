@@ -26,6 +26,7 @@
  * consent retries); shared custom-record keys go through customProvider.update
  * and stay in the field on refusal so the user can retry.
  */
+import { Button, IconButton } from "../ui/index.js";
 import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import { useStore } from "zustand";
 import { findKnownModel, isGatewayProvider } from "@anycode/core/model-dictionary";
@@ -2771,14 +2772,14 @@ export function ConnectionDrawerFields({
           {advancedBlock}
           <div className="settings-field-row connection-drawer-actions">
             {cancelAction}
-            <button
+            <Button variant="primary"
               type="button"
-              className="settings-button settings-button-primary"
+
               disabled={readOnly || creating || setupMissingModel || setupMissingKey || (!isNewCustomEndpoint && providerId === "")}
               onClick={() => void createConnection()}
             >
               {creating ? "Connecting…" : simplified && mode === "add" ? "Connect" : mode === "add" ? "Create connection" : "Save"}
-            </button>
+            </Button>
           </div>
           {providerId === "" ? <p className="settings-field-hint">Choose a provider to continue.</p> : setupMissingModel && <p className="settings-field-hint">Enter a model ID to continue.</p>}
           {setupMissingKey && <p className="settings-field-hint">Enter your API key to continue.</p>}
@@ -2788,14 +2789,14 @@ export function ConnectionDrawerFields({
           <section className="connection-drawer-model-picker connection-drawer-band" data-section="02 · What" aria-label="Models">
             <div className="connection-drawer-model-heading">
               <h3>Model</h3>
-              <button type="button" className="settings-button connection-drawer-model-open" disabled={readOnly || fetchingModels} aria-expanded={modelPopupOpen} onClick={() => {
+              <Button type="button" className="connection-drawer-model-open" disabled={readOnly || fetchingModels} aria-expanded={modelPopupOpen} onClick={() => {
                 if (modelPopupOpen) { setModelPopupOpen(false); return; }
                 setVisibleModelDraft(validVisibleModelIds(pendingVisibleModels ?? targetConnection?.visibleModels ?? mergeModelIds(modelSuggestions.map(item => item.id), normalizeModelId(model) ? [normalizeModelId(model)!] : [])));
                 setModelFilter("");
                 setDraftDefaultModel(model.trim());
                 setModelPopupOpen(true);
                 if (fetchedModels === null && targetConnection?.modelsFetchedAt === undefined && (credentialStatus?.set || noAuth || selectedEntry?.authOptional)) void doFetchModels();
-              }}>Fetch models</button>
+              }}>Fetch models</Button>
             </div>
             <div className="connection-drawer-model-chips" aria-label="Selected models">
               {(pendingVisibleModels ?? targetConnection?.visibleModels ?? mergeModelIds(modelSuggestions.map(item => item.id), normalizeModelId(model) ? [normalizeModelId(model)!] : [])).map(id => <span key={id} data-model-id={id} className={`connection-drawer-model-chip${id === model.trim() ? " connection-drawer-model-chip-selected" : ""}`}>{id === model.trim() ? "★ " : ""}{id}{id === model.trim() ? " · default" : ""}</span>)}
@@ -2808,23 +2809,23 @@ export function ConnectionDrawerFields({
               }
             }}>
               {error !== null && <p className="settings-notice" role="alert">{error}</p>}
-              <div className="connection-drawer-model-heading"><strong>Choose models</strong><button type="button" className="settings-button" disabled={readOnly || fetchingModels} onClick={() => void doFetchModels()}>{fetchingModels ? "Fetching…" : "Refresh"}</button></div>
+              <div className="connection-drawer-model-heading"><strong>Choose models</strong><Button type="button" disabled={readOnly || fetchingModels} onClick={() => void doFetchModels()}>{fetchingModels ? "Fetching…" : "Refresh"}</Button></div>
               <input className="settings-field-input" aria-label="Filter models" autoFocus placeholder="Filter models" value={modelFilter} onChange={e => setModelFilter(e.target.value)} />
               <div className="connection-drawer-popup-list">
                 {validVisibleModelIds(mergeModelIds(mergeModelIds(fetchedModels?.map(item => item.id) ?? [], modelSuggestions.map(item => item.id)), mergeModelIds(visibleModelDraft, normalizeModelId(model) ? [normalizeModelId(model)!] : []))).filter(id => id.toLowerCase().includes(modelFilter.toLowerCase())).map(id => <div className="connection-drawer-popup-row" key={id}>
                   <label><input type="checkbox" checked={visibleModelDraft.includes(id)} disabled={readOnly || fetchingModels} onChange={e => setVisibleModelDraft(current => e.target.checked ? mergeModelIds(current, [id]) : current.filter(item => item !== id))} /> {id}</label>
-                  <button type="button" className="settings-button" aria-label={`Set ${id} as default`} aria-pressed={draftDefaultModel === id} disabled={readOnly || fetchingModels} onClick={() => { setVisibleModelDraft(current => mergeModelIds(current, [id])); setDraftDefaultModel(id); }}>{draftDefaultModel === id ? "★" : "☆"}</button>
+                  <Button size="sm" type="button" aria-label={`Set ${id} as default`} aria-pressed={draftDefaultModel === id} disabled={readOnly || fetchingModels} onClick={() => { setVisibleModelDraft(current => mergeModelIds(current, [id])); setDraftDefaultModel(id); }}>{draftDefaultModel === id ? "★" : "☆"}</Button>
                 </div>)}
               </div>
-              <div className="connection-drawer-popup-manual"><input className="settings-field-input" aria-label="Manual model ID" placeholder="Enter a model ID" value={manualModel} onChange={e => setManualModel(e.target.value)} /><button type="button" className="settings-button connection-drawer-model-add" disabled={readOnly || normalizeModelId(manualModel) === null} onClick={() => { const id = normalizeModelId(manualModel); if (id) { setVisibleModelDraft(current => mergeModelIds(current, [id])); setManualModel(""); } }}>Add</button></div>
-              <div className="connection-drawer-model-heading"><span>{visibleModelDraft.length} selected</span><button type="button" className="settings-button connection-drawer-model-done" disabled={readOnly || fetchingModels || visibleModelDraft.length === 0} onClick={() => {
+              <div className="connection-drawer-popup-manual"><input className="settings-field-input" aria-label="Manual model ID" placeholder="Enter a model ID" value={manualModel} onChange={e => setManualModel(e.target.value)} /><Button type="button" className="connection-drawer-model-add" disabled={readOnly || normalizeModelId(manualModel) === null} onClick={() => { const id = normalizeModelId(manualModel); if (id) { setVisibleModelDraft(current => mergeModelIds(current, [id])); setManualModel(""); } }}>Add</Button></div>
+              <div className="connection-drawer-model-heading"><span>{visibleModelDraft.length} selected</span><Button type="button" className="connection-drawer-model-done" disabled={readOnly || fetchingModels || visibleModelDraft.length === 0} onClick={() => {
                 modelSelectionRevision.current++;
                 const defaultModel = visibleModelDraft.includes(draftDefaultModel) ? draftDefaultModel : visibleModelDraft[0]!;
                 setPendingVisibleModels(visibleModelDraft);
                 setCommitFetchedModels(fetchedModels !== null);
                 changeModel(defaultModel, defaultModel, targetConnection);
                 setModelPopupOpen(false);
-              }}>Done</button></div>
+              }}>Done</Button></div>
             </div>}
           </section>
 
@@ -2882,14 +2883,14 @@ export function ConnectionDrawerFields({
                     }}
                   />
                 </label>
-                  <button
+                  <Button variant="danger" data-automation="clear-key"
                     type="button"
-                    className="settings-button settings-button-danger"
+
                     disabled={readOnly || clearing || !credentialStatus?.set}
                     onClick={() => void clearSecretValue()}
                   >
                     Clear key
-                  </button>
+                  </Button>
                 </div>
               </>
             )}
@@ -2901,14 +2902,14 @@ export function ConnectionDrawerFields({
           {/* ONE Save (item 3): metadata + (if typed) the key, together. */}
           <div className="settings-field-row connection-drawer-actions">
             {cancelAction}
-            <button
+            <Button variant="primary"
               type="button"
-              className="settings-button settings-button-primary connection-drawer-save"
+              className="connection-drawer-save"
               disabled={readOnly || saving}
               onClick={() => void save()}
             >
               {saving ? "Saving…" : "Save"}
-            </button>
+            </Button>
             {savedNotice && (
               <span className="connection-drawer-saved" role="status">
                 Saved
@@ -2921,7 +2922,7 @@ export function ConnectionDrawerFields({
       {error !== null && !modelPopupOpen && (
         <div className="settings-notice" role="alert">
           {error}
-          {commitFetchedModels && <button type="button" className="settings-button" onClick={() => { modelSelectionRevision.current++; setFetchedModels(null); setFetchedSource(null); setCommitFetchedModels(false); setError("Fetched metadata discarded. Your model selections are kept; save or fetch again."); }}>Discard fetched metadata</button>}
+          {commitFetchedModels && <Button type="button" onClick={() => { modelSelectionRevision.current++; setFetchedModels(null); setFetchedSource(null); setCommitFetchedModels(false); setError("Fetched metadata discarded. Your model selections are kept; save or fetch again."); }}>Discard fetched metadata</Button>}
         </div>
       )}
 
@@ -3038,9 +3039,7 @@ export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDr
     >
       <div className="connection-drawer-header" inert={confirmDiscard || undefined} aria-hidden={confirmDiscard || undefined}>
         <span className="connection-drawer-title">{connectionDrawerTitle(fieldsProps.mode, createdId !== null)}</span>
-        <button type="button" className="connection-drawer-close" aria-label="Close" disabled={busy} onClick={requestClose}>
-          <X aria-hidden="true" />
-        </button>
+        <IconButton className="connection-drawer-close" label="Close" icon={<X aria-hidden="true" />} disabled={busy} onClick={requestClose} />
       </div>
       {/* Re-mounted (keyed) on every open so a prior connection's local form
           state (label/model/…) never leaks into the next Add/Edit — matches
@@ -3050,7 +3049,7 @@ export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDr
         key={fieldsProps.editConnection?.id ?? "add"}
         {...fieldsProps}
         onConnectionCreated={(connectionId) => setCreatedId(connectionId)}
-        cancelAction={<button type="button" className="settings-button" disabled={busy} onClick={requestClose}>Cancel</button>}
+        cancelAction={<Button type="button" disabled={busy} onClick={requestClose}>Cancel</Button>}
         onCommitBegin={() => editVersion.current}
         onCommitSuccess={(version) => {
           if (version !== editVersion.current) return false;
@@ -3065,7 +3064,7 @@ export function ConnectionDrawer({ open, onClose, ...fieldsProps }: ConnectionDr
         <p id="connection-discard-title">Discard unsaved changes?</p>
         <div className="settings-field-row">
           <button ref={keepEditingRef} type="button" className="settings-button" onClick={() => setConfirmDiscard(false)}>Keep editing</button>
-          <button type="button" className="settings-button settings-button-danger" disabled={busy} onClick={() => { if (!busy) onClose(); }}>Discard changes</button>
+          <Button variant="danger" type="button" disabled={busy} onClick={() => { if (!busy) onClose(); }}>Discard changes</Button>
         </div>
       </div>}
     </dialog>

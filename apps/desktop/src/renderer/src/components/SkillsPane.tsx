@@ -55,6 +55,7 @@ import type {
 } from "../../../shared/skills-config.js";
 import { Chevron, Download, FileIcon, Folder, Plus, Search, Spinner, Trash, X } from "./icons.js";
 import { RUN_ACTION_EVENT, SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
+import { Button, Field, IconButton, Input, Textarea } from "../ui/index.js";
 
 // ── bridge (DI, same ethic as McpServersPane.tsx's McpConfigBridge) ──
 
@@ -499,15 +500,9 @@ export function SkillsPane({ tabId, bridge = window.anycode.skills, onCountChang
           <option value="plugin">Plugin</option>
         </select>
         <div className="skills-pane-actions mcp-pane-actions">
-          <button type="button" className="skills-icon-button mcp-icon-button" aria-label="Create skill" onClick={openCreate}>
-            <Plus />
-          </button>
-          <button type="button" className="skills-icon-button mcp-icon-button" aria-label="Import skills" onClick={() => void openImport()}>
-            <Download />
-          </button>
-          <button type="button" className="skills-icon-button mcp-icon-button" aria-label="Refresh skills" onClick={() => void refresh()}>
-            <Spinner />
-          </button>
+          <IconButton className="skills-icon-button" label="Create skill" icon={<Plus />} onClick={openCreate} />
+          <IconButton className="skills-icon-button" label="Import skills" icon={<Download />} onClick={() => void openImport()} />
+          <IconButton className="skills-icon-button" label="Refresh skills" icon={<Spinner />} onClick={() => void refresh()} />
         </div>
       </div>
 
@@ -652,7 +647,7 @@ interface SkillRowItemProps {
   onConfirmDelete: () => void;
 }
 
-function SkillRowItem({ row, confirmDelete, onToggle, onReveal, onRequestDelete, onCancelDelete, onConfirmDelete }: SkillRowItemProps) {
+export function SkillRowItem({ row, confirmDelete, onToggle, onReveal, onRequestDelete, onCancelDelete, onConfirmDelete }: SkillRowItemProps) {
   const manageable = canManageSkillRow(row);
 
   return (
@@ -682,12 +677,10 @@ function SkillRowItem({ row, confirmDelete, onToggle, onReveal, onRequestDelete,
           {confirmDelete ? (
             <span className="mcp-confirm-row">
               <span className="mcp-confirm-text">Delete "{row.name}"?</span>
-              <button type="button" className="settings-button settings-button-danger" onClick={onConfirmDelete}>
+              <Button size="sm" variant="danger" onClick={onConfirmDelete}>
                 Delete
-              </button>
-              <button type="button" className="settings-button" onClick={onCancelDelete}>
-                Cancel
-              </button>
+              </Button>
+              <Button size="sm" onClick={onCancelDelete}>Cancel</Button>
             </span>
           ) : (
             <>
@@ -701,17 +694,8 @@ function SkillRowItem({ row, confirmDelete, onToggle, onReveal, onRequestDelete,
               >
                 <span className="settings-switch-thumb" />
               </button>
-              <button type="button" className="skills-icon-button mcp-icon-button" aria-label={`Reveal ${row.name}`} onClick={onReveal}>
-                <Folder />
-              </button>
-              <button
-                type="button"
-                className="skills-icon-button mcp-icon-button mcp-icon-button-danger"
-                aria-label={`Delete ${row.name}`}
-                onClick={onRequestDelete}
-              >
-                <Trash />
-              </button>
+              <IconButton className="skills-icon-button" label={`Reveal ${row.name}`} icon={<Folder />} onClick={onReveal} />
+              <IconButton className="skills-icon-button" label={`Delete ${row.name}`} icon={<Trash />} onClick={onRequestDelete} />
             </>
           )}
         </div>
@@ -771,34 +755,15 @@ function SkillCreateDialog({ fields, error, createdRow, scopeMode, onChange, onC
             <p>
               Created at <code className="skills-create-path">{createdRow.path}</code>.
             </p>
-            <button type="button" className="settings-button" onClick={onReveal}>
-              Reveal
-            </button>
+            <Button size="sm" onClick={onReveal}>Reveal</Button>
           </div>
         ) : (
           <>
-            <label className="settings-field">
-              <span className="settings-field-label">Name</span>
-              <input
-                className="settings-field-input"
-                type="text"
-                value={fields.name}
-                onChange={(e) => set("name", e.target.value)}
-              />
-              {nameInvalid && (
-                <span className="skills-field-invalid">
-                  Use letters, numbers, "-", or "_" — must start with a letter or number.
-                </span>
-              )}
-            </label>
-            <label className="settings-field">
-              <span className="settings-field-label">Description</span>
-              <textarea
-                className="settings-field-input mcp-textarea"
-                value={fields.description}
-                onChange={(e) => set("description", e.target.value)}
-              />
-            </label>
+            <Input label="Name" size="sm"
+              error={nameInvalid ? 'Use letters, numbers, "-", or "_" — must start with a letter or number.' : undefined}
+              type="text" value={fields.name} onChange={(e) => set("name", e.target.value)} />
+            <Textarea label="Description" value={fields.description}
+              onChange={(e) => set("description", e.target.value)} />
             {/* the scope radio is gone — the write target is the
                 pane's header scope bar (ScopeSwitcher), restated here as a
                 hint so the dialog itself names where the scaffold will land.
@@ -811,13 +776,11 @@ function SkillCreateDialog({ fields, error, createdRow, scopeMode, onChange, onC
         )}
       </div>
       <div className="mcp-dialog-actions">
-        <button type="button" className="settings-button" onClick={onCancel}>
-          {createdRow ? "Close" : "Cancel"}
-        </button>
+        <Button size="sm" onClick={onCancel}>{createdRow ? "Close" : "Cancel"}</Button>
         {!createdRow && (
-          <button type="button" className="settings-button settings-button-primary" disabled={!canSubmit} onClick={onSubmit}>
+          <Button size="sm" variant="primary" disabled={!canSubmit} onClick={onSubmit}>
             Create skill
-          </button>
+          </Button>
         )}
       </div>
     </dialog>
@@ -837,7 +800,7 @@ interface SkillImportDialogProps {
   onClose: () => void;
 }
 
-function SkillImportDialog({ scan, selection, scopeMode, results, onToggleRow, onApply, onClose }: SkillImportDialogProps) {
+export function SkillImportDialog({ scan, selection, scopeMode, results, onToggleRow, onApply, onClose }: SkillImportDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -938,17 +901,15 @@ function SkillImportDialog({ scan, selection, scopeMode, results, onToggleRow, o
         )}
       </div>
       <div className="mcp-dialog-actions">
-        <button type="button" className="settings-button" onClick={onClose}>
-          Close
-        </button>
-        <button
-          type="button"
-          className="settings-button settings-button-primary"
+        <Button size="sm" onClick={onClose}>Close</Button>
+        <Button
+          size="sm"
+          variant="primary"
           disabled={selectedImportIds(selection).length === 0}
           onClick={onApply}
         >
           {skillsImportFooterLabel(selection)}
-        </button>
+        </Button>
       </div>
     </dialog>
   );

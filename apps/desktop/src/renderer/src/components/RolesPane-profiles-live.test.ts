@@ -480,7 +480,7 @@ describe("Control appearance and unavailable routes", () => {
     expect(container.querySelector("#role-profile-name")?.classList.contains("settings-field-input")).toBe(true);
     expect([...container.querySelectorAll(".roles-pane select")].every((el) => el.classList.contains("settings-field-select"))).toBe(true);
     expect(container.querySelector('[aria-label="Max parallel children"]')?.classList.contains("settings-field-input")).toBe(true);
-    expect([...container.querySelectorAll(".roles-pane button")].every((el) => el.classList.contains("settings-button"))).toBe(true);
+    expect([...container.querySelectorAll(".roles-pane button")].every((el) => el.classList.contains("ak-btn"))).toBe(true);
   });
 
   it("keeps an unavailable route and its fallbacks until the user changes it", async () => {

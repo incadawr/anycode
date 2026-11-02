@@ -81,6 +81,7 @@ import {
   type ProfilePhase,
 } from "./profile-loader.js";
 import "../profile-pane.css";
+import { Button } from "../ui/index.js";
 
 // ── bridge (DI, same ethic as SkillsPane's SkillsBridge) ──
 
@@ -725,14 +726,9 @@ export function ProfilePane({ bridge = window.anycode.profile, now }: ProfilePan
       aria-busy={busy || undefined}
     >
       <div className="profile-pane-toolbar">
-        <button
-          type="button"
-          className="settings-button profile-refresh-button"
-          disabled={busy}
-          onClick={() => loaderRef.current?.refresh()}
-        >
+        <Button size="sm" className="profile-refresh-button" disabled={busy} onClick={() => loaderRef.current?.refresh()}>
           Refresh
-        </button>
+        </Button>
         {busyNote !== null && (
           <span className="profile-updating-note" role="status">
             <span className="profile-section-spinner" aria-hidden="true" />
@@ -1131,13 +1127,9 @@ function ToolsAndModelsColumn({
             ))}
           </ul>
           {summary.models.length > PROFILE_MODELS_COLLAPSED_ROWS && (
-            <button
-              type="button"
-              className="settings-button profile-show-all-models"
-              onClick={onToggleModelsExpanded}
-            >
+            <Button size="sm" className="profile-show-all-models" onClick={onToggleModelsExpanded}>
               {modelsExpanded ? "Show less" : `Show all (${summary.models.length})`}
-            </button>
+            </Button>
           )}
         </>
       )}
@@ -1183,9 +1175,9 @@ function TelemetryToggleBlock({
           </span>
         )}
         <div className="profile-telemetry-reveal-row">
-          <button type="button" className="settings-button profile-reveal-button" onClick={onReveal}>
+          <Button size="sm" className="profile-reveal-button" onClick={onReveal}>
             Reveal telemetry folder
-          </button>
+          </Button>
           <span className="profile-telemetry-dir">{view.dir}</span>
         </div>
       </div>

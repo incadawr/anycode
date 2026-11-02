@@ -10,6 +10,7 @@
  * agent" flow (only while enabled); a collapsed Advanced disclosure; one footer
  * line. The header title and subtitle come from the Settings shell.
  */
+import { Button, SegmentedControl, Switch } from "../ui/index.js";
 import { useEffect, useState } from "react";
 import {
   SESSIONS_API_AGENT_PROJECTS_EMPTY,
@@ -114,17 +115,7 @@ export function SessionsApiPaneView(props: SessionsApiPaneViewProps) {
 
       <div className="settings-field">
         <div className="settings-field-row sessions-api-enable-row">
-          <button
-            type="button"
-            role="switch"
-            aria-checked={view.enabled}
-            aria-labelledby="sessions-api-enable-caption"
-            className={`settings-switch${view.enabled ? " settings-switch-on" : ""}`}
-            disabled={!editable}
-            onClick={() => props.onToggle(!view.enabled)}
-          >
-            <span className="settings-switch-thumb" />
-          </button>
+          <Switch checked={view.enabled} aria-labelledby="sessions-api-enable-caption" disabled={!editable} onCheckedChange={() => props.onToggle(!view.enabled)} />
           <span id="sessions-api-enable-caption" className="settings-switch-caption">{SESSIONS_API_ENABLE_LABEL}</span>
           <span
             className={`settings-secret-status settings-secret-status-${sessionsApiStatusTone(status, envControlled)} sessions-api-status`}
@@ -150,27 +141,19 @@ export function SessionsApiPaneView(props: SessionsApiPaneViewProps) {
               <div className="sessions-api-step-body">
                 <div className="sessions-api-step-title">Copy the config for your agent</div>
                 <div className="sessions-api-copy-row">
-                  <div className="connection-drawer-segmented" role="group" aria-label="Agent">
-                    {COPY_CLIENTS.map(({ client, label }) => (
-                      <button
-                        key={client}
-                        type="button"
-                        className={`connection-drawer-segmented-btn${copyClient === client ? " connection-drawer-segmented-btn-selected" : ""}`}
-                        aria-pressed={copyClient === client}
-                        onClick={() => props.onCopyClient(client)}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                  <button
+                  <SegmentedControl
+                    label="Agent"
+                    value={copyClient}
+                    options={COPY_CLIENTS.map(({ client, label }) => ({ value: client, label }))}
+                    onChange={props.onCopyClient}
+                  />
+                  <Button variant="primary"
                     type="button"
-                    className="settings-button settings-button-primary"
                     disabled={!copyConfigEnabled(status, envControlled)}
                     onClick={() => props.onCopy(copyClient, copyClientLabel(copyClient))}
                   >
                     Copy config
-                  </button>
+                  </Button>
                 </div>
                 <p className="settings-field-hint">{SESSIONS_API_NODE_HINT}</p>
                 {copied && (
@@ -197,7 +180,7 @@ export function SessionsApiPaneView(props: SessionsApiPaneViewProps) {
           <div className="sessions-api-row-main">
             <span className="settings-field-label">Allowed folders (optional)</span>
             <div className="sessions-api-row-control">
-              <button type="button" className="settings-button" disabled={!editable} onClick={() => props.onAddFolder()}>Add folder…</button>
+              <Button type="button" disabled={!editable} onClick={() => props.onAddFolder()}>Add folder…</Button>
             </div>
           </div>
           {view.workspaces.length > 0 && (
@@ -212,7 +195,7 @@ export function SessionsApiPaneView(props: SessionsApiPaneViewProps) {
                         {SESSIONS_API_FOLDER_MISSING_LABEL}
                       </span>
                     )}
-                    <button type="button" className="settings-button" disabled={!editable} onClick={() => props.onRemoveFolder(workspace)}>Remove</button>
+                    <Button type="button" disabled={!editable} onClick={() => props.onRemoveFolder(workspace)}>Remove</Button>
                     {missing && <p className="settings-field-hint">{SESSIONS_API_FOLDER_MISSING_NOTE}</p>}
                   </li>
                 );
@@ -236,15 +219,14 @@ export function SessionsApiPaneView(props: SessionsApiPaneViewProps) {
                     <span className="settings-secret-status settings-secret-status-ok sessions-api-agent-project-state">
                       {SESSIONS_API_AGENT_PROJECT_ON}
                     </span>
-                    <button
+                    <Button
                       type="button"
-                      className="settings-button"
                       aria-label={`Turn off agents opening tasks in ${project.name}`}
                       disabled={!editable}
                       onClick={() => props.onAgentProjectOff(project.key)}
                     >
                       {SESSIONS_API_AGENT_PROJECT_TURN_OFF}
-                    </button>
+                    </Button>
                   </span>
                 </li>
               ))}
@@ -269,7 +251,7 @@ export function SessionsApiPaneView(props: SessionsApiPaneViewProps) {
               disabled={!editable}
               onChange={(event) => props.onPortText(event.target.value)}
             />
-            <button type="button" className="settings-button" disabled={!editable} onClick={() => props.onApplyPort()}>Apply</button>
+            <Button type="button" disabled={!editable} onClick={() => props.onApplyPort()}>Apply</Button>
           </div>
           <p className="settings-field-hint">{SESSIONS_API_PORT_HINT}</p>
         </div>
@@ -278,17 +260,7 @@ export function SessionsApiPaneView(props: SessionsApiPaneViewProps) {
           <div className="sessions-api-row-main">
             <span id="sessions-api-default-caption" className="settings-field-label">New sessions shared by default</span>
             <div className="sessions-api-row-control">
-              <button
-                type="button"
-                role="switch"
-                aria-checked={defaultOn}
-                aria-labelledby="sessions-api-default-caption"
-                className={`settings-switch${defaultOn ? " settings-switch-on" : ""}`}
-                disabled={!editable}
-                onClick={() => props.onDefaultAccess(defaultOn ? "off" : "on")}
-              >
-                <span className="settings-switch-thumb" />
-              </button>
+              <Switch checked={defaultOn} aria-labelledby="sessions-api-default-caption" disabled={!editable} onCheckedChange={() => props.onDefaultAccess(defaultOn ? "off" : "on")} />
             </div>
           </div>
         </div>
@@ -299,14 +271,13 @@ export function SessionsApiPaneView(props: SessionsApiPaneViewProps) {
               <div className="sessions-api-row-main">
                 <span className="settings-field-label">Regenerate token</span>
                 <div className="sessions-api-row-control">
-                  <button
+                  <Button variant="danger"
                     type="button"
-                    className="settings-button settings-button-danger"
                     disabled={!regenerateEnabled(status, envControlled)}
                     onClick={() => props.onRegenerateAsk()}
                   >
                     Regenerate token
-                  </button>
+                  </Button>
                 </div>
               </div>
               <p className="settings-field-hint">{SESSIONS_API_REGENERATE_HINT}</p>
@@ -315,8 +286,8 @@ export function SessionsApiPaneView(props: SessionsApiPaneViewProps) {
             <div role="group" aria-label="Confirm token regeneration" className="sessions-api-confirm">
               <p className="settings-field-hint">{SESSIONS_API_REGENERATE_CONFIRM}</p>
               <div className="sessions-api-row-control">
-                <button type="button" className="settings-button settings-button-danger" onClick={() => props.onRegenerateConfirm()}>Regenerate now</button>
-                <button type="button" className="settings-button" onClick={() => props.onRegenerateCancel()}>Cancel</button>
+                <Button variant="danger" type="button" onClick={() => props.onRegenerateConfirm()}>Regenerate now</Button>
+                <Button type="button" onClick={() => props.onRegenerateCancel()}>Cancel</Button>
               </div>
             </div>
           )}

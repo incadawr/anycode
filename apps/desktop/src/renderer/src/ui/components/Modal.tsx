@@ -4,6 +4,9 @@ import { IconClose } from "./icons.js";
 import { focusable } from "./focus.js";
 import { useOverlayFocus } from "./useOverlayFocus.js";
 
+/** Размер диалога: ширина берётся из токенов `--dialog-w*`. */
+export type ModalSize = "sm" | "md" | "lg";
+
 export interface ModalProps {
   open: boolean;
   onClose: () => void;
@@ -11,19 +14,33 @@ export interface ModalProps {
   subtitle?: string;
   children?: ReactNode;
   footer?: ReactNode;
+  /** Дополнительное содержимое в шапке (кнопки, счётчики) — слот header. */
+  headerExtra?: ReactNode;
   closeOnScrimClick?: boolean;
+  /** Устаревший синоним `size="lg"`, оставлен для совместимости. */
   wide?: boolean;
+  /** Размер диалога: sm | md | lg. */
+  size?: ModalSize;
   /** Additional classes on the dialog surface. */
   className?: string;
   initialFocusRef?: RefObject<HTMLElement | null>;
 }
 
-/** Native top-layer dialog with a layout-independent keyboard fallback. */
-export function Modal({ open, onClose, title, subtitle, children, footer,
-  closeOnScrimClick = true, wide = false, className, initialFocusRef }: ModalProps): React.ReactElement | null {
+/**
+ * Native top-layer dialog with a layout-independent keyboard fallback.
+ *
+ * Слоты: header (title/subtitle/headerExtra + кнопка закрытия), body (children,
+ * прокручивается), footer (footer). Размеры: sm | md | lg (`wide` = lg).
+ * Фокус запирается внутри, по закрытию возвращается на триггер, Esc закрывает.
+ * Имя доступности — `aria-labelledby` на заголовок, описание — `aria-describedby`.
+ * Подложка — токен `--bg-scrim`.
+ */
+export function Modal({ open, onClose, title, subtitle, children, footer, headerExtra,
+  closeOnScrimClick = true, wide = false, size, className, initialFocusRef }: ModalProps): React.ReactElement | null {
   const ref = useRef<HTMLDialogElement>(null);
   const closeHandled = useRef(false);
   const headingId = useId(), descriptionId = useId();
+  const effectiveSize: ModalSize = size ?? (wide ? "lg" : "md");
   const activate = useCallback((dialog: HTMLDialogElement) => {
     closeHandled.current = false;
     if (typeof dialog.showModal === "function") dialog.showModal();
@@ -36,7 +53,8 @@ export function Modal({ open, onClose, title, subtitle, children, footer,
   }, []);
   useOverlayFocus(ref, { open, bodySelector: ".ak-modal__body", initialFocusRef, onOpen: activate, onCleanup: deactivate });
   if (!open) return null;
-  return <dialog ref={ref} tabIndex={-1} className={["ak-modal", wide ? "ak-modal--wide" : "", className].filter(Boolean).join(" ")}
+  return <dialog ref={ref} tabIndex={-1} className={["ak-modal", `ak-modal--${effectiveSize}`,
+    effectiveSize === "lg" ? "ak-modal--wide" : "", className].filter(Boolean).join(" ")}
     aria-labelledby={headingId} aria-describedby={subtitle ? descriptionId : undefined} aria-modal="true"
     onClose={event => {
       if (event.target !== event.currentTarget || event.currentTarget.open || closeHandled.current) return;
@@ -58,6 +76,7 @@ export function Modal({ open, onClose, title, subtitle, children, footer,
         <h2 className="ak-modal__title" id={headingId}>{title}</h2>
         {subtitle && <p className="ak-modal__subtitle" id={descriptionId}>{subtitle}</p>}
       </div>
+      {headerExtra}
       <IconButton label="Close" icon={<IconClose size={14} />} onClick={onClose} />
     </div>
     <div className="ak-modal__body">{children}</div>

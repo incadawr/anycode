@@ -27,6 +27,7 @@
  */
 import { useState } from "react";
 import { useStore } from "zustand";
+import { Badge, Banner, Button, Field, Input } from "../ui/index.js";
 import type { RecognizerProbeResult } from "../../../shared/recognizer.js";
 import { describeMutationFailure, useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
 import {
@@ -155,10 +156,11 @@ export function VisionPane({ store = useSettingsStore }: VisionPaneProps) {
         on a connection of its own, answers what the image shows — this panel picks that model.
       </p>
 
-      <p className="vision-pane-state">
-        <span className={`vision-pane-state-badge${fallback.enabled ? " vision-pane-state-badge-on" : ""}`}>
-          {fallback.enabled ? "On" : "Off"}
-        </span>
+      <p className="vision-pane-state" data-automation="vision-state">
+        <Badge
+          status={fallback.enabled ? "success" : "neutral"}
+          label={fallback.enabled ? "On" : "Off"}
+        />
         {fallback.enabled && (
           <span className="vision-pane-current-pair">
             {currentLabel} · {fallback.modelId}
@@ -166,25 +168,31 @@ export function VisionPane({ store = useSettingsStore }: VisionPaneProps) {
         )}
       </p>
 
-      <label className="settings-field">
-        <span className="settings-field-label">Connection</span>
-        <select
-          className="settings-field-select vision-pane-connection-select"
-          value={connectionId}
-          disabled={readOnly}
-          onChange={(e) => setConnectionId(e.target.value)}
-        >
-          <option value="" disabled>
-            Select a connection…
-          </option>
-          {options.map((option) => (
-            <option key={option.id} value={option.id} disabled={!option.selectable} data-proxy-warning={option.proxyWarning}>
-              {option.selectable ? option.label : `${option.label} — OAuth`}
+      <Field
+        label="Connection"
+        hint={anyOptionDisabled ? RECOGNIZER_OAUTH_DISABLED_REASON : undefined}
+      >
+        {(control) => (
+          // Raw select element: the kit's Select cannot carry the per-option
+          // `data-proxy-warning` the automation probe reads.
+          <select
+            {...control}
+            className="settings-field-select vision-pane-connection-select"
+            value={connectionId}
+            disabled={readOnly}
+            onChange={(e) => setConnectionId(e.target.value)}
+          >
+            <option value="" disabled>
+              Select a connection…
             </option>
-          ))}
-        </select>
-        {anyOptionDisabled && <span className="settings-field-hint">{RECOGNIZER_OAUTH_DISABLED_REASON}</span>}
-      </label>
+            {options.map((option) => (
+              <option key={option.id} value={option.id} disabled={!option.selectable} data-proxy-warning={option.proxyWarning}>
+                {option.selectable ? option.label : `${option.label} — OAuth`}
+              </option>
+            ))}
+          </select>
+        )}
+      </Field>
 
       {selectedOption?.proxyWarning !== undefined && (
         <div className="settings-field-hint" role="note">
@@ -192,85 +200,79 @@ export function VisionPane({ store = useSettingsStore }: VisionPaneProps) {
         </div>
       )}
 
-      <label className="settings-field">
-        <span className="settings-field-label">Model</span>
-        <input
-          className="settings-field-input vision-pane-model-input"
-          type="text"
-          list="vision-model-suggestions"
-          value={modelId}
-          disabled={readOnly}
-          placeholder="e.g. glm-5.3-flash"
-          onChange={(e) => setModelId(e.target.value)}
-        />
-        <datalist id="vision-model-suggestions">
-          {modelHints.map((hint) => (
-            <option key={hint.id} value={hint.id}>
-              {hint.label}
-            </option>
-          ))}
-        </datalist>
-      </label>
+      <Input label="Model" size="sm"
+            className="vision-pane-model-input"
+            type="text"
+            list="vision-model-suggestions"
+            value={modelId}
+            disabled={readOnly}
+            placeholder="e.g. glm-5.3-flash"
+            onChange={(e) => setModelId(e.target.value)}
+          />
+      <datalist id="vision-model-suggestions">
+        {modelHints.map((hint) => (
+          <option key={hint.id} value={hint.id}>
+            {hint.label}
+          </option>
+        ))}
+      </datalist>
 
       <div className="settings-field-row">
-        <button
-          type="button"
-          className="settings-button settings-button-primary vision-pane-save-button"
+        <Button
+          size="sm"
+          variant="primary"
+          className="vision-pane-save-button"
           disabled={submitDisabled}
           onClick={() => void handleSave()}
         >
           {saving ? "Saving…" : "Save"}
-        </button>
-        <button
-          type="button"
-          className="settings-button vision-pane-probe-button"
-          disabled={probeDisabled}
-          onClick={() => void handleProbe()}
-        >
+        </Button>
+        <Button size="sm" className="vision-pane-probe-button" disabled={probeDisabled} onClick={() => void handleProbe()}>
           {probing ? "Probing…" : "Probe"}
-        </button>
+        </Button>
         {fallback.enabled && !confirmingOff && (
-          <button
-            type="button"
-            className="settings-button vision-pane-turnoff-button"
+          <Button
+            size="sm"
+            className="vision-pane-turnoff-button"
             disabled={readOnly || turningOff}
             onClick={() => setConfirmingOff(true)}
           >
             Turn off
-          </button>
+          </Button>
         )}
         {fallback.enabled && confirmingOff && (
           <>
-            <button
-              type="button"
-              className="settings-button settings-button-danger vision-pane-turnoff-confirm-button"
+            <Button
+              size="sm"
+              variant="danger"
+              className="vision-pane-turnoff-confirm-button"
               disabled={readOnly || turningOff}
               onClick={() => void handleTurnOff()}
             >
               {turningOff ? "Turning off…" : "Really turn off?"}
-            </button>
-            <button type="button" className="settings-button" disabled={turningOff} onClick={() => setConfirmingOff(false)}>
+            </Button>
+            <Button size="sm" disabled={turningOff} onClick={() => setConfirmingOff(false)}>
               Cancel
-            </button>
+            </Button>
           </>
         )}
       </div>
 
       {error !== null && (
-        <p className="settings-notice vision-pane-error" role="alert">
+        <Banner tone="danger" className="vision-pane-error">
           {error}
-        </p>
+        </Banner>
       )}
 
       {probeResult !== null &&
         (probeResult.ok ? (
-          <p className="settings-notice-ok vision-pane-probe-result" role="status">
+          <Banner tone="success" className="vision-pane-probe-result">
             {probeResult.text}
-          </p>
+          </Banner>
         ) : (
-          <p className="settings-notice vision-pane-probe-result" role="alert">
+          <Banner tone="danger" className="vision-pane-probe-result">
             {probeResult.message}
-          </p>
+          </Banner>
         ))}
     </section>
   );

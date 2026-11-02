@@ -62,7 +62,7 @@ try {
     for(const theme of ['dark','light']) {
       await evaluate(`document.documentElement.dataset.theme='${theme}'`);
       await capture(dir,`appearance-${theme}`);
-      const styles=await evaluate(`[...document.querySelectorAll('.settings-field')].filter(e=>/Theme|Density/.test(e.textContent)).map(e=>{const s=getComputedStyle(e);return {text:e.textContent,color:s.color,background:s.backgroundColor,font:s.font,border:s.border,padding:s.padding}})`);
+      const styles=await evaluate(`[...document.querySelectorAll('.ak-field')].filter(e=>/Theme|Density/.test(e.textContent)).map(e=>{const s=getComputedStyle(e);return {text:e.textContent,color:s.color,background:s.backgroundColor,font:s.font,border:s.border,padding:s.padding}})`);
       writeFileSync(join(dir,`appearance-${theme}.json`),JSON.stringify(styles,null,2));
     }
     writeFileSync(join(dir,'manifest.json'),JSON.stringify(manifest,null,2));

@@ -113,7 +113,7 @@ try {
   await evaluate(`(() => { const select = document.querySelector('.welcome-setup select'); select.value = 'z-ai'; select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
   await sleep(250);
   assert(await evaluate("document.querySelector('input[list=welcome-model-suggestions]').value.length > 0"));
-  assert(await evaluate("document.querySelector('.welcome-setup .settings-button-primary').disabled"), "Missing API key must block Connect");
+  assert(await evaluate("document.querySelector('.welcome-setup .ak-btn--primary').disabled"), "Missing API key must block Connect");
   await sleep(400);
   const setupPng = await call("Page.captureScreenshot", { format: "png" });
   writeFileSync(join(profile, "api-setup.png"), Buffer.from(setupPng.data, "base64"));

@@ -26,6 +26,12 @@ export type {
 export { Switch } from "./components/Switch.js";
 export type { SwitchProps } from "./components/Switch.js";
 
+export { Checkbox, Radio, RadioGroup } from "./components/Choice.js";
+export type { CheckboxProps, RadioProps, RadioGroupProps, RadioOption } from "./components/Choice.js";
+
+export { useRovingTabindex } from "./components/useRovingTabindex.js";
+export type { RovingOptions, RovingTabindex } from "./components/useRovingTabindex.js";
+
 export { SegmentedControl } from "./components/SegmentedControl.js";
 export type {
   SegmentedControlProps,
@@ -38,10 +44,10 @@ export { ToolCard } from "./components/ToolCard.js";
 export type { ToolCardProps } from "./components/ToolCard.js";
 
 export { Modal } from "./components/Modal.js";
-export type { ModalProps } from "./components/Modal.js";
+export type { ModalProps, ModalSize } from "./components/Modal.js";
 
 export { Drawer } from "./components/Drawer.js";
-export type { DrawerProps } from "./components/Drawer.js";
+export type { DrawerProps, DrawerSize } from "./components/Drawer.js";
 
 export { Toast, ToastStack } from "./components/Toast.js";
 export type { ToastProps, ToastStatus, ToastStackProps } from "./components/Toast.js";
@@ -57,6 +63,9 @@ export type { ContextRingProps } from "./components/ContextRing.js";
 
 export { Popover, MenuItem, MenuSeparator } from "./components/Popover.js";
 export type { PopoverProps, PopoverPosition, MenuItemProps } from "./components/Popover.js";
+
+export { Menu } from "./components/Menu.js";
+export type { MenuProps } from "./components/Menu.js";
 
 export { SearchInput } from "./components/SearchInput.js";
 export type { SearchInputProps } from "./components/SearchInput.js";

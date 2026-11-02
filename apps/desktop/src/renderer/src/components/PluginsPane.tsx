@@ -1,3 +1,4 @@
+import { Button, IconButton, Switch } from "../ui/index.js";
 /**
  * Plugins pane (Settings → Plugins; design 4732 §6, S1-C,
  * reconciled to the S1-B wire contract).
@@ -405,16 +406,12 @@ export function PluginsPane({
           </span>
         )}
         <label className="plugins-auto-update">
-          <button
+          <Switch
             type="button"
-            role="switch"
-            aria-checked={autoUpdate}
+            checked={autoUpdate}
             aria-label="Auto-update official plugins"
-            className={`settings-switch${autoUpdate ? " settings-switch-on" : ""}`}
-            onClick={() => void toggleAutoUpdate()}
-          >
-            <span className="settings-switch-thumb" />
-          </button>
+            onCheckedChange={() => void toggleAutoUpdate()}
+           />
           <span className="settings-switch-caption">Auto-update official plugins</span>
         </label>
       </div>
@@ -441,18 +438,14 @@ export function PluginsPane({
       {changedNotice && (
         <div className="mcp-problem-strip plugins-changed-banner" role="status">
           <span>{changedNotice}</span>
-          <button type="button" className="mcp-problem-dismiss" aria-label="Dismiss" onClick={() => setChangedNotice(null)}>
-            <X />
-          </button>
+          <IconButton type="button" label="Dismiss" onClick={() => setChangedNotice(null)} icon={<X />} />
         </div>
       )}
 
       {actionError && (
         <div className="mcp-problem-strip" role="alert">
           <span>{actionError}</span>
-          <button type="button" className="mcp-problem-dismiss" aria-label="Dismiss" onClick={() => setActionError(null)}>
-            <X />
-          </button>
+          <IconButton type="button" label="Dismiss" onClick={() => setActionError(null)} icon={<X />} />
         </div>
       )}
 
@@ -637,13 +630,12 @@ export function PluginsPaneBody({
                         {state.reason}
                       </span>
                     ) : (
-                      <button
+                      <Button
                         type="button"
-                        className="settings-button"
                         onClick={() => onInstallAvailable(entry.name, entry.version)}
                       >
                         {state.label}
-                      </button>
+                      </Button>
                     )}
                   </div>
                 </li>
@@ -752,18 +744,18 @@ function PluginCard({
                   <div key={key} className="plugins-service-row" data-service-name={serviceName}>
                     <span className="mcp-row-name">{serviceName}</span>
                     <span className={`mcp-badge ${chip.tone === "warn" ? "mcp-badge-compat" : "mcp-badge-user"}`}>{chip.text}</span>
-                    <button type="button" className="settings-button" disabled={busy} onClick={() => onRestartService(row.name, serviceName)}>
+                    <Button size="sm" type="button" disabled={busy} onClick={() => onRestartService(row.name, serviceName)}>
                       Restart
-                    </button>
-                    <button type="button" className="settings-button" onClick={() => onToggleLog(row.name, serviceName)}>
+                    </Button>
+                    <Button size="sm" type="button" onClick={() => onToggleLog(row.name, serviceName)}>
                       {openLogKey === key ? "Hide log" : "View log"}
-                    </button>
+                    </Button>
                     {openLogKey === key && (
                       <div className="plugins-service-log-block">
                         <pre className="plugins-service-log">{(logLines[key] ?? []).join("\n")}</pre>
-                        <button type="button" className="settings-button" onClick={() => onCopyLog(key)}>
+                        <Button size="sm" type="button" onClick={() => onCopyLog(key)}>
                           Copy log
-                        </button>
+                        </Button>
                       </div>
                     )}
                   </div>
@@ -775,51 +767,47 @@ function PluginCard({
       </div>
 
       <div className="mcp-row-controls">
-        <button
+        <Switch
           type="button"
-          role="switch"
-          aria-checked={enabled}
+          checked={enabled}
           aria-label={`${enabled ? "Disable" : "Enable"} ${row.name}`}
-          className={`settings-switch${enabled ? " settings-switch-on" : ""}`}
           disabled={busy}
-          onClick={onToggle}
-        >
-          <span className="settings-switch-thumb" />
-        </button>
+          onCheckedChange={onToggle}
+         />
         {actions.includes("update") && (
-          <button type="button" className="settings-button" disabled={busy} onClick={onUpdate}>
+          <Button size="sm" type="button" disabled={busy} onClick={onUpdate}>
             Update
-          </button>
+          </Button>
         )}
         {actions.includes("rollback") && (
-          <button type="button" className="settings-button" disabled={busy} onClick={onRollback}>
+          <Button size="sm" type="button" disabled={busy} onClick={onRollback}>
             {rollbackLabel(row)}
-          </button>
+          </Button>
         )}
         {pluginMcpNeedsApproval(row) && (
-          <button type="button" className="settings-button" disabled={busy} onClick={onApproveMcp}>
+          <Button size="sm" type="button" disabled={busy} onClick={onApproveMcp}>
             Approve MCP
-          </button>
+          </Button>
         )}
         {servicesNeedApproval(row) && (
-          <button type="button" className="settings-button" disabled={busy} onClick={onApproveServices}>
+          <Button size="sm" type="button" disabled={busy} onClick={onApproveServices}>
             Approve services
-          </button>
+          </Button>
         )}
         {(actions.includes("pin") || actions.includes("unpin")) && (
-          <button type="button" className="settings-button" disabled={busy} onClick={onPin}>
+          <Button size="sm" type="button" disabled={busy} onClick={onPin}>
             {pinned ? "Unpin" : "Pin"}
-          </button>
+          </Button>
         )}
         {actions.includes("reveal") && (
-          <button type="button" className="settings-button" disabled={busy} onClick={onReveal}>
+          <Button size="sm" type="button" disabled={busy} onClick={onReveal}>
             Reveal
-          </button>
+          </Button>
         )}
         {actions.includes("remove") && (
-          <button type="button" className="settings-button settings-button-danger" disabled={busy} onClick={onRemove}>
+          <Button size="sm" variant="danger" type="button" disabled={busy} onClick={onRemove}>
             Remove
-          </button>
+          </Button>
         )}
       </div>
     </li>
