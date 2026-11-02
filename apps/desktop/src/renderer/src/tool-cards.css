@@ -49,7 +49,7 @@
   color: var(--text-1);
 }
 .todo-item-status-in_progress .todo-glyph {
-  color: var(--accent);
+  color: var(--text-2);
 }
 
 .todo-item-status-completed {
@@ -83,7 +83,7 @@
 
 .subagent-persona {
   font-size: var(--fs-xs);
-  color: var(--accent);
+  color: var(--text-2);
   flex: none;
 }
 
@@ -119,7 +119,7 @@
 .subagent-collapsed-progress svg {
   width: 12px;
   height: 12px;
-  color: var(--accent);
+  color: var(--text-2);
 }
 
 .subagent-prompt {
@@ -318,7 +318,7 @@
   outline: none;
 }
 .workflow-map-node:focus-visible .workflow-map-box {
-  stroke: var(--accent);
+  stroke: var(--text-2);
   stroke-width: 2;
 }
 /* Selected node — the quiet fill the selected ROW uses, so the two views
@@ -330,7 +330,7 @@
 /* Status tiers. `pending` (never started) is the only DASHED outline: it is
    the one state that says "this has not happened", which a colour alone
    cannot carry for a reader who cannot distinguish them. */
-.workflow-map-node.substatus-running    .workflow-map-box { stroke: var(--accent); }
+.workflow-map-node.substatus-running    .workflow-map-box { stroke: var(--text-2); }
 .workflow-map-node.substatus-running    .workflow-map-label { fill: var(--text-1); }
 .workflow-map-node.substatus-completed  .workflow-map-box { stroke: var(--success); }
 .workflow-map-node.substatus-queued     .workflow-map-box { stroke: var(--text-3); }
@@ -409,7 +409,7 @@
    `.substatus-<kind> > .substatus-glyph`, a CHILD combinator, so any rule
    leaning on ancestry dies silently the moment the markup gains a level —
    the regression that already killed the step rows' colour once. */
-.workflow-tick.substatus-running   { background: var(--accent); }
+.workflow-tick.substatus-running   { background: var(--text-2); }
 .workflow-tick.substatus-completed { background: var(--success); }
 .workflow-tick.substatus-queued    { background: var(--text-3); }
 .workflow-tick.substatus-error,

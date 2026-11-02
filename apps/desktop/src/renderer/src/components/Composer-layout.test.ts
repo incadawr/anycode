@@ -230,7 +230,7 @@ describe("cost popover layout", () => {
   }, 60_000);
 
   it.skipIf(!existsSync(chrome))("tints the usage bar warning / danger near the limit", () => {
-    // The fill is the accent by default; at ≥80% / ≥95% the popover carries
+    // The fill is neutral by default; at ≥80% / ≥95% the popover carries
     // the same warning/danger class as its trigger and the fill must resolve
     // `currentColor` to that tint. The rule lives in app.css, so a comment
     // above it that the parser does not treat as a comment silently drops it
@@ -247,7 +247,7 @@ describe("cost popover layout", () => {
         ${popover("", 20)}
         ${popover(" composer-ctx-meter-warning", 85)}
         ${popover(" composer-ctx-meter-danger", 97)}
-        <div id="accent" style="background: var(--accent)"></div>
+        <div id="accent" style="background: var(--text-2)"></div>
         <pre id="result"></pre><script>
           const read = pop => ({ color: getComputedStyle(pop).color, fill: getComputedStyle(pop.querySelector('.ctx-popover-bar-fill')).backgroundColor });
           document.querySelector('#result').textContent = JSON.stringify({
@@ -263,7 +263,7 @@ describe("cost popover layout", () => {
       const [normal, warning, danger] = result.cases;
       // The tokens resolve in a themed document: the accent is a real colour.
       expect(result.accent).toMatch(/^rgb\(/);
-      // Below the limit the fill is the accent, not the inherited text colour.
+      // Below the limit the fill is neutral, not the inherited text colour.
       expect(normal!.fill).toBe(result.accent);
       expect(normal!.color).not.toBe(result.accent);
       // At the limit it is the popover's own colour (currentColor), not the accent.
