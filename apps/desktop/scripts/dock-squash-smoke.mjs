@@ -47,6 +47,8 @@ import {
 // SecItemAdd and dies on the GPU process unless the automation switches
 // (mock keychain, no sandbox, no GPU) reach the app through electron-vite.
 import { launchSmokeElectron } from "./smoke-electron-launch.mjs";
+import { buildSmokeEnv } from "./model-overrides-smoke-env.mjs";
+import { connectIsolatedCdp } from "./isolated-cdp.mjs";
 import {
   closeSync,
   copyFileSync,
@@ -55,6 +57,7 @@ import {
   mkdtempSync,
   openSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -202,9 +205,9 @@ function step1Prepare() {
   ctx.profileUserDataDir = join(profile, "user-data");
   ctx.profileDbPath = join(profile, "db.sqlite");
   ctx.profileAutomationInfo = join(profile, "automation.json");
-  ctx.logPath = join(profile, "dev.log");
   const workspace = mkdtempSync(join(tmpdir(), "anycode-dock-smoke-ws-"));
   ctx.workspace = workspace;
+  ctx.logPath = join(workspace, "dev.log");
   // The git-panel leg needs `git.statusKnown` in the tab's store — a real
   // repo in the workspace (git-ui-smoke.mjs's seed shape, minimal: init +
   // one commit so status is known and clean).
@@ -223,12 +226,11 @@ function step1Prepare() {
 
 async function step2LaunchApp(ctx) {
   const t0 = Date.now();
+  const binary = join(ctx.profile, "unavailable-engine");
+  writeFileSync(binary, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
   const env = {
-    ...process.env,
-    ANYCODE_AUTOMATION: "1",
-    ANYCODE_USER_DATA_DIR: ctx.profileUserDataDir,
-    ANYCODE_DB_PATH: ctx.profileDbPath,
-    ANYCODE_AUTOMATION_INFO: ctx.profileAutomationInfo,
+    ...buildSmokeEnv(process.env, ctx.profile, 0, binary),
+    HOME: ctx.profile,
     // Dummy provider credential (keybindings-ui-smoke.mjs precedent):
     // `computeProviderReady` (main/host-env.ts) only checks PRESENCE of an
     // API key + model, never validity — this smoke never sends a prompt, so
@@ -243,6 +245,7 @@ async function step2LaunchApp(ctx) {
   const child = launchSmokeElectron(spawn, {
     cwd: repoRoot,
     env,
+    remoteDebuggingPort: 0,
     stdio: ["ignore", logFd, logFd],
     detached: true,
   });
@@ -268,6 +271,8 @@ async function step2LaunchApp(ctx) {
   ctx.port = info.port;
   ctx.token = info.token;
   ctx.appPid = info.pid;
+  ctx.cdp = await connectIsolatedCdp({ profile: ctx.profile, env, launcher: child, wait: async (fn) => { for (let i = 0; i < 100; i++) { const value = await fn(); if (value) return value; await sleep(100); } throw new Error("CDP timeout"); } });
+  await ctx.cdp.call("Performance.enable");
   stepLog(2, `app launched (pid=${info.pid}), discovery ready after ${Date.now() - t0}ms on port ${info.port}`);
 }
 
@@ -508,7 +513,95 @@ async function step9SplitLeg(ctx) {
 
 // ── teardown ──
 
+async function step10Audit(ctx) {
+  const evalPage = async (expression) => {
+    const retained = `window.__dockAuditPromise = Promise.resolve(${expression}); window.__dockAuditPromise`;
+    const result = await ctx.cdp.call("Runtime.evaluate", { expression: retained, returnByValue: true, awaitPromise: true });
+    await ctx.cdp.call("Runtime.evaluate", { expression: "delete window.__dockAuditPromise" });
+    if (result.exceptionDetails) throw new Error("renderer evaluation failed");
+    return result.result.value;
+  };
+  const open = (body) => apiOk(ctx, 10, "POST", `/tabs/${ctx.tabId}/previews`, body);
+  const click = (id) => apiOk(ctx, 10, "POST", `/dock/tabs/${encodeURIComponent(`preview:${id}`)}/click`);
+  const metrics = async () => Object.fromEntries((await ctx.cdp.call("Performance.getMetrics")).metrics.filter(m => ["JSHeapUsedSize", "Nodes"].includes(m.name)).map(m => [m.name, m.value]));
+  const baseline = await metrics();
+  const entries = [];
+  for (let i = 0; i < 15; i++) {
+    const path = join(ctx.workspace, `audit-${i}.md`);
+    writeFileSync(path, `# audit ${i}\n\n${"line of text\n\n".repeat(400)}`);
+    const result = await open({ path });
+    assert(10, result.ok, `open ${i}: ${JSON.stringify(result)}`);
+    entries.push({ path, id: result.value.previewId });
+  }
+  await waitForDockState(ctx, 10, s => s.tabs.length >= 18, "15 extra markdown tabs");
+  await sleep(1000);
+  const loaded = await metrics();
+  record("15-tab renderer resource sample", "PASS", `nodes=${baseline.Nodes}->${loaded.Nodes}, JS heap MiB=${(baseline.JSHeapUsedSize / 1048576).toFixed(1)}->${(loaded.JSHeapUsedSize / 1048576).toFixed(1)} (not a benchmark)`);
+  await click(entries[1].id);
+  await sleep(500);
+  const before = await apiOk(ctx, 10, "GET", "/dock/state");
+  const duplicate = await evalPage(`window.anycode.artifacts.preview(${JSON.stringify(ctx.tabId)}, ${JSON.stringify(entries[0].path)})`);
+  await evalPage(`import('/src/dock/dock-store.ts').then(m => m.focusExistingPreview(${JSON.stringify(ctx.tabId)}, ${JSON.stringify(entries[0].id)}))`);
+  await sleep(500);
+  const after = await apiOk(ctx, 10, "GET", "/dock/state");
+  record("duplicate file reuse and focus callback", duplicate.value?.previewId === entries[0].id && after.tabs.length === before.tabs.length && after.tabs.find(t => t.active)?.id === `preview:${entries[0].id}` ? "PASS" : "FAIL", `same=${duplicate.value?.previewId === entries[0].id} count=${before.tabs.length}->${after.tabs.length}`);
+  await apiOk(ctx, 10, "POST", "/window/size", { width: 760, height: 600 });
+  await sleep(400);
+  const geom = await evalPage(`(() => { const s=document.querySelector('.dock-tab-strip'); return {width:s.clientWidth, scroll:s.scrollWidth, count:s.querySelectorAll('.dock-tab').length}; })()`);
+  record("narrow tab strip scrolls with 15 previews", geom.scroll > geom.width && geom.count >= 15 ? "PASS" : "FAIL", JSON.stringify(geom));
+  const stateTime = await evalPage(`(() => { let t=performance.now(); for(let i=0;i<30;i++) { document.querySelectorAll('.dock-tab-select')[i%15].click(); } return Math.round(performance.now()-t); })()`);
+  record("15-tab switch dispatch time", "PASS", `${stateTime}ms for 30 clicks (dispatch only)`);
+  await click(entries[0].id);
+  await sleep(500);
+  const mdState = await evalPage(`(() => { const b=document.querySelector('.md-preview-view-body'); const source=document.querySelector('[aria-label="Source"]'); if (!b||!source) return false; source.click(); b.scrollTop=300; window.__auditBody=b; return true; })()`);
+  await click(entries[1].id);
+  await click(entries[0].id);
+  await sleep(400);
+  const preserved = await evalPage(`(() => ({same:window.__auditBody===document.querySelector('.md-preview-view-body'), scroll:document.querySelector('.md-preview-view-body')?.scrollTop, mode:document.querySelector('[aria-label="Source"]')?.getAttribute('aria-pressed')}))()`);
+  record("markdown mode and scroll survive switching", mdState && preserved.same && preserved.scroll > 0 && preserved.mode === "true" ? "PASS" : "FAIL", JSON.stringify(preserved));
+  const missing = await open({ path: join(ctx.workspace, "missing.md") });
+  record("missing file open is refused", missing.ok === false && missing.errorKind === "invalid_input" ? "PASS" : "FAIL", JSON.stringify(missing));
+  const largePath = join(ctx.workspace, "large.md");
+  writeFileSync(largePath, "x".repeat(12 * 1024 * 1024));
+  const large = await open({ path: largePath });
+  await sleep(700);
+  await waitForDockState(ctx, 10, s => s.tabs.find(t => t.active)?.id === `preview:${large.value.previewId}`, "large preview active");
+  const largeText = await evalPage(`document.querySelector('.dock-body > div:not([style*="none"]) .md-preview-view-body')?.innerText?.slice(0,300)`);
+  record("large file displays a bounded error", /large|size|limit/i.test(largeText ?? "") ? "PASS" : "FAIL", JSON.stringify(largeText));
+  await click(entries[2].id);
+  renameSync(entries[2].path, entries[2].path + ".renamed");
+  await sleep(700);
+  await waitForDockState(ctx, 10, s => s.tabs.find(t => t.active)?.id === `preview:${entries[2].id}`, "renamed preview active");
+  await evalPage(`document.querySelector('.dock-body > div:not([style*="none"]) .md-preview-view-header [aria-label="Reload"]')?.click()`);
+  await sleep(500);
+  const renamed = await evalPage(`document.querySelector('.dock-body > div:not([style*="none"]) .md-preview-view-body')?.innerText?.slice(0,300)`);
+  record("renamed file reports read error", /fail|not.*found|no such|error/i.test(renamed ?? "") ? "PASS" : "FAIL", JSON.stringify(renamed));
+  await click(entries[5].id);
+  const beforeClose = await waitForDockState(ctx, 10, s => s.tabs.find(t => t.active)?.id === `preview:${entries[5].id}`, "close target active");
+  const index = beforeClose.tabs.findIndex(t => t.id === `preview:${entries[5].id}`);
+  const expected = beforeClose.tabs[index + 1]?.id ?? beforeClose.tabs[index - 1]?.id;
+  await apiOk(ctx, 10, "POST", `/dock/tabs/${encodeURIComponent(`preview:${entries[5].id}`)}/close`);
+  await sleep(500);
+  const closed = await apiOk(ctx, 10, "GET", "/dock/state");
+  record("active close selects neighbour", closed.tabs.find(t => t.active)?.id === expected ? "PASS" : "FAIL", `expected=${expected} actual=${closed.tabs.find(t => t.active)?.id}`);
+  await click(entries[6].id);
+  await waitForDockState(ctx, 10, s => s.tabs.find(t => t.active)?.id === `preview:${entries[6].id}`, "shortcut target active");
+  await evalPage(`document.querySelector('.dock-panel').focus()`);
+  await ctx.cdp.call("Input.dispatchKeyEvent", { type: "keyDown", key: "w", code: "KeyW", modifiers: 4 });
+  await ctx.cdp.call("Input.dispatchKeyEvent", { type: "keyUp", key: "w", code: "KeyW", modifiers: 4 });
+  const shortcut = await waitForDockState(ctx, 10, s => !s.tabs.some(t => t.id === `preview:${entries[6].id}`), "shortcut closes preview");
+  record("keyboard close shortcut", "PASS", `remaining=${shortcut.tabs.length}`);
+  const previewsBefore = (await apiOk(ctx, 10, "GET", `/tabs/${ctx.tabId}/previews`)).previews.length;
+  await ctx.cdp.call("Page.reload");
+  await sleep(1500);
+  await waitForFacade(ctx, 10, 20000);
+  const reloaded = await apiOk(ctx, 10, "GET", "/dock/state");
+  const previewsAfter = reloaded.tabs.filter(t => t.kind === "preview").length;
+  record("preview tabs survive renderer reload", previewsAfter === previewsBefore ? "PASS" : "FAIL", `before=${previewsBefore} after=${previewsAfter}`);
+}
+
 async function runTeardown(ctx, failedStep) {
+  ctx.cdp?.ws.close();
   if (ctx.port && ctx.token) {
     try {
       await api(ctx, "POST", "/quit", {});
@@ -602,6 +695,7 @@ async function run() {
     await step7CloseTab(ctx);
     await step8DrawerMode(ctx);
     await step9SplitLeg(ctx);
+    await step10Audit(ctx);
   } catch (err) {
     failedStep = err instanceof SmokeFailure ? err.step : "unknown";
     if (!(err instanceof SmokeFailure)) {

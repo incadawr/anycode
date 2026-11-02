@@ -27,6 +27,11 @@ import { TabContext } from "../tab-context.js";
 import { childLayoutStore } from "../child-layout.js";
 import { useDockStore } from "../dock/dock-store.js";
 import { DOCK_SPLIT_MIN_PX, DOCK_WIDTH_STORAGE_KEY, DOCK_WIDTH_MAX, DOCK_WIDTH_MIN, dockMinWidth } from "../dock/dock-layout.js";
+import { usePreviewStore } from "../preview/preview-store.js";
+import { Markdown } from "./Markdown.js";
+import { DockPanel } from "./DockPanel.js";
+import { ModeMenu, FOCUS_MODE_MENU_EVENT } from "./ModeMenu.js";
+import { isOverlayOpen } from "../preview/overlay-flag.js";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -88,6 +93,7 @@ describe("dock resize handle placement (GitHub #31)", () => {
 
   afterEach(async () => {
     await act(async () => root.unmount());
+    usePreviewStore.setState({ byTab: {} });
     container.remove();
     document.body.className = "";
     vi.restoreAllMocks();
@@ -295,6 +301,110 @@ describe("dock resize handle placement (GitHub #31)", () => {
       childLayoutStore.getState().enterSplit("tab");
     });
   }
+
+  it.each(["button", "shortcut"])("closes Review using the %s", async (method) => {
+    await mountBody();
+    await act(async () => {
+      store.getState().gitSetPanelOpen(true);
+      useDockStore.getState().open({ id: "git", kind: "git", title: "Review" });
+    });
+    await act(async () => {
+      if (method === "button") container.querySelector<HTMLButtonElement>('[aria-label="Close Review"]')!.click();
+      else container.querySelector<HTMLElement>(".dock-panel")!.dispatchEvent(new KeyboardEvent("keydown", { key: "w", metaKey: true, bubbles: true }));
+    });
+    expect(store.getState().git.panelOpen).toBe(false);
+  });
+
+  it("preserves Markdown view mode and scroll when switching dock tabs", async () => {
+    await mountBody();
+    await act(async () => {
+      usePreviewStore.getState().applyChanged({ tabId: "tab", visiblePanelPreviewId: "md", previews: [{ previewId: "md", tabId: "tab", url: "file:///doc.md", sourcePath: "/doc.md", title: "doc.md", status: "ready", container: "panel", viewKind: "dom-md" }] });
+    });
+    await act(async () => useDockStore.getState().open({ id: "git", kind: "git", title: "Review" }));
+    await act(async () => useDockStore.getState().focus("preview:md"));
+    const source = container.querySelector<HTMLButtonElement>('[aria-label="Source"]')!;
+    await act(async () => source.click());
+    const body = container.querySelector<HTMLElement>(".md-preview-view-body")!;
+    body.scrollTop = 120;
+    await act(async () => useDockStore.getState().focus("git"));
+    await act(async () => useDockStore.getState().focus("preview:md"));
+    expect(container.querySelector('[aria-label="Source"]')?.getAttribute("aria-pressed")).toBe("true");
+    expect(container.querySelector<HTMLElement>(".md-preview-view-body")).toBe(body);
+    expect(body.scrollTop).toBe(120);
+    await act(async () => useDockStore.getState().focus("git"));
+    await act(async () => useDockStore.getState().splitRight("preview:md", true));
+    expect(container.querySelector<HTMLElement>(".md-preview-view-body")).toBe(body);
+    await act(async () => useDockStore.getState().focus("preview:md"));
+    expect(container.querySelector<HTMLElement>(".md-preview-view-body")).toBe(body);
+  });
+
+  it("updates a preview tab title without changing focus", async () => {
+    await mountBody();
+    const preview = { previewId: "web", tabId: "tab", url: "http://localhost/", title: "First", status: "ready" as const, container: "panel" as const, viewKind: "web" as const };
+    await act(async () => usePreviewStore.getState().applyChanged({ tabId: "tab", visiblePanelPreviewId: "web", previews: [preview] }));
+    await act(async () => useDockStore.getState().open({ id: "git", kind: "git", title: "Review" }));
+    await act(async () => usePreviewStore.getState().applyChanged({ tabId: "tab", visiblePanelPreviewId: "web", previews: [{ ...preview, title: "Second" }] }));
+    expect(container.querySelector('[data-tab-id="preview:web"] .dock-tab-title')?.textContent).toBe("Second");
+    expect(useDockStore.getState().activeTabId).toBe("git");
+  });
+
+  it("focuses an existing preview when its artifact link is clicked", async () => {
+    const preview = vi.fn().mockResolvedValue({ ok: true, value: { previewId: "md" } });
+    const artifacts = new Proxy({ preview }, { get(target, key) { return Reflect.get(target, key) ?? anyBridge; } });
+    (window as { anycode?: unknown }).anycode = new Proxy(anyBridge as object, { get(target, key) { return key === "artifacts" ? artifacts : Reflect.get(target, key); } });
+    try {
+      useDockStore.setState({ ownerTabId: "tab", tabs: [{ id: "preview:md", kind: "preview", title: "doc.md" }, { id: "git", kind: "git", title: "Review" }], activeTabId: "git" });
+      await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab", store } }, createElement(Markdown, { text: "[doc](/doc.md)" }))));
+      await act(async () => container.querySelector<HTMLAnchorElement>("a.md-link")!.click());
+      expect(preview).toHaveBeenCalledWith("tab", "/doc.md");
+      expect(useDockStore.getState().activeTabId).toBe("preview:md");
+    } finally {
+      (window as { anycode?: unknown }).anycode = anyBridge;
+    }
+  });
+
+  it("clears the hidden subagent menu and ignores its shortcut", async () => {
+    const menu = () => createElement(ModeMenu, { mode: "build", disabled: false, onChange: () => {} });
+    const child = createDesktopStore();
+    child.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", sessionId: "child", mode: "build", model: "m1" });
+    const surface = createElement(TabContext.Provider, { value: { tabId: "child", store: child } }, createElement(SessionSurface, { tabId: "child", onToast: () => {} }));
+    useDockStore.setState({ ownerTabId: "tab", tabs: [{ id: "subagents", kind: "subagents", title: "Subagents" }, { id: "git", kind: "git", title: "Review" }], activeTabId: "subagents" });
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab", store } },
+      menu(), createElement(DockPanel, { mode: "column", width: 640, canSplitNow: true, splitTabId: null, onToast: () => {}, subagents: { rows: [{ spawnToolCallId: "child", badge: "running", card: { agentType: "worker", description: "", model: null, engine: null, turns: 0, toolCalls: 0, lastTool: null, activity: [], activityDropped: 0, final: null } }], expandedId: "child", surface } }))));
+    await act(async () => window.dispatchEvent(new Event(FOCUS_MODE_MENU_EVENT)));
+    expect(container.querySelectorAll(".mode-menu-popover")).toHaveLength(2);
+    expect(isOverlayOpen()).toBe(true);
+    await act(async () => useDockStore.getState().focus("git"));
+    await act(async () => container.querySelector<HTMLElement>(".mode-menu-popover")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(isOverlayOpen()).toBe(false);
+    await act(async () => window.dispatchEvent(new Event(FOCUS_MODE_MENU_EVENT)));
+    expect(container.querySelectorAll(".mode-menu-popover")).toHaveLength(1);
+    await act(async () => container.querySelector<HTMLElement>(".mode-menu-popover")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(isOverlayOpen()).toBe(false);
+  });
+
+  it("selects the right neighbour when the active preview closes", async () => {
+    const select = vi.fn().mockResolvedValue({ ok: true });
+    const previewPanel = new Proxy({ select, close: vi.fn().mockResolvedValue({ ok: true }) }, { get(target, key) { return Reflect.get(target, key) ?? anyBridge; } });
+    (window as { anycode?: unknown }).anycode = new Proxy(anyBridge as object, { get(target, key) { return key === "previewPanel" ? previewPanel : Reflect.get(target, key); } });
+    try {
+      await mountBody();
+      const previews = ["a", "b", "c"].map((id) => ({ previewId: id, tabId: "tab", url: `http://localhost/${id}`, title: id, status: "ready" as const, container: "panel" as const, viewKind: "web" as const }));
+      await act(async () => usePreviewStore.getState().applyChanged({ tabId: "tab", visiblePanelPreviewId: "b", previews }));
+      await act(async () => useDockStore.getState().open({ id: "git", kind: "git", title: "Review" }));
+      await act(async () => useDockStore.getState().focus("preview:b"));
+      const order = useDockStore.getState().tabs.map(tab => tab.id);
+      await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Close b"]')!.click());
+      expect(useDockStore.getState().activeTabId).toBe("preview:b");
+      expect(useDockStore.getState().tabs.map(tab => tab.id)).toEqual(order);
+      await act(async () => usePreviewStore.getState().applyChanged({ tabId: "tab", visiblePanelPreviewId: "a", previews: [previews[0]!, previews[2]!] }));
+      expect(useDockStore.getState().activeTabId).toBe("preview:c");
+      expect(select).toHaveBeenCalledWith("tab", "c");
+    } finally {
+      (window as { anycode?: unknown }).anycode = anyBridge;
+    }
+  });
+
 
   it("restores an unfinished role picker and task in its original tab", async () => {
     const originalSnapshot = useSettingsStore.getState().snapshot;

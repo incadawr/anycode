@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { DOCK_WIDTH_STORAGE_KEY } from "./dock-layout.js";
-import { createDockStore, EMPTY_DOCK_VIEW, selectDockOpen, selectDockOpenFor, selectDockView } from "./dock-store.js";
+import { createDockStore, EMPTY_DOCK_VIEW, focusExistingPreview, selectDockOpen, selectDockOpenFor, selectDockView, useDockStore } from "./dock-store.js";
 import type { DockStorage } from "./dock-layout.js";
 
 function memoryStorage(entries: Record<string, string> = {}): DockStorage & { written: Map<string, string> } {
@@ -23,6 +23,24 @@ const TAB_MD = { id: "preview:md", kind: "preview" as const, title: "doc.md" };
 const TAB_GIT = { id: "git", kind: "git" as const, title: "Review" };
 
 describe("dock store", () => {
+  it("focuses a reopened preview only in its owning conversation", () => {
+    useDockStore.setState({ ownerTabId: "owner", tabs: [TAB_MD, TAB_GIT], activeTabId: "git", splitTabId: null });
+    focusExistingPreview("other", "md");
+    expect(useDockStore.getState().activeTabId).toBe("git");
+    focusExistingPreview("owner", "md");
+    expect(useDockStore.getState().activeTabId).toBe(TAB_MD.id);
+    useDockStore.setState({ ownerTabId: null, tabs: [], activeTabId: null });
+  });
+  it("updates an existing title without moving focus or creating tabs", () => {
+    const store = createDockStore(memoryStorage());
+    store.getState().open(TAB_MD);
+    store.getState().open(TAB_GIT);
+    store.getState().updateTitle(TAB_MD.id, "renamed.md");
+    expect(store.getState().tabs).toEqual([{ ...TAB_MD, title: "renamed.md" }, TAB_GIT]);
+    expect(store.getState().activeTabId).toBe(TAB_GIT.id);
+    store.getState().updateTitle("missing", "ignored");
+    expect(store.getState().tabs).toHaveLength(2);
+  });
   it("opens tabs append+focus; an existing tab is re-focused, not duplicated", () => {
     const store = createDockStore(memoryStorage());
     store.getState().open(TAB_MD);

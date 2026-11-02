@@ -63,6 +63,7 @@ export interface DockStoreState {
   open(tab: DockTab): void;
   /** Appends a tab WITHOUT moving focus (cross-review D3). */
   openBackground(tab: DockTab): void;
+  updateTitle(id: string, title: string): void;
   close(id: string): void;
   focus(id: string): void;
   setWidth(width: number): void;
@@ -109,6 +110,12 @@ export function createDockStore(storage: DockStorage = typeof window === "undefi
       set((state) => openTabInBackgroundAlgebra(state.tabs, state.activeTabId, tab));
     },
 
+    updateTitle(id, title): void {
+      set((state) => state.tabs.some((tab) => tab.id === id && tab.title !== title)
+        ? { tabs: state.tabs.map((tab) => tab.id === id ? { ...tab, title } : tab) }
+        : state);
+    },
+
     close(id): void {
       set((state) => {
         const { tabs, activeTabId } = closeTabAlgebra(state.tabs, state.activeTabId, id);
@@ -148,6 +155,12 @@ export function createDockStore(storage: DockStorage = typeof window === "undefi
 }
 
 export const useDockStore = createDockStore();
+
+/** Focus an already open preview only while its conversation owns the dock. */
+export function focusExistingPreview(tabId: string, previewId: string): void {
+  const dock = useDockStore.getState();
+  if (dock.ownerTabId === tabId) dock.focus(`preview:${previewId}`);
+}
 
 /**
  * the owner-gated view of the dock for one conversation tab.
