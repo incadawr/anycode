@@ -450,7 +450,7 @@ body {
 .dock-tab-active {
   color: var(--text-1);
   background: var(--bg-card);
-  border-color: var(--border);
+  border-color: var(--border-strong);
 }
 
 .dock-tab-select {
@@ -2765,8 +2765,8 @@ body {
   display: flex;
   flex-direction: column;
   background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-surface);
   box-shadow: var(--shadow-menu);
   overflow: hidden;
 }
@@ -6172,13 +6172,14 @@ body {
 
 .permission-modal {
   padding: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  background: var(--bg-overlay);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-surface);
+  background: var(--bg-card);
   color: var(--text-1);
   box-shadow: var(--shadow-dialog);
   width: min(34rem, 90vw);
-  overflow: hidden;
+  max-height: 86vh;
+  overflow: auto;
   /* Overlay sweep (custom-titlebar §3): native <dialog> UA-positions itself
      `fixed`, vertically centered — reaches the top 46px on a short window. */
   -webkit-app-region: no-drag;
@@ -6189,7 +6190,7 @@ body {
 }
 
 .permission-modal::backdrop {
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--bg-scrim);
   -webkit-app-region: no-drag;
 }
 
@@ -6440,21 +6441,25 @@ body {
   gap: var(--sp-2);
   padding: var(--sp-3) var(--sp-4);
   border-top: 1px solid var(--border);
+  background: var(--bg-overlay);
+  flex-wrap: wrap;
 }
 
 .permission-deny-button,
 .permission-allow-button {
-  padding: 0.4rem 1.1rem;
-  border-radius: var(--r-sm);
-  border: none;
-  font-size: var(--fs-md);
+  min-height: var(--ctl-h-md);
+  padding: 0 var(--sp-3);
+  border-radius: var(--ctl-r);
+  border: 1px solid transparent;
+  font-size: var(--fs-sm);
+  font-weight: var(--w-medium);
   cursor: pointer;
 }
 
 .permission-deny-button {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text);
+  background: var(--bg-control);
+  border-color: var(--border-strong);
+  color: var(--text-2);
 }
 
 .permission-deny-button:hover {
@@ -6855,8 +6860,8 @@ body {
 }
 
 .git-panel-tab-active {
-  color: var(--text-1);
-  border-bottom-color: var(--text-1);
+  color: var(--accent-soft-text);
+  border-bottom-color: var(--accent);
 }
 
 .git-panel-note {
@@ -7277,8 +7282,8 @@ body {
   gap: var(--sp-2);
   padding: var(--sp-2);
   border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  background: var(--bg);
+  border-radius: var(--r-md);
+  background: var(--bg-card);
 }
 
 .hooks-row-main,
@@ -7741,13 +7746,14 @@ body {
 
 .git-confirm-dialog {
   padding: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  background: var(--bg-overlay);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-surface);
+  background: var(--bg-card);
   color: var(--text-1);
   box-shadow: var(--shadow-dialog);
   width: min(28rem, 90vw);
-  overflow: hidden;
+  max-height: 86vh;
+  overflow: auto;
   -webkit-app-region: no-drag;
 }
 
@@ -7756,7 +7762,7 @@ body {
 }
 
 .git-confirm-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--bg-scrim);
   -webkit-app-region: no-drag;
 }
 
@@ -7789,21 +7795,25 @@ body {
   gap: var(--sp-2);
   padding: var(--sp-3) var(--sp-4);
   border-top: 1px solid var(--border);
+  background: var(--bg-overlay);
+  flex-wrap: wrap;
 }
 
 .git-confirm-cancel,
 .git-confirm-confirm {
-  padding: 0.4rem 1.1rem;
-  border-radius: var(--r-sm);
-  border: none;
-  font-size: var(--fs-md);
+  min-height: var(--ctl-h-md);
+  padding: 0 var(--sp-3);
+  border-radius: var(--ctl-r);
+  border: 1px solid transparent;
+  font-size: var(--fs-sm);
+  font-weight: var(--w-medium);
   cursor: pointer;
 }
 
 .git-confirm-cancel {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text);
+  background: var(--bg-control);
+  border-color: var(--border-strong);
+  color: var(--text-2);
 }
 
 .git-confirm-cancel:hover {
@@ -8229,12 +8239,18 @@ body {
   -webkit-app-region: no-drag;
 }
 
+dialog.role-picker-dialog {
+  border-color: var(--border-strong);
+  border-radius: var(--r-surface);
+  background: var(--bg-card);
+}
+
 .role-picker-dialog[open] {
   animation: scale-in var(--dur-2) var(--ease-out);
 }
 
 .role-picker-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--bg-scrim);
   -webkit-app-region: no-drag;
 }
 

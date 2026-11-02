@@ -47,8 +47,8 @@
 
 .terminal-panel-title {
   font-size: var(--fs-xs);
-  font-weight: var(--w-medium);
-  color: var(--text-2);
+  font-weight: var(--w-semibold);
+  color: var(--text-1);
 }
 
 /* Soft-danger pill (same escalation-ramp language as notice-toast/mode-chip:
@@ -63,7 +63,7 @@
   font-size: var(--fs-xs);
   font-weight: var(--w-medium);
   padding: 0.15rem var(--sp-2);
-  transition: background var(--t-fast), color var(--t-fast);
+  transition: background var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
 }
 
 .terminal-panel-reopen:hover {
