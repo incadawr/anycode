@@ -1772,13 +1772,14 @@
 
 .consent-dialog {
   padding: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  background: var(--bg-overlay);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-surface);
+  background: var(--bg-card);
   color: var(--text-1);
   box-shadow: var(--shadow-dialog);
   width: min(30rem, 90vw);
-  overflow: hidden;
+  max-height: 86vh;
+  overflow: auto;
   /* Overlay sweep (custom-titlebar §3): same native-<dialog> reasoning as .settings-dialog above. */
   -webkit-app-region: no-drag;
 }
@@ -1788,7 +1789,7 @@
 }
 
 .consent-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--bg-scrim);
   -webkit-app-region: no-drag;
 }
 
@@ -1840,15 +1841,46 @@
   gap: var(--sp-2);
   padding: var(--sp-3) var(--sp-4);
   border-top: 1px solid var(--border);
+  background: var(--bg-overlay);
+  flex-wrap: wrap;
 }
 
 .consent-decline-button,
-.consent-accept-button {
-  padding: 0.4rem 1.1rem;
-  border-radius: var(--r-sm);
-  border: none;
-  font-size: var(--fs-md);
+.consent-accept-button,
+.consent-dialog-actions > button:not([class]) {
+  min-height: var(--ctl-h-md);
+  padding: 0 var(--sp-3);
+  border-radius: var(--ctl-r);
+  border: 1px solid transparent;
+  font-size: var(--fs-sm);
+  font-weight: var(--w-medium);
   cursor: pointer;
+}
+
+.consent-dialog-actions > button:not([class]) {
+  background: var(--bg-control);
+  border-color: var(--border-strong);
+  color: var(--text-2);
+}
+
+.consent-dialog-actions > button:not([class]):hover {
+  background: var(--bg-hover);
+  color: var(--text-1);
+}
+
+.consent-dialog-actions > button:not([class]):last-child {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--on-accent);
+}
+
+.consent-dialog-actions > button:not([class]):last-child:hover {
+  background: var(--accent-hover);
+}
+
+.consent-dialog-actions > button:not([class]):focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
 }
 
 .consent-decline-button {
@@ -2193,6 +2225,22 @@
 
 .mcp-form-dialog[open] {
   animation: scale-in var(--dur-2) var(--ease-out);
+}
+
+.codex-rollout-dialog {
+  border-color: var(--border-strong);
+  border-radius: var(--r-surface);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-dialog);
+}
+
+.mcp-form-dialog.codex-rollout-dialog::backdrop {
+  background: var(--bg-scrim);
+}
+
+.codex-rollout-dialog .mcp-dialog-actions {
+  background: var(--bg-overlay);
+  flex-wrap: wrap;
 }
 
 .mcp-form-dialog::backdrop {

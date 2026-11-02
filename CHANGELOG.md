@@ -32,6 +32,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Dialogs and utility panels use the same visual style as the main window.
 - Settings use the same look as the main window.
 - Refreshed the main window with the updated dark and light design palette, sidebar, conversation, composer, and dock.
 
