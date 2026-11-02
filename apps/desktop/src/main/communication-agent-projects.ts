@@ -27,6 +27,7 @@ export interface AgentProjectsStore {
   isAllowed(workspace: string): boolean;
   /** Switches the canonical key of `workspace`; false (state unchanged) when the write failed. */
   setAllowed(workspace: string, allowed: boolean): boolean;
+  setAllowedExactKey(key: string, allowed: boolean): boolean;
   /** Exact stored keys that are ON (main-listed only; the renderer never supplies these as paths). */
   allowedKeys(): string[];
   hasExactKey(key: string): boolean;
@@ -72,7 +73,9 @@ export function createAgentProjectsStore(deps: AgentProjectsStoreDeps): AgentPro
       return keys.has(keyOf(workspace));
     },
     setAllowed(workspace, allowed) {
-      const key = keyOf(workspace);
+      return this.setAllowedExactKey(keyOf(workspace), allowed);
+    },
+    setAllowedExactKey(key, allowed) {
       const had = keys.has(key);
       if (had === allowed) return true;
       return write(() => { if (allowed) keys.add(key); else keys.delete(key); }, () => { if (had) keys.add(key); else keys.delete(key); });

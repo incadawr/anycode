@@ -260,7 +260,7 @@ describe("create_session — the production creation path primes a non-active co
       readFile: async (p: string) => { const value = files.get(p); if (value === undefined) throw new Error("missing"); return value; },
       writeFile: async (p: string, value: string) => { files.set(p, value); },
       rename: async (from: string, to: string) => { files.set(to, files.get(from)!); files.delete(from); },
-      stat: async () => ({ size: 0, mtimeMs: 0, isFile: true, isDirectory: false }),
+      stat: async (p: string) => ({ size: 0, mtimeMs: 0, isFile: p !== "/ws", isDirectory: p === "/ws" }),
       mkdir: async () => {}, readdir: async () => [],
     };
     const r = rig();
@@ -670,7 +670,7 @@ describe("agent title resume wiring (production create_session → handle rename
         stdioScriptPath: () => null,
         realpath: async (path) => path,
         agentProjects: createAgentProjectsStore({ file: join(dir, "projects.json"), realpathSync: (path) => path }),
-        offerEmptyFolderTrust: async () => {},
+        offerEmptyFolderTrust: async (folder) => ({ folder }),
         realpathSync: (path) => path,
         homedir: () => dir,
         stat: async () => ({ isDirectory: () => true }),
