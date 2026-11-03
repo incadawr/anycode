@@ -88,7 +88,7 @@ function rig(options: { fullAccess?: () => boolean; decision?: PermissionDecisio
 const signal = (): AbortSignal => new AbortController().signal;
 
 describe("orchestration browser restriction", () => {
-  it("denies actions before full access and permission rules, while allowing observation and local files", async () => {
+  it("denies opening executable content and actions while allowing observation", async () => {
     const r = rig({ fullAccess: () => true });
     let restricted = true;
     const call = (name: string, args: object) => r.bridge.call(r.bridge.specs.find((s) => s.canonical === name)!, args, signal(), name, () => restricted);
@@ -96,12 +96,13 @@ describe("orchestration browser restriction", () => {
       ["BrowserClick", { selector: "button" }], ["BrowserType", { selector: "input", text: "x" }],
       ["BrowserEval", { expression: "1" }], ["BrowserNavigate", { url: "http://localhost:3000" }],
       ["BrowserOpen", { url: "https://example.com" }],
+      ...["html", "htm", "svg", "xhtml", "md"].map((ext) => ["BrowserOpen", { path: `/work/fetch-xhr-websocket.${ext}` }] as const),
     ] as const) expect((await call(name, args)).status).toBe("denied");
     expect(r.preview.calls).toHaveLength(0);
     expect(r.broker.requests).toHaveLength(0);
-    expect((await call("BrowserOpen", { path: "/work/index.html" })).status).toBe("success");
     expect((await call("BrowserRead", {})).status).toBe("success");
     restricted = false;
+    expect((await call("BrowserOpen", { path: "/work/fetch-xhr-websocket.html" })).status).toBe("success");
     expect((await call("BrowserClick", { selector: "button" })).status).toBe("success");
   });
 });

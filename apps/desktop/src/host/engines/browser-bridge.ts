@@ -278,12 +278,10 @@ export function createEngineBrowserBridge(deps: EngineBrowserBridgeDeps): Engine
     }
     const input = parsed.data;
     // Check at dispatch time, including for calls queued before a transition.
-    // Opening a local file uses the preview host's existing path validation;
-    // network navigation (including loopback) can itself have side effects.
+    // Opening any file can execute browser content or trigger network requests.
     if (restricted?.()) {
       const observing = ["BrowserRead", "BrowserSnapshot", "BrowserScreenshot", "BrowserConsole", "BrowserWaitFor"].includes(spec.canonical);
-      const localFile = spec.canonical === "BrowserOpen" && typeof (input as { path?: unknown }).path === "string";
-      if (!observing && !localFile) return { text: `${spec.canonical} is unavailable during orchestration`, isError: true, status: "denied", durationMs: Date.now() - startedAt };
+      if (!observing) return { text: `${spec.canonical} is unavailable during orchestration`, isError: true, status: "denied", durationMs: Date.now() - startedAt };
     }
     const meta = (tool.resolveMetadata as ((value: unknown) => ToolDefinition["metadata"]) | undefined)?.(input) ?? tool.metadata;
     if (meta.needsApproval === true) {
