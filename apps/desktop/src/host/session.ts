@@ -6175,7 +6175,7 @@ export class Session {
     this.orchestrationAdmission = new OrchestrationAdmission({
       controller: this.orchestrationController,
       connectionId: () => this.boundGeneration,
-      busy: () => this.busy || this.broker.pendingCount > 0 || this.shuttingDown || this.relocating || this.child !== undefined || this.continuationPending || this.orchestrationPosture !== "stable",
+      busy: () => this.busy || this.currentTurn !== null || this.broker.pendingCount > 0 || this.shuttingDown || this.relocating || this.child !== undefined || this.continuationPending || this.orchestrationPosture !== "stable",
       baseAuthority: () => this.engine.id === "codex" ? { mode: this.nativeChildBaseMode() } : this.engine.mode(),
       timeoutMs: 120_000,
     });

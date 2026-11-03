@@ -17,6 +17,42 @@ function nativePolicy(h: ReturnType<typeof createHarness>, policy: Orchestration
 }
 
 describe("session orchestration admission", () => {
+  it("rejects a toggle during teardown and drains the queued agent message", async () => {
+    let releaseFlush!: () => void;
+    let releaseApply!: () => void;
+    let flushing = false;
+    const flushGate = new Promise<void>(resolve => { releaseFlush = resolve; });
+    const applyGate = new Promise<void>(resolve => { releaseApply = resolve; });
+    const h = createHarness({
+      steps: [finishStep()],
+      envStatus: {
+        telemetry: () => null,
+        repoMap: () => null,
+        flushTelemetry: async () => { flushing = true; await flushGate; },
+      },
+    });
+    const apply = vi.fn(async (enabled: boolean, baseAuthority: unknown) => { await applyGate; return { enabled, baseAuthority }; });
+    nativePolicy(h, { availability: () => ({ supported: true }), apply });
+    const run = vi.spyOn(h.engine, "runTurn");
+    try {
+      const connectionId = await ready(h);
+      h.send({ type: "user_message", requestId: "first", text: "work" });
+      await h.waitUntil(() => flushing);
+      expect((h.session as unknown as { busy: boolean }).busy).toBe(false);
+      const delivery = await h.session.receiveAgentMessage({ messageId: "queued", sender: "supervisor", recipientSessionId: h.session.communicationStatus().sessionId, kind: "agent_message", payload: "follow up", mode: "next_turn", createdAt: new Date().toISOString() });
+      expect(delivery.state).toBe("queued");
+      h.send({ type: "set_orchestrate", requestId: "toggle", enabled: true, connectionId });
+      await h.flush();
+      releaseFlush();
+      await h.flush();
+      releaseApply();
+      await h.waitUntil(() => run.mock.calls.length === 2);
+      expect(h.received.find(m => m.type === "orchestrate_result" && m.requestId === "toggle")).toMatchObject({ outcome: "rejected", reason: "busy" });
+      expect(apply).not.toHaveBeenCalled();
+      expect(h.session.agentMessageStatus("queued")?.state).toBe("acknowledged");
+    } finally { releaseFlush(); releaseApply(); h.close(); }
+  });
+
   it("atomically enables core before claiming exactly one turn and restores the preset", async () => {
     const changed = vi.fn();
     const h = createHarness({ steps: [finishStep()], mode: "auto", onOrchestrateChanged: changed, gated: { parkAfterIndex: 0 } });
