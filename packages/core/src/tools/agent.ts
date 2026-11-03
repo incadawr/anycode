@@ -151,7 +151,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
     inputSchema,
     handler: async (input, ctx) => {
       const agentType = input.agent_type ?? DEFAULT_AGENT_TYPE;
-      const tier = input.tier ?? "inline";
+      const tier = input.tier ?? (sessionTier ? "session" : "inline");
 
       // Hosts without inline route discovery can only select providers for session children.
       if (input.provider !== undefined && tier !== "session" && !ctx.subagents?.supportsInlineProvider) {
@@ -236,7 +236,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
       const engineProfile = ctx.subagents?.engineProfile?.(agentType) ?? null;
       // GitHub #17 slice C: detach-by-default is MECHANICAL and
       // no longer gated on an orchestrate session. A session-tier Agent call
-      // (and an engine profile, which always runs as a child session) with no
+      // explicitly requesting session (and an engine profile, which always runs as a child session) with no
       // explicit detach and no send_to defaults to detach:true — it reports
       // back as a message instead of joining the parent's turn for minutes.
       // An explicit detach:false is honored (the spread in runSessionTier keys
@@ -245,7 +245,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
       // delivery acknowledgement and stays a plain call. Inline keeps its
       // synchronous default.
       const defaultDetach =
-        (tier === "session" || engineProfile !== null) &&
+        (input.tier === "session" || engineProfile !== null) &&
         input.detach === undefined &&
         input.send_to === undefined;
       if (engineProfile !== null) {
