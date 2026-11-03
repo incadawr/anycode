@@ -532,6 +532,7 @@ export interface HarnessOptions {
    * wiring (every pre-existing test unaffected).
    */
   switchEngineFactory?: SessionOptions["switchEngineFactory"];
+  backgroundChildren?: SessionOptions["backgroundChildren"];
   /**
    * a SkillPort + skills prompt-section text threaded into
    * AgentLoopConfig EXACTLY as host boot does (`config.skills` from
@@ -796,6 +797,7 @@ export function createHarness(options: HarnessOptions): Harness {
         : {}),
     ...(options.orchestratorRouteCheck !== undefined ? { orchestratorRouteCheck: options.orchestratorRouteCheck } : {}),
     ...(options.switchEngineFactory !== undefined ? { switchEngineFactory: options.switchEngineFactory } : {}),
+    ...(options.backgroundChildren !== undefined ? { backgroundChildren: options.backgroundChildren } : {}),
     broker,
     fs: toolFs,
     workspace: "/workspace",

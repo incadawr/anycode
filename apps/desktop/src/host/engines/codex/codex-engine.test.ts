@@ -495,7 +495,8 @@ describe("CodexEngine — native session boot", () => {
       "thread/read",
       "account/rateLimits/read",
     ]);
-    expect(server.calls.find((call) => call.method === "thread/resume")?.params).toEqual({ threadId: "persisted-thread", cwd: "/work" });
+    expect(server.calls.find((call) => call.method === "thread/resume")?.params).toMatchObject({ threadId: "persisted-thread", cwd: "/work", sandbox: "workspace-write", approvalPolicy: "on-request" });
+    expect(server.calls.some((call) => call.method === "turn/start")).toBe(false);
   });
 
   it("captures the native context notification during resume", async () => {
@@ -4063,7 +4064,8 @@ describe("CodexEngine — browser dynamicTools", () => {
     const server = new FakeAppServer();
     const shadowLog = new RecordingShadowLog();
     await resumeNativeCodexSession(server, "/work", "persisted-thread", undefined, undefined, undefined, shadowLog, undefined);
-    expect(server.calls.find((c) => c.method === "thread/resume")?.params).toEqual({ threadId: "persisted-thread", cwd: "/work" });
+    expect(server.calls.find((c) => c.method === "thread/resume")?.params).toMatchObject({ threadId: "persisted-thread", cwd: "/work", sandbox: "workspace-write" });
+    expect(server.calls.find((c) => c.method === "thread/resume")?.params).not.toHaveProperty("dynamicTools");
   });
 
   it("X14: a dynamicToolCall item for anycode_browser_click projects nothing (no double count)", async () => {

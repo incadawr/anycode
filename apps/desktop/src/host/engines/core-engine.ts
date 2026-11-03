@@ -72,6 +72,11 @@ export class CoreEngine implements SessionEngine {
     this.options.loop.setMode(mode);
   }
 
+  setCoreOrchestrate(enabled: boolean): boolean {
+    this.options.config.orchestrate = enabled;
+    return this.options.config.orchestrate === enabled;
+  }
+
   reasoningEffort() {
     return this.options.config.reasoningEffort;
   }
