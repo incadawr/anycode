@@ -40,7 +40,7 @@ export async function runLive(args) {
     const profile = `(version 1)(allow default)(deny file-write* (subpath ${quote(ownerDir)}))`;
     const env = { PATH: process.env.PATH, HOME: home, CODEX_HOME: codexHome, ANYCODE_USER_DATA_DIR: userData, TMPDIR: root };
     const launch = (...argv) => new Promise((resolve, reject) => {
-      const proc = spawn('/usr/bin/sandbox-exec', ['-p', profile, bin, ...argv], { cwd, env, stdio: ['ignore', 'pipe', 'ignore'], detached: true });
+      const proc = process.env.ORCH_PROBE_NO_SANDBOX_EXEC === '1' ? spawn(bin, argv, { cwd, env, stdio: ['ignore', 'pipe', 'ignore'], detached: true }) : spawn('/usr/bin/sandbox-exec', ['-p', profile, bin, ...argv], { cwd, env, stdio: ['ignore', 'pipe', 'ignore'], detached: true });
       let stdout = '', finished = false;
       const kill = () => { if (proc.pid) { try { process.kill(-proc.pid, 'SIGKILL'); } catch {} } };
       const deadline = setTimeout(() => { kill(); settle(Error('command-timeout')); }, RPC_MS);
@@ -80,7 +80,7 @@ createInterface({ input: process.stdin }).on('line', line => {
     const fixtureConfig = name => ({ command: process.execPath, args: [fixture, name] });
     const tomlString = value => JSON.stringify(value);
     writeFileSync(join(codexHome, 'config.toml'), `[features]\nmulti_agent = true\n[mcp_servers.ambient]\ncommand = ${tomlString(process.execPath)}\nargs = [${tomlString(fixture)}, "ambient"]\n[mcp_servers.second]\ncommand = ${tomlString(process.execPath)}\nargs = [${tomlString(fixture)}, "second"]\n`);
-    child = spawn('/usr/bin/sandbox-exec', ['-p', profile, bin, 'app-server', '--stdio'], { cwd, env, stdio: ['pipe', 'pipe', 'ignore'], detached: true });
+    child = process.env.ORCH_PROBE_NO_SANDBOX_EXEC === '1' ? spawn(bin, ['app-server', '--stdio'], { cwd, env, stdio: ['pipe', 'pipe', 'ignore'], detached: true }) : spawn('/usr/bin/sandbox-exec', ['-p', profile, bin, 'app-server', '--stdio'], { cwd, env, stdio: ['pipe', 'pipe', 'ignore'], detached: true });
     child.stdin.on('error', () => {});
     const send = message => child.stdin.write(JSON.stringify(message) + '\n');
     const failPending = () => { for (const p of pending.values()) { clearTimeout(p.timer); p.reject(Error('server-exited')); } pending.clear(); if (activeTurn) activeTurn.reject(Error('server-exited')); };
