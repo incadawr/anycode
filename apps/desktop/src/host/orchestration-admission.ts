@@ -28,14 +28,14 @@ export class OrchestrationAdmission {
   }
 
   /** admit must synchronously claim the turn; its normal delivery ledger owns the turn afterward. */
-  submit(requestId: string, connectionId: string, admit: () => void): Promise<AdmissionResponse> {
-    return this.request(requestId, connectionId, "submit", true, admit);
+  submit(requestId: string, connectionId: string, admit: () => void, fingerprint = ""): Promise<AdmissionResponse> {
+    return this.request(requestId, connectionId, `submit:${fingerprint}`, true, admit);
   }
 
   private request(id: string, connectionId: string, signature: string, enabled: boolean, admit?: () => void): Promise<AdmissionResponse> {
+    if (this.options.connectionId() !== connectionId) return Promise.resolve({ outcome: "rejected", reason: "stale" });
     const existing = this.entries.get(id);
     if (existing) return existing.signature === signature ? existing.promise : Promise.resolve({ kind: "frame_diagnostic", reason: "conflict" });
-    if (this.options.connectionId() !== connectionId) return Promise.resolve({ outcome: "rejected", reason: "stale" });
     if (this.entries.size >= (this.options.maxRequests ?? 256)) return Promise.resolve({ outcome: "rejected", reason: "capacity" });
     // Install the ledger entry before executing any callbacks, including synchronous re-entry.
     let resolve!: (result: AdmissionResult) => void;
