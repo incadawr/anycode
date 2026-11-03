@@ -2964,7 +2964,7 @@ body {
   color: var(--text-message);
 }
 
-.message-assistant :is(.md-h1, .md-h2, .md-h3, .md-h4, .md-h5, .md-codeblock) {
+.message-assistant :is(.md-h1, .md-h2, .md-h3, .md-h4, .md-h5, .md-codeblock):not(.md-blockquote *) {
   color: var(--text-1);
 }
 
