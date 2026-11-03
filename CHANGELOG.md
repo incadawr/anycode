@@ -19,6 +19,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Prevent duplicate preview errors after reconnecting, limit console groups, and update background agent buttons efficiently.
 
+- Block plan-mode Bash commands whose Unicode whitespace could redirect execution to a workspace program, and clarify the dedicated read-only tool alternatives.
+
 - Show subagent activity in the dock and allow splitting the active panel alongside a preview.
 
 - Keep orchestrated sessions in orchestrate mode and ask before side-effecting actions while allowing local previews.

@@ -79,7 +79,8 @@ export function resolveTrustedPlanCommand(command: string, cwd?: string): string
   if (!split) return undefined;
   const segments: string[] = [];
   for (const segment of split.segments) {
-    const match = /^(\s*)([a-z0-9-]+)(?=\s|$)/.exec(segment);
+    // Only space and tab separate shell words; Unicode whitespace is literal.
+    const match = /^([ \t]*)([a-z0-9-]+)(?=[ \t]|$)/.exec(segment);
     if (!match || match[2] === "git") return undefined;
     const executable = trustedExecutable(match[2]!, cwd);
     if (!executable) return undefined;
