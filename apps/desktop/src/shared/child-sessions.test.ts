@@ -975,7 +975,7 @@ describe("protocol constants", () => {
   it("freezes the documented admission/timing numbers", () => {
     expect(CHILD_RUNS_PER_PARENT_MAX).toBe(3);
     expect(CHILD_RUNS_GLOBAL_MAX).toBe(8);
-    expect(CHILD_START_DEADLINE_MS).toBe(30_000);
+    expect(CHILD_START_DEADLINE_MS).toBe(60_000);
     expect(CHILD_STEER_QUEUE_MAX).toBe(16);
   });
 });

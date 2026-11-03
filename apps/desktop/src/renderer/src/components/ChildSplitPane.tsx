@@ -77,6 +77,7 @@ function ChildSplitHeadSingle({ row }: { row: ChildSplitRow }) {
       {row.card.model !== null && <span className="child-split-head-model">{row.card.model}</span>}
       <span className="child-split-head-chip">subagent</span>
       <span className="child-split-head-counters">{formatSubagentCounters(row.card)}</span>
+      {row.card.final?.failureReason && <span className="child-split-error" title={row.card.final.failureReason}>Error: {row.card.final.failureReason}</span>}
     </>
   );
 }
@@ -99,6 +100,7 @@ function ChildSplitRowLine({ row }: { row: ChildSplitRow }) {
       <span className="child-split-row-persona">{row.card.agentType}</span>
       {row.card.model !== null && <span className="child-split-row-model">{row.card.model}</span>}
       <span className="child-split-row-counters">{formatSubagentCounters(row.card)}</span>
+      {row.card.final?.failureReason && <span className="child-split-error" title={row.card.final.failureReason}>Error: {row.card.final.failureReason}</span>}
     </div>
   );
 }

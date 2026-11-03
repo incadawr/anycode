@@ -21,6 +21,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Keep orchestrated sessions in orchestrate mode and ask before side-effecting actions while allowing local previews.
 
+- Allow more time and retry engine version checks, and report child startup failures immediately.
+
 - Protect imported catalog connections from unsafe destination overrides.
 
 - Keep background agent tool counts current after a burst of tool calls.

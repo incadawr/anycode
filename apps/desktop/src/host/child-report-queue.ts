@@ -51,6 +51,7 @@ const CAP_NOTICE_ID = "__child_report_cap_notice__";
 export interface ChildReportTerminalMeta {
   status: "completed" | "max_turns" | "cancelled" | "error";
   durationMs: number;
+  failureReason?: string;
   finalTurnFinishReason?: "length";
   ceiling?: ChildCeilingSummary;
 }

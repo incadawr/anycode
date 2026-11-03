@@ -18,7 +18,7 @@
  */
 
 /** `--version` preflight, its own short-lived process group (mirrors CODEX_VERSION_PREFLIGHT_TIMEOUT_MS). */
-export const CLAUDE_VERSION_PREFLIGHT_TIMEOUT_MS = 3_000;
+export const CLAUDE_VERSION_PREFLIGHT_TIMEOUT_MS = 15_000;
 
 /**
  * The `initialize` control-request's `control_response` ack. Live ack lands in

@@ -75,7 +75,7 @@ export const CODEX_BRIDGE_SETTLE_MS = 1_000;
  * host/engines/codex/app-server-client.ts — callers migrate to import this
  * shared constant instead of keeping their own local copy.
  */
-export const CODEX_VERSION_PREFLIGHT_TIMEOUT_MS = 3_000;
+export const CODEX_VERSION_PREFLIGHT_TIMEOUT_MS = 15_000;
 
 /**
  * Doctor-only per-RPC bounds (post-C0 review MED-1 fix): the doctor is an
@@ -116,7 +116,7 @@ export const CODEX_DOCTOR_MODEL_LIST_PAGE_TIMEOUT_MS = 2_000;
  * of every phase it wraps (asserted in the paired test — MED-1 fix, post-C0
  * review): `CODEX_VERSION_PREFLIGHT_TIMEOUT_MS` + 2x`CODEX_DOCTOR_RPC_
  * TIMEOUT_MS` (initialize, account/read) + `CODEX_MODEL_LIST_MAX_PAGES`x
- * `CODEX_DOCTOR_MODEL_LIST_PAGE_TIMEOUT_MS` = 3000 + 6000 + 10000 = 19000,
+ * `CODEX_DOCTOR_MODEL_LIST_PAGE_TIMEOUT_MS` = 15000 + 6000 + 10000 = 31000,
  * plus headroom for spawn/scheduling overhead. `close()`'s own bounded
  * teardown (`CODEX_TEARDOWN_TOTAL_BUDGET_MS`) runs AFTER this watchdog
  * settles (in the caller's `finally`), not inside it, so it is sized
@@ -124,7 +124,7 @@ export const CODEX_DOCTOR_MODEL_LIST_PAGE_TIMEOUT_MS = 2_000;
  * this value) — the watchdog and the teardown budget never compete for the
  * same clock.
  */
-export const CODEX_DOCTOR_WATCHDOG_MS = 20_000;
+export const CODEX_DOCTOR_WATCHDOG_MS = 32_000;
 
 // ── teardown recipe (design §2(b) / NOTES.md "Teardown hardening regression") ──
 // Both the host engine's child and main's doctor child

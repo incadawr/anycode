@@ -135,6 +135,18 @@ describe("AppServerClient", () => {
     }
   });
 
+  it("accepts a slow version wrapper", async () => {
+    const client = makeClient(["--slow-version"]);
+    try { await client.start(); } finally { await client.close(); }
+  }, 10_000);
+
+  it("retries a timed-out version wrapper once", async () => {
+    const marker = join(fixtureDir, "retry-version-marker");
+    const client = makeClient(["--retry-version", `--pid-file=${marker}`], { versionTimeoutMs: 500 });
+    try { await client.start(); expect(readFileSync(marker, "utf8")).toBe("attempted"); }
+    finally { await client.close(); }
+  });
+
   it("fails closed for an unsupported or timed-out version", async () => {
     await expect(makeClient(["--bad-version"]).start()).rejects.toBeInstanceOf(EngineVersionError);
     await expect(makeClient(["--hang-version"], { versionTimeoutMs: 150 }).start()).rejects.toBeInstanceOf(EngineVersionError);

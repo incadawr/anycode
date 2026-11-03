@@ -36,3 +36,18 @@ it("shows admission elapsed time immediately and stops ticking when empty", asyn
     vi.useRealTimers();
   }
 });
+
+it("keeps a failed child visible with its reason after it leaves the live snapshot", async () => {
+  const store = createDesktopStore();
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const child = { childSessionId: "child", spawnToolCallId: "spawn", agentType: "codex", description: "Review", startedAt: Date.now() };
+  try {
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab", store } }, createElement(BackgroundAgents))));
+    await act(async () => store.getState().applyHostMessage({ type: "background_children", children: [child] }));
+    await act(async () => store.getState().applyHostMessage({ type: "background_children", children: [] }));
+    await act(async () => store.getState().applyHostMessage({ type: "child_report", id: "spawn", text: "failed", childTerminal: { status: "error", durationMs: 1, failureReason: "host failed to initialize: timeout" } }));
+    expect(container.textContent).toContain("Error: host failed to initialize: timeout");
+    expect(container.textContent).not.toContain("Stop");
+  } finally { await act(async () => root.unmount()); }
+});

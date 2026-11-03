@@ -37,6 +37,7 @@ import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { childBootFailure, sanitizeBootFailure } from "./child-boot-failure.js";
 import { createRoutedChildComposition } from "./routed-child-composition.js";
 import { RoleHealthCache } from "./role-route.js";
 import {
@@ -2943,6 +2944,22 @@ describe("host degraded-mode port bind — immediate fatal (GitHub #4)", () => {
       initFailure: string | null,
     ) => void;
   }
+
+  it("sends the same sanitized startup error to the renderer and child terminal", async () => {
+    const source = await readHostSource();
+    expect(source).toContain("const safeFailure = sanitizeBootFailure(`host failed to initialize: ${describeError(error)}`);");
+    expect(source).toContain("initFailure = safeFailure.message;");
+    expect(source).toContain("childBootFailure(initFailure, safeFailure.truncated)");
+    const run = compileDegradedBlock(extractDegradedElseBlock(source));
+    const secret = "sk-abcdefghijklmnopqrstuvwx";
+    const safe = sanitizeBootFailure(`host failed to initialize: Codex preflight exited 1: ${secret}`);
+    const sent: unknown[] = [];
+    run({ attach: () => {}, sendDirect: (message) => sent.push(message) }, { onMessage: () => {} }, safe.message);
+    const terminal = childBootFailure(safe.message, safe.truncated);
+    expect(sent).toEqual([{ type: "fatal", message: safe.message }]);
+    expect(JSON.stringify({ sent, terminal })).not.toContain(secret);
+    expect(safe.message).toContain("Codex preflight exited 1: [redacted]");
+  });
 
   it("sends fatal immediately on port bind, with ZERO inbound messages", async () => {
     const source = await readHostSource();
