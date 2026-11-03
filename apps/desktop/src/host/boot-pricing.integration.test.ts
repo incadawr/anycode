@@ -24,7 +24,7 @@ describe("host model pricing", () => {
         response.writeHead(200, { "content-type": "text/event-stream" });
         const invoke = callAgent && input.model === "a";
         if (invoke) callAgent = false;
-        const delta = invoke ? { tool_calls: [{ index: 0, id: "call-agent", type: "function", function: { name: "Agent", arguments: JSON.stringify({ description: "test", prompt: "answer", agent_type: "general-purpose", model: "b" }) } }] } : { role: "assistant", content: "done" };
+        const delta = invoke ? { tool_calls: [{ index: 0, id: "call-agent", type: "function", function: { name: "Agent", arguments: JSON.stringify({ description: "test", prompt: "answer", agent_type: "general-purpose", model: "b", tier: "inline" }) } }] } : { role: "assistant", content: "done" };
         response.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`);
         response.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: invoke ? "tool_calls" : "stop" }], usage: { prompt_tokens: 1000, completion_tokens: 1000, total_tokens: 2000, prompt_tokens_details: { cached_tokens: 0 } } })}\n\n`);
         response.end("data: [DONE]\n\n");
