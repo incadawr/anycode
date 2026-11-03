@@ -15,6 +15,7 @@ import type {
   PermissionMode,
   ReasoningEffort,
 } from "@anycode/core";
+import type { OrchestrationPolicy } from "../orchestration-policy.js";
 import type { EngineId } from "../../shared/engines.js";
 
 export type { EngineId } from "../../shared/engines.js";
@@ -85,6 +86,8 @@ export interface RunTurnOptions {
 export interface SessionEngine {
   readonly id: EngineId;
   readonly capabilities: EngineCapabilities;
+  /** Optional engine-owned orchestration overlay; absent means unavailable. */
+  readonly orchestrationPolicy?: OrchestrationPolicy;
   mode(): PermissionMode;
   setMode?(mode: PermissionMode): void;
   reasoningEffort(): ReasoningEffort | undefined;

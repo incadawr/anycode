@@ -95,7 +95,7 @@ export type {
 export { PLAN_MODE_REMINDER, withPlanModeReminder } from "./prompts/plan-reminder.js";
 // Pure string helper: the orchestrate-mode reminder the desktop
 // host appends instead of the plan reminder while a tab is in orchestrate mode.
-export { ORCHESTRATE_REMINDER, withOrchestrateReminder } from "./prompts/orchestrate.js";
+export { ORCHESTRATE_REMINDER, withOrchestrateReminder, orchestrationInstructions, orchestrationDeveloperBlock, orchestrationTurnReminder } from "./prompts/orchestrate.js";
 // Pure catalog matcher (no I/O, no auto-run block — the NOTE about cli/main.ts
 // below does not apply): re-exported for the desktop host's boot-time
 // context-window resolution (slice 6.4), so both wiring paths resolve the
@@ -225,3 +225,5 @@ export type { TimeoutRaceResult } from "./util/abort.js";
 export { resolveWorkspaceWriteFacts } from "./util/path-containment.js";
 
 export { scrubApprovalText } from "./utils/scrub-approval-text.js";
+
+export type { OrchestrationDialect } from "./prompts/orchestrate.js";

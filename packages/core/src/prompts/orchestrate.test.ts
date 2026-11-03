@@ -4,7 +4,7 @@
  * `<orchestrate-reminder>`) and the core facts the desktop host depends on.
  */
 import { describe, expect, it } from "vitest";
-import { ORCHESTRATE_REMINDER, withOrchestrateReminder } from "./orchestrate.js";
+import { ORCHESTRATE_REMINDER, withOrchestrateReminder, orchestrationDeveloperBlock, orchestrationTurnReminder } from "./orchestrate.js";
 import * as barrel from "../index.js";
 import { sanitizeTitleSource, deriveSessionTitle } from "../context/session-title.js";
 
@@ -67,5 +67,21 @@ describe("sanitizer strips the orchestrate reminder", () => {
 describe("core barrel reachability", () => {
   it("exports withOrchestrateReminder", () => {
     expect(barrel.withOrchestrateReminder).toBe(withOrchestrateReminder);
+  });
+});
+
+
+describe("orchestration dialects", () => {
+  it("keeps core Agent arguments and uses only supported Codex arguments", () => {
+    for (const text of [orchestrationDeveloperBlock("core"), orchestrationTurnReminder("core")]) {
+      expect(text).toContain('tier "session"');
+      expect(text).toContain("detach true");
+    }
+    for (const text of [orchestrationDeveloperBlock("codex"), orchestrationTurnReminder("codex")]) {
+      expect(text).toContain("anycode_agent");
+      expect(text).toContain("detach true");
+      expect(text).not.toContain("tier");
+    }
+    expect(orchestrationDeveloperBlock("core")).toBe(ORCHESTRATE_REMINDER);
   });
 });
