@@ -7,6 +7,21 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.70] — 2026-11-03
+
+### Added
+
+- A MiniMax subscription connection now shows its remaining five-hour quota and reset time on its card in Settings. Pay-as-you-go keys are left alone.
+- Dropping a file or folder onto the composer inserts its path (relative to the session's workspace when inside it, quoted if it contains spaces). Images are still attached on models that accept them; on models that do not, their path is inserted instead.
+
+### Fixed
+
+- The background-agent row above the composer now refreshes its tool counts right after a burst of tool calls instead of waiting for the next model output.
+- Collapsed SubAgent cards no longer let long model or engine names run under the status badge or push the permission button out of view.
+- Local previews: file requests from the previous page are blocked while its replacement is loading, and a workspace reached through a symlink loads its files again.
+- Rewinding a conversation no longer brings back errors from the turns that were discarded.
+- When an agent cannot be started from a session (a role bound to its own connection, or a profile whose restrictions session delegation would drop), the refusal now says what to do instead. Engine child sessions are told that delegation is unavailable to them.
+
 ## [0.0.69] — 2026-11-03
 
 ### Changed
