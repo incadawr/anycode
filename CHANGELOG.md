@@ -7,32 +7,40 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.69] — 2026-11-03
+
 ### Changed
 
-- Desktop subagent calls without a tier now run as child sessions while the parent waits. Move running children to the background individually or together; when session capacity is full, eligible calls use a lightweight inline child.
+- Desktop general-purpose subagent calls without a tier now run as child sessions while the parent waits; other profiles stay inline. Move running children to the background individually or together; when session capacity is full, eligible calls use a lightweight inline child.
 
 ### Fixed
 
-- Local HTML previews can no longer load files outside their own folder (or workspace), including the app profile and shared temp folders. The restriction follows in-page navigation, and a document inside the app profile is never widened by a workspace.
+- Use readable Enter key names in task and permission hints. Refresh Git status when returning to its dock tab.
+
+- Make composer keyboard hints readable and separate them from the model selector.
+
+- Local HTML previews can no longer load files outside their own folder (or workspace), including the app profile and shared temp folders. The restriction follows the preview as it navigates, and a document inside the app profile is never widened by a workspace.
+
 - A session host that keeps crashing now explains common startup failures.
-- Keep preview console messages visible after debugger detachment without duplicating them on reconnect.
+
 - Keep preview errors visible during noisy logs and retain resource diagnostics and readable collection values.
+
 - Group preview warnings and errors in a collapsible chat row, keeping routine console messages in the preview console.
+
 - Show readable preview console objects in the console panel and browser tools.
+
+- Keep preview console messages available after the debugger detaches.
+
 - Keep background agent action buttons visible when progress text is long.
-- Keep local preview file access closed while a navigated document is being resolved or cannot be resolved.
+
 - Restore terminal turn errors in session transcripts after reopening a session.
+
 - Return the sanitized error in session results when a core turn fails without a completed answer.
 
 ## [0.0.68] — 2026-11-03
 
 ### Fixed
 
-- Preserve read-only and profile restrictions when delegating without an explicit tier.
-
-- Use readable Enter key names in task and permission hints. Refresh Git status when returning to its dock tab.
-
-- Make composer keyboard hints readable and separate them from the model selector.
 - Restore compact, right-aligned user messages in conversations.
 
 ### Changed
