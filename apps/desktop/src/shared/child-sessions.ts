@@ -579,11 +579,10 @@ function isChildEngine(value: unknown): value is "claude" | "codex" {
 }
 
 export function isSessionProfileRestrictions(value: unknown): value is SessionProfileRestrictions {
-  if (!isRecord(value) || !hasOnlyKeys(value, ["tools", "readOnly", "allowBash", "permissions"]) ||
+  if (!isRecord(value) || !hasOnlyKeys(value, ["tools", "readOnly", "permissions"]) ||
       !Array.isArray(value.tools) || value.tools.length > 200 ||
       !value.tools.every((item: unknown) => typeof item === "string" && item.length > 0 && item.length <= 256) ||
-      typeof value.readOnly !== "boolean" ||
-      (value.allowBash !== undefined && typeof value.allowBash !== "boolean")) return false;
+      typeof value.readOnly !== "boolean") return false;
   if (value.permissions === undefined) return true;
   if (!isRecord(value.permissions) || !hasOnlyKeys(value.permissions, ["allow", "deny"])) return false;
   return [value.permissions.allow, value.permissions.deny].every((rules) =>

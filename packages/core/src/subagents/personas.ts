@@ -125,7 +125,7 @@ export function sessionRestrictionsForPersona(persona: PersonaDefinition, includ
   if (!restricted) return null;
   const tools = [...persona.tools];
   if (includeConnections && tools.some((name) => ["Read", "Git", "Grep", "Glob", "ListConnections"].includes(name)) && !tools.includes("ListConnections")) tools.push("ListConnections");
-  return { tools, readOnly, ...(persona.name === "reviewer" ? { allowBash: true } : {}), ...(persona.permissions !== undefined ? { permissions: persona.permissions } : {}) };
+  return { tools, readOnly, ...(persona.permissions !== undefined ? { permissions: persona.permissions } : {}) };
 }
 
 /**
@@ -162,8 +162,8 @@ const PLANNER_TOOLS = ["Read", "Git", "Grep", "Glob", "TodoRead", "TodoWrite", "
 /** §3.1: EXECUTOR_TOOLS = GENERAL_PURPOSE_TOOLS (full toolset under the parent's gate). */
 const EXECUTOR_TOOLS = GENERAL_PURPOSE_TOOLS;
 
-/** §3.1: a reviewer runs tests — Bash included, under the parent's permission gate. */
-const REVIEWER_TOOLS = ["Read", "Git", "Grep", "Glob", "TodoRead", "TodoWrite", "WebFetch", "Bash"] as const;
+/** Reviewer has the same read-only tools as explore. */
+const REVIEWER_TOOLS = EXPLORE_TOOLS;
 
 const GENERAL_PURPOSE_SYSTEM_PROMPT = [
   "You are the general-purpose subagent: a versatile executor for one delegated subtask.",

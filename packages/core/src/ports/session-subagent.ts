@@ -37,7 +37,6 @@ import type { ReasoningEffort } from "../types/config.js";
 export interface SessionProfileRestrictions {
   tools: readonly string[];
   readOnly: boolean;
-  allowBash?: boolean;
   permissions?: import("../types/permissions.js").ProfilePermissionRules;
 }
 

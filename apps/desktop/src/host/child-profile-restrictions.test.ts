@@ -3,6 +3,14 @@ import { createDefaultToolRegistry, ModePermissionEngine, PERSONAS, sessionRestr
 import { restrictChildPermissions, restrictChildRegistry } from "./child-profile-restrictions.js";
 
 describe("child profile restrictions", () => {
+  it("denies reviewer shell redirection in yolo mode", () => {
+    const restrictions = sessionRestrictionsForPersona(PERSONAS.reviewer)!;
+    const registry = createDefaultToolRegistry();
+    const engine = restrictChildPermissions(new ModePermissionEngine(), restrictions);
+    restrictChildRegistry(registry, restrictions);
+    expect(registry.has("Bash")).toBe(false);
+    expect(engine.check({ toolName: "Bash", input: { command: "printf changed > tracked.txt" }, metadata: createDefaultToolRegistry().getMetadata("Bash")!, mode: "yolo" }).decision).toBe("deny");
+  });
   it("leaves unrestricted sessions able to use existing and later-registered tools", () => {
     const registry = createDefaultToolRegistry();
     const restrictions = sessionRestrictionsForPersona(PERSONAS["general-purpose"], true);
@@ -38,18 +46,6 @@ describe("child profile restrictions", () => {
     for (const [toolName, input] of [["Write", { file_path: "/tmp/a", content: "x" }], ["Edit", { file_path: "/tmp/a" }], ["Bash", { command: "touch /tmp/a" }]] as const) {
       expect(engine.check({ toolName, input, metadata: registry.getMetadata(toolName)!, mode: "yolo" }).decision).toBe("deny");
     }
-  });
-
-  it("allows reviewer commands through the inherited permission engine", () => {
-    const restrictions = sessionRestrictionsForPersona(PERSONAS.reviewer)!;
-    expect(restrictions.readOnly).toBe(true);
-    expect(restrictions.allowBash).toBe(true);
-    const registry = createDefaultToolRegistry();
-    restrictChildRegistry(registry, restrictions);
-    expect(registry.has("Write")).toBe(false);
-    const engine = restrictChildPermissions(new ModePermissionEngine(), restrictions);
-    expect(engine.check({ toolName: "Bash", input: { command: "pnpm test" }, metadata: registry.getMetadata("Bash")!, mode: "yolo" }).decision).toBe("allow");
-    expect(engine.check({ toolName: "Write", input: { file_path: "/tmp/a", content: "x" }, metadata: createDefaultToolRegistry().getMetadata("Write")!, mode: "yolo" }).decision).toBe("deny");
   });
 
   it("applies the profile deny overlay to the inherited engine", () => {

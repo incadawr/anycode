@@ -13,7 +13,7 @@ export function restrictChildPermissions(base: PermissionEngine, restrictions: S
   const readOnlyGate = new SafeCommandPermissionEngine(new ModePermissionEngine());
   return {
     check(request) {
-      if (!request.metadata.readOnly && request.toolName !== "TodoWrite" && !(restrictions.allowBash && request.toolName === "Bash")) {
+      if (!request.metadata.readOnly && request.toolName !== "TodoWrite") {
         const ruling = readOnlyGate.check({ ...request, mode: "plan" });
         if (ruling.decision === "deny") return ruling;
         const inherited = overlay.check(request);

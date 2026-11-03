@@ -28,6 +28,18 @@ describe("scrubApprovalText", () => {
 
 
 describe("scrubFailureText", () => {
+  it("redacts all URL userinfo up to the final at sign", () => {
+    expect(scrubFailureText("http://alice:prefix@private-suffix@proxy.local/path")).toBe("http://[redacted]@proxy.local/path");
+  });
+  it("redacts escaped JSON quotes", () => {
+    expect(scrubFailureText('{"password":"prefix\\"private-suffix"}')).not.toContain("private-suffix");
+  });
+  it("redacts key-provided long tokens", () => {
+    expect(scrubFailureText("Incorrect API key provided: abcdefghijklmnopqrstuvwxyz1234567890")).not.toContain("abcdefghijklmnopqrstuvwxyz1234567890");
+  });
+  it.each(["pass=short", "auth=short", "session=short"])("redacts legacy sensitive name %s", (value) => {
+    expect(scrubFailureText(value)).not.toContain("short");
+  });
   it.each(["https://alice:hunter2@proxy.local", "Bearer abc123", "sk-abcdefghijklmnopqrstuvwx", "sk-short", "API_KEY=secret123", "key=secret123", 'password="secret value"'])('redacts credentials in %s', (value) => {
     expect(scrubFailureText(value)).toContain("[redacted]");
     expect(scrubFailureText(value)).not.toContain("secret123");

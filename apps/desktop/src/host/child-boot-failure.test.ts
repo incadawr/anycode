@@ -2,6 +2,12 @@ import { expect, it } from "vitest";
 import { parseChildTerminal } from "../shared/child-sessions.js";
 import { childBootFailure, sanitizeBootFailure } from "./child-boot-failure.js";
 
+it("bounds adversarial inputs before scrubbing", () => {
+  const start = performance.now();
+  for (const value of ["key", "password", "a@", '"']) sanitizeBootFailure(value.repeat(100_000));
+  expect(performance.now() - start).toBeLessThan(2000);
+}, 3000);
+
 it("reports a startup error with the original engine message", () => {
   const reason = "host failed to initialize: Codex version preflight timed out after 15000ms";
   expect(parseChildTerminal(childBootFailure(reason))).toMatchObject({
