@@ -9,6 +9,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Keep background agent action buttons visible when progress text is long.
+
 - Keep local preview file access closed while a navigated document is being resolved or cannot be resolved.
 
 - Use readable Enter key names in task and permission hints. Refresh Git status when returning to its dock tab.

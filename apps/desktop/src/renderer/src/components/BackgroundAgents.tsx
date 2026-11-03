@@ -75,16 +75,18 @@ export function BackgroundAgents() {
         {children.map((child) => {
           const spawnToolCallId =
             parentSessionId === null ? undefined : spawnToolCallIdForChild(relations, parentSessionId, child.childSessionId);
+          const progress = backgroundProgressText(child);
+          const waiting = backgroundWaitingText(child);
           return (
             <li key={child.childSessionId} className="background-agents-item">
               <span className="background-agents-type">{child.agentType}</span>
               <span className="background-agents-description">{child.description}</span>
               <span className="background-agents-elapsed">{backgroundElapsed(child.startedAt, now)}</span>
-              {backgroundProgressText(child) !== "" && (
-                <span className="background-agents-progress">{backgroundProgressText(child)}</span>
+              {progress !== "" && (
+                <span className="background-agents-progress" title={progress}>{progress}</span>
               )}
-              {backgroundWaitingText(child) !== null && (
-                <span className="background-agents-waiting">{backgroundWaitingText(child)}</span>
+              {waiting !== null && (
+                <span className="background-agents-waiting" title={waiting}>{waiting}</span>
               )}
               {spawnToolCallId !== undefined && (
                 <button

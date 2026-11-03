@@ -5141,6 +5141,7 @@ body {
 
 .background-agents-item {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: var(--sp-2);
   padding: var(--sp-1) var(--sp-2);
@@ -5174,13 +5175,21 @@ body {
 
 /* GitHub #17 slice E: optional per-child progress and the blocked-on-ask line. */
 .background-agents-progress {
-  flex-shrink: 0;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   color: var(--text-3);
   font-size: var(--fs-2xs);
 }
 
 .background-agents-waiting {
-  flex-shrink: 0;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   color: var(--warning, var(--text-2));
   font-size: var(--fs-2xs);
   font-weight: var(--w-medium);
@@ -5195,6 +5204,10 @@ body {
   color: var(--text-3);
   font-size: var(--fs-2xs);
   cursor: pointer;
+}
+
+.background-agents-action:first-of-type {
+  margin-left: auto;
 }
 
 .background-agents-action:hover {
