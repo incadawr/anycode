@@ -4668,7 +4668,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         // has already settled.
         case "preview_console": {
           if (event.level === "log" && event.suppressed === undefined) return;
-          const entry = { level: event.level, message: event.message, count: 1 };
+          const entry = { level: event.level === "log" ? "warn" as const : event.level, message: event.message, count: 1 };
           flushDeltas();
           set((state) => {
             const last = state.transcript.at(-1);
