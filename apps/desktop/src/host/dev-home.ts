@@ -31,12 +31,6 @@ export function resolveExtensionsHomeOverride(env: NodeJS.ProcessEnv): string | 
   return trimmed;
 }
 
-export function resolveSkillsHomeOverride(env: NodeJS.ProcessEnv): string | null {
-  if (env.ANYCODE_AUTOMATION !== "1") return null;
-  const value = env.ANYCODE_SKILLS_IMPORT_HOME?.trim();
-  return value && isAbsolute(value) ? value : null;
-}
-
 /**
  * Dev/automation-ONLY override for `SESSION_HISTORY_MAX_ITEMS` (session.ts):
  * a replay recording needs a long session hydrated in full so the start of a

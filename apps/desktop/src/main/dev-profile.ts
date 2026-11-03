@@ -48,6 +48,16 @@ export function resolveUserDataOverride(env: NodeJS.ProcessEnv, isPackaged: bool
   return trimmed;
 }
 
+/** One home for automation skill and plugin discovery. */
+export function resolveSkillsProfileHome(env: NodeJS.ProcessEnv, isPackaged: boolean): string | null {
+  if (isPackaged || env.ANYCODE_AUTOMATION !== "1") return null;
+  for (const raw of [env.ANYCODE_SKILLS_IMPORT_HOME, env.ANYCODE_SUBAGENTS_HOME, env.ANYCODE_PROFILE_HOME, env.ANYCODE_USER_DATA_DIR]) {
+    const value = raw?.trim();
+    if (value && isAbsolute(value)) return value;
+  }
+  return null;
+}
+
 /**
  * True iff `ANYCODE_USER_DATA_DIR` was supplied (non-empty) alongside the
  * automation gate but `resolveUserDataOverride` refused it (packaged build or

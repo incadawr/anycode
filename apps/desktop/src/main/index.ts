@@ -318,6 +318,7 @@ import {
   resolveSecretsPathOverride,
   resolveSettingsPathOverride,
   resolveUserDataOverride,
+  resolveSkillsProfileHome,
 } from "./dev-profile.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -363,35 +364,8 @@ function normalizeProviderHealthEvent(
 }
 
 /**
- * Dev-only override for the skills import scan's `home`
- * (design/slice-P7.20-cut.md §4), mirroring `resolveMcpImportHome`
- * (main/dev-profile.ts) exactly rather than importing it -- this lever is
- * skills-specific (`ANYCODE_SKILLS_IMPORT_HOME`) and local to this
- * registration site, same "duplicated on purpose" rule as `SkillsFs` in
- * skills-ipc.ts. Same double gate: `ANYCODE_AUTOMATION==="1" && !isPackaged`,
- * plus a non-empty ABSOLUTE path -- a packaged production build NEVER honors
- * the var, so `home()` always falls back to `os.homedir()` there. Points
- * `scanHarnessSkills` at a disposable fixture directory instead of the real
- * `~` (the skills-ui-smoke harness, W4).
- */
-function resolveSkillsImportHome(env: NodeJS.ProcessEnv, isPackaged: boolean): string | null {
-  if (env.ANYCODE_AUTOMATION !== "1" || isPackaged) {
-    return null;
-  }
-  const raw = env.ANYCODE_SKILLS_IMPORT_HOME;
-  if (raw === undefined) {
-    return null;
-  }
-  const trimmed = raw.trim();
-  if (trimmed === "" || !isAbsolute(trimmed)) {
-    return null;
-  }
-  return trimmed;
-}
-
-/**
  * Dev-only override for the subagents editor's `home` (design/slice-P7.21-cut.md
- * §4 W2), same "duplicated on purpose" rule as `resolveSkillsImportHome` above
+ * §4 W2), same dev/automation gate as the skills profile resolver
  * (`ANYCODE_SUBAGENTS_HOME`, local to this registration site). Same double
  * gate: `ANYCODE_AUTOMATION==="1" && !isPackaged`, plus a non-empty ABSOLUTE
  * path — a packaged production build NEVER honors the var, so `home()` always
@@ -1709,10 +1683,9 @@ async function buildHostEnvFor(current: AnycodeSettings): Promise<NodeJS.Process
     // provider ladder above already resolves through — no second catalog dep.
     recognizerCatalogFor: resolveCatalog,
   });
-  applySubagentsHomeOverride(env, (selfCheckProfile ?? resolveSubagentsHome(bootEnv, app.isPackaged)));
-  const skillsHome = selfCheckProfile ?? resolveSkillsImportHome(bootEnv, app.isPackaged);
-  if (skillsHome === null || skillsHome === undefined) delete env.ANYCODE_SKILLS_IMPORT_HOME;
-  else env.ANYCODE_SKILLS_IMPORT_HOME = skillsHome;
+  const skillsHome = selfCheckProfile ?? resolveSkillsProfileHome(bootEnv, app.isPackaged);
+  applySubagentsHomeOverride(env, skillsHome);
+  delete env.ANYCODE_SKILLS_IMPORT_HOME;
   // W4-F0b host lever forward (Fable ruling iter-10): set-or-DELETE, so a raw
   // ambient var can never ride the bootEnv spread into a host fork ungated.
   // Consumes the module-scope `codexProfilesHome` const (W4-F0d single eager
@@ -3733,12 +3706,7 @@ void app.whenReady().then(async () => {
     },
   });
 
-  // Skills management control plane (design/slice-P7.20-cut.md §5 W2): mirrors
-  // the MCP config registration exactly. `home` resolves via
-  // `ANYCODE_SKILLS_IMPORT_HOME` ONLY under the same dev/automation double gate
-  // as `ANYCODE_MCP_IMPORT_HOME` (`resolveSkillsImportHome` below refuses it in
-  // a packaged production build), else the real homedir; `workspaceForTab`
-
+  // Skills and plugin discovery share the automation profile home with the host.
   // `reveal` injects the one Electron primitive (`shell.showItemInFolder`) the
   // handlers need, so `main/skills-ipc.ts` itself stays Electron-free and unit-
   // testable off a plain deps bag.
@@ -3765,7 +3733,7 @@ void app.whenReady().then(async () => {
   });
 
   registerSkillsIpc({
-    home: () => (selfCheckProfile ?? resolveSkillsImportHome(process.env, app.isPackaged)) ?? homedir(),
+    home: () => (selfCheckProfile ?? resolveSkillsProfileHome(process.env, app.isPackaged)) ?? homedir(),
     workspaceForTab: (ref) => scopeRegistry.resolve(ref, (tabId) => manager?.getTab(tabId)?.workspace),
     fs: new NodeSkillsFs(),
     // The pane's plugin world comes from the exported, unit-tested wiring

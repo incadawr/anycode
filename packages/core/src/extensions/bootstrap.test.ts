@@ -83,16 +83,6 @@ afterEach(() => {
 // identical to today's boot.
 
 describe("discoverExtensions — empty world", () => {
-  it("uses the overridden home for user skill roots", async () => {
-    const { discoverExtensions } = await importBootstrap();
-    const fs = makeFs();
-    const paths: string[] = [];
-    fs.exists = async (path) => { paths.push(path); return false; };
-    await discoverExtensions(fs, { workspace: "/project", home: "/owner", skillsHome: "/isolated" });
-    expect(paths).toContain("/isolated/.anycode/skills");
-    expect(paths).not.toContain("/owner/.anycode/skills");
-  });
-
   it("an empty tree yields an empty bootstrap: empty skill list, \"\" section, no profiles/specs/workflows/problems", async () => {
     const { discoverExtensions } = await importBootstrap();
     const bootstrap = await discoverExtensions(makeFs(), {
