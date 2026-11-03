@@ -1634,8 +1634,16 @@ export function Composer() {
     proceedOrchestrateSubmit();
   }
 
+  function policyUnavailable(): boolean {
+    const posture = tabStore.getState().orchestration.posture;
+    if (posture !== "transitioning" && posture !== "quarantined") return false;
+    tabStore.getState().setNotice({ kind: "slash_command_rejected", text: posture === "quarantined" ? "Session policy could not be verified. Close this tab to stop the session." : "Session policy is being applied. Your draft is retained." });
+    return true;
+  }
+
   /** Enable orchestrate, then submit the stashed task as a normal user message. */
   function proceedOrchestrateSubmit(): void {
+    if (policyUnavailable()) return;
     if (imagesStillLoading() || refuseOrchestrateAttachments()) return;
     sendToHost({ type: "set_orchestrate", enabled: true });
     const task = pendingOrchestrateTask;
@@ -1650,6 +1658,7 @@ export function Composer() {
 
   /** Claim one picker before emitting any toggle or task. */
   function finishRolePicker(id: string, expectedConnection: object): void {
+    if (policyUnavailable()) return;
     const picker = tabStore.getState().composerRolePicker;
     if (!picker || picker.id !== id || picker.saveOperation || picker.completionClaim) return;
     const connected = () => !!slashTabId && tabRegistry.getLiveHostConnection(slashTabId, tabStore) === expectedConnection;
@@ -1970,6 +1979,7 @@ export function Composer() {
   }
 
   function handleSend(): void {
+    if (policyUnavailable()) return;
     if (imagesStillLoading()) return;
     const recoverySourceId = tabStore.getState().restoredComposerDraft?.deliveryRequestId ?? restoredDeliveryId;
     if (unresolvedOrchestration(recoverySourceId)) return;

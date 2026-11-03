@@ -377,7 +377,7 @@ export function createTabRegistry(
     // plan-mode flip happens after any set_mode above and before the first
     // user_message on the same port. Enabling an already-enabled flag just
     // acks (onSetOrchestrate), so no current-state comparison is needed.
-    if (orchestrate === true) {
+    if (orchestrate === true && entry.store.getState().engine === null) {
       sendPick({ type: "set_orchestrate", enabled: true });
     }
   }
@@ -407,8 +407,14 @@ export function createTabRegistry(
       entry.store.getState().setNotice({ kind: "image_attach_rejected", text: stagedModel ? `${MODEL_IMAGE_ATTACH_BLOCKED_TEXT} Model switched to ${stagedModel.model}; effective reasoning effort is ${stagedModel.reasoningEffort}.` : MODEL_IMAGE_ATTACH_BLOCKED_TEXT });
       return;
     }
+    const state = entry.store.getState();
+    if (state.orchestration.posture === "transitioning" || state.orchestration.posture === "quarantined" || (orchestrate && state.engine !== null && (!state.orchestration.available || !state.orchestration.protocol?.atomicSubmit))) {
+      holdInitial(entry, { text, images, orchestrate, ...picks }, "Session policy is unavailable. Restore the draft before sending; close the tab if policy cannot be verified.");
+      return;
+    }
     const deliveredImages = images;
     const requestId = crypto.randomUUID();
+    if (orchestrate && state.engine !== null) entry.store.setState({ orchestration: { ...state.orchestration, posture: "transitioning", pendingSubmit: requestId } });
     entry.store.getState().appendUserText(requestId, text, deliveredImages.length > 0 ? deliveredImages.map((image) => image.attachment) : undefined);
     // W8: snapshot what actually went on the wire so a later terminal
     // retryable failure can offer to replay this same content.
@@ -416,7 +422,7 @@ export function createTabRegistry(
     const connection = liveConnection(entry);
     try {
       if (!connection) throw new Error("connection unavailable");
-      connection.send({ type: "user_message", requestId, text, ...(deliveredImages.length > 0 ? { images: deliveredImages.map((image) => image.attachment) } : {}) });
+      connection.send({ type: "user_message", requestId, text, ...(deliveredImages.length > 0 ? { images: deliveredImages.map((image) => image.attachment) } : {}), ...(orchestrate && state.engine !== null ? { orchestrate: "enable" as const, connectionId: state.orchestration.protocol!.connectionId } : {}) });
       if (liveConnection(entry) !== connection) entry.store.getState().markOrchestrationDeliveryUnknown(requestId);
     } catch {
       entry.store.getState().markOrchestrationDeliveryUnknown(requestId);
@@ -496,6 +502,10 @@ export function createTabRegistry(
   function startInitial(entry: TabEntry, tabId: string, prompt: InitialPrompt, current: { model: string | null; mode: PermissionMode | null; effort: string | undefined; reasoningEffort: ReasoningEffort | undefined }, imageInput: boolean | undefined, imageFallback: boolean | undefined, stagedModel?: { model: string; reasoningEffort: ReasoningEffort }): void {
     cancelPendingModel(tabId, entry);
     if (!liveConnection(entry)) { holdInitial(entry, prompt, "Connection unavailable. Restore the draft to review it before sending."); return; }
+    const state = entry.store.getState();
+    if (state.orchestration.posture === "transitioning" || state.orchestration.posture === "quarantined" || (prompt.orchestrate && state.engine !== null && (!state.orchestration.available || !state.orchestration.protocol?.atomicSubmit))) {
+      holdInitial(entry, prompt, "Session policy is unavailable. Restore the draft before sending; close the tab if policy cannot be verified."); return;
+    }
     if ((prompt.images?.length ?? 0) > 0 && prompt.model !== undefined && prompt.model !== current.model) {
       if (!entry.connection) { holdInitial(entry, prompt, "A model switch was requested; the current model and effective reasoning effort are not confirmed. Restore the draft to review its settings."); return; }
       const requestId = crypto.randomUUID();
@@ -642,7 +652,7 @@ export function createTabRegistry(
     });
     tabsStore.getState().setHostExited(tabId, false);
     entry.store.getState().setAwaitingHostReady();
-    connection.send({ type: "ui_ready" });
+    connection.send({ type: "ui_ready", orchestrationProtocol: 1 });
   }
 
   /** (Re)connects a term-port to an existing entry: tears down the old subscription, routes every message into terminal-view.ts for this tabId. */
@@ -762,6 +772,7 @@ export function createTabRegistry(
               !state.queuePaused || state.promptQueue.some((prompt) => prompt.origin === "system");
             if (
               state.connection === "ready" &&
+              state.orchestration.posture !== "transitioning" && state.orchestration.posture !== "quarantined" &&
               state.turn.status === "idle" &&
               hasDeliverableItem &&
               state.queueInFlight === null &&
