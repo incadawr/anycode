@@ -76,7 +76,7 @@ describe("dock resize handle placement (GitHub #31)", () => {
     // the triple App.tsx reads (owner-scoped tabs) and the persisted width
     // so one test's dock state never leaks into the next mount.
     useDockStore.getState().mergeSplit();
-    useDockStore.setState({ tabs: [], activeTabId: null, ownerTabId: null, hidden: false });
+    useDockStore.setState({ tabs: [], activeTabId: null, ownerTabId: null, hidden: false, activityByConversation: {} });
     useDockStore.setState({ width: 640 });
     localStorage.clear();
     // jsdom's getBoundingClientRect is always 0x0 and its window is 1024px —
@@ -391,6 +391,24 @@ describe("dock resize handle placement (GitHub #31)", () => {
     } finally {
       (window as { anycode?: unknown }).anycode = anyBridge;
     }
+  });
+
+  it("remembers acknowledged outcomes across dock remounts and prioritizes permission", async () => {
+    const card = { agentType: "worker", description: "", model: null, engine: null, turns: 0, toolCalls: 0, lastTool: null, activity: [], activityDropped: 0, final: null };
+    const rows = [{ spawnToolCallId: "child", badge: "done" as const, card }];
+    useDockStore.setState({ ownerTabId: "tab", tabs: [{ id: "subagents", kind: "subagents", title: "Subagents" }, { id: "git", kind: "git", title: "Review" }], activeTabId: "git" });
+    const panel = (childRows: typeof rows | { spawnToolCallId: string; badge: "waiting_permission"; card: typeof card }[]) => createElement(TabContext.Provider, { value: { tabId: "tab", store } }, createElement(DockPanel, { mode: "column", width: 640, canSplitNow: true, splitTabId: null, onToast: () => {}, subagents: { rows: childRows, expandedId: "child", surface: null } }));
+    await act(async () => root.render(panel(rows)));
+    expect(container.querySelector(".dock-activity-done")).not.toBeNull();
+    await act(async () => useDockStore.getState().focus("subagents"));
+    await act(async () => useDockStore.getState().focus("git"));
+    await act(async () => root.render(null));
+    await act(async () => root.render(panel(rows)));
+    expect(container.querySelector(".dock-activity-done")).toBeNull();
+    await act(async () => root.render(panel([{ spawnToolCallId: "child", badge: "waiting_permission", card }])));
+    expect(container.querySelector(".dock-activity-waiting")).not.toBeNull();
+    expect(container.querySelector(".dock-activity-running")).toBeNull();
+    expect(container.querySelector('[role="tab"][aria-label="Subagents — 1 waiting for permission"]')).not.toBeNull();
   });
 
   it("clears the hidden subagent menu and ignores its shortcut", async () => {

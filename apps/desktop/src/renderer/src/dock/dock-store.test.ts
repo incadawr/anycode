@@ -269,3 +269,13 @@ describe("dock store", () => {
     expect(selectDockOpenFor(store.getState(), "A")).toBe(true);
   });
 });
+
+it("keeps activity per conversation until the conversation is disposed", () => {
+  const store = createDockStore();
+  const memory = { previous: { child: "done" as const }, unseen: {} };
+  store.getState().setActivity("one", memory);
+  store.getState().adopt("two");
+  expect(store.getState().activityByConversation.one).toEqual(memory);
+  store.getState().clearActivity("one");
+  expect(store.getState().activityByConversation.one).toBeUndefined();
+});

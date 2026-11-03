@@ -16,7 +16,7 @@ export function deriveSubagentActivity(rows: readonly Row[], active: boolean, me
       delete unseen[row.spawnToolCallId];
     }
   }
-  const running = rows.filter((row) => row.badge === "running" || row.badge === "waiting_permission").length;
+  const running = rows.filter((row) => row.badge === "running").length;
   const waiting = rows.filter((row) => row.badge === "waiting_permission").length;
   const failed = Object.values(unseen).filter((badge) => badge === "error").length;
   const done = Object.values(unseen).filter((badge) => badge === "done").length;
