@@ -352,7 +352,18 @@ const connectionSchema = z.object({
       }).optional(),
     })
     .optional()
-    .catch(undefined),
+    .catch(undefined)
+    .transform((quota) => {
+      const secondary = quota?.secondary;
+      if (!quota || !secondary || secondary.resetsAt === undefined) return quota;
+      const observedAt = Date.parse(quota.observedAt);
+      const duration = secondary.windowDurationMins;
+      const resetMs = secondary.resetsAt * 1000;
+      if (Number.isFinite(observedAt) && duration !== undefined && Number.isFinite(duration) && duration > 0 &&
+          resetMs >= observedAt && resetMs <= observedAt + duration * 60_000) return quota;
+      const { resetsAt: _invalidReset, ...window } = secondary;
+      return { ...quota, secondary: window };
+    }),
 });
 
 // ── codex-profiles (cut §2.3/§2.6, amended §A1.1) ──
