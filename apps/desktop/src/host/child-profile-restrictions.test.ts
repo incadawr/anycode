@@ -24,6 +24,14 @@ describe("child profile restrictions", () => {
     expect(registry.has("Write")).toBe(false);
   });
 
+  it("removes spawn tools from explicit child tool lists", () => {
+    const registry = createDefaultToolRegistry();
+    restrictChildRegistry(registry, { tools: ["Read", "Agent", "Workflow"], readOnly: false });
+    expect(registry.list()).toEqual(["Read"]);
+    registry.register(createDefaultToolRegistry().get("Agent")!);
+    expect(registry.has("Agent")).toBe(false);
+  });
+
   it("enforces read-only writes and commands even in yolo mode", () => {
     const registry = createDefaultToolRegistry();
     const engine = restrictChildPermissions(new ModePermissionEngine(), { tools: ["Write", "Edit", "Bash"], readOnly: true });

@@ -1,9 +1,9 @@
-import { ModePermissionEngine, ProfilePermissionEngine, SafeCommandPermissionEngine } from "@anycode/core";
+import { SPAWN_TOOLS, ModePermissionEngine, ProfilePermissionEngine, SafeCommandPermissionEngine } from "@anycode/core";
 import type { PermissionEngine, SessionProfileRestrictions, ToolRegistry } from "@anycode/core";
 
 export function restrictChildRegistry(registry: ToolRegistry, restrictions: SessionProfileRestrictions | undefined): void {
   if (!restrictions) return;
-  registry.restrictTo(restrictions.tools);
+  registry.restrictTo(restrictions.tools.filter((name) => !SPAWN_TOOLS.has(name)));
 }
 
 export function restrictChildPermissions(base: PermissionEngine, restrictions: SessionProfileRestrictions | undefined): PermissionEngine {

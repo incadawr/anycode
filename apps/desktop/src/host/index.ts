@@ -4065,7 +4065,10 @@ async function boot(): Promise<void> {
     // already reflects it (no post-boot recompose needed for the common
     // case of a blind model booting with a recognizer already configured).
     recomputeInspectImageRegistration();
-    restrictChildRegistry(registry, args.child?.restrictions);
+    if (isChildSessionBoot(args, sessionMeta)) {
+      for (const name of ["Agent", "Workflow"]) registry.unregister(name);
+      restrictChildRegistry(registry, args.child?.restrictions);
+    }
 
     // Boot section components computed once (design P7.17/W2): renderRepoMap()'s
     // repoMapStatus side effect fires here, before Session's envStatus seam reads
@@ -4419,7 +4422,7 @@ async function boot(): Promise<void> {
     // profile authored into `.anycode/agents/` mid-session becomes a callable
     // agent_type without recreating this AgentLoop.
     const loop = new AgentLoop(
-      withWorkflows(
+      isChildSessionBoot(args, sessionMeta) ? config : withWorkflows(
         withSubagents(config, {
           createUsageRecorder: (model) => {
             const subagentId = randomUUID();
