@@ -5194,7 +5194,8 @@ export class Session {
       if (!this.saveTurnError) return;
       const redact = (value: string) => value.replace(/\bsk-[a-z0-9_-]+/gi, "[redacted]").replace(/\bBearer\s+[^\s,;]+/gi, "Bearer [redacted]");
       const error = turnError ?? { name: "AgentError", message: "The agent request failed." };
-      const record: TurnErrorRecord = { kind: "turn_error", id: randomUUID(), createdAt: Date.now(), turnId, engine: this.engine.id, model: redact(this.model), error: { name: error.name, message: redact(error.message), ...(error.code && /^[a-z_0-9]{1,80}$/.test(error.code) && !/^sk-/i.test(error.code) ? { code: error.code } : {}) } };
+      const afterItemId = this.engine.historyItems().at(-1)?.id;
+      const record: TurnErrorRecord = { kind: "turn_error", id: randomUUID(), createdAt: Date.now(), turnId, engine: this.engine.id, model: redact(this.model), ...(afterItemId ? { afterItemId } : {}), ...(nativeTurnId ? { nativeTurnId } : {}), error: { name: error.name, message: redact(error.message), ...(error.code && /^[a-z_0-9]{1,80}$/.test(error.code) && !/^sk-/i.test(error.code) ? { code: error.code } : {}) } };
       try { await this.saveTurnError(record); } catch (error) { console.error(`[host] turn error persistence failed: ${describeError(error)}`); }
     };
     const recordResult = (terminalReason: SessionPublicResult["terminalReason"]) => {
@@ -6227,8 +6228,13 @@ function buildSessionHistory(
     ...(item.step !== undefined ? { step: item.step } : {}),
     message: item.message,
   }));
-  for (const record of errors) items.push({ id: record.id, createdAt: record.createdAt, kind: "turn_error", turnId: record.turnId, error: record.error, message: { role: "assistant", content: [] } });
-  items.sort((a, b) => a.createdAt - b.createdAt);
+  for (const record of errors) {
+    let index = items.findLastIndex((item) => item.turnId === record.turnId || (record.nativeTurnId !== undefined && item.id.startsWith(`${record.nativeTurnId}:`)));
+    if (index < 0 && record.afterItemId) index = items.findLastIndex((item) => item.id === record.afterItemId);
+    if (index < 0) index = items.length - 1;
+    while (items[index + 1]?.kind === "turn_error") index++;
+    items.splice(index + 1, 0, { id: record.id, createdAt: record.createdAt, kind: "turn_error", turnId: record.turnId, error: record.error, message: { role: "assistant", content: [] } });
+  }
   const truncated = items.length > maxItems;
   return { items: truncated ? items.slice(-maxItems) : items, truncated };
 }
