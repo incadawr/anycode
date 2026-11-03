@@ -191,6 +191,10 @@ class FakeWebContents implements PreviewWebContentsLike {
   fireConsoleMessage(level: PreviewConsoleEntry["level"], message: string): void {
     for (const l of this.consoleMessage) l(level, message);
   }
+  /** Simulates Electron's `did-navigate` (the main frame committed a new document). */
+  fireDidNavigate(url: string): void {
+    for (const l of this.didNavigate) l(url);
+  }
 }
 
 class FakeWindow implements PreviewWindowLike {
@@ -2263,6 +2267,62 @@ describe("PreviewHost — redirect gate (cut §1.2/F1, REDIRECT)", () => {
     await openPromise;
     const wc = rig.windows[0]!.webContents;
     await expect(wc.requestGate!({ url: "https://evil.tld/", resourceType: "mainFrame" })).resolves.toBe(false);
+  });
+});
+
+describe("PreviewHost — request gate: the document anchor follows the navigation", () => {
+  const FAKE_HOME = "/fake-home";
+  const FAKE_TMP = "/fake-tmp";
+
+  async function openedRigWithContainedResolver(): Promise<Rig> {
+    const rig = makeRig({
+      workspaceForTab: () => WORKSPACE_ROOT,
+      fileResourceRoots: () => ({ home: FAKE_HOME, tmpdirs: [FAKE_TMP] }),
+    });
+    rig.resolveArtifactImpl = async (_tabId, path) => ({ realPath: path });
+    const openPromise = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    await openPromise;
+    return rig;
+  }
+
+  function gateOf(rig: Rig): (req: { url: string; resourceType: string }) => Promise<boolean> {
+    const gate = rig.windows[0]!.webContents.requestGate;
+    if (gate === undefined) {
+      throw new Error("request gate was never installed by wireWindow");
+    }
+    return gate;
+  }
+
+  it("re-anchors the policy on the NEW document after an in-page navigation", async () => {
+    const rig = await openedRigWithContainedResolver();
+    const wc = rig.windows[0]!.webContents;
+    // The page navigated to another document (a link click): the policy must
+    // be judged against the NEW document, not the one that was open before.
+    wc.fireDidNavigate(pathToFileURL(`${FAKE_TMP}/b/index.html`).href);
+    await flush();
+    const gate = gateOf(rig);
+    await expect(
+      gate({ url: pathToFileURL(`${FAKE_TMP}/b/style.css`).href, resourceType: "stylesheet" }),
+    ).resolves.toBe(true);
+    // The PREVIOUS document's tree is no longer the anchor.
+    await expect(
+      gate({ url: pathToFileURL(`${WORKSPACE_ROOT}/style.css`).href, resourceType: "stylesheet" }),
+    ).resolves.toBe(false);
+  });
+
+  it("clears the document anchor when the navigation is not a file URL", async () => {
+    const rig = await openedRigWithContainedResolver();
+    const wc = rig.windows[0]!.webContents;
+    wc.fireDidNavigate("http://localhost:5173/");
+    await flush();
+    const gate = gateOf(rig);
+    // The document is not a file document anymore: no file anchor may be
+    // inherited from the document that was open before.
+    await expect(
+      gate({ url: pathToFileURL(`${WORKSPACE_ROOT}/style.css`).href, resourceType: "stylesheet" }),
+    ).resolves.toBe(false);
   });
 });
 

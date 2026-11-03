@@ -9,7 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- Local HTML previews can no longer load files outside their own folder (or workspace), including the app profile and shared temp folders.
+- Local HTML previews can no longer load files outside their own folder (or workspace), including the app profile and shared temp folders. The restriction follows in-page navigation, and a document inside the app profile is never widened by a workspace.
 - A session host that keeps crashing now explains common startup failures.
 - Restore terminal turn errors in session transcripts after reopening a session.
 - Return the sanitized error in session results when a core turn fails without a completed answer.

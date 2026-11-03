@@ -552,6 +552,14 @@ interface WebPreviewRecord {
   sourcePath?: string;
   /** realpath of `sourcePath` — used for auto-open dedup, independent of the raw string the model wrote. */
   realSourcePath?: string;
+  /**
+   * The in-flight move of the document anchor (see `moveDocumentAnchor`):
+   * a main-frame navigation re-points the anchor at the NEW document, and
+   * the request gate AWAITS this promise before it evaluates a subresource
+   * against the policy — otherwise the new document's own assets would be
+   * judged against the PREVIOUS document's tree.
+   */
+  documentAnchorUpdate?: Promise<void>;
   renderedFrom?: string;
   title?: string;
   consentedOrigins: Set<string>;
@@ -2681,6 +2689,12 @@ class PreviewHost implements PreviewHostHandle {
     }));
     wc.onDidNavigate(guard((navUrl) => {
       record.url = navUrl;
+      // The document the policy anchors on moved: a `file:` navigation
+      // re-points the anchor at the NEW file (re-resolved through the
+      // artifact resolver), a non-file navigation clears it. The gate
+      // awaits `record.documentAnchorUpdate`, so the new document's own
+      // subresources are judged against the NEW document, not the old one.
+      record.documentAnchorUpdate = this.moveDocumentAnchor(record, navUrl);
     }));
     wc.onConsoleMessage(guard((level, message) => {
       this.recordConsole(record, {
@@ -2826,6 +2840,57 @@ class PreviewHost implements PreviewHostHandle {
   }
 
   /**
+   * Moves the DOCUMENT ANCHOR — the file the file-subresource policy treats
+   * as "the document" — to the document that just navigated.
+   *
+   * A `file:` navigation is RE-RESOLVED through `deps.resolveArtifact` first
+   * (the very resolver the request gate uses): only a resolved, contained
+   * path may become the anchor, so a navigation can never widen the policy
+   * by pointing it at a file the resolver refuses. The anchor is only moved
+   * when the new document is a DIFFERENT file (the initial load lands on
+   * the same file and changes nothing).
+   *
+   * A NON-file navigation CLEARS the anchor: the new document is not a file
+   * document, so its subresources are governed by the kind rules alone —
+   * never by a stale file anchor.
+   */
+  private async moveDocumentAnchor(record: WebPreviewRecord, navUrl: string): Promise<void> {
+    if (!navUrl.startsWith("file:")) {
+      if (record.realSourcePath === undefined && record.sourcePath === undefined) {
+        return;
+      }
+      record.realSourcePath = undefined;
+      record.sourcePath = undefined;
+      // The live-reload watcher followed the old file — a document that is
+      // no longer a file document must not be reloaded by that file's saves.
+      this.armWatcher(record);
+      return;
+    }
+    let filePath: string;
+    try {
+      filePath = fileURLToPath(navUrl);
+    } catch {
+      return;
+    }
+    let resolved: { realPath: string } | { failure: string };
+    try {
+      resolved = await this.deps.resolveArtifact(record.tabId, filePath);
+    } catch {
+      return; // a resolver that throws never moves the anchor
+    }
+    if (!("realPath" in resolved)) {
+      return; // unresolvable / not contained — the anchor stays where it was
+    }
+    if (resolved.realPath === record.realSourcePath) {
+      return; // the same document (the initial load) — nothing to move
+    }
+    record.realSourcePath = resolved.realPath;
+    record.sourcePath = filePath;
+    // The live-reload watcher now follows the NEW document's file.
+    this.armWatcher(record);
+  }
+
+  /**
    * ONE gate policy function (cut §1.1/F2, the keystone fix), closed over the
    * LIVE `record` — `record.kind`/`record.consentedOrigins` are read at
    * request time, so a reuse-navigate kind change is honored automatically.
@@ -2862,6 +2927,11 @@ class PreviewHost implements PreviewHostHandle {
       return { allowed: true, dedupeKey: req.url };
     }
     if (scheme === "file:") {
+      // The document anchor may be MOVING right now (a main-frame
+      // navigation re-points it at the NEW document): the new document's own
+      // subresources must be judged against the NEW document, so the pending
+      // move is awaited BEFORE the policy is evaluated.
+      await record.documentAnchorUpdate;
       let filePath: string;
       try {
         filePath = fileURLToPath(parsed);
