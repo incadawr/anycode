@@ -962,7 +962,7 @@ describe("agentTool handler — engine-profile routing (CUT-S4 §2.2)", () => {
     expect(result.ok).toBe(false);
     expect(result.errorKind).toBeUndefined();
     expect(result.error).toBe(
-      'Agent: agent type "claude-worker" runs on the "claude" engine; engine agents run as child sessions and are unavailable in this host.',
+      'Agent: agent type "claude-worker" runs on the "claude" engine; engine agents run as child sessions and are unavailable in this host. Use a persona without its own connection inline, or do the work yourself.',
     );
   });
 
@@ -1222,7 +1222,7 @@ describe("agentTool handler — codex engine profile now routes like claude", ()
     expect(result.ok).toBe(false);
     expect(result.errorKind).toBeUndefined();
     expect(result.error).toBe(
-      'Agent: agent type "codex-worker" runs on the "codex" engine; engine agents run as child sessions and are unavailable in this host.',
+      'Agent: agent type "codex-worker" runs on the "codex" engine; engine agents run as child sessions and are unavailable in this host. Use a persona without its own connection inline, or do the work yourself.',
     );
   });
 });
@@ -1584,6 +1584,17 @@ describe("agentTool handler — profile routing", () => {
     expect(result.ok === false && result.error).toContain('tier "session"');
   });
 
+  it("restricted declaration offers an actionable alternative for a routed profile", async () => {
+    const restricted = createAgentTool({ sessionTier: false });
+    const input = restricted.inputSchema.parse({ description: "d", prompt: "p", agent_type: "glm-planner" });
+    const result = await restricted.handler(input, makeCtx({ subagents: routingPort("glm-planner", { connection: "conn-glm" }) }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).not.toContain('tier "session"');
+      expect(result.error).toContain("Use a persona without its own connection inline, or do the work yourself");
+    }
+  });
+
   it('session tier with a connection route => request carries connectionId, no provider key', async () => {
     const { port, seen } = capturingPort(routingPort("glm-planner", { connection: "conn-2" }));
     await full.handler(
@@ -1896,6 +1907,18 @@ describe("agentTool handler — role route stamping (§3.3)", () => {
       ctx,
     );
     expect(seen()).toMatchObject({ connectionId: "conn-claude", model: "claude-opus-5" });
+  });
+
+  it("restricted declaration gives an actionable alternative for a connection-routed role", async () => {
+    const restricted = createAgentTool({ sessionTier: false });
+    const { ctx } = roleCtx({ entries: [{ connection: "conn-claude", model: "m" }] });
+    const input = restricted.inputSchema.parse({ description: "d", prompt: "p", agent_type: "reviewer" });
+    const result = await restricted.handler(input, ctx);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).not.toContain('tier "session"');
+      expect(result.error).toContain("Use a persona without its own connection inline, or do the work yourself");
+    }
   });
 
   it("an inline-tier call of a role whose route carries connection/engine is refused (4269 shape)", async () => {

@@ -286,7 +286,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
             ok: false,
             error:
               `Agent: agent type "${agentType}" runs on the "${engineProfile.engine}" engine; engine agents run ` +
-              `as child sessions and are unavailable in this host.`,
+              `as child sessions and are unavailable in this host. Use a persona without its own connection inline, or do the work yourself.`,
           };
         }
         // a settings-derived role whose PRIMARY is an engine entry
@@ -333,7 +333,9 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
         return {
           ok: false,
           errorKind: "invalid_input",
-          error: `Agent: profile "${agentType}" selects its own connection and runs as a child session; call it with tier "session".`,
+          error: sessionTier
+            ? `Agent: profile "${agentType}" selects its own connection and runs as a child session; call it with tier "session".`
+            : `Agent: profile "${agentType}" selects its own connection and cannot be spawned from here. Use a persona without its own connection inline, or do the work yourself.`,
         };
       }
 
@@ -356,7 +358,9 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
           return {
             ok: false,
             errorKind: "invalid_input",
-            error: `Agent: profile "${agentType}" selects its own connection and runs as a child session; call it with tier "session".`,
+            error: sessionTier
+            ? `Agent: profile "${agentType}" selects its own connection and runs as a child session; call it with tier "session".`
+            : `Agent: profile "${agentType}" selects its own connection and cannot be spawned from here. Use a persona without its own connection inline, or do the work yourself.`,
           };
         }
       }

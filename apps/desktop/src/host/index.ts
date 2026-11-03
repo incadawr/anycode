@@ -1,3 +1,4 @@
+import { engineChildPrompt } from "./engine-child-prompt.js";
 import { listConnectionTargets } from "./list-connections.js";
 import { claudeHistoryOnlyEngine } from "./engines/claude/history-only.js";
 import { SET_SESSION_FAST_OPERATION } from "../shared/communication.js";
@@ -1011,6 +1012,7 @@ function translatePreviewEvent(message: PreviewEventMessage): PreviewConsoleAgen
 const PREVIEW_CONSOLE_TURN_ID = "preview-console";
 
 let session: Session | null = null;
+let prepareChildPrompt = (prompt: string): string => prompt;
 /**
  * late-bound Session reference for the ENGINE-SESSION classifier
  * coverage. The codex/claude brokers are decorated BEFORE the Session exists
@@ -1429,6 +1431,9 @@ async function bootCodexSession(
       codexChildPort = port;
     }
     codexAgentBridge = new CodexDynamicToolBridge(catalog, port, agentCardLog, resolveCatalog, codexEngineBrowserBridge);
+  }
+  if (args.child !== undefined) {
+    prepareChildPrompt = (prompt) => engineChildPrompt(prompt, codexChildPort !== undefined);
   }
   // the supervisor idle watchdog for this (non-child) codex
   // boot — one instance, constructed once, mirroring the stall clock's
@@ -2145,6 +2150,10 @@ async function bootClaudeSession(
       });
   } else {
     console.log("[host] claude mcp bridge: child boot, no bridge");
+  }
+
+  if (args.child !== undefined) {
+    prepareChildPrompt = (prompt) => engineChildPrompt(prompt, claudeChildPort !== undefined);
   }
 
   // MCP forwarding. After bridge/catalog/database
@@ -5345,7 +5354,7 @@ process.parentPort.on("message", (event) => {
   // child-mode core session.
   const childStart = parseChildStart(data);
   if (childStart) {
-    session?.startProgrammaticTurn(childStart.prompt);
+    session?.startProgrammaticTurn(prepareChildPrompt(childStart.prompt));
     return;
   }
   // an OS connectivity hint (forwarded by main) wakes every turn parked
