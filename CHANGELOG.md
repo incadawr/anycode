@@ -11,6 +11,14 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Keep background agent action buttons visible when progress text is long.
 
+- Keep preview console messages visible after debugger detachment without duplicating them on reconnect.
+
+- Keep preview errors visible during noisy logs and retain resource diagnostics and readable collection values.
+
+- Group preview warnings and errors in a collapsible chat row, keeping routine console messages in the preview console.
+
+- Show readable preview console objects in the console panel and browser tools.
+
 - Keep local preview file access closed while a navigated document is being resolved or cannot be resolved.
 
 - Use readable Enter key names in task and permission hints. Refresh Git status when returning to its dock tab.

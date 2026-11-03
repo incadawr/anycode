@@ -39,6 +39,7 @@
  */
 
 import { BrowserWindow, Menu, type NativeImage, type WebContents } from "electron";
+import { formatConsoleArguments, type RemotePreview } from "./console-format.js";
 import type { PreviewConsoleEntry } from "../../shared/preview.js";
 import { isReturnShortcut, popoutTitle, returnMenuTemplate } from "./popout.js";
 import {
@@ -129,6 +130,12 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
   const cdpListeners: Array<(method: string, params: unknown) => void> = [];
   let attached = false;
   let messageWired = false;
+  const seenLogEntries = new Set<string>();
+  const consoleHistory: string[] = [];
+  let replayCounts = new Map<string, number>();
+  let attachGeneration = 0;
+  const detachedMessages: Array<PreviewConsoleEntry["level"]> = [];
+  let replaying = false;
 
   // Kills the common STUN/UDP exfil path that `onBeforeRequest` cannot see
   // (cut §1.1/F2, "one cheap adapter hardening that IS in scope"); the
@@ -141,6 +148,17 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
     }
     messageWired = true;
     wc.debugger.on("message", (_event, method, params) => {
+      if (method === "Log.entryAdded") {
+        const entry = (params as { entry?: { source?: string; level?: string; text?: string; timestamp?: number; url?: string; lineNumber?: number } }).entry;
+        if (entry?.text && entry.source !== "javascript") {
+          const key = JSON.stringify([entry.source, entry.level, entry.text, entry.timestamp, entry.url, entry.lineNumber]);
+          if (!seenLogEntries.has(key)) {
+            seenLogEntries.add(key);
+            if (seenLogEntries.size > 1000) seenLogEntries.delete(seenLogEntries.values().next().value!);
+            consoleListener(entry.level === "error" ? "error" : entry.level === "warning" ? "warn" : "log", entry.text.slice(0, RING_MAX_MSG_CHARS));
+          }
+        }
+      }
       if (method === "Runtime.exceptionThrown") {
         const details = (params as { exceptionDetails?: { exception?: { description?: string }; text?: string } })
           .exceptionDetails;
@@ -149,6 +167,25 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
           RING_MAX_MSG_CHARS,
         );
         consoleListener("pageerror", message);
+      }
+      if (method === "Runtime.consoleAPICalled") {
+        const call = params as { type?: string; args?: RemotePreview[]; timestamp?: number; executionContextId?: number; stackTrace?: unknown };
+        if (call.args) {
+          const level = call.type === "warning" ? "warn" : call.type === "error" || call.type === "assert" ? "error" : "log";
+          const message = formatConsoleArguments(call.args);
+          const key = call.timestamp === undefined ? undefined : JSON.stringify([call.timestamp, call.executionContextId, call.type, call.stackTrace]);
+          const remaining = key === undefined ? 0 : (replayCounts.get(key) ?? 0);
+          const seen = replaying && remaining > 0;
+          if (seen && key !== undefined) replayCounts.set(key, remaining - 1);
+          if (!seen && key !== undefined) {
+            consoleHistory.push(key);
+            if (consoleHistory.length > 1000) consoleHistory.shift();
+          }
+          const fallbackIndex = replaying && !seen && !isElectronInternalWarning(message, call.type)
+            ? detachedMessages.indexOf(level) : -1;
+          if (fallbackIndex >= 0) detachedMessages.splice(fallbackIndex, 1);
+          if (!seen && fallbackIndex < 0 && !isElectronInternalWarning(message, call.type)) consoleListener(level, message);
+        }
       }
       for (const listener of cdpListeners) {
         try {
@@ -171,8 +208,21 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
       return false;
     }
     attached = true;
+    const generation = ++attachGeneration;
+    replayCounts = new Map();
+    for (const key of consoleHistory) replayCounts.set(key, (replayCounts.get(key) ?? 0) + 1);
     wireMessages();
-    wc.debugger.sendCommand("Runtime.enable").catch((error: unknown) => {
+    wc.debugger.sendCommand("Log.enable").catch(() => {});
+    replaying = true;
+    wc.debugger.sendCommand("Runtime.enable").then(() => {
+      if (generation !== attachGeneration) return;
+      replaying = false;
+      replayCounts.clear();
+      detachedMessages.length = 0;
+    }).catch((error: unknown) => {
+      if (generation !== attachGeneration) return;
+      replaying = false;
+      attached = false;
       console.warn("[preview] failed to enable CDP Runtime domain", error);
     });
     return true;
@@ -181,6 +231,7 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
   // DevTools (or a crashed page process) can detach us at any time; the next
   // CDP use re-attaches (ensureAttached below).
   wc.debugger.on("detach", () => {
+    attachGeneration += 1;
     attached = false;
   });
 
@@ -196,6 +247,8 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
     console.warn("[preview] debugger attach failed; pageerror capture degraded to console-message only");
   }
   wc.on("console-message", (event) => {
+    // Runtime replays detached messages; reconcile them by occurrence on reattach.
+    if (attached) return;
     // Electron's own security warning is not a page console message (see
     // isElectronInternalWarning) — never surface it in the transcript. The
     // check needs BOTH the message's own `%c` marker at the start and the
@@ -208,7 +261,11 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
     // arrives in main once (Chromium delivers it; unavoidable) but is never
     // re-serialized host-ward at size. preview-host.ts's own slice at
     // recordConsole-time stays as defense-in-depth.
-    consoleListener(classifyConsoleLevel(event.level), event.message.slice(0, RING_MAX_MSG_CHARS));
+    const level = classifyConsoleLevel(event.level);
+    const message = event.message.slice(0, RING_MAX_MSG_CHARS);
+    detachedMessages.push(level);
+    if (detachedMessages.length > 1000) detachedMessages.shift();
+    consoleListener(level, message);
   });
 
   return {

@@ -23,7 +23,7 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { BrowserWindow, BrowserWindowConstructorOptions } from "electron";
-import { RING_MAX_MSG_CHARS } from "./preview-host.js";
+
 
 interface FakeDebugger {
   attachCalls: string[];
@@ -44,6 +44,8 @@ interface FakeDebugger {
   emit(event: string, ...args: unknown[]): void;
 }
 
+let failInitialAttach = false;
+
 function fakeDebugger(): FakeDebugger {
   const listeners = new Map<string, Array<(event: unknown, ...args: unknown[]) => void>>();
   return {
@@ -51,7 +53,7 @@ function fakeDebugger(): FakeDebugger {
     sendCommandCalls: [],
     detachCalls: 0,
     messageListeners: [],
-    attachThrows: false,
+    attachThrows: failInitialAttach,
     hangSend: false,
     sendParams: [],
     attach(version) {
@@ -275,6 +277,7 @@ vi.mock("electron", () => ({
   WebContentsView: FakeWebContentsView,
 }));
 
+const { RING_MAX_MSG_CHARS } = await import("./preview-host.js");
 const { createElectronPreviewWindow } = await import("./electron-adapter.js");
 const { createElectronPanelView } = await import("./panel-adapter.js");
 
@@ -383,14 +386,20 @@ describe("createElectronPreviewWindow — event adaptation", () => {
   });
 
   it("classifies console-message levels (info/debug -> log, warning -> warn, error -> error)", () => {
+    failInitialAttach = true;
     const win = createElectronPreviewWindow({ previewId: "p6" });
+    failInitialAttach = false;
     const fake = latestWindow();
     const messages: Array<{ level: string; message: string }> = [];
     win.webContents.onConsoleMessage((level, message) => messages.push({ level, message }));
 
+    fake.webContents.debugger.emit("detach");
     fake.webContents.emit("console-message", { level: "info", message: "hi" });
+    fake.webContents.debugger.emit("detach");
     fake.webContents.emit("console-message", { level: "debug", message: "dbg" });
+    fake.webContents.debugger.emit("detach");
     fake.webContents.emit("console-message", { level: "warning", message: "careful" });
+    fake.webContents.debugger.emit("detach");
     fake.webContents.emit("console-message", { level: "error", message: "console.error() call" });
 
     expect(messages).toEqual([
@@ -402,15 +411,19 @@ describe("createElectronPreviewWindow — event adaptation", () => {
   });
 
   it("drops Electron's own security warning but keeps the page's warnings", () => {
+    failInitialAttach = true;
     const win = createElectronPreviewWindow({ previewId: "p6b" });
+    failInitialAttach = false;
     const fake = latestWindow();
     const messages: Array<{ level: string; message: string }> = [];
     win.webContents.onConsoleMessage((level, message) => messages.push({ level, message }));
 
+    fake.webContents.debugger.emit("detach");
     fake.webContents.emit("console-message", {
       level: "warning",
       message: "%cElectron Security Warning (Insecure Content-Security-Policy) This renderer process has either no Content Security Policy set…",
     });
+    fake.webContents.debugger.emit("detach");
     fake.webContents.emit("console-message", { level: "warning", message: "deprecated API used" });
 
     expect(messages).toEqual([{ level: "warn", message: "deprecated API used" }]);
@@ -421,19 +434,24 @@ describe("createElectronPreviewWindow — event adaptation", () => {
     // error from a page script) is the page's diagnostic output, not Electron's
     // internal row: only the `%c`-prefixed warning at the warning level is ours
     // to drop.
+    failInitialAttach = true;
     const win = createElectronPreviewWindow({ previewId: "p6c" });
+    failInitialAttach = false;
     const fake = latestWindow();
     const messages: Array<{ level: string; message: string }> = [];
     win.webContents.onConsoleMessage((level, message) => messages.push({ level, message }));
 
+    fake.webContents.debugger.emit("detach");
     fake.webContents.emit("console-message", {
       level: "warning",
       message: "app.js:42 Electron Security Warning (fake) — this page's own note about strict CSP",
     });
+    fake.webContents.debugger.emit("detach");
     fake.webContents.emit("console-message", {
       level: "error",
       message: "Electron Security Warning (Insecure Content-Security-Policy) crashed my parser",
     });
+    fake.webContents.debugger.emit("detach");
     fake.webContents.emit("console-message", {
       level: "error",
       message: "%cElectron Security Warning (Insecure Content-Security-Policy) echoed by the page at error level",
@@ -453,7 +471,7 @@ describe("createElectronPreviewWindow — event adaptation", () => {
     win.webContents.onConsoleMessage((level, message) => messages.push({ level, message }));
 
     expect(fake.webContents.debugger.attachCalls).toEqual(["1.3"]);
-    expect(fake.webContents.debugger.sendCommandCalls).toEqual(["Runtime.enable"]);
+    expect(fake.webContents.debugger.sendCommandCalls).toEqual(["Log.enable", "Runtime.enable"]);
 
     for (const listener of fake.webContents.debugger.messageListeners) {
       listener({}, "Runtime.exceptionThrown", {
@@ -616,11 +634,14 @@ describe("createElectronPreviewWindow — navigation history (D14, panel-track C
 
 describe("createElectronPreviewWindow — console/CDP string slicing (cut §1.3/F3)", () => {
   it("slices a console-message string to RING_MAX_MSG_CHARS before the listener", () => {
+    failInitialAttach = true;
     const win = createElectronPreviewWindow({ previewId: "slice-a" });
+    failInitialAttach = false;
     const fake = latestWindow();
     const messages: string[] = [];
     win.webContents.onConsoleMessage((_level, message) => messages.push(message));
 
+    fake.webContents.debugger.emit("detach");
     fake.webContents.emit("console-message", { level: "info", message: "x".repeat(2000) });
 
     expect(messages).toHaveLength(1);
@@ -917,5 +938,85 @@ describe("createElectronPreviewWindow — pop-out title and Return to AnyCode", 
   it("adds no Return affordances when the host passes no onRedock", () => {
     createElectronPreviewWindow({ previewId: "t3" });
     expect(latestWindow().webContents.listenerCount("context-menu")).toBe(0);
+  });
+});
+
+
+describe("console argument formatting", () => {
+  it("captures resource diagnostics from the CDP log domain", () => {
+    const win = createElectronPreviewWindow({ previewId: "resource" });
+    const fake = latestWindow();
+    const messages: string[] = [];
+    win.webContents.onConsoleMessage((_level, message) => messages.push(message));
+    fake.webContents.debugger.emit("message", "Log.entryAdded", { entry: { source: "network", level: "error", text: "Failed to load resource", timestamp: 123 } });
+    expect(messages).toEqual(["Failed to load resource"]);
+  });
+
+  it("replays detached object logs once despite flattened fallback text and changed object ids", async () => {
+    const win = createElectronPreviewWindow({ previewId: "object-replay" });
+    const fake = latestWindow();
+    const messages: string[] = [];
+    win.webContents.onConsoleMessage((_level, message) => messages.push(message));
+    await Promise.resolve();
+    fake.webContents.debugger.emit("detach");
+    fake.webContents.emit("console-message", { level: "warning", message: "object [object Object]" });
+    expect(messages).toEqual(["object [object Object]"]);
+    win.webContents.cdp!.ensureAttached();
+    const args = [{ type: "string", value: "object" }, { type: "object", objectId: "new-id", preview: { properties: [{ name: "status", type: "number", value: "200" }] } }];
+    fake.webContents.debugger.emit("message", "Runtime.consoleAPICalled", { type: "warning", timestamp: 10, args });
+    await Promise.resolve();
+    expect(messages).toEqual(["object [object Object]"]);
+    fake.webContents.debugger.emit("detach");
+    win.webContents.cdp!.ensureAttached();
+    fake.webContents.debugger.emit("message", "Runtime.consoleAPICalled", { type: "warning", timestamp: 10, args: [args[0], { ...args[1], objectId: "another-id" }] });
+    expect(messages).toEqual(["object [object Object]"]);
+  });
+
+  it("does not append replayed console events after reattachment", async () => {
+    const win = createElectronPreviewWindow({ previewId: "replay" });
+    const fake = latestWindow();
+    const messages: string[] = [];
+    win.webContents.onConsoleMessage((_level, message) => messages.push(message));
+    await Promise.resolve();
+    const first = { type: "warning", timestamp: 10, args: [{ type: "string", value: "first" }] };
+    const second = { type: "warning", timestamp: 20, args: [{ type: "string", value: "offline" }] };
+    fake.webContents.debugger.emit("message", "Runtime.consoleAPICalled", first);
+    fake.webContents.debugger.emit("detach");
+    fake.webContents.emit("console-message", { level: "warning", message: "offline" });
+    win.webContents.cdp!.ensureAttached();
+    fake.webContents.debugger.emit("message", "Runtime.consoleAPICalled", first);
+    fake.webContents.debugger.emit("message", "Runtime.consoleAPICalled", second);
+    await Promise.resolve();
+    fake.webContents.debugger.emit("message", "Runtime.consoleAPICalled", { ...second, timestamp: 30 });
+    expect(messages).toEqual(["first", "offline", "offline"]);
+  });
+
+  it("uses CDP and waits for replay after detach", async () => {
+    const win = createElectronPreviewWindow({ previewId: "cdp-console" });
+    const fake = latestWindow();
+    const messages: string[] = [];
+    win.webContents.onConsoleMessage((_level, message) => messages.push(message));
+    await Promise.resolve();
+    fake.webContents.emit("console-message", { level: "warning", message: "duplicate" });
+    fake.webContents.debugger.emit("message", "Runtime.consoleAPICalled", { type: "warning", args: [{ type: "string", value: "hello" }] });
+    fake.webContents.debugger.emit("detach");
+    fake.webContents.emit("console-message", { level: "warning", message: "fallback" });
+    expect(messages).toEqual(["hello", "fallback"]);
+  });
+
+  it("reconciles object warnings after an initial attach failure", async () => {
+    failInitialAttach = true;
+    const win = createElectronPreviewWindow({ previewId: "initial-failure" });
+    failInitialAttach = false;
+    const fake = latestWindow();
+    const messages: string[] = [];
+    win.webContents.onConsoleMessage((_level, message) => messages.push(message));
+    fake.webContents.emit("console-message", { level: "warning", message: "object [object Object]" });
+    fake.webContents.debugger.attachThrows = false;
+    win.webContents.cdp!.ensureAttached();
+    fake.webContents.debugger.emit("message", "Runtime.consoleAPICalled", { type: "warning", timestamp: 10, args: [{ type: "string", value: "object" }, { type: "object", preview: { properties: [{ name: "status", type: "number", value: "200" }] } }] });
+    await Promise.resolve();
+    fake.webContents.debugger.emit("message", "Runtime.consoleAPICalled", { type: "warning", timestamp: 11, args: [{ type: "string", value: "later" }] });
+    expect(messages).toEqual(["object [object Object]", "later"]);
   });
 });

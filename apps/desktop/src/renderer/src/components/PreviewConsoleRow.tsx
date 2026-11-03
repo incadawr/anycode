@@ -1,23 +1,24 @@
-/**
- * One `preview_console` transcript row (slice 96-D, night-track wave-1 cut
- * §2.4): a preview window's forwarded console/pageerror line, or a
- * throttle-window summary (every entry in the window was dropped). Rendered
- * as its own top-level transcript block (MessageList.tsx) rather than nested
- * inside a tool_call card — a preview console line is not tied to any
- * particular tool call, and can arrive long after the BrowserOpen call that
- * opened the window has already settled. Deliberately plain, same quiet
- * single-line register as the subagent activity feed's own rows
- * (ToolCallCard.tsx's `subagent-activity-row`); all text/class logic is pure
- * and lives in preview-console-format.ts (this component itself is a thin,
- * untested-directly JSX wrapper, same posture as WorkingRow.tsx).
- */
+import { useId, useState } from "react";
 import type { PreviewConsoleBlock } from "./preview-console-format.js";
-import { previewConsoleRowClassName, previewConsoleRowText } from "./preview-console-format.js";
+import { previewConsoleRowClassName } from "./preview-console-format.js";
+import { Button } from "../ui/index.js";
+import { Chevron } from "./icons.js";
 
 export function PreviewConsoleRow({ block, enter }: { block: PreviewConsoleBlock; enter?: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const id = useId();
+  const count = block.entries.reduce((sum, entry) => sum + entry.count, 0);
   return (
-    <div className={`${previewConsoleRowClassName(block.level)}${enter === true ? " message-enter" : ""}`}>
-      {previewConsoleRowText(block)}
+    <div className={`compaction-card${enter ? " message-enter" : ""}`}>
+      <div className="message message-loop-end compaction-head">
+        <Button variant="ghost" className="compaction-toggle" aria-expanded={expanded} aria-controls={id} onClick={() => setExpanded(!expanded)}>
+          <span className="compaction-caret" aria-hidden="true"><Chevron /></span>
+          Preview console · {count} {count === 1 ? "message" : "messages"}
+        </Button>
+      </div>
+      {expanded && <div id={id} className="compaction-detail">{block.entries.map((entry, index) => (
+        <div key={index} className={previewConsoleRowClassName(entry.level)}>[{entry.level}] {entry.message}{entry.count > 1 ? ` ×${entry.count}` : ""}</div>
+      ))}</div>}
     </div>
   );
 }
