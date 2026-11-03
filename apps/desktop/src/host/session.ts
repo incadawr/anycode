@@ -6337,7 +6337,12 @@ function buildSessionHistory(
   for (const record of errors) {
     let index = items.findLastIndex((item) => item.turnId === record.turnId || (record.nativeTurnId !== undefined && item.id.startsWith(`${record.nativeTurnId}:`)));
     if (index < 0 && record.afterItemId) index = items.findLastIndex((item) => item.id === record.afterItemId);
-    if (index < 0) index = items.length - 1;
+    if (index < 0) {
+      // Compaction can remove the anchor while keeping later turns. Summaries
+      // are created at compaction time but stand before the retained tail.
+      const next = items.findIndex((item) => item.kind !== "turn_error" && item.kind !== "compact_summary" && item.createdAt > record.createdAt);
+      index = next < 0 ? items.length - 1 : next - 1;
+    }
     while (items[index + 1]?.kind === "turn_error") index++;
     items.splice(index + 1, 0, { id: record.id, createdAt: record.createdAt, kind: "turn_error", turnId: record.turnId, error: record.error, message: { role: "assistant", content: [] } });
   }
