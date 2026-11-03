@@ -12,6 +12,7 @@ import {
   resolveSecretsPathOverride,
   resolveSettingsPathOverride,
   resolveUserDataOverride,
+  resolveSkillsProfileHome,
 } from "./dev-profile.js";
 
 const ABS_DIR = "/tmp/anycode-dev-profile-test";
@@ -148,5 +149,17 @@ describe.each([
   it("trims surrounding whitespace off an otherwise-absolute path", () => {
     const result = resolve(env({ ANYCODE_AUTOMATION: "1", [varName]: `  ${absPath}  ` }), false);
     expect(result).toBe(absPath);
+  });
+});
+
+describe("resolveSkillsProfileHome", () => {
+  it("uses the disposable user data directory when it is the only profile override", () => {
+    const profile = { ANYCODE_AUTOMATION: "1", ANYCODE_USER_DATA_DIR: "/tmp/profile/user-data" };
+    expect(resolveSkillsProfileHome(profile, false)).toBe("/tmp/profile/user-data");
+    expect(resolveSkillsProfileHome(profile, true)).toBeNull();
+    expect(resolveSkillsProfileHome({ ...profile, ANYCODE_AUTOMATION: "0" }, false)).toBeNull();
+    expect(resolveSkillsProfileHome({ ...profile, ANYCODE_PROFILE_HOME: "/tmp/root" }, false)).toBe("/tmp/root");
+    expect(resolveSkillsProfileHome({ ...profile, ANYCODE_SUBAGENTS_HOME: "/tmp/agents" }, false)).toBe("/tmp/agents");
+    expect(resolveSkillsProfileHome({ ...profile, ANYCODE_SKILLS_IMPORT_HOME: "/tmp/skills" }, false)).toBe("/tmp/skills");
   });
 });

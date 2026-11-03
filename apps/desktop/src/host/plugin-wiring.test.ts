@@ -9,7 +9,9 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { NodeFileSystemAdapter } from "@anycode/core";
+import { discoverExtensions, NodeFileSystemAdapter } from "@anycode/core";
+import { resolveSkillsProfileHome } from "../main/dev-profile.js";
+import { resolveExtensionsHomeOverride } from "./dev-home.js";
 import { discoverPlugins, serversHash } from "@anycode/core/plugins-admin";
 import { buildHostBuiltinSkills } from "./builtin-skills.js";
 import { pluginsDiscoveryWiring } from "./plugin-wiring.js";
@@ -84,6 +86,23 @@ function wiring(settings: { mcpConsent?: { plugin: string; serversHash: string; 
     builtinPersonaNames: ["planner"],
   });
 }
+
+it("isolates populated user plugins when only the profile directory is supplied", async () => {
+  plantManaged("private", {}, { skillDirs: ["owner-only"] });
+  writeFile(join(home, ".anycode/plugins/.store/private/1.0.0/skills/owner-only/SKILL.md"), "---\nname: owner-only\ndescription: owner\n---\nbody");
+  const isolated = join(root, "profile");
+  home = isolated;
+  plantManaged("fixture", {}, { skillDirs: ["profile-only"] });
+  writeFile(join(home, ".anycode/plugins/.store/fixture/1.0.0/skills/profile-only/SKILL.md"), "---\nname: profile-only\ndescription: fixture\n---\nbody");
+  const env = { ANYCODE_AUTOMATION: "1", ANYCODE_USER_DATA_DIR: isolated };
+  const profile = resolveSkillsProfileHome(env, false);
+  expect(profile).toBe(isolated);
+  const hostHome = resolveExtensionsHomeOverride({ ...env, ANYCODE_SUBAGENTS_HOME: profile! });
+  expect(hostHome).toBe(isolated);
+  const result = await discoverExtensions(fsPort(), { workspace, home: hostHome!, ...wiring(undefined) });
+  expect(result.skills.list().map((skill) => skill.name)).toContain("profile-only");
+  expect(result.skills.list().map((skill) => skill.name)).not.toContain("owner-only");
+});
 
 describe("C1 — managed plugins load in the runtime", () => {
   it("an installed + enabled managed plugin's skill is discovered by the host", async () => {
