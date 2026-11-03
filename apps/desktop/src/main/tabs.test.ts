@@ -6008,6 +6008,16 @@ describe("TabHostManager — follow-up to a finished child (resumeChildSessionId
     expect(childRunEvents(rootHost).find((e) => e.requestId === "third")).toMatchObject({ kind: "accepted", childSessionId });
   });
 
+  it("preserves profile restrictions across follow-ups", async () => {
+    const restrictions = { tools: ["Read", "Grep"], readOnly: true, permissions: { allow: [], deny: [{ toolName: "Write" }] } };
+    const { forks, rootHost, childSessionId } = await finishedChild("root-restricted", { restrictions });
+    expect(forks[1]!.args).toContain(JSON.stringify(restrictions));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    rootHost.emit("message", spawnRequest({ requestId: "again", resumeChildSessionId: childSessionId }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(forks[2]!.args).toContain(JSON.stringify(restrictions));
+  });
+
   it("refuses a child id this parent never spawned, without forking", async () => {
     const { hosts, rootHost } = await finishedChild("root-unknown");
     await new Promise((resolve) => setTimeout(resolve, 0));

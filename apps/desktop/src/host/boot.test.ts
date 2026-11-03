@@ -1195,6 +1195,16 @@ describe("childRetryPolicy", () => {
 // host's argv. Both flag forms; only decimal positive safe integers 1..200.
 // ═════════════════════════════════════════════════════════════════════════════
 
+describe("parseHostArgs — child restrictions", () => {
+  it("loads restrictions for a fresh or resumed child and rejects malformed restrictions", () => {
+    const restrictions = { tools: ["Read"], readOnly: true, permissions: { allow: [], deny: [{ toolName: "Write" }] } };
+    const child = ["--child-parent", "p", "--child-spawn-call", "c", "--child-mode", "build", "--child-restrictions", JSON.stringify(restrictions)];
+    expect(parseHostArgs(["--session", "s", ...child]).child?.restrictions).toEqual(restrictions);
+    expect(parseHostArgs(["--resume", "s", ...child]).child?.restrictions).toEqual(restrictions);
+    expect(() => parseHostArgs([...child.slice(0, -1), '{}'])).toThrow();
+  });
+});
+
 describe("parseHostArgs — --child-max-turns", () => {
   const LINKAGE = ["--child-parent", "p", "--child-spawn-call", "c", "--child-mode", "build"];
 

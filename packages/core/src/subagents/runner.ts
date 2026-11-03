@@ -763,6 +763,18 @@ export function createSubagentRunner(
         ...(persona.effort !== undefined ? { effort: persona.effort } : {}),
       };
     },
+    sessionRestrictions(agentType: string) {
+      const persona = (isKnownPersona(agentType) && isReservedPersonaName(agentType))
+        ? getPersona(agentType)
+        : currentProfiles().get(agentType) ?? (isKnownPersona(agentType) ? getPersona(agentType) : undefined);
+      if (!persona) return null;
+      const tools = [...persona.tools];
+      if (opts?.readConnectionTargets && tools.some((name) => ["Read", "Git", "Grep", "Glob", "ListConnections"].includes(name)) && !tools.includes("ListConnections")) {
+        tools.push("ListConnections");
+      }
+      return { tools, readOnly: ["explore", "planner", "reviewer"].includes(agentType),
+        ...(persona.permissions !== undefined ? { permissions: persona.permissions } : {}) };
+    },
     hasSessionRestrictions(agentType: string): boolean {
       const persona = (isKnownPersona(agentType) && isReservedPersonaName(agentType))
         ? getPersona(agentType)

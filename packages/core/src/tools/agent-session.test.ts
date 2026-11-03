@@ -1694,24 +1694,11 @@ describe("agentTool handler — orchestrate default-detach (§2.3)", () => {
     }
   });
 
-  it.each(["explore", "custom-reviewer"])("refuses a session for %s without discarding its restrictions", async (agentType) => {
-    const inline: SubagentPort = {
-      listAgentTypes: () => [agentType],
-      hasSessionRestrictions: () => true,
-      run: async () => { throw new Error("unexpected inline run"); },
-    };
-    const sessionRun = vi.fn(async () => BASE_SESSION_OUTCOME);
-    const result = await full.handler(
-      { description: "d", prompt: "p", agent_type: agentType, tier: "session" },
-      makeCtx({ subagents: inline, sessionSubagents: { run: sessionRun, send: async () => ({ ok: true }) } }),
-    );
-    expect(result).toMatchObject({ ok: false, errorKind: "invalid_input", error: expect.stringContaining('use tier "inline" or omit tier') });
-    expect(sessionRun).not.toHaveBeenCalled();
-  });
-
-  it("refuses a connection-routed explore session before it can run write tools", async () => {
+  it("runs explore as a session when settings route it to a connection", async () => {
+    const restrictions = { tools: [...PERSONAS.explore.tools], readOnly: true };
     const inline: SubagentPort = {
       run: async () => { throw new Error("unexpected inline run"); },
+      sessionRestrictions: () => restrictions,
       resolveRoleRoute: () => ({ entries: [{ connection: "conn", model: "model" }], skipped: [] }),
     };
     const sessionRun = vi.fn(async () => BASE_SESSION_OUTCOME);
@@ -1719,25 +1706,23 @@ describe("agentTool handler — orchestrate default-detach (§2.3)", () => {
       { description: "d", prompt: "p", agent_type: "explore", tier: "session" },
       makeCtx({ subagents: inline, sessionSubagents: { run: sessionRun, send: async () => ({ ok: true }) } }),
     );
-    expect(result).toMatchObject({ ok: false, errorKind: "invalid_input", error: expect.stringContaining("restrictions") });
-    expect(sessionRun).not.toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    expect(sessionRun).toHaveBeenCalledWith(expect.objectContaining({ connectionId: "conn", restrictions }), expect.anything());
   });
 
-  it.each(["connection", "engine"])("refuses a restricted profile routed to an %s", async (target) => {
+  it("refuses restricted native engine profiles", async () => {
     const sessionRun = vi.fn(async () => BASE_SESSION_OUTCOME);
     const subagents: SubagentPort = {
       listAgentTypes: () => ["custom"],
       run: async () => { throw new Error("unexpected inline run"); },
       hasSessionRestrictions: () => true,
-      ...(target === "connection"
-        ? { profileRouting: () => ({ connection: "other" }) }
-        : { engineProfile: () => ({ engine: "codex" as const, systemPrompt: "profile" }) }),
+      engineProfile: () => ({ engine: "codex", systemPrompt: "profile" }),
     };
     const result = await full.handler(
       { description: "d", prompt: "p", agent_type: "custom", tier: "session" },
       makeCtx({ subagents, sessionSubagents: { run: sessionRun, send: async () => ({ ok: true }) } }),
     );
-    expect(result).toMatchObject({ ok: false, errorKind: "invalid_input", error: expect.stringContaining("restrictions") });
+    expect(result).toMatchObject({ ok: false, errorKind: "invalid_input", error: expect.stringContaining("native engine") });
     expect(sessionRun).not.toHaveBeenCalled();
   });
 

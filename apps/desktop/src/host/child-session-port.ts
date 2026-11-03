@@ -246,6 +246,9 @@ function isValidFreeText(value: string, maxLength: number): boolean {
  * found, or `null` when the request is well-formed.
  */
 function findSpawnRequestShapeError(req: SessionSubagentRequest): string | null {
+  if (req.engine !== undefined && (req.nativeRestrictionsUnsupported || req.restrictions?.readOnly || req.restrictions?.permissions)) {
+    return "Agent: native engine children cannot enforce this profile’s tool or permission restrictions.";
+  }
   if (!isValidChildId(req.spawnToolCallId)) {
     return MALFORMED_SPAWN_ID_MESSAGE;
   }
@@ -1295,6 +1298,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
         // parking it (a parked detached request holds the parent's whole step).
         ...(req.detach !== undefined ? { detach: req.detach } : {}),
         ...(req.fallbackAtCapacity === true ? { fallbackAtCapacity: true as const } : {}),
+        ...(req.restrictions !== undefined ? { restrictions: req.restrictions } : {}),
         permissionMode: options.getPermissionMode(),
       };
       options.send(spawnRequest);

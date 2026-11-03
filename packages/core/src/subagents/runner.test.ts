@@ -5815,7 +5815,7 @@ describe("inline child ask classification", () => {
 
 
 describe("core profile session requests", () => {
-  it("runs unrestricted profiles and executor as sessions, but refuses restricted profiles", async () => {
+  it("carries profile restrictions into session requests", async () => {
     const unrestricted = await makeProfile("worker", { body: "role", model: "model-b" });
     const restricted = await makeProfile("reader", { body: "role", tools: ["Read"] });
     const explicitBaseline = await makeProfile("explicit-baseline", { body: "role", tools: PERSONAS["general-purpose"].tools });
@@ -5839,9 +5839,12 @@ describe("core profile session requests", () => {
     expect(requests[0]?.model).toBe("model-b");
     for (const agent_type of ["reader", "explicit-baseline", "guarded", "explore"]) {
       const result = await tool.handler({ description: "d", prompt: "task", agent_type, tier: "session" }, ctx);
-      expect(result).toMatchObject({ ok: false, errorKind: "invalid_input", error: expect.stringContaining('use tier "inline" or omit tier') });
+      expect(result.ok).toBe(true);
     }
-    expect(requests).toHaveLength(2);
+    expect(requests[2]?.restrictions).toMatchObject({ tools: ["Read"], readOnly: false });
+    expect(requests[4]?.restrictions?.permissions?.deny).toEqual([{ toolName: "Write" }]);
+    expect(requests[5]?.restrictions).toMatchObject({ tools: PERSONAS.explore.tools, readOnly: true });
+    expect(requests).toHaveLength(6);
   });
 
   it.each([

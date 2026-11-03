@@ -503,6 +503,7 @@ export interface TabHost {
     spawnToolCallId: string;
     requestId: string;
     permissionMode: PermissionMode;
+    restrictions?: import("@anycode/core").SessionProfileRestrictions;
     /**
      * the CREATING spawn's turn budget (from the profile's
      * frontmatter, req.maxTurns). Populated only for a FRESH child — a
@@ -545,6 +546,7 @@ interface ChildRunLedgerEntry {
  * so a follow-up can only ever reach a child this parent really had.
  */
 interface ResumableChild {
+  restrictions?: import("@anycode/core").SessionProfileRestrictions;
   parentSessionId: string;
   connectionId?: string;
   modelOverride?: string;
@@ -1707,6 +1709,9 @@ export class TabHostManager {
         "--child-mode",
         tab.childOf.permissionMode,
       );
+      if (tab.childOf.restrictions !== undefined) {
+        args.push("--child-restrictions", JSON.stringify(tab.childOf.restrictions));
+      }
       // the creating spawn's turn budget rides argv only when the
       // child has one (fresh child of a profile with a budget). Follow-up
       // children and ordinary tabs never get it; children never respawn, so
@@ -2594,6 +2599,8 @@ export class TabHostManager {
         spawnToolCallId: req.spawnToolCallId,
         requestId: req.requestId,
         permissionMode: req.permissionMode,
+        ...((resumable !== undefined ? resumable.restrictions : req.restrictions) !== undefined
+          ? { restrictions: resumable !== undefined ? resumable.restrictions : req.restrictions } : {}),
         // only the CREATING spawn carries a budget; a follow-up
         // (resumable) child keeps whatever its session started with.
         ...(stampedMaxTurns !== undefined ? { maxTurns: stampedMaxTurns } : {}),
@@ -3226,6 +3233,7 @@ export class TabHostManager {
   private rememberResumableChild(entry: ChildRunLedgerEntry, childTab: TabHost, reaped: Promise<void>): void {
     const record: ResumableChild = {
       parentSessionId: entry.parentSessionId,
+      ...(childTab.childOf?.restrictions !== undefined ? { restrictions: childTab.childOf.restrictions } : {}),
       ...(childTab.connectionId !== undefined ? { connectionId: childTab.connectionId } : {}),
       ...(childTab.modelOverride !== undefined ? { modelOverride: childTab.modelOverride } : {}),
       ...(childTab.effortOverride !== undefined ? { effortOverride: childTab.effortOverride } : {}),

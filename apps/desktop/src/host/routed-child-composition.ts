@@ -64,6 +64,8 @@ export function createRoutedChildComposition(options: {
       description: `[fallback] ${req.description}`,
       prompt: req.prompt,
       spawnToolCallId: respawnId,
+      ...(req.restrictions !== undefined ? { restrictions: req.restrictions } : {}),
+      ...(req.nativeRestrictionsUnsupported ? { nativeRestrictionsUnsupported: true } : {}),
       ...(decision.entry.engine !== undefined ? { engine: decision.entry.engine } : {}),
       ...(decision.entry.connection !== undefined ? { connectionId: decision.entry.connection } : {}),
       ...(decision.entry.provider !== undefined ? { provider: decision.entry.provider } : {}),

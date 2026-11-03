@@ -63,7 +63,7 @@ import {
 } from "../subagents/role-route.js";
 import type { SessionSubagentRequest } from "../ports/session-subagent.js";
 import { SUBAGENT_OUTPUT_MAX_BYTES, SUBAGENT_TIME_BUDGET_MS } from "../types/config.js";
-import { listPersonaNames } from "../subagents/personas.js";
+import { getPersona, isKnownPersona, listPersonaNames } from "../subagents/personas.js";
 import {
   buildSessionSubagentRequest,
   formatResultForModel,
@@ -93,7 +93,7 @@ const BASE_DESCRIPTION =
   'Delegate a task to a subagent. agent_type "explore" = read-only recon that can read files and Git history with Git, but cannot run commands; use general-purpose for work needing Bash; "general-purpose" = the subtask needs write/exec tools. Independent Agent calls issued together in one response run concurrently — fan out disjoint searches. Use AgentStatus to inspect your children’s live progress. For a single known-file fact, Read/Grep it yourself; once delegated, do not redo the search.';
 
 const SESSION_TIER_DESCRIPTION_SUFFIX =
-  ' By default general-purpose runs as a session child while you wait; explore and other profiles default to inline to preserve their restrictions. Session spawns are refused for restricted profiles. The user can move a session to the background, and a long wait is handed off automatically with a later report as a new turn. Use tier "inline" for lightweight short lookups. send_to delivers a follow-up to your own still-running session child.';
+  ' By default general-purpose runs as a session child while you wait; explore and other profiles default to inline to preserve their restrictions. Session children enforce profile restrictions on core connections. The user can move a session to the background, and a long wait is handed off automatically with a later report as a new turn. Use tier "inline" for lightweight short lookups. send_to delivers a follow-up to your own still-running session child.';
 
 export interface CreateAgentToolOptions {
   /**
@@ -234,13 +234,13 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
       // it always runs as a child SESSION instead, through the exact same
       // SessionSubagentPort contract as an explicit `tier:"session"` call.
       const engineProfile = ctx.subagents?.engineProfile?.(agentType) ?? null;
-      const restricted = ctx.subagents?.hasSessionRestrictions?.(agentType) ??
-        ["explore", "planner", "reviewer"].includes(agentType);
+      const restricted = (ctx.subagents?.hasSessionRestrictions?.(agentType) ?? false) ||
+        (ctx.subagents?.sessionRestrictions?.(agentType)?.readOnly ?? ["explore", "planner", "reviewer"].includes(agentType));
       if (engineProfile !== null && restricted && input.continue_session === undefined && input.send_to === undefined) {
         return {
           ok: false,
           errorKind: "invalid_input",
-          error: `Agent: profile "${agentType}" has restrictions that a child session cannot preserve; use a profile without its own engine or do the work yourself.`,
+          error: `Agent: profile "${agentType}" has tool or permission restrictions that native engine children cannot enforce; use a core profile or do the work yourself.`,
         };
       }
       // GitHub #17 slice C: detach-by-default is MECHANICAL and
@@ -342,7 +342,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
         return {
           ok: false,
           errorKind: "invalid_input",
-          error: sessionTier && !restricted
+          error: sessionTier
             ? `Agent: profile "${agentType}" selects its own connection and runs as a child session; call it with tier "session".`
             : `Agent: profile "${agentType}" selects its own connection and cannot be spawned from here. Use a persona without its own connection inline, or do the work yourself.`,
         };
@@ -352,6 +352,10 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
       // host health cache). Returns null for everything but a ROLE persona
       // with configured roles — built-in defaults apply then.
       const roleRoute = ctx.subagents?.resolveRoleRoute?.(agentType) ?? null;
+      if (tier === "session" && restricted && roleRoute?.entries[0]?.engine !== undefined &&
+          input.continue_session === undefined && input.send_to === undefined) {
+        return { ok: false, errorKind: "invalid_input", error: `Agent: profile "${agentType}" has tool or permission restrictions that native engine children cannot enforce; use a core profile or do the work yourself.` };
+      }
       if (roleRoute !== null) {
         // An entry carrying connection/engine selects its own connection —
         // the inline tier cannot honor it (same 4269 refusal shape). F9
@@ -367,23 +371,13 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
           return {
             ok: false,
             errorKind: "invalid_input",
-            error: sessionTier && !restricted
+            error: sessionTier
             ? `Agent: profile "${agentType}" selects its own connection and runs as a child session; call it with tier "session".`
             : `Agent: profile "${agentType}" selects its own connection and cannot be spawned from here. Use a persona without its own connection inline, or do the work yourself.`,
           };
         }
       }
 
-      if (tier === "session" && restricted &&
-          input.continue_session === undefined && input.send_to === undefined) {
-        return {
-          ok: false,
-          errorKind: "invalid_input",
-          error: routing !== null || roleRoute?.entries.some((entry) => entry.connection !== undefined || entry.provider !== undefined || entry.engine !== undefined)
-            ? `Agent: profile "${agentType}" has restrictions that a child session cannot preserve; use a profile without its own connection or do the work yourself.`
-            : `Agent: profile "${agentType}" has restrictions that a child session cannot preserve; use tier "inline" or omit tier.`,
-        };
-      }
 
       if (tier === "session") {
         return runSessionTier(
@@ -499,6 +493,10 @@ async function runInlineTier(
  * built for EngineChildSpec.prompt — I3) and `engine` is stamped onto the
  * request. Every other field/behavior below is unchanged.
  */
+function restrictedForNative(ctx: ToolContext, agentType: string, readOnly: boolean): boolean {
+  return readOnly || (ctx.subagents?.hasSessionRestrictions?.(agentType) ?? false);
+}
+
 async function runSessionTier(
   input: AgentInput,
   ctx: ToolContext,
@@ -567,7 +565,16 @@ async function runSessionTier(
     ? ctx.subagents?.coreProfile?.(agentType) ?? undefined
     : undefined;
   const profileEffort = engineProfile?.effort ?? (roleRoute === undefined ? coreProfile?.effort : undefined);
+  const resolvedRestrictions = ctx.subagents?.sessionRestrictions?.(agentType) ?? undefined;
+  if (resumeChildSessionId === undefined && engineProfile === undefined && resolvedRestrictions === undefined && ctx.subagents?.hasSessionRestrictions?.(agentType)) {
+    return { ok: false, errorKind: "invalid_input", error: `Agent: profile "${agentType}" restrictions are unavailable for this child session.` };
+  }
+  const restrictions = resolvedRestrictions ??
+    (isKnownPersona(agentType) && ["explore", "planner", "reviewer"].includes(agentType)
+      ? { tools: [...getPersona(agentType).tools], readOnly: true } : undefined);
   const request: SessionSubagentRequest = {
+    ...(resumeChildSessionId === undefined && engineProfile === undefined && restrictions !== undefined
+      ? { restrictions, ...(restrictedForNative(ctx, agentType, restrictions.readOnly) ? { nativeRestrictionsUnsupported: true } : {}) } : {}),
     // a continuation branches the request build rather than
     // post-patching the spread — a resumed child keeps its own profile body
     // and model (both already in its history), so NEITHER a model override
