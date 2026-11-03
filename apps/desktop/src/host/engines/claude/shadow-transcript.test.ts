@@ -216,6 +216,15 @@ describe("ClaudeShadowTranscriptEngine (cut §1.5 D1/D2)", () => {
     expect(wrapped.historyItems()).toBe(bootHistory);
   });
 
+  it("stamps projected items with the host turn identity", async () => {
+    const engine = fakeEngine([[{ type: "loop_end", reason: "error", turns: 1 }]], { model: null, permissionMode: null });
+    const recorded: HistoryItem[] = [];
+    const sink: ClaudeShadowTranscriptPort = { record: (_ref, items) => recorded.push(...items.map((item) => item.data as HistoryItem)), list: async () => [] };
+    const wrapped = new ClaudeShadowTranscriptEngine(engine, sink, "ref", [], 0, tick());
+    await drain(wrapped.runTurn("failed prompt", { ...fakeOptions(), turnId: "host-turn" }));
+    expect(recorded).toEqual([expect.objectContaining({ turnId: "host-turn", message: { role: "user", content: "failed prompt" } })]);
+  });
+
   it("continues turnOrdinal from the resume-supplied starting value, never restarting at 0", async () => {
     const engine = fakeEngine([[{ type: "turn_end", turn: 1, finishReason: "stop" }, { type: "loop_end", reason: "completed", turns: 1 }]], {
       model: null,

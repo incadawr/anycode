@@ -127,6 +127,14 @@ describe("Session — session_history hydration", () => {
     const h = createHarness({ steps: [], bootHistory: [{ ...userItem("u1", "first", 500), turnId: "t1" }, userItem("u2", "next", 100)], bootTurnErrors: [{ kind: "turn_error", id: "e1", createdAt: 50, turnId: "t1", engine: "core", model: "m", error: { name: "ProviderError", message: "failed" } }] });
     try { h.send({ type: "ui_ready" }); expect((await h.waitFor(isSessionHistory)).items.map((item) => item.id)).toEqual(["u1", "e1", "u2"]); } finally { h.close(); }
   });
+  it("restores the last failure even when Claude projected its turn later", async () => {
+    const h = createHarness({ steps: [], bootHistory: [assistantTextItem("prior", "old answer", 1), { ...userItem("claude-user", "failed prompt", 300), turnId: "turn-2" }], bootTurnErrors: [{ kind: "turn_error", id: "e1", createdAt: 100, turnId: "turn-2", engine: "claude", model: "m", afterItemId: "prior", error: { name: "ProviderError", message: "failed" } }] });
+    try {
+      h.send({ type: "ui_ready" });
+      expect((await h.waitFor(isSessionHistory)).items.map((item) => item.id)).toEqual(["prior", "claude-user", "e1"]);
+      expect(h.session.communicationResult().latestResult).toMatchObject({ terminalReason: "error", publicAnswer: "failed" });
+    } finally { h.close(); }
+  });
   it("hydrates a terminal error and restores the last result", async () => {
     const h = createHarness({ steps: [], bootHistory: [userItem("u1", "hello", 10)], bootTurnErrors: [{ kind: "turn_error", id: "e1", createdAt: 20, turnId: "t1", engine: "core", model: "m", error: { name: "ProviderError", message: "Network error", code: "network" } }] });
     try {
