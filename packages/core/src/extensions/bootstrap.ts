@@ -98,6 +98,8 @@ export interface ExtensionsBootstrap {
 export interface DiscoverExtensionsOptions extends ProjectTrustOptions, McpResolveOptions {
   workspace: string;
   home: string;
+  /** Optional user home for skill discovery. */
+  skillsHome?: string;
   /** Server names already claimed by explicit config (so it always wins over plugins). */
   claimedMcpNames?: Set<string>;
   /**
@@ -288,14 +290,14 @@ export async function discoverExtensions(
 
   // Roots recipe is shared with the admin scan (buildSkillRoots) so the two
   // discovery paths never drift.
-  const skillRoots: SkillRoot[] = buildSkillRoots(workspace, home, pluginSkillRoots);
+  const skillRoots: SkillRoot[] = buildSkillRoots(workspace, opts.skillsHome ?? home, pluginSkillRoots);
 
   // Disabled skills are read fail-soft from the shared config and filtered at
   // discovery claim-time (before the cap). An empty set (the overwhelmingly
   // common case, and every pre-slice config) leaves discovery byte-identical.
   let disabledSkills = new Set<string>();
   try {
-    disabledSkills = await loadDisabledSkills(fs, { workspace, home });
+    disabledSkills = await loadDisabledSkills(fs, { workspace, home: opts.skillsHome ?? home });
   } catch (error) {
     problems.push(`skills disabled-list load failed: ${describeError(error)}`);
   }
