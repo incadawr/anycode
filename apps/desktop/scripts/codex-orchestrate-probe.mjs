@@ -97,5 +97,5 @@ try {
   child.stdin.end();
   if (process.platform !== 'win32' && child.pid) { try { process.kill(-child.pid, 'SIGTERM'); } catch {} }
   else child.kill();
-  setTimeout(() => { if (child.exitCode === null) { try { process.platform === 'win32' ? child.kill('SIGKILL') : process.kill(-child.pid, 'SIGKILL'); } catch {} } }, 1000).unref();
+  setTimeout(() => { try { process.platform === 'win32' ? child.kill('SIGKILL') : process.kill(-child.pid, 'SIGKILL'); } catch {} }, 1000);
 }
