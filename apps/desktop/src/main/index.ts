@@ -220,7 +220,7 @@ import {
 // electron-adapter is the ONLY file that touches real Electron primitives, so
 // preview-host.ts itself stays unit-testable off plain fakes.
 import { registerPreviewHost, type PreviewHostHandle } from "./preview/preview-host.js";
-import { buildFileResourceRoots, canonicalizeRootPath, defaultTempRoots } from "./preview/file-resource-roots.js";
+import { buildFileResourceRoots, canonicalWorkspaceForTab, defaultTempRoots } from "./preview/file-resource-roots.js";
 import { createElectronPreviewWindow, wrapCapturedImage } from "./preview/electron-adapter.js";
 import { createElectronPanelView } from "./preview/panel-adapter.js";
 // M3 (CUT.md GAP 1): the md-preview WINDOW container adapter — a
@@ -2379,10 +2379,7 @@ void app.whenReady().then(async () => {
     // resolver would happily serve them. The tab's workspace is the ONE
     // widening the policy allows (a workspace == the home dir widens
     // nothing — the policy itself refuses that).
-    workspaceForTab: (tabId) => {
-      const workspace = manager?.getTab(tabId)?.workspace;
-      return workspace === undefined ? undefined : canonicalizeRootPath(workspace);
-    },
+    workspaceForTab: canonicalWorkspaceForTab((tabId) => manager?.getTab(tabId)?.workspace),
     fileResourceRoots: () =>
       // CANONICALIZED roots (realpath'd) AND the raw spellings kept
       // alongside them: the policy compares them against REALPATH'd
