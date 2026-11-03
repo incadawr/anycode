@@ -13,6 +13,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Keep SubAgent status badges visible when model and engine names are long.
+
 - Refuse session delegation when it would discard an inline profile's restrictions.
 
 - Give actionable alternatives when a connection-bound agent cannot be spawned.
