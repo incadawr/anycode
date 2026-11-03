@@ -1,7 +1,7 @@
 import { scrubFailureText } from "@anycode/core";
 import { CHILD_FINAL_TEXT_MAX_CHARS, CHILD_TERMINAL_TYPE, type ChildTerminal } from "../shared/child-sessions.js";
 
-const STARTUP_HINT = "\nThis is a startup failure; retry the task unchanged.";
+const STARTUP_HINT = "\nThis is a startup failure; do not retry the task unchanged.";
 
 export function sanitizeBootFailure(message: string): { message: string; truncated: boolean } {
   const safe = scrubFailureText(message);
