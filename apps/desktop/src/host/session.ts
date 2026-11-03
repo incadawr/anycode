@@ -1868,7 +1868,9 @@ export class Session {
       break;
     }
     const lastError = this.bootTurnErrors.at(-1);
-    if (lastError && !publicHistory.some((item) => item.createdAt > lastError.createdAt)) {
+    const orderedHistory = this.sessionHistory?.items ?? [];
+    const errorIndex = lastError ? orderedHistory.findIndex((item) => item.id === lastError.id) : -1;
+    if (lastError && errorIndex >= 0 && !orderedHistory.slice(errorIndex + 1).some((item) => item.message.role === "user")) {
       this.latestPublicResult = { source: "history_recovery", turnId: lastError.turnId, requestId: null, nativeTurnId: null, historyItemId: lastError.id, terminalReason: "error", publicAnswer: lastError.error.message.slice(0, 32000), truncated: lastError.error.message.length > 32000, completedAt: lastError.createdAt };
     }
     // Slice P7.25/F3: subscribe to live LSP status transitions. The listener is
@@ -5254,7 +5256,7 @@ export class Session {
         // AgentLoop so every HistoryItem this turn appends (user frame step 0,
         // assistant/tool items per inner step ordinal, cancelled stragglers
         // included) carries {turnId, step}. Foreign engines ignore it.
-        ...(this.engine.id === "core" ? { turnId } : {}),
+        ...(this.engine.id === "core" || this.engine.id === "claude" ? { turnId } : {}),
       };
       const stream = text === undefined ? this.engine.continueTurn?.(options) : this.engine.runTurn(text, options);
       if (stream === undefined) {

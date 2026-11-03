@@ -237,7 +237,7 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
       // of the turn that carried it — and reads the engine's reconciled
       // snapshot rather than raw wire values.
       try {
-        const projected = projectClaudeTurn(input, events, this.now, turn);
+        const projected = projectClaudeTurn(input, events, this.now, turn).map((item) => options.turnId ? { ...item, turnId: options.turnId } : item);
         this.sink.record(
           this.sessionRef,
           projected.map((data, index) => ({ turnOrdinal: turn, positionInTurn: index, itemId: `${turn}:${index}`, data })),
