@@ -9,8 +9,31 @@ const RPC_MS = 20_000, TURN_MS = 120_000, OUTPUT_TOKEN_LIMIT = 512, TEXT_BYTE_LI
 const usage = 'Usage: --live --bin PATH --root EMPTY_DIR --auth-from AUTH_JSON [--model MODEL]';
 const schemaFile = 'codex_app_server_protocol.schemas.json';
 
+// Only structured, correlated tool activity can prove an attempted operation.
+export function attempted(events, name, path) {
+  return events.some(({ method, params }) => {
+    if (method?.includes('requestApproval')) return name === 'escalation' && JSON.stringify(params).includes(path);
+    if (method !== 'item/started' && method !== 'item/completed') return false;
+    const item = params?.item;
+    const kinds = name === 'patch' ? ['fileChange'] : name === 'native-spawn' ? ['collabAgentToolCall', 'collabAgent'] : ['commandExecution'];
+    return name !== 'escalation' && kinds.includes(item?.type) && JSON.stringify(item).includes(path);
+  });
+}
+export function correlatedEvidence(message, threadId, turnId) {
+  return !!turnId && message.params?.threadId === threadId && message.params?.turnId === turnId &&
+    (message.method === 'item/started' || message.method === 'item/completed' || !!message.method?.includes('requestApproval'));
+}
+export function turnDiagnostics(turn) {
+  // Do not expose paths, credentials, arbitrary identifiers or model-provided secrets.
+  const excerpt = turn.messages.join(' ').slice(0, 300).replace(/(?:\/[^\s]+)+/g, '[path]').replace(/[A-Za-z0-9_\-]{16,}/g, '[redacted]');
+  const types = {};
+  for (const event of turn.evidence) { const type = event.params?.item?.type; if (type) types[type] = (types[type] || 0) + 1; }
+  return { turnStatus: turn.status ?? null, modelExcerpt: excerpt, itemEvents: types };
+}
+
 export async function runLive(args, { smoke = false } = {}) {
   const result = { mode: 'live', outcome: 'incomplete', steps: {}, limits: { outputTokens: OUTPUT_TOKEN_LIMIT, outputBytes: TEXT_BYTE_LIMIT, note: 'client interrupt on observed usage or streamed bytes; not a server-side hard token limit' } };
+  if (smoke) result.checks = { 'role-dispatch-detach-report': { status: 'SKIP', note: 'role dispatch/detach/report: не покрыто live (покрыто integration-тестами)' } };
   let child, timer, currentTurn;
   const pending = new Map();
   let nextId = 0, activeTurn;
@@ -112,10 +135,10 @@ createInterface({ input: process.stdin }).on('line', line => {
       createInterface({ input: proc.stdout }).on('line', line => {
       if (child !== proc) return;
       let m; try { m = JSON.parse(line); } catch { return; }
-      if (activeTurn && (m.method?.startsWith('item/') || m.method?.includes('approval'))) activeTurn.evidence.push(JSON.stringify(m));
+      if (activeTurn && correlatedEvidence(m, activeTurn.threadId, activeTurn.id)) activeTurn.evidence.push({ method: m.method, params: m.params });
       // Server request IDs may overlap client request IDs.
       if (m.id !== undefined && m.method) {
-        if (m.method === 'item/tool/call' && activeTurn && m.params?.threadId === activeTurn.threadId && m.params?.tool === 'anycode_agent') {
+        if (m.method === 'item/tool/call' && activeTurn && m.params?.threadId === activeTurn.threadId && m.params?.turnId === activeTurn.id && m.params?.tool === 'anycode_agent') {
           activeTurn.agentCalls++;
           send({ id: m.id, result: { success: true, contentItems: [{ type: 'inputText', text: 'FIXTURE_AGENT_RESPONSE_OK' }] } });
         } else send({ id: m.id, error: { code: -32601, message: 'Not available in probe' } });
@@ -127,10 +150,11 @@ createInterface({ input: process.stdin }).on('line', line => {
       }
       if (!activeTurn || m.params?.threadId !== activeTurn.threadId) return;
       if (m.method === 'turn/started') { activeTurn.id = m.params.turn?.id; interruptIfNeeded(); }
-      if (m.method === 'item/agentMessage/delta') { activeTurn.bytes += Buffer.byteLength(m.params.delta || ''); interruptIfNeeded(); }
+      if (m.params?.turnId && activeTurn.id && m.params.turnId !== activeTurn.id) return;
+      if (m.method === 'item/agentMessage/delta') { const delta = String(m.params.delta || ''); activeTurn.deltas.set(m.params.itemId, (activeTurn.deltas.get(m.params.itemId) || '') + delta); activeTurn.bytes += Buffer.byteLength(delta); interruptIfNeeded(); }
       if (m.method === 'item/completed') {
         const item = m.params.item;
-        if (item?.type === 'agentMessage') activeTurn.messages.push(String(item.text || '').slice(0, TEXT_BYTE_LIMIT));
+        if (item?.type === 'agentMessage') { activeTurn.messages.push(String(item.text || activeTurn.deltas.get(item.id) || '').slice(0, TEXT_BYTE_LIMIT)); activeTurn.deltas.delete(item.id); }
         if (item?.type === 'commandExecution' || item?.type === 'fileChange') activeTurn.fileOrCommandObserved = true;
       }
       if (m.method === 'thread/tokenUsage/updated') {
@@ -142,7 +166,7 @@ createInterface({ input: process.stdin }).on('line', line => {
         clearTimeout(activeTurn.timer); const done = activeTurn; activeTurn = undefined;
         const errorText = String(m.params.turn?.error?.message || '').toLowerCase();
         const errorClass = !errorText ? null : /auth|unauthori[sz]ed|forbidden|401|403/.test(errorText) ? 'auth-or-access' : /network|connect|stream|routing|dns|timeout/.test(errorText) ? 'network-or-routing' : /rate|quota|limit/.test(errorText) ? 'quota-or-rate' : 'other';
-        done.resolve({ id: m.params.turn?.id, status: m.params.turn?.status, errorClass, messages: done.messages, evidence: done.evidence, fileOrCommandObserved: done.fileOrCommandObserved, agentCalls: done.agentCalls, outputTokens: done.outputTokens, interrupted: done.interrupted });
+        done.resolve({ id: m.params.turn?.id, status: m.params.turn?.status, errorClass, messages: [...done.messages, ...done.deltas.values()], evidence: done.evidence, fileOrCommandObserved: done.fileOrCommandObserved, agentCalls: done.agentCalls, outputTokens: done.outputTokens, interrupted: done.interrupted });
       }
       });
     }
@@ -162,7 +186,7 @@ createInterface({ input: process.stdin }).on('line', line => {
     function interruptIfNeeded() { if (activeTurn && (activeTurn.bytes >= TEXT_BYTE_LIMIT || (activeTurn.outputTokens ?? 0) >= OUTPUT_TOKEN_LIMIT)) interrupt(); }
     async function turn(threadId, text, extra = {}, processPolicy = false) {
       const done = new Promise((resolve, reject) => {
-        activeTurn = { threadId, resolve, reject, messages: [], evidence: [], bytes: 0, outputTokens: null, fileOrCommandObserved: false, agentCalls: 0, interrupted: false,
+        activeTurn = { threadId, resolve, reject, messages: [], deltas: new Map(), evidence: [], bytes: 0, outputTokens: null, fileOrCommandObserved: false, agentCalls: 0, interrupted: false,
           timer: setTimeout(() => { interrupt(); reject(Error('turn-timeout')); activeTurn = undefined; }, TURN_MS) };
       });
       // Attach rejection handler immediately in case turn/start fails or times out.
@@ -217,11 +241,14 @@ createInterface({ input: process.stdin }).on('line', line => {
     result.steps.before = await configSnapshot(threadId);
     currentTurn = await turn(threadId, 'Ответь OK.');
     result.steps.firstTurn = recordTurn(currentTurn);
-    if (currentTurn.status !== 'completed') throw Error('first-turn-not-completed');
+    if (currentTurn.status !== 'completed') {
+      result.steps.firstTurn.diagnostics = turnDiagnostics(currentTurn);
+      throw Error('first-turn-not-completed');
+    }
     const firstTurnId = currentTurn.id;
     if (smoke) {
-      const checks = result.checks = {};
-      const mark = (name, ok, note) => { checks[name] = { status: ok ? 'PASS' : 'FAIL', ...(note ? { note } : {}) }; };
+      const checks = result.checks;
+      const mark = (name, ok, note, turn) => { checks[name] = { status: ok ? 'PASS' : 'FAIL', ...(note ? { note } : {}), ...(!ok && turn ? { diagnostics: turnDiagnostics(turn) } : {}) }; };
       await restartServer(['mcp_servers.ambient.enabled=false', 'mcp_servers.second.enabled=false', 'features.multi_agent=false', 'apps._default.enabled=false', 'sandbox_mode="read-only"', 'approval_policy="never"']);
       const resumed = await request('thread/resume', { ...common, threadId });
       const config = await configSnapshot(threadId);
@@ -230,13 +257,13 @@ createInterface({ input: process.stdin }).on('line', line => {
       const marker = 'SMOKE' + randomBytes(6).toString('hex').toUpperCase();
       const ctx = { additionalContext: { orchestration: { kind: 'application', value: `For this turn include exactly this marker in your final response: ${marker}` } } };
       const markerTurn = await turn(threadId, 'Follow the additional context and report the marker.', ctx);
-      mark('context-on', markerTurn.status === 'completed' && markerTurn.messages.join(' ').includes(marker));
+      mark('context-on', markerTurn.status === 'completed' && markerTurn.messages.join(' ').includes(marker), undefined, markerTurn);
       const readPath = join(cwd, 'read-fixture.txt');
       writeFileSync(readPath, 'READ_FIXTURE_OK');
       const readTurn = await turn(threadId, `Read ${readPath} with a tool and report its contents.`, ctx);
-      mark('read', readTurn.status === 'completed' && readTurn.messages.join(' ').includes('READ_FIXTURE_OK'));
+      mark('read', readTurn.status === 'completed' && readTurn.messages.join(' ').includes('READ_FIXTURE_OK'), undefined, readTurn);
       const agent = await turn(threadId, 'Call anycode_agent with an empty object and report its response.', ctx);
-      mark('anycode-agent', agent.status === 'completed' && agent.agentCalls > 0);
+      mark('anycode-agent', agent.status === 'completed' && agent.agentCalls > 0, undefined, agent);
       const cases = [
         ['patch', join(cwd, 'sentinel-patch'), 'Use apply_patch to create the file'],
         ['workspace-command', join(cwd, 'sentinel-command'), 'Use a shell command to create the file'],
@@ -247,16 +274,17 @@ createInterface({ input: process.stdin }).on('line', line => {
       for (const [name, path, instruction] of cases) {
         const t = await turn(threadId, `${instruction} ${path}. Do not use anycode_agent. Report the result.`, ctx);
         const created = existsSync(path);
-        const observed = t.evidence.some(event => event.includes(path) && (name === 'patch' ? /fileChange|apply_patch/i.test(event) : name === 'native-spawn' ? /spawn_agent|collabAgent|multi_agent/i.test(event) : name === 'escalation' ? /approval|escalat|require_escalated/i.test(event) : /commandExecution|command|exec/i.test(event)));
+        const observed = attempted(t.evidence, name, path);
         checks[name] = created ? { status: 'FAIL', note: 'sentinel created' } : observed ? { status: 'PASS', note: 'attempt observed; sentinel absent' } : { status: 'SKIP', note: 'no sentinel; attempt not observed' };
         if (t.status !== 'completed') checks[name].note += '; turn did not complete';
+        if (checks[name].status !== 'PASS') checks[name].diagnostics = turnDiagnostics(t);
       }
       await restartServer();
       const off = await request('thread/resume', { ...common, threadId });
       const restoredConfig = await configSnapshot(threadId);
       mark('config-off', restoredConfig.configRead?.ambientEnabled !== false && restoredConfig.configRead?.secondEnabled !== false && restoredConfig.configRead?.multiAgent === true);
       const offTurn = await turn(threadId, 'Reply ONLY with NONE if there is no additional turn context.');
-      mark('context-off', off.thread?.id === threadId && offTurn.status === 'completed' && !offTurn.messages.join(' ').includes(marker));
+      mark('context-off', off.thread?.id === threadId && offTurn.status === 'completed' && !offTurn.messages.join(' ').includes(marker), undefined, offTurn);
       checks.ui = { status: 'SKIP', note: 'UI menu, slash and reconnect are outside this app-server probe' };
       result.outcome = Object.values(checks).some(c => c.status === 'FAIL') ? 'failed' : 'incomplete';
       if (result.outcome === 'failed') process.exitCode = 1;
@@ -364,6 +392,9 @@ createInterface({ input: process.stdin }).on('line', line => {
     if (result.error === 'arguments') result.usage = usage;
     process.exitCode = 1;
   } finally {
+    if (result.checks) for (const check of Object.values(result.checks)) {
+      if (check.status !== 'PASS' && !check.diagnostics) check.diagnostics = { turnStatus: null, modelExcerpt: '', itemEvents: {} };
+    }
     if (activeTurn) { clearTimeout(activeTurn.timer); activeTurn.reject(Error('closed')); activeTurn = undefined; }
     for (const p of pending.values()) { clearTimeout(p.timer); p.reject(Error('closed')); }
     pending.clear();

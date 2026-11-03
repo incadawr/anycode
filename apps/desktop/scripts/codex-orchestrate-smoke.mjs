@@ -18,7 +18,6 @@ if (modes[0] === '--live' && process.env.ANYCODE_CODEX_ORCHESTRATE_LIVE_SMOKE !=
   process.exit(1);
 }
 if (modes[0] === '--live' && (!option('--bin') || !option('--auth-from'))) throw Error('Live smoke requires --bin and --auth-from');
-if (modes[0] === '--live' && process.env.ORCH_PROBE_NO_SANDBOX_EXEC === '1') throw Error('Live smoke requires the auth write guard');
 const root = mkdtempSync(join(tmpdir(), 'anycode-orchestration-smoke-'));
 try {
   if (modes[0] === '--fixture-only') {

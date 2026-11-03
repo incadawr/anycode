@@ -21,3 +21,18 @@ test('fixture mode runs without a model or live opt-in', () => {
   assert.equal(report.live, 'SKIP');
   assert.equal(report.ui, 'SKIP');
 });
+
+test('only structured tool events count as attempted writes', async () => {
+  const { attempted, correlatedEvidence, turnDiagnostics } = await import('./codex-orchestrate-live-probe.mjs');
+  const path = '/tmp/sentinel';
+  const event = (type, content) => ({ method: 'item/completed', params: { item: { type, ...content } } });
+  assert.equal(attempted([event('agentMessage', { text: `cannot execute a command ${path}` })], 'workspace-command', path), false);
+  assert.equal(attempted([event('commandExecution', { command: `touch ${path}` })], 'workspace-command', path), true);
+  assert.equal(attempted([event('fileChange', { changes: [{ path }] })], 'patch', path), true);
+  assert.equal(attempted([event('commandExecution', { command: `touch ${path}` })], 'patch', path), false);
+  const correlated = { method: 'item/started', params: { threadId: 'thread', turnId: 'turn', item: { type: 'commandExecution', command: `touch ${path}` } } };
+  assert.equal(correlatedEvidence(correlated, 'thread', 'turn'), true);
+  assert.equal(correlatedEvidence(correlated, 'thread', 'other'), false);
+  assert.equal(correlatedEvidence(correlated, 'other', 'turn'), false);
+  assert.deepEqual(turnDiagnostics({ status: 'failed', messages: ['cannot read /private/secret'], evidence: [event('commandExecution', {})] }), { turnStatus: 'failed', modelExcerpt: 'cannot read [path]', itemEvents: { commandExecution: 1 } });
+});

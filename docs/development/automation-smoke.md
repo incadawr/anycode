@@ -45,6 +45,12 @@ limited by conversation history. UI menu, slash and reconnect are explicitly
 SKIP: this driver neither opens the UI nor replaces the release GUI gate.
 A SKIP is not acceptance evidence.
 
+When a nested sandbox-exec cannot run, `ORCH_PROBE_NO_SANDBOX_EXEC=1` explicitly
+selects an external auth write guard. The auth.json is linked into the isolated
+home by symlink and its source must be protected read-only externally; the
+result records `authWriteGuard: "external-required"`. The live Agent response
+is a fixture: role dispatch/detach/report: не покрыто live (покрыто integration-тестами).
+
 ## Launching the app from automation
 
 A dev Electron started from an agent shell or CI is not the same as one started
