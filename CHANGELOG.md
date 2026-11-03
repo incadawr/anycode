@@ -9,6 +9,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Orchestrate Codex sessions with role-based delegation and a read-only parent when the runtime policy can be verified.
+
 - Export and import provider connections and role profiles as a key-free setup file.
 
 - Prepare key-free connection and role profile sharing for plugins.

@@ -9,6 +9,42 @@ main → preload → renderer → host path rather than replacing it with a test
 For example, start-screen smoke creates an isolated profile, exercises task
 creation, and saves screenshots as evidence.
 
+## Codex orchestration smoke
+
+This driver runs at the app-server level and does not attach to an open app.
+From the repository root, with dependencies installed:
+
+```sh
+node apps/desktop/scripts/codex-orchestrate-smoke.mjs --fixture-only --keep
+```
+
+The fixture mode uses the scripted in-process app-server in the engine tests,
+with isolated HOME, CODEX_HOME, user data and temporary paths. It performs no
+model request and needs no network. PASS covers the simulated transition and
+policy checks only; it does not establish real sandbox or model behaviour.
+The optional `--keep` prints the temporary root; otherwise it is removed.
+
+For an explicitly authorised live test on macOS, use a separate account file:
+
+```sh
+ANYCODE_CODEX_ORCHESTRATE_LIVE_SMOKE=1 node apps/desktop/scripts/codex-orchestrate-smoke.mjs \
+  --live --bin /absolute/path/to/codex --auth-from /absolute/path/to/auth.json --keep
+```
+
+`--model MODEL` optionally selects a low-effort model. The live helper symlinks
+only the specified auth file into a fresh CODEX_HOME and uses sandbox-exec to
+prevent writes to its source directory; it does not copy the owner's profile or
+inherit ambient Codex auth. The retained directory contains private session
+artifacts and an auth symlink. The live model sequence is currently scoped to
+0.166.0; other admitted versions receive schema-only observations. The driver
+reports the binary, version, and per-check PASS/FAIL/SKIP. A missing sentinel
+is PASS only when a corresponding attempt is observed; otherwise it is SKIP.
+The read and dynamic Agent checks, restart/resume and per-turn application
+context marker do not prove developer-instruction priority. The OFF marker is
+limited by conversation history. UI menu, slash and reconnect are explicitly
+SKIP: this driver neither opens the UI nor replaces the release GUI gate.
+A SKIP is not acceptance evidence.
+
 ## Launching the app from automation
 
 A dev Electron started from an agent shell or CI is not the same as one started
