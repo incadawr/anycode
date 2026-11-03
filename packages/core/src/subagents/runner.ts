@@ -1922,7 +1922,8 @@ export async function runWrapUp(
       abortSignal: controller.signal,
     });
     for await (const event of stream) {
-      // Forward every event to the child config's tap: the wrap-up
+      if (event.type === "reasoning_replay_metadata") continue;
+      // Forward events to the child config's tap: the wrap-up
       // runs outside the AgentLoop, so this wrapper is the only bridge. An
       // observer must never break the rescue (same contract as
       // AgentLoop.runTurn's eventTap wrapper).

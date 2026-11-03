@@ -845,7 +845,7 @@ export function PermissionModal({
         <button type="button" className="permission-allow-button" onClick={fireAllow} disabled={saving || (showRemember && alwaysAllow && invalidWriteMask)}>
           {presentation.allowLabel}
           <span className="permission-allow-kbd" aria-hidden="true">
-            {platform === "darwin" ? "⌘⏎" : "Ctrl+Enter"}
+            {platform === "darwin" ? "⌘ Enter" : "Ctrl+Enter"}
           </span>
         </button>
       </div>

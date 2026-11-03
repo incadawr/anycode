@@ -14,7 +14,7 @@
  * refuses server-side; this only keeps the UI honest about it). Errors render
 
  */
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { GitBranchInfo, GitCommitInfo, GitDiffTarget, GitFileChange } from "@anycode/core";
 import type { GitCommand, WireGitStatus } from "../../../shared/protocol.js";
 import type { GitDestructiveIntent, GitDiffState, GitPanelView, GitPendingRequest } from "../store.js";
@@ -590,11 +590,13 @@ function GitBranchControls({ status, branches, dispatch }: BranchControlsProps) 
   );
 }
 
-export function GitPanel() {
+export function GitPanel({ visible = true }: { visible?: boolean }) {
   const tabStore = useTabStoreApi();
   const send = useTabSend();
 
   const panelOpen = useTabStore((state) => state.git.panelOpen);
+  const pendingRefresh = useTabStore((state) => Object.values(state.git.pending).some((request) => request.kind === "refresh" || request.kind === "branches"));
+  const refreshNeeded = useRef(false);
   const view = useTabStore((state) => state.git.view);
   const status = useTabStore((state) => state.git.status);
   const branches = useTabStore((state) => state.git.branches);
@@ -617,14 +619,19 @@ export function GitPanel() {
     dispatch({ op: "branches" }, { kind: "branches", label: "branches" });
   }, [dispatch]);
 
-  // Opening the panel re-syncs status + the branch dropdown (residual R11:
-  // status also freshens on turn-end/bind/mutations — this covers the
-  // "manual open" trigger from that same list).
   useEffect(() => {
-    if (panelOpen) {
+    if (panelOpen && visible) refreshNeeded.current = true;
+    else refreshNeeded.current = false;
+  }, [panelOpen, visible]);
+
+  useEffect(() => {
+    if (!panelOpen || !visible || pendingRefresh || !refreshNeeded.current) return;
+    const timer = setTimeout(() => {
+      refreshNeeded.current = false;
       refresh();
-    }
-  }, [panelOpen, refresh]);
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [panelOpen, visible, pendingRefresh, refresh]);
 
   // History is fetched lazily on first visit to that tab, not on every panel
   // open (design §2.6) — re-fires if a prior fetch never populated `log`
