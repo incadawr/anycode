@@ -84,6 +84,20 @@ export type ChatMessage =
   | { role: "assistant"; content: AssistantPart[] }
   | { role: "tool"; content: ToolResultPart[] };
 
+/** Presentation-only terminal failure, stored separately from model history. */
+export interface TurnErrorRecord {
+  kind: "turn_error";
+  id: string;
+  createdAt: number;
+  turnId: string;
+  engine: string;
+  model: string;
+  afterItemId?: string;
+  nativeTurnId?: string;
+  afterNativeTurnId?: string;
+  error: { name: string; message: string; code?: string };
+}
+
 export interface HistoryItem {
   /** Stable uuid; persisted as-is. */
   id: string;

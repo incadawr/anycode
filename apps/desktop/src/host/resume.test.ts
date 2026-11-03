@@ -119,6 +119,52 @@ function toolResultItem(
 // ═════════════════════════════════════════════════════════════════════════════
 
 describe("Session — session_history hydration", () => {
+  it("keeps unanchored old errors before later turns after compaction", async () => {
+    const errors = [10, 20].map((createdAt) => ({ kind: "turn_error" as const, id: `e${createdAt}`, createdAt, turnId: `gone${createdAt}`, afterItemId: `missing${createdAt}`, engine: "core", model: "m", error: { name: "ProviderError", message: `failed ${createdAt}` } }));
+    const h = createHarness({ steps: [], bootHistory: [{ ...userItem("summary", "summary", 500), kind: "compact_summary" }, userItem("later", "next", 100), assistantTextItem("answer", "success", 101)], bootTurnErrors: errors });
+    try {
+      h.send({ type: "ui_ready" });
+      expect((await h.waitFor(isSessionHistory)).items.map((item) => item.id)).toEqual(["summary", "e10", "e20", "later", "answer"]);
+      expect(h.session.communicationResult().latestResult).toMatchObject({ publicAnswer: "success" });
+    } finally { h.close(); }
+  });
+  it("keeps errors before the first later turn and in order without history", async () => {
+    const errors = [10, 20].map((createdAt) => ({ kind: "turn_error" as const, id: `e${createdAt}`, createdAt, turnId: `t${createdAt}`, engine: "codex", model: "m", error: { name: "AgentError", message: "failed" } }));
+    for (const history of [[], [userItem("later", "next", 100)]]) {
+      const h = createHarness({ steps: [], bootHistory: history, bootTurnErrors: errors });
+      try { h.send({ type: "ui_ready" }); expect((await h.waitFor(isSessionHistory)).items.map((item) => item.id)).toEqual(history.length ? ["e10", "e20", "later"] : ["e10", "e20"]); } finally { h.close(); }
+    }
+  });
+  it("does not restore an older failure when only a newer answer survives", async () => {
+    const h = createHarness({ steps: [], bootHistory: [{ ...userItem("summary", "summary", 500), kind: "compact_summary" }, assistantTextItem("answer", "new answer", 100)], bootTurnErrors: [{ kind: "turn_error", id: "e1", createdAt: 10, turnId: "gone", engine: "core", model: "m", error: { name: "AgentError", message: "old error" } }] });
+    try { h.send({ type: "ui_ready" }); await h.waitFor(isSessionHistory); expect(h.session.communicationResult().latestResult).toMatchObject({ publicAnswer: "new answer" }); } finally { h.close(); }
+  });
+  it("preserves compacted conversation order when hydrating history", async () => {
+    const h = createHarness({ steps: [], bootHistory: [{ ...userItem("summary", "summary", 200), kind: "compact_summary" }, userItem("older", "retained", 100)] });
+    try { h.send({ type: "ui_ready" }); expect((await h.waitFor(isSessionHistory)).items.map((item) => item.id)).toEqual(["summary", "older"]); } finally { h.close(); }
+  });
+  it("inserts a failure after its anchored turn without reordering history", async () => {
+    const h = createHarness({ steps: [], bootHistory: [{ ...userItem("u1", "first", 500), turnId: "t1" }, userItem("u2", "next", 100)], bootTurnErrors: [{ kind: "turn_error", id: "e1", createdAt: 50, turnId: "t1", engine: "core", model: "m", error: { name: "ProviderError", message: "failed" } }] });
+    try { h.send({ type: "ui_ready" }); expect((await h.waitFor(isSessionHistory)).items.map((item) => item.id)).toEqual(["u1", "e1", "u2"]); } finally { h.close(); }
+  });
+  it("restores the last failure even when Claude projected its turn later", async () => {
+    const h = createHarness({ steps: [], bootHistory: [assistantTextItem("prior", "old answer", 1), { ...userItem("claude-user", "failed prompt", 300), turnId: "turn-2" }], bootTurnErrors: [{ kind: "turn_error", id: "e1", createdAt: 100, turnId: "turn-2", engine: "claude", model: "m", afterItemId: "prior", error: { name: "ProviderError", message: "failed" } }] });
+    try {
+      h.send({ type: "ui_ready" });
+      expect((await h.waitFor(isSessionHistory)).items.map((item) => item.id)).toEqual(["prior", "claude-user", "e1"]);
+      expect(h.session.communicationResult().latestResult).toMatchObject({ terminalReason: "error", publicAnswer: "failed" });
+    } finally { h.close(); }
+  });
+  it("hydrates a terminal error and restores the last result", async () => {
+    const h = createHarness({ steps: [], bootHistory: [userItem("u1", "hello", 10)], bootTurnErrors: [{ kind: "turn_error", id: "e1", createdAt: 20, turnId: "t1", engine: "core", model: "m", error: { name: "ProviderError", message: "Network error", code: "network" } }] });
+    try {
+      h.send({ type: "ui_ready" });
+      const history = await h.waitFor(isSessionHistory);
+      expect(history.items.map((item) => item.kind)).toEqual(["normal", "turn_error"]);
+      expect(history.items[1]).toMatchObject({ turnId: "t1", error: { message: "Network error", code: "network" } });
+      expect(h.session.communicationResult().latestResult).toMatchObject({ terminalReason: "error", publicAnswer: "Network error", turnId: "t1" });
+    } finally { h.close(); }
+  });
   it("emits host_ready{sessionId} then session_history then replay, in that order", async () => {
     const bootHistory = [userItem("u1", "hello there"), assistantTextItem("a1", "hi")];
     const h = createHarness({ steps: [textStep("again")], bootHistory, hasTitle: true });

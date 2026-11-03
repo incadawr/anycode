@@ -56,6 +56,7 @@ import type {
   FileSystemPort,
   FinalTextAccumulator,
   HistoryItem,
+  TurnErrorRecord,
   ImageAttachment,
   LspServerStatus,
   PermissionMode,
@@ -847,6 +848,7 @@ export interface SessionOptions {
    * ui_ready (design §3.3). Empty for a fresh session -> no emission.
    */
   bootHistory?: ReturnType<SessionEngine["historyItems"]>;
+  bootTurnErrors?: readonly TurnErrorRecord[];
   /**
    * Dev/automation-ONLY override for `SESSION_HISTORY_MAX_ITEMS` (
    * S4): a replay recording needs a long session hydrated in full. Resolved
@@ -868,6 +870,7 @@ export interface SessionOptions {
   initialTitle?: string;
   /** Narrow persistence callback for title/mode patches (design §4.2). */
   persistence?: SessionPersistence;
+  saveTurnError?: (record: TurnErrorRecord, input?: string) => Promise<void>;
   /**
    * GitHub #36: the durable presentation records of this session's compactions
    * (host/compaction-records.ts). Wired for the core boot, whose `compaction_end`
@@ -1318,6 +1321,8 @@ export class Session {
   private model: string;
   private readonly sessionId: string;
   private readonly persistence: SessionPersistence | undefined;
+  private readonly saveTurnError: SessionOptions["saveTurnError"];
+  private readonly bootTurnErrors: readonly TurnErrorRecord[];
   /** GitHub #36: durable compaction rows; see SessionOptions.compactionRecords. */
   private readonly compactionRecords: CompactionRecordSeam | undefined;
   /**
@@ -1476,6 +1481,7 @@ export class Session {
   private abort: AbortController | null = null;
   private turnId: string | null = null;
   private latestTurnId: string | null = null;
+  private lastNativeTurnId: string | null = null;
   private nativeUsageStep = 0;
   /** Epoch ms the live turn began (host clock) — rides every turn_started, including the per-connect re-assertion. */
   private turnStartedAt: number | undefined = undefined;
@@ -1822,6 +1828,8 @@ export class Session {
     this.saveContextUsage = options.saveContextUsage;
     this.checkpointContextUsage = options.initialContextUsage ?? null;
     this.persistence = options.persistence;
+    this.saveTurnError = options.saveTurnError;
+    this.bootTurnErrors = options.bootTurnErrors ?? [];
     this.compactionRecords = options.compactionRecords;
     this.usageAudit = options.usageAudit;
     this.rules = options.rules;
@@ -1858,7 +1866,7 @@ export class Session {
     this.titleSet = this.currentTitle !== undefined || (options.hasTitle ?? false);
     this.historyMaxItems = options.historyMaxItems ?? SESSION_HISTORY_MAX_ITEMS;
     this.presentationJournal = new PresentationJournal(this.historyMaxItems, REPLAY_BUFFER_CAP);
-    this.sessionHistory = buildSessionHistory(options.bootHistory ?? [], this.historyMaxItems);
+    this.sessionHistory = buildSessionHistory(options.bootHistory ?? [], this.historyMaxItems, this.bootTurnErrors);
     const publicHistory = options.bootHistory ?? this.engine.historyItems();
     this.latestTurnId = [...publicHistory].reverse().find((item) => item.turnId !== undefined)?.turnId ?? null;
     for (const item of [...publicHistory].reverse()) {
@@ -1867,6 +1875,12 @@ export class Session {
       if (!text) continue;
       this.latestPublicResult = { source: "history_recovery", turnId: null, requestId: null, nativeTurnId: null, historyItemId: item.id, terminalReason: "unknown", publicAnswer: text.slice(0, 32000), truncated: text.length > 32000, completedAt: null };
       break;
+    }
+    const lastError = this.bootTurnErrors.at(-1);
+    const orderedHistory = this.sessionHistory?.items ?? [];
+    const errorIndex = lastError ? orderedHistory.findIndex((item) => item.id === lastError.id) : -1;
+    if (lastError && errorIndex >= 0 && !orderedHistory.slice(errorIndex + 1).some((item) => item.kind !== "turn_error" && item.kind !== "compact_summary" && (item.message.role === "user" || (item.message.role === "assistant" && item.message.content.some((part) => part.type === "text"))))) {
+      this.latestPublicResult = { source: "history_recovery", turnId: lastError.turnId, requestId: null, nativeTurnId: null, historyItemId: lastError.id, terminalReason: "error", publicAnswer: lastError.error.message.slice(0, 32000), truncated: lastError.error.message.length > 32000, completedAt: lastError.createdAt };
     }
     // Slice P7.25/F3: subscribe to live LSP status transitions. The listener is
 
@@ -2780,7 +2794,7 @@ export class Session {
         // the pre-switch transcript; keep the switch-time snapshot (the ring
         // carries everything newer, the native-engine discipline).
         if (this.engine.id === "core" && !this.engineSwitched) {
-          this.sessionHistory = buildSessionHistory([...this.engine.historyItems()], this.historyMaxItems);
+          this.sessionHistory = buildSessionHistory([...this.engine.historyItems()], this.historyMaxItems, this.bootTurnErrors);
         }
         this.sendSessionHistory();
         const historyTracksTurns = this.engine.id === "core" && !this.engineSwitched;
@@ -4214,6 +4228,7 @@ export class Session {
       this.settingsBarrierActive = false;
       this.updateContextUsage(null);
       this.engine = next;
+      this.lastNativeTurnId = null;
       this.checkpointContextUsage = null;
       this.outbound.clearContextUsage();
       this.engineSwitched = true;
@@ -5278,8 +5293,18 @@ export class Session {
     let lastCompletedText: { text: string; truncated: boolean } | null = null;
     let nativeTurnId: string | null = null;
     let turnErrorText: string | null = null;
+    let turnError: { name: string; message: string; code?: string } | undefined;
+    const persistTurnError = async () => {
+      if (!this.saveTurnError) return;
+      const redact = (value: string) => value.replace(/\bsk-[a-z0-9_-]+/gi, "[redacted]").replace(/\bBearer\s+[^\s,;]+/gi, "Bearer [redacted]");
+      const error = turnError ?? { name: "AgentError", message: "The agent request failed." };
+      const afterItemId = this.engine.historyItems().at(-1)?.id;
+      const afterNativeTurnId = this.engine.id === "codex" && nativeTurnId === null ? this.lastNativeTurnId : null;
+      const record: TurnErrorRecord = { kind: "turn_error", id: randomUUID(), createdAt: Date.now(), turnId, engine: this.engine.id, model: redact(this.model), ...(afterItemId ? { afterItemId } : {}), ...(nativeTurnId ? { nativeTurnId } : {}), ...(afterNativeTurnId ? { afterNativeTurnId } : {}), error: { name: error.name, message: redact(error.message), ...(error.code && /^[a-z_0-9]{1,80}$/.test(error.code) && !/^sk-/i.test(error.code) ? { code: error.code } : {}) } };
+      try { await this.saveTurnError(record, text); } catch (error) { console.error(`[host] turn error persistence failed: ${describeError(error)}`); }
+    };
     const recordResult = (terminalReason: SessionPublicResult["terminalReason"]) => {
-      this.latestPublicResult = { source: "live_turn", turnId, requestId, nativeTurnId, terminalReason, publicAnswer: lastCompletedText?.text ?? (this.engine.id === "codex" && terminalReason === "error" ? turnErrorText : null), truncated: lastCompletedText?.truncated ?? false, completedAt: Date.now() };
+      this.latestPublicResult = { source: "live_turn", turnId, requestId, nativeTurnId, terminalReason, publicAnswer: lastCompletedText?.text ?? ((this.engine.id === "codex" || this.engine.id === "core") && terminalReason === "error" ? turnErrorText : null), truncated: lastCompletedText?.truncated ?? false, completedAt: Date.now() };
       this.rememberTurnResult(turnId, this.latestPublicResult);
       // thread this turn's final assistant text OUT of runTurn
       // for the supervisor idle-watchdog's noteTurnSettled call — the accept
@@ -5335,7 +5360,7 @@ export class Session {
         // AgentLoop so every HistoryItem this turn appends (user frame step 0,
         // assistant/tool items per inner step ordinal, cancelled stragglers
         // included) carries {turnId, step}. Foreign engines ignore it.
-        ...(this.engine.id === "core" ? { turnId } : {}),
+        ...(this.engine.id === "core" || this.engine.id === "claude" ? { turnId } : {}),
       };
       const stream = text === undefined ? this.engine.continueTurn?.(options) : this.engine.runTurn(text, options);
       if (stream === undefined) {
@@ -5344,6 +5369,7 @@ export class Session {
       let noticeConsumeAttempted = false;
       for await (const event of stream) {
         nativeTurnId ??= this.engine.steeringStatus?.().nativeTurnId ?? null;
+        if (this.engine.id === "codex" && nativeTurnId !== null) this.lastNativeTurnId = nativeTurnId;
         if (event.type === "text_start") publicText.set(event.id, { text: "", truncated: false });
         if (event.type === "text_delta") {
           const current = publicText.get(event.id) ?? { text: "", truncated: false };
@@ -5363,9 +5389,12 @@ export class Session {
         }
         if (event.type === "error") {
           const wire = sanitizeAgentEvent(event, this.engine.id);
-          if (wire.type === "error") turnErrorText = wire.error.message;
+          if (wire.type === "error") { turnErrorText = wire.error.message; turnError = wire.error; }
         }
-        if (event.type === "loop_end") recordResult(event.reason);
+        if (event.type === "loop_end") {
+          recordResult(event.reason);
+          if (event.reason === "error") await persistTurnError();
+        }
         // the foreign-engine telemetry seam — see SessionOptions.
         // eventTap's own doc/invariant comment. Fires for every event this
         // loop observes (covers continueTurn too, since it drives the same
@@ -5621,7 +5650,10 @@ export class Session {
     } catch (error) {
       // runTurn is designed never to throw (it maps failures to loop_end), so
       // this is a defensive net; the host must not crash on a rogue turn.
+      const wire = sanitizeAgentEvent({ type: "error", error }, this.engine.id);
+      if (wire.type === "error") { turnError = wire.error; turnErrorText = wire.error.message; }
       recordResult("error");
+      await persistTurnError();
       this.outbound.emit({ type: "fatal", message: `turn failed: ${describeError(error)}` });
     }
   }
@@ -6287,13 +6319,12 @@ function accumulateCheckpointTokens(
 function buildSessionHistory(
   bootHistory: readonly HistoryItem[],
   maxItems: number,
+  errors: readonly TurnErrorRecord[] = [],
 ): { items: WireHistoryItem[]; truncated: boolean } | null {
-  if (bootHistory.length === 0) {
+  if (bootHistory.length === 0 && errors.length === 0) {
     return null;
   }
-  const truncated = bootHistory.length > maxItems;
-  const kept = truncated ? bootHistory.slice(-maxItems) : bootHistory;
-  const items: WireHistoryItem[] = kept.map((item) => ({
+  const items: WireHistoryItem[] = bootHistory.map((item) => ({
     id: item.id,
     createdAt: item.createdAt,
     ...(item.kind !== undefined ? { kind: item.kind } : {}),
@@ -6307,5 +6338,19 @@ function buildSessionHistory(
     ...(item.step !== undefined ? { step: item.step } : {}),
     message: item.message,
   }));
-  return { items, truncated };
+  for (const record of errors) {
+    const nativeAnchor = record.nativeTurnId ?? record.afterNativeTurnId;
+    let index = items.findLastIndex((item) => item.turnId === record.turnId || (nativeAnchor !== undefined && item.id.startsWith(`${nativeAnchor}:`)));
+    if (index < 0 && record.afterItemId) index = items.findLastIndex((item) => item.id === record.afterItemId);
+    if (index < 0) {
+      // Compaction can remove the anchor while keeping later turns. Summaries
+      // are created at compaction time but stand before the retained tail.
+      const next = items.findIndex((item) => item.kind !== "turn_error" && item.kind !== "compact_summary" && item.createdAt > record.createdAt);
+      index = next < 0 ? items.length - 1 : next - 1;
+    }
+    while (items[index + 1]?.kind === "turn_error") index++;
+    items.splice(index + 1, 0, { id: record.id, createdAt: record.createdAt, kind: "turn_error", turnId: record.turnId, error: record.error, message: { role: "assistant", content: [] } });
+  }
+  const truncated = items.length > maxItems;
+  return { items: truncated ? items.slice(-maxItems) : items, truncated };
 }

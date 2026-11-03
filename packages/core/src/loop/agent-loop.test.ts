@@ -52,6 +52,8 @@ import type { WorkspaceTransition } from "../ports/worktrees.js";
 import { CEILING_VERDICT_DECLARATION } from "./ceiling.js";
 import { DEGENERATION_CHECK_STRIDE_CHARS, DEGENERATION_MIN_RUN_CHARS, MAX_CEILING_ROUNDS } from "../types/config.js";
 import { createMediaProjectionPort } from "../provider/media-projection.js";
+import { SqlitePersistenceAdapter } from "../adapters/node/sqlite-persistence.js";
+import { ConversationHistory } from "../context/history.js";
 import type { RecognizerEndpoint } from "../vision/index.js";
 
 // ---------------------------------------------------------------------------
@@ -172,6 +174,23 @@ async function collect(iter: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
 }
 
 const types = (events: AgentEvent[]): string[] => events.map((e) => e.type);
+
+it("builds the same model request with a stored turn error", async () => {
+  const db = new SqlitePersistenceAdapter(":memory:");
+  await db.createSession({ id: "s1", workspace: "/work", model: "m", mode: "build" });
+  await db.appendHistory("s1", [{ id: "u1", createdAt: 1, message: { role: "user", content: "previous" } }]);
+  const request = async () => {
+    const modelPort = new MockModelPort([[{ type: "start" }, { type: "finish", finishReason: "stop", usage: {} }]]);
+    const loop = makeLoop({ modelPort, history: new ConversationHistory({ initial: await db.loadHistory("s1") }) });
+    await collect(loop.runTurn("next"));
+    const { abortSignal: _signal, ...rest } = modelPort.requests[0]!;
+    return rest;
+  };
+  const before = await request();
+  await db.appendTurnError("s1", { kind: "turn_error", id: "e1", createdAt: 2, turnId: "t1", engine: "core", model: "m", error: { name: "ProviderError", message: "not context" } });
+  expect(await request()).toEqual(before);
+  await db.close();
+});
 
 // ---------------------------------------------------------------------------
 

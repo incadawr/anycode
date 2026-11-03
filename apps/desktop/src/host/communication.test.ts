@@ -21,14 +21,14 @@ const isPermissionRequest = (m: HostToUiMessage): m is Extract<HostToUiMessage, 
 const isLoopEnd = (m: HostToUiMessage): m is Extract<HostToUiMessage, { type: "agent_event" }> => m.type === "agent_event" && m.event.type === "loop_end";
 const isAgentDelivery = (m: HostToUiMessage): m is Extract<HostToUiMessage, { type: "agent_message" }> => m.type === "agent_message";
 const envelope = (messageId: string, mode: "next_turn" | "steer" = "next_turn"): AgentEnvelope => ({ messageId, sender: "test-supervisor", recipientSessionId: "test-session", payload: "Follow this clarification", mode, kind: "agent_message", createdAt: new Date().toISOString() });
-function fixture() {
+function fixture(saveTurnError?: SessionOptions["saveTurnError"]) {
   const inputs: string[] = []; const signals: AbortSignal[] = []; const finishes: Array<() => void> = [];
   const engine: SessionEngine = {
     id: "codex", capabilities: CORE_ENGINE_CAPABILITIES, mode: () => "build", reasoningEffort: () => undefined, setReasoningEffort: () => {}, historyItems: () => [], dispose: async () => {},
     steer: vi.fn(async () => ({ turnId: "native-turn" })),
     async *runTurn(input, options) { inputs.push(input); signals.push(options.signal); yield { type: "turn_start", turn: inputs.length }; await new Promise<void>((resolve) => { finishes.push(resolve); }); yield { type: "loop_end", reason: "completed", turns: 1 }; },
   };
-  const h = createHarness({ steps: [], engine });
+  const h = createHarness({ steps: [], engine, saveTurnError });
   // Harness uses fixed session ID; retrieve it rather than guessing.
   const make = (id: string, mode: "next_turn" | "steer" = "next_turn") => ({ ...envelope(id, mode), recipientSessionId: h.session.communicationStatus().sessionId });
   return { h, engine, inputs, signals, finishes, make };
@@ -192,8 +192,9 @@ describe("public result retrieval", () => {
       expect(f.h.session.communicationResult().latestResult?.publicAnswer).toBe("UNFINISHED_TEXT");
     } finally { f.h.close(); }
   });
-  it("returns a safe error for a failed turn", async () => {
+  it.each(["codex", "core"] as const)("returns a safe error for a failed %s turn", async (id) => {
     const f = fixture();
+    Object.defineProperty(f.engine, "id", { value: id });
     f.engine.runTurn = async function* () {
       yield { type: "error", error: new Error("private raw error"), safe: { code: "codex_usage_limit", message: "Try again at 1:13 PM." } };
       yield { type: "loop_end", reason: "error", turns: 1 };
@@ -207,6 +208,74 @@ describe("public result retrieval", () => {
       await f.h.waitUntil(() => f.h.received.some((m) => m.type === "agent_event" && m.event.type === "error"));
       const wire = f.h.received.find((m) => m.type === "agent_event" && m.event.type === "error");
       expect(wire).toMatchObject({ event: { error: { message: "Try again at 1:13 PM." } } });
+    } finally { f.h.close(); }
+  });
+  it("persists terminal errors and keeps the live error when storage fails", async () => {
+    const save = vi.fn().mockRejectedValue(new Error("disk full"));
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const f = fixture(save);
+    f.engine.runTurn = async function* () {
+      yield { type: "error", error: new Error("raw"), safe: { code: "network", message: "Network error" } };
+      yield { type: "loop_end", reason: "error", turns: 1 };
+    };
+    try {
+      await f.h.session.receiveAgentMessage(f.make("failure"));
+      await f.h.waitUntil(() => f.h.received.some(isLoopEnd));
+      expect(save).toHaveBeenCalledWith(expect.objectContaining({ kind: "turn_error", engine: "codex", turnId: expect.any(String), createdAt: expect.any(Number), error: expect.objectContaining({ code: "network", message: "Network error" }) }), expect.any(String));
+      expect(f.h.session.communicationResult().latestResult?.publicAnswer).toBe("Network error");
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("turn error persistence failed: disk full"));
+    } finally { f.h.close(); log.mockRestore(); }
+  });
+  it("anchors a rejected Codex turn after the last live native turn", async () => {
+    const saved: import("@anycode/core").TurnErrorRecord[] = [];
+    const f = fixture(async (record) => { saved.push(record); });
+    let native: string | undefined;
+    let calls = 0;
+    f.engine.historyItems = () => [{ id: "boot:old", createdAt: 1, message: { role: "user", content: "old" } }];
+    f.engine.steeringStatus = () => ({ supported: true, ready: native !== undefined, ...(native ? { nativeTurnId: native } : {}) });
+    f.engine.runTurn = async function* () {
+      calls++;
+      if (calls === 1) {
+        native = "live-turn";
+        yield* textStep("successful answer");
+        yield { type: "loop_end", reason: "completed", turns: 1 };
+        native = undefined;
+      } else {
+        yield { type: "error", error: new Error("rejected"), safe: { code: "network", message: "rejected" } };
+        yield { type: "loop_end", reason: "error", turns: 1 };
+      }
+    };
+    try {
+      await f.h.session.receiveAgentMessage(f.make("success"));
+      await f.h.waitUntil(() => f.h.session.communicationStatus().state === "idle");
+      await f.h.session.receiveAgentMessage(f.make("rejected"));
+      await f.h.waitUntil(() => saved.length === 1);
+      expect(saved[0]).toMatchObject({ afterNativeTurnId: "live-turn", afterItemId: "boot:old" });
+      expect(saved[0]?.nativeTurnId).toBeUndefined();
+      const resumed = createHarness({ steps: [], bootHistory: [{ id: "boot:old", createdAt: 1, message: { role: "user", content: "old" } }, { id: "live-turn:user", createdAt: 2, message: { role: "user", content: "new" } }, { id: "live-turn:answer", createdAt: 3, message: { role: "assistant", content: [{ type: "text", text: "successful answer" }] } }], bootTurnErrors: saved });
+      try {
+        resumed.send({ type: "ui_ready" });
+        await resumed.waitUntil(() => resumed.received.some((m) => m.type === "session_history"));
+        const history = resumed.received.find((m) => m.type === "session_history");
+        expect(history?.type === "session_history" && history.items.map((item) => item.id)).toEqual(["boot:old", "live-turn:user", "live-turn:answer", saved[0]!.id]);
+        expect(resumed.session.communicationResult().latestResult).toMatchObject({ terminalReason: "error", publicAnswer: "rejected" });
+      } finally { resumed.close(); }
+    } finally { f.h.close(); }
+  });
+  it("redacts credentials from a persisted terminal error", async () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    const f = fixture(save);
+    f.engine.runTurn = async function* () {
+      yield { type: "error", error: new Error("sk-private123 Bearer secret-token"), safe: { code: "network", message: "Rejected sk-private123 and Bearer secret-token" } };
+      yield { type: "loop_end", reason: "error", turns: 1 };
+    };
+    try {
+      await f.h.session.receiveAgentMessage(f.make("redaction"));
+      await f.h.waitUntil(() => f.h.received.some(isLoopEnd));
+      const record = save.mock.calls[0]![0];
+      expect(JSON.stringify(record)).not.toContain("sk-private123");
+      expect(JSON.stringify(record)).not.toContain("secret-token");
+      expect(record.error.message).toBe("Rejected [redacted] and Bearer [redacted]");
     } finally { f.h.close(); }
   });
   it.each(["codex", "claude"] as const)("preserves a completed %s answer after an error", async (id) => {

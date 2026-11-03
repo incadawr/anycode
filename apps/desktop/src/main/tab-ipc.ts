@@ -803,12 +803,13 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
   // A resumed engine is persisted host metadata, never renderer input. Old
   // rows have no identity and remain the historical core engine.
   const engine = meta.engineId ?? "core";
+  const historyOnly = engine === "claude" && !meta.externalSessionRef;
   // Codex-profiles S3-1: gate on the profile the session was CREATED under
   // (persisted `meta.codexProfileId` — never the renderer's current active pick),
   // consistent with the re-resolve below; a legacy/system session (no id) keeps
   // the active-profile answer. same UNKNOWN-await as the "new" branch —
   // a resumed profile nobody diagnosed since boot is hydrated, not refused.
-  if (!isEngineId(engine) || !(await spawnableWhenKnown(deps, engine, meta.codexProfileId))) {
+  if (!isEngineId(engine) || (!historyOnly && !(await spawnableWhenKnown(deps, engine, meta.codexProfileId)))) {
     return notReady(deps, engine, meta.connectionId, meta.codexProfileId);
   }
   const openInTabId = deps.manager.sessionOpenInTab(req.sessionId);
@@ -884,6 +885,7 @@ export async function handleCreate(deps: TabIpcDeps, req: CreateTabRequest): Pro
       ...(meta.worktree !== undefined ? { worktree: meta.worktree } : {}),
       sessionId: req.sessionId,
       resume: true,
+      ...(historyOnly ? { historyOnly: true } : {}),
       engine,
       ...(pinnedConnectionId !== undefined ? { connectionId: pinnedConnectionId } : {}),
       ...(resumeCodexProfile !== undefined ? { codexProfile: resumeCodexProfile } : {}),

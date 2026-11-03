@@ -1309,6 +1309,29 @@ describe("SqlitePersistenceAdapter", () => {
     expect(loaded).toEqual(items);
   });
 
+  it("retains terminal errors when conversation history is replaced", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+    const error = { kind: "turn_error" as const, id: "e1", createdAt: 20, turnId: "t1", engine: "core", model: "m", error: { name: "ProviderError", message: "Failed", code: "network" } };
+    await adapter.appendTurnError("s1", error);
+    await adapter.replaceHistory("s1", [makeItem({ id: "u1" })]);
+    expect(await adapter.loadTurnErrors("s1")).toEqual([error]);
+    expect((await adapter.loadHistory("s1")).map((item) => item.id)).toEqual(["u1"]);
+    adapter.close();
+  });
+
+  it("builds the same model messages after storing a terminal error", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+    await adapter.appendHistory("s1", [makeItem({ id: "u1" })]);
+    const build = (items: HistoryItem[]) => toSdkMessages(new ConversationHistory({ initial: items }).toMessages(), "openai-chat-completions");
+    const before = build(await adapter.loadHistory("s1"));
+    await adapter.appendTurnError("s1", { kind: "turn_error", id: "e1", createdAt: 20, turnId: "t1", engine: "core", model: "m", error: { name: "ProviderError", message: "not model context" } });
+    expect(build(await adapter.loadHistory("s1"))).toEqual(before);
+    expect(build((await adapter.loadCliCoreRootSnapshot("s1"))!.history)).toEqual(before);
+    await adapter.close();
+  });
+
   it("round-trips assistant reasoning parts with provider metadata and source, in order (GitHub #41)", async () => {
     const adapter = new SqlitePersistenceAdapter(":memory:");
     const session = await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
