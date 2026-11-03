@@ -877,7 +877,7 @@ describe("PreviewHost — console ring buffer + throttled event forwarding", () 
     const rig = makeRigReady();
     const wc = rig.windows[0]!.webContents;
     for (let i = 0; i < 25; i++) {
-      wc.fireConsoleMessage("log", `m${i}`);
+      wc.fireConsoleMessage("warn", `m${i}`);
     }
     const forwarded = rig.posted.filter(
       (p): p is { tabId: string; message: PreviewEventMessage } => p.message.type === PREVIEW_EVENT_TYPE,
@@ -892,10 +892,10 @@ describe("PreviewHost — console ring buffer + throttled event forwarding", () 
     const rig = makeRigReady();
     const wc = rig.windows[0]!.webContents;
     for (let i = 0; i < 25; i++) {
-      wc.fireConsoleMessage("log", `m${i}`);
+      wc.fireConsoleMessage("warn", `m${i}`);
     }
     rig.clock.time += 10_001; // roll past the 10s window
-    wc.fireConsoleMessage("log", "next-window");
+    wc.fireConsoleMessage("warn", "next-window");
 
     const forwarded = rig.posted.filter(
       (p): p is { tabId: string; message: PreviewEventMessage } => p.message.type === PREVIEW_EVENT_TYPE,
@@ -903,6 +903,16 @@ describe("PreviewHost — console ring buffer + throttled event forwarding", () 
     const summaries = forwarded.filter((p) => p.message.entry === undefined);
     expect(summaries).toHaveLength(1);
     expect(summaries[0]!.message.suppressed).toBe(5); // 25 - 20 forwarded
+  });
+
+  it("keeps routine logs in the ring without consuming the warning budget", () => {
+    const rig = makeRigReady();
+    const wc = rig.windows[0]!.webContents;
+    for (let i = 0; i < 25; i++) wc.fireConsoleMessage("log", `log-${i}`);
+    wc.fireConsoleMessage("error", "failure");
+    const events = rig.posted.filter((p) => p.message.type === PREVIEW_EVENT_TYPE);
+    expect(events).toHaveLength(1);
+    expect((events[0]!.message as PreviewEventMessage).entry?.message).toBe("failure");
   });
 
   function makeRigReady(): Rig {

@@ -1895,6 +1895,14 @@ describe("desktop store — preview_console (slice 96-D, night-track wave-1 cut 
     expect(store.getState().turn.turnId).toBe("turn-1");
   });
 
+  it("shows a suppression summary in the console group", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "preview-console", event: { type: "preview_console", previewId: "p1", level: "log", message: "5 console messages suppressed", suppressed: 5 } });
+    expect(findBlock(store.getState().transcript, "preview_console")?.entries[0]?.message).toBe("5 console messages suppressed");
+  });
+
   it("filters logs and groups consecutive messages by preview with repeat counts", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);

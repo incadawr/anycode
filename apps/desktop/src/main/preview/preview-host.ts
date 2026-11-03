@@ -3036,6 +3036,7 @@ class PreviewHost implements PreviewHostHandle {
       record.eventWindowStart = now;
       record.eventSentInWindow = 0;
     }
+    if (entry.level === "log") return;
     if (record.eventSentInWindow < EVENT_MAX_PER_WINDOW) {
       record.eventSentInWindow += 1;
       this.deps.postToHost(record.tabId, { type: PREVIEW_EVENT_TYPE, previewId: record.previewId, entry });
