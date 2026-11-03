@@ -1438,6 +1438,15 @@ describe("handleCreate — unknown-readiness hydration", () => {
     touchSession: async () => {},
   });
 
+  it("opens a Claude history-only failure even when Claude is unavailable", async () => {
+    const rig = makeHydrationRig({ readyAfterHydrate: false });
+    const { dialog } = makeDialog({ canceled: false, filePaths: [] });
+    const deps: TabIpcDeps = { manager: rig.manager, persistence: metaPersistence({ ...codexMeta(), engineId: "claude" }), dialog, engineReadyKnown: rig.engineReadyKnown, hydrateEngineReady: rig.hydrateEngineReady };
+    expect(await handleCreate(deps, { kind: "resume", sessionId: "s-codex" })).toEqual({ ok: true, tabId: "tab-1", workspace: "/project" });
+    expect(rig.createTab).toHaveBeenCalledWith(expect.objectContaining({ engine: "claude", historyOnly: true }));
+    expect(rig.hydrateEngineReady).not.toHaveBeenCalled();
+  });
+
   it("resume: an UNKNOWN verdict hydrates first — a ready profile opens instead of a false not_ready", async () => {
     const rig = makeHydrationRig({ readyAfterHydrate: true });
     const { dialog } = makeDialog({ canceled: false, filePaths: [] });

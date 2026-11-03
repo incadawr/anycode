@@ -922,6 +922,7 @@ export interface CreateTabParams {
   worktree?: WorktreeIdentity;
   sessionId: string;
   resume: boolean;
+  historyOnly?: boolean;
   engine?: EngineId;
   /** Draft engine model/preset ids. Opaque here; the host validates them. */
   engineModel?: string;
@@ -1381,7 +1382,7 @@ export class TabHostManager {
     // Gate on the profile this spawn will actually run under (codex-profiles
     // S3-1), not merely the active one — a ready non-active pick must be able to
     // spawn even while the active account is signed out.
-    if (!this.canSpawn(engine, params.codexProfile?.id)) {
+    if (!params.historyOnly && !this.canSpawn(engine, params.codexProfile?.id)) {
       return { ok: false, reason: "not_ready" };
     }
     const existing = this.bindings.get(params.sessionId);

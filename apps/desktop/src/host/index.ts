@@ -1,4 +1,5 @@
 import { listConnectionTargets } from "./list-connections.js";
+import { claudeHistoryOnlyEngine } from "./engines/claude/history-only.js";
 import { SET_SESSION_FAST_OPERATION } from "../shared/communication.js";
 import { startHostWithActivity } from "./activity-forwarding.js";
 import { contextSnapshotOptions } from "./context-snapshot.js";
@@ -1906,10 +1907,6 @@ async function bootClaudeSession(
   plugin: EnginePlugin,
   mcpSecrets: McpSecretResolver,
 ): Promise<void> {
-  const binaryPath = process.env[ENV_CLAUDE_BIN];
-  if (binaryPath === undefined || binaryPath.trim() === "") {
-    throw new Error("Claude binary is unavailable; configure a validated Claude Code installation first");
-  }
   const args = parseHostArgs(process.argv.slice(2));
   // Deliberately the SAME resolver the codex branch uses rather than a
   // duplicate: both native engines must open the one ANYCODE_DB_PATH database,
@@ -1928,6 +1925,18 @@ async function bootClaudeSession(
     rules,
     args.child !== undefined,
   );
+  if (args.resume && args.sessionId) {
+    const existing = await persistence.getRootSession(args.sessionId);
+    if (existing?.engineId === "claude" && !existing.externalSessionRef) {
+      const history = await persistence.loadHistory(args.sessionId);
+      session = new Session({ outbound, engine: claudeHistoryOnlyEngine(history), broker, fs: new NodeFileSystemAdapter(), workspace, model: existing.model, sessionId: existing.id, bootHistory: history, bootTurnErrors: await loadTurnErrors(existing.id), rules, initialTitle: existing.title });
+      return;
+    }
+  }
+  const binaryPath = process.env[ENV_CLAUDE_BIN];
+  if (binaryPath === undefined || binaryPath.trim() === "") {
+    throw new Error("Claude binary is unavailable; configure a validated Claude Code installation first");
+  }
   // ask-zone classifier coverage for the Claude approval bridge
   // (same shape as the codex boot above).
   const claudeClassifierBoot: EngineClassifierBoot | undefined = (() => {
@@ -2564,7 +2573,13 @@ async function bootClaudeSession(
   session = new Session({
     workspaceTrustRequired: workspaceTrustRequiredMessage,
     usageAudit: claudeUsageAudit,
-    saveTurnError: async (record) => { await rowWriter.settled(); await persistence!.appendTurnError(rowId, record); },
+    saveTurnError: async (record, input) => {
+      if (!rowWriter.materialized) rowWriter.materializeFailure({ model: record.model, mode: connected.presetId });
+      const historyOnly = rowWriter.isHistoryOnly;
+      await rowWriter.settled();
+      if (historyOnly && input !== undefined) await persistence!.appendHistory(rowId, [{ id: `failed-input:${record.turnId}`, createdAt: record.createdAt, turnId: record.turnId, message: { role: "user", content: input } }]);
+      await persistence!.appendTurnError(rowId, record);
+    },
     outbound,
     engine: booted.engine,
     // CC-D-min: the RAW ClaudeEngine, Claude's own immediate-apply seam (never

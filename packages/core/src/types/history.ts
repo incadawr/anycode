@@ -37,8 +37,6 @@ export interface ReasoningSource {
   provider?: string;
   baseUrl: string;
   model: string;
-  afterItemId?: string;
-  nativeTurnId?: string;
 }
 
 /**
@@ -94,6 +92,8 @@ export interface TurnErrorRecord {
   turnId: string;
   engine: string;
   model: string;
+  afterItemId?: string;
+  nativeTurnId?: string;
   error: { name: string; message: string; code?: string };
 }
 

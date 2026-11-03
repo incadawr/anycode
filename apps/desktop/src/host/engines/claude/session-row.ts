@@ -26,6 +26,7 @@ export interface ClaudeSessionRowPatch {
   model?: string;
   /** The Claude preset id, stored verbatim in the shared `mode` TEXT column (cut §2(k).4). */
   mode?: string;
+  externalSessionRef?: string;
 }
 
 export interface ClaudeSessionRowPort {
@@ -78,6 +79,7 @@ interface BufferedWrite {
 }
 
 export class ClaudeSessionRowWriter {
+  private historyOnly = false;
   /** Serializes writes behind the CREATE; null exactly while no row exists. */
   private chain: Promise<void> | null;
   private readonly buffered: BufferedWrite[] = [];
@@ -114,6 +116,8 @@ export class ClaudeSessionRowWriter {
   get materialized(): boolean {
     return this.chain !== null;
   }
+
+  get isHistoryOnly(): boolean { return this.historyOnly; }
 
   /**
    * Patch, never dropped: buffered while no row exists yet. The returned
@@ -228,13 +232,15 @@ export class ClaudeSessionRowWriter {
    * CREATE for a fresh session, TOUCH for a resume — never a second INSERT on
    * the same primary key (main sends `--resume <id>` for every respawn).
    */
-  materialize(posture: { model: string; mode: string }): void {
+  materialize(posture: { model: string; mode: string }, identity = this.options.identity): void {
     if (this.chain !== null) {
-      void this.touch(posture);
+      const externalSessionRef = this.historyOnly ? this.options.identity.externalSessionRef : undefined;
+      this.historyOnly = false;
+      void this.touch({ ...posture, ...(typeof externalSessionRef === "string" ? { externalSessionRef } : {}) });
       return;
     }
     const created = this.options.port
-      .create(this.options.rowId, { ...this.options.identity, ...posture })
+      .create(this.options.rowId, { ...identity, ...posture })
       .then(() => undefined);
     // `this.chain` never rejects (a failed create is swallowed into onError
     // so the boot survives it) — which is exactly why the flush below gates
@@ -276,6 +282,13 @@ export class ClaudeSessionRowWriter {
         () => undefined,
       );
     void this.chain;
+  }
+
+  materializeFailure(posture: { model: string; mode: string }): void {
+    if (this.chain !== null) return;
+    const { externalSessionRef: _native, ...identity } = this.options.identity;
+    this.materialize(posture, identity);
+    this.historyOnly = true;
   }
 
   /**

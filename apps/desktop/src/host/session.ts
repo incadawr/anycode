@@ -870,7 +870,7 @@ export interface SessionOptions {
   initialTitle?: string;
   /** Narrow persistence callback for title/mode patches (design §4.2). */
   persistence?: SessionPersistence;
-  saveTurnError?: (record: TurnErrorRecord) => Promise<void>;
+  saveTurnError?: (record: TurnErrorRecord, input?: string) => Promise<void>;
   /**
    * GitHub #36: the durable presentation records of this session's compactions
    * (host/compaction-records.ts). Wired for the core boot, whose `compaction_end`
@@ -5298,7 +5298,7 @@ export class Session {
       const error = turnError ?? { name: "AgentError", message: "The agent request failed." };
       const afterItemId = this.engine.historyItems().at(-1)?.id;
       const record: TurnErrorRecord = { kind: "turn_error", id: randomUUID(), createdAt: Date.now(), turnId, engine: this.engine.id, model: redact(this.model), ...(afterItemId ? { afterItemId } : {}), ...(nativeTurnId ? { nativeTurnId } : {}), error: { name: error.name, message: redact(error.message), ...(error.code && /^[a-z_0-9]{1,80}$/.test(error.code) && !/^sk-/i.test(error.code) ? { code: error.code } : {}) } };
-      try { await this.saveTurnError(record); } catch (error) { console.error(`[host] turn error persistence failed: ${describeError(error)}`); }
+      try { await this.saveTurnError(record, text); } catch (error) { console.error(`[host] turn error persistence failed: ${describeError(error)}`); }
     };
     const recordResult = (terminalReason: SessionPublicResult["terminalReason"]) => {
       this.latestPublicResult = { source: "live_turn", turnId, requestId, nativeTurnId, terminalReason, publicAnswer: lastCompletedText?.text ?? ((this.engine.id === "codex" || this.engine.id === "core") && terminalReason === "error" ? turnErrorText : null), truncated: lastCompletedText?.truncated ?? false, completedAt: Date.now() };
