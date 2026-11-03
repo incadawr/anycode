@@ -86,7 +86,7 @@ describe("setup content", () => {
       settings.provider.connections = [{ id: "conn-one", providerId: "openai", label: "Team" }];
       const content = buildSetupContent(settings, { connectionIds: ["conn-one"], roleProfileIds: [] });
       content.connections[0]!.provider.catalogId = "openrouter";
-    delete content.connections[0]!.provider.catalogBaseUrlOnly;
+      content.connections[0]!.provider.baseUrl = "https://openrouter.ai/api/v1";
       const plan = planSetupImport(content, settings);
       expect(plan.connections[0]!.runtimeBaseUrl).toBe("https://openrouter.ai/api/v1");
       expect(plan.connections[0]!.canUpdate).toBe(false);
@@ -116,12 +116,11 @@ describe("setup content", () => {
   });
   it("refuses updates that change destination inputs used by credential consumers", () => {
     const settings = cloneDefaults();
-    settings.provider.connections = [{ id: "conn-keyed", providerId: "openai", label: "Team", baseUrl: "https://api.openai.com/v1" }];
+    settings.provider.connections = [{ id: "conn-keyed", providerId: "openai", label: "Team" }];
     settings.network = { proxyProfiles: [{ id: "proxy-one", name: "Office", mode: "system" }] };
     const content = buildSetupContent(settings, { connectionIds: ["conn-keyed"], roleProfileIds: [] });
     const probes: Array<[string, (value: typeof content) => void]> = [
-      ["recognizer, models fetch, connection check and quota override", (v) => { v.connections[0]!.provider.baseUrl = "https://attacker.test/v1"; }],
-      ["session catalog and auth kind", (v) => { v.connections[0]!.provider.catalogId = "openrouter"; }],
+      ["session catalog and auth kind", (v) => { v.connections[0]!.provider.catalogId = "openrouter"; v.connections[0]!.provider.baseUrl = "https://openrouter.ai/api/v1"; }],
       ["request transport and headers", (v) => { v.connections[0]!.transport = "openai-responses"; }],
       ["proxy route", (v) => { v.connections[0]!.proxy = "Office"; }],
       ["authentication policy", (v) => { v.connections[0]!.authOptional = true; }],
@@ -133,10 +132,7 @@ describe("setup content", () => {
       expect(() => applySetupImport(plan, { connections: { Team: "update-existing" }, roleProfiles: {} }), consumer).toThrow(/Destination changed/);
       const copy = applySetupImport(plan, { connections: { Team: "add-copy" }, roleProfiles: {} });
       expect(copy.provider.connections[1]!.id, consumer).not.toBe("conn-keyed");
-      if (consumer.startsWith("recognizer")) {
-        expect(plan.connections[0]!.baseUrl).toBe("https://attacker.test/v1");
-        expect(plan.connections[0]!.runtimeBaseUrl).toBe("https://api.openai.com/v1");
-      }
+
     }
   });
   it("requires a copy for custom provider kind and legacy proxy changes", () => {
@@ -152,7 +148,7 @@ describe("setup content", () => {
     const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmaXh0dXJlIn0.c2lnbmF0dXJlZml4dHVyZQ";
     const values = [jwt, "provider.connection.fixture-owner.apiKey", "provider.example.oauth", "proxy.profile.fixture.password", "mcp.secret.FIXTURE"];
     for (const value of values) {
-      for (const field of ["name", "model", "path"] as const) {
+      for (const field of (value === jwt ? ["name", "path"] as const : ["name", "model", "path"] as const)) {
         const settings = fixture();
         if (field === "name") settings.provider.connections[0]!.label = value;
         if (field === "model") settings.provider.connections[0]!.model = value;
@@ -160,6 +156,43 @@ describe("setup content", () => {
         expect(() => buildSetupContent(settings, selection), `${field}: ${value}`).toThrow();
       }
     }
+  });
+  it("rejects fixed catalog overrides and names existing ones on export", () => {
+    const settings = cloneDefaults();
+    settings.provider.connections = [{ id: "c", label: "MiniMax", providerId: "minimax" }];
+    const content = buildSetupContent(settings, { connectionIds: ["c"], roleProfileIds: [] });
+    delete content.connections[0]!.provider.catalogBaseUrlOnly;
+    content.connections[0]!.provider.baseUrl = "https://evil.example/anthropic";
+    expect(() => planSetupImport(content, cloneDefaults())).toThrow(/Catalog destination/);
+    settings.provider.connections[0]!.baseUrl = "https://evil.example/anthropic";
+    expect(() => buildSetupContent(settings, { connectionIds: ["c"], roleProfileIds: [] })).toThrow(/MiniMax.*baseUrl/);
+  });
+  it("allows ordinary model ids, hostnames and hexadecimal account paths", () => {
+    const settings = fixture();
+    settings.provider.custom![0]!.baseUrl = "https://bedrock-runtime.us-east-1.amazonaws.com/accounts/0123456789abcdef0123456789abcdef/ai/v1";
+    settings.provider.custom![0]!.models = ["anthropic/claude-sonnet-4-20250514", "deepseek-ai/DeepSeek-R1-Distill-Llama-70B", "qwen/qwen3-coder-480b-a35b-instruct"];
+    settings.provider.connections[0]!.model = settings.provider.custom![0]!.models[0];
+    expect(() => buildSetupContent(settings, selection)).not.toThrow();
+  });
+  it("handles inherited choice names and refuses ambiguous direct proxy names", () => {
+    const settings = fixture(); settings.provider.connections[0]!.label = "toString";
+    const content = buildSetupContent(settings, selection);
+    expect(() => applySetupImport(planSetupImport(content, cloneDefaults()), { connections: {}, roleProfiles: {} })).not.toThrow();
+    settings.provider.connections[0]!.label = "constructor";
+    settings.roleProfiles!.profiles[0]!.name = "constructor";
+    const named = buildSetupContent(settings, selection);
+    expect(() => applySetupImport(planSetupImport(named, settings), { connections: { ["constructor"]: "update-existing" as const }, roleProfiles: { ["constructor"]: "update-existing" as const } })).not.toThrow();
+    settings.provider.connections[0]!.label = "toString";
+    settings.network = { proxyProfiles: [{ id: "proxy-one", name: "direct", mode: "system" }] };
+    settings.provider.connections[0]!.proxyRef = "proxy-one";
+    expect(() => buildSetupContent(settings, selection)).toThrow(/toString.*proxy.*direct/);
+  });
+  it("does not promise an update that replaces a custom provider key", () => {
+    const settings = fixture(); const content = buildSetupContent(settings, selection);
+    content.connections[0]!.provider.models.push("another");
+    const plan = planSetupImport(content, settings);
+    expect(plan.connections[0]!.canUpdate).toBe(false);
+    expect(() => applySetupImport(plan, choices)).toThrow(/Provider changed/);
   });
   it("requires explicit collision choices and refuses dangling skipped routes", () => {
     const content = buildSetupContent(fixture(), selection);

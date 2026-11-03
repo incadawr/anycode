@@ -1117,7 +1117,7 @@ function SetupFiles({ readOnly, onApplied }: { readOnly: boolean; onApplied: (id
         <h4>{group === "connections" ? "Connections" : "Role profiles"}</h4>
         {(preview[group] ?? []).map((item) => { const connection = group === "connections" ? preview.connections?.find((c) => c.name === item.name) : undefined; return <div key={item.name}>
           <strong>{item.name}</strong>{connection && <p>Connection destination: {connection.baseUrl}{connection.runtimeBaseUrl !== connection.baseUrl && <span>; provider destination: {connection.runtimeBaseUrl}</span>}{connection.existingBaseUrls.map((url, i) => <span key={i}>; existing: {url}</span>)}</p>}
-          {item.matches.length ? <Select label="Collision" value={choices[group][item.name] ?? ""} onChange={(event) => setChoices((prev) => ({ ...prev, [group]: { ...prev[group], [item.name]: event.target.value as SetupChoice } }))} options={[
+          {item.matches.length ? <Select label="Collision" value={Object.hasOwn(choices[group], item.name) ? choices[group][item.name] : ""} onChange={(event) => setChoices((prev) => ({ ...prev, [group]: { ...prev[group], [item.name]: event.target.value as SetupChoice } }))} options={[
             { value: "", label: "Choose an action" }, { value: "update-existing", label: "Update existing", disabled: item.matches.length !== 1 || (connection !== undefined && !connection.canUpdate) }, { value: "add-copy", label: "Add copy" }, { value: "skip", label: "Skip" },
           ]} /> : <span> — Add</span>}
         </div>; })}

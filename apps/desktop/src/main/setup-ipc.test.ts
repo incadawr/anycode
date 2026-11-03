@@ -47,6 +47,19 @@ describe("setup file handlers", () => {
       await expect(readFile(f.file)).rejects.toMatchObject({ code: "ENOENT" });
     }
   });
+  it("rejects oversized files and invalid collision choices", async () => {
+    const f = await fixture();
+    await writeFile(f.file, Buffer.alloc(2_000_001, 32));
+    expect((await f.handlers.preview()).error).toBeTruthy();
+    expect((await f.handlers.apply({ connections: { Team: "delete" }, roleProfiles: {} })).error).toBe("Invalid collision choices.");
+  });
+  it("names the connection and field when an export is refused", async () => {
+    const f = await fixture(); const settings = cloneDefaults();
+    settings.provider.custom = [{ id: "custom:one", name: "Gateway", kind: "openai-compatible", baseUrl: "https://example.test/sk-fixture-secret", models: [] }];
+    settings.provider.connections = [{ id: "conn-one", providerId: "custom:one", label: "Team" }];
+    await saveSettings(f.settingsPath, settings);
+    expect((await f.handlers.exportFile()).error).toMatch(/Connection Team: provider.baseUrl/);
+  });
   it("rejects malformed files", async () => {
     const f = await fixture(); await writeFile(f.file, '{"version":1,"connections":[],"roleProfiles":[],"token":"secret"}');
     expect((await f.handlers.preview()).error).toBeTruthy();
