@@ -14,8 +14,20 @@ const forkStubbornGrandchild = () => {
   if (pidFilePath && grandchild.pid !== undefined) writeFileSync(pidFilePath, String(grandchild.pid));
 };
 
+function readRetryMarker() {
+  try { return readFileSync(pidFilePath, "utf8") === "attempted"; } catch { return false; }
+}
+
+let keepRunning = false;
 if (args.includes("--version")) {
-  if (args.includes("--version-grandchild")) {
+  if (args.includes("--slow-version")) {
+    keepRunning = true;
+    setTimeout(() => { process.stdout.write("codex-cli 0.144.1\n"); }, 5_000);
+  } else if (args.includes("--retry-version") && pidFilePath && !readRetryMarker()) {
+    writeFileSync(pidFilePath, "attempted");
+    keepRunning = true;
+    setInterval(() => {}, 1_000);
+  } else if (args.includes("--version-grandchild")) {
     // A version wrapper that forks a grandchild and hangs. The preflight runs
     // BEFORE the long-lived client exists, so killing only the direct wrapper
     // on timeout strands this grandchild with nothing left to reap it.
@@ -31,7 +43,7 @@ if (args.includes("--version")) {
     process.stdout.write("codex-cli 1.0.0\n");
   } else if (args.includes("--hang-version")) setInterval(() => {}, 1_000);
   else process.stdout.write("codex-cli 0.144.1\n");
-  if (!args.includes("--hang-version") && !args.includes("--version-grandchild")) process.exit(0);
+  if (!keepRunning && !args.includes("--hang-version") && !args.includes("--version-grandchild")) process.exit(0);
 } else {
   const fixture = args.find((arg) => arg.startsWith("--fixture="));
   // cross-review M2: the last id:88 RESPONSE line this fake

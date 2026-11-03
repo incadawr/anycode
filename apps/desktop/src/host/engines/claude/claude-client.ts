@@ -860,6 +860,15 @@ export class ClaudeClient {
    * that forks a grandchild and hangs must not strand it).
    */
   private async preflightVersion(): Promise<void> {
+    try {
+      await this.preflightVersionOnce();
+    } catch (error) {
+      if (!(error instanceof EngineVersionError) || !error.message.startsWith("Claude version preflight timed out after ")) throw error;
+      await this.preflightVersionOnce();
+    }
+  }
+
+  private async preflightVersionOnce(): Promise<void> {
     this.assertTrusted();
     const child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), "--version"], this.spawnOptions(true));
     const timeoutMs = this.options.versionTimeoutMs ?? CLAUDE_VERSION_PREFLIGHT_TIMEOUT_MS;
