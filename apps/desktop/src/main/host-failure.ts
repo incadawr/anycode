@@ -7,6 +7,11 @@ export function hostFailure(code: HostFailure["code"], stderr = "", exitCode?: n
   const { kind, systemCode: system } = classifyHostStderr(stderr);
   const safeExit = Number.isInteger(exitCode) && exitCode! >= 0 && exitCode! <= 255 ? exitCode : undefined;
   const safeSignal = signal && ["SIGABRT", "SIGBUS", "SIGFPE", "SIGHUP", "SIGILL", "SIGINT", "SIGKILL", "SIGQUIT", "SIGSEGV", "SIGTERM", "SIGTRAP"].includes(signal) ? signal : undefined;
-  const details = [safeExit !== undefined ? `exit code ${safeExit}` : "", safeSignal ?? "", kind ?? "", system ?? ""].filter(Boolean).join(", ");
+  const cause = /(?:ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|Cannot find module|Cannot find package)/i.test(stderr)
+    ? "required module could not be loaded"
+    : /(?:ERR_DLOPEN_FAILED|dlopen|shared librar(?:y|ies))/i.test(stderr)
+      ? "native library could not be loaded"
+      : /\bSyntaxError:/.test(stderr) ? "startup syntax error" : undefined;
+  const details = [safeExit !== undefined ? `exit code ${safeExit}` : "", safeSignal ?? "", cause ?? "", kind ?? "", system ?? ""].filter(Boolean).join(", ");
   return { code, message: `${description}${details ? ` (${details})` : ""}`.slice(0, 256), ...(safeExit !== undefined ? { exitCode: safeExit } : {}), ...(safeSignal ? { signal: safeSignal } : {}) };
 }

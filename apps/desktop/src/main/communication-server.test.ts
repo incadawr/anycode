@@ -187,7 +187,7 @@ describe("production communication MCP over real SDK HTTP", () => {
   });
   it("returns an authorized terminal status without contacting the host", async () => {
     const f = await fixture();
-    const failure = { code: "per_tab_crash_loop" as const, message: "Session host stopped after repeated crashes.", exitCode: 1 };
+    const failure = { code: "per_tab_crash_loop" as const, message: "Session host stopped after repeated crashes. (exit code 1, required module could not be loaded)", exitCode: 1 };
     f.manager.listTabs = () => [{ sessionId: "allowed", workspace: f.dir, state: "crash_looped", pid: 10, engine: "core", hostFailure: failure }, { sessionId: "forbidden", workspace: tmpdir(), state: "crash_looped", pid: 10, engine: "core", hostFailure: failure }];
     const status = value(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } }));
     expect(status).toMatchObject({ state: "crash_looped", engine: "core", hostFailure: failure });
