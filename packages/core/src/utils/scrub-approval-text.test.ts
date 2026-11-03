@@ -48,10 +48,21 @@ describe("scrubFailureText", () => {
       const source = fs.readFileSync(process.argv[1], 'utf8');
       const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
       const mod = { exports: {} }; new Function('exports', 'module', js)(mod.exports, mod);
-      for (const input of ['a'.repeat(1e6), 'Authorization: '.repeat(1e5), 'password: '.repeat(1e5)]) mod.exports.scrubFailureText(input);
+      for (const input of ['a'.repeat(1e6), 'a.'.repeat(500000), 'Authorization: '.repeat(1e5), 'password: '.repeat(1e5)]) mod.exports.scrubFailureText(input);
     `;
     execFileSync(process.execPath, ["-e", script, fileURLToPath(new URL("./scrub-approval-text.ts", import.meta.url))], { timeout: 5000, killSignal: "SIGKILL" });
   }, 10000);
+  it.each([
+    "packages/core/src/utils/a-very-long-filename-with-many-characters.ts",
+    "/Users/me/.anycode/sessions/12345678-1234-1234-1234-123456789abc.json",
+    "~/.codex/sessions/12345678-1234-1234-1234-123456789abc.json",
+    "12345678-1234-1234-1234-123456789abc",
+  ])("preserves diagnostic path or UUID %s", (value) => {
+    expect(scrubFailureText(value)).toBe(value);
+  });
+  it.each(["socks5", "ws", "postgres", "custom+scheme.1"])("redacts %s userinfo through the last at sign", (scheme) => {
+    expect(scrubFailureText(`${scheme}://bob:hunter2@other@proxy/path`)).toBe(`${scheme}://[redacted]@proxy/path`);
+  });
   it("redacts all URL userinfo up to the final at sign", () => {
     expect(scrubFailureText("http://alice:prefix@private-suffix@proxy.local/path")).toBe("http://[redacted]@proxy.local/path");
   });

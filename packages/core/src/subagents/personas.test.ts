@@ -118,6 +118,8 @@ describe("personas", () => {
     expect(reviewer.turnBudget).toBe(40);
     expect(ROLE_TURN_BUDGETS.reviewer).toBe(40);
     expect(reviewer.systemPrompt).toContain("CLEAN, MINOR, or DEFECTS");
+    expect(reviewer.systemPrompt).not.toContain("run the targeted tests before you report");
+    expect(reviewer.systemPrompt).toContain("do not run tests");
   });
 
   it("OVERRIDABLE_PERSONAS is exactly the three role personas; the legacy built-ins stay reserved", () => {

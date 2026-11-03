@@ -14,10 +14,29 @@ export function scrubApprovalText(text: string): string {
 
 /** Removes secret-looking material from text shown outside the child. */
 export function scrubFailureText(text: string): string {
-  const urls = text.replace(/\bhttps?:\/\/[^\s/?#]*/gi, (url) => {
-    const at = url.lastIndexOf("@");
-    return at < 0 ? url : url.slice(0, url.indexOf("//") + 2) + REDACTED + url.slice(at);
-  });
+  // Scan scheme candidates once, including punctuation that is legal in schemes.
+  const candidates = /[a-z0-9+.-]+/gi;
+  let urls = "";
+  let urlEnd = 0;
+  let candidate: RegExpExecArray | null;
+  while ((candidate = candidates.exec(text)) !== null) {
+    const end = candidates.lastIndex;
+    if (text.slice(end, end + 3) !== "://") continue;
+    const schemeOffset = candidate[0].search(/(?:^|[^a-z0-9_])(?=[a-z])/i);
+    if (schemeOffset < 0) continue;
+    let authorityEnd = end + 3;
+    let at = -1;
+    while (authorityEnd < text.length && !/[\s/?#]/.test(text[authorityEnd]!)) {
+      if (text[authorityEnd] === "@") at = authorityEnd;
+      authorityEnd++;
+    }
+    if (at >= 0) {
+      urls += text.slice(urlEnd, end + 3) + REDACTED + text.slice(at, authorityEnd);
+      urlEnd = authorityEnd;
+    }
+    candidates.lastIndex = authorityEnd;
+  }
+  urls += text.slice(urlEnd);
   // Scan names once; consume quoted values including escaped quotes.
   const names = /[A-Za-z0-9_-]+/g;
   const sensitive = /pass|secret|token|key|credential|auth|cookie|session/i;
@@ -56,6 +75,10 @@ export function scrubFailureText(text: string): string {
     .replace(/\b(?:Bearer|Basic)\s+[^\s"']+/gi, REDACTED)
     .replace(/\bkey\s+provided\s*:\s*[^\s,;}&]+/gi, `key provided: ${REDACTED}`)
     .replace(/\b(?:sk|pk|ghp|gho|xox[abp])[-_][A-Za-z0-9_-]+/g, REDACTED)
-    .replace(/[A-Za-z0-9+/=_-]+/g, (token, offset: number, source: string) =>
-      token.length >= 32 && !(token.startsWith("/") && token.indexOf("/", 1) !== -1) && source[offset - 1] !== "/" && source[offset + token.length] !== "/" ? REDACTED : token);
+    .replace(/[A-Za-z0-9+/=_.~-]+/g, (token) => {
+      const slash = token.indexOf("/");
+      const isPath = slash > 0 || (slash === 0 && token.indexOf("/", 1) !== -1);
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token);
+      return token.length >= 32 && !isPath && !isUuid ? REDACTED : token;
+    });
 }

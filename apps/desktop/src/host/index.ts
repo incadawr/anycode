@@ -1,4 +1,4 @@
-import { scrubApprovalText, scrubFailureText } from "@anycode/core";
+import { scrubFailureText } from "@anycode/core";
 import { childBootFailure, sanitizeBootFailure } from "./child-boot-failure.js";
 import { engineChildPrompt } from "./engine-child-prompt.js";
 import { listConnectionTargets } from "./list-connections.js";
@@ -759,7 +759,7 @@ function deliverDetachedChildReport(outcome: SessionSubagentOutcome, req: Sessio
   childReportQueue.add(outcome.spawnToolCallId, text, {
     status: outcome.status,
     durationMs: outcome.durationMs,
-    ...(outcome.status === "error" ? { failureReason: scrubApprovalText(outcome.finalText).slice(0, 2000) } : {}),
+    ...(outcome.status === "error" ? { failureReason: scrubFailureText(outcome.finalText.slice(0, 2000)) } : {}),
     ...(outcome.finalTurnFinishReason === "length" ? { finalTurnFinishReason: "length" } : {}),
     // cross-review F2: the ceiling summary rides the report's
     // metadata so the renderer's card shows the budget line on this path too.

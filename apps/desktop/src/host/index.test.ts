@@ -3363,3 +3363,15 @@ describe("host diagnostics-ring answer ordering (GitHub #18)", () => {
     expect(reply).not.toContain("session.");
   });
 });
+
+
+it("bounds and sanitizes detached failure reasons without losing diagnostic text", async () => {
+  const source = await import("node:fs/promises").then(fs => fs.readFile(new URL("./index.ts", import.meta.url), "utf8"));
+  const expression = source.match(/failureReason: (.*?) } : \{\}\)/)?.[1];
+  expect(expression).toBeDefined();
+  const { scrubFailureText, scrubApprovalText } = await import("@anycode/core");
+  const run = new Function("outcome", "scrubFailureText", "scrubApprovalText", `return ${expression}`);
+  const reason = "ANYCODE_API_KEY is not set; Codex authentication required";
+  expect(run({ finalText: reason }, scrubFailureText, scrubApprovalText)).toBe(reason);
+  expect(run({ finalText: "x".repeat(100_000) }, scrubFailureText, scrubApprovalText).length).toBeLessThanOrEqual(2000);
+});
