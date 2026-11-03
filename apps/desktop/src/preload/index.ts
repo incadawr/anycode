@@ -1002,6 +1002,8 @@ contextBridge.exposeInMainWorld("anycode", {
     },
   },
   settings: {
+    refreshMiniMaxQuota: (connectionId?: string): Promise<void> =>
+      ipcRenderer.invoke("anycode:minimax-quota-refresh", connectionId) as Promise<void>,
     get: (): Promise<SettingsSnapshot> =>
       ipcRenderer.invoke(SETTINGS_GET_CHANNEL) as Promise<SettingsSnapshot>,
     set: (patch: SettingsPatch): Promise<SettingsMutationResult> =>
