@@ -1871,7 +1871,7 @@ export class Session {
     const lastError = this.bootTurnErrors.at(-1);
     const orderedHistory = this.sessionHistory?.items ?? [];
     const errorIndex = lastError ? orderedHistory.findIndex((item) => item.id === lastError.id) : -1;
-    if (lastError && errorIndex >= 0 && !orderedHistory.slice(errorIndex + 1).some((item) => item.message.role === "user")) {
+    if (lastError && errorIndex >= 0 && !orderedHistory.slice(errorIndex + 1).some((item) => item.kind !== "turn_error" && item.kind !== "compact_summary" && (item.message.role === "user" || (item.message.role === "assistant" && item.message.content.some((part) => part.type === "text"))))) {
       this.latestPublicResult = { source: "history_recovery", turnId: lastError.turnId, requestId: null, nativeTurnId: null, historyItemId: lastError.id, terminalReason: "error", publicAnswer: lastError.error.message.slice(0, 32000), truncated: lastError.error.message.length > 32000, completedAt: lastError.createdAt };
     }
     // Slice P7.25/F3: subscribe to live LSP status transitions. The listener is
