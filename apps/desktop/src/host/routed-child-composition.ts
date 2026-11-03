@@ -122,9 +122,11 @@ export function createRoutedChildComposition(options: {
     childPort.run = (req: SessionSubagentRequest, opts: SubagentRunOptions) => {
       if ((req.detach === true || req.allowBackgroundHandoff === true) &&
           isRoleRouteName(req.agentType) && req.resumeChildSessionId === undefined && req.routeStamped === true) {
-        const resolution = options.resolve(req.agentType);
-        const head = resolution?.entries[0];
-        if (head !== undefined) noteRoutedSpawn(req, head, resolution!.entries.slice(1), resolution!.skipped);
+        if (!routedSpawns.has(req.spawnToolCallId)) {
+          const resolution = options.resolve(req.agentType);
+          const head = resolution?.entries[0];
+          if (head !== undefined) noteRoutedSpawn(req, head, resolution!.entries.slice(1), resolution!.skipped);
+        }
       }
       const budgeted = options.prepare(req);
       return innerRun(budgeted, opts).then((outcome) => {
@@ -143,5 +145,13 @@ export function createRoutedChildComposition(options: {
     if (notice !== undefined) outcome.finalText = `${notice}\n${outcome.finalText}`;
     options.deliver(outcome, req);
   }
-  return { attach, onTerminal };
+  /** Record the exact route selected for a request before it reaches the port. */
+  function snapshot(req: SessionSubagentRequest, resolution: RoleRouteResolution): void {
+    const head = resolution.entries[0];
+    if (head !== undefined && req.routeStamped === true && req.resumeChildSessionId === undefined &&
+        (req.detach === true || req.allowBackgroundHandoff === true)) {
+      noteRoutedSpawn(req, head, resolution.entries.slice(1), resolution.skipped);
+    }
+  }
+  return { attach, onTerminal, snapshot };
 }
