@@ -5815,6 +5815,35 @@ describe("inline child ask classification", () => {
 
 
 describe("core profile session requests", () => {
+  it("runs unrestricted profiles and executor as sessions, but refuses restricted profiles", async () => {
+    const unrestricted = await makeProfile("worker", { body: "role", model: "model-b" });
+    const restricted = await makeProfile("reader", { body: "role", tools: ["Read"] });
+    const explicitBaseline = await makeProfile("explicit-baseline", { body: "role", tools: PERSONAS["general-purpose"].tools });
+    const permissionRestricted = { ...unrestricted, name: "guarded", permissions: { allow: [], deny: [{ toolName: "Write" }] } };
+    const runner = createSubagentRunner(makeParent(), { profiles: [unrestricted, restricted, explicitBaseline, permissionRestricted] });
+    const requests: SessionSubagentRequest[] = [];
+    const port: SessionSubagentPort = {
+      run: async (request) => {
+        requests.push(request);
+        return { status: "completed", finalText: "done", truncated: false, turns: 1, toolCalls: 0, durationMs: 1, childSessionId: "child", parentSessionId: "parent", spawnToolCallId: "call" };
+      },
+      send: async () => ({ ok: true }),
+    };
+    const tool = createAgentTool({ sessionTier: true });
+    const ctx = { toolCallId: "call", abortSignal: new AbortController().signal, cwd: "/work", ports: makePorts(), subagents: runner, sessionSubagents: port };
+    for (const agent_type of ["worker", "executor"]) {
+      const result = await tool.handler({ description: "d", prompt: "task", agent_type, tier: "session" }, ctx);
+      expect(result.ok).toBe(true);
+    }
+    expect(requests.map((request) => request.agentType)).toEqual(["worker", "executor"]);
+    expect(requests[0]?.model).toBe("model-b");
+    for (const agent_type of ["reader", "explicit-baseline", "guarded", "explore"]) {
+      const result = await tool.handler({ description: "d", prompt: "task", agent_type, tier: "session" }, ctx);
+      expect(result).toMatchObject({ ok: false, errorKind: "invalid_input", error: expect.stringContaining('use tier "inline" or omit tier') });
+    }
+    expect(requests).toHaveLength(2);
+  });
+
   it.each([
     ["both", ["xhigh", "max"], "xhigh"],
     ["max-only", ["high", "max"], "max"],

@@ -1697,6 +1697,7 @@ describe("agentTool handler — orchestrate default-detach (§2.3)", () => {
   it.each(["explore", "custom-reviewer"])("refuses a session for %s without discarding its restrictions", async (agentType) => {
     const inline: SubagentPort = {
       listAgentTypes: () => [agentType],
+      hasSessionRestrictions: () => true,
       run: async () => { throw new Error("unexpected inline run"); },
     };
     const sessionRun = vi.fn(async () => BASE_SESSION_OUTCOME);

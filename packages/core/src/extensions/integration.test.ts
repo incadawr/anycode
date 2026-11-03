@@ -226,6 +226,7 @@ describe("extensions integration — skills + agent profiles + plugins compose t
           name: "reviewer",
           description: "A restricted-tool review profile.",
           tools: ["Read", "Grep"],
+          toolsExplicit: true,
           // The trailing newline from the written file's body survives capUtf8Bytes
           // (only an all-whitespace body is replaced with a placeholder, §3.5).
           systemPrompt: "REVIEWER PROFILE SYSTEM PROMPT — conduct a careful, narrow review.\n",
