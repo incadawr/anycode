@@ -960,16 +960,16 @@ describe("console argument formatting", () => {
     await Promise.resolve();
     fake.webContents.debugger.emit("detach");
     fake.webContents.emit("console-message", { level: "warning", message: "object [object Object]" });
-    expect(messages).toEqual([]);
+    expect(messages).toEqual(["object [object Object]"]);
     win.webContents.cdp!.ensureAttached();
     const args = [{ type: "string", value: "object" }, { type: "object", objectId: "new-id", preview: { properties: [{ name: "status", type: "number", value: "200" }] } }];
     fake.webContents.debugger.emit("message", "Runtime.consoleAPICalled", { type: "warning", timestamp: 10, args });
     await Promise.resolve();
-    expect(messages).toEqual(["object {status: 200}"]);
+    expect(messages).toEqual(["object [object Object]"]);
     fake.webContents.debugger.emit("detach");
     win.webContents.cdp!.ensureAttached();
     fake.webContents.debugger.emit("message", "Runtime.consoleAPICalled", { type: "warning", timestamp: 10, args: [args[0], { ...args[1], objectId: "another-id" }] });
-    expect(messages).toEqual(["object {status: 200}"]);
+    expect(messages).toEqual(["object [object Object]"]);
   });
 
   it("does not append replayed console events after reattachment", async () => {
@@ -1001,6 +1001,22 @@ describe("console argument formatting", () => {
     fake.webContents.debugger.emit("message", "Runtime.consoleAPICalled", { type: "warning", args: [{ type: "string", value: "hello" }] });
     fake.webContents.debugger.emit("detach");
     fake.webContents.emit("console-message", { level: "warning", message: "fallback" });
-    expect(messages).toEqual(["hello"]);
+    expect(messages).toEqual(["hello", "fallback"]);
+  });
+
+  it("reconciles object warnings after an initial attach failure", async () => {
+    failInitialAttach = true;
+    const win = createElectronPreviewWindow({ previewId: "initial-failure" });
+    failInitialAttach = false;
+    const fake = latestWindow();
+    const messages: string[] = [];
+    win.webContents.onConsoleMessage((_level, message) => messages.push(message));
+    fake.webContents.emit("console-message", { level: "warning", message: "object [object Object]" });
+    fake.webContents.debugger.attachThrows = false;
+    win.webContents.cdp!.ensureAttached();
+    fake.webContents.debugger.emit("message", "Runtime.consoleAPICalled", { type: "warning", timestamp: 10, args: [{ type: "string", value: "object" }, { type: "object", preview: { properties: [{ name: "status", type: "number", value: "200" }] } }] });
+    await Promise.resolve();
+    fake.webContents.debugger.emit("message", "Runtime.consoleAPICalled", { type: "warning", timestamp: 11, args: [{ type: "string", value: "later" }] });
+    expect(messages).toEqual(["object [object Object]", "later"]);
   });
 });

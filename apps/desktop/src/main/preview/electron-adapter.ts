@@ -133,9 +133,8 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
   const seenLogEntries = new Set<string>();
   const consoleHistory: string[] = [];
   let replayCounts = new Map<string, number>();
-  let hadCdpSession = false;
   let attachGeneration = 0;
-  const detachedMessages: Array<{ level: PreviewConsoleEntry["level"]; message: string }> = [];
+  const detachedMessages: Array<PreviewConsoleEntry["level"]> = [];
   let replaying = false;
 
   // Kills the common STUN/UDP exfil path that `onBeforeRequest` cannot see
@@ -182,7 +181,8 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
             consoleHistory.push(key);
             if (consoleHistory.length > 1000) consoleHistory.shift();
           }
-          const fallbackIndex = replaying && !seen ? detachedMessages.findIndex((item) => item.level === level && item.message === message) : -1;
+          const fallbackIndex = replaying && !seen && !isElectronInternalWarning(message, call.type)
+            ? detachedMessages.indexOf(level) : -1;
           if (fallbackIndex >= 0) detachedMessages.splice(fallbackIndex, 1);
           if (!seen && fallbackIndex < 0 && !isElectronInternalWarning(message, call.type)) consoleListener(level, message);
         }
@@ -216,7 +216,6 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
     replaying = true;
     wc.debugger.sendCommand("Runtime.enable").then(() => {
       if (generation !== attachGeneration) return;
-      hadCdpSession = true;
       replaying = false;
       replayCounts.clear();
       detachedMessages.length = 0;
@@ -248,9 +247,8 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
     console.warn("[preview] debugger attach failed; pageerror capture degraded to console-message only");
   }
   wc.on("console-message", (event) => {
-    // Runtime replays messages produced while detached. Avoid recording the
-    // flattened Electron version after CDP has successfully captured this page.
-    if (attached || hadCdpSession) return;
+    // Runtime replays detached messages; reconcile them by occurrence on reattach.
+    if (attached) return;
     // Electron's own security warning is not a page console message (see
     // isElectronInternalWarning) — never surface it in the transcript. The
     // check needs BOTH the message's own `%c` marker at the start and the
@@ -265,7 +263,7 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
     // recordConsole-time stays as defense-in-depth.
     const level = classifyConsoleLevel(event.level);
     const message = event.message.slice(0, RING_MAX_MSG_CHARS);
-    detachedMessages.push({ level, message });
+    detachedMessages.push(level);
     if (detachedMessages.length > 1000) detachedMessages.shift();
     consoleListener(level, message);
   });
