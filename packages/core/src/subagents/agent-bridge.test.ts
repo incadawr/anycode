@@ -28,6 +28,7 @@ import type {
 } from "../ports/session-subagent.js";
 import type { EngineProfileInfo, SubagentPort, SubagentRunOptions } from "../ports/subagent.js";
 import type { SubagentCardEvent } from "./card-snapshot.js";
+import type { RoleRouteName, RoleRouteResolution } from "./role-route.js";
 
 function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
   return {
@@ -50,6 +51,80 @@ const BASE_OUTCOME: SessionSubagentOutcome = {
   parentSessionId: "parent-1",
   spawnToolCallId: "toolu_bridge_1",
 };
+
+describe("bridge role routing policy", () => {
+  const catalog: AgentBridgeCatalogEntry[] = ["planner", "executor", "reviewer", "explore"].map((name) => ({
+    name, description: name, systemPrompt: `body ${name}`, engine: "claude", model: "old-model", effort: "low",
+    connection: "old-connection", maxTurns: 99,
+  }));
+  const routes: Record<RoleRouteName, RoleRouteResolution> = {
+    planner: { entries: [{ connection: "plan-conn", model: "plan-model", effort: "high" }], skipped: [], turnBudget: 30 },
+    executor: { entries: [{ engine: "codex", model: "exec-model", effort: "medium" }], skipped: [], turnBudget: 80 },
+    reviewer: { entries: [{ provider: "review-provider", model: "review-model" }], skipped: [], turnBudget: 40 },
+    explore: { entries: [{ connection: "explore-conn", model: "explore-model" }], skipped: [] },
+  };
+  const resolveRoleRoute = vi.fn((role: RoleRouteName) => routes[role]);
+  const run = vi.fn(async (_request: SessionSubagentRequest) => BASE_OUTCOME);
+  const port: SessionSubagentPort = { run, send: async () => ({ ok: false, reason: "unavailable", message: "unused" }) };
+  const deps = { catalog, port, spawnToolCallId: "toolu_bridge_1", policy: { resolveRoleRoute, defaultDetach: true } };
+
+  it.each([
+    ["planner", { connectionId: "plan-conn", model: "plan-model", effort: "high", maxTurns: 99 }],
+    ["executor", { engine: "codex", model: "exec-model", effort: "medium", maxTurns: 99 }],
+    ["reviewer", { provider: "review-provider", model: "review-model", maxTurns: 99 }],
+    ["explore", { connectionId: "explore-conn", model: "explore-model", maxTurns: 99 }],
+  ])("stamps %s route instead of profile routing", async (name, expected) => {
+    run.mockClear();
+    await runAgentBridgeCall({ agent_type: name, description: "d", prompt: "p" }, deps);
+    const request = run.mock.calls[0]![0];
+    expect(request).toMatchObject({ ...expected, routeStamped: true, detach: true, prompt: `body ${name}\n\n---\n\np` });
+    expect(request.connectionId).not.toBe("old-connection");
+    expect(request.engine).not.toBe("claude");
+  });
+
+  it("explicit model suppresses route model and effort; explicit false overrides detach", async () => {
+    run.mockClear();
+    await runAgentBridgeCall({ agent_type: "planner", description: "d", prompt: "p", model: "chosen", detach: false }, deps);
+    expect(run.mock.calls[0]![0]).toMatchObject({ connectionId: "plan-conn", model: "chosen" });
+    expect(run.mock.calls[0]![0]).not.toHaveProperty("effort");
+    expect(run.mock.calls[0]![0]).not.toHaveProperty("detach");
+    expect(run.mock.calls[0]![0]).not.toHaveProperty("routeStamped");
+  });
+
+  it("preserves explicit detach and continues without resolving current role settings", async () => {
+    run.mockClear(); resolveRoleRoute.mockClear();
+    await runAgentBridgeCall({ agent_type: "planner", description: "d", prompt: "p", model: "ignored", detach: true, continue_session: "child" }, deps);
+    expect(resolveRoleRoute).not.toHaveBeenCalled();
+    expect(run.mock.calls[0]![0]).toEqual({ agentType: "planner", description: "d", prompt: "p", spawnToolCallId: "toolu_bridge_1", detach: true, resumeChildSessionId: "child" });
+  });
+
+  it("rejects missing and exhausted routes and unknown roles before spawning", async () => {
+    run.mockClear();
+    for (const route of [undefined, { entries: [], skipped: [] }]) {
+      const result = await runAgentBridgeCall({ agent_type: "planner", description: "d", prompt: "p" }, { ...deps, policy: { resolveRoleRoute: () => route } });
+      expect(result.isError).toBe(true);
+      expect(result.text).toMatch(/no usable route/);
+    }
+    expect((await runAgentBridgeCall({ agent_type: "unknown", description: "d", prompt: "p" }, deps)).isError).toBe(true);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("does not permit native routes to bypass profile restrictions", async () => {
+    run.mockClear();
+    const restricted = [{ ...catalog[1]!, restrictions: { tools: [], readOnly: true } }];
+    const result = await runAgentBridgeCall({ agent_type: "executor", description: "d", prompt: "p" }, { ...deps, catalog: restricted });
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/cannot enforce/);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("stamps the role budget for core profiles", async () => {
+    run.mockClear();
+    const core = [{ name: "planner", description: "plan", systemPrompt: "body" }];
+    await runAgentBridgeCall({ agent_type: "planner", description: "d", prompt: "p" }, { ...deps, catalog: core });
+    expect(run.mock.calls[0]![0]).toMatchObject({ maxTurns: 30, connectionId: "plan-conn", routeStamped: true });
+  });
+});
 
 // ---------------------------------------------------------------------------
 // §3.1 — buildAgentBridgeToolDecl
@@ -720,11 +795,12 @@ describe("decodeAgentBridgeCallInput (срез S4)", () => {
       prompt: "p",
       detach: true,
     });
-    // `detach:false` is the default sync join — normalized away, never carried.
+    // An explicit false overrides an orchestrator's default detach policy.
     expect(decodeAgentBridgeCallInput({ agent_type: "reviewer", description: "d", prompt: "p", detach: false })).toEqual({
       agent_type: "reviewer",
       description: "d",
       prompt: "p",
+      detach: false,
     });
     expect(decodeAgentBridgeCallInput({ agent_type: "reviewer", description: "d", prompt: "p", detach: "yes" })).toBeNull();
     expect(decodeAgentBridgeCallInput({ agent_type: "reviewer", description: "d", prompt: "p" })).toEqual({

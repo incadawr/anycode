@@ -38,6 +38,7 @@ import {
 } from "./card-snapshot.js";
 import { linkAbortSignal } from "../util/abort.js";
 import type { AgentProfileEffort } from "./personas.js";
+import { buildRoleRouteRequestFields, isRoleRouteName, type RoleRouteName, type RoleRouteResolution } from "./role-route.js";
 
 // ---------------------------------------------------------------------------
 // §3.1 — the model-visible tool declaration.
@@ -560,7 +561,7 @@ export function decodeAgentBridgeCallInput(args: Record<string, unknown>): Agent
     description,
     prompt,
     ...(model !== undefined ? { model: model as string } : {}),
-    ...(detach === true ? { detach: true } : {}),
+    ...(detach !== undefined ? { detach: detach as boolean } : {}),
     ...(continueSession !== undefined ? { continue_session: continueSession as string } : {}),
   };
 }
@@ -578,6 +579,11 @@ export interface AgentBridgeCallDeps {
   onEvent?: (event: SubagentCardEvent) => void;
   /** Wall-clock cap for this one call; defaults to SUBAGENT_TIME_BUDGET_MS (§2.3). */
   wallMs?: number;
+  /** Opt-in routing and dispatch policy for native parents. Resolve fresh calls only. */
+  policy?: {
+    defaultDetach?: boolean;
+    resolveRoleRoute?: (role: RoleRouteName) => RoleRouteResolution | undefined | Promise<RoleRouteResolution | undefined>;
+  };
 }
 
 export interface AgentBridgeCallResult {
@@ -621,15 +627,23 @@ export async function runAgentBridgeCall(
   }
 
   const continueSession = input.continue_session;
-  if (continueSession !== undefined && entry.engine !== undefined) {
+  if (continueSession !== undefined && entry.engine !== undefined && !(deps.policy?.resolveRoleRoute && isRoleRouteName(entry.name))) {
     return {
       text: `Agent: continue_session is supported only for AnyCode (core) profiles; "${entry.name}" runs on ${entry.engine}. Start a new call instead.`,
       isError: true,
     };
   }
 
+  const resolveRoute = deps.policy?.resolveRoleRoute;
+  const route = continueSession === undefined && resolveRoute !== undefined && isRoleRouteName(entry.name)
+    ? await resolveRoute(entry.name)
+    : undefined;
+  if (continueSession === undefined && resolveRoute !== undefined && isRoleRouteName(entry.name) && (route === undefined || route.entries.length === 0)) {
+    return { text: `Agent: no usable route for role "${entry.name}". Configure a role route and an available connection.`, isError: true };
+  }
+
   const profile = continueSession === undefined
-    ? { systemPrompt: entry.systemPrompt, ...(entry.model !== undefined ? { model: entry.model } : {}), ...(entry.engine !== undefined ? { engine: entry.engine } : {}) }
+    ? { systemPrompt: entry.systemPrompt, ...(route === undefined && entry.model !== undefined ? { model: entry.model } : {}), ...(route === undefined && entry.engine !== undefined ? { engine: entry.engine } : {}) }
     : undefined;
   const built = buildSessionSubagentRequest({
     agentType: entry.name,
@@ -640,7 +654,7 @@ export async function runAgentBridgeCall(
     profile,
     ...(continueSession === undefined && entry.restrictions !== undefined ? { restrictions: entry.restrictions } : {}),
     // A continued child keeps the tier its session was started on.
-    ...(continueSession === undefined && entry.effort !== undefined ? { effort: entry.effort } : {}),
+    ...(continueSession === undefined && route === undefined && entry.effort !== undefined ? { effort: entry.effort } : {}),
     // the profile's turn budget rides only the CREATING spawn —
     // a continued child keeps whatever budget its session started with.
     ...(continueSession === undefined && entry.maxTurns !== undefined ? { maxTurns: entry.maxTurns } : {}),
@@ -652,9 +666,14 @@ export async function runAgentBridgeCall(
     ...built,
     // a routed entry's declared target rides the CREATING spawn
     // only; a continued child keeps the connection its session started on.
-    ...(continueSession === undefined && entry.connection !== undefined ? { connectionId: entry.connection } : {}),
-    ...(continueSession === undefined && entry.provider !== undefined ? { provider: entry.provider } : {}),
-    ...(input.detach === true ? { detach: true } : {}),
+    ...(continueSession === undefined && route === undefined && entry.connection !== undefined ? { connectionId: entry.connection } : {}),
+    ...(continueSession === undefined && route === undefined && entry.provider !== undefined ? { provider: entry.provider } : {}),
+    ...(continueSession === undefined ? buildRoleRouteRequestFields(route, {
+      model: input.model,
+      engineTurnBudget: entry.engine !== undefined ? entry.maxTurns : undefined,
+      degraded: false,
+    }) : {}),
+    ...((input.detach ?? deps.policy?.defaultDetach) === true ? { detach: true } : {}),
     ...(continueSession !== undefined ? { resumeChildSessionId: continueSession } : {}),
   };
 
