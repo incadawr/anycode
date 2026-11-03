@@ -132,6 +132,8 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
   let messageWired = false;
   const seenLogEntries = new Set<string>();
   const consoleHistory: string[] = [];
+  const exceptionHistory: string[] = [];
+  let exceptionReplayCounts = new Map<string, number>();
   let replayCounts = new Map<string, number>();
   let attachGeneration = 0;
   const detachedMessages: Array<PreviewConsoleEntry["level"]> = [];
@@ -160,13 +162,21 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
         }
       }
       if (method === "Runtime.exceptionThrown") {
-        const details = (params as { exceptionDetails?: { exception?: { description?: string }; text?: string } })
-          .exceptionDetails;
+        const event = params as { timestamp?: number; exceptionDetails?: { exceptionId?: number; executionContextId?: number; exception?: { description?: string }; text?: string } };
+        const details = event.exceptionDetails;
+        const key = event.timestamp === undefined ? undefined : JSON.stringify([event.timestamp, details?.exceptionId, details?.executionContextId]);
+        const remaining = key === undefined ? 0 : (exceptionReplayCounts.get(key) ?? 0);
+        const seen = replaying && remaining > 0;
+        if (seen && key !== undefined) exceptionReplayCounts.set(key, remaining - 1);
+        if (!seen && key !== undefined) {
+          exceptionHistory.push(key);
+          if (exceptionHistory.length > 1000) exceptionHistory.shift();
+        }
         const message = (details?.exception?.description ?? details?.text ?? "uncaught exception").slice(
           0,
           RING_MAX_MSG_CHARS,
         );
-        consoleListener("pageerror", message);
+        if (!seen) consoleListener("pageerror", message);
       }
       if (method === "Runtime.consoleAPICalled") {
         const call = params as { type?: string; args?: RemotePreview[]; timestamp?: number; executionContextId?: number; stackTrace?: unknown };
@@ -211,6 +221,8 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
     const generation = ++attachGeneration;
     replayCounts = new Map();
     for (const key of consoleHistory) replayCounts.set(key, (replayCounts.get(key) ?? 0) + 1);
+    exceptionReplayCounts = new Map();
+    for (const key of exceptionHistory) exceptionReplayCounts.set(key, (exceptionReplayCounts.get(key) ?? 0) + 1);
     wireMessages();
     wc.debugger.sendCommand("Log.enable").catch(() => {});
     replaying = true;
@@ -218,6 +230,7 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
       if (generation !== attachGeneration) return;
       replaying = false;
       replayCounts.clear();
+      exceptionReplayCounts.clear();
       detachedMessages.length = 0;
     }).catch((error: unknown) => {
       if (generation !== attachGeneration) return;
