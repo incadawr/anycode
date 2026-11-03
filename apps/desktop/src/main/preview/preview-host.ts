@@ -562,6 +562,7 @@ interface WebPreviewRecord {
    */
   documentAnchorUpdate?: Promise<void>;
   documentAnchorGeneration?: number;
+  documentAnchorPending?: boolean;
   renderedFrom?: string;
   title?: string;
   consentedOrigins: Set<string>;
@@ -946,6 +947,7 @@ class PreviewHost implements PreviewHostHandle {
     }
 
     record.documentAnchorGeneration = (record.documentAnchorGeneration ?? 0) + 1;
+    record.documentAnchorPending = !isNewWindow;
     record.documentAnchorUpdate = undefined;
     record.status = "loading";
     record.kind = target.kind;
@@ -2692,6 +2694,7 @@ class PreviewHost implements PreviewHostHandle {
       );
     }));
     wc.onDidNavigate(guard((navUrl) => {
+      record.documentAnchorPending = false;
       record.url = navUrl;
       // The document the policy anchors on moved: a `file:` navigation
       // re-points the anchor at the NEW file (re-resolved through the
@@ -2913,6 +2916,9 @@ class PreviewHost implements PreviewHostHandle {
       // navigation re-points it at the NEW document): the new document's own
       // subresources must be judged against the NEW document, so the pending
       // move is awaited BEFORE the policy is evaluated.
+      if (req.resourceType !== "mainFrame" && record.documentAnchorPending) {
+        return { allowed: false, dedupeKey: req.url };
+      }
       const generation = record.documentAnchorGeneration;
       await record.documentAnchorUpdate;
       if (generation !== record.documentAnchorGeneration) {
