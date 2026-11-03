@@ -67,6 +67,7 @@ export type RewindResult =
        * restored history.
        */
       compactionSeq?: number;
+      turnErrorIds?: string[];
     }
   | { ok: false; reason: string };
 
@@ -211,6 +212,7 @@ export class ShadowGitCheckpoints implements CheckpointCapturer {
     label: string,
     historySnapshot: readonly HistoryItem[],
     compactionSeq?: number,
+    turnErrorIds?: readonly string[],
   ): Promise<{ id: string; commitHash: string }> {
     await this.ensureInit();
     await this.ensureLastCommitLoaded();
@@ -232,7 +234,7 @@ export class ShadowGitCheckpoints implements CheckpointCapturer {
         createdAt: this.now(),
         reason,
         label,
-        historyJson: JSON.stringify(historySnapshot),
+        historyJson: JSON.stringify(turnErrorIds === undefined ? historySnapshot : { items: historySnapshot, turnErrorIds }),
         ...(compactionSeq !== undefined ? { compactionSeq } : {}),
       },
       { keepPerSession: CHECKPOINTS_KEEP_PER_SESSION },
@@ -256,7 +258,7 @@ export class ShadowGitCheckpoints implements CheckpointCapturer {
       // SNAPSHOT was taken (turn start), carried on the request because the
       // capture itself is lazy — by now an auto compaction of this same turn
       // may already have recorded an outcome.
-      const { id } = await this.performCapture("auto", label, req.historySnapshot, req.compactionSeq);
+      const { id } = await this.performCapture("auto", label, req.historySnapshot, req.compactionSeq, req.turnErrorIds);
       return { kind: "created", id, label };
     } catch (err) {
       this.disabled = true;
@@ -290,6 +292,7 @@ export class ShadowGitCheckpoints implements CheckpointCapturer {
        * no records (the CLI).
        */
       compactionSeq?: number;
+      turnErrorIds?: readonly string[];
     },
   ): Promise<RewindResult> {
     if (!this.hasRunBinary) {
@@ -314,7 +317,7 @@ export class ShadowGitCheckpoints implements CheckpointCapturer {
       // The safety checkpoint captures the CURRENT conversation, so its boundary
       // is the CURRENT sequence — everything recorded up to now is part of the
       // state this rewind is about to preserve.
-      safety = await this.performCapture("pre-rewind", "before /rewind", opts.currentHistory, opts.compactionSeq);
+      safety = await this.performCapture("pre-rewind", "before /rewind", opts.currentHistory, opts.compactionSeq, opts.turnErrorIds);
     } catch (err) {
       return { ok: false, reason: `safety checkpoint failed: ${toReason(err)}` };
     }
@@ -343,8 +346,11 @@ export class ShadowGitCheckpoints implements CheckpointCapturer {
     }
 
     let historyItems: HistoryItem[] | null = null;
+    let turnErrorIds: string[] | undefined;
     if (wantsConversation) {
-      historyItems = JSON.parse(record.historyJson) as HistoryItem[];
+      const snapshot = JSON.parse(record.historyJson) as HistoryItem[] | { items: HistoryItem[]; turnErrorIds: string[] };
+      historyItems = Array.isArray(snapshot) ? snapshot : snapshot.items;
+      turnErrorIds = Array.isArray(snapshot) ? undefined : snapshot.turnErrorIds;
     }
 
     return {
@@ -352,6 +358,7 @@ export class ShadowGitCheckpoints implements CheckpointCapturer {
       safetyCheckpointId: safety.id,
       restoredPaths,
       historyItems,
+      ...(turnErrorIds !== undefined ? { turnErrorIds } : {}),
       ...(record.compactionSeq !== undefined ? { compactionSeq: record.compactionSeq } : {}),
     };
   }

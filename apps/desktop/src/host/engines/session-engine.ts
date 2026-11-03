@@ -105,7 +105,7 @@ export interface SessionEngine {
    * `historyItems()` returns. Optional; engine switch prefers it.
    */
   readTranscript?(): Promise<readonly HistoryItem[]>;
-  replaceHistory?(items: HistoryItem[]): void;
+  replaceHistory?(items: HistoryItem[], persist?: boolean): void;
   contextBreakdown?(): ContextBreakdown;
   /**
    * Manual conversation compaction on the existing host maintenance rail.

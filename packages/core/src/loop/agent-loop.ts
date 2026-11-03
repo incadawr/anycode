@@ -504,6 +504,7 @@ export interface AgentLoopConfig {
    * checkpoint records no boundary and the rewind falls back.
    */
   compactionBoundary?: () => number;
+  turnErrorBoundary?: () => Promise<readonly string[]>;
   /**
    * Fire-and-forget observer of every event yielded by runTurn/compactNow
    * (slice 6.6 telemetry seam). Called synchronously immediately before each
@@ -1097,6 +1098,7 @@ export class AgentLoop {
     // GitHub #36: the compaction boundary belongs to THIS moment, not to the
     // lazy capture below — an auto compaction of this same turn records its
     // outcome after the snapshot but before the first write-effect tool.
+    const preTurnErrorIds = this.config.checkpoints !== undefined ? await this.config.turnErrorBoundary?.() : undefined;
     const preTurnCompactionSeq = this.config.checkpoints !== undefined ? this.config.compactionBoundary?.() : undefined;
 
     let turnStartItemId: string | undefined;
@@ -1253,6 +1255,7 @@ export class AgentLoop {
           pending ??= capturer.capture({
             userInput: userInput ?? "",
             historySnapshot: preTurnItems,
+            ...(preTurnErrorIds !== undefined ? { turnErrorIds: preTurnErrorIds } : {}),
             ...(preTurnCompactionSeq !== undefined ? { compactionSeq: preTurnCompactionSeq } : {}),
           });
           const result = await pending;

@@ -871,6 +871,8 @@ export interface SessionOptions {
   /** Narrow persistence callback for title/mode patches (design §4.2). */
   persistence?: SessionPersistence;
   saveTurnError?: (record: TurnErrorRecord, input?: string) => Promise<void>;
+  restoreHistoryAndTurnErrors?: (history: readonly HistoryItem[], errorIds?: readonly string[]) => Promise<string[]>;
+  currentTurnErrorIds?: () => Promise<string[]>;
   /**
    * GitHub #36: the durable presentation records of this session's compactions
    * (host/compaction-records.ts). Wired for the core boot, whose `compaction_end`
@@ -1082,6 +1084,7 @@ export interface SessionOptions {
         currentHistory: readonly HistoryItem[];
         /** GitHub #36: boundary for the pre-rewind safety checkpoint (absent = no records to judge). */
         compactionSeq?: number;
+        turnErrorIds?: readonly string[];
       },
     ): Promise<RewindResult>;
   };
@@ -1323,7 +1326,9 @@ export class Session {
   private readonly sessionId: string;
   private readonly persistence: SessionPersistence | undefined;
   private readonly saveTurnError: SessionOptions["saveTurnError"];
-  private readonly bootTurnErrors: readonly TurnErrorRecord[];
+  private bootTurnErrors: readonly TurnErrorRecord[];
+  private readonly restoreHistoryAndTurnErrors: SessionOptions["restoreHistoryAndTurnErrors"];
+  private readonly currentTurnErrorIds: SessionOptions["currentTurnErrorIds"];
   /** GitHub #36: durable compaction rows; see SessionOptions.compactionRecords. */
   private readonly compactionRecords: CompactionRecordSeam | undefined;
   /**
@@ -1831,6 +1836,8 @@ export class Session {
     this.persistence = options.persistence;
     this.saveTurnError = options.saveTurnError;
     this.bootTurnErrors = options.bootTurnErrors ?? [];
+    this.restoreHistoryAndTurnErrors = options.restoreHistoryAndTurnErrors;
+    this.currentTurnErrorIds = options.currentTurnErrorIds;
     this.compactionRecords = options.compactionRecords;
     this.usageAudit = options.usageAudit;
     this.rules = options.rules;
@@ -3946,6 +3953,7 @@ export class Session {
       const res = await this.checkpoints.rewind(checkpointId, {
         scope,
         currentHistory: [...this.engine.historyItems()],
+        ...(this.currentTurnErrorIds ? { turnErrorIds: await this.currentTurnErrorIds() } : {}),
         // GitHub #36: the pre-rewind SAFETY checkpoint is a checkpoint the user
         // can rewind TO later, so it must carry the same boundary type as any
         // other — the sequence as it stands right now.
@@ -3967,6 +3975,12 @@ export class Session {
       const restoredHistory = res.historyItems;
       const conversationRestored = restoredHistory !== null;
       if (restoredHistory !== null) {
+        const removedErrors = new Set(await this.restoreHistoryAndTurnErrors?.(restoredHistory, res.turnErrorIds) ?? []);
+        this.bootTurnErrors = this.bootTurnErrors.filter((record) => !removedErrors.has(record.id));
+        if (this.latestPublicResult && (removedErrors.has(this.latestPublicResult.historyItemId ?? "") ||
+          (this.latestPublicResult.source !== "history_recovery" && this.latestPublicResult.turnId !== null && !restoredHistory.some((item) => item.turnId === this.latestPublicResult!.turnId)))) {
+          this.latestPublicResult = null;
+        }
         // GitHub #36 review 4: the compaction rows are records OF this
         // conversation, so a rewind must drop the ones belonging to the part it
         // throws away — and the checkpoint's recorded SEQUENCE says exactly
@@ -3978,14 +3992,14 @@ export class Session {
         // cache AND storage BEFORE the re-handshake below, so neither the
         // truncated `session_history` nor a later reopen brings one back.
         this.compactionRecords?.truncate(restoredHistory, res.compactionSeq);
-        // Atomic swap feeding the write-behind sink (truncates persistence too),
-        // exactly the CLI's /rewind conversation restore.
-        this.engine.replaceHistory(restoredHistory);
+        // The durable restore has already committed when the persistence seam
+        // is present; update the live history without queuing a second write.
+        this.engine.replaceHistory(restoredHistory, this.restoreHistoryAndTurnErrors === undefined);
         this.updateContextUsage(null);
         // drift-flag-1: rebuild the re-handshake snapshot from the TRUNCATED
         // history and drop the pre-rewind replay ring BEFORE re-sending, so a
         // renderer reload never resurrects the rewound-away conversation.
-        this.sessionHistory = buildSessionHistory([...this.engine.historyItems()], this.historyMaxItems);
+        this.sessionHistory = buildSessionHistory([...this.engine.historyItems()], this.historyMaxItems, this.bootTurnErrors);
         this.outbound.clear();
         this.presentationJournal.clear();
         // rewind success retires any leftover pending prompt — the

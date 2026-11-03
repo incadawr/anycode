@@ -216,8 +216,9 @@ export class CoreEngine implements SessionEngine {
     return this.options.loop.history.items;
   }
 
-  replaceHistory(items: Parameters<NonNullable<SessionEngine["replaceHistory"]>>[0]): void {
-    this.options.loop.history.replaceAll(items);
+  replaceHistory(items: Parameters<NonNullable<SessionEngine["replaceHistory"]>>[0], persist = true): void {
+    if (persist) this.options.loop.history.replaceAll(items);
+    else this.options.loop.history.replaceAll(items, false);
   }
 
   contextBreakdown() {

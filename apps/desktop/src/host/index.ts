@@ -4181,6 +4181,7 @@ async function boot(): Promise<void> {
             // sequence current when its history SNAPSHOT is taken (turn start),
             // so a rewind to it can tell which compaction rows predate it.
             compactionBoundary: () => compactionRecordSeam?.sequence() ?? 0,
+            turnErrorBoundary: async () => (await persistence!.loadTurnErrors(sessionMeta.id)).map((record) => record.id),
           }
         : {}),
       // spill oversized tool results to the artifact
@@ -4824,6 +4825,11 @@ async function boot(): Promise<void> {
       selectedEffort,
       sessionId,
       saveTurnError: (record) => persistence!.appendTurnError(sessionId, record),
+      currentTurnErrorIds: async () => (await persistence!.loadTurnErrors(sessionId)).map((record) => record.id),
+      restoreHistoryAndTurnErrors: async (items, errorIds) => {
+        await historySink!.flushChecked();
+        return persistence!.restoreHistoryAndTurnErrors(sessionId, items, errorIds);
+      },
       bootHistory,
       bootTurnErrors: await loadTurnErrors(sessionId),
       // S4: dev/automation-ONLY replay-recording override, resolved

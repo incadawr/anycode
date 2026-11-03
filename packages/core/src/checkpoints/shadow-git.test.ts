@@ -432,7 +432,7 @@ describe("ShadowGitCheckpoints.rewind", () => {
 
     // A files-only rewind: files move, the conversation does not — but the
     // safety checkpoint still records the boundary as it stands (3 rows so far).
-    const res = await svc.rewind("target-id", { scope: "files", currentHistory, compactionSeq: 3 });
+    const res = await svc.rewind("target-id", { scope: "files", currentHistory, compactionSeq: 3, turnErrorIds: ["old-error"] });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.historyItems).toBeNull();
@@ -440,12 +440,16 @@ describe("ShadowGitCheckpoints.rewind", () => {
     const safety = store.saved.find((record) => record.reason === "pre-rewind")!;
     expect(safety.id).toBe(res.safetyCheckpointId);
     expect(safety.compactionSeq).toBe(3);
+    expect(JSON.parse(safety.historyJson)).toEqual({ items: currentHistory, turnErrorIds: ["old-error"] });
 
     // Rewinding TO that safety checkpoint reports the boundary with it, which is
     // what the caller keeps records by.
     const back = await svc.rewind(safety.id, { scope: "conversation", currentHistory });
     expect(back.ok).toBe(true);
-    if (back.ok) expect(back.compactionSeq).toBe(3);
+    if (back.ok) {
+      expect(back.compactionSeq).toBe(3);
+      expect(back.turnErrorIds).toEqual(["old-error"]);
+    }
   });
 
   it("records no boundary when the caller keeps no records (the CLI) — the rewind falls back", async () => {
