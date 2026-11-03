@@ -2,8 +2,11 @@ import { OrchestrationController } from "./orchestration-policy.js";
 
 export type AdmissionResult =
   | { outcome: "applied"; enabled: boolean }
-  | { outcome: "rejected"; reason: "unavailable" | "busy" | "stale" | "capacity" | "conflict" }
+  | { outcome: "rejected"; reason: "unavailable" | "busy" | "stale" | "capacity" }
   | { outcome: "unknown"; reason: "timeout" | "disconnected" | "unconfirmed" | "admission" };
+
+/** A diagnostic about this frame, never the outcome of the existing request. */
+export type AdmissionResponse = AdmissionResult | { kind: "frame_diagnostic"; reason: "conflict" };
 
 type Entry = { signature: string; promise: Promise<AdmissionResult> };
 
@@ -20,18 +23,18 @@ export class OrchestrationAdmission {
     maxRequests?: number;
   }) {}
 
-  toggle(requestId: string, connectionId: string, enabled: boolean): Promise<AdmissionResult> {
+  toggle(requestId: string, connectionId: string, enabled: boolean): Promise<AdmissionResponse> {
     return this.request(requestId, connectionId, `toggle:${enabled}`, enabled);
   }
 
   /** admit must synchronously claim the turn; its normal delivery ledger owns the turn afterward. */
-  submit(requestId: string, connectionId: string, admit: () => void): Promise<AdmissionResult> {
+  submit(requestId: string, connectionId: string, admit: () => void): Promise<AdmissionResponse> {
     return this.request(requestId, connectionId, "submit", true, admit);
   }
 
-  private request(id: string, connectionId: string, signature: string, enabled: boolean, admit?: () => void): Promise<AdmissionResult> {
+  private request(id: string, connectionId: string, signature: string, enabled: boolean, admit?: () => void): Promise<AdmissionResponse> {
     const existing = this.entries.get(id);
-    if (existing) return existing.signature === signature ? existing.promise : Promise.resolve({ outcome: "rejected", reason: "conflict" });
+    if (existing) return existing.signature === signature ? existing.promise : Promise.resolve({ kind: "frame_diagnostic", reason: "conflict" });
     if (this.options.connectionId() !== connectionId) return Promise.resolve({ outcome: "rejected", reason: "stale" });
     if (this.entries.size >= (this.options.maxRequests ?? 256)) return Promise.resolve({ outcome: "rejected", reason: "capacity" });
     // Install the ledger entry before executing any callbacks, including synchronous re-entry.

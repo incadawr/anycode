@@ -24,7 +24,33 @@ describe("orchestration admission", () => {
     expect(await duplicate).toEqual(await first);
     expect(await h.gate.submit("id", "one", admit)).toEqual(await first);
     expect(h.apply).toHaveBeenCalledTimes(1); expect(admit).toHaveBeenCalledTimes(1);
-    expect(await h.gate.toggle("id", "one", false)).toEqual({ outcome: "rejected", reason: "conflict" });
+    expect(await h.gate.toggle("id", "one", false)).toEqual({ kind: "frame_diagnostic", reason: "conflict" });
+  });
+  it("diagnoses a conflicting frame while the original request is pending", async () => {
+    const h = setup(); const admit = vi.fn();
+    const original = h.gate.submit("id", "one", admit);
+    expect(await h.gate.toggle("id", "one", false)).toEqual({ kind: "frame_diagnostic", reason: "conflict" });
+    expect(admit).not.toHaveBeenCalled();
+    h.finish();
+    expect(await original).toEqual({ outcome: "applied", enabled: true });
+    expect(await h.gate.submit("id", "one", admit)).toEqual(await original);
+    expect(admit).toHaveBeenCalledTimes(1);
+  });
+  it("diagnoses a conflicting frame after the original turn started", async () => {
+    const h = setup(); const admit = vi.fn();
+    const original = h.gate.submit("id", "one", admit); h.finish();
+    expect(await original).toEqual({ outcome: "applied", enabled: true });
+    expect(await h.gate.toggle("id", "one", false)).toEqual({ kind: "frame_diagnostic", reason: "conflict" });
+    expect(await h.gate.submit("id", "one", admit)).toEqual(await original);
+    expect(admit).toHaveBeenCalledTimes(1);
+  });
+  it("diagnoses a conflicting frame without replacing an unknown outcome", async () => {
+    const h = setup(); const admit = vi.fn();
+    const original = h.gate.submit("id", "one", admit); h.disconnect(); h.finish();
+    expect(await original).toEqual({ outcome: "unknown", reason: "disconnected" });
+    expect(await h.gate.toggle("id", "one", false)).toEqual({ kind: "frame_diagnostic", reason: "conflict" });
+    expect(await h.gate.submit("id", "one", admit)).toEqual(await original);
+    expect(admit).not.toHaveBeenCalled();
   });
   it("refuses unavailable, busy, stale and bounded ledger without applying", async () => {
     const h = setup(); const admit = vi.fn();
