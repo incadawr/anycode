@@ -145,6 +145,31 @@ describe("isAllowedFileSubresource — the app profile and the home dir", () => 
       ),
     ).toBe(false);
   });
+
+  it("a workspace INSIDE the app profile never widens a document under it", () => {
+    // The workspace is a broad-root SUBDIRECTORY (`<home>/.anycode/gen`):
+    // the workspace-widening rule must not apply to a document that lives
+    // under the app profile — its own directory is the whole allowed tree.
+    expect(
+      isAllowedFileSubresource(
+        input({
+          requestRealPath: `${FAKE_HOME}/.anycode/gen/secret.json`,
+          documentRealPath: `${FAKE_HOME}/.anycode/gen/pages/index.html`,
+          workspace: `${FAKE_HOME}/.anycode/gen`,
+        }),
+      ),
+    ).toBe(false);
+    // …and the document's own directory stays readable.
+    expect(
+      isAllowedFileSubresource(
+        input({
+          requestRealPath: `${FAKE_HOME}/.anycode/gen/pages/style.css`,
+          documentRealPath: `${FAKE_HOME}/.anycode/gen/pages/index.html`,
+          workspace: `${FAKE_HOME}/.anycode/gen`,
+        }),
+      ),
+    ).toBe(true);
+  });
 });
 
 describe("isAllowedFileSubresource — broad roots (home, temp)", () => {

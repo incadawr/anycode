@@ -2183,6 +2183,29 @@ describe("PreviewHost — request gate legibility (cut §1.1, GATE-LEGIBILITY)",
   });
 });
 
+describe("PreviewHost — request gate: a document under the app profile is never widened", () => {
+  it("denies a file OUTSIDE the document's own directory inside the profile", async () => {
+    const rig = makeRig({
+      // A workspace that lives INSIDE the app profile — it must not widen
+      // the document's allowed tree (the profile is a broad root).
+      workspaceForTab: () => "/fake-home/.anycode/gen",
+      fileResourceRoots: () => ({ home: "/fake-home", tmpdirs: ["/fake-tmp"] }),
+    });
+    rig.resolveArtifactImpl = async (_tabId, path) => ({ realPath: path });
+    const openPromise = rig.host.openForTab(TAB, { path: "/fake-home/.anycode/gen/pages/index.html" });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    await openPromise;
+    const gate = rig.windows[0]!.webContents.requestGate!;
+    await expect(
+      gate({ url: pathToFileURL("/fake-home/.anycode/gen/secret.json").href, resourceType: "xhr" }),
+    ).resolves.toBe(false);
+    await expect(
+      gate({ url: pathToFileURL("/fake-home/.anycode/gen/pages/style.css").href, resourceType: "stylesheet" }),
+    ).resolves.toBe(true);
+  });
+});
+
 describe("PreviewHost — redirect gate (cut §1.2/F1, REDIRECT)", () => {
   it("denies a redirect to a non-consented origin; consentedOrigins does NOT widen", async () => {
     const rig = makeRig();
