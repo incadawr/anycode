@@ -1023,6 +1023,11 @@ let engineBootstrap: EngineBootstrap | null = null;
 let initFailure: string | null = null;
 let historySink: WriteBehindHistorySink | null = null;
 let persistence: SqlitePersistenceAdapter | null = null;
+
+async function loadTurnErrors(sessionId: string) {
+  try { return await persistence!.loadTurnErrors(sessionId); }
+  catch (error) { console.error(`[host] turn error history unavailable: ${describeError(error)}`); return []; }
+}
 /**
  * cross-review finding 4: the usage-audit write-behind tail —
  * every recordProviderUsage call chains off the previous one (serialized,
@@ -1800,6 +1805,7 @@ async function bootCodexSession(
     // `connected.engine` already is (registry.ts's codex plugin is a
     // pass-through), so this is exactly what `historyItems()` returns.
     bootHistory: booted.engine.historyItems(),
+    bootTurnErrors: await loadTurnErrors(connected.sessionMeta.id),
     ...(codexChildPort !== undefined
       ? {
           backgroundChildren: {
@@ -2588,6 +2594,7 @@ async function bootClaudeSession(
     // The resume projection built above — `[]` for a fresh session, the
     // shadow-mirror transcript (incl. tool_call cards) for a resumed one.
     bootHistory,
+    bootTurnErrors: await loadTurnErrors(rowId),
     // S4: dev/automation-ONLY replay-recording override, resolved
     // here (the composition root) and never inside Session itself.
     ...(claudeHistoryMaxItems !== null ? { historyMaxItems: claudeHistoryMaxItems } : {}),
@@ -4803,6 +4810,7 @@ async function boot(): Promise<void> {
       sessionId,
       saveTurnError: (record) => persistence!.appendTurnError(sessionId, record),
       bootHistory,
+      bootTurnErrors: await loadTurnErrors(sessionId),
       // S4: dev/automation-ONLY replay-recording override, resolved
       // here (the composition root) and never inside Session itself.
       ...(coreHistoryMaxItems !== null ? { historyMaxItems: coreHistoryMaxItems } : {}),

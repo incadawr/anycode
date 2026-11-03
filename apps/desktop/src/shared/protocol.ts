@@ -212,7 +212,8 @@ export interface WireToolMeta {
 export interface WireHistoryItem {
   id: string;
   createdAt: number;
-  kind?: "normal" | "compact_summary" | "microcompact_cleared";
+  kind?: "normal" | "compact_summary" | "microcompact_cleared" | "turn_error";
+  error?: SerializedError;
   /** срез 2: mirrors core's `HistoryItem.origin` — marks a `role:"user"` item the host injected (a detached child's report), not the human. See that field's own doc. */
   origin?: "system";
   /**

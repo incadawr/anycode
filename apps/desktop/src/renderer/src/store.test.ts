@@ -5379,6 +5379,11 @@ describe("desktop store — session_history hydration (task 2.1.5, design §3.3)
     },
   ];
 
+  it("shows a restored terminal error as an error row", () => {
+    const error = { name: "ProviderError", code: "network", message: "Network error" };
+    expect(projectHistoryToBlocks([{ id: "e1", createdAt: 20, kind: "turn_error", error, message: { role: "assistant", content: [] } }])).toEqual([{ kind: "error", id: "e1:0", error }]);
+  });
+
   it("projectHistoryToBlocks maps user/compact_summary/assistant-text/tool_call+result, pairing status+modelText and skipping the tool-role item", () => {
     const blocks = projectHistoryToBlocks(fixtureItems);
 

@@ -119,6 +119,16 @@ function toolResultItem(
 // ═════════════════════════════════════════════════════════════════════════════
 
 describe("Session — session_history hydration", () => {
+  it("hydrates a terminal error and restores the last result", async () => {
+    const h = createHarness({ steps: [], bootHistory: [userItem("u1", "hello", 10)], bootTurnErrors: [{ kind: "turn_error", id: "e1", createdAt: 20, turnId: "t1", engine: "core", model: "m", error: { name: "ProviderError", message: "Network error", code: "network" } }] });
+    try {
+      h.send({ type: "ui_ready" });
+      const history = await h.waitFor(isSessionHistory);
+      expect(history.items.map((item) => item.kind)).toEqual(["normal", "turn_error"]);
+      expect(history.items[1]).toMatchObject({ turnId: "t1", error: { message: "Network error", code: "network" } });
+      expect(h.session.communicationResult().latestResult).toMatchObject({ terminalReason: "error", publicAnswer: "Network error", turnId: "t1" });
+    } finally { h.close(); }
+  });
   it("emits host_ready{sessionId} then session_history then replay, in that order", async () => {
     const bootHistory = [userItem("u1", "hello there"), assistantTextItem("a1", "hi")];
     const h = createHarness({ steps: [textStep("again")], bootHistory, hasTitle: true });

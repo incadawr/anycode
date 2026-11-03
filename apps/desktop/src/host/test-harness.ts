@@ -292,6 +292,7 @@ export interface HarnessOptions {
   reconnectGraceMs?: number;
   /** Boot history snapshot for transcript hydration (design §3.3); empty by default. */
   bootHistory?: readonly HistoryItem[];
+  bootTurnErrors?: SessionOptions["bootTurnErrors"];
   /**
    * Dev/automation-ONLY override for `SESSION_HISTORY_MAX_ITEMS` (
    * S4), forwarded straight to `Session` — the harness never resolves it from
@@ -801,6 +802,7 @@ export function createHarness(options: HarnessOptions): Harness {
     model: "scripted-model",
     sessionId: "test-session",
     bootHistory: options.bootHistory,
+    bootTurnErrors: options.bootTurnErrors,
     ...(options.historyMaxItems !== undefined ? { historyMaxItems: options.historyMaxItems } : {}),
     hasTitle: options.hasTitle,
     ...(options.initialTitle !== undefined ? { initialTitle: options.initialTitle } : {}),
