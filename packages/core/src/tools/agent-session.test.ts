@@ -13,6 +13,7 @@
 
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import { PERSONAS } from "../subagents/personas.js";
 import { agentTool, createAgentTool } from "./agent.js";
 import { agentInputSchema, restrictedAgentInputSchema } from "./schemas.js";
 import type { ToolContext, ToolEmittedEvent } from "../types/tools.js";
@@ -1651,6 +1652,29 @@ describe("agentTool handler — orchestrate default-detach (§2.3)", () => {
     const result = await full.handler({ description: "d", prompt: "p" }, makeCtx({ sessionSubagents: port, subagents: inline }));
     expect(result.ok).toBe(true);
     expect(inlineRuns).toBe(1);
+  });
+
+  it.each(["explore", "custom-reviewer"])("defaults %s to inline with its profile", async (agentType) => {
+    const calls: string[] = [];
+    const inline: SubagentPort = {
+      listAgentTypes: () => [agentType],
+      run: async (req) => {
+        calls.push(req.agentType);
+        return { status: "completed", finalText: "ok", truncated: false, turns: 1, toolCalls: 0, durationMs: 1 };
+      },
+    };
+    const session: SessionSubagentPort = {
+      send: async () => ({ ok: true }),
+      run: async () => { throw new Error("restricted profile reached session"); },
+    };
+    const result = await full.handler({ description: "d", prompt: "p", agent_type: agentType }, makeCtx({ subagents: inline, sessionSubagents: session }));
+    expect(result.ok).toBe(true);
+    expect(calls).toEqual([agentType]);
+    if (agentType === "explore") {
+      expect(PERSONAS.explore.tools).not.toEqual(expect.arrayContaining(["Write"]));
+      expect(PERSONAS.explore.tools).not.toEqual(expect.arrayContaining(["Edit"]));
+      expect(PERSONAS.explore.tools).not.toEqual(expect.arrayContaining(["Bash"]));
+    }
   });
 
   it("an omitted tier starts a joining session", async () => {
