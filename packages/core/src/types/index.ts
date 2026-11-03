@@ -28,6 +28,7 @@ export type {
   AssistantToolCallPart,
   ChatMessage,
   HistoryItem,
+  TurnErrorRecord,
   ReasoningSource,
   ToolResultPart,
 } from "./history.js";
