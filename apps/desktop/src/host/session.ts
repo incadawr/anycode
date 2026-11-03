@@ -2764,6 +2764,7 @@ export class Session {
           mode: this.engine.mode(),
           model: this.model,
           sessionId: this.sessionId,
+          ...(this.turnId !== null && this.lastTurnRequest !== undefined ? { activeTurn: { turnId: this.turnId, requestId: this.lastTurnRequest.requestId, ...(this.turnStartedAt !== undefined ? { startedAt: this.turnStartedAt } : {}) } } : {}),
           orchestration: { ...(message.orchestrationProtocol === 1 ? { revision: ++this.orchestrationRevision } : {}), enabled: this.orchestrate, available: this.orchestrationAvailable() && !this.postureBlocked(), ...(!this.orchestrationAvailable() ? { reason: "unavailable" } : {}), posture: this.orchestrationPosture !== "stable" ? this.orchestrationPosture : this.orchestrationController?.state.status ?? (this.orchestrate ? "on" : "off") },
           ...(message.orchestrationProtocol === 1 && this.boundGeneration !== null ? { orchestrationProtocol: { version: 1 as const, hostIncarnation: this.hostIncarnation, connectionId: this.boundGeneration, atomicSubmit: this.orchestrationAvailable(), correlatedToggle: this.orchestrationAvailable() } } : {}),
           ...(this.checkpointContextUsage !== null ? { contextUsage: this.checkpointContextUsage } : {}),

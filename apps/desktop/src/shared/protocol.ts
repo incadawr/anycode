@@ -597,6 +597,8 @@ export type HostToUiMessage =
       mode: PermissionMode;
       model: string;
       sessionId: string;
+      /** Active turn at handshake, before any queued reports may drain. */
+      activeTurn?: { requestId: string; turnId: string; startedAt?: number };
       /** Runtime snapshot; available is false until atomic admission is implemented. */
       orchestration?: { enabled: boolean; available: boolean; reason?: string; posture?: "off" | "on" | "transitioning" | "quarantined"; revision?: number };
       /** Absence on older hosts also means unsupported. */
