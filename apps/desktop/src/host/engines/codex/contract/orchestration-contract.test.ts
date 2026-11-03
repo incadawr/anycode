@@ -21,6 +21,19 @@ describe("orchestration experimental feature contract", () => {
     expect(recommended.dynamicToolCallParams.required).toEqual(expect.arrayContaining(["threadId", "turnId", "callId", "tool", "arguments"]));
     expect(Object.keys(recommended.configReadParams.properties)).toEqual(expect.arrayContaining(["cwd", "includeLayers"]));
   });
+  it("pins the alternative surfaces and distinguishes the lower schema", () => {
+    for (const feature of [fixture, recommended]) {
+      expect(feature.alternatives.modeKind.enum).toEqual(expect.arrayContaining(["default", "plan"]));
+      expect(feature.alternatives.settings.required).toContain("model");
+      expect(feature.alternatives.settings.properties).toHaveProperty("developer_instructions");
+      expect(feature.alternatives.additionalContextKind.enum).toEqual(expect.arrayContaining(["application", "untrusted"]));
+      for (const key of ["collaborationMode", "additionalContext", "permissions"]) expect(feature.alternatives.turnFields[key]).toBeTruthy();
+      expect(feature.alternatives.mcpMethods).toContain("config/mcpServer/reload");
+      expect(feature.alternatives.mcpMethods.some((method: string) => /mcpServer\/(enable|disable)/.test(method))).toBe(false);
+    }
+    expect(fixture.alternatives.turnFields.disabledPluginIds).toBeNull();
+    expect(recommended.alternatives.turnFields.disabledPluginIds).toBeTruthy();
+  });
   it("pins the config/read request fields without claiming thread override visibility", () => {
     expect(fixture.configReadParams).toEqual(reference.definitions.v2.ConfigReadParams);
     expect(Object.keys(fixture.configReadParams.properties)).toEqual(expect.arrayContaining(["cwd", "includeLayers"]));

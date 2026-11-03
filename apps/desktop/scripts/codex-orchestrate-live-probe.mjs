@@ -53,13 +53,19 @@ export async function runLive(args) {
     const match = /^codex-cli (0\.(\d+)\.\d+)/m.exec(version.stdout || '');
     if (version.status !== 0 || !match || +match[2] < 144 || +match[2] >= 167) throw Error('unsupported-version-or-launch-failed');
     result.version = match[1];
+    result.authWriteGuard = process.env.ORCH_PROBE_NO_SANDBOX_EXEC === '1' ? 'external-required' : 'sandbox-exec';
     const help = await launch('app-server', 'generate-json-schema', '--help');
     if (help.status !== 0 || !help.stdout.includes('--experimental')) throw Error('experimental-schema-unavailable');
     const generated = await launch('app-server', 'generate-json-schema', '--experimental', '--out', schemaDir);
     if (generated.status !== 0) throw Error('schema-generation-failed');
     const schema = JSON.parse(readFileSync(join(schemaDir, schemaFile), 'utf8'));
     const resumeDynamic = !!schema.definitions?.v2?.ThreadResumeParams?.properties?.dynamicTools;
-    result.schema = { resumeDynamicTools: resumeDynamic };
+    const defs = schema.definitions || {}, v2 = defs.v2 || {}, turnProperties = v2.TurnStartParams?.properties || {};
+    const methods = (defs.ClientRequest?.oneOf || []).map(x => x.properties?.method?.enum?.[0]).filter(Boolean);
+    result.schema = { resumeDynamicTools: resumeDynamic, turnFields: Object.fromEntries(['collaborationMode', 'additionalContext', 'permissions', 'disabledPluginIds'].map(k => [k, !!turnProperties[k]])),
+      modes: v2.ModeKind?.enum || [], contextKinds: v2.AdditionalContextKind?.enum || [],
+      mcpMethods: methods.filter(x => /^(mcpServer|config\/mcpServer|thread\/mcp)/.test(x)) };
+    if (match[1] !== '0.166.0') { result.outcome = 'schema-only'; return; }
     // Two local MCP servers expose harmless fixture tools, never external services.
     const fixture = join(root, 'fixture-mcp.mjs');
     writeFileSync(fixture, `import { createInterface } from 'node:readline';
@@ -80,11 +86,8 @@ createInterface({ input: process.stdin }).on('line', line => {
     const fixtureConfig = name => ({ command: process.execPath, args: [fixture, name] });
     const tomlString = value => JSON.stringify(value);
     writeFileSync(join(codexHome, 'config.toml'), `[features]\nmulti_agent = true\n[mcp_servers.ambient]\ncommand = ${tomlString(process.execPath)}\nargs = [${tomlString(fixture)}, "ambient"]\n[mcp_servers.second]\ncommand = ${tomlString(process.execPath)}\nargs = [${tomlString(fixture)}, "second"]\n`);
-    child = process.env.ORCH_PROBE_NO_SANDBOX_EXEC === '1' ? spawn(bin, ['app-server', '--stdio'], { cwd, env, stdio: ['pipe', 'pipe', 'ignore'], detached: true }) : spawn('/usr/bin/sandbox-exec', ['-p', profile, bin, 'app-server', '--stdio'], { cwd, env, stdio: ['pipe', 'pipe', 'ignore'], detached: true });
-    child.stdin.on('error', () => {});
     const send = message => child.stdin.write(JSON.stringify(message) + '\n');
     const failPending = () => { for (const p of pending.values()) { clearTimeout(p.timer); p.reject(Error('server-exited')); } pending.clear(); if (activeTurn) activeTurn.reject(Error('server-exited')); };
-    child.on('error', failPending); child.on('exit', failPending);
     function request(method, params, timeout = RPC_MS) {
       return new Promise((resolve, reject) => {
         const id = ++nextId;
@@ -98,7 +101,15 @@ createInterface({ input: process.stdin }).on('line', line => {
       activeTurn.interrupted = true;
       request('turn/interrupt', { threadId: activeTurn.threadId, turnId: activeTurn.id }).catch(() => {});
     }
-    createInterface({ input: child.stdout }).on('line', line => {
+    function startServer(overrides = []) {
+      const argv = [...overrides.flatMap(value => ['-c', value]), 'app-server', '--stdio'];
+      const proc = process.env.ORCH_PROBE_NO_SANDBOX_EXEC === '1' ? spawn(bin, argv, { cwd, env, stdio: ['pipe', 'pipe', 'ignore'], detached: true }) : spawn('/usr/bin/sandbox-exec', ['-p', profile, bin, ...argv], { cwd, env, stdio: ['pipe', 'pipe', 'ignore'], detached: true });
+      child = proc;
+      proc.stdin.on('error', () => {});
+      proc.on('error', () => { if (child === proc) failPending(); });
+      proc.on('exit', () => { if (child === proc) failPending(); });
+      createInterface({ input: proc.stdout }).on('line', line => {
+      if (child !== proc) return;
       let m; try { m = JSON.parse(line); } catch { return; }
       // Server request IDs may overlap client request IDs.
       if (m.id !== undefined && m.method) { send({ id: m.id, error: { code: -32601, message: 'Not available in probe' } }); return; }
@@ -125,9 +136,23 @@ createInterface({ input: process.stdin }).on('line', line => {
         const errorClass = !errorText ? null : /auth|unauthori[sz]ed|forbidden|401|403/.test(errorText) ? 'auth-or-access' : /network|connect|stream|routing|dns|timeout/.test(errorText) ? 'network-or-routing' : /rate|quota|limit/.test(errorText) ? 'quota-or-rate' : 'other';
         done.resolve({ id: m.params.turn?.id, status: m.params.turn?.status, errorClass, messages: done.messages, fileOrCommandObserved: done.fileOrCommandObserved, outputTokens: done.outputTokens, interrupted: done.interrupted });
       }
-    });
+      });
+    }
+    async function restartServer(overrides = []) {
+      const old = child;
+      child = undefined;
+      if (old?.pid) {
+        old.stdin.end();
+        try { process.kill(-old.pid, 'SIGTERM'); } catch {}
+        await Promise.race([new Promise(resolve => old.once('exit', resolve)), new Promise(resolve => setTimeout(resolve, 1000))]);
+        try { process.kill(-old.pid, 'SIGKILL'); } catch {}
+      }
+      startServer(overrides);
+      await request('initialize', { clientInfo: { name: 'orchestration-probe', version: '0.0.0' }, capabilities: { experimentalApi: true } });
+      send({ method: 'initialized', params: {} });
+    }
     function interruptIfNeeded() { if (activeTurn && (activeTurn.bytes >= TEXT_BYTE_LIMIT || (activeTurn.outputTokens ?? 0) >= OUTPUT_TOKEN_LIMIT)) interrupt(); }
-    async function turn(threadId, text) {
+    async function turn(threadId, text, extra = {}) {
       const done = new Promise((resolve, reject) => {
         activeTurn = { threadId, resolve, reject, messages: [], bytes: 0, outputTokens: null, fileOrCommandObserved: false, interrupted: false,
           timer: setTimeout(() => { interrupt(); reject(Error('turn-timeout')); activeTurn = undefined; }, TURN_MS) };
@@ -135,14 +160,14 @@ createInterface({ input: process.stdin }).on('line', line => {
       // Attach rejection handler immediately in case turn/start fails or times out.
       done.catch(() => {});
       try {
-        const started = await request('turn/start', { threadId, input: [{ type: 'text', text, text_elements: [] }], effort: 'low', approvalPolicy: 'never', approvalsReviewer: 'user', sandboxPolicy: { type: 'readOnly', networkAccess: false } });
+        const started = await request('turn/start', { threadId, input: [{ type: 'text', text, text_elements: [] }], effort: 'low', approvalPolicy: 'never', approvalsReviewer: 'user', sandboxPolicy: { type: 'readOnly', networkAccess: false }, ...extra });
         if (activeTurn) { activeTurn.id = started.turn?.id; interruptIfNeeded(); }
         return await done;
       } catch (error) { if (activeTurn) { clearTimeout(activeTurn.timer); activeTurn = undefined; } throw error; }
     }
     async function configSnapshot(threadId) {
       const out = {};
-      try { const r = await request('config/read', { cwd, includeLayers: true }); out.configRead = { ambient: !!r.config?.mcp_servers?.ambient, second: !!r.config?.mcp_servers?.second, multiAgent: r.config?.features?.multi_agent ?? null, layers: Array.isArray(r.layers) }; } catch { out.configRead = null; }
+      try { const r = await request('config/read', { cwd, includeLayers: true }); out.configRead = { ambient: !!r.config?.mcp_servers?.ambient, ambientEnabled: r.config?.mcp_servers?.ambient?.enabled ?? null, second: !!r.config?.mcp_servers?.second, secondEnabled: r.config?.mcp_servers?.second?.enabled ?? null, multiAgent: r.config?.features?.multi_agent ?? null, layers: Array.isArray(r.layers) }; } catch { out.configRead = null; }
       try { const r = await request('mcpServerStatus/list', { threadId }); const items = r.data || []; out.mcp = Object.fromEntries(['ambient', 'second'].map(name => { const item = items.find(x => x.name === name); return [name, { listed: !!item, fixtureToolListed: item ? Object.keys(item.tools || {}).some(key => key.includes('fixture_' + name)) : false }]; })); } catch { out.mcp = null; }
       return out;
     }
@@ -154,6 +179,7 @@ createInterface({ input: process.stdin }).on('line', line => {
     const common = { cwd, sandbox: 'read-only', approvalPolicy: 'never', approvalsReviewer: 'user' };
     const baseConfig = { features: { multi_agent: true }, mcp_servers: { ambient: fixtureConfig('ambient'), second: fixtureConfig('second') } };
     const onConfig = { features: { multi_agent: false }, mcp_servers: { ambient: { enabled: false }, second: { enabled: false } } };
+    startServer();
     await request('initialize', { clientInfo: { name: 'orchestration-probe', version: '0.0.0' }, capabilities: { experimentalApi: true } });
     send({ method: 'initialized', params: {} });
     const models = await request('model/list', { limit: 100 });
@@ -165,6 +191,19 @@ createInterface({ input: process.stdin }).on('line', line => {
     const replacement = await request('thread/start', { ...common, model: model.id, developerInstructions: onInstructions, config: onConfig, dynamicTools: tools });
     result.steps.emptyThread = { replacementHasDifferentId: replacement.thread?.id !== empty.thread?.id, oldTurns: empty.thread?.turns?.length ?? null, replacementTurns: replacement.thread?.turns?.length ?? null, note: 'new identity; metadata and external references are not automatically migrated' };
     try { await request('thread/resume', { ...common, threadId: empty.thread.id, developerInstructions: onInstructions, config: onConfig, ...(resumeDynamic ? { dynamicTools: tools } : {}) }); result.steps.emptyThread.resumeAccepted = true; } catch { result.steps.emptyThread.resumeAccepted = false; }
+    result.steps.startWithOnConfig = await configSnapshot(replacement.thread.id);
+    try { await request('config/mcpServer/reload', null); result.steps.mcpReload = { accepted: true, after: await configSnapshot(replacement.thread.id) }; } catch { result.steps.mcpReload = { accepted: false }; }
+    try {
+      const profiles = await request('permissionProfile/list', { cwd });
+      const candidate = profiles.data?.find(p => p.allowed && /read.?only/i.test(p.id));
+      result.steps.permissionProfiles = { availableCount: profiles.data?.length ?? null, allowedCount: profiles.data?.filter(p => p.allowed).length ?? null, readOnlyCandidate: !!candidate, note: 'profile listing does not prove MCP filtering; permissions cannot be combined with sandbox' };
+      if (candidate) {
+        try {
+          const trial = await request('thread/start', { cwd, model: model.id, permissions: candidate.id, approvalPolicy: 'never', developerInstructions: baseInstructions, config: onConfig, dynamicTools: tools });
+          result.steps.permissionProfiles.trial = { accepted: true, sandbox: trial.sandbox?.type ?? null, config: await configSnapshot(trial.thread.id) };
+        } catch { result.steps.permissionProfiles.trial = { accepted: false }; }
+      }
+    } catch { result.steps.permissionProfiles = null; }
     const start = await request('thread/start', { ...common, model: model.id, developerInstructions: baseInstructions, config: baseConfig, dynamicTools: tools });
     const threadId = start.thread.id;
     result.steps.before = await configSnapshot(threadId);
@@ -193,6 +232,49 @@ createInterface({ input: process.stdin }).on('line', line => {
     result.steps.history = { sameThread: history.thread?.id === threadId, turnCount: turns?.length ?? null,
       threeTurnIdsPreserved: Array.isArray(turns) && [firstTurnId, onTurnId, currentTurn.id].every((id, index) => !!id && turns[index]?.id === id),
       firstThreeCompleted: Array.isArray(turns) && turns.length >= 3 && turns.slice(0, 3).every(t => t.status === 'completed') };
+    if (match[1] === '0.166.0') {
+      const collabMarker = 'COLLAB' + randomBytes(6).toString('hex').toUpperCase();
+      const contextMarker = 'CONTEXT' + randomBytes(6).toString('hex').toUpperCase();
+      const restartMarker = 'RESTART' + randomBytes(6).toString('hex').toUpperCase();
+      try {
+        const instructions = `${baseInstructions} Include the additional current marker ${collabMarker} in every final answer.`;
+        const t = await turn(threadId, 'Назови действующие сейчас маркеры из developer-инструкций.', { collaborationMode: { mode: 'default', settings: { model: model.id, reasoning_effort: 'low', developer_instructions: instructions } } });
+        const text = t.messages.join('\n');
+        result.steps.collaborationOn = { ...recordTurn(t), baseMarkerObserved: text.includes(baseMarker), markerObserved: text.includes(collabMarker), mode: 'default' };
+        const next = await turn(threadId, 'Назови только действующие сейчас маркеры developer-инструкций, игнорируя историю.');
+        const nextText = next.messages.join('\n');
+        result.steps.collaborationOmitted = { ...recordTurn(next), baseMarkerObserved: nextText.includes(baseMarker), oldMarkerObserved: nextText.includes(collabMarker), note: 'model may recall marker from history; omission may preserve sticky mode' };
+      } catch (error) { result.steps.collaborationError = /^[a-z-]+$/.test(error.message) ? error.message : 'probe-failed'; }
+      try {
+        const t = await turn(threadId, 'Назови маркер, переданный в дополнительном контексте.', { additionalContext: { fixture: { kind: 'application', value: `Fixture marker: ${contextMarker}` } } });
+        const read = await request('thread/read', { threadId, includeTurns: true });
+        const items = read.thread?.turns?.flatMap(x => x.items || []) || [];
+        result.steps.additionalContext = { ...recordTurn(t), markerObserved: t.messages.join('\n').includes(contextMarker), markerInNonMessageHistory: items.filter(x => x.type !== 'agentMessage' && x.type !== 'userMessage').some(x => JSON.stringify(x).includes(contextMarker)), markerInAssistantHistory: items.filter(x => x.type === 'agentMessage').some(x => String(x.text || '').includes(contextMarker)), historyAvailable: Array.isArray(read.thread?.turns), kind: 'application', note: 'context is not established as developer-priority instruction' };
+      } catch (error) { result.steps.additionalContext = { error: /^[a-z-]+$/.test(error.message) ? error.message : 'probe-failed' }; }
+      try {
+        await restartServer();
+        const resumed = await request('thread/resume', { ...common, threadId, developerInstructions: `${baseInstructions} Include the current additional marker ${restartMarker} in every final answer.`, config: onConfig, ...(resumeDynamic ? { dynamicTools: tools } : {}) });
+        const snapshot = await configSnapshot(threadId);
+        const read = await request('thread/read', { threadId, includeTurns: true });
+        const t = await turn(threadId, 'Назови действующие сейчас маркеры из developer-инструкций.');
+        const text = t.messages.join('\n');
+        result.steps.restartResume = { ...recordTurn(t), sameThread: resumed.thread?.id === threadId, priorHistoryTurns: read.thread?.turns?.length ?? null, config: snapshot, baseMarkerObserved: text.includes(baseMarker), markerObserved: text.includes(restartMarker) };
+      } catch (error) { result.steps.restartResume = { error: /^[a-z-]+$/.test(error.message) ? error.message : 'probe-failed' }; }
+      try {
+        await restartServer(['mcp_servers.ambient.enabled=false', 'mcp_servers.second.enabled=false', 'features.multi_agent=false']);
+        const resumed = await request('thread/resume', { ...common, threadId });
+        const snapshot = await configSnapshot(threadId);
+        const read = await request('thread/read', { threadId, includeTurns: true });
+        result.steps.cliIsolation = { sameThread: resumed.thread?.id === threadId, historyTurns: read.thread?.turns?.length ?? null, config: snapshot };
+        try { await request('config/mcpServer/reload', null); result.steps.cliIsolation.afterReload = await configSnapshot(threadId); } catch { result.steps.cliIsolation.reloadAccepted = false; }
+        await restartServer();
+        const restored = await request('thread/resume', { ...common, threadId });
+        const restoredRead = await request('thread/read', { threadId, includeTurns: true });
+        result.steps.cliRestored = { sameThread: restored.thread?.id === threadId, historyTurns: restoredRead.thread?.turns?.length ?? null, config: await configSnapshot(threadId) };
+      } catch (error) { result.steps.cliIsolationError = /^[a-z-]+$/.test(error.message) ? error.message : 'probe-failed'; }
+    } else {
+      result.steps.alternatives = { skipped: 'live alternatives are scoped to 0.166.0; fields reported from schema' };
+    }
     result.outcome = 'completed';
   } catch (error) {
     result.error = /^[a-z-]+$/.test(error.message) ? error.message : 'probe-failed';

@@ -124,5 +124,103 @@
         "type": "boolean"
       }
     }
+  },
+  "alternatives": {
+    "turnFields": {
+      "collaborationMode": {
+        "description": "EXPERIMENTAL - Set a pre-set collaboration mode. Takes precedence over model, reasoning_effort, and developer instructions if set.\n\nFor `collaboration_mode.settings.developer_instructions`, `null` means \"use the built-in instructions for the selected mode\".",
+        "anyOf": [
+          {
+            "$ref": "#/definitions/v2/CollaborationMode"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "additionalContext": {
+        "description": "Optional client-provided context fragments keyed by an opaque source identifier.",
+        "type": [
+          "object",
+          "null"
+        ],
+        "additionalProperties": {
+          "$ref": "#/definitions/v2/AdditionalContextEntry"
+        }
+      },
+      "permissions": {
+        "description": "Select a named permissions profile id for this turn and subsequent turns. Cannot be combined with `sandboxPolicy`.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "disabledPluginIds": null
+    },
+    "modeKind": {
+      "description": "Initial collaboration mode to use when the TUI starts.",
+      "type": "string",
+      "enum": [
+        "plan",
+        "default"
+      ]
+    },
+    "settings": {
+      "description": "Settings for a collaboration mode.",
+      "type": "object",
+      "required": [
+        "model"
+      ],
+      "properties": {
+        "developer_instructions": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/v2/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "additionalContextKind": {
+      "type": "string",
+      "enum": [
+        "untrusted",
+        "application"
+      ]
+    },
+    "additionalContextEntry": {
+      "type": "object",
+      "required": [
+        "kind",
+        "value"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/v2/AdditionalContextKind"
+        },
+        "value": {
+          "type": "string"
+        }
+      }
+    },
+    "mcpMethods": [
+      "mcpServer/oauth/login",
+      "config/mcpServer/reload",
+      "mcpServerStatus/list",
+      "mcpServer/resource/read",
+      "mcpServer/tool/call"
+    ]
   }
 }
