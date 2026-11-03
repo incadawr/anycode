@@ -40,7 +40,7 @@ export class SafeCommandPermissionEngine implements PermissionEngine {
     if (planDeny) {
       return {
         decision: "deny",
-        reason: "Bash: command is not proven read-only, its executable is not trusted, or it uses unsupported shell syntax (such as chains or redirects). Use Glob for listing, Read for files, or Git for status and history; only read-only commands and | pipelines are allowed in plan mode.",
+        reason: "Bash: command is not proven read-only, its executable is not trusted, or it uses unsupported shell syntax (such as chains or redirects). Use Glob for listing, Grep for search, or Read for files. Git commands are denied because repository configuration can execute programs; use the Git tool for status, history, and diffs. Only proven read-only commands and | pipelines with trusted executables are allowed in plan mode.",
       };
     }
     return ruling;
