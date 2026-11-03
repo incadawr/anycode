@@ -2865,7 +2865,7 @@
 }
 
 .profile-insight-value {
-  color: var(--text-1);
+  color: var(--text-message);
   font-variant-numeric: tabular-nums;
 }
 
@@ -2885,6 +2885,10 @@
   font-size: var(--fs-sm);
   padding: 0.2rem 0;
   border-bottom: 1px solid var(--border);
+}
+
+.profile-top-row .settings-mcp-name {
+  color: var(--text-message);
 }
 
 .profile-top-count {
