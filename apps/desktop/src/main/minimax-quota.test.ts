@@ -10,6 +10,18 @@ const response = () => new Response(JSON.stringify({ base_resp: { status_code: 0
 const route = { kind: "direct", why: "explicit-direct" } as const;
 
 describe("MiniMax quota polling", () => {
+  it("suppresses 1004 until the connection guard changes", async () => {
+    let now = 0; let guard = "old";
+    const fetch = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ base_resp: { status_code: 1004 } }))).mockResolvedValue(response());
+    const record = vi.fn(async () => {});
+    const poller = createMiniMaxQuotaPoller({ resolve: async () => ({ apiKey: "key", guard, route }), fetch: () => fetch, record, now: () => now });
+    await poller.refresh("one");
+    now += 60_000; await poller.refresh("one");
+    expect(fetch).toHaveBeenCalledTimes(1);
+    guard = "new"; now += 60_000; await poller.refresh("one");
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(record).toHaveBeenCalledTimes(1);
+  });
   it("deduplicates in-flight requests, throttles, and refuses redirects", async () => {
     let now = 0;
     let release!: (response: Response) => void;
@@ -55,6 +67,25 @@ describe("MiniMax quota persistence", () => {
     await service.refresh("c1");
     expect((await loadSettings(path)).settings.provider.connections[0]?.lastQuota).toMatchObject({ usedPercent: 20, windowDurationMins: 300, source: "minimax-token-plan" });
     expect(notify).toHaveBeenCalledTimes(1);
+  });
+  it("uses the connection model to select the quota row", async () => {
+    await writeFile(path, JSON.stringify({ version: 2, provider: { connections: [{ id: "c1", providerId: "minimax", model: "model-b" }], activeConnectionId: "c1" }, tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false } }));
+    const body = { base_resp: { status_code: 0 }, model_remains: [{ model_name: "model-a", current_interval_remaining_percent: 80 }, { model_name: "model-b", current_interval_remaining_percent: 30 }] };
+    const service = createMiniMaxQuotaService({ settingsPath: path, vault: { getSecretValue: async () => key }, fetch: () => async () => new Response(JSON.stringify(body)), onPersisted: () => {} });
+    await service.refresh("c1");
+    expect((await loadSettings(path)).settings.provider.connections[0]?.lastQuota?.usedPercent).toBe(70);
+  });
+  it("drops an in-flight observation after the selected model changes", async () => {
+    let release!: (response: Response) => void;
+    const fetch = vi.fn(() => new Promise<Response>(resolve => { release = resolve; }));
+    const notify = vi.fn();
+    const service = createMiniMaxQuotaService({ settingsPath: path, vault: { getSecretValue: async () => key }, fetch: () => fetch, onPersisted: notify });
+    const request = service.refresh("c1");
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    await writeFile(path, JSON.stringify({ version: 2, provider: { connections: [{ id: "c1", providerId: "minimax", model: "model-b" }], activeConnectionId: "c1" }, tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false } }));
+    release(response()); await request;
+    expect((await loadSettings(path)).settings.provider.connections[0]?.lastQuota).toBeUndefined();
+    expect(notify).not.toHaveBeenCalled();
   });
   it.each(["rotate", "delete"])("drops an in-flight response after credential %s", async operation => {
     let release!: (response: Response) => void;
