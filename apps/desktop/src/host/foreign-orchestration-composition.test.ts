@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { PERSONAS, type AgentBridgeCallDeps, type SessionSubagentPort } from "@anycode/core";
 import { cloneDefaults } from "../settings/schema.js";
-import { createForeignOrchestrationComposition } from "./foreign-orchestration-composition.js";
+import { createForeignOrchestrationComposition, selectedCodexPreset } from "./foreign-orchestration-composition.js";
 import { createRoutedChildComposition } from "./routed-child-composition.js";
 import { entryKey, RoleHealthCache } from "./role-route.js";
 import { CodexDynamicToolBridge } from "./engines/codex/dynamic-tool-bridge.js";
@@ -27,6 +27,12 @@ function setup() {
 }
 
 describe("foreign orchestration composition", () => {
+  it("uses a pending ask selection over applied full-access when enabling", async () => {
+    const s = setup();
+    const engine = { snapshot: () => ({ activePresetId: "full-access" }), pendingSnapshot: () => ({ activePresetId: "ask" }) };
+    s.composition.captureBaseAuthority(selectedCodexPreset(engine));
+    expect(s.composition.childMode()).toBe("build");
+  });
   it("declares roles without profiles and preserves base authority through an overlay", async () => {
     const s = setup();
     expect((await s.composition.catalog()).map(e => e.name)).toEqual(["planner", "executor", "reviewer", "explore"]);

@@ -350,7 +350,7 @@ import {
 import { attachChildReportDurability, attachEngineChildReportDurability } from "./child-report-durability.js";
 import { createSpawnModeCell } from "./spawn-mode-cell.js";
 import { createRoutedChildComposition } from "./routed-child-composition.js";
-import { createForeignOrchestrationComposition } from "./foreign-orchestration-composition.js";
+import { createForeignOrchestrationComposition, selectedCodexPreset } from "./foreign-orchestration-composition.js";
 import { RoleHealthCache, pickEntry, resolveRoleRouteChain, toCoreEntry } from "./role-route.js";
 import { parseSettings } from "../settings/schema.js";
 import { ENV_APP_VERSION, parseAppVersionEnv } from "../main/host-env.js";
@@ -1872,7 +1872,7 @@ async function bootCodexSession(
     // boot (a child-mode codex session has no detached children of its own).
     ...(codexPendingChildReports !== undefined ? { pendingChildReports: codexPendingChildReports } : {}),
     ...(codexForeignComposition ? { onOrchestrateChanged: (enabled: boolean) => {
-      if (enabled) codexForeignComposition!.captureBaseAuthority(connected.engine.snapshot().activePresetId);
+      if (enabled) codexForeignComposition!.captureBaseAuthority(selectedCodexPreset(connected.engine));
       else codexForeignComposition!.clearBaseAuthority();
     } } : {}),
     hasTitle: connected.sessionMeta.title !== undefined && connected.sessionMeta.title.length > 0,

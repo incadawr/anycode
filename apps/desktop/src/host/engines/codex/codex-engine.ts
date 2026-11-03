@@ -24,7 +24,7 @@
 import type { AgentEvent, CodexRateLimitsWire, HistoryItem, ImageAttachment, PermissionMode, ReasoningEffort } from "@anycode/core";
 import { orchestrationDeveloperBlock, orchestrationTurnReminder } from "@anycode/core";
 import { OrchestrationNotReadyError, type OrchestrationPolicy } from "../../orchestration-policy.js";
-import { captureBaseConfig, orchestrationOverrides, verifyConfig, verifyReadOnlyEcho, type BaseConfig } from "./orchestration-policy.js";
+import { captureBaseConfig, orchestrationOverrides, requireCompleteReadback, verifyConfig, verifyReadOnlyEcho, type BaseConfig } from "./orchestration-policy.js";
 import {
   CODEX_BOOT_RPC_TIMEOUT_MS,
   CODEX_BRIDGE_SETTLE_MS,
@@ -977,6 +977,7 @@ export class CodexEngine implements SessionEngine {
     try {
       const config = await this.client.request("config/read", { cwd: this.settings.workspace, includeLayers: true }, { timeoutMs: this.bounds.bootRpcMs });
       if (!config || typeof config !== "object" || !Array.isArray((config as { layers?: unknown }).layers)) return;
+      requireCompleteReadback(config);
       captureBaseConfig(config, forwarded);
       this.orchestrationVerified = true;
     } catch { /* unavailable until a new session can verify the inventory */ }
@@ -1006,7 +1007,9 @@ export class CodexEngine implements SessionEngine {
             count = 0;
           }
           check();
-          const base = enabled ? captureBaseConfig(await this.client.request("config/read", { cwd: this.settings?.workspace, includeLayers: true }, { timeoutMs: this.bounds.bootRpcMs }), forwarded) : this.orchestrationBase;
+          const readback = enabled ? await this.client.request("config/read", { cwd: this.settings?.workspace, includeLayers: true }, { timeoutMs: this.bounds.bootRpcMs }) : undefined;
+          if (enabled) requireCompleteReadback(readback);
+          const base = enabled ? captureBaseConfig(readback, forwarded) : this.orchestrationBase;
           if (!base) throw new Error("Missing base Codex config");
           check();
           this.unobserve();

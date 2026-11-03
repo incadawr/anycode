@@ -7,6 +7,10 @@ import type { createRoutedChildComposition } from "./routed-child-composition.js
 import { createForeignSpawnModeCell } from "./spawn-mode-cell.js";
 import { codexAgentPermissionMode } from "./engines/codex/dynamic-tool-bridge.js";
 
+export function selectedCodexPreset(engine: { snapshot(): { activePresetId: string }; pendingSnapshot(): { activePresetId: string } | null }): string {
+  return (engine.pendingSnapshot() ?? engine.snapshot()).activePresetId;
+}
+
 /** Composition for a native root. The overlay owner calls capture/clear at its verified transition boundary. */
 export function createForeignOrchestrationComposition(options: {
   settings(): AnycodeSettings | undefined;

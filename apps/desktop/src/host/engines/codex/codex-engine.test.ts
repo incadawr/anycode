@@ -1088,9 +1088,11 @@ describe("Codex orchestration restart", () => {
     expect(r.engine.orchestrationPolicy!.availability().supported).toBe(true);
     await r.engine.verifyOrchestrationAvailability(false);
     expect(r.engine.orchestrationPolicy!.availability().supported).toBe(false);
-    r.initial.request = async <T>() => ({ config: { mcp_servers: {} } } as T);
-    await r.engine.verifyOrchestrationAvailability(true);
-    expect(r.engine.orchestrationPolicy!.availability().supported).toBe(false);
+    for (const config of [{ mcp_servers: {} }, { mcp_servers: {}, features: { multi_agent: false }, sandbox_mode: "read-only" }]) {
+      r.initial.request = async <T>() => ({ config, layers: [] } as T);
+      await r.engine.verifyOrchestrationAvailability(true);
+      expect(r.engine.orchestrationPolicy!.availability().supported).toBe(false);
+    }
     await r.engine.dispose("session-close");
   });
 
