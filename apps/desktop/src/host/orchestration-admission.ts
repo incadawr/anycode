@@ -14,6 +14,7 @@ type Entry = { signature: string; promise: Promise<AdmissionResult> };
 export class OrchestrationAdmission {
   private readonly entries = new Map<string, Entry>();
   private transition = false;
+  get locked(): boolean { return this.transition; }
   constructor(private readonly options: {
     controller: OrchestrationController;
     connectionId(): string | null;

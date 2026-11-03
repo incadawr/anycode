@@ -17,6 +17,28 @@ function nativePolicy(h: ReturnType<typeof createHarness>, policy: Orchestration
 }
 
 describe("session orchestration admission", () => {
+  it("gives the atomic task priority over an agent arrival as policy resolves", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const h = createHarness({ steps: [finishStep()], gated: { parkAfterIndex: 0 } });
+    nativePolicy(h, { availability: () => ({ supported: true }), apply: async (enabled, baseAuthority) => { await gate; return { enabled, baseAuthority }; } });
+    try {
+      const connectionId = await ready(h);
+      h.send({ type: "user_message", requestId: "atomic", text: "task", orchestrate: "enable", connectionId });
+      await h.flush();
+      release();
+      const controller = (h.session as unknown as { orchestrationController: { state: { status: string } } }).orchestrationController;
+      for (let i = 0; i < 50 && controller.state.status !== "on"; i++) await Promise.resolve();
+      expect(controller.state.status).toBe("on");
+      const delivery = await h.session.receiveAgentMessage({ messageId: "agent", sender: "supervisor", recipientSessionId: h.session.communicationStatus().sessionId, kind: "agent_message", payload: "follow-up", mode: "next_turn", createdAt: new Date().toISOString() });
+      expect(delivery.state).toBe("queued");
+      await h.waitFor((m): m is Of<"turn_started"> => m.type === "turn_started" && m.requestId === "atomic");
+      expect(h.received.find(m => m.type === "turn_started")).toMatchObject({ requestId: "atomic" });
+      expect(h.received.some(m => m.type === "turn_rejected" && m.requestId === "atomic")).toBe(false);
+      h.gated?.release();
+      await h.waitUntil(() => h.session.agentMessageStatus("agent")?.state === "acknowledged");
+    } finally { release(); h.gated?.release(); h.close(); }
+  });
   it("rejects a toggle during teardown and drains the queued agent message", async () => {
     let releaseFlush!: () => void;
     let releaseApply!: () => void;
