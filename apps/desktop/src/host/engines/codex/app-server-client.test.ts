@@ -294,6 +294,27 @@ describe("AppServerClient", () => {
     }
   });
 
+  it("passes process overrides only to app-server and never to version preflight", async () => {
+    const spawnSpy = vi.fn((command: string, args: readonly string[], opts: Parameters<typeof spawn>[2]) => spawn(command, args, opts));
+    const client = makeClient([], { spawnImpl: spawnSpy, configOverrides: ['features.multi_agent=false', 'sandbox_mode="read-only"'] });
+    try {
+      await client.start();
+      const preflight = spawnSpy.mock.calls.find((call) => call[1].includes("--version"))![1];
+      const server = spawnSpy.mock.calls.find((call) => call[1].includes("app-server"))![1];
+      expect(preflight).not.toContain("-c");
+      expect(server.slice(-6)).toEqual(["-c", "features.multi_agent=false", "-c", 'sandbox_mode="read-only"', "app-server", "--stdio"]);
+    } finally { await client.close(); }
+  });
+
+  it("does not spawn app-server after close during version preflight", async () => {
+    const spawnSpy = vi.fn((command: string, args: readonly string[], opts: Parameters<typeof spawn>[2]) => spawn(command, args, opts));
+    const client = makeClient([], { spawnImpl: spawnSpy });
+    const start = client.start();
+    await client.close();
+    await expect(start).rejects.toThrow("client closed");
+    expect(spawnSpy.mock.calls.some((call) => call[1].includes("app-server"))).toBe(false);
+  });
+
   // The ONE test in this file that omits the `binaryTrust` seam, so the client's
   // production default — the real on-disk `checkCodexBinaryTrustOnDisk` — is what
   // decides. Without it, every test here injects a trusted stub and nothing pins

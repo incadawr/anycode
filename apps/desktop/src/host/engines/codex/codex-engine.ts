@@ -22,6 +22,9 @@
  */
 
 import type { AgentEvent, CodexRateLimitsWire, HistoryItem, ImageAttachment, PermissionMode, ReasoningEffort } from "@anycode/core";
+import { orchestrationDeveloperBlock, orchestrationTurnReminder } from "@anycode/core";
+import type { OrchestrationPolicy } from "../../orchestration-policy.js";
+import { captureBaseConfig, orchestrationOverrides, verifyConfig, verifyReadOnlyEcho, type BaseConfig } from "./orchestration-policy.js";
 import {
   CODEX_BOOT_RPC_TIMEOUT_MS,
   CODEX_BRIDGE_SETTLE_MS,
@@ -408,6 +411,8 @@ export interface CodexClient {
 import type { CodexAgentCardLogPort } from "./agent-card-log.js";
 
 export interface CodexEngineCreateOptions extends Omit<AppServerClientOptions, "bootstrap" | "onServerRequest"> {
+  /** Durable replacement for a fresh thread that has no rollout yet. */
+  persistOrchestrationThreadId?: (oldId: string, newId: string) => Promise<void>;
   agentBridge?: import("./dynamic-tool-bridge.js").CodexDynamicToolBridge;
   onMcpNotification?: (notification: JsonRpcNotification) => void;
   agentCardLog?: CodexAgentCardLogPort;
@@ -764,6 +769,7 @@ export async function startCodexEngine(options: CodexEngineCreateOptions): Promi
   const approvals = new CodexApprovalBridge({
     broker: options.broker,
     activeTurn: () => engine?.activeTurnDetails ?? null,
+    denyApprovals: () => engine?.denyOrchestrationApprovals() ?? false,
     // (cross-review F1): the thread's cwd is the boot workspace,
     // so fileChange approvals mint containment facts against that root.
     workspace: options.workspace,
@@ -771,17 +777,23 @@ export async function startCodexEngine(options: CodexEngineCreateOptions): Promi
       ? { patchAutoApproval: { ...options.patchAutoApproval, workspace: options.workspace, activePresetId: () => engine?.snapshot().activePresetId ?? null } }
       : {}),
   });
-  const client = new AppServerClient({ ...options, bootstrap: options.bootstrap, onServerRequest: (request, respond) => {
+  const makeClient = (configOverrides: readonly string[] = []) => new AppServerClient({ ...options, configOverrides: [...(options.configOverrides ?? []), ...configOverrides], bootstrap: options.bootstrap, onServerRequest: (request, respond) => {
     const owner = engine?.activeTurnDetails ?? null;
     return request.method === "item/tool/call" && options.agentBridge
       ? options.agentBridge.handle(request, respond, owner, (event) => engine?.pushBridgeEvent(event, owner))
       : approvals.handle(request, respond);
   } });
+  const client = makeClient();
   client.observeNotifications((notification) => options.onMcpNotification?.(notification));
   try {
     await client.start();
     const connected = await createNativeCodexSession(client, options.workspace, approvals, options.timeouts, options.selection, options.shadowLog, options.agentBridge, options.agentCardLog, withVersionWarning(options.bootNotices, client.versionWarning), options.mcpForward);
     engine = connected.engine;
+    if (options.persistOrchestrationThreadId) engine.installOrchestration((overrides) => {
+      const replacement = makeClient(overrides);
+      replacement.observeNotifications((notification) => options.onMcpNotification?.(notification));
+      return { client: replacement, start: () => replacement.start() };
+    }, options.persistOrchestrationThreadId, options.mcpForward?.servers);
     return connected;
   } catch (error) {
     // Any bounded boot RPC that times out lands here: the child is released.
@@ -796,6 +808,7 @@ export async function resumeCodexEngine(options: CodexEngineCreateOptions & { ex
   const approvals = new CodexApprovalBridge({
     broker: options.broker,
     activeTurn: () => engine?.activeTurnDetails ?? null,
+    denyApprovals: () => engine?.denyOrchestrationApprovals() ?? false,
     // (cross-review F1): the thread's cwd is the boot workspace,
     // so fileChange approvals mint containment facts against that root.
     workspace: options.workspace,
@@ -803,12 +816,13 @@ export async function resumeCodexEngine(options: CodexEngineCreateOptions & { ex
       ? { patchAutoApproval: { ...options.patchAutoApproval, workspace: options.workspace, activePresetId: () => engine?.snapshot().activePresetId ?? null } }
       : {}),
   });
-  const client = new AppServerClient({ ...options, bootstrap: options.bootstrap, onServerRequest: (request, respond) => {
+  const makeClient = (configOverrides: readonly string[] = []) => new AppServerClient({ ...options, configOverrides: [...(options.configOverrides ?? []), ...configOverrides], bootstrap: options.bootstrap, onServerRequest: (request, respond) => {
     const owner = engine?.activeTurnDetails ?? null;
     return request.method === "item/tool/call" && options.agentBridge
       ? options.agentBridge.handle(request, respond, owner, (event) => engine?.pushBridgeEvent(event, owner))
       : approvals.handle(request, respond);
   } });
+  const client = makeClient();
   client.observeNotifications((notification) => options.onMcpNotification?.(notification));
   try {
     await client.start();
@@ -826,6 +840,11 @@ export async function resumeCodexEngine(options: CodexEngineCreateOptions & { ex
       options.mcpForward,
     );
     engine = connected.engine;
+    if (options.persistOrchestrationThreadId) engine.installOrchestration((overrides) => {
+      const replacement = makeClient(overrides);
+      replacement.observeNotifications((notification) => options.onMcpNotification?.(notification));
+      return { client: replacement, start: () => replacement.start() };
+    }, options.persistOrchestrationThreadId, options.mcpForward?.servers);
     return connected;
   } catch (error) {
     await client.close();
@@ -834,6 +853,11 @@ export async function resumeCodexEngine(options: CodexEngineCreateOptions & { ex
 }
 
 export class CodexEngine implements SessionEngine {
+  orchestrationPolicy?: OrchestrationPolicy;
+  private orchestrationState: "off" | "on" | "transitioning" | "quarantined" = "off";
+  private orchestrationGeneration = 0;
+  private orchestrationCandidate: CodexClient | null = null;
+  private orchestrationBase?: BaseConfig;
   private usageObserver?: (usage: { inputTokens?: number; cachedInputTokens?: number; outputTokens?: number; totalTokens?: number }) => void;
   onUsage(observer: (usage: { inputTokens?: number; cachedInputTokens?: number; outputTokens?: number; totalTokens?: number }) => void): void { this.usageObserver = observer; }
   /** A selection made during a turn applies only on the next accepted turn. */
@@ -849,9 +873,9 @@ export class CodexEngine implements SessionEngine {
   readonly id = "codex" as const;
   capabilities: EngineCapabilities;
   private readonly bounds: CodexEngineTimeouts;
-  private readonly unobserve: () => void;
+  private unobserve: () => void;
   private turnNumber = 0;
-  private operation: "turn" | "compact" | null = null;
+  private operation: "turn" | "compact" | "transition" | null = null;
   private notificationIterator?: AsyncIterator<JsonRpcNotification>;
   private pendingNotification?: Promise<IteratorResult<JsonRpcNotification>>;
   private maintenanceObserver?: (event: AgentEvent) => void;
@@ -902,8 +926,8 @@ export class CodexEngine implements SessionEngine {
   private readonly appliedListeners = new Set<(snapshot: { model: string; activePresetId: string; effort?: string; fast?: boolean }) => void>();
 
   constructor(
-    private readonly client: CodexClient,
-    readonly threadId: string,
+    private client: CodexClient,
+    public threadId: string,
     private readonly approvals?: CodexApprovalBridge,
     overrides?: Partial<CodexEngineTimeouts>,
     settings?: CodexEngineSettings,
@@ -937,6 +961,88 @@ export class CodexEngine implements SessionEngine {
 
   get activeTurnDetails(): ActiveCodexTurn | null {
     return this.disposed || this.operation === "compact" ? null : this.activeTurn;
+  }
+
+  denyOrchestrationApprovals(): boolean { return this.orchestrationState !== "off"; }
+
+  /** Installs a per-session transport factory; it does not enable product admission. */
+  installOrchestration(factory: (overrides: readonly string[]) => { client: CodexClient; start(): Promise<void> }, persistId: (oldId: string, newId: string) => Promise<void>, forwarded: Record<string, unknown> = {}): void {
+    this.orchestrationPolicy = {
+      availability: () => this.disposed || this.orchestrationState === "quarantined"
+        ? { supported: false, reason: "unavailable" } : { supported: true },
+      apply: async (enabled, baseAuthority) => {
+        if (this.disposed || this.terminalError || this.operation !== null || this.approvals?.hasActiveRequests() || this.agentBridge?.hasPendingCalls() || this.orchestrationState === "quarantined" || this.orchestrationState === "transitioning") throw new Error("Codex orchestration transition unavailable");
+        if ((this.orchestrationState === "on") === enabled) return { enabled, baseAuthority };
+        this.operation = "transition";
+        this.orchestrationState = "transitioning";
+        const generation = ++this.orchestrationGeneration;
+        const check = () => { if (this.disposed || generation !== this.orchestrationGeneration) throw new Error("Codex transition invalidated"); };
+        const work = async () => {
+          const oldId = this.threadId;
+          const count = (await this.readNativeTurnState()).count;
+          check();
+          const base = enabled ? captureBaseConfig(await this.client.request("config/read", { cwd: this.settings?.workspace, includeLayers: true }, { timeoutMs: this.bounds.bootRpcMs }), forwarded) : this.orchestrationBase;
+          if (!base) throw new Error("Missing base Codex config");
+          check();
+          this.unobserve();
+          await this.client.close();
+          check();
+          const replacement = factory(enabled ? orchestrationOverrides(base) : []);
+          const client = replacement.client;
+          this.orchestrationCandidate = client;
+          await replacement.start();
+          check();
+          await initializeAndVerifyAccount(client, this.bounds.bootRpcMs, this.agentBridge !== undefined, process.platform);
+          check();
+          const config = await client.request("config/read", { cwd: this.settings?.workspace, includeLayers: true }, { timeoutMs: this.bounds.bootRpcMs });
+          verifyConfig(config, base, enabled);
+          check();
+          const settings = this.settings;
+          if (!settings) throw new Error("Codex settings unavailable");
+          const params = { cwd: settings.workspace, ...(settings.catalog.has(settings.model) ? { model: settings.model } : {}),
+            ...(this.agentBridge ? { dynamicTools: this.agentBridge.declarations() } : {}),
+            ...(enabled ? { sandbox: "read-only", approvalPolicy: "never", approvalsReviewer: "user" } : settings.preset.threadParams),
+            ...(!enabled && Object.keys(forwarded).length ? { config: { mcp_servers: forwarded } } : {}) };
+          let result: ThreadResult;
+          let startedReplacement = false;
+          try {
+            result = await client.request<ThreadResult>("thread/resume", { ...params, threadId: oldId }, { timeoutMs: this.bounds.bootRpcMs });
+          } catch (error) {
+            if (count !== 0 || !(error instanceof Error) || !/no rollout found/i.test(error.message)) throw error;
+            check();
+            result = await client.request<ThreadResult>("thread/start", params, { timeoutMs: this.bounds.bootRpcMs });
+            startedReplacement = true;
+          }
+          check();
+          const native = nativeThread(result, "orchestration transition");
+          if (native.threadId !== oldId && !startedReplacement) throw new Error("Codex resumed a different thread id");
+          if (enabled) verifyReadOnlyEcho(result);
+          if (native.threadId !== oldId) { await persistId(oldId, native.threadId); check(); }
+          this.threadId = native.threadId;
+          this.client = client;
+          this.orchestrationCandidate = null;
+          this.notificationIterator = undefined;
+          this.pendingNotification = undefined;
+          this.unobserve = client.observeNotifications?.((notification) => this.observeNotification(notification)) ?? (() => {});
+          this.orchestrationBase = enabled ? base : undefined;
+          this.orchestrationState = enabled ? "on" : "off";
+          return { enabled, baseAuthority };
+        };
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          return await Promise.race([work(), new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("Codex orchestration transition timed out")), this.bounds.bootRpcMs * 4); })]);
+        } catch (error) {
+          ++this.orchestrationGeneration;
+          this.orchestrationState = "quarantined";
+          this.terminalError = error instanceof Error ? error : new Error(String(error));
+          void this.orchestrationCandidate?.close();
+          throw error;
+        } finally {
+          if (timer !== undefined) clearTimeout(timer);
+          this.operation = null;
+        }
+      },
+    };
   }
 
   mode(): PermissionMode {
@@ -1143,6 +1249,7 @@ export class CodexEngine implements SessionEngine {
 
   /** Membership in the frozen preset table is the ONLY way a posture is expressible — no raw policy/config from the renderer. */
   selectPreset(id: string): CodexSettingsChange {
+    if (this.orchestrationState !== "off") return { ok: false, reason: "Permission presets cannot change during orchestration." };
     const settings = this.settings;
     if (settings === undefined) return { ok: false, reason: "Codex permission presets are unavailable for this session." };
     const preset = findCodexPreset(id);
@@ -1325,6 +1432,10 @@ export class CodexEngine implements SessionEngine {
       threadId: this.threadId,
       input: inputItems,
       ...this.turnSettingsOverride(),
+      ...(this.orchestrationState === "on" ? {
+        sandboxPolicy: { type: "readOnly", networkAccess: false }, approvalPolicy: "never", approvalsReviewer: "user",
+        additionalContext: { orchestration: { kind: "application", value: `${orchestrationDeveloperBlock("codex")}\n${orchestrationTurnReminder("codex")}` } },
+      } : {}),
     }, { timeoutMs: this.bounds.turnStartMs });
     const buffered: JsonRpcNotification[] = [];
 
@@ -1757,6 +1868,8 @@ export class CodexEngine implements SessionEngine {
   }
 
   dispose(_reason: "session-close" | "host-shutdown"): Promise<void> {
+    ++this.orchestrationGeneration;
+    void this.orchestrationCandidate?.close();
     this.agentBridge?.cancel();
     // drop the session-lifetime collab correlation. This never
     // manufactures a child completion — it only forgets the mapping.

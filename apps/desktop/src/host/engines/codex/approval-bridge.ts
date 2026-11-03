@@ -258,6 +258,8 @@ function denial(message: string): JsonRpcError {
 
 export class CodexApprovalBridge {
   private pending = false;
+  private activeRequests = 0;
+  hasActiveRequests(): boolean { return this.activeRequests > 0; }
   /**
    * True while the parked ask is being force-settled because the TURN is going
    * away (Stop / disconnect / shutdown) rather than because the user said no.
@@ -269,7 +271,8 @@ export class CodexApprovalBridge {
 
   /** AppServerClient hook. Every request is answered exactly once. */
   handle = async (request: JsonRpcServerRequest, responder: ServerRequestResponder): Promise<void> => {
-    await this.route(request, responder);
+    this.activeRequests++;
+    try { await this.route(request, responder); } finally { this.activeRequests--; }
   };
 
   /** Settles an outstanding broker ask promptly when the turn or engine is torn down. */

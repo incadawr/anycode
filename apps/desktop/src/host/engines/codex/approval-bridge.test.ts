@@ -743,6 +743,15 @@ describe("CodexApprovalBridge — workspace patch auto-accept", () => {
     expect(broker.pendingCount).toBe(0);
   });
 
+  it("declines an otherwise auto-accepted patch during orchestration", async () => {
+    const broker = new IpcPermissionBroker(() => {});
+    const bridge = new CodexApprovalBridge({ broker, activeTurn: () => ({ ...ACTIVE, items: fileItem(join(WS, "a.ts")) }), patchAutoApproval: patchCtx(), denyApprovals: () => true });
+    const response = responder();
+    await bridge.handle(file(), response);
+    expect(response.result).toHaveBeenCalledWith({ decision: "decline" });
+    expect(broker.pendingCount).toBe(0);
+  });
+
   // Cross-review M1: a delete-kind patch asks even inside the
   // workspace — core's edit-mode containment widens only Write/Edit and
   // Claude's workspace tier is acceptEdits, so the codex child must not become

@@ -32,6 +32,8 @@ import {
 } from "./codex-engine.js";
 
 import { CodexDynamicToolBridge, ANYCODE_AGENT_TOOL, ANYCODE_AGENT_STATUS_TOOL } from "./dynamic-tool-bridge.js";
+import { OrchestrationController } from "../../orchestration-policy.js";
+import { ChildReportQueue } from "../../child-report-queue.js";
 import { createEngineBrowserBridge } from "../browser-bridge.js";
 
 const childPath = fileURLToPath(new URL("./test-child.mjs", import.meta.url));
@@ -1363,6 +1365,143 @@ async function runTurn(server: FakeAppServer, engine: CodexEngine, input = "hi")
 function notices(events: AgentEvent[]): string[] {
   return events.filter((event) => event.type === "engine_notice").map((event) => (event as { message: string }).message);
 }
+
+describe("Codex orchestration restart", () => {
+  async function setup(options: { empty?: boolean; badEcho?: boolean; noRollout?: boolean; neverFactory?: boolean; bridge?: CodexDynamicToolBridge; approvals?: CodexApprovalBridge } = {}) {
+    const baseConfig = { mcp_servers: { ambient: { enabled: true } }, features: { multi_agent: true }, sandbox_mode: "workspace-write", approval_policy: "on-request" };
+    const onConfig = { mcp_servers: { ambient: { enabled: false } }, features: { multi_agent: false }, sandbox_mode: "read-only", approval_policy: "never" };
+    const initial = new FakeAppServer();
+    const baseRequest = initial.request.bind(initial);
+    initial.request = <T>(method: string, params?: unknown, opts?: { timeoutMs?: number }) => {
+      if (method === "config/read") return Promise.resolve({ config: baseConfig } as T);
+      if (method === "thread/read") return Promise.resolve({ thread: { id: "fresh-thread", turns: options.empty ? [] : [{ id: "prior" }] } } as T);
+      return baseRequest<T>(method, params, opts);
+    };
+    const { engine } = await createNativeCodexSession(initial, "/work", options.approvals, { bootRpcMs: 20 }, undefined, undefined, options.bridge);
+    const servers: FakeAppServer[] = [];
+    const overrides: string[][] = [];
+    const persist = vi.fn(async () => {});
+    let releaseFactory: (() => void) | undefined;
+    engine.installOrchestration((args) => {
+      overrides.push([...args]);
+      const next = new FakeAppServer(); servers.push(next);
+      const original = next.request.bind(next);
+      next.request = <T>(method: string, params?: unknown, opts?: { timeoutMs?: number }): Promise<T> => {
+        if (method === "config/read") return Promise.resolve({ config: args.length ? onConfig : baseConfig } as T);
+        if (method === "thread/read") return Promise.resolve({ thread: { id: engine.threadId, turns: options.empty ? [] : [{ id: "prior" }] } } as T);
+        if (method === "thread/resume" || method === "thread/start") {
+          next.calls.push({ method, params });
+          if ((options.empty || options.noRollout) && method === "thread/resume") return Promise.reject(new Error("no rollout found"));
+          return Promise.resolve({ thread: { id: method === "thread/start" ? "replacement" : engine.threadId }, model: "gpt-5.6-sol", approvalPolicy: options.badEcho ? "on-request" : "never", sandbox: { type: "readOnly", networkAccess: false } } as T);
+        }
+        return original<T>(method, params, opts);
+      };
+      return { client: next, start: () => options.neverFactory ? new Promise<void>((resolve) => { releaseFactory = resolve; }) : Promise.resolve() };
+    }, persist);
+    return { initial, engine, servers, overrides, persist, releaseFactory: () => releaseFactory?.(), controller: new OrchestrationController(engine.orchestrationPolicy) };
+  }
+
+  it("restarts ON/OFF with the same thread and reasserts policy on each turn", async () => {
+    const r = await setup(); const authority = { preset: "ask" };
+    expect(await r.controller.apply(true, authority)).toBe(true);
+    expect(r.initial.closeCount).toBe(1);
+    expect(r.overrides[0]).toContain('mcp_servers."ambient".enabled=false');
+    expect(r.servers[0]!.calls.find((c) => c.method === "thread/resume")?.params).toMatchObject({ threadId: "fresh-thread", sandbox: "read-only", approvalPolicy: "never" });
+    expect(r.engine.selectPreset("full-access").ok).toBe(false);
+    await runTurn(r.servers[0]!, r.engine); await runTurn(r.servers[0]!, r.engine);
+    for (const params of r.servers[0]!.turnStartParams()) expect(params).toMatchObject({ approvalPolicy: "never", sandboxPolicy: { type: "readOnly", networkAccess: false }, additionalContext: { orchestration: { kind: "application", value: expect.stringContaining("anycode_agent") } } });
+    expect(await r.controller.apply(false, authority)).toBe(true);
+    expect(r.overrides[1]).toEqual([]);
+    expect(r.engine.threadId).toBe("fresh-thread");
+    await runTurn(r.servers[1]!, r.engine);
+    expect(r.servers[1]!.turnStartParams()[0]).toMatchObject({ approvalPolicy: "on-request", sandboxPolicy: { type: "workspaceWrite" } });
+    expect(r.servers[1]!.turnStartParams()[0]).not.toHaveProperty("additionalContext");
+    await r.engine.dispose("session-close");
+  });
+
+  it("replaces an empty thread only after persisting its new id", async () => {
+    const r = await setup({ empty: true });
+    expect(await r.controller.apply(true, "ask")).toBe(true);
+    expect(r.persist).toHaveBeenCalledWith("fresh-thread", "replacement");
+    expect(r.engine.threadId).toBe("replacement");
+    await r.engine.dispose("session-close");
+  });
+
+  it("never replaces a thread containing history after a no-rollout error", async () => {
+    const r = await setup({ noRollout: true });
+    expect(await r.controller.apply(true, "ask")).toBe(false);
+    expect(r.controller.state.status).toBe("quarantined");
+    expect(r.servers[0]!.calls.some((call) => call.method === "thread/start")).toBe(false);
+    expect(r.persist).not.toHaveBeenCalled();
+    await r.engine.dispose("session-close");
+  });
+
+  it("refuses to restart while a child call is awaiting admission", async () => {
+    let finish!: (result: Awaited<ReturnType<SessionSubagentPort["run"]>>) => void;
+    const run = vi.fn<SessionSubagentPort["run"]>().mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const bridge = new CodexDynamicToolBridge([{ name: "worker", description: "worker", systemPrompt: "" }], { run, send: async () => ({ ok: false, reason: "unavailable", message: "unused" }) });
+    const r = await setup({ bridge });
+    const pending = bridge.handle({ id: 1, method: "item/tool/call", params: { threadId: "fresh-thread", turnId: "turn-1", callId: "pending", tool: ANYCODE_AGENT_TOOL, arguments: { agent_type: "worker", description: "work", prompt: "work", detach: true } } }, { result: vi.fn(), error: vi.fn() }, { threadId: "fresh-thread", turnId: "turn-1" }, () => {});
+    expect(await r.controller.apply(true, "ask")).toBe(false);
+    expect(r.initial.closeCount).toBe(0);
+    finish({ status: "completed", finalText: "started", turns: 0, toolCalls: 0, truncated: false, durationMs: 1, childSessionId: "child", parentSessionId: "parent", spawnToolCallId: "pending" });
+    await pending; await r.engine.dispose("session-close");
+  });
+
+  it("refuses to restart while an approval is pending", async () => {
+    const broker = new IpcPermissionBroker(() => {});
+    const approvals = new CodexApprovalBridge({ broker, activeTurn: () => ({ threadId: "fresh-thread", turnId: "turn-1" }) });
+    const pending = approvals.handle({ id: 1, method: "item/commandExecution/requestApproval", params: { threadId: "fresh-thread", turnId: "turn-1", itemId: "cmd", command: "ls", cwd: "/work" } }, { result: vi.fn(), error: vi.fn() });
+    const r = await setup({ approvals });
+    expect(approvals.hasActiveRequests()).toBe(true);
+    expect(await r.controller.apply(true, "ask")).toBe(false);
+    expect(r.initial.closeCount).toBe(0);
+    approvals.denyAll("test", "shutdown"); await pending; await r.engine.dispose("session-close");
+  });
+
+  it.each([{ badEcho: true }, { neverFactory: true }])("quarantines failed or timed-out restart: %j", async (fault) => {
+    const r = await setup(fault);
+    expect(await r.controller.apply(true, "ask")).toBe(false);
+    expect(r.controller.state.status).toBe("quarantined");
+    expect(r.engine.denyOrchestrationApprovals()).toBe(true);
+    if (fault.neverFactory) {
+      expect(r.servers[0]!.closeCount).toBe(1);
+      r.releaseFactory(); await tick();
+      expect(r.servers[0]!.closeCount).toBe(1);
+      expect(r.controller.state.status).toBe("quarantined");
+    }
+    const events = []; for await (const event of r.engine.runTurn("x", { signal: new AbortController().signal })) events.push(event);
+    expect(events.some((event) => event.type === "error")).toBe(true);
+    await r.engine.dispose("session-close");
+  });
+
+  it("keeps an admitted detached child alive and its report reachable across restart", async () => {
+    let signal: AbortSignal | undefined;
+    const reports: HostToUiMessage[] = [];
+    const queue = new ChildReportQueue({ sendDirect: (message) => reports.push(message) });
+    let finishChild!: () => void;
+    const childFinished = new Promise<void>((resolve) => { finishChild = resolve; });
+    const run = vi.fn<SessionSubagentPort["run"]>().mockImplementation(async (req, opts) => {
+      signal = opts?.signal;
+      void childFinished.then(() => queue.add(req.spawnToolCallId!, "child completed"));
+      return { status: "completed", finalText: "started", turns: 0, toolCalls: 0, truncated: false, durationMs: 1,
+        childSessionId: "child", parentSessionId: "parent", spawnToolCallId: req.spawnToolCallId };
+    });
+    const bridge = new CodexDynamicToolBridge([{ name: "worker", description: "worker", systemPrompt: "" }], { run, send: async () => ({ ok: false, reason: "unavailable", message: "unused" }) });
+    const r = await setup({ bridge });
+    const response = { result: vi.fn(), error: vi.fn() };
+    await bridge.handle({ id: 1, method: "item/tool/call", params: { threadId: "fresh-thread", turnId: "turn-1", callId: "child-call", tool: ANYCODE_AGENT_TOOL, arguments: { agent_type: "worker", description: "work", prompt: "work", detach: true } } }, response, { threadId: "fresh-thread", turnId: "turn-1" }, () => {});
+    expect(response.result).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    queue.add("prior-report", "queued before restart");
+    expect(await r.controller.apply(true, "ask")).toBe(true);
+    expect(signal?.aborted).toBe(false);
+    finishChild(); await childFinished; await tick();
+    expect(queue.snapshot().reports).toEqual(expect.arrayContaining([expect.objectContaining({ id: "prior-report" }), expect.objectContaining({ id: "child-call", text: "child completed" })]));
+    expect(reports).toEqual(expect.arrayContaining([expect.objectContaining({ type: "child_report", id: "child-call" })]));
+    expect(r.servers[0]!.calls.find((c) => c.method === "thread/resume")?.params).toMatchObject({ dynamicTools: expect.arrayContaining([expect.objectContaining({ name: ANYCODE_AGENT_TOOL })]) });
+    await r.engine.dispose("session-close");
+  });
+});
 
 /** The RAW engine_notice events — level assertions need the whole event, not just the message. */
 function noticeEvents(events: AgentEvent[]): Array<{ type: string; level: string; message: string }> {
