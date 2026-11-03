@@ -983,6 +983,30 @@ describe("console argument formatting", () => {
     expect(messages).toEqual(["resource failed", "uncaught", "uncaught"]);
   });
 
+  it("reconciles detached exceptions once without hiding new or unrelated errors", async () => {
+    const win = createElectronPreviewWindow({ previewId: "detached-exception" });
+    const fake = latestWindow();
+    const dbg = fake.webContents.debugger;
+    const messages: Array<[string, string]> = [];
+    win.webContents.onConsoleMessage((level, message) => messages.push([level, message]));
+    await Promise.resolve();
+    dbg.emit("detach");
+    fake.webContents.emit("console-message", { level: "error", message: "Uncaught Error: offline" });
+    win.webContents.cdp!.ensureAttached();
+    const exception = { timestamp: 10, exceptionDetails: { exceptionId: 1, exception: { description: "Error: offline\n    at page.js:1" } } };
+    dbg.emit("message", "Runtime.exceptionThrown", { timestamp: 9, exceptionDetails: { exceptionId: 2, text: "different" } });
+    dbg.emit("message", "Runtime.exceptionThrown", exception);
+    dbg.emit("message", "Runtime.exceptionThrown", { ...exception, timestamp: 11, exceptionDetails: { ...exception.exceptionDetails, exceptionId: 3 } });
+    await Promise.resolve();
+    dbg.emit("detach");
+    win.webContents.cdp!.ensureAttached();
+    dbg.emit("message", "Runtime.exceptionThrown", exception);
+    await Promise.resolve();
+    expect(messages).toEqual([
+      ["error", "Uncaught Error: offline"], ["pageerror", "different"], ["pageerror", "Error: offline\n    at page.js:1"],
+    ]);
+  });
+
   it("replays detached object logs once despite flattened fallback text and changed object ids", async () => {
     const win = createElectronPreviewWindow({ previewId: "object-replay" });
     const fake = latestWindow();
