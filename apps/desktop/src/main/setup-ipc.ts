@@ -23,7 +23,7 @@ export function createSetupHandlers(deps: SettingsIpcDeps, dialogs: Dialogs = di
         if (result.canceled || !result.filePath) return { canceled: true as const };
         await writeFile(result.filePath, JSON.stringify({ version: 1, ...content }, null, 2) + "\n", { mode: 0o600 });
         return { ok: true as const };
-      } catch { return { error: "Could not export setup. Check connections and proxy settings." }; }
+      } catch { return { error: "Could not export setup. Check connections, proxy settings, and names or URLs for secret-like text." }; }
     },
     async preview() {
       pending = undefined;

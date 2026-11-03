@@ -37,6 +37,16 @@ describe("setup file handlers", () => {
     expect((await f.handlers.apply({ connections: { Team: "skip" }, roleProfiles: {} })).ok).toBe(true);
     expect((await loadSettings(f.settingsPath)).settings.provider.connections).toHaveLength(2);
   });
+  it("does not write an export containing a secret-like name or URL", async () => {
+    for (const [label, baseUrl] of [["sk-fixture-secret", "https://example.test/v1"], ["Team", "https://example.test/sk-fixture-secret"]]) {
+      const f = await fixture(); const settings = cloneDefaults();
+      settings.provider.custom = [{ id: "custom:one", name: "Gateway", kind: "openai-compatible", baseUrl: baseUrl!, models: [] }];
+      settings.provider.connections = [{ id: "conn-one", providerId: "custom:one", label }];
+      await saveSettings(f.settingsPath, settings);
+      expect((await f.handlers.exportFile()).error).toBeTruthy();
+      await expect(readFile(f.file)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  });
   it("rejects malformed files", async () => {
     const f = await fixture(); await writeFile(f.file, '{"version":1,"connections":[],"roleProfiles":[],"token":"secret"}');
     expect((await f.handlers.preview()).error).toBeTruthy();

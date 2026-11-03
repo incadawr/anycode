@@ -536,7 +536,7 @@ declare global {
       // secret is never returned — setSecret is the only value-carrying call.
       settings: {
         setupExport(): Promise<{ ok?: true; canceled?: true; error?: string }>;
-        setupPreview(): Promise<{ ok?: true; canceled?: true; error?: string; connections?: Array<{ name: string; matches: string[]; baseUrl: string; existingBaseUrls: string[] }>; roleProfiles?: Array<{ name: string; matches: string[] }> }>;
+        setupPreview(): Promise<{ ok?: true; canceled?: true; error?: string; connections?: Array<{ name: string; matches: string[]; baseUrl: string; existingBaseUrls: string[]; canUpdate: boolean }>; roleProfiles?: Array<{ name: string; matches: string[] }> }>;
         setupApply(choices: { connections: Record<string, "update-existing" | "add-copy" | "skip">; roleProfiles: Record<string, "update-existing" | "add-copy" | "skip"> }): Promise<{ ok?: true; error?: string; addedIds?: string[] }>;
         refreshMiniMaxQuota(connectionId?: string): Promise<void>;
         get(): Promise<SettingsSnapshot>;

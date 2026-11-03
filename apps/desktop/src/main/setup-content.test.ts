@@ -77,6 +77,42 @@ describe("setup content", () => {
     content.connections[0]!.provider.baseUrl += "?key=secret";
     expect(() => validateSetupContent(content)).toThrow();
   });
+  it("keeps a catalog credential bound to its original provider and shows the real destination", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "setup-identity-"));
+    try {
+      const vault = new Vault({ secretsPath: join(dir, "secrets.json"), platform: "darwin", safeStorage: { isEncryptionAvailable: () => true, encryptString: (v) => Buffer.from(v), decryptString: (v) => v.toString() } });
+      await vault.setSecret("provider.connection.conn-one.apiKey", "synthetic-key", { allowWeak: false });
+      const settings = cloneDefaults();
+      settings.provider.connections = [{ id: "conn-one", providerId: "openai", label: "Team" }];
+      const content = buildSetupContent(settings, { connectionIds: ["conn-one"], roleProfileIds: [] });
+      content.connections[0]!.provider.catalogId = "openrouter";
+      const plan = planSetupImport(content, settings);
+      expect(plan.connections[0]!.baseUrl).toBe("https://openrouter.ai/api/v1");
+      expect(plan.connections[0]!.canUpdate).toBe(false);
+      expect(() => applySetupImport(plan, choices)).toThrow(/Destination changed/);
+      const imported = applySetupImport(plan, { connections: { Team: "add-copy" }, roleProfiles: {} });
+      const copy = imported.provider.connections[1]!;
+      expect(copy.id).not.toBe("conn-one");
+      expect(await vault.getSecretValue(`provider.connection.${copy.id}.apiKey`)).toBeUndefined();
+      expect(await vault.getSecretValue("provider.connection.conn-one.apiKey")).toBe("synthetic-key");
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+  it.each(["vllm", "custom"])("restores configured %s template destinations", (providerId) => {
+    const settings = cloneDefaults();
+    settings.provider.connections = [{ id: "conn-local", providerId, label: "Local", baseUrl: "http://localhost:8000/v1" }];
+    const content = buildSetupContent(settings, { connectionIds: ["conn-local"], roleProfileIds: [] });
+    const plan = planSetupImport(content, cloneDefaults());
+    expect(plan.connections[0]!.baseUrl).toBe("http://localhost:8000/v1");
+    const imported = applySetupImport(plan, { connections: {}, roleProfiles: {} });
+    expect(imported.provider.connections[0]).toMatchObject({ providerId, baseUrl: "http://localhost:8000/v1" });
+  });
+  it("rejects secret-like names and URL paths", () => {
+    for (const [label, url] of [["sk-fixture-secret", "https://example.test/v1"], ["Team", "https://example.test/sk-fixture-secret"], ["Team", "https://example.test/Abcdef1234567890GhijkLMNOPQRSTuv"], ["Bearer abcdef0123456789abcdef", "https://example.test/v1"], ["Team", "https://user:password@example.test/v1"], ["Team", "https://example.test/v1?token=fixture"]]) {
+      const settings = fixture(); settings.provider.connections[0]!.label = label;
+      settings.provider.custom![0]!.baseUrl = url!;
+      expect(() => buildSetupContent(settings, selection)).toThrow();
+    }
+  });
   it("requires explicit collision choices and refuses dangling skipped routes", () => {
     const content = buildSetupContent(fixture(), selection);
     const plan = planSetupImport(content, fixture());
