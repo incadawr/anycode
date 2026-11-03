@@ -388,9 +388,13 @@ describe("createElectronPreviewWindow — event adaptation", () => {
     const messages: Array<{ level: string; message: string }> = [];
     win.webContents.onConsoleMessage((level, message) => messages.push({ level, message }));
 
+    fake.webContents.debugger.emit("detach");
     fake.webContents.emit("console-message", { level: "info", message: "hi" });
+    fake.webContents.debugger.emit("detach");
     fake.webContents.emit("console-message", { level: "debug", message: "dbg" });
+    fake.webContents.debugger.emit("detach");
     fake.webContents.emit("console-message", { level: "warning", message: "careful" });
+    fake.webContents.debugger.emit("detach");
     fake.webContents.emit("console-message", { level: "error", message: "console.error() call" });
 
     expect(messages).toEqual([
@@ -407,10 +411,12 @@ describe("createElectronPreviewWindow — event adaptation", () => {
     const messages: Array<{ level: string; message: string }> = [];
     win.webContents.onConsoleMessage((level, message) => messages.push({ level, message }));
 
+    fake.webContents.debugger.emit("detach");
     fake.webContents.emit("console-message", {
       level: "warning",
       message: "%cElectron Security Warning (Insecure Content-Security-Policy) This renderer process has either no Content Security Policy set…",
     });
+    fake.webContents.debugger.emit("detach");
     fake.webContents.emit("console-message", { level: "warning", message: "deprecated API used" });
 
     expect(messages).toEqual([{ level: "warn", message: "deprecated API used" }]);
@@ -426,14 +432,17 @@ describe("createElectronPreviewWindow — event adaptation", () => {
     const messages: Array<{ level: string; message: string }> = [];
     win.webContents.onConsoleMessage((level, message) => messages.push({ level, message }));
 
+    fake.webContents.debugger.emit("detach");
     fake.webContents.emit("console-message", {
       level: "warning",
       message: "app.js:42 Electron Security Warning (fake) — this page's own note about strict CSP",
     });
+    fake.webContents.debugger.emit("detach");
     fake.webContents.emit("console-message", {
       level: "error",
       message: "Electron Security Warning (Insecure Content-Security-Policy) crashed my parser",
     });
+    fake.webContents.debugger.emit("detach");
     fake.webContents.emit("console-message", {
       level: "error",
       message: "%cElectron Security Warning (Insecure Content-Security-Policy) echoed by the page at error level",
@@ -621,6 +630,7 @@ describe("createElectronPreviewWindow — console/CDP string slicing (cut §1.3/
     const messages: string[] = [];
     win.webContents.onConsoleMessage((_level, message) => messages.push(message));
 
+    fake.webContents.debugger.emit("detach");
     fake.webContents.emit("console-message", { level: "info", message: "x".repeat(2000) });
 
     expect(messages).toHaveLength(1);
@@ -917,5 +927,20 @@ describe("createElectronPreviewWindow — pop-out title and Return to AnyCode", 
   it("adds no Return affordances when the host passes no onRedock", () => {
     createElectronPreviewWindow({ previewId: "t3" });
     expect(latestWindow().webContents.listenerCount("context-menu")).toBe(0);
+  });
+});
+
+
+describe("console argument formatting", () => {
+  it("uses CDP once and falls back after detach", () => {
+    const win = createElectronPreviewWindow({ previewId: "cdp-console" });
+    const fake = latestWindow();
+    const messages: string[] = [];
+    win.webContents.onConsoleMessage((_level, message) => messages.push(message));
+    fake.webContents.emit("console-message", { level: "warning", message: "duplicate" });
+    fake.webContents.debugger.emit("message", "Runtime.consoleAPICalled", { type: "warning", args: [{ type: "string", value: "hello" }] });
+    fake.webContents.debugger.emit("detach");
+    fake.webContents.emit("console-message", { level: "warning", message: "fallback" });
+    expect(messages).toEqual(["hello", "fallback"]);
   });
 });

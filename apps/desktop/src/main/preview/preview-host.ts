@@ -1,3 +1,4 @@
+import { RING_MAX_MSG_CHARS } from "./console-format.js";
 /**
  * PreviewHost (night-track wave-1 cut §2.5, 96-A, the keystone slice):
  * owns every live "browser preview" window for every tab, the security
@@ -492,7 +493,7 @@ export interface PreviewHostHandle {
 
 const RING_MAX_ENTRIES = 200;
 /** Exported: electron-adapter.ts slices console-message/CDP-exception strings to this BEFORE they ever reach preview-host.ts (cut §1.3/F3). */
-export const RING_MAX_MSG_CHARS = 500;
+export { RING_MAX_MSG_CHARS } from "./console-format.js";
 const EVENT_WINDOW_MS = 10_000;
 const EVENT_MAX_PER_WINDOW = 20;
 const OPEN_TIMEOUT_MS = 15_000;
