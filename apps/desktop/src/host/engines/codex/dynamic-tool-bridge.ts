@@ -19,6 +19,7 @@ export function codexAgentPermissionMode(presetId: string): PermissionMode {
 /** One host-owned tool; native Codex agents never substitute for AnyCode profiles. */
 export class CodexDynamicToolBridge {
   private readonly pending = new Map<string, AbortController>();
+  hasPendingCalls(): boolean { return this.pending.size > 0 || this.work.size > 0; }
   private readonly work = new Set<Promise<unknown>>();
   private turnKey = "";
   private readonly seenCalls = new Set<string>();

@@ -55,6 +55,8 @@ export interface ActiveCodexTurn {
 export interface CodexApprovalBridgeOptions {
   broker: EngineBridgeBroker;
   activeTurn(): ActiveCodexTurn | null;
+  /** Parent overlay denies native approvals before decoding or automatic grants. */
+  denyApprovals?: () => boolean;
   /**
    * (cross-review F1): the session's workspace root (the host
    * boot's `workspace` — the cwd the codex thread was started with). When
@@ -256,6 +258,8 @@ function denial(message: string): JsonRpcError {
 
 export class CodexApprovalBridge {
   private pending = false;
+  private activeRequests = 0;
+  hasActiveRequests(): boolean { return this.activeRequests > 0; }
   /**
    * True while the parked ask is being force-settled because the TURN is going
    * away (Stop / disconnect / shutdown) rather than because the user said no.
@@ -267,7 +271,8 @@ export class CodexApprovalBridge {
 
   /** AppServerClient hook. Every request is answered exactly once. */
   handle = async (request: JsonRpcServerRequest, responder: ServerRequestResponder): Promise<void> => {
-    await this.route(request, responder);
+    this.activeRequests++;
+    try { await this.route(request, responder); } finally { this.activeRequests--; }
   };
 
   /** Settles an outstanding broker ask promptly when the turn or engine is torn down. */
@@ -319,6 +324,11 @@ export class CodexApprovalBridge {
   }
 
   private async route(serverRequest: JsonRpcServerRequest, responder: ServerRequestResponder): Promise<void> {
+    if (this.options.denyApprovals?.() &&
+      (serverRequest.method === OBSERVED_COMMAND_APPROVAL_METHOD || serverRequest.method === OBSERVED_FILE_CHANGE_APPROVAL_METHOD)) {
+      responder.result({ decision: "decline" });
+      return;
+    }
     const active = this.options.activeTurn();
     const decoded = decode(serverRequest, active?.items);
     if (decoded === null) {

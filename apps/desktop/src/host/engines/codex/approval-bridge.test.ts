@@ -80,6 +80,20 @@ function ask(emitted: HostToUiMessage[]) {
 }
 
 describe("CodexApprovalBridge — decisions", () => {
+  it("declines orchestration approvals before classification or the broker", async () => {
+    const emitted: HostToUiMessage[] = [];
+    const broker = new IpcPermissionBroker((message) => emitted.push(message));
+    const askBroker = vi.spyOn(broker, "requestPermission");
+    const bridge = new CodexApprovalBridge({ broker, activeTurn: () => ACTIVE, denyApprovals: () => true });
+    for (const input of [command(), file()]) {
+      const response = responder();
+      await bridge.handle(input, response);
+      expect(response.result).toHaveBeenCalledWith({ decision: "decline" });
+      expect(response.error).not.toHaveBeenCalled();
+    }
+    expect(askBroker).not.toHaveBeenCalled();
+    expect(emitted).toEqual([]);
+  });
   it("answers allow with accept and deny with decline (both families, turn continues)", async () => {
     const { bridge, broker, emitted } = rig();
 
@@ -726,6 +740,15 @@ describe("CodexApprovalBridge — workspace patch auto-accept", () => {
     expect(response.result).toHaveBeenCalledWith({ decision: "accept" });
     expect(response.error).not.toHaveBeenCalled();
     expect(emitted.filter((m) => m.type === "permission_request")).toHaveLength(0);
+    expect(broker.pendingCount).toBe(0);
+  });
+
+  it("declines an otherwise auto-accepted patch during orchestration", async () => {
+    const broker = new IpcPermissionBroker(() => {});
+    const bridge = new CodexApprovalBridge({ broker, activeTurn: () => ({ ...ACTIVE, items: fileItem(join(WS, "a.ts")) }), patchAutoApproval: patchCtx(), denyApprovals: () => true });
+    const response = responder();
+    await bridge.handle(file(), response);
+    expect(response.result).toHaveBeenCalledWith({ decision: "decline" });
     expect(broker.pendingCount).toBe(0);
   });
 

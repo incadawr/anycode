@@ -79,6 +79,8 @@ export interface AppServerClientOptions {
   homeTrust?: () => string | null;
   /** Test-only launcher prefix; production keeps it empty. */
   binaryArgs?: readonly string[];
+  /** Process-scoped Codex configuration overrides; never used by version preflight. */
+  configOverrides?: readonly string[];
   bootstrap?: EngineBootstrap;
   /** May await a future UI approval; safe denial happens only after it settles. */
   onServerRequest?: (request: JsonRpcServerRequest, respond: ServerRequestResponder) => void | Promise<void>;
@@ -446,11 +448,13 @@ export class AppServerClient {
 
   /** Preflight + spawn only. Caller sends initialize after the bootstrap owns disposal. */
   async start(): Promise<void> {
+    if (this.closing) throw new AppServerClientError("app-server client closed");
     if (this.child !== null) throw new AppServerClientError("app-server client already started");
     if (!isAbsolute(this.options.binaryPath)) {
       throw new EngineVersionError("Codex binary path must be absolute");
     }
     await this.preflightVersion();
+    if (this.closing) throw new AppServerClientError("app-server client closed");
     // Re-validated HERE, immediately before THIS spawn — not merely once
     // before preflight (W5.5-review Medium). A binary that passed both
     // discovery and the `--version` preflight can still be swapped in the
@@ -458,7 +462,7 @@ export class AppServerClient {
     // once before preflight and executing unchecked afterward leaves exactly
     // that interval open. See `assertTrusted`.
     this.assertTrusted();
-    const child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), "app-server", "--stdio"], this.spawnOptions(true));
+    const child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), ...(this.options.configOverrides ?? []).flatMap((value) => ["-c", value]), "app-server", "--stdio"], this.spawnOptions(true));
     this.child = child;
     // Adopt immediately after spawn, before any JSON-RPC initialize/account/thread work.
     this.options.bootstrap?.adopt(() => this.close());
