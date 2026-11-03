@@ -2289,7 +2289,7 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
         parentModel={parentIdentity.model}
         parentEngine={parentIdentity.engine}
       />
-      {backgroundContext !== null && <BackgroundAgentControls block={block} ctx={backgroundContext} />}
+      {backgroundContext !== null && isAgent && block.status === "running" && <BackgroundAgentControls block={block} ctx={backgroundContext} />}
       {expanded && (
         // aria-live="off" (design §1.9): a user-driven expand must not dump
         // the body into the polite column's announcement queue; the badge in

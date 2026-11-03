@@ -3035,3 +3035,21 @@ it("does not show a diff placeholder for denied file operations", () => {
     expect(running).toContain("Waiting for file snapshot");
   }
 });
+
+
+describe("background controls subscription", () => {
+  it("reads the transcript only for running Agent cards", () => {
+    for (const [toolName, status, expected] of [["Agent", "running", true], ["Agent", "completed", false], ["Read", "running", false]] as const) {
+      const store = createDesktopStore();
+      const initial = store.getInitialState();
+      let reads = 0;
+      store.getInitialState = () => new Proxy(initial, { get(target, key, receiver) {
+        if (key === "transcript") reads++;
+        return Reflect.get(target, key, receiver);
+      } });
+      renderToStaticMarkup(createElement(TabContext.Provider, { value: { tabId: "tab-1", store } },
+        createElement(ToolCallCard, { block: mkAgentBlock({ toolName, status }) })));
+      expect(reads > 0).toBe(expected);
+    }
+  });
+});
