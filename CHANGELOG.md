@@ -20,7 +20,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Collapsed SubAgent cards no longer let long model or engine names run under the status badge or push the permission button out of view.
 - Local previews: file requests from the previous page are blocked while its replacement is loading, and a workspace reached through a symlink loads its files again.
 - Rewinding a conversation no longer brings back errors from the turns that were discarded.
-- When an agent cannot be started from a session (a role bound to its own connection, or a profile whose restrictions session delegation would drop), the refusal now says what to do instead. Engine child sessions are told that delegation is unavailable to them.
+- When an agent cannot be started from a session (for example a role bound to its own connection when called inline, or a restricted profile that session delegation cannot honour), the refusal now says what to do instead. Engine child sessions are told that delegation is unavailable to them.
 
 ## [0.0.69] — 2026-11-03
 
