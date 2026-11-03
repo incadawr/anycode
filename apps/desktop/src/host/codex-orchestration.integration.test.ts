@@ -154,7 +154,7 @@ async function nativeRig() {
   initial.threadId = "fresh-thread";
   const original = initial.request.bind(initial);
   initial.request = <T>(method: string, params?: unknown, opts?: { timeoutMs?: number }) => {
-    if (method === "config/read") return Promise.resolve({ config: { mcp_servers: {}, features: { multi_agent: true }, sandbox_mode: "workspace-write", approval_policy: "on-request" } } as T);
+    if (method === "config/read") return Promise.resolve({ config: { mcp_servers: {}, features: { multi_agent: true }, sandbox_mode: "workspace-write", approval_policy: "on-request" }, layers: [] } as T);
     if (method === "thread/read") return Promise.resolve({ thread: { id: "fresh-thread", turns: Array.from({ length: 81 }, (_, i) => ({ id: `old-${i}` })) } } as T);
     return original<T>(method, params, opts);
   };
@@ -163,7 +163,7 @@ async function nativeRig() {
   let releaseTransition!: () => void;
   const transitionGate = new Promise<void>(resolve => { releaseTransition = resolve; });
   engine.installOrchestration(() => {
-    const server = new FakeAppServer(); server.threadId = "fresh-thread"; servers.push(server);
+    const server = new FakeAppServer(); Object.assign(server, { orchestrationVersionVerified: true }); server.threadId = "fresh-thread"; servers.push(server);
     server.serverRequestHandler = request => {
       const owner = engine.activeTurnDetails;
       return child.bridge.handle(request, child.response, owner, event => engine.pushBridgeEvent(event, owner));
@@ -176,6 +176,7 @@ async function nativeRig() {
     };
     return { client: server, start: () => transitionGate };
   }, async () => {});
+  await engine.verifyOrchestrationAvailability(true);
   const outbound = new Outbound(); child.forwardReports(message => outbound.sendDirect(message));
   const broker = new IpcPermissionBroker(message => outbound.emit(message), 25);
   const session = new Session({ outbound, engine, engineSettings: engine, broker, fs: new MemFs(), workspace: "/work", model: "gpt-native", sessionId: "parent", rules: new SessionPermissionRules(), pendingChildReports: { resendAll: () => child.queue.resendAll(), ack: id => child.queue.ack(id) } });

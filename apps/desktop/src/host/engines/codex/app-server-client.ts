@@ -31,6 +31,7 @@ import {
   parseCodexVersion,
 } from "./protocol.js";
 import { resolveHostCodexVersionPolicy } from "./version-policy.js";
+import { decodeCodexSupportPolicy, ENV_CODEX_SUPPORT_POLICY, judgeCodexVersion } from "../../../shared/codex-version-policy.js";
 
 export const CODEX_MAX_LINE_BYTES = 10 * 1024 * 1024;
 export const CODEX_MAX_PENDING_REQUESTS = 64;
@@ -421,6 +422,7 @@ export class AppServerClient {
   }
 
   private versionWarningValue: string | null = null;
+  orchestrationVersionVerified = false;
   /** Soft-allow warning from the last preflight (null when the version was verified or no policy travelled). */
   get versionWarning(): string | null {
     return this.versionWarningValue;
@@ -688,7 +690,10 @@ export class AppServerClient {
     if (version === null || !policy.allows(version)) {
       throw new EngineVersionError(`Unsupported Codex version: ${output.trim() || "unparseable"} (supported ${policy.supportedRange})`);
     }
-    this.versionWarningValue = version === null ? null : policy.warningFor(version);
+    this.versionWarningValue = policy.warningFor(version);
+    const manifestPolicy = decodeCodexSupportPolicy(this.options.sourceEnv[ENV_CODEX_SUPPORT_POLICY]);
+    const verdict = manifestPolicy && judgeCodexVersion(`${version.major}.${version.minor}.${version.patch}`, manifestPolicy);
+    this.orchestrationVersionVerified = !!verdict && verdict.allowed && !verdict.risk && !verdict.warning;
   }
 
   /**

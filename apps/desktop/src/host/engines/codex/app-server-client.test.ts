@@ -195,6 +195,7 @@ describe("AppServerClient", () => {
       await client.start();
       await expect(client.request("echo", { value: 3 })).resolves.toEqual({ value: 3 });
       expect(client.versionWarning).toMatch(/not verified, running anyway/);
+      expect(client.orchestrationVersionVerified).toBe(false);
     } finally {
       await client.close();
     }
@@ -205,6 +206,7 @@ describe("AppServerClient", () => {
     try {
       await client.start();
       await expect(client.request("echo", { value: 1 })).resolves.toEqual({ value: 1 });
+      expect(client.orchestrationVersionVerified).toBe(true);
     } finally {
       await client.close();
     }
@@ -222,6 +224,7 @@ describe("AppServerClient", () => {
       await expect(client.request("echo", { value: 2 })).resolves.toEqual({ value: 2 });
       // Risk acceptance keeps today's marking: allowed WITHOUT a new warning.
       expect(client.versionWarning).toBeNull();
+      expect(client.orchestrationVersionVerified).toBe(false);
     } finally {
       await client.close();
     }

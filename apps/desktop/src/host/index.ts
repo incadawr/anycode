@@ -1398,8 +1398,7 @@ async function bootCodexSession(
   // supervisor's background agents never reached the renderer at all.
   let codexChildPort: ChildSessionPort | undefined;
   let codexParentEngine: import("./engines/codex/codex-engine.js").CodexEngine | undefined;
-  // The overlay transition (when implemented) captures the selected base preset
-  // here before changing the effective engine posture, then clears it on OFF.
+  // Captures the selected base preset for delegated children during the overlay.
   let codexForeignComposition: ReturnType<typeof createForeignOrchestrationComposition> | undefined;
   if (args.child === undefined) {
     const codexProjectRoot = (args.resume && args.sessionId ? await persistence.getRootSession(args.sessionId) : null)?.projectRoot ?? workspace;
@@ -1535,6 +1534,11 @@ async function bootCodexSession(
       : {}),
     ...(codexAgentBridge ? { agentBridge: codexAgentBridge } : {}),
     agentCardLog,
+    ...(args.child === undefined ? { persistOrchestrationThreadId: async (oldId: string, newId: string) => {
+      const row = await persistence!.getRootSession(bridgeRowId);
+      if (!row || row.externalSessionRef !== oldId) throw new Error("Codex thread identity changed");
+      await persistence!.touchSession(bridgeRowId, { externalSessionRef: newId });
+    } } : {}),
     onMcpNotification: (notification: import("./engines/codex/protocol.js").JsonRpcNotification) => {
       const status = codexMcpStatus(notification, codexMcpForward.specs);
       if (status) { engineMcpStatuses = [...engineMcpStatuses.filter((item) => item.name !== status.name), status]; publishEngineMcpStatuses(); }
@@ -1867,6 +1871,10 @@ async function bootCodexSession(
     // on every ui_ready, ack on child_report_ack. Present only for a root
     // boot (a child-mode codex session has no detached children of its own).
     ...(codexPendingChildReports !== undefined ? { pendingChildReports: codexPendingChildReports } : {}),
+    ...(codexForeignComposition ? { onOrchestrateChanged: (enabled: boolean) => {
+      if (enabled) codexForeignComposition!.captureBaseAuthority(connected.engine.snapshot().activePresetId);
+      else codexForeignComposition!.clearBaseAuthority();
+    } } : {}),
     hasTitle: connected.sessionMeta.title !== undefined && connected.sessionMeta.title.length > 0,
     initialTitle: connected.sessionMeta.title,
     // the SAME store the broker above matches against, so an

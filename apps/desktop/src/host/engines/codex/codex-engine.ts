@@ -795,6 +795,7 @@ export async function startCodexEngine(options: CodexEngineCreateOptions): Promi
       replacement.observeNotifications((notification) => options.onMcpNotification?.(notification));
       return { client: replacement, start: () => replacement.start() };
     }, options.persistOrchestrationThreadId, options.mcpForward?.servers);
+    if (options.persistOrchestrationThreadId) await engine.verifyOrchestrationAvailability(client.orchestrationVersionVerified, options.mcpForward?.servers);
     return connected;
   } catch (error) {
     // Any bounded boot RPC that times out lands here: the child is released.
@@ -846,6 +847,7 @@ export async function resumeCodexEngine(options: CodexEngineCreateOptions & { ex
       replacement.observeNotifications((notification) => options.onMcpNotification?.(notification));
       return { client: replacement, start: () => replacement.start() };
     }, options.persistOrchestrationThreadId, options.mcpForward?.servers);
+    if (options.persistOrchestrationThreadId) await engine.verifyOrchestrationAvailability(client.orchestrationVersionVerified, options.mcpForward?.servers);
     return connected;
   } catch (error) {
     await client.close();
@@ -855,6 +857,7 @@ export async function resumeCodexEngine(options: CodexEngineCreateOptions & { ex
 
 export class CodexEngine implements SessionEngine {
   orchestrationPolicy?: OrchestrationPolicy;
+  private orchestrationVerified = false;
   private orchestrationState: "off" | "on" | "transitioning" | "quarantined" = "off";
   private orchestrationGeneration = 0;
   private orchestrationCandidate: CodexClient | null = null;
@@ -967,13 +970,25 @@ export class CodexEngine implements SessionEngine {
 
   denyOrchestrationApprovals(): boolean { return this.orchestrationState !== "off"; }
 
-  /** Installs a per-session transport factory; it does not enable product admission. */
+  /** A malformed or incomplete inventory never exposes the toggle. */
+  async verifyOrchestrationAvailability(versionVerified: boolean, forwarded: Record<string, unknown> = {}): Promise<void> {
+    this.orchestrationVerified = false;
+    if (!versionVerified || !this.settings?.workspace) return;
+    try {
+      const config = await this.client.request("config/read", { cwd: this.settings.workspace, includeLayers: true }, { timeoutMs: this.bounds.bootRpcMs });
+      if (!config || typeof config !== "object" || !Array.isArray((config as { layers?: unknown }).layers)) return;
+      captureBaseConfig(config, forwarded);
+      this.orchestrationVerified = true;
+    } catch { /* unavailable until a new session can verify the inventory */ }
+  }
+
+  /** Installs a per-session transport factory. */
   installOrchestration(factory: (overrides: readonly string[]) => { client: CodexClient; start(): Promise<void> }, persistId: (oldId: string, newId: string) => Promise<void>, forwarded: Record<string, unknown> = {}): void {
     this.orchestrationPolicy = {
-      availability: () => this.disposed || this.orchestrationState === "quarantined"
+      availability: () => !this.orchestrationVerified || this.disposed || this.orchestrationState === "quarantined"
         ? { supported: false, reason: "unavailable" } : { supported: true },
       apply: async (enabled, baseAuthority) => {
-        if (this.disposed || this.terminalError || this.operation !== null || this.approvals?.hasActiveRequests() || this.agentBridge?.hasPendingCalls() || this.orchestrationState === "quarantined" || this.orchestrationState === "transitioning") throw new OrchestrationNotReadyError("Codex orchestration transition unavailable");
+        if (!this.orchestrationVerified || this.disposed || this.terminalError || this.operation !== null || this.approvals?.hasActiveRequests() || this.agentBridge?.hasPendingCalls() || this.orchestrationState === "quarantined" || this.orchestrationState === "transitioning") throw new OrchestrationNotReadyError("Codex orchestration transition unavailable");
         if ((this.orchestrationState === "on") === enabled) return { enabled, baseAuthority };
         this.operation = "transition";
         this.orchestrationState = "transitioning";
@@ -1001,6 +1016,7 @@ export class CodexEngine implements SessionEngine {
           const client = replacement.client;
           this.orchestrationCandidate = client;
           await replacement.start();
+          if (!(client as CodexClient & { orchestrationVersionVerified?: boolean }).orchestrationVersionVerified) throw new Error("Codex orchestration version is not verified");
           check();
           await initializeAndVerifyAccount(client, this.bounds.bootRpcMs, this.agentBridge !== undefined, process.platform);
           check();
