@@ -2371,6 +2371,28 @@ void app.whenReady().then(async () => {
       sendToMainWindow(win, PREVIEW_CHANGED_CHANNEL, payload);
     },
     resolveArtifact: (tabId, path) => resolveContainedPath(artifactsIpcDeps, tabId, path),
+    // File-subresource policy (preview/file-resource-policy.ts): a `file:`
+    // preview may load only its OWN tree (plus the workspace) — the app
+    // profile (`<home>/.anycode`), the home dir and the shared temp dirs are
+    // broad roots a document may NOT walk into, even though the artifact
+    // resolver would happily serve them. The tab's workspace is the ONE
+    // widening the policy allows (a workspace == the home dir widens
+    // nothing — the policy itself refuses that).
+    workspaceForTab: (tabId) => manager?.getTab(tabId)?.workspace,
+    fileResourceRoots: () => {
+      const tmpdirs = [tmpdir()];
+      if (process.platform === "darwin") {
+        // `/tmp` is a symlink to `/private/tmp` on darwin — both spellings
+        // must be broad roots (a realpath'd request carries either).
+        tmpdirs.push("/tmp");
+        try {
+          tmpdirs.push(realpathSync("/tmp"));
+        } catch {
+          // /tmp unreadable — the literal spelling above is enough.
+        }
+      }
+      return { home: artifactsIpcDeps.home(), tmpdirs };
+    },
     // M4 (CUT.md GAP 2): the SAME `fsStat`/`NodeArtifactsFs.readFileNoFollow`
     // primitives registerMdDocIpc's own `MdDocDeps` below binds for the
     // renderer's MD_PREVIEW_READ/Reload channel — one fs implementation, two

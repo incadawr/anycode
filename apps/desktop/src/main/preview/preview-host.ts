@@ -71,6 +71,8 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 // M4 (CUT.md GAP 2): the single source of truth for the dom-md
@@ -80,6 +82,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // only), so this import does not compromise this module's own Electron-free
 // discipline.
 import { MD_PREVIEW_MAX_SOURCE_BYTES } from "./md-doc.js";
+import { isAllowedFileSubresource } from "./file-resource-policy.js";
 import { isMarkdownPath } from "../../shared/previewable.js";
 import { BrowserController, checkInteractionPolicy, type BrowserControlContext, type InteractionKind } from "./browser-control.js";
 import {
@@ -360,6 +363,18 @@ export interface PreviewHostDeps {
   fullAccess?(tabId: string): boolean;
   /** Main wires this to `win.webContents.send(PREVIEW_CHANGED_CHANNEL, payload)` (D7); absent is a safe no-op (e.g. in tests that never care). */
   onPreviewsChanged?(payload: PreviewChangedPayload): void;
+  /**
+   * The tab's workspace — the tree a `file:` preview may load RELATIVE
+   * assets from (its own directory plus the workspace). Absent = undefined,
+   * which narrows the policy to the document's own directory only.
+   */
+  workspaceForTab?(tabId: string): string | undefined;
+  /**
+   * The broad roots of the file-subresource policy: the user's home (and
+   * therefore `<home>/.anycode`) plus the temp dirs. Absent = `os.homedir()`
+   * and `[os.tmpdir()]` (plus `/tmp` on darwin).
+   */
+  fileResourceRoots?(): { home: string; tmpdirs: string[] };
   logger: PreviewLogger;
   now: () => number;
 }
@@ -496,6 +511,26 @@ export const READ_RESULT_MAX_CHARS = 200_000;
 export const EXEC_JS_TIMEOUT_MS = 10_000;
 /** D18: promote-then-capture race window — one short paint delay before the single retry. */
 export const PANEL_SCREENSHOT_RETRY_DELAY_MS = 150;
+
+/**
+ * Broad roots of the file-subresource policy when main did NOT bind
+ * `fileResourceRoots`: the user's home (and therefore `<home>/.anycode`) and
+ * the OS temp dir — plus `/tmp` on darwin, where `/tmp` is a symlink to
+ * `/private/tmp` (BOTH spellings are listed, since a realpath'd request may
+ * carry either).
+ */
+function defaultFileResourceRoots(): { home: string; tmpdirs: string[] } {
+  const tmpdirs: string[] = [tmpdir()];
+  if (process.platform === "darwin") {
+    tmpdirs.push("/tmp");
+    try {
+      tmpdirs.push(realpathSync("/tmp"));
+    } catch {
+      // /tmp unreadable — the literal spelling above is enough.
+    }
+  }
+  return { home: homedir(), tmpdirs };
+}
 
 /**
  * D9's main-side clamp (exported for panel-ipc.ts + tests, single source of
@@ -2857,7 +2892,27 @@ class PreviewHost implements PreviewHostHandle {
       if (req.resourceType === "mainFrame") {
         return { allowed: true, dedupeKey: filePath };
       }
-      return { allowed: record.kind === "file", dedupeKey: filePath };
+      if (record.kind !== "file") {
+        return { allowed: false, dedupeKey: filePath };
+      }
+      // Containment is NOT enough for a SUBRESOURCE: it answers "may the app
+      // serve this path", not "may THIS document load this path". A `file:`
+      // preview may load only its own tree (plus the workspace) — never the
+      // app profile, the home dir or a shared temp folder (see
+      // file-resource-policy.ts's threat model).
+      const documentRealPath = record.realSourcePath;
+      if (documentRealPath === undefined) {
+        return { allowed: false, dedupeKey: filePath };
+      }
+      const roots = this.deps.fileResourceRoots?.() ?? defaultFileResourceRoots();
+      const allowed = isAllowedFileSubresource({
+        requestRealPath: resolved.realPath,
+        documentRealPath,
+        workspace: this.deps.workspaceForTab?.(record.tabId),
+        home: roots.home,
+        tmpdirs: roots.tmpdirs,
+      });
+      return { allowed, dedupeKey: filePath };
     }
     if (scheme === "http:" || scheme === "https:" || scheme === "ws:" || scheme === "wss:") {
       const normalizedScheme = scheme === "ws:" ? "http:" : scheme === "wss:" ? "https:" : scheme;
