@@ -135,6 +135,10 @@ describe("Session — session_history hydration", () => {
       try { h.send({ type: "ui_ready" }); expect((await h.waitFor(isSessionHistory)).items.map((item) => item.id)).toEqual(history.length ? ["e10", "e20", "later"] : ["e10", "e20"]); } finally { h.close(); }
     }
   });
+  it("does not restore an older failure when only a newer answer survives", async () => {
+    const h = createHarness({ steps: [], bootHistory: [{ ...userItem("summary", "summary", 500), kind: "compact_summary" }, assistantTextItem("answer", "new answer", 100)], bootTurnErrors: [{ kind: "turn_error", id: "e1", createdAt: 10, turnId: "gone", engine: "core", model: "m", error: { name: "AgentError", message: "old error" } }] });
+    try { h.send({ type: "ui_ready" }); await h.waitFor(isSessionHistory); expect(h.session.communicationResult().latestResult).toMatchObject({ publicAnswer: "new answer" }); } finally { h.close(); }
+  });
   it("preserves compacted conversation order when hydrating history", async () => {
     const h = createHarness({ steps: [], bootHistory: [{ ...userItem("summary", "summary", 200), kind: "compact_summary" }, userItem("older", "retained", 100)] });
     try { h.send({ type: "ui_ready" }); expect((await h.waitFor(isSessionHistory)).items.map((item) => item.id)).toEqual(["summary", "older"]); } finally { h.close(); }
