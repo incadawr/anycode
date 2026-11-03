@@ -1015,7 +1015,7 @@ export function Sidebar({
       return;
     }
     if (event.key === "Enter" && filtering && filtered.length === 0) {
-      // The empty state's "⏎ to start one" — armed ONLY while that state is
+      // The empty state's "Enter to start one" — armed ONLY while that state is
       // visible; Enter with matches is a deliberate no-op (ruling 6).
       event.preventDefault();
       void createNewSession();
@@ -1130,7 +1130,7 @@ export function Sidebar({
         )}
         {filtering && filtered.length === 0 && (
           <div className="sidebar-empty sidebar-search-empty" role="status">
-            No tasks match — ⏎ to start one
+            No tasks match — Enter to start one
           </div>
         )}
 
