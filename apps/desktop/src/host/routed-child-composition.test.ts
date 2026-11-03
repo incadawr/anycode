@@ -7,11 +7,11 @@ import { createChildSessionPort } from "./child-session-port.js";
 import { CHILD_RUN_EVENT_TYPE, CHILD_SPAWN_REQUEST_TYPE, type ChildRunEvent, type ChildSpawnRequest } from "../shared/child-sessions.js";
 
 describe("routed child snapshots", () => {
-  it.each([
-    { reason: "not_ready" as const, message: "Agent: this model is not available on the selected connection; select a matching provider/connection.", retry: true },
-    { reason: "recursion" as const, message: "Permission policy forbids this child; network error", retry: false },
-    { reason: "not_ready" as const, message: "Permission policy forbids this child; network error", retry: false },
-  ])("handles wire admission rejection $reason", async ({ reason, message, retry }) => {
+  it.each([false, true].flatMap(snapshot => [false, true].flatMap(detach => [
+    { snapshot, detach, reason: "not_ready" as const, message: "Agent: this model is not available on the selected connection; select a matching provider/connection.", retry: true },
+    { snapshot, detach, reason: "recursion" as const, message: "Permission policy forbids this child; network error", retry: false },
+    { snapshot, detach, reason: "not_ready" as const, message: "Permission policy forbids this child; network error", retry: false },
+  ])))("handles wire admission rejection $reason with detach=$detach snapshot=$snapshot", async ({ snapshot, detach, reason, message, retry }) => {
     const health = new RoleHealthCache();
     const sent: ChildSpawnRequest[] = [];
     let listener: (event: ChildRunEvent) => void = () => {};
@@ -22,14 +22,21 @@ describe("routed child snapshots", () => {
       send: msg => { if (msg.type === CHILD_SPAWN_REQUEST_TYPE) sent.push(msg); },
       subscribe: cb => { listener = cb; return () => {}; }, onDetachedTerminal: composition.onTerminal });
     composition.attach(port);
-    const pending = port.run({ agentType: "executor", description: "task", prompt: "work", spawnToolCallId: "call", model: "primary", routeStamped: true, detach: true }, {});
+    const req: SessionSubagentRequest = { agentType: "executor", description: "task", prompt: "work", spawnToolCallId: "call", model: "primary", routeStamped: true, detach };
+    if (snapshot) composition.snapshot(req, { entries: [{ model: "primary" }, { model: "fallback" }], skipped: [] });
+    const pending = port.run(req, {});
     listener({ type: CHILD_RUN_EVENT_TYPE, requestId: sent[0]!.requestId, kind: "rejected", reason, message });
     await vi.waitFor(() => expect(sent).toHaveLength(retry ? 2 : 1));
     if (retry) {
       expect(sent[1]).toMatchObject({ model: "fallback", spawnToolCallId: "call" });
       expect(health.snapshot().get(entryKey("executor", { model: "primary" }))).toMatchObject({ failures: 1, lastReason: "model_not_found" });
       listener({ type: CHILD_RUN_EVENT_TYPE, requestId: sent[1]!.requestId, kind: "accepted", childSessionId: "child", childTabId: "tab", model: "fallback" });
-      expect(await pending).toMatchObject({ background: { reason: "requested" }, childSessionId: "child" });
+      if (detach) {
+        expect(await pending).toMatchObject({ background: { reason: "requested" }, childSessionId: "child" });
+      } else {
+        listener({ type: CHILD_RUN_EVENT_TYPE, requestId: sent[1]!.requestId, kind: "terminal", status: "completed", finalText: "done", truncated: false, turns: 1, toolCalls: 0, durationMs: 1, childSessionId: "child" });
+        expect(await pending).toMatchObject({ status: "completed", finalText: "done", childSessionId: "child" });
+      }
     } else {
       expect(await pending).toMatchObject({ status: "error", finalText: message });
       expect(health.snapshot().size).toBe(0);
