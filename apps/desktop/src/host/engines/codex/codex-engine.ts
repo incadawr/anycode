@@ -979,7 +979,15 @@ export class CodexEngine implements SessionEngine {
         const check = () => { if (this.disposed || generation !== this.orchestrationGeneration) throw new Error("Codex transition invalidated"); };
         const work = async () => {
           const oldId = this.threadId;
-          const count = (await this.readNativeTurnState()).count;
+          let count: number;
+          try {
+            count = (await this.readNativeTurnState()).count;
+          } catch (error) {
+            // 0.166 reports this for a fresh thread before its first rollout.
+            // Never apply this fallback once this session has started a turn.
+            if (this.nextNativeTurnOrdinal !== 0 || this.nativeTurnOrdinalDirty || !(error instanceof Error) || !/list_turns is not supported yet/i.test(error.message)) throw error;
+            count = 0;
+          }
           check();
           const base = enabled ? captureBaseConfig(await this.client.request("config/read", { cwd: this.settings?.workspace, includeLayers: true }, { timeoutMs: this.bounds.bootRpcMs }), forwarded) : this.orchestrationBase;
           if (!base) throw new Error("Missing base Codex config");
