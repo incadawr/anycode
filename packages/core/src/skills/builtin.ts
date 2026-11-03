@@ -177,9 +177,9 @@ way you read what comes back.
   turn. Explicit \`tier: "session"\` defaults to detach; pass \`detach: false\`
   to wait, or \`detach: true\` to dispatch immediately. Restricted hosts
   default to inline. Limits are typically 3
-  children per parent and 8 per app. A session child can spawn INLINE
+  children per parent and 8 per app. A core session child can spawn INLINE
   grandchildren only (its own Agent tool has no session tier) — a chain never
-  recurses.
+  recurses. Engine children do not receive AnyCode skills or the Agent bridge.
 
 \`provider\`, \`detach\`, \`continue_session\` and \`send_to\` are
 session-tier-only fields; on any other tier the call fails fast.
