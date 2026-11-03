@@ -1894,6 +1894,14 @@ describe("agentTool handler — role route stamping (§3.3)", () => {
     return { ctx: makeCtx({ sessionSubagents: port, subagents }), port, seen: () => seen };
   }
 
+  it.each(["planner", "reviewer"] as const)("uses the built-in %s prompt and budget without an override", async (role) => {
+    const { ctx, seen } = roleCtx(null);
+    ctx.subagents!.coreProfile = () => null;
+    await full.handler({ description: "d", prompt: "p", tier: "session", agent_type: role }, ctx);
+    expect(seen()?.prompt).toContain(role === "planner" ? "plan" : "review");
+    expect(seen()?.maxTurns).toBe(role === "planner" ? 30 : 40);
+  });
+
   it("a role route stamps provider/model/effort/maxTurns on a FRESH spawn", async () => {
     const { ctx, seen } = roleCtx({
       entries: [{ provider: "conn-glm", model: "glm-5.3", effort: "high" }],

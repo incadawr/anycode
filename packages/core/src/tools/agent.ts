@@ -63,7 +63,7 @@ import {
 } from "../subagents/role-route.js";
 import type { SessionSubagentRequest } from "../ports/session-subagent.js";
 import { SUBAGENT_OUTPUT_MAX_BYTES, SUBAGENT_TIME_BUDGET_MS } from "../types/config.js";
-import { getPersona, isKnownPersona, listPersonaNames } from "../subagents/personas.js";
+import { getPersona, isKnownPersona, listPersonaNames, ROLE_TURN_BUDGETS, type RolePersonaName } from "../subagents/personas.js";
 import {
   buildSessionSubagentRequest,
   formatResultForModel,
@@ -554,9 +554,11 @@ async function runSessionTier(
   // composition — `provider`/`detach` stay this tool's own fields (agent-
   // bridge.ts never sets either), spread on afterward.
   const resumeChildSessionId = input.continue_session;
-  const coreProfile = engineProfile === undefined && degrade === undefined
-    ? ctx.subagents?.coreProfile?.(agentType) ?? undefined
-    : undefined;
+  const builtinRole = (["planner", "executor", "reviewer"] as string[]).includes(agentType) ? agentType as RolePersonaName : undefined;
+  const configuredCoreProfile = engineProfile === undefined && degrade === undefined
+    ? ctx.subagents?.coreProfile?.(agentType) ?? undefined : undefined;
+  const useBuiltinRole = configuredCoreProfile === undefined && engineProfile === undefined && degrade === undefined && roleRoute === undefined && builtinRole !== undefined;
+  const coreProfile = configuredCoreProfile ?? (useBuiltinRole ? { systemPrompt: getPersona(builtinRole).systemPrompt } : undefined);
   const profileEffort = engineProfile?.effort ?? (roleRoute === undefined ? coreProfile?.effort : undefined);
   const resolvedRestrictions = ctx.subagents?.sessionRestrictions?.(agentType) ?? undefined;
   if (resumeChildSessionId === undefined && engineProfile === undefined && resolvedRestrictions === undefined && ctx.subagents?.hasSessionRestrictions?.(agentType)) {
@@ -596,7 +598,7 @@ async function runSessionTier(
             ? { systemPrompt: coreProfile.systemPrompt }
             : coreProfile),
           // the profile's own turn budget rides the creating spawn only.
-          ...(engineProfile?.turnBudget !== undefined ? { maxTurns: engineProfile.turnBudget } : {}),
+          ...(engineProfile?.turnBudget !== undefined ? { maxTurns: engineProfile.turnBudget } : useBuiltinRole ? { maxTurns: ROLE_TURN_BUDGETS[builtinRole] } : {}),
           // A role route supplies its own effort; otherwise preserve the profile's
           // selection for the destination model to resolve at child boot.
           ...(profileEffort !== undefined ? { effort: profileEffort } : {}),
