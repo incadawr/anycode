@@ -1369,7 +1369,7 @@ function notices(events: AgentEvent[]): string[] {
 describe("Codex orchestration restart", () => {
   async function setup(options: { empty?: boolean; readUnsupported?: boolean; badEcho?: boolean; noRollout?: boolean; neverFactory?: boolean; noInventory?: boolean; bridge?: CodexDynamicToolBridge; approvals?: CodexApprovalBridge } = {}) {
     const baseConfig = { mcp_servers: { ambient: { enabled: true } }, features: { multi_agent: true }, sandbox_mode: "workspace-write", approval_policy: "on-request" };
-    const onConfig = { mcp_servers: { ambient: { enabled: false } }, features: { multi_agent: false }, sandbox_mode: "read-only", approval_policy: "never" };
+    const onConfig = { mcp_servers: { ambient: { enabled: false } }, features: { multi_agent: false }, apps: { _default: { enabled: false } }, sandbox_mode: "read-only", approval_policy: "never" };
     const initial = new FakeAppServer();
     const baseRequest = initial.request.bind(initial);
     initial.request = <T>(method: string, params?: unknown, opts?: { timeoutMs?: number }) => {
