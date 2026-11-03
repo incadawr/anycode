@@ -7,11 +7,20 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.0.67] — 2026-11-03
+## [0.0.68] — 2026-11-03
 
 ### Fixed
 
 - Restore compact, right-aligned user messages in conversations.
+
+### Changed
+
+- Softened message text and primary usage statistics in the dark theme for more comfortable reading. Headings and code blocks keep their colours.
+
+## [0.0.67] — 2026-11-03
+
+### Fixed
+
 - Keep suggested write permissions scoped to the workspace for files inside it, and reject broad macOS directory aliases and temporary directories.
 - Close OpenRouter reasoning indicators when answers or tool calls begin, and when streams end unexpectedly, including when reasoning replay is disabled.
 - Close hidden subagent menus so they cannot intercept shortcuts or hide previews.
@@ -35,8 +44,6 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Softened message text and primary usage statistics in the dark theme for more comfortable reading.
-- Blockquote headings and code retain their original colours, and Stats tiles use the softened text colour.
 - Dialogs and utility panels use the same visual style as the main window.
 - Settings use the same look as the main window.
 - New always-allow write rules must use an absolute path mask; relative patterns such as `src/**` can no longer be added (existing ones keep working inside the workspace).
