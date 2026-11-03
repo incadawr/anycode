@@ -109,6 +109,7 @@ export function parseProviderQuotaEvent(raw: unknown): ProviderQuotaEvent | unde
 
 /** The persisted `lastQuota` shape (shared/settings.ts `ProviderConnection`). */
 export type LastQuota = NonNullable<ProviderConnection["lastQuota"]>;
+type ConnectionQuota = ProviderQuotaWindowWire & { secondary?: ProviderQuotaWindowWire };
 
 /**
  * Sparse merge onto one connection; `undefined` when the connection no longer
@@ -122,7 +123,7 @@ export type LastQuota = NonNullable<ProviderConnection["lastQuota"]>;
 export function withConnectionQuota(
   settings: AnycodeSettings,
   connectionId: string,
-  quota: ProviderQuotaWindowWire,
+  quota: ConnectionQuota,
   source: string,
   observedAt: string,
 ): AnycodeSettings | undefined {
@@ -147,7 +148,7 @@ export function withConnectionQuota(
 }
 
 type QuotaGuard = (settings: AnycodeSettings) => Promise<boolean>;
-interface PendingQuota { quota: ProviderQuotaWindowWire; source: string; guard?: QuotaGuard; onPersisted?: () => void; deps: ConnectionQuotaDeps }
+interface PendingQuota { quota: ConnectionQuota; source: string; guard?: QuotaGuard; onPersisted?: () => void; deps: ConnectionQuotaDeps }
 interface ThrottleState {
   lastWriteMs: number;
   /** Latest coalesced observation waiting for the trailing window to close. */
@@ -220,7 +221,7 @@ export function handleProviderQuotaMessage(
 export async function recordConnectionQuota(
   deps: ConnectionQuotaDeps,
   connectionId: string,
-  quota: ProviderQuotaWindowWire,
+  quota: ConnectionQuota,
   source: string,
   onPersisted?: () => void,
   guard?: QuotaGuard,
@@ -280,7 +281,7 @@ export async function recordConnectionQuota(
 async function writeQuotaUnderLock(
   deps: ConnectionQuotaDeps,
   connectionId: string,
-  quota: ProviderQuotaWindowWire,
+  quota: ConnectionQuota,
   source: string,
   now: NowMs,
   guard?: QuotaGuard,

@@ -14,7 +14,7 @@ type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 export function createMiniMaxQuotaPoller(deps: {
   resolve(id: string): Promise<Context | undefined>;
   fetch(route: ProxyRoute): FetchLike;
-  record(id: string, guard: string, quota: NonNullable<ReturnType<typeof parseMiniMaxQuota>>["primary"]): Promise<void>;
+  record(id: string, guard: string, quota: NonNullable<NonNullable<ReturnType<typeof parseMiniMaxQuota>>["primary"]> & { secondary?: NonNullable<NonNullable<ReturnType<typeof parseMiniMaxQuota>>["secondary"]> }): Promise<void>;
   now?: () => number;
 }) {
   const last = new Map<string, number>();
@@ -43,7 +43,7 @@ export function createMiniMaxQuotaPoller(deps: {
           return;
         }
         const quota = parseMiniMaxQuota(body, Date.now(), context.model);
-        if (quota?.primary) await deps.record(id, context.guard, quota.primary);
+        if (quota?.primary) await deps.record(id, context.guard, { ...quota.primary, ...(quota.secondary ? { secondary: quota.secondary } : {}) });
       } catch {
         // Quota is advisory; failures leave the last observation untouched.
       }

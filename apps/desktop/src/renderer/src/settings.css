@@ -1066,6 +1066,9 @@
 /* Provider-reported subscription quota line:
    rendered only when the provider last reported something. */
 .connection-quota {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-3);
   font-size: 12px;
 }

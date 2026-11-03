@@ -9,7 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- Show MiniMax subscription quota on provider connection cards.
+- Show five-hour and weekly MiniMax subscription quotas on provider connection cards.
 
 ### Fixed
 
