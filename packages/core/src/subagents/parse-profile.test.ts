@@ -240,7 +240,7 @@ describe("discoverAgentProfiles byte-invariance (post-extraction regression)", (
     expect(first.profiles).toEqual([
       { name: "noname", description: "no name here", tools: [...PERSONAS["general-purpose"].tools], systemPrompt: "b" },
       { name: "reviewer", description: "project reviewer", tools: [...PERSONAS["general-purpose"].tools], systemPrompt: "PROJECT BODY" },
-      { name: "spawner", description: "d", tools: ["Read", "Agent"], systemPrompt: "b" },
+      { name: "spawner", description: "d", tools: ["Read", "Agent"], toolsExplicit: true, systemPrompt: "b" },
       { name: "useronly", description: "u", tools: [...PERSONAS["general-purpose"].tools], systemPrompt: "b" },
     ]);
 

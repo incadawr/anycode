@@ -763,6 +763,15 @@ export function createSubagentRunner(
         ...(persona.effort !== undefined ? { effort: persona.effort } : {}),
       };
     },
+    hasSessionRestrictions(agentType: string): boolean {
+      const persona = (isKnownPersona(agentType) && isReservedPersonaName(agentType))
+        ? getPersona(agentType)
+        : currentProfiles().get(agentType) ?? (isKnownPersona(agentType) ? getPersona(agentType) : undefined);
+      if (!persona) return false;
+      const baseline = getPersona("general-purpose").tools;
+      return persona.toolsExplicit === true || persona.permissions !== undefined ||
+        persona.tools.length !== baseline.length || persona.tools.some((tool) => !baseline.includes(tool));
+    },
     profileRouting(agentType: string): { provider?: string; connection?: string } | null {
       // same flip as engineProfile — overridable role personas
       // consult the profile map first; hard-reserved built-ins never route.

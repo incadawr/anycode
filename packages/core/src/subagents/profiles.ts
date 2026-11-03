@@ -795,7 +795,7 @@ export async function discoverAgentProfiles(
         continue;
       }
 
-      const { name, description, tools, body, model, engine, connection, provider, turnBudget, effort, permissions } =
+      const { name, description, tools, toolsExplicit, body, model, engine, connection, provider, turnBudget, effort, permissions } =
         result.ok;
 
       // Precedence dedupe: a lower source's same-named file is shadowed silently.
@@ -824,6 +824,7 @@ export async function discoverAgentProfiles(
         name,
         description,
         tools,
+        ...(toolsExplicit ? { toolsExplicit: true } : {}),
         systemPrompt: body,
         ...(model !== undefined ? { model } : {}),
         ...(engine !== undefined ? { engine } : {}),

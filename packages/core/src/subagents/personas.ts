@@ -59,6 +59,8 @@ export interface PersonaDefinition {
   description: string;
   /** Built-in tool names the child registry is assembled from (never includes Agent — non-recursion lock). */
   tools: readonly string[];
+  /** Whether an md-profile explicitly declared its tool list. */
+  toolsExplicit?: boolean;
   /**
    * Role-specific system prompt body. Embedded by buildSubagentSystemPrompt
    * AFTER the harness prelude and BEFORE the finality note (design §2.3), so
