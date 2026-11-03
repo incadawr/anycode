@@ -80,6 +80,20 @@ function ask(emitted: HostToUiMessage[]) {
 }
 
 describe("CodexApprovalBridge — decisions", () => {
+  it("declines orchestration approvals before classification or the broker", async () => {
+    const emitted: HostToUiMessage[] = [];
+    const broker = new IpcPermissionBroker((message) => emitted.push(message));
+    const askBroker = vi.spyOn(broker, "requestPermission");
+    const bridge = new CodexApprovalBridge({ broker, activeTurn: () => ACTIVE, denyApprovals: () => true });
+    for (const input of [command(), file()]) {
+      const response = responder();
+      await bridge.handle(input, response);
+      expect(response.result).toHaveBeenCalledWith({ decision: "decline" });
+      expect(response.error).not.toHaveBeenCalled();
+    }
+    expect(askBroker).not.toHaveBeenCalled();
+    expect(emitted).toEqual([]);
+  });
   it("answers allow with accept and deny with decline (both families, turn continues)", async () => {
     const { bridge, broker, emitted } = rig();
 

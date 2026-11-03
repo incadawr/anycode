@@ -55,6 +55,8 @@ export interface ActiveCodexTurn {
 export interface CodexApprovalBridgeOptions {
   broker: EngineBridgeBroker;
   activeTurn(): ActiveCodexTurn | null;
+  /** Parent overlay denies native approvals before decoding or automatic grants. */
+  denyApprovals?: () => boolean;
   /**
    * (cross-review F1): the session's workspace root (the host
    * boot's `workspace` — the cwd the codex thread was started with). When
@@ -319,6 +321,11 @@ export class CodexApprovalBridge {
   }
 
   private async route(serverRequest: JsonRpcServerRequest, responder: ServerRequestResponder): Promise<void> {
+    if (this.options.denyApprovals?.() &&
+      (serverRequest.method === OBSERVED_COMMAND_APPROVAL_METHOD || serverRequest.method === OBSERVED_FILE_CHANGE_APPROVAL_METHOD)) {
+      responder.result({ decision: "decline" });
+      return;
+    }
     const active = this.options.activeTurn();
     const decoded = decode(serverRequest, active?.items);
     if (decoded === null) {
