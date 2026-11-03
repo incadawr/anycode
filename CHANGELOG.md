@@ -11,6 +11,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Refuse restricted roles when starting child sessions with native Claude or Codex engines.
+- Show the reason when a background agent fails to start.
 - Show subagent activity in the dock and allow splitting the active dock tab alongside a preview.
 - Keep orchestrated sessions in orchestrate mode and ask before side-effecting actions while allowing local previews.
 - Allow more time and retry engine version checks, and report child startup failures immediately without exposing credentials.
