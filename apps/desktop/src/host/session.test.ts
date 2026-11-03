@@ -10343,3 +10343,16 @@ describe("dormant child posture admission foundation", () => {
     } finally { release("synthetic result"); h.close(); }
   });
 });
+
+describe("orchestration wire", () => {
+  it("validates correlated requests while preserving legacy frames", async () => {
+    const { uiReadySchema, userMessageSchema, setOrchestrateSchema } = await import("../shared/protocol.js");
+    expect(uiReadySchema.safeParse({ type: "ui_ready", orchestrationProtocol: 1 }).success).toBe(true);
+    expect(userMessageSchema.safeParse({ type: "user_message", requestId: "r", text: "task", orchestrate: "enable", connectionId: "c" }).success).toBe(true);
+    expect(userMessageSchema.safeParse({ type: "user_message", requestId: "r", text: "task" }).success).toBe(true);
+    expect(setOrchestrateSchema.safeParse({ type: "set_orchestrate", enabled: true, requestId: "r", connectionId: "c" }).success).toBe(true);
+    expect(setOrchestrateSchema.safeParse({ type: "set_orchestrate", enabled: false }).success).toBe(true);
+    expect(setOrchestrateSchema.safeParse({ type: "set_orchestrate", enabled: true, connectionId: "" }).success).toBe(false);
+    expect(userMessageSchema.safeParse({ type: "user_message", requestId: "r", text: "task", orchestrate: "disable" }).success).toBe(false);
+  });
+});
