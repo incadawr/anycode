@@ -16,6 +16,9 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - Use readable Enter key names in task and permission hints. Refresh Git status when returning to its dock tab.
+- Allow local previews to load workspace files when the workspace path is a symlink.
+
+- Keep background agent action buttons visible when progress text is long.
 
 - Make composer keyboard hints readable and separate them from the model selector.
 
