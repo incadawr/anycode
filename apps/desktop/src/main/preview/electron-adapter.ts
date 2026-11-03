@@ -131,6 +131,9 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
   let attached = false;
   let messageWired = false;
   const seenLogEntries = new Set<string>();
+  const seenConsoleCalls = new Set<string>();
+  const detachedMessages: Array<{ level: PreviewConsoleEntry["level"]; message: string }> = [];
+  let replaying = false;
 
   // Kills the common STUN/UDP exfil path that `onBeforeRequest` cannot see
   // (cut §1.1/F2, "one cheap adapter hardening that IS in scope"); the
@@ -164,11 +167,19 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
         consoleListener("pageerror", message);
       }
       if (method === "Runtime.consoleAPICalled") {
-        const call = params as { type?: string; args?: RemotePreview[] };
+        const call = params as { type?: string; args?: RemotePreview[]; timestamp?: number };
         if (call.args) {
           const level = call.type === "warning" ? "warn" : call.type === "error" || call.type === "assert" ? "error" : "log";
           const message = formatConsoleArguments(call.args);
-          if (!isElectronInternalWarning(message, call.type)) consoleListener(level, message);
+          const key = call.timestamp === undefined ? undefined : JSON.stringify(params);
+          const seen = key !== undefined && seenConsoleCalls.has(key);
+          if (key !== undefined) {
+            seenConsoleCalls.add(key);
+            if (seenConsoleCalls.size > 1000) seenConsoleCalls.delete(seenConsoleCalls.values().next().value!);
+          }
+          const fallbackIndex = replaying && !seen ? detachedMessages.findIndex((item) => item.level === level && item.message === message) : -1;
+          if (fallbackIndex >= 0) detachedMessages.splice(fallbackIndex, 1);
+          if (!seen && fallbackIndex < 0 && !isElectronInternalWarning(message, call.type)) consoleListener(level, message);
         }
       }
       for (const listener of cdpListeners) {
@@ -194,7 +205,12 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
     attached = true;
     wireMessages();
     wc.debugger.sendCommand("Log.enable").catch(() => {});
-    wc.debugger.sendCommand("Runtime.enable").catch((error: unknown) => {
+    replaying = true;
+    wc.debugger.sendCommand("Runtime.enable").then(() => {
+      replaying = false;
+      detachedMessages.length = 0;
+    }).catch((error: unknown) => {
+      replaying = false;
       attached = false;
       console.warn("[preview] failed to enable CDP Runtime domain", error);
     });
@@ -232,7 +248,11 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
     // arrives in main once (Chromium delivers it; unavoidable) but is never
     // re-serialized host-ward at size. preview-host.ts's own slice at
     // recordConsole-time stays as defense-in-depth.
-    consoleListener(classifyConsoleLevel(event.level), event.message.slice(0, RING_MAX_MSG_CHARS));
+    const level = classifyConsoleLevel(event.level);
+    const message = event.message.slice(0, RING_MAX_MSG_CHARS);
+    detachedMessages.push({ level, message });
+    if (detachedMessages.length > 1000) detachedMessages.shift();
+    consoleListener(level, message);
   });
 
   return {
