@@ -298,6 +298,20 @@ describe("Codex AnyCode dynamic tool — browser tools", () => {
     return { ...rig, bridge, response, events, call };
   }
 
+  it("enforces the live orchestration restriction through the dynamic tool door", async () => {
+    const s = browserSetup();
+    let restricted = true;
+    s.bridge.setBrowserRestriction(() => restricted);
+    await s.call("anycode_browser_click", { selector: "button" }, "one");
+    expect(s.response.result).toHaveBeenLastCalledWith(expect.objectContaining({ success: false }));
+    expect(s.requests).toHaveLength(0);
+    expect(s.portCalls).toHaveLength(0);
+    restricted = false;
+    await s.call("anycode_browser_click", { selector: "button" }, "two");
+    expect(s.response.result).toHaveBeenLastCalledWith(expect.objectContaining({ success: true }));
+    expect(s.portCalls).toHaveLength(1);
+  });
+
   it("X1: empty catalog + no port -> exactly the 10 browser declarations; catalog + port -> agent first then 10", () => {
     const empty = browserSetup();
     const decls = empty.bridge.declarations();

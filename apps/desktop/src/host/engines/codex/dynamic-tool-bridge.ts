@@ -18,6 +18,8 @@ export function codexAgentPermissionMode(presetId: string): PermissionMode {
 
 /** One host-owned tool; native Codex agents never substitute for AnyCode profiles. */
 export class CodexDynamicToolBridge {
+  private browserRestricted: () => boolean = () => false;
+  setBrowserRestriction(restricted: () => boolean): void { this.browserRestricted = restricted; }
   private readonly pending = new Map<string, AbortController>();
   hasPendingCalls(): boolean { return this.pending.size > 0 || this.work.size > 0; }
   private readonly work = new Set<Promise<unknown>>();
@@ -116,7 +118,7 @@ export class CodexDynamicToolBridge {
     });
     let result;
     try {
-      const execution = this.browser!.call(spec, p.arguments, controller.signal, id);
+      const execution = this.browser!.call(spec, p.arguments, controller.signal, id, () => this.browserRestricted());
       this.work.add(execution);
       void execution.then(() => this.work.delete(execution), () => this.work.delete(execution));
       result = await Promise.race([execution, cancelled]);

@@ -955,6 +955,7 @@ export class CodexEngine implements SessionEngine {
     this.compactNow = this.compactNowInner.bind(this);
     this.bounds = timeouts(overrides);
     this.settings = settings;
+    this.agentBridge?.setBrowserRestriction(() => this.orchestrationState !== "off");
     this.applied = this.chosen();
     this.unobserve = this.client.observeNotifications?.((notification) => this.observeNotification(notification)) ?? (() => {});
   }

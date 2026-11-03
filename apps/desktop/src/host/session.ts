@@ -1484,9 +1484,10 @@ export class Session {
   private orchestrationPosture: "stable" | "transitioning" | "quarantined" = "stable";
   private orchestrationController?: OrchestrationController;
   private orchestrationAdmission?: OrchestrationAdmission;
-  private postureBlocked(): boolean {
+  private legacyOrchestration = false;
+  private postureBlocked(includeAdmission = true): boolean {
     const state = this.orchestrationController?.state.status;
-    return this.orchestrationPosture !== "stable" || state === "transitioning" || state === "quarantined";
+    return this.orchestrationPosture !== "stable" || state === "transitioning" || state === "quarantined" || (includeAdmission && this.orchestrationAdmission?.locked === true);
   }
   /** The mode the user had BEFORE orchestrate was enabled; null while off. */
   private preOrchestrateMode: PermissionMode | null = null;
@@ -2470,7 +2471,7 @@ export class Session {
   async receiveAgentMessage(envelope: AgentEnvelope): Promise<AgentDelivery> {
     const existing = this.agentDeliveries.get(envelope.messageId);
     if (existing) return existing;
-    if (this.postureBlocked()) {
+    if (this.postureBlocked(false)) {
       const delivery: AgentDelivery = { envelope, state: "rejected", detail: "Session posture unavailable" };
       this.publishAgentDelivery(delivery);
       return delivery;
@@ -3059,6 +3060,7 @@ export class Session {
           const connectionId = message.requestId === undefined ? this.boundGeneration ?? "" : message.connectionId ?? "";
           const id = message.requestId ?? randomUUID();
           void this.admission().toggle(id, connectionId, message.enabled).then(result => {
+            this.drainAgentInbox();
             if (message.requestId !== undefined && this.boundGeneration === replyGeneration && replyGeneration !== null) this.sendOrchestrationResult(id, replyGeneration, result);
           });
         }
@@ -3256,7 +3258,7 @@ export class Session {
         void this.onCompact();
         break;
       case "engine_switch_request":
-        if (this.postureBlocked() || this.orchestrate) { this.outbound.sendDirect({ type: "engine_switch_failed", requestId: message.requestId, reason: "Session posture unavailable" }); break; }
+        if (this.postureBlocked() || (this.orchestrate && this.engine.id !== "core" && !this.legacyOrchestration)) { this.outbound.sendDirect({ type: "engine_switch_failed", requestId: message.requestId, reason: "Session posture unavailable" }); break; }
         // async handler holds `busy` across the factory await —
         // the exact rewind pattern (route() itself never awaits). The handler
         // re-checks its own gates (messages route synchronously, but this
@@ -4259,6 +4261,7 @@ export class Session {
       this.settingsBarrierActive = false;
       this.updateContextUsage(null);
       this.engine = next;
+      if (previousEngine.id === "core" && this.orchestrate) this.legacyOrchestration = true;
       this.orchestrationController?.invalidate();
       this.orchestrationController = undefined;
       this.orchestrationAdmission = undefined;
@@ -4313,7 +4316,7 @@ export class Session {
   }
 
   private onUserMessage(requestId: string, text: string, images?: ImageAttachment[], origin?: "system"): void {
-    if (this.presentationJournal.snapshot().turns.some(turn => turn.requestId === requestId)) {
+    if (this.child === undefined && this.presentationJournal.snapshot().turns.some(turn => turn.requestId === requestId)) {
       this.outbound.sendDirect({ type: "user_message_unavailable", requestId, reason: "posture_unavailable" });
       return;
     }
@@ -4476,8 +4479,8 @@ export class Session {
    * tell "started, own `currentTurn` now covers it" apart from "refused, this
    * queued item is fully spent and produced nothing to wait on."
    */
-  private acceptUserMessage(requestId: string, text: string, images?: ImageAttachment[], origin?: "system"): boolean {
-    if (this.postureBlocked()) return false;
+  private acceptUserMessage(requestId: string, text: string, images?: ImageAttachment[], origin?: "system", ownsAdmission = false): boolean {
+    if (this.postureBlocked(!ownsAdmission)) return false;
     // record the RAW human turn for the ask-zone classifier's
     // engine-session coverage (classifying-broker.ts). Only genuinely human
     // turns: origin "system" never enters — that is the parent agent's spawn
@@ -5377,7 +5380,8 @@ export class Session {
           void this.settingsBarrier.finally(() => { controller.signal.removeEventListener("abort", abort); resolve(); });
         });
       }
-      if (this.postureBlocked()) return;
+      // This turn already owns admission; only policy state can block it here.
+      if (this.postureBlocked(false)) return;
       if (controller.signal.aborted || this.shuttingDown) {
         recordResult("cancelled");
         if (!this.shuttingDown) {
@@ -6145,15 +6149,16 @@ export class Session {
     if (this.orchestrationAdmission) return this.orchestrationAdmission;
     const engine = this.engine;
     const policy: OrchestrationPolicy = {
-      availability: () => this.engine === engine && this.orchestrationAvailable()
+      availability: () => this.engine === engine && (this.legacyOrchestration || this.orchestrationAvailable())
         ? { supported: true } : { supported: false, reason: "unavailable" },
       apply: async (enabled, baseAuthority) => {
         if (this.settingsBarrierActive) await this.settingsBarrier;
         await this.engineSettings?.waitForSettingsChanges?.();
         if (this.shuttingDown || this.engine !== engine || this.relocating || this.orchestrationController?.state.status !== "transitioning") throw new Error("Session changed during orchestration transition");
-        if (engine.id === "core") {
+        if (engine.id === "core" || (this.legacyOrchestration && !enabled)) {
           this.onSetOrchestrate(enabled);
           if (this.orchestrate !== enabled) throw new Error("Core orchestration transition failed");
+          if (!enabled) this.legacyOrchestration = false;
           return { enabled, baseAuthority };
         }
         // Capture the preset after queued settings have settled, before the
@@ -6172,10 +6177,11 @@ export class Session {
       },
     };
     this.orchestrationController = new OrchestrationController(policy);
+    if (this.legacyOrchestration) this.orchestrationController.state = { status: "on", baseAuthority: this.preOrchestrateMode ?? "build" };
     this.orchestrationAdmission = new OrchestrationAdmission({
       controller: this.orchestrationController,
       connectionId: () => this.boundGeneration,
-      busy: () => this.busy || this.broker.pendingCount > 0 || this.shuttingDown || this.relocating || this.child !== undefined || this.continuationPending || this.orchestrationPosture !== "stable",
+      busy: () => this.busy || this.currentTurn !== null || this.broker.pendingCount > 0 || this.shuttingDown || this.relocating || this.child !== undefined || this.continuationPending || this.orchestrationPosture !== "stable",
       baseAuthority: () => this.engine.id === "codex" ? { mode: this.nativeChildBaseMode() } : this.engine.mode(),
       timeoutMs: 120_000,
     });
@@ -6198,7 +6204,7 @@ export class Session {
 
   private submitOrchestration(message: Extract<UiToHostMessage, { type: "user_message" }>): void {
     const connectionId = message.connectionId ?? "";
-    if (connectionId !== this.boundGeneration) {
+    if (this.legacyOrchestration || connectionId !== this.boundGeneration) {
       this.outbound.sendDirect({ type: "user_message_unavailable", requestId: message.requestId, reason: "orchestrate_unavailable" });
       return;
     }
@@ -6212,9 +6218,10 @@ export class Session {
     void this.admission().submit(message.requestId, connectionId, () => {
       if (message.origin !== "system") this.broker.noteHumanPresent();
       // acceptUserMessage claims busy synchronously, before admission resolves.
-      this.acceptUserMessage(message.requestId, message.text, message.images, message.origin);
+      this.acceptUserMessage(message.requestId, message.text, message.images, message.origin, true);
     }, fingerprint).then(result => {
       if (!("kind" in result) && result.outcome === "unknown" && result.reason === "admission") this.orchestrationController?.quarantine("Turn admission was not confirmed");
+      this.drainAgentInbox();
       if (this.boundGeneration !== connectionId || this.shuttingDown) return;
       if ("kind" in result || result.outcome === "unknown") {
         this.outbound.sendDirect({ type: "user_message_unavailable", requestId: message.requestId, reason: "orchestrate_unavailable" });
@@ -6299,6 +6306,7 @@ export class Session {
   private clearOrchestrateForLeavingPlan(): void {
     if (!this.orchestrate) return;
     this.orchestrate = false;
+    this.legacyOrchestration = false;
     this.orchestrationController?.coreModeExited();
     this.preOrchestrateMode = null;
     this.onOrchestrateChanged?.(false);
