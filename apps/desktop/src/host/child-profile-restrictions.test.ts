@@ -42,12 +42,14 @@ describe("child profile restrictions", () => {
 
   it("allows reviewer commands through the inherited permission engine", () => {
     const restrictions = sessionRestrictionsForPersona(PERSONAS.reviewer)!;
-    expect(restrictions.readOnly).toBe(false);
+    expect(restrictions.readOnly).toBe(true);
+    expect(restrictions.allowBash).toBe(true);
     const registry = createDefaultToolRegistry();
     restrictChildRegistry(registry, restrictions);
     expect(registry.has("Write")).toBe(false);
     const engine = restrictChildPermissions(new ModePermissionEngine(), restrictions);
     expect(engine.check({ toolName: "Bash", input: { command: "pnpm test" }, metadata: registry.getMetadata("Bash")!, mode: "yolo" }).decision).toBe("allow");
+    expect(engine.check({ toolName: "Write", input: { file_path: "/tmp/a", content: "x" }, metadata: createDefaultToolRegistry().getMetadata("Write")!, mode: "yolo" }).decision).toBe("deny");
   });
 
   it("applies the profile deny overlay to the inherited engine", () => {

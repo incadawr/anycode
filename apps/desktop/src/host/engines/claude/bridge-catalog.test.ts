@@ -9,7 +9,7 @@ import type { PersonaDefinition, SessionSubagentOutcome, SessionSubagentPort, Se
 import { PERSONAS, runAgentBridgeCall, type AgentBridgeCatalogEntry } from "@anycode/core";
 import { bridgeCallableCatalog, catalogFromProfiles } from "./bridge-catalog.js";
 
-const reviewerRestrictions = { tools: [...PERSONAS["general-purpose"].tools, "ListConnections"], readOnly: true };
+const reviewerRestrictions = { tools: [...PERSONAS["general-purpose"].tools, "ListConnections"], readOnly: true, allowBash: true };
 
 function profile(overrides: Partial<PersonaDefinition> = {}): PersonaDefinition {
   return {
@@ -153,7 +153,7 @@ describe("bridgeCallableCatalog", () => {
       run: async (request) => { seen = request; return { ...BASE_OUTCOME, spawnToolCallId: request.spawnToolCallId }; },
     };
     await runAgentBridgeCall({ agent_type: "reviewer", description: "d", prompt: "p" }, { catalog, port, spawnToolCallId: "call" });
-    expect(seen).toMatchObject({ connectionId: "other", restrictions: { tools: ["Read", "Bash", "ListConnections"], readOnly: true, permissions: { deny: [{ toolName: "Write" }] } } });
+    expect(seen).toMatchObject({ connectionId: "other", restrictions: { tools: ["Read", "Bash", "ListConnections"], readOnly: true, allowBash: true, permissions: { deny: [{ toolName: "Write" }] } } });
     await runAgentBridgeCall({ agent_type: "reviewer", description: "d", prompt: "p", continue_session: "child-1" }, { catalog, port, spawnToolCallId: "next" });
     expect(seen).toMatchObject({ resumeChildSessionId: "child-1" });
     expect(seen).not.toHaveProperty("restrictions");

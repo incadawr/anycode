@@ -566,7 +566,7 @@ async function runSessionTier(
   }
   const restrictions = resolvedRestrictions ??
     (ctx.subagents?.sessionRestrictions === undefined && isKnownPersona(agentType) && ["explore", "planner", "reviewer"].includes(agentType)
-      ? { tools: [...getPersona(agentType).tools], readOnly: agentType !== "reviewer" } : undefined);
+      ? { tools: [...getPersona(agentType).tools], readOnly: true, ...(agentType === "reviewer" ? { allowBash: true } : {}) } : undefined);
   const request: SessionSubagentRequest = {
 
     // a continuation branches the request build rather than

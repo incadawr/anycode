@@ -118,14 +118,14 @@ export interface PersonaDefinition {
 }
 
 export function sessionRestrictionsForPersona(persona: PersonaDefinition, includeConnections = false): import("../ports/session-subagent.js").SessionProfileRestrictions | null {
-  const readOnly = ["explore", "planner"].includes(persona.name);
+  const readOnly = ["explore", "planner", "reviewer"].includes(persona.name);
   const baseline = PERSONAS["general-purpose"].tools;
   const restricted = readOnly || persona.toolsExplicit === true || persona.permissions !== undefined ||
     persona.tools.length !== baseline.length || persona.tools.some((tool) => !baseline.includes(tool));
   if (!restricted) return null;
   const tools = [...persona.tools];
   if (includeConnections && tools.some((name) => ["Read", "Git", "Grep", "Glob", "ListConnections"].includes(name)) && !tools.includes("ListConnections")) tools.push("ListConnections");
-  return { tools, readOnly, ...(persona.permissions !== undefined ? { permissions: persona.permissions } : {}) };
+  return { tools, readOnly, ...(persona.name === "reviewer" ? { allowBash: true } : {}), ...(persona.permissions !== undefined ? { permissions: persona.permissions } : {}) };
 }
 
 /**
