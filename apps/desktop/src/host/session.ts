@@ -1784,6 +1784,7 @@ export class Session {
   private childLastTool: string | undefined;
   /** Wall-clock (per `this.now`) of the last emitted progress report — `undefined` until the first boundary, so the first boundary always emits (leading edge). */
   private childLastProgressEmitAt: number | undefined;
+  private childProgressTimer: ReturnType<typeof setTimeout> | null = null;
   /**
    * review F3: liveness interval armed while a child tool call
    * is EXECUTING (dispatch crossed one boundary; the result may be minutes
@@ -1967,6 +1968,7 @@ export class Session {
       // (Before the reload-grace branch below: even a reload-adjacent close
       // must not keep pushing while no port is bound.)
       this.disarmChildToolLiveness();
+      this.cancelChildProgressTimer();
       // the old unconditional denyAll here destroyed the parked
       // ask mid-reload (live S2: "ui disconnected" deny + no_pending_request
       // 1.3s after a Page.reload — the close is observed BEFORE main re-posts
@@ -2526,6 +2528,7 @@ export class Session {
     // review F3: the in-tool liveness interval must not survive
     // the session — clear it before any teardown await can interleave.
     this.disarmChildToolLiveness();
+    this.cancelChildProgressTimer();
     // shutdown is the terminal settlement — disarm the reconnect
     // grace window so its timer can never fire a disconnect-origin denyAll
     // after (or beside) the shutdown settlement below.
@@ -4813,6 +4816,7 @@ export class Session {
       // lost (the O7 bug), and the error terminal publishes as-is.
       const flushDurationMs = Date.now() - this.childStartedAt;
       this.rejectQueuedSteerMessages();
+      this.cancelChildProgressTimer();
       this.childTerminalFinalized = true;
       // Read the dedicated-port claim ONCE for the terminal being reported.
       const responseModel = this.child.responseModel?.();
@@ -4881,6 +4885,7 @@ export class Session {
     }
     // Measured AFTER the rescue so the reported duration includes it.
     const durationMs = Date.now() - this.childStartedAt;
+    this.cancelChildProgressTimer();
     this.childTerminalFinalized = true;
     // Read the dedicated-port claim ONCE for the terminal being reported.
     const responseModel = this.child.responseModel?.();
@@ -5112,18 +5117,31 @@ export class Session {
    * dispatch are signs of life, see observeChildEvent). Leading-edge throttled
    * at 1000ms via the injected `this.now` — the FIRST boundary this session
    * ever crosses always emits (`childLastProgressEmitAt` starts `undefined`);
-   * every later boundary within 1000ms of the last emission is silently
-   * skipped (never a trailing timer — the next boundary, or the always-
-   * authoritative terminal report, absorbs whatever a skip withheld, so no
-   * count is ever lost, only delayed by at most ~1s). `turns` reads the NEW
-   * `childTurnEndCount`, not `childTurns` (§10.7 п.3's explicit distinction).
+   * boundaries within that window schedule a trailing report with current counts.
    */
   private emitChildProgressBoundary(): void {
+    if (this.shuttingDown || this.childTerminalFinalized) return;
     const now = this.now();
     if (this.childLastProgressEmitAt !== undefined && now - this.childLastProgressEmitAt < 1000) {
+      if (this.childProgressTimer === null) {
+        this.childProgressTimer = setTimeout(() => {
+          this.childProgressTimer = null;
+          if (!this.shuttingDown && !this.childTerminalFinalized) this.sendChildProgress();
+        }, 1000 - (now - this.childLastProgressEmitAt));
+      }
       return;
     }
-    this.childLastProgressEmitAt = now;
+    this.cancelChildProgressTimer();
+    this.sendChildProgress();
+  }
+
+  private cancelChildProgressTimer(): void {
+    if (this.childProgressTimer !== null) clearTimeout(this.childProgressTimer);
+    this.childProgressTimer = null;
+  }
+
+  private sendChildProgress(): void {
+    this.childLastProgressEmitAt = this.now();
     this.child?.onProgress({
       kind: "progress",
       // review F2: model rounds once any were seen (a claude

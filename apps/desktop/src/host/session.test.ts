@@ -6425,8 +6425,8 @@ describe("Session — child mode: activity/progress bridge (CUT-S2 §2.6.3/§10.
     );
   });
 
-  describe("progress: leading-edge 1000ms throttle, NO trailing timer (§10.7 п.6a.3)", () => {
-    it("boundaries at t=0/500/1100 emit at t=0 and t=1100 with CUMULATIVE totals; advancing fake timers with no NEW boundary crossed emits nothing", () => {
+  describe("progress: 1000ms throttle", () => {
+    it("a later boundary replaces the pending trailing report", () => {
       let currentTime = 0;
       const h = createChildHarness({ steps: [finishStep()], now: () => currentTime });
       try {
@@ -6449,13 +6449,6 @@ describe("Session — child mode: activity/progress bridge (CUT-S2 §2.6.3/§10.
           expect(progress[1]).toEqual({ kind: "progress", turns: 0, toolCalls: 3, lastTool: "C" });
 
           const countBefore = h.onProgress.mock.calls.length;
-          // No new boundary crossed here — a trailing-timer implementation
-          // would register a setTimeout during one of the calls above, which
-          // fake timers (armed BEFORE those calls) would intercept; advancing
-          // them proves no such timer exists (this is a red test the moment
-          // one is added). Still true after 4820 F3: the F3 liveness INTERVAL
-          // arms only on tool_execution_start (none here — tool_results
-          // arrive paired); the throttle itself stays timer-free.
           vi.advanceTimersByTime(10_000);
           expect(h.onProgress.mock.calls.length).toBe(countBefore);
         } finally {
@@ -6463,6 +6456,37 @@ describe("Session — child mode: activity/progress bridge (CUT-S2 §2.6.3/§10.
         }
       } finally {
         h.close();
+      }
+    });
+
+    it("flushes a burst of results after silence", () => {
+      vi.useFakeTimers();
+      const h = createChildHarness({ steps: [finishStep()], now: () => Date.now() });
+      try {
+        observeChildEventDirect(h.session, { type: "tool_execution_start", toolCallId: "a", toolName: "A", input: {} });
+        for (let i = 0; i < 9; i++) observeChildEventDirect(h.session, toolResultEvent(String(i), "A"));
+        expect(h.onProgress.mock.calls.map((c) => c[0]).filter(isProgressReport)).toHaveLength(1);
+        vi.advanceTimersByTime(1000);
+        expect(h.onProgress.mock.calls.map((c) => c[0]).filter(isProgressReport).at(-1)).toMatchObject({ toolCalls: 9 });
+      } finally {
+        h.close();
+        vi.useRealTimers();
+      }
+    });
+
+    it("cancels a pending trailing report on shutdown", async () => {
+      vi.useFakeTimers();
+      const h = createChildHarness({ steps: [finishStep()], now: () => Date.now() });
+      try {
+        observeChildEventDirect(h.session, toolResultEvent("a"));
+        observeChildEventDirect(h.session, toolResultEvent("b"));
+        await h.session.shutdown();
+        const count = h.onProgress.mock.calls.filter((c) => isProgressReport(c[0])).length;
+        vi.advanceTimersByTime(1000);
+        expect(h.onProgress.mock.calls.filter((c) => isProgressReport(c[0]))).toHaveLength(count);
+      } finally {
+        h.close();
+        vi.useRealTimers();
       }
     });
   });
@@ -6683,9 +6707,10 @@ describe("Session — child mode: activity/progress bridge (CUT-S2 §2.6.3/§10.
           const midTool = h.onProgress.mock.calls.map((c) => c[0]).filter(isProgressReport).length;
           expect(midTool - atDispatch).toBe(3);
 
-          // The paired result clears the timer: advancing another 10 minutes
-          // emits NOTHING further (this is the red test for the clear).
+          // The paired result clears liveness; allow its trailing report to flush.
           observeChildEventDirect(h.session, toolResultEvent("tc-long", "Bash"));
+          currentTime = 182_000;
+          vi.advanceTimersByTime(1_000);
           const atResult = h.onProgress.mock.calls.map((c) => c[0]).filter(isProgressReport).length;
           currentTime = 781_000;
           vi.advanceTimersByTime(600_000);
