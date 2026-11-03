@@ -1672,7 +1672,8 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       const removed = errors.filter((record) => keep ? !keep.has(record.id) : !history.some((item) =>
         item.turnId === record.turnId ||
         (record.nativeTurnId !== undefined && item.id.startsWith(`${record.nativeTurnId}:`)) ||
-        (record.afterItemId === item.id && item.turnId === undefined) || item.kind === "compact_summary"
+        (record.afterItemId === item.id && item.turnId === undefined) ||
+        (item.kind === "compact_summary" && record.createdAt <= item.createdAt)
       ));
       db.prepare("DELETE FROM history_items WHERE session_id = ? AND COALESCE(json_extract(data, '$.kind'), '') != 'turn_error'").run(sessionId);
       const insert = db.prepare("INSERT INTO history_items (session_id, item_id, data) VALUES (?, ?, ?)");
