@@ -7,12 +7,20 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.0.66] — 2026-11-03
+## [0.0.67] — 2026-11-03
 
 ### Fixed
 
 - Keep suggested write permissions scoped to the workspace for files inside it, and reject broad macOS directory aliases and temporary directories.
-- Close OpenRouter reasoning indicators when answers or tool calls begin, and when streams end unexpectedly.
+- Close OpenRouter reasoning indicators when answers or tool calls begin, and when streams end unexpectedly, including when reasoning replay is disabled.
+- Close hidden subagent menus so they cannot intercept shortcuts or hide previews.
+- Reopening a preview focuses its dock tab, and closing a preview selects the adjacent tab consistently.
+- Keep dock panel state when switching tabs, and update preview tab titles as they change.
+- Closing the Review dock tab or using its close shortcut now works.
+
+## [0.0.66] — 2026-11-03
+
+### Fixed
 
 - Always-allow write rules can use a scoped absolute path mask outside the workspace. Path aliases and new directories are handled consistently, and broad system and home scopes are rejected.
 - Prevent external pages from replacing the main application window or opening uncontrolled child windows.
