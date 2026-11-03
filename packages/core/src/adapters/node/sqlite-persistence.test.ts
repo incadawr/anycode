@@ -1187,6 +1187,20 @@ describe("SqlitePersistenceAdapter", () => {
     adapter.close();
   });
 
+  it("keeps compacted errors but removes later errors when restoring a legacy checkpoint", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+    const error = (id: string, createdAt: number) => ({ kind: "turn_error" as const, id, createdAt, turnId: id, engine: "core", model: "m", error: { name: "Error", message: id } });
+    const old = error("old", 10);
+    const discarded = error("discarded", 30);
+    await adapter.appendTurnError("s1", old);
+    await adapter.appendTurnError("s1", discarded);
+    const summary = makeItem({ id: "summary", kind: "compact_summary", createdAt: 20 });
+    expect(await adapter.restoreHistoryAndTurnErrors("s1", [summary])).toEqual(["discarded"]);
+    expect(await adapter.loadTurnErrors("s1")).toEqual([old]);
+    adapter.close();
+  });
+
   it("builds the same model messages after storing a terminal error", async () => {
     const adapter = new SqlitePersistenceAdapter(":memory:");
     await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
