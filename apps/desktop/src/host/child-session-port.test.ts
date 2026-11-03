@@ -1388,6 +1388,8 @@ describe("stall clock wiring — session tier (slice 1)", () => {
     vi.useRealTimers();
   });
 
+
+
   function stallHarness(stallTimeoutMs?: number) {
     const sent: SentMessage[] = [];
     let listener: ((event: ChildRunEvent) => void) | undefined;
@@ -2873,6 +2875,21 @@ describe("child-session-port — synchronous join budget handoff (GitHub #17 sli
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("moves an eligible joining child to the background without cancelling it", async () => {
+    const h = joinHarness();
+    const pending = h.port.run(JOIN_REQUEST(true), {});
+    const requestId = spawns(h.sent)[0]!.requestId;
+    accept(h, requestId);
+    expect(h.port.backgroundAgent("spawn-join-1")).toBe(true);
+    const result = await pending;
+    expect(result.background).toEqual({ reason: "requested" });
+    expect(result.childSessionId).toBe("child-join");
+    expect(h.port.backgroundAgent("spawn-join-1")).toBe(false);
+    expect(cancels(h.sent)).toHaveLength(0);
+    h.emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "terminal", status: "completed", finalText: "done", truncated: false, turns: 1, toolCalls: 0, durationMs: 5, childSessionId: "child-join" });
+    expect(h.detachedTerminals).toHaveLength(1);
   });
 
   it("hands off at exactly 120000 ms from admission, not at 119999 ms, keeping the child and sending no cancel", async () => {

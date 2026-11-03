@@ -488,6 +488,8 @@ export interface CreateChildSessionPortOptions {
  * so `session.ts`'s `backgroundChildren` seam can read it.
  */
 export interface ChildSessionPort extends SessionSubagentPort {
+  /** Move an eligible joining Agent call to the background. */
+  backgroundAgent(spawnToolCallId: string): boolean;
   /** Every currently-live detached child this port has admitted and not yet seen a terminal for. */
   listBackgroundChildren(): BackgroundChildSnapshot[];
   /**
@@ -554,6 +556,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
   const createRequestId = options.createRequestId ?? randomUUID;
   const stallTimeoutMs = options.stallTimeoutMs ?? SUBAGENT_STALL_TIMEOUT_MS;
   const waiters = new Map<string, Waiter>();
+  const joiningAgents = new Map<string, () => void>();
   // срез 3: registry of live detached children, keyed by
   // childSessionId (the id `cancelBackgroundChild`/the renderer's future list
   // both address by) — populated at admit, removed at terminal, see the two
@@ -802,6 +805,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
       }
 
       const finish = (outcome: SessionSubagentOutcome): void => {
+        joiningAgents.delete(req.spawnToolCallId);
         clearJoinTimer();
         stallClock.dispose();
         waiters.delete(requestId);
@@ -815,6 +819,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
           return;
         }
         cancelSent = true;
+        joiningAgents.delete(req.spawnToolCallId);
         // Slice D: an abort BEFORE any handoff disarms the join budget — one
         // cancel, no background transition, unchanged cascade semantics.
         clearJoinTimer();
@@ -836,6 +841,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
         if (handedOff || terminalSeen || cancelSent || opts.signal?.aborted) return;
         if (acceptedEvent === undefined) return;
         handedOff = true;
+        joiningAgents.delete(req.spawnToolCallId);
         mode = "background";
         clearJoinTimer();
         // A detach is an exit from the turn: from here on, cancelling the
@@ -890,6 +896,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
           options.onDetachedApproval?.(joiningAsk, backgroundRequest(), acceptedEvent.childSessionId);
         }
       };
+
 
       waiters.set(requestId, {
         onEvent: (event) => {
@@ -947,6 +954,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               // unchanged. The clock starts at ADMISSION, not at the model
               // request: a request still queued has spent none of its budget.
               if (req.allowBackgroundHandoff === true && options.onDetachedTerminal !== undefined) {
+                joiningAgents.set(req.spawnToolCallId, () => enterBackground("requested"));
                 joinTimer = setTimeout(() => {
                   joinTimer = undefined;
                   enterBackground("join_budget");
@@ -1388,5 +1396,5 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
     };
   }
 
-  return { run, send, listStatus: statusStore.list, getStatus: statusStore.get, statusDiscarded: statusStore.discarded, listBackgroundChildren, cancelBackgroundChild, cancelAllBackgroundChildren, onBackgroundChildrenChanged };
+  return { run, send, backgroundAgent: (id) => { const move = joiningAgents.get(id); if (!move) return false; move(); return true; }, listStatus: statusStore.list, getStatus: statusStore.get, statusDiscarded: statusStore.discarded, listBackgroundChildren, cancelBackgroundChild, cancelAllBackgroundChildren, onBackgroundChildrenChanged };
 }
