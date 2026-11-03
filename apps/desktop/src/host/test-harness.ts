@@ -428,6 +428,7 @@ export interface HarnessOptions {
   initialContextUsage?: SessionOptions["initialContextUsage"];
   saveContextUsage?: SessionOptions["saveContextUsage"];
   saveTurnError?: SessionOptions["saveTurnError"];
+  truncateTurnErrors?: SessionOptions["truncateTurnErrors"];
   /** Provider-aware reasoning-effort support exposed to Session. */
   reasoningSupported?: boolean;
   /** Provider-declared levels exposed to the UI and enforced by Session. */
@@ -831,6 +832,7 @@ export function createHarness(options: HarnessOptions): Harness {
     ...(options.initialContextUsage !== undefined ? { initialContextUsage: options.initialContextUsage } : {}),
     ...(options.saveContextUsage !== undefined ? { saveContextUsage: options.saveContextUsage } : {}),
     ...(options.saveTurnError !== undefined ? { saveTurnError: options.saveTurnError } : {}),
+    ...(options.truncateTurnErrors !== undefined ? { truncateTurnErrors: options.truncateTurnErrors } : {}),
     ...(options.reconnectGraceMs !== undefined ? { reconnectGraceMs: options.reconnectGraceMs } : {}),
     ...(options.imageInputEnabled !== null ? { imageInputEnabled: media.imageInputEnabled } : {}),
     ...(options.imageFallbackAvailable !== undefined

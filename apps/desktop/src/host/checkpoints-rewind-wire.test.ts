@@ -181,6 +181,50 @@ describe("checkpoints-rewind-wire (P7.26/R2) — route + guards + ordering (fake
   });
 });
 
+it("removes discarded errors on rewind, reload, and reopen while retaining surviving errors", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "rewind-errors-"));
+  const path = join(dir, "sessions.db");
+  const db = new SqlitePersistenceAdapter(path);
+  await db.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+  const kept: HistoryItem = { id: "kept", turnId: "t1", createdAt: 1, message: { role: "user", content: "first" } };
+  const discarded: HistoryItem = { id: "discarded", turnId: "t2", createdAt: 3, message: { role: "user", content: "second" } };
+  const error = (id: string, turnId: string) => ({ kind: "turn_error" as const, id, turnId, createdAt: 4, engine: "core", model: "m", error: { name: "Error", message: id } });
+  await db.appendHistory("s1", [kept, discarded]);
+  await db.appendTurnError("s1", error("kept-error", "t1"));
+  await db.appendTurnError("s1", error("ghost", "t2"));
+  const h = createHarness({
+    steps: [], bootHistory: [kept, discarded], bootTurnErrors: await db.loadTurnErrors("s1"),
+    truncateTurnErrors: (history) => db.truncateTurnErrors("s1", history),
+    checkpointsSeam: { list: async () => [], rewind: async () => ({ ok: true, safetyCheckpointId: "safety", restoredPaths: 0, historyItems: [kept] }) },
+  });
+  try {
+    h.send({ type: "ui_ready" });
+    await h.waitFor(isHostReady);
+    h.send({ type: "rewind_request", requestId: "rw", checkpointId: "cp", scope: "conversation" });
+    expect((await h.waitFor(isRewindResult)).ok).toBe(true);
+    expect(h.session.communicationResult().latestResult?.publicAnswer).not.toBe("ghost");
+    const before = h.received.length;
+    h.send({ type: "ui_ready" });
+    await h.waitFor((m): m is Of<"host_ready"> => isHostReady(m) && h.received.indexOf(m) >= before);
+    await h.waitFor((m): m is Of<"session_history"> => m.type === "session_history" && h.received.indexOf(m) >= before);
+    const reload = h.received.slice(before).find((m): m is Of<"session_history"> => m.type === "session_history")!;
+    expect(reload.items.map((item) => item.id)).toEqual(["kept", "kept-error"]);
+    await db.replaceHistory("s1", [kept, { id: "next", turnId: "t3", createdAt: 5, message: { role: "user", content: "next" } }]);
+  } finally {
+    h.close();
+    db.close();
+  }
+  const reopened = new SqlitePersistenceAdapter(path);
+  try {
+    const resumed = createHarness({ steps: [], bootHistory: await reopened.loadHistory("s1"), bootTurnErrors: await reopened.loadTurnErrors("s1") });
+    try {
+      resumed.send({ type: "ui_ready" });
+      const history = await resumed.waitFor((m): m is Of<"session_history"> => m.type === "session_history");
+      expect(history.items.map((item) => item.id)).toEqual(["kept", "kept-error", "next"]);
+    } finally { resumed.close(); }
+  } finally { reopened.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
 // ── (5)-(7): real ShadowGitCheckpoints destructive units ───────────────────────
 describe("checkpoints-rewind-wire (P7.26/R2) — real service: reconnect + destructive DoD", () => {
   const tmpDirs: string[] = [];

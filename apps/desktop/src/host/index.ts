@@ -4824,6 +4824,7 @@ async function boot(): Promise<void> {
       selectedEffort,
       sessionId,
       saveTurnError: (record) => persistence!.appendTurnError(sessionId, record),
+      truncateTurnErrors: (history) => persistence!.truncateTurnErrors(sessionId, history),
       bootHistory,
       bootTurnErrors: await loadTurnErrors(sessionId),
       // S4: dev/automation-ONLY replay-recording override, resolved

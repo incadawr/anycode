@@ -19,6 +19,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Block local file requests from an old preview while its replacement is loading.
 
 - Allow local previews to load workspace files when the workspace path is a symlink.
+- Keep errors from discarded turns from reappearing after rewinding a conversation.
 
 - Keep background agent action buttons visible when progress text is long.
 

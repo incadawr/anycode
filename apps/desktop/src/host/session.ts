@@ -871,6 +871,7 @@ export interface SessionOptions {
   /** Narrow persistence callback for title/mode patches (design §4.2). */
   persistence?: SessionPersistence;
   saveTurnError?: (record: TurnErrorRecord, input?: string) => Promise<void>;
+  truncateTurnErrors?: (history: readonly HistoryItem[]) => Promise<string[]>;
   /**
    * GitHub #36: the durable presentation records of this session's compactions
    * (host/compaction-records.ts). Wired for the core boot, whose `compaction_end`
@@ -1323,7 +1324,8 @@ export class Session {
   private readonly sessionId: string;
   private readonly persistence: SessionPersistence | undefined;
   private readonly saveTurnError: SessionOptions["saveTurnError"];
-  private readonly bootTurnErrors: readonly TurnErrorRecord[];
+  private bootTurnErrors: readonly TurnErrorRecord[];
+  private readonly truncateTurnErrors: SessionOptions["truncateTurnErrors"];
   /** GitHub #36: durable compaction rows; see SessionOptions.compactionRecords. */
   private readonly compactionRecords: CompactionRecordSeam | undefined;
   /**
@@ -1823,6 +1825,7 @@ export class Session {
     this.persistence = options.persistence;
     this.saveTurnError = options.saveTurnError;
     this.bootTurnErrors = options.bootTurnErrors ?? [];
+    this.truncateTurnErrors = options.truncateTurnErrors;
     this.compactionRecords = options.compactionRecords;
     this.usageAudit = options.usageAudit;
     this.rules = options.rules;
@@ -3896,6 +3899,12 @@ export class Session {
       const restoredHistory = res.historyItems;
       const conversationRestored = restoredHistory !== null;
       if (restoredHistory !== null) {
+        const removedErrors = new Set(await this.truncateTurnErrors?.(restoredHistory) ?? []);
+        this.bootTurnErrors = this.bootTurnErrors.filter((record) => !removedErrors.has(record.id));
+        if (this.latestPublicResult && (removedErrors.has(this.latestPublicResult.historyItemId ?? "") ||
+          (this.latestPublicResult.turnId !== null && !restoredHistory.some((item) => item.turnId === this.latestPublicResult!.turnId)))) {
+          this.latestPublicResult = null;
+        }
         // GitHub #36 review 4: the compaction rows are records OF this
         // conversation, so a rewind must drop the ones belonging to the part it
         // throws away — and the checkpoint's recorded SEQUENCE says exactly
@@ -3914,7 +3923,7 @@ export class Session {
         // drift-flag-1: rebuild the re-handshake snapshot from the TRUNCATED
         // history and drop the pre-rewind replay ring BEFORE re-sending, so a
         // renderer reload never resurrects the rewound-away conversation.
-        this.sessionHistory = buildSessionHistory([...this.engine.historyItems()], this.historyMaxItems);
+        this.sessionHistory = buildSessionHistory([...this.engine.historyItems()], this.historyMaxItems, this.bootTurnErrors);
         this.outbound.clear();
         this.presentationJournal.clear();
         // rewind success retires any leftover pending prompt — the
