@@ -23,7 +23,7 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { BrowserWindow, BrowserWindowConstructorOptions } from "electron";
-import { RING_MAX_MSG_CHARS } from "./preview-host.js";
+
 
 interface FakeDebugger {
   attachCalls: string[];
@@ -275,6 +275,7 @@ vi.mock("electron", () => ({
   WebContentsView: FakeWebContentsView,
 }));
 
+const { RING_MAX_MSG_CHARS } = await import("./preview-host.js");
 const { createElectronPreviewWindow } = await import("./electron-adapter.js");
 const { createElectronPanelView } = await import("./panel-adapter.js");
 
@@ -462,7 +463,7 @@ describe("createElectronPreviewWindow — event adaptation", () => {
     win.webContents.onConsoleMessage((level, message) => messages.push({ level, message }));
 
     expect(fake.webContents.debugger.attachCalls).toEqual(["1.3"]);
-    expect(fake.webContents.debugger.sendCommandCalls).toEqual(["Runtime.enable"]);
+    expect(fake.webContents.debugger.sendCommandCalls).toEqual(["Log.enable", "Runtime.enable"]);
 
     for (const listener of fake.webContents.debugger.messageListeners) {
       listener({}, "Runtime.exceptionThrown", {
@@ -932,6 +933,15 @@ describe("createElectronPreviewWindow — pop-out title and Return to AnyCode", 
 
 
 describe("console argument formatting", () => {
+  it("captures resource diagnostics from the CDP log domain", () => {
+    const win = createElectronPreviewWindow({ previewId: "resource" });
+    const fake = latestWindow();
+    const messages: string[] = [];
+    win.webContents.onConsoleMessage((_level, message) => messages.push(message));
+    fake.webContents.debugger.emit("message", "Log.entryAdded", { entry: { source: "network", level: "error", text: "Failed to load resource", timestamp: 123 } });
+    expect(messages).toEqual(["Failed to load resource"]);
+  });
+
   it("uses CDP once and falls back after detach", () => {
     const win = createElectronPreviewWindow({ previewId: "cdp-console" });
     const fake = latestWindow();
