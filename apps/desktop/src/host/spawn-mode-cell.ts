@@ -74,7 +74,7 @@ export function createSpawnModeCell(
 export function createForeignSpawnModeCell(readMode: () => PermissionMode) {
   let base: PermissionMode | undefined;
   return {
-    capture(): void { base = readMode(); },
+    capture(mode: PermissionMode = readMode()): void { base ??= mode; },
     clear(): void { base = undefined; },
     read(): PermissionMode {
       if (base === undefined) return readMode();

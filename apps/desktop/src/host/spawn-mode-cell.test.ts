@@ -60,6 +60,7 @@ describe("foreign spawn authority", () => {
     mode = "yolo";
     cell.capture();
     mode = "plan";
+    cell.capture();
     expect(cell.read()).toBe("yolo");
     cell.clear();
     expect(cell.read()).toBe("plan");

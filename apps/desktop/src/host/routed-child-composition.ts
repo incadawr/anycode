@@ -66,6 +66,7 @@ export function createRoutedChildComposition(options: {
       spawnToolCallId: respawnId,
       ...(req.restrictions !== undefined ? { restrictions: req.restrictions } : {}),
       ...(req.nativeRestrictionsUnsupported ? { nativeRestrictionsUnsupported: true } : {}),
+      ...(req.maxTurns !== undefined ? { maxTurns: req.maxTurns } : {}),
       ...(decision.entry.engine !== undefined ? { engine: decision.entry.engine } : {}),
       ...(decision.entry.connection !== undefined ? { connectionId: decision.entry.connection } : {}),
       ...(decision.entry.provider !== undefined ? { provider: decision.entry.provider } : {}),
@@ -135,6 +136,9 @@ export function createRoutedChildComposition(options: {
           options.record(outcome, budgeted);
         }
         return outcome;
+      }, (error: unknown) => {
+        routedSpawns.delete(req.spawnToolCallId);
+        throw error;
       });
     };
   }

@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentBridgeCatalogEntry, SessionSubagentPort, PermissionMode } from "@anycode/core";
+import type { AgentEvent, AgentBridgeCatalogEntry, SessionSubagentPort, PermissionMode, AgentBridgeCallDeps, AgentBridgeCallInput, AgentBridgeCallResult } from "@anycode/core";
 import { buildAgentBridgeToolDecl, decodeAgentBridgeCallInput, runAgentBridgeCall, agentStatusBridgeDecl, runAgentStatusBridge } from "@anycode/core";
 import type { JsonRpcServerRequest } from "./protocol.js";
 import type { ServerRequestResponder } from "./app-server-client.js";
@@ -30,7 +30,8 @@ export class CodexDynamicToolBridge {
    * (browser-bridge.ts). The agent path below is byte-for-byte unchanged.
    */
   constructor(readonly catalog: readonly AgentBridgeCatalogEntry[], private readonly port: SessionSubagentPort | undefined, private readonly cardLog?: CodexAgentCardLogPort,
-    private readonly resolveCatalog?: () => Promise<readonly AgentBridgeCatalogEntry[]>, private readonly browser?: EngineBrowserBridge) {}
+    private readonly resolveCatalog?: () => Promise<readonly AgentBridgeCatalogEntry[]>, private readonly browser?: EngineBrowserBridge,
+    private readonly callAgent: (input: AgentBridgeCallInput, deps: AgentBridgeCallDeps) => Promise<AgentBridgeCallResult> = runAgentBridgeCall) {}
 
   declarations(): Record<string, unknown>[] {
     // `detach` is safe to offer here: host/index.ts wires this bridge's port
@@ -196,7 +197,7 @@ export class CodexDynamicToolBridge {
     try {
       const execute = (catalog: readonly AgentBridgeCatalogEntry[]) => {
         if (controller.signal.aborted) throw new Error("AnyCode agent was cancelled");
-        return runAgentBridgeCall(input, {
+        return this.callAgent(input, {
           // Native declarations stay fixed for this thread; existing profile bodies/models are live.
           catalog: catalog.filter((entry) => this.catalog.some((declared) => declared.name === entry.name)),
           port: this.port as SessionSubagentPort, spawnToolCallId: id, signal: controller.signal,
