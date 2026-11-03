@@ -21,6 +21,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Keep local preview file access closed while a navigated document is being resolved or cannot be resolved.
 
+- Preserve read-only and profile restrictions when delegating without an explicit tier.
+
 - Use readable Enter key names in task and permission hints. Refresh Git status when returning to its dock tab.
 - Restore terminal turn errors in session transcripts after reopening a session.
 - Return the sanitized error in session results when a core turn fails without a completed answer.
@@ -56,6 +58,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Choose the accent color (Blue, Gold, Indigo, Teal, Ember) in Settings → Appearance; the choice is saved on this device.
 
 ### Changed
+
+- Desktop subagent calls without a tier now run as child sessions while the parent waits. Move running children to the background individually or together; when session capacity is full, eligible calls use a lightweight inline child.
 
 - Softened message text and primary usage statistics in the dark theme for more comfortable reading.
 - Blockquote headings and code retain their original colours, and Stats tiles use the softened text colour.

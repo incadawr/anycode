@@ -34,12 +34,15 @@
 import { useCallback, useContext, useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import type { TokenUsage } from "@anycode/core";
 import type { SubagentSubStatus, ToolCallBlock, WorkflowStepStatus, WorkflowSubStatus } from "../store.js";
-import { TabContext } from "../tab-context.js";
+import { TabContext, type TabContextValue } from "../tab-context.js";
+import { tabRegistry } from "../tab-registry.js";
+import { useStore } from "zustand";
 import { focusExistingPreview } from "../dock/dock-store.js";
 import { isPreviewableDocPath } from "../../../shared/previewable.js";
 import { useTabsStore } from "../tabs-store.js";
 import { childBadgeKind, childLayoutStore, type ChildBadgeKind } from "../child-layout.js";
 import { childRelationStore, hasOpenableChild, sameChildPredicate, type ChildRelation } from "../child-sessions.js";
+import { Button } from "../ui/index.js";
 import { DiffView } from "./DiffView.js";
 import { Check, Chevron, Minus, Spinner, Warning, X } from "./icons.js";
 import { Markdown } from "./Markdown.js";
@@ -2186,6 +2189,24 @@ export function ToolCallHeaderRow({
   );
 }
 
+export function BackgroundAgentButtons({ ids, current, move }: { ids: string[]; current: string; move: (ids: string[]) => void }) {
+  if (!ids.includes(current)) return null;
+  return <span className="tool-call-background-actions">
+    <Button size="sm" variant="ghost" onClick={() => move([current])}>Move to background</Button>
+    {ids.length > 1 && ids[0] === current && <Button size="sm" variant="ghost" onClick={() => move(ids)}>Move all to background</Button>}
+  </span>;
+}
+
+function BackgroundAgentControls({ block, ctx }: { block: ToolCallBlock; ctx: TabContextValue }) {
+  const transcript = useStore(ctx.store, (state) => state.transcript);
+  const parent = useTabsStore((state) => state.tabs.find((tab) => tab.tabId === ctx.tabId)?.sessionId);
+  const relations = childRelationStore((state) => state.relations);
+  const ids = transcript.filter((item): item is ToolCallBlock => item.kind === "tool_call" && item.toolName === "Agent" && item.status === "running")
+    .filter((item) => parent !== undefined && parent !== null && relations.get(`${parent}\u0000${item.toolCallId}`)?.live === true)
+    .map((item) => item.toolCallId).slice(0, 24);
+  return <BackgroundAgentButtons ids={ids} current={block.toolCallId} move={(spawnToolCallIds) => tabRegistry.sendToTab(ctx.tabId, { type: "background_agent_request", spawnToolCallIds })} />;
+}
+
 export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; enter?: boolean }) {
   // Default-unless-user-overrode disclosure (design §1.A): the default is
   // derived from status every render, so an untouched card auto-collapses on
@@ -2207,6 +2228,7 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
   // CUT-S2 §2.5 (C3): undefined for every card but a session-tier
   // child's — see the hook's own doc comment.
   const childAction = useChildSessionAction(block);
+  const backgroundContext = useContext(TabContext);
   // Parent identity for Agent-card model/engine display: this card's OWN tab
   // (never the globally active tab), subscribed unconditionally so a parent
   // model/engine change re-renders, and "unknown" without a provider — the
@@ -2265,6 +2287,7 @@ export function ToolCallCard({ block, enter = false }: { block: ToolCallBlock; e
         parentModel={parentIdentity.model}
         parentEngine={parentIdentity.engine}
       />
+      {backgroundContext !== null && <BackgroundAgentControls block={block} ctx={backgroundContext} />}
       {expanded && (
         // aria-live="off" (design §1.9): a user-driven expand must not dump
         // the body into the polite column's announcement queue; the badge in

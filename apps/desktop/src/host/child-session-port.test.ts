@@ -1388,6 +1388,8 @@ describe("stall clock wiring — session tier (slice 1)", () => {
     vi.useRealTimers();
   });
 
+
+
   function stallHarness(stallTimeoutMs?: number) {
     const sent: SentMessage[] = [];
     let listener: ((event: ChildRunEvent) => void) | undefined;
@@ -2873,6 +2875,41 @@ describe("child-session-port — synchronous join budget handoff (GitHub #17 sli
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("moves an eligible joining child to the background without cancelling it", async () => {
+    const h = joinHarness();
+    const pending = h.port.run(JOIN_REQUEST(true), {});
+    const requestId = spawns(h.sent)[0]!.requestId;
+    accept(h, requestId);
+    expect(h.port.backgroundAgent("spawn-join-1")).toBe(true);
+    const result = await pending;
+    expect(result.background).toEqual({ reason: "requested" });
+    expect(result.childSessionId).toBe("child-join");
+    expect(result.finalText).toContain("moved to background");
+    expect(h.port.backgroundAgent("spawn-join-1")).toBe(false);
+    expect(cancels(h.sent)).toHaveLength(0);
+    h.emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "terminal", status: "completed", finalText: "done", truncated: false, turns: 1, toolCalls: 0, durationMs: 5, childSessionId: "child-join" });
+    expect(h.detachedTerminals).toHaveLength(1);
+  });
+
+  it("moves parallel children independently and can cancel one after handoff", async () => {
+    const h = joinHarness();
+    const first = h.port.run(JOIN_REQUEST(true), {});
+    const second = h.port.run({ ...JOIN_REQUEST(true), spawnToolCallId: "spawn-join-2" }, {});
+    const [a, b] = spawns(h.sent);
+    accept(h, a!.requestId, "child-a");
+    accept(h, b!.requestId, "child-b");
+    expect(h.port.backgroundAgent("spawn-join-1")).toBe(true);
+    expect(h.port.backgroundAgent("spawn-join-2")).toBe(true);
+    expect((await Promise.all([first, second])).map((result) => result.finalText)).toEqual([expect.stringContaining("moved to background"), expect.stringContaining("moved to background")]);
+    expect(h.port.cancelBackgroundChild("child-a")).toBe(true);
+    expect(cancels(h.sent)).toHaveLength(1);
+    h.emit({ type: CHILD_RUN_EVENT_TYPE, requestId: a!.requestId, kind: "terminal", status: "cancelled", finalText: "", truncated: false, turns: 1, toolCalls: 0, durationMs: 5, childSessionId: "child-a" });
+    h.emit({ type: CHILD_RUN_EVENT_TYPE, requestId: b!.requestId, kind: "terminal", status: "completed", finalText: "report b", truncated: false, turns: 1, toolCalls: 0, durationMs: 5, childSessionId: "child-b" });
+    expect(h.detachedTerminals).toHaveLength(2);
+    expect(h.detachedTerminals.find((result) => result.childSessionId === "child-a")).toMatchObject({ status: "cancelled", cancelledBy: "user" });
+    expect(h.detachedTerminals.find((result) => result.childSessionId === "child-b")).toMatchObject({ status: "completed", finalText: "report b" });
   });
 
   it("hands off at exactly 120000 ms from admission, not at 119999 ms, keeping the child and sending no cancel", async () => {

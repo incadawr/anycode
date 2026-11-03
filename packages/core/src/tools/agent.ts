@@ -93,7 +93,7 @@ const BASE_DESCRIPTION =
   'Delegate a task to a subagent. agent_type "explore" = read-only recon that can read files and Git history with Git, but cannot run commands; use general-purpose for work needing Bash; "general-purpose" = the subtask needs write/exec tools. Independent Agent calls issued together in one response run concurrently — fan out disjoint searches. Use AgentStatus to inspect your children’s live progress. For a single known-file fact, Read/Grep it yourself; once delegated, do not redo the search.';
 
 const SESSION_TIER_DESCRIPTION_SUFFIX =
-  ' Tier "session" spawns a full child session the user can open and steer. send_to delivers a follow-up to your own still-running child (tier session).';
+  ' By default general-purpose runs as a session child while you wait; explore and other profiles default to inline to preserve their restrictions; the user can move it to the background, and a long wait is handed off automatically with a later report as a new turn. Use tier "inline" for lightweight short lookups. send_to delivers a follow-up to your own still-running session child.';
 
 export interface CreateAgentToolOptions {
   /**
@@ -151,7 +151,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
     inputSchema,
     handler: async (input, ctx) => {
       const agentType = input.agent_type ?? DEFAULT_AGENT_TYPE;
-      const tier = input.tier ?? "inline";
+      const tier = input.tier ?? (sessionTier && agentType === DEFAULT_AGENT_TYPE ? "session" : "inline");
 
       // Hosts without inline route discovery can only select providers for session children.
       if (input.provider !== undefined && tier !== "session" && !ctx.subagents?.supportsInlineProvider) {
@@ -236,7 +236,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
       const engineProfile = ctx.subagents?.engineProfile?.(agentType) ?? null;
       // GitHub #17 slice C: detach-by-default is MECHANICAL and
       // no longer gated on an orchestrate session. A session-tier Agent call
-      // (and an engine profile, which always runs as a child session) with no
+      // explicitly requesting session (and an engine profile, which always runs as a child session) with no
       // explicit detach and no send_to defaults to detach:true — it reports
       // back as a message instead of joining the parent's turn for minutes.
       // An explicit detach:false is honored (the spread in runSessionTier keys
@@ -245,7 +245,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
       // delivery acknowledgement and stays a plain call. Inline keeps its
       // synchronous default.
       const defaultDetach =
-        (tier === "session" || engineProfile !== null) &&
+        (input.tier === "session" || engineProfile !== null) &&
         input.detach === undefined &&
         input.send_to === undefined;
       if (engineProfile !== null) {
@@ -370,6 +370,8 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
           routing ?? undefined,
           roleRoute ?? undefined,
           defaultDetach,
+          undefined,
+          input.tier === undefined && input.provider === undefined && input.detach !== true && input.continue_session === undefined && input.send_to === undefined && routing === null && !(roleRoute?.entries[0]?.connection || roleRoute?.entries[0]?.engine || roleRoute?.entries[0]?.provider),
         );
       }
       return runInlineTier(input, ctx, agentType);
@@ -482,6 +484,7 @@ async function runSessionTier(
   roleRoute?: RoleRouteResolution,
   defaultDetach?: boolean,
   degrade?: { systemPrompt: string; notice: string },
+  fallbackAtCapacity = false,
 ): Promise<ToolResult<AgentOutput>> {
   if (!ctx.sessionSubagents) {
     return {
@@ -632,6 +635,7 @@ async function runSessionTier(
     // mode instead of holding this turn open. Never model input, never a wire
     // field; Workflow engine steps never carry it.
     ...(input.detach === true || defaultDetach === true ? { detach: true } : { allowBackgroundHandoff: true }),
+    ...(fallbackAtCapacity ? { fallbackAtCapacity: true as const } : {}),
   };
 
   // Same accumulation/bridge discipline as the inline tier above — the
@@ -646,6 +650,10 @@ async function runSessionTier(
       ctx.emit?.(event);
     },
   });
+
+  if (fallbackAtCapacity && outcome.capacityRefused === true && outcome.spawnToolCallId === request.spawnToolCallId) {
+    return runInlineTier(input, ctx, agentType);
+  }
 
   // Round-trip check (F14, ports/session-subagent.ts docstring): core OWNS
   // spawnToolCallId — it minted it as ctx.toolCallId and stamped it onto the
