@@ -9,6 +9,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Allow local previews to load workspace files when the workspace path is a symlink.
+
 - Keep background agent action buttons visible when progress text is long.
 
 - Keep preview console messages visible after debugger detachment without duplicating them on reconnect.

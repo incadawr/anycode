@@ -11,7 +11,7 @@
  */
 
 import { pathToFileURL } from "node:url";
-import { realpathSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,6 +28,7 @@ import {
   type PreviewResult,
 } from "../../shared/preview.js";
 import { fakeCdp } from "./fake-cdp.js";
+import { canonicalizeRootPath } from "./file-resource-roots.js";
 import {
   EXEC_JS_TIMEOUT_MS,
   LIVE_RELOAD_DEBOUNCE_MS,
@@ -2134,6 +2135,28 @@ describe("PreviewHost — request gate: file subresources stay inside the docume
 });
 
 describe("PreviewHost — request gate: the broad roots are canonical", () => {
+  it("allows workspace siblings through a symlinked workspace", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "preview-workspace-"));
+    try {
+      const workspace = join(dir, "project");
+      const link = join(dir, "link");
+      mkdirSync(workspace);
+      symlinkSync(workspace, link);
+      const canonical = realpathSync(workspace);
+      const rig = makeRig({ workspaceForTab: () => canonicalizeRootPath(link) });
+      rig.resolveArtifactImpl = async (_tabId, path) => ({ realPath: path });
+      const opening = rig.host.openForTab(TAB, { path: join(canonical, "site/index.html") });
+      await flush();
+      rig.windows[0]!.webContents.fireDidFinishLoad();
+      await opening;
+      await expect(rig.windows[0]!.webContents.requestGate!({
+        url: pathToFileURL(join(canonical, "shared/a.css")).href, resourceType: "stylesheet",
+      })).resolves.toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("a document directly in the OS temp dir reads its DIRECT children only", async () => {
     // No `fileResourceRoots` dep -> the host falls back to the REAL home and
     // the REAL temp roots. On macOS the temp dir's raw spelling
