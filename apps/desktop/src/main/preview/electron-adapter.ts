@@ -223,6 +223,11 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
       if (generation !== attachGeneration) return;
       replaying = false;
       attached = false;
+      try {
+        wc.debugger.detach();
+      } catch {
+        // The debugger may already have detached.
+      }
       console.warn("[preview] failed to enable CDP Runtime domain", error);
     });
     return true;
