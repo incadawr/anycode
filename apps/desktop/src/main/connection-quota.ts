@@ -136,7 +136,7 @@ export function withConnectionQuota(
     const lastQuota: LastQuota = {
       // Same-source observations merge sparsely (absent fields keep their
       // known values); a different source starts from a clean window.
-      ...(previous?.source === source ? previous : {}),
+      ...(previous?.source === source && source !== "minimax-token-plan" ? previous : {}),
       ...quota,
       observedAt,
       source,
@@ -146,10 +146,12 @@ export function withConnectionQuota(
   return found ? { ...settings, provider: { ...settings.provider, connections } } : undefined;
 }
 
+type QuotaGuard = (settings: AnycodeSettings) => Promise<boolean>;
+interface PendingQuota { quota: ProviderQuotaWindowWire; source: string; guard?: QuotaGuard; onPersisted?: () => void; deps: ConnectionQuotaDeps }
 interface ThrottleState {
   lastWriteMs: number;
   /** Latest coalesced observation waiting for the trailing window to close. */
-  pending?: { quota: ProviderQuotaWindowWire; source: string };
+  pending?: PendingQuota;
   timer?: ReturnType<typeof setTimeout>;
   inFlight?: boolean;
 }
@@ -221,6 +223,7 @@ export async function recordConnectionQuota(
   quota: ProviderQuotaWindowWire,
   source: string,
   onPersisted?: () => void,
+  guard?: QuotaGuard,
 ): Promise<boolean> {
   const now = deps.now ?? Date.now;
   const interval = deps.writeIntervalMs ?? QUOTA_WRITE_INTERVAL_MS;
@@ -228,7 +231,7 @@ export async function recordConnectionQuota(
   throttles.set(connectionId, state);
   const elapsed = now() - state.lastWriteMs;
   if (elapsed < interval) {
-    state.pending = { quota, source };
+    state.pending = { quota, source, guard, onPersisted, deps };
     if (state.timer === undefined) {
       const remaining = interval - elapsed;
       state.timer = setTimeout(() => {
@@ -238,7 +241,7 @@ export async function recordConnectionQuota(
         if (pending === undefined) {
           return;
         }
-        void recordConnectionQuota(deps, connectionId, pending.quota, pending.source, onPersisted).catch((error) => {
+        void recordConnectionQuota(pending.deps, connectionId, pending.quota, pending.source, pending.onPersisted, pending.guard).catch((error) => {
           deps.logger?.warn?.(`[main] failed to persist connection quota`, error);
         });
       }, remaining);
@@ -249,12 +252,12 @@ export async function recordConnectionQuota(
   // A write is already in flight for this connection: coalesce into its
   // trailing edge instead of stacking a second locked write behind it.
   if (state.inFlight) {
-    state.pending = { quota, source };
+    state.pending = { quota, source, guard, onPersisted, deps };
     return false;
   }
   state.inFlight = true;
   try {
-    const persisted = await writeQuotaUnderLock(deps, connectionId, quota, source, now);
+    const persisted = await writeQuotaUnderLock(deps, connectionId, quota, source, now, guard);
     if (persisted) {
       onPersisted?.();
     }
@@ -267,7 +270,7 @@ export async function recordConnectionQuota(
     const pending = state.pending;
     state.pending = undefined;
     if (pending !== undefined) {
-      void recordConnectionQuota(deps, connectionId, pending.quota, pending.source, onPersisted).catch((error) => {
+      void recordConnectionQuota(pending.deps, connectionId, pending.quota, pending.source, pending.onPersisted, pending.guard).catch((error) => {
         deps.logger?.warn?.(`[main] failed to persist connection quota`, error);
       });
     }
@@ -280,12 +283,14 @@ async function writeQuotaUnderLock(
   quota: ProviderQuotaWindowWire,
   source: string,
   now: NowMs,
+  guard?: QuotaGuard,
 ): Promise<boolean> {
   return withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return false;
     }
+    if (guard && !(await guard(loaded.settings))) return false;
     const updated = withConnectionQuota(
       loaded.settings,
       connectionId,
@@ -347,7 +352,7 @@ export async function flushPendingConnectionQuota(deps: ConnectionQuotaDeps): Pr
     }
     state.pending = undefined;
     pendingFlushes.push(
-      writeQuotaUnderLock(deps, connectionId, pending.quota, pending.source, deps.now ?? Date.now),
+      writeQuotaUnderLock(pending.deps, connectionId, pending.quota, pending.source, pending.deps.now ?? Date.now, pending.guard),
     );
   }
   if (pendingFlushes.length === 0) {

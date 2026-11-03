@@ -91,6 +91,16 @@ async function persistedLine(): Promise<Record<string, unknown> | undefined> {
   return (await readConnections())[0]?.lastQuota as Record<string, unknown> | undefined;
 }
 
+it("checks the observation guard again when a delayed write is flushed", async () => {
+  await writeSettingsFixture({ connections: [{ id: "c1", providerId: "minimax" }], activeConnectionId: "c1" });
+  await recordConnectionQuota(deps, "c1", { usedPercent: 10 }, "first");
+  let current = true;
+  await recordConnectionQuota(deps, "c1", { usedPercent: 50 }, "minimax-token-plan", undefined, async () => current);
+  current = false;
+  await flushPendingConnectionQuota(deps);
+  expect(await persistedLine()).toMatchObject({ usedPercent: 10, source: "first" });
+});
+
 describe("parseProviderQuotaEvent — process-boundary validation", () => {
   const raw = {
     type: "anycode:provider-quota",

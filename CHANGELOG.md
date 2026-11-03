@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Show MiniMax subscription quota on provider connection cards.
+
 ### Fixed
 
 - Refuse session delegation when it would discard an inline profile's restrictions.

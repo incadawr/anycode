@@ -69,6 +69,7 @@ import { watchExternalEngines } from "./engine-availability.js";
 import { WelcomeScreen } from "./components/WelcomeScreen.js";
 import { StartScreen } from "./components/StartScreen.js";
 import { SettingsDialog } from "./components/SettingsScreen.js";
+import { useMiniMaxQuotaPoll } from "./minimax-quota-poll.js";
 import { TerminalPanel } from "./components/TerminalPanel.js";
 import { DockPanel } from "./components/DockPanel.js";
 import { useOverlayFlag } from "./preview/overlay-flag.js";
@@ -1263,6 +1264,8 @@ function ActiveTab({
   onToggleSidebar,
   onToast,
 }: { store: DesktopStoreApi } & ActiveTabBodyProps) {
+  const connectionId = useStore(store, state => state.pinnedConnection?.connectionId);
+  useMiniMaxQuotaPoll(connectionId !== undefined, connectionId);
   return (
     <TabContext.Provider value={{ tabId, store }}>
       <ActiveTabBody tabId={tabId} sidebarCollapsed={sidebarCollapsed} onToggleSidebar={onToggleSidebar} onToast={onToast} />

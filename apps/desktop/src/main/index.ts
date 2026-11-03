@@ -1,4 +1,5 @@
 import { providerProxyConfig } from "./provider-proxy-config.mjs";
+import { createMiniMaxQuotaService } from "./minimax-quota.js";
 import { protectMainNavigation } from "./main-navigation.js";
 import { resolveCoreConnectionForModel } from "../shared/core-model-connection.js";
 import { initializeIsolatedSmoke, isolatedSmokeStorage } from "./isolated-smoke.js";
@@ -3267,6 +3268,15 @@ void app.whenReady().then(async () => {
   // settingsIpcDeps.onMutation immediately above — provider-ipc.ts already
   // hands back the POST-mutation `AnycodeSettings` (not a projected
   // snapshot), so no re-load from disk is needed here, unlike that hook.
+  const miniMaxQuota = createMiniMaxQuotaService({
+    settingsPath, vault, systemProxy: systemProxyDelegate,
+    fetch: route => fetchForProxyChain([], route),
+    onPersisted: () => sendToMainWindow(win, PROVIDER_QUOTA_CHANGED_CHANNEL),
+  });
+  ipcMain.handle("anycode:minimax-quota-refresh", (_event, id: unknown) => {
+    if (id !== undefined && (typeof id !== "string" || id.length > 256)) return;
+    void miniMaxQuota.refresh(id);
+  });
   registerProviderIpc({
     vault,
     settingsPath,
