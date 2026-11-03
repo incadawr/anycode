@@ -2324,6 +2324,75 @@ describe("PreviewHost — request gate: the document anchor follows the navigati
       gate({ url: pathToFileURL(`${WORKSPACE_ROOT}/style.css`).href, resourceType: "stylesheet" }),
     ).resolves.toBe(false);
   });
+
+  it("waits for the new anchor before allowing its subresource", async () => {
+    const rig = await openedRigWithContainedResolver();
+    const document = `${FAKE_TMP}/b/index.html`;
+    let finish!: (value: { realPath: string }) => void;
+    rig.resolveArtifactImpl = async (_tab, path) => path === document
+      ? await new Promise<{ realPath: string }>((resolve) => { finish = resolve; }) : { realPath: path };
+    rig.windows[0]!.webContents.fireDidNavigate(pathToFileURL(document).href);
+    let settled = false;
+    const request = gateOf(rig)({ url: pathToFileURL(`${FAKE_TMP}/b/style.css`).href, resourceType: "stylesheet" })
+      .then((allowed) => { settled = true; return allowed; });
+    await flush();
+    expect(settled).toBe(false);
+    finish({ realPath: document });
+    await expect(request).resolves.toBe(true);
+  });
+
+  it("does not restore an older anchor after a non-file navigation", async () => {
+    const rig = await openedRigWithContainedResolver();
+    const document = `${FAKE_TMP}/b/index.html`;
+    let finish!: (value: { realPath: string }) => void;
+    rig.resolveArtifactImpl = async (_tab, path) => path === document
+      ? await new Promise<{ realPath: string }>((resolve) => { finish = resolve; }) : { realPath: path };
+    const wc = rig.windows[0]!.webContents;
+    wc.fireDidNavigate(pathToFileURL(document).href);
+    wc.fireDidNavigate("http://localhost:5173/");
+    finish({ realPath: document });
+    await flush();
+    await expect(gateOf(rig)({ url: pathToFileURL(`${FAKE_TMP}/b/secret.json`).href, resourceType: "xhr" })).resolves.toBe(false);
+  });
+
+  it("clears the previous anchor when the new document cannot be resolved", async () => {
+    const rig = await openedRigWithContainedResolver();
+    rig.resolveArtifactImpl = async (_tab, path) => path === `${FAKE_TMP}/b/index.html`
+      ? { failure: "missing" } : { realPath: path };
+    rig.windows[0]!.webContents.fireDidNavigate(pathToFileURL(`${FAKE_TMP}/b/index.html`).href);
+    await expect(gateOf(rig)({ url: pathToFileURL(`${WORKSPACE_ROOT}/secret.json`).href, resourceType: "xhr" })).resolves.toBe(false);
+  });
+
+  it("denies a request if navigation changes while its file is resolving", async () => {
+    const rig = await openedRigWithContainedResolver();
+    const secret = `${WORKSPACE_ROOT}/secret.json`;
+    let finish!: (value: { realPath: string }) => void;
+    rig.resolveArtifactImpl = async (_tab, path) => path === secret
+      ? await new Promise<{ realPath: string }>((resolve) => { finish = resolve; }) : { realPath: path };
+    const request = gateOf(rig)({ url: pathToFileURL(secret).href, resourceType: "xhr" });
+    await flush();
+    rig.windows[0]!.webContents.fireDidNavigate("http://localhost:5173/");
+    finish({ realPath: secret });
+    await expect(request).resolves.toBe(false);
+  });
+
+  it("does not restore an older anchor after preview reuse", async () => {
+    const rig = await openedRigWithContainedResolver();
+    const document = `${FAKE_TMP}/b/index.html`;
+    let finish!: (value: { realPath: string }) => void;
+    rig.resolveArtifactImpl = async (_tab, path) => path === document
+      ? await new Promise<{ realPath: string }>((resolve) => { finish = resolve; }) : { realPath: path };
+    const wc = rig.windows[0]!.webContents;
+    wc.fireDidNavigate(pathToFileURL(document).href);
+    const reused = rig.host.openForTab(TAB, { previewId: rig.windows[0]!.previewId, path: `${FAKE_TMP}/c/index.html` });
+    await flush();
+    finish({ realPath: document });
+    await flush();
+    wc.fireDidFinishLoad();
+    await reused;
+    await expect(gateOf(rig)({ url: pathToFileURL(`${FAKE_TMP}/b/secret.json`).href, resourceType: "xhr" })).resolves.toBe(false);
+  });
+
 });
 
 describe("PreviewHost — read op bounds + exec timeout (cut §1.3/F3)", () => {
