@@ -112,3 +112,8 @@ export function startDraftOrchestrateRowProps(
   }
   return { orchestrateActive: orchestrate === true, onToggleOrchestrate: setOrchestrate };
 }
+
+/** Draft engine availability permits expressing intent; the host decides admission. */
+export function showCodexDraftOrchestrateToggle(engine: EngineId, availableEngines: readonly EngineId[]): boolean {
+  return engine === "codex" && availableEngines.includes("codex");
+}

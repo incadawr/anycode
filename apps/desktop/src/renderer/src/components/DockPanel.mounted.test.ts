@@ -460,7 +460,7 @@ describe("dock resize handle placement (GitHub #31)", () => {
     const originalShow = HTMLDialogElement.prototype.showModal;
     HTMLDialogElement.prototype.showModal = function () { this.open = true; };
     const other = createDesktopStore();
-    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",imageInput:true});
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",orchestration:{enabled:false,available:true,posture:"off"},orchestrationProtocol:{version:1,hostIncarnation:"host",connectionId:"conn",atomicSubmit:true,correlatedToggle:true},imageInput:true});
     other.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"b",mode:"build",model:"m1",imageInput:true});
     const send = vi.spyOn(tabRegistry,"sendToTab").mockImplementation(() => {});
     const renderTab = async (tabId: string, target: DesktopStoreApi) => {
@@ -1071,7 +1071,7 @@ describe("dock resize handle placement (GitHub #31)", () => {
     const tabId = "role-host-exit-test";
     tabRegistry.registerPort(tabId,"/ws",port as unknown as MessagePort);
     const target = tabRegistry.getStore(tabId)!;
-    port.onmessage!({data:{type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1"}} as MessageEvent);
+    port.onmessage!({data:{type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",orchestration:{enabled:false,available:true,posture:"off"},orchestrationProtocol:{version:1,hostIncarnation:"host",connectionId:"conn",atomicSubmit:true,correlatedToggle:true}}} as MessageEvent);
     try {
       await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId,store:target}}, createElement(SessionSurface, {tabId,onToast:() => {}}))));
       const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
@@ -1177,7 +1177,7 @@ describe("dock resize handle placement (GitHub #31)", () => {
     useSettingsStore.setState({snapshot:{settings:cloneDefaults(),secrets:[],providerReady:true,envOverrides:[],readOnly:false,catalog:[]},setPatch:save as typeof previous.setPatch});
     const originalShow = HTMLDialogElement.prototype.showModal;
     HTMLDialogElement.prototype.showModal = function () { this.open = true; };
-    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1"});
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",orchestration:{enabled:false,available:true,posture:"off"},orchestrationProtocol:{version:1,hostIncarnation:"host",connectionId:"conn",atomicSubmit:true,correlatedToggle:true}});
     const send = vi.spyOn(tabRegistry,"sendToTab").mockImplementation(() => {});
     try {
       await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId:"a",store}}, createElement(SessionSurface, {tabId:"a",onToast:() => {}}))));
@@ -1204,7 +1204,7 @@ describe("dock resize handle placement (GitHub #31)", () => {
     const originalShow = HTMLDialogElement.prototype.showModal;
     HTMLDialogElement.prototype.showModal = function () { this.open = true; };
     const other = createDesktopStore();
-    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1"});
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",orchestration:{enabled:false,available:true,posture:"off"},orchestrationProtocol:{version:1,hostIncarnation:"host",connectionId:"conn",atomicSubmit:true,correlatedToggle:true}});
     const send = vi.spyOn(tabRegistry,"sendToTab").mockImplementation(() => {});
     const renderTab = async (tabId: string, target: DesktopStoreApi) => {
       await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId,store:target}}, createElement(SessionSurface, {tabId,onToast:() => {}}))));
@@ -1370,7 +1370,7 @@ describe("dock resize handle placement (GitHub #31)", () => {
   });
 
   it("retains a completed image when the active orchestrator slash command is selected", async () => {
-    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",imageInput:true});
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",orchestration:{enabled:false,available:true,posture:"off"},orchestrationProtocol:{version:1,hostIncarnation:"host",connectionId:"conn",atomicSubmit:true,correlatedToggle:true},imageInput:true});
     store.setState({orchestrateActive:true});
     const send = vi.spyOn(tabRegistry,"sendToTab").mockImplementation(() => {});
     let finish!: (bytes: ArrayBuffer) => void;

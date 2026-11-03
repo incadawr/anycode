@@ -528,7 +528,7 @@ describe("Composer slash-submit wiring (GitHub #14)", () => {
   });
 
   it("rejects a stale orchestrate menu selection if an attachment starts loading", () => {
-    seed("/orchestrate task", 12, makeStoreState({orchestrateActive:true}));
+    seed("/orchestrate task", 12, makeStoreState({orchestrateActive:true, orchestration: { available: true, posture: "on", protocol: { hostIncarnation: "host", connectionId: "conn", atomicSubmit: true, correlatedToggle: true }, pendingToggle: null, pendingSubmit: null, observedEnabled: null }}));
     const tree = mountComposer();
     const menu = findSlashMenu(tree)!;
     const items = menu.props.items as Array<{id:string}>;

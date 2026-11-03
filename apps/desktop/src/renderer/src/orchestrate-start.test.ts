@@ -11,11 +11,21 @@ import {
   parseOrchestrateSlash,
   resolveStartOrchestrate,
   startDraftOrchestrateRowProps,
+  showCodexDraftOrchestrateToggle,
   startOrchestrateHint,
   startSendNeedsRolePicker,
 } from "./orchestrate-start.js";
 
 const ROLES = { executor: { primary: { engine: "claude" as const } } };
+
+describe("Codex draft orchestration toggle", () => {
+  it("appears only for an available Codex draft", () => {
+    expect(showCodexDraftOrchestrateToggle("codex", ["core", "codex"])).toBe(true);
+    expect(showCodexDraftOrchestrateToggle("codex", ["core"])).toBe(false);
+    expect(showCodexDraftOrchestrateToggle("claude", ["core", "codex", "claude"])).toBe(false);
+    expect(showCodexDraftOrchestrateToggle("core", ["core", "codex"])).toBe(false);
+  });
+});
 
 describe("parseOrchestrateSlash", () => {
   it("parses a leading /orchestrate token and returns the trimmed task after it", () => {
