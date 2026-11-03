@@ -17,9 +17,18 @@ describe("Codex orchestration process policy", () => {
     expect(() => captureBaseConfig({ config: { mcp_servers: [] } })).toThrow();
   });
   it("includes forwarded-only names in isolation without requiring them in ambient restoration", () => {
-    const captured = captureBaseConfig({ config: {} }, { forwarded: { command: "server" } });
+    const captured = captureBaseConfig({ config: { mcp_servers: {} } }, { forwarded: { command: "server" } });
     expect(orchestrationOverrides(captured)).toContain('mcp_servers."forwarded".enabled=false');
     expect(() => verifyConfig({ config: { mcp_servers: { forwarded: { enabled: false } }, features: { multi_agent: false }, sandbox_mode: "read-only", approval_policy: "never" } }, captured, true)).not.toThrow();
-    expect(() => verifyConfig({ config: {} }, captured, false)).not.toThrow();
+    expect(() => verifyConfig({ config: { mcp_servers: {} } }, captured, false)).not.toThrow();
+  });
+  it("requires a complete MCP inventory and rejects unexpected or enabled servers", () => {
+    expect(() => captureBaseConfig({ config: {} })).toThrow();
+    const captured = captureBaseConfig({ config: { mcp_servers: { ambient: {} } } }, { forwarded: {} });
+    const config = { mcp_servers: { ambient: { enabled: false }, forwarded: { enabled: false } }, features: { multi_agent: false }, sandbox_mode: "read-only", approval_policy: "never" };
+    expect(() => verifyConfig({ config }, captured, true)).not.toThrow();
+    expect(() => verifyConfig({ config: { ...config, mcp_servers: { ...config.mcp_servers, extra: { enabled: false } } } }, captured, true)).toThrow();
+    expect(() => verifyConfig({ config: { ...config, features: { multi_agent: true } } }, captured, true)).toThrow();
+    expect(() => verifyConfig({ config: { ...config, mcp_servers: { ambient: { enabled: false }, forwarded: { enabled: true } } } }, captured, true)).toThrow();
   });
 });

@@ -109,7 +109,7 @@ export interface EngineBrowserBridge {
   specs: readonly EngineBrowserSpec[];
   byClaudeName(name: string): EngineBrowserSpec | undefined;
   byCodexName(name: string): EngineBrowserSpec | undefined;
-  call(spec: EngineBrowserSpec, rawArgs: unknown, signal: AbortSignal, toolCallId: string): Promise<EngineBrowserCallResult>;
+  call(spec: EngineBrowserSpec, rawArgs: unknown, signal: AbortSignal, toolCallId: string, restricted?: () => boolean): Promise<EngineBrowserCallResult>;
 }
 
 /** "mcp__anycode__browser_navigate" -> "BrowserNavigate"; anything else -> undefined. */
@@ -264,6 +264,7 @@ export function createEngineBrowserBridge(deps: EngineBrowserBridgeDeps): Engine
     rawArgs: unknown,
     signal: AbortSignal,
     toolCallId: string,
+    restricted?: () => boolean,
   ): Promise<EngineBrowserCallResult> {
     const { spec, tool } = entry;
     const startedAt = Date.now();
@@ -276,6 +277,14 @@ export function createEngineBrowserBridge(deps: EngineBrowserBridgeDeps): Engine
       return { text: zodIssuesToText(spec, parsed.error.issues), isError: true, status: "error", durationMs: Date.now() - startedAt };
     }
     const input = parsed.data;
+    // Check at dispatch time, including for calls queued before a transition.
+    // Opening a local file uses the preview host's existing path validation;
+    // network navigation (including loopback) can itself have side effects.
+    if (restricted?.()) {
+      const observing = ["BrowserRead", "BrowserSnapshot", "BrowserScreenshot", "BrowserConsole", "BrowserWaitFor"].includes(spec.canonical);
+      const localFile = spec.canonical === "BrowserOpen" && typeof (input as { path?: unknown }).path === "string";
+      if (!observing && !localFile) return { text: `${spec.canonical} is unavailable during orchestration`, isError: true, status: "denied", durationMs: Date.now() - startedAt };
+    }
     const meta = (tool.resolveMetadata as ((value: unknown) => ToolDefinition["metadata"]) | undefined)?.(input) ?? tool.metadata;
     if (meta.needsApproval === true) {
       const request: PermissionRequest = {
@@ -374,7 +383,7 @@ export function createEngineBrowserBridge(deps: EngineBrowserBridgeDeps): Engine
     specs,
     byClaudeName: (name) => (typeof name === "string" ? byClaude.get(name)?.spec : undefined),
     byCodexName: (name) => (typeof name === "string" ? byCodex.get(name)?.spec : undefined),
-    call: (spec, rawArgs, signal, toolCallId) => {
+    call: (spec, rawArgs, signal, toolCallId, restricted) => {
       const entry = entries.find((candidate) => candidate.spec === spec);
       if (entry === undefined) {
         return Promise.resolve({
@@ -388,7 +397,7 @@ export function createEngineBrowserBridge(deps: EngineBrowserBridgeDeps): Engine
         signal.aborted
           ? // A queued call aborted before its turn never touches the port.
             Promise.resolve({ text: "Browser call was cancelled", isError: true, status: "cancelled" as const, durationMs: 0 })
-          : dispatch(entry, rawArgs, signal, toolCallId);
+          : dispatch(entry, rawArgs, signal, toolCallId, restricted);
       const next = chain.then(run, run);
       // The chain never rejects: `dispatch` returns results, it does not throw.
       chain = next.then(

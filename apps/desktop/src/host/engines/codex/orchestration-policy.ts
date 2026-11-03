@@ -15,7 +15,7 @@ export interface BaseConfig {
 export function captureBaseConfig(response: unknown, forwarded: Record<string, unknown> = {}): BaseConfig {
   const config = object(object(response)?.config);
   if (!config) throw new Error("Codex config/read returned no config");
-  const servers = config.mcp_servers === undefined ? {} : object(config.mcp_servers);
+  const servers = object(config.mcp_servers);
   if (!servers || (config.features !== undefined && !object(config.features))) throw new Error("Malformed Codex config inventory");
   for (const value of Object.values(servers)) if (!object(value)) throw new Error("Malformed Codex MCP inventory");
   const names = [...new Set([...Object.keys(servers), ...Object.keys(forwarded)])].sort();
