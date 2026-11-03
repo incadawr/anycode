@@ -9545,9 +9545,9 @@ describe("direct refusal recovery by request identity", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);
     const images = [{name:"a.png",sizeBytes:3,attachment:{mediaType:"image/png" as const,data:"YWJj"}}];
-    store.getState().recordSentMessage("direct", images, "direct-id", "enable");
     store.getState().enqueuePrompt({text:"queued",images:[]});
     store.getState().takeQueueHead("other-id");
+    store.getState().recordSentMessage("direct", images, "direct-id", "enable");
     store.getState().applyHostMessage({type:"turn_rejected",requestId:"direct-id",reason:"busy"});
     expect(store.getState().queueInFlight?.requestId).toBe("other-id");
     expect(store.getState().promptQueue).toHaveLength(0);

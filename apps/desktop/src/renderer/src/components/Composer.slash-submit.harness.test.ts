@@ -299,6 +299,7 @@ function makeStoreState(overrides: Record<string, unknown> = {}): Record<string,
     steering: { supported: false },
     transcript: [],
     orchestrateActive: false,
+    orchestration: { available: false, posture: "off", protocol: null, pendingToggle: null, pendingSubmit: null, observedEnabled: null },
     orchestrationDeliveries: [],
     ...overrides,
   };

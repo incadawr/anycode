@@ -162,6 +162,7 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
   const worktree = tab?.worktree;
   const openedByAgent = tab?.openedByAgent === true;
   const orchestrateActive = useTabStore((state) => state.orchestrateActive);
+  const orchestrationPosture = useTabStore((state) => state.orchestration.posture);
   const externalEngine = engine !== null;
   // core-only drawer gate — `engine` is null before host_ready ⇒
   // default true; claude/codex advertise supportsTasks:false so the toggle
@@ -280,6 +281,7 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
       {/* The tab's orchestration flag, readable without opening the mode menu
           (the chip spells it too, but the header is where a user looks to see
           what a tab IS). */}
+      {orchestrationPosture === "quarantined" && <span className="session-header-agent" role="alert" title="Session policy could not be verified. Close this tab to stop the session.">Policy unverified · close tab</span>}
       {orchestrateActive && (
         <span className="session-header-agent session-header-orchestrate" data-testid="session-header-orchestrate" title="Orchestrating: child agents do the work">
           Orchestrate

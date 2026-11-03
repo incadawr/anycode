@@ -1327,6 +1327,10 @@ export interface DesktopState {
    * steps 8–11) renders the ModeMenu row/dialog; part A only keeps state.
    */
   orchestrateActive: boolean;
+  orchestration: { available: boolean; reason?: string; posture: "off" | "on" | "transitioning" | "quarantined"; protocol: { hostIncarnation: string; connectionId: string; atomicSubmit: boolean; correlatedToggle: boolean } | null; pendingToggle: { requestId: string; connectionId: string } | null; pendingSubmit: string | null; observedEnabled: boolean | null };
+  beginOrchestrationToggle(requestId: string): string | null;
+  beginOrchestrationSubmit(requestId: string): string | null;
+
   /** Host-authoritative external-engine projection; null means historical core wire. */
   engine: EnginePresentation | null;
   /**
@@ -2468,6 +2472,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
   // key would route a later step's deltas into the earlier step's block.
   const openStreamBlocks = projectionMaps?.streams ?? new Map<string, string>();
   let presentationReplayTurns: Set<string> | null = null;
+  let orchestrationRevision = -1;
   let presentationReplayActive = false;
 
   function streamScope(turnId: string, step: number | undefined, streamId: string): string {
@@ -5078,6 +5083,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       // Prompt-queue slots (slice P7.14): outside initialSessionSlice so a
       // host respawn preserves user-typed prompts (see QueuedPrompt comment).
       promptQueue: [],
+      orchestration: { available: false, posture: "off", protocol: null, pendingToggle: null, pendingSubmit: null, observedEnabled: null },
       orchestrationDeliveries: [],
       queueEditDraft: null,
       composerRolePicker: null,
@@ -5135,6 +5141,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // session_history/replay that follows on this same port; the
             // `engine` slot set below mirrors the same discriminator so
             // hydrateSessionHistory can re-derive it without its own copy.
+            orchestrationRevision = message.orchestration?.revision ?? -1;
             causalFoldEngaged = message.engine === undefined;
             // Preserve unacknowledged wire identity before the ready transition
             // can wake the drainer. Reconnect never proves delivery failed.
@@ -5149,6 +5156,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             });
             set({
               connection: "ready",
+              orchestrateActive: message.orchestration?.enabled ?? false,
+              orchestration: { available: message.orchestration?.available ?? false, reason: message.orchestration?.reason, posture: message.orchestration?.posture ?? (message.orchestration?.enabled ? "on" : "off"), protocol: message.orchestrationProtocol?.version === 1 ? message.orchestrationProtocol : null, pendingToggle: null, pendingSubmit: null, observedEnabled: null },
               contextUsage: message.contextUsage ?? null,
               // the tab's session id, lifted for marker persistence.
               sessionId: message.sessionId,
@@ -5180,19 +5189,37 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           case "mode_changed":
             set({ mode: message.mode });
             return;
+          case "orchestration_state": {
+            const current = get().orchestration;
+            if (message.connectionId !== current.protocol?.connectionId || message.revision <= orchestrationRevision) return;
+            orchestrationRevision = message.revision;
+            if (current.pendingToggle || current.pendingSubmit) return;
+            set({ orchestrateActive: message.enabled, orchestration: { ...current, available: message.available, posture: message.posture } });
+            return;
+          }
           case "orchestrate_changed":
             // §3.7: tab-scoped orchestrate flag from the host ack
             // (same pattern as mode). Part A: store sync only; the ModeMenu
             // row/dialog ride in part B (UI steps 8–11 are out of scope here).
-            set({ orchestrateActive: message.enabled });
+            set((state) => (state.orchestration.posture === "quarantined" || (state.orchestration.posture === "transitioning" && !state.orchestration.pendingToggle && !state.orchestration.pendingSubmit)) ? {} : state.orchestration.pendingToggle || state.orchestration.pendingSubmit ? { orchestration: { ...state.orchestration, observedEnabled: message.enabled } } : ({ orchestrateActive: message.enabled, orchestration: { ...state.orchestration, posture: message.enabled ? "on" : "off" } }));
             return;
-          case "orchestrate_result":
+          case "orchestrate_result": {
+            const current = get().orchestration;
+            if (!current.pendingToggle || current.pendingToggle.requestId !== message.requestId || current.pendingToggle.connectionId !== message.connectionId) return;
+            const enabled = message.outcome === "applied" && message.enabled !== undefined ? message.enabled : current.observedEnabled ?? get().orchestrateActive;
+            const posture = message.outcome === "unknown" ? "quarantined" : enabled ? "on" : "off";
+            set({ orchestration: { ...current, posture, pendingToggle: null, observedEnabled: null }, ...(message.outcome !== "unknown" ? { orchestrateActive: enabled } : {}) });
+            return;
+          }
           case "orchestrate_frame_diagnostic":
-            // This renderer does not issue correlated requests yet. Never treat
-            // their direct outcome as authoritative orchestration state.
+            return;
+          case "user_message_unavailable":
+            set((state) => state.orchestration.pendingSubmit !== message.requestId || !state.orchestrationDeliveries.some(item => item.requestId === message.requestId && item.status === "pending") ? {} : {
+              orchestrationDeliveries: state.orchestrationDeliveries.map(item => item.requestId === message.requestId ? deliveryUnknown(item) : item),
+              orchestration: { ...state.orchestration, pendingSubmit: null, posture: "quarantined", observedEnabled: null },
+            });
             return;
           case "user_message_invalid":
-          case "user_message_unavailable":
             // A malformed duplicate can reuse an active requestId; it is not
             // evidence that any earlier turn with that ID was rejected.
             return;
@@ -5318,6 +5345,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             }
             set({
               ...reconcileQueuedRetries(get().promptQueue,startedDeliveries(get(),message.requestId,message.turnId)),
+              ...(get().orchestration.pendingSubmit === message.requestId ? { orchestrateActive: true, orchestration: { ...get().orchestration, posture: "on" as const, pendingSubmit: null, observedEnabled: null } } : {}),
               turn: { status: "running", turnId: message.turnId, requestId: message.requestId, startedAt: turnStartedAt.get(message.turnId) },
               latestTurnId: message.turnId,
               // W8: a new turn starting — whether via the Try-again
@@ -5356,6 +5384,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             const { queueInFlight, promptQueue } = get();
             const direct = pendingSentMessages.get(message.requestId);
             const delivery = get().orchestrationDeliveries.find(item => item.requestId === message.requestId);
+            const atomicRejected = delivery?.orchestrate === "enable" && delivery.status === "pending" && get().orchestration.pendingSubmit === message.requestId;
             const rejectedSteer = get().pendingSteers.find(item => item.requestId === message.requestId);
             const rejectedSystem = queueInFlight?.requestId === message.requestId && queueInFlight.item.origin === "system" ? queueInFlight.item : undefined;
             const restoreDirect = delivery === undefined && rejectedSteer === undefined && queueInFlight?.requestId !== message.requestId && direct !== undefined && !promptQueue.some(item => item.id === message.requestId)
@@ -5371,7 +5400,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                   }
                 : null;
             const updatedDeliveries = delivery ? get().orchestrationDeliveries.map(item => item.requestId === message.requestId ? deliveryRejected(item) : item) : rejectedSystem ? [...get().orchestrationDeliveries,{requestId:message.requestId,text:rejectedSystem.text,images:rejectedSystem.images,origin:"system" as const,...(rejectedSystem.originId ? {originId:rejectedSystem.originId} : {}),status:"rejected" as const,restored:false,reviewed:false}] : rejectedSteer ? [...get().orchestrationDeliveries,{requestId:message.requestId,text:rejectedSteer.sentMessage.text,images:rejectedSteer.sentMessage.images.map(image => ({...image,attachment:{...image.attachment}})),status:"rejected" as const,restored:false,reviewed:false}] : get().orchestrationDeliveries;
+            const enabledAfterRejection = get().orchestration.observedEnabled ?? get().orchestrateActive;
             set({
+              ...(atomicRejected ? { orchestrateActive: enabledAfterRejection, orchestration: { ...get().orchestration, posture: enabledAfterRejection ? "on" as const : "off" as const, pendingSubmit: null, observedEnabled: null }, queuePaused: true, queuePauseReason: "rejected" as const } : {}),
               ...((rejectedSystem || (delivery && queueInFlight?.requestId === message.requestId)) ? {queueInFlight:null} : {}),
               notice: {
                 kind: "turn_rejected",
@@ -5829,7 +5860,20 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               if (match) blockSeq = Math.max(blockSeq, Number(match[1]) + 1);
               if (block.kind === "loop_end") loopEndEmitted.add(block.id);
             }
-            set({ transcript, modelTurns: projection.getState().modelTurns, continueOffer: projection.getState().continueOffer, ...(!isCore ? { sessionTokens: projection.getState().sessionTokens } : {}) });
+            set((state) => {
+              let deliveries = state.orchestrationDeliveries;
+              for (const turn of message.turns) {
+                const terminal = turn.events.findLast(({ event }) => event.type === "loop_end")?.event;
+                if (terminal?.type !== "loop_end" || !["completed", "error", "cancelled", "max_turns"].includes(terminal.reason)) continue;
+                deliveries = deliveries.map((item) => {
+                  if (item.requestId !== turn.requestId) return item;
+                  const started = deliveryStarted(item, turn.turnId);
+                  if (started.status !== "started" || started.turnId !== turn.turnId) return started;
+                  return { ...started, ...(started.parentRequestId ? { status: "finished" as const } : {}), terminalReason: terminal.reason as NonNullable<OrchestrationDelivery["terminalReason"]> };
+                });
+              }
+              return { transcript, modelTurns: projection.getState().modelTurns, continueOffer: projection.getState().continueOffer, ...(!isCore ? { sessionTokens: projection.getState().sessionTokens } : {}), ...reconcileQueuedRetries(state.promptQueue, deliveries) };
+            });
             // A refused steer that became a later turn has already been sent.
             // Its original request id survives queue draining in the journal.
             set((state) => ({ steerRequeueSeen: [...new Set([...state.steerRequeueSeen, ...message.turns.map((turn) => turn.requestId)])] }));
@@ -6613,7 +6657,24 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         set((state) => { const retryOf = state.promptQueue.find(prompt => prompt.id === id)?.retryOf; return { promptQueue: state.promptQueue.filter((prompt) => prompt.id !== id), queueEditDraft: state.queueEditDraft?.id === id ? null : state.queueEditDraft, ...(retryOf ? {orchestrationDeliveries:state.orchestrationDeliveries.map(item => item.requestId === retryOf ? {...item,retryQueued:false} : item)} : {}) }; });
       },
 
+      beginOrchestrationToggle(requestId: string): string | null {
+        const { orchestration, connection, turn, queueInFlight } = get();
+        const protocol = orchestration.protocol;
+        if (turn.status !== "idle" || queueInFlight || connection !== "ready" || !protocol?.correlatedToggle || !orchestration.available || orchestration.posture === "transitioning" || orchestration.posture === "quarantined") return null;
+        set({ orchestration: { ...orchestration, posture: "transitioning", pendingToggle: { requestId, connectionId: protocol.connectionId }, observedEnabled: null } });
+        return protocol.connectionId;
+      },
+
+      beginOrchestrationSubmit(requestId: string): string | null {
+        const { orchestration, connection, turn, queueInFlight } = get();
+        const protocol = orchestration.protocol;
+        if (connection !== "ready" || !protocol?.atomicSubmit || !orchestration.available || orchestration.posture === "transitioning" || orchestration.posture === "quarantined" || turn.status !== "idle" || queueInFlight) return null;
+        set({ orchestration: { ...orchestration, posture: "transitioning", pendingSubmit: requestId, observedEnabled: null } });
+        return protocol.connectionId;
+      },
+
       takeQueueHead(requestId: string): QueuedPrompt | null {
+        if (get().orchestration.posture === "transitioning" || get().orchestration.posture === "quarantined" || get().orchestrationDeliveries.some(item => ((item.orchestrate === "enable" && (item.status === "pending" || item.status === "unknown") && !item.reviewed) || ((item.orchestrate === "enable" || item.origin === "system") && item.status === "started" && !item.terminalReason)))) return null;
         const { promptQueue, queuePaused, queueInFlight, queueEditDraft } = get();
         // Atomic double-guard: held, or a drain already in flight. Read-then-set
         // is atomic in single-threaded JS (no await between), so a re-entrant

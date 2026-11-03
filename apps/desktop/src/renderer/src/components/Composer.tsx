@@ -1,3 +1,4 @@
+import { saveRecovery } from "../orchestration-recovery-storage.js";
 import { planComposerDrop } from "../composer-drop.js";
 import { modelSettingsTarget } from "../model-settings-target.js";
 import { describeCodexAccountLine } from "../codex-account-line.js";
@@ -1605,10 +1606,8 @@ export function Composer() {
    * message. Otherwise, when NO roles are configured (settings.roles absent),
    * the first-run RolePickerDialog opens with the task stashed; Save writes
    * roles then proceeds, Skip proceeds with built-in defaults. Either way the
-   * proceed step enables orchestrate (set_orchestrate true) and submits the
-   * stashed task. The enable and the submit are separate wire messages: the
-   * host applies set_orchestrate between turns (silent-drop discipline), and
-   * the prompt queue carries the task exactly like any other send.
+   * proceed step submits the task with atomic orchestration intent. The host
+   * confirms the policy before admitting the turn.
    */
   function beginOrchestrateSubmit(taskText: string): void {
     const sourceId = tabStore.getState().restoredComposerDraft?.deliveryRequestId ?? restoredDeliveryId;
@@ -1631,25 +1630,47 @@ export function Composer() {
       setRolePickerOpen(true);
       return;
     }
-    proceedOrchestrateSubmit();
+    proceedOrchestrateSubmit(task);
   }
 
-  /** Enable orchestrate, then submit the stashed task as a normal user message. */
-  function proceedOrchestrateSubmit(): void {
-    if (imagesStillLoading() || refuseOrchestrateAttachments()) return;
-    sendToHost({ type: "set_orchestrate", enabled: true });
-    const task = pendingOrchestrateTask;
+  function policyUnavailable(): boolean {
+    const posture = tabStore.getState().orchestration.posture;
+    if (posture !== "transitioning" && posture !== "quarantined") return false;
+    tabStore.getState().setNotice({ kind: "slash_command_rejected", text: posture === "quarantined" ? "Session policy could not be verified. Close this tab to stop the session." : "Session policy is being applied. Your draft is retained." });
+    return true;
+  }
+
+  function sendOrchestrationToggle(enabled: boolean): boolean {
+    const connection = slashTabId ? tabRegistry.getLiveHostConnection(slashTabId, tabStore) : null;
+    const requestId = crypto.randomUUID();
+    const connectionId = connection && tabStore.getState().beginOrchestrationToggle(requestId);
+    if (!connection || !connectionId) {
+      tabStore.getState().setNotice({ kind: "slash_command_rejected", text: "Orchestration is unavailable or the session is busy." });
+      return false;
+    }
+    try {
+      sendToHost({ type: "set_orchestrate", enabled, requestId, connectionId });
+      if (!slashTabId || tabRegistry.getLiveHostConnection(slashTabId, tabStore) !== connection) throw new Error("connection changed");
+      return true;
+    } catch {
+      tabStore.getState().setPortClosed();
+      tabStore.getState().setNotice({ kind: "slash_command_rejected", text: "Policy change was not confirmed. Reconnect or close the tab." });
+      return false;
+    }
+  }
+
+  function proceedOrchestrateSubmit(task: string | null = pendingOrchestrateTask): void {
+    if (policyUnavailable() || imagesStillLoading() || refuseOrchestrateAttachments()) return;
+    if (task && !submitOrchestrateTask(task)) return;
     tabStore.setState({composerRolePicker: null});
     setPendingOrchestrateTask(null);
     setRolePickerForToggle(false);
     setRolePickerOpen(false);
-    if (task !== null && task.length > 0) {
-      submitOrchestrateTask(task);
-    }
   }
 
   /** Claim one picker before emitting any toggle or task. */
   function finishRolePicker(id: string, expectedConnection: object): void {
+    if (policyUnavailable()) return;
     const picker = tabStore.getState().composerRolePicker;
     if (!picker || picker.id !== id || picker.saveOperation || picker.completionClaim) return;
     const connected = () => !!slashTabId && tabRegistry.getLiveHostConnection(slashTabId, tabStore) === expectedConnection;
@@ -1672,13 +1693,17 @@ export function Composer() {
     }
     let deliveryRequestId: string | undefined;
     try {
-      sendToHost({type:"set_orchestrate",enabled:true});
-      if (!picker.forToggle && picker.task) {
+      if (picker.forToggle) {
+        if (!sendOrchestrationToggle(true)) { retain("Policy change could not be sent. Review the picker."); return; }
+      } else if (picker.task) {
         if (!connected()) throw new Error("connection changed");
         const requestId = crypto.randomUUID();
+        const connectionId = tabStore.getState().beginOrchestrationSubmit(requestId);
+        if (!connectionId) { retain("Orchestration is unavailable or the session is busy. The task is retained."); return; }
         deliveryRequestId = requestId;
         if (picker.deliveryRequestId) {
           if (!tabStore.getState().claimRecoveryAttempt(picker.deliveryRequestId,requestId,picker.task,[],undefined,{orchestrate:"enable",pickerId:id,bindDraft:picker.sourceDraft})) {
+            tabStore.setState((state) => ({ orchestration: { ...state.orchestration, posture: state.orchestrateActive ? "on" : "off", pendingSubmit: null } }));
             deliveryRequestId = undefined;
             retain("Another attempt may already be in progress. Review the retained task."); return;
           }
@@ -1689,11 +1714,12 @@ export function Composer() {
           if (picker.sourceDraft) bindRecoveryAttempt(requestId,picker.task,[]);
         }
         if (!connected() || (picker.deliveryRequestId && recoveryAdmissionBlocked(tabStore.getState(),picker.deliveryRequestId,{ignorePendingId:requestId}))) throw new Error("connection or source changed");
-        sendToHost({type:"user_message",requestId,text:picker.task});
+        if (!slashTabId || !saveRecovery(slashTabId, tabStore.getState())) throw new Error("draft could not be saved");
+        sendToHost({type:"user_message",requestId,text:picker.task,orchestrate:"enable",connectionId});
         tabStore.getState().appendUserText(requestId,picker.task);
       }
     } catch {
-      if (deliveryRequestId) tabStore.getState().markOrchestrationDeliveryUnknown(deliveryRequestId);
+      if (deliveryRequestId) { tabStore.getState().markOrchestrationDeliveryUnknown(deliveryRequestId); tabStore.getState().setPortClosed(); }
       if (deliveryRequestId) tabStore.setState((state) => state.composerRolePicker?.id === id ? {composerRolePicker:{...state.composerRolePicker,deliveryRequestId}} : {});
       if (deliveryRequestId && picker.sourceDraft) setRestoredDeliveryId(deliveryRequestId);
       retain("Delivery was not confirmed. The task and orchestration intent are retained; review the session before retrying.");
@@ -1707,21 +1733,37 @@ export function Composer() {
   }
 
   /** Send one text as a user message through the same wire path handleSend's idle branch uses. */
-  function submitOrchestrateTask(task: string): void {
-    if (imagesStillLoading() || refuseOrchestrateAttachments()) return;
-    if (task.length === 0) {
-      return;
-    }
+  function submitOrchestrateTask(task: string, images: readonly QueuedPrompt["images"][number][] = []): boolean {
+    if (imagesStillLoading() || !task) return false;
+    const connection = slashTabId ? tabRegistry.getLiveHostConnection(slashTabId, tabStore) : null;
     const requestId = crypto.randomUUID();
+    const connectionId = connection && tabStore.getState().beginOrchestrationSubmit(requestId);
+    if (!connection || !connectionId) {
+      tabStore.getState().setNotice({kind:"slash_command_rejected",text:"Orchestration is unavailable or the session is busy. The draft is retained."});
+      return false;
+    }
     const parentRequestId = tabStore.getState().restoredComposerDraft?.deliveryRequestId ?? restoredDeliveryId;
     if (parentRequestId) {
-      if (!tabStore.getState().claimRecoveryAttempt(parentRequestId,requestId,task,[],undefined,{orchestrate:"enable",bindDraft:true})) {
-        tabStore.getState().setNotice({kind:"slash_command_rejected",text:"Another attempt may already be in progress. Review the retained draft."}); return;
+      if (!tabStore.getState().claimRecoveryAttempt(parentRequestId,requestId,task,images,restoredPicks,{orchestrate:"enable",bindDraft:true})) {
+        tabStore.setState((state) => ({ orchestration: { ...state.orchestration, posture: state.orchestrateActive ? "on" : "off", pendingSubmit: null } }));
+        tabStore.getState().setNotice({kind:"slash_command_rejected",text:"Another attempt may already be in progress. Review the retained draft."}); return false;
       }
       restoredOwned.current = true; setRestoredDeliveryId(requestId);
-    } else {tabStore.getState().recordSentMessage(task, [], requestId, "enable"); bindRecoveryAttempt(requestId,task,[]);}
-    try { tabStore.getState().appendUserText(requestId, task); if (parentRequestId && recoveryAdmissionBlocked(tabStore.getState(),parentRequestId,{ignorePendingId:requestId})) throw new Error("source changed"); sendToHost({ type: "user_message", requestId, text: task }); }
-    catch { tabStore.getState().markOrchestrationDeliveryUnknown(requestId); tabStore.getState().setNotice({kind:"slash_command_rejected",text:"Delivery is unconfirmed. The draft is retained for review."}); }
+    } else {tabStore.getState().recordSentMessage(task, images, requestId, "enable", restoredPicks); bindRecoveryAttempt(requestId,task,images);}
+    try {
+      tabStore.getState().appendUserText(requestId, task, images.length ? images.map(image => image.attachment) : undefined);
+      if (parentRequestId && recoveryAdmissionBlocked(tabStore.getState(),parentRequestId,{ignorePendingId:requestId})) throw new Error("source changed");
+      if (!slashTabId || tabRegistry.getLiveHostConnection(slashTabId, tabStore) !== connection) throw new Error("connection changed");
+      if (!saveRecovery(slashTabId, tabStore.getState())) throw new Error("draft could not be saved");
+      sendToHost({ type: "user_message", requestId, text: task, orchestrate: "enable", connectionId, ...(images.length ? { images: images.map(image => image.attachment) } : {}) });
+      if (tabRegistry.getLiveHostConnection(slashTabId, tabStore) !== connection) throw new Error("connection changed");
+      return true;
+    } catch {
+      tabStore.getState().markOrchestrationDeliveryUnknown(requestId);
+      tabStore.getState().setPortClosed();
+      tabStore.getState().setNotice({kind:"slash_command_rejected",text:"Delivery is unconfirmed. The draft is retained for review."});
+      return false;
+    }
   }
 
   /**
@@ -1970,14 +2012,11 @@ export function Composer() {
   }
 
   function handleSend(): void {
+    if (policyUnavailable()) return;
     if (imagesStillLoading()) return;
     const recoverySourceId = tabStore.getState().restoredComposerDraft?.deliveryRequestId ?? restoredDeliveryId;
     if (unresolvedOrchestration(recoverySourceId)) return;
     if (supportsCorePermissions && /^\s*\/orchestrate(?:\s|$)/.test(reconstitutePasteMarkers(text, pasteBlocks)) && refuseOrchestrateAttachments()) return;
-    if (restoredOrchestrate) {
-      tabStore.getState().setNotice({ kind: "slash_command_rejected", text: "This restored draft requires orchestration. Review it before starting a new orchestration." });
-      return;
-    }
     if (restoredPicks) {
       const current = tabStore.getState();
       if ((restoredPicks.model !== undefined && restoredPicks.model !== current.model) ||
@@ -1989,6 +2028,15 @@ export function Composer() {
       }
     }
     const outgoing = reconstitutePasteMarkers(text, pasteBlocks);
+    if (restoredOrchestrate) {
+      if (!canSend) return;
+      const images = attachedImages.map(({ name, sizeBytes, attachment }) => ({ name, sizeBytes, attachment }));
+      if (!submitOrchestrateTask(outgoing, images)) return;
+      setText(""); setPasteBlocks([]); setAttachedImages([]); setRestoredOrchestrate(false); setRestoredPicks(undefined);
+      return;
+    }
+    const orchestrationTask = supportsCorePermissions ? /^\s*\/orchestrate\s+([\s\S]*\S)\s*$/.exec(outgoing)?.[1] : undefined;
+    if (orchestrationTask !== undefined) { beginOrchestrateSubmit(orchestrationTask); return; }
     // GitHub #14: a recognized whole-draft slash command is consumed (run or
     // visibly refused) BEFORE the canSend gate and before any queue/steer/
     // append side effect — it is never delivered to the model as a prompt.
@@ -2126,7 +2174,7 @@ export function Composer() {
       setRolePickerOpen(true);
       return;
     }
-    sendToHost({ type: "set_orchestrate", enabled: next });
+    sendOrchestrationToggle(next);
   }
 
   // (cut §3.3): the engine picks reuse the SAME between-turns
@@ -2343,6 +2391,18 @@ export function Composer() {
             void useSettingsStore.getState().setPatch(rolesPatch(useSettingsStore.getState().snapshot?.settings ?? {}, roles, projectRoot))
               .then((result) => finishSave(result.ok), () => finishSave(false));
           } catch { finishSave(false); }
+        }}
+        onCancel={() => {
+          const picker = tabStore.getState().composerRolePicker;
+          if (!picker || picker.saveOperation || picker.completionClaim) return;
+          if (!picker.forToggle && picker.task) {
+            setText(`/orchestrate ${picker.task}`);
+            setCaret(`/orchestrate ${picker.task}`.length);
+          }
+          tabStore.setState({ composerRolePicker: null });
+          setPendingOrchestrateTask(null);
+          setRolePickerForToggle(false);
+          setRolePickerOpen(false);
         }}
         onSkip={() => {
           const picker = tabStore.getState().composerRolePicker;

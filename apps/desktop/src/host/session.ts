@@ -2764,7 +2764,7 @@ export class Session {
           mode: this.engine.mode(),
           model: this.model,
           sessionId: this.sessionId,
-          orchestration: { enabled: this.orchestrate, available: this.orchestrationAvailable() && !this.postureBlocked(), ...(!this.orchestrationAvailable() ? { reason: "unavailable" } : {}), posture: this.orchestrationPosture !== "stable" ? this.orchestrationPosture : this.orchestrationController?.state.status ?? (this.orchestrate ? "on" : "off") },
+          orchestration: { ...(message.orchestrationProtocol === 1 ? { revision: ++this.orchestrationRevision } : {}), enabled: this.orchestrate, available: this.orchestrationAvailable() && !this.postureBlocked(), ...(!this.orchestrationAvailable() ? { reason: "unavailable" } : {}), posture: this.orchestrationPosture !== "stable" ? this.orchestrationPosture : this.orchestrationController?.state.status ?? (this.orchestrate ? "on" : "off") },
           ...(message.orchestrationProtocol === 1 && this.boundGeneration !== null ? { orchestrationProtocol: { version: 1 as const, hostIncarnation: this.hostIncarnation, connectionId: this.boundGeneration, atomicSubmit: this.orchestrationAvailable(), correlatedToggle: this.orchestrationAvailable() } } : {}),
           ...(this.checkpointContextUsage !== null ? { contextUsage: this.checkpointContextUsage } : {}),
           reasoningEffort: this.engine.reasoningEffort() ?? "off",
@@ -3061,6 +3061,7 @@ export class Session {
           const id = message.requestId ?? randomUUID();
           void this.admission().toggle(id, connectionId, message.enabled).then(result => {
             this.drainAgentInbox();
+            this.pushOrchestrationState();
             if (message.requestId !== undefined && this.boundGeneration === replyGeneration && replyGeneration !== null) this.sendOrchestrationResult(id, replyGeneration, result);
           });
         }
@@ -6138,6 +6139,14 @@ export class Session {
     return this.preOrchestrateMode ?? undefined;
   }
 
+  private orchestrationRevision = 0;
+
+  private pushOrchestrationState(): void {
+    if (!this.uiReady || this.boundGeneration === null) return;
+    const posture = this.orchestrationPosture !== "stable" ? this.orchestrationPosture : this.orchestrationController?.state.status ?? (this.orchestrate ? "on" : "off");
+    this.outbound.sendDirect({ type: "orchestration_state", connectionId: this.boundGeneration, revision: ++this.orchestrationRevision, enabled: this.orchestrate, available: this.orchestrationAvailable() && !this.postureBlocked(), posture });
+  }
+
   private orchestrationAvailable(): boolean {
     if (this.child !== undefined || this.shuttingDown || this.relocating) return false;
     if (this.engine.id === "core") return this.engine.capabilities.supportsCorePermissions && this.engine.setMode !== undefined;
@@ -6222,6 +6231,7 @@ export class Session {
     }, fingerprint).then(result => {
       if (!("kind" in result) && result.outcome === "unknown" && result.reason === "admission") this.orchestrationController?.quarantine("Turn admission was not confirmed");
       this.drainAgentInbox();
+      this.pushOrchestrationState();
       if (this.boundGeneration !== connectionId || this.shuttingDown) return;
       if ("kind" in result || result.outcome === "unknown") {
         this.outbound.sendDirect({ type: "user_message_unavailable", requestId: message.requestId, reason: "orchestrate_unavailable" });

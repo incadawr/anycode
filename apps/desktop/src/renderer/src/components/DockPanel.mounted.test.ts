@@ -503,7 +503,7 @@ describe("dock resize handle placement (GitHub #31)", () => {
     const originalShow = HTMLDialogElement.prototype.showModal;
     HTMLDialogElement.prototype.showModal = function () { this.open = true; };
     const other = createDesktopStore();
-    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1"});
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",orchestration:{enabled:false,available:true,posture:"off" as const},orchestrationProtocol:{version:1 as const,hostIncarnation:"host",connectionId:"conn",atomicSubmit:true,correlatedToggle:true}});
     const send = vi.spyOn(tabRegistry,"sendToTab").mockImplementation(() => {});
     const renderTab = async (tabId: string, target: DesktopStoreApi) => {
       await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId,store:target}}, createElement(SessionSurface, {tabId,onToast:() => {}}))));
@@ -542,7 +542,7 @@ describe("dock resize handle placement (GitHub #31)", () => {
     useSettingsStore.setState({snapshot:{settings:cloneDefaults(),secrets:[],providerReady:true,envOverrides:[],readOnly:false,catalog:[]},setPatch:save as typeof previous.setPatch});
     const originalShow = HTMLDialogElement.prototype.showModal;
     HTMLDialogElement.prototype.showModal = function () { this.open = true; };
-    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1"});
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",orchestration:{enabled:false,available:true,posture:"off" as const},orchestrationProtocol:{version:1 as const,hostIncarnation:"host",connectionId:"conn",atomicSubmit:true,correlatedToggle:true}});
     const send = vi.spyOn(tabRegistry,"sendToTab").mockImplementation(() => {});
     try {
       await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId:"a",store}}, createElement(SessionSurface, {tabId:"a",onToast:() => {}}))));
@@ -555,12 +555,16 @@ describe("dock resize handle placement (GitHub #31)", () => {
       });
       const option = [...container.querySelectorAll<HTMLElement>('[role="option"]')].find(element => element.textContent?.includes("Orchestrate"))!;
       await act(async () => option.click());
-      const dialog = container.querySelector<HTMLDialogElement>('[aria-label="Choose orchestration roles"]')!;
-      const pickerId = store.getState().composerRolePicker!.id;
-      const idleCancel = new Event("cancel",{cancelable:true});
+      let dialog = container.querySelector<HTMLDialogElement>('[aria-label="Choose orchestration roles"]')!;
+      const idleCancel = new Event("cancel", {cancelable:true});
       await act(async () => dialog.dispatchEvent(idleCancel));
       expect(idleCancel.defaultPrevented).toBe(true);
-      expect(dialog.open).toBe(true);
+      expect(store.getState().composerRolePicker).toBeNull();
+      expect(send).not.toHaveBeenCalledWith("a", expect.objectContaining({type:"user_message"}));
+      await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+      dialog = container.querySelector<HTMLDialogElement>('[aria-label="Choose orchestration roles"]')!;
+      expect(dialog).not.toBeNull();
+      const pickerId = store.getState().composerRolePicker!.id;
       const saveButton = container.querySelector<HTMLButtonElement>('[data-testid="role-picker-save"]')!;
       const skipButton = container.querySelector<HTMLButtonElement>('[data-testid="role-picker-skip"]')!;
       await act(async () => { saveButton.click(); saveButton.click(); skipButton.click(); });
@@ -576,8 +580,8 @@ describe("dock resize handle placement (GitHub #31)", () => {
       await act(async () => resolve({ok:true,snapshot:useSettingsStore.getState().snapshot!}));
       const messages = send.mock.calls.filter(([,message]) => message.type === "user_message");
       expect(messages).toHaveLength(1);
-      expect(messages[0]?.[1]).toMatchObject({type:"user_message",text:"plan task"});
-      expect(send.mock.calls.filter(([,message]) => message.type === "set_orchestrate")).toHaveLength(1);
+      expect(messages[0]?.[1]).toMatchObject({type:"user_message",text:"plan task",orchestrate:"enable",connectionId:"conn"});
+      expect(send.mock.calls.filter(([,message]) => message.type === "set_orchestrate")).toHaveLength(0);
     } finally {
       HTMLDialogElement.prototype.showModal = originalShow;
       useSettingsStore.setState({snapshot:previous.snapshot,setPatch:previous.setPatch});
@@ -1000,7 +1004,7 @@ describe("dock resize handle placement (GitHub #31)", () => {
     const makePort = () => ({onmessage:null as ((event:MessageEvent) => void) | null,postMessage:vi.fn(),addEventListener:()=>{},removeEventListener:()=>{}});
     const first = makePort();
     const tabId = "delivery-unknown-test";
-    const ready = {type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1"};
+    const ready = {type:"host_ready",workspace:"/ws",sessionId:"a",mode:"build",model:"m1",orchestration:{enabled:false,available:true,posture:"off" as const},orchestrationProtocol:{version:1 as const,hostIncarnation:"host",connectionId:"conn",atomicSubmit:true,correlatedToggle:true}};
     tabRegistry.registerPort(tabId,"/ws",first as unknown as MessagePort);
     const target = tabRegistry.getStore(tabId)!;
     first.onmessage!({data:ready} as MessageEvent);

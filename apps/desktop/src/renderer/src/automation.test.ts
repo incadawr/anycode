@@ -392,7 +392,7 @@ describe("automation facade — sendPrompt", () => {
     const result = facade.sendPrompt("tab-a", "hello");
 
     expect(result).toEqual({ ok: false, reason: "not_ready" });
-    expect(port.sent).toEqual([{ type: "ui_ready" }]); // only the handshake, no user_message
+    expect(port.sent).toEqual([{ type: "ui_ready", orchestrationProtocol: 1 }]); // only the handshake, no user_message
   });
 
   it("rejects with busy while a turn is running, sending nothing", () => {
@@ -403,7 +403,7 @@ describe("automation facade — sendPrompt", () => {
     const result = facade.sendPrompt(tabId, "hello");
 
     expect(result).toEqual({ ok: false, reason: "busy" });
-    expect(port.sent).toEqual([{ type: "ui_ready" }]);
+    expect(port.sent).toEqual([{ type: "ui_ready", orchestrationProtocol: 1 }]);
   });
 
   it("rejects with unknown_tab for a tabId the registry has never seen", () => {
@@ -624,7 +624,7 @@ describe("automation facade — respondPermission", () => {
     const result = facade.respondPermission(tabId, "allow");
 
     expect(result).toEqual({ ok: false, reason: "no_pending_request" });
-    expect(port.sent).toEqual([{ type: "ui_ready" }]);
+    expect(port.sent).toEqual([{ type: "ui_ready", orchestrationProtocol: 1 }]);
   });
 
   it("a requestId that doesn't match the pending ask -> {ok:false}, zero sends (fail-closed)", () => {
@@ -736,7 +736,7 @@ describe("automation facade — child tabs", () => {
     expect(result).toEqual({ ok: true });
     expect(childPort.sent).toContainEqual({ type: "permission_response", requestId: "req-c1", behavior: "allow" });
     // The root port heard nothing but its own ui_ready handshake.
-    expect(port.sent).toEqual([{ type: "ui_ready" }]);
+    expect(port.sent).toEqual([{ type: "ui_ready", orchestrationProtocol: 1 }]);
   });
 
   it("childStates is an empty object when no children are registered", () => {
@@ -755,7 +755,7 @@ describe("automation facade — setMode", () => {
     const result = facade.setMode(tabId, "not-a-real-mode");
 
     expect(result).toEqual({ ok: false, reason: "invalid_mode" });
-    expect(port.sent).toEqual([{ type: "ui_ready" }]);
+    expect(port.sent).toEqual([{ type: "ui_ready", orchestrationProtocol: 1 }]);
   });
 
   it("MA1: sends set_mode while a turn is running (busy no longer refuses), valid against uiToHostMessageSchema", () => {
@@ -781,7 +781,7 @@ describe("automation facade — setMode", () => {
     const result = facade.setMode("tab-a", "plan");
 
     expect(result).toEqual({ ok: false, reason: "not_ready" });
-    expect(port.sent).toEqual([{ type: "ui_ready" }]); // only the handshake, no set_mode
+    expect(port.sent).toEqual([{ type: "ui_ready", orchestrationProtocol: 1 }]); // only the handshake, no set_mode
   });
 
   it("sends set_mode when ready+idle+valid, valid against uiToHostMessageSchema", () => {
@@ -828,7 +828,7 @@ describe("automation facade — setOrchestrate / modeMenuState", () => {
     registry2.registerPort("tab-b", "/ws/b", asPort(port2)); // never ready
     const facade2 = createAutomationFacade(registry2, tabsStore2, stubBridge());
     expect(facade2.setOrchestrate("tab-b", true)).toEqual({ ok: false, reason: "not_ready" });
-    expect(port2.sent).toEqual([{ type: "ui_ready" }]);
+    expect(port2.sent).toEqual([{ type: "ui_ready", orchestrationProtocol: 1 }]);
   });
 
   it("OR3: modeMenuState reads open:false (closed chip) for an active tab — a normal reading, not an error", () => {
@@ -1172,7 +1172,7 @@ describe("automation facade — tryAgain (design W8)", () => {
     const facade = createAutomationFacade(registry, tabsStore, stubBridge());
 
     expect(facade.tryAgain(tabId)).toEqual({ ok: false, reason: "no_retry_offer" });
-    expect(port.sent).toEqual([{ type: "ui_ready" }]);
+    expect(port.sent).toEqual([{ type: "ui_ready", orchestrationProtocol: 1 }]);
   });
 
   it("an armed offer -> {ok:true}, drives the SAME dispatchTryAgain path App.tsx's button uses (user_message on the wire, offer consumed)", () => {
@@ -2545,7 +2545,7 @@ describe("automation facade — prompt queue (design/slice-P7.14-cut.md §5 W3)"
       { id: second.id, text: "second" },
     ]);
     // Never touches the wire (design §1 — a pure renderer-side reducer mutation).
-    expect(port.sent).toEqual([{ type: "ui_ready" }]);
+    expect(port.sent).toEqual([{ type: "ui_ready", orchestrationProtocol: 1 }]);
   });
 
   it("queuePrompt at TRULY IDLE returns the correct minted id even though the drainer immediately pops the item into queueInFlight (no tail-read crash)", () => {
@@ -7622,7 +7622,7 @@ describe("automation facade — checkpoint timeline / rewind probes+driver (desi
       tabsStore.getState().setActiveTab("tab-b");
       const facade = buildFacade(registry, tabsStore);
       await expect(facade.checkpointRewind(tabId, { scope: "both" })).resolves.toEqual({ ok: false, reason: "tab_not_active" });
-      expect(port.sent).toEqual([{ type: "ui_ready" }]);
+      expect(port.sent).toEqual([{ type: "ui_ready", orchestrationProtocol: 1 }]);
     });
 
     it("refuses with checkpoint_not_specified when neither checkpointId nor index is given", async () => {
@@ -7630,7 +7630,7 @@ describe("automation facade — checkpoint timeline / rewind probes+driver (desi
       tabsStore.getState().setActiveTab(tabId);
       const facade = buildFacade(registry, tabsStore);
       await expect(facade.checkpointRewind(tabId, { scope: "both" })).resolves.toEqual({ ok: false, reason: "checkpoint_not_specified" });
-      expect(port.sent).toEqual([{ type: "ui_ready" }]);
+      expect(port.sent).toEqual([{ type: "ui_ready", orchestrationProtocol: 1 }]);
     });
 
     it("refuses with checkpoint_not_found when index is out of range against the current list", async () => {
@@ -7642,7 +7642,7 @@ describe("automation facade — checkpoint timeline / rewind probes+driver (desi
         ok: false,
         reason: "checkpoint_not_found",
       });
-      expect(port.sent).toEqual([{ type: "ui_ready" }]);
+      expect(port.sent).toEqual([{ type: "ui_ready", orchestrationProtocol: 1 }]);
     });
 
     it("resolves index 0 to the NEWEST checkpoint (newest-first order), sends the matching rewind_request, and returns rewindState once the reply lands", async () => {
@@ -7679,7 +7679,7 @@ describe("automation facade — checkpoint timeline / rewind probes+driver (desi
         transcriptBlockCount: 0,
       });
       expect(port.sent).toEqual([
-        { type: "ui_ready" },
+        { type: "ui_ready", orchestrationProtocol: 1 },
         { type: "rewind_request", requestId: sentRequestId, checkpointId: "newer", scope: "both" },
       ]);
     });
@@ -7709,7 +7709,7 @@ describe("automation facade — checkpoint timeline / rewind probes+driver (desi
         transcriptBlockCount: 0,
       });
       expect(port.sent).toEqual([
-        { type: "ui_ready" },
+        { type: "ui_ready", orchestrationProtocol: 1 },
         { type: "rewind_request", requestId: sentRequestId, checkpointId: "explicit-id", scope: "files" },
       ]);
     });
