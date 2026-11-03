@@ -9,6 +9,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Give actionable alternatives when a connection-bound agent cannot be spawned.
+
 - Block local file requests from an old preview while its replacement is loading.
 
 - Allow local previews to load workspace files when the workspace path is a symlink.
