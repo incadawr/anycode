@@ -91,6 +91,18 @@ function fresh(rec: Recorder): ClaudeSessionRowWriter {
 }
 
 describe("ClaudeSessionRowWriter — a fresh session writes nothing until the native session exists", () => {
+  it("creates a history-only row on a pre-init failure and promotes it on native init", async () => {
+    const rec = recorder();
+    const writer = fresh(rec);
+    writer.materializeFailure({ model: "m", mode: "ask" });
+    await writer.settled();
+    expect(rec.creates[0]?.row).toEqual({ workspace: "/work", engineId: "claude", model: "m", mode: "ask" });
+    expect(writer.isHistoryOnly).toBe(true);
+    writer.materialize({ model: "m", mode: "ask" });
+    await writer.settled();
+    expect(rec.touches.at(-1)?.patch).toEqual({ model: "m", mode: "ask", externalSessionRef: "native-ref-1" });
+    expect(writer.isHistoryOnly).toBe(false);
+  });
   it("writes NO row for a tab that never ran a turn (the dead-reference scenario)", async () => {
     const rec = recorder();
     const writer = fresh(rec);

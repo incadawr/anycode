@@ -221,7 +221,7 @@ describe("public result retrieval", () => {
     try {
       await f.h.session.receiveAgentMessage(f.make("failure"));
       await f.h.waitUntil(() => f.h.received.some(isLoopEnd));
-      expect(save).toHaveBeenCalledWith(expect.objectContaining({ kind: "turn_error", engine: "codex", turnId: expect.any(String), createdAt: expect.any(Number), error: expect.objectContaining({ code: "network", message: "Network error" }) }));
+      expect(save).toHaveBeenCalledWith(expect.objectContaining({ kind: "turn_error", engine: "codex", turnId: expect.any(String), createdAt: expect.any(Number), error: expect.objectContaining({ code: "network", message: "Network error" }) }), expect.any(String));
       expect(f.h.session.communicationResult().latestResult?.publicAnswer).toBe("Network error");
       expect(log).toHaveBeenCalledWith(expect.stringContaining("turn error persistence failed: disk full"));
     } finally { f.h.close(); log.mockRestore(); }
