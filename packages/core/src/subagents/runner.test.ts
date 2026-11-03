@@ -5819,7 +5819,7 @@ describe("core profile session requests", () => {
     ["both", ["xhigh", "max"], "xhigh"],
     ["max-only", ["high", "max"], "max"],
   ] as const)("resolves a core profile's effort for the %s destination", async (model, levels, expected) => {
-    const profile = await makeProfile("worker", { body: "role", model, effort: "xhigh" });
+    const profile = { ...await makeProfile("worker", { body: "role", model, effort: "xhigh" }), connection: "conn" };
     const runner = createSubagentRunner(makeParent(), { profiles: [profile] });
     const requests: SessionSubagentRequest[] = [];
     const port: SessionSubagentPort = {
@@ -5842,7 +5842,7 @@ describe("core profile session requests", () => {
 
   it("uses discovered current profile metadata and preserves follow-ups", async () => {
     const body = "Привет\n\n---\n\ninside";
-    let profiles = [await makeProfile("worker", { body, model: "model-b" })];
+    let profiles = [{ ...await makeProfile("worker", { body, model: "model-b" }), connection: "conn" }];
     const runner = createSubagentRunner(makeParent(), { profiles: () => profiles });
     const requests: SessionSubagentRequest[] = [];
     const messages: string[] = [];
@@ -5867,7 +5867,7 @@ describe("core profile session requests", () => {
     expect(requests.at(-1)).not.toHaveProperty("model");
     await tool.handler({ description: "d", prompt: "message", agent_type: "worker", tier: "session", send_to: "child" }, ctx);
     expect(messages).toEqual(["message"]);
-    profiles = [await makeProfile("worker", { body: "updated" })];
+    profiles = [{ ...await makeProfile("worker", { body: "updated" }), connection: "conn" }];
     await tool.handler({ description: "d", prompt: "task", agent_type: "worker", tier: "session" }, ctx);
     expect(requests.at(-1)?.prompt).toBe("updated\n\n---\n\ntask");
     expect(requests.at(-1)).not.toHaveProperty("model");
