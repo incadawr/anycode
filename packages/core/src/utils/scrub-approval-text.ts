@@ -18,5 +18,5 @@ export function scrubFailureText(text: string): string {
     .replace(/\b(https?:\/\/)[^\s/@]+@/gi, `$1${REDACTED}@`)
     .replace(/\b(?:Bearer|Basic)\s+[^\s"']+/gi, REDACTED)
     .replace(/\b(?:sk|pk|ghp|gho|xox[abp])[-_][A-Za-z0-9_-]{16,}/g, REDACTED)
-    .replace(/\b([A-Za-z0-9_-]*(?:password|passwd|secret|token|api[_-]?key|credential|authorization|cookie)[A-Za-z0-9_-]*["']?\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}&]+)/gi, `$1${REDACTED}`);
+    .replace(/\b([A-Za-z0-9_-]*(?:password|passwd|secret|token|key|credential|authorization|cookie)[A-Za-z0-9_-]*["']?\s*[:=]\s*)(?:"[^"\r\n]*"?|'[^'\r\n]*'?|[^\s,;}&]+)/gi, `$1${REDACTED}`);
 }

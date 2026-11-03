@@ -28,7 +28,7 @@ describe("scrubApprovalText", () => {
 
 
 describe("scrubFailureText", () => {
-  it.each(["https://alice:hunter2@proxy.local", "Bearer abc123", "sk-abcdefghijklmnopqrstuvwx", "API_KEY=secret123", 'password="secret value"'])('redacts credentials in %s', (value) => {
+  it.each(["https://alice:hunter2@proxy.local", "Bearer abc123", "sk-abcdefghijklmnopqrstuvwx", "API_KEY=secret123", "key=secret123", 'password="secret value"'])('redacts credentials in %s', (value) => {
     expect(scrubFailureText(value)).toContain("[redacted]");
     expect(scrubFailureText(value)).not.toContain("secret123");
     expect(scrubFailureText(value)).not.toContain("hunter2");
