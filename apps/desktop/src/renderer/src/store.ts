@@ -4892,7 +4892,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         // may arrive long after the BrowserOpen call that opened the window
         // has already settled.
         case "preview_console": {
-          if (event.level === "log") return;
+          if (event.level === "log" && event.suppressed === undefined) return;
           const entry = { level: event.level, message: event.message, count: 1 };
           flushDeltas();
           set((state) => {
