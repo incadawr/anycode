@@ -23,7 +23,7 @@ describe("withPlanModeReminder", () => {
   });
 
   it("describes allowed Bash forms and the dedicated alternatives", () => {
-    for (const text of ["read-only", "|", "&&", ";", "redirects", "Glob", "Read", "Git"]) {
+    for (const text of ["read-only", "|", "&&", ";", "redirects", "trusted executables", "Glob", "Read", "Grep", "use the Git tool", "repository configuration can execute programs"]) {
       expect(PLAN_MODE_REMINDER).toContain(text);
     }
   });

@@ -1,9 +1,9 @@
 /** Tests for safe-command permission narrowing and its production composition. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { ModePermissionEngine } from "./engine.js";
 import { RuleAwarePermissionEngine, SessionPermissionRules } from "./rules.js";
 import { SafeCommandPermissionEngine } from "./safe-command-engine.js";
@@ -96,6 +96,87 @@ describe("SafeCommandPermissionEngine", () => {
       for (const tool of ["Glob", "Read", "Git"]) expect(ruling.reason).toContain(tool);
     }
     expect(engine.check(bashRequest(null, "plan")).decision).toBe("deny");
+  });
+
+  it.each([
+    ["ls", "allow"],
+    ["wc -l file", "allow"],
+    ["cat file", "allow"],
+    ["grep needle file", "allow"],
+    ["grep -i needle file", "deny"],
+    ["head -n 5 file | tail -n 2", "allow"],
+    ["find . -type f", "deny"],
+    ["git status", "deny"],
+    ["git log", "deny"],
+    ["git diff", "deny"],
+    ["git show", "deny"],
+    ["git branch --list", "deny"],
+    ["ls > marker", "deny"],
+    ["cat < file", "deny"],
+    ["ls; wc -l file", "deny"],
+    ["ls && wc -l file", "deny"],
+    ["ls || wc -l file", "deny"],
+    ["cat $(touch marker)", "deny"],
+    ["cat `touch marker`", "deny"],
+    ["A=1 ls", "deny"],
+    ["sed -i s/a/b/ file", "deny"],
+    ["find . -exec touch marker +", "deny"],
+    ["find . -delete", "deny"],
+    ["ls | xargs cat", "deny"],
+    ["cat <(ls)", "deny"],
+    ["cat file | tee marker", "deny"],
+  ])("audits plan-mode ruling for %s: %s", (command, decision) => {
+    const engine = new SafeCommandPermissionEngine(new ModePermissionEngine());
+    const ruling = engine.check(bashRequest(command, "plan"));
+    expect(ruling.decision).toBe(decision);
+    if (decision === "deny") {
+      for (const alternative of ["Glob", "Read", "Grep", "use the Git tool"]) {
+        expect(ruling.reason).toContain(alternative);
+      }
+      expect(ruling.reason).toContain("repository configuration can execute programs");
+    }
+  });
+
+  it.each(["\u00a0", "\u1680", "\u2003", "\u2028", "\u2029", "\u202f", "\u3000", "\ufeff"])(
+    "rejects literal Unicode characters around a command word: %j", (space) => {
+      const engine = new SafeCommandPermissionEngine(new ModePermissionEngine());
+      for (const command of [`${space}ls`, ` \t${space}ls file`, `ls${space}`, `ls${space}file`, `${space}ls | cat`]) {
+        const ruling = engine.check(bashRequest(command, "plan"));
+        expect(ruling.decision, JSON.stringify(command)).toBe("deny");
+        expect(ruling.resolvedCommand).toBeUndefined();
+      }
+    },
+  );
+
+  it.each([" \tls", "ls\tfile", " \tls \t | \t head"])("permits shell word separators: %j", (command) => {
+    const engine = new SafeCommandPermissionEngine(new ModePermissionEngine());
+    expect(engine.check(bashRequest(command, "plan")).decision).toBe("allow");
+  });
+
+  it.each(["\u00a0", "\ufeff"])("blocks a workspace executable behind a Unicode prefix: %j", async (space) => {
+    const dir = mkdtempSync(join(tmpdir(), "plan-unicode-"));
+    const engine = new SafeCommandPermissionEngine(new ModePermissionEngine());
+    const exec = new NodeExecutionAdapter();
+    const run = vi.spyOn(exec, "run");
+    const requestPermission = vi.fn(async () => ({ behavior: "deny", reason: "unexpected" }));
+    try {
+      const checked = engine.check(bashRequest("ls", "plan")).resolvedCommand!;
+      expect(checked).toBeDefined();
+      const planted = join(dir, space + checked.slice(1, -1));
+      mkdirSync(dirname(planted), { recursive: true });
+      writeFileSync(planted, "#!/bin/sh\n: > marker\n", { mode: 0o755 });
+      const ctx = {
+        registry: { get: () => bashTool } as unknown as ToolRegistry,
+        hooks: { runPreToolUse: async () => ({}), runObservers: async () => {} } as unknown as HookRunner,
+        mode: "plan", cwd: dir, permissionEngine: engine,
+        permissionBroker: { requestPermission }, ports: { exec } as unknown as CorePorts,
+      } as DispatchContext;
+      const outcome = await executeToolCall(ctx, { id: "unicode", name: "Bash", input: { command: space + "ls" } });
+      expect(outcome.status).toBe("denied");
+      expect(existsSync(join(dir, "marker"))).toBe(false);
+      expect(run).not.toHaveBeenCalled();
+      expect(requestPermission).not.toHaveBeenCalled();
+    } finally { run.mockRestore(); rmSync(dir, { recursive: true, force: true }); }
   });
 
 
