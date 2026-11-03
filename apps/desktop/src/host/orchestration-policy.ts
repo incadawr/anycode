@@ -12,6 +12,9 @@ export interface OrchestrationPolicy {
   apply(enabled: boolean, baseAuthority: unknown): Promise<OrchestrationSnapshot>;
 }
 
+/** Raised only before the engine has changed any effective policy. */
+export class OrchestrationNotReadyError extends Error {}
+
 export type OrchestrationState =
   | { status: "off"; baseAuthority?: unknown }
   | { status: "on"; baseAuthority: unknown }
@@ -45,7 +48,11 @@ export class OrchestrationController {
       this.state = enabled ? { status: "on", baseAuthority: snapshot.baseAuthority } : { status: "off", baseAuthority: snapshot.baseAuthority };
       return true;
     } catch (error) {
-      if (generation === this.generation) this.state = { status: "quarantined", previous, reason: error instanceof Error ? error.message : String(error) };
+      if (generation === this.generation) {
+        this.state = error instanceof OrchestrationNotReadyError
+          ? previous.enabled ? { status: "on", baseAuthority: previous.baseAuthority } : { status: "off", baseAuthority: previous.baseAuthority }
+          : { status: "quarantined", previous, reason: error instanceof Error ? error.message : String(error) };
+      }
       return false;
     }
   }
@@ -54,6 +61,19 @@ export class OrchestrationController {
   invalidate(): void {
     ++this.generation;
     if (this.state.status === "transitioning") this.state = { status: "quarantined", previous: this.state.previous, reason: "transition invalidated" };
+  }
+
+  /** Core can leave plan mode from inside a turn; reconcile that synchronous change. */
+  coreModeExited(): void {
+    if (this.state.status === "on") this.state = { status: "off", baseAuthority: this.state.baseAuthority };
+  }
+
+  quarantine(reason: string): void {
+    if (this.state.status === "quarantined") return;
+    const previous = this.state.status === "transitioning" ? this.state.previous
+      : { enabled: this.state.status === "on", baseAuthority: this.state.baseAuthority };
+    ++this.generation;
+    this.state = { status: "quarantined", previous, reason };
   }
 }
 
