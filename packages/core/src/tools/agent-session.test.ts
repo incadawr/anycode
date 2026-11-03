@@ -173,7 +173,7 @@ describe("agentTool handler — provider validation (CUT-S2 §2.1)", () => {
     const result = await full.handler({ description: "d", prompt: "p", provider: "anthropic-2" }, makeCtx());
     expect(result.ok).toBe(false);
     expect(result.errorKind).toBeUndefined();
-    expect(result.error).toContain("unavailable");
+    expect(result.error).toBe("Agent: session-tier subagents are unavailable in this host. See the using-subagents skill.");
   });
 
   it("provider validation fires even with NO ports at all wired (fails fast, before any availability check)", async () => {
@@ -192,7 +192,7 @@ describe("agentTool handler — provider validation (CUT-S2 §2.1)", () => {
       makeCtx(), // no sessionSubagents => fail-closed, but NOT invalid_input
     );
     expect(result.errorKind).toBeUndefined();
-    expect(result.error).toContain("unavailable");
+    expect(result.error).toBe("Agent: session-tier subagents are unavailable in this host. See the using-subagents skill.");
   });
 });
 
@@ -395,11 +395,13 @@ describe("agentTool handler — continue_session", () => {
   });
 
   it("continue_session with the default session tier is accepted", async () => {
+    const { port, seen } = capturingPort();
     const result = await full.handler(
       { description: "d", prompt: "p", continue_session: "child-9" },
-      makeCtx({ sessionSubagents: capturingPort().port }),
+      makeCtx({ sessionSubagents: port }),
     );
     expect(result.ok).toBe(true);
+    expect(seen()?.resumeChildSessionId).toBe("child-9");
   });
 
   it("session-tier completed with a start progress => formatResultForModel carries the childSessionId + continue_session hint", async () => {
@@ -537,11 +539,14 @@ describe("agentTool handler — send_to", () => {
   });
 
   it("send_to with the default session tier is accepted", async () => {
+    const { port, sent, runReached } = sendPort({ ok: true });
     const result = await full.handler(
       { description: "d", prompt: "p", send_to: "child-77" },
-      makeCtx({ sessionSubagents: sendPort({ ok: true }).port }),
+      makeCtx({ sessionSubagents: port }),
     );
     expect(result.ok).toBe(true);
+    expect(sent()).toEqual({ childSessionId: "child-77", text: "p" });
+    expect(runReached()).toBe(false);
   });
 
   it.each([
@@ -1697,6 +1702,13 @@ describe("agentTool handler — orchestrate default-detach (§2.3)", () => {
     expect(request?.fallbackAtCapacity).toBeUndefined();
     expect(result.ok).toBe(false);
     expect(inlineRuns).toBe(0);
+  });
+
+  it("forwards provider and detach on an omitted-tier session", async () => {
+    const { port, seen } = capturingPort();
+    const result = await full.handler({ description: "d", prompt: "p", provider: "provider-b", detach: true }, makeCtx({ sessionSubagents: port }));
+    expect(result.ok).toBe(true);
+    expect(seen()).toMatchObject({ provider: "provider-b", detach: true });
   });
 
   it("an omitted tier starts a joining session", async () => {
