@@ -136,7 +136,8 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
   let exceptionReplayCounts = new Map<string, number>();
   let replayCounts = new Map<string, number>();
   let attachGeneration = 0;
-  const detachedMessages: Array<PreviewConsoleEntry["level"]> = [];
+  const detachedMessages: Array<{ level: PreviewConsoleEntry["level"]; message: string }> = [];
+  const exceptionText = (message: string): string => message.split("\n", 1)[0]!.replace(/^Uncaught (?:\(in promise\) )?/, "");
   let replaying = false;
 
   // Kills the common STUN/UDP exfil path that `onBeforeRequest` cannot see
@@ -176,7 +177,10 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
           0,
           RING_MAX_MSG_CHARS,
         );
-        if (!seen) consoleListener("pageerror", message);
+        const fallbackIndex = replaying && !seen
+          ? detachedMessages.findIndex((item) => item.level === "error" && exceptionText(item.message) === exceptionText(message)) : -1;
+        if (fallbackIndex >= 0) detachedMessages.splice(fallbackIndex, 1);
+        if (!seen && fallbackIndex < 0) consoleListener("pageerror", message);
       }
       if (method === "Runtime.consoleAPICalled") {
         const call = params as { type?: string; args?: RemotePreview[]; timestamp?: number; executionContextId?: number; stackTrace?: unknown };
@@ -192,7 +196,7 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
             if (consoleHistory.length > 1000) consoleHistory.shift();
           }
           const fallbackIndex = replaying && !seen && !isElectronInternalWarning(message, call.type)
-            ? detachedMessages.indexOf(level) : -1;
+            ? detachedMessages.findIndex((item) => item.level === level) : -1;
           if (fallbackIndex >= 0) detachedMessages.splice(fallbackIndex, 1);
           if (!seen && fallbackIndex < 0 && !isElectronInternalWarning(message, call.type)) consoleListener(level, message);
         }
@@ -281,7 +285,7 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
     // recordConsole-time stays as defense-in-depth.
     const level = classifyConsoleLevel(event.level);
     const message = event.message.slice(0, RING_MAX_MSG_CHARS);
-    detachedMessages.push(level);
+    detachedMessages.push({ level, message });
     if (detachedMessages.length > 1000) detachedMessages.shift();
     consoleListener(level, message);
   });
