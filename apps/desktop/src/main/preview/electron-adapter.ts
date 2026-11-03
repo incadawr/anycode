@@ -131,7 +131,10 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
   let attached = false;
   let messageWired = false;
   const seenLogEntries = new Set<string>();
-  const seenConsoleCalls = new Set<string>();
+  const consoleHistory: string[] = [];
+  let replayCounts = new Map<string, number>();
+  let hadCdpSession = false;
+  let attachGeneration = 0;
   const detachedMessages: Array<{ level: PreviewConsoleEntry["level"]; message: string }> = [];
   let replaying = false;
 
@@ -167,15 +170,17 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
         consoleListener("pageerror", message);
       }
       if (method === "Runtime.consoleAPICalled") {
-        const call = params as { type?: string; args?: RemotePreview[]; timestamp?: number };
+        const call = params as { type?: string; args?: RemotePreview[]; timestamp?: number; executionContextId?: number; stackTrace?: unknown };
         if (call.args) {
           const level = call.type === "warning" ? "warn" : call.type === "error" || call.type === "assert" ? "error" : "log";
           const message = formatConsoleArguments(call.args);
-          const key = call.timestamp === undefined ? undefined : JSON.stringify(params);
-          const seen = key !== undefined && seenConsoleCalls.has(key);
-          if (key !== undefined) {
-            seenConsoleCalls.add(key);
-            if (seenConsoleCalls.size > 1000) seenConsoleCalls.delete(seenConsoleCalls.values().next().value!);
+          const key = call.timestamp === undefined ? undefined : JSON.stringify([call.timestamp, call.executionContextId, call.type, call.stackTrace]);
+          const remaining = key === undefined ? 0 : (replayCounts.get(key) ?? 0);
+          const seen = replaying && remaining > 0;
+          if (seen && key !== undefined) replayCounts.set(key, remaining - 1);
+          if (!seen && key !== undefined) {
+            consoleHistory.push(key);
+            if (consoleHistory.length > 1000) consoleHistory.shift();
           }
           const fallbackIndex = replaying && !seen ? detachedMessages.findIndex((item) => item.level === level && item.message === message) : -1;
           if (fallbackIndex >= 0) detachedMessages.splice(fallbackIndex, 1);
@@ -203,13 +208,20 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
       return false;
     }
     attached = true;
+    const generation = ++attachGeneration;
+    replayCounts = new Map();
+    for (const key of consoleHistory) replayCounts.set(key, (replayCounts.get(key) ?? 0) + 1);
     wireMessages();
     wc.debugger.sendCommand("Log.enable").catch(() => {});
     replaying = true;
     wc.debugger.sendCommand("Runtime.enable").then(() => {
+      if (generation !== attachGeneration) return;
+      hadCdpSession = true;
       replaying = false;
+      replayCounts.clear();
       detachedMessages.length = 0;
     }).catch((error: unknown) => {
+      if (generation !== attachGeneration) return;
       replaying = false;
       attached = false;
       console.warn("[preview] failed to enable CDP Runtime domain", error);
@@ -220,6 +232,7 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
   // DevTools (or a crashed page process) can detach us at any time; the next
   // CDP use re-attaches (ensureAttached below).
   wc.debugger.on("detach", () => {
+    attachGeneration += 1;
     attached = false;
   });
 
@@ -235,7 +248,9 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
     console.warn("[preview] debugger attach failed; pageerror capture degraded to console-message only");
   }
   wc.on("console-message", (event) => {
-    if (attached) return;
+    // Runtime replays messages produced while detached. Avoid recording the
+    // flattened Electron version after CDP has successfully captured this page.
+    if (attached || hadCdpSession) return;
     // Electron's own security warning is not a page console message (see
     // isElectronInternalWarning) — never surface it in the transcript. The
     // check needs BOTH the message's own `%c` marker at the start and the
