@@ -1,3 +1,4 @@
+import { clearPendingInitial, clearRecovery, loadPendingInitial, loadRecovery, savePendingInitial, saveRecovery } from "./orchestration-recovery-storage.js";
 import { useDockStore } from "./dock/dock-store.js";
 /**
  * Per-tab connection registry (design phase-2.md §2.4/§4.3): one DesktopStore
@@ -78,6 +79,7 @@ interface TabEntry {
   unsubscribeStatus: (() => void) | null;
   /** P7.14 prompt-queue drainer subscription on this tab's own store; store-lifetime (survives respawns), dies in disposeTab (symmetry with `unsubscribeStatus`). */
   unsubscribeQueue: (() => void) | null;
+  unsubscribeRecovery: (() => void) | null;
   /**
    * CUT-S2 §2.5/§5.3: true iff this tabId was classified `"child"`
    * (`classifyPortEnvelope`) on its FIRST `registerPort` — fixed for the
@@ -294,7 +296,7 @@ export function createTabRegistry(
    * picks) queued via `queueInitialPrompt`, waiting for its tab's
    * `host_ready`. `effort`/`images` join the same slot.
    */
-  type InitialPrompt = { text: string; model?: string; mode?: PermissionMode; effort?: string; images?: readonly QueuedPromptImage[]; reasoningEffort?: string; orchestrate?: boolean };
+  type InitialPrompt = { requestId?: string; text: string; model?: string; mode?: PermissionMode; effort?: string; images?: readonly QueuedPromptImage[]; reasoningEffort?: string; orchestrate?: boolean };
   const pendingInitialPrompts = new Map<string, InitialPrompt>();
   const pendingInitialModels = new Map<string, { requestId: string; prompt: InitialPrompt; timer: ReturnType<typeof setTimeout>; connection: HostConnection }>();
   const liveConnection = (entry: TabEntry): HostConnection | null => entry.connection && !unusableHostConnections.has(entry.connection) && entry.store.getState().connection === "ready" ? entry.connection : null;
@@ -311,6 +313,7 @@ export function createTabRegistry(
     clearTimeout(pending.timer);
     pendingInitialModels.delete(tabId);
     holdInitial(entry, pending.prompt, "A model switch was requested; the current model and effective reasoning effort are not confirmed. Restore the draft to review its settings.");
+    clearPendingInitial(tabId);
   }
 
   /**
@@ -373,13 +376,7 @@ export function createTabRegistry(
     if (level !== undefined && (level !== current.reasoningEffort || (model !== undefined && model !== current.model))) {
       sendPick({ type: "set_reasoning_effort", effort: level });
     }
-    // Start-screen Orchestrate (core only): LAST of the picks, so the host's
-    // plan-mode flip happens after any set_mode above and before the first
-    // user_message on the same port. Enabling an already-enabled flag just
-    // acks (onSetOrchestrate), so no current-state comparison is needed.
-    if (orchestrate === true && entry.store.getState().engine === null) {
-      sendPick({ type: "set_orchestrate", enabled: true });
-    }
+    // Orchestration intent rides atomically with the initial user message.
   }
 
   /**
@@ -393,6 +390,7 @@ export function createTabRegistry(
    */
   function dispatchInitialPrompt(
     entry: TabEntry,
+    tabId: string,
     text: string,
     images: readonly QueuedPromptImage[],
     imageInput: boolean | undefined,
@@ -400,6 +398,7 @@ export function createTabRegistry(
     orchestrate?: boolean,
     picks?: QueuedPrompt["initialPicks"],
     stagedModel?: { model: string; reasoningEffort: ReasoningEffort },
+    initialRequestId?: string,
   ): void {
     const blocked = isSendBlockedByModelImages(imageInput, imageFallback, images.length);
     if (blocked) {
@@ -408,21 +407,22 @@ export function createTabRegistry(
       return;
     }
     const state = entry.store.getState();
-    if (state.orchestration.posture === "transitioning" || state.orchestration.posture === "quarantined" || (orchestrate && state.engine !== null && (!state.orchestration.available || !state.orchestration.protocol?.atomicSubmit))) {
+    if (state.orchestration.posture === "transitioning" || state.orchestration.posture === "quarantined" || (orchestrate && (!state.orchestration.available || !state.orchestration.protocol?.atomicSubmit))) {
       holdInitial(entry, { text, images, orchestrate, ...picks }, "Session policy is unavailable. Restore the draft before sending; close the tab if policy cannot be verified.");
       return;
     }
     const deliveredImages = images;
-    const requestId = crypto.randomUUID();
-    if (orchestrate && state.engine !== null) entry.store.setState({ orchestration: { ...state.orchestration, posture: "transitioning", pendingSubmit: requestId } });
+    const requestId = initialRequestId ?? crypto.randomUUID();
+    const connectionId = orchestrate ? entry.store.getState().beginOrchestrationSubmit(requestId) : null;
+    if (orchestrate && !connectionId) { holdInitial(entry, { text, images, orchestrate, ...picks }, "Session policy is unavailable. Restore the draft before sending."); return; }
     entry.store.getState().appendUserText(requestId, text, deliveredImages.length > 0 ? deliveredImages.map((image) => image.attachment) : undefined);
     // W8: snapshot what actually went on the wire so a later terminal
     // retryable failure can offer to replay this same content.
     entry.store.getState().recordSentMessage(text, deliveredImages, requestId, orchestrate ? "enable" : undefined, picks ?? {});
     const connection = liveConnection(entry);
     try {
-      if (!connection) throw new Error("connection unavailable");
-      connection.send({ type: "user_message", requestId, text, ...(deliveredImages.length > 0 ? { images: deliveredImages.map((image) => image.attachment) } : {}), ...(orchestrate && state.engine !== null ? { orchestrate: "enable" as const, connectionId: state.orchestration.protocol!.connectionId } : {}) });
+      if (!connection || !saveRecovery(tabId, entry.store.getState())) throw new Error("connection or recovery storage unavailable");
+      connection.send({ type: "user_message", requestId, text, ...(deliveredImages.length > 0 ? { images: deliveredImages.map((image) => image.attachment) } : {}), ...(connectionId ? { orchestrate: "enable" as const, connectionId } : {}) });
       if (liveConnection(entry) !== connection) entry.store.getState().markOrchestrationDeliveryUnknown(requestId);
     } catch {
       entry.store.getState().markOrchestrationDeliveryUnknown(requestId);
@@ -441,7 +441,7 @@ export function createTabRegistry(
    * with Composer's image send: images only when present. Returns early if the
    * head couldn't be taken (queue emptied/paused/inFlight by a racing update).
    */
-  function dispatchQueuedPrompt(entry: TabEntry): void {
+  function dispatchQueuedPrompt(entry: TabEntry, tabId: string): void {
     const connection = liveConnection(entry);
     if (!connection) return;
     const candidateId = crypto.randomUUID();
@@ -467,11 +467,12 @@ export function createTabRegistry(
       .appendUserText(requestId, item.text, item.images.length > 0 ? item.images.map((image) => image.attachment) : undefined, item.origin);
     // W8: snapshot what actually went on the wire so a later terminal
     // retryable failure can offer to replay this same content.
-    entry.store.getState().recordSentMessage(item.text, item.images, requestId, item.orchestrate, item.trackDelivery || item.retryOf ? item.initialPicks ?? {} : undefined, item.recoverySourceId ?? item.retryOf, item.retryOf ? item.originId : undefined);
+    entry.store.getState().recordSentMessage(item.text, item.images, requestId, item.orchestrate, item.trackDelivery || item.retryOf || item.origin === "system" ? item.initialPicks ?? {} : undefined, item.recoverySourceId ?? item.retryOf, item.origin === "system" ? item.originId : undefined);
     if (liveConnection(entry) !== connection) { entry.store.getState().markOrchestrationDeliveryUnknown(requestId); return; }
     if (!retryStillRejected()) { cancelRetry(); return; }
     if (!recoveryStillSafe()) { entry.store.getState().holdBlockedRecovery(requestId); return; }
     try {
+      if (!saveRecovery(tabId, entry.store.getState())) throw new Error("recovery storage unavailable");
       connection.send({
         type: "user_message", requestId, text: item.text,
         ...(item.images.length > 0 ? { images: item.images.map((image) => image.attachment) } : {}),
@@ -500,14 +501,15 @@ export function createTabRegistry(
   });
 
   function startInitial(entry: TabEntry, tabId: string, prompt: InitialPrompt, current: { model: string | null; mode: PermissionMode | null; effort: string | undefined; reasoningEffort: ReasoningEffort | undefined }, imageInput: boolean | undefined, imageFallback: boolean | undefined, stagedModel?: { model: string; reasoningEffort: ReasoningEffort }): void {
+    const retain = (reason: string): void => { holdInitial(entry, prompt, reason); if (saveRecovery(tabId, entry.store.getState())) clearPendingInitial(tabId); };
     cancelPendingModel(tabId, entry);
-    if (!liveConnection(entry)) { holdInitial(entry, prompt, "Connection unavailable. Restore the draft to review it before sending."); return; }
+    if (!liveConnection(entry)) { retain("Connection unavailable. Restore the draft to review it before sending."); return; }
     const state = entry.store.getState();
-    if (state.orchestration.posture === "transitioning" || state.orchestration.posture === "quarantined" || (prompt.orchestrate && state.engine !== null && (!state.orchestration.available || !state.orchestration.protocol?.atomicSubmit))) {
-      holdInitial(entry, prompt, "Session policy is unavailable. Restore the draft before sending; close the tab if policy cannot be verified."); return;
+    if (state.orchestration.posture === "transitioning" || state.orchestration.posture === "quarantined" || (prompt.orchestrate && (!state.orchestration.available || !state.orchestration.protocol?.atomicSubmit))) {
+      retain("Session policy is unavailable. Restore the draft before sending; close the tab if policy cannot be verified."); return;
     }
     if ((prompt.images?.length ?? 0) > 0 && prompt.model !== undefined && prompt.model !== current.model) {
-      if (!entry.connection) { holdInitial(entry, prompt, "A model switch was requested; the current model and effective reasoning effort are not confirmed. Restore the draft to review its settings."); return; }
+      if (!entry.connection) { retain("A model switch was requested; the current model and effective reasoning effort are not confirmed. Restore the draft to review its settings."); return; }
       const requestId = crypto.randomUUID();
       const connection = entry.connection;
       const timer = setTimeout(() => cancelPendingModel(tabId, entry), 10_000);
@@ -521,11 +523,12 @@ export function createTabRegistry(
     // All remaining picks and the turn are committed only after that verdict passes.
     if (!blocked) {
       try { applyInitialPicks(entry, prompt.model, prompt.mode, prompt.effort, current, prompt.reasoningEffort, prompt.orchestrate); }
-      catch { holdInitial(entry, prompt, "Connection failed while applying settings. Restore the draft and review the current settings."); return; }
-      if (!liveConnection(entry)) { holdInitial(entry, prompt, "Connection closed while applying settings. Restore the draft and review the current settings."); return; }
+      catch { retain("Connection failed while applying settings. Restore the draft and review the current settings."); return; }
+      if (!liveConnection(entry)) { retain("Connection closed while applying settings. Restore the draft and review the current settings."); return; }
     }
-    dispatchInitialPrompt(entry, prompt.text, prompt.images ?? [], imageInput, imageFallback, prompt.orchestrate,
-      { model: prompt.model, mode: prompt.mode, effort: prompt.effort, reasoningEffort: prompt.reasoningEffort }, stagedModel);
+    dispatchInitialPrompt(entry, tabId, prompt.text, prompt.images ?? [], imageInput, imageFallback, prompt.orchestrate,
+      { model: prompt.model, mode: prompt.mode, effort: prompt.effort, reasoningEffort: prompt.reasoningEffort }, stagedModel, prompt.requestId);
+    clearPendingInitial(tabId);
   }
 
   /** (Re)connects `port` to an existing entry: tears down the old subscription, wires the new one, kicks off the handshake. */
@@ -604,6 +607,7 @@ export function createTabRegistry(
             if (state.turn.status !== "idle" || state.queueInFlight !== null) holdInitial(entry, pending.prompt, `Session became busy. Host reports model ${message.model}; effective reasoning effort ${message.reasoningEffort}. Restore the draft to review its settings.`);
             else startInitial(entry, tabId, pending.prompt, { model: message.model, mode: state.mode, effort: state.engine?.model?.effort, reasoningEffort: state.reasoningEffort }, message.imageInput, message.imageFallback, { model: message.model, reasoningEffort: message.reasoningEffort });
           }
+          if (!pendingInitialModels.has(tabId) && saveRecovery(tabId, entry.store.getState())) clearPendingInitial(tabId);
         }
       }
       // renderer-local provider-switch markers are restored at
@@ -617,14 +621,9 @@ export function createTabRegistry(
         if (sessionId !== null) entry.store.getState().insertConnectionChangedAt(loadConnectionSwitches(sessionId));
       }
       if (message.type === "child_report") {
-        // срез 2: acks UNCONDITIONALLY — whether store.ts's
-        // `child_report` case just enqueued a NEW item or recognized this as
-        // a re-delivered duplicate of one already queued/in-flight (dedup by
-        // `originId`), the renderer now durably has it either way, so the
-        // host's pending-report queue can stop resending this id (child-
-        // report-queue.ts's `ack`, its own doc explains why "enqueued" and
-        // not "turn sent" is the chosen removal point).
-        if (liveConnection(entry) === connection) connection.send({ type: "child_report_ack", id: message.id });
+        // Acknowledge enqueue only after the renderer recovery state is saved.
+        // This is not evidence that the model consumed the report.
+        if (liveConnection(entry) === connection && saveRecovery(tabId, entry.store.getState())) connection.send({ type: "child_report_ack", id: message.id });
       }
       if (message.type === "host_ready") {
         // Renderer-only quota diagnostics are restored after host_ready's
@@ -698,10 +697,21 @@ export function createTabRegistry(
           unsubscribeTerminalMessages: null,
           unsubscribeStatus: null,
           unsubscribeQueue: null,
+          unsubscribeRecovery: null,
           isChild: kind === "child",
           child: null,
         };
         entries.set(tabId, entry);
+        const recovered = loadRecovery(tabId);
+        if (recovered) entry.store.setState(recovered);
+        const initial = loadPendingInitial(tabId) as InitialPrompt | null;
+        if (!pendingInitialPrompts.has(tabId) && initial && typeof initial.text === "string") {
+          if (!initial.requestId || !recovered?.orchestrationDeliveries.some(delivery => delivery.requestId === initial.requestId)) holdInitial(entry, initial, "The initial draft was restored after reload. Review it before sending.");
+          if (saveRecovery(tabId, entry.store.getState())) clearPendingInitial(tabId);
+        }
+        entry.unsubscribeRecovery = entry.store.subscribe((state, previous) => {
+          if (state.promptQueue !== previous.promptQueue || state.queueInFlight !== previous.queueInFlight || state.orchestrationDeliveries !== previous.orchestrationDeliveries || state.restoredComposerDraft !== previous.restoredComposerDraft || state.composerRolePicker !== previous.composerRolePicker || state.queuePaused !== previous.queuePaused || state.queuePauseReason !== previous.queuePauseReason) saveRecovery(tabId, state);
+        });
         if (kind === "child") {
           // CUT-S2 §2.5/§5.3: a child session gets the SAME
           // store+connection+ui_ready mechanism (below/attach()) but never
@@ -773,12 +783,13 @@ export function createTabRegistry(
             if (
               state.connection === "ready" &&
               state.orchestration.posture !== "transitioning" && state.orchestration.posture !== "quarantined" &&
+              !state.orchestrationDeliveries.some(item => ((item.orchestrate === "enable" && (item.status === "pending" || item.status === "unknown") && !item.reviewed) || ((item.orchestrate === "enable" || item.origin === "system") && item.status === "started" && !item.terminalReason))) &&
               state.turn.status === "idle" &&
               hasDeliverableItem &&
               state.queueInFlight === null &&
               state.promptQueue.length > 0
             ) {
-              dispatchQueuedPrompt(capturedEntry);
+              dispatchQueuedPrompt(capturedEntry, tabId);
             }
           };
           entry.unsubscribeQueue = entry.store.subscribe(maybeDrain);
@@ -882,6 +893,9 @@ export function createTabRegistry(
       entry.unsubscribeTerminalMessages?.();
       entry.unsubscribeStatus?.();
       entry.unsubscribeQueue?.();
+      entry.unsubscribeRecovery?.();
+      clearRecovery(tabId);
+      clearPendingInitial(tabId);
       entries.delete(tabId);
       pendingInitialPrompts.delete(tabId);
       // CUT-S2 §2.5 (review wave R, F11 fix): a child's own tabId
@@ -985,7 +999,10 @@ export function createTabRegistry(
     reset(): void {
       for (const pending of pendingInitialModels.values()) clearTimeout(pending.timer);
       pendingInitialModels.clear();
-      for (const entry of entries.values()) entry.store.setState((state) => ({ pendingComposerImages: [], completedComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 }));
+      for (const entry of entries.values()) {
+        entry.store.setState((state) => ({ pendingComposerImages: [], completedComposerImages: [], composerImageGeneration: state.composerImageGeneration + 1 }));
+        entry.unsubscribeRecovery?.();
+      }
       entries.clear();
       closedTabIds.clear();
       agentTitles.clear();
@@ -998,17 +1015,21 @@ export function createTabRegistry(
         return;
       }
       const entry = entries.get(tabId);
+      const requestId = crypto.randomUUID();
       if (entry && (entry.store.getState().connection === "host_exited" || (entry.connection && unusableHostConnections.has(entry.connection)))) {
         holdInitial(entry, {text,model,mode,effort,images,reasoningEffort,orchestrate}, "Connection unavailable. Restore the draft before sending.");
         return;
       }
       if (entry?.store.getState().connection === "ready") {
         const state = entry.store.getState();
-        startInitial(entry, tabId, { text, model, mode, effort, images, reasoningEffort, orchestrate },
+        savePendingInitial(tabId, { requestId, text, model, mode, effort, images, reasoningEffort, orchestrate });
+        startInitial(entry, tabId, { requestId, text, model, mode, effort, images, reasoningEffort, orchestrate },
           { model: state.model, mode: state.mode, effort: state.engine?.model?.effort, reasoningEffort: state.reasoningEffort }, state.imageInput, state.imageFallback);
         return;
       }
-      pendingInitialPrompts.set(tabId, { text, model, mode, effort, images, reasoningEffort, orchestrate });
+      const pending = { requestId, text, model, mode, effort, images, reasoningEffort, orchestrate };
+      savePendingInitial(tabId, pending);
+      pendingInitialPrompts.set(tabId, pending);
     },
   };
 }

@@ -31,6 +31,8 @@ function coreReady(mode: "plan" | "build"): HostToUiMessage {
     mode,
     model: "glm-5.3",
     sessionId: "sess-1",
+    orchestration: { enabled: false, available: true, posture: "off" },
+    orchestrationProtocol: { version: 1, hostIncarnation: "host", connectionId: "conn", atomicSubmit: true, correlatedToggle: true },
     engine: {
       id: "core",
       capabilities: {
@@ -165,11 +167,15 @@ describe("Composer — mode menu's Orchestrate row", () => {
       expect(send).not.toHaveBeenCalledWith("tab-1", expect.objectContaining({ type: "set_orchestrate" }));
 
       await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="role-picker-skip"]')!.click());
-      expect(send).toHaveBeenCalledWith("tab-1", { type: "set_orchestrate", enabled: true });
+      expect(send).toHaveBeenCalledWith("tab-1", expect.objectContaining({ type: "set_orchestrate", enabled: true, connectionId: "conn", requestId: expect.any(String) }));
+      const requestId = (send.mock.calls.at(-1)![1] as {requestId: string}).requestId;
+      expect(store.getState().orchestrateActive).toBe(false);
 
       // The host's ack is what makes the tab visibly orchestrate.
       await act(async () => {
         store.getState().applyHostMessage({ type: "orchestrate_changed", enabled: true });
+        expect(store.getState().orchestrateActive).toBe(false);
+        store.getState().applyHostMessage({ type: "orchestrate_result", requestId, connectionId: "conn", outcome: "applied", enabled: true });
         store.getState().applyHostMessage({ type: "mode_changed", mode: "plan" });
       });
       expect(container.querySelector(".mode-chip")!.textContent).toContain("Orchestrate");
@@ -178,4 +184,45 @@ describe("Composer — mode menu's Orchestrate row", () => {
       await act(async () => root.unmount());
     }
   });
+  it("retains the task when the role picker is cancelled and sends one atomic message after skip", async () => {
+    useSettingsStore.setState({ snapshot: { settings: cloneDefaults(), secrets: [], providerReady: true, envOverrides: [], readOnly: false, catalog: [] } });
+    const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+    const store = createDesktopStore(); store.getState().applyHostMessage(coreReady("build"));
+    const container = document.createElement("div"); document.body.append(container);
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId:"tab-1",store}}, createElement(Composer))));
+      const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+      const type = async (value: string) => { await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(textarea,value); textarea.dispatchEvent(new Event("input",{bubbles:true})); }); };
+      await type("/orchestrate do work");
+      await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+      expect(container.querySelector('[data-testid="role-picker-cancel"]')).not.toBeNull();
+      await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="role-picker-cancel"]')!.click());
+      expect(textarea.value).toBe("/orchestrate do work");
+      expect(send).not.toHaveBeenCalled();
+      await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+      await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="role-picker-skip"]')!.click());
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send).toHaveBeenCalledWith("tab-1", expect.objectContaining({ type: "user_message", text: "do work", orchestrate: "enable", connectionId: "conn", requestId: expect.any(String) }));
+      expect(store.getState().orchestration.posture).toBe("transitioning");
+      expect(store.getState().orchestrationDeliveries[0]?.status).toBe("pending");
+    } finally { await act(async () => root.unmount()); }
+  });
+
+  it("resends a restored orchestration draft with its image atomically", async () => {
+    const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+    const store = createDesktopStore(); store.getState().applyHostMessage(coreReady("build"));
+    const image = {name:"a.png",sizeBytes:3,attachment:{mediaType:"image/png" as const,data:"YWJj"}};
+    store.getState().enqueuePrompt({ text:"review image", images:[image], orchestrate:"enable", requiresRestore:true });
+    const container = document.createElement("div"); document.body.append(container);
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId:"tab-1",store}}, createElement(Composer))));
+      await act(async () => container.querySelector<HTMLButtonElement>(".prompt-queue-restore")!.click());
+      await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+      expect(send).toHaveBeenCalledWith("tab-1", expect.objectContaining({ type:"user_message", text:"review image", images:[image.attachment], orchestrate:"enable", connectionId:"conn" }));
+      expect(store.getState().orchestrationDeliveries).toMatchObject([{ text:"review image", images:[image], status:"pending" }]);
+    } finally { await act(async () => root.unmount()); }
+  });
+
 });

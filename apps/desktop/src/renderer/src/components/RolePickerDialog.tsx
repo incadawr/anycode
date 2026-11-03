@@ -93,6 +93,7 @@ export interface RolePickerDialogProps {
   saving?: boolean;
   onSave(roles: Partial<Record<PresetRole, RoleConfig>>): void;
   onSkip?(): void;
+  onCancel?(): void;
 }
 
 export function RolePickerDialog({
@@ -110,6 +111,7 @@ export function RolePickerDialog({
   saving = false,
   onSave,
   onSkip,
+  onCancel,
 }: RolePickerDialogProps) {
   const snapshot = useSettingsStore((state) => state.snapshot);
   // Readiness defaults to the shell's live engine list. The prop exists for
@@ -339,6 +341,7 @@ export function RolePickerDialog({
         <div className="role-picker-actions">
           {saving && <span role="status">Saving roles; this request cannot be cancelled.</span>}
           {actionsNotice}
+          {onCancel && <button type="button" data-testid="role-picker-cancel" disabled={saving} onClick={onCancel}>Cancel</button>}
           {skippable && (
             <button type="button" className="role-picker-skip" data-testid="role-picker-skip" disabled={saving} onClick={() => { if (!saving) onSkip?.(); }}>
               Skip
@@ -363,7 +366,7 @@ export function RolePickerDialog({
     </section>
   ) : (
     <dialog ref={dialogRef} className="role-picker-dialog" aria-label="Choose orchestration roles"
-      onCancel={(event) => { event.preventDefault(); }}
+      onCancel={(event) => { event.preventDefault(); if (!saving) onCancel?.(); }}
       onClose={() => { const dialog = dialogRef.current; if (open && dialog?.isConnected && !dialog.open) dialog.showModal(); }}>
       {content}
     </dialog>
