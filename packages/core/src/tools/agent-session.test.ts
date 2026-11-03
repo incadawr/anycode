@@ -1642,6 +1642,14 @@ describe("agentTool handler — orchestrate default-detach (§2.3)", () => {
     };
   }
 
+  it("an omitted tier starts a joining session", async () => {
+    const { port, seen } = capturingPort();
+    const result = await full.handler({ description: "d", prompt: "p" }, makeCtx({ sessionSubagents: port }));
+    expect(result.ok).toBe(true);
+    expect(seen()).toMatchObject({ allowBackgroundHandoff: true });
+    expect(seen()?.detach).toBeUndefined();
+  });
+
   it("orchestrate + tier session + no detach => request carries detach:true", async () => {
     const { port, seen } = capturingPort();
     await full.handler(
