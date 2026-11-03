@@ -1089,11 +1089,50 @@ export function paneHasScope(pane: SettingsPaneId | undefined): boolean {
  * first-run empty state") — WelcomeScreen conditionally narrows the grid to a
  * single first-connection prompt, see its own file.
  */
+type SetupChoice = "update-existing" | "add-copy" | "skip";
+type SetupPreview = Awaited<ReturnType<typeof window.anycode.settings.setupPreview>>;
+function SetupFiles({ readOnly, onApplied }: { readOnly: boolean; onApplied: (ids: string[]) => void }) {
+  const [preview, setPreview] = useState<SetupPreview | null>(null);
+  const [choices, setChoices] = useState<{ connections: Record<string, SetupChoice>; roleProfiles: Record<string, SetupChoice> }>({ connections: {}, roleProfiles: {} });
+  const [message, setMessage] = useState("");
+  async function open() {
+    const result = await window.anycode.settings.setupPreview();
+    setMessage(result.error ?? "");
+    if (result.ok) { setPreview(result); setChoices({ connections: {}, roleProfiles: {} }); }
+  }
+  async function apply() {
+    const result = await window.anycode.settings.setupApply(choices);
+    setMessage(result.error ?? (result.ok ? "Setup imported. Enter credentials for imported connections below." : ""));
+    if (result.ok) { setPreview(null); onApplied(result.addedIds ?? []); }
+  }
+  return <section className="settings-section">
+    <div className="settings-section-title">Setup file</div>
+    <Button type="button" onClick={() => void window.anycode.settings.setupExport().then((r) => setMessage(r.error ?? (r.ok ? "Setup exported." : "")))}>Export setup</Button>{" "}
+    <Button type="button" disabled={readOnly} onClick={() => void open()}>Import setup</Button>
+    {message && <p role="status">{message}</p>}
+    {preview && <div role="dialog" aria-label="Import setup preview">
+      <h3>Import setup preview</h3>
+      <p>Review connection destinations before importing. A changed destination or provider must be added as a copy.</p>
+      {(["connections", "roleProfiles"] as const).map((group) => <div key={group}>
+        <h4>{group === "connections" ? "Connections" : "Role profiles"}</h4>
+        {(preview[group] ?? []).map((item) => { const connection = group === "connections" ? preview.connections?.find((c) => c.name === item.name) : undefined; return <div key={item.name}>
+          <strong>{item.name}</strong>{connection && <p>Connection destination: {connection.baseUrl}{connection.runtimeBaseUrl !== connection.baseUrl && <span>; provider destination: {connection.runtimeBaseUrl}</span>}{connection.existingBaseUrls.map((url, i) => <span key={i}>; existing: {url}</span>)}</p>}
+          {item.matches.length ? <Select label="Collision" value={choices[group][item.name] ?? ""} onChange={(event) => setChoices((prev) => ({ ...prev, [group]: { ...prev[group], [item.name]: event.target.value as SetupChoice } }))} options={[
+            { value: "", label: "Choose an action" }, { value: "update-existing", label: "Update existing", disabled: item.matches.length !== 1 || (connection !== undefined && !connection.canUpdate) }, { value: "add-copy", label: "Add copy" }, { value: "skip", label: "Skip" },
+          ]} /> : <span> — Add</span>}
+        </div>; })}
+      </div>)}
+      <Button type="button" onClick={() => void apply()}>Apply</Button>{" "}<Button type="button" onClick={() => setPreview(null)}>Cancel</Button>
+    </div>}
+  </section>;
+}
+
 export function ProviderSettings({ store = useSettingsStore, addConnectionRequest = 0, onAddConnectionConsumed }: ProviderSettingsProps) {
   const snapshot = useStore(store, (s) => s.snapshot);
   const pendingConsent = useStore(store, (s) => s.pendingConsent);
   const consentSaving = useStore(store, (s) => s.consentSaving);
 
+  const [setupKeyIds, setSetupKeyIds] = useState<string[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState<"add" | "edit">("add");
   const [drawerConnectionId, setDrawerConnectionId] = useState<string | null>(null);
@@ -1313,6 +1352,8 @@ export function ProviderSettings({ store = useSettingsStore, addConnectionReques
         )}
       </section>
 
+      <SetupFiles readOnly={readOnly} onApplied={(ids) => { setSetupKeyIds(ids); void store.getState().load().then(() => { if (ids[0]) { setDrawerMode("edit"); setDrawerConnectionId(ids[0]); setDrawerFocus("credential"); setDrawerOpen(true); } }); }} />
+      {setupKeyIds.length > 0 && <section className="settings-section"><div className="settings-section-title">Imported credentials</div><p>Enter keys or sign in for connections that require authentication.</p>{setupKeyIds.map((id) => { const connection = connections.find((c) => c.id === id); return connection ? <Button type="button" key={id} onClick={() => openEdit(id)}>{connection.label ?? connection.providerId}</Button> : null; })}</section>}
       <CustomProvidersSection
         providers={customRecords}
         readOnly={readOnly}

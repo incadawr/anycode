@@ -1003,6 +1003,9 @@ contextBridge.exposeInMainWorld("anycode", {
     },
   },
   settings: {
+    setupExport: () => ipcRenderer.invoke("anycode:setup-export"),
+    setupPreview: () => ipcRenderer.invoke("anycode:setup-preview"),
+    setupApply: (choices: unknown) => ipcRenderer.invoke("anycode:setup-apply", choices),
     refreshMiniMaxQuota: (connectionId?: string): Promise<void> =>
       ipcRenderer.invoke("anycode:minimax-quota-refresh", connectionId) as Promise<void>,
     get: (): Promise<SettingsSnapshot> =>

@@ -7,6 +7,12 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.71] — 2026-11-03
+
+### Added
+
+- Settings can export your provider connections and role profiles to a JSON file without any API keys, and import such a file on another machine or profile. The import shows a preview with the destination URL of every connection and lets you update, copy or skip each entry; a connection whose destination changed is imported as a copy, and you enter its key afterwards.
+
 ## [0.0.70] — 2026-11-03
 
 ### Added
