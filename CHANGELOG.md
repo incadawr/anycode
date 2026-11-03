@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Desktop subagent calls without a tier now run as child sessions while the parent waits for their result.
+
 ### Fixed
 
 - Local HTML previews can no longer load files outside their own folder (or workspace), including the app profile and shared temp folders. The restriction follows in-page navigation, and a document inside the app profile is never widened by a workspace.
