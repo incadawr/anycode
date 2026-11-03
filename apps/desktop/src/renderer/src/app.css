@@ -8716,3 +8716,16 @@ dialog.role-picker-dialog {
   background: var(--bg-card);
   margin-bottom: var(--sp-4);
 }
+
+.dock-tab-select { gap: 4px; }
+.dock-activity-running { display: inline-flex; align-items: center; gap: 3px; color: var(--accent); }
+.dock-activity-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+.dock-activity-running .dock-activity-dot { animation: dock-activity-pulse 1.5s ease-in-out infinite; }
+.dock-activity-waiting { color: var(--warning); }
+.dock-activity-error { color: var(--danger); }
+.dock-activity-done { color: var(--success); }
+@keyframes dock-activity-pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .dock-activity-running .dock-activity-dot { animation: none; } }
+.dock-tab-split { opacity: 0; }
+.dock-tab:hover .dock-tab-split, .dock-tab:focus-within .dock-tab-split, .dock-tab-split-active { opacity: 1; }
+.dock-tab:hover .dock-tab-split:disabled, .dock-tab:focus-within .dock-tab-split:disabled { opacity: 0.3; }

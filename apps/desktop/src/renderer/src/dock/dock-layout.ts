@@ -163,24 +163,26 @@ export function openTabInBackground(
   };
 }
 
-/**
- * Split eligibility per tab (cross-review D1). The pinned tab must be a
- * DIFFERENT tab from the primary (pinning the active tab would render one
- * preview twice, two bounds publishers for one preview). A web preview renders
- * in a main-side WebContentsView, and main positions ONE visible panel slot per
- * tab over the primary body — a web preview pinned to the secondary pane could
- * never be placed, so it is not splittable. Markdown previews (DOM), git and
- * subagents are.
- */
+/** Web previews can only render in the primary pane. */
 export function isSplittableTab(
   tab: DockTab,
-  activeTabId: string | null,
+  _activeTabId: string | null,
   previewViewKind: "web" | "dom-md" | undefined,
 ): boolean {
-  if (tab.id === activeTabId) {
-    return false;
-  }
   return !(tab.kind === "preview" && previewViewKind === "web");
+}
+
+export function splitTarget(tabs: readonly DockTab[], activeTabId: string | null, id: string): { activeTabId: string; splitTabId: string } | null {
+  const index = tabs.findIndex((tab) => tab.id === id);
+  if (index < 0 || tabs.length < 2) return null;
+  const primary = activeTabId === id ? (tabs[index + 1] ?? tabs[index - 1])?.id : activeTabId;
+  return primary ? { activeTabId: primary, splitTabId: id } : null;
+}
+
+export function splitReason(canSplitNow: boolean, tabCount: number): string | null {
+  if (!canSplitNow) return "Window too narrow to split";
+  if (tabCount < 2) return "Open another tab to split";
+  return null;
 }
 
 /**

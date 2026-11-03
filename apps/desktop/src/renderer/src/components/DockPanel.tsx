@@ -15,12 +15,13 @@
  *    the tab through App.tsx's tab-derivation effects;
  *  - ⌘W/Ctrl+W while the dock holds focus closes the ACTIVE tab.
  */
-import { useContext, type ReactNode } from "react";
+import { useContext, useEffect, useState, type ReactNode } from "react";
 import { TabContext } from "../tab-context.js";
 import type { DesktopStoreApi } from "../tab-registry.js";
 import { selectDockView, useDockStore } from "../dock/dock-store.js";
 import { childLayoutStore } from "../child-layout.js";
-import { isSplittableTab, type DockMode, type DockTab } from "../dock/dock-layout.js";
+import { isSplittableTab, splitReason, splitTarget, type DockMode, type DockTab } from "../dock/dock-layout.js";
+import { deriveSubagentActivity, type ActivityMemory } from "../dock/subagent-activity.js";
 import { usePreviewStore } from "../preview/preview-store.js";
 import type { ToastKind } from "../toasts.js";
 import { ChildSplitPane, type ChildSplitRow } from "./ChildSplitPane.js";
@@ -93,6 +94,12 @@ export function DockPanel({ mode, width, onToast, subagents, canSplitNow, splitT
   const mergeSplit = useDockStore((state) => state.mergeSplit);
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
 
+  const [activityMemory, setActivityMemory] = useState<ActivityMemory & { owner: string }>({ owner: tabId, previous: {}, unseen: {} });
+  const activity = deriveSubagentActivity(subagents.rows, activeTabId === "subagents", activityMemory.owner === tabId ? activityMemory : { previous: {}, unseen: {} });
+  useEffect(() => {
+    setActivityMemory((memory) => ({ owner: tabId, ...deriveSubagentActivity(subagents.rows, activeTabId === "subagents", memory.owner === tabId ? memory : { previous: {}, unseen: {} }).memory }));
+  }, [subagents.rows, activeTabId, tabId]);
+
   function handleKeyDown(event: React.KeyboardEvent<HTMLElement>): void {
     if ((event.metaKey || event.ctrlKey) && event.key === "w") {
       event.preventDefault();
@@ -102,12 +109,6 @@ export function DockPanel({ mode, width, onToast, subagents, canSplitNow, splitT
         if (activeTab.kind !== "preview") close(activeTab.id);
       }
     }
-  }
-
-  /** Per-tab split gate: the window must afford a split AND the tab must be splittable (not the primary, not a web preview — isSplittableTab). */
-  function splitAllowedFor(tab: DockTab): boolean {
-    const viewKind = tab.kind === "preview" ? previews.find((preview) => preview.previewId === tab.id.slice("preview:".length))?.viewKind : undefined;
-    return canSplitNow && isSplittableTab(tab, activeTabId, viewKind);
   }
 
   /**
@@ -163,7 +164,10 @@ export function DockPanel({ mode, width, onToast, subagents, canSplitNow, splitT
         {tabs.map((tab) => {
           const active = tab.id === activeTabId;
           const pinned = tab.id === splitTabId;
-          const splitAllowed = splitAllowedFor(tab);
+          const viewKind = tab.kind === "preview" ? previews.find((preview) => preview.previewId === tab.id.slice("preview:".length))?.viewKind : undefined;
+          const splittable = isSplittableTab(tab, activeTabId, viewKind);
+          const reason = splitReason(canSplitNow, tabs.length);
+          const splitAllowed = splittable && reason === null;
           // Cross-review D4: each affordance is its own real <button> (tab stop,
           // Enter/Space) — the old <span role=button tabIndex=-1> nested inside
           // a <button> was unreachable by keyboard.
@@ -174,27 +178,26 @@ export function DockPanel({ mode, width, onToast, subagents, canSplitNow, splitT
                 role="tab"
                 aria-selected={active}
                 className="dock-tab-select"
-                title={tab.title}
+                title={tab.id === "subagents" ? activity.label : tab.title}
+                aria-label={tab.id === "subagents" ? activity.label : tab.title}
                 onClick={() => {
                   focusDockTab(tab, tabId);
                   focus(tab.id);
                 }}
               >
                 <span className="dock-tab-title">{tab.title}</span>
+                {tab.id === "subagents" && <>
+                  {activity.running > 0 && <span className="dock-activity-running" aria-hidden="true"><span className="dock-activity-dot" /> {activity.running}</span>}
+                  {activity.waiting > 0 && <span className="dock-activity-dot dock-activity-waiting" aria-hidden="true" />}
+                  {activity.failed > 0 && <span className="dock-activity-dot dock-activity-error" aria-hidden="true" />}
+                  {activity.done > 0 && <span className="dock-activity-dot dock-activity-done" aria-hidden="true" />}
+                </>}
               </button>
-              <button
+              {splittable && <button
                 type="button"
                 className={"dock-tab-split" + (pinned ? " dock-tab-split-active" : "")}
                 aria-label={`Split ${tab.title} right`}
-                title={
-                  pinned
-                    ? "Pinned to split pane"
-                    : !splitAllowed
-                      ? canSplitNow
-                        ? "Web previews show in the main pane only"
-                        : "Window too narrow to split"
-                      : "Split right"
-                }
+                title={pinned ? "Pinned to split pane" : reason ?? "Split right"}
                 data-split-for={tab.id}
                 disabled={!pinned && !splitAllowed}
                 onClick={() => {
@@ -202,11 +205,14 @@ export function DockPanel({ mode, width, onToast, subagents, canSplitNow, splitT
                     mergeSplit();
                     return;
                   }
+                  const target = splitAllowed ? splitTarget(tabs, activeTabId, tab.id) : null;
+                  const primary = tabs.find((candidate) => candidate.id === target?.activeTabId);
+                  if (primary && primary.id !== activeTabId) focusDockTab(primary, tabId);
                   splitRight(tab.id, splitAllowed);
                 }}
               >
                 <Split />
-              </button>
+              </button>}
               <button
                 type="button"
                 className="dock-tab-close"

@@ -17,6 +17,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Show subagent activity in the dock and allow splitting the active panel alongside a preview.
+
 - Protect imported catalog connections from unsafe destination overrides.
 
 - Keep background agent tool counts current after a burst of tool calls.
