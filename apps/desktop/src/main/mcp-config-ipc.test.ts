@@ -554,6 +554,13 @@ describe("handleMcpConfigGet pluginServers (S1-C)", () => {
     return { deps };
   }
 
+  it("uses the isolated plugin home independently of the MCP config home", async () => {
+    const { deps } = pluginWorld(pluginManifestJson({ api: { command: "node", args: ["api.js"] } }));
+    deps.pluginHome = () => "/isolated";
+    const snapshot = await handleMcpConfigGet(deps, {});
+    expect(snapshot.pluginServers).toEqual([]);
+  });
+
   it("projects a plugin's stdio server as a read-only row with the plugin_<name>_<server> rename", async () => {
     const { deps } = pluginWorld(pluginManifestJson({ api: { command: "node", args: ["api.js"], cwd: "." } }));
     const snapshot = await handleMcpConfigGet(deps, {});

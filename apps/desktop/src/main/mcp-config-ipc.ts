@@ -128,6 +128,8 @@ export class NodeMcpConfigFs implements McpConfigFs {
 export interface McpConfigIpcDeps {
   /** `os.homedir()` in production; `ANYCODE_MCP_IMPORT_HOME`-overridable at the main/index.ts wiring site (dev/test only). */
   home(): string;
+  /** User home for plugin discovery, when different from the MCP config home. */
+  pluginHome?(): string;
   /** Scope reference resolver: a tab id (legacy) or a workspace id `ws_<16 hex>`, resolved main-side — never a renderer-supplied path. */
   workspaceForTab(tabId: string): string | undefined;
   fs: McpConfigFs;
@@ -385,7 +387,7 @@ async function buildSnapshot(deps: McpConfigIpcDeps, tabId: string | undefined):
     entries,
     problems,
     projectAvailable: workspace !== undefined,
-    pluginServers: await collectPluginServers(deps, workspace, home, discoveryClaimed, configClaimedNames, problems),
+    pluginServers: await collectPluginServers(deps, workspace, deps.pluginHome?.() ?? home, discoveryClaimed, configClaimedNames, problems),
   };
 }
 

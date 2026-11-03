@@ -101,6 +101,11 @@ vi.mock("electron-updater", () => ({
   },
 }));
 
+vi.mock("node:fs", async (importOriginal) => {
+  const real = await importOriginal<typeof import("node:fs")>();
+  return { ...real, watch: vi.fn(() => ({ on: vi.fn(), unref: vi.fn(), close: vi.fn() })) };
+});
+
 vi.mock("node:os", async (importOriginal) => {
   const real = await importOriginal<typeof import("node:os")>();
   return { ...real, homedir: () => fakeHomeRef.current };
@@ -146,6 +151,9 @@ beforeEach(async () => {
   process.env.ANYCODE_DB_PATH = ":memory:";
   process.env.ANYCODE_API_KEY = "sk-primary-env";
   delete process.env.ANYCODE_USER_DATA_DIR;
+  delete process.env.ANYCODE_SKILLS_IMPORT_HOME;
+  delete process.env.ANYCODE_SUBAGENTS_HOME;
+  delete process.env.ANYCODE_PROFILE_HOME;
   delete process.env.ANYCODE_WORKSPACE;
   delete process.env.ANYCODE_RESUME;
   delete process.env.ELECTRON_RENDERER_URL;
@@ -173,10 +181,34 @@ afterEach(async () => {
   delete process.env.ANYCODE_SECRETS_PATH;
   delete process.env.ANYCODE_DB_PATH;
   delete process.env.ANYCODE_API_KEY;
+  delete process.env.ANYCODE_USER_DATA_DIR;
+  delete process.env.ANYCODE_SKILLS_IMPORT_HOME;
   await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 describe("main/index.ts — S1-B plugins boot wiring", () => {
+  it.each(["ANYCODE_USER_DATA_DIR", "ANYCODE_SKILLS_IMPORT_HOME"])("keeps plugin discovery and maintenance in %s", async (variable) => {
+    const profile = join(dir, "isolated");
+    process.env[variable] = profile;
+    for (const [home, name] of [[fakeHomeRef.current, "owner-only"], [profile, "profile-only"]]) {
+      const plugins = join(home!, ".anycode", "plugins");
+      await mkdir(join(plugins, ".staging", "leftover"), { recursive: true });
+      await mkdir(join(plugins, ".store", "ghost", "1.0.0"), { recursive: true });
+      await mkdir(join(plugins, name!, ".anycode-plugin"), { recursive: true });
+      await writeFile(join(plugins, name!, ".anycode-plugin", "plugin.json"), JSON.stringify({ manifestVersion: 1, name, version: "1.0.0" }));
+    }
+    await import("./index.js");
+    const handler = await waitForHandler(PLUGINS_LIST_CHANNEL);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const snapshot = await handler({}) as { plugins: { name: string }[] };
+    expect(snapshot.plugins.map((p) => p.name)).toContain("profile-only");
+    expect(snapshot.plugins.map((p) => p.name)).not.toContain("owner-only");
+    await expect(readdir(join(fakeHomeRef.current, ".anycode/plugins/.staging/leftover"))).resolves.toEqual([]);
+    await expect(readdir(join(fakeHomeRef.current, ".anycode/plugins/.store/ghost/1.0.0"))).resolves.toEqual([]);
+    await expect(readdir(join(profile, ".anycode/plugins/.staging/leftover"))).rejects.toThrow();
+    await expect(readdir(join(profile, ".anycode/plugins/.store/ghost/1.0.0"))).rejects.toThrow();
+  });
+
   it("wipes staging residue and GCs orphaned store dirs at boot", async () => {
     const pluginsDir = join(fakeHomeRef.current, ".anycode", "plugins");
     // Crash residue in staging + an orphaned store dir (no state entry).

@@ -3594,6 +3594,7 @@ void app.whenReady().then(async () => {
 
   registerMcpConfigIpc({
     home: () => (selfCheckProfile ?? resolveMcpImportHome(process.env, app.isPackaged)) ?? homedir(),
+    pluginHome: () => (selfCheckProfile ?? resolveSkillsProfileHome(process.env, app.isPackaged) ?? resolveMcpImportHome(process.env, app.isPackaged)) ?? homedir(),
     workspaceForTab: (ref) => scopeRegistry.resolve(ref, (tabId) => manager?.getTab(tabId)?.workspace),
     fs: new NodeMcpConfigFs(),
     // xfix H1: the plugin-server rows consent state from the
@@ -3753,17 +3754,9 @@ void app.whenReady().then(async () => {
     reveal: (path) => shell.showItemInFolder(path),
   });
 
-  // Subagents editor control plane (design/slice-P7.21-cut.md §4 W2): mirrors
-  // the skills registration exactly. `home` resolves via
-  // `ANYCODE_SUBAGENTS_HOME` ONLY under the same dev/automation double gate as
-  // `ANYCODE_SKILLS_IMPORT_HOME` (`resolveSubagentsHome` above refuses it in a
-  // packaged production build), else the real homedir; `workspaceForTab` reads
-
-  // injects the one Electron primitive (`shell.showItemInFolder`) the handlers
-  // need, so `main/subagents-ipc.ts` itself stays Electron-free and unit-
-  // testable off a plain deps bag.
+  // The subagents pane uses the same profile as plugin and skill discovery.
   registerSubagentsIpc({
-    home: () => (selfCheckProfile ?? resolveSubagentsHome(process.env, app.isPackaged)) ?? homedir(),
+    home: () => (selfCheckProfile ?? resolveSkillsProfileHome(process.env, app.isPackaged)) ?? homedir(),
     workspaceForTab: (ref) => scopeRegistry.resolve(ref, (tabId) => manager?.getTab(tabId)?.workspace),
     fs: new NodeSubagentsFs(),
     pluginDiscoveryOptions: (home, workspace) => pluginPaneDiscoveryOptions(home, workspace),
@@ -3792,7 +3785,7 @@ void app.whenReady().then(async () => {
   // installs cannot race them because install IPC is registered but the
   // renderer only reaches it after load.
   if (selfCheckProfile === undefined) {
-    const pluginsHome = resolveSubagentsHome(process.env, app.isPackaged) ?? homedir();
+    const pluginsHome = resolveSkillsProfileHome(process.env, app.isPackaged) ?? homedir();
     const pluginsFs = new NodePluginsFs();
     let localPluginsIpc: PluginsIpc | undefined;
     pluginsIpc = registerPluginsIpc({
