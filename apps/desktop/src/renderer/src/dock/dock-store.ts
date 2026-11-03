@@ -11,6 +11,7 @@
  * storage so tests stay jsdom-free (App.test.ts header precedent).
  */
 import { create } from "zustand";
+import type { ActivityMemory } from "./subagent-activity.js";
 import {
   DOCK_WIDTH_STORAGE_KEY,
   closeTab as closeTabAlgebra,
@@ -53,6 +54,9 @@ export interface DockStoreState {
    * `width`/`hidden` stay global (one persisted width, one hide toggle).
    */
   ownerTabId: string | null;
+  activityByConversation: Record<string, ActivityMemory>;
+  setActivity(tabId: string, memory: ActivityMemory): void;
+  clearActivity(tabId: string): void;
   /**
    * become the owner (ActiveTabBody's layout effect, BEFORE
    * its derivation effects and before paint). Same id → no-op (the same
@@ -91,6 +95,18 @@ export function createDockStore(storage: DockStorage = typeof window === "undefi
     hidden: false,
     splitTabId: null,
     ownerTabId: null,
+    activityByConversation: {},
+    setActivity(tabId, memory): void {
+      set((state) => ({ activityByConversation: { ...state.activityByConversation, [tabId]: memory } }));
+    },
+    clearActivity(tabId): void {
+      set((state) => {
+        if (!(tabId in state.activityByConversation)) return state;
+        const activityByConversation = { ...state.activityByConversation };
+        delete activityByConversation[tabId];
+        return { activityByConversation };
+      });
+    },
 
     adopt(tabId): void {
       set((state) =>

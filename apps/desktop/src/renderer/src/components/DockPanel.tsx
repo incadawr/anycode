@@ -15,7 +15,7 @@
  *    the tab through App.tsx's tab-derivation effects;
  *  - ⌘W/Ctrl+W while the dock holds focus closes the ACTIVE tab.
  */
-import { useContext, useEffect, useState, type ReactNode } from "react";
+import { useContext, useEffect, type ReactNode } from "react";
 import { TabContext } from "../tab-context.js";
 import type { DesktopStoreApi } from "../tab-registry.js";
 import { selectDockView, useDockStore } from "../dock/dock-store.js";
@@ -73,6 +73,7 @@ function focusDockTab(tab: DockTab, tabId: string): void {
 }
 
 const EMPTY_PREVIEWS: never[] = [];
+const EMPTY_ACTIVITY: ActivityMemory = { previous: {}, unseen: {} };
 
 export function DockPanel({ mode, width, onToast, subagents, canSplitNow, splitTabId }: DockPanelProps) {
   const ctx = useContext(TabContext);
@@ -94,10 +95,12 @@ export function DockPanel({ mode, width, onToast, subagents, canSplitNow, splitT
   const mergeSplit = useDockStore((state) => state.mergeSplit);
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
 
-  const [activityMemory, setActivityMemory] = useState<ActivityMemory & { owner: string }>({ owner: tabId, previous: {}, unseen: {} });
-  const activity = deriveSubagentActivity(subagents.rows, activeTabId === "subagents", activityMemory.owner === tabId ? activityMemory : { previous: {}, unseen: {} });
+  const activityMemory = useDockStore((state) => state.activityByConversation[tabId] ?? EMPTY_ACTIVITY);
+  const activity = deriveSubagentActivity(subagents.rows, activeTabId === "subagents", activityMemory);
   useEffect(() => {
-    setActivityMemory((memory) => ({ owner: tabId, ...deriveSubagentActivity(subagents.rows, activeTabId === "subagents", memory.owner === tabId ? memory : { previous: {}, unseen: {} }).memory }));
+    const dock = useDockStore.getState();
+    const memory = dock.activityByConversation[tabId] ?? EMPTY_ACTIVITY;
+    dock.setActivity(tabId, deriveSubagentActivity(subagents.rows, activeTabId === "subagents", memory).memory);
   }, [subagents.rows, activeTabId, tabId]);
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLElement>): void {
@@ -187,7 +190,7 @@ export function DockPanel({ mode, width, onToast, subagents, canSplitNow, splitT
               >
                 <span className="dock-tab-title">{tab.title}</span>
                 {tab.id === "subagents" && <>
-                  {activity.running > 0 && <span className="dock-activity-running" aria-hidden="true"><span className="dock-activity-dot" /> {activity.running}</span>}
+                  {activity.running > 0 && activity.waiting === 0 && <span className="dock-activity-running" aria-hidden="true"><span className="dock-activity-dot" /> {activity.running}</span>}
                   {activity.waiting > 0 && <span className="dock-activity-dot dock-activity-waiting" aria-hidden="true" />}
                   {activity.failed > 0 && <span className="dock-activity-dot dock-activity-error" aria-hidden="true" />}
                   {activity.done > 0 && <span className="dock-activity-dot dock-activity-done" aria-hidden="true" />}

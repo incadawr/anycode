@@ -1,3 +1,4 @@
+import { useDockStore } from "./dock/dock-store.js";
 /**
  * Per-tab connection registry (design phase-2.md §2.4/§4.3): one DesktopStore
  * instance + one HostConnection per live tabId, held outside React so
@@ -769,6 +770,7 @@ export function createTabRegistry(
     },
 
     disposeTab(tabId): void {
+      useDockStore.getState().clearActivity(tabId);
       agentTitles.delete(tabId);
       closedTabIds.add(tabId);
       const entry = entries.get(tabId);
