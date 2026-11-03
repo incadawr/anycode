@@ -14,11 +14,12 @@
  */
 
 import { describe, expect, it } from "vitest";
-import type { AgentEvent, HistoryItem, PermissionMode } from "@anycode/core";
+import { AgentLoop, type AgentEvent, type HistoryItem, type PermissionMode } from "@anycode/core";
 import type { HostToUiMessage, UiToHostMessage } from "../shared/protocol.js";
 import type { EngineCapabilities, RunTurnOptions, SessionEngine } from "./engines/session-engine.js";
 import { ENGINE_SWITCH_TURN_ID } from "./engine-switch.js";
-import { createHarness } from "./test-harness.js";
+import { createHarness, finishStep, ScriptedModelPort } from "./test-harness.js";
+import { CoreEngine } from "./engines/core-engine.js";
 
 const NO_CORE_CAPS: EngineCapabilities = {
   supportsCorePermissions: false,
@@ -240,14 +241,10 @@ describe("Session — engine switch", () => {
     class Source extends NextFakeEngine {
       readonly orchestrationPolicy = { availability: () => ({ supported: true as const }), apply: async (enabled: boolean, baseAuthority: unknown) => ({ enabled, baseAuthority }) };
     }
-    class Target extends SwitchableFakeEngine {
-      override readonly capabilities = { ...NO_CORE_CAPS, supportsCorePermissions: true };
-      readonly orchestrationCompositionReady = true;
-      private current: PermissionMode = "build";
-      override mode(): PermissionMode { return this.current; }
-      setMode(mode: PermissionMode): void { this.current = mode; }
-    }
-    const source = new Source(); const target = new Target([]);
+    const targetHarness = createHarness({ steps: [finishStep()], planExit: true });
+    const config = targetHarness.config;
+    const target = Object.assign(new CoreEngine({ loop: new AgentLoop(config), config }), { orchestrationCompositionReady: true });
+    const source = new Source();
     const h = createHarness({ steps: [], engine: source, switchEngineFactory: async () => target });
     try {
       h.send({ type: "ui_ready" }); await h.waitFor(isHostReady);
@@ -255,11 +252,47 @@ describe("Session — engine switch", () => {
       await h.waitUntil(() => h.received.some(m => m.type === "orchestrate_changed" && m.enabled));
       h.send({ type: "engine_switch_request", requestId: "sw", engine: "core" });
       await h.waitFor(isEngineSwitched); expect(target.mode()).toBe("plan");
-      expect(target.inputs).toEqual([]); expect(source.disposeReasons).toEqual(["session-close"]);
+      expect(config.orchestrate).toBe(true); expect(source.disposeReasons).toEqual(["session-close"]);
+      h.send({ type: "user_message", requestId: "first", text: "go" });
+      await h.waitFor(agentEventOf("loop_end"));
+      const requests = (config.modelPort as ScriptedModelPort).requests;
+      expect(requests).toHaveLength(1);
+      expect(requests[0]!.tools.map(tool => tool.name)).not.toContain("ExitPlanMode");
       h.send({ type: "set_orchestrate", enabled: false });
       await h.waitUntil(() => h.received.some(m => m.type === "orchestrate_changed" && !m.enabled));
       expect(target.mode()).toBe("plan"); // Unknown native settings retain the fail-closed base.
-    } finally { h.close(); }
+      expect(config.orchestrate).toBe(false);
+    } finally { h.close(); targetHarness.close(); }
+  });
+  it("rejects an unconfirmed core flag and keeps the Codex parent active", async () => {
+    class Source extends NextFakeEngine {
+      readonly orchestrationPolicy = { availability: () => ({ supported: true as const }), apply: async (enabled: boolean, baseAuthority: unknown) => ({ enabled, baseAuthority }) };
+    }
+    const targetHarness = createHarness({ steps: [] });
+    const config = targetHarness.config;
+    class RefusingCore extends CoreEngine {
+      readonly orchestrationCompositionReady = true;
+      override setCoreOrchestrate(): boolean { return false; }
+    }
+    const target = new RefusingCore({ loop: new AgentLoop(config), config });
+    const source = new Source();
+    const h = createHarness({ steps: [], engine: source, switchEngineFactory: async () => target });
+    try {
+      h.send({ type: "ui_ready" }); await h.waitFor(isHostReady);
+      h.send({ type: "set_orchestrate", enabled: true });
+      await h.waitUntil(() => h.received.some(m => m.type === "orchestrate_changed" && m.enabled));
+      h.send({ type: "engine_switch_request", requestId: "sw", engine: "core" });
+      expect((await h.waitFor(isEngineSwitchFailed)).reason).toContain("unconfirmed");
+      expect(source.disposeReasons).toEqual([]);
+      expect((h.session as unknown as { engine: SessionEngine }).engine).toBe(source);
+      h.send({ type: "user_message", requestId: "still-on", text: "go" });
+      await h.waitFor(agentEventOf("loop_end"));
+      expect(source.inputs).toHaveLength(1);
+      const before = h.received.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.slice(before).some(isHostReady));
+      expect(h.received.slice(before).find(isHostReady)?.orchestration?.enabled).toBe(true);
+    } finally { h.close(); targetHarness.close(); }
   });
   it("success: swaps the engine, disposes the old one after, announces once, keeps the transcript continuous", async () => {
     const oldEngine = new SwitchableFakeEngine(seededHistory());

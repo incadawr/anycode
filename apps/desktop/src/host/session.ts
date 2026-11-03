@@ -4246,9 +4246,9 @@ export class Session {
           if (next.id === "claude" || !next.orchestrationCompositionReady) throw new Error("target orchestration composition unavailable");
           const base = this.preOrchestrateMode ?? "build";
           if (next.id === "core") {
-            if (!next.capabilities.supportsCorePermissions || !next.setMode) throw new Error("target orchestration policy unavailable");
+            if (!next.capabilities.supportsCorePermissions || !next.setMode || !next.setCoreOrchestrate) throw new Error("target orchestration policy unavailable");
             next.setMode("plan");
-            if (next.mode() !== "plan") throw new Error("target orchestration policy unconfirmed");
+            if (next.mode() !== "plan" || !next.setCoreOrchestrate(true)) throw new Error("target orchestration policy unconfirmed");
           } else {
             const policy = next.orchestrationPolicy;
             if (!policy?.availability().supported) throw new Error("target orchestration policy unavailable");
@@ -6286,6 +6286,9 @@ export class Session {
       this.outbound.emit({ type: "orchestrate_changed", enabled: this.orchestrate });
       return;
     }
+    if (this.engine.id === "core" && this.engine.setCoreOrchestrate && !this.engine.setCoreOrchestrate(enabled)) {
+      throw new Error("Core orchestration transition failed");
+    }
     if (enabled) {
       this.preOrchestrateMode = this.engine.mode();
       this.orchestrate = true;
@@ -6341,6 +6344,7 @@ export class Session {
    */
   private clearOrchestrateForLeavingPlan(): void {
     if (!this.orchestrate) return;
+    this.engine.setCoreOrchestrate?.(false);
     this.orchestrate = false;
     this.legacyOrchestration = false;
     this.orchestrationController?.coreModeExited();
