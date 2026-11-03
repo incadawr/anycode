@@ -417,6 +417,31 @@ describe("Composer slash-submit wiring (GitHub #14)", () => {
     }
   });
 
+  it("inserts a dropped file at the selection and sends the resulting text", () => {
+    seed("look here", 5);
+    harness.tabsState.tabs = [{ tabId: "tab-1", projectRoot: "/work" }];
+    const tree = mountComposer();
+    const input = findTextarea(tree)!;
+    (input.props.ref as { current: unknown }).current = {
+      selectionStart: 5, selectionEnd: 5, focus() {}, setSelectionRange() {},
+    };
+    const getPathForFile = vi.fn(() => "/work/read me.md");
+    Object.assign(window.anycode, { getPathForFile });
+    let target: AnyElement | undefined;
+    walk(tree, element => { if (typeof element.props.onDrop === "function") target = element; });
+    const preventDefault = vi.fn();
+    const file = { name: "read me.md", type: "text/markdown" };
+    (target!.props.onDrop as (event: unknown) => void)({
+      preventDefault, dataTransfer: { items: [{ kind: "file" }], files: [file] },
+    });
+    expect(preventDefault).toHaveBeenCalled();
+    expect(getPathForFile).toHaveBeenCalledWith(file);
+    const updated = mountComposer();
+    expect(findTextarea(updated)!.props.value).toBe('look "read me.md" here');
+    (findByAria(updated, "Send")!.props.onClick as () => void)();
+    expect(harness.apiMethods.recordSentMessage?.mock.calls[0]?.[0]).toBe('look "read me.md" here');
+  });
+
   it.each(["Enter", "Send", "menu"])("submits supported Codex compact once through Enter Send and the menu: %s", action => {
     const engine = { ...CODEX_ENGINE, capabilities: { ...CODEX_ENGINE.capabilities, supportsManualCompact: true } };
     seed("/compact", 8, makeStoreState({ engine })); const tree = mountComposer();

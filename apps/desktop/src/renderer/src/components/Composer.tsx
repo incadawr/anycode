@@ -1,3 +1,4 @@
+import { planComposerDrop } from "../composer-drop.js";
 import { modelSettingsTarget } from "../model-settings-target.js";
 import { describeCodexAccountLine } from "../codex-account-line.js";
 import type { CodexTabAccountResult } from "../../../shared/codex-account.js";
@@ -2201,23 +2202,37 @@ export function Composer() {
     fileInputRef.current?.click();
   }
 
-  function hasImageFiles(event: DragEvent<HTMLElement>): boolean {
-    return Array.from(event.dataTransfer.items).some((item) => item.kind === "file" && item.type.startsWith("image/"));
+  function hasFiles(event: DragEvent<HTMLElement>): boolean {
+    return Array.from(event.dataTransfer.items).some((item) => item.kind === "file");
   }
 
   function handleDragOver(event: DragEvent<HTMLDivElement>): void {
-    if (ready && supportsImages && hasImageFiles(event)) {
+    if (ready && hasFiles(event)) {
       event.preventDefault();
       event.dataTransfer.dropEffect = "copy";
     }
   }
 
   function handleDrop(event: DragEvent<HTMLDivElement>): void {
-    if (!ready || !supportsImages || !hasImageFiles(event)) {
-      return;
-    }
+    if (!ready || !hasFiles(event)) return;
     event.preventDefault();
-    void addImageFiles(Array.from(event.dataTransfer.files));
+    const { attachImages, insertPaths } = planComposerDrop(
+      Array.from(event.dataTransfer.files), supportsImages && !modelBlocksAttach,
+      projectRoot, window.anycode.getPathForFile,
+    );
+    if (insertPaths.length) {
+      const input = textareaRef.current;
+      const start = input?.selectionStart ?? text.length;
+      const end = input?.selectionEnd ?? start;
+      const before = text.slice(0, start);
+      const after = text.slice(end);
+      const insertion = (before && !/\s$/.test(before) ? " " : "") + insertPaths.join(" ") + (after && !/^\s/.test(after) ? " " : "");
+      setText(before + insertion + after);
+      pendingCaretRef.current = start + insertion.length;
+      setCaret(start + insertion.length);
+      input?.focus();
+    }
+    void addImageFiles(attachImages);
   }
 
   const ctxPercent = contextMeterPercent(contextUsage);

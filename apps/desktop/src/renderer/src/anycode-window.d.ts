@@ -416,6 +416,7 @@ export type ChildHistoryResult =
 declare global {
   interface Window {
     anycode: {
+      getPathForFile: (file: File) => string;
       homeDirectory(): Promise<string>;
       tabBootstrap(): Promise<import("../../shared/tabs.js").TabBootstrap>;
       selectTab(tabId: string): void;

@@ -13,6 +13,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Insert dropped file and folder paths into the composer, while keeping image attachments for supported models.
+
 - Refuse session delegation when it would discard an inline profile's restrictions.
 
 - Give actionable alternatives when a connection-bound agent cannot be spawned.
