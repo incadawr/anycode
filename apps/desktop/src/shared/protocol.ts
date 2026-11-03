@@ -426,6 +426,8 @@ export type RewindScopeWire = "both" | "files" | "conversation";
  */
 export interface WireBackgroundChild {
   childSessionId: string;
+  spawnToolCallId?: string;
+  failureReason?: string;
   agentType: string;
   description: string;
   startedAt: number; // epoch ms
@@ -1106,6 +1108,7 @@ export type HostToUiMessage =
       childTerminal?: {
         status: "completed" | "max_turns" | "cancelled" | "error";
         durationMs: number;
+        failureReason?: string;
         finalTurnFinishReason?: "length";
         /** cross-review F2: the child's ceiling summary (additive; absent when the ceiling never tripped). */
         ceiling?: ChildCeilingSummary;

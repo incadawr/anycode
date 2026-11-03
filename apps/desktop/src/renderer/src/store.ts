@@ -256,6 +256,7 @@ export interface SubagentSubStatus {
   final: {
     status: "completed" | "max_turns" | "cancelled" | "error";
     durationMs: number;
+    failureReason?: string;
     /**
      * Provider-reported model id read off the child's port after its final
      * model call (raw wire claim). Absent for engine children,
@@ -1252,6 +1253,8 @@ export interface DesktopState {
    * Their parent turn has already ended, so this is the only live sign of them.
    */
   backgroundChildren: WireBackgroundChild[];
+  recentBackgroundChildren: WireBackgroundChild[];
+  failedBackgroundChildren: WireBackgroundChild[];
   /** Model turns this tab finished (`turn_end` count) — a live child's "turn N" while its loop still runs. */
   modelTurns: number;
   /**
@@ -1621,6 +1624,8 @@ interface SessionSlice {
   backgroundTasks: BackgroundTaskSnapshot[];
   backgroundTaskOutput: Record<string, string>;
   backgroundChildren: WireBackgroundChild[];
+  recentBackgroundChildren: WireBackgroundChild[];
+  failedBackgroundChildren: WireBackgroundChild[];
   modelTurns: number;
   git: GitSlice;
   envStatus: WireEnvStatus | null;
@@ -1698,6 +1703,8 @@ function initialSessionSlice(): SessionSlice {
     backgroundTasks: [],
     backgroundTaskOutput: {},
     backgroundChildren: [],
+    recentBackgroundChildren: [],
+    failedBackgroundChildren: [],
     modelTurns: 0,
     git: initialGitSlice(),
     envStatus: null,
@@ -5804,6 +5811,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // cross-review F2: the ceiling summary is patched by
             // the same branch (it is the detached child's only terminal channel).
             const childTerminal = message.childTerminal;
+            if (childTerminal?.status === "error" && childTerminal.failureReason) {
+              set((state) => {
+                const child = [...state.backgroundChildren, ...state.recentBackgroundChildren].find((item) => item.spawnToolCallId === message.id);
+                if (!child) return {};
+                return { failedBackgroundChildren: [...state.failedBackgroundChildren.filter((item) => item.childSessionId !== child.childSessionId), { ...child, failureReason: childTerminal.failureReason }].slice(-20) };
+              });
+            }
             // a cancelled terminal patches too — the card must read
             // Cancelled, not the admit turn's "Done".
             if (
@@ -5813,11 +5827,13 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               const term: {
                 status: "completed" | "max_turns" | "cancelled" | "error";
                 durationMs: number;
+                failureReason?: string;
                 finalTurnFinishReason?: "length";
                 ceiling?: { rounds: number; grantedTurns: number; lastRefusal?: string };
               } = {
                 status: childTerminal.status,
                 durationMs: childTerminal.durationMs,
+                ...(childTerminal.failureReason ? { failureReason: childTerminal.failureReason } : {}),
                 ...(childTerminal.finalTurnFinishReason === "length" ? { finalTurnFinishReason: "length" as const } : {}),
                 ...(childTerminal.ceiling !== undefined ? { ceiling: childTerminal.ceiling } : {}),
               };
@@ -5842,6 +5858,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                         final: {
                           status: term.status,
                           durationMs: term.durationMs,
+                          ...(term.failureReason ? { failureReason: term.failureReason } : {}),
                           ...(term.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: term.finalTurnFinishReason } : {}),
                           ...(term.ceiling !== undefined ? { ceiling: term.ceiling } : {}),
                         },
@@ -5868,6 +5885,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                     final: {
                       status: term.status,
                       durationMs: term.durationMs,
+                      ...(term.failureReason ? { failureReason: term.failureReason } : {}),
                       ...(term.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: term.finalTurnFinishReason } : {}),
                       ...(term.ceiling !== undefined ? { ceiling: term.ceiling } : {}),
                     },
@@ -5882,7 +5900,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           case "background_children":
             // Full snapshot replacement, pushed on ui_ready and on every
             // admit/terminal of a detached child (host/session.ts).
-            set({ backgroundChildren: message.children });
+            set((state) => ({
+              backgroundChildren: message.children,
+              failedBackgroundChildren: state.failedBackgroundChildren.filter((child) => !message.children.some((item) => item.childSessionId === child.childSessionId)),
+              recentBackgroundChildren: [...state.recentBackgroundChildren, ...state.backgroundChildren.filter((child) => !message.children.some((item) => item.childSessionId === child.childSessionId))].slice(-20),
+            }));
             return;
           case "usage_audit":
             // the durable audit list, served ONLY in

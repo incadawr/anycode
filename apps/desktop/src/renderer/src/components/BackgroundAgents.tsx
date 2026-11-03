@@ -46,7 +46,9 @@ export function backgroundWaitingText(
 }
 
 export function BackgroundAgents() {
-  const children = useTabStore((state) => state.backgroundChildren);
+  const running = useTabStore((state) => state.backgroundChildren);
+  const failed = useTabStore((state) => state.failedBackgroundChildren);
+  const children = [...running, ...failed.filter((child) => !running.some((item) => item.childSessionId === child.childSessionId))];
   const tabId = useTabContextTabId();
   const send = useTabSend();
   const parentSessionId = useTabsStore((state) => state.tabs.find((tab) => tab.tabId === tabId)?.sessionId ?? null);
@@ -70,7 +72,7 @@ export function BackgroundAgents() {
 
   return (
     <div className="background-agents" role="status" aria-live="polite">
-      <div className="background-agents-heading">{backgroundHeading(children.length)}</div>
+      <div className="background-agents-heading">{running.length > 0 ? backgroundHeading(running.length) : "Background agents"}</div>
       <ul className="background-agents-list">
         {children.map((child) => {
           const spawnToolCallId =
@@ -82,7 +84,8 @@ export function BackgroundAgents() {
               <span className="background-agents-type">{child.agentType}</span>
               <span className="background-agents-description">{child.description}</span>
               <span className="background-agents-elapsed">{backgroundElapsed(child.startedAt, now)}</span>
-              {progress !== "" && (
+              {child.failureReason && <span className="background-agents-waiting" title={child.failureReason}>Error: {child.failureReason}</span>}
+              {!child.failureReason && progress !== "" && (
                 <span className="background-agents-progress" title={progress}>{progress}</span>
               )}
               {waiting !== null && (
@@ -107,14 +110,14 @@ export function BackgroundAgents() {
                   Open
                 </button>
               )}
-              <button
+              {!child.failureReason && <button
                 type="button"
                 className="background-agents-action"
                 aria-label={`Stop background agent ${child.description}`}
                 onClick={() => stop(child)}
               >
                 Stop
-              </button>
+              </button>}
             </li>
           );
         })}

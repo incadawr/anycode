@@ -9,3 +9,19 @@ it("reports a startup error with the original engine message", () => {
     finalText: `${reason}\nThis is a startup failure; retry the task unchanged.`,
   });
 });
+
+it.each(["Codex", "Claude"])("redacts credentials in %s startup errors", (engine) => {
+  const secret = "sk-abcdefghijklmnopqrstuvwx";
+  const result = childBootFailure(`host failed to initialize: ${engine} version preflight exited 1: ${secret}`);
+  expect(result.finalText).not.toContain(secret);
+  expect(result.finalText).toContain(`${engine} version preflight exited 1`);
+  expect(result.finalText).toContain("[redacted]");
+});
+
+it("bounds a long failure while preserving the startup hint and terminal validity", () => {
+  const result = childBootFailure("host failed to initialize: " + "bad ".repeat(30_000));
+  expect(result.truncated).toBe(true);
+  expect(result.finalText.length).toBeLessThanOrEqual(100_000);
+  expect(result.finalText).toContain("retry the task unchanged");
+  expect(parseChildTerminal(result)).toEqual(result);
+});

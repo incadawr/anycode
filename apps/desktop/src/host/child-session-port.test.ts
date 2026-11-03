@@ -3208,6 +3208,7 @@ describe("child-session-port — background progress snapshots (GitHub #17 slice
     const initial = h.port.listBackgroundChildren()[0]!;
     expect(initial).toEqual({
       childSessionId: "child-prog",
+      spawnToolCallId: "spawn-prog",
       agentType: "executor",
       description: "review",
       startedAt: initial.startedAt,
