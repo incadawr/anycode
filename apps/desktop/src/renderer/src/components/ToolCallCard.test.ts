@@ -3039,7 +3039,7 @@ it("does not show a diff placeholder for denied file operations", () => {
 
 describe("background controls subscription", () => {
   it("reads the transcript only for running Agent cards", () => {
-    for (const [toolName, status, expected] of [["Agent", "running", true], ["Agent", "completed", false], ["Read", "running", false]] as const) {
+    for (const [toolName, status, expected] of [["Agent", "running", true], ["Agent", "success", false], ["Read", "running", false]] as const) {
       const store = createDesktopStore();
       const initial = store.getInitialState();
       let reads = 0;
