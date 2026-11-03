@@ -5805,7 +5805,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // Cancelled, not the admit turn's "Done".
             if (
               childTerminal !== undefined &&
-              (childTerminal.finalTurnFinishReason === "length" || childTerminal.ceiling !== undefined || childTerminal.status === "cancelled")
+              (childTerminal.finalTurnFinishReason === "length" || childTerminal.ceiling !== undefined || childTerminal.status === "cancelled" || childTerminal.status === "error")
             ) {
               const term: {
                 status: "completed" | "max_turns" | "cancelled" | "error";
