@@ -99,6 +99,8 @@ export interface SessionSubagentRequest {
    * byte-identical to pre-145.
    */
   detach?: boolean;
+  /** Refuse at capacity so the caller can use an inline child. */
+  fallbackAtCapacity?: true;
   /**
    * GitHub #17 slice D: internal eligibility flag for the
    * host's synchronous JOIN budget. Set by the native Agent tool on session
@@ -154,6 +156,7 @@ export interface SessionSubagentOutcome extends SubagentOutcome {
    * reading the stop as a failure to retry. Absent for every other cause.
    */
   cancelledBy?: "user";
+  capacityRefused?: true;
   /**
    * GitHub #17 slice D: this outcome is an ADMISSION/HANDOFF,
    * not a child terminal — the child (if any) is still running and its report

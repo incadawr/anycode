@@ -370,6 +370,8 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
           routing ?? undefined,
           roleRoute ?? undefined,
           defaultDetach,
+          undefined,
+          input.tier === undefined && input.provider === undefined && input.detach !== true && input.continue_session === undefined && input.send_to === undefined && routing === null && !(roleRoute?.entries[0]?.connection || roleRoute?.entries[0]?.engine),
         );
       }
       return runInlineTier(input, ctx, agentType);
@@ -482,6 +484,7 @@ async function runSessionTier(
   roleRoute?: RoleRouteResolution,
   defaultDetach?: boolean,
   degrade?: { systemPrompt: string; notice: string },
+  fallbackAtCapacity = false,
 ): Promise<ToolResult<AgentOutput>> {
   if (!ctx.sessionSubagents) {
     return {
@@ -632,6 +635,7 @@ async function runSessionTier(
     // mode instead of holding this turn open. Never model input, never a wire
     // field; Workflow engine steps never carry it.
     ...(input.detach === true || defaultDetach === true ? { detach: true } : { allowBackgroundHandoff: true }),
+    ...(fallbackAtCapacity ? { fallbackAtCapacity: true as const } : {}),
   };
 
   // Same accumulation/bridge discipline as the inline tier above — the
@@ -646,6 +650,10 @@ async function runSessionTier(
       ctx.emit?.(event);
     },
   });
+
+  if (fallbackAtCapacity && outcome.capacityRefused === true && outcome.spawnToolCallId === request.spawnToolCallId) {
+    return runInlineTier(input, ctx, agentType);
+  }
 
   // Round-trip check (F14, ports/session-subagent.ts docstring): core OWNS
   // spawnToolCallId — it minted it as ctx.toolCallId and stamped it onto the

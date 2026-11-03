@@ -1635,6 +1635,24 @@ describe("agentTool handler — orchestrate default-detach (§2.3)", () => {
     };
   }
 
+  it("falls back to inline when a default session is refused at capacity", async () => {
+    let inlineRuns = 0;
+    const inline: SubagentPort = { run: async () => {
+      inlineRuns++;
+      return { status: "completed", finalText: "inline", truncated: false, turns: 1, toolCalls: 0, durationMs: 1 };
+    } };
+    const port: SessionSubagentPort = {
+      send: async () => ({ ok: true }),
+      run: async (req) => {
+        expect(req.fallbackAtCapacity).toBe(true);
+        return { ...BASE_SESSION_OUTCOME, status: "error", capacityRefused: true, spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    const result = await full.handler({ description: "d", prompt: "p" }, makeCtx({ sessionSubagents: port, subagents: inline }));
+    expect(result.ok).toBe(true);
+    expect(inlineRuns).toBe(1);
+  });
+
   it("an omitted tier starts a joining session", async () => {
     const { port, seen } = capturingPort();
     const result = await full.handler({ description: "d", prompt: "p" }, makeCtx({ sessionSubagents: port }));

@@ -2167,7 +2167,7 @@ export class TabHostManager {
       // await a tool call that main has not answered (the sync-join the
       // detach flag exists to avoid). The existing FIFO queue stays for
       // explicitly synchronous callers only.
-      if (req.detach === true) {
+      if (req.detach === true || req.fallbackAtCapacity === true) {
         reject(capBlock.reason, capBlock.message);
         return;
       }
