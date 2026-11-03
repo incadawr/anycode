@@ -1335,6 +1335,7 @@ export function Composer() {
     const tab = state.tabs.find((item) => item.tabId === slashTabId);
     return tab?.projectRoot ?? tab?.workspace;
   });
+  const workspace = useTabsStore((state) => state.tabs.find((item) => item.tabId === slashTabId)?.workspace);
   // §3.8 (part B): first-run /orchestrate state — the task text
   // parked while the RolePickerDialog is up, and the dialog's visibility.
   // Local to Composer: the pending text belongs to THIS tab's composer draft
@@ -2216,9 +2217,13 @@ export function Composer() {
   function handleDrop(event: DragEvent<HTMLDivElement>): void {
     if (!ready || !hasFiles(event)) return;
     event.preventDefault();
+    const items = Array.from(event.dataTransfer.items).flatMap((item) => {
+      if (item.kind !== "file") return [];
+      const file = item.getAsFile();
+      return file ? [{ file, isDirectory: item.webkitGetAsEntry()?.isDirectory ?? false }] : [];
+    });
     const { attachImages, insertPaths } = planComposerDrop(
-      Array.from(event.dataTransfer.files), supportsImages && !modelBlocksAttach,
-      projectRoot, window.anycode.getPathForFile,
+      items, supportsImages && !modelBlocksAttach, workspace, window.anycode.getPathForFile,
     );
     if (insertPaths.length) {
       const input = textareaRef.current;

@@ -419,27 +419,31 @@ describe("Composer slash-submit wiring (GitHub #14)", () => {
 
   it("inserts a dropped file at the selection and sends the resulting text", () => {
     seed("look here", 5);
-    harness.tabsState.tabs = [{ tabId: "tab-1", projectRoot: "/work" }];
+    harness.tabsState.tabs = [{ tabId: "tab-1", projectRoot: "/work", workspace: "/work/.anycode/worktrees/feature" }];
     const tree = mountComposer();
     const input = findTextarea(tree)!;
     (input.props.ref as { current: unknown }).current = {
       selectionStart: 5, selectionEnd: 5, focus() {}, setSelectionRange() {},
     };
-    const getPathForFile = vi.fn(() => "/work/read me.md");
+    const getPathForFile = vi.fn((file: { name: string }) => `/work/.anycode/worktrees/feature/${file.name}`);
     Object.assign(window.anycode, { getPathForFile });
     let target: AnyElement | undefined;
     walk(tree, element => { if (typeof element.props.onDrop === "function") target = element; });
     const preventDefault = vi.fn();
     const file = { name: "read me.md", type: "text/markdown" };
+    const folder = { name: "photos.png", type: "" };
     (target!.props.onDrop as (event: unknown) => void)({
-      preventDefault, dataTransfer: { items: [{ kind: "file" }], files: [file] },
+      preventDefault, dataTransfer: { items: [
+        { kind: "file", getAsFile: () => file, webkitGetAsEntry: () => ({ isDirectory: false }) },
+        { kind: "file", getAsFile: () => folder, webkitGetAsEntry: () => ({ isDirectory: true }) },
+      ], files: [file, folder] },
     });
     expect(preventDefault).toHaveBeenCalled();
     expect(getPathForFile).toHaveBeenCalledWith(file);
     const updated = mountComposer();
-    expect(findTextarea(updated)!.props.value).toBe('look "read me.md" here');
+    expect(findTextarea(updated)!.props.value).toBe('look "read me.md" photos.png here');
     (findByAria(updated, "Send")!.props.onClick as () => void)();
-    expect(harness.apiMethods.recordSentMessage?.mock.calls[0]?.[0]).toBe('look "read me.md" here');
+    expect(harness.apiMethods.recordSentMessage?.mock.calls[0]?.[0]).toBe('look "read me.md" photos.png here');
   });
 
   it.each(["Enter", "Send", "menu"])("submits supported Codex compact once through Enter Send and the menu: %s", action => {
