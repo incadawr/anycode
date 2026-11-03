@@ -118,7 +118,7 @@ export interface PersonaDefinition {
 }
 
 export function sessionRestrictionsForPersona(persona: PersonaDefinition, includeConnections = false): import("../ports/session-subagent.js").SessionProfileRestrictions | null {
-  const readOnly = ["explore", "planner", "reviewer"].includes(persona.name);
+  const readOnly = ["explore", "planner"].includes(persona.name);
   const baseline = PERSONAS["general-purpose"].tools;
   const restricted = readOnly || persona.toolsExplicit === true || persona.permissions !== undefined ||
     persona.tools.length !== baseline.length || persona.tools.some((tool) => !baseline.includes(tool));
