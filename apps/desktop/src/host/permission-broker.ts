@@ -464,6 +464,7 @@ export class IpcPermissionBroker implements PermissionBroker {
           toolName: shown.request.toolName,
           input: shown.request.input,
           mode: shown.request.mode,
+          orchestrate: shown.request.orchestrate,
           metadata: toWireToolMeta(shown.request.metadata),
           workspaceWriteInside: workspaceWriteInside(shown.request),
           ...(entry.presentedAt !== null && entry.presentedTimeoutMs !== null
@@ -545,6 +546,7 @@ export class IpcPermissionBroker implements PermissionBroker {
       toolName: entry.request.toolName,
       input: entry.request.input,
       mode: entry.request.mode,
+      orchestrate: entry.request.orchestrate,
       metadata: toWireToolMeta(entry.request.metadata),
       workspaceWriteInside: workspaceWriteInside(entry.request),
     });

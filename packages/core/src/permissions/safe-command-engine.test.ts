@@ -45,6 +45,13 @@ let originalPath: string | undefined;
 beforeEach(() => { originalPath = process.env.PATH; process.env.PATH = "/usr/bin:/bin"; });
 afterEach(() => { if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath; });
 
+describe("orchestrate command approval", () => {
+  it("asks even for a command classified read-only", () => {
+    const engine = new SafeCommandPermissionEngine(new ModePermissionEngine(), () => "read-only");
+    expect(engine.check({ ...bashRequest("git status", "plan"), orchestrate: true }).decision).toBe("ask");
+  });
+});
+
 describe("SafeCommandPermissionEngine", () => {
   it("downgrades an ask -> allow for a provably read-only Bash command", () => {
     const engine = new SafeCommandPermissionEngine(askAlways);

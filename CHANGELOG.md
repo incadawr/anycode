@@ -19,6 +19,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Show subagent activity in the dock and allow splitting the active panel alongside a preview.
 
+- Keep orchestrated sessions in orchestrate mode and ask before side-effecting actions while allowing local previews.
+
 - Protect imported catalog connections from unsafe destination overrides.
 
 - Keep background agent tool counts current after a burst of tool calls.

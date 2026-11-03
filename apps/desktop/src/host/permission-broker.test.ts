@@ -72,6 +72,14 @@ describe("IpcPermissionBroker matrix", () => {
     broker.denyAll("cleanup", "shutdown");
   });
 
+  it("preserves orchestrate context when presenting and restoring an approval", () => {
+    const { broker, emitted } = makeBroker();
+    void broker.requestPermission({ ...request, mode: "plan", orchestrate: true });
+    expect(emitted.find((m) => m.type === "permission_request")).toMatchObject({ orchestrate: true });
+    expect(broker.approvalState().pending).toMatchObject({ orchestrate: true });
+    broker.denyAll("cleanup", "shutdown");
+  });
+
   it("sends resolved workspace containment for aliases and restored approvals", async () => {
     const base = await mkdtemp(join(tmpdir(), "permission-alias-"));
     try {

@@ -1992,6 +1992,19 @@ describe("executeToolCall — ask-zone classifier", () => {
     expect(emitted[0]).not.toHaveProperty("error");
   });
 
+  it("requires human approval for orchestrated commands", async () => {
+    const handler = vi.fn(async () => ({ ok: true, output: "built" }));
+    const bash = makeTool({ metadata: { ...baseMetadata, name: "Bash" }, inputSchema: z.object({ command: z.string() }), handler });
+    const { ctx, classify, brokerSpy } = classifierCtx({});
+    ctx.registry = makeRegistry({ Bash: bash });
+    ctx.orchestrate = true;
+    const outcome = await executeToolCall(ctx, bashCall("npm run build"));
+    expect(outcome.status).toBe("denied");
+    expect(classify).not.toHaveBeenCalled();
+    expect(brokerSpy).toHaveBeenCalledOnce();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("classifier input carries exactly the bounded fields (no registry, ports or history objects)", async () => {
     const { ctx, classify } = classifierCtx({ classify: async () => ({ decision: "ask", reason: "unsure" }) });
     await executeToolCall(ctx, bashCall("npm run build && echo ok"));

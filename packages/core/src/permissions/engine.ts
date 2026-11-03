@@ -31,6 +31,16 @@ export class ModePermissionEngine implements PermissionEngine {
   check(request: PermissionRequest): PermissionRuling {
     const { mode, metadata, toolName } = request;
 
+    if (request.orchestrate) {
+      if (toolName === "BrowserOpen" && metadata.riskLevel === "low" && !metadata.needsApproval) {
+        return { decision: "allow" };
+      }
+      if (!metadata.readOnly || metadata.needsApproval) {
+        return { decision: "ask", reason: `${toolName}: requires approval in orchestrate mode` };
+      }
+      return { decision: "allow" };
+    }
+
     // honest Edit mode: a Write/Edit whose dispatch-site-resolved
     // target provably sits inside the workspace is allowed TERMINALLY. The
     // early return (before baseRuling and before the needsApproval escalation

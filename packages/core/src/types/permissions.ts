@@ -18,6 +18,7 @@ export interface PermissionRequest {
   input: unknown;
   metadata: ToolMetadata;
   mode: PermissionMode;
+  orchestrate?: boolean;
   /** Working directory used to execute the tool. */
   cwd?: string;
   /* */
