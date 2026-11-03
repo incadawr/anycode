@@ -942,6 +942,25 @@ describe("console argument formatting", () => {
     expect(messages).toEqual(["Failed to load resource"]);
   });
 
+  it("does not append replayed console events after reattachment", async () => {
+    const win = createElectronPreviewWindow({ previewId: "replay" });
+    const fake = latestWindow();
+    const messages: string[] = [];
+    win.webContents.onConsoleMessage((_level, message) => messages.push(message));
+    await Promise.resolve();
+    const first = { type: "warning", timestamp: 10, args: [{ type: "string", value: "first" }] };
+    const second = { type: "warning", timestamp: 20, args: [{ type: "string", value: "offline" }] };
+    fake.webContents.debugger.emit("message", "Runtime.consoleAPICalled", first);
+    fake.webContents.debugger.emit("detach");
+    fake.webContents.emit("console-message", { level: "warning", message: "offline" });
+    win.webContents.cdp!.ensureAttached();
+    fake.webContents.debugger.emit("message", "Runtime.consoleAPICalled", first);
+    fake.webContents.debugger.emit("message", "Runtime.consoleAPICalled", second);
+    await Promise.resolve();
+    fake.webContents.debugger.emit("message", "Runtime.consoleAPICalled", { ...second, timestamp: 30 });
+    expect(messages).toEqual(["first", "offline", "offline"]);
+  });
+
   it("uses CDP once and falls back after detach", () => {
     const win = createElectronPreviewWindow({ previewId: "cdp-console" });
     const fake = latestWindow();
