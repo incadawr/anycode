@@ -123,6 +123,7 @@ export interface ChildSpawnRequest {
    * absent/boolean is well-formed.
    */
   detach?: boolean;
+  fallbackAtCapacity?: true;
 }
 
 /** Aborts a running child (parent turn cancel/timeout, §0.5's ctx.abortSignal). */
@@ -562,6 +563,7 @@ const CHILD_SPAWN_REQUEST_KEYS = [
   "maxTurns",
   // GitHub #17 slice B: additive key (detach admission flag).
   "detach",
+  "fallbackAtCapacity",
 ] as const;
 
 const CHILD_EFFORT_VALUES: readonly string[] = ["off", "low", "medium", "high", "xhigh", "max"] satisfies readonly ChildEffort[];
@@ -634,6 +636,7 @@ export function parseChildSpawnRequest(msg: unknown): ChildSpawnRequest | null {
   if (msg.detach !== undefined && typeof msg.detach !== "boolean") {
     return null;
   }
+  if (msg.fallbackAtCapacity !== undefined && msg.fallbackAtCapacity !== true) return null;
   return {
     type: CHILD_SPAWN_REQUEST_TYPE,
     requestId: msg.requestId,
@@ -650,6 +653,7 @@ export function parseChildSpawnRequest(msg: unknown): ChildSpawnRequest | null {
     ...(msg.resumeChildSessionId !== undefined ? { resumeChildSessionId: msg.resumeChildSessionId as string } : {}),
     ...(msg.maxTurns !== undefined ? { maxTurns: msg.maxTurns as number } : {}),
     ...(msg.detach !== undefined ? { detach: msg.detach } : {}),
+    ...(msg.fallbackAtCapacity === true ? { fallbackAtCapacity: true as const } : {}),
   };
 }
 

@@ -970,6 +970,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               finish({
                 status: "error",
                 finalText: event.message,
+                ...(event.reason === "limit_parent" || event.reason === "limit_global" ? { capacityRefused: true as const } : {}),
                 truncated: false,
                 turns: 0,
                 toolCalls: 0,
@@ -1291,6 +1292,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
         // main can refuse an over-cap detached request immediately instead of
         // parking it (a parked detached request holds the parent's whole step).
         ...(req.detach !== undefined ? { detach: req.detach } : {}),
+        ...(req.fallbackAtCapacity === true ? { fallbackAtCapacity: true as const } : {}),
         permissionMode: options.getPermissionMode(),
       };
       options.send(spawnRequest);
