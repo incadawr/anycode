@@ -15,6 +15,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Keep background agent tool counts current after a burst of tool calls.
 - Keep SubAgent status badges visible when model and engine names are long.
+- Insert dropped file and folder paths into the composer, while keeping image attachments for supported models.
 
 - Refuse session delegation when it would discard an inline profile's restrictions.
 
