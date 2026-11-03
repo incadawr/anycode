@@ -144,6 +144,7 @@ export function classifyInfraFailure(text: string): InfraFailureKind {
   // from child-model.ts / tabs.ts / runner.ts's fixed sentences.
   if (
     text.includes("This model is not available on the selected connection") ||
+    text.includes("this model is not available on the selected connection") ||
     text.includes("is not available on this connection") ||
     text.includes("could not be resolved in this host")
   ) {
@@ -301,6 +302,7 @@ export function decideRoutedTerminal(
   health: RoleHealthCache,
   now: number,
   errorDescriptor?: string,
+  admissionFailure?: InfraFailureKind,
 ): RoutedTerminalDecision {
   if (facts === undefined) return { action: "deliver" };
   if (status === "completed") {
@@ -319,7 +321,7 @@ export function decideRoutedTerminal(
   // no structured descriptor rode the terminal) — never the child's free
   // model text, whose prose legitimately mentions "forbidden"/"network
   // error"/"rate limits" of the task domain.
-  const kind = classifyInfraFailure(classifyableErrorText(finalText, errorDescriptor));
+  const kind = admissionFailure ?? classifyInfraFailure(classifyableErrorText(finalText, errorDescriptor));
   if (kind === "none") return { action: "deliver" };
   const failedKey = entryKey(facts.role, facts.entry);
   health.markFailure(failedKey, kind, now);

@@ -2,9 +2,39 @@ import { describe, expect, it, vi } from "vitest";
 import type { SessionSubagentRequest } from "@anycode/core";
 import type { ChildSessionPort } from "./child-session-port.js";
 import { createRoutedChildComposition } from "./routed-child-composition.js";
-import { RoleHealthCache } from "./role-route.js";
+import { entryKey, RoleHealthCache } from "./role-route.js";
+import { createChildSessionPort } from "./child-session-port.js";
+import { CHILD_RUN_EVENT_TYPE, CHILD_SPAWN_REQUEST_TYPE, type ChildRunEvent, type ChildSpawnRequest } from "../shared/child-sessions.js";
 
 describe("routed child snapshots", () => {
+  it.each([
+    { reason: "not_ready" as const, message: "Agent: this model is not available on the selected connection; select a matching provider/connection.", retry: true },
+    { reason: "recursion" as const, message: "Permission policy forbids this child; network error", retry: false },
+    { reason: "not_ready" as const, message: "Permission policy forbids this child; network error", retry: false },
+  ])("handles wire admission rejection $reason", async ({ reason, message, retry }) => {
+    const health = new RoleHealthCache();
+    const sent: ChildSpawnRequest[] = [];
+    let listener: (event: ChildRunEvent) => void = () => {};
+    const composition = createRoutedChildComposition({ health, describeError: String,
+      resolve: () => ({ entries: [{ model: "primary" }, { model: "fallback" }], skipped: [] }),
+      prepare: req => req, record: () => {}, report: () => {}, deliver: () => {} });
+    const port = createChildSessionPort({ parentSessionId: "parent", getPermissionMode: () => "build",
+      send: msg => { if (msg.type === CHILD_SPAWN_REQUEST_TYPE) sent.push(msg); },
+      subscribe: cb => { listener = cb; return () => {}; }, onDetachedTerminal: composition.onTerminal });
+    composition.attach(port);
+    const pending = port.run({ agentType: "executor", description: "task", prompt: "work", spawnToolCallId: "call", model: "primary", routeStamped: true, detach: true }, {});
+    listener({ type: CHILD_RUN_EVENT_TYPE, requestId: sent[0]!.requestId, kind: "rejected", reason, message });
+    await vi.waitFor(() => expect(sent).toHaveLength(retry ? 2 : 1));
+    if (retry) {
+      expect(sent[1]).toMatchObject({ model: "fallback", spawnToolCallId: "call" });
+      expect(health.snapshot().get(entryKey("executor", { model: "primary" }))).toMatchObject({ failures: 1, lastReason: "model_not_found" });
+      listener({ type: CHILD_RUN_EVENT_TYPE, requestId: sent[1]!.requestId, kind: "accepted", childSessionId: "child", childTabId: "tab", model: "fallback" });
+      expect(await pending).toMatchObject({ background: { reason: "requested" }, childSessionId: "child" });
+    } else {
+      expect(await pending).toMatchObject({ status: "error", finalText: message });
+      expect(health.snapshot().size).toBe(0);
+    }
+  });
   it("uses the route selected before dispatch even if settings change", async () => {
     const run = vi.fn().mockResolvedValue({ status: "completed", turns: 0, background: { reason: "requested" } });
     const resolve = vi.fn(() => ({ entries: [{ model: "changed" }], skipped: [] }));

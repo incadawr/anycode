@@ -977,6 +977,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               finish({
                 status: "error",
                 finalText: event.message,
+                admissionRejectReason: event.reason,
                 ...(event.reason === "limit_parent" || event.reason === "limit_global" ? { capacityRefused: true as const } : {}),
                 truncated: false,
                 turns: 0,
