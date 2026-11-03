@@ -264,6 +264,9 @@ export async function executeToolCall(
       if (!tool) {
         return outcome("error", `Unknown tool: ${toolName}.`);
       }
+      if (ctx.orchestrate && toolName === "ExitPlanMode") {
+        return outcome("denied", 'You are orchestrating: delegate planning to the planner role (Agent, agent_type "planner").');
+      }
 
       // 2. zod validation
       const parsed = tool.inputSchema.safeParse(call.input);
@@ -322,6 +325,7 @@ export async function executeToolCall(
         input,
         metadata,
         mode: ctx.mode,
+        ...(ctx.orchestrate ? { orchestrate: true } : {}),
         cwd: ctx.cwd,
         toolCallId,
         ...(workspace !== undefined ? { workspace } : {}),

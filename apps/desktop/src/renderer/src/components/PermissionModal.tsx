@@ -803,7 +803,7 @@ export function PermissionModal({
                 {presentation.plaque}
               </div>
             )}
-            <div className="permission-mode">Mode: {request.mode}</div>
+            <div className="permission-mode">Mode: {request.orchestrate ? "orchestrate" : request.mode}</div>
           </>
         )}
 

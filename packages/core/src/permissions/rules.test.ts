@@ -40,6 +40,15 @@ describe("SessionPermissionRules", () => {
 describe("RuleAwarePermissionEngine", () => {
   const base = new ModePermissionEngine();
 
+  it("applies saved rules to orchestrate approvals", () => {
+    const rules = new SessionPermissionRules();
+    rules.add({ toolName: "Write" });
+    const engine = new RuleAwarePermissionEngine(base, rules);
+    expect(engine.check({ toolName: "Write", input: { file_path: "/ws/x", content: "y" },
+      metadata: writeTool.metadata, mode: "plan", orchestrate: true,
+      workspace: { root: "/ws", resolvedPath: "/ws/x" } }).decision).toBe("allow");
+  });
+
   it("downgrades ask -> allow when a bare tool rule matches (build-mode write tool)", () => {
     const rules = new SessionPermissionRules();
     rules.add({ toolName: "Write" });

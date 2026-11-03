@@ -18,6 +18,7 @@ export class SafeCommandPermissionEngine implements PermissionEngine {
 
   check(request: PermissionRequest): PermissionRuling {
     const ruling = this.base.check(request);
+    if (request.orchestrate) return ruling;
     if (request.toolName !== "Bash") return ruling;
 
     const planDeny = request.mode === "plan" && ruling.decision === "deny" &&
