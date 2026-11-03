@@ -3259,7 +3259,7 @@ export class Session {
         void this.onCompact();
         break;
       case "engine_switch_request":
-        if (this.postureBlocked() || (this.orchestrate && this.engine.id !== "core" && !this.legacyOrchestration)) { this.outbound.sendDirect({ type: "engine_switch_failed", requestId: message.requestId, reason: "Session posture unavailable" }); break; }
+        if (this.postureBlocked()) { this.outbound.sendDirect({ type: "engine_switch_failed", requestId: message.requestId, reason: "Session posture unavailable" }); break; }
         // async handler holds `busy` across the factory await —
         // the exact rewind pattern (route() itself never awaits). The handler
         // re-checks its own gates (messages route synchronously, but this
@@ -4192,8 +4192,9 @@ export class Session {
     const fail = (reason: string) => {
       this.outbound.sendDirect({ type: "engine_switch_failed", requestId: message.requestId, reason });
     };
-    if (this.busy || this.relocating) return fail("a turn is running");
+    if (this.busy || this.currentTurn !== null || this.relocating || this.broker.pendingCount > 0 || this.continuationPending) return fail("a turn is running");
     if (this.child !== undefined) return fail("a child session is attached");
+    if ((this.backgroundChildren?.list().length ?? 0) > 0) return fail("children are running");
     if (this.engine.id === message.engine) return fail(`already running the "${message.engine}" engine`);
     if (this.switchEngineFactory === undefined) return fail("engine switch is not available in this host");
     this.busy = true;
@@ -4202,6 +4203,7 @@ export class Session {
     this.currentTurn = op;
     try {
       const previousEngine = this.engine;
+      const generation = this.boundGeneration;
       // Canonical transcript captured BEFORE anything else. A native engine's
       // `historyItems()` is only its BOOT snapshot (codex) or `[]` (claude);
       // codex can re-read the live thread, so prefer that when available —
@@ -4231,12 +4233,35 @@ export class Session {
       // Shutdown raced the factory await: shutdown() already disposed the OLD
       // engine and is waiting on `currentTurn`; the freshly started engine
       // would otherwise never be disposed (orphaned engine process).
-      if (this.shuttingDown) {
-        await next.dispose("host-shutdown").catch((error) =>
+      const invalid = () => this.shuttingDown || this.relocating || this.boundGeneration !== generation || this.engine !== previousEngine || (this.backgroundChildren?.list().length ?? 0) > 0;
+      if (invalid()) {
+        await next.dispose(this.shuttingDown ? "host-shutdown" : "session-close").catch((error) =>
           console.error(`[host] switched-to engine dispose threw during shutdown: ${describeError(error)}`),
         );
-        fail("session is shutting down");
+        fail("session changed during engine switch");
         return;
+      }
+      if (this.orchestrate) {
+        try {
+          if (next.id === "claude" || !next.orchestrationCompositionReady) throw new Error("target orchestration composition unavailable");
+          const base = this.preOrchestrateMode ?? "build";
+          if (next.id === "core") {
+            if (!next.capabilities.supportsCorePermissions || !next.setMode) throw new Error("target orchestration policy unavailable");
+            next.setMode("plan");
+            if (next.mode() !== "plan") throw new Error("target orchestration policy unconfirmed");
+          } else {
+            const policy = next.orchestrationPolicy;
+            if (!policy?.availability().supported) throw new Error("target orchestration policy unavailable");
+            const authority = { mode: base };
+            const result = await policy.apply(true, authority);
+            if (!result.enabled || result.baseAuthority !== authority) throw new Error("target orchestration policy unconfirmed");
+          }
+          if (invalid()) throw new Error("session changed during engine switch");
+        } catch (error) {
+          await next.dispose("session-close").catch(() => {});
+          fail(error instanceof Error ? error.message : String(error));
+          return;
+        }
       }
       // The import prompt is rendered from `canonical` alone (the old
       // engine's items captured above) — nothing else feeds the render.
@@ -4248,6 +4273,7 @@ export class Session {
       // permission modes, the new one must not silently start in its default
       // (e.g. a plan-mode session becoming build after the switch).
       if (
+        !this.orchestrate &&
         previousEngine.capabilities.supportsCorePermissions &&
         next.capabilities.supportsCorePermissions &&
         next.setMode !== undefined &&
@@ -4262,7 +4288,7 @@ export class Session {
       this.settingsBarrierActive = false;
       this.updateContextUsage(null);
       this.engine = next;
-      if (previousEngine.id === "core" && this.orchestrate) this.legacyOrchestration = true;
+      this.legacyOrchestration = false;
       this.orchestrationController?.invalidate();
       this.orchestrationController = undefined;
       this.orchestrationAdmission = undefined;
@@ -6186,7 +6212,7 @@ export class Session {
       },
     };
     this.orchestrationController = new OrchestrationController(policy);
-    if (this.legacyOrchestration) this.orchestrationController.state = { status: "on", baseAuthority: this.preOrchestrateMode ?? "build" };
+    if (this.orchestrate) this.orchestrationController.state = { status: "on", baseAuthority: engine.id === "codex" ? { mode: this.preOrchestrateMode ?? "build" } : this.preOrchestrateMode ?? "build" };
     this.orchestrationAdmission = new OrchestrationAdmission({
       controller: this.orchestrationController,
       connectionId: () => this.boundGeneration,

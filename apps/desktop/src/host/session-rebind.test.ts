@@ -108,6 +108,28 @@ async function reloadRenderer(h: Harness): Promise<ReboundPort> {
 }
 
 describe("connection incarnation fence", () => {
+  it("preserves ON across renderer reconnect to the same host", async () => {
+    const h = createHarness({ steps: [finishStep()] });
+    let b: ReboundPort | null = null;
+    try {
+      h.send({ type: "ui_ready" }); await h.waitFor(isHostReady);
+      h.send({ type: "set_orchestrate", enabled: true });
+      await h.waitUntil(() => h.received.some(m => m.type === "orchestrate_changed" && m.enabled));
+      b = await reloadRenderer(h);
+      expect(b.delivered.find(isHostReady)?.orchestration?.enabled).toBe(true);
+      expect(h.engine.mode()).toBe("plan");
+    } finally { h.close(); b?.closePhysical(); }
+  });
+
+  it("starts a new host with orchestration OFF without starting a turn", async () => {
+    const h = createHarness({ steps: [finishStep()] });
+    try {
+      h.send({ type: "ui_ready" });
+      const ready = await h.waitFor(isHostReady);
+      expect(ready.orchestration?.enabled).toBe(false);
+      expect(h.received.some(m => m.type === "turn_started")).toBe(false);
+    } finally { h.close(); }
+  });
   it("rejects a stale binding even if the same WirePort object is rebound", () => {
     const h = createHarness({ steps: [finishStep()] });
     const inbound: Array<(raw: unknown) => void> = [];

@@ -88,6 +88,8 @@ export interface SessionEngine {
   readonly capabilities: EngineCapabilities;
   /** Optional engine-owned orchestration overlay; absent means unavailable. */
   readonly orchestrationPolicy?: OrchestrationPolicy;
+  /** Factory attests that the target has its Agent and role routing wired. */
+  readonly orchestrationCompositionReady?: boolean;
   mode(): PermissionMode;
   setMode?(mode: PermissionMode): void;
   reasoningEffort(): ReasoningEffort | undefined;

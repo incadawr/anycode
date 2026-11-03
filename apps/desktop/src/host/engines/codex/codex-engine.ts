@@ -699,6 +699,7 @@ export async function resumeNativeCodexSession(
   const resumed = await client.request<ThreadResult>("thread/resume", {
     threadId: externalSessionRef,
     cwd: workspace,
+    ...preset.threadParams,
     // 4764 review F17: the fresh app-server of THIS boot has no memory of the
     // previous launch's dynamic tools either — exactly like config.mcp_servers
     // above, the declarations must ride the resume or a resumed
