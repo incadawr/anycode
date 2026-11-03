@@ -42,6 +42,7 @@ import { isPreviewableDocPath } from "../../../shared/previewable.js";
 import { useTabsStore } from "../tabs-store.js";
 import { childBadgeKind, childLayoutStore, type ChildBadgeKind } from "../child-layout.js";
 import { childRelationStore, hasOpenableChild, sameChildPredicate, type ChildRelation } from "../child-sessions.js";
+import { Button } from "../ui/index.js";
 import { DiffView } from "./DiffView.js";
 import { Check, Chevron, Minus, Spinner, Warning, X } from "./icons.js";
 import { Markdown } from "./Markdown.js";
@@ -2191,8 +2192,8 @@ export function ToolCallHeaderRow({
 export function BackgroundAgentButtons({ ids, current, move }: { ids: string[]; current: string; move: (ids: string[]) => void }) {
   if (!ids.includes(current)) return null;
   return <span className="tool-call-background-actions">
-    <button type="button" className="tool-call-open" onClick={() => move([current])}>Move to background</button>
-    {ids.length > 1 && ids[0] === current && <button type="button" className="tool-call-open" onClick={() => move(ids)}>Move all to background</button>}
+    <Button size="sm" variant="ghost" onClick={() => move([current])}>Move to background</Button>
+    {ids.length > 1 && ids[0] === current && <Button size="sm" variant="ghost" onClick={() => move(ids)}>Move all to background</Button>}
   </span>;
 }
 
