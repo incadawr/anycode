@@ -3159,6 +3159,21 @@ describe("wrap-up usage reporting (gap closed)", () => {
     expect(outcome.usage).toEqual({ inputTokens: 11, outputTokens: 7, totalTokens: 18 });
   });
 
+  it("does not forward reasoning replay metadata from the child or wrap-up", async () => {
+    const tapped: { type: string }[] = [];
+    const metadata: ModelStreamEvent = { type: "reasoning_replay_metadata", id: "r", providerMetadata: {}, source: { transport: "openrouter", baseUrl: "https://example.com", model: "model" } };
+    const model = new ScriptedModelPort((req) => {
+      if (isWrapUpRequest(req)) return [metadata, ...usageStep("REPORT: done", {})];
+      if (isCeilingRequest(req)) return usageStep("done", {});
+      return [metadata, ...toolStep("c1", "TodoRead", {}, "turn-1")];
+    });
+    const parent = makeParent({ modelPort: model, mode: "yolo", subagentEventTap: () => (event) => tapped.push(event) });
+    const outcome = await createSubagentRunner(parent).run({ ...REQ, maxTurns: 2 }, {});
+    expect(outcome.finalText).toBe("REPORT: done");
+    expect(tapped.some((event) => event.type === "text_delta")).toBe(true);
+    expect(tapped.some((event) => event.type === "reasoning_replay_metadata")).toBe(false);
+  });
+
   it("(b) wrap-up usage merges into the run total from the ordinary turns", async () => {
     let step = 0;
     const model = new ScriptedModelPort((req) => {
