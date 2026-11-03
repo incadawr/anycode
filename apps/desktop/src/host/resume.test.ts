@@ -119,6 +119,22 @@ function toolResultItem(
 // ═════════════════════════════════════════════════════════════════════════════
 
 describe("Session — session_history hydration", () => {
+  it("keeps unanchored old errors before later turns after compaction", async () => {
+    const errors = [10, 20].map((createdAt) => ({ kind: "turn_error" as const, id: `e${createdAt}`, createdAt, turnId: `gone${createdAt}`, afterItemId: `missing${createdAt}`, engine: "core", model: "m", error: { name: "ProviderError", message: `failed ${createdAt}` } }));
+    const h = createHarness({ steps: [], bootHistory: [{ ...userItem("summary", "summary", 500), kind: "compact_summary" }, userItem("later", "next", 100), assistantTextItem("answer", "success", 101)], bootTurnErrors: errors });
+    try {
+      h.send({ type: "ui_ready" });
+      expect((await h.waitFor(isSessionHistory)).items.map((item) => item.id)).toEqual(["summary", "e10", "e20", "later", "answer"]);
+      expect(h.session.communicationResult().latestResult).toMatchObject({ publicAnswer: "success" });
+    } finally { h.close(); }
+  });
+  it("keeps errors before the first later turn and in order without history", async () => {
+    const errors = [10, 20].map((createdAt) => ({ kind: "turn_error" as const, id: `e${createdAt}`, createdAt, turnId: `t${createdAt}`, engine: "codex", model: "m", error: { name: "AgentError", message: "failed" } }));
+    for (const history of [[], [userItem("later", "next", 100)]]) {
+      const h = createHarness({ steps: [], bootHistory: history, bootTurnErrors: errors });
+      try { h.send({ type: "ui_ready" }); expect((await h.waitFor(isSessionHistory)).items.map((item) => item.id)).toEqual(history.length ? ["e10", "e20", "later"] : ["e10", "e20"]); } finally { h.close(); }
+    }
+  });
   it("preserves compacted conversation order when hydrating history", async () => {
     const h = createHarness({ steps: [], bootHistory: [{ ...userItem("summary", "summary", 200), kind: "compact_summary" }, userItem("older", "retained", 100)] });
     try { h.send({ type: "ui_ready" }); expect((await h.waitFor(isSessionHistory)).items.map((item) => item.id)).toEqual(["summary", "older"]); } finally { h.close(); }
