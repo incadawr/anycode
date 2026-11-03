@@ -88,7 +88,10 @@ import {
   withPlanModeReminder,
   withOrchestrateReminder,
 } from "@anycode/core";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { OrchestrationAdmission, type AdmissionResponse } from "./orchestration-admission.js";
+import { OrchestrationController, type OrchestrationPolicy } from "./orchestration-policy.js";
+import { codexAgentPermissionMode } from "./engines/codex/dynamic-tool-bridge.js";
 import type {
   EngineCapabilitiesProjection,
   EngineModelChoice,
@@ -1479,7 +1482,12 @@ export class Session {
   // Activation requires renderer posture handling and a reviewed admission
   // ledger; tests inject it to exercise the real Session boundaries.
   private orchestrationPosture: "stable" | "transitioning" | "quarantined" = "stable";
-  private postureBlocked(): boolean { return this.orchestrationPosture !== "stable"; }
+  private orchestrationController?: OrchestrationController;
+  private orchestrationAdmission?: OrchestrationAdmission;
+  private postureBlocked(): boolean {
+    const state = this.orchestrationController?.state.status;
+    return this.orchestrationPosture !== "stable" || state === "transitioning" || state === "quarantined";
+  }
   /** The mode the user had BEFORE orchestrate was enabled; null while off. */
   private preOrchestrateMode: PermissionMode | null = null;
   /** Permanent source-host latch once a durable relocation handoff begins. */
@@ -2532,6 +2540,7 @@ export class Session {
 
   closeAdmissions(): void {
     this.shuttingDown = true;
+    this.orchestrationController?.invalidate();
     this.publishActivity();
     this.pendingEngineEffort = undefined;
     this.inFlightEngineEffort = undefined;
@@ -2754,8 +2763,8 @@ export class Session {
           mode: this.engine.mode(),
           model: this.model,
           sessionId: this.sessionId,
-          orchestration: { enabled: this.orchestrate, available: false, reason: "unavailable" },
-          ...(message.orchestrationProtocol === 1 && this.boundGeneration !== null ? { orchestrationProtocol: { version: 1 as const, hostIncarnation: this.hostIncarnation, connectionId: this.boundGeneration, atomicSubmit: false as const, correlatedToggle: false as const } } : {}),
+          orchestration: { enabled: this.orchestrate, available: this.orchestrationAvailable() && !this.postureBlocked(), ...(!this.orchestrationAvailable() ? { reason: "unavailable" } : {}), posture: this.orchestrationPosture !== "stable" ? this.orchestrationPosture : this.orchestrationController?.state.status ?? (this.orchestrate ? "on" : "off") },
+          ...(message.orchestrationProtocol === 1 && this.boundGeneration !== null ? { orchestrationProtocol: { version: 1 as const, hostIncarnation: this.hostIncarnation, connectionId: this.boundGeneration, atomicSubmit: this.orchestrationAvailable(), correlatedToggle: this.orchestrationAvailable() } } : {}),
           ...(this.checkpointContextUsage !== null ? { contextUsage: this.checkpointContextUsage } : {}),
           reasoningEffort: this.engine.reasoningEffort() ?? "off",
           ...(bootEffortAdjustment !== undefined ? { effortAdjustment: bootEffortAdjustment } : {}),
@@ -2931,10 +2940,8 @@ export class Session {
         this.handleUiSteerMessage(message.requestId, message.text);
         return;
       case "user_message":
-        // Reserved for the future atomic admission path. Never silently turn an
-        // unimplemented orchestration request into an ordinary user turn.
         if (message.orchestrate !== undefined) {
-          this.outbound.sendDirect({ type: "user_message_unavailable", requestId: message.requestId, reason: "orchestrate_unavailable" });
+          this.submitOrchestration(message);
           break;
         }
         if (this.postureBlocked()) {
@@ -3043,23 +3050,21 @@ export class Session {
         this.onSetMode(message.mode);
         break;
       case "set_orchestrate":
-        if (this.postureBlocked()) {
+        if (this.orchestrationPosture !== "stable") {
           if (message.requestId !== undefined) this.outbound.sendDirect({ type: "orchestrate_result", requestId: message.requestId, outcome: "rejected", reason: "unavailable" });
           break;
         }
-        // Correlated transitions are not enabled until the mode/readback and
-        // renderer recovery contracts are implemented together.
-        if (message.requestId !== undefined) {
-          this.outbound.sendDirect({ type: "orchestrate_result", requestId: message.requestId, outcome: "rejected", reason: "unavailable" });
-          break;
+        {
+          const replyGeneration = this.boundGeneration;
+          const connectionId = message.requestId === undefined ? this.boundGeneration ?? "" : message.connectionId ?? "";
+          const id = message.requestId ?? randomUUID();
+          void this.admission().toggle(id, connectionId, message.enabled).then(result => {
+            if (message.requestId !== undefined && this.boundGeneration === replyGeneration && replyGeneration !== null) this.sendOrchestrationResult(id, replyGeneration, result);
+          });
         }
-        // §3.7: between-turns only (busy => silent drop inside
-        // onSetOrchestrate, the set_mode discipline). The orchestrate flag
-        // drives the reminder swap (acceptUserMessage) and the Agent tool's
-        // default-detach via the loop config copy.
-        this.onSetOrchestrate(message.enabled);
         break;
       case "set_reasoning_effort":
+        if (this.postureBlocked()) { this.outbound.sendDirect({ type: "mode_change_rejected", reason: "Session posture unavailable" }); break; }
         // Validate against the model's declared effort levels (when known) so a
         // stale renderer can't request an unsupported tier; "off" always allowed.
         if (
@@ -3083,6 +3088,7 @@ export class Session {
         }
         break;
       case "set_model": {
+        if (this.postureBlocked()) { this.outbound.sendDirect({ type: "mode_change_rejected", reason: "Session posture unavailable" }); break; }
         // Slice P7.15 (F14, design §2.1): mid-session model switch. Mirror of
         // the CLI /model ambiguity rules: a non-empty trimmed id with no
         // internal whitespace. No switch factory wired (legacy tests) ->
@@ -3133,6 +3139,7 @@ export class Session {
         // the engine's own frozen table. No sandbox object, no approvalPolicy, no
         // raw config JSON is accepted from the renderer, by construction of this
         // message (DoD-4). Between-turns discipline mirrors set_model.
+        if (this.orchestrate || this.postureBlocked()) { this.outbound.emit({ type: "mode_change_rejected", reason: "Permission presets cannot change during orchestration." }); break; }
         if (this.engineSettings === undefined) break;
         // cross-review finding 2: an engine CHILD's posture is
         // FROZEN. The child tab renders the same SessionSurface (and therefore
@@ -3165,6 +3172,7 @@ export class Session {
         this.queueIdleEngineSetting((seam) => this.onEngineSettingsChange(seam.selectPreset(message.presetId), { presetId: message.presetId }));
         break;
       case "set_engine_fast": {
+        if (this.postureBlocked()) { this.outbound.sendDirect({ type: "mode_change_rejected", reason: "Session posture unavailable" }); break; }
         if (this.busy) {
           this.outbound.emit({ type: "mode_change_rejected", reason: "Cannot change speed during a turn" });
           break;
@@ -3175,6 +3183,7 @@ export class Session {
         break;
       }
       case "set_engine_effort": {
+        if (this.postureBlocked()) { this.outbound.sendDirect({ type: "mode_change_rejected", reason: "Session posture unavailable" }); break; }
         const seam = this.engineSettings;
         if (seam === undefined || seam.selectEffort === undefined) break;
         if (this.busy) {
@@ -3247,7 +3256,7 @@ export class Session {
         void this.onCompact();
         break;
       case "engine_switch_request":
-        if (this.postureBlocked()) { this.outbound.sendDirect({ type: "engine_switch_failed", requestId: message.requestId, reason: "Session posture unavailable" }); break; }
+        if (this.postureBlocked() || this.orchestrate) { this.outbound.sendDirect({ type: "engine_switch_failed", requestId: message.requestId, reason: "Session posture unavailable" }); break; }
         // async handler holds `busy` across the factory await —
         // the exact rewind pattern (route() itself never awaits). The handler
         // re-checks its own gates (messages route synchronously, but this
@@ -4250,6 +4259,9 @@ export class Session {
       this.settingsBarrierActive = false;
       this.updateContextUsage(null);
       this.engine = next;
+      this.orchestrationController?.invalidate();
+      this.orchestrationController = undefined;
+      this.orchestrationAdmission = undefined;
       this.lastNativeTurnId = null;
       this.checkpointContextUsage = null;
       this.outbound.clearContextUsage();
@@ -4301,6 +4313,10 @@ export class Session {
   }
 
   private onUserMessage(requestId: string, text: string, images?: ImageAttachment[], origin?: "system"): void {
+    if (this.presentationJournal.snapshot().turns.some(turn => turn.requestId === requestId)) {
+      this.outbound.sendDirect({ type: "user_message_unavailable", requestId, reason: "posture_unavailable" });
+      return;
+    }
     if (this.relocating) {
       this.outbound.emit({ type: "turn_rejected", requestId, reason: "not_ready" });
       return;
@@ -6118,6 +6134,96 @@ export class Session {
     return this.preOrchestrateMode ?? undefined;
   }
 
+  private orchestrationAvailable(): boolean {
+    if (this.child !== undefined || this.shuttingDown || this.relocating) return false;
+    if (this.engine.id === "core") return this.engine.capabilities.supportsCorePermissions && this.engine.setMode !== undefined;
+    return this.engine.id === "codex" && this.engine.orchestrationPolicy?.availability().supported === true;
+  }
+
+  /** One controller owns all UI paths; the engine overlay is never bypassed. */
+  private admission(): OrchestrationAdmission {
+    if (this.orchestrationAdmission) return this.orchestrationAdmission;
+    const engine = this.engine;
+    const policy: OrchestrationPolicy = {
+      availability: () => this.engine === engine && this.orchestrationAvailable()
+        ? { supported: true } : { supported: false, reason: "unavailable" },
+      apply: async (enabled, baseAuthority) => {
+        if (this.settingsBarrierActive) await this.settingsBarrier;
+        await this.engineSettings?.waitForSettingsChanges?.();
+        if (this.shuttingDown || this.engine !== engine || this.relocating || this.orchestrationController?.state.status !== "transitioning") throw new Error("Session changed during orchestration transition");
+        if (engine.id === "core") {
+          this.onSetOrchestrate(enabled);
+          if (this.orchestrate !== enabled) throw new Error("Core orchestration transition failed");
+          return { enabled, baseAuthority };
+        }
+        // Capture the preset after queued settings have settled, before the
+        // overlay can change the effective posture. The holder's identity is
+        // retained by the controller across both transitions.
+        const nativeAuthority = baseAuthority as { mode: PermissionMode };
+        if (enabled) nativeAuthority.mode = this.nativeChildBaseMode();
+        const snapshot = await engine.orchestrationPolicy!.apply(enabled, baseAuthority);
+        if (this.shuttingDown || this.engine !== engine || this.orchestrationController?.state.status !== "transitioning") throw new Error("Session changed during orchestration transition");
+        if (snapshot.enabled !== enabled || !Object.is(snapshot.baseAuthority, baseAuthority)) throw new Error("Unconfirmed orchestration transition");
+        this.preOrchestrateMode = enabled ? nativeAuthority.mode : null;
+        this.orchestrate = enabled;
+        this.onOrchestrateChanged?.(enabled);
+        this.outbound.emit({ type: "orchestrate_changed", enabled });
+        return snapshot;
+      },
+    };
+    this.orchestrationController = new OrchestrationController(policy);
+    this.orchestrationAdmission = new OrchestrationAdmission({
+      controller: this.orchestrationController,
+      connectionId: () => this.boundGeneration,
+      busy: () => this.busy || this.broker.pendingCount > 0 || this.shuttingDown || this.relocating || this.child !== undefined || this.continuationPending || this.orchestrationPosture !== "stable",
+      baseAuthority: () => this.engine.id === "codex" ? { mode: this.nativeChildBaseMode() } : this.engine.mode(),
+      timeoutMs: 120_000,
+    });
+    return this.orchestrationAdmission;
+  }
+
+  private nativeChildBaseMode(): PermissionMode {
+    const settings = this.engineSettings;
+    return settings === undefined ? "plan" : codexAgentPermissionMode((settings.pendingSnapshot?.() ?? settings.snapshot()).activePresetId);
+  }
+
+  private sendOrchestrationResult(requestId: string, connectionId: string, result: AdmissionResponse): void {
+    if (this.boundGeneration !== connectionId || this.shuttingDown) return;
+    if ("kind" in result) {
+      this.outbound.sendDirect({ type: "orchestrate_frame_diagnostic", requestId, reason: result.reason });
+    } else {
+      this.outbound.sendDirect({ type: "orchestrate_result", requestId, connectionId, ...result });
+    }
+  }
+
+  private submitOrchestration(message: Extract<UiToHostMessage, { type: "user_message" }>): void {
+    const connectionId = message.connectionId ?? "";
+    if (connectionId !== this.boundGeneration) {
+      this.outbound.sendDirect({ type: "user_message_unavailable", requestId: message.requestId, reason: "orchestrate_unavailable" });
+      return;
+    }
+    // The presentation journal is the existing bounded delivery record. An ID
+    // already used by an ordinary turn must never acquire a new rejection.
+    if (this.presentationJournal.snapshot().turns.some(turn => turn.requestId === message.requestId)) {
+      this.outbound.sendDirect({ type: "user_message_unavailable", requestId: message.requestId, reason: "orchestrate_unavailable" });
+      return;
+    }
+    const fingerprint = createHash("sha256").update(JSON.stringify([message.text, message.images, message.origin])).digest("hex");
+    void this.admission().submit(message.requestId, connectionId, () => {
+      if (message.origin !== "system") this.broker.noteHumanPresent();
+      // acceptUserMessage claims busy synchronously, before admission resolves.
+      this.acceptUserMessage(message.requestId, message.text, message.images, message.origin);
+    }, fingerprint).then(result => {
+      if (!("kind" in result) && result.outcome === "unknown" && result.reason === "admission") this.orchestrationController?.quarantine("Turn admission was not confirmed");
+      if (this.boundGeneration !== connectionId || this.shuttingDown) return;
+      if ("kind" in result || result.outcome === "unknown") {
+        this.outbound.sendDirect({ type: "user_message_unavailable", requestId: message.requestId, reason: "orchestrate_unavailable" });
+      } else if (result.outcome === "rejected") {
+        this.outbound.emit({ type: "turn_rejected", requestId: message.requestId, reason: result.reason === "busy" ? "busy" : "not_ready" });
+      }
+    });
+  }
+
   /**
    * §2.2/§3.7: `set_orchestrate` — between-turns only (busy =>
    * silent drop, the set_mode/set_model discipline). On enable: remember the
@@ -6193,6 +6299,7 @@ export class Session {
   private clearOrchestrateForLeavingPlan(): void {
     if (!this.orchestrate) return;
     this.orchestrate = false;
+    this.orchestrationController?.coreModeExited();
     this.preOrchestrateMode = null;
     this.onOrchestrateChanged?.(false);
     this.outbound.emit({ type: "orchestrate_changed", enabled: false });

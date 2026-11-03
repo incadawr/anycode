@@ -76,7 +76,7 @@ describe("dormant orchestration posture admission foundation", () => {
     try {
       h.send({ type: "ui_ready" });
       const ready = await h.waitFor((m): m is Extract<HostToUiMessage, {type:"host_ready"}> => m.type === "host_ready");
-      expect(ready.orchestration?.available).toBe(false);
+      expect(ready.orchestration?.available).toBe(true);
       internal(h.session).orchestrationPosture = posture;
       const image = { mediaType: "image/png" as const, data: "YQ==" };
       h.send({ type: "user_message", requestId: "direct", text: "direct", images: [image] });
