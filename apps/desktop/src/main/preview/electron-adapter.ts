@@ -39,6 +39,7 @@
  */
 
 import { BrowserWindow, Menu, type NativeImage, type WebContents } from "electron";
+import { formatConsoleArguments, type RemotePreview } from "./console-format.js";
 import type { PreviewConsoleEntry } from "../../shared/preview.js";
 import { isReturnShortcut, popoutTitle, returnMenuTemplate } from "./popout.js";
 import {
@@ -150,6 +151,14 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
         );
         consoleListener("pageerror", message);
       }
+      if (method === "Runtime.consoleAPICalled") {
+        const call = params as { type?: string; args?: RemotePreview[] };
+        if (call.args) {
+          const level = call.type === "warning" ? "warn" : call.type === "error" || call.type === "assert" ? "error" : "log";
+          const message = formatConsoleArguments(call.args);
+          if (!isElectronInternalWarning(message, call.type)) consoleListener(level, message);
+        }
+      }
       for (const listener of cdpListeners) {
         try {
           listener(method, params);
@@ -173,6 +182,7 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
     attached = true;
     wireMessages();
     wc.debugger.sendCommand("Runtime.enable").catch((error: unknown) => {
+      attached = false;
       console.warn("[preview] failed to enable CDP Runtime domain", error);
     });
     return true;
@@ -196,6 +206,7 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
     console.warn("[preview] debugger attach failed; pageerror capture degraded to console-message only");
   }
   wc.on("console-message", (event) => {
+    if (attached) return;
     // Electron's own security warning is not a page console message (see
     // isElectronInternalWarning) — never surface it in the transcript. The
     // check needs BOTH the message's own `%c` marker at the start and the
