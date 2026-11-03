@@ -68,6 +68,7 @@
   gap: var(--sp-2);
   flex: 1;
   min-width: 0;
+  overflow: hidden;
 }
 .subagent-collapsed-line svg {
   flex: none;
@@ -94,7 +95,11 @@
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   color: var(--text-2);
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* Inherited from the parent tab, not the child's own choice: one tier quieter. */
 .subagent-collapsed-model-inherited,

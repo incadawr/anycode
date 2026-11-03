@@ -2166,6 +2166,8 @@ describe("identity display — inherited parent model/engine (SSR static renders
     expect(html).toContain('class="subagent-collapsed-model subagent-collapsed-model-inherited"');
     expect(html).toContain("parent-model (inherited)");
     expect(html).toContain("codex (inherited)");
+    expect(html).toContain('title="parent-model (inherited)"');
+    expect(html).toContain('title="codex (inherited)"');
   });
 
   it("collapsed row keeps an explicit child model winning over a different parent", () => {
