@@ -1,0 +1,293 @@
+{
+  "generatedFrom": "codex-cli 0.166.0 --experimental",
+  "startDynamicTools": {
+    "default": null,
+    "items": {
+      "$ref": "#/definitions/v2/DynamicToolSpec"
+    },
+    "type": [
+      "array",
+      "null"
+    ]
+  },
+  "resumeDynamicTools": null,
+  "dynamicToolSpec": {
+    "oneOf": [
+      {
+        "properties": {
+          "deferLoading": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": "string"
+          },
+          "inputSchema": true,
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "function"
+            ],
+            "title": "FunctionDynamicToolSpecType",
+            "type": "string"
+          }
+        },
+        "required": [
+          "description",
+          "inputSchema",
+          "name",
+          "type"
+        ],
+        "title": "FunctionDynamicToolSpec",
+        "type": "object"
+      },
+      {
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "tools": {
+            "items": {
+              "$ref": "#/definitions/v2/DynamicToolNamespaceTool"
+            },
+            "type": "array"
+          },
+          "type": {
+            "enum": [
+              "namespace"
+            ],
+            "title": "NamespaceDynamicToolSpecType",
+            "type": "string"
+          }
+        },
+        "required": [
+          "description",
+          "name",
+          "tools",
+          "type"
+        ],
+        "title": "NamespaceDynamicToolSpec",
+        "type": "object"
+      }
+    ]
+  },
+  "dynamicToolCallParams": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "arguments": true,
+      "callId": {
+        "type": "string"
+      },
+      "namespace": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "threadId": {
+        "type": "string"
+      },
+      "tool": {
+        "type": "string"
+      },
+      "turnId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "arguments",
+      "callId",
+      "threadId",
+      "tool",
+      "turnId"
+    ],
+    "title": "DynamicToolCallParams",
+    "type": "object"
+  },
+  "configReadParams": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "properties": {
+      "cwd": {
+        "description": "Optional working directory to resolve project config layers. If specified, return the effective config as seen from that directory (i.e., including any project layers between `cwd` and the project/repo root).",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "includeLayers": {
+        "type": "boolean"
+      }
+    },
+    "title": "ConfigReadParams",
+    "type": "object"
+  },
+  "alternatives": {
+    "turnFields": {
+      "collaborationMode": {
+        "anyOf": [
+          {
+            "$ref": "#/definitions/v2/CollaborationMode"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "EXPERIMENTAL - Set a pre-set collaboration mode. Takes precedence over model, reasoning_effort, and developer instructions if set.\n\nFor `collaboration_mode.settings.developer_instructions`, `null` means \"use the built-in instructions for the selected mode\"."
+      },
+      "additionalContext": {
+        "additionalProperties": {
+          "$ref": "#/definitions/v2/AdditionalContextEntry"
+        },
+        "description": "Optional client-provided context fragments keyed by an opaque source identifier.",
+        "type": [
+          "object",
+          "null"
+        ]
+      },
+      "permissions": {
+        "description": "Select a named permissions profile id for this turn and subsequent turns. Cannot be combined with `sandboxPolicy`.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "disabledPluginIds": {
+        "description": "Replace this thread's disabled plugin IDs. Omitted/null preserves the list; [] clears it.",
+        "items": {
+          "type": "string"
+        },
+        "type": [
+          "array",
+          "null"
+        ]
+      }
+    },
+    "modeKind": {
+      "description": "Initial collaboration mode to use when the TUI starts.",
+      "enum": [
+        "plan",
+        "default"
+      ],
+      "type": "string"
+    },
+    "settings": {
+      "description": "Settings for a collaboration mode.",
+      "properties": {
+        "developer_instructions": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "reasoning_effort": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/v2/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "type": "object"
+    },
+    "additionalContextKind": {
+      "enum": [
+        "untrusted",
+        "application"
+      ],
+      "type": "string"
+    },
+    "additionalContextEntry": {
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/v2/AdditionalContextKind"
+        },
+        "name": {
+          "description": "Optional name for untrusted context, used to label its tool output.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "type": "object"
+    },
+    "mcpMethods": [
+      "mcpServer/oauth/login",
+      "config/mcpServer/reload",
+      "mcpServerStatus/list",
+      "mcpServer/resource/read",
+      "mcpServer/event/stream/start",
+      "mcpServer/event/stream/stop",
+      "mcpServer/tool/call"
+    ]
+  },
+  "processAndInjection": {
+    "configProperties": {
+      "developer_instructions": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "sandbox_mode": {
+        "anyOf": [
+          {
+            "$ref": "#/definitions/v2/SandboxMode"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "approval_policy": {
+        "anyOf": [
+          {
+            "$ref": "#/definitions/v2/AskForApproval"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "injectItems": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "items": {
+          "description": "Raw Responses API items to append to the thread's model-visible history.",
+          "items": true,
+          "type": "array"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "items",
+        "threadId"
+      ],
+      "title": "ThreadInjectItemsParams",
+      "type": "object"
+    }
+  }
+}
