@@ -2951,12 +2951,11 @@ body {
 
 /* User messages: compact accent-soft card, right-shifted (design §2.1). */
 .message-user {
-  align-self: stretch;
-  padding: var(--sp-3) var(--sp-4);
-  border: 1px solid var(--border);
-  border-left: 2px solid var(--border-strong);
+  align-self: flex-end;
+  max-width: 85%;
+  padding: var(--sp-2) var(--sp-3);
   border-radius: var(--r-md);
-  background: var(--bg-card);
+  background: var(--accent-soft);
   color: var(--text-1);
 }
 
