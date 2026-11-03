@@ -4634,6 +4634,7 @@ body {
 @container composer (min-width: 640px) {
   .composer-footer {
     grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr);
+    column-gap: var(--sp-3);
   }
 
   .composer-footer-right {

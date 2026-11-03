@@ -9,6 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Make composer keyboard hints readable and separate them from the model selector.
 - Restore compact, right-aligned user messages in conversations.
 - Keep suggested write permissions scoped to the workspace for files inside it, and reject broad macOS directory aliases and temporary directories.
 - Close OpenRouter reasoning indicators when answers or tool calls begin, and when streams end unexpectedly, including when reasoning replay is disabled.
