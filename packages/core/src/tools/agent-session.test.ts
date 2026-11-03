@@ -167,18 +167,18 @@ describe("agentTool handler — provider validation (CUT-S2 §2.1)", () => {
     expect(result.error).toBe('Agent: "provider" is only valid with tier "session". See the using-subagents skill.');
   });
 
-  it("provider with tier omitted (default inline) => invalid_input, same exact message", async () => {
+  it("provider with tier omitted accepts the default session tier", async () => {
     const full = createAgentTool({ sessionTier: true });
     const result = await full.handler({ description: "d", prompt: "p", provider: "anthropic-2" }, makeCtx());
     expect(result.ok).toBe(false);
-    expect(result.errorKind).toBe("invalid_input");
-    expect(result.error).toBe('Agent: "provider" is only valid with tier "session". See the using-subagents skill.');
+    expect(result.errorKind).toBeUndefined();
+    expect(result.error).toContain("unavailable");
   });
 
   it("provider validation fires even with NO ports at all wired (fails fast, before any availability check)", async () => {
     const full = createAgentTool({ sessionTier: true });
     const result = await full.handler(
-      { description: "d", prompt: "p", provider: "anthropic-2" },
+      { description: "d", prompt: "p", tier: "inline", provider: "anthropic-2" },
       makeCtx(), // no subagents, no sessionSubagents
     );
     expect(result.errorKind).toBe("invalid_input");
@@ -229,16 +229,10 @@ describe("agentTool handler — session-tier fail-closed lock (CUT-S2 §2.1)", (
     expect(result.error).toBe("Agent: session-tier subagents are unavailable in this host. See the using-subagents skill.");
   });
 
-  it("DISCRIMINATION PIN: default tier (absent) with ONLY sessionSubagents wired never reaches sessionSubagents.run — mirrors agent.test.ts's pre-B1 pin, now proven against the REAL tier branch", async () => {
+  it("an omitted tier reaches the session port", async () => {
     const full = createAgentTool({ sessionTier: true });
-    const sessionPort: SessionSubagentPort = {
-      run: async () => {
-        throw new Error("sessionSubagents.run must not be reached — this request never asked for tier:\"session\"");
-      },
-      send: async () => ({ ok: false, reason: "unavailable", message: "fake port: send is not exercised by this test" }),
-    };
-    const result = await full.handler({ description: "d", prompt: "p" }, makeCtx({ sessionSubagents: sessionPort }));
-    expect(result).toEqual({ ok: false, error: "Agent: subagents are unavailable in this context." });
+    const result = await full.handler({ description: "d", prompt: "p" }, makeCtx({ sessionSubagents: portReturning(BASE_SESSION_OUTCOME) }));
+    expect(result.ok).toBe(true);
   });
 });
 
@@ -399,13 +393,12 @@ describe("agentTool handler — continue_session", () => {
     expect(result.ok === false && result.error).toContain('cannot be combined with "provider"');
   });
 
-  it("continue_session with default (inline) tier => invalid_input", async () => {
+  it("continue_session with the default session tier is accepted", async () => {
     const result = await full.handler(
       { description: "d", prompt: "p", continue_session: "child-9" },
       makeCtx({ sessionSubagents: capturingPort().port }),
     );
-    expect(result).toMatchObject({ ok: false, errorKind: "invalid_input" });
-    expect(result.ok === false && result.error).toContain('only valid with tier "session"');
+    expect(result.ok).toBe(true);
   });
 
   it("session-tier completed with a start progress => formatResultForModel carries the childSessionId + continue_session hint", async () => {
@@ -542,12 +535,12 @@ describe("agentTool handler — send_to", () => {
     );
   });
 
-  it("send_to with default (absent) tier => invalid_input", async () => {
+  it("send_to with the default session tier is accepted", async () => {
     const result = await full.handler(
       { description: "d", prompt: "p", send_to: "child-77" },
       makeCtx({ sessionSubagents: sendPort({ ok: true }).port }),
     );
-    expect(result).toMatchObject({ ok: false, errorKind: "invalid_input" });
+    expect(result.ok).toBe(true);
   });
 
   it.each([
@@ -1284,16 +1277,16 @@ describe("agentTool handler — detach validation (срез 1, precedent: provid
     expect(result.error).toBe('Agent: "detach" is only valid with tier "session". See the using-subagents skill.');
   });
 
-  it("detach:true with tier omitted (default inline) => invalid_input, same exact message", async () => {
+  it("detach:true with tier omitted accepts the default session tier", async () => {
     const full = createAgentTool({ sessionTier: true });
     const result = await full.handler({ description: "d", prompt: "p", detach: true }, makeCtx());
-    expect(result.errorKind).toBe("invalid_input");
-    expect(result.error).toBe('Agent: "detach" is only valid with tier "session". See the using-subagents skill.');
+    expect(result.errorKind).toBeUndefined();
+    expect(result.error).toContain("unavailable");
   });
 
   it("detach:true validation fires even with NO ports at all wired (fails fast, before any availability check)", async () => {
     const full = createAgentTool({ sessionTier: true });
-    const result = await full.handler({ description: "d", prompt: "p", detach: true }, makeCtx());
+    const result = await full.handler({ description: "d", prompt: "p", tier: "inline", detach: true }, makeCtx());
     expect(result.errorKind).toBe("invalid_input");
   });
 
@@ -1578,7 +1571,7 @@ describe("agentTool handler — profile routing", () => {
 
   it('routed profile + inline tier => invalid_input naming tier "session"', async () => {
     const result = await full.handler(
-      { description: "d", prompt: "p", agent_type: "glm-planner" },
+      { description: "d", prompt: "p", tier: "inline", agent_type: "glm-planner" },
       makeCtx({ subagents: routingPort("glm-planner", { connection: "conn-glm" }) }),
     );
     expect(result).toMatchObject({ ok: false, errorKind: "invalid_input" });
@@ -1693,7 +1686,7 @@ describe("agentTool handler — orchestrate default-detach (§2.3)", () => {
       },
     };
     const result = await full.handler(
-      { description: "d", prompt: "p", agent_type: "explore" },
+      { description: "d", prompt: "p", tier: "inline", agent_type: "explore" },
       makeCtx({ orchestrate: true, subagents: inlinePort }),
     );
     expect(result.ok).toBe(true);
@@ -1832,7 +1825,7 @@ describe("agentTool handler — role route stamping (§3.3)", () => {
   it("an inline-tier call of a role whose route carries connection/engine is refused (4269 shape)", async () => {
     const { ctx } = roleCtx({ entries: [{ connection: "conn-claude", model: "m" }] });
     const result = await full.handler(
-      { description: "d", prompt: "p", agent_type: "reviewer" },
+      { description: "d", prompt: "p", tier: "inline", agent_type: "reviewer" },
       ctx,
     );
     expect(result).toMatchObject({ ok: false, errorKind: "invalid_input" });
@@ -1860,7 +1853,7 @@ describe("agentTool handler — role route stamping (§3.3)", () => {
         ({ entries: [{ model: "m-1" }], skipped: [] }) as never,
     };
     const result = await full.handler(
-      { description: "d", prompt: "p", agent_type: "planner" },
+      { description: "d", prompt: "p", tier: "inline", agent_type: "planner" },
       makeCtx({ subagents }),
     );
     expect(result.ok).toBe(true);
@@ -1924,7 +1917,7 @@ describe("agentTool handler — role route stamping (§3.3)", () => {
         ({ entries: [{ model: "m-1" }, { connection: "conn-x", model: "m-2" }], skipped: [] }) as never,
     };
     const result = await full.handler(
-      { description: "d", prompt: "p", agent_type: "planner" },
+      { description: "d", prompt: "p", tier: "inline", agent_type: "planner" },
       makeCtx({ subagents }),
     );
     expect(result.ok).toBe(true);
