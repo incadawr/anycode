@@ -9,7 +9,11 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { isAllowedFileSubresource } from "./file-resource-policy.js";
+import { buildFileResourceRoots, defaultFileResourceRoots } from "./file-resource-roots.js";
 
 const FAKE_HOME = "/fake-home";
 const FAKE_WS = "/fake-ws";
@@ -314,5 +318,65 @@ describe("isAllowedFileSubresource — platform rules", () => {
         }),
       ),
     ).toBe(false);
+  });
+});
+
+describe("file-resource-roots — the broad roots are CANONICALIZED", () => {
+  it("canonicalizes a symlinked temp root AND keeps the raw spelling", () => {
+    // The policy compares REALPATH'd paths, so a root that is only known in
+    // its raw spelling never matches — and the broad-root rules silently
+    // stop applying. The canonical spelling is therefore added, and the
+    // raw one is kept (a realpath'd request may carry either).
+    const base = mkdtempSync(join(tmpdir(), "anycode-roots-"));
+    const real = join(base, "real");
+    const link = join(base, "link");
+    mkdirSync(real);
+    symlinkSync(real, link);
+    const roots = buildFileResourceRoots(base, [link]);
+    expect(roots.tmpdirs).toContain(link);
+    expect(roots.tmpdirs).toContain(realpathSync(link));
+    expect(roots.tmpdirs).toContain(realpathSync(real));
+  });
+
+  it("canonicalizes the home dir and the app profile dir", () => {
+    const base = mkdtempSync(join(tmpdir(), "anycode-home-"));
+    const home = join(base, "home");
+    mkdirSync(join(home, ".anycode"), { recursive: true });
+    const roots = buildFileResourceRoots(home, []);
+    expect(roots.home).toBe(realpathSync(home));
+    expect(roots.profileDir).toBe(realpathSync(join(home, ".anycode")));
+  });
+
+  it("the default roots contain the canonical spelling of the OS temp dir", () => {
+    // On macOS the OS temp dir is `/var/folders/…` while its realpath is
+    // `/private/var/folders/…` — the raw spelling alone would not match a
+    // realpath'd request.
+    const roots = defaultFileResourceRoots();
+    expect(roots.tmpdirs).toContain(tmpdir());
+    expect(roots.tmpdirs).toContain(realpathSync(tmpdir()));
+  });
+
+  it("a document directly in the canonical temp root reads its DIRECT children only", () => {
+    // The end-to-end shape of the defect: the document's directory IS the
+    // canonical temp root, so the request below it is denied.
+    const canonicalTmp = realpathSync(tmpdir());
+    expect(
+      isAllowedFileSubresource(
+        input({
+          requestRealPath: `${canonicalTmp}/nested/secret.json`,
+          documentRealPath: `${canonicalTmp}/index.html`,
+          tmpdirs: defaultFileResourceRoots().tmpdirs,
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isAllowedFileSubresource(
+        input({
+          requestRealPath: `${canonicalTmp}/logo.png`,
+          documentRealPath: `${canonicalTmp}/index.html`,
+          tmpdirs: defaultFileResourceRoots().tmpdirs,
+        }),
+      ),
+    ).toBe(true);
   });
 });

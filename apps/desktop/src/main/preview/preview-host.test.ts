@@ -11,6 +11,9 @@
  */
 
 import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   PREVIEW_EVENT_TYPE,
@@ -2112,6 +2115,30 @@ describe("PreviewHost — request gate: file subresources stay inside the docume
     ).resolves.toBe(false);
     await expect(
       gate({ url: "http://localhost:5173/api", resourceType: "xhr" }),
+    ).resolves.toBe(true);
+  });
+});
+
+describe("PreviewHost — request gate: the broad roots are canonical", () => {
+  it("a document directly in the OS temp dir reads its DIRECT children only", async () => {
+    // No `fileResourceRoots` dep -> the host falls back to the REAL home and
+    // the REAL temp roots. On macOS the temp dir's raw spelling
+    // (`/var/folders/…`) differs from its realpath (`/private/var/folders/…`)
+    // — an uncanonical root would stop being a broad root, and the whole
+    // temp tree would become readable from a document that sits in it.
+    const rig = makeRig();
+    rig.resolveArtifactImpl = async (_tabId, path) => ({ realPath: path });
+    const canonicalTmp = realpathSync(tmpdir());
+    const openPromise = rig.host.openForTab(TAB, { path: join(canonicalTmp, "anycode-preview-doc.html") });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    await openPromise;
+    const gate = rig.windows[0]!.webContents.requestGate!;
+    await expect(
+      gate({ url: pathToFileURL(join(canonicalTmp, "nested/secret.json")).href, resourceType: "xhr" }),
+    ).resolves.toBe(false);
+    await expect(
+      gate({ url: pathToFileURL(join(canonicalTmp, "logo.png")).href, resourceType: "image" }),
     ).resolves.toBe(true);
   });
 });
