@@ -11,11 +11,21 @@ import {
   parseOrchestrateSlash,
   resolveStartOrchestrate,
   startDraftOrchestrateRowProps,
+  showCodexDraftOrchestrateToggle,
   startOrchestrateHint,
   startSendNeedsRolePicker,
 } from "./orchestrate-start.js";
 
 const ROLES = { executor: { primary: { engine: "claude" as const } } };
+
+describe("Codex draft orchestration toggle", () => {
+  it("appears only for an available Codex draft", () => {
+    expect(showCodexDraftOrchestrateToggle("codex", ["core", "codex"])).toBe(true);
+    expect(showCodexDraftOrchestrateToggle("codex", ["core"])).toBe(false);
+    expect(showCodexDraftOrchestrateToggle("claude", ["core", "codex", "claude"])).toBe(false);
+    expect(showCodexDraftOrchestrateToggle("core", ["core", "codex"])).toBe(false);
+  });
+});
 
 describe("parseOrchestrateSlash", () => {
   it("parses a leading /orchestrate token and returns the trimmed task after it", () => {
@@ -59,10 +69,10 @@ describe("resolveStartOrchestrate", () => {
     expect(resolveStartOrchestrate("core", undefined, "hello")).toEqual({ orchestrate: false, text: "hello", bareSlash: false });
   });
 
-  it("orchestrate is core-only: a Codex or Claude draft never orchestrates, and the token is sent literally", () => {
+  it("Codex retains intent while Claude stays unchanged", () => {
     expect(resolveStartOrchestrate("codex", true, "/orchestrate x")).toEqual({
-      orchestrate: false,
-      text: "/orchestrate x",
+      orchestrate: true,
+      text: "x",
       bareSlash: false,
     });
     expect(resolveStartOrchestrate("claude", true, "hello")).toEqual({ orchestrate: false, text: "hello", bareSlash: false });

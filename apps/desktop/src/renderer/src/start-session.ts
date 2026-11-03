@@ -195,8 +195,7 @@ export async function submitStartDraft(
   // own declared vocabulary). Images ride `queueInitialPrompt` for every
   // engine alike — there is no spawn-time attachment channel for any of them.
   if (engine === "core") {
-    // Orchestrate rides LAST in queueInitialPrompt (tab-registry.ts), so the
-    // host sees set_orchestrate before the first user_message.
+    // The registry sends orchestration intent atomically with the first message.
     deps.registry.queueInitialPrompt(
       createdTabId,
       plan.text,
@@ -208,7 +207,11 @@ export async function submitStartDraft(
       plan.orchestrate,
     );
   } else {
-    deps.registry.queueInitialPrompt(createdTabId, prompt, undefined, undefined, engineEffort, images);
+    if (plan.orchestrate) {
+      deps.registry.queueInitialPrompt(createdTabId, plan.text, undefined, undefined, engineEffort, images, undefined, true);
+    } else {
+      deps.registry.queueInitialPrompt(createdTabId, plan.text, undefined, undefined, engineEffort, images);
+    }
   }
   deps.tabsStore.getState().discardDraft();
   return { ok: true, tabId: createdTabId };

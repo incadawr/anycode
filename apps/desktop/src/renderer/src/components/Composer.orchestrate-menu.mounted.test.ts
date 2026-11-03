@@ -225,4 +225,54 @@ describe("Composer — mode menu's Orchestrate row", () => {
     } finally { await act(async () => root.unmount()); }
   });
 
+  it("exposes Codex orchestration only when the host advertises it and waits for the toggle acknowledgement", async () => {
+    useSettingsStore.setState({ snapshot: { settings: cloneDefaults(), secrets: [], providerReady: true, envOverrides: [], readOnly: false, catalog: [] } });
+    const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+    const store = createDesktopStore();
+    const ready = coreReady("build") as Extract<HostToUiMessage, {type:"host_ready"}>;
+    ready.engine = { ...ready.engine!, id: "codex", capabilities: { ...ready.engine!.capabilities, supportsCorePermissions: false } };
+    ready.orchestration = {enabled:false, available:false};
+    store.getState().applyHostMessage(ready);
+    const container = document.createElement("div"); document.body.append(container);
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId:"tab-1",store}}, createElement(Composer))));
+      expect(container.textContent).not.toContain("Orchestrate");
+      await act(async () => store.getState().applyHostMessage({...ready, orchestration:{enabled:false,available:true,posture:"off"}}));
+      const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent === "Orchestrate")!;
+      expect(button).toBeDefined();
+      expect(container.querySelector(".mode-menu")).toBeNull();
+      await act(async () => button.click());
+      await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="role-picker-skip"]')!.click());
+      const request = send.mock.calls.at(-1)![1] as {requestId:string};
+      expect(store.getState().orchestrateActive).toBe(false);
+      await act(async () => store.getState().applyHostMessage({type:"orchestrate_result",requestId:request.requestId,connectionId:"conn",outcome:"applied",enabled:true}));
+      expect(container.textContent).toContain("Orchestrate on");
+    } finally { await act(async () => root.unmount()); }
+  });
+
+  it("sends a Codex slash task atomically after the role picker and retains unavailable tasks", async () => {
+    useSettingsStore.setState({ snapshot: { settings: cloneDefaults(), secrets: [], providerReady: true, envOverrides: [], readOnly: false, catalog: [] } });
+    const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+    const store = createDesktopStore();
+    const ready = coreReady("build") as Extract<HostToUiMessage, {type:"host_ready"}>;
+    ready.engine = { ...ready.engine!, id:"codex", capabilities:{...ready.engine!.capabilities,supportsCorePermissions:false} };
+    ready.orchestration = {enabled:false,available:false};
+    store.getState().applyHostMessage(ready);
+    const container = document.createElement("div"); document.body.append(container);
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId:"tab-1",store}}, createElement(Composer))));
+      const textarea = container.querySelector<HTMLTextAreaElement>(".composer-textarea")!;
+      await act(async () => { Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value")!.set!.call(textarea,"/orchestrate do work"); textarea.dispatchEvent(new Event("input",{bubbles:true})); });
+      await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+      expect(textarea.value).toBe("/orchestrate do work");
+      expect(send).not.toHaveBeenCalled();
+      await act(async () => store.getState().applyHostMessage({...ready,orchestration:{enabled:false,available:true,posture:"off"}}));
+      await act(async () => container.querySelector<HTMLButtonElement>(".composer-send")!.click());
+      await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="role-picker-skip"]')!.click());
+      expect(send).toHaveBeenCalledWith("tab-1",expect.objectContaining({type:"user_message",text:"do work",orchestrate:"enable",connectionId:"conn",requestId:expect.any(String)}));
+    } finally { await act(async () => root.unmount()); }
+  });
+
 });

@@ -191,9 +191,9 @@ describe("submitStartDraft — Orchestrate (start screen)", () => {
     expect(createTab).not.toHaveBeenCalled();
   });
 
-  it("a Codex draft never orchestrates: the flag is ignored and the /orchestrate token is sent literally", async () => {
+  it("a Codex draft queues orchestration intent for host confirmation", async () => {
     const { deps, tabsStore, queueInitialPrompt } = makeDeps({ ok: true, tabId: "t1", workspace: "/ws/a" });
-    deps.rolesConfigured = () => false;
+    deps.rolesConfigured = () => true;
     tabsStore.getState().openDraft("/ws/a");
     tabsStore.getState().setDraftPrompt("/orchestrate hi");
     tabsStore.getState().setDraftOrchestrate(true);
@@ -203,7 +203,7 @@ describe("submitStartDraft — Orchestrate (start screen)", () => {
     const res = await submitStartDraft(deps);
 
     expect(res.ok).toBe(true);
-    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "/orchestrate hi", undefined, undefined, undefined, undefined);
+    expect(queueInitialPrompt).toHaveBeenCalledWith("t1", "hi", undefined, undefined, undefined, undefined, undefined, true);
   });
 });
 
@@ -759,6 +759,22 @@ describe("submitStartDraft — a deferred first fork (GitHub #6)", () => {
     const prompts = port.sent.filter((message) => message.type === "user_message");
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toMatchObject({ type: "user_message", text: "hello deferred" });
+  });
+
+  it("keeps a Codex orchestration draft recoverable when the host does not offer the mode", async () => {
+    const tabsStore = createTabsStore();
+    const registry = createTabRegistry(tabsStore);
+    tabsStore.getState().openDraft("/ws/a");
+    tabsStore.getState().setDraftEngine("codex");
+    tabsStore.getState().setCodexModels([{id:"gpt-5.6-sol"}]);
+    tabsStore.getState().setDraftPrompt("/orchestrate investigate");
+    const port = new FakeUiPort();
+    registry.registerPort("t1", "/ws/a", port as unknown as MessagePort);
+    expect(await submitStartDraft({createTab: async () => ({ok:true,tabId:"t1",workspace:"/ws/a"}), registry, tabsStore, rolesConfigured: () => false}, {skipRoleGate:true})).toEqual({ok:true,tabId:"t1"});
+    expect(port.sent.filter(message => message.type === "user_message")).toHaveLength(0);
+    port.emit({type:"host_ready",workspace:"/ws/a",mode:"build",model:"m1",sessionId:"sess-a",orchestration:{enabled:false,available:false}});
+    expect(port.sent.filter(message => message.type === "user_message")).toHaveLength(0);
+    expect(registry.getStore("t1")!.getState().promptQueue).toMatchObject([{text:"investigate",orchestrate:"enable",requiresRestore:true}]);
   });
 
   it("holds the initial draft when the port closes before host_ready", async () => {

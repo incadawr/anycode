@@ -95,6 +95,7 @@ import {
   orchestrateToggleNeedsRolePicker,
   resolveStartOrchestrate,
   startDraftOrchestrateRowProps,
+  showCodexDraftOrchestrateToggle,
   startOrchestrateHint,
   startSendNeedsRolePicker,
 } from "../orchestrate-start.js";
@@ -1695,6 +1696,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
             dialog was open and called a ready one "not connected"). */}
         <RolePickerDialog
           open={startRolePickerOpen}
+          initialRoles={resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {}, draft.workspace ?? undefined)}
           connections={useSettingsStore.getState().snapshot?.settings.provider.connections ?? []}
           activeConnectionId={useSettingsStore.getState().snapshot?.settings.provider.activeConnectionId}
           onSave={(roles) => void saveStartRoles(roles)}
@@ -1803,6 +1805,17 @@ export function StartScreen({ onToast }: StartScreenProps) {
                   disabled={false}
                   onPick={(id) => useTabsStore.getState().setDraftEnginePreset(id)}
                 />
+                {showCodexDraftOrchestrateToggle(draft.engine, availableEngines) && (
+                  <button
+                    type="button"
+                    className="mode-chip"
+                    aria-pressed={draft.orchestrate === true}
+                    title="Request orchestration when the session starts"
+                    onClick={() => toggleDraftOrchestrate(draft.orchestrate !== true)}
+                  >
+                    Orchestrate{draft.orchestrate ? " (requested)" : ""}
+                  </button>
+                )}
                 {codexModels.length > 0 && (
                   <EngineModelMenu
                     model={{ current: codexDraftModel, available: codexModels }}

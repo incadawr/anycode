@@ -1473,6 +1473,8 @@ export function Composer() {
   // from `orchestrate_changed` acks). Read here for the ModeMenu row and the
   // `/orchestrate` submit path below.
   const orchestrateActive = useTabStore((state) => state.orchestrateActive);
+  const orchestration = useTabStore((state) => state.orchestration);
+  const supportsOrchestration = (engine?.id ?? "core") !== "claude" && orchestration.available;
 
   // Core keeps its exact legacy presentation when `engine` is null. External
   // engines declare only the controls their adapter can honour.
@@ -1528,6 +1530,7 @@ export function Composer() {
     modelDisabled: modelPickDisabled(turn.status, queueInFlight, ready, engine === null),
     idle: !shouldEnqueue(turn.status, queueInFlight) && ready,
     supportsCorePermissions,
+    supportsOrchestration,
     supportsModelSelection,
     supportsManualCompact: engine?.capabilities.supportsManualCompact ?? true,
     shellGitReadOnly,
@@ -2016,7 +2019,7 @@ export function Composer() {
     if (imagesStillLoading()) return;
     const recoverySourceId = tabStore.getState().restoredComposerDraft?.deliveryRequestId ?? restoredDeliveryId;
     if (unresolvedOrchestration(recoverySourceId)) return;
-    if (supportsCorePermissions && /^\s*\/orchestrate(?:\s|$)/.test(reconstitutePasteMarkers(text, pasteBlocks)) && refuseOrchestrateAttachments()) return;
+    if (supportsOrchestration && /^\s*\/orchestrate(?:\s|$)/.test(reconstitutePasteMarkers(text, pasteBlocks)) && refuseOrchestrateAttachments()) return;
     if (restoredPicks) {
       const current = tabStore.getState();
       if ((restoredPicks.model !== undefined && restoredPicks.model !== current.model) ||
@@ -2035,7 +2038,11 @@ export function Composer() {
       setText(""); setPasteBlocks([]); setAttachedImages([]); setRestoredOrchestrate(false); setRestoredPicks(undefined);
       return;
     }
-    const orchestrationTask = supportsCorePermissions ? /^\s*\/orchestrate\s+([\s\S]*\S)\s*$/.exec(outgoing)?.[1] : undefined;
+    const orchestrationTask = (engine?.id ?? "core") !== "claude" ? /^\s*\/orchestrate\s+([\s\S]*\S)\s*$/.exec(outgoing)?.[1] : undefined;
+    if (orchestrationTask !== undefined && !supportsOrchestration) {
+      tabStore.getState().setNotice({ kind: "slash_command_rejected", text: "Orchestration is unavailable in this session. Your draft has been kept." });
+      return;
+    }
     if (orchestrationTask !== undefined) { beginOrchestrateSubmit(orchestrationTask); return; }
     // GitHub #14: a recognized whole-draft slash command is consumed (run or
     // visibly refused) BEFORE the canSend gate and before any queue/steer/
@@ -2353,6 +2360,7 @@ export function Composer() {
       {restoredDeliveryId && <div className="composer-hint">This draft is linked to an earlier delivery. <button type="button" onClick={() => { setText(""); setPasteBlocks([]); setAttachedImages([]); setRestoredOrchestrate(false); setRestoredPicks(undefined); setRestoredDeliveryId(undefined); tabStore.setState((state) => ({pendingComposerImages:[],completedComposerImages:[],composerImageGeneration:state.composerImageGeneration + 1})); }}>Discard this draft and start a new message</button></div>}
       <RolePickerDialog
         open={rolePickerOpen}
+        initialRoles={resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {}, projectRoot)}
         saving={rolePickerSnapshot?.saveOperation !== undefined || rolePickerSnapshot?.completionClaim !== undefined}
         draftStorage={{
           canEdit: () => { const picker = tabStore.getState().composerRolePicker; return !!picker && picker.id === rolePickerSnapshot?.id && !picker.saveOperation && !picker.completionClaim; },
@@ -2546,7 +2554,12 @@ export function Composer() {
               presentation-driven control — core's ModeMenu/permission
               vocabulary is never used for it (`supportsCorePermissions`
               stays false for Codex, so the two are mutually exclusive). */}
-          {supportsCorePermissions && <ModeMenu mode={mode ?? "plan"} disabled={modeChangeDisabled(turn.status, ready)} onChange={handleModeChange} orchestrateActive={orchestrateActive} onToggleOrchestrate={handleToggleOrchestrate} />}
+          {supportsCorePermissions && <ModeMenu mode={mode ?? "plan"} disabled={modeChangeDisabled(turn.status, ready)} onChange={handleModeChange} {...(supportsOrchestration ? { orchestrateActive, onToggleOrchestrate: handleToggleOrchestrate } : {})} />}
+          {engine?.id === "codex" && supportsOrchestration && (
+            <button type="button" className="mode-chip" aria-pressed={orchestrateActive} disabled={engineControlDisabled(turn.status, queueInFlight, ready) || orchestration.posture === "transitioning" || orchestration.posture === "quarantined"} onClick={() => handleToggleOrchestrate(!orchestrateActive)}>
+              {orchestrateActive ? "Orchestrate on" : "Orchestrate"}
+            </button>
+          )}
           {engine?.permissions && (
             <EnginePresetMenu
               permissions={engine.permissions}
