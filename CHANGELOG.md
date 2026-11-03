@@ -12,6 +12,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Use readable Enter key names in task and permission hints. Refresh Git status when returning to its dock tab.
 - Restore terminal turn errors in session transcripts after reopening a session.
 - Return the sanitized error in session results when a core turn fails without a completed answer.
+- A session host that keeps crashing now explains common startup failures.
 - Make composer keyboard hints readable and separate them from the model selector.
 - Restore compact, right-aligned user messages in conversations.
 - Keep suggested write permissions scoped to the workspace for files inside it, and reject broad macOS directory aliases and temporary directories.

@@ -2,6 +2,19 @@ import { describe, expect, it } from "vitest";
 import { hostFailure } from "./host-failure.js";
 
 describe("host failure summaries", () => {
+  it("reports common startup causes without exposing stderr", () => {
+    for (const [stderr, cause] of [
+      ["Error: Cannot find module /Users/alice/private/token", "required module could not be loaded"],
+      ["Error: dlopen /Users/alice/private/token", "native library could not be loaded"],
+      ["SyntaxError: /Users/alice/private/token", "startup syntax error"],
+    ]) {
+      const failure = hostFailure("per_tab_crash_loop", stderr, 1);
+      expect(failure.message).toContain(cause);
+      expect(failure.message).toContain("exit code 1");
+      expect(failure.message).not.toContain("/Users/alice");
+    }
+  });
+
   it("keeps only fixed error classes and system codes", () => {
     const secret = "secret-token-/private/credentials-https://example.test";
     for (const stderr of ["", secret, `\u001b[31mTypeError: EACCES ${secret}\u0000`, `${"x".repeat(40000)}\nError: ENOENT ${secret}`]) {
