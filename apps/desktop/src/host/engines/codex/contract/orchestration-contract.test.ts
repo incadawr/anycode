@@ -34,6 +34,13 @@ describe("orchestration experimental feature contract", () => {
     expect(fixture.alternatives.turnFields.disabledPluginIds).toBeNull();
     expect(recommended.alternatives.turnFields.disabledPluginIds).toBeTruthy();
   });
+  it("pins process configuration keys and the untyped history injection surface", () => {
+    for (const feature of [fixture, recommended]) {
+      expect(Object.keys(feature.processAndInjection.configProperties)).toEqual(expect.arrayContaining(["developer_instructions", "sandbox_mode", "approval_policy"]));
+      expect(feature.processAndInjection.injectItems.required).toEqual(expect.arrayContaining(["threadId", "items"]));
+      expect(feature.processAndInjection.injectItems.properties.items.items).toBe(true);
+    }
+  });
   it("pins the config/read request fields without claiming thread override visibility", () => {
     expect(fixture.configReadParams).toEqual(reference.definitions.v2.ConfigReadParams);
     expect(Object.keys(fixture.configReadParams.properties)).toEqual(expect.arrayContaining(["cwd", "includeLayers"]));

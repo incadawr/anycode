@@ -112,7 +112,13 @@ createInterface({ input: process.stdin }).on('line', line => {
       if (child !== proc) return;
       let m; try { m = JSON.parse(line); } catch { return; }
       // Server request IDs may overlap client request IDs.
-      if (m.id !== undefined && m.method) { send({ id: m.id, error: { code: -32601, message: 'Not available in probe' } }); return; }
+      if (m.id !== undefined && m.method) {
+        if (m.method === 'item/tool/call' && activeTurn && m.params?.threadId === activeTurn.threadId && m.params?.tool === 'anycode_agent') {
+          activeTurn.agentCalls++;
+          send({ id: m.id, result: { success: true, contentItems: [{ type: 'inputText', text: 'FIXTURE_AGENT_RESPONSE_OK' }] } });
+        } else send({ id: m.id, error: { code: -32601, message: 'Not available in probe' } });
+        return;
+      }
       if (m.id !== undefined && pending.has(m.id)) {
         const p = pending.get(m.id); pending.delete(m.id); clearTimeout(p.timer);
         m.error ? p.reject(Error('rpc-rejected')) : p.resolve(m.result); return;
@@ -134,7 +140,7 @@ createInterface({ input: process.stdin }).on('line', line => {
         clearTimeout(activeTurn.timer); const done = activeTurn; activeTurn = undefined;
         const errorText = String(m.params.turn?.error?.message || '').toLowerCase();
         const errorClass = !errorText ? null : /auth|unauthori[sz]ed|forbidden|401|403/.test(errorText) ? 'auth-or-access' : /network|connect|stream|routing|dns|timeout/.test(errorText) ? 'network-or-routing' : /rate|quota|limit/.test(errorText) ? 'quota-or-rate' : 'other';
-        done.resolve({ id: m.params.turn?.id, status: m.params.turn?.status, errorClass, messages: done.messages, fileOrCommandObserved: done.fileOrCommandObserved, outputTokens: done.outputTokens, interrupted: done.interrupted });
+        done.resolve({ id: m.params.turn?.id, status: m.params.turn?.status, errorClass, messages: done.messages, fileOrCommandObserved: done.fileOrCommandObserved, agentCalls: done.agentCalls, outputTokens: done.outputTokens, interrupted: done.interrupted });
       }
       });
     }
@@ -152,30 +158,30 @@ createInterface({ input: process.stdin }).on('line', line => {
       send({ method: 'initialized', params: {} });
     }
     function interruptIfNeeded() { if (activeTurn && (activeTurn.bytes >= TEXT_BYTE_LIMIT || (activeTurn.outputTokens ?? 0) >= OUTPUT_TOKEN_LIMIT)) interrupt(); }
-    async function turn(threadId, text, extra = {}) {
+    async function turn(threadId, text, extra = {}, processPolicy = false) {
       const done = new Promise((resolve, reject) => {
-        activeTurn = { threadId, resolve, reject, messages: [], bytes: 0, outputTokens: null, fileOrCommandObserved: false, interrupted: false,
+        activeTurn = { threadId, resolve, reject, messages: [], bytes: 0, outputTokens: null, fileOrCommandObserved: false, agentCalls: 0, interrupted: false,
           timer: setTimeout(() => { interrupt(); reject(Error('turn-timeout')); activeTurn = undefined; }, TURN_MS) };
       });
       // Attach rejection handler immediately in case turn/start fails or times out.
       done.catch(() => {});
       try {
-        const started = await request('turn/start', { threadId, input: [{ type: 'text', text, text_elements: [] }], effort: 'low', approvalPolicy: 'never', approvalsReviewer: 'user', sandboxPolicy: { type: 'readOnly', networkAccess: false }, ...extra });
+        const started = await request('turn/start', { threadId, input: [{ type: 'text', text, text_elements: [] }], effort: 'low', ...(processPolicy ? {} : { approvalPolicy: 'never', approvalsReviewer: 'user', sandboxPolicy: { type: 'readOnly', networkAccess: false } }), ...extra });
         if (activeTurn) { activeTurn.id = started.turn?.id; interruptIfNeeded(); }
         return await done;
       } catch (error) { if (activeTurn) { clearTimeout(activeTurn.timer); activeTurn = undefined; } throw error; }
     }
-    async function configSnapshot(threadId) {
+    async function configSnapshot(threadId, marker) {
       const out = {};
-      try { const r = await request('config/read', { cwd, includeLayers: true }); out.configRead = { ambient: !!r.config?.mcp_servers?.ambient, ambientEnabled: r.config?.mcp_servers?.ambient?.enabled ?? null, second: !!r.config?.mcp_servers?.second, secondEnabled: r.config?.mcp_servers?.second?.enabled ?? null, multiAgent: r.config?.features?.multi_agent ?? null, layers: Array.isArray(r.layers) }; } catch { out.configRead = null; }
+      try { const r = await request('config/read', { cwd, includeLayers: true }); out.configRead = { ambient: !!r.config?.mcp_servers?.ambient, ambientEnabled: r.config?.mcp_servers?.ambient?.enabled ?? null, second: !!r.config?.mcp_servers?.second, secondEnabled: r.config?.mcp_servers?.second?.enabled ?? null, multiAgent: r.config?.features?.multi_agent ?? null, sandboxMode: r.config?.sandbox_mode ?? null, approvalPolicy: r.config?.approval_policy ?? null, developerMarkerInConfig: marker ? String(r.config?.developer_instructions || '').includes(marker) : null, layers: Array.isArray(r.layers) }; } catch { out.configRead = null; }
       try { const r = await request('mcpServerStatus/list', { threadId }); const items = r.data || []; out.mcp = Object.fromEntries(['ambient', 'second'].map(name => { const item = items.find(x => x.name === name); return [name, { listed: !!item, fixtureToolListed: item ? Object.keys(item.tools || {}).some(key => key.includes('fixture_' + name)) : false }]; })); } catch { out.mcp = null; }
       return out;
     }
-    const recordTurn = t => ({ status: t.status, errorClass: t.errorClass, fileOrCommandObserved: t.fileOrCommandObserved, outputTokensObserved: t.outputTokens, interrupted: t.interrupted });
+    const recordTurn = t => ({ status: t.status, errorClass: t.errorClass, fileOrCommandObserved: t.fileOrCommandObserved, agentCalls: t.agentCalls, outputTokensObserved: t.outputTokens, interrupted: t.interrupted });
     const baseMarker = 'BASE' + randomBytes(6).toString('hex').toUpperCase(), onMarker = 'ON' + randomBytes(6).toString('hex').toUpperCase();
     const baseInstructions = `In each final answer include the exact current base marker ${baseMarker}. Keep responses brief.`;
     const onInstructions = `${baseInstructions}\nWhile this instruction is active, include the exact current additional marker ${onMarker} in each final answer.`;
-    const tools = [{ type: 'function', name: 'anycode_agent', description: 'Fixture agent', inputSchema: { type: 'object', properties: {} } }];
+    const tools = [{ type: 'function', name: 'anycode_agent', description: 'Call this harmless fixture when asked to call anycode_agent; returns a short fixed response.', inputSchema: { type: 'object', properties: {} } }];
     const common = { cwd, sandbox: 'read-only', approvalPolicy: 'never', approvalsReviewer: 'user' };
     const baseConfig = { features: { multi_agent: true }, mcp_servers: { ambient: fixtureConfig('ambient'), second: fixtureConfig('second') } };
     const onConfig = { features: { multi_agent: false }, mcp_servers: { ambient: { enabled: false }, second: { enabled: false } } };
@@ -233,6 +239,13 @@ createInterface({ input: process.stdin }).on('line', line => {
       threeTurnIdsPreserved: Array.isArray(turns) && [firstTurnId, onTurnId, currentTurn.id].every((id, index) => !!id && turns[index]?.id === id),
       firstThreeCompleted: Array.isArray(turns) && turns.length >= 3 && turns.slice(0, 3).every(t => t.status === 'completed') };
     if (match[1] === '0.166.0') {
+      const toolPrompt = 'Вызови инструмент anycode_agent с пустым объектом и кратко сообщи его ответ. Если инструмента нет, скажи что он недоступен.';
+      async function toolObservation() {
+        const t = await turn(threadId, toolPrompt);
+        return { ...recordTurn(t), toolCallObserved: t.agentCalls > 0, fixtureReplyInAssistantText: t.messages.join('\n').includes('FIXTURE_AGENT_RESPONSE_OK') };
+      }
+      try { result.steps.agentBeforeRestart = await toolObservation(); }
+      catch (error) { result.steps.agentBeforeRestart = { error: /^[a-z-]+$/.test(error.message) ? error.message : 'probe-failed' }; }
       const collabMarker = 'COLLAB' + randomBytes(6).toString('hex').toUpperCase();
       const contextMarker = 'CONTEXT' + randomBytes(6).toString('hex').toUpperCase();
       const restartMarker = 'RESTART' + randomBytes(6).toString('hex').toUpperCase();
@@ -266,12 +279,37 @@ createInterface({ input: process.stdin }).on('line', line => {
         const snapshot = await configSnapshot(threadId);
         const read = await request('thread/read', { threadId, includeTurns: true });
         result.steps.cliIsolation = { sameThread: resumed.thread?.id === threadId, historyTurns: read.thread?.turns?.length ?? null, config: snapshot };
+        try { result.steps.agentAfterRestartWithoutResumeDeclaration = await toolObservation(); } catch (error) { result.steps.agentAfterRestartWithoutResumeDeclaration = { error: /^[a-z-]+$/.test(error.message) ? error.message : 'probe-failed' }; }
         try { await request('config/mcpServer/reload', null); result.steps.cliIsolation.afterReload = await configSnapshot(threadId); } catch { result.steps.cliIsolation.reloadAccepted = false; }
         await restartServer();
         const restored = await request('thread/resume', { ...common, threadId });
         const restoredRead = await request('thread/read', { threadId, includeTurns: true });
         result.steps.cliRestored = { sameThread: restored.thread?.id === threadId, historyTurns: restoredRead.thread?.turns?.length ?? null, config: await configSnapshot(threadId) };
       } catch (error) { result.steps.cliIsolationError = /^[a-z-]+$/.test(error.message) ? error.message : 'probe-failed'; }
+      try {
+        await restartServer();
+        const resumed = await request('thread/resume', { ...common, threadId, dynamicTools: tools });
+        result.steps.agentResumeWithUndeclaredField = { sameThread: resumed.thread?.id === threadId, schemaDeclaresField: resumeDynamic, observation: await toolObservation() };
+      } catch (error) { result.steps.agentResumeWithUndeclaredField = { schemaDeclaresField: resumeDynamic, error: /^[a-z-]+$/.test(error.message) ? error.message : 'probe-failed' }; }
+      const processMarker = 'PROCESS' + randomBytes(6).toString('hex').toUpperCase();
+      try {
+        await restartServer([`developer_instructions=${JSON.stringify(`Include the marker ${processMarker} in every final answer.`)}`, 'sandbox_mode="read-only"', 'approval_policy="never"', 'mcp_servers.ambient.enabled=false', 'mcp_servers.second.enabled=false', 'features.multi_agent=false']);
+        // Omit per-thread sandbox/approval and instructions to observe the process layer.
+        const resumed = await request('thread/resume', { threadId, cwd });
+        const config = await configSnapshot(threadId, processMarker);
+        const read = await request('thread/read', { threadId, includeTurns: true });
+        result.steps.processInstructionsOn = { sameThread: resumed.thread?.id === threadId, historyTurns: read.thread?.turns?.length ?? null, echoedSandbox: resumed.sandbox?.type ?? null, echoedNetworkAccess: resumed.sandbox?.networkAccess ?? null, echoedApproval: resumed.approvalPolicy ?? null, config };
+        if (resumed.sandbox?.type !== 'readOnly' || resumed.sandbox?.networkAccess !== false || resumed.approvalPolicy !== 'never') throw Error('process-policy-not-confirmed');
+        const t = await turn(threadId, 'Назови действующие сейчас маркеры из developer-инструкций, не используя историю.', {}, true);
+        const text = t.messages.join('\n');
+        Object.assign(result.steps.processInstructionsOn, recordTurn(t), { baseMarkerObserved: text.includes(baseMarker), processMarkerObserved: text.includes(processMarker), note: 'base marker can be recalled from history; observed response is not proof of instruction composition' });
+        await restartServer();
+        const restored = await request('thread/resume', { threadId, cwd });
+        const afterConfig = await configSnapshot(threadId, processMarker);
+        const after = await turn(threadId, 'Назови только действующие сейчас маркеры из developer-инструкций, не используя историю. Если дополнительного нет, ответь NONE.');
+        const afterText = after.messages.join('\n');
+        result.steps.processInstructionsOff = { ...recordTurn(after), sameThread: restored.thread?.id === threadId, config: afterConfig, baseMarkerObserved: afterText.includes(baseMarker), oldProcessMarkerObserved: afterText.includes(processMarker), note: 'old marker remains in history, so its repetition is not proof of a still-active instruction' };
+      } catch (error) { result.steps.processInstructionsError = /^[a-z-]+$/.test(error.message) ? error.message : 'probe-failed'; }
     } else {
       result.steps.alternatives = { skipped: 'live alternatives are scoped to 0.166.0; fields reported from schema' };
     }
