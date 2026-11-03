@@ -17,6 +17,7 @@ import {
   openTab as openTabAlgebra,
   openTabInBackground as openTabInBackgroundAlgebra,
   readDockWidth,
+  splitTarget,
   type DockStorage,
   type DockTab,
 } from "./dock-layout.js";
@@ -144,7 +145,7 @@ export function createDockStore(storage: DockStorage = typeof window === "undefi
 
     splitRight(id, allowed): void {
       set((state) =>
-        allowed && state.tabs.some((tab) => tab.id === id) ? { splitTabId: id } : state,
+        allowed ? (splitTarget(state.tabs, state.activeTabId, id) ?? state) : state,
       );
     },
 

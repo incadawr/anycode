@@ -103,8 +103,10 @@ describe("dock store", () => {
 
   it("splitRight pins an open tab when allowed; mergeSplit unpins", () => {
     const store = createDockStore(memoryStorage());
+    store.getState().open(TAB_GIT);
     store.getState().open(TAB_MD);
     store.getState().splitRight(TAB_MD.id, true);
+    expect(store.getState().activeTabId).toBe("git");
     expect(store.getState().splitTabId).toBe("preview:md");
     store.getState().mergeSplit();
     expect(store.getState().splitTabId).toBe(null);

@@ -20,6 +20,8 @@ import {
   derivePreviewTabs,
   dockMinWidth,
   isSplittableTab,
+  splitTarget,
+  splitReason,
   openTab,
   openTabInBackground,
   readDockWidth,
@@ -243,9 +245,9 @@ describe("background open + split eligibility (cross-review D1/D3)", () => {
     expect(isSplittableTab({ id: "preview:w", kind: "preview", title: "web" }, "git", "web")).toBe(false);
   });
 
-  it("the active (primary) tab is never split with itself", () => {
-    expect(isSplittableTab(GIT, "git", undefined)).toBe(false);
-    expect(isSplittableTab(MD, "preview:md", "dom-md")).toBe(false);
+  it("the active tab can be split", () => {
+    expect(isSplittableTab(GIT, "git", undefined)).toBe(true);
+    expect(isSplittableTab(MD, "preview:md", "dom-md")).toBe(true);
   });
 
   it("markdown previews, git and subagents remain splittable when not primary", () => {
@@ -253,4 +255,17 @@ describe("background open + split eligibility (cross-review D1/D3)", () => {
     expect(isSplittableTab(MD, "git", undefined)).toBe(true);
     expect(isSplittableTab(GIT, "preview:md", undefined)).toBe(true);
   });
+});
+
+it("promotes the neighboring web preview when splitting the active tab", () => {
+  const sub = { id: "subagents", kind: "subagents" as const, title: "Subagents" };
+  const web = { id: "preview:web", kind: "preview" as const, title: "Web" };
+  expect(splitTarget([sub, web], sub.id, sub.id)).toEqual({ activeTabId: web.id, splitTabId: sub.id });
+  expect(splitTarget([sub], sub.id, sub.id)).toBeNull();
+});
+
+it("explains why splitting is unavailable", () => {
+  expect(splitReason(false, 2)).toBe("Window too narrow to split");
+  expect(splitReason(true, 1)).toBe("Open another tab to split");
+  expect(splitReason(true, 2)).toBeNull();
 });
