@@ -221,3 +221,9 @@ reasoning without a usable stored summary is omitted from replay, including
 older history and responses whose compaction failed. Unset and `full` always
 replay the original under the existing provider policy, even if a summary is
 stored.
+
+### Export and import a setup
+
+In Settings → Provider, choose **Export setup** to save a JSON file, or **Import setup** to preview and apply one. The preview lists connection destinations and lets you update, copy, or skip name collisions. A different destination must be added as a copy. After import, use the imported credential buttons to enter API keys or sign in through the connection editor. Keys and tokens are never exported.
+
+The file contains supported provider connection details and role profiles. It does not include unused custom providers, project-to-profile assignments, active selections, proxy profiles or their credentials, application settings, session history, vault paths, or secrets. Named proxy references require a matching proxy profile on the receiving installation. Connections with legacy proxy URLs cannot be exported. URL query strings and fragments are rejected. Connection names must be unique. Keep any sensitive information out of names and URL paths.

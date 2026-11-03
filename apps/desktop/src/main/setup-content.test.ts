@@ -42,9 +42,10 @@ describe("setup content", () => {
     expect(second).toEqual(first);
     const changed = structuredClone(content);
     changed.connections[0]!.provider.baseUrl = "https://new.example.test";
-    const updated = applySetupImport(planSetupImport(changed, first), choices);
-    expect(updated.provider.connections[1]).toEqual(initial.provider.connections[1]);
-    expect(updated.provider.connections[0]!.providerId).not.toBe(updated.provider.connections[1]!.providerId);
+    expect(() => applySetupImport(planSetupImport(changed, first), choices)).toThrow(/Destination changed/);
+    const updated = applySetupImport(planSetupImport(changed, first), { connections: { Team: "add-copy" }, roleProfiles: { "Team roles": "skip" } });
+    expect(updated.provider.connections[0]).toEqual(first.provider.connections[0]);
+    expect(updated.provider.connections[2]!.id).not.toBe(first.provider.connections[0]!.id);
   });
   it("rejects malformed content, duplicate names and missing references", () => {
     const content = buildSetupContent(fixture(), selection);
@@ -61,6 +62,20 @@ describe("setup content", () => {
     const content = buildSetupContent(settings, selection);
     const result = applySetupImport(planSetupImport(content, settings), { connections: { Gateway: "add-copy" }, roleProfiles: { "Team roles": "skip" } });
     expect(result.provider.connections[1]!.label).toBe("Gateway (2)");
+  });
+  it("exports and restores catalog connections", () => {
+    const settings = cloneDefaults();
+    settings.provider.connections = [{ id: "conn-catalog", providerId: "openai", label: "OpenAI" }];
+    const content = buildSetupContent(settings, { connectionIds: ["conn-catalog"], roleProfileIds: [] });
+    expect(content.connections[0]!.provider.catalogId).toBe("openai");
+    const imported = applySetupImport(planSetupImport(content, cloneDefaults()), { connections: {}, roleProfiles: {} });
+    expect(imported.provider.connections[0]!.providerId).toBe("openai");
+    expect(planSetupImport(content, imported).connections[0]!.existingBaseUrls).toEqual([content.connections[0]!.provider.baseUrl]);
+  });
+  it("rejects URL query strings", () => {
+    const content = buildSetupContent(fixture(), selection);
+    content.connections[0]!.provider.baseUrl += "?key=secret";
+    expect(() => validateSetupContent(content)).toThrow();
   });
   it("requires explicit collision choices and refuses dangling skipped routes", () => {
     const content = buildSetupContent(fixture(), selection);

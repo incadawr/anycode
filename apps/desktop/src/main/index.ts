@@ -238,6 +238,7 @@ import { PREVIEW_CHANGED_CHANNEL } from "../shared/preview-panel.js";
 import { registerMdDocIpc } from "./preview/md-doc-ipc.js";
 import type { MdDocDeps } from "./preview/md-doc.js";
 import { OAuthEngine, oauthConfigFromEntry } from "./oauth.js";
+import { registerSetupIpc } from "./setup-ipc.js";
 import { registerProviderIpc } from "./provider-ipc.js";
 import { flushPendingConnectionQuota, handleProviderQuotaMessage } from "./connection-quota.js";
 import {
@@ -3170,6 +3171,7 @@ void app.whenReady().then(async () => {
     },
   };
   registerSettingsIpc(settingsIpcDeps);
+  registerSetupIpc(settingsIpcDeps);
   // the per-tab workspace-trust answer. Main resolves folder + hash
   // from the tab's own record; the renderer sends a tab id and a decision only.
   // folder keys are realpath-canonical (symlink and target share

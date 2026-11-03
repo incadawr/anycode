@@ -9,6 +9,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Export and import provider connections and role profiles as a key-free setup file.
+
 - Prepare key-free connection and role profile sharing for plugins.
 
 - Show five-hour and weekly MiniMax subscription quotas on provider connection cards.
