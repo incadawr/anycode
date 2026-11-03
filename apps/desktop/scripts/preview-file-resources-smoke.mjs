@@ -1,7 +1,7 @@
 /** Isolated Electron check of local preview file subresources and navigation. */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, realpathSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, realpathSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -72,6 +72,29 @@ try {
   await check("New document sibling", files.next, "synthetic-next");
   await check("Previous document sibling", files.sibling, null);
   console.log("PASS: in-page navigation moved the document anchor");
+
+  const workspace = join(profile, "project");
+  const workspaceLink = join(profile, "project-link");
+  mkdirSync(join(workspace, "site"), { recursive: true });
+  mkdirSync(join(workspace, "shared"));
+  symlinkSync(workspace, workspaceLink);
+  writeFileSync(join(workspace, "shared", "a.css"), "body { color: rgb(12, 34, 56); }");
+  const linkedDoc = join(workspace, "site", "index.html");
+  writeFileSync(linkedDoc, `<!doctype html><link rel="stylesheet" href="../shared/a.css"><title>Linked workspace</title>`);
+  const linkedTab = await api("POST", "/tabs", { kind: "new", workspace: workspaceLink });
+  assert.equal(linkedTab.ok, true, JSON.stringify(linkedTab));
+  const linkedPreview = await api("POST", `/tabs/${linkedTab.tabId}/previews`, { path: join(workspaceLink, "site", "index.html") });
+  assert.equal(linkedPreview.ok, true, JSON.stringify(linkedPreview));
+  const linkedPage = await wait(async () => (await call("Target.getTargets")).targetInfos.find(t => t.url === pathToFileURL(linkedDoc).href));
+  const linkedSession = (await call("Target.attachToTarget", { targetId: linkedPage.targetId, flatten: true })).sessionId;
+  const linkedEval = async expression => {
+    const result = await cdp.call("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, linkedSession);
+    if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
+    return result.result.value;
+  };
+  assert.equal(await linkedEval("getComputedStyle(document.body).color"), "rgb(12, 34, 56)");
+  assert.equal(await linkedEval(`fetch(${JSON.stringify(pathToFileURL(files.sibling).href)}).then(r => r.text()).catch(() => null)`), null);
+  console.log("PASS: symlinked workspace loads ../shared/a.css and blocks files outside the workspace");
 } finally {
   if (cdp) { try { const info = JSON.parse(readFileSync(join(profile, "automation.json"), "utf8")); await cdp.automation(info, "/quit", "POST", {}); } catch {} cdp.ws.close(); }
   if (app.exitCode === null && app.signalCode === null) try { process.kill(-app.pid, "SIGTERM"); } catch {}
