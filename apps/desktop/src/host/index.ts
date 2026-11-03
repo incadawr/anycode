@@ -4881,6 +4881,7 @@ async function boot(): Promise<void> {
       ...(childSessionPortHandle !== undefined
         ? {
             backgroundChildren: {
+              moveAgent: (id: string) => childSessionPortHandle!.backgroundAgent(id),
               list: () => childSessionPortHandle!.listBackgroundChildren(),
               cancel: (childSessionId: string) => childSessionPortHandle!.cancelBackgroundChild(childSessionId),
               cancelAll: () => childSessionPortHandle!.cancelAllBackgroundChildren(),

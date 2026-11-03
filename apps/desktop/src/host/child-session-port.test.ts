@@ -2886,6 +2886,7 @@ describe("child-session-port — synchronous join budget handoff (GitHub #17 sli
     const result = await pending;
     expect(result.background).toEqual({ reason: "requested" });
     expect(result.childSessionId).toBe("child-join");
+    expect(result.finalText).toContain("moved to background");
     expect(h.port.backgroundAgent("spawn-join-1")).toBe(false);
     expect(cancels(h.sent)).toHaveLength(0);
     h.emit({ type: CHILD_RUN_EVENT_TYPE, requestId, kind: "terminal", status: "completed", finalText: "done", truncated: false, turns: 1, toolCalls: 0, durationMs: 5, childSessionId: "child-join" });
