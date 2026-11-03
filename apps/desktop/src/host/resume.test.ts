@@ -119,6 +119,14 @@ function toolResultItem(
 // ═════════════════════════════════════════════════════════════════════════════
 
 describe("Session — session_history hydration", () => {
+  it("preserves compacted conversation order when hydrating history", async () => {
+    const h = createHarness({ steps: [], bootHistory: [{ ...userItem("summary", "summary", 200), kind: "compact_summary" }, userItem("older", "retained", 100)] });
+    try { h.send({ type: "ui_ready" }); expect((await h.waitFor(isSessionHistory)).items.map((item) => item.id)).toEqual(["summary", "older"]); } finally { h.close(); }
+  });
+  it("inserts a failure after its anchored turn without reordering history", async () => {
+    const h = createHarness({ steps: [], bootHistory: [{ ...userItem("u1", "first", 500), turnId: "t1" }, userItem("u2", "next", 100)], bootTurnErrors: [{ kind: "turn_error", id: "e1", createdAt: 50, turnId: "t1", engine: "core", model: "m", error: { name: "ProviderError", message: "failed" } }] });
+    try { h.send({ type: "ui_ready" }); expect((await h.waitFor(isSessionHistory)).items.map((item) => item.id)).toEqual(["u1", "e1", "u2"]); } finally { h.close(); }
+  });
   it("hydrates a terminal error and restores the last result", async () => {
     const h = createHarness({ steps: [], bootHistory: [userItem("u1", "hello", 10)], bootTurnErrors: [{ kind: "turn_error", id: "e1", createdAt: 20, turnId: "t1", engine: "core", model: "m", error: { name: "ProviderError", message: "Network error", code: "network" } }] });
     try {

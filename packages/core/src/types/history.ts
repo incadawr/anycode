@@ -37,6 +37,8 @@ export interface ReasoningSource {
   provider?: string;
   baseUrl: string;
   model: string;
+  afterItemId?: string;
+  nativeTurnId?: string;
 }
 
 /**
