@@ -29,7 +29,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Keep SubAgent status badges visible when model and engine names are long.
 - Insert dropped file and folder paths into the composer, while keeping image attachments for supported models.
 
-- Refuse session delegation when it would discard an inline profile's restrictions.
+- Preserve profile tool and permission restrictions for core child sessions, including delegation through engine bridges and workflows.
 
 - Give actionable alternatives when a connection-bound agent cannot be spawned.
 

@@ -1694,24 +1694,11 @@ describe("agentTool handler — orchestrate default-detach (§2.3)", () => {
     }
   });
 
-  it.each(["explore", "custom-reviewer"])("refuses a session for %s without discarding its restrictions", async (agentType) => {
-    const inline: SubagentPort = {
-      listAgentTypes: () => [agentType],
-      hasSessionRestrictions: () => true,
-      run: async () => { throw new Error("unexpected inline run"); },
-    };
-    const sessionRun = vi.fn(async () => BASE_SESSION_OUTCOME);
-    const result = await full.handler(
-      { description: "d", prompt: "p", agent_type: agentType, tier: "session" },
-      makeCtx({ subagents: inline, sessionSubagents: { run: sessionRun, send: async () => ({ ok: true }) } }),
-    );
-    expect(result).toMatchObject({ ok: false, errorKind: "invalid_input", error: expect.stringContaining('use tier "inline" or omit tier') });
-    expect(sessionRun).not.toHaveBeenCalled();
-  });
-
   it("runs explore as a session when settings route it to a connection", async () => {
+    const restrictions = { tools: [...PERSONAS.explore.tools], readOnly: true };
     const inline: SubagentPort = {
       run: async () => { throw new Error("unexpected inline run"); },
+      sessionRestrictions: () => restrictions,
       resolveRoleRoute: () => ({ entries: [{ connection: "conn", model: "model" }], skipped: [] }),
     };
     const sessionRun = vi.fn(async () => BASE_SESSION_OUTCOME);
@@ -1720,7 +1707,40 @@ describe("agentTool handler — orchestrate default-detach (§2.3)", () => {
       makeCtx({ subagents: inline, sessionSubagents: { run: sessionRun, send: async () => ({ ok: true }) } }),
     );
     expect(result.ok).toBe(true);
-    expect(sessionRun).toHaveBeenCalledTimes(1);
+    expect(sessionRun).toHaveBeenCalledWith(expect.objectContaining({ connectionId: "conn", restrictions }), expect.anything());
+  });
+
+  it("carries restrictions when a native role falls back to a core connection", async () => {
+    const restrictions = { tools: ["Read"], readOnly: true };
+    const subagents: SubagentPort = {
+      listAgentTypes: () => ["reviewer"],
+      run: async () => { throw new Error("unexpected inline run"); },
+      hasSessionRestrictions: () => true,
+      sessionRestrictions: () => restrictions,
+      engineProfile: () => ({ engine: "codex", systemPrompt: "profile" }),
+      resolveRoleRoute: () => ({ entries: [{ connection: "other" }], skipped: [{ entry: { engine: "codex" }, reason: "unavailable" }] }),
+    };
+    const sessionRun = vi.fn(async () => BASE_SESSION_OUTCOME);
+    const result = await full.handler({ description: "d", prompt: "p", agent_type: "reviewer", tier: "session" },
+      makeCtx({ subagents, sessionSubagents: { run: sessionRun, send: async () => ({ ok: true }) } }));
+    expect(result.ok).toBe(true);
+    expect(sessionRun).toHaveBeenCalledWith(expect.objectContaining({ connectionId: "other", restrictions }), expect.anything());
+  });
+
+  it("refuses restricted native engine profiles", async () => {
+    const sessionRun = vi.fn(async () => BASE_SESSION_OUTCOME);
+    const subagents: SubagentPort = {
+      listAgentTypes: () => ["custom"],
+      run: async () => { throw new Error("unexpected inline run"); },
+      hasSessionRestrictions: () => true,
+      engineProfile: () => ({ engine: "codex", systemPrompt: "profile" }),
+    };
+    const result = await full.handler(
+      { description: "d", prompt: "p", agent_type: "custom", tier: "session" },
+      makeCtx({ subagents, sessionSubagents: { run: sessionRun, send: async () => ({ ok: true }) } }),
+    );
+    expect(result).toMatchObject({ ok: false, errorKind: "invalid_input", error: expect.stringContaining("native engine") });
+    expect(sessionRun).not.toHaveBeenCalled();
   });
 
   it("does not fall back inline when the resolved route selects a provider", async () => {
@@ -1859,6 +1879,7 @@ describe("agentTool handler — role route stamping (§3.3)", () => {
         throw new Error("inline run not expected");
       },
       listAgentTypes: () => ["general-purpose", "explore", "planner", "executor", "reviewer"],
+      hasSessionRestrictions: () => false,
       coreProfile: () => ({ systemPrompt: "role body", model: "stale-primary", effort: "xhigh" }),
       profileRouting: () => connectionBound ? { connection: "conn" } : null,
       resolveRoleRoute: (agentType: string) =>
@@ -2078,6 +2099,7 @@ describe("agentTool handler — role route stamping (§3.3)", () => {
         throw new Error("inline run not expected");
       },
       listAgentTypes: () => ["planner", "executor", "reviewer"],
+      hasSessionRestrictions: () => false,
       profileRouting: () => ({ provider: "z-ai" }),
       resolveRoleRoute: () =>
         ({ entries: [{ connection: "conn-glm", model: "glm-5.3" }], skipped: [], turnBudget: 80 }) as never,
@@ -2109,6 +2131,7 @@ describe("agentTool handler — role route stamping (§3.3)", () => {
         throw new Error("inline run not expected");
       },
       listAgentTypes: () => ["planner", "executor", "reviewer"],
+      hasSessionRestrictions: () => false,
       resolveRoleRoute: () => route,
     };
     await full.handler(

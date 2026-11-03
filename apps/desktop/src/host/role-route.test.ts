@@ -420,13 +420,14 @@ it.each([
     subscribe: (cb) => { listener = cb; return () => {}; }, onDetachedTerminal: composition.onTerminal,
   });
   composition.attach(port);
-  const pending = port.run({ agentType: "executor", description: "Review", prompt: "task", spawnToolCallId: "original", ...request }, {});
+  const restrictions = { tools: ["Read"], readOnly: true };
+  const pending = port.run({ agentType: "executor", description: "Review", prompt: "task", spawnToolCallId: "original", restrictions, nativeRestrictionsUnsupported: true, ...request }, {});
   const id = sent[0]!.requestId;
   listener({ type: CHILD_RUN_EVENT_TYPE, kind: "accepted", requestId: id, childSessionId: "child", childTabId: "tab", model: "A" });
   if (request.detach) await pending;
   listener({ type: CHILD_RUN_EVENT_TYPE, kind: "terminal", requestId: id, status, finalText: text, truncated: false, turns: 1, toolCalls: 0, durationMs: 1, childSessionId: "child" });
   await pending;
   expect(sent).toHaveLength(fallback ? 2 : 1);
-  if (fallback) expect(sent[1]).toMatchObject({ model: "B", prompt: "task" });
+  if (fallback) expect(sent[1]).toMatchObject({ model: "B", prompt: "task", restrictions });
   if (request.detach && !fallback) expect(delivered).toEqual([text]);
 });

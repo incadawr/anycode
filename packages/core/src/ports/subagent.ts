@@ -308,6 +308,7 @@ export interface SubagentPort {
   coreProfile?(agentType: string): { systemPrompt: string; model?: string; effort?: ReasoningEffort } | null;
   /** Whether the resolved inline persona has restrictions a session cannot carry. */
   hasSessionRestrictions?(agentType: string): boolean;
+  sessionRestrictions?(agentType: string): import("./session-subagent.js").SessionProfileRestrictions | null;
   /** Resolves an md-profile's `connection:`/`provider:` frontmatter; null for built-ins, engine profiles, and unrouted profiles. */
   profileRouting?(agentType: string): { provider?: string; connection?: string } | null;
   /**

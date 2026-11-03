@@ -54,6 +54,7 @@ export type {
   SubagentRunOptions,
 } from "./subagent.js";
 export type {
+  SessionProfileRestrictions,
   SessionSubagentOutcome,
   SessionSubagentPort,
   SessionSubagentRequest,

@@ -179,6 +179,7 @@ import { createDiagnosticsRing, noteWireMessage } from "../shared/diagnostics-ri
  * budget matches its real provider window instead of the generic default.
  */
 
+import { restrictChildPermissions, restrictChildRegistry } from "./child-profile-restrictions.js";
 import { randomUUID } from "node:crypto";
 import { homedir, release, tmpdir } from "node:os";
 import { realpath as fsRealpath } from "node:fs/promises";
@@ -3983,7 +3984,8 @@ async function boot(): Promise<void> {
      * (ToolRegistry.register/unregister already are).
      */
     function recomputeInspectImageRegistration(): boolean {
-      const shouldRegister = recognizerConfigured && media.imageInputEnabled() === false;
+      const shouldRegister = recognizerConfigured && media.imageInputEnabled() === false &&
+        (args.child?.restrictions === undefined || args.child.restrictions.tools.includes("InspectImage"));
       const isRegistered = registry.has("InspectImage");
       if (shouldRegister === isRegistered) {
         return false;
@@ -4063,6 +4065,7 @@ async function boot(): Promise<void> {
     // already reflects it (no post-boot recompose needed for the common
     // case of a blind model booting with a recognizer already configured).
     recomputeInspectImageRegistration();
+    restrictChildRegistry(registry, args.child?.restrictions);
 
     // Boot section components computed once (design P7.17/W2): renderRepoMap()'s
     // repoMapStatus side effect fires here, before Session's envStatus seam reads
@@ -4087,13 +4090,13 @@ async function boot(): Promise<void> {
       // untouched SafeCommand(Mode) pair — an empty runAllowBashEntries (the
       // env-unset default) makes it a byte-identical no-op wrapper, so this
       // composition degrades to exactly the pre-slice-2 chain.
-      permissionEngine: new RuleAwarePermissionEngine(
+      permissionEngine: restrictChildPermissions(new RuleAwarePermissionEngine(
         new RunAllowBashPermissionEngine(
           new SafeCommandPermissionEngine(new ModePermissionEngine()),
           runAllowBashEntries,
         ),
         rules,
-      ),
+      ), args.child?.restrictions),
       permissionBroker: broker,
       // Stage 1 / 4730: optional; absent = byte-identical to pre-4702.
       ...(effectiveAskClassifierBoot !== undefined ? { askClassifier: effectiveAskClassifierBoot } : {}),

@@ -64,6 +64,7 @@ import type {
 } from "../ports/subagent.js";
 import {
   getPersona,
+  sessionRestrictionsForPersona,
   isKnownPersona,
   isReservedPersonaName,
   listPersonaNames,
@@ -763,14 +764,17 @@ export function createSubagentRunner(
         ...(persona.effort !== undefined ? { effort: persona.effort } : {}),
       };
     },
+    sessionRestrictions(agentType: string) {
+      const persona = (isKnownPersona(agentType) && isReservedPersonaName(agentType))
+        ? getPersona(agentType)
+        : currentProfiles().get(agentType) ?? (isKnownPersona(agentType) ? getPersona(agentType) : undefined);
+      return persona ? sessionRestrictionsForPersona(persona, opts?.readConnectionTargets !== undefined) : null;
+    },
     hasSessionRestrictions(agentType: string): boolean {
       const persona = (isKnownPersona(agentType) && isReservedPersonaName(agentType))
         ? getPersona(agentType)
         : currentProfiles().get(agentType) ?? (isKnownPersona(agentType) ? getPersona(agentType) : undefined);
-      if (!persona) return false;
-      const baseline = getPersona("general-purpose").tools;
-      return persona.toolsExplicit === true || persona.permissions !== undefined ||
-        persona.tools.length !== baseline.length || persona.tools.some((tool) => !baseline.includes(tool));
+      return persona !== undefined && sessionRestrictionsForPersona(persona) !== null;
     },
     profileRouting(agentType: string): { provider?: string; connection?: string } | null {
       // same flip as engineProfile — overridable role personas

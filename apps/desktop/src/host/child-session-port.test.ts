@@ -90,6 +90,26 @@ function terminalEvent(requestId: string, overrides: Partial<Extract<ChildRunEve
   };
 }
 
+describe("profile restriction transport", () => {
+  it("refuses restricted native engine fallbacks before spawn", async () => {
+    const { port, sent } = harness();
+    const outcome = await port.run({ agentType: "reviewer", description: "d", prompt: "p", spawnToolCallId: "call", engine: "codex", restrictions: { tools: ["Read"], readOnly: true } }, {});
+    expect(outcome.status).toBe("error");
+    expect(outcome.finalText).toContain("native engine");
+    expect(sent).toHaveLength(0);
+  });
+  it("forwards the restrictions through the validated spawn message", async () => {
+    const { port, sent, emit } = harness();
+    const restrictions = { tools: ["Read"], readOnly: true, permissions: { allow: [], deny: [{ toolName: "Write" }] } };
+    const pending = port.run({ agentType: "explore", description: "d", prompt: "p", spawnToolCallId: "call", restrictions }, {});
+    const request = spawns(sent)[0]!;
+    expect(parseChildSpawnRequest(request)?.restrictions).toEqual(restrictions);
+    expect(parseChildSpawnRequest({ ...request, restrictions: { ...restrictions, tools: "Read" } })).toBeNull();
+    emit(terminalEvent(request.requestId));
+    await pending;
+  });
+});
+
 describe("createChildSessionPort (CUT-S2 §2.6.1)", () => {
   it("correlates concurrent run()s by requestId: replies arriving in REVERSED order still resolve the matching promise, and an unrelated requestId is ignored", async () => {
     const { port, sent, emit } = harness();

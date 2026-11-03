@@ -20,8 +20,17 @@ import { archMapTool } from "./arch-map.js";
 
 export class ToolRegistry {
   private readonly tools = new Map<string, AnyToolDefinition>();
+  private allowedNames?: ReadonlySet<string>;
+
+  restrictTo(names: readonly string[]): void {
+    const requested = new Set(names);
+    this.allowedNames = this.allowedNames
+      ? new Set([...this.allowedNames].filter((name) => requested.has(name))) : requested;
+    for (const name of this.tools.keys()) if (!this.allowedNames.has(name)) this.tools.delete(name);
+  }
 
   register(tool: AnyToolDefinition, options?: { silentDuplicateWarning?: boolean }): void {
+    if (this.allowedNames && !this.allowedNames.has(tool.metadata.name)) return;
     if (this.tools.has(tool.metadata.name) && options?.silentDuplicateWarning !== true) {
       console.warn(`ToolRegistry: duplicate registration for tool "${tool.metadata.name}" (overwriting)`);
     }

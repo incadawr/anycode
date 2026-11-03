@@ -89,10 +89,8 @@ export interface PermissionRule {
  *  - `allow` only downgrades a base `ask` to `allow`; a base `allow` needs no
  *    help and a base `deny` is never overridden;
  *  - both lists are applied per child CONFIG (subagents/runner.ts
- *    buildChildConfig), so they narrow exactly one profile's children. That is
- *    the IN-PROCESS tier (the default); a session-tier child is its own session
- *    with its own gate and does not read them — the same scope the profile's
- *    `tools:` list has.
+ *    buildChildConfig), so they narrow exactly one profile's children. Core
+ *    session children also apply the overlay over their session gate.
  */
 export interface ProfilePermissionRules {
   allow: readonly PermissionRule[];
