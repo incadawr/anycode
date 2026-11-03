@@ -1320,6 +1320,18 @@ describe("SqlitePersistenceAdapter", () => {
     adapter.close();
   });
 
+  it("builds the same model messages after storing a terminal error", async () => {
+    const adapter = new SqlitePersistenceAdapter(":memory:");
+    await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+    await adapter.appendHistory("s1", [makeItem({ id: "u1" })]);
+    const build = (items: HistoryItem[]) => toSdkMessages(new ConversationHistory({ initial: items }).toMessages(), "openai-chat-completions");
+    const before = build(await adapter.loadHistory("s1"));
+    await adapter.appendTurnError("s1", { kind: "turn_error", id: "e1", createdAt: 20, turnId: "t1", engine: "core", model: "m", error: { name: "ProviderError", message: "not model context" } });
+    expect(build(await adapter.loadHistory("s1"))).toEqual(before);
+    expect(build((await adapter.loadCliCoreRootSnapshot("s1"))!.history)).toEqual(before);
+    await adapter.close();
+  });
+
   it("round-trips assistant reasoning parts with provider metadata and source, in order (GitHub #41)", async () => {
     const adapter = new SqlitePersistenceAdapter(":memory:");
     const session = await adapter.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
