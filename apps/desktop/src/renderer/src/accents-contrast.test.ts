@@ -31,6 +31,12 @@ it("finds accent selectors independently of spacing, comments and attribute orde
     .toEqual([{ accent: "gold", theme: "dark", body: "--accent: #abc;" }]);
 });
 const baseFor = (theme: string) => declarations(tokens.match(new RegExp(':root\\[data-theme="'+theme+'"\\]\\s*\\{([^}]+)'))![1]!);
+it("keeps message text readable on the dark card and unchanged in light theme", () => {
+  const dark = baseFor("dark"), light = baseFor("light");
+  expect(cr(hex2rgb(dark["--text-message"]!), hex2rgb(dark["--bg-card"]!))).toBeGreaterThanOrEqual(7);
+  expect(lum(hex2rgb(dark["--text-message"]!))).toBeLessThan(lum(hex2rgb(dark["--text-1"]!)));
+  expect(light["--text-message"]).toBe("var(--text-1)");
+});
 const blockFor = (theme: string, key: string) => blocks.filter(b => b.theme === theme && b.accent === key);
 const rgba = (v: string) => v.match(/[\d.]+/g)!.map(Number) as [number, number, number, number];
 // Shared by the actual palette checks and the soft-gate regression below.

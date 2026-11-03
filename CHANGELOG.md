@@ -34,6 +34,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Softened message text in the dark theme for more comfortable reading.
 - Dialogs and utility panels use the same visual style as the main window.
 - Settings use the same look as the main window.
 - New always-allow write rules must use an absolute path mask; relative patterns such as `src/**` can no longer be added (existing ones keep working inside the workspace).
