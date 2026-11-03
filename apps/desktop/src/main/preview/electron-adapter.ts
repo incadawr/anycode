@@ -130,6 +130,7 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
   const cdpListeners: Array<(method: string, params: unknown) => void> = [];
   let attached = false;
   let messageWired = false;
+  const seenLogEntries = new Set<string>();
 
   // Kills the common STUN/UDP exfil path that `onBeforeRequest` cannot see
   // (cut §1.1/F2, "one cheap adapter hardening that IS in scope"); the
@@ -142,6 +143,17 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
     }
     messageWired = true;
     wc.debugger.on("message", (_event, method, params) => {
+      if (method === "Log.entryAdded") {
+        const entry = (params as { entry?: { source?: string; level?: string; text?: string; timestamp?: number; url?: string; lineNumber?: number } }).entry;
+        if (entry?.text && entry.source !== "javascript") {
+          const key = JSON.stringify([entry.source, entry.level, entry.text, entry.timestamp, entry.url, entry.lineNumber]);
+          if (!seenLogEntries.has(key)) {
+            seenLogEntries.add(key);
+            if (seenLogEntries.size > 1000) seenLogEntries.delete(seenLogEntries.values().next().value!);
+            consoleListener(entry.level === "error" ? "error" : entry.level === "warning" ? "warn" : "log", entry.text.slice(0, RING_MAX_MSG_CHARS));
+          }
+        }
+      }
       if (method === "Runtime.exceptionThrown") {
         const details = (params as { exceptionDetails?: { exception?: { description?: string }; text?: string } })
           .exceptionDetails;
@@ -181,6 +193,7 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
     }
     attached = true;
     wireMessages();
+    wc.debugger.sendCommand("Log.enable").catch(() => {});
     wc.debugger.sendCommand("Runtime.enable").catch((error: unknown) => {
       attached = false;
       console.warn("[preview] failed to enable CDP Runtime domain", error);
