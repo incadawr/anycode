@@ -9,7 +9,7 @@ import { createNativeCodexSession } from "./engines/codex/codex-engine.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
 import { Outbound, Session } from "./session.js";
 import { MemFs, nodeWirePort } from "./test-harness.js";
-import { formatChildApprovalNotice, formatChildStallNotice } from "@anycode/core";
+import { formatChildApprovalNotice, formatChildStallNotice, formatChildTaskNotification, mapChildRunStatusToNotification } from "@anycode/core";
 import { CHILD_RUN_EVENT_TYPE, parseChildRunEvent, parseChildSpawnRequest, type ChildRunEvent, type ChildSpawnRequest } from "../shared/child-sessions.js";
 import { cloneDefaults } from "../settings/schema.js";
 import { ChildReportQueue } from "./child-report-queue.js";
@@ -30,7 +30,13 @@ function rig() {
   const listeners = new Set<(event: ChildRunEvent) => void>();
   const emit = (raw: unknown) => { const event = parseChildRunEvent(raw); if (!event) throw new Error("invalid scripted event"); for (const listener of listeners) listener(event); };
   const health = new RoleHealthCache();
-  const routed = createRoutedChildComposition({ health, describeError: String, resolve: () => null, prepare: req => req, record: () => {}, deliver: (outcome) => queue.add(outcome.spawnToolCallId, outcome.finalText, { status: outcome.status, durationMs: outcome.durationMs }), report: (id, text, meta) => queue.add(id, text, meta) });
+  const routed = createRoutedChildComposition({ health, describeError: String, resolve: () => null, prepare: req => req, record: () => {}, deliver: (outcome, req) => queue.add(outcome.spawnToolCallId, formatChildTaskNotification({
+    taskId: outcome.spawnToolCallId, toolUseId: outcome.spawnToolCallId, agentId: outcome.childSessionId, subagentType: req.agentType,
+    status: mapChildRunStatusToNotification(outcome.status, outcome.declaredDoneAtCeiling === true), summary: outcome.finalText,
+    ...(outcome.cancelledBy === "user" ? { cancelledBy: "user" as const } : {}),
+    ...(outcome.finalTurnFinishReason === "length" ? { finalTurnFinishReason: "length" as const } : {}),
+    ...(outcome.status === "max_turns" && outcome.declaredDoneAtCeiling !== true ? { turnLimitTurns: outcome.turns } : {}),
+  }), { status: outcome.status, durationMs: outcome.durationMs }), report: (id, text, meta) => queue.add(id, text, meta) });
   let preset = "full-access";
   const composition = createForeignOrchestrationComposition({ settings: () => settings, profiles: async () => [], projectRoot: "/project", preset: () => preset, health, routed });
   composition.captureBaseAuthority(preset);
@@ -46,7 +52,7 @@ function rig() {
     return bridge.handle({ id: 1, method: "item/tool/call", params: { ...active, callId: id, tool: "anycode_agent", arguments: { agent_type: role, description: "work", prompt: "do work" } } }, response, active, () => {});
   }
   function accepted(spawn: ChildSpawnRequest) { emit({ type: CHILD_RUN_EVENT_TYPE, kind: "accepted", requestId: spawn.requestId, childSessionId: "child", childTabId: "tab", model: spawn.model ?? "native" }); }
-  function terminal(spawn: ChildSpawnRequest, status: "completed" | "error" | "cancelled" | "max_turns", text: string) { emit({ type: CHILD_RUN_EVENT_TYPE, kind: "terminal", requestId: spawn.requestId, status, finalText: text, truncated: status === "max_turns", turns: 3, toolCalls: 0, durationMs: 10, childSessionId: "child" }); }
+  function terminal(spawn: ChildSpawnRequest, status: "completed" | "error" | "cancelled" | "max_turns", text: string, lengthCut = false) { emit({ type: CHILD_RUN_EVENT_TYPE, kind: "terminal", requestId: spawn.requestId, status, finalText: text, truncated: lengthCut, ...(lengthCut ? { finalTurnFinishReason: "length" } : {}), turns: 3, toolCalls: 0, durationMs: 10, childSessionId: "child" }); }
   return { settings, sent, reports, queue, response, dispatch, accepted, terminal, emit, bridge, forwardReports: (sink: typeof forwardReport) => { forwardReport = sink; } };
 }
 
@@ -62,7 +68,7 @@ describe("Codex role dispatch through the child wire", () => {
     expect(r.response.result).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
     expect(r.reports).toHaveLength(0);
     r.terminal(spawn, "completed", "finished work");
-    expect(r.reports).toEqual([expect.objectContaining({ type: "child_report", id: "call-1", text: "finished work" })]);
+    expect(r.reports).toEqual([expect.objectContaining({ type: "child_report", id: "call-1", text: expect.stringContaining("finished work") })]);
     r.queue.ack("call-1");
     r.queue.resendAll();
     expect(r.reports).toHaveLength(1);
@@ -73,7 +79,7 @@ describe("Codex role dispatch through the child wire", () => {
     await vi.waitFor(() => expect(r.sent).toHaveLength(1));
     const spawn = r.sent[0]!; r.accepted(spawn); await pending;
     r.terminal(spawn, status, `${status} details`);
-    expect(r.reports[0]).toMatchObject({ id: "call-1", text: `${status} details`, childTerminal: { status } });
+    expect(r.reports[0]).toMatchObject({ id: "call-1", text: expect.stringContaining(`${status} details`), childTerminal: { status } });
   });
 
   it("reloads role profile for the next wire request", async () => {
@@ -122,7 +128,7 @@ describe("Codex role dispatch through the child wire", () => {
     } else {
       await new Promise(resolve => setImmediate(resolve));
       expect(r.sent).toHaveLength(1);
-      expect(r.reports[0]).toMatchObject({ id: "first", text });
+      expect(r.reports[0]).toMatchObject({ id: "first", text: expect.stringContaining(text) });
     }
   });
 
@@ -196,6 +202,42 @@ async function nativeRig() {
 }
 
 describe("native Session, Codex and renderer report queue", () => {
+  it.each([
+    { status: "error", lengthCut: false, marker: "<status>failed</status>" },
+    { status: "cancelled", lengthCut: false, marker: "<status>cancelled</status>" },
+    { status: "max_turns", lengthCut: false, marker: "TURN LIMIT after 3 turns" },
+    { status: "completed", lengthCut: true, marker: "TRUNCATED CHILD REPORT" },
+  ] as const)("delivers $status terminal to the next native turn (lengthCut=$lengthCut)", async ({ status, lengthCut, marker }) => {
+    const r = await nativeRig();
+    try {
+      const connectionId = r.store.getState().beginOrchestrationToggle("on")!;
+      r.send({ type: "set_orchestrate", requestId: "on", enabled: true, connectionId });
+      await vi.waitFor(() => expect(r.servers).toHaveLength(1));
+      r.releaseTransition();
+      await vi.waitFor(() => expect(r.store.getState().orchestration.posture).toBe("on"));
+      const server = r.servers[0]!;
+      r.send({ type: "user_message", requestId: "task", text: "delegate" });
+      await vi.waitFor(() => expect(server.turnStartParams()).toHaveLength(1));
+      await vi.waitFor(() => expect(r.engine.activeTurnDetails).not.toBeNull());
+      const pending = server.serverRequest({ id: 1, method: "item/tool/call", params: { threadId: server.threadId, turnId: server.turnId, callId: "terminal-call", tool: "anycode_agent", arguments: { agent_type: "executor", description: "work", prompt: "do work" } } });
+      await vi.waitFor(() => expect(r.child.sent).toHaveLength(1));
+      const spawn = r.child.sent[0]!;
+      r.child.accepted(spawn); await pending;
+      r.child.terminal(spawn, status, "terminal details", lengthCut);
+      await vi.waitFor(() => expect(r.frames).toContainEqual({ type: "child_report_ack", id: "terminal-call" }));
+      expect(server.turnStartParams()).toHaveLength(1);
+      server.completeTurn("completed");
+      await vi.waitFor(() => expect(server.turnStartParams()).toHaveLength(2));
+      const wire = JSON.stringify(server.turnStartParams()[1]);
+      expect(wire).toContain(marker);
+      expect(wire).toContain("terminal details");
+      expect(r.child.sent).toHaveLength(1);
+      server.completeTurn("completed");
+      await vi.waitFor(() => expect(r.store.getState().turn.status).toBe("idle"));
+      expect(server.turnStartParams()).toHaveLength(2);
+    } finally { await r.close(); }
+  });
+
   it("holds a report during a verified transition without steering or disarming unattended approval", async () => {
     const r = await nativeRig();
     try {
