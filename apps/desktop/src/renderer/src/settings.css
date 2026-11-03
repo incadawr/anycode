@@ -2759,7 +2759,7 @@
 .profile-tile-value {
   font-size: var(--fs-xl);
   font-weight: var(--w-semibold);
-  color: var(--text-1);
+  color: var(--text-message);
   font-variant-numeric: tabular-nums;
 }
 

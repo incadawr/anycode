@@ -39,6 +39,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - Softened message text and primary usage statistics in the dark theme for more comfortable reading.
+- Blockquote headings and code retain their original colours, and Stats tiles use the softened text colour.
 - Dialogs and utility panels use the same visual style as the main window.
 - Settings use the same look as the main window.
 - Refreshed the main window with the updated dark and light design palette, sidebar, conversation, composer, and dock.
