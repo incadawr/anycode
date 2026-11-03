@@ -16,6 +16,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Local HTML previews can no longer load files outside their own folder (or workspace), including the app profile and shared temp folders. The restriction follows in-page navigation, and a document inside the app profile is never widened by a workspace.
 - A session host that keeps crashing now explains common startup failures.
 - Show readable preview console objects in the console panel and browser tools.
+- Keep background agent action buttons visible when progress text is long.
 - Keep local preview file access closed while a navigated document is being resolved or cannot be resolved.
 - Restore terminal turn errors in session transcripts after reopening a session.
 - Return the sanitized error in session results when a core turn fails without a completed answer.
