@@ -16,7 +16,7 @@
  *
  * Sandboxed CJS build — nothing else belongs here.
  */
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { isRendererUrl } from "../main/main-navigation.js";
 import { TAB_CLOSED_ENVELOPE_TYPE, HOST_EXITED_ENVELOPE_TYPE, PORT_ENVELOPE_TYPE, type PortEnvelope } from "../shared/envelopes.js";
 import {
@@ -754,6 +754,7 @@ ipcRenderer.on(TERMINAL_PORT_ENVELOPE_TYPE, (event, payload: { tabId: string }) 
 // no ports, no arbitrary channels, no decrypted secret ever crosses back — a
 // value only travels in via setSecret.
 contextBridge.exposeInMainWorld("anycode", {
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   homeDirectory: () => ipcRenderer.invoke("anycode:home-directory") as Promise<string>,
   // the answer to a folder's project-trust question. The payload is a
   // tab id and a decision ONLY; main resolves the folder and the hash itself.
