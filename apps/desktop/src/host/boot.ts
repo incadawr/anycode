@@ -137,6 +137,15 @@ export interface HostArgs {
  * malformed child triple must never silently produce a HALF-populated
  * `HostArgs.child`, which downstream code treats as an all-or-nothing signal).
  */
+export function parseHostArgsForFailure(argv: string[]): HostArgs {
+  const safeArgs: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--child-restrictions") { i++; continue; }
+    safeArgs.push(argv[i]!);
+  }
+  return parseHostArgs(safeArgs);
+}
+
 export function parseHostArgs(argv: string[]): HostArgs {
   let sessionId: string | undefined;
   let resume = false;

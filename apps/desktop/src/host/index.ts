@@ -386,6 +386,7 @@ import {
   hostDiagnosticSink,
   isChildSessionBoot,
   parseHostArgs,
+  parseHostArgsForFailure,
   readConnectionModelCapabilities,
   readConnectionModelSettingsSync,
   resolveChildMaxTurns,
@@ -5101,14 +5102,15 @@ async function boot(): Promise<void> {
     const rawFailure = `host failed to initialize: ${describeError(error)}`;
     const safeFailure = sanitizeBootFailure(rawFailure);
     initFailure = safeFailure.message;
-    if (parseHostArgs(process.argv.slice(2)).child !== undefined) {
+    const failureArgs = parseHostArgsForFailure(process.argv.slice(2));
+    if (failureArgs.child !== undefined) {
       postHostControlMessage(childBootFailure(initFailure, safeFailure.truncated));
     }
     console.error("[host]", scrubFailureText(rawFailure) === rawFailure ? rawFailure : initFailure);
     // make the crash cause visible in the per-session diagnostic
     // file too (host stdio is inherited, so this console.error alone would not
     // reach a diagnostic artifact). Safe, fixed-vocabulary code only.
-    recordHostBootFailure(process.env.ANYCODE_DIAGNOSTICS_DIR, parseHostArgs(process.argv.slice(2)).sessionId, error);
+    recordHostBootFailure(process.env.ANYCODE_DIAGNOSTICS_DIR, failureArgs.sessionId, error);
   } finally {
     // Env-hardening (ruling §3, slice 2.2.3): runs on BOTH the success and the
     // init-failure path (defense-in-depth — a degraded host still leaks
