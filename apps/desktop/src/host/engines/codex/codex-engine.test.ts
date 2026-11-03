@@ -1367,13 +1367,13 @@ function notices(events: AgentEvent[]): string[] {
 }
 
 describe("Codex orchestration restart", () => {
-  async function setup(options: { empty?: boolean; readUnsupported?: boolean; badEcho?: boolean; noRollout?: boolean; neverFactory?: boolean; bridge?: CodexDynamicToolBridge; approvals?: CodexApprovalBridge } = {}) {
+  async function setup(options: { empty?: boolean; readUnsupported?: boolean; badEcho?: boolean; noRollout?: boolean; neverFactory?: boolean; noInventory?: boolean; bridge?: CodexDynamicToolBridge; approvals?: CodexApprovalBridge } = {}) {
     const baseConfig = { mcp_servers: { ambient: { enabled: true } }, features: { multi_agent: true }, sandbox_mode: "workspace-write", approval_policy: "on-request" };
-    const onConfig = { mcp_servers: { ambient: { enabled: false } }, features: { multi_agent: false }, sandbox_mode: "read-only", approval_policy: "never" };
+    const onConfig = { mcp_servers: { ambient: { enabled: false } }, features: { multi_agent: false }, apps: { _default: { enabled: false } }, sandbox_mode: "read-only", approval_policy: "never" };
     const initial = new FakeAppServer();
     const baseRequest = initial.request.bind(initial);
     initial.request = <T>(method: string, params?: unknown, opts?: { timeoutMs?: number }) => {
-      if (method === "config/read") return Promise.resolve({ config: baseConfig } as T);
+      if (method === "config/read") return Promise.resolve({ config: options.noInventory ? {} : baseConfig } as T);
       if (method === "thread/read") return options.readUnsupported ? Promise.reject(new Error("list_turns is not supported yet")) : Promise.resolve({ thread: { id: "fresh-thread", turns: options.empty ? [] : [{ id: "prior" }] } } as T);
       return baseRequest<T>(method, params, opts);
     };
@@ -1400,6 +1400,26 @@ describe("Codex orchestration restart", () => {
     }, persist);
     return { initial, engine, servers, overrides, persist, releaseFactory: () => releaseFactory?.(), controller: new OrchestrationController(engine.orchestrationPolicy) };
   }
+
+  it("fails closed without an MCP inventory before restarting", async () => {
+    const r = await setup({ noInventory: true });
+    expect(await r.controller.apply(true, "build")).toBe(false);
+    expect(r.initial.closeCount).toBe(0);
+    expect(r.overrides).toHaveLength(0);
+    expect(r.engine.orchestrationPolicy!.availability().supported).toBe(false);
+  });
+
+  it("tracks the engine posture in the browser guard across ON and OFF", async () => {
+    const bridge = new CodexDynamicToolBridge([], undefined);
+    const spy = vi.spyOn(bridge, "setBrowserRestriction");
+    const r = await setup({ bridge });
+    const restricted = spy.mock.calls[0]![0];
+    expect(restricted()).toBe(false);
+    expect(await r.controller.apply(true, "build")).toBe(true);
+    expect(restricted()).toBe(true);
+    expect(await r.controller.apply(false, "build")).toBe(true);
+    expect(restricted()).toBe(false);
+  });
 
   it("restarts ON/OFF with the same thread and reasserts policy on each turn", async () => {
     const r = await setup(); const authority = { preset: "ask" };
