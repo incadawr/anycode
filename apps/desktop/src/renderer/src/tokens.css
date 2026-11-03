@@ -73,6 +73,7 @@
   --border-control: rgba(255, 255, 255, 0.37);
 
   --text-1:     #ECE9E3;
+  --text-message: #CFCFCF;
   --text-2:     #A2A6B0;
   --text-3:     #8B90A0;
   --text-ghost: rgba(236, 233, 227, 0.40);
@@ -117,6 +118,7 @@
   --border-control: rgba(28, 24, 18, 0.54);
 
   --text-1:     #1C1A17;
+  --text-message: var(--text-1);
   --text-2:     rgba(28, 26, 23, 0.74);
   --text-3:     rgba(28, 26, 23, 0.72);
   --text-ghost: rgba(28, 26, 23, 0.65);
