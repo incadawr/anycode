@@ -27,4 +27,3 @@ export function formatConsoleArguments(args: RemotePreview[]): string {
   };
   return args.map((arg) => format(arg)).join(" ").slice(0, RING_MAX_MSG_CHARS);
 }
-
