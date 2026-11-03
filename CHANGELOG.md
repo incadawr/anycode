@@ -9,6 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Restore terminal turn errors in session transcripts after reopening a session.
 - Return the sanitized error in session results when a core turn fails without a completed answer.
 
 ## [0.0.68] — 2026-11-03

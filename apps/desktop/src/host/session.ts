@@ -848,6 +848,7 @@ export interface SessionOptions {
    * ui_ready (design §3.3). Empty for a fresh session -> no emission.
    */
   bootHistory?: ReturnType<SessionEngine["historyItems"]>;
+  bootTurnErrors?: readonly TurnErrorRecord[];
   /**
    * Dev/automation-ONLY override for `SESSION_HISTORY_MAX_ITEMS` (
    * S4): a replay recording needs a long session hydrated in full. Resolved
@@ -1321,6 +1322,7 @@ export class Session {
   private readonly sessionId: string;
   private readonly persistence: SessionPersistence | undefined;
   private readonly saveTurnError: SessionOptions["saveTurnError"];
+  private readonly bootTurnErrors: readonly TurnErrorRecord[];
   /** GitHub #36: durable compaction rows; see SessionOptions.compactionRecords. */
   private readonly compactionRecords: CompactionRecordSeam | undefined;
   /**
@@ -1818,6 +1820,7 @@ export class Session {
     this.checkpointContextUsage = options.initialContextUsage ?? null;
     this.persistence = options.persistence;
     this.saveTurnError = options.saveTurnError;
+    this.bootTurnErrors = options.bootTurnErrors ?? [];
     this.compactionRecords = options.compactionRecords;
     this.usageAudit = options.usageAudit;
     this.rules = options.rules;
@@ -1854,7 +1857,7 @@ export class Session {
     this.titleSet = this.currentTitle !== undefined || (options.hasTitle ?? false);
     this.historyMaxItems = options.historyMaxItems ?? SESSION_HISTORY_MAX_ITEMS;
     this.presentationJournal = new PresentationJournal(this.historyMaxItems, REPLAY_BUFFER_CAP);
-    this.sessionHistory = buildSessionHistory(options.bootHistory ?? [], this.historyMaxItems);
+    this.sessionHistory = buildSessionHistory(options.bootHistory ?? [], this.historyMaxItems, this.bootTurnErrors);
     const publicHistory = options.bootHistory ?? this.engine.historyItems();
     this.latestTurnId = [...publicHistory].reverse().find((item) => item.turnId !== undefined)?.turnId ?? null;
     for (const item of [...publicHistory].reverse()) {
@@ -1863,6 +1866,10 @@ export class Session {
       if (!text) continue;
       this.latestPublicResult = { source: "history_recovery", turnId: null, requestId: null, nativeTurnId: null, historyItemId: item.id, terminalReason: "unknown", publicAnswer: text.slice(0, 32000), truncated: text.length > 32000, completedAt: null };
       break;
+    }
+    const lastError = this.bootTurnErrors.at(-1);
+    if (lastError && !publicHistory.some((item) => item.createdAt > lastError.createdAt)) {
+      this.latestPublicResult = { source: "history_recovery", turnId: lastError.turnId, requestId: null, nativeTurnId: null, historyItemId: lastError.id, terminalReason: "error", publicAnswer: lastError.error.message.slice(0, 32000), truncated: lastError.error.message.length > 32000, completedAt: lastError.createdAt };
     }
     // Slice P7.25/F3: subscribe to live LSP status transitions. The listener is
 
@@ -2741,7 +2748,7 @@ export class Session {
         // the pre-switch transcript; keep the switch-time snapshot (the ring
         // carries everything newer, the native-engine discipline).
         if (this.engine.id === "core" && !this.engineSwitched) {
-          this.sessionHistory = buildSessionHistory([...this.engine.historyItems()], this.historyMaxItems);
+          this.sessionHistory = buildSessionHistory([...this.engine.historyItems()], this.historyMaxItems, this.bootTurnErrors);
         }
         this.sendSessionHistory();
         const historyTracksTurns = this.engine.id === "core" && !this.engineSwitched;
@@ -6201,13 +6208,12 @@ function accumulateCheckpointTokens(
 function buildSessionHistory(
   bootHistory: readonly HistoryItem[],
   maxItems: number,
+  errors: readonly TurnErrorRecord[] = [],
 ): { items: WireHistoryItem[]; truncated: boolean } | null {
-  if (bootHistory.length === 0) {
+  if (bootHistory.length === 0 && errors.length === 0) {
     return null;
   }
-  const truncated = bootHistory.length > maxItems;
-  const kept = truncated ? bootHistory.slice(-maxItems) : bootHistory;
-  const items: WireHistoryItem[] = kept.map((item) => ({
+  const items: WireHistoryItem[] = bootHistory.map((item) => ({
     id: item.id,
     createdAt: item.createdAt,
     ...(item.kind !== undefined ? { kind: item.kind } : {}),
@@ -6221,5 +6227,8 @@ function buildSessionHistory(
     ...(item.step !== undefined ? { step: item.step } : {}),
     message: item.message,
   }));
-  return { items, truncated };
+  for (const record of errors) items.push({ id: record.id, createdAt: record.createdAt, kind: "turn_error", turnId: record.turnId, error: record.error, message: { role: "assistant", content: [] } });
+  items.sort((a, b) => a.createdAt - b.createdAt);
+  const truncated = items.length > maxItems;
+  return { items: truncated ? items.slice(-maxItems) : items, truncated };
 }

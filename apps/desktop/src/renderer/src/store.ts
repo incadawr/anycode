@@ -1811,6 +1811,10 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
 
   for (const [index, item] of items.entries()) {
     const message = item.message;
+    if (item.kind === "turn_error") {
+      if (item.error) blocks.push({ kind: "error", id: `${item.id}:0`, error: item.error });
+      continue;
+    }
 
     // GitHub #36: core's compaction installs its summary as a user-role
     // `compact_summary` item — the ONE durable trace a swap leaves in history.
