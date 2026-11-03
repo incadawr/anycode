@@ -61,11 +61,11 @@ describe("MiniMax quota persistence", () => {
     resetConnectionQuotaThrottles();
   });
   afterEach(async () => { resetConnectionQuotaThrottles(); await rm(dir, { recursive: true, force: true }); });
-  it("persists the primary window and notifies the renderer", async () => {
+  it("persists both windows and notifies the renderer", async () => {
     const notify = vi.fn();
-    const service = createMiniMaxQuotaService({ settingsPath: path, vault: { getSecretValue: async () => key }, fetch: () => async () => response(), onPersisted: notify });
+    const service = createMiniMaxQuotaService({ settingsPath: path, vault: { getSecretValue: async () => key }, fetch: () => async () => new Response(JSON.stringify({ base_resp: { status_code: 0 }, model_remains: [{ current_interval_remaining_percent: 80, current_weekly_remaining_percent: 40 }] })), onPersisted: notify });
     await service.refresh("c1");
-    expect((await loadSettings(path)).settings.provider.connections[0]?.lastQuota).toMatchObject({ usedPercent: 20, windowDurationMins: 300, source: "minimax-token-plan" });
+    expect((await loadSettings(path)).settings.provider.connections[0]?.lastQuota).toMatchObject({ usedPercent: 20, windowDurationMins: 300, secondary: { usedPercent: 60, windowDurationMins: 10080 }, source: "minimax-token-plan" });
     expect(notify).toHaveBeenCalledTimes(1);
   });
   it("uses the connection model to select the quota row", async () => {

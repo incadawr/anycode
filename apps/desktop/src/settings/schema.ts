@@ -345,6 +345,11 @@ const connectionSchema = z.object({
       resetsAt: z.number().optional(),
       observedAt: z.string(),
       source: z.string(),
+      secondary: z.object({
+        usedPercent: z.number().min(0).max(100),
+        windowDurationMins: z.number().optional(),
+        resetsAt: z.number().optional(),
+      }).optional(),
     })
     .optional()
     .catch(undefined),

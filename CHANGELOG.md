@@ -11,7 +11,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- A MiniMax subscription connection now shows its remaining five-hour quota and reset time on its card in Settings. Pay-as-you-go keys are left alone.
+- A MiniMax subscription connection now shows its remaining five-hour and weekly quota with reset times on its card in Settings. Pay-as-you-go keys are left alone.
 - Dropping a file or folder onto the composer inserts its path (relative to the session's workspace when inside it, quoted if it contains spaces). Images are still attached on models that accept them; on models that do not, their path is inserted instead.
 
 ### Fixed

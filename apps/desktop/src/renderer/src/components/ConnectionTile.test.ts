@@ -425,6 +425,14 @@ describe("connectionQuotaLine (the provider-reported quota line)", () => {
     ).toBe("5h · 20% left · resets in 5h");
   });
 
+  it("renders both quota windows with their resets", () => {
+    expect(connectionQuotaLine({
+      usedPercent: 80, windowDurationMins: 300, resetsAt: Date.parse("2026-10-24T17:00:00.000Z") / 1000,
+      secondary: { usedPercent: 60, windowDurationMins: 10080, resetsAt: Date.parse("2026-10-29T12:00:00.000Z") / 1000 },
+      observedAt: "2026-10-24T12:00:00.000Z", source: "minimax-token-plan",
+    }, NOW)).toBe("5h · 20% left · resets in 5h | Weekly · 40% left · resets in 5d");
+  });
+
   it("returns null for an absent lastQuota (no block, no fabricated 0%)", () => {
     expect(connectionQuotaLine(undefined, NOW)).toBeNull();
   });

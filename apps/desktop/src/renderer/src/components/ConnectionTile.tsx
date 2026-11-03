@@ -285,11 +285,14 @@ export function connectionQuotaLine(
     return null;
   }
   const familyName = lastQuota.source.match(/ratelimit-([a-z_]+)-/)?.[1] ?? null;
-  const label = quotaWindowLabel(lastQuota.windowDurationMins, familyName);
-  const percentLeft = Math.min(100, Math.max(0, Math.round(100 - lastQuota.usedPercent)));
-  const resetsPart =
-    lastQuota.resetsAt != null ? ` · resets in ${formatAge(lastQuota.resetsAt * 1000, now)}` : "";
-  return `${label} · ${percentLeft}% left${resetsPart}`;
+  const formatWindow = (window: { usedPercent: number; windowDurationMins?: number; resetsAt?: number }) => {
+    const label = quotaWindowLabel(window.windowDurationMins, familyName);
+    const percentLeft = Math.min(100, Math.max(0, Math.round(100 - window.usedPercent)));
+    const resetsPart = window.resetsAt != null ? ` · resets in ${formatAge(window.resetsAt * 1000, now)}` : "";
+    return `${label} · ${percentLeft}% left${resetsPart}`;
+  };
+  const primary = formatWindow(lastQuota);
+  return lastQuota.secondary ? `${primary} | ${formatWindow(lastQuota.secondary)}` : primary;
 }
 
 /** What clicking the tile does — it silently changed the default for new sessions before. */
@@ -358,6 +361,8 @@ export function ConnectionTile({
     quotaLine != null && connection.lastQuota?.observedAt
       ? `Reported by provider · observed ${formatAge(Date.parse(connection.lastQuota.observedAt), now)}`
       : "Reported by provider";
+
+  const fullQuotaTitle = connection.lastQuota?.secondary ? `${quotaLine} · ${quotaTitle}` : quotaTitle;
 
   useEffect(() => {
     if (!menuOpen) {
@@ -450,7 +455,7 @@ export function ConnectionTile({
           <span>{presentation.text}</span>
         </div>
         {quotaLine != null && (
-          <div className="connection-quota" title={quotaTitle}>
+          <div className="connection-quota" title={fullQuotaTitle}>
             {quotaLine}
           </div>
         )}
