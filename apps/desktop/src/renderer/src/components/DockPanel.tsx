@@ -145,7 +145,7 @@ export function DockPanel({ mode, width, onToast, subagents, canSplitNow, splitT
       );
     }
     if (tab.id === "git") {
-      return <GitPanel />;
+      return <GitPanel visible={publishBounds || tab.id === splitTabId} />;
     }
     return <div className="dock-empty">No side panel selected.</div>;
   }

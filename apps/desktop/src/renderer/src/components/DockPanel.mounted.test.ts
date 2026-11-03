@@ -19,6 +19,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ActiveTabBody, SessionSurface } from "../App.js";
 import { createDesktopStore } from "../store.js";
+import { tabRegistry } from "../tab-registry.js";
 import type { DesktopStoreApi } from "../tab-registry.js";
 import { TabContext } from "../tab-context.js";
 import { childLayoutStore } from "../child-layout.js";
@@ -108,6 +109,36 @@ describe("dock resize handle placement (GitHub #31)", () => {
       childLayoutStore.getState().enterSplit("tab");
     });
   }
+
+  it("refreshes repository status when Review becomes visible again", async () => {
+    vi.useFakeTimers();
+    const status = { head: { branch: "main", detached: false, sha: "abc1234", ahead: 0, behind: 0 }, staged: [], unstaged: [], untracked: [] as string[], dirtyCount: 0, filesTruncated: false };
+    let files: string[] = [];
+    const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation((_tab, message) => {
+      if (message.type !== "git_command") return;
+      if (message.command.op === "refresh") store.getState().applyHostMessage({ type: "git_status", status: { ...status, untracked: files, dirtyCount: files.length } });
+      store.getState().applyHostMessage({ type: "git_result", requestId: message.requestId, outcome: { ok: true, kind: "unit" } });
+    });
+    try {
+      await mountBody();
+      await act(async () => {
+        store.getState().gitSetPanelOpen(true);
+        useDockStore.getState().open({ id: "git", kind: "git", title: "Review" });
+        usePreviewStore.getState().applyChanged({ tabId: "tab", visiblePanelPreviewId: "md", previews: [{ previewId: "md", tabId: "tab", url: "file:///doc.md", sourcePath: "/doc.md", title: "doc.md", status: "ready", container: "panel", viewKind: "dom-md" }] });
+      });
+      await act(async () => { useDockStore.getState().focus("git"); vi.advanceTimersByTime(150); });
+      await act(async () => vi.advanceTimersByTime(150));
+      expect(container.textContent).toContain("No untracked files.");
+      await act(async () => useDockStore.getState().focus("preview:md"));
+      files = ["new-file.txt"];
+      await act(async () => useDockStore.getState().focus("git"));
+      await act(async () => vi.advanceTimersByTime(150));
+      expect(container.textContent).toContain("new-file.txt");
+      expect(send).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("renders the separator as a direct child of the grid, before the dock aside — never inside it", async () => {
     await mountBody();
