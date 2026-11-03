@@ -161,7 +161,7 @@ way you read what comes back.
 
 ## Choosing the tier
 
-- **inline** (the default) for short read/verify mechanics: a lookup, a grep
+- **inline** for short read/verify mechanics: a lookup, a grep
   across many files, running one focused check. The child runs in-process,
   joins your turn, and typically has 40 turns (Settings can raise this to at
   most 200). It has NO background Bash, NO MCP tools, and NO spawn tools (an
@@ -171,10 +171,12 @@ way you read what comes back.
   together in one response and they run
   concurrently — fan out disjoint searches, never split one coherent
   investigation.
-- **session** for anything that writes, builds and iterates, or needs more
-  than ~30 turns: the child is a full session in its own process. Defaults to
-  detach (the call returns an admit immediately and the report arrives later
-  as a message); pass \`detach: false\` to join it. Limits are typically 3
+- **session** is the default on desktop: the child is a full session and the
+  parent waits for its result. The user can move it to the background; after a
+  long wait it is handed off automatically and its report arrives as a new
+  turn. Explicit \`tier: "session"\` defaults to detach; pass \`detach: false\`
+  to wait, or \`detach: true\` to dispatch immediately. Restricted hosts
+  default to inline. Limits are typically 3
   children per parent and 8 per app. A session child can spawn INLINE
   grandchildren only (its own Agent tool has no session tier) — a chain never
   recurses.

@@ -93,7 +93,7 @@ const BASE_DESCRIPTION =
   'Delegate a task to a subagent. agent_type "explore" = read-only recon that can read files and Git history with Git, but cannot run commands; use general-purpose for work needing Bash; "general-purpose" = the subtask needs write/exec tools. Independent Agent calls issued together in one response run concurrently — fan out disjoint searches. Use AgentStatus to inspect your children’s live progress. For a single known-file fact, Read/Grep it yourself; once delegated, do not redo the search.';
 
 const SESSION_TIER_DESCRIPTION_SUFFIX =
-  ' Tier "session" spawns a full child session the user can open and steer. send_to delivers a follow-up to your own still-running child (tier session).';
+  ' By default a session child runs while you wait; the user can move it to the background, and a long wait is handed off automatically with a later report as a new turn. Use tier "inline" for lightweight short lookups. send_to delivers a follow-up to your own still-running session child.';
 
 export interface CreateAgentToolOptions {
   /**
