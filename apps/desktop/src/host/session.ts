@@ -1484,6 +1484,7 @@ export class Session {
   private orchestrationPosture: "stable" | "transitioning" | "quarantined" = "stable";
   private orchestrationController?: OrchestrationController;
   private orchestrationAdmission?: OrchestrationAdmission;
+  private legacyOrchestration = false;
   private postureBlocked(includeAdmission = true): boolean {
     const state = this.orchestrationController?.state.status;
     return this.orchestrationPosture !== "stable" || state === "transitioning" || state === "quarantined" || (includeAdmission && this.orchestrationAdmission?.locked === true);
@@ -3257,7 +3258,7 @@ export class Session {
         void this.onCompact();
         break;
       case "engine_switch_request":
-        if (this.postureBlocked() || this.orchestrate) { this.outbound.sendDirect({ type: "engine_switch_failed", requestId: message.requestId, reason: "Session posture unavailable" }); break; }
+        if (this.postureBlocked() || (this.orchestrate && this.engine.id !== "core" && !this.legacyOrchestration)) { this.outbound.sendDirect({ type: "engine_switch_failed", requestId: message.requestId, reason: "Session posture unavailable" }); break; }
         // async handler holds `busy` across the factory await —
         // the exact rewind pattern (route() itself never awaits). The handler
         // re-checks its own gates (messages route synchronously, but this
@@ -4260,6 +4261,7 @@ export class Session {
       this.settingsBarrierActive = false;
       this.updateContextUsage(null);
       this.engine = next;
+      if (previousEngine.id === "core" && this.orchestrate) this.legacyOrchestration = true;
       this.orchestrationController?.invalidate();
       this.orchestrationController = undefined;
       this.orchestrationAdmission = undefined;
@@ -6147,15 +6149,16 @@ export class Session {
     if (this.orchestrationAdmission) return this.orchestrationAdmission;
     const engine = this.engine;
     const policy: OrchestrationPolicy = {
-      availability: () => this.engine === engine && this.orchestrationAvailable()
+      availability: () => this.engine === engine && (this.legacyOrchestration || this.orchestrationAvailable())
         ? { supported: true } : { supported: false, reason: "unavailable" },
       apply: async (enabled, baseAuthority) => {
         if (this.settingsBarrierActive) await this.settingsBarrier;
         await this.engineSettings?.waitForSettingsChanges?.();
         if (this.shuttingDown || this.engine !== engine || this.relocating || this.orchestrationController?.state.status !== "transitioning") throw new Error("Session changed during orchestration transition");
-        if (engine.id === "core") {
+        if (engine.id === "core" || (this.legacyOrchestration && !enabled)) {
           this.onSetOrchestrate(enabled);
           if (this.orchestrate !== enabled) throw new Error("Core orchestration transition failed");
+          if (!enabled) this.legacyOrchestration = false;
           return { enabled, baseAuthority };
         }
         // Capture the preset after queued settings have settled, before the
@@ -6174,6 +6177,7 @@ export class Session {
       },
     };
     this.orchestrationController = new OrchestrationController(policy);
+    if (this.legacyOrchestration) this.orchestrationController.state = { status: "on", baseAuthority: this.preOrchestrateMode ?? "build" };
     this.orchestrationAdmission = new OrchestrationAdmission({
       controller: this.orchestrationController,
       connectionId: () => this.boundGeneration,
@@ -6200,7 +6204,7 @@ export class Session {
 
   private submitOrchestration(message: Extract<UiToHostMessage, { type: "user_message" }>): void {
     const connectionId = message.connectionId ?? "";
-    if (connectionId !== this.boundGeneration) {
+    if (this.legacyOrchestration || connectionId !== this.boundGeneration) {
       this.outbound.sendDirect({ type: "user_message_unavailable", requestId: message.requestId, reason: "orchestrate_unavailable" });
       return;
     }
@@ -6302,6 +6306,7 @@ export class Session {
   private clearOrchestrateForLeavingPlan(): void {
     if (!this.orchestrate) return;
     this.orchestrate = false;
+    this.legacyOrchestration = false;
     this.orchestrationController?.coreModeExited();
     this.preOrchestrateMode = null;
     this.onOrchestrateChanged?.(false);
