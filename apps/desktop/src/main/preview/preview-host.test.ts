@@ -2328,6 +2328,21 @@ describe("PreviewHost — request gate: the document anchor follows the navigati
     return gate;
   }
 
+  it("blocks file subresources during reuse until the new document commits", async () => {
+    const rig = await openedRigWithContainedResolver();
+    const wc = rig.windows[0]!.webContents;
+    const document = `${FAKE_TMP}/new/index.html`;
+    const asset = pathToFileURL(`${FAKE_TMP}/new/style.css`).href;
+    const opening = rig.host.openForTab(TAB, { previewId: rig.windows[0]!.previewId, path: document });
+    await flush();
+    await expect(gateOf(rig)({ url: asset, resourceType: "stylesheet" })).resolves.toBe(false);
+    await expect(gateOf(rig)({ url: pathToFileURL(document).href, resourceType: "mainFrame" })).resolves.toBe(true);
+    wc.fireDidNavigate(pathToFileURL(document).href);
+    await expect(gateOf(rig)({ url: asset, resourceType: "stylesheet" })).resolves.toBe(true);
+    wc.fireDidFinishLoad();
+    await opening;
+  });
+
   it("re-anchors the policy on the NEW document after an in-page navigation", async () => {
     const rig = await openedRigWithContainedResolver();
     const wc = rig.windows[0]!.webContents;
