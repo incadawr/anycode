@@ -12,27 +12,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - Desktop general-purpose subagent calls without a tier now run as child sessions while the parent waits; other profiles stay inline. Move running children to the background individually or together; when session capacity is full, eligible calls use a lightweight inline child.
-### Added
-
-- Show MiniMax subscription quota on provider connection cards.
 
 ### Fixed
 
 - Use readable Enter key names in task and permission hints. Refresh Git status when returning to its dock tab.
-- Keep background agent tool counts current after a burst of tool calls.
-- Insert dropped file and folder paths into the composer, while keeping image attachments for supported models.
-- Keep SubAgent status badges visible when model and engine names are long.
-
-- Refuse session delegation when it would discard an inline profile's restrictions.
-
-- Give actionable alternatives when a connection-bound agent cannot be spawned.
-
-- Block local file requests from an old preview while its replacement is loading.
-
-- Allow local previews to load workspace files when the workspace path is a symlink.
-- Keep errors from discarded turns from reappearing after rewinding a conversation.
-
-- Keep background agent action buttons visible when progress text is long.
 
 - Make composer keyboard hints readable and separate them from the model selector.
 

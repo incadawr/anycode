@@ -1785,6 +1785,8 @@ export class Session {
   /** Wall-clock (per `this.now`) of the last emitted progress report — `undefined` until the first boundary, so the first boundary always emits (leading edge). */
   private childLastProgressEmitAt: number | undefined;
   private childProgressTimer: ReturnType<typeof setTimeout> | null = null;
+  /** True once the CURRENT port has closed and no successor is bound — progress has nowhere to go. */
+  private childPortClosed = false;
   /**
    * review F3: liveness interval armed while a child tool call
    * is EXECUTING (dispatch crossed one boundary; the result may be minutes
@@ -1954,6 +1956,7 @@ export class Session {
     // IS the successor of a completed renderer reload, so its predecessor's
     // close described the reload, not a dead session.
     this.boundPort = port;
+    this.childPortClosed = false;
     if (this.reconnectGraceTimer !== null) {
       clearTimeout(this.reconnectGraceTimer);
       this.reconnectGraceTimer = null;
@@ -1969,6 +1972,7 @@ export class Session {
       // must not keep pushing while no port is bound.)
       this.disarmChildToolLiveness();
       this.cancelChildProgressTimer();
+      if (this.boundPort === port) this.childPortClosed = true;
       // the old unconditional denyAll here destroyed the parked
       // ask mid-reload (live S2: "ui disconnected" deny + no_pending_request
       // 1.3s after a Page.reload — the close is observed BEFORE main re-posts
@@ -5120,13 +5124,13 @@ export class Session {
    * boundaries within that window schedule a trailing report with current counts.
    */
   private emitChildProgressBoundary(): void {
-    if (this.shuttingDown || this.childTerminalFinalized || this.boundGeneration === null) return;
+    if (this.shuttingDown || this.childTerminalFinalized || this.childPortClosed) return;
     const now = this.now();
     if (this.childLastProgressEmitAt !== undefined && now - this.childLastProgressEmitAt < 1000) {
       if (this.childProgressTimer === null) {
         this.childProgressTimer = setTimeout(() => {
           this.childProgressTimer = null;
-          if (!this.shuttingDown && !this.childTerminalFinalized && this.boundGeneration !== null) this.sendChildProgress();
+          if (!this.shuttingDown && !this.childTerminalFinalized && !this.childPortClosed) this.sendChildProgress();
         }, 1000 - (now - this.childLastProgressEmitAt));
       }
       return;
