@@ -13,4 +13,14 @@ describe("MiniMax subscription quota", () => {
   it("omits implausible reset times", () => {
     expect(parseMiniMaxQuota(response({ current_interval_remaining_percent: 0, end_time: now / 1000 }), now)?.primary).toEqual({ usedPercent: 100, windowDurationMins: 300 });
   });
+  it("selects only an unambiguous matching model from multiple rows", () => {
+    const raw = { base_resp: { status_code: 0 }, model_remains: [
+      { model_name: "model-a", current_interval_remaining_percent: 80 },
+      { model_name: "model-b", current_interval_remaining_percent: 30 },
+    ] };
+    expect(parseMiniMaxQuota(raw, now, "model-b")?.primary?.usedPercent).toBe(70);
+    expect(parseMiniMaxQuota(raw, now, "missing")).toBeNull();
+    expect(parseMiniMaxQuota(raw, now)).toBeNull();
+    expect(parseMiniMaxQuota({ ...raw, model_remains: [...raw.model_remains, raw.model_remains[1]] }, now, "model-b")).toBeNull();
+  });
 });

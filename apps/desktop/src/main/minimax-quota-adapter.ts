@@ -1,10 +1,12 @@
 import type { ProviderQuotaUpdate, ProviderQuotaWindow } from "@anycode/core/provider/quota";
 
-export function parseMiniMaxQuota(raw: unknown, now = Date.now()): ProviderQuotaUpdate | null {
+export function parseMiniMaxQuota(raw: unknown, now = Date.now(), model?: string): ProviderQuotaUpdate | null {
   if (!raw || typeof raw !== "object") return null;
   const data = raw as Record<string, unknown>;
-  if (!data.base_resp || typeof data.base_resp !== "object" || (data.base_resp as Record<string, unknown>).status_code !== 0 || !Array.isArray(data.model_remains) || data.model_remains.length !== 1) return null;
-  const row = data.model_remains[0];
+  if (!data.base_resp || typeof data.base_resp !== "object" || (data.base_resp as Record<string, unknown>).status_code !== 0 || !Array.isArray(data.model_remains)) return null;
+  const matches = data.model_remains.length === 1 ? data.model_remains : model ? data.model_remains.filter(row => row && typeof row === "object" && row.model_name === model) : [];
+  if (matches.length !== 1) return null;
+  const row = matches[0];
   if (!row || typeof row !== "object") return null;
   const fields = row as Record<string, unknown>;
   function window(percent: unknown, reset: unknown, minutes: number): ProviderQuotaWindow | undefined {

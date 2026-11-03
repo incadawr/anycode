@@ -8,7 +8,7 @@ import { recordConnectionQuota } from "./connection-quota.js";
 import { parseMiniMaxQuota } from "./minimax-quota-adapter.js";
 
 const TARGET = "https://api.minimax.io/v1/token_plan/remains";
-type Context = { apiKey: string; guard: string; route: ProxyRoute };
+type Context = { apiKey: string; guard: string; route: ProxyRoute; model?: string };
 type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
 export function createMiniMaxQuotaPoller(deps: {
@@ -19,6 +19,7 @@ export function createMiniMaxQuotaPoller(deps: {
 }) {
   const last = new Map<string, number>();
   const flights = new Map<string, Promise<void>>();
+  const unsupported = new Map<string, string>();
   function refresh(id: string): Promise<void> {
     const existing = flights.get(id);
     if (existing) return existing;
@@ -29,12 +30,19 @@ export function createMiniMaxQuotaPoller(deps: {
       try {
         const context = await deps.resolve(id);
         if (!context) return;
+        if (unsupported.get(id) === context.guard) return;
+        unsupported.delete(id);
         const response = await deps.fetch(context.route)(TARGET, {
           method: "GET", headers: { Authorization: `Bearer ${context.apiKey}` },
           redirect: "error", signal: AbortSignal.timeout(10_000),
         });
         if (!response.ok) return;
-        const quota = parseMiniMaxQuota(await response.json());
+        const body: unknown = await response.json();
+        if (body && typeof body === "object" && "base_resp" in body && body.base_resp && typeof body.base_resp === "object" && "status_code" in body.base_resp && body.base_resp.status_code === 1004) {
+          unsupported.set(id, context.guard);
+          return;
+        }
+        const quota = parseMiniMaxQuota(body, Date.now(), context.model);
         if (quota?.primary) await deps.record(id, context.guard, quota.primary);
       } catch {
         // Quota is advisory; failures leave the last observation untouched.
@@ -72,7 +80,7 @@ export function createMiniMaxQuotaService(deps: {
     if (!connection) return undefined;
     const prepared = await prepareModelFetchContext(settings, connection, deps.vault, TARGET, deps.systemProxy);
     if (!prepared.ok || !prepared.apiKey || (prepared.route.kind === "direct" && prepared.route.why === "dangling-ref")) return undefined;
-    return { apiKey: prepared.apiKey, guard: prepared.guard, route: prepared.route };
+    return { apiKey: prepared.apiKey, guard: `${prepared.guard}:${JSON.stringify(connection.model ?? null)}`, route: prepared.route, model: connection.model };
   }
   const poller = createMiniMaxQuotaPoller({
     resolve: id => withSettingsFileLock(deps.settingsPath, async () => context((await loadSettings(deps.settingsPath)).settings, id)),
