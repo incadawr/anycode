@@ -1664,6 +1664,20 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     return rows.map((row) => JSON.parse(row.data) as import("../../types/history.js").TurnErrorRecord);
   }
 
+  async truncateTurnErrors(sessionId: string, history: readonly HistoryItem[]): Promise<string[]> {
+    const errors = await this.loadTurnErrors(sessionId);
+    const removed = errors.filter((record) => !history.some((item) =>
+      item.turnId === record.turnId ||
+      (record.nativeTurnId !== undefined && item.id.startsWith(`${record.nativeTurnId}:`)) ||
+      (record.afterItemId === item.id && item.turnId === undefined)
+    ));
+    this.transaction((db) => {
+      const deleteRow = db.prepare("DELETE FROM history_items WHERE session_id = ? AND item_id = ? AND json_extract(data, '$.kind') = 'turn_error'");
+      for (const record of removed) deleteRow.run(sessionId, record.id);
+    });
+    return removed.map((record) => record.id);
+  }
+
   /**
    * GitHub #36: appends one durable compaction presentation record, keeping at
    * most `COMPACTION_RECORD_MAX_PER_SESSION` per session (the table is a view of
