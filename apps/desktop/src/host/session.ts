@@ -3730,6 +3730,7 @@ export class Session {
               input: shown.request.input,
               mode: shown.request.mode,
               metadata: toWireToolMeta(shown.request.metadata),
+              orchestrate: shown.request.orchestrate,
               workspaceWriteInside: workspaceWriteInside(shown.request),
             },
           }

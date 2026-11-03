@@ -3301,6 +3301,30 @@ function makePlanLoop(overrides: {
 }
 
 describe("AgentLoop.runTurn — plan-mode exit arc (design §2.3)", () => {
+  it("refuses a forced plan exit while orchestrating and hides its declaration", async () => {
+    const onModeChange = vi.fn();
+    const seen: PermissionRequest[] = [];
+    const steps: ModelStreamEvent[][] = [
+      [{ type: "start" }, { type: "tool_call", toolCall: { id: "p1", name: "ExitPlanMode", input: { plan: "plan" } } }, { type: "finish", finishReason: "tool_calls", usage: {} }],
+      [{ type: "start" }, { type: "finish", finishReason: "stop", usage: {} }],
+    ];
+    const modelPort = new MockModelPort(steps);
+    const loop = makeLoop({ modelPort, registry: makeRegistry({ ExitPlanMode: exitPlanModeTool, Write: writeMock }),
+      permissionEngine: new ModePermissionEngine(), permissionBroker: recordingAllowBroker(seen),
+      mode: "plan", orchestrate: true, planExitMode: "build", onModeChange });
+    const events = await collect(loop.runTurn("plan"));
+    expect(modelPort.requests[0]!.tools?.some((tool) => tool.name === "ExitPlanMode")).toBe(false);
+    expect(toolResult(events, "ExitPlanMode")?.modelText).toContain('delegate planning to the planner role');
+    expect(onModeChange).not.toHaveBeenCalled();
+    expect(seen).toEqual([]);
+    steps.push(
+      [{ type: "start" }, { type: "tool_call", toolCall: { id: "w1", name: "Write", input: { value: "x" } } }, { type: "finish", finishReason: "tool_calls", usage: {} }],
+      [{ type: "start" }, { type: "finish", finishReason: "stop", usage: {} }],
+    );
+    await collect(loop.runTurn("continue"));
+    expect(seen[0]).toMatchObject({ toolName: "Write", mode: "plan", orchestrate: true });
+  });
+
   it("an approved ExitPlanMode escalates a LATER same-turn Write into build (ask), not plan (deny)", async () => {
     const seen: PermissionRequest[] = [];
     const onModeChange = vi.fn();

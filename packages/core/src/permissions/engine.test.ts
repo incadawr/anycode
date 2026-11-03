@@ -11,6 +11,7 @@ import type { RiskLevel, ToolMetadata } from "../types/tools.js";
 import {
   agentTool,
   bashTool,
+  browserOpenTool,
   editTool,
   globTool,
   gitTool,
@@ -95,6 +96,17 @@ describe("ModePermissionEngine", () => {
         expect(ruling.reason, `${mode}/${key}`).toBeTruthy();
         expect(ruling.reason).toContain(tools[key].name);
       }
+    }
+  });
+
+  it("asks for side effects while orchestrating and allows local previews", () => {
+    const check = (toolName: string, metadata: ToolMetadata) =>
+      engine.check({ toolName, metadata, input: {}, mode: "plan", orchestrate: true });
+    const local = browserOpenTool.resolveMetadata!({ path: "/tmp/mock.html" });
+    const remote = browserOpenTool.resolveMetadata!({ url: "https://example.com" });
+    expect(check("BrowserOpen", local).decision).toBe("allow");
+    for (const [name, metadata] of [["BrowserOpen", remote], ["Bash", bashTool.metadata], ["Write", writeTool.metadata]] as const) {
+      expect(check(name, metadata)).toEqual({ decision: "ask", reason: `${name}: requires approval in orchestrate mode` });
     }
   });
 

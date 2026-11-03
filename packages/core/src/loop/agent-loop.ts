@@ -1410,7 +1410,7 @@ export class AgentLoop {
             const stream = this.config.modelPort.streamText({
               system: appendSystemContext(this.config.systemPrompt, options?.systemContext),
               messages: this.history.toMessages(),
-              tools: toToolDeclarations(this.config.registry),
+              tools: toToolDeclarations(this.config.registry).filter((tool) => !this.config.orchestrate || tool.name !== "ExitPlanMode"),
               maxOutputTokens: this.config.maxOutputTokens,
               reasoningEffort: this.config.reasoningEffort,
               abortSignal: turnAbort.signal,

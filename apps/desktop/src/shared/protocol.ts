@@ -871,6 +871,7 @@ export type HostToUiMessage =
         totalSteps: number;
       };
       permission?: {
+        orchestrate?: boolean;
         workspaceWriteInside?: boolean;
         deadline?: number;
         requestId: string;
@@ -883,10 +884,11 @@ export type HostToUiMessage =
   | {
       type: "approval_state";
       unattended: boolean;
-      pending: { requestId: string; toolName: string; input: unknown; mode: PermissionMode; metadata: WireToolMeta; deadline?: number; workspaceWriteInside?: boolean } | null;
+      pending: { orchestrate?: boolean; requestId: string; toolName: string; input: unknown; mode: PermissionMode; metadata: WireToolMeta; deadline?: number; workspaceWriteInside?: boolean } | null;
     }
   | {
       type: "permission_request";
+      orchestrate?: boolean;
       workspaceWriteInside?: boolean;
       deadline?: number;
       requestId: string;
