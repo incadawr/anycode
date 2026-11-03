@@ -9,6 +9,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Prepare key-free connection and role profile sharing for plugins.
+
 - Show five-hour and weekly MiniMax subscription quotas on provider connection cards.
 
 ### Fixed
