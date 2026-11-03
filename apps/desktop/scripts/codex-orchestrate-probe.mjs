@@ -58,12 +58,28 @@ try {
   const start = await request('thread/start', { ...common, developerInstructions: 'fixture base', config: on });
   console.log(JSON.stringify({ step: 'start', ...summary(start) }));
   const threadId = start.thread.id;
-  for (const [label, instructions, config] of [['on', 'fixture base\nfixture orchestrate', off], ['off', 'fixture base', on]]) {
-    const res = await request('thread/resume', { ...common, threadId, developerInstructions: instructions, config });
-    console.log(JSON.stringify({ step: label, sameThread: res.thread?.id === threadId, ...summary(res) }));
+  try {
+    // Neither tested experimental schema declares dynamicTools on resume.
+    const { dynamicTools: _declarations, ...resumeCommon } = common;
+    for (const [label, instructions, config] of [['on', 'fixture base\nfixture orchestrate', off], ['off', 'fixture base', on]]) {
+      const res = await request('thread/resume', { ...resumeCommon, threadId, developerInstructions: instructions, config });
+      console.log(JSON.stringify({ step: label, sameThread: res.thread?.id === threadId, ...summary(res) }));
+    }
+  } catch (error) {
+    console.log(JSON.stringify({ step: 'resume', accepted: false, reason: error.message.includes('no rollout found') ? 'no rollout found' : 'other error' }));
+    process.exitCode = 1;
   }
-  const read = await request('thread/read', { threadId, includeTurns: true });
-  console.log(JSON.stringify({ step: 'read', sameThread: read.thread?.id === threadId, turns: read.thread?.turns?.length }));
+  try {
+    const read = await request('thread/read', { threadId, includeTurns: true });
+    console.log(JSON.stringify({ step: 'read', sameThread: read.thread?.id === threadId, turns: read.thread?.turns?.length }));
+  } catch { console.log(JSON.stringify({ step: 'read', accepted: false })); }
+  const fresh = await request('thread/start', { ...common, developerInstructions: 'fixture base\nfixture orchestrate', config: off });
+  console.log(JSON.stringify({ step: 'start-on', newThread: fresh.thread?.id !== threadId, turns: fresh.thread?.turns?.length, sandbox: fresh.sandbox, approvalPolicy: fresh.approvalPolicy }));
+  try {
+    const status = await request('mcpServerStatus/list', { threadId: fresh.thread.id });
+    const names = status.data?.map(item => item.name) || [];
+    console.log(JSON.stringify({ step: 'start-on-mcp', ambient: names.includes('ambient'), second: names.includes('second') }));
+  } catch { console.log(JSON.stringify({ step: 'start-on-mcp', available: false })); }
   console.log('No-inference: response acceptance does not establish effective instructions or tools.');
 } catch (error) {
   console.error(String(error.message)); process.exitCode = 1;
