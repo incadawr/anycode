@@ -314,7 +314,7 @@ describe("tab-registry — routing by tabId", () => {
     expect(tabsStore.getState().activeTabId).toBe("fresh-tab");
     expect(registry.getStore("fresh-tab")).toBeDefined();
     // The handshake fires immediately on attach.
-    expect(port.sent).toEqual([{ type: "ui_ready" }]);
+    expect(port.sent).toEqual([{ type: "ui_ready", orchestrationProtocol: 1 }]);
   });
 
   it("drops a port for an already-closed tab instead of resurrecting it", () => {
@@ -372,7 +372,7 @@ describe("tab-registry — routing by tabId", () => {
 
     registry.sendToTab("tab-a", { type: "cancel_turn" });
     expect(warnSpy).toHaveBeenCalled();
-    expect(port.sent).toEqual([{ type: "ui_ready" }]); // no cancel_turn appended
+    expect(port.sent).toEqual([{ type: "ui_ready", orchestrationProtocol: 1 }]); // no cancel_turn appended
 
     warnSpy.mockRestore();
   });
@@ -567,7 +567,7 @@ describe("tab-registry — child-session registration (CUT-S2 §2.5, slice S2c C
     const port = new FakeMessagePort();
     registry.registerPort("child-1", "/ws/root", asPort(port), undefined, childField());
 
-    expect(port.sent).toEqual([{ type: "ui_ready" }]);
+    expect(port.sent).toEqual([{ type: "ui_ready", orchestrationProtocol: 1 }]);
   });
 
   // `listChildTabs` is the enumeration seam the automation
@@ -809,7 +809,7 @@ describe("tab-registry — queueInitialPrompt (slice P7.12 §4.2)", () => {
 
     registry.queueInitialPrompt("tab-a", "queued prompt");
     // Not dispatched yet — only the handshake went out.
-    expect(port.sent).toEqual([{ type: "ui_ready" }]);
+    expect(port.sent).toEqual([{ type: "ui_ready", orchestrationProtocol: 1 }]);
 
     port.emit(HOST_READY("/ws/a", "sess-a"));
 
@@ -1137,6 +1137,20 @@ describe("tab-registry — queueInitialPrompt start-screen Orchestrate (atomic i
     expect(port.sent[2]).toEqual(expect.objectContaining({ type: "user_message", orchestrate: "enable", connectionId: "conn", text: "plan it" }));
   });
 
+  it("reconciles an unavailable atomic submit once without treating it as rejection", () => {
+    const { registry } = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    port.emit({ ...HOST_READY("/ws/a", "sess-a"), orchestration: { enabled: false, available: true }, orchestrationProtocol: { version: 1, hostIncarnation: "host", connectionId: "conn", atomicSubmit: true, correlatedToggle: true } });
+    registry.queueInitialPrompt("tab-a", "plan it", undefined, undefined, undefined, undefined, undefined, true);
+    const request = port.sent.find((message) => (message as { type: string }).type === "user_message") as { requestId: string };
+    port.emit({ type: "user_message_unavailable", requestId: request.requestId, reason: "orchestrate_unavailable" });
+    expect(registry.getStore("tab-a")!.getState().orchestrationDeliveries).toMatchObject([{ requestId: request.requestId, status: "unknown" }]);
+    expect(sentTypes(port)).toEqual(["ui_ready", "user_message", "ui_ready"]);
+    port.emit({ type: "user_message_unavailable", requestId: request.requestId, reason: "orchestrate_unavailable" });
+    expect(sentTypes(port)).toEqual(["ui_ready", "user_message", "ui_ready"]);
+  });
+
   it("already-ready tab sends an atomic first message", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);
@@ -1386,7 +1400,7 @@ describe("tab-registry — queueInitialPrompt images", () => {
     const port = new FakeMessagePort();
     registry.registerPort("tab-a", "/ws/a", asPort(port));
     registry.queueInitialPrompt("tab-a", "look", "selected", "plan", "high", [IMAGE], "high", true);
-    port.emit({ ...HOST_READY("/ws/a", "sess-a"), imageInput:true });
+    port.emit({ ...HOST_READY("/ws/a", "sess-a"), imageInput:true, orchestration:{enabled:false,available:true,posture:"off"}, orchestrationProtocol:{version:1,hostIncarnation:"host",connectionId:"conn",atomicSubmit:true,correlatedToggle:true} });
     const request = port.sent[1] as {requestId:string};
     port.emit({type:"model_changed",requestId:request.requestId,model:"selected",reasoningEffort:"high",imageInput:false});
     expect(registry.getStore("tab-a")!.getState()).toMatchObject({model:"selected",reasoningEffort:"high",notice:{kind:"image_attach_rejected",text:expect.stringContaining("Model switched to selected; effective reasoning effort is high.")}});
@@ -2522,11 +2536,11 @@ describe("tab-registry — status mirror (slice-R10)", () => {
     respawnPort.emit(HOST_READY("/ws/a", "sess-a2"));
 
     // Exactly one store was created and its `.subscribe` was called exactly
-    // twice (the R10 status mirror + the P7.14 prompt-queue drainer, both
+    // three times (recovery persistence, status mirror and queue drainer, all
     // store-lifetime) — the respawn reused the entry, it did not stack more
-    // listeners (this would be 4 if the respawn re-subscribed).
+    // listeners (this would be 6 if the respawn re-subscribed).
     expect(subscribeSpies).toHaveLength(1);
-    expect(subscribeSpies[0]).toHaveBeenCalledTimes(2);
+    expect(subscribeSpies[0]).toHaveBeenCalledTimes(3);
 
     // The whole host-crash/respawn sequence never minted a phantom "finished" dot.
     expect(statusStore.getState().statuses.get("tab-a")).toEqual({
