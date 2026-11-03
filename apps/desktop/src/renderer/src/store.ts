@@ -5156,6 +5156,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             });
             set({
               connection: "ready",
+              ...(message.activeTurn ? { turn: { status: "running" as const, turnId: message.activeTurn.turnId, requestId: message.activeTurn.requestId, startedAt: message.activeTurn.startedAt ?? Date.now() } } : {}),
               orchestrateActive: message.orchestration?.enabled ?? false,
               orchestration: { available: message.orchestration?.available ?? false, reason: message.orchestration?.reason, posture: message.orchestration?.posture ?? (message.orchestration?.enabled ? "on" : "off"), protocol: message.orchestrationProtocol?.version === 1 ? message.orchestrationProtocol : null, pendingToggle: null, pendingSubmit: null, observedEnabled: null },
               contextUsage: message.contextUsage ?? null,
