@@ -873,7 +873,9 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
           finalText:
             reason === "join_budget"
               ? joinBudgetHandoffMessage(acceptedEvent.childSessionId)
-              : detachAdmitMessage(acceptedEvent.childSessionId),
+              : req.detach === true
+                ? detachAdmitMessage(acceptedEvent.childSessionId)
+                : `Agent: moved to background. The child is still running; its report will arrive as a new turn. Child session ${acceptedEvent.childSessionId}.`,
           truncated: false,
           turns: 0,
           toolCalls: 0,

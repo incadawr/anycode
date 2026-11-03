@@ -566,7 +566,8 @@ export type UiToHostMessage =
   // срез 3 §2(a): cancel ONE detached child by id (mirror of
   // task_kill_request's shape). Untrusted -> validated by
   // `backgroundChildCancelRequestSchema` below.
-  | { type: "background_child_cancel_request"; requestId: string; childSessionId: string };
+  | { type: "background_child_cancel_request"; requestId: string; childSessionId: string }
+  | { type: "background_agent_request"; spawnToolCallIds: string[] };
 
 // ── host -> renderer ──
 export interface WorktreeProjection {
@@ -1444,6 +1445,11 @@ export const backgroundChildCancelRequestSchema = z
   })
   .strict();
 
+export const backgroundAgentRequestSchema = z.object({
+  type: z.literal("background_agent_request"),
+  spawnToolCallIds: z.array(z.string().min(1).max(CHILD_ID_MAX_CHARS)).min(1).max(24),
+}).strict();
+
 /** Discriminated union validating any incoming UiToHostMessage; unknown `type` values fail closed. */
 export const uiToHostMessageSchema = z.discriminatedUnion("type", [
   uiReadySchema,
@@ -1477,4 +1483,5 @@ export const uiToHostMessageSchema = z.discriminatedUnion("type", [
   childReportAckSchema,
   backgroundChildrenRequestSchema,
   backgroundChildCancelRequestSchema,
+  backgroundAgentRequestSchema,
 ]);

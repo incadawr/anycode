@@ -983,6 +983,7 @@ export interface SessionOptions {
     list(): WireBackgroundChild[];
     cancel(childSessionId: string): boolean;
     cancelAll(): void;
+    moveAgent?(spawnToolCallId: string): boolean;
     onChange?(listener: () => void): () => void;
   };
   /**
@@ -3197,6 +3198,9 @@ export class Session {
         // mode host, legacy test) -> silent no-op, same posture as every
         // other optional seam this switch reads.
         this.pendingChildReports?.ack(message.id);
+        break;
+      case "background_agent_request":
+        for (const id of message.spawnToolCallIds) this.backgroundChildren?.moveAgent?.(id);
         break;
       case "background_children_request":
         this.pushBackgroundChildren();
