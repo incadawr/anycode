@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Isolated, no-inference inspection. Never prints raw server replies or config.
+// Isolated orchestration probes. Never prints raw server replies or config.
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, readdirSync, writeFileSync, realpathSync, lstatSync } from 'node:fs';
 import { resolve, join } from 'node:path';
@@ -7,6 +7,16 @@ import { createInterface } from 'node:readline';
 
 const args = process.argv.slice(2);
 const value = (flag) => args[args.indexOf(flag) + 1];
+if (args.includes('--help')) {
+  console.log('Usage: node codex-orchestrate-probe.mjs --no-inference --bin PATH --root EMPTY_DIR\n       node codex-orchestrate-probe.mjs --live --bin PATH --root EMPTY_DIR --auth-from AUTH_JSON [--model MODEL]');
+  process.exit(0);
+}
+if (args.includes('--live')) {
+  const { runLive } = await import('./codex-orchestrate-live-probe.mjs');
+  await runLive(args);
+  process.exit(process.exitCode || 0);
+}
+
 if (!args.includes('--bin') || !args.includes('--root') || !args.includes('--no-inference')) {
   throw new Error('Usage: --bin PATH --root EMPTY_DIRECTORY --no-inference');
 }
