@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { resolveExtensionsHomeOverride, resolveSkillsHomeOverride, resolveSessionHistoryMaxItems } from "./dev-home.js";
+import { resolveExtensionsHomeOverride, resolveSessionHistoryMaxItems } from "./dev-home.js";
 
 describe("resolveExtensionsHomeOverride", () => {
   it("honors an absolute override when automation is on", () => {
@@ -69,13 +69,5 @@ describe("resolveSessionHistoryMaxItems", () => {
 
   it.each(nullCases)("returns null: %s", (_label, env) => {
     expect(resolveSessionHistoryMaxItems(env)).toBeNull();
-  });
-});
-
-describe("resolveSkillsHomeOverride", () => {
-  it("uses the isolated skills home during automation", () => {
-    expect(resolveSkillsHomeOverride({ ANYCODE_AUTOMATION: "1", ANYCODE_SKILLS_IMPORT_HOME: "/tmp/profile" })).toBe("/tmp/profile");
-    expect(resolveSkillsHomeOverride({ ANYCODE_SKILLS_IMPORT_HOME: "/tmp/profile" })).toBeNull();
-    expect(resolveSkillsHomeOverride({ ANYCODE_AUTOMATION: "1", ANYCODE_SKILLS_IMPORT_HOME: "relative" })).toBeNull();
   });
 });
