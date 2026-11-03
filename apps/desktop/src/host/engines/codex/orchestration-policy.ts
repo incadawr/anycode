@@ -24,7 +24,11 @@ export function captureBaseConfig(response: unknown, forwarded: Record<string, u
 }
 
 export function orchestrationOverrides(base: BaseConfig): string[] {
-  return [...base.names.map((name) => `mcp_servers.${JSON.stringify(name)}.enabled=false`),
+  // A forwarded-only server has no process-level transport to merge with.
+  // Supply an inert stdio transport; never expose forwarded credentials on argv.
+  const transports = base.names.filter((name) => !base.ambientNames.includes(name))
+    .map((name) => `mcp_servers.${JSON.stringify(name)}.command="anycode-disabled-mcp"`);
+  return [...transports, ...base.names.map((name) => `mcp_servers.${JSON.stringify(name)}.enabled=false`),
     "features.multi_agent=false", 'sandbox_mode="read-only"', 'approval_policy="never"'];
 }
 

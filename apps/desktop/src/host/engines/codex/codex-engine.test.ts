@@ -1367,14 +1367,14 @@ function notices(events: AgentEvent[]): string[] {
 }
 
 describe("Codex orchestration restart", () => {
-  async function setup(options: { empty?: boolean; badEcho?: boolean; noRollout?: boolean; neverFactory?: boolean; noInventory?: boolean; bridge?: CodexDynamicToolBridge; approvals?: CodexApprovalBridge } = {}) {
+  async function setup(options: { empty?: boolean; readUnsupported?: boolean; badEcho?: boolean; noRollout?: boolean; neverFactory?: boolean; noInventory?: boolean; bridge?: CodexDynamicToolBridge; approvals?: CodexApprovalBridge } = {}) {
     const baseConfig = { mcp_servers: { ambient: { enabled: true } }, features: { multi_agent: true }, sandbox_mode: "workspace-write", approval_policy: "on-request" };
     const onConfig = { mcp_servers: { ambient: { enabled: false } }, features: { multi_agent: false }, sandbox_mode: "read-only", approval_policy: "never" };
     const initial = new FakeAppServer();
     const baseRequest = initial.request.bind(initial);
     initial.request = <T>(method: string, params?: unknown, opts?: { timeoutMs?: number }) => {
       if (method === "config/read") return Promise.resolve({ config: options.noInventory ? {} : baseConfig } as T);
-      if (method === "thread/read") return Promise.resolve({ thread: { id: "fresh-thread", turns: options.empty ? [] : [{ id: "prior" }] } } as T);
+      if (method === "thread/read") return options.readUnsupported ? Promise.reject(new Error("list_turns is not supported yet")) : Promise.resolve({ thread: { id: "fresh-thread", turns: options.empty ? [] : [{ id: "prior" }] } } as T);
       return baseRequest<T>(method, params, opts);
     };
     const { engine } = await createNativeCodexSession(initial, "/work", options.approvals, { bootRpcMs: 20 }, undefined, undefined, options.bridge);
@@ -1444,6 +1444,14 @@ describe("Codex orchestration restart", () => {
     expect(await r.controller.apply(true, "ask")).toBe(true);
     expect(r.persist).toHaveBeenCalledWith("fresh-thread", "replacement");
     expect(r.engine.threadId).toBe("replacement");
+    await r.engine.dispose("session-close");
+  });
+
+  it("replaces a fresh thread when 0.166 cannot list its turns", async () => {
+    const r = await setup({ empty: true, readUnsupported: true });
+    expect(await r.controller.apply(true, "ask")).toBe(true);
+    expect(r.servers[0]!.calls.some((call) => call.method === "thread/start")).toBe(true);
+    expect(r.persist).toHaveBeenCalledWith("fresh-thread", "replacement");
     await r.engine.dispose("session-close");
   });
 
