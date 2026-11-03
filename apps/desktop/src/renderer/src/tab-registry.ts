@@ -594,7 +594,9 @@ export function createTabRegistry(
       // host_ready's own applyHostMessage case resets the transcript (store.ts
       // §3.3 respawn semantics) — dispatch AFTER that reset, or a queued
       // initial prompt appended before it would be wiped along with it (§4.2).
+      const reconcileUnavailable = message.type === "user_message_unavailable" && entry.store.getState().orchestration.pendingSubmit === message.requestId && entry.store.getState().orchestrationDeliveries.some(item => item.requestId === message.requestId && item.status === "pending");
       entry.store.getState().applyHostMessage(message);
+      if (reconcileUnavailable && liveConnection(entry) === connection) connection.send({ type: "ui_ready", orchestrationProtocol: 1 });
       if (message.type === "model_changed") {
         const pending = pendingInitialModels.get(tabId);
         if (pending && pending.connection === connection && message.requestId !== pending.requestId) {

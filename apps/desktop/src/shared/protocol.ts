@@ -598,7 +598,7 @@ export type HostToUiMessage =
       model: string;
       sessionId: string;
       /** Runtime snapshot; available is false until atomic admission is implemented. */
-      orchestration?: { enabled: boolean; available: boolean; reason?: string; posture?: "off" | "on" | "transitioning" | "quarantined" };
+      orchestration?: { enabled: boolean; available: boolean; reason?: string; posture?: "off" | "on" | "transitioning" | "quarantined"; revision?: number };
       /** Absence on older hosts also means unsupported. */
       orchestrationProtocol?: { version: 1; hostIncarnation: string; connectionId: string; atomicSubmit: boolean; correlatedToggle: boolean };
       contextUsage?: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" };
@@ -928,6 +928,7 @@ export type HostToUiMessage =
   // §3.7: host ack for `set_orchestrate` (trusted, no zod,
   // precedent mode_changed). Carries the resulting state so the renderer's
   // tab-scoped orchestrateActive stays in sync even across a reconnect.
+  | { type: "orchestration_state"; connectionId: string; revision: number; enabled: boolean; available: boolean; posture: "off" | "on" | "transitioning" | "quarantined" }
   | { type: "orchestrate_changed"; enabled: boolean }
   | { type: "orchestrate_result"; requestId: string; connectionId?: string; outcome: "applied" | "rejected" | "unknown"; reason?: string; enabled?: boolean }
   | { type: "orchestrate_frame_diagnostic"; requestId: string; reason: "conflict" }

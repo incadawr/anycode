@@ -9697,6 +9697,9 @@ describe("Session — set_orchestrate (§3.7 / A1)", () => {
       await h.flush();
       expect(h.received).toContainEqual({ type: "user_message_unavailable", requestId: "atomic", reason: "orchestrate_unavailable" });
       expect(h.received).toContainEqual({ type: "orchestrate_result", requestId: "toggle", connectionId: ready.orchestrationProtocol!.connectionId, outcome: "rejected", reason: "stale" });
+      expect(h.received).toContainEqual({ type: "orchestration_state", connectionId: ready.orchestrationProtocol!.connectionId, revision: expect.any(Number), enabled: false, available: true, posture: "off" });
+      const update = h.received.find((message): message is Of<"orchestration_state"> => message.type === "orchestration_state")!;
+      expect(update.revision).toBeGreaterThan(ready.orchestration!.revision!);
       expect(engine.mode()).toBe("build");
       expect(inputs).toEqual([]);
       expect(h.received.some(m => m.type === "turn_started" || m.type === "orchestrate_changed" || m.type === "mode_changed")).toBe(false);

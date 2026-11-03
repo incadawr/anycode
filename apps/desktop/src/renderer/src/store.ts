@@ -2472,6 +2472,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
   // key would route a later step's deltas into the earlier step's block.
   const openStreamBlocks = projectionMaps?.streams ?? new Map<string, string>();
   let presentationReplayTurns: Set<string> | null = null;
+  let orchestrationRevision = -1;
   let presentationReplayActive = false;
 
   function streamScope(turnId: string, step: number | undefined, streamId: string): string {
@@ -5140,6 +5141,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // session_history/replay that follows on this same port; the
             // `engine` slot set below mirrors the same discriminator so
             // hydrateSessionHistory can re-derive it without its own copy.
+            orchestrationRevision = message.orchestration?.revision ?? -1;
             causalFoldEngaged = message.engine === undefined;
             // Preserve unacknowledged wire identity before the ready transition
             // can wake the drainer. Reconnect never proves delivery failed.
@@ -5187,11 +5189,19 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           case "mode_changed":
             set({ mode: message.mode });
             return;
+          case "orchestration_state": {
+            const current = get().orchestration;
+            if (message.connectionId !== current.protocol?.connectionId || message.revision <= orchestrationRevision) return;
+            orchestrationRevision = message.revision;
+            if (current.pendingToggle || current.pendingSubmit) return;
+            set({ orchestrateActive: message.enabled, orchestration: { ...current, available: message.available, posture: message.posture } });
+            return;
+          }
           case "orchestrate_changed":
             // §3.7: tab-scoped orchestrate flag from the host ack
             // (same pattern as mode). Part A: store sync only; the ModeMenu
             // row/dialog ride in part B (UI steps 8–11 are out of scope here).
-            set((state) => state.orchestration.posture === "quarantined" ? {} : state.orchestration.pendingToggle || state.orchestration.pendingSubmit ? { orchestration: { ...state.orchestration, observedEnabled: message.enabled } } : ({ orchestrateActive: message.enabled, orchestration: { ...state.orchestration, posture: message.enabled ? "on" : "off" } }));
+            set((state) => (state.orchestration.posture === "quarantined" || (state.orchestration.posture === "transitioning" && !state.orchestration.pendingToggle && !state.orchestration.pendingSubmit)) ? {} : state.orchestration.pendingToggle || state.orchestration.pendingSubmit ? { orchestration: { ...state.orchestration, observedEnabled: message.enabled } } : ({ orchestrateActive: message.enabled, orchestration: { ...state.orchestration, posture: message.enabled ? "on" : "off" } }));
             return;
           case "orchestrate_result": {
             const current = get().orchestration;
@@ -5204,6 +5214,11 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           case "orchestrate_frame_diagnostic":
             return;
           case "user_message_unavailable":
+            set((state) => state.orchestration.pendingSubmit !== message.requestId || !state.orchestrationDeliveries.some(item => item.requestId === message.requestId && item.status === "pending") ? {} : {
+              orchestrationDeliveries: state.orchestrationDeliveries.map(item => item.requestId === message.requestId ? deliveryUnknown(item) : item),
+              orchestration: { ...state.orchestration, pendingSubmit: null, posture: "quarantined", observedEnabled: null },
+            });
+            return;
           case "user_message_invalid":
             // A malformed duplicate can reuse an active requestId; it is not
             // evidence that any earlier turn with that ID was rejected.
@@ -5845,7 +5860,20 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               if (match) blockSeq = Math.max(blockSeq, Number(match[1]) + 1);
               if (block.kind === "loop_end") loopEndEmitted.add(block.id);
             }
-            set({ transcript, modelTurns: projection.getState().modelTurns, continueOffer: projection.getState().continueOffer, ...(!isCore ? { sessionTokens: projection.getState().sessionTokens } : {}) });
+            set((state) => {
+              let deliveries = state.orchestrationDeliveries;
+              for (const turn of message.turns) {
+                const terminal = turn.events.findLast(({ event }) => event.type === "loop_end")?.event;
+                if (terminal?.type !== "loop_end" || !["completed", "error", "cancelled", "max_turns"].includes(terminal.reason)) continue;
+                deliveries = deliveries.map((item) => {
+                  if (item.requestId !== turn.requestId) return item;
+                  const started = deliveryStarted(item, turn.turnId);
+                  if (started.status !== "started" || started.turnId !== turn.turnId) return started;
+                  return { ...started, ...(started.parentRequestId ? { status: "finished" as const } : {}), terminalReason: terminal.reason as NonNullable<OrchestrationDelivery["terminalReason"]> };
+                });
+              }
+              return { transcript, modelTurns: projection.getState().modelTurns, continueOffer: projection.getState().continueOffer, ...(!isCore ? { sessionTokens: projection.getState().sessionTokens } : {}), ...reconcileQueuedRetries(state.promptQueue, deliveries) };
+            });
             // A refused steer that became a later turn has already been sent.
             // Its original request id survives queue draining in the journal.
             set((state) => ({ steerRequeueSeen: [...new Set([...state.steerRequeueSeen, ...message.turns.map((turn) => turn.requestId)])] }));

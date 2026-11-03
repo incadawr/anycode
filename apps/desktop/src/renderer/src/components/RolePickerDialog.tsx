@@ -1,3 +1,4 @@
+import { Button } from "../ui/index.js";
 /**
  * §3.9 (part B) — the first-run role picker dialog. Modal
  * listing the five roles; per role a primary row (engine select
@@ -341,7 +342,7 @@ export function RolePickerDialog({
         <div className="role-picker-actions">
           {saving && <span role="status">Saving roles; this request cannot be cancelled.</span>}
           {actionsNotice}
-          {onCancel && <button type="button" data-testid="role-picker-cancel" disabled={saving} onClick={onCancel}>Cancel</button>}
+          {onCancel && <Button data-testid="role-picker-cancel" disabled={saving} onClick={onCancel}>Cancel</Button>}
           {skippable && (
             <button type="button" className="role-picker-skip" data-testid="role-picker-skip" disabled={saving} onClick={() => { if (!saving) onSkip?.(); }}>
               Skip
