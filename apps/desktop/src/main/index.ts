@@ -220,6 +220,7 @@ import {
 // electron-adapter is the ONLY file that touches real Electron primitives, so
 // preview-host.ts itself stays unit-testable off plain fakes.
 import { registerPreviewHost, type PreviewHostHandle } from "./preview/preview-host.js";
+import { buildFileResourceRoots, defaultTempRoots } from "./preview/file-resource-roots.js";
 import { createElectronPreviewWindow, wrapCapturedImage } from "./preview/electron-adapter.js";
 import { createElectronPanelView } from "./preview/panel-adapter.js";
 // M3 (CUT.md GAP 1): the md-preview WINDOW container adapter — a
@@ -2379,20 +2380,14 @@ void app.whenReady().then(async () => {
     // widening the policy allows (a workspace == the home dir widens
     // nothing — the policy itself refuses that).
     workspaceForTab: (tabId) => manager?.getTab(tabId)?.workspace,
-    fileResourceRoots: () => {
-      const tmpdirs = [tmpdir()];
-      if (process.platform === "darwin") {
-        // `/tmp` is a symlink to `/private/tmp` on darwin — both spellings
-        // must be broad roots (a realpath'd request carries either).
-        tmpdirs.push("/tmp");
-        try {
-          tmpdirs.push(realpathSync("/tmp"));
-        } catch {
-          // /tmp unreadable — the literal spelling above is enough.
-        }
-      }
-      return { home: artifactsIpcDeps.home(), tmpdirs };
-    },
+    fileResourceRoots: () =>
+      // CANONICALIZED roots (realpath'd) AND the raw spellings kept
+      // alongside them: the policy compares them against REALPATH'd
+      // requests, so an uncanonical root (e.g. the macOS temp dir
+      // `/var/folders/…` vs its realpath `/private/var/folders/…`) would
+      // silently stop being a broad root — and the temp tree would become
+      // readable from a document that sits directly in it.
+      buildFileResourceRoots(artifactsIpcDeps.home(), defaultTempRoots()),
     // M4 (CUT.md GAP 2): the SAME `fsStat`/`NodeArtifactsFs.readFileNoFollow`
     // primitives registerMdDocIpc's own `MdDocDeps` below binds for the
     // renderer's MD_PREVIEW_READ/Reload channel — one fs implementation, two

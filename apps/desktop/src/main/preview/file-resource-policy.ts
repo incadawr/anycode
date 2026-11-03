@@ -45,6 +45,13 @@ export interface FileSubresourceInput {
   home: string;
   /** Temp dirs (OS temp dir, plus `/tmp` on darwin) — broad roots. */
   tmpdirs: string[];
+  /**
+   * The app profile dir (`<home>/.anycode`) — a broad root and the tree
+   * rule (d) protects. Defaults to `join(home, ".anycode")`; the caller
+   * passes the CANONICAL (realpath'd) spelling, since the request paths
+   * compared against it are canonical too.
+   */
+  profileDir?: string;
   /** Defaults to `process.platform`; tests pass it explicitly. */
   platform?: NodeJS.Platform;
 }
@@ -66,7 +73,7 @@ export function isAllowedFileSubresource(input: FileSubresourceInput): boolean {
     return false;
   }
   const home = input.home;
-  const anycodeDir = join(home, ".anycode");
+  const anycodeDir = input.profileDir ?? join(home, ".anycode");
   const docDir = dirname(documentRealPath);
 
   // "Broad roots": a document sitting directly in one of them may only load

@@ -71,8 +71,6 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { realpathSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
 import { basename, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 // M4 (CUT.md GAP 2): the single source of truth for the dom-md
@@ -83,6 +81,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // discipline.
 import { MD_PREVIEW_MAX_SOURCE_BYTES } from "./md-doc.js";
 import { isAllowedFileSubresource } from "./file-resource-policy.js";
+import { defaultFileResourceRoots } from "./file-resource-roots.js";
 import { isMarkdownPath } from "../../shared/previewable.js";
 import { BrowserController, checkInteractionPolicy, type BrowserControlContext, type InteractionKind } from "./browser-control.js";
 import {
@@ -373,8 +372,12 @@ export interface PreviewHostDeps {
    * The broad roots of the file-subresource policy: the user's home (and
    * therefore `<home>/.anycode`) plus the temp dirs. Absent = `os.homedir()`
    * and `[os.tmpdir()]` (plus `/tmp` on darwin).
+   *
+   * The roots MUST be canonicalized (realpath'd) by the caller — the policy
+   * compares them against realpath'd requests — but the RAW spellings are
+   * kept alongside them (see `file-resource-roots.ts`).
    */
-  fileResourceRoots?(): { home: string; tmpdirs: string[] };
+  fileResourceRoots?(): { home: string; tmpdirs: string[]; profileDir?: string };
   logger: PreviewLogger;
   now: () => number;
 }
@@ -511,26 +514,6 @@ export const READ_RESULT_MAX_CHARS = 200_000;
 export const EXEC_JS_TIMEOUT_MS = 10_000;
 /** D18: promote-then-capture race window — one short paint delay before the single retry. */
 export const PANEL_SCREENSHOT_RETRY_DELAY_MS = 150;
-
-/**
- * Broad roots of the file-subresource policy when main did NOT bind
- * `fileResourceRoots`: the user's home (and therefore `<home>/.anycode`) and
- * the OS temp dir — plus `/tmp` on darwin, where `/tmp` is a symlink to
- * `/private/tmp` (BOTH spellings are listed, since a realpath'd request may
- * carry either).
- */
-function defaultFileResourceRoots(): { home: string; tmpdirs: string[] } {
-  const tmpdirs: string[] = [tmpdir()];
-  if (process.platform === "darwin") {
-    tmpdirs.push("/tmp");
-    try {
-      tmpdirs.push(realpathSync("/tmp"));
-    } catch {
-      // /tmp unreadable — the literal spelling above is enough.
-    }
-  }
-  return { home: homedir(), tmpdirs };
-}
 
 /**
  * D9's main-side clamp (exported for panel-ipc.ts + tests, single source of
@@ -2904,6 +2887,9 @@ class PreviewHost implements PreviewHostHandle {
       if (documentRealPath === undefined) {
         return { allowed: false, dedupeKey: filePath };
       }
+      // The fallback roots (main did NOT bind `fileResourceRoots`) are the
+      // user's home and the OS temp dirs, CANONICALIZED (realpath'd) and
+      // with their raw spellings kept — see file-resource-roots.ts.
       const roots = this.deps.fileResourceRoots?.() ?? defaultFileResourceRoots();
       const allowed = isAllowedFileSubresource({
         requestRealPath: resolved.realPath,
@@ -2911,6 +2897,7 @@ class PreviewHost implements PreviewHostHandle {
         workspace: this.deps.workspaceForTab?.(record.tabId),
         home: roots.home,
         tmpdirs: roots.tmpdirs,
+        profileDir: roots.profileDir,
       });
       return { allowed, dedupeKey: filePath };
     }
