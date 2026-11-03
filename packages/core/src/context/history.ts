@@ -65,9 +65,9 @@ export class ConversationHistory {
   }
 
   /** Atomic swap (compaction); feeds sink.replaceAll with the new list. */
-  replaceAll(items: HistoryItem[]): void {
+  replaceAll(items: HistoryItem[], persist = true): void {
     this.list = [...items];
-    this.sink?.replaceAll(this.list);
+    if (persist) this.sink?.replaceAll(this.list);
   }
 
   toMessages(): ChatMessage[] {

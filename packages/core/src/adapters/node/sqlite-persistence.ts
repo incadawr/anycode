@@ -1616,18 +1616,24 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     return rows.map((row) => JSON.parse(row.data) as import("../../types/history.js").TurnErrorRecord);
   }
 
-  async truncateTurnErrors(sessionId: string, history: readonly HistoryItem[]): Promise<string[]> {
-    const errors = await this.loadTurnErrors(sessionId);
-    const removed = errors.filter((record) => !history.some((item) =>
-      item.turnId === record.turnId ||
-      (record.nativeTurnId !== undefined && item.id.startsWith(`${record.nativeTurnId}:`)) ||
-      (record.afterItemId === item.id && item.turnId === undefined)
-    ));
-    this.transaction((db) => {
-      const deleteRow = db.prepare("DELETE FROM history_items WHERE session_id = ? AND item_id = ? AND json_extract(data, '$.kind') = 'turn_error'");
-      for (const record of removed) deleteRow.run(sessionId, record.id);
+  async restoreHistoryAndTurnErrors(sessionId: string, history: readonly HistoryItem[], turnErrorIds?: readonly string[]): Promise<string[]> {
+    return this.transaction((db) => {
+      const rows = db.prepare("SELECT data FROM history_items WHERE session_id = ? AND json_extract(data, '$.kind') = 'turn_error'").all(sessionId) as unknown as { data: string }[];
+      const errors = rows.map((row) => JSON.parse(row.data) as import("../../types/history.js").TurnErrorRecord);
+      const keep = turnErrorIds === undefined ? undefined : new Set(turnErrorIds);
+      const removed = errors.filter((record) => keep ? !keep.has(record.id) : !history.some((item) =>
+        item.turnId === record.turnId ||
+        (record.nativeTurnId !== undefined && item.id.startsWith(`${record.nativeTurnId}:`)) ||
+        (record.afterItemId === item.id && item.turnId === undefined) || item.kind === "compact_summary"
+      ));
+      db.prepare("DELETE FROM history_items WHERE session_id = ? AND COALESCE(json_extract(data, '$.kind'), '') != 'turn_error'").run(sessionId);
+      const insert = db.prepare("INSERT INTO history_items (session_id, item_id, data) VALUES (?, ?, ?)");
+      for (const item of history) insert.run(sessionId, item.id, JSON.stringify(item));
+      const remove = db.prepare("DELETE FROM history_items WHERE session_id = ? AND item_id = ? AND json_extract(data, '$.kind') = 'turn_error'");
+      for (const record of removed) remove.run(sessionId, record.id);
+      touchSessionActivity(db, sessionId, history);
+      return removed.map((record) => record.id);
     });
-    return removed.map((record) => record.id);
   }
 
   /**

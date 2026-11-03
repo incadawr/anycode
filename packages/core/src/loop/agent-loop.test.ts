@@ -3651,6 +3651,7 @@ describe("AgentLoop.runTurn — auto-checkpoint arc (design slice-4.7-cut.md §2
       registry: makeRegistry({ Write: writeMock }),
       checkpoints: capturing,
       compactionBoundary: () => recorded,
+      turnErrorBoundary: async () => ["earlier-error"],
     });
     loop.history.append({ role: "user", content: "earlier" });
 
@@ -3663,6 +3664,7 @@ describe("AgentLoop.runTurn — auto-checkpoint arc (design slice-4.7-cut.md §2
     // ...and the checkpoint still carries the value read at TURN START.
     expect(cap.calls).toHaveLength(1);
     expect(cap.calls[0]?.compactionSeq).toBe(3);
+    expect(cap.calls[0]?.turnErrorIds).toEqual(["earlier-error"]);
   });
 
   it("hands the capturer the RAW userInput, not the hook-augmented prompt", async () => {

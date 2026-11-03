@@ -53,6 +53,7 @@ export interface TurnCheckpointRequest {
   userInput: string;
   /* */
   historySnapshot: readonly HistoryItem[];
+  turnErrorIds?: readonly string[];
   /**
    * GitHub #36: the compaction-record sequence current when `historySnapshot`
    * was captured (the turn start), sampled there and carried here because the
