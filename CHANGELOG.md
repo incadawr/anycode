@@ -9,7 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Desktop subagent calls without a tier now run as child sessions while the parent waits for their result.
+- Desktop subagent calls without a tier now run as child sessions while the parent waits. Move running children to the background individually or together; when session capacity is full, eligible calls use a lightweight inline child.
 
 ### Fixed
 

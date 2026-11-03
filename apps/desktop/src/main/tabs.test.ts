@@ -8048,6 +8048,18 @@ describe("TabHostManager — detached spawns are refused at the cap, never parke
     expect(raw.childSpawnQueue).toEqual(["s4"]);
   });
 
+  it("a default joining child is refused at capacity instead of entering the queue", () => {
+    const { fork, hosts } = shutdownableForkRig();
+    const { window } = windowRig();
+    const manager = childManager(fork, window);
+    manager.createTab({ workspace: "/ws", sessionId: "root-fallback", resume: false });
+    const root = hosts[0]!;
+    for (let n = 0; n < 3; n++) root.emit("message", spawnRequest({ requestId: `full-${n}` }));
+    root.emit("message", spawnRequest({ requestId: "fallback", spawnToolCallId: "fallback-call", fallbackAtCapacity: true }));
+    expect(childRunEvents(root).find((e) => e.requestId === "fallback")).toMatchObject({ kind: "rejected", reason: "limit_parent" });
+    expect((manager as unknown as { childSpawnQueue: string[] }).childSpawnQueue).toEqual([]);
+  });
+
   it("a detached global overflow rejects immediately while another parent owns the slots", () => {
     const { fork, hosts } = shutdownableForkRig();
     const { window } = windowRig();

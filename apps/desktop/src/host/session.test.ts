@@ -2394,6 +2394,17 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
       expect(pushes.length).toBeGreaterThanOrEqual(2);
     });
 
+    it("moves only the requested joining calls through the owning session", () => {
+      const { seam } = fakeBackgroundChildren([]);
+      const moved: string[] = [];
+      const { port } = buildTestSession({ backgroundChildren: { ...seam, moveAgent: (id) => { moved.push(id); return true; } } });
+      port.send({ type: "ui_ready" });
+      port.send({ type: "background_agent_request", spawnToolCallIds: ["one", "two"] });
+      expect(moved).toEqual(["one", "two"]);
+      port.send({ type: "background_agent_request", spawnToolCallIds: [""], extra: true });
+      expect(moved).toEqual(["one", "two"]);
+    });
+
     it("background_child_cancel_request calls seam.cancel with the id, acks ok:true, and re-pushes the updated list", () => {
       const { seam, cancelCalls } = fakeBackgroundChildren([CHILD_A]);
       const { port } = buildTestSession({ backgroundChildren: seam });
