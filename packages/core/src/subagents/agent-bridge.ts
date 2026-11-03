@@ -673,6 +673,10 @@ export async function runAgentBridgeCall(
       engineTurnBudget: entry.engine !== undefined ? entry.maxTurns : undefined,
       degraded: false,
     }) : {}),
+    // The model override changes the model, not the native route's engine.
+    ...(continueSession === undefined && input.model !== undefined && route?.entries[0]?.engine !== undefined
+      ? { engine: route.entries[0].engine }
+      : {}),
     ...((input.detach ?? deps.policy?.defaultDetach) === true ? { detach: true } : {}),
     ...(continueSession !== undefined ? { resumeChildSessionId: continueSession } : {}),
   };

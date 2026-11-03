@@ -91,6 +91,18 @@ describe("bridge role routing policy", () => {
     expect(run.mock.calls[0]![0]).not.toHaveProperty("routeStamped");
   });
 
+  it.each(["codex", "claude"] as const)("keeps the %s route engine with an explicit model", async (engine) => {
+    run.mockClear();
+    const resolve = () => ({ entries: [{ engine, model: "route-model", effort: "high" as const }], skipped: [] });
+    await runAgentBridgeCall(
+      { agent_type: "executor", description: "d", prompt: "p", model: "chosen" },
+      { ...deps, policy: { resolveRoleRoute: resolve } },
+    );
+    expect(run.mock.calls[0]![0]).toMatchObject({ engine, model: "chosen" });
+    expect(run.mock.calls[0]![0]).not.toHaveProperty("effort");
+    expect(run.mock.calls[0]![0]).not.toHaveProperty("routeStamped");
+  });
+
   it("preserves explicit detach and continues without resolving current role settings", async () => {
     run.mockClear(); resolveRoleRoute.mockClear();
     await runAgentBridgeCall({ agent_type: "planner", description: "d", prompt: "p", model: "ignored", detach: true, continue_session: "child" }, deps);
@@ -115,6 +127,9 @@ describe("bridge role routing policy", () => {
     const result = await runAgentBridgeCall({ agent_type: "executor", description: "d", prompt: "p" }, { ...deps, catalog: restricted });
     expect(result.isError).toBe(true);
     expect(result.text).toMatch(/cannot enforce/);
+    expect(run).not.toHaveBeenCalled();
+    const override = await runAgentBridgeCall({ agent_type: "executor", description: "d", prompt: "p", model: "chosen" }, { ...deps, catalog: restricted });
+    expect(override.isError).toBe(true);
     expect(run).not.toHaveBeenCalled();
   });
 
