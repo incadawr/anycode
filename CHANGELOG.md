@@ -44,7 +44,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Desktop subagent calls without a tier now run as child sessions while the parent waits for their result.
+- Desktop subagent calls without a tier now run as child sessions while the parent waits. Move running children to the background individually or together; when session capacity is full, eligible calls use a lightweight inline child.
 
 - Softened message text and primary usage statistics in the dark theme for more comfortable reading.
 - Blockquote headings and code retain their original colours, and Stats tiles use the softened text colour.

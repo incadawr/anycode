@@ -2893,6 +2893,25 @@ describe("child-session-port — synchronous join budget handoff (GitHub #17 sli
     expect(h.detachedTerminals).toHaveLength(1);
   });
 
+  it("moves parallel children independently and can cancel one after handoff", async () => {
+    const h = joinHarness();
+    const first = h.port.run(JOIN_REQUEST(true), {});
+    const second = h.port.run({ ...JOIN_REQUEST(true), spawnToolCallId: "spawn-join-2" }, {});
+    const [a, b] = spawns(h.sent);
+    accept(h, a!.requestId, "child-a");
+    accept(h, b!.requestId, "child-b");
+    expect(h.port.backgroundAgent("spawn-join-1")).toBe(true);
+    expect(h.port.backgroundAgent("spawn-join-2")).toBe(true);
+    expect((await Promise.all([first, second])).map((result) => result.finalText)).toEqual([expect.stringContaining("moved to background"), expect.stringContaining("moved to background")]);
+    expect(h.port.cancelBackgroundChild("child-a")).toBe(true);
+    expect(cancels(h.sent)).toHaveLength(1);
+    h.emit({ type: CHILD_RUN_EVENT_TYPE, requestId: a!.requestId, kind: "terminal", status: "cancelled", finalText: "", truncated: false, turns: 1, toolCalls: 0, durationMs: 5, childSessionId: "child-a" });
+    h.emit({ type: CHILD_RUN_EVENT_TYPE, requestId: b!.requestId, kind: "terminal", status: "completed", finalText: "report b", truncated: false, turns: 1, toolCalls: 0, durationMs: 5, childSessionId: "child-b" });
+    expect(h.detachedTerminals).toHaveLength(2);
+    expect(h.detachedTerminals.find((result) => result.childSessionId === "child-a")).toMatchObject({ status: "cancelled", cancelledBy: "user" });
+    expect(h.detachedTerminals.find((result) => result.childSessionId === "child-b")).toMatchObject({ status: "completed", finalText: "report b" });
+  });
+
   it("hands off at exactly 120000 ms from admission, not at 119999 ms, keeping the child and sending no cancel", async () => {
     vi.useFakeTimers();
     expect(CHILD_SYNC_JOIN_BUDGET_MS).toBe(120_000);
