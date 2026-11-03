@@ -1695,6 +1695,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
             dialog was open and called a ready one "not connected"). */}
         <RolePickerDialog
           open={startRolePickerOpen}
+          initialRoles={resolveProfileRoles(useSettingsStore.getState().snapshot?.settings ?? {}, draft.workspace ?? undefined)}
           connections={useSettingsStore.getState().snapshot?.settings.provider.connections ?? []}
           activeConnectionId={useSettingsStore.getState().snapshot?.settings.provider.activeConnectionId}
           onSave={(roles) => void saveStartRoles(roles)}

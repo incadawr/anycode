@@ -5,10 +5,7 @@
  * every decision here is a function of its arguments so node-env vitest can
  * pin it directly.
  *
- * Orchestrate is core-only (`supportsCorePermissions`): a Codex/Claude draft
- * never gets the Orchestrate row, and `/orchestrate` is not recognized for
- * them (the text is sent literally, as the in-tab composer also does for an
- * engine that has no such command).
+ * Core and Codex drafts may retain orchestration intent until host readiness.
  */
 import type { EngineId } from "../../shared/engines.js";
 
@@ -40,14 +37,14 @@ export interface StartOrchestratePlan {
 /**
  * Resolves one start-composer send. `flag` is the draft's own Orchestrate
  * toggle; a leading `/orchestrate ` token turns orchestrate on for this send
- * regardless of the toggle. Non-core drafts never orchestrate.
+ * regardless of the toggle. Claude drafts never orchestrate.
  */
 export function resolveStartOrchestrate(
   engine: EngineId,
   flag: boolean | undefined,
   prompt: string,
 ): StartOrchestratePlan {
-  if (engine !== "core") {
+  if (engine !== "core" && engine !== "codex") {
     return { orchestrate: false, text: prompt, bareSlash: false };
   }
   const slash = parseOrchestrateSlash(prompt);

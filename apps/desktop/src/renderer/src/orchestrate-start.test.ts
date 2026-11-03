@@ -59,10 +59,10 @@ describe("resolveStartOrchestrate", () => {
     expect(resolveStartOrchestrate("core", undefined, "hello")).toEqual({ orchestrate: false, text: "hello", bareSlash: false });
   });
 
-  it("orchestrate is core-only: a Codex or Claude draft never orchestrates, and the token is sent literally", () => {
+  it("Codex retains intent while Claude stays unchanged", () => {
     expect(resolveStartOrchestrate("codex", true, "/orchestrate x")).toEqual({
-      orchestrate: false,
-      text: "/orchestrate x",
+      orchestrate: true,
+      text: "x",
       bareSlash: false,
     });
     expect(resolveStartOrchestrate("claude", true, "hello")).toEqual({ orchestrate: false, text: "hello", bareSlash: false });

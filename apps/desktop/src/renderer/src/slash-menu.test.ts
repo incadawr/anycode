@@ -412,6 +412,8 @@ describe("SLASH_COMMANDS registry invariants", () => {
     // Core-only: set_orchestrate is rejected without supportsCorePermissions.
     expect(SLASH_COMMANDS[1]!.visible(ctx({ supportsCorePermissions: true }))).toBe(true);
     expect(SLASH_COMMANDS[1]!.visible(ctx({ supportsCorePermissions: false }))).toBe(false);
+    expect(SLASH_COMMANDS[1]!.visible(ctx({ supportsCorePermissions: false, supportsOrchestration: true }))).toBe(true);
+    expect(SLASH_COMMANDS[1]!.visible(ctx({ supportsCorePermissions: true, supportsOrchestration: false }))).toBe(false);
   });
 
   it("the Compact row sits at index 4 — last in the core cluster, before the common one", () => {

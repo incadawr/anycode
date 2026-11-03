@@ -68,6 +68,8 @@ export type SlashRunIntent =
 export interface SlashCapabilityCtx {
   /** Mirrors `engine.capabilities.supportsCorePermissions` — gates `/mode`, `plan-mode` (ModeMenu isn't rendered without it). */
   supportsCorePermissions: boolean;
+  /** Host-confirmed orchestration availability, independent of permission controls. */
+  supportsOrchestration?: boolean;
   /** Mirrors `engine.capabilities.supportsModelSelection` — gates `/model` (ModelPill isn't rendered without it). */
   supportsModelSelection: boolean;
   /**
@@ -274,13 +276,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     visible: (ctx) => ctx.supportsCorePermissions,
   },
   {
-    // §3.8 (part B): `/orchestrate <task>` — enable orchestrate
-    // (via the first-run RolePickerDialog when no roles are configured) and
-    // submit the text after the token as a normal user message. Sits right
-    // after plan-mode in the registry (the orchestration posture's nearest
-    // neighbor); same supportsCorePermissions structural gate — orchestrate
-    // drives set_orchestrate + the plan-mode permission posture, both
-    // core-only (an engine session has no ModeMenu either).
+    // Orchestration is advertised independently of permission controls.
     id: "orchestrate",
     name: "Orchestrate",
     description: () => "Delegate <task> to child agents in the background",
@@ -288,7 +284,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     run: { kind: "orchestrate_submit" },
     enabled: (ctx) => ctx.ready,
     source: "core",
-    visible: (ctx) => ctx.supportsCorePermissions,
+    visible: (ctx) => ctx.supportsOrchestration ?? ctx.supportsCorePermissions,
   },
   {
     id: "mode",
