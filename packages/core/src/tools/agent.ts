@@ -371,7 +371,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
           roleRoute ?? undefined,
           defaultDetach,
           undefined,
-          input.tier === undefined && input.provider === undefined && input.detach !== true && input.continue_session === undefined && input.send_to === undefined && routing === null && !(roleRoute?.entries[0]?.connection || roleRoute?.entries[0]?.engine),
+          input.tier === undefined && input.provider === undefined && input.detach !== true && input.continue_session === undefined && input.send_to === undefined && routing === null && !(roleRoute?.entries[0]?.connection || roleRoute?.entries[0]?.engine || roleRoute?.entries[0]?.provider),
         );
       }
       return runInlineTier(input, ctx, agentType);

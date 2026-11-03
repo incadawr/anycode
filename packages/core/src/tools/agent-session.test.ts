@@ -1677,6 +1677,27 @@ describe("agentTool handler — orchestrate default-detach (§2.3)", () => {
     }
   });
 
+  it("does not fall back inline when the resolved route selects a provider", async () => {
+    let inlineRuns = 0;
+    let request: SessionSubagentRequest | undefined;
+    const inline: SubagentPort = {
+      run: async () => { inlineRuns++; throw new Error("inline route changed provider"); },
+      resolveRoleRoute: () => ({ entries: [{ provider: "provider-b", model: "fallback" }], skipped: [{ entry: { model: "primary" }, reason: "unavailable" }] }),
+    };
+    const port: SessionSubagentPort = {
+      send: async () => ({ ok: true }),
+      run: async (req) => {
+        request = req;
+        return { ...BASE_SESSION_OUTCOME, status: "error", capacityRefused: true, spawnToolCallId: req.spawnToolCallId };
+      },
+    };
+    const result = await full.handler({ description: "d", prompt: "p" }, makeCtx({ subagents: inline, sessionSubagents: port }));
+    expect(request).toMatchObject({ provider: "provider-b", model: "fallback" });
+    expect(request?.fallbackAtCapacity).toBeUndefined();
+    expect(result.ok).toBe(false);
+    expect(inlineRuns).toBe(0);
+  });
+
   it("an omitted tier starts a joining session", async () => {
     const { port, seen } = capturingPort();
     const result = await full.handler({ description: "d", prompt: "p" }, makeCtx({ sessionSubagents: port }));
