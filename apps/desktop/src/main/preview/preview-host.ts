@@ -80,6 +80,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // only), so this import does not compromise this module's own Electron-free
 // discipline.
 import { MD_PREVIEW_MAX_SOURCE_BYTES } from "./md-doc.js";
+import { isAllowedFileSubresource } from "./file-resource-policy.js";
+import { defaultFileResourceRoots } from "./file-resource-roots.js";
 import { isMarkdownPath } from "../../shared/previewable.js";
 import { BrowserController, checkInteractionPolicy, type BrowserControlContext, type InteractionKind } from "./browser-control.js";
 import {
@@ -360,6 +362,22 @@ export interface PreviewHostDeps {
   fullAccess?(tabId: string): boolean;
   /** Main wires this to `win.webContents.send(PREVIEW_CHANGED_CHANNEL, payload)` (D7); absent is a safe no-op (e.g. in tests that never care). */
   onPreviewsChanged?(payload: PreviewChangedPayload): void;
+  /**
+   * The tab's workspace — the tree a `file:` preview may load RELATIVE
+   * assets from (its own directory plus the workspace). Absent = undefined,
+   * which narrows the policy to the document's own directory only.
+   */
+  workspaceForTab?(tabId: string): string | undefined;
+  /**
+   * The broad roots of the file-subresource policy: the user's home (and
+   * therefore `<home>/.anycode`) plus the temp dirs. Absent = `os.homedir()`
+   * and `[os.tmpdir()]` (plus `/tmp` on darwin).
+   *
+   * The roots MUST be canonicalized (realpath'd) by the caller — the policy
+   * compares them against realpath'd requests — but the RAW spellings are
+   * kept alongside them (see `file-resource-roots.ts`).
+   */
+  fileResourceRoots?(): { home: string; tmpdirs: string[]; profileDir?: string };
   logger: PreviewLogger;
   now: () => number;
 }
@@ -534,6 +552,15 @@ interface WebPreviewRecord {
   sourcePath?: string;
   /** realpath of `sourcePath` — used for auto-open dedup, independent of the raw string the model wrote. */
   realSourcePath?: string;
+  /**
+   * The in-flight move of the document anchor (see `moveDocumentAnchor`):
+   * a main-frame navigation re-points the anchor at the NEW document, and
+   * the request gate AWAITS this promise before it evaluates a subresource
+   * against the policy — otherwise the new document's own assets would be
+   * judged against the PREVIOUS document's tree.
+   */
+  documentAnchorUpdate?: Promise<void>;
+  documentAnchorGeneration?: number;
   renderedFrom?: string;
   title?: string;
   consentedOrigins: Set<string>;
@@ -917,6 +944,8 @@ class PreviewHost implements PreviewHostHandle {
       return this.fail(target.errorKind, target.error);
     }
 
+    record.documentAnchorGeneration = (record.documentAnchorGeneration ?? 0) + 1;
+    record.documentAnchorUpdate = undefined;
     record.status = "loading";
     record.kind = target.kind;
     record.url = target.url;
@@ -2663,6 +2692,12 @@ class PreviewHost implements PreviewHostHandle {
     }));
     wc.onDidNavigate(guard((navUrl) => {
       record.url = navUrl;
+      // The document the policy anchors on moved: a `file:` navigation
+      // re-points the anchor at the NEW file (re-resolved through the
+      // artifact resolver), a non-file navigation clears it. The gate
+      // awaits `record.documentAnchorUpdate`, so the new document's own
+      // subresources are judged against the NEW document, not the old one.
+      record.documentAnchorUpdate = this.moveDocumentAnchor(record, navUrl);
     }));
     wc.onConsoleMessage(guard((level, message) => {
       this.recordConsole(record, {
@@ -2807,6 +2842,35 @@ class PreviewHost implements PreviewHostHandle {
     }
   }
 
+  /** Updates the file anchor for a committed main-frame navigation. */
+  private async moveDocumentAnchor(record: WebPreviewRecord, navUrl: string): Promise<void> {
+    const generation = record.documentAnchorGeneration = (record.documentAnchorGeneration ?? 0) + 1;
+    record.realSourcePath = undefined;
+    record.sourcePath = undefined;
+    this.armWatcher(record);
+    if (!navUrl.startsWith("file:")) {
+      return;
+    }
+    let filePath: string;
+    try {
+      filePath = fileURLToPath(navUrl);
+    } catch {
+      return;
+    }
+    let resolved: { realPath: string } | { failure: string };
+    try {
+      resolved = await this.deps.resolveArtifact(record.tabId, filePath);
+    } catch {
+      return;
+    }
+    if (record.documentAnchorGeneration !== generation || !("realPath" in resolved)) {
+      return;
+    }
+    record.realSourcePath = resolved.realPath;
+    record.sourcePath = filePath;
+    this.armWatcher(record);
+  }
+
   /**
    * ONE gate policy function (cut §1.1/F2, the keystone fix), closed over the
    * LIVE `record` — `record.kind`/`record.consentedOrigins` are read at
@@ -2844,6 +2908,15 @@ class PreviewHost implements PreviewHostHandle {
       return { allowed: true, dedupeKey: req.url };
     }
     if (scheme === "file:") {
+      // The document anchor may be MOVING right now (a main-frame
+      // navigation re-points it at the NEW document): the new document's own
+      // subresources must be judged against the NEW document, so the pending
+      // move is awaited BEFORE the policy is evaluated.
+      const generation = record.documentAnchorGeneration;
+      await record.documentAnchorUpdate;
+      if (generation !== record.documentAnchorGeneration) {
+        return { allowed: false, dedupeKey: req.url };
+      }
       let filePath: string;
       try {
         filePath = fileURLToPath(parsed);
@@ -2851,13 +2924,37 @@ class PreviewHost implements PreviewHostHandle {
         return { allowed: false, dedupeKey: req.url };
       }
       const resolved = await this.deps.resolveArtifact(record.tabId, filePath);
-      if (!("realPath" in resolved)) {
+      if (!("realPath" in resolved) || generation !== record.documentAnchorGeneration) {
         return { allowed: false, dedupeKey: filePath };
       }
       if (req.resourceType === "mainFrame") {
         return { allowed: true, dedupeKey: filePath };
       }
-      return { allowed: record.kind === "file", dedupeKey: filePath };
+      if (record.kind !== "file") {
+        return { allowed: false, dedupeKey: filePath };
+      }
+      // Containment is NOT enough for a SUBRESOURCE: it answers "may the app
+      // serve this path", not "may THIS document load this path". A `file:`
+      // preview may load only its own tree (plus the workspace) — never the
+      // app profile, the home dir or a shared temp folder (see
+      // file-resource-policy.ts's threat model).
+      const documentRealPath = record.realSourcePath;
+      if (documentRealPath === undefined) {
+        return { allowed: false, dedupeKey: filePath };
+      }
+      // The fallback roots (main did NOT bind `fileResourceRoots`) are the
+      // user's home and the OS temp dirs, CANONICALIZED (realpath'd) and
+      // with their raw spellings kept — see file-resource-roots.ts.
+      const roots = this.deps.fileResourceRoots?.() ?? defaultFileResourceRoots();
+      const allowed = isAllowedFileSubresource({
+        requestRealPath: resolved.realPath,
+        documentRealPath,
+        workspace: this.deps.workspaceForTab?.(record.tabId),
+        home: roots.home,
+        tmpdirs: roots.tmpdirs,
+        profileDir: roots.profileDir,
+      });
+      return { allowed, dedupeKey: filePath };
     }
     if (scheme === "http:" || scheme === "https:" || scheme === "ws:" || scheme === "wss:") {
       const normalizedScheme = scheme === "ws:" ? "http:" : scheme === "wss:" ? "https:" : scheme;

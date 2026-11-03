@@ -11,6 +11,9 @@
  */
 
 import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   PREVIEW_EVENT_TYPE,
@@ -187,6 +190,10 @@ class FakeWebContents implements PreviewWebContentsLike {
   }
   fireConsoleMessage(level: PreviewConsoleEntry["level"], message: string): void {
     for (const l of this.consoleMessage) l(level, message);
+  }
+  /** Simulates Electron's `did-navigate` (the main frame committed a new document). */
+  fireDidNavigate(url: string): void {
+    for (const l of this.didNavigate) l(url);
   }
 }
 
@@ -2017,6 +2024,129 @@ describe("PreviewHost — request gate (cut §1.1/F2, GATE-MATRIX)", () => {
   });
 });
 
+describe("PreviewHost — request gate: file subresources stay inside the document's own tree", () => {
+  const FAKE_HOME = "/fake-home";
+  const FAKE_PROFILE_SECRET = `${FAKE_HOME}/.anycode/auth.json`;
+
+  /**
+   * A resolver that claims EVERYTHING is contained (the app profile secret
+   * included) — containment alone must not be enough for a `file:`
+   * SUBRESOURCE of a local preview.
+   */
+  async function openedRigWithContainedResolver(): Promise<Rig> {
+    const rig = makeRig({
+      workspaceForTab: () => WORKSPACE_ROOT,
+      fileResourceRoots: () => ({ home: FAKE_HOME, tmpdirs: ["/fake-tmp"] }),
+    });
+    rig.resolveArtifactImpl = async (_tabId, path) => ({ realPath: path });
+    const openPromise = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    await openPromise;
+    return rig;
+  }
+
+  function gateOf(rig: Rig): (req: { url: string; resourceType: string }) => Promise<boolean> {
+    const gate = rig.windows[0]!.webContents.requestGate;
+    if (gate === undefined) {
+      throw new Error("request gate was never installed by wireWindow");
+    }
+    return gate;
+  }
+
+  it("denies a CONTAINED file: subresource from the app profile", async () => {
+    const rig = await openedRigWithContainedResolver();
+    const gate = gateOf(rig);
+    await expect(
+      gate({ url: pathToFileURL(FAKE_PROFILE_SECRET).href, resourceType: "xhr" }),
+    ).resolves.toBe(false);
+  });
+
+  it("denies a CONTAINED file: subresource from outside the document's tree", async () => {
+    const rig = await openedRigWithContainedResolver();
+    const gate = gateOf(rig);
+    await expect(
+      gate({ url: pathToFileURL("/etc/passwd").href, resourceType: "image" }),
+    ).resolves.toBe(false);
+  });
+
+  it("still allows an in-tree stylesheet of the same document", async () => {
+    const rig = await openedRigWithContainedResolver();
+    const gate = gateOf(rig);
+    await expect(
+      gate({ url: pathToFileURL(`${WORKSPACE_ROOT}/style.css`).href, resourceType: "stylesheet" }),
+    ).resolves.toBe(true);
+    await expect(
+      gate({ url: pathToFileURL(`${WORKSPACE_ROOT}/img/logo.png`).href, resourceType: "image" }),
+    ).resolves.toBe(true);
+  });
+
+  it("leaves the mainFrame behaviour unchanged", async () => {
+    const rig = await openedRigWithContainedResolver();
+    const gate = gateOf(rig);
+    await expect(
+      gate({ url: pathToFileURL(`${WORKSPACE_ROOT}/other.html`).href, resourceType: "mainFrame" }),
+    ).resolves.toBe(true);
+  });
+
+  it("records ONE deduped 'blocked by security policy' ring entry for the denial", async () => {
+    const rig = await openedRigWithContainedResolver();
+    const gate = gateOf(rig);
+    const previewId = rig.windows[0]!.previewId;
+    await gate({ url: pathToFileURL(FAKE_PROFILE_SECRET).href, resourceType: "xhr" });
+    await gate({ url: pathToFileURL(FAKE_PROFILE_SECRET).href, resourceType: "xhr" });
+
+    const console_ = rig.host.getConsole(TAB, previewId);
+    const entries = "entries" in console_ ? console_.entries : [];
+    const blocked = entries.filter((e) => e.message.includes("blocked by security policy"));
+    expect(blocked).toHaveLength(1);
+    expect(blocked[0]).toMatchObject({ level: "warn" });
+  });
+
+  it("leaves the localhost-kind preview's file: subresource denial unchanged", async () => {
+    const rig = makeRig({
+      workspaceForTab: () => WORKSPACE_ROOT,
+      fileResourceRoots: () => ({ home: FAKE_HOME, tmpdirs: ["/fake-tmp"] }),
+    });
+    rig.resolveArtifactImpl = async (_tabId, path) => ({ realPath: path });
+    const openPromise = rig.host.openForTab(TAB, { url: "http://localhost:5173/" });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    await openPromise;
+    const gate = gateOf(rig);
+    await expect(
+      gate({ url: pathToFileURL(`${WORKSPACE_ROOT}/style.css`).href, resourceType: "stylesheet" }),
+    ).resolves.toBe(false);
+    await expect(
+      gate({ url: "http://localhost:5173/api", resourceType: "xhr" }),
+    ).resolves.toBe(true);
+  });
+});
+
+describe("PreviewHost — request gate: the broad roots are canonical", () => {
+  it("a document directly in the OS temp dir reads its DIRECT children only", async () => {
+    // No `fileResourceRoots` dep -> the host falls back to the REAL home and
+    // the REAL temp roots. On macOS the temp dir's raw spelling
+    // (`/var/folders/…`) differs from its realpath (`/private/var/folders/…`)
+    // — an uncanonical root would stop being a broad root, and the whole
+    // temp tree would become readable from a document that sits in it.
+    const rig = makeRig();
+    rig.resolveArtifactImpl = async (_tabId, path) => ({ realPath: path });
+    const canonicalTmp = realpathSync(tmpdir());
+    const openPromise = rig.host.openForTab(TAB, { path: join(canonicalTmp, "anycode-preview-doc.html") });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    await openPromise;
+    const gate = rig.windows[0]!.webContents.requestGate!;
+    await expect(
+      gate({ url: pathToFileURL(join(canonicalTmp, "nested/secret.json")).href, resourceType: "xhr" }),
+    ).resolves.toBe(false);
+    await expect(
+      gate({ url: pathToFileURL(join(canonicalTmp, "logo.png")).href, resourceType: "image" }),
+    ).resolves.toBe(true);
+  });
+});
+
 describe("PreviewHost — request gate legibility (cut §1.1, GATE-LEGIBILITY)", () => {
   it("records exactly one deduped ring entry per denied origin/path for subresource denials", async () => {
     const rig = makeRig();
@@ -2054,6 +2184,29 @@ describe("PreviewHost — request gate legibility (cut §1.1, GATE-LEGIBILITY)",
     const console_ = rig.host.getConsole(TAB, previewId);
     const entries = "entries" in console_ ? console_.entries : [];
     expect(entries).toEqual([]);
+  });
+});
+
+describe("PreviewHost — request gate: a document under the app profile is never widened", () => {
+  it("denies a file OUTSIDE the document's own directory inside the profile", async () => {
+    const rig = makeRig({
+      // A workspace that lives INSIDE the app profile — it must not widen
+      // the document's allowed tree (the profile is a broad root).
+      workspaceForTab: () => "/fake-home/.anycode/gen",
+      fileResourceRoots: () => ({ home: "/fake-home", tmpdirs: ["/fake-tmp"] }),
+    });
+    rig.resolveArtifactImpl = async (_tabId, path) => ({ realPath: path });
+    const openPromise = rig.host.openForTab(TAB, { path: "/fake-home/.anycode/gen/pages/index.html" });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    await openPromise;
+    const gate = rig.windows[0]!.webContents.requestGate!;
+    await expect(
+      gate({ url: pathToFileURL("/fake-home/.anycode/gen/secret.json").href, resourceType: "xhr" }),
+    ).resolves.toBe(false);
+    await expect(
+      gate({ url: pathToFileURL("/fake-home/.anycode/gen/pages/style.css").href, resourceType: "stylesheet" }),
+    ).resolves.toBe(true);
   });
 });
 
@@ -2115,6 +2268,131 @@ describe("PreviewHost — redirect gate (cut §1.2/F1, REDIRECT)", () => {
     const wc = rig.windows[0]!.webContents;
     await expect(wc.requestGate!({ url: "https://evil.tld/", resourceType: "mainFrame" })).resolves.toBe(false);
   });
+});
+
+describe("PreviewHost — request gate: the document anchor follows the navigation", () => {
+  const FAKE_HOME = "/fake-home";
+  const FAKE_TMP = "/fake-tmp";
+
+  async function openedRigWithContainedResolver(): Promise<Rig> {
+    const rig = makeRig({
+      workspaceForTab: () => WORKSPACE_ROOT,
+      fileResourceRoots: () => ({ home: FAKE_HOME, tmpdirs: [FAKE_TMP] }),
+    });
+    rig.resolveArtifactImpl = async (_tabId, path) => ({ realPath: path });
+    const openPromise = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    await openPromise;
+    return rig;
+  }
+
+  function gateOf(rig: Rig): (req: { url: string; resourceType: string }) => Promise<boolean> {
+    const gate = rig.windows[0]!.webContents.requestGate;
+    if (gate === undefined) {
+      throw new Error("request gate was never installed by wireWindow");
+    }
+    return gate;
+  }
+
+  it("re-anchors the policy on the NEW document after an in-page navigation", async () => {
+    const rig = await openedRigWithContainedResolver();
+    const wc = rig.windows[0]!.webContents;
+    // The page navigated to another document (a link click): the policy must
+    // be judged against the NEW document, not the one that was open before.
+    wc.fireDidNavigate(pathToFileURL(`${FAKE_TMP}/b/index.html`).href);
+    await flush();
+    const gate = gateOf(rig);
+    await expect(
+      gate({ url: pathToFileURL(`${FAKE_TMP}/b/style.css`).href, resourceType: "stylesheet" }),
+    ).resolves.toBe(true);
+    // The PREVIOUS document's tree is no longer the anchor.
+    await expect(
+      gate({ url: pathToFileURL(`${WORKSPACE_ROOT}/style.css`).href, resourceType: "stylesheet" }),
+    ).resolves.toBe(false);
+  });
+
+  it("clears the document anchor when the navigation is not a file URL", async () => {
+    const rig = await openedRigWithContainedResolver();
+    const wc = rig.windows[0]!.webContents;
+    wc.fireDidNavigate("http://localhost:5173/");
+    await flush();
+    const gate = gateOf(rig);
+    // The document is not a file document anymore: no file anchor may be
+    // inherited from the document that was open before.
+    await expect(
+      gate({ url: pathToFileURL(`${WORKSPACE_ROOT}/style.css`).href, resourceType: "stylesheet" }),
+    ).resolves.toBe(false);
+  });
+
+  it("waits for the new anchor before allowing its subresource", async () => {
+    const rig = await openedRigWithContainedResolver();
+    const document = `${FAKE_TMP}/b/index.html`;
+    let finish!: (value: { realPath: string }) => void;
+    rig.resolveArtifactImpl = async (_tab, path) => path === document
+      ? await new Promise<{ realPath: string }>((resolve) => { finish = resolve; }) : { realPath: path };
+    rig.windows[0]!.webContents.fireDidNavigate(pathToFileURL(document).href);
+    let settled = false;
+    const request = gateOf(rig)({ url: pathToFileURL(`${FAKE_TMP}/b/style.css`).href, resourceType: "stylesheet" })
+      .then((allowed) => { settled = true; return allowed; });
+    await flush();
+    expect(settled).toBe(false);
+    finish({ realPath: document });
+    await expect(request).resolves.toBe(true);
+  });
+
+  it("does not restore an older anchor after a non-file navigation", async () => {
+    const rig = await openedRigWithContainedResolver();
+    const document = `${FAKE_TMP}/b/index.html`;
+    let finish!: (value: { realPath: string }) => void;
+    rig.resolveArtifactImpl = async (_tab, path) => path === document
+      ? await new Promise<{ realPath: string }>((resolve) => { finish = resolve; }) : { realPath: path };
+    const wc = rig.windows[0]!.webContents;
+    wc.fireDidNavigate(pathToFileURL(document).href);
+    wc.fireDidNavigate("http://localhost:5173/");
+    finish({ realPath: document });
+    await flush();
+    await expect(gateOf(rig)({ url: pathToFileURL(`${FAKE_TMP}/b/secret.json`).href, resourceType: "xhr" })).resolves.toBe(false);
+  });
+
+  it("clears the previous anchor when the new document cannot be resolved", async () => {
+    const rig = await openedRigWithContainedResolver();
+    rig.resolveArtifactImpl = async (_tab, path) => path === `${FAKE_TMP}/b/index.html`
+      ? { failure: "missing" } : { realPath: path };
+    rig.windows[0]!.webContents.fireDidNavigate(pathToFileURL(`${FAKE_TMP}/b/index.html`).href);
+    await expect(gateOf(rig)({ url: pathToFileURL(`${WORKSPACE_ROOT}/secret.json`).href, resourceType: "xhr" })).resolves.toBe(false);
+  });
+
+  it("denies a request if navigation changes while its file is resolving", async () => {
+    const rig = await openedRigWithContainedResolver();
+    const secret = `${WORKSPACE_ROOT}/secret.json`;
+    let finish!: (value: { realPath: string }) => void;
+    rig.resolveArtifactImpl = async (_tab, path) => path === secret
+      ? await new Promise<{ realPath: string }>((resolve) => { finish = resolve; }) : { realPath: path };
+    const request = gateOf(rig)({ url: pathToFileURL(secret).href, resourceType: "xhr" });
+    await flush();
+    rig.windows[0]!.webContents.fireDidNavigate("http://localhost:5173/");
+    finish({ realPath: secret });
+    await expect(request).resolves.toBe(false);
+  });
+
+  it("does not restore an older anchor after preview reuse", async () => {
+    const rig = await openedRigWithContainedResolver();
+    const document = `${FAKE_TMP}/b/index.html`;
+    let finish!: (value: { realPath: string }) => void;
+    rig.resolveArtifactImpl = async (_tab, path) => path === document
+      ? await new Promise<{ realPath: string }>((resolve) => { finish = resolve; }) : { realPath: path };
+    const wc = rig.windows[0]!.webContents;
+    wc.fireDidNavigate(pathToFileURL(document).href);
+    const reused = rig.host.openForTab(TAB, { previewId: rig.windows[0]!.previewId, path: `${FAKE_TMP}/c/index.html` });
+    await flush();
+    finish({ realPath: document });
+    await flush();
+    wc.fireDidFinishLoad();
+    await reused;
+    await expect(gateOf(rig)({ url: pathToFileURL(`${FAKE_TMP}/b/secret.json`).href, resourceType: "xhr" })).resolves.toBe(false);
+  });
+
 });
 
 describe("PreviewHost — read op bounds + exec timeout (cut §1.3/F3)", () => {

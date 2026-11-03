@@ -9,6 +9,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Keep local preview file access closed while a navigated document is being resolved or cannot be resolved.
+
 - Use readable Enter key names in task and permission hints. Refresh Git status when returning to its dock tab.
 - Restore terminal turn errors in session transcripts after reopening a session.
 - Return the sanitized error in session results when a core turn fails without a completed answer.
@@ -36,6 +38,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Z.AI (GLM), MiniMax, Xiaomi MiMo and DeepSeek now get their own reasoning back on later requests, in tool loops and across turns, so the model keeps its earlier thinking. Reasoning is sent only to the provider and model that produced it, and reloaded sessions show it as collapsed blocks. Set `ANYCODE_PRESERVE_REASONING=on|off` to override this for supported providers and custom connections (#41).
 - Conversation history written by this version cannot be read by older versions.
+- Local HTML previews can no longer load files outside their own folder (or workspace), including the app profile and shared temp folders. The restriction follows in-page navigation, and a document inside the app profile is never widened by a workspace.
 
 ### Added
 

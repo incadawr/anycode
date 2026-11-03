@@ -220,6 +220,7 @@ import {
 // electron-adapter is the ONLY file that touches real Electron primitives, so
 // preview-host.ts itself stays unit-testable off plain fakes.
 import { registerPreviewHost, type PreviewHostHandle } from "./preview/preview-host.js";
+import { buildFileResourceRoots, defaultTempRoots } from "./preview/file-resource-roots.js";
 import { createElectronPreviewWindow, wrapCapturedImage } from "./preview/electron-adapter.js";
 import { createElectronPanelView } from "./preview/panel-adapter.js";
 // M3 (CUT.md GAP 1): the md-preview WINDOW container adapter — a
@@ -2371,6 +2372,22 @@ void app.whenReady().then(async () => {
       sendToMainWindow(win, PREVIEW_CHANGED_CHANNEL, payload);
     },
     resolveArtifact: (tabId, path) => resolveContainedPath(artifactsIpcDeps, tabId, path),
+    // File-subresource policy (preview/file-resource-policy.ts): a `file:`
+    // preview may load only its OWN tree (plus the workspace) — the app
+    // profile (`<home>/.anycode`), the home dir and the shared temp dirs are
+    // broad roots a document may NOT walk into, even though the artifact
+    // resolver would happily serve them. The tab's workspace is the ONE
+    // widening the policy allows (a workspace == the home dir widens
+    // nothing — the policy itself refuses that).
+    workspaceForTab: (tabId) => manager?.getTab(tabId)?.workspace,
+    fileResourceRoots: () =>
+      // CANONICALIZED roots (realpath'd) AND the raw spellings kept
+      // alongside them: the policy compares them against REALPATH'd
+      // requests, so an uncanonical root (e.g. the macOS temp dir
+      // `/var/folders/…` vs its realpath `/private/var/folders/…`) would
+      // silently stop being a broad root — and the temp tree would become
+      // readable from a document that sits directly in it.
+      buildFileResourceRoots(artifactsIpcDeps.home(), defaultTempRoots()),
     // M4 (CUT.md GAP 2): the SAME `fsStat`/`NodeArtifactsFs.readFileNoFollow`
     // primitives registerMdDocIpc's own `MdDocDeps` below binds for the
     // renderer's MD_PREVIEW_READ/Reload channel — one fs implementation, two
