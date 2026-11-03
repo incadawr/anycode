@@ -194,7 +194,7 @@ it("removes discarded errors on rewind, reload, and reopen while retaining survi
   await db.appendTurnError("s1", error("ghost", "t2"));
   const h = createHarness({
     steps: [], bootHistory: [kept, discarded], bootTurnErrors: await db.loadTurnErrors("s1"),
-    truncateTurnErrors: (history) => db.truncateTurnErrors("s1", history),
+    restoreHistoryAndTurnErrors: (history, ids) => db.restoreHistoryAndTurnErrors("s1", history, ids),
     checkpointsSeam: { list: async () => [], rewind: async () => ({ ok: true, safetyCheckpointId: "safety", restoredPaths: 0, historyItems: [kept] }) },
   });
   try {
@@ -223,6 +223,67 @@ it("removes discarded errors on rewind, reload, and reopen while retaining survi
       expect(history.items.map((item) => item.id)).toEqual(["kept", "kept-error", "next"]);
     } finally { resumed.close(); }
   } finally { reopened.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+it("rolls back history and errors and reports failure when the restore write fails", async () => {
+  const db = new SqlitePersistenceAdapter(":memory:");
+  await db.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+  const original: HistoryItem = { id: "old", turnId: "old-turn", createdAt: 1, message: { role: "user", content: "old" } };
+  const error = { kind: "turn_error" as const, id: "error", turnId: "old-turn", createdAt: 2, engine: "core", model: "m", error: { name: "Error", message: "failure" } };
+  await db.appendHistory("s1", [original]);
+  await db.appendTurnError("s1", error);
+  const duplicate = { ...original, id: "duplicate" };
+  const h = createHarness({ steps: [], bootHistory: [original], bootTurnErrors: [error],
+    restoreHistoryAndTurnErrors: (history, ids) => db.restoreHistoryAndTurnErrors("s1", history, ids),
+    checkpointsSeam: { list: async () => [], rewind: async () => ({ ok: true, safetyCheckpointId: "s", restoredPaths: 0, historyItems: [duplicate, duplicate], turnErrorIds: [] }) },
+  });
+  try {
+    h.send({ type: "ui_ready" });
+    await h.waitFor(isHostReady);
+    h.send({ type: "rewind_request", requestId: "rw", checkpointId: "cp", scope: "conversation" });
+    expect((await h.waitFor(isRewindResult)).ok).toBe(false);
+    expect(await db.loadHistory("s1")).toEqual([original]);
+    expect(await db.loadTurnErrors("s1")).toEqual([error]);
+    expect(h.session.communicationResult().latestResult?.publicAnswer).toBe("failure");
+  } finally { h.close(); db.close(); }
+});
+
+it("retains errors captured before compaction and discards later errors using the checkpoint boundary", async () => {
+  const db = new SqlitePersistenceAdapter(":memory:");
+  await db.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+  const summary: HistoryItem = { id: "summary", kind: "compact_summary", createdAt: 10, message: { role: "user", content: "summary" } };
+  const error = (id: string) => ({ kind: "turn_error" as const, id, turnId: id, createdAt: 2, engine: "core", model: "m", error: { name: "Error", message: id } });
+  await db.appendTurnError("s1", error("before"));
+  await db.appendTurnError("s1", error("after"));
+  const h = createHarness({ steps: [], bootHistory: [summary], bootTurnErrors: await db.loadTurnErrors("s1"),
+    restoreHistoryAndTurnErrors: (history, ids) => db.restoreHistoryAndTurnErrors("s1", history, ids),
+    checkpointsSeam: { list: async () => [], rewind: async () => ({ ok: true, safetyCheckpointId: "s", restoredPaths: 0, historyItems: [summary], turnErrorIds: ["before"] }) },
+  });
+  try {
+    h.send({ type: "ui_ready" }); await h.waitFor(isHostReady);
+    h.send({ type: "rewind_request", requestId: "rw", checkpointId: "cp", scope: "conversation" });
+    expect((await h.waitFor(isRewindResult)).ok).toBe(true);
+    expect((await db.loadTurnErrors("s1")).map((record) => record.id)).toEqual(["before"]);
+  } finally { h.close(); db.close(); }
+});
+
+it("keeps a recovered error result when its unmarked anchor survives", async () => {
+  const db = new SqlitePersistenceAdapter(":memory:");
+  await db.createSession({ id: "s1", workspace: "/w", model: "m", mode: "build" });
+  const item: HistoryItem = { id: "anchor", createdAt: 1, message: { role: "user", content: "input" } };
+  const error = { kind: "turn_error" as const, id: "error", turnId: "turn", afterItemId: "anchor", createdAt: 2, engine: "core", model: "m", error: { name: "Error", message: "failure" } };
+  await db.appendTurnError("s1", error);
+  const h = createHarness({ steps: [], bootHistory: [item], bootTurnErrors: [error],
+    restoreHistoryAndTurnErrors: (history, ids) => db.restoreHistoryAndTurnErrors("s1", history, ids),
+    checkpointsSeam: { list: async () => [], rewind: async () => ({ ok: true, safetyCheckpointId: "s", restoredPaths: 0, historyItems: [item] }) },
+  });
+  try {
+    h.send({ type: "ui_ready" }); await h.waitFor(isHostReady);
+    h.send({ type: "rewind_request", requestId: "rw", checkpointId: "cp", scope: "conversation" });
+    expect((await h.waitFor(isRewindResult)).ok).toBe(true);
+    expect(await db.loadTurnErrors("s1")).toEqual([error]);
+    expect(h.session.communicationResult().latestResult?.publicAnswer).toBe("failure");
+  } finally { h.close(); db.close(); }
 });
 
 // ── (5)-(7): real ShadowGitCheckpoints destructive units ───────────────────────
