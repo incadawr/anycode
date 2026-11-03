@@ -175,9 +175,8 @@ export interface DispatchContext {
    */
   artifacts?: ArtifactContext;
   /**
-   * §3.3: true while the owning session tab runs in orchestrate
-   * mode. Threaded into every ToolContext (the Agent tool is the sole
-   * consumer). Optional: absent => byte-identical pre-4704 behavior.
+   * True while the owning session tab runs in orchestrate mode. Read at
+   * dispatch time for permissions and threaded into ToolContext.
    */
   orchestrate?: boolean;
   /**
@@ -346,7 +345,7 @@ export async function executeToolCall(
       // skip the broker. Never consulted on allow/deny, on a hook-demanded ask,
       // or on an ineligible call; every failure inside leaves the broker in charge.
       const autoAllowed =
-        decision === "ask" && ctx.askClassifier !== undefined
+        decision === "ask" && !request.orchestrate && ctx.askClassifier !== undefined
           ? await tryAutoDecideAsk(ctx, request, ruling.decision, hookDecision === "ask", toolCallId, emit, parentSignal)
           : false;
       let brokerRewroteInput = false;
