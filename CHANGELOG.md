@@ -9,6 +9,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Group preview warnings and errors in a collapsible chat row, keeping routine console messages in the preview console.
+
 - Show readable preview console objects in the console panel and browser tools.
 
 - Keep local preview file access closed while a navigated document is being resolved or cannot be resolved.

@@ -9,6 +9,7 @@ function block(overrides: Partial<PreviewConsoleBlock> = {}): PreviewConsoleBloc
     previewId: "preview-1",
     level: "log",
     message: "hello from the page",
+    entries: [],
     ...overrides,
   };
 }

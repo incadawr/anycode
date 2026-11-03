@@ -1863,27 +1863,6 @@ describe("desktop store — preview_console (slice 96-D, night-track wave-1 cut 
     expect(block?.suppressed).toBeUndefined();
   });
 
-  it("carries the suppressed count through for a throttle-window summary", () => {
-    const { scheduler } = createManualScheduler();
-    const store = createDesktopStore(scheduler);
-    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
-
-    store.getState().applyHostMessage({
-      type: "agent_event",
-      turnId: "preview-console",
-      event: {
-        type: "preview_console",
-        previewId: "preview-1",
-        level: "log",
-        message: "3 console messages suppressed",
-        suppressed: 3,
-      },
-    });
-
-    const block = findBlock(store.getState().transcript, "preview_console");
-    expect(block?.suppressed).toBe(3);
-  });
-
   it("is EXEMPT from the turn-scoped drop guard — applies even while idle (turnId: null), unlike every other agent_event", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);
@@ -1908,7 +1887,7 @@ describe("desktop store — preview_console (slice 96-D, night-track wave-1 cut 
     store.getState().applyHostMessage({
       type: "agent_event",
       turnId: "preview-console", // deliberately NOT "turn-1"
-      event: { type: "preview_console", previewId: "preview-1", level: "log", message: "hi" },
+      event: { type: "preview_console", previewId: "preview-1", level: "warn", message: "hi" },
     });
 
     expect(findBlock(store.getState().transcript, "preview_console")).toBeDefined();
@@ -1916,25 +1895,20 @@ describe("desktop store — preview_console (slice 96-D, night-track wave-1 cut 
     expect(store.getState().turn.turnId).toBe("turn-1");
   });
 
-  it("multiple preview_console events each get their own block with a distinct id", () => {
+  it("filters logs and groups consecutive messages by preview with repeat counts", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);
     store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
-
-    for (let i = 0; i < 3; i++) {
-      store.getState().applyHostMessage({
-        type: "agent_event",
-        turnId: "preview-console",
-        event: { type: "preview_console", previewId: "preview-1", level: "log", message: `line ${i}` },
-      });
-    }
-
-    const blocks = store
-      .getState()
-      .transcript.filter((b): b is Extract<TranscriptBlock, { kind: "preview_console" }> => b.kind === "preview_console");
-    expect(blocks).toHaveLength(3);
-    expect(new Set(blocks.map((b) => b.id)).size).toBe(3);
+    const send = (previewId: string, level: "log" | "warn" | "error", message: string) =>
+      store.getState().applyHostMessage({ type: "agent_event", turnId: "preview-console", event: { type: "preview_console", previewId, level, message } });
+    send("p1", "log", "ignored");
+    expect(store.getState().transcript).toHaveLength(0);
+    send("p1", "warn", "repeat"); send("p1", "warn", "repeat"); send("p1", "error", "failure"); send("p2", "warn", "other");
+    const blocks = store.getState().transcript.filter((b) => b.kind === "preview_console");
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]?.entries).toEqual([{ level: "warn", message: "repeat", count: 2 }, { level: "error", message: "failure", count: 1 }]);
   });
+
 });
 
 describe("desktop store — W8 retry visibility + Try-again", () => {

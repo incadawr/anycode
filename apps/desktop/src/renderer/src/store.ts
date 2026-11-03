@@ -629,6 +629,7 @@ export type TranscriptBlock =
       level: "log" | "warn" | "error" | "pageerror";
       message: string;
       suppressed?: number;
+      entries: Array<{ level: "warn" | "error" | "pageerror"; message: string; count: number }>;
     }
   /**
    * One row per `ceiling_grant` AgentEvent (cut-1): the turn-ceiling
@@ -4890,16 +4891,27 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         // console line is not associated with any particular tool call, and
         // may arrive long after the BrowserOpen call that opened the window
         // has already settled.
-        case "preview_console":
-          appendBlock({
-            kind: "preview_console",
-            id: `preview-console:${previewConsoleSeq++}`,
-            previewId: event.previewId,
-            level: event.level,
-            message: event.message,
-            ...(event.suppressed !== undefined ? { suppressed: event.suppressed } : {}),
+        case "preview_console": {
+          if (event.level === "log") return;
+          const entry = { level: event.level, message: event.message, count: 1 };
+          flushDeltas();
+          set((state) => {
+            const last = state.transcript.at(-1);
+            if (last?.kind === "preview_console" && last.previewId === event.previewId) {
+              const entries = [...last.entries];
+              const previous = entries.at(-1);
+              if (previous && previous.level === entry.level && previous.message === entry.message) {
+                entries[entries.length - 1] = { ...previous, count: previous.count + 1 };
+              } else entries.push(entry);
+              return { transcript: [...state.transcript.slice(0, -1), { ...last, entries }] };
+            }
+            return { transcript: [...state.transcript, {
+              kind: "preview_console" as const, id: `preview-console:${previewConsoleSeq++}`,
+              previewId: event.previewId, level: event.level, message: event.message, entries: [entry],
+            }] };
           });
           return;
+        }
 
         // Degenerate-generation guard: the same "a guard acted,
         // the feed must say so" posture as ceiling_grant below — the model's
