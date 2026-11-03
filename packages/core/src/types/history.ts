@@ -94,6 +94,7 @@ export interface TurnErrorRecord {
   model: string;
   afterItemId?: string;
   nativeTurnId?: string;
+  afterNativeTurnId?: string;
   error: { name: string; message: string; code?: string };
 }
 
