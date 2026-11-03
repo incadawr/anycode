@@ -9650,7 +9650,7 @@ describe("Session — set_orchestrate (§3.7 / A1)", () => {
     try {
       h.send({ type: "ui_ready" });
       const ready = await h.waitFor(isHostReady);
-      expect(ready.orchestration).toEqual({ enabled: false, available: false, reason: "unavailable" });
+      expect(ready.orchestration).toEqual({ enabled: false, available: true, posture: "off" });
       h.send({ type: "user_message", requestId: "malformed", text: "private", orchestrate: "disable" } as unknown as UiToHostMessage);
       const refusal = await h.waitFor((m): m is Of<"user_message_invalid"> => m.type === "user_message_invalid" && m.requestId === "malformed");
       expect(refusal).toEqual({ type: "user_message_invalid", requestId: "malformed" });
@@ -9683,20 +9683,20 @@ describe("Session — set_orchestrate (§3.7 / A1)", () => {
     } finally { release?.(); h.close(); }
   });
 
-  it("rejects reserved atomic and correlated operations without mutation or replay", async () => {
+  it("rejects atomic and correlated operations without a connection token without mutation or replay", async () => {
     const inputs: string[] = [];
     const engine = orchestrateEngine({ onRunTurn: (input) => inputs.push(input) });
     const h = createHarness({ steps: [], engine });
     try {
       h.send({ type: "ui_ready", orchestrationProtocol: 1 });
       const ready = await h.waitFor(isHostReady);
-      expect(ready.orchestrationProtocol).toEqual({ version: 1, hostIncarnation: expect.any(String), connectionId: expect.any(String), atomicSubmit: false, correlatedToggle: false });
+      expect(ready.orchestrationProtocol).toEqual({ version: 1, hostIncarnation: expect.any(String), connectionId: expect.any(String), atomicSubmit: true, correlatedToggle: true });
       h.send({ type: "user_message", requestId: "atomic", text: "task", orchestrate: "enable", images: [{ mediaType: "image/png", data: "YQ==" }] });
       h.send({ type: "set_orchestrate", enabled: true, requestId: "toggle" });
       await h.waitFor((m): m is Of<"orchestrate_result"> => m.type === "orchestrate_result" && m.requestId === "toggle");
       await h.flush();
       expect(h.received).toContainEqual({ type: "user_message_unavailable", requestId: "atomic", reason: "orchestrate_unavailable" });
-      expect(h.received).toContainEqual({ type: "orchestrate_result", requestId: "toggle", outcome: "rejected", reason: "unavailable" });
+      expect(h.received).toContainEqual({ type: "orchestrate_result", requestId: "toggle", connectionId: ready.orchestrationProtocol!.connectionId, outcome: "rejected", reason: "stale" });
       expect(engine.mode()).toBe("build");
       expect(inputs).toEqual([]);
       expect(h.received.some(m => m.type === "turn_started" || m.type === "orchestrate_changed" || m.type === "mode_changed")).toBe(false);

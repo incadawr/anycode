@@ -147,7 +147,7 @@ describe("connection incarnation fence", () => {
       const next = b.delivered.find(isHostReady)!;
       expect(next.orchestrationProtocol?.hostIncarnation).toBe(first.orchestrationProtocol?.hostIncarnation);
       expect(next.orchestrationProtocol?.connectionId).not.toBe(first.orchestrationProtocol?.connectionId);
-      expect(next.orchestrationProtocol?.atomicSubmit).toBe(false);
+      expect(next.orchestrationProtocol?.atomicSubmit).toBe(true);
       expect(h.engine.mode()).toBe("build");
       expect(b.delivered.some(m => m.type === "orchestrate_changed" || m.type === "turn_started")).toBe(false);
       b.send({ type: "user_message", requestId: "current", text: "current" });

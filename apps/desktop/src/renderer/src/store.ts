@@ -5187,6 +5187,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             set({ orchestrateActive: message.enabled });
             return;
           case "orchestrate_result":
+          case "orchestrate_frame_diagnostic":
             // This renderer does not issue correlated requests yet. Never treat
             // their direct outcome as authoritative orchestration state.
             return;

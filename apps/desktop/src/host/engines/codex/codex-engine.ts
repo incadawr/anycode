@@ -23,7 +23,7 @@
 
 import type { AgentEvent, CodexRateLimitsWire, HistoryItem, ImageAttachment, PermissionMode, ReasoningEffort } from "@anycode/core";
 import { orchestrationDeveloperBlock, orchestrationTurnReminder } from "@anycode/core";
-import type { OrchestrationPolicy } from "../../orchestration-policy.js";
+import { OrchestrationNotReadyError, type OrchestrationPolicy } from "../../orchestration-policy.js";
 import { captureBaseConfig, orchestrationOverrides, verifyConfig, verifyReadOnlyEcho, type BaseConfig } from "./orchestration-policy.js";
 import {
   CODEX_BOOT_RPC_TIMEOUT_MS,
@@ -972,7 +972,7 @@ export class CodexEngine implements SessionEngine {
       availability: () => this.disposed || this.orchestrationState === "quarantined"
         ? { supported: false, reason: "unavailable" } : { supported: true },
       apply: async (enabled, baseAuthority) => {
-        if (this.disposed || this.terminalError || this.operation !== null || this.approvals?.hasActiveRequests() || this.agentBridge?.hasPendingCalls() || this.orchestrationState === "quarantined" || this.orchestrationState === "transitioning") throw new Error("Codex orchestration transition unavailable");
+        if (this.disposed || this.terminalError || this.operation !== null || this.approvals?.hasActiveRequests() || this.agentBridge?.hasPendingCalls() || this.orchestrationState === "quarantined" || this.orchestrationState === "transitioning") throw new OrchestrationNotReadyError("Codex orchestration transition unavailable");
         if ((this.orchestrationState === "on") === enabled) return { enabled, baseAuthority };
         this.operation = "transition";
         this.orchestrationState = "transitioning";

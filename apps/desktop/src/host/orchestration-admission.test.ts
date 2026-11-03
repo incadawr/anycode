@@ -48,8 +48,8 @@ describe("orchestration admission", () => {
     const h = setup(); const admit = vi.fn();
     const original = h.gate.submit("id", "one", admit); h.disconnect(); h.finish();
     expect(await original).toEqual({ outcome: "unknown", reason: "disconnected" });
-    expect(await h.gate.toggle("id", "one", false)).toEqual({ kind: "frame_diagnostic", reason: "conflict" });
-    expect(await h.gate.submit("id", "one", admit)).toEqual(await original);
+    expect(await h.gate.toggle("id", "one", false)).toEqual({ outcome: "rejected", reason: "stale" });
+    expect(await h.gate.submit("id", "one", admit)).toEqual({ outcome: "rejected", reason: "stale" });
     expect(admit).not.toHaveBeenCalled();
   });
   it("refuses unavailable, busy, stale and bounded ledger without applying", async () => {
@@ -84,7 +84,7 @@ describe("orchestration admission", () => {
     const result = h.gate.submit("id", "one", admit); h.disconnect(); h.finish();
     expect(await result).toEqual({ outcome: "unknown", reason: "disconnected" });
     expect(admit).not.toHaveBeenCalled();
-    expect(await h.gate.submit("id", "one", admit)).toEqual(await result);
+    expect(await h.gate.submit("id", "one", admit)).toEqual({ outcome: "rejected", reason: "stale" });
   });
   it("does not claim rejection when admission may have started before disconnect", async () => {
     const h = setup();

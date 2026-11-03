@@ -930,6 +930,7 @@ export type HostToUiMessage =
   // tab-scoped orchestrateActive stays in sync even across a reconnect.
   | { type: "orchestrate_changed"; enabled: boolean }
   | { type: "orchestrate_result"; requestId: string; connectionId?: string; outcome: "applied" | "rejected" | "unknown"; reason?: string; enabled?: boolean }
+  | { type: "orchestrate_frame_diagnostic"; requestId: string; reason: "conflict" }
   | { type: "reasoning_effort_changed"; effort: ReasoningEffort; requestId?: string; availableEffortLevels?: ReasoningEffort[] }
   // Slice P7.15 (F14): host acknowledges a `set_model` switch (trusted, no zod,
   // precedent mode_changed/reasoning_effort_changed). `reasoningEffort` is the
