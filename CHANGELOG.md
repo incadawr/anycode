@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Return the sanitized error in session results when a core turn fails without a completed answer.
+
 ## [0.0.68] — 2026-11-03
 
 ### Fixed

@@ -192,8 +192,9 @@ describe("public result retrieval", () => {
       expect(f.h.session.communicationResult().latestResult?.publicAnswer).toBe("UNFINISHED_TEXT");
     } finally { f.h.close(); }
   });
-  it("returns a safe error for a failed turn", async () => {
+  it.each(["codex", "core"] as const)("returns a safe error for a failed %s turn", async (id) => {
     const f = fixture();
+    Object.defineProperty(f.engine, "id", { value: id });
     f.engine.runTurn = async function* () {
       yield { type: "error", error: new Error("private raw error"), safe: { code: "codex_usage_limit", message: "Try again at 1:13 PM." } };
       yield { type: "loop_end", reason: "error", turns: 1 };
