@@ -964,6 +964,25 @@ describe("console argument formatting", () => {
     expect(messages).toEqual(["Failed to load resource"]);
   });
 
+  it("does not repeat replayed resource errors or exceptions after reattachment", async () => {
+    const win = createElectronPreviewWindow({ previewId: "diagnostic-replay" });
+    const dbg = latestWindow().webContents.debugger;
+    const messages: string[] = [];
+    win.webContents.onConsoleMessage((_level, message) => messages.push(message));
+    await Promise.resolve();
+    const log = { entry: { source: "network", level: "error", text: "resource failed", timestamp: 10 } };
+    const exception = { timestamp: 20, exceptionDetails: { exceptionId: 1, text: "uncaught" } };
+    dbg.emit("message", "Log.entryAdded", log);
+    dbg.emit("message", "Runtime.exceptionThrown", exception);
+    dbg.emit("detach");
+    win.webContents.cdp!.ensureAttached();
+    dbg.emit("message", "Log.entryAdded", log);
+    dbg.emit("message", "Runtime.exceptionThrown", exception);
+    await Promise.resolve();
+    dbg.emit("message", "Runtime.exceptionThrown", { ...exception, timestamp: 21 });
+    expect(messages).toEqual(["resource failed", "uncaught", "uncaught"]);
+  });
+
   it("replays detached object logs once despite flattened fallback text and changed object ids", async () => {
     const win = createElectronPreviewWindow({ previewId: "object-replay" });
     const fake = latestWindow();
