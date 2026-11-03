@@ -9,6 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Return the sanitized error in session results when a core turn fails without a completed answer.
 - Make composer keyboard hints readable and separate them from the model selector.
 - Restore compact, right-aligned user messages in conversations.
 - Keep suggested write permissions scoped to the workspace for files inside it, and reject broad macOS directory aliases and temporary directories.
