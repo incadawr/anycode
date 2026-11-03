@@ -7,8 +7,8 @@ export function useMiniMaxQuotaPoll(enabled: boolean, connectionId?: string): vo
       if (document.visibilityState === "visible") void window.anycode?.settings.refreshMiniMaxQuota?.(connectionId).catch(() => {});
     };
     refresh();
-    const timer = window.setInterval(refresh, 60_000);
+    const timer = setInterval(refresh, 60_000);
     document.addEventListener("visibilitychange", refresh);
-    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", refresh); };
+    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", refresh); };
   }, [enabled, connectionId]);
 }

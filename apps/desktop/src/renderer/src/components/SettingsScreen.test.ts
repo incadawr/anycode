@@ -1261,7 +1261,7 @@ function installWindow(): (type: string) => void {
     },
   };
   vi.stubGlobal("window", stub);
-  vi.stubGlobal("document", { activeElement: null });
+  vi.stubGlobal("document", { activeElement: null, visibilityState: "hidden", addEventListener: () => {}, removeEventListener: () => {} });
   return (type: string) => {
     stub.dispatchEvent({ type } as Event);
   };
