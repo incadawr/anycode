@@ -86,8 +86,9 @@ describe("setup content", () => {
       settings.provider.connections = [{ id: "conn-one", providerId: "openai", label: "Team" }];
       const content = buildSetupContent(settings, { connectionIds: ["conn-one"], roleProfileIds: [] });
       content.connections[0]!.provider.catalogId = "openrouter";
+    delete content.connections[0]!.provider.catalogBaseUrlOnly;
       const plan = planSetupImport(content, settings);
-      expect(plan.connections[0]!.baseUrl).toBe("https://openrouter.ai/api/v1");
+      expect(plan.connections[0]!.runtimeBaseUrl).toBe("https://openrouter.ai/api/v1");
       expect(plan.connections[0]!.canUpdate).toBe(false);
       expect(() => applySetupImport(plan, choices)).toThrow(/Destination changed/);
       const imported = applySetupImport(plan, { connections: { Team: "add-copy" }, roleProfiles: {} });
@@ -111,6 +112,53 @@ describe("setup content", () => {
       const settings = fixture(); settings.provider.connections[0]!.label = label;
       settings.provider.custom![0]!.baseUrl = url!;
       expect(() => buildSetupContent(settings, selection)).toThrow();
+    }
+  });
+  it("refuses updates that change destination inputs used by credential consumers", () => {
+    const settings = cloneDefaults();
+    settings.provider.connections = [{ id: "conn-keyed", providerId: "openai", label: "Team", baseUrl: "https://api.openai.com/v1" }];
+    settings.network = { proxyProfiles: [{ id: "proxy-one", name: "Office", mode: "system" }] };
+    const content = buildSetupContent(settings, { connectionIds: ["conn-keyed"], roleProfileIds: [] });
+    const probes: Array<[string, (value: typeof content) => void]> = [
+      ["recognizer, models fetch, connection check and quota override", (v) => { v.connections[0]!.provider.baseUrl = "https://attacker.test/v1"; }],
+      ["session catalog and auth kind", (v) => { v.connections[0]!.provider.catalogId = "openrouter"; }],
+      ["request transport and headers", (v) => { v.connections[0]!.transport = "openai-responses"; }],
+      ["proxy route", (v) => { v.connections[0]!.proxy = "Office"; }],
+      ["authentication policy", (v) => { v.connections[0]!.authOptional = true; }],
+    ];
+    for (const [consumer, mutate] of probes) {
+      const changed = structuredClone(content); mutate(changed);
+      const plan = planSetupImport(changed, settings);
+      expect(plan.connections[0]!.canUpdate, consumer).toBe(false);
+      expect(() => applySetupImport(plan, { connections: { Team: "update-existing" }, roleProfiles: {} }), consumer).toThrow(/Destination changed/);
+      const copy = applySetupImport(plan, { connections: { Team: "add-copy" }, roleProfiles: {} });
+      expect(copy.provider.connections[1]!.id, consumer).not.toBe("conn-keyed");
+      if (consumer.startsWith("recognizer")) {
+        expect(plan.connections[0]!.baseUrl).toBe("https://attacker.test/v1");
+        expect(plan.connections[0]!.runtimeBaseUrl).toBe("https://api.openai.com/v1");
+      }
+    }
+  });
+  it("requires a copy for custom provider kind and legacy proxy changes", () => {
+    const settings = fixture();
+    const content = buildSetupContent(settings, selection);
+    content.connections[0]!.provider.kind = "anthropic";
+    expect(planSetupImport(content, settings).connections[0]!.canUpdate).toBe(false);
+    settings.provider.connections[0]!.proxyUrl = "http://localhost:9000";
+    content.connections[0]!.provider.kind = "openai-compatible";
+    expect(planSetupImport(content, settings).connections[0]!.canUpdate).toBe(false);
+  });
+  it("rejects JWTs and vault references in every exported text field", () => {
+    const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJmaXh0dXJlIn0.c2lnbmF0dXJlZml4dHVyZQ";
+    const values = [jwt, "provider.connection.fixture-owner.apiKey", "provider.example.oauth", "proxy.profile.fixture.password", "mcp.secret.FIXTURE"];
+    for (const value of values) {
+      for (const field of ["name", "model", "path"] as const) {
+        const settings = fixture();
+        if (field === "name") settings.provider.connections[0]!.label = value;
+        if (field === "model") settings.provider.connections[0]!.model = value;
+        if (field === "path") settings.provider.custom![0]!.baseUrl = `https://example.test/${value}`;
+        expect(() => buildSetupContent(settings, selection), `${field}: ${value}`).toThrow();
+      }
     }
   });
   it("requires explicit collision choices and refuses dangling skipped routes", () => {

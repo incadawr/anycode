@@ -13,7 +13,7 @@ const overrides = z.object({ catalogMatchDisabled: z.literal(true).optional(), e
 const capability = z.object({ contextWindow: z.number().int().positive().optional(), maxOutputTokens: z.number().int().positive().optional(), pricing: rates.omit({ cacheWrite: true }).optional(), reasoning: z.boolean().optional(), effortLevels: z.array(z.string().max(64)).max(16).optional(), imageInput: z.literal(true).optional() }).strict();
 const connectionSchema = z.object({
   name,
-  provider: z.object({ catalogId: z.string().min(1).max(128).optional(), name, kind: z.enum(["openai-compatible", "anthropic", "openai"]), baseUrl: z.string().max(4096).refine((value) => isHttpsOrLocalhostUrl(value) && !new URL(value).search && !new URL(value).hash, "Invalid provider URL"), models: z.array(model).max(10000), authOptional: z.boolean().optional() }).strict(),
+  provider: z.object({ catalogId: z.string().min(1).max(128).optional(), catalogBaseUrlOnly: z.literal(true).optional(), name, kind: z.enum(["openai-compatible", "anthropic", "openai"]), baseUrl: z.string().max(4096).refine((value) => isHttpsOrLocalhostUrl(value) && !new URL(value).search && !new URL(value).hash, "Invalid provider URL"), models: z.array(model).max(10000), authOptional: z.boolean().optional() }).strict(),
   transport: z.enum(["anthropic-messages", "openai-chat-completions", "openai-responses"]).optional(),
   model: model.optional(), reasoningEffort: effort.optional(), authOptional: z.boolean().optional(),
   modelOverrides: z.record(model, overrides).optional(), modelCapabilities: z.record(model, capability).optional(),
@@ -49,7 +49,7 @@ export interface SetupSelection { connectionIds: string[]; roleProfileIds: strin
 export interface SetupPlan {
   content: SetupContent;
   settings: AnycodeSettings;
-  connections: Array<{ name: string; matches: string[]; baseUrl: string; existingBaseUrls: string[]; canUpdate: boolean }>;
+  connections: Array<{ name: string; matches: string[]; baseUrl: string; existingBaseUrls: string[]; runtimeBaseUrl: string; canUpdate: boolean }>;
   roleProfiles: Array<{ name: string; matches: string[] }>;
 }
 
@@ -80,7 +80,7 @@ export function buildSetupContent(settings: AnycodeSettings, selection: SetupSel
     const localName = connection.label?.trim() || source.name;
     const proxy = connection.proxyRef === "direct" ? "direct" : settings.network?.proxyProfiles?.find((p) => p.id === connection.proxyRef)?.name;
     if (connection.proxyUrl || (connection.proxyRef && !proxy)) throw new Error(`Connection ${localName} has an unsupported proxy`);
-    return { id, entry: { name: localName, provider: { ...(!provider ? { catalogId: connection.providerId } : {}), name: source.name, kind: source.kind, baseUrl: provider ? provider.baseUrl : (source.baseUrl || connection.baseUrl!), models: source.models, ...(source.authOptional !== undefined ? { authOptional: source.authOptional } : {}) }, ...(connection.transport ? { transport: connection.transport } : {}), ...(connection.model ? { model: connection.model } : {}), ...(connection.reasoningEffort ? { reasoningEffort: connection.reasoningEffort } : {}), ...(connection.authOptional !== undefined ? { authOptional: connection.authOptional } : {}), ...(connection.modelOverrides ? { modelOverrides: connection.modelOverrides } : {}), ...(connection.modelCapabilities ? { modelCapabilities: connection.modelCapabilities } : {}), ...(proxy ? { proxy } : {}) } };
+    return { id, entry: { name: localName, provider: { ...(!provider ? { catalogId: connection.providerId } : {}), name: source.name, kind: source.kind, baseUrl: provider ? provider.baseUrl : (connection.baseUrl || source.baseUrl), ...(!provider && !connection.baseUrl && source.baseUrl ? { catalogBaseUrlOnly: true as const } : {}), models: source.models, ...(source.authOptional !== undefined ? { authOptional: source.authOptional } : {}) }, ...(connection.transport ? { transport: connection.transport } : {}), ...(connection.model ? { model: connection.model } : {}), ...(connection.reasoningEffort ? { reasoningEffort: connection.reasoningEffort } : {}), ...(connection.authOptional !== undefined ? { authOptional: connection.authOptional } : {}), ...(connection.modelOverrides ? { modelOverrides: connection.modelOverrides } : {}), ...(connection.modelCapabilities ? { modelCapabilities: connection.modelCapabilities } : {}), ...(proxy ? { proxy } : {}) } };
   });
   const names = new Map(selected.map((item) => [item.id, item.entry.name]));
   const profiles = selection.roleProfileIds.map((id) => {
@@ -97,24 +97,47 @@ export function buildSetupContent(settings: AnycodeSettings, selection: SetupSel
 
 function catalogEntry(id: string) { return getBuiltinCatalog().providers.find((p) => p.id === id); }
 
-function incomingIdentity(entry: SetupContent["connections"][number]) {
+function resolveSetupProxy(settings: AnycodeSettings, proxy: string | undefined): string | undefined {
+  if (!proxy) return undefined;
+  if (proxy === "direct") return "direct";
+  const matches = settings.network?.proxyProfiles?.filter((p) => p.name === proxy) ?? [];
+  if (matches.length !== 1) throw new Error("Proxy profile is missing or ambiguous");
+  return matches[0]!.id;
+}
+
+function incomingIdentity(settings: AnycodeSettings, entry: SetupContent["connections"][number]) {
   const catalog = entry.provider.catalogId ? catalogEntry(entry.provider.catalogId) : undefined;
   if (entry.provider.catalogId && !catalog) throw new Error("Unknown catalog provider");
-  return { id: catalog?.id ?? "custom", kind: catalog ? catalog.auth.kind : entry.provider.kind, baseUrl: catalog?.baseUrl || entry.provider.baseUrl };
+  if (entry.provider.catalogBaseUrlOnly && (!catalog?.baseUrl || entry.provider.baseUrl !== catalog.baseUrl)) throw new Error("Invalid catalog destination");
+  return { id: catalog?.id ?? "custom", kind: catalog ? catalog.auth.kind : entry.provider.kind,
+    baseUrl: catalog ? (entry.provider.catalogBaseUrlOnly ? undefined : entry.provider.baseUrl) : entry.provider.baseUrl,
+    connectionBaseUrl: catalog && !entry.provider.catalogBaseUrlOnly ? entry.provider.baseUrl : undefined,
+    transport: entry.transport, authOptional: entry.authOptional,
+    proxyRef: resolveSetupProxy(settings, entry.proxy), proxyUrl: undefined as string | undefined };
 }
 
 function existingIdentity(settings: AnycodeSettings, connection: ProviderConnection) {
   const custom = settings.provider.custom?.find((p) => p.id === connection.providerId);
   const catalog = catalogEntry(connection.providerId);
-  return { id: custom ? "custom" : connection.providerId, kind: custom?.kind ?? catalog?.auth.kind ?? "unknown", baseUrl: custom?.baseUrl ?? (catalog?.baseUrl || connection.baseUrl || "") };
+  return { id: custom ? "custom" : connection.providerId, kind: custom?.kind ?? catalog?.auth.kind ?? "unknown",
+    baseUrl: custom?.baseUrl ?? connection.baseUrl, connectionBaseUrl: connection.baseUrl,
+    transport: connection.transport, authOptional: connection.authOptional,
+    proxyRef: connection.proxyRef, proxyUrl: connection.proxyUrl };
 }
 
 function sameIdentity(a: ReturnType<typeof incomingIdentity>, b: ReturnType<typeof existingIdentity>): boolean {
-  return a.id === b.id && a.kind === b.kind && a.baseUrl === b.baseUrl;
+  return a.id === b.id && a.kind === b.kind && a.baseUrl === b.baseUrl && a.connectionBaseUrl === b.connectionBaseUrl &&
+    a.transport === b.transport && a.authOptional === b.authOptional && a.proxyRef === b.proxyRef && a.proxyUrl === b.proxyUrl;
+}
+
+function hasTokenOrReference(text: string): boolean {
+  return /(?:^|[^a-z0-9_-])(?:eyJ[a-z0-9_-]*\.[a-z0-9_-]+\.[a-z0-9_-]+|[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}\.[a-z0-9_-]{8,})(?:$|[^a-z0-9_-])/i.test(text) ||
+    /\b(?:provider\.(?:[a-z0-9:_-]+\.)*(?:apiKey|oauth)|proxy\.profile\.[a-z0-9_-]+\.password|mcp\.secret\.[a-z0-9_-]+)/i.test(text);
 }
 
 function rejectSecretText(value: unknown): void {
   const inspect = (text: string) => {
+    if (hasTokenOrReference(text)) throw new Error("Setup contains a token or vault reference");
     if (/\bsk-[a-z0-9_-]{8,}/i.test(text) || /\bbearer\s+[a-z0-9._~+\/-]{12,}/i.test(text)) throw new Error("Setup contains secret-like text");
     for (const token of text.match(/[a-z0-9_~+\/=.-]{32,}/gi) ?? []) {
       if (!token.includes(".") && new Set(token).size >= 12) throw new Error("Setup contains secret-like text");
@@ -125,6 +148,7 @@ function rejectSecretText(value: unknown): void {
     for (const raw of url.pathname.split("/")) {
       let segment: string;
       try { segment = decodeURIComponent(raw); } catch { throw new Error("Invalid URL path"); }
+      if (hasTokenOrReference(segment)) throw new Error("Setup contains a token");
       if (/\bsk-[a-z0-9_-]{8,}/i.test(segment) || (segment.length >= 32 && /^[a-z0-9_~+\-=]+$/i.test(segment) && new Set(segment).size >= 12)) throw new Error("Setup contains a secret-like URL path");
     }
   };
@@ -139,9 +163,9 @@ function rejectSecretText(value: unknown): void {
 export function planSetupImport(raw: unknown, settings: AnycodeSettings): SetupPlan {
   const content = validateSetupContent(raw);
   return { content, settings: structuredClone(settings), connections: content.connections.map((entry) => {
-    const identity = incomingIdentity(entry);
+    const identity = incomingIdentity(settings, entry);
     const matches = settings.provider.connections.filter((existing) => (existing.label?.trim() || (settings.provider.custom?.find((p) => p.id === existing.providerId)?.name ?? catalogEntry(existing.providerId)?.name)) === entry.name);
-    return { name: entry.name, baseUrl: identity.baseUrl, matches: matches.map((c) => c.id), existingBaseUrls: matches.map((c) => existingIdentity(settings, c).baseUrl), canUpdate: matches.length === 1 && sameIdentity(identity, existingIdentity(settings, matches[0]!)) };
+    return { name: entry.name, baseUrl: identity.baseUrl ?? catalogEntry(entry.provider.catalogId ?? "")?.baseUrl ?? "", runtimeBaseUrl: catalogEntry(entry.provider.catalogId ?? "")?.baseUrl || identity.baseUrl || "", matches: matches.map((c) => c.id), existingBaseUrls: matches.map((c) => existingIdentity(settings, c).baseUrl ?? catalogEntry(c.providerId)?.baseUrl ?? ""), canUpdate: matches.length === 1 && sameIdentity(identity, existingIdentity(settings, matches[0]!)) };
   }), roleProfiles: content.roleProfiles.map((p) => ({ name: p.name, matches: roleProfiles(settings).profiles.filter((existing) => existing.name === p.name).map((existing) => existing.id) })) };
 }
 
@@ -162,12 +186,12 @@ export function applySetupImport(plan: SetupPlan, choices: { connections: Record
     const target = decision(entry.name, currentPlan.connections.find((c) => c.name === entry.name)!.matches, choices.connections[entry.name]);
     if (target === null) continue;
     const previous = settings.provider.connections.find((c) => c.id === target);
-    if (previous && !sameIdentity(incomingIdentity(entry), existingIdentity(settings, previous))) throw new Error(`Destination changed for ${entry.name}; choose add copy`);
+    if (previous && !sameIdentity(incomingIdentity(settings, entry), existingIdentity(settings, previous))) throw new Error(`Destination changed for ${entry.name}; choose add copy`);
     const oldProvider = settings.provider.custom?.find((p) => p.id === previous?.providerId);
     const sameProvider = oldProvider && oldProvider.name === entry.provider.name && oldProvider.kind === entry.provider.kind && oldProvider.baseUrl === entry.provider.baseUrl && JSON.stringify(oldProvider.models) === JSON.stringify(entry.provider.models) && oldProvider.authOptional === entry.provider.authOptional;
     if (entry.provider.catalogId && !catalogEntry(entry.provider.catalogId)) throw new Error("Unknown catalog provider");
     const providerId = entry.provider.catalogId ?? (sameProvider ? oldProvider.id : `custom:${randomUUID()}`);
-    if (!entry.provider.catalogId && !sameProvider) { const { catalogId: _catalogId, ...provider } = entry.provider; (settings.provider.custom ??= []).push({ id: providerId, ...provider }); }
+    if (!entry.provider.catalogId && !sameProvider) { const { catalogId: _catalogId, catalogBaseUrlOnly: _catalogBaseUrlOnly, ...provider } = entry.provider; (settings.provider.custom ??= []).push({ id: providerId, ...provider }); }
     let proxyRef: string | undefined;
     if (entry.proxy === "direct") proxyRef = "direct";
     else if (entry.proxy) { const proxies = settings.network?.proxyProfiles?.filter((p) => p.name === entry.proxy) ?? []; if (proxies.length !== 1) throw new Error(`Proxy profile ${entry.proxy} is missing or ambiguous`); proxyRef = proxies[0]!.id; }
@@ -175,7 +199,7 @@ export function applySetupImport(plan: SetupPlan, choices: { connections: Record
     const id = previous?.id ?? `conn-${randomUUID()}`;
     const label = previous ? localName : uniqueName(localName, settings.provider.connections.map((c) => c.label?.trim() || settings.provider.custom?.find((p) => p.id === c.providerId)?.name || getBuiltinCatalog().providers.find((p) => p.id === c.providerId)?.name || ""));
     const { baseUrl: _baseUrl, authOptional: _authOptional, model: _model, transport: _transport, reasoningEffort: _effort, modelOverrides: _overrides, modelCapabilities: _capabilities, proxyRef: _proxyRef, proxyUrl: _proxyUrl, lastHealth: _health, lastQuota: _quota, modelsFetchedAt: _fetched, ...rest } = previous ?? {} as ProviderConnection;
-    const connection: ProviderConnection = { ...rest, ...fields, id, providerId, label, ...(entry.provider.catalogId ? { baseUrl: entry.provider.baseUrl } : {}), ...(proxyRef ? { proxyRef } : {}) };
+    const connection: ProviderConnection = { ...rest, ...fields, id, providerId, label, ...(entry.provider.catalogId && !entry.provider.catalogBaseUrlOnly ? { baseUrl: entry.provider.baseUrl } : {}), ...(proxyRef ? { proxyRef } : {}) };
     if (previous) settings.provider.connections[settings.provider.connections.indexOf(previous)] = connection; else settings.provider.connections.push(connection);
     remap.set(entry.name, id);
   }
