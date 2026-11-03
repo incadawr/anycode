@@ -308,7 +308,7 @@ export const agentInputSchema = z.object({
     .enum(["inline", "session"])
     .optional()
     .describe(
-      '"inline": lightweight in-process subagent for short lookups. Omit tier for a joining session child. ' +
+      '"inline": lightweight in-process subagent for short lookups. When tier is omitted, general-purpose defaults to a joining session in the desktop; explore and other profiles default to inline. ' +
         '"session": a full child session in its own process — the user can open it, watch the live transcript and steer it; ' +
         "its transcript persists with this conversation. Use \"session\" for long or complex build/debug work, " +
         "when the user should be able to inspect or steer the delegation, or to run it on a different provider connection.",
