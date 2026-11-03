@@ -3049,9 +3049,9 @@ describe("desktop store — subagent_end.responseModel forwarding (slice C1)", (
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);
     beginAgentToolCall(store, "turn-1", "spawn-error");
-    store.getState().applyHostMessage({ type: "child_report", id: "spawn-error", text: "host failed to initialize: timeout", childTerminal: { status: "error", durationMs: 100 } });
+    store.getState().applyHostMessage({ type: "child_report", id: "spawn-error", text: "host failed to initialize: timeout", childTerminal: { status: "error", durationMs: 100, failureReason: "host failed to initialize: timeout" } });
     const block = findByToolCallId(store, "spawn-error");
-    expect(block?.kind === "tool_call" && block.subagent?.final?.status).toBe("error");
+    expect(block?.kind === "tool_call" && block.subagent?.final).toMatchObject({ status: "error", failureReason: "host failed to initialize: timeout" });
   });
 
   it("child_report with childTerminal.finalTurnFinishReason patches the matching Agent block (synthesizing the card when subagent was null, sessionChild set); without childTerminal the block is untouched", () => {

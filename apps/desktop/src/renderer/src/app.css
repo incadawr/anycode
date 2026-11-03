@@ -7884,6 +7884,16 @@ body {
 }
 
 /* `single` head (mokap C): persona anchor + optional model + "subagent" chip. */
+.child-split-error {
+  flex: 1 1 8rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--warning, var(--text-2));
+  font-size: var(--fs-xs);
+}
+
 .child-split-head-persona {
   flex-shrink: 0;
   font-family: var(--font-mono);

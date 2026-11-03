@@ -339,6 +339,7 @@ function joinBudgetHandoffMessage(childSessionId: string): string {
  */
 export interface BackgroundChildSnapshot {
   childSessionId: string;
+  spawnToolCallId?: string;
   agentType: string;
   description: string;
   /**
@@ -858,6 +859,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
           requestId,
           snapshot: {
             childSessionId: acceptedEvent.childSessionId,
+            spawnToolCallId: req.spawnToolCallId,
             agentType: req.agentType,
             description: req.description,
             // Elapsed time continues from the ACTUAL admission, not the
