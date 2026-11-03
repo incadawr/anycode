@@ -1903,6 +1903,19 @@ describe("desktop store — preview_console (slice 96-D, night-track wave-1 cut 
     expect(findBlock(store.getState().transcript, "preview_console")?.entries[0]?.message).toBe("5 console messages suppressed");
   });
 
+  it("bounds preview groups and counts discarded messages", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    store.getState().applyHostMessage({ type: "host_ready", workspace: "/ws", mode: "build", model: "m1", sessionId: "s1" });
+    const send = (message: string) => store.getState().applyHostMessage({ type: "agent_event", turnId: "preview-console", event: { type: "preview_console", previewId: "p1", level: "warn", message } });
+    send("first"); send("first");
+    for (let i = 0; i < 201; i++) send(`message ${i}`);
+    const block = findBlock(store.getState().transcript, "preview_console");
+    expect(block?.entries).toHaveLength(200);
+    expect(block?.entries[0]?.message).toBe("message 1");
+    expect(block?.dropped).toBe(3);
+  });
+
   it("filters logs and groups consecutive messages by preview with repeat counts", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);
