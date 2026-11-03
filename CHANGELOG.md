@@ -7,6 +7,18 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.72] — 2026-11-03
+
+### Fixed
+
+- Show subagent activity in the dock and allow splitting the active dock tab alongside a preview.
+- Keep orchestrated sessions in orchestrate mode and ask before side-effecting actions while allowing local previews.
+- Allow more time and retry engine version checks, and report child startup failures immediately without exposing credentials.
+- Preserve profile tool and permission restrictions for core child sessions, including delegation through engine bridges and workflows.
+- Block plan-mode Bash commands whose Unicode whitespace could redirect execution to a workspace program.
+- Prevent duplicate preview errors after reconnecting, limit console groups, and update background agent buttons efficiently.
+- Keep skill and plugin discovery inside isolated temporary profiles.
+
 ## [0.0.71] — 2026-11-03
 
 ### Added
