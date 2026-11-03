@@ -308,7 +308,7 @@ export const agentInputSchema = z.object({
     .enum(["inline", "session"])
     .optional()
     .describe(
-      '"inline" (default): lightweight in-process subagent — cheap, invisible, result-only. ' +
+      '"inline": lightweight in-process subagent for short lookups. Omit tier for a joining session child. ' +
         '"session": a full child session in its own process — the user can open it, watch the live transcript and steer it; ' +
         "its transcript persists with this conversation. Use \"session\" for long or complex build/debug work, " +
         "when the user should be able to inspect or steer the delegation, or to run it on a different provider connection.",
@@ -339,8 +339,8 @@ export const agentInputSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      'Session tier only, and background by default: an omitted detach returns immediately once the child ' +
-        "session starts — end your turn after dispatch; do not poll, the child's report arrives later as a new " +
+      'Session tier only: an explicitly selected session tier defaults to background, while an omitted tier joins. A detached child ' +
+        "returns once the session starts; its report arrives later as a new " +
         "message in this conversation. Pass false only for a short lookup whose result you need in this step; " +
         "a joining call is handed over to the background after 120 seconds and its report arrives as a message. " +
         "Invalid for inline tier.",
