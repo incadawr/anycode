@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { scrubApprovalText, scrubFailureText } from "./scrub-approval-text.js";
 
 describe("scrubApprovalText", () => {
@@ -28,6 +30,28 @@ describe("scrubApprovalText", () => {
 
 
 describe("scrubFailureText", () => {
+  it.each(["Authorization", "Proxy-Authorization"])("redacts the entire %s header", (header) => {
+    expect(scrubFailureText(`${header}: Digest username="alice", response="hunter2"\nnext`)).toBe(`${header}: [redacted]\nnext`);
+  });
+  it.each(["password", "passwd", "secret"])("redacts multiword %s values up to a delimiter", (name) => {
+    expect(scrubFailureText(`${name}: first second; next`)).toBe(`${name}: [redacted]; next`);
+  });
+  it("redacts a leading-slash token while preserving paths", () => {
+    expect(scrubFailureText("Rejected /abcdefghijklmnopqrstuvwxyz1234567890")).toBe("Rejected [redacted]");
+    const path = "/usr/local/lib/abcdefghijklmnopqrstuvwxyz1234567890/file";
+    expect(scrubFailureText(path)).toBe(path);
+  });
+  it("handles long inputs within a hard process timeout", () => {
+    const script = `
+      const fs = require('node:fs');
+      const ts = require('typescript');
+      const source = fs.readFileSync(process.argv[1], 'utf8');
+      const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
+      const mod = { exports: {} }; new Function('exports', 'module', js)(mod.exports, mod);
+      for (const input of ['a'.repeat(1e6), 'Authorization: '.repeat(1e5), 'password: '.repeat(1e5)]) mod.exports.scrubFailureText(input);
+    `;
+    execFileSync(process.execPath, ["-e", script, fileURLToPath(new URL("./scrub-approval-text.ts", import.meta.url))], { timeout: 5000, killSignal: "SIGKILL" });
+  }, 10000);
   it("redacts all URL userinfo up to the final at sign", () => {
     expect(scrubFailureText("http://alice:prefix@private-suffix@proxy.local/path")).toBe("http://[redacted]@proxy.local/path");
   });

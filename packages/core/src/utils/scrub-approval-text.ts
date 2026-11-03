@@ -30,15 +30,20 @@ export function scrubFailureText(text: string): string {
     if (urls[i] === '"' || urls[i] === "'") i++;
     while (i < urls.length && /[ \t]/.test(urls[i]!)) i++;
     if (urls[i] !== ":" && urls[i] !== "=") continue;
+    const separator = urls[i];
     i++;
     while (i < urls.length && /[ \t]/.test(urls[i]!)) i++;
     const valueStart = i;
     const quote = urls[i] === '"' || urls[i] === "'" ? urls[i++] : undefined;
-    if (quote) {
+    if (separator === ":" && /^(?:proxy-)?authorization$/i.test(match[0])) {
+      while (i < urls.length && urls[i] !== "\n" && urls[i] !== "\r") i++;
+    } else if (quote) {
       while (i < urls.length && urls[i] !== "\n" && urls[i] !== "\r") {
         if (urls[i] === "\\") { i += Math.min(2, urls.length - i); continue; }
         if (urls[i++] === quote) break;
       }
+    } else if (separator === ":" && /^(?:password|passwd|secret)$/i.test(match[0])) {
+      while (i < urls.length && !/[\r\n,;}&]/.test(urls[i]!)) i++;
     } else {
       while (i < urls.length && !/[\s,;}&]/.test(urls[i]!)) i++;
     }
@@ -52,5 +57,5 @@ export function scrubFailureText(text: string): string {
     .replace(/\bkey\s+provided\s*:\s*[^\s,;}&]+/gi, `key provided: ${REDACTED}`)
     .replace(/\b(?:sk|pk|ghp|gho|xox[abp])[-_][A-Za-z0-9_-]+/g, REDACTED)
     .replace(/[A-Za-z0-9+/=_-]+/g, (token, offset: number, source: string) =>
-      token.length >= 32 && !token.startsWith("/") && source[offset - 1] !== "/" && source[offset + token.length] !== "/" ? REDACTED : token);
+      token.length >= 32 && !(token.startsWith("/") && token.indexOf("/", 1) !== -1) && source[offset - 1] !== "/" && source[offset + token.length] !== "/" ? REDACTED : token);
 }
