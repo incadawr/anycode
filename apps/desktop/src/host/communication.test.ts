@@ -226,6 +226,22 @@ describe("public result retrieval", () => {
       expect(log).toHaveBeenCalledWith(expect.stringContaining("turn error persistence failed: disk full"));
     } finally { f.h.close(); log.mockRestore(); }
   });
+  it("redacts credentials from a persisted terminal error", async () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    const f = fixture(save);
+    f.engine.runTurn = async function* () {
+      yield { type: "error", error: new Error("sk-private123 Bearer secret-token"), safe: { code: "network", message: "Rejected sk-private123 and Bearer secret-token" } };
+      yield { type: "loop_end", reason: "error", turns: 1 };
+    };
+    try {
+      await f.h.session.receiveAgentMessage(f.make("redaction"));
+      await f.h.waitUntil(() => f.h.received.some(isLoopEnd));
+      const record = save.mock.calls[0]![0];
+      expect(JSON.stringify(record)).not.toContain("sk-private123");
+      expect(JSON.stringify(record)).not.toContain("secret-token");
+      expect(record.error.message).toBe("Rejected [redacted] and Bearer [redacted]");
+    } finally { f.h.close(); }
+  });
   it.each(["codex", "claude"] as const)("preserves a completed %s answer after an error", async (id) => {
     const f = fixture();
     Object.defineProperty(f.engine, "id", { value: id });
