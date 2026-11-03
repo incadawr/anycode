@@ -1481,6 +1481,7 @@ export class Session {
   private abort: AbortController | null = null;
   private turnId: string | null = null;
   private latestTurnId: string | null = null;
+  private lastNativeTurnId: string | null = null;
   private nativeUsageStep = 0;
   /** Epoch ms the live turn began (host clock) — rides every turn_started, including the per-connect re-assertion. */
   private turnStartedAt: number | undefined = undefined;
@@ -4227,6 +4228,7 @@ export class Session {
       this.settingsBarrierActive = false;
       this.updateContextUsage(null);
       this.engine = next;
+      this.lastNativeTurnId = null;
       this.checkpointContextUsage = null;
       this.outbound.clearContextUsage();
       this.engineSwitched = true;
@@ -5297,7 +5299,8 @@ export class Session {
       const redact = (value: string) => value.replace(/\bsk-[a-z0-9_-]+/gi, "[redacted]").replace(/\bBearer\s+[^\s,;]+/gi, "Bearer [redacted]");
       const error = turnError ?? { name: "AgentError", message: "The agent request failed." };
       const afterItemId = this.engine.historyItems().at(-1)?.id;
-      const record: TurnErrorRecord = { kind: "turn_error", id: randomUUID(), createdAt: Date.now(), turnId, engine: this.engine.id, model: redact(this.model), ...(afterItemId ? { afterItemId } : {}), ...(nativeTurnId ? { nativeTurnId } : {}), error: { name: error.name, message: redact(error.message), ...(error.code && /^[a-z_0-9]{1,80}$/.test(error.code) && !/^sk-/i.test(error.code) ? { code: error.code } : {}) } };
+      const afterNativeTurnId = this.engine.id === "codex" && nativeTurnId === null ? this.lastNativeTurnId : null;
+      const record: TurnErrorRecord = { kind: "turn_error", id: randomUUID(), createdAt: Date.now(), turnId, engine: this.engine.id, model: redact(this.model), ...(afterItemId ? { afterItemId } : {}), ...(nativeTurnId ? { nativeTurnId } : {}), ...(afterNativeTurnId ? { afterNativeTurnId } : {}), error: { name: error.name, message: redact(error.message), ...(error.code && /^[a-z_0-9]{1,80}$/.test(error.code) && !/^sk-/i.test(error.code) ? { code: error.code } : {}) } };
       try { await this.saveTurnError(record, text); } catch (error) { console.error(`[host] turn error persistence failed: ${describeError(error)}`); }
     };
     const recordResult = (terminalReason: SessionPublicResult["terminalReason"]) => {
@@ -5366,6 +5369,7 @@ export class Session {
       let noticeConsumeAttempted = false;
       for await (const event of stream) {
         nativeTurnId ??= this.engine.steeringStatus?.().nativeTurnId ?? null;
+        if (this.engine.id === "codex" && nativeTurnId !== null) this.lastNativeTurnId = nativeTurnId;
         if (event.type === "text_start") publicText.set(event.id, { text: "", truncated: false });
         if (event.type === "text_delta") {
           const current = publicText.get(event.id) ?? { text: "", truncated: false };
@@ -6335,7 +6339,8 @@ function buildSessionHistory(
     message: item.message,
   }));
   for (const record of errors) {
-    let index = items.findLastIndex((item) => item.turnId === record.turnId || (record.nativeTurnId !== undefined && item.id.startsWith(`${record.nativeTurnId}:`)));
+    const nativeAnchor = record.nativeTurnId ?? record.afterNativeTurnId;
+    let index = items.findLastIndex((item) => item.turnId === record.turnId || (nativeAnchor !== undefined && item.id.startsWith(`${nativeAnchor}:`)));
     if (index < 0 && record.afterItemId) index = items.findLastIndex((item) => item.id === record.afterItemId);
     if (index < 0) {
       // Compaction can remove the anchor while keeping later turns. Summaries

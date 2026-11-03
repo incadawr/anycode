@@ -226,6 +226,42 @@ describe("public result retrieval", () => {
       expect(log).toHaveBeenCalledWith(expect.stringContaining("turn error persistence failed: disk full"));
     } finally { f.h.close(); log.mockRestore(); }
   });
+  it("anchors a rejected Codex turn after the last live native turn", async () => {
+    const saved: import("@anycode/core").TurnErrorRecord[] = [];
+    const f = fixture(async (record) => { saved.push(record); });
+    let native: string | undefined;
+    let calls = 0;
+    f.engine.historyItems = () => [{ id: "boot:old", createdAt: 1, message: { role: "user", content: "old" } }];
+    f.engine.steeringStatus = () => ({ supported: true, ready: native !== undefined, ...(native ? { nativeTurnId: native } : {}) });
+    f.engine.runTurn = async function* () {
+      calls++;
+      if (calls === 1) {
+        native = "live-turn";
+        yield* textStep("successful answer");
+        yield { type: "loop_end", reason: "completed", turns: 1 };
+        native = undefined;
+      } else {
+        yield { type: "error", error: new Error("rejected"), safe: { code: "network", message: "rejected" } };
+        yield { type: "loop_end", reason: "error", turns: 1 };
+      }
+    };
+    try {
+      await f.h.session.receiveAgentMessage(f.make("success"));
+      await f.h.waitUntil(() => f.h.session.communicationStatus().state === "idle");
+      await f.h.session.receiveAgentMessage(f.make("rejected"));
+      await f.h.waitUntil(() => saved.length === 1);
+      expect(saved[0]).toMatchObject({ afterNativeTurnId: "live-turn", afterItemId: "boot:old" });
+      expect(saved[0]?.nativeTurnId).toBeUndefined();
+      const resumed = createHarness({ steps: [], bootHistory: [{ id: "boot:old", createdAt: 1, message: { role: "user", content: "old" } }, { id: "live-turn:user", createdAt: 2, message: { role: "user", content: "new" } }, { id: "live-turn:answer", createdAt: 3, message: { role: "assistant", content: [{ type: "text", text: "successful answer" }] } }], bootTurnErrors: saved });
+      try {
+        resumed.send({ type: "ui_ready" });
+        await resumed.waitUntil(() => resumed.received.some((m) => m.type === "session_history"));
+        const history = resumed.received.find((m) => m.type === "session_history");
+        expect(history?.type === "session_history" && history.items.map((item) => item.id)).toEqual(["boot:old", "live-turn:user", "live-turn:answer", saved[0]!.id]);
+        expect(resumed.session.communicationResult().latestResult).toMatchObject({ terminalReason: "error", publicAnswer: "rejected" });
+      } finally { resumed.close(); }
+    } finally { f.h.close(); }
+  });
   it("redacts credentials from a persisted terminal error", async () => {
     const save = vi.fn().mockResolvedValue(undefined);
     const f = fixture(save);
