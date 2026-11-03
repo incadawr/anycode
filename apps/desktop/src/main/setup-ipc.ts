@@ -1,8 +1,9 @@
 import { dialog, ipcMain } from "electron";
-import { readFile, writeFile } from "node:fs/promises";
+import { open, writeFile } from "node:fs/promises";
+import { z } from "zod";
 import { loadSettings, saveSettings, withSettingsFileLock } from "../settings/files.js";
 import { roleProfiles } from "../shared/role-profiles.js";
-import { applySetupImport, buildSetupContent, planSetupImport, validateSetupContent, type SetupChoice, type SetupContent } from "./setup-content.js";
+import { applySetupImport, buildSetupContent, planSetupImport, validateSetupContent, SetupExportError, type SetupContent } from "./setup-content.js";
 import { handleGet, type SettingsIpcDeps } from "./settings-ipc.js";
 
 interface Dialogs {
@@ -10,7 +11,24 @@ interface Dialogs {
   showOpenDialog(options: { properties: ["openFile"]; filters: Array<{ name: string; extensions: string[] }> }): Promise<{ canceled: boolean; filePaths: string[] }>;
 }
 const filters = [{ name: "JSON", extensions: ["json"] }];
-type Choices = { connections: Record<string, SetupChoice>; roleProfiles: Record<string, SetupChoice> };
+const choicesSchema = z.object({ connections: z.record(z.string(), z.enum(["update-existing", "add-copy", "skip"])), roleProfiles: z.record(z.string(), z.enum(["update-existing", "add-copy", "skip"])) }).strict();
+const MAX_BYTES = 2_000_000;
+async function readSetupFile(path: string): Promise<Buffer> {
+  const file = await open(path, "r");
+  try {
+    const stat = await file.stat();
+    if (!stat.isFile() || stat.size > MAX_BYTES) throw new Error("Invalid file size");
+    const buffer = Buffer.alloc(MAX_BYTES + 1);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const { bytesRead } = await file.read(buffer, offset, buffer.length - offset, null);
+      if (!bytesRead) break;
+      offset += bytesRead;
+    }
+    if (offset > MAX_BYTES) throw new Error("Invalid file size");
+    return buffer.subarray(0, offset);
+  } finally { await file.close(); }
+}
 
 export function createSetupHandlers(deps: SettingsIpcDeps, dialogs: Dialogs = dialog) {
   let pending: { content: SetupContent; settings: string } | undefined;
@@ -23,15 +41,14 @@ export function createSetupHandlers(deps: SettingsIpcDeps, dialogs: Dialogs = di
         if (result.canceled || !result.filePath) return { canceled: true as const };
         await writeFile(result.filePath, JSON.stringify({ version: 1, ...content }, null, 2) + "\n", { mode: 0o600 });
         return { ok: true as const };
-      } catch { return { error: "Could not export setup. Check connections, proxy settings, and names or URLs for secret-like text." }; }
+      } catch (error) { return { error: error instanceof SetupExportError ? error.message : "Could not export setup. Check connections and proxy settings." }; }
     },
     async preview() {
       pending = undefined;
       try {
         const result = await dialogs.showOpenDialog({ properties: ["openFile"], filters });
         if (result.canceled || !result.filePaths[0]) return { canceled: true as const };
-        const bytes = await readFile(result.filePaths[0]);
-        if (bytes.length > 2_000_000) throw new Error();
+        const bytes = await readSetupFile(result.filePaths[0]);
         const raw: unknown = JSON.parse(bytes.toString("utf8"));
         if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error();
         const { version, ...body } = raw as Record<string, unknown>;
@@ -43,7 +60,10 @@ export function createSetupHandlers(deps: SettingsIpcDeps, dialogs: Dialogs = di
         return { ok: true as const, connections: plan.connections, roleProfiles: plan.roleProfiles };
       } catch { return { error: "Invalid or unreadable setup file." }; }
     },
-    async apply(choices: Choices) {
+    async apply(raw: unknown) {
+      const parsed = choicesSchema.safeParse(raw);
+      if (!parsed.success) return { error: "Invalid collision choices." };
+      const choices = parsed.data;
       try {
         return await withSettingsFileLock(deps.settingsPath, async () => {
           if (!pending) return { error: "Open a setup file first." };
@@ -67,5 +87,5 @@ export function registerSetupIpc(deps: SettingsIpcDeps): void {
   const handlers = createSetupHandlers(deps);
   ipcMain.handle("anycode:setup-export", () => handlers.exportFile());
   ipcMain.handle("anycode:setup-preview", () => handlers.preview());
-  ipcMain.handle("anycode:setup-apply", (_event, choices: Choices) => handlers.apply(choices));
+  ipcMain.handle("anycode:setup-apply", (_event, choices: unknown) => handlers.apply(choices));
 }

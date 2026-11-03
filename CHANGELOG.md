@@ -17,6 +17,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Protect imported catalog connections from unsafe destination overrides.
+
 - Keep background agent tool counts current after a burst of tool calls.
 - Keep SubAgent status badges visible when model and engine names are long.
 - Insert dropped file and folder paths into the composer, while keeping image attachments for supported models.
