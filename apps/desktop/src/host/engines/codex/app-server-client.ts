@@ -626,6 +626,15 @@ export class AppServerClient {
    * it started. An already-empty group raises ESRCH, which is the success case.
    */
   private async preflightVersion(): Promise<void> {
+    try {
+      await this.preflightVersionOnce();
+    } catch (error) {
+      if (!(error instanceof EngineVersionError) || !error.message.startsWith("Codex version preflight timed out after ")) throw error;
+      await this.preflightVersionOnce();
+    }
+  }
+
+  private async preflightVersionOnce(): Promise<void> {
     // Re-validated HERE, immediately before the preflight's OWN spawn — see
     // `assertTrusted`.
     this.assertTrusted();

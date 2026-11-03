@@ -353,7 +353,7 @@ export const CHILD_RUNS_PER_PARENT_MAX = 3;
 /** Max concurrently running/starting/cancelling children application-wide. */
 export const CHILD_RUNS_GLOBAL_MAX = 8;
 /** No `child-ready` within this window after fork -> cascade-cancel, terminal `error`. */
-export const CHILD_START_DEADLINE_MS = 30_000;
+export const CHILD_START_DEADLINE_MS = 60_000;
 /** Bound on the child's host-side steer-message queue (§0.5/§1.1); beyond this, `turn_rejected busy`. */
 export const CHILD_STEER_QUEUE_MAX = 16;
 /**
