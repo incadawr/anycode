@@ -11,7 +11,7 @@
  * они краснеют, это твой регресс").
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { PERSONAS } from "../subagents/personas.js";
 import { agentTool, createAgentTool } from "./agent.js";
@@ -620,7 +620,7 @@ describe("agentTool handler — session-tier presentation target (CUT-S2 §2.1)"
       spawnToolCallId: "call-99",
     };
     const result = await full.handler(
-      { description: "d", prompt: "p", agent_type: "explore", tier: "session" },
+      { description: "d", prompt: "p", tier: "session" },
       makeCtx({ toolCallId: "call-99", sessionSubagents: scriptedPort(outcome) }),
     );
     expect(result.presentation?.subagent?.target).toEqual({
@@ -1694,6 +1694,34 @@ describe("agentTool handler — orchestrate default-detach (§2.3)", () => {
     }
   });
 
+  it.each(["explore", "custom-reviewer"])("refuses a session for %s without discarding its restrictions", async (agentType) => {
+    const inline: SubagentPort = {
+      listAgentTypes: () => [agentType],
+      run: async () => { throw new Error("unexpected inline run"); },
+    };
+    const sessionRun = vi.fn(async () => BASE_SESSION_OUTCOME);
+    const result = await full.handler(
+      { description: "d", prompt: "p", agent_type: agentType, tier: "session" },
+      makeCtx({ subagents: inline, sessionSubagents: { run: sessionRun, send: async () => ({ ok: true }) } }),
+    );
+    expect(result).toMatchObject({ ok: false, errorKind: "invalid_input", error: expect.stringContaining('use tier "inline" or omit tier') });
+    expect(sessionRun).not.toHaveBeenCalled();
+  });
+
+  it("refuses explore even when settings resolve it to a connection", async () => {
+    const inline: SubagentPort = {
+      run: async () => { throw new Error("unexpected inline run"); },
+      resolveRoleRoute: () => ({ entries: [{ connection: "conn", model: "model" }], skipped: [] }),
+    };
+    const sessionRun = vi.fn(async () => BASE_SESSION_OUTCOME);
+    const result = await full.handler(
+      { description: "d", prompt: "p", agent_type: "explore", tier: "session" },
+      makeCtx({ subagents: inline, sessionSubagents: { run: sessionRun, send: async () => ({ ok: true }) } }),
+    );
+    expect(result).toMatchObject({ ok: false, errorKind: "invalid_input" });
+    expect(sessionRun).not.toHaveBeenCalled();
+  });
+
   it("does not fall back inline when the resolved route selects a provider", async () => {
     let inlineRuns = 0;
     let request: SessionSubagentRequest | undefined;
@@ -1815,6 +1843,7 @@ describe("agentTool handler — role route stamping (§3.3)", () => {
 
   function roleCtx(
     route: { entries: Array<Record<string, string | number>>; skipped?: Array<{ entry: Record<string, string | number>; reason: string }>; turnBudget?: number } | null,
+    connectionBound = false,
   ): { ctx: ToolContext; port: SessionSubagentPort; seen: () => SessionSubagentRequest | undefined } {
     let seen: SessionSubagentRequest | undefined;
     const port: SessionSubagentPort = {
@@ -1830,6 +1859,7 @@ describe("agentTool handler — role route stamping (§3.3)", () => {
       },
       listAgentTypes: () => ["general-purpose", "explore", "planner", "executor", "reviewer"],
       coreProfile: () => ({ systemPrompt: "role body", model: "stale-primary", effort: "xhigh" }),
+      profileRouting: () => connectionBound ? { connection: "conn" } : null,
       resolveRoleRoute: (agentType: string) =>
         route === null
           ? null
@@ -1867,7 +1897,7 @@ describe("agentTool handler — role route stamping (§3.3)", () => {
       { entries: [], skipped: [primary, { entry: { model: "fallback" }, reason: "unavailable" }], model: undefined },
     ];
     for (const { entries, skipped, model } of cases) {
-      const { ctx, seen } = roleCtx({ entries, skipped });
+      const { ctx, seen } = roleCtx({ entries, skipped }, true);
       await full.handler({ description: "d", prompt: "task", tier: "session", agent_type: "executor" }, ctx);
       expect(seen()?.prompt).toBe("role body\n\n---\n\ntask");
       expect(seen()).not.toHaveProperty("effort");
@@ -1892,7 +1922,7 @@ describe("agentTool handler — role route stamping (§3.3)", () => {
   });
 
   it("an explicit model beats the route's model (existing precedence)", async () => {
-    const { ctx, seen } = roleCtx({ entries: [{ model: "route-model" }] });
+    const { ctx, seen } = roleCtx({ entries: [{ model: "route-model" }] }, true);
     await full.handler(
       { description: "d", prompt: "p", tier: "session", agent_type: "planner", model: "explicit-model" },
       ctx,
@@ -1986,7 +2016,7 @@ describe("agentTool handler — role route stamping (§3.3)", () => {
   // F9 (cross-review): the route's effort belongs to the route's model — an
   // explicit model override must not inherit it.
   it("an explicit model also suppresses the route's effort (F9)", async () => {
-    const { ctx, seen } = roleCtx({ entries: [{ model: "route-model", effort: "high" }] });
+    const { ctx, seen } = roleCtx({ entries: [{ model: "route-model", effort: "high" }] }, true);
     await full.handler(
       { description: "d", prompt: "p", tier: "session", agent_type: "planner", model: "explicit-model" },
       ctx,
@@ -2072,7 +2102,7 @@ describe("agentTool handler — role route stamping (§3.3)", () => {
         return { ...BASE_SESSION_OUTCOME, spawnToolCallId: req.spawnToolCallId };
       },
     };
-    const route = { entries: [{ model: "route-model" }], skipped: [] } as never;
+    const route = { entries: [{ provider: "conn", model: "route-model" }], skipped: [] } as never;
     const subagents: SubagentPort = {
       run: async () => {
         throw new Error("inline run not expected");

@@ -93,7 +93,7 @@ const BASE_DESCRIPTION =
   'Delegate a task to a subagent. agent_type "explore" = read-only recon that can read files and Git history with Git, but cannot run commands; use general-purpose for work needing Bash; "general-purpose" = the subtask needs write/exec tools. Independent Agent calls issued together in one response run concurrently — fan out disjoint searches. Use AgentStatus to inspect your children’s live progress. For a single known-file fact, Read/Grep it yourself; once delegated, do not redo the search.';
 
 const SESSION_TIER_DESCRIPTION_SUFFIX =
-  ' By default general-purpose runs as a session child while you wait; explore and other profiles default to inline to preserve their restrictions; the user can move it to the background, and a long wait is handed off automatically with a later report as a new turn. Use tier "inline" for lightweight short lookups. send_to delivers a follow-up to your own still-running session child.';
+  ' By default general-purpose runs as a session child while you wait; explore and other profiles default to inline to preserve their restrictions. Explicit session spawns for these profiles are refused unless they select their own connection or engine. The user can move a session to the background, and a long wait is handed off automatically with a later report as a new turn. Use tier "inline" for lightweight short lookups. send_to delivers a follow-up to your own still-running session child.';
 
 export interface CreateAgentToolOptions {
   /**
@@ -363,6 +363,18 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
             : `Agent: profile "${agentType}" selects its own connection and cannot be spawned from here. Use a persona without its own connection inline, or do the work yourself.`,
           };
         }
+      }
+
+      const routedRole = roleRoute !== null && [...roleRoute.entries, ...roleRoute.skipped.map((item) => item.entry)]
+        .some((entry) => entry.connection !== undefined || entry.provider !== undefined || entry.engine !== undefined);
+      if (tier === "session" && agentType !== DEFAULT_AGENT_TYPE &&
+          (agentType === "explore" || (routing === null && !routedRole)) &&
+          input.continue_session === undefined && input.send_to === undefined) {
+        return {
+          ok: false,
+          errorKind: "invalid_input",
+          error: `Agent: profile "${agentType}" has restrictions that a child session cannot preserve; use tier "inline" or omit tier.`,
+        };
       }
 
       if (tier === "session") {

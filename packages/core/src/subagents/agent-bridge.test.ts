@@ -274,7 +274,7 @@ describe("buildSessionSubagentRequest (§3.2)", () => {
         {
           description: "d3",
           prompt: "task three",
-          agent_type: "explore",
+          agent_type: "general-purpose",
           tier: "session",
           provider: "anthropic-2",
           detach: true,
@@ -283,7 +283,7 @@ describe("buildSessionSubagentRequest (§3.2)", () => {
       );
       const built = {
         ...buildSessionSubagentRequest({
-          agentType: "explore",
+          agentType: "general-purpose",
           description: "d3",
           prompt: "task three",
           spawnToolCallId: "call-fx-3",
