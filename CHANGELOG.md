@@ -27,6 +27,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Preserve read-only and profile restrictions when delegating without an explicit tier.
+
 - Use readable Enter key names in task and permission hints. Refresh Git status when returning to its dock tab.
 
 - Make composer keyboard hints readable and separate them from the model selector.

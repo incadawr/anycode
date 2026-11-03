@@ -93,7 +93,7 @@ const BASE_DESCRIPTION =
   'Delegate a task to a subagent. agent_type "explore" = read-only recon that can read files and Git history with Git, but cannot run commands; use general-purpose for work needing Bash; "general-purpose" = the subtask needs write/exec tools. Independent Agent calls issued together in one response run concurrently — fan out disjoint searches. Use AgentStatus to inspect your children’s live progress. For a single known-file fact, Read/Grep it yourself; once delegated, do not redo the search.';
 
 const SESSION_TIER_DESCRIPTION_SUFFIX =
-  ' By default a session child runs while you wait; the user can move it to the background, and a long wait is handed off automatically with a later report as a new turn. Use tier "inline" for lightweight short lookups. send_to delivers a follow-up to your own still-running session child.';
+  ' By default general-purpose runs as a session child while you wait; explore and other profiles default to inline to preserve their restrictions; the user can move it to the background, and a long wait is handed off automatically with a later report as a new turn. Use tier "inline" for lightweight short lookups. send_to delivers a follow-up to your own still-running session child.';
 
 export interface CreateAgentToolOptions {
   /**
@@ -151,7 +151,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
     inputSchema,
     handler: async (input, ctx) => {
       const agentType = input.agent_type ?? DEFAULT_AGENT_TYPE;
-      const tier = input.tier ?? (sessionTier ? "session" : "inline");
+      const tier = input.tier ?? (sessionTier && agentType === DEFAULT_AGENT_TYPE ? "session" : "inline");
 
       // Hosts without inline route discovery can only select providers for session children.
       if (input.provider !== undefined && tier !== "session" && !ctx.subagents?.supportsInlineProvider) {
