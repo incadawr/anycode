@@ -534,6 +534,7 @@ declare global {
       // Slice 2.2 (design §3): settings + secret-vault invoke-API. A decrypted
       // secret is never returned — setSecret is the only value-carrying call.
       settings: {
+        refreshMiniMaxQuota(connectionId?: string): Promise<void>;
         get(): Promise<SettingsSnapshot>;
         set(patch: SettingsPatch): Promise<SettingsMutationResult>;
         setSecret(key: SecretKey, value: string): Promise<SettingsMutationResult>;

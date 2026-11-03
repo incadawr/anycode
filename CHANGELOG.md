@@ -12,6 +12,9 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - Desktop general-purpose subagent calls without a tier now run as child sessions while the parent waits; other profiles stay inline. Move running children to the background individually or together; when session capacity is full, eligible calls use a lightweight inline child.
+### Added
+
+- Show MiniMax subscription quota on provider connection cards.
 
 ### Fixed
 
