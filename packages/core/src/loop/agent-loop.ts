@@ -1157,6 +1157,7 @@ export class AgentLoop {
     // reverted a user's mid-turn switch for the whole turn). No await may be
     // introduced between this line and the publish.
     const mode = options?.mode ?? this.config.mode;
+    const config = this.config;
 
     const dispatchCtx: DispatchContext = {
       registry: this.config.registry,
@@ -1164,6 +1165,7 @@ export class AgentLoop {
       permissionEngine: this.config.permissionEngine,
       permissionBroker: this.config.permissionBroker,
       mode,
+      get orchestrate() { return config.orchestrate; },
       ports: this.config.ports,
       cwd: this.config.cwd,
       subagents: this.config.subagents,
@@ -1184,15 +1186,6 @@ export class AgentLoop {
       preview: this.config.preview,
       artifacts: this.config.artifacts,
     };
-    // §3.3: orchestrate rides the dispatch context (read at
-    // dispatch time so a between-turns toggle lands next turn, same
-    // discipline as mode above). Copied into ToolContext by the dispatcher.
-    // Set as a plain assignment (not a spread) — the prologue guard requires
-    // this stretch to stay a single synchronous job with no spreads.
-    if (this.config.orchestrate === true) {
-      dispatchCtx.orchestrate = true;
-    }
-
     // the optional ask-zone classifier rides the dispatch context
     // as a plain assignment (the prologue guard forbids spreads in this stretch).
     // The user context is a thunk over the live history, read at ask time, and

@@ -3304,6 +3304,8 @@ describe("AgentLoop.runTurn — plan-mode exit arc (design §2.3)", () => {
   it("refuses a forced plan exit while orchestrating and hides its declaration", async () => {
     const onModeChange = vi.fn();
     const seen: PermissionRequest[] = [];
+    const declarations = [{ name: "ExitPlanMode", description: "exit", inputJsonSchema: {} }, { name: "Write", description: "write", inputJsonSchema: {} }];
+    vi.mocked(toToolDeclarations).mockReturnValue(declarations);
     const steps: ModelStreamEvent[][] = [
       [{ type: "start" }, { type: "tool_call", toolCall: { id: "p1", name: "ExitPlanMode", input: { plan: "plan" } } }, { type: "finish", finishReason: "tool_calls", usage: {} }],
       [{ type: "start" }, { type: "finish", finishReason: "stop", usage: {} }],
@@ -3312,8 +3314,13 @@ describe("AgentLoop.runTurn — plan-mode exit arc (design §2.3)", () => {
     const loop = makeLoop({ modelPort, registry: makeRegistry({ ExitPlanMode: exitPlanModeTool, Write: writeMock }),
       permissionEngine: new ModePermissionEngine(), permissionBroker: recordingAllowBroker(seen),
       mode: "plan", orchestrate: true, planExitMode: "build", onModeChange });
-    const events = await collect(loop.runTurn("plan"));
-    expect(modelPort.requests[0]!.tools?.some((tool) => tool.name === "ExitPlanMode")).toBe(false);
+    let events: AgentEvent[];
+    try {
+      events = await collect(loop.runTurn("plan"));
+    } finally {
+      vi.mocked(toToolDeclarations).mockReturnValue([]);
+    }
+    expect(modelPort.requests[0]!.tools?.map((tool) => tool.name)).toEqual(["Write"]);
     expect(toolResult(events, "ExitPlanMode")?.modelText).toContain('delegate planning to the planner role');
     expect(onModeChange).not.toHaveBeenCalled();
     expect(seen).toEqual([]);
@@ -3323,6 +3330,36 @@ describe("AgentLoop.runTurn — plan-mode exit arc (design §2.3)", () => {
     );
     await collect(loop.runTurn("continue"));
     expect(seen[0]).toMatchObject({ toolName: "Write", mode: "plan", orchestrate: true });
+  });
+
+  it("uses live orchestration state after a mid-turn mode switch", async () => {
+    let loop: AgentLoop;
+    const seen: PermissionRequest[] = [];
+    const declarations = [{ name: "ExitPlanMode", description: "exit", inputJsonSchema: {} }, { name: "Write", description: "write", inputJsonSchema: {} }];
+    vi.mocked(toToolDeclarations).mockReturnValue(declarations);
+    const switcher = makeTool({ metadata: { ...baseMetadata, name: "Switcher", readOnly: true }, handler: async () => {
+      config.orchestrate = false;
+      loop.setMode("yolo");
+      return { ok: true, output: {} };
+    } });
+    const modelPort = new MockModelPort([
+      [{ type: "start" }, { type: "tool_call", toolCall: { id: "s1", name: "Switcher", input: { value: "x" } } }, { type: "finish", finishReason: "tool_calls", usage: {} }],
+      [{ type: "start" }, { type: "tool_call", toolCall: { id: "w1", name: "Write", input: { value: "x" } } }, { type: "tool_call", toolCall: { id: "p1", name: "ExitPlanMode", input: { plan: "plan" } } }, { type: "finish", finishReason: "tool_calls", usage: {} }],
+      [{ type: "start" }, { type: "finish", finishReason: "stop", usage: {} }],
+    ]);
+    const config: AgentLoopConfig = { modelPort, registry: makeRegistry({ Switcher: switcher, Write: writeMock, ExitPlanMode: exitPlanModeTool }),
+      hooks: makeHooks(), permissionEngine: { check: (request) => { seen.push(request); return new ModePermissionEngine().check(request); } },
+      permissionBroker: denyBroker, mode: "plan", orchestrate: true, planExitMode: "build", ports: {} as CorePorts, cwd: "/work" };
+    loop = new AgentLoop(config);
+    try {
+      const events = await collect(loop.runTurn("switch"));
+      expect(modelPort.requests[0]!.tools?.map((tool) => tool.name)).toEqual(["Write"]);
+      expect(modelPort.requests[1]!.tools?.map((tool) => tool.name)).toEqual(["ExitPlanMode", "Write"]);
+      expect(seen.find((request) => request.toolName === "Write")).toMatchObject({ mode: "yolo" });
+      expect(seen.find((request) => request.toolName === "Write")?.orchestrate).toBeUndefined();
+      expect(toolResult(events, "Write")?.status).toBe("success");
+      expect(toolResult(events, "ExitPlanMode")?.modelText).toContain("not in plan mode");
+    } finally { vi.mocked(toToolDeclarations).mockReturnValue([]); }
   });
 
   it("an approved ExitPlanMode escalates a LATER same-turn Write into build (ask), not plan (deny)", async () => {
