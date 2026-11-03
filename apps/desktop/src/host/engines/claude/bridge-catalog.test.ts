@@ -6,14 +6,16 @@
 
 import { describe, expect, it } from "vitest";
 import type { PersonaDefinition, SessionSubagentOutcome, SessionSubagentPort, SessionSubagentRequest } from "@anycode/core";
-import { runAgentBridgeCall, type AgentBridgeCatalogEntry } from "@anycode/core";
+import { PERSONAS, runAgentBridgeCall, type AgentBridgeCatalogEntry } from "@anycode/core";
 import { bridgeCallableCatalog, catalogFromProfiles } from "./bridge-catalog.js";
+
+const reviewerRestrictions = { tools: [...PERSONAS["general-purpose"].tools, "ListConnections"], readOnly: true };
 
 function profile(overrides: Partial<PersonaDefinition> = {}): PersonaDefinition {
   return {
     name: "reviewer",
     description: "Reviews code",
-    tools: [],
+    tools: PERSONAS["general-purpose"].tools,
     systemPrompt: "You review code.",
     ...overrides,
   };
@@ -22,7 +24,7 @@ function profile(overrides: Partial<PersonaDefinition> = {}): PersonaDefinition 
 describe("catalogFromProfiles (срез S4)", () => {
   it("carries name/description/systemPrompt verbatim for a core (no-engine) profile", () => {
     expect(catalogFromProfiles([profile()])).toEqual([
-      { name: "reviewer", description: "Reviews code", systemPrompt: "You review code." },
+      { name: "reviewer", description: "Reviews code", systemPrompt: "You review code.", restrictions: reviewerRestrictions },
     ]);
   });
 
@@ -56,7 +58,7 @@ describe("catalogFromProfiles (срез S4)", () => {
     // pins the defensive isKnownPersona filter as a second, independent line
     // of exclusion rather than trusting the caller alone (plan §3.1).
     expect(catalogFromProfiles([profile({ name: "general-purpose" }), profile({ name: "reviewer" })])).toEqual([
-      { name: "reviewer", description: "Reviews code", systemPrompt: "You review code." },
+      { name: "reviewer", description: "Reviews code", systemPrompt: "You review code.", restrictions: reviewerRestrictions },
     ]);
   });
 });
@@ -66,7 +68,7 @@ describe("catalogFromProfiles (срез S4)", () => {
 describe("catalogFromProfiles — turnBudget", () => {
   it("carries turnBudget through as maxTurns for a core profile", () => {
     expect(catalogFromProfiles([profile({ turnBudget: 20 })])).toEqual([
-      { name: "reviewer", description: "Reviews code", systemPrompt: "You review code.", maxTurns: 20 },
+      { name: "reviewer", description: "Reviews code", systemPrompt: "You review code.", restrictions: reviewerRestrictions, maxTurns: 20 },
     ]);
   });
 
@@ -86,7 +88,7 @@ describe("catalogFromProfiles — turnBudget", () => {
 
   it("omits maxTurns when the profile declares no budget", () => {
     expect(catalogFromProfiles([profile()])).toEqual([
-      { name: "reviewer", description: "Reviews code", systemPrompt: "You review code." },
+      { name: "reviewer", description: "Reviews code", systemPrompt: "You review code.", restrictions: reviewerRestrictions },
     ]);
   });
 });
@@ -109,7 +111,7 @@ describe("catalogFromProfiles — connection/provider routing", () => {
 
   it("omits both routing keys when the profile declares neither", () => {
     expect(catalogFromProfiles([profile()])).toEqual([
-      { name: "reviewer", description: "Reviews code", systemPrompt: "You review code." },
+      { name: "reviewer", description: "Reviews code", systemPrompt: "You review code.", restrictions: reviewerRestrictions },
     ]);
   });
 });
@@ -142,6 +144,26 @@ describe("bridgeCallableCatalog", () => {
     parentSessionId: "parent-1",
     spawnToolCallId: "toolu_bridge_1",
   };
+
+  it("passes a routed reviewer’s restrictions through the bridge and refuses restricted native engines", async () => {
+    const catalog = catalogFromProfiles([profile({ name: "reviewer", tools: ["Read", "Bash"], toolsExplicit: true, connection: "other", permissions: { allow: [], deny: [{ toolName: "Write" }] } })]);
+    let seen: SessionSubagentRequest | undefined;
+    const port: SessionSubagentPort = {
+      send: async () => ({ ok: true }),
+      run: async (request) => { seen = request; return { ...BASE_OUTCOME, spawnToolCallId: request.spawnToolCallId }; },
+    };
+    await runAgentBridgeCall({ agent_type: "reviewer", description: "d", prompt: "p" }, { catalog, port, spawnToolCallId: "call" });
+    expect(seen).toMatchObject({ connectionId: "other", restrictions: { tools: ["Read", "Bash", "ListConnections"], readOnly: true, permissions: { deny: [{ toolName: "Write" }] } } });
+    await runAgentBridgeCall({ agent_type: "reviewer", description: "d", prompt: "p", continue_session: "child-1" }, { catalog, port, spawnToolCallId: "next" });
+    expect(seen).toMatchObject({ resumeChildSessionId: "child-1" });
+    expect(seen).not.toHaveProperty("restrictions");
+    seen = undefined;
+    const native = [{ ...catalog[0]!, connection: undefined, engine: "codex" as const }];
+    const result = await runAgentBridgeCall({ agent_type: "reviewer", description: "d", prompt: "p" }, { catalog: native, port, spawnToolCallId: "call" });
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain("native engine");
+    expect(seen).toBeUndefined();
+  });
 
   it("edited entry survives with v2 fields; a new boot-unknown name is dropped", () => {
     const current: AgentBridgeCatalogEntry[] = [

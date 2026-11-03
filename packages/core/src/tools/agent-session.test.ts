@@ -1710,6 +1710,23 @@ describe("agentTool handler — orchestrate default-detach (§2.3)", () => {
     expect(sessionRun).toHaveBeenCalledWith(expect.objectContaining({ connectionId: "conn", restrictions }), expect.anything());
   });
 
+  it("carries restrictions when a native role falls back to a core connection", async () => {
+    const restrictions = { tools: ["Read"], readOnly: true };
+    const subagents: SubagentPort = {
+      listAgentTypes: () => ["reviewer"],
+      run: async () => { throw new Error("unexpected inline run"); },
+      hasSessionRestrictions: () => true,
+      sessionRestrictions: () => restrictions,
+      engineProfile: () => ({ engine: "codex", systemPrompt: "profile" }),
+      resolveRoleRoute: () => ({ entries: [{ connection: "other" }], skipped: [{ entry: { engine: "codex" }, reason: "unavailable" }] }),
+    };
+    const sessionRun = vi.fn(async () => BASE_SESSION_OUTCOME);
+    const result = await full.handler({ description: "d", prompt: "p", agent_type: "reviewer", tier: "session" },
+      makeCtx({ subagents, sessionSubagents: { run: sessionRun, send: async () => ({ ok: true }) } }));
+    expect(result.ok).toBe(true);
+    expect(sessionRun).toHaveBeenCalledWith(expect.objectContaining({ connectionId: "other", restrictions }), expect.anything());
+  });
+
   it("refuses restricted native engine profiles", async () => {
     const sessionRun = vi.fn(async () => BASE_SESSION_OUTCOME);
     const subagents: SubagentPort = {

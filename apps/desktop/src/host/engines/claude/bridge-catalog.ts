@@ -17,7 +17,7 @@
  * user role personas vanish from the Claude bridge catalog.
  */
 
-import { isReservedPersonaName, type AgentBridgeCatalogEntry, type PersonaDefinition } from "@anycode/core";
+import { isReservedPersonaName, sessionRestrictionsForPersona, type AgentBridgeCatalogEntry, type PersonaDefinition } from "@anycode/core";
 
 export function catalogFromProfiles(profiles: readonly PersonaDefinition[]): AgentBridgeCatalogEntry[] {
   return profiles
@@ -26,6 +26,7 @@ export function catalogFromProfiles(profiles: readonly PersonaDefinition[]): Age
       name: profile.name,
       description: profile.description,
       systemPrompt: profile.systemPrompt,
+      ...(sessionRestrictionsForPersona(profile, true) !== null ? { restrictions: sessionRestrictionsForPersona(profile, true)! } : {}),
       ...(profile.engine !== undefined ? { engine: profile.engine } : {}),
       ...(profile.model !== undefined ? { model: profile.model } : {}),
       ...(profile.effort !== undefined ? { effort: profile.effort } : {}),

@@ -1,8 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { createDefaultToolRegistry, ModePermissionEngine, PERSONAS } from "@anycode/core";
+import { createDefaultToolRegistry, ModePermissionEngine, PERSONAS, sessionRestrictionsForPersona } from "@anycode/core";
 import { restrictChildPermissions, restrictChildRegistry } from "./child-profile-restrictions.js";
 
 describe("child profile restrictions", () => {
+  it("leaves unrestricted sessions able to use existing and later-registered tools", () => {
+    const registry = createDefaultToolRegistry();
+    const restrictions = sessionRestrictionsForPersona(PERSONAS["general-purpose"], true);
+    expect(restrictions).toBeNull();
+    restrictChildRegistry(registry, restrictions ?? undefined);
+    expect(registry.has("Skill")).toBe(true);
+    const source = registry.get("Read")!;
+    for (const name of ["BrowserOpen", "mcp__server__tool", "BashOutput"]) {
+      registry.register({ ...source, metadata: { ...source.metadata, name } });
+      expect(registry.has(name)).toBe(true);
+    }
+  });
   it("limits explore tools regardless of the inherited mode", () => {
     const registry = createDefaultToolRegistry();
     restrictChildRegistry(registry, { tools: PERSONAS.explore.tools, readOnly: true });

@@ -1908,6 +1908,25 @@ describe("workflow engine role-route (engine-profile steps)", () => {
     return new FakeSessionSubagentPort(async (req) => sessionOutcome(req, { finalText: "ok-plan" }));
   }
 
+  it("carries restrictions to a core fallback and refuses a restricted native target", async () => {
+    const restrictions = { tools: ["Read"], readOnly: true };
+    const fallback = new RoutedSubagentPort(
+      ["planner"], (id, req, opts) => emitAndComplete(opts, req, `inline:${id}`), PLANNER_PROFILES,
+      new Map([["planner", { entries: [{ connection: "other", model: "m" }], skipped: [{ entry: { engine: "claude" }, reason: "unavailable" }] }]]),
+    );
+    const session = okSession();
+    await runPlanner(Object.assign(fallback, { sessionRestrictions: () => restrictions }), session);
+    expect(session.requests[0]).toMatchObject({ connectionId: "other", restrictions });
+    const native = new RoutedSubagentPort(
+      ["planner"], (id, req, opts) => emitAndComplete(opts, req, `inline:${id}`), PLANNER_PROFILES,
+      new Map([["planner", { entries: [{ engine: "claude" }], skipped: [] }]]),
+    );
+    const nativeSession = okSession();
+    const result = await runPlanner(Object.assign(native, { sessionRestrictions: () => restrictions }), nativeSession);
+    expect(nativeSession.requests).toHaveLength(0);
+    expect(outcomeOf(result.steps, "a").finalText).toContain("native engine");
+  });
+
   it("(a) healthy primary (no skips): the profile request is unchanged, no route stamps", async () => {
     const port = new RoutedSubagentPort(
       ["planner"],

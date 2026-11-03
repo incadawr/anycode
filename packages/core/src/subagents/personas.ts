@@ -117,6 +117,17 @@ export interface PersonaDefinition {
   permissions?: ProfilePermissionRules;
 }
 
+export function sessionRestrictionsForPersona(persona: PersonaDefinition, includeConnections = false): import("../ports/session-subagent.js").SessionProfileRestrictions | null {
+  const readOnly = ["explore", "planner", "reviewer"].includes(persona.name);
+  const baseline = PERSONAS["general-purpose"].tools;
+  const restricted = readOnly || persona.toolsExplicit === true || persona.permissions !== undefined ||
+    persona.tools.length !== baseline.length || persona.tools.some((tool) => !baseline.includes(tool));
+  if (!restricted) return null;
+  const tools = [...persona.tools];
+  if (includeConnections && tools.some((name) => ["Read", "Git", "Grep", "Glob", "ListConnections"].includes(name)) && !tools.includes("ListConnections")) tools.push("ListConnections");
+  return { tools, readOnly, ...(persona.permissions !== undefined ? { permissions: persona.permissions } : {}) };
+}
+
 /**
  * general-purpose: the non-Agent default tools (full access under the
  * parent's inherited permission gate). WebSearch is deliberately NOT here

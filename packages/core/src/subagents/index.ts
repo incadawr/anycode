@@ -20,6 +20,7 @@ export {
   isKnownPersona,
   isReservedPersonaName,
   listPersonaNames,
+  sessionRestrictionsForPersona,
 } from "./personas.js";
 export type { PersonaDefinition, PersonaName, RolePersonaName } from "./personas.js";
 // the role-route chain types shared between the host resolver

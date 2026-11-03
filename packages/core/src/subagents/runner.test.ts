@@ -5837,6 +5837,8 @@ describe("core profile session requests", () => {
     }
     expect(requests.map((request) => request.agentType)).toEqual(["worker", "executor"]);
     expect(requests[0]?.model).toBe("model-b");
+    expect(requests[0]).not.toHaveProperty("restrictions");
+    expect(requests[1]).not.toHaveProperty("restrictions");
     for (const agent_type of ["reader", "explicit-baseline", "guarded", "explore"]) {
       const result = await tool.handler({ description: "d", prompt: "task", agent_type, tier: "session" }, ctx);
       expect(result.ok).toBe(true);

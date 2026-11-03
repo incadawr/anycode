@@ -364,6 +364,8 @@ function createRunner(
             // a cooling role primary degrades/falls back like the
             // Agent tool does; a healthy or unresolved route keeps the profile.
             const engineRoute = resolveEngineStepRoute(step.agentType, engineProfile, subagents);
+            const restrictions = subagents.sessionRestrictions?.(step.agentType) ?? undefined;
+            const missingRestrictions = restrictions === undefined && subagents.hasSessionRestrictions?.(step.agentType) === true;
             const request =
               engineRoute === null
                 ? buildSessionSubagentRequest({
@@ -371,6 +373,7 @@ function createRunner(
                     description: `workflow ${definition.name} step ${step.id}`,
                     prompt: cappedPrompt.text,
                     spawnToolCallId,
+                    ...(restrictions !== undefined ? { restrictions } : {}),
                     profile: engineProfile,
                   })
                 : {
@@ -379,11 +382,18 @@ function createRunner(
                       description: `workflow ${definition.name} step ${step.id}`,
                       prompt: `${engineRoute.systemPrompt}\n\n---\n\n${cappedPrompt.text}`,
                       spawnToolCallId,
+                      ...(restrictions !== undefined ? { restrictions } : {}),
                     }),
                     ...engineRoute.fields,
                   };
             routeNotice = engineRoute?.notice;
-            const sessionOutcome = await sessionSubagents!.run(request, subOpts);
+            const refusal = missingRestrictions ? "Agent: profile restrictions are unavailable for this child session."
+              : request.engine !== undefined && request.nativeRestrictionsUnsupported
+                ? "Agent: native engine children cannot enforce this profile’s tool or permission restrictions."
+                : undefined;
+            const sessionOutcome = refusal !== undefined
+              ? { status: "error" as const, finalText: refusal, truncated: false, turns: 0, toolCalls: 0, durationMs: 0, spawnToolCallId }
+              : await sessionSubagents!.run(request, subOpts);
             // Round-trip check (F14, ports/session-subagent.ts): core minted
             // the spawn identity, so the host must return exactly it.
             if (sessionOutcome.spawnToolCallId !== spawnToolCallId) {
