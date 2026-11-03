@@ -171,7 +171,7 @@ way you read what comes back.
   together in one response and they run
   concurrently — fan out disjoint searches, never split one coherent
   investigation.
-- **session** is the desktop default for general-purpose; explore and other profiles default to inline to preserve their restrictions. A session child the child is a full session and the
+- **session** is the desktop default for general-purpose; explore and other profiles default to inline to preserve their restrictions. A session child is a full session, and the
   parent waits for its result. The user can move it to the background; after a
   long wait it is handed off automatically and its report arrives as a new
   turn. Explicit \`tier: "session"\` defaults to detach; pass \`detach: false\`
