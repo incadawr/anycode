@@ -69,3 +69,16 @@ export function createSpawnModeCell(
     },
   };
 }
+
+/** Native overlays capture the preset before changing the effective posture. */
+export function createForeignSpawnModeCell(readMode: () => PermissionMode) {
+  let base: PermissionMode | undefined;
+  return {
+    capture(mode: PermissionMode = readMode()): void { base ??= mode; },
+    clear(): void { base = undefined; },
+    read(): PermissionMode {
+      if (base === undefined) return readMode();
+      return base === "plan" ? "build" : base;
+    },
+  };
+}

@@ -9,7 +9,7 @@ import { contextSnapshotOptions } from "./context-snapshot.js";
 import { discoverLoginPath, mcpProblemStatuses, codexMcpStatus, claudeMcpStatuses, forwardProblemStatuses } from "./mcp-login-path.js";
 import { readRoleSettings } from "./role-settings.js";
 import { SqliteCodexAgentCardLog } from "./engines/codex/agent-card-log.js";
-import { CodexDynamicToolBridge, codexAgentPermissionMode } from "./engines/codex/dynamic-tool-bridge.js";
+import { CodexDynamicToolBridge } from "./engines/codex/dynamic-tool-bridge.js";
 import { createEngineBrowserBridge } from "./engines/browser-bridge.js";
 import { assertChildModel, readAllowedChildModels } from "../shared/child-model.js";
 import { resolveModelClassifierBoot } from "./model-classifier-boot.js";
@@ -350,6 +350,7 @@ import {
 import { attachChildReportDurability, attachEngineChildReportDurability } from "./child-report-durability.js";
 import { createSpawnModeCell } from "./spawn-mode-cell.js";
 import { createRoutedChildComposition } from "./routed-child-composition.js";
+import { createForeignOrchestrationComposition } from "./foreign-orchestration-composition.js";
 import { RoleHealthCache, pickEntry, resolveRoleRouteChain, toCoreEntry } from "./role-route.js";
 import { parseSettings } from "../settings/schema.js";
 import { ENV_APP_VERSION, parseAppVersionEnv } from "../main/host-env.js";
@@ -1397,14 +1398,37 @@ async function bootCodexSession(
   // supervisor's background agents never reached the renderer at all.
   let codexChildPort: ChildSessionPort | undefined;
   let codexParentEngine: import("./engines/codex/codex-engine.js").CodexEngine | undefined;
+  // The overlay transition (when implemented) captures the selected base preset
+  // here before changing the effective engine posture, then clears it on OFF.
+  let codexForeignComposition: ReturnType<typeof createForeignOrchestrationComposition> | undefined;
   if (args.child === undefined) {
+    const codexProjectRoot = (args.resume && args.sessionId ? await persistence.getRootSession(args.sessionId) : null)?.projectRoot ?? workspace;
     const profileRoots = buildAgentProfileRoots(workspace, hostProfileHome(), []);
-    const resolveCatalog = async () => catalogFromProfiles(
-      (await discoverAgentProfiles(new NodeFileSystemAdapter(), profileRoots)).profiles,
-    );
+    const settingsPath = hostSettingsPathOverride() ?? defaultSettingsPath();
+    const readSettings = () => {
+      try {
+        const parsed = parseSettings(JSON.parse(readFileSync(settingsPath, "utf8")));
+        return parsed.status === "ok" ? parsed.settings : undefined;
+      } catch { return undefined; }
+    };
+    const adaptiveEnv = process.env.ANYCODE_ADAPTIVE_TURN_BUDGET;
+    const adaptive = adaptiveEnv === undefined ? readSettings()?.tools.adaptiveTurnBudget === true : /^(1|true|on)$/i.test(adaptiveEnv);
+    const budget = adaptive ? createSubagentBudgetPort(defaultTurnBudgetHistoryPath()) : undefined;
+    const routed = createRoutedChildComposition({
+      health: roleHealth, describeError, resolve: () => null,
+      prepare: req => stampLearnedMaxTurns(req, { adaptive, settingsBudgetSet: process.env.ANYCODE_SUBAGENT_MAX_TURNS !== undefined || readSettings()?.tools.subagentMaxTurns !== undefined, port: budget }),
+      record: (outcome, req) => recordAcceptedChildBudget(budget, outcome, req),
+      report: (id, text, meta) => childReportQueue.add(id, text, meta),
+      deliver: deliverDetachedChildReport,
+    });
+    const foreignComposition = codexForeignComposition = createForeignOrchestrationComposition({
+      settings: readSettings, projectRoot: codexProjectRoot, health: roleHealth, routed,
+      profiles: async () => (await discoverAgentProfiles(new NodeFileSystemAdapter(), profileRoots)).profiles,
+      preset: () => codexParentEngine?.snapshot().activePresetId ?? "read-only",
+    });
+    const resolveCatalog = foreignComposition.catalog;
     const catalog = await resolveCatalog();
-    // `port`/`codexChildPort` stay behind the catalog switch,
-    // but the BRIDGE itself is built for every root Codex boot — the browser
+    // The role catalog is nonempty for every root Codex boot. The browser
     // tools (anycode_browser_*) ride dynamicTools even with an empty catalog,
     // so the experimental API + thread/start dynamicTools are always on for
     // root boots. Child boots (args.child !== undefined) get no bridge.
@@ -1426,15 +1450,17 @@ async function bootCodexSession(
     if (catalog.length) {
       port = createChildSessionPort({
         parentSessionId: bridgeRowId,
-        getPermissionMode: () => codexAgentPermissionMode(codexParentEngine?.snapshot().activePresetId ?? "read-only"),
+        getPermissionMode: foreignComposition.childMode,
         send: sendChildSessionMessage, subscribe: subscribeChildRunEvents,
-        onDetachedTerminal: deliverDetachedChildReport, onDetachedStall: deliverDetachedChildStall,
+        onDetachedTerminal: routed.onTerminal, onDetachedStall: deliverDetachedChildStall,
         onDetachedApproval: deliverDetachedChildApproval, onDetachedApprovalSettled: retractDetachedChildApprovalNotice,
         onDetachedTurnBudget: deliverDetachedTurnBudgetNotice,
+        maxDetachedChildren: () => readChildSessionsPerParentMax(settingsPath, codexProjectRoot),
       });
+      routed.attach(port);
       codexChildPort = port;
     }
-    codexAgentBridge = new CodexDynamicToolBridge(catalog, port, agentCardLog, resolveCatalog, codexEngineBrowserBridge);
+    codexAgentBridge = new CodexDynamicToolBridge(catalog, port, agentCardLog, resolveCatalog, codexEngineBrowserBridge, foreignComposition.call);
   }
   if (args.child !== undefined) {
     prepareChildPrompt = (prompt) => engineChildPrompt(prompt, codexChildPort !== undefined);
@@ -1460,10 +1486,8 @@ async function bootCodexSession(
       deliverSupervisorIdleReminder,
     );
     // The background-children feed is what makes the watchdog's supervising
-    // state reachable at all: it exists ONLY when the child port does (the
-    // `if (catalog.length)` gate above — an empty profile catalog means no
-    // port, no detachable children, and an inert, correctly-silent
-    // watchdog). Any future change that arms supervision without the port
+    // state reachable at all: it exists ONLY when the child port does.
+    // Any future change that arms supervision without the port
     // must first give this feed another source, or settle-time state
     // (liveChildren) goes stale.
     if (codexChildPort !== undefined) {

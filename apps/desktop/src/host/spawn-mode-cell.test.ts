@@ -48,3 +48,21 @@ describe("createSpawnModeCell", () => {
     expect(cell.read()).toBe("build");
   });
 });
+
+describe("foreign spawn authority", () => {
+  it("captures the original preset through the overlay and restores live reads", async () => {
+    const { createForeignSpawnModeCell } = await import("./spawn-mode-cell.js");
+    let mode: "plan" | "build" | "yolo" = "plan";
+    const cell = createForeignSpawnModeCell(() => mode);
+    cell.capture();
+    expect(cell.read()).toBe("build");
+    cell.clear();
+    mode = "yolo";
+    cell.capture();
+    mode = "plan";
+    cell.capture();
+    expect(cell.read()).toBe("yolo");
+    cell.clear();
+    expect(cell.read()).toBe("plan");
+  });
+});

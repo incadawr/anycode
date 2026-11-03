@@ -165,6 +165,8 @@ export interface SessionSubagentOutcome extends SubagentOutcome {
    */
   cancelledBy?: "user";
   capacityRefused?: true;
+  /** Main rejected the spawn before admission; preserves the wire reason. */
+  admissionRejectReason?: "limit_parent" | "limit_global" | "recursion" | "not_ready" | "closing" | "spawn_failed";
   /**
    * GitHub #17 slice D: this outcome is an ADMISSION/HANDOFF,
    * not a child terminal — the child (if any) is still running and its report

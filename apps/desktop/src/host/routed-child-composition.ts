@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { formatChildTaskNotification, isRoleRouteName } from "@anycode/core";
 import type { RoleRouteResolution, SessionSubagentRequest, SessionSubagentOutcome, SubagentRunOptions } from "@anycode/core";
 import type { ChildSessionPort } from "./child-session-port.js";
-import { decideRoutedTerminal, entryLabel, respawnReportId, type RoleHealthCache } from "./role-route.js";
+import { classifyInfraFailure, decideRoutedTerminal, entryLabel, respawnReportId, type RoleHealthCache } from "./role-route.js";
 
 export function createRoutedChildComposition(options: {
   health: RoleHealthCache;
@@ -66,6 +66,7 @@ export function createRoutedChildComposition(options: {
       spawnToolCallId: respawnId,
       ...(req.restrictions !== undefined ? { restrictions: req.restrictions } : {}),
       ...(req.nativeRestrictionsUnsupported ? { nativeRestrictionsUnsupported: true } : {}),
+      ...(req.maxTurns !== undefined ? { maxTurns: req.maxTurns } : {}),
       ...(decision.entry.engine !== undefined ? { engine: decision.entry.engine } : {}),
       ...(decision.entry.connection !== undefined ? { connectionId: decision.entry.connection } : {}),
       ...(decision.entry.provider !== undefined ? { provider: decision.entry.provider } : {}),
@@ -119,21 +120,51 @@ export function createRoutedChildComposition(options: {
   function attach(childPort: ChildSessionPort): void {
     port = childPort;
     const innerRun = childPort.run.bind(childPort);
-    childPort.run = (req: SessionSubagentRequest, opts: SubagentRunOptions) => {
-      if ((req.detach === true || req.allowBackgroundHandoff === true) &&
-          isRoleRouteName(req.agentType) && req.resumeChildSessionId === undefined && req.routeStamped === true) {
-        const resolution = options.resolve(req.agentType);
-        const head = resolution?.entries[0];
-        if (head !== undefined) noteRoutedSpawn(req, head, resolution!.entries.slice(1), resolution!.skipped);
-      }
-      const budgeted = options.prepare(req);
-      return innerRun(budgeted, opts).then((outcome) => {
-        if (outcome.background === undefined) {
-          routedSpawns.delete(req.spawnToolCallId);
-          options.record(outcome, budgeted);
+    childPort.run = async (req: SessionSubagentRequest, opts: SubagentRunOptions) => {
+      if (isRoleRouteName(req.agentType) && req.resumeChildSessionId === undefined && req.routeStamped === true) {
+        if (!routedSpawns.has(req.spawnToolCallId)) {
+          const resolution = options.resolve(req.agentType);
+          const head = resolution?.entries[0];
+          if (head !== undefined) noteRoutedSpawn(req, head, resolution!.entries.slice(1), resolution!.skipped);
         }
-        return outcome;
-      });
+      }
+      let current = req;
+      try {
+        for (;;) {
+          const budgeted = options.prepare(current);
+          const outcome = await innerRun(budgeted, opts);
+          const reason = outcome.admissionRejectReason;
+          const facts = routedSpawns.get(req.spawnToolCallId);
+          if (facts && !opts.signal?.aborted && (reason === "not_ready" || reason === "spawn_failed")) {
+            const classified = classifyInfraFailure(outcome.finalText);
+            // Both wire reasons also cover non-infrastructure refusals. Admit
+            // only known readiness/start messages, never arbitrary policy text.
+            const readiness = reason === "not_ready" && /^Agent: (?:this model is not available on the selected connection|the (?:core engine|"(?:codex|claude)" engine|default Codex account) is not available|(?:connection|provider connection) ".+" (?:declared by this profile is not available|is not available|could not be prepared))/.test(outcome.finalText);
+            const startFailed = reason === "spawn_failed" && outcome.finalText === "Agent: the child session failed to start.";
+            const kind = readiness ? (classified === "none" ? "unreachable" : classified) : startFailed ? "unreachable" : "none";
+            const decision = decideRoutedTerminal(facts, outcome.status, outcome.finalText, options.health, Date.now(), undefined, kind);
+            if (decision.action === "respawn") {
+              routedSpawns.set(req.spawnToolCallId, { ...decision.next, rest: [...decision.next.rest] });
+              const { engine: _engine, connectionId: _connection, provider: _provider, model: _model, effort: _effort, ...rest } = current;
+              current = { ...rest, ...(decision.entry.engine !== undefined ? { engine: decision.entry.engine } : {}),
+                ...(decision.entry.connection !== undefined ? { connectionId: decision.entry.connection } : {}),
+                ...(decision.entry.provider !== undefined ? { provider: decision.entry.provider } : {}),
+                ...(decision.entry.model !== undefined ? { model: decision.entry.model } : {}),
+                ...(decision.entry.effort !== undefined ? { effort: decision.entry.effort } : {}) };
+              continue;
+            }
+            if (decision.action === "deliver_exhausted") outcome.finalText += `\n[role ${facts.role}: all route entries failed]`;
+          }
+          if (outcome.background === undefined) {
+            routedSpawns.delete(req.spawnToolCallId);
+            options.record(outcome, budgeted);
+          }
+          return outcome;
+        }
+      } catch (error: unknown) {
+        routedSpawns.delete(req.spawnToolCallId);
+        throw error;
+      }
     };
   }
   function onTerminal(outcome: SessionSubagentOutcome, req: SessionSubagentRequest): void {
@@ -143,5 +174,12 @@ export function createRoutedChildComposition(options: {
     if (notice !== undefined) outcome.finalText = `${notice}\n${outcome.finalText}`;
     options.deliver(outcome, req);
   }
-  return { attach, onTerminal };
+  /** Record the exact route selected for a request before it reaches the port. */
+  function snapshot(req: SessionSubagentRequest, resolution: RoleRouteResolution): void {
+    const head = resolution.entries[0];
+    if (head !== undefined && req.routeStamped === true && req.resumeChildSessionId === undefined) {
+      noteRoutedSpawn(req, head, resolution.entries.slice(1), resolution.skipped);
+    }
+  }
+  return { attach, onTerminal, snapshot };
 }
