@@ -6480,10 +6480,36 @@ describe("Session — child mode: activity/progress bridge (CUT-S2 §2.6.3/§10.
       try {
         observeChildEventDirect(h.session, toolResultEvent("a"));
         observeChildEventDirect(h.session, toolResultEvent("b"));
+        expect(vi.getTimerCount()).toBe(1);
         await h.session.shutdown();
+        expect(vi.getTimerCount()).toBe(0);
         const count = h.onProgress.mock.calls.filter((c) => isProgressReport(c[0])).length;
         vi.advanceTimersByTime(1000);
         expect(h.onProgress.mock.calls.filter((c) => isProgressReport(c[0]))).toHaveLength(count);
+      } finally {
+        h.close();
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not schedule or emit progress after the current port closes", async () => {
+      vi.useFakeTimers();
+      const h = createChildHarness({ steps: [finishStep()], now: () => Date.now() });
+      try {
+        let closePort = (): void => {};
+        h.session.bindPort({ post() {}, onMessage() {}, onClose(cb) { closePort = cb; } });
+        observeChildEventDirect(h.session, toolResultEvent("a"));
+        observeChildEventDirect(h.session, toolResultEvent("b"));
+        expect(vi.getTimerCount()).toBe(1);
+        closePort();
+        const timersAfterClose = vi.getTimerCount();
+        const count = h.onProgress.mock.calls.filter((c) => isProgressReport(c[0])).length;
+        observeChildEventDirect(h.session, toolResultEvent("c"));
+        expect(vi.getTimerCount()).toBe(timersAfterClose);
+        vi.advanceTimersByTime(1000);
+        observeChildEventDirect(h.session, toolResultEvent("d"));
+        expect(h.onProgress.mock.calls.filter((c) => isProgressReport(c[0]))).toHaveLength(count);
+        await h.session.shutdown();
       } finally {
         h.close();
         vi.useRealTimers();

@@ -5120,13 +5120,13 @@ export class Session {
    * boundaries within that window schedule a trailing report with current counts.
    */
   private emitChildProgressBoundary(): void {
-    if (this.shuttingDown || this.childTerminalFinalized) return;
+    if (this.shuttingDown || this.childTerminalFinalized || this.boundGeneration === null) return;
     const now = this.now();
     if (this.childLastProgressEmitAt !== undefined && now - this.childLastProgressEmitAt < 1000) {
       if (this.childProgressTimer === null) {
         this.childProgressTimer = setTimeout(() => {
           this.childProgressTimer = null;
-          if (!this.shuttingDown && !this.childTerminalFinalized) this.sendChildProgress();
+          if (!this.shuttingDown && !this.childTerminalFinalized && this.boundGeneration !== null) this.sendChildProgress();
         }, 1000 - (now - this.childLastProgressEmitAt));
       }
       return;
