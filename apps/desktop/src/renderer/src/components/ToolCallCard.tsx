@@ -2105,6 +2105,7 @@ export function ToolCallHeaderRow({
             {collapsedIdentity?.model.label != null && (
               <span
                 className={`subagent-collapsed-model${collapsedIdentity.model.inherited ? " subagent-collapsed-model-inherited" : ""}`}
+                title={collapsedIdentity.model.label}
               >
                 {collapsedIdentity.model.label}
               </span>
@@ -2116,6 +2117,7 @@ export function ToolCallHeaderRow({
               !(block.subagent?.final === null && block.subagent?.engine !== null) && (
                 <span
                   className={`subagent-collapsed-engine${collapsedIdentity.engine.inherited ? " subagent-collapsed-engine-inherited" : ""}`}
+                  title={collapsedIdentity.engine.label}
                 >
                   {collapsedIdentity.engine.label}
                 </span>

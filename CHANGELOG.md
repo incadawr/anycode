@@ -21,6 +21,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Use readable Enter key names in task and permission hints. Refresh Git status when returning to its dock tab.
 - Keep background agent tool counts current after a burst of tool calls.
 - Insert dropped file and folder paths into the composer, while keeping image attachments for supported models.
+- Keep SubAgent status badges visible when model and engine names are long.
 
 - Refuse session delegation when it would discard an inline profile's restrictions.
 

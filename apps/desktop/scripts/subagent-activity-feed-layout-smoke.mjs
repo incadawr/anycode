@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const rendererRoot = resolve(here, "..", "src", "renderer", "src");
 const css = readFileSync(resolve(rendererRoot, "tool-cards.css"), "utf8");
+const appCss = readFileSync(resolve(rendererRoot, "app.css"), "utf8");
 
 function assert(condition, message) {
   if (!condition) {
@@ -138,9 +139,28 @@ try {
       }
       * { box-sizing: border-box; }
       body { margin: 0; line-height: 20px; }
+      ${appCss}
       ${css}
+      .layout-fixture { width: 360px; }
     </style>
     <ul class="subagent-activity-feed">${rows}</ul>
+    <div class="layout-fixture tool-call-toggle-row"><button class="tool-call-toggle">
+      <span class="tool-call-caret">›</span><span class="subagent-collapsed-line">
+        <span class="subagent-name">SubAgent</span><span class="subagent-persona">reviewer</span>
+        <span class="subagent-collapsed-model">a-very-long-model-identifier-that-exceeds-the-available-space (inherited)</span>
+        <span class="subagent-collapsed-engine">a-long-engine-label (inherited)</span><span class="tool-call-summary">summary</span>
+      </span><span class="tool-call-status-badge">Running</span><span class="tool-call-child-badge">Child</span>
+    </button></div>
+    ${[false, true].map((progress) => `<div class="action-fixture tool-call-toggle-row" style="width: 720px">
+      <button class="tool-call-toggle"><span class="tool-call-caret">›</span>
+        <span class="subagent-collapsed-line"><span class="subagent-name">SubAgent</span>
+          <span class="subagent-persona">reviewer</span>
+          <span class="subagent-collapsed-model">a-very-long-model-identifier-that-exceeds-the-available-space-repeated-many-times-and-keeps-going (inherited)</span>
+          <span class="subagent-collapsed-engine">a-long-engine-label (inherited)</span><span class="tool-call-summary">summary</span>
+        </span><span class="tool-call-status-badge">Running</span>
+        ${progress ? '<span class="subagent-collapsed-progress">Running · turn 1 · 10 seconds</span>' : ''}
+      </button><button class="tool-call-child-badge tool-call-child-badge-action">Waiting for permission</button>
+    </div>`).join('')}
     <script>
       const feed = document.querySelector('.subagent-activity-feed');
       const feedRows = [...document.querySelectorAll('.subagent-activity-row')];
@@ -158,6 +178,22 @@ try {
       feed.scrollTop = feed.scrollHeight;
       geometry.scrolledTop = feed.scrollTop;
       geometry.bottomGap = feed.scrollHeight - feed.scrollTop - feed.clientHeight;
+      const rect = (selector) => {
+        const r = document.querySelector(selector).getBoundingClientRect();
+        return { left: r.left, right: r.right, width: r.width };
+      };
+      geometry.header = {
+        line: rect('.subagent-collapsed-line'), model: rect('.subagent-collapsed-model'),
+        engine: rect('.subagent-collapsed-engine'), status: rect('.tool-call-status-badge'),
+        child: rect('.tool-call-child-badge'), fixture: rect('.layout-fixture'),
+        modelOverflow: getComputedStyle(document.querySelector('.subagent-collapsed-model')).textOverflow,
+      };
+      geometry.actions = [...document.querySelectorAll('.action-fixture')].map((row) => {
+        const bounds = row.getBoundingClientRect();
+        const toggle = row.querySelector('.tool-call-toggle').getBoundingClientRect();
+        const badge = row.querySelector('.tool-call-child-badge-action').getBoundingClientRect();
+        return { rowRight: bounds.right, toggleRight: toggle.right, badgeLeft: badge.left, badgeRight: badge.right, badgeWidth: badge.width };
+      });
       document.body.dataset.result = btoa(JSON.stringify(geometry));
     </script>`;
 
@@ -207,6 +243,14 @@ try {
     geometry.scrolledTop > 0 && Math.abs(geometry.bottomGap) <= 1,
     `scroll-to-newest remained a no-op: scrollTop=${geometry.scrolledTop}, bottomGap=${geometry.bottomGap}`,
   );
+  const h = geometry.header;
+  assert(h.line.right <= h.status.left && h.model.right <= h.status.left && h.engine.right <= h.status.left,
+    `header text overlaps the status badge: ${JSON.stringify(h)}`);
+  assert(h.status.width > 0 && h.status.right <= h.child.left && h.child.width > 0 && h.child.right <= h.fixture.right,
+    `status or child badge is not visible: ${JSON.stringify(h)}`);
+  assert(h.modelOverflow === "ellipsis", `model does not truncate with an ellipsis: ${JSON.stringify(h)}`);
+  assert(geometry.actions.every((a) => a.badgeWidth > 0 && a.toggleRight <= a.badgeLeft && a.badgeRight <= a.rowRight),
+    `actionable child badge is clipped or overlapped: ${JSON.stringify(geometry.actions)}`);
 
   console.log(
     `[subagent-feed-layout] PASS rows=${geometry.readings.length} ` +
