@@ -370,7 +370,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
       const restricted = ctx.subagents?.hasSessionRestrictions?.(agentType) ??
         ["explore", "planner", "reviewer"].includes(agentType);
       if (tier === "session" && restricted &&
-          (agentType === "explore" || (routing === null && !routedRole)) &&
+          (routing === null && !routedRole) &&
           input.continue_session === undefined && input.send_to === undefined) {
         return {
           ok: false,

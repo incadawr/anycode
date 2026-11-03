@@ -1709,7 +1709,7 @@ describe("agentTool handler — orchestrate default-detach (§2.3)", () => {
     expect(sessionRun).not.toHaveBeenCalled();
   });
 
-  it("refuses explore even when settings resolve it to a connection", async () => {
+  it("runs explore as a session when settings route it to a connection", async () => {
     const inline: SubagentPort = {
       run: async () => { throw new Error("unexpected inline run"); },
       resolveRoleRoute: () => ({ entries: [{ connection: "conn", model: "model" }], skipped: [] }),
@@ -1719,8 +1719,8 @@ describe("agentTool handler — orchestrate default-detach (§2.3)", () => {
       { description: "d", prompt: "p", agent_type: "explore", tier: "session" },
       makeCtx({ subagents: inline, sessionSubagents: { run: sessionRun, send: async () => ({ ok: true }) } }),
     );
-    expect(result).toMatchObject({ ok: false, errorKind: "invalid_input" });
-    expect(sessionRun).not.toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    expect(sessionRun).toHaveBeenCalledTimes(1);
   });
 
   it("does not fall back inline when the resolved route selects a provider", async () => {
