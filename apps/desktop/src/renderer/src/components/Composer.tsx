@@ -104,6 +104,10 @@ export function shouldEnqueue(
   return turnStatus !== "idle" || queueInFlight !== null;
 }
 
+export function composerHintText(running: boolean): string {
+  return running ? "Enter queue · Esc stop" : "Enter send · Shift+Enter newline";
+}
+
 /**
  * Whether the current draft is actually sendable: trimmed text is non-empty OR
  * at least one image is attached (a whitespace-only draft is not). The single
@@ -2025,17 +2029,12 @@ export function Composer() {
           : "";
 
   const pills = visiblePasteBlocks(text, pasteBlocks);
-  const platform = window.anycode?.platform ?? "darwin";
   const hasDraft = text.length > 0 || attachedImages.length > 0;
   // Idle: the send-keybinding hint teaches the shortcut before first use, then
   // hides once there's a draft. Running: inverted — nothing to explain on an
   // empty draft, but a typed draft now queues on Enter instead of sending, so
   // the "queue" hint surfaces exactly then.
-  const hintText = running
-    ? "⏎ queue · Esc stop"
-    : platform === "darwin"
-      ? "⏎ send · ⇧⏎ newline"
-      : "Enter send · Shift+Enter newline";
+  const hintText = composerHintText(running);
   const hintHidden = !ready || (running ? !hasDraft : hasDraft);
   // Capability, not a current value: the effort row is offered whenever the
   // SELECTED native model advertises levels (`engineEffortOptions`), even if

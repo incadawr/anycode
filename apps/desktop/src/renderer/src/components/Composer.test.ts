@@ -10,6 +10,7 @@ import type { WireContextBreakdown } from "../../../shared/protocol.js";
 import {
   CTX_RING_CIRCUMFERENCE,
   buildQuotaPopoverView,
+  composerHintText,
   contextMeterPercent,
   ctxPopoverAnchorFromRect,
   ctxPopoverBodyState,
@@ -36,6 +37,13 @@ import {
   shouldEnqueue,
   sniffComposerImageMediaType,
 } from "./Composer.js";
+
+describe("composerHintText", () => {
+  it("names the keys in idle and running states", () => {
+    expect(composerHintText(false)).toBe("Enter send · Shift+Enter newline");
+    expect(composerHintText(true)).toBe("Enter queue · Esc stop");
+  });
+});
 
 function usage(estimatedTokens: number, budgetTokens: number): ContextUsage {
   return { estimatedTokens, budgetTokens, source: "provider" };

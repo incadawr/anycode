@@ -11,6 +11,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Make composer keyboard hints readable and separate them from the model selector.
 - Restore compact, right-aligned user messages in conversations.
 
 ### Changed
