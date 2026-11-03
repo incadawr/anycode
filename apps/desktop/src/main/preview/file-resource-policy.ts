@@ -23,7 +23,7 @@
  *     home dir must never widen anything);
  *   - nothing under `<home>/.anycode` is loadable unless the document itself
  *     lives under `<home>/.anycode` (and then only from the document's own
- *     directory onwards).
+ *     directory onwards — the workspace NEVER widens such a document).
  *
  * All paths handed in are already REALPATH'd by the caller (the artifact
  * resolver realpaths before reporting containment), so a symlink pointing
@@ -94,6 +94,14 @@ export function isAllowedFileSubresource(input: FileSubresourceInput): boolean {
   // Rule (c): the document's own directory tree.
   if (isUnderRoot(requestRealPath, docDir, platform)) {
     return true;
+  }
+
+  // Rule (d), second half: a document that lives UNDER the app profile is
+  // confined to its OWN directory tree — the workspace must NEVER widen it
+  // (a workspace inside the profile, e.g. `<home>/.anycode/gen`, would
+  // otherwise hand the document the whole workspace tree).
+  if (docUnderProfile) {
+    return false;
   }
 
   // Rule (c), second half: the workspace widens the tree — but only when the
