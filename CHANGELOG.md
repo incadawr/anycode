@@ -9,6 +9,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Keep preview errors visible during noisy logs and retain resource diagnostics and readable collection values.
+
 - Group preview warnings and errors in a collapsible chat row, keeping routine console messages in the preview console.
 
 - Show readable preview console objects in the console panel and browser tools.

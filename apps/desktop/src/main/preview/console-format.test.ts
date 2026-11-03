@@ -14,8 +14,8 @@ describe("console argument formatting", () => {
   it("preserves descriptions and collection entries and handles unusual values", () => {
     expect(formatConsoleArguments([
       { type: "object", subtype: "date", description: "2026-01-01", preview: { properties: [] } },
-      { type: "object", subtype: "map", description: "Map(1)", preview: { entries: [{ key: { type: "string", description: "key" }, value: { type: "number", description: "2" } }] } },
-      { type: "object", subtype: "set", description: "Set(1)", preview: { entries: [{ value: { type: "number", description: "3" } }] } },
+      { type: "object", subtype: "map", description: "Map(1)", preview: { entries: [{ key: { type: "string", description: "key", properties: [] }, value: { type: "number", description: "2", properties: [] } }] } },
+      { type: "object", subtype: "set", description: "Set(1)", preview: { entries: [{ value: { type: "number", description: "3", properties: [] } }] } },
       { type: "object", subtype: "error", description: "Error: broken", preview: { properties: [{ name: "code", type: "number", value: "1" }] } },
     ])).toBe('2026-01-01 Map(1) {"key" => 2} Set(1) {3} Error: broken');
     const circular: Record<string, unknown> = {}; circular.self = circular;

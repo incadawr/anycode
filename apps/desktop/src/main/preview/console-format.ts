@@ -21,7 +21,7 @@ export function formatConsoleArguments(args: RemotePreview[]): string {
       return `${arg.description ?? arg.subtype} {${entries.join(", ")}}`;
     }
     if (arg.description && (arg.type === "function" || ["date", "error", "regexp", "typedarray", "node", "promise"].includes(arg.subtype ?? ""))) return arg.description;
-    if (arg.preview && (arg.preview.properties || arg.preview.overflow)) {
+    if (arg.preview && ((arg.preview.properties?.length ?? 0) > 0 || arg.preview.overflow || arg.description === undefined)) {
       const array = arg.subtype === "array" || arg.preview.subtype === "array";
       const parts = (arg.preview.properties ?? []).slice(0, 50).map((p) => {
         const value = p.valuePreview ? format({ type: p.type, preview: p.valuePreview }, true, depth + 1)
