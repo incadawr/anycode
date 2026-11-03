@@ -45,6 +45,7 @@ interface FakeDebugger {
 }
 
 let failInitialAttach = false;
+let failRuntimeEnable = false;
 
 function fakeDebugger(): FakeDebugger {
   const listeners = new Map<string, Array<(event: unknown, ...args: unknown[]) => void>>();
@@ -72,6 +73,7 @@ function fakeDebugger(): FakeDebugger {
       this.sendCommandCalls.push(method);
       this.sendParams.push({ method, params });
       if (this.hangSend) return new Promise(() => {});
+      if (method === "Runtime.enable" && failRuntimeEnable) return Promise.reject(new Error("refused"));
       return Promise.resolve({});
     },
     detach() {
@@ -481,6 +483,16 @@ describe("createElectronPreviewWindow — event adaptation", () => {
     }
 
     expect(messages).toEqual([{ level: "pageerror", message: "TypeError: boom" }]);
+  });
+
+  it("detaches after Runtime enable fails so the debugger can reattach", async () => {
+    failRuntimeEnable = true;
+    const win = createElectronPreviewWindow({ previewId: "enable-failure" });
+    const dbg = latestWindow().webContents.debugger;
+    await vi.waitFor(() => expect(dbg.detachCalls).toBe(1));
+    failRuntimeEnable = false;
+    expect(win.webContents.cdp!.ensureAttached()).toBe(true);
+    expect(dbg.attachCalls).toHaveLength(2);
   });
 
   it("detaches the debugger when the window closes", () => {
