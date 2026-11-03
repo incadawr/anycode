@@ -28,7 +28,7 @@ import {
   type PreviewResult,
 } from "../../shared/preview.js";
 import { fakeCdp } from "./fake-cdp.js";
-import { canonicalizeRootPath } from "./file-resource-roots.js";
+import { canonicalWorkspaceForTab } from "./file-resource-roots.js";
 import {
   EXEC_JS_TIMEOUT_MS,
   LIVE_RELOAD_DEBOUNCE_MS,
@@ -2143,7 +2143,7 @@ describe("PreviewHost — request gate: the broad roots are canonical", () => {
       mkdirSync(workspace);
       symlinkSync(workspace, link);
       const canonical = realpathSync(workspace);
-      const rig = makeRig({ workspaceForTab: () => canonicalizeRootPath(link) });
+      const rig = makeRig({ workspaceForTab: canonicalWorkspaceForTab((tabId) => tabId === TAB ? link : undefined) });
       rig.resolveArtifactImpl = async (_tabId, path) => ({ realPath: path });
       const opening = rig.host.openForTab(TAB, { path: join(canonical, "site/index.html") });
       await flush();
@@ -2152,6 +2152,9 @@ describe("PreviewHost — request gate: the broad roots are canonical", () => {
       await expect(rig.windows[0]!.webContents.requestGate!({
         url: pathToFileURL(join(canonical, "shared/a.css")).href, resourceType: "stylesheet",
       })).resolves.toBe(true);
+      await expect(rig.windows[0]!.webContents.requestGate!({
+        url: pathToFileURL(join(realpathSync(dir), "outside.css")).href, resourceType: "stylesheet",
+      })).resolves.toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

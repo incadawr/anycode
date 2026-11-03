@@ -44,6 +44,14 @@ export function canonicalizeRootPath(path: string): string {
   }
 }
 
+/** Adapts a live tab workspace lookup for the realpath-based file policy. */
+export function canonicalWorkspaceForTab(lookup: (tabId: string) => string | undefined): (tabId: string) => string | undefined {
+  return (tabId) => {
+    const workspace = lookup(tabId);
+    return workspace === undefined ? undefined : canonicalizeRootPath(workspace);
+  };
+}
+
 /**
  * The OS temp roots. On darwin `/tmp` is a SYMLINK to `/private/tmp`, so
  * both spellings are listed (a realpath'd request carries either).
