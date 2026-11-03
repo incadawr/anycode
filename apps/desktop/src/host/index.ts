@@ -1,3 +1,4 @@
+import { childBootFailure } from "./child-boot-failure.js";
 import { engineChildPrompt } from "./engine-child-prompt.js";
 import { listConnectionTargets } from "./list-connections.js";
 import { claudeHistoryOnlyEngine } from "./engines/claude/history-only.js";
@@ -5090,6 +5091,9 @@ async function boot(): Promise<void> {
     // defensive path: surface the failure to the UI on connect rather than dying
     // silently. No core is instantiated in degraded mode.
     initFailure = `host failed to initialize: ${describeError(error)}`;
+    if (parseHostArgs(process.argv.slice(2)).child !== undefined) {
+      postHostControlMessage(childBootFailure(initFailure));
+    }
     console.error("[host]", initFailure);
     // make the crash cause visible in the per-session diagnostic
     // file too (host stdio is inherited, so this console.error alone would not

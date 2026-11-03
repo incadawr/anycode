@@ -1141,6 +1141,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               // timer can never hand off a finished child.
               terminalSeen = true;
               if (acceptedEvent) statusStore.update(acceptedEvent.childSessionId, { state: event.status === "completed" ? "completed" : "failed", turns: event.turns, toolCalls: event.toolCalls, endedAt: Date.now(), currentTool: undefined });
+              if (acceptedEvent && event.status === "error") statusStore.append(acceptedEvent.childSessionId, { kind: "result", text: event.finalText });
               clearJoinTimer();
               // the cancel cause lives only in this host's registry
               // row, which the detached branch below deletes — read it NOW,
