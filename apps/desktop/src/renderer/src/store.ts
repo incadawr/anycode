@@ -631,6 +631,7 @@ export type TranscriptBlock =
       message: string;
       suppressed?: number;
       entries: Array<{ level: "warn" | "error" | "pageerror"; message: string; count: number }>;
+      dropped?: number;
     }
   /**
    * One row per `ceiling_grant` AgentEvent (cut-1): the turn-ceiling
@@ -4911,7 +4912,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               if (previous && previous.level === entry.level && previous.message === entry.message) {
                 entries[entries.length - 1] = { ...previous, count: previous.count + 1 };
               } else entries.push(entry);
-              return { transcript: [...state.transcript.slice(0, -1), { ...last, entries }] };
+              let dropped = last.dropped ?? 0;
+              if (entries.length > 200) dropped += entries.shift()!.count;
+              return { transcript: [...state.transcript.slice(0, -1), { ...last, entries, dropped }] };
             }
             return { transcript: [...state.transcript, {
               kind: "preview_console" as const, id: `preview-console:${previewConsoleSeq++}`,

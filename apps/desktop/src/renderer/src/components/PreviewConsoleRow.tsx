@@ -16,7 +16,9 @@ export function PreviewConsoleRow({ block, enter }: { block: PreviewConsoleBlock
           Preview console · {count} {count === 1 ? "message" : "messages"}
         </Button>
       </div>
-      {expanded && <div id={id} className="compaction-detail">{block.entries.map((entry, index) => (
+      {expanded && <div id={id} className="compaction-detail">
+        {(block.dropped ?? 0) > 0 && <div>{block.dropped} earlier messages dropped</div>}
+        {block.entries.map((entry, index) => (
         <div key={index} className={previewConsoleRowClassName(entry.level)}>[{entry.level}] {entry.message}{entry.count > 1 ? ` ×${entry.count}` : ""}</div>
       ))}</div>}
     </div>
