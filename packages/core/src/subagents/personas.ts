@@ -111,8 +111,7 @@ export interface PersonaDefinition {
    * session's engine by buildChildConfig (ProfilePermissionEngine). Never wider
    * than the session gate: `deny` refuses without a prompt, `allow` only
    * resolves an existing `ask`, everything else is unchanged. In-process
-   * children only, exactly like the `tools:` list: a session-tier child is its
-   * own session with its own gate. Built-in personas leave this undefined —
+   * and core session children. Built-in personas leave this undefined —
    * they inherit the parent's gate untouched.
    */
   permissions?: ProfilePermissionRules;

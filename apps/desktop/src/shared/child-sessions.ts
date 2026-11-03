@@ -35,7 +35,7 @@
  * sender is authorized to say it.
  */
 
-import type { PermissionMode, ReasoningEffort } from "@anycode/core";
+import type { PermissionMode, ReasoningEffort, SessionProfileRestrictions } from "@anycode/core";
 
 // ── parentPort message types (parent host <-> main, child host <-> main) ──
 
@@ -65,6 +65,7 @@ export const CHILD_TERMINAL_TYPE = "anycode:child-terminal" as const; // child h
  * was invoked (§0.8) — the child never tracks the parent's LIVE mode.
  */
 export interface ChildSpawnRequest {
+  restrictions?: SessionProfileRestrictions;
   type: typeof CHILD_SPAWN_REQUEST_TYPE;
   requestId: string;
   spawnToolCallId: string;
@@ -564,6 +565,7 @@ const CHILD_SPAWN_REQUEST_KEYS = [
   // GitHub #17 slice B: additive key (detach admission flag).
   "detach",
   "fallbackAtCapacity",
+  "restrictions",
 ] as const;
 
 const CHILD_EFFORT_VALUES: readonly string[] = ["off", "low", "medium", "high", "xhigh", "max"] satisfies readonly ChildEffort[];
@@ -574,6 +576,20 @@ export function isChildEffort(value: unknown): value is ChildEffort {
 
 function isChildEngine(value: unknown): value is "claude" | "codex" {
   return typeof value === "string" && CHILD_ENGINE_VALUES.includes(value);
+}
+
+export function isSessionProfileRestrictions(value: unknown): value is SessionProfileRestrictions {
+  if (!isRecord(value) || !hasOnlyKeys(value, ["tools", "readOnly", "permissions"]) ||
+      !Array.isArray(value.tools) || value.tools.length > 200 ||
+      !value.tools.every((item: unknown) => typeof item === "string" && item.length > 0 && item.length <= 256) ||
+      typeof value.readOnly !== "boolean") return false;
+  if (value.permissions === undefined) return true;
+  if (!isRecord(value.permissions) || !hasOnlyKeys(value.permissions, ["allow", "deny"])) return false;
+  return [value.permissions.allow, value.permissions.deny].every((rules) =>
+    Array.isArray(rules) && rules.length <= 200 && rules.every((rule: unknown) =>
+      isRecord(rule) && hasOnlyKeys(rule, ["toolName", "pattern"]) &&
+      typeof rule.toolName === "string" && rule.toolName.length > 0 && rule.toolName.length <= 256 &&
+      (rule.pattern === undefined || (typeof rule.pattern === "string" && rule.pattern.length <= 4096))));
 }
 
 export function parseChildSpawnRequest(msg: unknown): ChildSpawnRequest | null {
@@ -637,6 +653,7 @@ export function parseChildSpawnRequest(msg: unknown): ChildSpawnRequest | null {
     return null;
   }
   if (msg.fallbackAtCapacity !== undefined && msg.fallbackAtCapacity !== true) return null;
+  if (msg.restrictions !== undefined && !isSessionProfileRestrictions(msg.restrictions)) return null;
   return {
     type: CHILD_SPAWN_REQUEST_TYPE,
     requestId: msg.requestId,
@@ -649,6 +666,7 @@ export function parseChildSpawnRequest(msg: unknown): ChildSpawnRequest | null {
     ...(msg.model !== undefined ? { model: msg.model as string } : {}),
     ...(msg.effort !== undefined ? { effort: msg.effort } : {}),
     permissionMode: msg.permissionMode,
+    ...(msg.restrictions !== undefined ? { restrictions: msg.restrictions } : {}),
     ...(msg.engine !== undefined ? { engine: msg.engine } : {}),
     ...(msg.resumeChildSessionId !== undefined ? { resumeChildSessionId: msg.resumeChildSessionId as string } : {}),
     ...(msg.maxTurns !== undefined ? { maxTurns: msg.maxTurns as number } : {}),

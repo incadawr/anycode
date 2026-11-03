@@ -68,6 +68,7 @@ import type {
   RetryPolicy,
   SessionMeta,
 } from "@anycode/core";
+import { isSessionProfileRestrictions } from "../shared/child-sessions.js";
 import { BROWSER_ACCESS_HOST_MESSAGE_TYPE } from "../shared/browser-access.js";
 import { NETWORK_HINT_HOST_MESSAGE_TYPE } from "../shared/network-hints.js";
 import { SECRET_ENV_KEYS, connectionById, type ModelCapabilitiesDto, type ProviderConnection } from "../shared/settings.js";
@@ -112,6 +113,7 @@ export interface HostChildArgs {
    * anything else is dropped, consistently with the child-mode drop rule.
    */
   maxTurns?: number;
+  restrictions?: import("@anycode/core").SessionProfileRestrictions;
 }
 
 export interface HostArgs {
@@ -142,6 +144,7 @@ export function parseHostArgs(argv: string[]): HostArgs {
   let childSpawnCall: string | undefined;
   let childMode: PermissionMode | undefined;
   let childMaxTurns: number | undefined;
+  let restrictions: import("@anycode/core").SessionProfileRestrictions | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -174,6 +177,12 @@ export function parseHostArgs(argv: string[]): HostArgs {
     if (arg.startsWith("--resume=")) {
       sessionId = arg.slice("--resume=".length);
       resume = true;
+      continue;
+    }
+    if (arg === "--child-restrictions") {
+      const value: unknown = JSON.parse(argv[++i] ?? "");
+      if (!isSessionProfileRestrictions(value)) throw new Error("Invalid child restrictions");
+      restrictions = value;
       continue;
     }
     if (arg === "--child-parent") {
@@ -243,6 +252,7 @@ export function parseHostArgs(argv: string[]): HostArgs {
           parentSessionId: childParent,
           spawnToolCallId: childSpawnCall,
           initialMode: childMode,
+          ...(restrictions !== undefined ? { restrictions } : {}),
           ...(childMaxTurns !== undefined ? { maxTurns: childMaxTurns } : {}),
         }
       : undefined;

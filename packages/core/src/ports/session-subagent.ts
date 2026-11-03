@@ -34,7 +34,15 @@ import type { ReasoningEffort } from "../types/config.js";
  * id-shape security rationale in `shared/child-sessions.ts`, all of which
  * assume this field IS the model-visible tool_call id).
  */
+export interface SessionProfileRestrictions {
+  tools: readonly string[];
+  readOnly: boolean;
+  permissions?: import("../types/permissions.js").ProfilePermissionRules;
+}
+
 export interface SessionSubagentRequest {
+  restrictions?: SessionProfileRestrictions;
+  nativeRestrictionsUnsupported?: boolean;
   agentType: string;
   description: string;
   prompt: string;
