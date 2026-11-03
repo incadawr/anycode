@@ -1,4 +1,4 @@
-import { scrubApprovalText } from "@anycode/core";
+import { scrubApprovalText, scrubFailureText } from "@anycode/core";
 import { childBootFailure, sanitizeBootFailure } from "./child-boot-failure.js";
 import { engineChildPrompt } from "./engine-child-prompt.js";
 import { listConnectionTargets } from "./list-connections.js";
@@ -5098,12 +5098,13 @@ async function boot(): Promise<void> {
     // main (MVP.2) validates ANYCODE_API_KEY/MODEL before spawning, so this is a
     // defensive path: surface the failure to the UI on connect rather than dying
     // silently. No core is instantiated in degraded mode.
-    const safeFailure = sanitizeBootFailure(`host failed to initialize: ${describeError(error)}`);
+    const rawFailure = `host failed to initialize: ${describeError(error)}`;
+    const safeFailure = sanitizeBootFailure(rawFailure);
     initFailure = safeFailure.message;
     if (parseHostArgs(process.argv.slice(2)).child !== undefined) {
       postHostControlMessage(childBootFailure(initFailure, safeFailure.truncated));
     }
-    console.error("[host]", initFailure);
+    console.error("[host]", scrubFailureText(rawFailure) === rawFailure ? rawFailure : initFailure);
     // make the crash cause visible in the per-session diagnostic
     // file too (host stdio is inherited, so this console.error alone would not
     // reach a diagnostic artifact). Safe, fixed-vocabulary code only.

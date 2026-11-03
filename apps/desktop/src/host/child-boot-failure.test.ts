@@ -27,3 +27,8 @@ it("bounds a long failure while preserving the startup hint and terminal validit
   expect(result.finalText).toContain("retry the task unchanged");
   expect(parseChildTerminal(result)).toEqual(result);
 });
+
+it("hides URL credentials while keeping the failure cause", () => {
+  const safe = sanitizeBootFailure("proxy https://alice:hunter2@proxy.local refused the connection");
+  expect(safe.message).toBe("proxy https://[redacted]@proxy.local refused the connection");
+});

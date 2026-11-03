@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { scrubApprovalText } from "./scrub-approval-text.js";
+import { scrubApprovalText, scrubFailureText } from "./scrub-approval-text.js";
 
 describe("scrubApprovalText", () => {
   it.each([
@@ -23,5 +23,18 @@ describe("scrubApprovalText", () => {
   it("redacts even when the sensitive name ends the current snapshot", () => {
     expect(scrubApprovalText('progress {"password')).toBe('progress {"password[redacted]');
     expect(scrubApprovalText("ordinary progress\nnext line")).toBe("ordinary progress\nnext line");
+  });
+});
+
+
+describe("scrubFailureText", () => {
+  it.each(["https://alice:hunter2@proxy.local", "Bearer abc123", "sk-abcdefghijklmnopqrstuvwx", "API_KEY=secret123", 'password="secret value"'])('redacts credentials in %s', (value) => {
+    expect(scrubFailureText(value)).toContain("[redacted]");
+    expect(scrubFailureText(value)).not.toContain("secret123");
+    expect(scrubFailureText(value)).not.toContain("hunter2");
+  });
+  it("preserves useful failure text and long paths", () => {
+    const reason = "session authentication failed at /a/very-long-path-with-more-than-thirty-two-characters/file: connection refused";
+    expect(scrubFailureText(reason)).toBe(reason);
   });
 });
