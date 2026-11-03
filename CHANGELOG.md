@@ -15,6 +15,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Local HTML previews can no longer load files outside their own folder (or workspace), including the app profile and shared temp folders. The restriction follows in-page navigation, and a document inside the app profile is never widened by a workspace.
 - A session host that keeps crashing now explains common startup failures.
+- Keep preview console messages visible after debugger detachment without duplicating them on reconnect.
 - Keep preview errors visible during noisy logs and retain resource diagnostics and readable collection values.
 - Group preview warnings and errors in a collapsible chat row, keeping routine console messages in the preview console.
 - Show readable preview console objects in the console panel and browser tools.
