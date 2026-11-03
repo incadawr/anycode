@@ -20,6 +20,7 @@
 import { z } from "zod";
 import type { EngineProfileInfo, SubagentOutcome, SubagentProgress } from "../ports/subagent.js";
 import type {
+  SessionProfileRestrictions,
   SessionSubagentOutcome,
   SessionSubagentPort,
   SessionSubagentRequest,
@@ -47,15 +48,14 @@ import type { AgentProfileEffort } from "./personas.js";
  * PersonaDefinition, F13) that both `buildAgentBridgeToolDecl` (the enum +
  * description text) and `runAgentBridgeCall` (agent_type resolution + request
  * building) consume. Deliberately narrower than PersonaDefinition — `tools`
- * are irrelevant to a session-tier child that boots its own host (§2.2), so
- * they are not carried here; `maxTurns` IS carried: a session
- * child's host consumes the profile's turn budget (core AgentLoopConfig /
- * claude --max-turns).
+ * and permission restrictions are carried to core session children along
+ * with the profile turn budget.
  */
 export interface AgentBridgeCatalogEntry {
   /** Profile name — the value the model must pass as `agent_type` (also the one JSON-Schema enum member it names). */
   name: string;
   description: string;
+  restrictions?: SessionProfileRestrictions;
   /** Absent = a core profile (an AnyCode persona, in-process or its own child session); present = a foreign-CLI md-profile (profiles.ts `engine:` frontmatter). */
   engine?: "claude" | "codex";
   /** Default model id for this profile's children (frontmatter `model:`); absent = inherit the parent's/host's default. */
@@ -182,6 +182,7 @@ export interface BuildSessionSubagentRequestParams {
   /** The caller's own model override (an explicit `Agent(model:…)` argument, or the bridge call's own `model` field) — NOT yet resolved against `profile.model`. */
   model?: string;
   spawnToolCallId: string;
+  restrictions?: SessionProfileRestrictions;
   profile?: { systemPrompt: string; model?: string; engine?: EngineProfileInfo["engine"] };
   /** The profile's own `effort:` frontmatter, if any. */
   effort?: AgentProfileEffort;
@@ -197,7 +198,7 @@ export interface BuildSessionSubagentRequestParams {
  * added by each caller that honors it (agent.ts, `runAgentBridgeCall`).
  */
 export function buildSessionSubagentRequest(params: BuildSessionSubagentRequestParams): SessionSubagentRequest {
-  const { agentType, description, prompt, model, spawnToolCallId, profile, effort, maxTurns } = params;
+  const { agentType, description, prompt, model, spawnToolCallId, profile, effort, maxTurns, restrictions } = params;
   // Model precedence (model plumbing fix, unchanged by this extraction): an
   // explicit override always outranks the profile's own frontmatter default.
   const resolvedModel = model ?? profile?.model;
@@ -206,6 +207,7 @@ export function buildSessionSubagentRequest(params: BuildSessionSubagentRequestP
     description,
     prompt: profile !== undefined && (profile.engine !== undefined || profile.systemPrompt.trim()) ? `${profile.systemPrompt}\n\n---\n\n${prompt}` : prompt,
     spawnToolCallId,
+    ...(restrictions !== undefined ? { restrictions, nativeRestrictionsUnsupported: true } : {}),
     ...(resolvedModel !== undefined ? { model: resolvedModel } : {}),
     ...(profile?.engine !== undefined ? { engine: profile.engine } : {}),
     // Preserve the declared tier until the target model is known.
@@ -636,6 +638,7 @@ export async function runAgentBridgeCall(
     model: continueSession === undefined ? input.model : undefined,
     spawnToolCallId: deps.spawnToolCallId,
     profile,
+    ...(continueSession === undefined && entry.restrictions !== undefined ? { restrictions: entry.restrictions } : {}),
     // A continued child keeps the tier its session was started on.
     ...(continueSession === undefined && entry.effort !== undefined ? { effort: entry.effort } : {}),
     // the profile's turn budget rides only the CREATING spawn —
@@ -654,6 +657,10 @@ export async function runAgentBridgeCall(
     ...(input.detach === true ? { detach: true } : {}),
     ...(continueSession !== undefined ? { resumeChildSessionId: continueSession } : {}),
   };
+
+  if (request.engine !== undefined && request.nativeRestrictionsUnsupported) {
+    return { text: "Agent: native engine children cannot enforce this profile’s tool or permission restrictions.", isError: true };
+  }
 
   const controller = new AbortController();
   const unlink = deps.signal !== undefined ? linkAbortSignal(deps.signal, controller) : () => {};

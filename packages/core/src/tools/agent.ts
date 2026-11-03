@@ -236,13 +236,6 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
       const engineProfile = ctx.subagents?.engineProfile?.(agentType) ?? null;
       const restricted = (ctx.subagents?.hasSessionRestrictions?.(agentType) ?? false) ||
         (ctx.subagents?.sessionRestrictions?.(agentType)?.readOnly ?? ["explore", "planner", "reviewer"].includes(agentType));
-      if (engineProfile !== null && restricted && input.continue_session === undefined && input.send_to === undefined) {
-        return {
-          ok: false,
-          errorKind: "invalid_input",
-          error: `Agent: profile "${agentType}" has tool or permission restrictions that native engine children cannot enforce; use a core profile or do the work yourself.`,
-        };
-      }
       // GitHub #17 slice C: detach-by-default is MECHANICAL and
       // no longer gated on an orchestrate session. A session-tier Agent call
       // explicitly requesting session (and an engine profile, which always runs as a child session) with no
@@ -306,6 +299,10 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
         // runs that entry through the route stamping. A healthy primary (no
         // skips) and a md-claimed profile (null route) keep the profile request.
         const engineRoute = ctx.subagents?.resolveRoleRoute?.(agentType) ?? null;
+        const selectsNative = engineRoute === null || engineRoute.skipped.length === 0 || engineRoute.entries[0]?.engine !== undefined;
+        if (restricted && selectsNative) {
+          return { ok: false, errorKind: "invalid_input", error: `Agent: profile "${agentType}" has tool or permission restrictions that native engine children cannot enforce; use a core profile or do the work yourself.` };
+        }
         if (engineRoute !== null && engineRoute.skipped.length > 0) {
           const degrade = {
             systemPrompt: engineProfile.systemPrompt,
@@ -493,10 +490,6 @@ async function runInlineTier(
  * built for EngineChildSpec.prompt — I3) and `engine` is stamped onto the
  * request. Every other field/behavior below is unchanged.
  */
-function restrictedForNative(ctx: ToolContext, agentType: string, readOnly: boolean): boolean {
-  return readOnly || (ctx.subagents?.hasSessionRestrictions?.(agentType) ?? false);
-}
-
 async function runSessionTier(
   input: AgentInput,
   ctx: ToolContext,
@@ -570,11 +563,10 @@ async function runSessionTier(
     return { ok: false, errorKind: "invalid_input", error: `Agent: profile "${agentType}" restrictions are unavailable for this child session.` };
   }
   const restrictions = resolvedRestrictions ??
-    (isKnownPersona(agentType) && ["explore", "planner", "reviewer"].includes(agentType)
+    (ctx.subagents?.sessionRestrictions === undefined && isKnownPersona(agentType) && ["explore", "planner", "reviewer"].includes(agentType)
       ? { tools: [...getPersona(agentType).tools], readOnly: true } : undefined);
   const request: SessionSubagentRequest = {
-    ...(resumeChildSessionId === undefined && engineProfile === undefined && restrictions !== undefined
-      ? { restrictions, ...(restrictedForNative(ctx, agentType, restrictions.readOnly) ? { nativeRestrictionsUnsupported: true } : {}) } : {}),
+
     // a continuation branches the request build rather than
     // post-patching the spread — a resumed child keeps its own profile body
     // and model (both already in its history), so NEITHER a model override
@@ -599,6 +591,7 @@ async function runSessionTier(
           prompt: degrade !== undefined ? `${degrade.systemPrompt}\n\n---\n\n${input.prompt}` : input.prompt,
           model: input.model,
           spawnToolCallId: ctx.toolCallId,
+          ...(restrictions !== undefined ? { restrictions } : {}),
           profile: engineProfile ?? (coreProfile !== undefined && roleRoute !== undefined
             ? { systemPrompt: coreProfile.systemPrompt }
             : coreProfile),
