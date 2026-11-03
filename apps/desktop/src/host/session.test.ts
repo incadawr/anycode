@@ -2401,7 +2401,7 @@ describe("Session — shell capability projection & git-user-mutation gate (desi
       port.send({ type: "ui_ready" });
       port.send({ type: "background_agent_request", spawnToolCallIds: ["one", "two"] });
       expect(moved).toEqual(["one", "two"]);
-      port.send({ type: "background_agent_request", spawnToolCallIds: [""], extra: true });
+      port.send({ type: "background_agent_request", spawnToolCallIds: [""] });
       expect(moved).toEqual(["one", "two"]);
     });
 
