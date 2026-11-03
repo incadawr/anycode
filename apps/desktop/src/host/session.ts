@@ -56,6 +56,7 @@ import type {
   FileSystemPort,
   FinalTextAccumulator,
   HistoryItem,
+  TurnErrorRecord,
   ImageAttachment,
   LspServerStatus,
   PermissionMode,
@@ -868,6 +869,7 @@ export interface SessionOptions {
   initialTitle?: string;
   /** Narrow persistence callback for title/mode patches (design §4.2). */
   persistence?: SessionPersistence;
+  saveTurnError?: (record: TurnErrorRecord) => Promise<void>;
   /**
    * GitHub #36: the durable presentation records of this session's compactions
    * (host/compaction-records.ts). Wired for the core boot, whose `compaction_end`
@@ -1318,6 +1320,7 @@ export class Session {
   private model: string;
   private readonly sessionId: string;
   private readonly persistence: SessionPersistence | undefined;
+  private readonly saveTurnError: SessionOptions["saveTurnError"];
   /** GitHub #36: durable compaction rows; see SessionOptions.compactionRecords. */
   private readonly compactionRecords: CompactionRecordSeam | undefined;
   /**
@@ -1814,6 +1817,7 @@ export class Session {
     this.saveContextUsage = options.saveContextUsage;
     this.checkpointContextUsage = options.initialContextUsage ?? null;
     this.persistence = options.persistence;
+    this.saveTurnError = options.saveTurnError;
     this.compactionRecords = options.compactionRecords;
     this.usageAudit = options.usageAudit;
     this.rules = options.rules;
@@ -5178,6 +5182,14 @@ export class Session {
     let lastCompletedText: { text: string; truncated: boolean } | null = null;
     let nativeTurnId: string | null = null;
     let turnErrorText: string | null = null;
+    let turnError: { name: string; message: string; code?: string } | undefined;
+    const persistTurnError = async () => {
+      if (!this.saveTurnError) return;
+      const redact = (value: string) => value.replace(/\bsk-[a-z0-9_-]+/gi, "[redacted]").replace(/\bBearer\s+[^\s,;]+/gi, "Bearer [redacted]");
+      const error = turnError ?? { name: "AgentError", message: "The agent request failed." };
+      const record: TurnErrorRecord = { kind: "turn_error", id: randomUUID(), createdAt: Date.now(), turnId, engine: this.engine.id, model: redact(this.model), error: { name: error.name, message: redact(error.message), ...(error.code && /^[a-z_0-9]{1,80}$/.test(error.code) && !/^sk-/i.test(error.code) ? { code: error.code } : {}) } };
+      try { await this.saveTurnError(record); } catch (error) { console.error(`[host] turn error persistence failed: ${describeError(error)}`); }
+    };
     const recordResult = (terminalReason: SessionPublicResult["terminalReason"]) => {
       this.latestPublicResult = { source: "live_turn", turnId, requestId, nativeTurnId, terminalReason, publicAnswer: lastCompletedText?.text ?? ((this.engine.id === "codex" || this.engine.id === "core") && terminalReason === "error" ? turnErrorText : null), truncated: lastCompletedText?.truncated ?? false, completedAt: Date.now() };
       this.rememberTurnResult(turnId, this.latestPublicResult);
@@ -5262,9 +5274,12 @@ export class Session {
         }
         if (event.type === "error") {
           const wire = sanitizeAgentEvent(event, this.engine.id);
-          if (wire.type === "error") turnErrorText = wire.error.message;
+          if (wire.type === "error") { turnErrorText = wire.error.message; turnError = wire.error; }
         }
-        if (event.type === "loop_end") recordResult(event.reason);
+        if (event.type === "loop_end") {
+          recordResult(event.reason);
+          if (event.reason === "error") await persistTurnError();
+        }
         // the foreign-engine telemetry seam — see SessionOptions.
         // eventTap's own doc/invariant comment. Fires for every event this
         // loop observes (covers continueTurn too, since it drives the same
@@ -5520,7 +5535,10 @@ export class Session {
     } catch (error) {
       // runTurn is designed never to throw (it maps failures to loop_end), so
       // this is a defensive net; the host must not crash on a rogue turn.
+      const wire = sanitizeAgentEvent({ type: "error", error }, this.engine.id);
+      if (wire.type === "error") { turnError = wire.error; turnErrorText = wire.error.message; }
       recordResult("error");
+      await persistTurnError();
       this.outbound.emit({ type: "fatal", message: `turn failed: ${describeError(error)}` });
     }
   }

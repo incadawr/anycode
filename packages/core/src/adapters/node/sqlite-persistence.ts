@@ -1208,7 +1208,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       if ((session.engineId !== undefined && session.engineId !== "core") || session.externalSessionRef !== undefined) {
         throw new Error("Cannot resume: this session belongs to another engine or has incompatible native session metadata. Choose a core session or start a new session explicitly.");
       }
-      const rows = db.prepare("SELECT data FROM history_items WHERE session_id = ? ORDER BY seq ASC").all(id) as unknown as { data: string }[];
+      const rows = db.prepare("SELECT data FROM history_items WHERE session_id = ? AND COALESCE(json_extract(data, '$.kind'), '') != 'turn_error' ORDER BY seq ASC").all(id) as unknown as { data: string }[];
       return { session, history: rows.map((item) => JSON.parse(item.data) as HistoryItem) };
     });
   }
@@ -1589,7 +1589,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   /** Atomic swap of the whole history (compaction): DELETE + re-INSERT in one transaction. */
   async replaceHistory(sessionId: string, items: readonly HistoryItem[]): Promise<void> {
     this.transaction((db) => {
-      db.prepare("DELETE FROM history_items WHERE session_id = ?").run(sessionId);
+      db.prepare("DELETE FROM history_items WHERE session_id = ? AND COALESCE(json_extract(data, '$.kind'), '') != 'turn_error'").run(sessionId);
       const stmt = db.prepare("INSERT INTO history_items (session_id, item_id, data) VALUES (?, ?, ?)");
       for (const item of items) {
         stmt.run(sessionId, item.id, JSON.stringify(item));
@@ -1601,9 +1601,19 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   async loadHistory(sessionId: string): Promise<HistoryItem[]> {
     const db = this.open();
     const rows = db
-      .prepare("SELECT data FROM history_items WHERE session_id = ? ORDER BY seq ASC")
+      .prepare("SELECT data FROM history_items WHERE session_id = ? AND COALESCE(json_extract(data, '$.kind'), '') != 'turn_error' ORDER BY seq ASC")
       .all(sessionId) as unknown as { data: string }[];
     return rows.map((row) => JSON.parse(row.data) as HistoryItem);
+  }
+
+  async appendTurnError(sessionId: string, record: import("../../types/history.js").TurnErrorRecord): Promise<void> {
+    const db = this.open();
+    db.prepare("INSERT INTO history_items (session_id, item_id, data) VALUES (?, ?, ?)").run(sessionId, record.id, JSON.stringify(record));
+  }
+
+  async loadTurnErrors(sessionId: string): Promise<import("../../types/history.js").TurnErrorRecord[]> {
+    const rows = this.open().prepare("SELECT data FROM history_items WHERE session_id = ? AND json_extract(data, '$.kind') = 'turn_error' ORDER BY seq ASC").all(sessionId) as unknown as { data: string }[];
+    return rows.map((row) => JSON.parse(row.data) as import("../../types/history.js").TurnErrorRecord);
   }
 
   /**

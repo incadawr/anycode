@@ -1790,6 +1790,7 @@ async function bootCodexSession(
     workspace,
     model: connected.model,
     sessionId: connected.sessionMeta.id,
+    saveTurnError: (record) => persistence!.appendTurnError(connected.sessionMeta.id, record),
     ...await contextSnapshotOptions(persistence!, connected.sessionMeta.id, "codex", connected.model, undefined, connected.initialContextUsage),
     usageAudit: codexUsageAudit,
     // Codex owns native thread history; never an AgentLoop history — this is
@@ -2557,6 +2558,7 @@ async function bootClaudeSession(
   session = new Session({
     workspaceTrustRequired: workspaceTrustRequiredMessage,
     usageAudit: claudeUsageAudit,
+    saveTurnError: async (record) => { await rowWriter.settled(); await persistence!.appendTurnError(rowId, record); },
     outbound,
     engine: booted.engine,
     // CC-D-min: the RAW ClaudeEngine, Claude's own immediate-apply seam (never
@@ -4799,6 +4801,7 @@ async function boot(): Promise<void> {
       // selectedReasoningEffort seed). set_reasoning_effort keeps it in sync.
       selectedEffort,
       sessionId,
+      saveTurnError: (record) => persistence!.appendTurnError(sessionId, record),
       bootHistory,
       // S4: dev/automation-ONLY replay-recording override, resolved
       // here (the composition root) and never inside Session itself.
