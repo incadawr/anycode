@@ -1710,6 +1710,9 @@ async function buildHostEnvFor(current: AnycodeSettings): Promise<NodeJS.Process
     recognizerCatalogFor: resolveCatalog,
   });
   applySubagentsHomeOverride(env, (selfCheckProfile ?? resolveSubagentsHome(bootEnv, app.isPackaged)));
+  const skillsHome = selfCheckProfile ?? resolveSkillsImportHome(bootEnv, app.isPackaged);
+  if (skillsHome === null || skillsHome === undefined) delete env.ANYCODE_SKILLS_IMPORT_HOME;
+  else env.ANYCODE_SKILLS_IMPORT_HOME = skillsHome;
   // W4-F0b host lever forward (Fable ruling iter-10): set-or-DELETE, so a raw
   // ambient var can never ride the bootEnv spread into a host fork ungated.
   // Consumes the module-scope `codexProfilesHome` const (W4-F0d single eager

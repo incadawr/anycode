@@ -17,6 +17,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Keep user skill discovery inside the configured isolated profile.
+
 - Show subagent activity in the dock and allow splitting the active panel alongside a preview.
 
 - Keep orchestrated sessions in orchestrate mode and ask before side-effecting actions while allowing local previews.

@@ -445,10 +445,10 @@ const ENV_PERMISSION_CLASSIFIER = "ANYCODE_PERMISSION_CLASSIFIER";
  */
 /** `<on|off>:<modelId>`, the drawer's per-model override (main/host-env.ts). */
 const ENV_IMAGE_INPUT_MODEL_OVERRIDE = "ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE";
-import { resolveExtensionsHomeOverride, resolveSessionHistoryMaxItems } from "./dev-home.js";
+import { resolveExtensionsHomeOverride, resolveSkillsHomeOverride, resolveSessionHistoryMaxItems } from "./dev-home.js";
 
 function hostProfileHome(): string {
-  return resolveExtensionsHomeOverride(process.env) ?? homedir();
+  return resolveExtensionsHomeOverride(process.env) ?? resolveSkillsHomeOverride(process.env) ?? homedir();
 }
 import { buildCheckpointService } from "./checkpoints.js";
 import { GitBridge } from "./git-bridge.js";
@@ -3717,6 +3717,7 @@ async function boot(): Promise<void> {
       ext = await discoverExtensions(fsAdapter, {
         workspace,
         home: hostProfileHome(),
+        skillsHome: resolveSkillsHomeOverride(process.env) ?? hostProfileHome(),
         claimedMcpNames: new Set(mcpSpecs.map((spec) => spec.name)),
         loginPath: mcpLoginPath,
         repoMapConfig,
