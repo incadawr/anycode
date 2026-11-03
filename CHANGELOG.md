@@ -13,6 +13,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Keep background agent tool counts current after a burst of tool calls.
+
 - Refuse session delegation when it would discard an inline profile's restrictions.
 
 - Give actionable alternatives when a connection-bound agent cannot be spawned.
