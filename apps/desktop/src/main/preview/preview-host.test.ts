@@ -81,6 +81,9 @@ class FakeWebContents implements PreviewWebContentsLike {
   backgroundThrottlingCalls: boolean[] = [];
   windowOpenHandler?: (details: { url: string }) => { action: "deny" };
   permissionRequestHandler?: (permission: string, callback: (granted: boolean) => void) => void;
+  permissionCheckHandler?: (permission: string, requestingOrigin: string) => boolean;
+  devicePermissionHandler?: () => boolean;
+  displayMediaRequestHandler?: (callback: (streams: { video?: unknown; audio?: unknown }) => void) => void;
   capturePageImpl: () => Promise<PreviewCapturedImage> = () => Promise.resolve(fakeImage());
   /** D18: consumed in order — each queued error rejects the NEXT `capturePage()` call instead of running `capturePageImpl`. */
   captureRejections: Error[] = [];
@@ -134,6 +137,15 @@ class FakeWebContents implements PreviewWebContentsLike {
   }
   setPermissionRequestHandler(handler: (permission: string, callback: (granted: boolean) => void) => void): void {
     this.permissionRequestHandler = handler;
+  }
+  setPermissionCheckHandler(handler: (permission: string, requestingOrigin: string) => boolean): void {
+    this.permissionCheckHandler = handler;
+  }
+  setDevicePermissionHandler(handler: () => boolean): void {
+    this.devicePermissionHandler = handler;
+  }
+  setDisplayMediaRequestHandler(handler: (callback: (streams: { video?: unknown; audio?: unknown }) => void) => void): void {
+    this.displayMediaRequestHandler = handler;
   }
   onDidFinishLoad(listener: () => void): void {
     this.didFinishLoad.push(listener);
@@ -530,6 +542,58 @@ describe("PreviewHost — window security invariants (cut §2.5, non-negotiable)
       });
       expect(granted).toBe(false);
     }
+  });
+
+  it("wires setPermissionCheckHandler to synchronously deny every permission, incl. unknown strings", async () => {
+    const rig = makeRig();
+    void rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    const win = rig.windows[0]!;
+    for (const permission of [
+      "camera",
+      "microphone",
+      "clipboard-read",
+      "geolocation",
+      "notifications",
+      "hid",
+      "usb",
+      "serial",
+      "totally-unknown-permission",
+    ]) {
+      expect(win.webContents.permissionCheckHandler?.(permission, "https://evil.example")).toBe(false);
+    }
+  });
+
+  it("wires setDevicePermissionHandler to deny", async () => {
+    const rig = makeRig();
+    void rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    expect(rig.windows[0]!.webContents.devicePermissionHandler?.()).toBe(false);
+  });
+
+  it("wires setDisplayMediaRequestHandler to deny with an empty stream set", async () => {
+    const rig = makeRig();
+    void rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    const streams = vi.fn();
+    rig.windows[0]!.webContents.displayMediaRequestHandler?.(streams);
+    expect(streams).toHaveBeenCalledWith({});
+  });
+
+  it("full access grants no system permissions — all four permission handlers still deny", async () => {
+    const rig = makeRig({ fullAccess: () => true });
+    void rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    const win = rig.windows[0]!;
+    const granted = await new Promise<boolean>((resolve) => {
+      win.webContents.permissionRequestHandler?.("camera", resolve);
+    });
+    expect(granted).toBe(false);
+    expect(win.webContents.permissionCheckHandler?.("camera", "https://evil.example")).toBe(false);
+    expect(win.webContents.devicePermissionHandler?.()).toBe(false);
+    const streams = vi.fn();
+    win.webContents.displayMediaRequestHandler?.(streams);
+    expect(streams).toHaveBeenCalledWith({});
   });
 });
 
@@ -3124,6 +3188,54 @@ describe("PreviewHost — panel container: security regression (invariant 7, sam
       });
       expect(granted).toBe(false);
     }
+  });
+
+  it("wires setPermissionCheckHandler to synchronously deny every permission, incl. unknown strings", async () => {
+    const { view } = await openedPanelRig();
+    for (const permission of [
+      "camera",
+      "microphone",
+      "clipboard-read",
+      "geolocation",
+      "notifications",
+      "hid",
+      "usb",
+      "serial",
+      "totally-unknown-permission",
+    ]) {
+      expect(view.webContents.permissionCheckHandler?.(permission, "https://evil.example")).toBe(false);
+    }
+  });
+
+  it("wires setDevicePermissionHandler to deny", async () => {
+    const { view } = await openedPanelRig();
+    expect(view.webContents.devicePermissionHandler?.()).toBe(false);
+  });
+
+  it("wires setDisplayMediaRequestHandler to deny with an empty stream set", async () => {
+    const { view } = await openedPanelRig();
+    const streams = vi.fn();
+    view.webContents.displayMediaRequestHandler?.(streams);
+    expect(streams).toHaveBeenCalledWith({});
+  });
+
+  it("full access grants no system permissions — all four permission handlers still deny", async () => {
+    const rig = makeRig({ fullAccess: () => true });
+    rig.displayModeValue.value = "panel";
+    const openPromise = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    const view = rig.panelViews[0]!;
+    view.webContents.fireDidFinishLoad();
+    await openPromise;
+    const granted = await new Promise<boolean>((resolve) => {
+      view.webContents.permissionRequestHandler?.("camera", resolve);
+    });
+    expect(granted).toBe(false);
+    expect(view.webContents.permissionCheckHandler?.("camera", "https://evil.example")).toBe(false);
+    expect(view.webContents.devicePermissionHandler?.()).toBe(false);
+    const streams = vi.fn();
+    view.webContents.displayMediaRequestHandler?.(streams);
+    expect(streams).toHaveBeenCalledWith({});
   });
 
   it("will-navigate: allows a file under an allowed root, denies one outside", async () => {
