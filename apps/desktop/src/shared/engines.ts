@@ -46,6 +46,28 @@ export const ENV_CODEX_PROXY_URL = "ANYCODE_CODEX_PROXY_URL";
 export const ENV_CLAUDE_PROXY_URL = "ANYCODE_CLAUDE_PROXY_URL";
 
 /**
+ * Carrier for `settings.claude.contextWindowTokens` (a session context-window
+ * LIMIT, not a proxy decision). Main stamps it into every fork — the same
+ * every-fork rule as the two binary paths and the proxy carriers, since a
+ * Claude engine child or Claude subagent can be spawned from any tab — and
+ * `buildClaudeChildEnv` translates it into the CLI's
+ * `CLAUDE_CODE_AUTO_COMPACT_WINDOW`. Never forwarded to the child under its
+ * carrier name; a malformed value is dropped by the builder (fail-soft "CLI
+ * default"), same posture as the proxy carriers.
+ */
+export const ENV_CLAUDE_CONTEXT_WINDOW = "ANYCODE_CLAUDE_CONTEXT_WINDOW";
+
+/**
+ * Bounds of the Claude CLI's `CLAUDE_CODE_AUTO_COMPACT_WINDOW` variable — its
+ * own parser accepts 100k–1M tokens and ignores anything else, so every writer
+ * (the settings schema, the settings-set gate, the child-env builder) shares
+ * this exact range: a value outside it must never be persisted or emitted,
+ * because the setting would silently apply nothing.
+ */
+export const CLAUDE_CONTEXT_WINDOW_MIN = 100_000;
+export const CLAUDE_CONTEXT_WINDOW_MAX = 1_000_000;
+
+/**
  * The carrier namespace as one unit — see `stripEngineProxyCarriers`.
  *
  * (design review B-02) widened what a carrier SAYS without adding a
