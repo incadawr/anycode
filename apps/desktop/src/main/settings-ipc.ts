@@ -27,6 +27,7 @@ import { ipcMain } from "electron";
 import { z } from "zod";
 import { mergeModelIds, normalizeModelId } from "../shared/settings.js";
 import { patchModelOverride } from "../shared/model-overrides.js";
+import { CLAUDE_CONTEXT_WINDOW_MAX, CLAUDE_CONTEXT_WINDOW_MIN } from "../shared/engines.js";
 import { SESSION_LIMIT_RANGES } from "../shared/session-limits.js";
 import type { FileIoLogger } from "../settings/files.js";
 import { loadSettings, saveSettings, withSettingsFileLock } from "../settings/files.js";
@@ -1073,6 +1074,32 @@ export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<Se
     return { ok: false, reason: "invalid" };
   }
 
+  // `settings.claude.contextWindowTokens` rides the generic patch channel
+  // under the sessionLimits discipline: a NUMBER outside the CLI's accepted
+  // 100k–1M range is refused loudly, never persisted (the field's per-field
+  // catch would otherwise let a junk value through the whole-document gate
+  // into the file, where it reads back as "not configured" and silently
+  // applies nothing). `""` is the CLEAR sentinel — deepMerge cannot delete a
+  // key, so the value is stripped from the patch here and the persisted key
+  // is removed from the merged document after the merge (the connection
+  // channel's `contextWindowTokens` field uses the same "" convention).
+  let claudeClearsContextWindow = false;
+  if (isPlainObjectLike(rawPatch.claude) && "contextWindowTokens" in rawPatch.claude) {
+    const requested = (rawPatch.claude as Record<string, unknown>).contextWindowTokens;
+    if (requested === "") {
+      const { contextWindowTokens: _cleared, ...restClaude } = rawPatch.claude;
+      (rawPatch as Record<string, unknown>).claude = restClaude;
+      claudeClearsContextWindow = true;
+    } else if (
+      typeof requested !== "number" ||
+      !Number.isInteger(requested) ||
+      requested < CLAUDE_CONTEXT_WINDOW_MIN ||
+      requested > CLAUDE_CONTEXT_WINDOW_MAX
+    ) {
+      return { ok: false, reason: "invalid" };
+    }
+  }
+
   return withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
@@ -1094,6 +1121,9 @@ export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<Se
       }
     }
     const merged = mergeSettings(settings, patch);
+    if (claudeClearsContextWindow && isPlainObjectLike(merged.claude)) {
+      delete merged.claude.contextWindowTokens;
+    }
     // Safety gate (§5.2 layer 2): validate the WHOLE merged object before it is
     // written. A type/enum violation in ANY section is refused `invalid` rather
     // than persisted — an unvalidated write would fail schema parse on the next

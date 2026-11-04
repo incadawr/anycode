@@ -881,6 +881,18 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
         proxyUrl: z.string().optional(),
         // Proxy-registry reference — mirror of `codex.proxyRef`.
         proxyRef: z.string().optional(),
+        // Context-window limit (tokens) for Claude sessions: rides the
+        // `ANYCODE_CLAUDE_CONTEXT_WINDOW` carrier into the CLI as
+        // `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, capping the ctx meter and the
+        // CLI's own auto-compact threshold. Absent = the CLI's own default.
+        // Bounds mirror `CLAUDE_CONTEXT_WINDOW_MIN/MAX` in shared/engines.ts
+        // by contract (local literals — this module only type-imports from
+        // shared): the CLI ignores values outside its accepted 100k–1M
+        // range, so one must not be persistable. Per-field catch (env
+        // `contextWindowTokens` precedent): a corrupt hand-edited value
+        // degrades to "not configured" alone instead of tripping the outer
+        // block salvage that would drop `lastCheck`/`binaryPath`.
+        contextWindowTokens: z.number().int().min(100_000).max(1_000_000).optional().catch(undefined),
       })
       .optional()
       // Same functional-field salvage as `codex` above (design review B-07).

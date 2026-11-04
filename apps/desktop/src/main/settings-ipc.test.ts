@@ -847,6 +847,48 @@ describe("handleSet — sessionLimits", () => {
   });
 });
 
+describe("handleSet — claude.contextWindowTokens", () => {
+  it("persists a valid limit and it survives a REAL reload", async () => {
+    const res = await handleSet(makeDeps(), { claude: { contextWindowTokens: 260000 } });
+    expect(res.ok).toBe(true);
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.claude?.contextWindowTokens).toBe(260000);
+  });
+
+  it("merges beside the other engine fields without touching them", async () => {
+    await handleSet(makeDeps(), { claude: { binaryPath: "/usr/local/bin/claude" } });
+    const res = await handleSet(makeDeps(), { claude: { contextWindowTokens: 200000 } });
+    expect(res.ok).toBe(true);
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.claude?.binaryPath).toBe("/usr/local/bin/claude");
+    expect(loaded.settings.claude?.contextWindowTokens).toBe(200000);
+  });
+
+  it("refuses out-of-range / fractional / wrong-typed values with the file byte-identical", async () => {
+    await handleSet(makeDeps(), { ui: { theme: "dark" } }); // seed a baseline file
+    const before = await readFile(settingsPath, "utf8");
+    for (const value of [99999, 1000001, 2.5, "260000"]) {
+      const res = await handleSet(makeDeps(), { claude: { contextWindowTokens: value } });
+      expect(res).toEqual({ ok: false, reason: "invalid" });
+    }
+    const after = await readFile(settingsPath, "utf8");
+    expect(after).toBe(before);
+  });
+
+  it('the "" sentinel deletes the persisted key; without a prior value it is a no-op', async () => {
+    await handleSet(makeDeps(), { claude: { contextWindowTokens: 260000 } });
+    const cleared = await handleSet(makeDeps(), { claude: { contextWindowTokens: "" } });
+    expect(cleared.ok).toBe(true);
+    const afterClear = await loadSettings(settingsPath);
+    expect(afterClear.settings.claude?.contextWindowTokens).toBeUndefined();
+    expect(JSON.parse(await readFile(settingsPath, "utf8")).claude).toEqual({});
+
+    const noop = await handleSet(makeDeps(), { claude: { contextWindowTokens: "" } });
+    expect(noop.ok).toBe(true);
+    expect((await loadSettings(settingsPath)).settings.claude?.contextWindowTokens).toBeUndefined();
+  });
+});
+
 describe("handleSwapCodexBinaryPath — compare-and-set under the settings lock", () => {
   const OLD = "/home/u/.anycode/codex/bin/0.144.3/vendor/aarch64-apple-darwin/bin/codex";
   const NEW = "/home/u/.anycode/codex/bin/0.160.0/vendor/aarch64-apple-darwin/bin/codex";

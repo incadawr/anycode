@@ -718,6 +718,18 @@ export interface AnycodeSettings {
     proxyUrl?: string;
     /** Reference into the named proxy registry — the exact mirror of `codex.proxyRef`; read that field's doc. */
     proxyRef?: string;
+    /**
+     * Context-window limit (tokens) for Claude sessions — main stamps it
+     * into every host fork under `ANYCODE_CLAUDE_CONTEXT_WINDOW` and the
+     * claude child-env builder turns it into the CLI's
+     * `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, which caps both the context meter
+     * and the CLI's own auto-compact threshold (the CLI clamps the value to
+     * the running model's window). Absent means the CLI's own default — the
+     * same "empty = as the CLI reports" discipline as the provider
+     * `contextWindowTokens` override. Bounds mirror the CLI's accepted
+     * range, so any persisted value is one the CLI honors.
+     */
+    contextWindowTokens?: number;
   };
   /**
    * Named proxy profiles + the APP-level reference (редакция 2;
