@@ -70,7 +70,7 @@ describe("dormant orchestration posture admission foundation", () => {
       expect(h.received.filter(m => m.type === "turn_rejected" && m.requestId === "reserved")).toEqual([]);
     } finally { h.close(); }
   });
-  it.each(["transitioning", "quarantined"] as const)("holds direct, system and initial frames in %s without claiming terminal rejection", async (posture) => {
+  it.each(["transitioning", "quarantined"] as const)("refuses direct, system and initial frames in %s before execution", async (posture) => {
     const h = createHarness({ steps: [] });
     const run = vi.spyOn(h.engine, "runTurn");
     try {
@@ -90,21 +90,23 @@ describe("dormant orchestration posture admission foundation", () => {
       expect(h.received.filter(m => m.type === "turn_started" || m.type === "turn_rejected" || m.type === "steer_requeued")).toEqual([]);
       expect(internal(h.session).acceptUserMessage("internal", "payload")).toBe(false);
 
-      // The current renderer intentionally ignores this frame diagnostic: it
-      // must not turn an old started/unknown ID into a fabricated rejection.
+      // A correlated pending frame was refused before admission. Preserve user
+      // drafts and retain a system report in the retry ledger.
       const store = createDesktopStore({ schedule: () => {} });
       store.getState().applyHostMessage(ready);
       const saved = { name: "a.png", sizeBytes: 1, attachment: image };
       store.getState().recordSentMessage("direct", [saved], "direct", undefined, undefined, undefined, undefined, true);
       store.getState().applyHostMessage(await h.waitFor(diagnostic("direct")));
-      expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ requestId: "direct", status: "pending", images: [saved] });
+      expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ requestId: "direct", status: "rejected", images: [saved] });
       store.getState().recordSentMessage("initial", [saved], "initial", undefined, {});
       store.getState().applyHostMessage(await h.waitFor(diagnostic("initial")));
-      expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "initial")).toMatchObject({ status: "pending", images: [saved], initialPicks: {} });
+      expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "initial")).toMatchObject({ status: "rejected", images: [saved], initialPicks: {} });
+      store.getState().recordSentMessage("report", [], "system", undefined, {}, undefined, "child-report");
       store.setState({ queueInFlight: { requestId: "system", item: { id: "report", text: "report", images: [], origin: "system", originId: "child-report" } } });
       store.getState().applyHostMessage(await h.waitFor(diagnostic("system")));
-      expect(store.getState().queueInFlight).toMatchObject({ requestId: "system", item: { text: "report", origin: "system", originId: "child-report" } });
-      expect(store.getState().promptQueue).toEqual([]);
+      expect(store.getState().queueInFlight).toBeNull();
+      expect(store.getState().orchestrationDeliveries.find(item => item.requestId === "system")).toMatchObject({ status: "rejected", origin: "system" });
+      expect(store.getState().promptQueue.map(item => item.text)).toEqual(["initial", "direct"]);
     } finally { h.close(); }
   });
 
