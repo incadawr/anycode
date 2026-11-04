@@ -110,7 +110,8 @@ const MINIMAX_MODELS: CatalogProviderEntry["models"] = [
 const OPENCODE_KIMI_MODELS: CatalogProviderEntry["models"] = [
   { id: "kimi-k3", name: "Kimi K3", contextWindow: 1_048_576, maxOutputTokens: 131_072 },
   { id: "kimi-k3.1-pro", name: "Kimi K3.1 Pro", contextWindow: 1_048_576, maxOutputTokens: 131_072 },
-  { id: "kimi-k2.7-code", name: "Kimi K2.7 Code", contextWindow: 262_144, maxOutputTokens: 262_144 },
+  // The endpoint declares output = the whole 262,144 window; sending that as max_tokens would leave no room for the prompt, so the output cap is left unset (like the kimi.com row).
+  { id: "kimi-k2.7-code", name: "Kimi K2.7 Code", contextWindow: 262_144 },
 ];
 
 const OPENCODE_MODELS: CatalogProviderEntry["models"] = [...OPENCODE_KIMI_MODELS];

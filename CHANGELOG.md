@@ -7,7 +7,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.0.76] — 2026-11-04
+## [0.0.76] — 2026-11-05
 
 ### Security
 
@@ -15,8 +15,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- The first-run screen gains three subscription shortcuts — GLM Coding Plan, MiniMax M Plan and Kimi (kimi.com): each opens the API connection form with the provider's template preselected and a link to the provider's own key page, so pasting the subscription key, connecting and landing on the catalog's default model is one stop. The key link only shows while the form still uses the seeded template, and re-clicking the already-chosen path keeps whatever has been typed so far.
-- OpenCode Go (a subscription gateway) is available as a provider: two connections, one speaking Anthropic's protocol and one OpenAI-compatible, both sending a per-session marker and an Anycode user-agent with every request so the endpoint sees one stable identity per conversation. The Anthropic-protocol connection suggests the models the endpoint serves on that protocol natively (MiniMax M3, Qwen3.8 Max/Flash, Qwen3.7 Plus, Claude Haiku 5.5), the OpenAI-compatible one leads with Kimi, and the declared context windows follow the endpoint's own model list.
+- The first-run screen gains three subscription shortcuts — GLM Coding Plan, MiniMax M Plan and Kimi (kimi.com): each opens the API connection form with the provider's template preselected and a link to the provider's own key page, so pasting the subscription key, connecting and landing on the catalog's default model is one stop. The key link only shows while the form still uses the seeded template, and re-clicking a shortcut starts its form over from the template.
+- OpenCode Go (a subscription gateway) is available as a provider: two connections, one speaking Anthropic's protocol and one OpenAI-compatible, both sending a per-session marker and an Anycode user-agent with every request so the endpoint sees one stable identity per conversation. The Anthropic-protocol connection suggests the models the endpoint serves on that protocol natively (MiniMax M3, Qwen3.8 Max/Flash, Qwen3.7 Plus, Claude Haiku 5.5), the OpenAI-compatible one leads with Kimi (which the Anthropic-protocol connection lists after its native models, served through the endpoint's translation, not yet confirmed with a live key), and the declared context windows follow the endpoint's own model list.
 - An isolated smoke driver exercises the pinned preview loopback grant end to end against throwaway loopback fixtures (`pnpm --filter @anycode/desktop smoke:preview-loopback`), with no provider credentials or model requests.
 
 ### Fixed
