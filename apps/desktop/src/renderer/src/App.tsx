@@ -40,6 +40,7 @@ import type { DesktopPlatform, WindowState } from "../../shared/window.js";
 import { bindingFor, formatBinding, matchKeymap, resolveKeymap, type ActionId } from "./keymap.js";
 import { CommandPalette, type PaletteAction, type PaletteMode } from "./components/CommandPalette.js";
 import { handleCreateTabResult } from "./components/SessionPicker.js";
+import { resumeWithMarker } from "./pending-resumes.js";
 import { Sidebar, SIDEBAR_SEARCH_EVENT } from "./components/Sidebar.js";
 import { WindowControls } from "./components/WindowControls.js";
 import { SessionHeader } from "./components/SessionHeader.js";
@@ -1670,8 +1671,11 @@ export function App() {
   }
 
   function runResumeSession(sessionId: string, title: string | undefined): void {
-    window.anycode
-      .createTab({ kind: "resume", sessionId })
+    // The shared pending-resume seam (pending-resumes.ts): arms the marker
+    // synchronously so the sidebar folds the history row into the new tab row
+    // for the whole hydration window — same dedupe as the Sidebar's own
+    // resume path, cleared automatically on a refusal/rejection.
+    resumeWithMarker(sessionId, (request) => window.anycode.createTab(request))
       .then((result) => {
         const message = handleCreateTabResult(
           result,

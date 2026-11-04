@@ -21,6 +21,7 @@ import { fuzzyMatch, type MatchRange } from "../fuzzy.js";
 import { rowStatusKind, useTabStatusStore, type RowStatusKind } from "../tab-status-store.js";
 import { nextRovingIndex } from "./ModeMenu.js";
 import { handleCreateTabResult, resolveConnectionMissingAction } from "./SessionPicker.js";
+import { resumeWithMarker, usePendingResumes } from "../pending-resumes.js";
 import { ConfirmDialog } from "./ConfirmDialog.js";
 import { highlight } from "./highlight.js";
 import { ArrowUp, Chevron, Collapse, Cube, Dot, Ellipsis, Folder, Gear, Plus, Search, Spinner, Trash, X } from "./icons.js";
@@ -666,10 +667,12 @@ export function Sidebar({
   const statuses = useTabStatusStore((state) => state.statuses);
   const [notice, setNotice] = useState<string | null>(null);
   // Sessions currently presented by an open tab row instead of their history
-  // row: sessionId → the tabId that represents them. Recorded when a resume
-  // (or an already_open focus) lands and pruned by the effect below — see
-  // buildSidebarGroups's `opening` dedupe.
-  const [opening, setOpening] = useState<ReadonlyMap<string, string>>(() => new Map());
+  // row, from the SHARED pending-resume store (sessionId → representing
+  // tabId): every resume entry point writes it (sidebar, command palette,
+  // Codex import, automation), not just this component's own clicks — see
+  // pending-resumes.ts. buildSidebarGroups consumes the ids; the prune effect
+  // below retires settled markers.
+  const pendingResumes = usePendingResumes((state) => state.marks);
   // W10-FIX F1: a `connection_missing` resume becomes actionable — when set, the
   // notice toast offers a "Resume on the current connection" button that re-invokes
   // resume with this replacement id (an explicit user choice, never an auto-switch).
@@ -714,7 +717,7 @@ export function Sidebar({
 
   /**
    * Resume a persisted session (design §2.3). Always routes through
-   * `createTab({kind:"resume"})` + the shared `handleCreateTabResult`
+   * `resumeWithMarker` + the shared `handleCreateTabResult`
    * (already_open → onFocusTab with main's authoritative focus target,
    * failures → notice). A rendered resumable row is only ever one whose
    * `openInTabId` is unset or points at a NON-live tab (`buildSidebarGroups`
@@ -726,9 +729,11 @@ export function Sidebar({
    * NOT the "Untitled task" display fallback.
    *
    * A successful resume (or an `already_open` focus) records the session in
-   * `opening` so its stale resumable row folds into the new/existing open tab
-   * row for the whole hydration window — one row per session from the click
-   * onward, not two until the session index refetches.
+   * the shared pending-resume store (`resumeWithMarker`) so its stale
+   * resumable row folds into the new/existing open tab row for the whole
+   * hydration window — one row per session from the click onward, not two
+   * until the session index refetches. The marker is armed synchronously
+   * before the call and cleared on any refusal/rejection by the seam itself.
    */
   const resumeSession = useCallback(
     async (sessionId: string, replacementConnectionId?: string) => {
@@ -737,12 +742,7 @@ export function Sidebar({
         return;
       }
       try {
-        const result = await window.anycode.createTab({
-          kind: "resume",
-          sessionId: session.id,
-          // W10-FIX F1: explicit re-pin target (only ever set by the notice button).
-          ...(replacementConnectionId !== undefined ? { replacementConnectionId } : {}),
-        });
+        const result = await resumeWithMarker(session.id, (request) => window.anycode.createTab(request), replacementConnectionId);
         // forward the session's engine so a `not_ready` refusal on a
         // Codex session surfaces the sign-in copy, not the core provider copy.
         // Unknown/legacy engine ids fall through to undefined (historical copy).
@@ -752,14 +752,6 @@ export function Sidebar({
           { onTabCreated, onFocusTab },
           { title: session.title, ...(engine !== undefined ? { engine } : {}) },
         );
-        // The open tab row now represents this session; suppress its stale
-        // resumable row for the hydration window (pruned by the effect below).
-        const representingTabId = result.ok
-          ? result.tabId
-          : (result.reason === "already_open" ? result.focusTabId : undefined);
-        if (representingTabId !== undefined) {
-          setOpening((prev) => new Map(prev).set(session.id, representingTabId));
-        }
         setNotice(message);
         // W10-FIX F1: arm the re-pin button ONLY for connection_missing AND when a
         // current connection exists to re-pin onto; null on every other outcome.
@@ -961,24 +953,14 @@ export function Sidebar({
     }
   }, [menuFor, menuFocusIndex]);
 
-  // Retire opening markers once they have done their job: the tab bound the
-  // session (buildSidebarGroups's sessionId dedupe takes over) or the tab is
-  // gone (closed mid-hydration — the history row must come back).
+  // Retire shared opening markers once they have done their job — the store's
+  // prune: the tab bound the session (buildSidebarGroups's sessionId dedupe
+  // takes over), or the representing tab is gone / its host exited before
+  // host_ready (the history row must come back so the session can be
+  // re-resumed). Failures never change `tabs`, so the seam clears those
+  // itself (pending-resumes.ts).
   useEffect(() => {
-    setOpening((prev) => {
-      if (prev.size === 0) {
-        return prev;
-      }
-      const next = new Map<string, string>();
-      for (const [sessionId, tabId] of prev) {
-        const bound = tabs.some((t) => t.sessionId === sessionId);
-        const live = tabs.some((t) => t.tabId === tabId);
-        if (live && !bound) {
-          next.set(sessionId, tabId);
-        }
-      }
-      return next.size === prev.size ? prev : next;
-    });
+    usePendingResumes.getState().prune(tabs);
   }, [tabs]);
 
   // Persist the collapsed-group set (App's SIDEBAR_COLLAPSED_KEY effect idiom;
@@ -1033,7 +1015,7 @@ export function Sidebar({
 
   // Compose the hidden-project filter BETWEEN grouping and the search filter
 
-  const visibleGroups = applyHiddenProjects(buildSidebarGroups(tabs, sessions, undefined, new Set(opening.keys())), hiddenWorkspaces);
+  const visibleGroups = applyHiddenProjects(buildSidebarGroups(tabs, sessions, undefined, new Set(pendingResumes.keys())), hiddenWorkspaces);
   const filtering = query !== "";
   const filtered = filterSidebarGroups(visibleGroups, query);
   // "Remove project" is disabled while the open menu's project still has a live

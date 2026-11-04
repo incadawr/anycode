@@ -22,6 +22,7 @@ import type { TabInfo } from "../tabs-store.js";
 import type { SessionSummary } from "../../../shared/tabs.js";
 import type { DesktopPlatform } from "../../../shared/window.js";
 import { buildSidebarGroups, type SidebarGroup, type SidebarRow } from "./Sidebar.js";
+import { usePendingResumes } from "../pending-resumes.js";
 import { nextRovingIndex } from "./ModeMenu.js";
 import { fuzzyMatch, type MatchRange } from "../fuzzy.js";
 import { highlight } from "./highlight.js";
@@ -276,7 +277,12 @@ export function CommandPalette({
     setSelected(0);
   }, [mode]);
 
-  const groups = buildSidebarGroups(tabs, sessions);
+  // Same dedupe facts as the Sidebar: a session currently opening (the shared
+  // pending-resume marker, written by every resume entry point) or already
+  // bound folds into its open row here too, so the sessions mode never lists
+  // a session twice while it hydrates.
+  const pendingResumes = usePendingResumes((state) => state.marks);
+  const groups = buildSidebarGroups(tabs, sessions, undefined, new Set(pendingResumes.keys()));
   const tabOrder = tabs.map((t) => t.tabId);
   const rows = buildPaletteRows({ mode, query, actions, groups, tabOrder, platform });
   const selectable = rows.filter((r) => r.kind !== "group");
