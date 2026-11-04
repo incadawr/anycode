@@ -14,7 +14,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- Fixed the desktop app throwing "Object has been destroyed" in the main process (and popping the Electron error modal) when quitting with an open detached Markdown preview window; quitting now exits cleanly, and the window's access entries can no longer outlive it.
+- A detached Markdown preview window now releases its IPC access and its preview binding the moment the window closes, so neither can outlive it.
 - Scope selection for skills import and MCP add-server is honoured again: the requested folder (this computer, or the active session's folder) is picked in the Settings scope switcher before the write lands, and the action stops with a clear error instead of silently writing into another folder's config when the folder can't be selected.
 - Fixed the model pill in the composer footer sliding under the context meter in narrow windows and panes: the footer's left group now shrinks to the space it actually has, truncating the model name (full name stays on hover) instead of overlapping the context indicator. The Codex speed chip truncates the same way inside its own border, and pill labels keep a short readable stub instead of collapsing to an empty chevron.
 
