@@ -45,6 +45,10 @@ export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | nu
         preTokens: event.preTokens,
         postTokens: event.postTokens,
         durationMs: event.durationMs,
+        // Carried verbatim: core already redacts compaction errors at source
+        // (the whitelist-derived safe message), so no raw text can arrive here.
+        ...(event.error !== undefined ? { error: event.error } : {}),
+        ...(event.skipped !== undefined ? { skipped: event.skipped } : {}),
       };
     case "microcompact":
       return {

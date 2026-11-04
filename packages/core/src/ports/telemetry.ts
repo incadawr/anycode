@@ -49,7 +49,19 @@ export type TelemetryEventRecord =
   | { t: "tool"; tool: string; status: ToolCallStatus; durationMs: number }
   | { t: "loop_end"; reason: LoopEndReason; turns: number }
   | { t: "compaction_start"; trigger: "auto" | "manual" }
-  | { t: "compaction_end"; ok: boolean; preTokens?: number; postTokens?: number; durationMs: number }
+  | {
+      t: "compaction_end";
+      ok: boolean;
+      preTokens?: number;
+      postTokens?: number;
+      durationMs: number;
+      /** Failure/skip reason. Joins the classified-error-text-only rule above:
+       *  core derives it from the whitelist safe message before the event
+       *  exists, so the raw provider text never reaches this port. */
+      error?: string;
+      /** True when the cycle was a structural no-op (nothing to compact). */
+      skipped?: true;
+    }
   | { t: "microcompact"; clearedToolResults: number; savedTokens: number }
   | {
       t: "context_usage";

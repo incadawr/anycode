@@ -2,8 +2,9 @@
  * records.test.ts (slice 6.6 B7): the whitelist theorem for
  * telemetryRecordFor, verified unit-by-unit. Every mapped AgentEvent variant
  * projects field-by-field; every unmapped variant (including a synthetic
- * future one) maps to null; and a sentinel string planted in EVERY
- * text-bearing carrier never survives into the serialized record.
+ * future one) maps to null; and a sentinel string planted in every
+ * sentinel-guarded text-bearing carrier never survives into the serialized
+ * record (compaction_end.error is exempt by design — it is redacted at source).
  */
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -97,18 +98,36 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
     expect(telemetryRecordFor(event)).toEqual({ t: "compaction_start", trigger: "manual" });
   });
 
-  it("compaction_end (error dropped)", () => {
+  it("compaction_end carries the source-redacted error and the skip flag", () => {
     const event: AgentEvent = {
       type: "compaction_end",
       ok: false,
       preTokens: 1000,
-      postTokens: 400,
       durationMs: 50,
-      error: SENTINEL,
+      error: "request failed with a server error",
+      skipped: true,
     };
     expect(telemetryRecordFor(event)).toEqual({
       t: "compaction_end",
       ok: false,
+      preTokens: 1000,
+      durationMs: 50,
+      error: "request failed with a server error",
+      skipped: true,
+    });
+  });
+
+  it("compaction_end (no error/skipped -> the fields stay off)", () => {
+    const event: AgentEvent = {
+      type: "compaction_end",
+      ok: true,
+      preTokens: 1000,
+      postTokens: 400,
+      durationMs: 50,
+    };
+    expect(telemetryRecordFor(event)).toEqual({
+      t: "compaction_end",
+      ok: true,
       preTokens: 1000,
       postTokens: 400,
       durationMs: 50,
@@ -562,7 +581,7 @@ describe("telemetryRecordFor — unmapped variants -> null (fail-closed)", () =>
   });
 });
 
-describe("telemetryRecordFor — sentinel-leak invariant across every text carrier", () => {
+describe("telemetryRecordFor — sentinel-leak invariant across sentinel-guarded text carriers", () => {
   function assertNoLeak(event: AgentEvent): void {
     const rec = telemetryRecordFor(event);
     const serialized = JSON.stringify(rec);
@@ -584,14 +603,10 @@ describe("telemetryRecordFor — sentinel-leak invariant across every text carri
         durationMs: 1,
       },
     }));
-  it("compaction_end.error", () =>
-    assertNoLeak({
-      type: "compaction_end",
-      ok: false,
-      preTokens: 1,
-      durationMs: 1,
-      error: SENTINEL,
-    }));
+  // compaction_end.error is the one text carrier that PASSES THROUGH by
+  // design: core redacts it at source (the whitelist-derived safe message)
+  // before the event exists, so the sentinel invariant does not apply here —
+  // that redaction contract is pinned by ContextManager's own test instead.
   it("subagent_start.description", () =>
     assertNoLeak({ type: "subagent_start", toolCallId: "1", agentType: "clean-agent", description: SENTINEL }));
   it("subagent_start.description (with model+engine present)", () =>
