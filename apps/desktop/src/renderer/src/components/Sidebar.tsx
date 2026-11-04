@@ -372,19 +372,34 @@ export function limitGroupRows(
   return hidden < 2 ? { shown: rows, hidden: 0 } : { shown: rows.slice(0, cut), hidden };
 }
 
-/** sessions in the sidebar's default (unfiltered) wire page. */
+/** per-project sessions in the sidebar's default (unfiltered) wire page — main
+ *  applies it WITHIN every project, so one busy project cannot push other
+ *  projects' folders out of the page. */
 export const SIDEBAR_SESSIONS_LIMIT = 50;
 
-/** apply the default wire cap to a probe page fetched at LIMIT+1.
- *  Over-limit ⇒ cut to the limit and flag `hasMore` — "Show all tasks" and
- *  any search query both reach the full list. */
+/** apply the default per-project wire cap to a probe page fetched at LIMIT+1
+ *  per project. Over-limit in ANY project ⇒ cut that project to the limit and
+ *  flag `hasMore` — "Show all tasks" and any search query both reach the full
+ *  list, while every project keeps its most recent rows (no folder starves).
+ *  The cap key mirrors buildSidebarGroups's (`projectRoot ?? workspace`). */
 export function capSessionPage(
   list: readonly SessionSummary[],
   limit: number = SIDEBAR_SESSIONS_LIMIT,
 ): { page: readonly SessionSummary[]; hasMore: boolean } {
-  return list.length > limit
-    ? { page: list.slice(0, limit), hasMore: true }
-    : { page: list, hasMore: false };
+  const seen = new Map<string, number>();
+  const page: SessionSummary[] = [];
+  let hasMore = false;
+  for (const s of list) {
+    const key = s.projectRoot ?? s.workspace;
+    const count = seen.get(key) ?? 0;
+    if (count >= limit) {
+      hasMore = true;
+      continue;
+    }
+    seen.set(key, count + 1);
+    page.push(s);
+  }
+  return { page, hasMore };
 }
 
 /**
@@ -611,10 +626,11 @@ const PROJECT_MENU_WIDTH = 224;
 
 /**
  * Fetches the persisted-session index for the sidebar (design §2.3).
- * default view is a capped probe page (LIMIT+1 — one extra row says
- * "more exist" without a count query); `full` (active search or Show-all)
- * fetches uncapped, so the filter and old-session deletion always see every
- * row. Refetch triggers: mount, a REAL session-set change (tabsSessionKey via
+ * default view is a capped probe page (LIMIT+1 per project — one extra row
+ * says "more exist there" without a count query); `full` (active search or
+ * Show-all) fetches uncapped, so the filter and old-session deletion always
+ * see every row. Refetch triggers: mount, a REAL session-set change
+ * (tabsSessionKey via
  * the controller's key guard — NOT array identity), mode flips, and the
  * delete paths via `refetch`. The window-focus listener is REMOVED: there is
  * no local signal of an external change, and any focus probe is still a

@@ -579,6 +579,40 @@ describe("capSessionPage", () => {
     expect(page[0]?.id).toBe("s0");
     expect(hasMore).toBe(true);
   });
+  it("the cap is PER PROJECT — 60 fresh sessions of A and 3 old of B keep both folders fed, A flagged", () => {
+    const busy = summaries(60).map((s) => ({ ...s, projectRoot: "/a" }));
+    const quiet = Array.from({ length: 3 }, (_, i) => session({ id: `q${i}`, workspace: "/b", updatedAt: 100 + i }));
+    const { page, hasMore } = capSessionPage([...busy, ...quiet]);
+    expect(page.filter((s) => s.projectRoot === "/a")).toHaveLength(SIDEBAR_SESSIONS_LIMIT);
+    expect(page.filter((s) => s.workspace === "/b").map((s) => s.id)).toEqual(["q0", "q1", "q2"]);
+    expect(hasMore).toBe(true); // A alone keeps the "Show all tasks" escape hatch
+    // the composed sidebar shows both folders — the quiet project's rows survive
+    const groups = buildSidebarGroups([], page);
+    expect(groups.map((g) => g.workspace)).toEqual(["/a", "/b"]);
+    expect(groups[0]!.rows).toHaveLength(SIDEBAR_SESSIONS_LIMIT);
+    expect(groups[1]!.rows.map((r) => r.key)).toEqual(["q0", "q1", "q2"]);
+  });
+  it("the cap key mirrors the grouping key (projectRoot ?? workspace), not the raw workspace", () => {
+    const rows = [
+      session({ id: "a1", workspace: "/w", projectRoot: "/a", updatedAt: 3 }),
+      session({ id: "b1", workspace: "/w", projectRoot: "/b", updatedAt: 2 }),
+      session({ id: "a2", workspace: "/w", projectRoot: "/a", updatedAt: 1 }),
+    ];
+    const { page, hasMore } = capSessionPage(rows, 1);
+    expect(page.map((s) => s.id)).toEqual(["a1", "b1"]);
+    expect(hasMore).toBe(true); // only a2 was cut — /b never counted toward /a
+  });
+  it("interleaved recency order survives: each project keeps its own most recent slice", () => {
+    const rows: SessionSummary[] = [];
+    for (let i = 9; i >= 0; i--) {
+      rows.push(session({ id: `a${i}`, workspace: "/a", updatedAt: 2000 + i }));
+      rows.push(session({ id: `b${i}`, workspace: "/b", updatedAt: 1500 + i }));
+    }
+    const { page, hasMore } = capSessionPage(rows, 5);
+    expect(page.filter((s) => s.workspace === "/a").map((s) => s.id)).toEqual(["a9", "a8", "a7", "a6", "a5"]);
+    expect(page.filter((s) => s.workspace === "/b").map((s) => s.id)).toEqual(["b9", "b8", "b7", "b6", "b5"]);
+    expect(hasMore).toBe(true);
+  });
 });
 
 describe("SessionIndexController (fetch discipline; the hook delegates here)", () => {

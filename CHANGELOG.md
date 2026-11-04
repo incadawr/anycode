@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The sidebar's default view no longer lets one busy project crowd every other project's folder out of the task list: the recent-tasks page is now counted per project, so each project keeps its newest sessions and stays visible, while "Show all tasks" and search still reach the full history.
+
 ## [0.0.75] — 2026-11-04
 
 ### Security
