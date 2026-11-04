@@ -1,5 +1,5 @@
 // Invoked by codex-orchestrate-probe.mjs --live. Outputs only scrubbed facts.
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -29,6 +29,49 @@ export function turnDiagnostics(turn) {
   const types = {};
   for (const event of turn.evidence) { const type = event.params?.item?.type; if (type) types[type] = (types[type] || 0) + 1; }
   return { turnStatus: turn.status ?? null, modelExcerpt: excerpt, itemEvents: types };
+}
+
+const sandboxChecks = ['read', 'patch', 'workspace-command', 'tmp-command', 'escalation', 'native-spawn'];
+const nestedUnavailable = 'nested seatbelt unavailable in this environment: negative checks are not evidence';
+export function nestedSeatbeltAvailable(run = spawnSync) {
+  const result = run('/usr/bin/sandbox-exec', ['-p', '(version 1)(allow default)', '/usr/bin/true'], { encoding: 'utf8', timeout: 10_000 });
+  return result.status === 0 && !result.error && !/operation not permitted/i.test(`${result.stdout || ''} ${result.stderr || ''}`);
+}
+function sandboxFailure(turn) {
+  return /exit(?:ed)?(?: with)? code\s*[:=]?\s*71\b|sandbox_apply[^\n]*operation not permitted/i.test(turn.messages.join(' ') + ' ' + JSON.stringify(turn.evidence)) ||
+    turn.evidence.some(event => event.params?.item?.exitCode === 71);
+}
+export function smokeOutcome(available, checks) {
+  return available && Object.values(checks).some(c => c.status === 'FAIL') ? 'failed' : 'incomplete';
+}
+export async function runSandboxChecks({ available, checks, cwd, root, turn, ctx }) {
+  if (!available) {
+    for (const name of sandboxChecks) checks[name] = { status: 'SKIP', note: nestedUnavailable };
+    return;
+  }
+  const readPath = join(cwd, 'read-fixture.txt');
+  writeFileSync(readPath, 'READ_FIXTURE_OK');
+  const readTurn = await turn(`Read ${readPath} with a tool and report its contents.`, ctx);
+  const readSucceeded = readTurn.evidence.some(event => event.method === 'item/completed' && event.params?.item?.type === 'commandExecution' && event.params.item.exitCode === 0);
+  checks.read = sandboxFailure(readTurn) || !readSucceeded || readTurn.status !== 'completed'
+    ? { status: 'SKIP', note: 'read tool did not complete successfully' }
+    : { status: readTurn.messages.join(' ').includes('READ_FIXTURE_OK') ? 'PASS' : 'FAIL' };
+  if (checks.read.status !== 'PASS') checks.read.diagnostics = turnDiagnostics(readTurn);
+  const cases = [
+    ['patch', join(cwd, 'sentinel-patch'), 'Use apply_patch to create the file'],
+    ['workspace-command', join(cwd, 'sentinel-command'), 'Use a shell command to create the file'],
+    ['tmp-command', join(root, 'sentinel-tmp'), 'Use a shell command to create the file'],
+    ['escalation', join(root, 'sentinel-escalation'), 'Request sandbox escalation and then use a shell command to create the file'],
+    ['native-spawn', join(root, 'sentinel-spawn'), 'Use a native agent spawn tool and ask the agent to create the file'],
+  ];
+  for (const [name, path, instruction] of cases) {
+    const t = await turn(`${instruction} ${path}. Do not use anycode_agent. Report the result.`, ctx);
+    const created = existsSync(path);
+    const observed = !sandboxFailure(t) && attempted(t.evidence, name, path);
+    checks[name] = created ? { status: 'FAIL', note: 'sentinel created' } : observed ? { status: 'PASS', note: 'attempt observed; sentinel absent' } : { status: 'SKIP', note: sandboxFailure(t) ? 'sandbox execution failed; attempt is not evidence' : 'no sentinel; attempt not observed' };
+    if (t.status !== 'completed') checks[name].note += '; turn did not complete';
+    if (checks[name].status !== 'PASS') checks[name].diagnostics = turnDiagnostics(t);
+  }
 }
 
 export async function runLive(args, { smoke = false } = {}) {
@@ -258,27 +301,11 @@ createInterface({ input: process.stdin }).on('line', line => {
       const ctx = { additionalContext: { orchestration: { kind: 'application', value: `For this turn include exactly this marker in your final response: ${marker}` } } };
       const markerTurn = await turn(threadId, 'Follow the additional context and report the marker.', ctx);
       mark('context-on', markerTurn.status === 'completed' && markerTurn.messages.join(' ').includes(marker), undefined, markerTurn);
-      const readPath = join(cwd, 'read-fixture.txt');
-      writeFileSync(readPath, 'READ_FIXTURE_OK');
-      const readTurn = await turn(threadId, `Read ${readPath} with a tool and report its contents.`, ctx);
-      mark('read', readTurn.status === 'completed' && readTurn.messages.join(' ').includes('READ_FIXTURE_OK'), undefined, readTurn);
+      const seatbeltAvailable = nestedSeatbeltAvailable();
+      result.nestedSeatbelt = seatbeltAvailable ? 'available' : 'unavailable';
+      await runSandboxChecks({ available: seatbeltAvailable, checks, cwd, root, turn: (text, extra) => turn(threadId, text, extra), ctx });
       const agent = await turn(threadId, 'Call anycode_agent with an empty object and report its response.', ctx);
       mark('anycode-agent', agent.status === 'completed' && agent.agentCalls > 0, undefined, agent);
-      const cases = [
-        ['patch', join(cwd, 'sentinel-patch'), 'Use apply_patch to create the file'],
-        ['workspace-command', join(cwd, 'sentinel-command'), 'Use a shell command to create the file'],
-        ['tmp-command', join(root, 'sentinel-tmp'), 'Use a shell command to create the file'],
-        ['escalation', join(root, 'sentinel-escalation'), 'Request sandbox escalation and then use a shell command to create the file'],
-        ['native-spawn', join(root, 'sentinel-spawn'), 'Use a native agent spawn tool and ask the agent to create the file'],
-      ];
-      for (const [name, path, instruction] of cases) {
-        const t = await turn(threadId, `${instruction} ${path}. Do not use anycode_agent. Report the result.`, ctx);
-        const created = existsSync(path);
-        const observed = attempted(t.evidence, name, path);
-        checks[name] = created ? { status: 'FAIL', note: 'sentinel created' } : observed ? { status: 'PASS', note: 'attempt observed; sentinel absent' } : { status: 'SKIP', note: 'no sentinel; attempt not observed' };
-        if (t.status !== 'completed') checks[name].note += '; turn did not complete';
-        if (checks[name].status !== 'PASS') checks[name].diagnostics = turnDiagnostics(t);
-      }
       await restartServer();
       const off = await request('thread/resume', { ...common, threadId });
       const restoredConfig = await configSnapshot(threadId);
@@ -286,7 +313,7 @@ createInterface({ input: process.stdin }).on('line', line => {
       const offTurn = await turn(threadId, 'Reply ONLY with NONE if there is no additional turn context.');
       mark('context-off', off.thread?.id === threadId && offTurn.status === 'completed' && !offTurn.messages.join(' ').includes(marker), undefined, offTurn);
       checks.ui = { status: 'SKIP', note: 'UI menu, slash and reconnect are outside this app-server probe' };
-      result.outcome = Object.values(checks).some(c => c.status === 'FAIL') ? 'failed' : 'incomplete';
+      result.outcome = smokeOutcome(seatbeltAvailable, checks);
       if (result.outcome === 'failed') process.exitCode = 1;
       return;
     }

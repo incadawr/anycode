@@ -45,6 +45,13 @@ limited by conversation history. UI menu, slash and reconnect are explicitly
 SKIP: this driver neither opens the UI nor replaces the release GUI gate.
 A SKIP is not acceptance evidence.
 
+The read and negative sandbox checks require nested seatbelt to be usable. Run
+the live smoke outside an enclosing sandbox, for example from a normal Terminal.
+The driver preflights sandbox-exec; if it is unavailable these checks are SKIP
+and the outcome is incomplete. With a working sandbox, observed attempts give
+PASS or FAIL according to the sentinel and read results; unobserved attempts
+remain SKIP. Exit code 71 is a sandbox failure, not evidence of enforcement.
+
 When a nested sandbox-exec cannot run, `ORCH_PROBE_NO_SANDBOX_EXEC=1` explicitly
 selects an external auth write guard. The auth.json is linked into the isolated
 home by symlink and its source must be protected read-only externally; the

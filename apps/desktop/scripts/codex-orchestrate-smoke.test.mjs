@@ -36,3 +36,43 @@ test('only structured tool events count as attempted writes', async () => {
   assert.equal(correlatedEvidence(correlated, 'other', 'turn'), false);
   assert.deepEqual(turnDiagnostics({ status: 'failed', messages: ['cannot read /private/secret'], evidence: [event('commandExecution', {})] }), { turnStatus: 'failed', modelExcerpt: 'cannot read [path]', itemEvents: { commandExecution: 1 } });
 });
+
+test('nested seatbelt preflight gates sandbox checks and detects exit 71', async () => {
+  const { nestedSeatbeltAvailable, runSandboxChecks, smokeOutcome } = await import('./codex-orchestrate-live-probe.mjs');
+  const { mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  assert.equal(nestedSeatbeltAvailable((bin, args) => {
+    assert.equal(bin, '/usr/bin/sandbox-exec');
+    assert.deepEqual(args, ['-p', '(version 1)(allow default)', '/usr/bin/true']);
+    return { status: 0 };
+  }), true);
+  assert.equal(nestedSeatbeltAvailable(() => ({ status: 71, stderr: 'Operation not permitted' })), false);
+  assert.equal(nestedSeatbeltAvailable(() => ({ status: 0, stderr: 'Operation not permitted' })), false);
+  const root = mkdtempSync(join(tmpdir(), 'orch-test-'));
+  try {
+    const checks = {};
+    let calls = 0;
+    await runSandboxChecks({ available: false, checks, cwd: root, root, turn: () => { throw Error('must not run'); } });
+    assert.equal(Object.keys(checks).length, 6);
+    assert.ok(Object.values(checks).every(c => c.status === 'SKIP' && c.note === 'nested seatbelt unavailable in this environment: negative checks are not evidence'));
+    assert.equal(smokeOutcome(false, checks), 'incomplete');
+    const event = (path, exitCode) => ({ method: 'item/completed', params: { item: { type: 'commandExecution', command: `touch ${path}`, exitCode } } });
+    const live = {};
+    await runSandboxChecks({ available: true, checks: live, cwd: root, root, turn: async text => {
+      calls++;
+      if (calls === 1) return { status: 'completed', messages: ['READ_FIXTURE_OK'], evidence: [event('read-fixture.txt', 0)] };
+      if (calls === 2) { writeFileSync(join(root, 'sentinel-patch'), 'x'); return { status: 'completed', messages: [], evidence: [] }; }
+      if (calls === 3) return { status: 'completed', messages: ['exit code 71'], evidence: [event(join(root, 'sentinel-command'), 71)] };
+      return { status: 'completed', messages: [], evidence: [event(join(root, 'sentinel-tmp'), 1)] };
+    } });
+    assert.equal(calls, 6);
+    assert.equal(live.read.status, 'PASS');
+    assert.equal(live.patch.status, 'FAIL');
+    assert.equal(smokeOutcome(true, live), 'failed');
+    assert.equal(live['workspace-command'].status, 'SKIP');
+    assert.equal(live['tmp-command'].status, 'PASS');
+    const failedRead = {};
+    await runSandboxChecks({ available: true, checks: failedRead, cwd: root, root, turn: async () => ({ status: 'completed', messages: ['wrong'], evidence: [event('read-fixture.txt', 0)] }) });
+    assert.equal(failedRead.read.status, 'FAIL');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
