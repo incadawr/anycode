@@ -6,10 +6,11 @@
  *
  *   - the md preview still opens, still transfers to the WINDOW container
  *     (the popout) and back, and the popout still renders a REAL screenshot
- *     after the transfer — i.e. the narrowed webPreferences (dedicated
- *     in-memory `md-preview` partition, narrow-bridge argv flag), the
- *     channel-scoped IPC allow-list entry, and the (tabId, previewId) target
- *     binding did not break the feature;
+ *     after the transfer AND its document really shows the smoke's DOC_MARKER
+ *     (a PNG signature alone would pass an all-white window) — i.e. the
+ *     narrowed webPreferences (dedicated in-memory `md-preview` partition,
+ *     narrow-bridge argv flag), the channel-scoped IPC allow-list entry, and
+ *     the (tabId, previewId) target binding did not break the feature;
  *   - the guard/target/registry entries do not outlive the window: teardown
  *     with a popout OPEN (the exact repro of the owner-visible
  *     "Object has been destroyed" main-process modal — PreviewHost.closeAll
@@ -37,6 +38,7 @@
 import { spawn } from "node:child_process";
 import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createServer } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -192,9 +194,16 @@ function step1Prepare() {
 
 async function step2LaunchApp(ctx) {
   const t0 = Date.now();
+  // A free port for Chromium's debugger: electron-vite appends
+  // --remote-debugging-port when REMOTE_DEBUGGING_PORT is set (smoke-electron-
+  // launch.mjs documents the lever). The document-marker assertion below reads
+  // the popout's DOM over this endpoint — the same CDP route the other
+  // DOM-assertion smokes use — so no new automation endpoint is invented.
+  ctx.cdpPort = await pickFreePort();
   const env = {
     ...process.env,
     ANYCODE_AUTOMATION: "1",
+    REMOTE_DEBUGGING_PORT: String(ctx.cdpPort),
     ANYCODE_USER_DATA_DIR: ctx.profileUserDataDir,
     ANYCODE_DB_PATH: ctx.profileDbPath,
     ANYCODE_AUTOMATION_INFO: ctx.profileAutomationInfo,
@@ -272,6 +281,121 @@ async function step4OpenMdPreview(ctx) {
 
 // ── step 5: transfer to the WINDOW container (creates the md popout) ──
 
+/** Binds a port on 127.0.0.1, then releases it (the compact-submit smoke's free-port probe). */
+function pickFreePort() {
+  return new Promise((resolvePort, rejectPort) => {
+    const server = createServer();
+    server.once("error", rejectPort);
+    server.listen(0, "127.0.0.1", () => {
+      const port = server.address().port;
+      server.close(() => resolvePort(port));
+    });
+  });
+}
+
+/**
+ * One Runtime.evaluate channel bound to a single page target, found over
+ * `/json/list` on the launch's debugger port (compact-submit-ui-smoke.mjs
+ * pattern: plain node WebSocket, zero npm deps). Returns an `evaluate`
+ * function and a `close()`; `null` when no matching page appeared in time.
+ */
+async function connectPageEvaluate(ctx, urlMatches, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    let target = null;
+    try {
+      const list = await (await fetch(`http://127.0.0.1:${ctx.cdpPort}/json/list`)).json();
+      target = list.find((t) => t.type === "page" && !t.url.startsWith("devtools://") && urlMatches(t.url)) ?? null;
+    } catch {
+      // debugger endpoint not accepting connections yet
+    }
+    if (target !== null) {
+      const ws = new WebSocket(target.webSocketDebuggerUrl);
+      await new Promise((resolveOpen, rejectOpen) => {
+        ws.addEventListener("open", resolveOpen, { once: true });
+        ws.addEventListener("error", () => rejectOpen(new Error(`CDP websocket to ${target.url} failed`)), { once: true });
+      });
+      const pending = new Map();
+      let nextId = 0;
+      ws.addEventListener("message", ({ data }) => {
+        const response = JSON.parse(String(data));
+        const waiter = pending.get(response.id);
+        if (waiter === undefined) return;
+        pending.delete(response.id);
+        clearTimeout(waiter.timer);
+        response.error ? waiter.reject(new Error(JSON.stringify(response.error))) : waiter.resolve(response.result);
+      });
+      const evaluate = async (expression) => {
+        const id = ++nextId;
+        const result = await new Promise((resolveResult, rejectResult) => {
+          const timer = setTimeout(() => {
+            pending.delete(id);
+            rejectResult(new Error("Runtime.evaluate timed out"));
+          }, 10_000);
+          pending.set(id, { resolve: resolveResult, reject: rejectResult, timer });
+          ws.send(JSON.stringify({ id, method: "Runtime.evaluate", params: { expression, returnByValue: true } }));
+        });
+        if (result.exceptionDetails !== undefined) {
+          throw new Error(`evaluate failed: ${JSON.stringify(result.exceptionDetails)}`);
+        }
+        return result.result.value;
+      };
+      return {
+        evaluate,
+        close: () => {
+          try {
+            ws.close();
+          } catch {
+            // already gone
+          }
+        },
+      };
+    }
+    if (Date.now() >= deadline) return null;
+    await sleep(300);
+  }
+}
+
+/**
+ * Polls the popout's DOCUMENT text until DOC_MARKER shows up. The PNG check
+ * in assertMdScreenshotPng cannot tell a rendered document from an all-white
+ * window (any PNG-signature file over 1000 bytes passes it), so this is the
+ * assertion that proves the markdown really rendered inside the popout.
+ */
+async function assertMdPopoutDocument(ctx, step, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+  let probe = null;
+  let text = "";
+  while (Date.now() < deadline) {
+    if (probe === null) {
+      probe = await connectPageEvaluate(
+        ctx,
+        (url) => url.includes("view=md-preview") && url.includes(ctx.mdPreviewId),
+        Math.max(1000, deadline - Date.now()),
+      );
+      if (probe === null) break;
+    }
+    try {
+      text = String(await probe.evaluate("document.body.textContent"));
+      if (text.includes(DOC_MARKER)) break;
+    } catch {
+      // the popout renderer may still be booting — reconnect and retry
+      probe.close();
+      probe = null;
+    }
+    await sleep(300);
+  }
+  if (probe !== null) probe.close();
+  const ok = text.includes(DOC_MARKER);
+  record(
+    "md popout document contains the doc marker (a real render, not a blank window)",
+    ok ? "PASS" : "FAIL",
+    ok ? JSON.stringify(DOC_MARKER) : `marker absent — last document text: ${JSON.stringify(text.slice(0, 200))}`,
+  );
+  if (!ok) fail(step, `the popout's document never showed the doc marker within ${timeoutMs}ms`);
+  return ok;
+}
+
 /** Polls the preview's screenshot until a real PNG comes back (the popout must boot its renderer first). */
 async function assertMdScreenshotPng(ctx, step, containerLabel, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
@@ -314,6 +438,12 @@ async function step5TransferToWindow(ctx) {
   // a real PNG (boot takes a moment on a fresh BrowserWindow).
   const shotOk = await assertMdScreenshotPng(ctx, 5, "window (md popout)");
   if (!shotOk) fail(5, "popout never produced a real screenshot after the transfer");
+
+  // The PNG check above cannot tell a rendered document from an all-white
+  // window — find the doc marker in the popout's DOM itself (additional
+  // assertion on top of the PNG, over the same CDP evaluate route; no new
+  // app endpoint).
+  await assertMdPopoutDocument(ctx, 5);
 
   // The MAIN-side registry/allow-list must not have disturbed the roster:
   // the list route (a separate read of the live record) still shows the
