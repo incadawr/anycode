@@ -214,9 +214,12 @@ async function main() {
   log("boot", health.ok === true, `dev up, pid ${health.pid}, version ${health.version}`);
   await waitForFacade();
 
-  // ── seed: 60 fresh resumable sessions in the busy project, 3 in the quiet one ──
-  await seedGroup(wsBusy, 60);
+  // ── seed the DoD scenario: the quiet project's 3 rows FIRST (so they are the
+  // oldest in the profile), then 60 fresh rows in the busy one. Sessions list
+  // newest-first, so a GLOBAL page cap would fill up with busy rows and leave
+  // the quiet folder empty — only a per-project cap keeps both folders fed. ──
   await seedGroup(wsQuiet, 3);
+  await seedGroup(wsBusy, 60);
   const settled = await settle(
     (groups) => {
       const busy = groupFor(groups, wsBusy);
