@@ -3287,7 +3287,7 @@ void app.whenReady().then(async () => {
     fetch: route => fetchForProxyChain([], route),
     onPersisted: () => sendToMainWindow(win, PROVIDER_QUOTA_CHANGED_CHANNEL),
   });
-  ipcMain.handle("anycode:glm-quota-refresh", (_event, id: unknown) => {
+  guardedIpcHandle("anycode:glm-quota-refresh", (_event, id: unknown) => {
     if (id !== undefined && (typeof id !== "string" || id.length > 256)) return;
     void glmQuota.refresh(id);
   });
