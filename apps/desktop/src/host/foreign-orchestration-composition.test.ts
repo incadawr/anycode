@@ -118,8 +118,34 @@ describe("foreign orchestration composition", () => {
     expect((await s.invoke("executor")).text).toMatch(/no usable route/);
     expect(s.run).not.toHaveBeenCalled();
     s.settings.roles = { reviewer: { primary: { engine: "codex" } } };
-    expect((await s.invoke("reviewer")).text).toMatch(/cannot enforce/);
+    const refusal = await s.invoke("reviewer");
+    expect(refusal.isError).toBe(true);
+    expect(refusal.text).toMatch(/cannot enforce/);
+    expect(refusal.text).toContain("reviewer");
     expect(s.run).not.toHaveBeenCalled();
+  });
+
+  it("never routes a restricted role onto an engine fallback and names the fix", async () => {
+    const s = setup();
+    s.settings.roles = { planner: { primary: { connection: "api", model: "api-model" }, fallbacks: [{ engine: "codex" }] } };
+    s.health.markFailure(entryKey("planner", { connection: "api", model: "api-model" }), "quota", Date.now());
+    const result = await s.invoke("planner");
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain("planner");
+    expect(result.text).toContain("quota");
+    expect(result.text).toContain("Settings");
+    expect(s.run).not.toHaveBeenCalled();
+  });
+
+  it("still reroutes an unrestricted role onto an engine fallback", async () => {
+    const s = setup();
+    s.settings.roles = { executor: { primary: { connection: "api", model: "api-model" }, fallbacks: [{ engine: "codex" }] } };
+    s.health.markFailure(entryKey("executor", { connection: "api", model: "api-model" }), "quota", Date.now());
+    const result = await s.invoke("executor");
+    expect(result.isError).toBe(false);
+    expect(s.run.mock.calls[0]![0]).toMatchObject({ engine: "codex" });
+    expect(s.run.mock.calls[0]![0]).not.toHaveProperty("restrictions");
+    expect(result.text).toContain("engine codex");
   });
 
   it("accepts an explicit model for a configured connection with no default model", async () => {

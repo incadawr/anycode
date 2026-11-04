@@ -247,7 +247,8 @@ function isValidFreeText(value: string, maxLength: number): boolean {
  */
 function findSpawnRequestShapeError(req: SessionSubagentRequest): string | null {
   if (req.engine !== undefined && (req.nativeRestrictionsUnsupported || req.restrictions?.readOnly || req.restrictions?.permissions)) {
-    return "Agent: native engine children cannot enforce this profile’s tool or permission restrictions.";
+    return `Agent: ${req.agentType} cannot run on engine ${req.engine} — native engine children cannot enforce this profile’s tool or permission restrictions. ` +
+      "Give the role an available API connection in Settings → Roles, or remove the engine entry.";
   }
   if (!isValidChildId(req.spawnToolCallId)) {
     return MALFORMED_SPAWN_ID_MESSAGE;

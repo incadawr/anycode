@@ -639,7 +639,11 @@ export async function runAgentBridgeCall(
     ? await resolveRoute(entry.name)
     : undefined;
   if (continueSession === undefined && resolveRoute !== undefined && isRoleRouteName(entry.name) && (route === undefined || route.entries.length === 0)) {
-    return { text: `Agent: no usable route for role "${entry.name}". Configure a role route and an available connection.`, isError: true };
+    const reasons = route?.skipped.map(({ reason }) => reason).filter(Boolean).join("; ");
+    return {
+      text: `Agent: no usable route for role "${entry.name}".${reasons ? ` ${reasons}.` : ""} Give the role an available API connection in Settings → Roles, or remove any engine entry.`,
+      isError: true,
+    };
   }
 
   const profile = continueSession === undefined
@@ -682,7 +686,11 @@ export async function runAgentBridgeCall(
   };
 
   if (request.engine !== undefined && request.nativeRestrictionsUnsupported) {
-    return { text: "Agent: native engine children cannot enforce this profile’s tool or permission restrictions.", isError: true };
+    return {
+      text: `Agent: role "${request.agentType}" cannot run on engine ${request.engine} — native engine children cannot enforce this profile’s tool or permission restrictions. ` +
+        "Give the role an available API connection in Settings → Roles, or remove the engine entry.",
+      isError: true,
+    };
   }
 
   const controller = new AbortController();

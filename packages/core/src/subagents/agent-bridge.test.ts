@@ -127,6 +127,8 @@ describe("bridge role routing policy", () => {
     const result = await runAgentBridgeCall({ agent_type: "executor", description: "d", prompt: "p" }, { ...deps, catalog: restricted });
     expect(result.isError).toBe(true);
     expect(result.text).toMatch(/cannot enforce/);
+    expect(result.text).toContain("executor");
+    expect(result.text).toContain("codex");
     expect(run).not.toHaveBeenCalled();
     const override = await runAgentBridgeCall({ agent_type: "executor", description: "d", prompt: "p", model: "chosen" }, { ...deps, catalog: restricted });
     expect(override.isError).toBe(true);

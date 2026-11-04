@@ -389,7 +389,8 @@ function createRunner(
             routeNotice = engineRoute?.notice;
             const refusal = missingRestrictions ? "Agent: profile restrictions are unavailable for this child session."
               : request.engine !== undefined && request.nativeRestrictionsUnsupported
-                ? "Agent: native engine children cannot enforce this profile’s tool or permission restrictions."
+                ? `Agent: ${step.agentType} cannot run on engine ${request.engine} — native engine children cannot enforce this profile’s tool or permission restrictions. ` +
+                  "Give the role an available API connection in Settings → Roles, or remove the engine entry."
                 : undefined;
             const sessionOutcome = refusal !== undefined
               ? { status: "error" as const, finalText: refusal, truncated: false, turns: 0, toolCalls: 0, durationMs: 0, spawnToolCallId }

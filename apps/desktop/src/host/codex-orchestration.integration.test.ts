@@ -46,7 +46,7 @@ function rig() {
     onDetachedApprovalSettled: req => queue.ack(`approval:${req.spawnToolCallId}`),
     onDetachedStall: (report, req, childSessionId) => queue.upsert(`stall:${req.spawnToolCallId}`, formatChildStallNotice({ taskId: req.spawnToolCallId, toolUseId: req.spawnToolCallId, agentId: childSessionId, subagentType: report.agentType, description: report.description, silentMs: report.silentMs, waitingForApproval: report.waitingForApproval })) });
   routed.attach(port);
-  const bridge = new CodexDynamicToolBridge([{ name: "executor", description: "executor", systemPrompt: "" }, { name: "reviewer", description: "reviewer", systemPrompt: "" }], port, undefined, composition.catalog, undefined, composition.call);
+  const bridge = new CodexDynamicToolBridge([{ name: "executor", description: "executor", systemPrompt: "" }, { name: "reviewer", description: "reviewer", systemPrompt: "" }, { name: "planner", description: "planner", systemPrompt: "" }], port, undefined, composition.catalog, undefined, composition.call);
   const response = { result: vi.fn(), error: vi.fn() };
   function dispatch(id: string, role = "executor", active = { threadId: "thread", turnId: "turn" }) {
     return bridge.handle({ id: 1, method: "item/tool/call", params: { ...active, callId: id, tool: "anycode_agent", arguments: { agent_type: role, description: "work", prompt: "do work" } } }, response, active, () => {});
@@ -107,6 +107,28 @@ describe("Codex role dispatch through the child wire", () => {
     await r.dispatch("review", "reviewer");
     expect(r.sent).toHaveLength(0);
     expect(r.response.result).toHaveBeenCalledWith(expect.objectContaining({ success: false, contentItems: [expect.objectContaining({ text: expect.stringContaining("cannot enforce") })] }));
+    expect(r.response.result).toHaveBeenCalledWith(expect.objectContaining({ success: false, contentItems: [expect.objectContaining({ text: expect.stringContaining("reviewer") })] }));
+  });
+
+  it("does not fall a restricted role back onto an engine spawn after an admission failure", async () => {
+    const r = rig();
+    r.settings.roles = { planner: { primary: { connection: "a", model: "model-a" }, fallbacks: [{ engine: "codex" }] } };
+    const pending = r.dispatch("plan-1", "planner");
+    await vi.waitFor(() => expect(r.sent).toHaveLength(1));
+    expect(r.sent[0]).toMatchObject({ agentType: "planner", connectionId: "a", restrictions: { readOnly: true } });
+    r.emit({ type: CHILD_RUN_EVENT_TYPE, kind: "rejected", requestId: r.sent[0]!.requestId, reason: "not_ready", message: "Agent: connection \"a\" declared by this profile is not available." });
+    await pending;
+    expect(r.sent).toHaveLength(1);
+    expect(r.response.result).toHaveBeenCalledWith(expect.objectContaining({
+      success: false,
+      contentItems: [expect.objectContaining({
+        text: expect.stringMatching(/planner.*all route entries failed/s),
+      })],
+    }));
+    expect(r.response.result).toHaveBeenCalledWith(expect.objectContaining({
+      success: false,
+      contentItems: [expect.objectContaining({ text: expect.not.stringContaining("cannot enforce") })],
+    }));
   });
 
   it.each([
