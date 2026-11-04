@@ -275,13 +275,19 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
       setDraft(next); setBaseline(next); setCap(nextCap); setBaselineCap(nextCap);
     }
   }
-  const title = projectRoot ? mapped ? `project override for ${projectFolderName(projectRoot)}` : `inherited global profile for ${projectFolderName(projectRoot)}` : "";
+  // The grey parenthetical used to hide which profile actually governs a
+  // project; a short badge with the detail in its tooltip says it at a glance.
+  const profileScopeBadge = projectRoot
+    ? mapped
+      ? { label: "Project override", title: `This project uses the “${mapped.name}” profile instead of the global one.` }
+      : { label: "Global", title: "No override for this project — the global selection applies to its roles." }
+    : null;
   return <div className="settings-pane roles-pane" data-testid="settings-roles-pane">
     {busy && <p className="settings-field-hint" role="status">Saving…</p>}
     <div className="roles-header"><span>Profile:</span>
       {registry.profiles.length ? <select className="settings-field-select" aria-label="Role profile" title={selected?.name ?? "Default"} value={projectRoot ? mapped?.id ?? "" : selected?.id ?? ""} disabled={busy} onChange={(e) => selectProfile(e.target.value)}>
         {projectRoot ? <option value="">{`Use global (${registry.profiles.find((p) => p.id === registry.activeId)?.name ?? "Built-in roles"})`}</option> : <option value="">Built-in roles</option>}{registry.profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}      </select> : <strong>Built-in roles</strong>}
-      {title && <span className="settings-field-hint">({title})</span>}
+      {profileScopeBadge && <span className="roles-badge" title={profileScopeBadge.title}>{profileScopeBadge.label}</span>}
       <div className="roles-menu" ref={menuRef}><Button size="sm" type="button" className="roles-menu-trigger" aria-label="Profile actions" aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => { setMenuFocus(0); setMenuOpen((open) => !open); }}>⋯</Button>
         {menuOpen && <div className="roles-menu-items" role="menu" aria-label="Profile actions" onKeyDown={onMenuKeyDown}>
         {(["new", "duplicate", "rename"] as const).map((action, index) => <Button size="sm" type="button" key={action} role="menuitem" className="roles-menu-item" tabIndex={menuFocus === index ? 0 : -1} disabled={busy || (action === "rename" && !selected)} onClick={() => { setMenuOpen(false); setNameAction(action); setName(action === "rename" ? selected?.name ?? "" : ""); }}>{action === "new" ? "New" : action === "duplicate" ? "Duplicate" : "Rename"}</Button>)}

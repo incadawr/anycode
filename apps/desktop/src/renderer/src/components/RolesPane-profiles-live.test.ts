@@ -337,7 +337,7 @@ describe("Profile and project interactions", () => {
     const bridge = installBridge(initial);
     root = createRoot(container);
     await act(async () => root?.render(createElement<RolesPaneProps>(RolesPane, { projectRoot: "/projects/app" })));
-    expect(container.textContent).toContain("project override for app");
+    expect(container.textContent).toContain("Project override");
     expect(bridge.set).not.toHaveBeenCalled();
     const effort = container.querySelector<HTMLSelectElement>('[aria-label="executor primary effort"]')!;
     await act(async () => { effort.value = "high"; effort.dispatchEvent(new Event("change", { bubbles: true })); });
@@ -432,12 +432,13 @@ describe("Project selection and profile naming", () => {
     const bridge = installBridge(initial);
     root = createRoot(container);
     await act(async () => root?.render(createElement<RolesPaneProps>(RolesPane, { projectRoot: "/projects/app" })));
-    expect(container.textContent).toContain("inherited global profile for app");
+    expect(container.querySelector(".roles-badge")?.getAttribute("title")).toContain("No override for this project");
     const select = container.querySelector<HTMLSelectElement>('[aria-label="Role profile"]')!;
     await act(async () => { select.value = "b"; select.dispatchEvent(new Event("change", { bubbles: true })); });
     expect(bridge.current().roleProfiles?.activeId).toBe("a");
     expect(bridge.current().roleProfiles?.projects).toEqual([{ projectRoot: "/projects/app", profileId: "b" }]);
-    expect(container.textContent).toContain("project override for app");
+    expect(container.textContent).toContain("Project override");
+    expect(container.querySelector(".roles-badge")?.getAttribute("title")).toContain("instead of the global one");
   });
 
   it("renames through an inline form and cancellation writes nothing", async () => {
