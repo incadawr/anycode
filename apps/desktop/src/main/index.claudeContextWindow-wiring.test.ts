@@ -44,8 +44,21 @@ class FakeHostProcess {
   once = vi.fn(() => this);
 }
 
+// Shared fake webContents: main/index.ts's IPC guard resolves its trusted
+// sender to the live main window's webContents, so the rig must present THIS
+// identity as the sender (plus its top frame) when driving captured handlers.
+const FAKE_MAIN_WEBCONTENTS = {
+  setWindowOpenHandler: vi.fn(),
+  on: vi.fn(),
+  send: vi.fn(),
+  postMessage: vi.fn(),
+  isDestroyed: vi.fn(() => false),
+  isLoading: vi.fn(() => false),
+  mainFrame: { frame: "main" },
+};
+
 class FakeBrowserWindow {
-  webContents = { setWindowOpenHandler: vi.fn(), on: vi.fn(), send: vi.fn(), postMessage: vi.fn(), isDestroyed: vi.fn(() => false), isLoading: vi.fn(() => false) };
+  webContents = FAKE_MAIN_WEBCONTENTS;
   on = vi.fn();
   isMaximized = vi.fn(() => false);
   isFullScreen = vi.fn(() => false);
@@ -132,7 +145,13 @@ async function waitForHandler(channel: string, timeoutMs = 5000): Promise<IpcHan
   const start = Date.now();
   for (;;) {
     const handler = ipcHandlers.get(channel);
-    if (handler !== undefined) return handler;
+    if (handler !== undefined) {
+      // The guard only serves a trusted main-window top-frame event; wrap so
+      // drive sites keep their ({}, payload) shape while the real handler gets
+      // the exact event Electron would deliver from the main window.
+      return ((_event: unknown, ...args: unknown[]) =>
+        handler({ sender: FAKE_MAIN_WEBCONTENTS, senderFrame: FAKE_MAIN_WEBCONTENTS.mainFrame } as unknown, ...args)) as IpcHandler;
+    }
     if (Date.now() - start > timeoutMs) {
       throw new Error(`ipcMain.handle(${channel}) was never registered within ${timeoutMs}ms`);
     }
