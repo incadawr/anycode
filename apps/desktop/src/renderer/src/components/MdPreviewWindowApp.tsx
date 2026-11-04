@@ -12,11 +12,14 @@
  * (`parseMdWindowTarget`) and the sourcePath lookup (`findPreviewSourcePath`)
  * are pure functions in `preview/md-view-state.ts`, unit-tested there.
  *
- * Theme boot mirrors App.tsx's own (investigated, not guessed — App.tsx:628/636):
- * one `useSettingsStore.getState().load()` on mount, then `applyThemePreference`
- * in an effect keyed on the resolved snapshot. `index.html`'s pre-boot
- * `data-theme="dark"` covers the flash-free default for THIS window too (the
- * same static HTML file is served to both windows).
+ * Theme boot: the window CANNOT resolve its own appearance — the narrow
+ * bridge has no settings family (so `useSettingsStore.load()` would only
+ * throw into its swallowed catch) and the in-memory partition's localStorage
+ * starts empty (so `readAccent`/`readDensity` would only yield defaults).
+ * Main instead hands the already-resolved theme/accent/density over in this
+ * window's query string (main/preview/md-window-appearance.ts), applied
+ * pre-React in `main.tsx` before this component ever mounts — this component
+ * carries no appearance logic at all.
  *
  * `TabContext.Provider` wraps `MarkdownPreviewView` because the reused
  * `Markdown` component (chat's renderer, RECON §1) reads `TabContext.tabId`
@@ -56,11 +59,8 @@
  * OS titlebar always agree.
  */
 import { useEffect, useMemo, useState } from "react";
-import { useStore } from "zustand";
 import { createDesktopStore } from "../store.js";
 import { TabContext } from "../tab-context.js";
-import { useSettingsStore } from "../settings-store.js";
-import { applyThemePreference } from "../theme.js";
 import { findPreviewSourcePath, mdWindowTitle, parseMdWindowTarget } from "../preview/md-view-state.js";
 import { MarkdownPreviewView } from "./MarkdownPreviewView.js";
 
@@ -71,16 +71,7 @@ export function MdPreviewWindowApp() {
   const target = useMemo(() => parseMdWindowTarget(location.search), []);
   // Type-satisfying stub (module doc) — never fed a port, never subscribed to.
   const store = useMemo(() => createDesktopStore(), []);
-  const settingsSnapshot = useStore(useSettingsStore, (state) => state.snapshot);
   const [sourcePath, setSourcePath] = useState("");
-
-  useEffect(() => {
-    void useSettingsStore.getState().load();
-  }, []);
-
-  useEffect(() => {
-    applyThemePreference(settingsSnapshot?.settings.ui.theme ?? "dark");
-  }, [settingsSnapshot]);
 
   useEffect(() => {
     if (target === null) {

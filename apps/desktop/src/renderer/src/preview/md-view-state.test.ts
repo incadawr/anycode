@@ -10,6 +10,7 @@ import {
   mdWindowTitle,
   parseMdWindowTarget,
   shouldRefetchOnDocVersionChange,
+  parseMdWindowAppearanceQuery,
   stripLeadingFrontmatter,
   transferControlForContainer,
   type MdViewState,
@@ -150,8 +151,34 @@ describe("shouldRefetchOnDocVersionChange", () => {
   });
 });
 
-describe("parseMdWindowTarget (M3)", () => {
-  it("parses both tabId and previewId out of the query string", () => {
+describe("parseMdWindowAppearanceQuery", () => {
+  it("parses the appearance handoff main puts beside the routing triple", () => {
+    expect(parseMdWindowAppearanceQuery("?view=md-preview&tabId=t1&previewId=p1&theme=light&accent=teal&density=comfortable")).toEqual({
+      theme: "light",
+      accent: "teal",
+      density: "comfortable",
+    });
+  });
+
+  it("absent params fail safe to the defaults the empty stores would have produced", () => {
+    expect(parseMdWindowAppearanceQuery("?view=md-preview&tabId=t1&previewId=p1")).toEqual({
+      theme: "dark",
+      accent: "current",
+      density: "compact",
+    });
+  });
+
+  it("garbage params fail safe per field (never a half-trusted value)", () => {
+    expect(parseMdWindowAppearanceQuery("?theme=system&accent=neon-green&density=cozy")).toEqual({
+      theme: "dark",
+      accent: "current",
+      density: "compact",
+    });
+    expect(parseMdWindowAppearanceQuery("?theme=light")).toEqual({ theme: "light", accent: "current", density: "compact" });
+  });
+});
+
+describe("parseMdWindowTarget (M3)", () => {  it("parses both tabId and previewId out of the query string", () => {
     expect(parseMdWindowTarget("?view=md-preview&tabId=t1&previewId=p1")).toEqual({ tabId: "t1", previewId: "p1" });
   });
 
