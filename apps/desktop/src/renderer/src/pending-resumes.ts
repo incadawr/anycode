@@ -104,14 +104,19 @@ export function prunePendingResumes(prev: PendingResumeMarks, tabs: readonly Tab
 }
 
 /**
- * Promotes armed (null-tabId) markers to a representing tab: the FIRST unbound
- * tab that was not present when the marker was armed is this resume's own tab
- * arriving through the port envelope before the `createTab` reply. A promoted
- * marker rejoins the settled lifecycle (the caller prunes right after, so a
- * promotion onto a dead tab drops at once). Pure: returns the inputs untouched
- * when nothing promotes. Armed markers without a recorded baseline stay armed —
- * without the arm-time context a pre-existing unbound tab is indistinguishable
- * from the resume's own.
+ * Promotes armed (null-tabId) markers to a representing tab: a tab that was
+ * not present when the marker was armed is this resume's own tab arriving
+ * through the port envelope before the `createTab` reply. Markers are walked
+ * in arm order and a tab represents AT MOST ONE session: a tab already named
+ * by a settled marker — or claimed by a marker promoted earlier in the same
+ * pass — is taken, so two simultaneous resumes never bind one marker to the
+ * other's tab. A fresh tab that has already bound THIS session's id (the
+ * envelope can publish it bound) outranks unbound candidates; the fallback is
+ * a fresh UNBOUND tab. A promoted marker rejoins the settled lifecycle (the
+ * caller prunes right after, so a promotion onto a dead tab drops at once).
+ * Pure: returns the inputs untouched when nothing promotes. Armed markers
+ * without a recorded baseline stay armed — without the arm-time context a
+ * pre-existing unbound tab is indistinguishable from the resume's own.
  */
 export function promoteArmedResumes(
   prev: PendingResumeMarks,
@@ -120,6 +125,12 @@ export function promoteArmedResumes(
 ): { marks: PendingResumeMarks; baselines: PendingResumeArmBaselines } {
   let marks: Map<string, string | null> | null = null;
   let nextBaselines: Map<string, ReadonlySet<string>> | null = null;
+  const claimed = new Set<string>();
+  for (const tabId of prev.values()) {
+    if (tabId !== null) {
+      claimed.add(tabId); // already represents a settled marker's session
+    }
+  }
   for (const [sessionId, tabId] of prev) {
     if (tabId !== null) {
       continue;
@@ -128,16 +139,18 @@ export function promoteArmedResumes(
     if (baseline === undefined) {
       continue;
     }
-    const fresh = tabs.find((t) => t.sessionId === null && !baseline.has(t.tabId));
-    if (fresh === undefined) {
+    const fresh = tabs.filter((t) => !baseline.has(t.tabId) && !claimed.has(t.tabId));
+    const representing = fresh.find((t) => t.sessionId === sessionId) ?? fresh.find((t) => t.sessionId === null);
+    if (representing === undefined) {
       continue;
     }
     if (marks === null) {
       marks = new Map(prev);
       nextBaselines = new Map(baselines);
     }
-    marks!.set(sessionId, fresh.tabId);
+    marks!.set(sessionId, representing.tabId);
     nextBaselines!.delete(sessionId);
+    claimed.add(representing.tabId);
   }
   return marks === null ? { marks: prev, baselines } : { marks, baselines: nextBaselines! };
 }
