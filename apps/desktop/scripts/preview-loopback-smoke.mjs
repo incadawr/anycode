@@ -5,7 +5,10 @@
  * port, the 127.0.0.1 spelling and a WebSocket are denied (legible in the
  * preview console); in-page navigation to the second port does not commit;
  * a file: preview has no loopback grant; an explicit open loads the second
- * port and pins only it.
+ * port and pins only it. The fixtures send `Access-Control-Allow-Origin: *`
+ * and the denied legs also compare server-side request counters, so a
+ * `null` fetch result can only mean a real denial — an allowed request
+ * would come back readable and would have been counted by the server.
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -23,11 +26,19 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 // Two harmless loopback HTTP fixtures: A plays the dev server a preview is
 // opened with, B plays a second local service nothing was ever opened against.
+// Both answer with `Access-Control-Allow-Origin: *`: if the gate ever let a
+// cross-origin fetch through, the page could READ the response, so a `null`
+// result proves a real denial instead of a vacuous CORS read failure.
+const sendFixtureResponse = (res, body, type) => {
+  res.setHeader("access-control-allow-origin", "*");
+  res.setHeader("content-type", type);
+  res.end(body);
+};
 let hitsA = 0, hitsB = 0;
 const serverA = createServer((req, res) => {
   hitsA += 1;
-  res.setHeader("content-type", req.url === "/asset.txt" ? "text/plain" : "text/html");
-  res.end(req.url === "/asset.txt"
+  const isAsset = req.url === "/asset.txt";
+  sendFixtureResponse(res, isAsset
     ? "synthetic-dev-asset"
     : `<!doctype html><title>Dev fixture</title><script>
 window.__devChecks = async (portB, portA) => {
@@ -44,15 +55,15 @@ window.__devChecks = async (portB, portA) => {
   });
   return { rel, otherPort, otherHost, ws };
 };
-</script>`);
+</script>`, isAsset ? "text/plain" : "text/html");
 });
 // serverB has no WebSocket endpoint: an upgrade attempt means the gate let a
 // denied request through, so count and destroy instead of answering.
 let upgradesB = 0;
 const serverB = createServer((req, res) => {
   hitsB += 1;
-  res.setHeader("content-type", req.url === "/b-asset.txt" ? "text/plain" : "text/html");
-  res.end(req.url === "/b-asset.txt" ? "synthetic-second-port" : "<!doctype html><title>Second fixture</title>");
+  const isAsset = req.url === "/b-asset.txt";
+  sendFixtureResponse(res, isAsset ? "synthetic-second-port" : "<!doctype html><title>Second fixture</title>", isAsset ? "text/plain" : "text/html");
 });
 serverB.on("upgrade", (req, socket) => { upgradesB += 1; socket.destroy(); });
 const listen = server => new Promise(resolve => server.listen(0, "127.0.0.1", () => resolve(server.address().port)));
@@ -142,20 +153,24 @@ try {
   const filePreview = await api("POST", `/tabs/${tab.tabId}/previews`, { path: fileDoc });
   assert.equal(filePreview.ok, true, JSON.stringify(filePreview));
   const fileEval = evaluator(await attach(pathToFileURL(fileDoc).href, "typeof window.__fileChecks === 'function'"));
+  const fileHits = { a: hitsA, b: hitsB };
   const fileChecks = await fileEval(`window.__fileChecks(${portA}, ${portB})`);
   assert.equal(fileChecks.a, null, "a file: preview must not reach the dev server origin");
   assert.equal(fileChecks.b, null, "a file: preview must not reach the second port");
+  assert.equal(hitsA, fileHits.a, "the file: preview must have sent no request to the dev server origin at all");
+  assert.equal(hitsB, fileHits.b, "the file: preview must have sent no request to the second port at all");
   console.log("PASS: a file: preview has no loopback grant");
 
   // Leg 4 — the explicit open path legitimately loads the second port and
   // pins IT (a fresh preview, its own grant; the old preview keeps its own).
   const secondPreview = await api("POST", `/tabs/${tab.tabId}/previews`, { url: urlB });
   assert.equal(secondPreview.ok, true, JSON.stringify(secondPreview));
-  const hitsBefore = hitsB;
+  const hitsBefore = { b: hitsB, a: hitsA };
   const secondEval = evaluator(await attach(urlB, "document.readyState === 'complete' || document.readyState === 'interactive'"));
   assert.equal(await secondEval(`fetch("b-asset.txt").then(r => r.text()).catch(() => null)`), "synthetic-second-port");
   assert.equal(await secondEval(`fetch(${JSON.stringify(urlA)}).then(r => r.text()).catch(() => null)`), null, "the second preview must not inherit the first preview's grant");
-  assert.ok(hitsB >= hitsBefore + 1, "the explicit open legitimately reached the second port");
+  assert.ok(hitsB >= hitsBefore.b + 1, "the explicit open legitimately reached the second port");
+  assert.equal(hitsA, hitsBefore.a, "the second preview must have sent no request to the dev server origin at all");
   console.log("PASS: explicit open loads the second port and pins only it");
 
   console.log("PASS: preview loopback grant is pinned to the opened dev-server origin");
