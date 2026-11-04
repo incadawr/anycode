@@ -472,6 +472,58 @@ describe("In-flight saves", () => {
   });
 });
 
+/**
+ * The first save used to leave the pane dirty: the baseline was seeded from
+ * the raw draft while the post-write effects rebuilt it from the persisted
+ * (normalized) roles, so a UI-only field — a pending Custom… model flag —
+ * made them disagree and leaving the section asked "Discard unsaved roles?"
+ * right after "Roles saved.".
+ */
+describe("One save clears the unsaved-changes guard", () => {
+  /** The owner's edit shape: a Custom… model carries the UI-only customModel flag. */
+  async function editCustomModel(): Promise<void> {
+    const model = container.querySelector<HTMLSelectElement>('[aria-label="executor primary model"]')!;
+    await act(async () => { model.value = "custom"; model.dispatchEvent(new Event("change", { bubbles: true })); });
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    await act(async () => {
+      const custom = container.querySelector<HTMLInputElement>('[aria-label="executor primary custom model"]')!;
+      setter?.call(custom, "my-model");
+      custom.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+
+  it.each([
+    ["an existing global profile", (pane: Partial<RolesPaneProps>) => { pane.tabId = undefined; }, settingsWithProfile("Team")],
+    ["a new profile from the built-ins", (pane: Partial<RolesPaneProps>) => { pane.tabId = undefined; }, cloneDefaults()],
+    ["an existing project override", (pane: Partial<RolesPaneProps>) => { pane.projectRoot = "/projects/app"; }, (() => {
+      const settings = cloneDefaults();
+      settings.roleProfiles = {
+        profiles: [{ id: "g", name: "Global", roles: {} }, { id: "j", name: "Job", roles: {} }],
+        activeId: "g",
+        projects: [{ projectRoot: "/projects/app", profileId: "j" }],
+      };
+      return settings;
+    })()],
+    ["a new project profile", (pane: Partial<RolesPaneProps>) => { pane.projectRoot = "/projects/app"; }, cloneDefaults()],
+  ])("after one save of %s, leaving does not ask to discard", async (_label, configure, initial) => {
+    installBridge(initial);
+    const actions: string[] = [];
+    let guard: ((action: () => void, onCancel?: () => void) => void) | null = null;
+    const props: RolesPaneProps = {};
+    configure(props);
+    props.registerGuard = (registered) => { guard = registered; };
+    root = createRoot(container);
+    await act(async () => root?.render(createElement(RolesPane as React.ComponentType<RolesPaneProps>, props)));
+    await editCustomModel();
+    await click(buttonByText("Save roles"));
+    expect(container.textContent).toContain("Roles saved.");
+    guard!(() => { actions.push("left"); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(container.querySelector('[aria-label="Discard unsaved roles?"]')).toBeNull();
+    expect(actions).toEqual(["left"]);
+  });
+});
+
 describe("Control appearance and unavailable routes", () => {
   it("uses shared styles for default, prompt, project, and advanced controls", async () => {
     installBridge(settingsWithProfile("Team"));

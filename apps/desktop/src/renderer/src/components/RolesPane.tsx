@@ -230,7 +230,17 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
       const profile = { id, name: existing?.name ?? createProfileName("", current.profiles.map((p) => p.name)), roles: built.roles };
       return { ...current, profiles: existing ? current.profiles.map((p) => p.id === id ? profile : p) : [...current.profiles, profile], ...(projectRoot ? {} : { activeId: id }), ...(!selected && projectRoot ? { projects: [...current.projects.filter((p) => p.projectRoot !== projectRoot), { projectRoot, profileId: id }] } : {}) };
     }, "Roles saved.");
-    if (ok) { setBaseline(draft); setBaselineCap(cap); }
+    if (ok) {
+      // The post-write effects rebuild the draft from the persisted roles,
+      // whose normalized shape drops UI-only fields (a pending Custom… flag,
+      // stray whitespace). Seeding the baseline from the raw draft would
+      // disagree with that rebuild and re-arm the unsaved-changes guard right
+      // after a successful save, so both sides read the same fresh snapshot.
+      const saved = roleProfiles(useSettingsStore.getState().snapshot?.settings ?? {}).profiles.find((p) => p.id === id);
+      const next = toDraft(saved?.roles ?? fromDraft(draft).roles);
+      const nextCap = saved?.roles.maxParallelChildren?.toString() ?? "";
+      setDraft(next); setBaseline(next); setCap(nextCap); setBaselineCap(nextCap);
+    }
   }
   const title = projectRoot ? mapped ? `project override for ${projectFolderName(projectRoot)}` : `inherited global profile for ${projectFolderName(projectRoot)}` : "";
   return <div className="settings-pane roles-pane" data-testid="settings-roles-pane">
