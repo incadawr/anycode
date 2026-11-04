@@ -9,7 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- Auto-compaction no longer no-ops with "the conversation is too short" on sessions driven by a single prompt: the compaction boundary now falls back to an assistant message when no later user message exists, so the context can shrink instead of growing past the model's window. After repeated failures with the context still above the threshold the turn stops with a clear error instead of running until the provider rejects the request — and so does every later prompt, until the session is restarted or the context is reduced; a manual /compact no longer trips that breaker, and the telemetry `compaction_end` record carries only failure/skip flags, never the error text (engine error messages are arbitrary transport text).
+- Auto-compaction no longer no-ops with "the conversation is too short" on sessions driven by a single prompt: the compaction boundary now falls back to an assistant message when no later user message exists, so the context can shrink instead of growing past the model's window. After repeated failures with the context still above the threshold the turn stops with a clear error instead of running until the provider rejects the request — and so does every later prompt, until the session is restarted or the context is reduced; a manual /compact never feeds that breaker — neither its no-op skip nor a failed attempt (provider error, cancel, empty summary) — and the telemetry `compaction_end` record carries only failure/skip flags, never the error text (engine error messages are arbitrary transport text).
 
 ## [0.0.75] — 2026-11-04
 
