@@ -70,7 +70,10 @@ import { RING_MAX_MSG_CHARS } from "./console-format.js";
  * reach loopback transitively at all (preview-ipc-risk F4). The loopback
  * grant is pinned to the ONE origin an open names (`record.localOrigins`) —
  * will-navigate, will-redirect and the request gate all enforce the same
- * set, for mainFrame and subresource alike, so a remote/file document has
+ * set, for mainFrame and subresource alike, and a committed navigation away
+ * from the pinned origin (link jump or history restore, `did-navigate`)
+ * drops the grant entirely, so the document that took over the frame cannot
+ * inherit it. A remote/file document has
  * no loopback path and a localhost document cannot widen to a second port,
  * another loopback host spelling, or a different scheme's port. A different
  * local target is reachable only through a fresh open/navigate (the
@@ -623,7 +626,9 @@ interface WebPreviewRecord {
    * The loopback origins this preview may contact (`http(s)://host[:port]`,
    * scheme-normalized exactly like the request gate's comparisons). Set at
    * open/reuse-navigate time to the ONE dev-server origin a `localhost`
-   * open carries; every other open clears it. Both halves of preview-ipc-risk
+   * open carries; every other open clears it, and so does a committed
+   * navigation away from it (`rederiveLoopbackGrant`). Both halves of
+   * preview-ipc-risk
    * F4 close here: a remote/file document has NO loopback grant (its
    * mainFrame can neither pivot into loopback nor any loopback port), and a
    * localhost document is bound to the specific origin it was opened with
@@ -2822,6 +2827,11 @@ class PreviewHost implements PreviewHostHandle {
     wc.onDidNavigate(guard((navUrl) => {
       record.documentAnchorPending = false;
       record.url = navUrl;
+      // The loopback grant follows the DISPLAYED document: a committed
+      // navigation away from the pinned dev-server origin (an allowed link,
+      // or a history restore, which never re-enters `evaluateNavigation`)
+      // must not leave the grant live for the new document.
+      this.rederiveLoopbackGrant(record, navUrl);
       // The document the policy anchors on moved: a `file:` navigation
       // re-points the anchor at the NEW file (re-resolved through the
       // artifact resolver), a non-file navigation clears it. The gate
@@ -3022,6 +3032,32 @@ class PreviewHost implements PreviewHostHandle {
     record.realSourcePath = resolved.realPath;
     record.sourcePath = filePath;
     this.armWatcher(record);
+  }
+
+  /**
+   * Re-derives the loopback grant after a committed main-frame navigation
+   * (`did-navigate` — this also covers history back/forward, which never
+   * re-enters `evaluateNavigation`): the grant belongs to the document the
+   * preview DISPLAYS. Landing on the pinned dev-server origin keeps it
+   * (reload, same-origin path change); landing anywhere else drops it, so a
+   * page that navigates away to an approved remote origin cannot inherit
+   * the grant and reach the dev server with XHR/WebSocket. The grant is
+   * never widened here: a committed navigation can only reach a loopback
+   * origin the pinned-origin policy already approved.
+   */
+  private rederiveLoopbackGrant(record: WebPreviewRecord, navUrl: string): void {
+    let pinned = false;
+    try {
+      const parsed = new URL(navUrl);
+      if ((parsed.protocol === "http:" || parsed.protocol === "https:") && isLocalHost(parsed.hostname)) {
+        pinned = record.localOrigins.has(`${parsed.protocol}//${parsed.host}`);
+      }
+    } catch {
+      // Unparseable landing URL — not the pinned origin.
+    }
+    if (!pinned) {
+      record.localOrigins = new Set();
+    }
   }
 
   /**
