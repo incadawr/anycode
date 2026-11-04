@@ -776,16 +776,15 @@ describe("BrowserController hard limits while Full browser access is on (brief 4
  * the preview page, driven through the REAL BrowserController over FakeCdp's
  * `Runtime.evaluate` seam. The fake cookie jar models the browser invariant
  * the policy relies on: an HttpOnly cookie is stored in the jar but never
- * exposed to `document.cookie`, and another partition's jar is a separate
- * context the script cannot reach.
+ * exposed to `document.cookie`, and the script's world is the page's own
+ * main context — eval never names another one.
  */
 const VISIBLE_COOKIE = "sid=fake-visible-cookie-sentinel";
 const HTTPONLY_COOKIE = "fake-httponly-cookie-sentinel";
 const LOCAL_TOKEN = "fake-localstorage-sentinel";
-const OTHER_PARTITION_COOKIE = "fake-other-partition-sentinel";
 
-function fakePartition(cookies: string[] = [VISIBLE_COOKIE, HTTPONLY_COOKIE], url = "http://localhost:3000/") {
-  const jar = cookies.map((cookie) => ({ value: cookie, httpOnly: cookie === HTTPONLY_COOKIE }));
+function fakePartition() {
+  const jar = [VISIBLE_COOKIE, HTTPONLY_COOKIE].map((cookie) => ({ value: cookie, httpOnly: cookie === HTTPONLY_COOKIE }));
   const store = new Map([["token", LOCAL_TOKEN]]);
   const sandbox = {
     document: {
@@ -803,7 +802,7 @@ function fakePartition(cookies: string[] = [VISIBLE_COOKIE, HTTPONLY_COOKIE], ur
   const world = vm.createContext(sandbox);
   // A page-defined helper that reads the cookie, exactly as a real page could.
   vm.runInContext("function leakCookie() { return document.cookie; }", world);
-  const { cdp, run } = setup({ url });
+  const { cdp, run } = setup();
   cdp.respond("Runtime.evaluate", (params?: object) => {
     const expression = (params as { expression?: string } | undefined)?.expression ?? "";
     try {
@@ -842,17 +841,27 @@ describe("BrowserController eval data contract (runs page code, states it)", () 
     expect(result.value.text).not.toContain(HTTPONLY_COOKIE);
   });
 
-  it("another partition's sentinel never leaks into this partition's eval", async () => {
-    const other = fakePartition([OTHER_PARTITION_COOKIE], "http://localhost:4000/");
-    const otherResult = await other.run({ action: "eval", expression: "document.cookie" });
-    expect(otherResult.ok && otherResult.value.text).toContain(OTHER_PARTITION_COOKIE);
-
+  it("eval rides only the page's own context: no Network./Storage. CDP traffic and no explicit context id", async () => {
     const page = fakePartition();
     const result = await page.run({ action: "eval", expression: "document.cookie + ' | ' + leakCookie()" });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.text).toContain(VISIBLE_COOKIE);
-    expect(result.value.text).not.toContain(OTHER_PARTITION_COOKIE);
+    // The isolation the policy relies on is structural: eval goes through
+    // Runtime.evaluate in the page's main world — the driver never enables a
+    // Network.*/Storage.* domain (no cookie/storage inspection traffic) and
+    // never names another execution context.
+    const methods = page.cdp.methods();
+    expect(methods).toContain("Runtime.evaluate");
+    for (const method of methods) {
+      expect(method.startsWith("Network.")).toBe(false);
+      expect(method.startsWith("Storage.")).toBe(false);
+    }
+    for (const call of page.cdp.calls.filter((entry) => entry.method === "Runtime.evaluate")) {
+      const params = call.params as { contextId?: unknown; uniqueContextId?: unknown };
+      expect(params.contextId).toBeUndefined();
+      expect(params.uniqueContextId).toBeUndefined();
+    }
   });
 });
 
