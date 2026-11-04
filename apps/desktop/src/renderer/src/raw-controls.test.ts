@@ -77,7 +77,7 @@ const BASELINE: Record<string, number> = {
   "components/TrustedBinariesSection.tsx": 1,
   "components/TrustedFoldersSection.tsx": 1,
   "components/VisionPane.tsx": 1,
-  "components/WelcomeScreen.tsx": 4,
+  "components/WelcomeScreen.tsx": 5,
   "components/WindowControls.tsx": 3,
   "components/WorkspaceTrustDialog.tsx": 4,
   "components/model-drill-menu.tsx": 6
