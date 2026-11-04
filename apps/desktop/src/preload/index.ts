@@ -335,8 +335,9 @@ import type {
 // channels (CUT.md CONTRACTS) — mirrors the `previewPanel.setContainer`
 // style just above: shared constant, typed invoke wrapper, zero logic in
 // this file.
-import { MD_PREVIEW_NAVIGATE_CHANNEL, MD_PREVIEW_READ_CHANNEL } from "../shared/md-preview.js";
+import { MD_PREVIEW_NAVIGATE_CHANNEL, MD_PREVIEW_READ_CHANNEL, MD_PREVIEW_WINDOW_ARGV_FLAG } from "../shared/md-preview.js";
 import type { MdDocReadResult } from "../shared/md-preview.js";
+import { exposeMdPreviewBridge } from "./md-preview-bridge.js";
 
 // (design/slice-codex-fixes-cut.md §2(g)/§3.8): Codex onboarding
 // invoke/push channels. Duplicated literals, not `shared/**` exports — every
@@ -674,7 +675,12 @@ export type ClaudeLoginStartResult =
 // re-stamps the `type` and re-posts (still window.postMessage, since
 
 const rendererUrl = process.argv.find((arg) => arg.startsWith("--anycode-renderer-url="))?.slice("--anycode-renderer-url=".length);
-if (rendererUrl && isRendererUrl(window.location.href, rendererUrl)) {
+// The detached md popout (main/md-window-adapter.ts stamps the flag into its
+// argv) must NOT get this full app surface: it takes the NARROW document
+// bridge of md-preview-bridge.ts instead (preview-ipc-risk F2 — no
+// settings/plugins/trust/tab/proxy method even exists in that window).
+const mdPreviewWindow = process.argv.includes(MD_PREVIEW_WINDOW_ARGV_FLAG);
+if (rendererUrl && !mdPreviewWindow && isRendererUrl(window.location.href, rendererUrl)) {
 ipcRenderer.on(
   PORT_ENVELOPE_TYPE,
   (
@@ -1432,4 +1438,12 @@ contextBridge.exposeInMainWorld("anycode", {
     },
   },
 });
+}
+
+// The detached md popout's NARROW document bridge — behind the SAME
+// isRendererUrl gate as the full bridge above, so it exists only while this
+// window shows the app's own renderer; a document that somehow navigated
+// away has no `window.anycode` at all (md-preview-bridge.ts).
+if (rendererUrl && mdPreviewWindow && isRendererUrl(window.location.href, rendererUrl)) {
+  exposeMdPreviewBridge();
 }
