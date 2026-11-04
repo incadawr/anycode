@@ -314,3 +314,84 @@ describe("cost popover layout", () => {
     } finally { rmSync(directory, { recursive: true, force: true }); }
   }, 40_000);
 });
+
+describe("composer chip row geometry", () => {
+  /**
+   * The owner-reported chip-row bug: the Orchestrate text chip wrapped to two
+   * lines and its ink painted past the footer's fixed 28px height, reading as
+   * overlapping buttons. The contract: every chip stays one 28px line, the
+   * row never overflows (session footer clips; the start screen's open footer
+   * must not spill into the send column), and narrow width truncates labels
+   * with an ellipsis instead of wrapping or overlapping.
+   */
+  it.skipIf(!existsSync(chrome))("keeps the codex chip row one fixed-height line, no wrap and no overlap, at narrow and wide widths", () => {
+    const cssRoot = resolve(import.meta.dirname, "..");
+    const css = ["tokens.css", "app.css"].map((file) => readFileSync(resolve(cssRoot, file), "utf8")).join("\n");
+    // One codex session row (overflow-hidden footer) and one start-screen
+    // codex draft row (overflow-visible footer), each at wide and narrow
+    // width — the four surfaces of one contract, verified in a single run.
+    const row = (id: string, width: number, start: boolean): string =>
+      `<div class="composer${start ? " start-composer" : ""}" style="width:${width}px">` +
+      `<div class="composer-footer"><div class="composer-footer-left" id="${id}">` +
+      `<button class="orchestrate-toggle" aria-pressed="true" aria-label="Orchestrate"><svg width="16" height="16"></svg></button>` +
+      `<div class="model-pill"><button class="model-pill-chip"><span class="model-pill-label">Full access</span><svg class="model-pill-chevron" width="12" height="12"></svg></button></div>` +
+      `<button class="composer-attach"><svg width="16" height="16"></svg></button>` +
+      `<div class="model-pill"><button class="model-pill-chip"><span class="model-pill-label">GPT-6.1-Sol · medium</span><svg class="model-pill-chevron" width="12" height="12"></svg></button></div>` +
+      `</div><div class="composer-footer-right"><button class="composer-send">Send</button></div></div></div>`;
+    const directory = mkdtempSync(resolve(tmpdir(), "anycode-chip-row-layout-"));
+    try {
+      const file = resolve(directory, "fixture.html");
+      writeFileSync(file, `<!doctype html><html data-theme="dark"><head><meta charset="utf-8"><style>${css}</style></head><body>
+        ${row("session-wide", 700, false)}
+        ${row("session-narrow", 300, false)}
+        ${row("start-wide", 700, true)}
+        ${row("start-narrow", 300, true)}
+        <pre id="result"></pre><script>
+          const read = id => {
+            const left = document.getElementById(id);
+            const chips = [...left.children].filter(el => el.getBoundingClientRect().height > 0);
+            const boxes = chips.map(el => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, height: r.height, scrollH: el.scrollHeight, clientH: el.clientHeight }; });
+            // Pairwise overlap probe, in row order (flex layout never reorders).
+            const overlaps = [];
+            for (let i = 1; i < boxes.length; i++) if (boxes[i].left < boxes[i - 1].right - 0.6) overlaps.push(i);
+            const label = left.querySelector('.model-pill:last-child .model-pill-label');
+            return {
+              heights: boxes.map(box => box.height),
+              wrapped: boxes.filter(box => box.scrollH > box.clientH + 0.6).length,
+              overlaps,
+              rowSpill: left.scrollWidth - left.clientWidth,
+              rightEdge: left.getBoundingClientRect().right,
+              sendLeft: left.parentElement.querySelector('.composer-footer-right').getBoundingClientRect().left,
+              labelTruncated: label.scrollWidth - label.clientWidth > 0.6,
+              toggleWidth: left.querySelector('.orchestrate-toggle').getBoundingClientRect().width,
+            };
+          };
+          const ids = ['session-wide', 'session-narrow', 'start-wide', 'start-narrow'];
+          document.querySelector('#result').textContent = JSON.stringify(Object.fromEntries(ids.map(id => [id, read(id)])));
+        </script></body></html>`);
+      const run = spawnSync(chrome, ["--headless", "--no-sandbox", "--disable-gpu", "--disable-background-networking", "--no-first-run", `--user-data-dir=${directory}/profile`, "--dump-dom", `file://${file}`], { encoding: "utf8", timeout: 30_000 });
+      expect(run.status, run.stderr).toBe(0);
+      const match = run.stdout.match(/<pre id="result">([^<]+)<\/pre>/);
+      expect(match).not.toBeNull();
+      const result = JSON.parse(match![1]!) as Record<string, { heights: number[]; wrapped: number; overlaps: number[]; rowSpill: number; rightEdge: number; sendLeft: number; labelTruncated: boolean; toggleWidth: number }>;
+      for (const [id, row] of Object.entries(result)) {
+        // One fixed-height line: every control is the 28px footer surface and
+        // nothing grew a second line of ink.
+        expect(row.heights, id).toEqual([28, 28, 28, 28]);
+        expect(row.wrapped, id).toBe(0);
+        expect(row.overlaps, id).toEqual([]);
+        expect(row.toggleWidth, id).toBe(28);
+      }
+      // Narrow must truncate, not clip: the model label actually ellipsizes.
+      expect(result["session-narrow"]!.labelTruncated).toBe(true);
+      // The session footer contains its row (the chips FIT in the clipped box,
+      // ellipsis did the yielding — not the clip edge).
+      expect(result["session-narrow"]!.rowSpill).toBeLessThanOrEqual(0.6);
+      // The start screen's overflow-visible footer must not spill into the
+      // send column at either width.
+      for (const id of ["start-wide", "start-narrow"]) {
+        expect(result[id]!.rightEdge).toBeLessThanOrEqual(result[id]!.sendLeft + 0.6);
+      }
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  }, 60_000);
+});

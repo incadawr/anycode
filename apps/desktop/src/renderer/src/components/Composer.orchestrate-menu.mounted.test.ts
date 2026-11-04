@@ -239,15 +239,21 @@ describe("Composer — mode menu's Orchestrate row", () => {
       await act(async () => root.render(createElement(TabContext.Provider, {value:{tabId:"tab-1",store}}, createElement(Composer))));
       expect(container.textContent).not.toContain("Orchestrate");
       await act(async () => store.getState().applyHostMessage({...ready, orchestration:{enabled:false,available:true,posture:"off"}}));
-      const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent === "Orchestrate")!;
-      expect(button).toBeDefined();
+      // Icon-only toggle: the accessible name carries the state, the chip's
+      // own text is gone (a text chip wrapped and inflated the chip row).
+      const toggle = () => container.querySelector<HTMLButtonElement>("button.orchestrate-toggle")!;
+      expect(toggle()).not.toBeNull();
+      expect(toggle().getAttribute("aria-label")).toBe("Orchestrate: delegate work to child agents");
+      expect(toggle().getAttribute("aria-pressed")).toBe("false");
       expect(container.querySelector(".mode-menu")).toBeNull();
-      await act(async () => button.click());
+      await act(async () => toggle().click());
       await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="role-picker-skip"]')!.click());
       const request = send.mock.calls.at(-1)![1] as {requestId:string};
       expect(store.getState().orchestrateActive).toBe(false);
       await act(async () => store.getState().applyHostMessage({type:"orchestrate_result",requestId:request.requestId,connectionId:"conn",outcome:"applied",enabled:true}));
-      expect(container.textContent).toContain("Orchestrate on");
+      // The host's ack is what flips the pressed state (and the label with it).
+      expect(toggle().getAttribute("aria-pressed")).toBe("true");
+      expect(toggle().getAttribute("aria-label")).toBe("Orchestration is on: child agents do the work");
     } finally { await act(async () => root.unmount()); }
   });
 
