@@ -17,6 +17,10 @@
 import { isAbsolute } from "node:path";
 import { z } from "zod";
 import type { AnycodeSettings, SettingsPatch } from "../shared/settings.js";
+// VALUE import (the one exception to the type-only rule below): the claude
+// context-window bounds, so the schema cannot drift from the settings-set gate
+// and the child-env builder that share the same constants.
+import { CLAUDE_CONTEXT_WINDOW_MAX, CLAUDE_CONTEXT_WINDOW_MIN } from "../shared/engines.js";
 
 /** The settings schema version this binary writes and understands (bumped to v2 — provider connections). */
 export const CURRENT_SETTINGS_VERSION = 2 as const;
@@ -694,23 +698,46 @@ const proxyProfilesArraySchema = z
  * the precise opposite of what the user selected, and a leak direction rather
  * than a fail-soft one.
  *
- * This keeps only the two string-shaped functional fields and drops the rest of
- * the corrupt block, so the outer catch keeps doing its job for the cache half
- * while an explicit proxy decision survives on its own.
+ * This keeps the functional fields and drops the rest of the corrupt block, so
+ * the outer catch keeps doing its job for the cache half while an explicit
+ * proxy decision survives on its own. The claude block extends the rule to one
+ * more functional field: a range-valid `contextWindowTokens` (the caller passes
+ * the shared bounds; codex has no such field) rides the salvage too — losing it
+ * would not fail soft, it would silently stop applying the user's limit and let
+ * the next write persist its absence permanently.
  */
-function salvageEngineProxyFields(raw: unknown): { proxyUrl?: string; proxyRef?: string } | undefined {
+function salvageEngineProxyFields(
+  raw: unknown,
+  contextWindowBounds?: { min: number; max: number },
+): { proxyUrl?: string; proxyRef?: string; contextWindowTokens?: number } | undefined {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     return undefined;
   }
-  const source = raw as { proxyUrl?: unknown; proxyRef?: unknown };
-  const salvaged: { proxyUrl?: string; proxyRef?: string } = {};
+  const source = raw as { proxyUrl?: unknown; proxyRef?: unknown; contextWindowTokens?: unknown };
+  const salvaged: { proxyUrl?: string; proxyRef?: string; contextWindowTokens?: number } = {};
   if (typeof source.proxyUrl === "string") {
     salvaged.proxyUrl = source.proxyUrl;
   }
   if (typeof source.proxyRef === "string") {
     salvaged.proxyRef = source.proxyRef;
   }
-  return salvaged.proxyUrl === undefined && salvaged.proxyRef === undefined ? undefined : salvaged;
+  // Same functional-field rule as the proxy decision, but only for a caller
+  // that names the bounds: a range-valid limit is carried, anything else is
+  // dropped (the CLI would ignore it anyway).
+  if (
+    contextWindowBounds &&
+    typeof source.contextWindowTokens === "number" &&
+    Number.isInteger(source.contextWindowTokens) &&
+    source.contextWindowTokens >= contextWindowBounds.min &&
+    source.contextWindowTokens <= contextWindowBounds.max
+  ) {
+    salvaged.contextWindowTokens = source.contextWindowTokens;
+  }
+  return salvaged.proxyUrl === undefined &&
+    salvaged.proxyRef === undefined &&
+    salvaged.contextWindowTokens === undefined
+    ? undefined
+    : salvaged;
 }
 
 export const settingsSchema: z.ZodType<AnycodeSettings> = z
@@ -885,18 +912,26 @@ export const settingsSchema: z.ZodType<AnycodeSettings> = z
         // `ANYCODE_CLAUDE_CONTEXT_WINDOW` carrier into the CLI as
         // `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, capping the ctx meter and the
         // CLI's own auto-compact threshold. Absent = the CLI's own default.
-        // Bounds mirror `CLAUDE_CONTEXT_WINDOW_MIN/MAX` in shared/engines.ts
-        // by contract (local literals — this module only type-imports from
-        // shared): the CLI ignores values outside its accepted 100k–1M
-        // range, so one must not be persistable. Per-field catch (env
-        // `contextWindowTokens` precedent): a corrupt hand-edited value
-        // degrades to "not configured" alone instead of tripping the outer
-        // block salvage that would drop `lastCheck`/`binaryPath`.
-        contextWindowTokens: z.number().int().min(100_000).max(1_000_000).optional().catch(undefined),
+        // Bounds are the SHARED `CLAUDE_CONTEXT_WINDOW_MIN/MAX` constants
+        // (bound by import, not mirrored by contract — the settings-set gate
+        // and the child-env builder use the same values): the CLI ignores
+        // values outside its accepted 100k–1M range, so one must not be
+        // persistable. Per-field catch (env `contextWindowTokens`
+        // precedent): a corrupt hand-edited value degrades to "not
+        // configured" alone instead of tripping the outer block salvage that
+        // would drop `lastCheck`/`binaryPath`.
+        contextWindowTokens: z
+          .number()
+          .int()
+          .min(CLAUDE_CONTEXT_WINDOW_MIN)
+          .max(CLAUDE_CONTEXT_WINDOW_MAX)
+          .optional()
+          .catch(undefined),
       })
       .optional()
-      // Same functional-field salvage as `codex` above (design review B-07).
-      .catch((ctx) => salvageEngineProxyFields(ctx.value)),
+      // Same functional-field salvage as `codex` above (design review B-07);
+      // the bounds let a range-valid contextWindowTokens ride the salvage too.
+      .catch((ctx) => salvageEngineProxyFields(ctx.value, { min: CLAUDE_CONTEXT_WINDOW_MIN, max: CLAUDE_CONTEXT_WINDOW_MAX })),
     // Named proxy profiles + the app-level reference (additive-optional;
     // version NOT bumped, same forward-compat reasoning as `codex`/`claude`
     // above — a settings.json with no `network` key round-trips byte-identically).
