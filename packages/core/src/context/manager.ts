@@ -258,16 +258,20 @@ export class ContextManager {
    * the request overhead alone; on a longer history under pressure the skip
    * would repeat on every turn while the context keeps growing, so it counts
    * as a breaker failure. On
-   * error/empty-summary/abort the history is untouched and the failure counter
-   * increments; the configured number of consecutive failures trips the breaker.
-   * The pressured structural skip counts toward the breaker only on the auto
-   * trigger; a manual /compact never feeds it (its skip stays a benign no-op).
+   * error/empty-summary/abort the history is untouched and — on the auto
+   * trigger — the failure counter increments; the configured number of
+   * consecutive failures trips the breaker. The breaker is fed on the auto
+   * trigger only: a manual /compact never changes its state (its structural
+   * skip stays a benign no-op, and a failed attempt leaves the breaker alone —
+   * the user is present, reads the error, and simply retries).
    */
   async runCompaction(opts: { signal?: AbortSignal; trigger?: "auto" | "manual" }): Promise<RunCompactionResult> {
     // A manual /compact never feeds the breaker: a structural skip there is
-    // the benign no-op it is below the threshold — the user is present and
-    // can read the row, unlike the auto path where a skip would repeat on
-    // every turn while the context keeps growing.
+    // the benign no-op it is below the threshold, and none of its real
+    // failures (provider error, cancel, empty summary) may disable the
+    // session's auto-compaction — the user is present and can read the row
+    // and retry, unlike the auto path where a skip would repeat on every turn
+    // while the context keeps growing.
     const trigger = opts.trigger ?? "auto";
     const preTokens = this.estimate().tokens;
     const signal = opts.signal;
@@ -292,7 +296,7 @@ export class ContextManager {
     // the compaction threshold; under pressure it counts as one.
     if (boundary <= 0) {
       if (underPressure) {
-        return this.recordFailure(preTokens, COMPACTION_SKIP_UNDER_PRESSURE, modelId);
+        return this.recordFailure(preTokens, COMPACTION_SKIP_UNDER_PRESSURE, modelId, trigger === "auto");
       }
       return {
         ok: false,
@@ -308,7 +312,7 @@ export class ContextManager {
     // Pure structural check on `kind`; same skip semantics as an empty prefix.
     if (items.slice(0, boundary).every((item) => item.kind === "compact_summary")) {
       if (underPressure) {
-        return this.recordFailure(preTokens, COMPACTION_SKIP_UNDER_PRESSURE, modelId);
+        return this.recordFailure(preTokens, COMPACTION_SKIP_UNDER_PRESSURE, modelId, trigger === "auto");
       }
       return {
         ok: false,
@@ -360,14 +364,14 @@ export class ContextManager {
     }
 
     if (aborted || signal?.aborted) {
-      return this.recordFailure(preTokens, "compaction aborted", modelId);
+      return this.recordFailure(preTokens, "compaction aborted", modelId, trigger === "auto");
     }
     if (streamError !== null) {
-      return this.recordFailure(preTokens, streamError, modelId);
+      return this.recordFailure(preTokens, streamError, modelId, trigger === "auto");
     }
     const trimmed = summary.trim();
     if (trimmed.length === 0) {
-      return this.recordFailure(preTokens, "compaction produced an empty summary", modelId);
+      return this.recordFailure(preTokens, "compaction produced an empty summary", modelId, trigger === "auto");
     }
 
     const summaryText = `${COMPACT_SUMMARY_PREFIX}${trimmed}`;
@@ -425,12 +429,20 @@ export class ContextManager {
     return 0;
   }
 
+  /**
+   * Records a failed attempt. Feeds the circuit breaker only when the caller
+   * asked for the compaction itself (the auto trigger): a manual /compact
+   * failure returns the error to its caller without touching breaker state.
+   */
   private recordFailure(
     preTokens: number,
     error: string,
     modelId: string | undefined,
+    feedsBreaker: boolean,
   ): RunCompactionResult {
-    this.consecutiveFailures += 1;
+    if (feedsBreaker) {
+      this.consecutiveFailures += 1;
+    }
     return {
       ok: false,
       preTokens,

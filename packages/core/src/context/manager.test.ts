@@ -1087,6 +1087,116 @@ describe("ContextManager.runCompaction — atomic on failure/abort", () => {
   });
 });
 
+describe("ContextManager.runCompaction — manual failures never feed the breaker", () => {
+  // Six heavy turns on a tight window: every failure below is a real
+  // summarizing attempt (no structural skip), the context sits ABOVE the
+  // compaction threshold exactly as in the auto path (shouldAutoCompact true),
+  // and the failure ceiling sits at the default 3.
+  const tightWindow = {
+    keepRecentMessages: 4,
+    contextWindowTokens: 2_000,
+    outputReserveTokens: 100,
+    compactBufferTokens: 100,
+  };
+  const longMessages = (): ChatMessage[] => {
+    const messages: ChatMessage[] = [];
+    for (let t = 0; t < 6; t += 1) {
+      messages.push(userMsg(`turn ${t}`));
+      messages.push(assistantToolCall(`c${t}`));
+      messages.push(toolResult(`c${t}`, "x".repeat(1_200)));
+    }
+    return messages;
+  };
+
+  /** Port failing the first `failures` calls with `failingScript`, then summarizing successfully. */
+  const flakyPort = (
+    failures: number,
+    failingScript: () => ModelStreamEvent[],
+  ): { port: ModelPort; callsMade: () => number } => {
+    let calls = 0;
+    const port: ModelPort = {
+      streamText: (request: ModelRequest) => {
+        const events = calls < failures ? failingScript() : summaryScript("OK");
+        calls += 1;
+        const signal = request.abortSignal;
+        return (async function* () {
+          for (const event of events) {
+            if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+            yield event;
+          }
+        })();
+      },
+    };
+    return { port, callsMade: () => calls };
+  };
+
+  const expectBreakerUntouched = (manager: ContextManager): void => {
+    expect(manager.breakerTripped()).toBe(false);
+    // Under pressure the auto path would still be allowed to try: only a
+    // tripped breaker (or a drop below the threshold) answers false here.
+    expect(manager.shouldAutoCompact()).toBe(true);
+    expect((manager as unknown as { consecutiveFailures: number }).consecutiveFailures).toBe(0);
+  };
+
+  it("three manual runs failing on a provider error leave the breaker untripped and the next auto attempt runs", async () => {
+    const { port, callsMade } = flakyPort(3, errorScript);
+    const history = buildHistory(longMessages());
+    const manager = makeManager(history, port, tightWindow);
+    expect(manager.shouldAutoCompact()).toBe(true); // fixture precondition: real pressure
+
+    for (let i = 0; i < 3; i += 1) {
+      const result = await manager.runCompaction({ trigger: "manual" });
+      expect(result.ok).toBe(false);
+    }
+    expectBreakerUntouched(manager);
+
+    // The next AUTO attempt is neither blocked nor pre-failed: it reaches the
+    // model (4th call) and compacts.
+    expect((await manager.runCompaction({})).ok).toBe(true);
+    expect(callsMade()).toBe(4);
+    expect(history.items[0]!.kind).toBe("compact_summary");
+  });
+
+  it("three cancelled manual runs leave the breaker untripped and the next auto attempt runs", async () => {
+    const port = new ScriptedModelPort(summaryScript("CONDENSED"));
+    const history = buildHistory(longMessages());
+    const manager = makeManager(history, port, tightWindow);
+    expect(manager.shouldAutoCompact()).toBe(true); // fixture precondition: real pressure
+
+    for (let i = 0; i < 3; i += 1) {
+      const controller = new AbortController();
+      controller.abort();
+      const result = await manager.runCompaction({ signal: controller.signal, trigger: "manual" });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toBe("compaction aborted");
+      }
+    }
+    expectBreakerUntouched(manager);
+
+    expect((await manager.runCompaction({})).ok).toBe(true);
+    expect(port.requests).toHaveLength(4);
+    expect(history.items[0]!.kind).toBe("compact_summary");
+  });
+
+  it("three manual runs producing an empty summary leave the breaker untripped and the next auto attempt runs", async () => {
+    const { port, callsMade } = flakyPort(3, emptyScript);
+    const history = buildHistory(longMessages());
+    const manager = makeManager(history, port, tightWindow);
+    expect(manager.shouldAutoCompact()).toBe(true); // fixture precondition: real pressure
+
+    for (let i = 0; i < 3; i += 1) {
+      const result = await manager.runCompaction({ trigger: "manual" });
+      expect(result.ok).toBe(false);
+    }
+    expectBreakerUntouched(manager);
+
+    expect((await manager.runCompaction({})).ok).toBe(true);
+    expect(callsMade()).toBe(4);
+    expect(history.items[0]!.kind).toBe("compact_summary");
+  });
+});
+
 describe("ContextManager.runCompaction — property: never splits a tool pair", () => {
   it("keeps every tool_call/tool_result pair intact across random valid histories", async () => {
     for (let seed = 1; seed <= 60; seed += 1) {
