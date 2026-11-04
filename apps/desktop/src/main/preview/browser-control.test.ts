@@ -568,13 +568,38 @@ describe("driver source guard", () => {
     }
   });
 
-  // Eval runs page JavaScript by contract; no substring filter may pretend to
-  // be a data boundary on top of it.
-  it("keeps no eval blocklist and no cookie/storage refusal message", () => {
+  // Eval runs page JavaScript by contract; no content filter under any name
+  // may pretend to be a data boundary on top of it.
+  it("keeps no eval blocklist: the eval path forwards the expression with no expression-inspection branch", () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const source = readFileSync(join(here, "browser-control.ts"), "utf8");
     expect(source).not.toContain("EVAL_BLOCKLIST");
     expect(source).not.toContain("reading cookies/storage/credentials is not permitted");
+    // Slice the driver's eval path (the evaluate method, up to the next
+    // section) and forbid content inspection of the expression there: the
+    // only expression-dependent branch allowed is the length robustness cap,
+    // so a blocklist re-introduced under another name fails here, and the
+    // behavioural tests above fail anything that slips past a rename.
+    const evalBody = source.slice(source.indexOf("private async evaluate("), source.indexOf("// ── domains ──"));
+    expect(evalBody).toContain("Runtime.evaluate");
+    expect(evalBody).toMatch(/expression\.length/);
+    for (const inspection of [
+      "expression.includes(",
+      "expression.match(",
+      "expression.indexOf(",
+      "expression.search(",
+      "expression.split(",
+      "expression.startsWith(",
+      "expression.endsWith(",
+      "expression.toLowerCase(",
+      "expression.toUpperCase(",
+      "expression.replace(",
+      "expression.trim(",
+      "expression.test(",
+    ]) {
+      expect(evalBody).not.toContain(inspection);
+    }
+    expect(evalBody).not.toMatch(/BLOCKLIST|BLOCKED_EXPRESSIONS|SENSITIVE_PATTERN|FORBIDDEN/i);
   });
 });
 
