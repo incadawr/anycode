@@ -50,7 +50,14 @@ export function removeIpcGuardTrustedWindow(webContents: unknown): void {
 /** True only when `sender` IS the main window's webContents or an allow-listed window's. */
 export function isTrustedIpcSender(sender: unknown): boolean {
   if (typeof sender !== "object" || sender === null) return false;
-  const main = mainWindowSource?.();
+  // Fail closed: the source closure may touch a window that died mid-event
+  // (a throwing getter must refuse the call, not crash the listener).
+  let main: unknown;
+  try {
+    main = mainWindowSource?.();
+  } catch {
+    return false;
+  }
   if (sender === main) return true;
   return trustedWindows.has(sender);
 }
@@ -58,10 +65,19 @@ export function isTrustedIpcSender(sender: unknown): boolean {
 /** True only when the event's frame is its own sender's top (main) frame. */
 export function isTopFrameIpcEvent(event: unknown): boolean {
   if (typeof event !== "object" || event === null) return false;
-  const { sender, senderFrame } = event as { sender?: unknown; senderFrame?: unknown };
-  if (typeof sender !== "object" || sender === null) return false;
-  const mainFrame = (sender as { mainFrame?: unknown }).mainFrame;
-  return senderFrame !== undefined && senderFrame !== null && senderFrame === mainFrame;
+  // Fail closed: Electron can deliver an event whose sender is already
+  // destroyed, and `mainFrame`/`senderFrame` are native getters that THROW
+  // on a destroyed object. Reading them must refuse the event — never let
+  // the exception escape, because out of an `on` listener an uncaught throw
+  // is a main-process crash (the owner-visible error modal), not a refusal.
+  try {
+    const { sender, senderFrame } = event as { sender?: unknown; senderFrame?: unknown };
+    if (typeof sender !== "object" || sender === null) return false;
+    const mainFrame = (sender as { mainFrame?: unknown }).mainFrame;
+    return senderFrame !== undefined && senderFrame !== null && senderFrame === mainFrame;
+  } catch {
+    return false;
+  }
 }
 
 /** Trusted sender AND top frame; a missing/undefined event is never trusted. */

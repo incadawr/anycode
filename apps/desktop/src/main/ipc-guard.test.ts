@@ -107,12 +107,32 @@ function collectMainSources(dir: string): string[] {
   return out;
 }
 
+/**
+ * The ban covers every way to reach ipcMain, not just the two literal calls:
+ * handleOnce/once variants, computed member access, the import/destructure of
+ * ipcMain itself, destructuring or aliasing of its registration methods, and
+ * passing it as an argument. Any hit in non-test main source means a channel
+ * can bypass the guard.
+ */
+const IPC_MAIN_BAN_PATTERNS: Array<{ pattern: RegExp; why: string }> = [
+  { pattern: /ipcMain\s*\.\s*(handleOnce|handle|once|on|addListener)\s*\(/, why: "direct ipcMain registration call" },
+  { pattern: /ipcMain\s*\[/, why: "computed ipcMain member access" },
+  { pattern: /import\s*\{[^}]*\bipcMain\b[^}]*\}\s*from/, why: "ipcMain import outside ipc-guard.ts" },
+  { pattern: /\{\s*ipcMain\s*[,}]/, why: "destructuring ipcMain out of a namespace" },
+  { pattern: /\{[^}]*\b(handleOnce|handle|once|on)\b[^}]*\}\s*=\s*ipcMain\b/, why: "destructuring ipcMain's registration methods" },
+  { pattern: /=\s*ipcMain\s*[.;,)\s]/, why: "aliasing ipcMain" },
+  { pattern: /\(\s*ipcMain\b/, why: "passing ipcMain as an argument" },
+];
+
 describe("ipc guard enumeration — every privileged registration goes through the guard", () => {
-  it("no main module (tests and ipc-guard.ts excluded) contains a direct ipcMain.handle( or ipcMain.on( call", () => {
+  it("no main module (tests and ipc-guard.ts excluded) reaches ipcMain in any form", () => {
     const mainDir = fileURLToPath(new URL(".", import.meta.url));
     const offenders: string[] = [];
     for (const file of collectMainSources(mainDir)) {
-      if (/ipcMain\.(handle|on)\s*\(/.test(readFileSync(file, "utf8"))) offenders.push(file);
+      const text = readFileSync(file, "utf8");
+      for (const { pattern, why } of IPC_MAIN_BAN_PATTERNS) {
+        if (pattern.test(text)) offenders.push(`${file}: ${why}`);
+      }
     }
     expect(offenders).toEqual([]);
   });
@@ -143,6 +163,50 @@ describe("ipc guard helpers", () => {
     expect(isTopFrameIpcEvent({})).toBe(false);
     expect(isTopFrameIpcEvent(undefined)).toBe(false);
     expect(isTopFrameIpcEvent(null)).toBe(false);
+  });
+
+  it("a THROWING getter (destroyed sender) fails closed instead of throwing out of the guard", () => {
+    // Electron's destroyed webContents throws from its native accessors.
+    const destroyedSender = {};
+    Object.defineProperty(destroyedSender, "mainFrame", {
+      get: () => {
+        throw new TypeError("Object has been destroyed");
+      },
+    });
+    expect(isTopFrameIpcEvent({ sender: destroyedSender, senderFrame: {} })).toBe(false);
+    // The event object itself can carry the throwing getter (destructuring).
+    const throwingEvent = {};
+    Object.defineProperty(throwingEvent, "senderFrame", {
+      get: () => {
+        throw new TypeError("Object has been destroyed");
+      },
+    });
+    expect(isTopFrameIpcEvent(throwingEvent)).toBe(false);
+    // Wrapper level: the event is refused with the guard's refusal, not the
+    // destroyed-object TypeError leaking out of the wrapper.
+    setIpcGuardMainWindow(() => destroyedSender);
+    guardedIpcHandle("anycode:guard-destroyed-sender", () => "served");
+    expect(() => invokeHandle("anycode:guard-destroyed-sender", { sender: destroyedSender, senderFrame: {} })).toThrow(/refused/);
+    // ...and an `on` wrapper DROPS the event: no exception escapes the listener.
+    capturedOn.clear();
+    guardedIpcOn("anycode:guard-destroyed-sender-on", () => {
+      throw new Error("listener must not run");
+    });
+    expect(() => fireOn("anycode:guard-destroyed-sender-on", { sender: destroyedSender, senderFrame: {} })).not.toThrow();
+    expect(() => fireOn("anycode:guard-destroyed-sender-on", throwingEvent)).not.toThrow();
+  });
+
+  it("a THROWING guard source fails closed: refuse on handle, silent drop on on", () => {
+    setIpcGuardMainWindow(() => {
+      throw new TypeError("Object has been destroyed");
+    });
+    guardedIpcHandle("anycode:guard-throwing-source", () => "served");
+    expect(() => invokeHandle("anycode:guard-throwing-source", MAIN_EVENT)).toThrow(/refused/);
+    capturedOn.clear();
+    guardedIpcOn("anycode:guard-throwing-source-on", () => {
+      throw new Error("listener must not run");
+    });
+    expect(() => fireOn("anycode:guard-throwing-source-on", MAIN_EVENT, { tabId: "t" })).not.toThrow();
   });
 });
 

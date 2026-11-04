@@ -7,15 +7,19 @@
  * asserts four things:
  *
  *   1. the app's main frame still resolves `window.anycode.settings.get()`;
- *   2. a same-origin SUBFRAME of the renderer either has no bridge or its
- *      invoke is rejected (before: the subframe's invoke RESOLVES — the hole);
+ *   2. a same-origin SUBFRAME of the renderer has NO preload bridge
+ *      (sandboxed subframes get no preload: nodeIntegrationInSubFrames is
+ *      off), so "no bridge" is the pass condition — no bridge means nothing
+ *      to invoke from; this step is a regression tripwire for a future
+ *      nodeIntegrationInSubFrames flip, NOT a demonstration of the top-frame
+ *      rule, which is pinned by ipc-guard.test.ts's unit tests;
  *   3. a foreign window built by a require hook with the very same preload and
  *      renderer URL cannot invoke `settings.get()` — it must reject (before:
  *      it RESOLVES — the hole); after: rejects with the guard's refusal;
  *   4. the detached Markdown popout window (allow-listed at creation) still
  *      works: `mdPreview.read` answers instead of rejecting.
  *
- * The `--before` run is expected to FAIL on steps 2/3 (that is the hole this
+ * The `--before` run is expected to fail on step 3 (that is the hole this
  * change closes); `--after` must pass all steps.
  */
 import assert from "node:assert/strict";

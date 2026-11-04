@@ -82,7 +82,12 @@ export function createMdPreviewWindow(
   // loads the app's own renderer bundle (same trust domain as the main
   // window), so it is allow-listed as a trusted IPC sender for its whole
   // lifetime — window-level, not per-channel; narrower per-channel policies
-  // can extend the same seam later. Dropped on close so a dead window can
+  // can extend the same seam later. That "same trust domain" holds only while
+  // this window shows the app's OWN bundle: unlike the main window it has NO
+  // main-navigation protection (protectMainNavigation is wired on the main
+  // window's webContents only), so a later navigation-hardening task must
+  // re-check this trust (or narrow it per-channel) before anything here can
+  // navigate away from our renderer. Dropped on close so a dead window can
   // never keep a stale trust entry alive.
   addIpcGuardTrustedWindow(contents);
   win.once("closed", () => {
