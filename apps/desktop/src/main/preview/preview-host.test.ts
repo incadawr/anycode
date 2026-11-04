@@ -2672,6 +2672,52 @@ describe("PreviewHost — the loopback grant stays pinned across reuse, transfer
     expect(allowed.ok).toBe(true);
     expect(wc.goToOffsetCalls).toEqual([-1]);
   });
+
+  it("navigating away to the approved remote origin DROPS the grant: the remote document cannot reach the dev server", async () => {
+    // Repro of the surviving-grant hole: approved remote open -> reuse the
+    // preview for the dev server -> navigate back to the approved page. The
+    // committed remote document must not inherit the dev-server grant.
+    const rig = makeRig();
+    const first = rig.host.openForTab(TAB, { url: "https://a.tld/app", allowRemote: true });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    await first;
+
+    const second = rig.host.openForTab(TAB, { url: "http://localhost:5173/", previewId: rig.windows[0]!.previewId });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    await second;
+
+    const wc = rig.windows[0]!.webContents;
+    const gate = gateOf(rig.windows[0]!);
+    await expect(gate({ url: "http://localhost:5173/api", resourceType: "xhr" })).resolves.toBe(true);
+
+    // The dev-server page links to the approved origin: the in-page jump is
+    // allowed (consented) and the remote document commits.
+    expect(wc.fireWillNavigate("https://a.tld/app")).toBe(true);
+    await flush();
+    expect(wc.loadedUrls.at(-1)).toBe("https://a.tld/app");
+    wc.fireDidNavigate("https://a.tld/app");
+
+    // The grant did not survive the navigation away ...
+    await expect(gate({ url: "http://localhost:5173/api", resourceType: "xhr" })).resolves.toBe(false);
+    await expect(gate({ url: "ws://localhost:5173/", resourceType: "webSocket" })).resolves.toBe(false);
+    // ... the remote document keeps its own consented access ...
+    await expect(gate({ url: "https://a.tld/api", resourceType: "xhr" })).resolves.toBe(true);
+    // ... and cannot pivot into loopback by navigating back, either.
+    const before = wc.loadedUrls.length;
+    wc.fireWillNavigate("http://localhost:5173/");
+    await flush();
+    expect(wc.loadedUrls).toHaveLength(before);
+  });
+
+  it("a committed navigation WITHIN the pinned origin keeps the grant (reload, same-origin path change)", async () => {
+    const rig = await openedLocalRig("http://localhost:5173/");
+    const gate = gateOf(rig.windows[0]!);
+    rig.windows[0]!.webContents.fireDidNavigate("http://localhost:5173/other-path");
+    await expect(gate({ url: "http://localhost:5173/api", resourceType: "xhr" })).resolves.toBe(true);
+    await expect(gate({ url: "http://localhost:9999/", resourceType: "mainFrame" })).resolves.toBe(false);
+  });
 });
 
 describe("PreviewHost — request gate: the document anchor follows the navigation", () => {
