@@ -358,7 +358,11 @@ export function ModeMenu({ mode, disabled, onChange, orchestrateActive = false, 
         aria-haspopup="menu"
         aria-expanded={open}
         aria-pressed={showOrchestrateRow ? orchestrateActive : undefined}
-        title={orchestrateOn ? "Orchestrate is on: child agents do the work, the session runs in Plan" : undefined}
+        // The chip truncates at narrow widths (the label's `min-width: 3ch`
+        // floor), so the full text rides the title in EVERY state — not only
+        // orchestrate's note; otherwise a truncated chip hides its mode with
+        // no hover recovery.
+        title={orchestrateOn ? "Orchestrate is on: child agents do the work, the session runs in Plan" : chipLabel}
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
         onKeyDown={onChipKeyDown}

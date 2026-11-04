@@ -159,6 +159,10 @@ describe("Composer — mode menu's Orchestrate row", () => {
 
       const chip = container.querySelector<HTMLButtonElement>(".mode-chip")!;
       expect(chip.textContent).toContain("build");
+      // The truncated chip's full text rides the title in EVERY state, not
+      // only while orchestrate is on (the label can ellipsize to its 3ch
+      // floor, so hover is the only place the full name survives).
+      expect(chip.title).toBe("build");
       await act(async () => chip.click());
       await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="mode-menu-orchestrate"]')!.click());
 
@@ -180,6 +184,7 @@ describe("Composer — mode menu's Orchestrate row", () => {
       });
       expect(container.querySelector(".mode-chip")!.textContent).toContain("Orchestrate");
       expect(container.querySelector(".mode-chip")!.classList.contains("mode-chip-orchestrate")).toBe(true);
+      expect(container.querySelector<HTMLButtonElement>(".mode-chip")!.title).toBe("Orchestrate is on: child agents do the work, the session runs in Plan");
     } finally {
       await act(async () => root.unmount());
     }
