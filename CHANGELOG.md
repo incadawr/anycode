@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Reasoning-history replay can now be enabled per connection for custom endpoints and vLLM (connection drawer, "Reasoning replay" setting), and a per-provider replay support table is published in the developer documentation.
+
 ## [0.0.74] — 2026-11-04
 
 ### Fixed
