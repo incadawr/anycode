@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Browser results (read, snapshot, console, eval) now state the preview URL and id and carry an explicit untrusted-data boundary in the text models see, so page-controlled output stays attributable across native, Codex and Claude tabs.
+
 ## [0.0.73] — 2026-11-04
 
 ### Added
