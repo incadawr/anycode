@@ -3134,7 +3134,7 @@ describe("AgentLoop.compactNow — manual compaction (design slice-2.3-cut.md, t
     expect(usage.budgetTokens).toBeGreaterThan(0);
   });
 
-  it("still reaches the model on a second call even after the auto-compact circuit breaker has tripped", async () => {
+  it("a failed manual compaction does not feed the breaker and the next call still reaches the model", async () => {
     const modelPort = new MockModelPort([
       [{ type: "finish", finishReason: "stop", usage: {} }], // empty summary -> 1st attempt fails
       [
@@ -3152,9 +3152,12 @@ describe("AgentLoop.compactNow — manual compaction (design slice-2.3-cut.md, t
     expect(firstRun.at(-1)).toMatchObject({ type: "compaction_end", ok: false });
     expect(modelPort.step).toBe(1);
 
-    // maxConsecutiveCompactionFailures: 1 means the auto-compact breaker has now
-    // tripped; a manual call must still reach the model (it never calls
-    // shouldAutoCompact/consults the breaker).
+    // A manual failure never increments the breaker counter (runCompaction
+    // feeds the breaker on the auto trigger only): the user's failed /compact
+    // must not disable the session's auto-compaction — maxConsecutive-
+    // CompactionFailures: 1 means a single counted failure would trip it.
+    expect(loop.contextInfo().breakerTripped).toBe(false);
+
     const secondRun = await collect(loop.compactNow());
     expect(secondRun.find((e) => e.type === "compaction_end")).toMatchObject({
       type: "compaction_end",
