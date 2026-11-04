@@ -157,6 +157,56 @@ describe("buildSidebarGroups", () => {
     expect(groups[0]!.rows.map((r) => r.kind)).toEqual(["open", "resumable"]);
   });
 
+  it("dedupes a session whose id matches a live tab's bound sessionId even when the session index is stale (no openInTabId yet)", () => {
+    // Hydration window: host_ready landed (the tab bound s1) but the session
+    // index has not refetched, so the persisted row still lacks openInTabId.
+    const groups = buildSidebarGroups(
+      [tab({ tabId: "t1", workspace: "/ws", title: "Same session", sessionId: "s1" })],
+      [session({ id: "s1", workspace: "/ws", title: "Same session" })],
+    );
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.rows).toHaveLength(1);
+    expect(groups[0]!.rows[0]).toMatchObject({ kind: "open", key: "t1", tabId: "t1" });
+  });
+
+  it("carries the engine label onto the open row via the bound sessionId when openInTabId is not there yet", () => {
+    const groups = buildSidebarGroups(
+      [tab({ tabId: "t1", workspace: "/ws", sessionId: "s1" })],
+      [session({ id: "s1", workspace: "/ws", engineId: "codex" })],
+    );
+
+    expect(groups[0]!.rows[0]).toMatchObject({ kind: "open", engineId: "codex" });
+  });
+
+  it("hides a resumable row for a session currently opening in an unbound tab (click → hydration)", () => {
+    // The click created the tab (title forwarded) but host_ready has not
+    // landed: no bound sessionId, no refetched index — only the `opening`
+    // marker says this history row is already represented by the open tab.
+    const groups = buildSidebarGroups(
+      [tab({ tabId: "t1", workspace: "/ws", title: "Привет. Что у нас по задачам?" })],
+      [session({ id: "s1", workspace: "/ws", title: "Привет. Что у нас по задачам?", updatedAt: 0 })],
+      undefined,
+      new Set(["s1"]),
+    );
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.rows).toHaveLength(1);
+    expect(groups[0]!.rows[0]).toMatchObject({ kind: "open", key: "t1" });
+  });
+
+  it("keeps resumable rows that the opening marker does not name", () => {
+    const groups = buildSidebarGroups(
+      [tab({ tabId: "t1", workspace: "/ws" })],
+      [session({ id: "s1", workspace: "/ws" }), session({ id: "s2", workspace: "/ws" })],
+      undefined,
+      new Set(["s1"]),
+    );
+
+    expect(groups[0]!.rows.map((r) => r.kind)).toEqual(["open", "resumable"]);
+    expect(groups[0]!.rows[1]).toMatchObject({ kind: "resumable", sessionId: "s2" });
+  });
+
   it("orders groups by first-seen across tabs then sessions, so open-tab workspaces float above session-only ones", () => {
     const groups = buildSidebarGroups(
       [tab({ tabId: "t1", workspace: "/ws-b" })],
