@@ -69,6 +69,7 @@ import {
   reasoningReplayCreateValue,
   reasoningReplayUpdateValue,
   reasoningReplayVisible,
+  reasoningReplayTransportVisible,
   reasoningReplayBaseUrlMatch,
   reasoningReplayEnvHint,
   REASONING_REPLAY_HELP,
@@ -2163,6 +2164,53 @@ describe("reasoning replay helpers (GitHub #41)", () => {
     expect(advancedHasValues({ ...tuning, replay: "off" })).toBe(true);
   });
 
+  it("is transport-gated: hidden for openai-responses (core's replay gate never serves it), shown for the two message transports", () => {
+    expect(reasoningReplayTransportVisible("openai-responses", undefined)).toBe(false);
+    expect(reasoningReplayTransportVisible("openai-chat-completions", undefined)).toBe(true);
+    expect(reasoningReplayTransportVisible("anthropic-messages", undefined)).toBe(true);
+    // An empty local transport resolves through the provider's default,
+    // exactly like `promptCacheVisible`/`usageVisible`.
+    expect(reasoningReplayTransportVisible("", "openai-responses")).toBe(false);
+    expect(reasoningReplayTransportVisible("", "openai-chat-completions")).toBe(true);
+    expect(reasoningReplayTransportVisible("", undefined)).toBe(true);
+  });
+
+  it("a save while the select is transport-hidden omits the replay field — no invisible write, no delete of a saved one", () => {
+    const hidden = buildConnectionUpdatePayload({
+      connectionId: "conn-1", label: "", model: "", transport: "openai-responses", baseUrl: "", showBaseUrl: false,
+      proxyRef: "", authOptional: false, maxOutputTokens: "", imageInput: "auto",
+      promptCacheEnabled: false, usage: "auto", replay: "on", replayHidden: true,
+    });
+    // Neither the stale On nor the `""` clear sentinel rides the save:
+    // omission means "keep" in main, so a choice saved under a replay-capable
+    // transport survives switching away and back.
+    expect("preserveReasoning" in hidden).toBe(false);
+  });
+
+  it("the rendered replayShown resolves the transport before showing: a custom openai-kind endpoint (default openai-responses) hides it", async () => {
+    const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
+    const from = source.indexOf("const replayTransportShown");
+    const marker = "(replayCatalogMatch === undefined || replayCatalogMatch.preserveReasoning === true);";
+    const block = source.slice(from, source.indexOf(marker, from) + marker.length);
+    expect(block).toContain("replayTransportShown");
+    const { CUSTOM_KIND_DEFAULT_TRANSPORT } = await import("./SettingsScreen.js");
+    const evaluate = new Function(
+      "reasoningReplayVisible", "reasoningReplayTransportVisible", "transport", "isNewCustomEndpoint",
+      "CUSTOM_KIND_DEFAULT_TRANSPORT", "customKind", "selectedEntry", "effectiveProviderId", "replayCatalogMatch",
+      `${block}\nreturn { transportShown: replayTransportShown, shown: replayShown };`,
+    );
+    const run = (customKind: string, transport = "") =>
+      evaluate(reasoningReplayVisible, reasoningReplayTransportVisible, transport, true, CUSTOM_KIND_DEFAULT_TRANSPORT, customKind, { defaultTransport: "anthropic-messages" }, "custom", undefined);
+    // The reported repro: new custom endpoint of kind `openai` — its default
+    // transport is openai-responses, where replay can never be served.
+    expect(run("openai").transportShown).toBe(false);
+    expect(run("openai").shown).toBe(false);
+    expect(run("openai-compatible").shown).toBe(true);
+    // An explicit transport choice wins over the kind's default.
+    expect(run("openai", "openai-chat-completions").shown).toBe(true);
+    expect(run("openai-compatible", "openai-responses").shown).toBe(false);
+  });
+
   it("matches a custom record's base URL onto the builtin entry the host would resolve", () => {
     const builtin: CatalogSummaryEntry = { id: "openai", name: "OpenAI", authKind: "api_key", models: [], catalogBaseUrl: "https://api.openai.com/v1" };
     const record: CatalogSummaryEntry = { id: "custom:fixture", name: "OpenAI mirror", authKind: "api_key", models: [], catalogBaseUrl: "https://api.openai.com/v1/" };
@@ -2323,7 +2371,7 @@ describe("custom endpoint cache creation", () => {
       },
       modelPersistenceBridge: () => ({}), label: "", transport: "openai-responses", proxyRef: "",
       connectionCreateProxyRefField: () => ({}), promptCacheEnabled: true, IMPLICIT_PROMPT_CACHE,
-      usageSelection: "auto", usageSelectionCreateValue, replaySelection: "auto", reasoningReplayCreateValue,
+      usageSelection: "auto", usageSelectionCreateValue, replaySelection: "auto", reasoningReplayCreateValue, replayTransportShown: true,
       setProviderId: () => {}, setCreatedConnectionId: () => {}, onConnectionCreated: () => {}, onCommitBegin: undefined, onCommitSuccess: undefined, onBusyChange: undefined,
     };
     const run = new Function(...Object.keys(bindings), js)(...Object.values(bindings)) as () => Promise<void>;
@@ -2354,12 +2402,49 @@ describe("custom endpoint cache creation", () => {
         },
         modelPersistenceBridge: () => ({}), label: "", transport: "openai-chat-completions", proxyRef: "",
         connectionCreateProxyRefField: () => ({}), promptCacheEnabled: false,
-        usageSelection, usageSelectionCreateValue, replaySelection: "auto", reasoningReplayCreateValue,
+        usageSelection, usageSelectionCreateValue, replaySelection: "auto", reasoningReplayCreateValue, replayTransportShown: true,
         setProviderId: () => {}, setCreatedConnectionId: () => {}, onConnectionCreated: () => {}, onCommitBegin: undefined, onCommitSuccess: undefined, onBusyChange: undefined,
       };
       const run = new Function(...Object.keys(bindings), js)(...Object.values(bindings)) as () => Promise<void>;
       await run();
       expect(calls).toEqual([{ providerId: "custom:fixture", modelPricing: {}, model: "fixture-model", transport: "openai-chat-completions", includeUsage: expected }]);
+    },
+  );
+
+  // The replay select is hidden for a transport core's replay gate cannot
+  // serve, so its (stale) value must not ride that create either.
+  it.each([
+    ["openai-chat-completions", "on", true],
+    ["openai-chat-completions", "off", false],
+    ["openai-responses", "on", undefined],
+  ] as const)(
+    "on transport %s sends replay %s through the custom endpoint create path only when the transport can replay",
+    async (transport, replaySelection, expected) => {
+      const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
+      const body = source.slice(source.indexOf("  async function createNewCustomEndpoint()"), source.indexOf("  /** ADD: single primary action"));
+      const ts = await import("typescript");
+      const js = ts.transpile(body + "\nreturn createNewCustomEndpoint;", { target: ts.ScriptTarget.ES2022 });
+      const calls: unknown[] = [];
+      const bindings: Record<string, unknown> = {
+        preflightModelId, model: "fixture-model", buildCustomProviderCreateRequest: () => ({}),
+        pricingPayload: () => "", modelPricingPayload: () => ({}),
+        contextWindowTokensField, contextWindow: { raw: "" }, catalogMatchDisabled: false, reasoningSupported: undefined, modelEffort: "", effortLevels: [], imageInput: "auto", imageInputModelPreflightError,
+        customName: "fixture", customBaseUrl: "http://127.0.0.1", customKind: "openai-compatible",
+        secretValue: "", noAuth: true, setCreating: () => {}, setError: () => {}, catalog: [],
+        isCustomRecordProviderId: () => false, resolvedCustomProvider: () => ({ create: async () => ({ ok: true, providers: [] }) }),
+        dispatchSecret: () => {}, resolveCreatedCustomProviderId: () => "custom:fixture", reloadSnapshot: async () => {},
+        createConnectionAndPersistModel: async (_bridge: unknown, _reload: unknown, request: unknown) => {
+          calls.push(request); return { createdConnectionId: "connection" };
+        },
+        modelPersistenceBridge: () => ({}), label: "", transport, proxyRef: "",
+        connectionCreateProxyRefField: () => ({}), promptCacheEnabled: false,
+        usageSelection: "auto", usageSelectionCreateValue, replaySelection, reasoningReplayCreateValue,
+        replayTransportShown: reasoningReplayTransportVisible(transport, "openai-chat-completions"),
+        setProviderId: () => {}, setCreatedConnectionId: () => {}, onConnectionCreated: () => {}, onCommitBegin: undefined, onCommitSuccess: undefined, onBusyChange: undefined,
+      };
+      const run = new Function(...Object.keys(bindings), js)(...Object.values(bindings)) as () => Promise<void>;
+      await run();
+      expect(calls).toEqual([{ providerId: "custom:fixture", modelPricing: {}, model: "fixture-model", transport, ...(expected === undefined ? {} : { preserveReasoning: expected }) }]);
     },
   );
 });

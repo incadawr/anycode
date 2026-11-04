@@ -548,6 +548,23 @@ export function reasoningReplayVisible(providerId: string | undefined): boolean 
 }
 
 /**
+ * Whether the control belongs on screen for the RESOLVED transport: core's
+ * replay gate (`model-port.ts` `reasoningReplaySource`) replays reasoning
+ * only on the two message transports — openai-responses is out of scope
+ * (with `store: false` its reasoning items would need encrypted content) —
+ * so there the select would be inert no matter what it saves. Resolved
+ * exactly like `promptCacheVisible`/`usageVisible` (an empty local transport
+ * means the provider's default). Exported for direct testing (no jsdom).
+ */
+export function reasoningReplayTransportVisible(
+  transport: ProviderTransportId | "",
+  defaultTransport: ProviderTransportId | undefined,
+): boolean {
+  const resolved = transport !== "" ? transport : (defaultTransport ?? "anthropic-messages");
+  return resolved === "anthropic-messages" || resolved === "openai-chat-completions";
+}
+
+/**
  * Renderer mirror of core's `normalizeAnthropicBaseUrl` — the exact transform
  * `matchCatalogEntryByBaseUrl` (host, `@anycode/core`) applies to BOTH sides
  * before comparing: trailing slashes stripped, `/v1` ensured. Renderer modules
@@ -643,6 +660,13 @@ export function buildConnectionUpdatePayload(params: {
   usage: UsageSelection;
   /** GitHub #41: the reasoning-replay select's three-state value; Automatic sends the `""` clear sentinel. */
   replay: ReasoningReplaySelection;
+  /**
+   * True while the select is hidden because the transport cannot replay at
+   * all: the hidden control's value must not ride a save its user cannot
+   * see, and omission means "keep" in main, so a choice saved under a
+   * replay-capable transport survives the switch — never deleted.
+   */
+  replayHidden?: boolean;
   reasoningEffort?: ReasoningEffort | "";
   reasoningSupported?: boolean | "";
   effortLevels?: ReasoningEffort[] | "";
@@ -693,8 +717,10 @@ export function buildConnectionUpdatePayload(params: {
     // channel's `""` clear sentinel, On/Off persist a real boolean (`false`
     // is a MEANING — an explicit opt-out). Also sent while the control is
     // hidden for a catalog provider, so a provider switch never silently
-    // drops a saved custom-endpoint choice.
-    preserveReasoning: reasoningReplayUpdateValue(params.replay),
+    // drops a saved custom-endpoint choice. The one exception is a transport
+    // that cannot replay at all (`replayHidden`): there the value is omitted
+    // — nothing the user cannot see gets written, nothing gets deleted.
+    ...(params.replayHidden === true ? {} : { preserveReasoning: reasoningReplayUpdateValue(params.replay) }),
   };
 }
 
@@ -1726,8 +1752,15 @@ export function ConnectionDrawerFields({
   // GitHub #41: the reasoning-replay select is shown only where the catalog has
   // no own policy — the custom sentinel, a custom:<id> record, and vllm.
   const replayCatalogMatch = reasoningReplayBaseUrlMatch(catalog, selectedEntry?.catalogBaseUrl);
+  const replayTransportShown = reasoningReplayTransportVisible(
+    transport,
+    isNewCustomEndpoint ? CUSTOM_KIND_DEFAULT_TRANSPORT[customKind] : selectedEntry?.defaultTransport,
+  );
   const replayShown =
     reasoningReplayVisible(effectiveProviderId) &&
+    // A transport core's replay gate cannot serve (openai-responses) would
+    // keep the select inert however it is saved — hide it there too.
+    replayTransportShown &&
     // GitHub #41 review: a custom:<id> record whose base URL normalises onto a
     // BUILTIN catalog entry is governed by that entry's own flag — the host
     // resolves `providerName` by base URL (`matchCatalogEntryByBaseUrl`) and
@@ -1902,8 +1935,9 @@ export function ConnectionDrawerFields({
     }
     // GitHub #1: create has no `""` sentinel — Automatic is simply absent.
     const usageCreateValue = usageSelectionCreateValue(usageSelection);
-    // GitHub #41: same create discipline for the reasoning-replay override.
-    const replayCreateValue = reasoningReplayCreateValue(replaySelection);
+    // GitHub #41: same create discipline for the reasoning-replay override;
+    // a transport that cannot replay never carries the hidden select's value.
+    const replayCreateValue = replayTransportShown ? reasoningReplayCreateValue(replaySelection) : undefined;
     const req = buildCustomProviderCreateRequest({
       name: customName,
       baseUrl: customBaseUrl,
@@ -2060,8 +2094,9 @@ export function ConnectionDrawerFields({
     // GitHub #1: create has no `""` sentinel — Automatic is simply absent.
     const usageCreateValue = usageSelectionCreateValue(usageSelection);
     // GitHub #41: same create discipline for the reasoning-replay override
-    // (visible here only for the vllm template).
-    const replayCreateValue = reasoningReplayCreateValue(replaySelection);
+    // (visible here only for the vllm template); a transport that cannot
+    // replay never carries the hidden select's value.
+    const replayCreateValue = replayTransportShown ? reasoningReplayCreateValue(replaySelection) : undefined;
     const commitVersion = onCommitBegin?.() ?? 0;
     onBusyChange?.(true);
     setCreating(true);
@@ -2254,6 +2289,7 @@ export function ConnectionDrawerFields({
           promptCacheEnabled,
           usage: usageSelection,
           replay: replaySelection,
+          replayHidden: !replayTransportShown,
         }, { contextWindowDirty, contextWindowTokens: cw.value, reasoningSupportedDirty, reasoningSupported, modelEffortDirty, modelEffort, imageInputDirty, effortLevelsDirty, effortLevels }), ...(isCustomRecordConnection && !showBaseUrl ? { baseUrl: undefined } : {}), ...(catalogMatchDirty ? { catalogMatchDisabled: catalogMatchDisabled ? true as const : "" as const } : {}), ...(pendingVisibleModels !== null ? { visibleModels: pendingVisibleModels } : {}), ...(commitFetchedModels && fetchedModels !== null && fetchedSource !== null ? { fetchedModels: { ...fetchedSource, models: fetchedModels } } : {}), pricing, modelPricing },
         selectedModelId !== null && shouldAppendModelToList(selectedModelId, catalogOfferedIds, isCustomRecordConnection)
           ? selectedModelId
