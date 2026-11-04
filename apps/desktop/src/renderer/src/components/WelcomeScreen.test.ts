@@ -71,23 +71,27 @@ describe("resolveWelcomeView", () => {
 });
 
 describe("welcomeFormKey", () => {
-  it("a subscription pick on the fresh-create form keys the form per template", () => {
-    expect(welcomeFormKey("add", "z-ai")).toBe("add:z-ai");
-    expect(welcomeFormKey("add", "minimax")).toBe("add:minimax");
-    expect(welcomeFormKey("add", "kimi")).toBe("add:kimi");
+  it("a subscription pick on the fresh-create form keys the form per template and pick", () => {
+    expect(welcomeFormKey("add", "z-ai", 0)).toBe("add:z-ai#0");
+    expect(welcomeFormKey("add", "minimax", 0)).toBe("add:minimax#0");
+    expect(welcomeFormKey("add", "kimi", 0)).toBe("add:kimi#0");
   });
 
   it("different picks yield different keys (typed values must not leak across templates)", () => {
-    expect(welcomeFormKey("add", "z-ai")).not.toBe(welcomeFormKey("add", "minimax"));
+    expect(welcomeFormKey("add", "z-ai", 0)).not.toBe(welcomeFormKey("add", "minimax", 0));
+  });
+
+  it("re-picking the SAME template yields a NEW key (a fresh seed must actually remount the form, not just reset the pick bookkeeping)", () => {
+    expect(welcomeFormKey("add", "z-ai", 0)).not.toBe(welcomeFormKey("add", "z-ai", 1));
   });
 
   it("no pick keeps the plain key", () => {
-    expect(welcomeFormKey("add", null)).toBe("add");
+    expect(welcomeFormKey("add", null, 0)).toBe("add");
   });
 
   it("any other view passes its key through untouched", () => {
-    expect(welcomeFormKey("conn-a", "z-ai")).toBe("conn-a");
-    expect(welcomeFormKey("conn-a", null)).toBe("conn-a");
+    expect(welcomeFormKey("conn-a", "z-ai", 0)).toBe("conn-a");
+    expect(welcomeFormKey("conn-a", null, 0)).toBe("conn-a");
   });
 });
 

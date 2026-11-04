@@ -72,13 +72,18 @@ export const WELCOME_SUBSCRIPTIONS: readonly WelcomeSubscription[] = [
 
 /**
  * The mount key for the embedded API form: a subscription pick gets its own
- * key (`add:<template>`) so switching picks remounts the form with the new
- * template seeded (typed values must never leak across templates — the same
- * discipline as the switcher's per-connection keys), while any other view
- * keeps its plain stable key and no template. Exported for direct testing.
+ * key (`add:<template>#<pick>`) so switching picks remounts the form with the
+ * new template seeded (typed values must never leak across templates — the
+ * same discipline as the switcher's per-connection keys), while any other view
+ * keeps its plain stable key and no template. `pick` is a nonce bumped on
+ * every subscription click, including a re-pick of the already-active one:
+ * the bare subscription state no-ops on an identical re-pick, so without the
+ * nonce no key change and no remount would follow — and the pick's fresh-seed
+ * reset would then describe a form that never happened (the key link reviving
+ * over a form still showing another provider). Exported for direct testing.
  */
-export function welcomeFormKey(resolvedKey: string, subscription: WelcomeSubscriptionId | null): string {
-  return resolvedKey === "add" && subscription !== null ? `add:${subscription}` : resolvedKey;
+export function welcomeFormKey(resolvedKey: string, subscription: WelcomeSubscriptionId | null, pick: number): string {
+  return resolvedKey === "add" && subscription !== null ? `add:${subscription}#${pick}` : resolvedKey;
 }
 
 /**
@@ -134,10 +139,15 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
   const activePath = path ?? (connections.length > 0 ? "api" : null);
   // The subscription shortcut picked on this screen, if any. It only drives
   // the API form while the view is still the fresh-create form it opened
-  // (`welcomeFormKey`'s `add:<template>` rule) — switching to edit another
+  // (`welcomeFormKey`'s `add:<template>#<pick>` rule) — switching to edit another
   // connection or to a generic add drops it, exactly like any other
   // half-typed form state.
   const [subscription, setSubscription] = useState<WelcomeSubscriptionId | null>(null);
+  // Bumped on every subscription click so each pick — even of the template
+  // already shown — yields a fresh form key. Without it an identical re-pick
+  // would no-op the subscription state and leave the old form instance (say,
+  // switched to another provider) under a freshly reset key link.
+  const [pick, setPick] = useState(0);
   // The provider the embedded form's select currently shows (`null` = the
   // untouched seed), reported through `onProviderIdChange`. A select change
   // away from the seeded template must take the key link with it, or the pane
@@ -176,7 +186,7 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
   useEffect(() => {
     cardRef.current?.querySelector<HTMLElement>(".welcome-setup select, .welcome-setup input, .welcome-setup button, .welcome-paths button")?.focus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resolved.key, activePath, subscription]);
+  }, [resolved.key, activePath, subscription, pick]);
 
   return (
     <div className="welcome-screen">
@@ -242,6 +252,7 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
             <button key={sub.id} type="button" className="welcome-path welcome-subscription" onClick={() => {
               setPath("api");
               setSubscription(sub.id);
+              setPick((n) => n + 1);
               // A fresh seed: the remounted form's select shows the new
               // template again, whatever the previous form had been switched to.
               setFormProviderId(null);
@@ -328,7 +339,7 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
                 </p>
               )}
               <ConnectionDrawerFields
-                key={welcomeFormKey(resolved.key, subscription)}
+                key={welcomeFormKey(resolved.key, subscription, pick)}
                 mode={resolved.mode}
                 editConnection={resolved.editConnection}
                 catalog={catalog}
