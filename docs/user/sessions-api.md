@@ -15,6 +15,7 @@ send them a message. It is a local MCP endpoint that runs while AnyCode is open.
 | `get_message_status` | Delivery state of a message you sent. |
 | `wait_for_result` | Waits (up to 120 s per call) until the turn that took your message finishes, then returns its answer. Returns `pending` on timeout; call it again. |
 | `cancel_turn` | Stops the running turn of a shared session, like the Stop button. Queued messages are rejected and parked approvals are denied. An idle session answers `cancelled: false`, which is not an error. |
+| `list_agent_projects` | Lists the projects (folder paths) where you switched on **Allow agents to open tasks here**. Read-only discovery for `create_session`; answers an empty list in the legacy env-file mode. |
 | `close_session` | Closes a shared tab opened by `create_session`; stop a running turn with `cancel_turn` first. |
 | `create_session` | Opens a new tab in a project where you switched on **Allow agents to open tasks here**, optionally with a validated reasoning effort and — for a Codex session — a chosen Codex account. See "Let agents open tasks" below. |
 | `list_pending_approvals` | Lists tool requests waiting for an answer. Only sessions with **External approvals** on. See below. |

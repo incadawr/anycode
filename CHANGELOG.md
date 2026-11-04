@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- The telegram-remote example plugin can open and close sessions from the chat with `/projects`, `/new` and `/close`, backed by a new read-only `list_agent_projects` Sessions API tool that lists the projects where agents may open tasks.
+
 ## [0.0.74] — 2026-11-04
 
 ### Fixed
