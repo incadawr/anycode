@@ -1332,7 +1332,28 @@ export class AgentLoop {
           };
         }
         if (this.context.shouldAutoCompact()) {
-          yield* this.runCompactionCycle("auto", signal);
+          const compacted = yield* this.runCompactionCycle("auto", signal);
+          // Repeated compaction failures under pressure would otherwise retry
+          // every turn while the context keeps growing past the window. Once
+          // the breaker has tripped, stop the turn with a diagnosable error
+          // instead of running until the provider rejects an overflowed
+          // request (rendered from `safe`, never the raw error).
+          if (compacted === false && this.context.breakerTripped()) {
+            const max = this.context.getBudgetConfig().maxConsecutiveCompactionFailures;
+            const message =
+              `Auto-compaction failed ${max} times in a row with the context still above the compaction threshold; ` +
+              "this turn is stopped before the context window overflows. Run /compact or start a new session.";
+            yield { type: "error", error: new Error(message), safe: { code: "unknown", message } };
+            // The consumer may abort while paused on the yielded error event
+            // (before this generator resumes) — re-check so a synchronous
+            // abort there still ends the loop as "cancelled", not "error".
+            if (signal?.aborted) {
+              yield* this.emitLoopEnd("cancelled", turn, signal, turnId, turn);
+            } else {
+              yield* this.emitLoopEnd("error", turn, signal, turnId, turn);
+            }
+            return;
+          }
         }
         if (signal?.aborted) {
           yield* this.emitLoopEnd("cancelled", turn, signal, turnId, turn);
