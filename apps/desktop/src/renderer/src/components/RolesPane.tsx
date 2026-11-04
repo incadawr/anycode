@@ -1,5 +1,5 @@
 import { Button } from "../ui/index.js";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { SubagentsSnapshot } from "../../../shared/subagents-config.js";
 import { useSettingsStore } from "../settings-store.js";
 import { useTabsStore } from "../tabs-store.js";
@@ -163,6 +163,19 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
   useEffect(() => {
     if (menuOpen) menuRef.current?.querySelectorAll<HTMLButtonElement>(".roles-menu-item")[menuFocus]?.focus();
   }, [menuOpen, menuFocus]);
+  // Every close hands focus back to the trigger (the kit Popover's rule):
+  // Delete closes the menu before its confirm dialog opens, so the dialog's
+  // own close would otherwise strand focus on <body>. Skip it when the close
+  // already moved focus somewhere (the name form, the dialog).
+  useLayoutEffect(() => {
+    if (!menuOpen) return;
+    return () => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active !== document.body && active !== document.documentElement) return;
+      const trigger = menuRef.current?.querySelector<HTMLButtonElement>(".roles-menu-trigger");
+      if (trigger?.isConnected) trigger.focus();
+    };
+  }, [menuOpen]);
   useEffect(() => {
     if (!menuOpen) return;
     const onPointer = (event: MouseEvent) => { if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false); };
@@ -181,6 +194,10 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
   const projects = [...new Set([...tabs.map((t) => t.projectRoot ?? t.workspace).filter(isAbsoluteProject), ...sessionProjects, ...registry.projects.map((p) => p.projectRoot)])];
   const projectLabel = (path: string) => projects.filter((p) => projectFolderName(p) === projectFolderName(path)).length > 1 ? `${projectFolderName(path)} — ${path}` : projectFolderName(path);
   function onMenuKeyDown(event: React.KeyboardEvent): void {
+    // The handler sits on the wrapper so it also sees the trigger (while a
+    // save is in flight every item is disabled and focus stays there); a
+    // closed menu must stay transparent to the app-level Esc handlers.
+    if (!menuOpen) return;
     if (event.key === "Escape") {
       // preventDefault: the window-level Esc handlers must not also see it.
       event.preventDefault();
@@ -192,12 +209,21 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
     if (event.key === "Tab") { setMenuOpen(false); return; }
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     event.preventDefault();
-    const items = menuRef.current ? [...menuRef.current.querySelectorAll<HTMLButtonElement>(".roles-menu-item")] : [];
+    // Roving skips disabled items (a save in flight, or the built-ins'
+    // Rename/Delete) — a modulo over them parks focus and kills the menu.
+    const items = menuRef.current ? [...menuRef.current.querySelectorAll<HTMLButtonElement>(".roles-menu-item")].filter((item) => !item.disabled) : [];
     if (!items.length) return;
     const offset = event.key === "ArrowDown" ? 1 : -1;
-    const next = (items.indexOf(document.activeElement as HTMLButtonElement) + offset + items.length) % items.length;
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next = current === -1 ? (offset === 1 ? 0 : items.length - 1) : (current + offset + items.length) % items.length;
     setMenuFocus(next);
     items[next]?.focus();
+  }
+  // A confirm dialog that replaced the menu hands focus back to the trigger
+  // when it closes; the dialog itself only unmounts, which strands focus.
+  function restoreMenuTrigger(): void {
+    const trigger = menuRef.current?.querySelector<HTMLButtonElement>(".roles-menu-trigger");
+    if (trigger?.isConnected) trigger.focus();
   }
   function guard(action: () => void, onCancel?: () => void): void {
     if (!dirty) { action(); return; }
@@ -288,8 +314,8 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
       {registry.profiles.length ? <select className="settings-field-select" aria-label="Role profile" title={selected?.name ?? "Default"} value={projectRoot ? mapped?.id ?? "" : selected?.id ?? ""} disabled={busy} onChange={(e) => selectProfile(e.target.value)}>
         {projectRoot ? <option value="">{`Use global (${registry.profiles.find((p) => p.id === registry.activeId)?.name ?? "Built-in roles"})`}</option> : <option value="">Built-in roles</option>}{registry.profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}      </select> : <strong>Built-in roles</strong>}
       {profileScopeBadge && <span className="roles-badge" title={profileScopeBadge.title}>{profileScopeBadge.label}</span>}
-      <div className="roles-menu" ref={menuRef}><Button size="sm" type="button" className="roles-menu-trigger" aria-label="Profile actions" aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => { setMenuFocus(0); setMenuOpen((open) => !open); }}>⋯</Button>
-        {menuOpen && <div className="roles-menu-items" role="menu" aria-label="Profile actions" onKeyDown={onMenuKeyDown}>
+      <div className="roles-menu" ref={menuRef} onKeyDown={onMenuKeyDown}><Button size="sm" type="button" className="roles-menu-trigger" aria-label="Profile actions" aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => { setMenuFocus(0); setMenuOpen((open) => !open); }}>⋯</Button>
+        {menuOpen && <div className="roles-menu-items" role="menu" aria-label="Profile actions">
         {(["new", "duplicate", "rename"] as const).map((action, index) => <Button size="sm" type="button" key={action} role="menuitem" className="roles-menu-item" tabIndex={menuFocus === index ? 0 : -1} disabled={busy || (action === "rename" && !selected)} onClick={() => { setMenuOpen(false); setNameAction(action); setName(action === "rename" ? selected?.name ?? "" : ""); }}>{action === "new" ? "New" : action === "duplicate" ? "Duplicate" : "Rename"}</Button>)}
         <div className="roles-menu-divider" role="separator" />
         <Button size="sm" type="button" role="menuitem" className="roles-menu-item roles-menu-item-danger" tabIndex={3 === menuFocus ? 0 : -1} disabled={busy || !selected} onClick={() => { setMenuOpen(false); if (!selected) return; guard(() => setPending({ title: `Delete ${selected.name}?`, body: `Project mappings to ${selected.name} will be removed and will use the global profile.`, confirmLabel: "Delete", action: () => { void write((current) => { const profiles = current.profiles.filter((p) => p.id !== selected.id); return { profiles, activeId: current.activeId === selected.id ? "" : current.activeId, projects: current.projects.filter((p) => p.profileId !== selected.id) }; }); } })); }}>Delete</Button>
@@ -314,7 +340,7 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
     <details onToggle={(e) => setAdvanced(e.currentTarget.open)}><summary className="settings-button">Advanced {(selected?.roles.maxParallelChildren !== undefined || ROLE_PRESET_ROLES.some((role) => (selected?.roles[role]?.fallbacks?.length ?? 0) > 1)) && <span className="roles-badge">Configured</span>}</summary><label className="settings-field"><span className="settings-field-label">Max parallel children</span><input className="settings-field-input" type="text" inputMode="numeric" aria-label="Max parallel children" disabled={busy} value={cap} onChange={(e) => setCap(e.target.value)} /><span className="settings-field-hint">Optional limit (1–16); blank uses the session limit, default 3.</span></label></details>
     <details><summary className="settings-button">Per-project profiles ({registry.projects.length})</summary><div className="roles-projects">{registry.projects.map((p) => <div className="roles-project" key={p.projectRoot}><span title={p.projectRoot}>{projectLabel(p.projectRoot)}</span><span>{registry.profiles.find((profile) => profile.id === p.profileId)?.name ?? "Missing profile (using global fallback)"}</span><Button size="sm" type="button" disabled={busy} aria-label={`Remove profile for ${p.projectRoot}`} onClick={() => { const run = () => { void write((current) => ({ ...current, projects: current.projects.filter((entry) => entry.projectRoot !== p.projectRoot) })); }; if (projectRoot === p.projectRoot) guard(run); else run(); }}>Remove</Button></div>)}
       <div className="roles-project"><select className="settings-field-select" aria-label="Project to add" disabled={busy} value={addProject} onChange={(e) => setAddProject(e.target.value)}><option value="">Select project</option>{projects.map((p) => <option key={p} value={p}>{projectLabel(p)}</option>)}</select><select className="settings-field-select" aria-label="Profile to add" disabled={busy} value={addProfile} onChange={(e) => setAddProfile(e.target.value)}><option value="">Select profile</option>{registry.profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select><Button size="sm" type="button" disabled={busy || !addProject || !addProfile} onClick={() => { const run = () => { void write((current) => ({ ...current, projects: [...current.projects.filter((p) => p.projectRoot !== addProject), { projectRoot: addProject, profileId: addProfile }] })); }; if (projectRoot === addProject) guard(run); else run(); }}>Add</Button></div></div></details>
-    <ConfirmDialog request={busy ? null : pending} onCancel={() => { const cancel = pending?.onCancel; setPending(null); cancel?.(); }} onConfirm={() => { const action = pending?.action; setPending(null); action?.(); }} />
+    <ConfirmDialog request={busy ? null : pending} onCancel={() => { const cancel = pending?.onCancel; setPending(null); cancel?.(); restoreMenuTrigger(); }} onConfirm={() => { const action = pending?.action; setPending(null); restoreMenuTrigger(); action?.(); }} />
   </div>;
 }
 

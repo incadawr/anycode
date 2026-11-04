@@ -303,6 +303,36 @@ describe("Profile actions menu", () => {
     await click(buttonByText("Cancel"));
     expect(bridge.set).not.toHaveBeenCalled();
   });
+
+  it("returns focus to the menu trigger after the Delete confirm closes", async () => {
+    installBridge(settingsWithProfile("Team"));
+    await mount();
+    await openMenu();
+    await click(buttonByText("Delete"));
+    // The menu unmounted before the dialog opened, so the dialog has no
+    // opener to hand focus back to — Esc in it must not strand focus.
+    await act(async () => {
+      container.querySelector("dialog")!.dispatchEvent(new Event("cancel", { bubbles: false, cancelable: true }));
+    });
+    expect(container.querySelector("dialog")).toBeNull();
+    expect(document.activeElement).toBe(menuTrigger());
+  });
+
+  it("keeps arrow roving alive past the disabled built-in Rename and Delete", async () => {
+    const initial = cloneDefaults();
+    initial.roleProfiles = undefined;
+    installBridge(initial);
+    await mount();
+    const menu = await openMenu();
+    const items = [...menu.querySelectorAll<HTMLButtonElement>(".roles-menu-item")];
+    // Only New and Duplicate are enabled; the arrows must rove over those two
+    // and wrap, never park on a disabled item.
+    expect(document.activeElement).toBe(items[0]);
+    await act(async () => { menu.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })); });
+    expect(document.activeElement).toBe(items[1]);
+    await act(async () => { menu.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })); });
+    expect(document.activeElement).toBe(items[0]);
+  });
 });
 
 describe("Save from the pane", () => {
@@ -546,6 +576,30 @@ describe("In-flight saves", () => {
     await act(async () => { release(); await waiting; });
     expect(bridge.set).toHaveBeenCalledTimes(1);
     expect(buttonByText("Save roles").disabled).toBe(false);
+  });
+
+  it("closes the busy menu from the trigger on Escape without interrupting the write", async () => {
+    const bridge = installBridge(settingsWithProfile("Team"));
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const original = bridge.set.getMockImplementation()!;
+    bridge.set.mockImplementationOnce(async (patch) => { await waiting; return original(patch); });
+    await mount();
+    await click(buttonByText("Save roles"));
+    await openMenu();
+    // Every item is disabled, so focus stays on the trigger — outside the
+    // items' keydown handler. Escape there must still close the menu and must
+    // not reach the window-level Esc-to-interrupt handler.
+    const windowEscape = vi.fn();
+    window.addEventListener("keydown", windowEscape);
+    try {
+      await act(async () => { menuTrigger().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+      expect(container.querySelector('[role="menu"]')).toBeNull();
+      expect(windowEscape).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", windowEscape);
+    }
+    await act(async () => { release(); await waiting; });
   });
 });
 
