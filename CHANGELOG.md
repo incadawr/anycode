@@ -9,7 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- The automation facade now honors the requested scope for skills import and MCP add-server: it drives the Settings scope switcher before Apply or before the form opens, and refuses with an explicit `scope_unavailable` when the requested scope cannot be selected — instead of silently importing into the personal folder or failing with `field_not_found` on radio groups that no longer exist.
+- Scope selection for skills import and MCP add-server is honoured again: the requested folder (this computer, or the active session's folder) is picked in the Settings scope switcher before the write lands, and the action stops with a clear error instead of silently writing into another folder's config when the folder can't be selected.
 
 ## [0.0.74] — 2026-11-04
 
