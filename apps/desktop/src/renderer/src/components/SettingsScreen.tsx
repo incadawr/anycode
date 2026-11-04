@@ -99,7 +99,7 @@ import { useTabsStore } from "../tabs-store.js";
 import { CodexEnginePane } from "./CodexEnginePane.js";
 import { ClaudeEnginePane } from "./ClaudeEnginePane.js";
 import { ConnectionDrawer } from "./ConnectionDrawer.js";
-import { useMiniMaxQuotaPoll } from "../minimax-quota-poll.js";
+import { useProviderQuotaPoll } from "../provider-quota-poll.js";
 import { ProxyProfilesPane } from "./ProxyProfilesPane.js";
 import { ProxyRefPicker } from "./ProxyRefPicker.js";
 import { ConnectionTile, connectionCredentialKey, connectionDisplayName, connectionSecretKey } from "./ConnectionTile.js";
@@ -2454,7 +2454,7 @@ function UpdateNoticeBanner({ status, store }: { status: UpdateStatus; store: Se
  * once — same idempotent `set()`.
  */
 export function SettingsDialog({ open, onClose, store = useSettingsStore }: SettingsDialogProps) {
-  useMiniMaxQuotaPoll(open);
+  useProviderQuotaPoll(open);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const leaveGuardRef = useRef<((action: () => void, onCancel?: () => void) => void) | null>(null);
   const registerLeaveGuard = useCallback((guard: ((action: () => void, onCancel?: () => void) => void) | null) => { leaveGuardRef.current = guard; }, []);

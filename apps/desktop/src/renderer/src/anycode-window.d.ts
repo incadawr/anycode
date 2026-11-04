@@ -539,6 +539,7 @@ declare global {
         setupPreview(): Promise<{ ok?: true; canceled?: true; error?: string; connections?: Array<{ name: string; matches: string[]; baseUrl: string; existingBaseUrls: string[]; runtimeBaseUrl: string; canUpdate: boolean }>; roleProfiles?: Array<{ name: string; matches: string[] }> }>;
         setupApply(choices: { connections: Record<string, "update-existing" | "add-copy" | "skip">; roleProfiles: Record<string, "update-existing" | "add-copy" | "skip"> }): Promise<{ ok?: true; error?: string; addedIds?: string[] }>;
         refreshMiniMaxQuota(connectionId?: string): Promise<void>;
+        refreshGlmQuota(connectionId?: string): Promise<void>;
         get(): Promise<SettingsSnapshot>;
         set(patch: SettingsPatch): Promise<SettingsMutationResult>;
         setSecret(key: SecretKey, value: string): Promise<SettingsMutationResult>;

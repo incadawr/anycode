@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Z.AI (GLM) connections on a coding-plan key now show their 5-hour and weekly quota windows (percent left, reset time) on the connection card, same as the MiniMax M Plan tile. Pay-as-you-go Z.AI keys are not polled.
+
 ## [0.0.74] — 2026-11-04
 
 ### Fixed
