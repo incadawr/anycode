@@ -11,10 +11,15 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Privileged IPC is now guarded by sender identity: every `anycode:*` channel answers only the app's main window (and the detached Markdown popout, explicitly allow-listed), and only from the renderer's top frame. Subframes, preview views, and other windows that somehow carry the preload bridge get refused, so a compromised renderer frame or stray window can no longer read settings, secrets, or drive sessions.
 
+### Added
+
+- Settings → Claude gains a context-window limit: a value there caps the context meter and Claude Code's own auto-compact threshold for every new Claude session, while blank keeps the CLI's own default.
+
 ### Fixed
 
 - Scope selection for skills import and MCP add-server is honoured again: the requested folder (this computer, or the active session's folder) is picked in the Settings scope switcher before the write lands, and the action stops with a clear error instead of silently writing into another folder's config when the folder can't be selected.
 - Fixed the model pill in the composer footer sliding under the context meter in narrow windows and panes: the footer's left group now shrinks to the space it actually has, truncating the model name (full name stays on hover) instead of overlapping the context indicator. The Codex speed chip truncates the same way inside its own border, and pill labels keep a short readable stub instead of collapsing to an empty chevron.
+- A corrupt sibling field in the Claude settings block no longer silently drops a configured context-window limit, and an untouched blank limit field no longer triggers a redundant settings write on every blur.
 
 ## [0.0.74] — 2026-11-04
 

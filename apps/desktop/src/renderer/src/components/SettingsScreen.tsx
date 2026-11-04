@@ -98,6 +98,7 @@ import { tabRegistry } from "../tab-registry.js";
 import { useTabsStore } from "../tabs-store.js";
 import { CodexEnginePane } from "./CodexEnginePane.js";
 import { ClaudeEnginePane } from "./ClaudeEnginePane.js";
+import { ClaudeContextWindowSection } from "./ClaudeContextWindowSection.js";
 import { ConnectionDrawer } from "./ConnectionDrawer.js";
 import { useMiniMaxQuotaPoll } from "../minimax-quota-poll.js";
 import { ProxyProfilesPane } from "./ProxyProfilesPane.js";
@@ -1924,6 +1925,11 @@ export function SettingsScreen({
             {activePane === "codex" && <ProxyRefPicker scope={{ kind: "engine", engine: "codex" }} store={store} />}
 
             {activePane === "claude" && <ClaudeEnginePane />}
+
+            {/* the session context-window limit — a sibling section for the
+                same reason ProxyRefPicker below is: ClaudeEnginePane owns the
+                doctor bridge, not the settings store. */}
+            {activePane === "claude" && <ClaudeContextWindowSection store={store} />}
 
             {activePane === "claude" && <ProxyRefPicker scope={{ kind: "engine", engine: "claude" }} store={store} />}
 

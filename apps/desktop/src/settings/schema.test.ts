@@ -1785,6 +1785,94 @@ describe("codex/claude proxyUrl — persisted schema stays LENIENT on purpose", 
   });
 });
 
+describe("claude.contextWindowTokens — session context-window limit", () => {
+  it("round-trips a value inside the CLI's accepted range alongside the other engine fields", () => {
+    const parsed = settingsSchema.safeParse({
+      ...cloneDefaults(),
+      claude: {
+        binaryPath: "/opt/homebrew/bin/claude",
+        lastCheck: { status: "ready", at: "2026-11-04T00:00:00.000Z" },
+        contextWindowTokens: 260000,
+      },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.claude?.contextWindowTokens).toBe(260000);
+      expect(parsed.data.claude?.binaryPath).toBe("/opt/homebrew/bin/claude");
+    }
+  });
+
+  it("absent means not configured (key absent, CLI default applies)", () => {
+    const parsed = settingsSchema.safeParse({ ...cloneDefaults(), claude: { binaryPath: "/usr/local/bin/claude" } });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect("contextWindowTokens" in (parsed.data.claude ?? {})).toBe(false);
+    }
+  });
+
+  // The field-level catch: a corrupt or out-of-range value degrades to
+  // "not configured" ALONE — the CLI would ignore it anyway — while
+  // `binaryPath`/`proxyUrl` and the rest of the block survive untouched.
+  it("out-of-range or corrupt values degrade to undefined without failing the block", () => {
+    for (const bad of [99999, 1000001, 2.5, "260000", null]) {
+      const parsed = parseSettings({ ...cloneDefaults(), claude: { binaryPath: "/usr/local/bin/claude", contextWindowTokens: bad } });
+      expect(parsed.status).toBe("ok");
+      expect(parsed.settings.claude?.contextWindowTokens).toBeUndefined();
+      expect(parsed.settings.claude?.binaryPath).toBe("/usr/local/bin/claude");
+    }
+  });
+
+  // The block-level salvage: a sibling that trips the OBJECT-level catch (a
+  // wrong-typed lastCheck, a future enum value, ...) used to drop a valid
+  // limit together with the cache — the setting silently stopped applying and
+  // the next write persisted its absence. A range-valid limit now rides the
+  // salvage next to the proxy decision; the cache half is still dropped.
+  it("a block that trips its object-level catch for an unrelated reason keeps a range-valid limit", () => {
+    const parsed = parseSettings({
+      ...cloneDefaults(),
+      claude: {
+        binaryPath: "/usr/local/bin/claude",
+        lastCheck: { status: 42, at: [] },
+        proxyRef: "direct",
+        contextWindowTokens: 260000,
+      },
+    });
+    expect(parsed.status).toBe("ok");
+    expect(parsed.settings.claude?.contextWindowTokens).toBe(260000);
+    expect(parsed.settings.claude?.proxyRef).toBe("direct");
+    expect(parsed.settings.claude?.binaryPath).toBeUndefined();
+    expect(parsed.settings.claude?.lastCheck).toBeUndefined();
+  });
+
+  it("an out-of-range or non-integer limit is NOT carried through the salvage", () => {
+    for (const bad of [99999, 1000001, 2.5, "260000"]) {
+      const parsed = settingsSchema.safeParse({
+        ...cloneDefaults(),
+        claude: { proxyRef: "direct", lastCheck: { status: 42, at: [] }, contextWindowTokens: bad },
+      });
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.claude?.proxyRef).toBe("direct");
+        expect("contextWindowTokens" in (parsed.data.claude ?? {})).toBe(false);
+      }
+    }
+  });
+
+  // The codex twin has no such field: its salvage never carries one, so a
+  // claude-only key in a corrupt codex block cannot leak into the document.
+  it("the codex salvage never carries the claude-only field", () => {
+    const parsed = settingsSchema.safeParse({
+      ...cloneDefaults(),
+      codex: { proxyRef: "direct", lastCheck: { status: 42, at: [] }, contextWindowTokens: 260000 },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.codex?.proxyRef).toBe("direct");
+      expect("contextWindowTokens" in (parsed.data.codex ?? {})).toBe(false);
+    }
+  });
+});
+
 describe("network.proxyProfiles + proxyRef — round-trip + zod-granularity", () => {
   const CORP = { id: "proxy-corp", name: "Corp", mode: "manual", url: "http://proxy.corp:3128" };
   const SYS = { id: "proxy-sys", name: "System", mode: "system", noProxy: "a.corp", login: "user" };

@@ -21,7 +21,7 @@ import { proxyRelayLookup } from "@anycode/core/proxy-relay";
 import { proxyValueCarriesCredential } from "@anycode/core/child-env";
 import type { EngineBootstrap } from "../bootstrap.js";
 import type { EngineProcessRegistrationMessage } from "../../../shared/engines.js";
-import { ENGINE_PROCESS_REGISTRATION_TYPE, ENV_CLAUDE_PROXY_URL, applyEngineProxyOverride } from "../../../shared/engines.js";
+import { CLAUDE_CONTEXT_WINDOW_MAX, CLAUDE_CONTEXT_WINDOW_MIN, ENGINE_PROCESS_REGISTRATION_TYPE, ENV_CLAUDE_CONTEXT_WINDOW, ENV_CLAUDE_PROXY_URL, applyEngineProxyOverride } from "../../../shared/engines.js";
 import { SESSION_TOOL_ENV_KEYS } from "../../../shared/session-env.js";
 import { checkConsentedBinaryTrust, type BinaryTrustConsent, type CodexPathStat } from "../../../shared/codex-binary-trust.js";
 import { resolveClaudeConfigDir } from "../../../shared/claude-config-dir.js";
@@ -241,6 +241,20 @@ export function buildClaudeSpawnArgs(options: ClaudeSpawnArgsOptions): string[] 
 }
 
 /**
+ * The fail-soft parse behind `buildClaudeChildEnv`'s context-window override.
+ * `env` values are untrusted strings (a hand-edited carrier, an old fork);
+ * anything but a whole number inside the CLI's accepted range (bounds live in
+ * shared/engines.ts) means "no override" — the CLI's own default — never a
+ * partial or bogus limit.
+ */
+export function parseClaudeContextWindowOverride(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < CLAUDE_CONTEXT_WINDOW_MIN || value > CLAUDE_CONTEXT_WINDOW_MAX) return undefined;
+  return value;
+}
+
+/**
  * Explicit child env custody: `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`
  * (silently override the subscription) and `CLAUDECODE` (breaks a nested
  * claude-under-claude-code launch) are never forwarded — the allowlist simply
@@ -305,6 +319,15 @@ export function buildClaudeChildEnv(source: NodeJS.ProcessEnv, profileDir: strin
   applyEngineProxyOverride(env, source, ENV_CLAUDE_PROXY_URL);
   const resolvedConfigDir = resolveClaudeConfigDir(profileDir);
   if (resolvedConfigDir !== undefined) env.CLAUDE_CONFIG_DIR = resolvedConfigDir;
+  // `settings.claude.contextWindowTokens`, carried in from main under a
+  // private name and turned into the CLI's own auto-compact window override
+  // here. The CLI clamps the value to the running model's window, so this
+  // caps BOTH the context meter (`get_context_usage.maxTokens` — the
+  // budgetTokens the renderer shows) and the CLI's auto-compact threshold.
+  // Absent/garbage emits nothing: the CLI keeps its own default, exactly the
+  // without-the-setting behavior. Never forwarded under the carrier name.
+  const contextWindow = parseClaudeContextWindowOverride(source[ENV_CLAUDE_CONTEXT_WINDOW]);
+  if (contextWindow !== undefined) env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(contextWindow);
   env.DISABLE_AUTOUPDATER = "1";
   env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
   env.DISABLE_TELEMETRY = "1";

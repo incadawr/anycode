@@ -259,6 +259,8 @@ import { handleCreate, registerTabIpc, type ResolveCodexProfileResult, type TabI
 import { ENV_CODEX_BIN, ENV_ENGINE, ENV_HOST_GENERATION, type EngineId } from "../shared/engines.js";
 // SLICE-CC A1 (cut §1.2): new import line — ENV_CLAUDE_BIN mirrors ENV_CODEX_BIN above.
 import { ENV_CLAUDE_BIN } from "../shared/engines.js";
+// Context-window LIMIT carrier (settings.claude.contextWindowTokens) — rides the same every-fork overlay as ENV_CLAUDE_BIN.
+import { ENV_CLAUDE_CONTEXT_WINDOW } from "../shared/engines.js";
 import { readSessionLimits, resolveChildSessionsPerParentMax } from "../shared/session-limits.js";
 import { resolveProfileRoles } from "../shared/role-profiles.js";
 // F1: `stripEngineProxyCarriers` keeps an AMBIENT carrier out of main's
@@ -2753,6 +2755,17 @@ void app.whenReady().then(async () => {
       [ENV_HOST_GENERATION]: String(generation),
       ...(codexBinaryPath !== null ? { [ENV_CODEX_BIN]: codexBinaryPath } : {}),
       ...(claudeBinaryPath !== null ? { [ENV_CLAUDE_BIN]: claudeBinaryPath } : {}),
+      // `settings.claude.contextWindowTokens` — the session context-window
+      // limit, consumed by buildClaudeChildEnv (the CLI's
+      // CLAUDE_CODE_AUTO_COMPACT_WINDOW). Stamped UNCONDITIONALLY ("not
+      // configured" is the empty string, which the builder drops): an env
+      // name main sometimes omits is a name an ambient shell export could
+      // occupy, since a fork env starts as a spread of the boot snapshot —
+      // same reason ENV_CODEX_SUPPORT_POLICY above never skips its key.
+      // Rebuilt per spawn off the live settings like the proxy carriers
+      // below, so an edit reaches the NEXT Claude session with no cache to
+      // invalidate.
+      [ENV_CLAUDE_CONTEXT_WINDOW]: settings?.claude?.contextWindowTokens !== undefined ? String(settings.claude.contextWindowTokens) : "",
       // the ACTIVE codex version-support policy — the same manifest
       // ranges Settings displays and the same `riskAcceptedVersions` the "use
       // it anyway" button writes. Without it the host preflight judged by a
