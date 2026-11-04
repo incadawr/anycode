@@ -7,9 +7,11 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.73] — 2026-11-04
+
 ### Added
 
-- Orchestrate Codex sessions with role-based delegation and a read-only parent when the runtime policy can be verified.
+- Orchestrate mode for Codex sessions: the Codex tab delegates work to role-based subagents while the parent stays read-only. It is available when the runtime policy can be verified. Turn it on with the `/orchestrate` command; turning it off restores the previous Codex permissions.
 
 ## [0.0.72] — 2026-11-03
 
