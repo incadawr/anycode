@@ -142,8 +142,9 @@ it("renders profile and project selection controls", () => {
   expect(html).toContain('aria-haspopup="menu"');
   expect(html).toContain('aria-label="Project to add"');
   expect(html).toContain('aria-label="Profile to add"');
-  // The actions are a popover menu: its items mount only while it is open.
-  expect(html).not.toContain('role="menu"');
+  // The actions are a popover menu: closed, it is only the trigger advertising
+  // its popup — the items mount only while it is open.
+  expect(html).toContain('aria-haspopup="menu" aria-expanded="false"');
 });
 
 it("an empty saved profile displays the active connection instead of an unsaved preset", () => {
@@ -401,6 +402,14 @@ describe("Truncated route labels keep their full text reachable", () => {
     useSettingsStore.setState({ snapshot: snapshot({ primary: { connection: "c", model: "live-model" } }) });
     const html = renderToStaticMarkup(createElement(RolesPane));
     expect(html).toContain('aria-label="executor primary model" title="live-model"');
+  });
+
+  it("the model tooltip prefers the resolved model's display name over the raw value", () => {
+    // "catalog-model" resolves from the vendor catalog WITH a display name,
+    // exercising the name branch instead of the raw-value fallback.
+    useSettingsStore.setState({ snapshot: snapshot({ primary: { connection: "c", model: "catalog-model" } }) });
+    const html = renderToStaticMarkup(createElement(RolesPane));
+    expect(html).toContain('aria-label="executor primary model" title="Catalog model"');
   });
 
   it("an unavailable connection reads as guidance, never as a raw id", () => {
