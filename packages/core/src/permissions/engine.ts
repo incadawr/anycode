@@ -22,6 +22,12 @@
  * above ever run. The early return is load-bearing: Write/Edit carry
  * needsApproval:true, so an allow produced later in this method would be
  * re-escalated to ask by the block above.
+ *
+ * addition (mandatoryApproval): a tool carrying `metadata.mandatoryApproval`
+ * escalates an "allow" to "ask" in EVERY mode — yolo and auto included — so
+ * its per-call approval cannot be skipped by any mode's auto-allow. The rule
+ * layers honour the same flag: neither RuleAwarePermissionEngine, the profile
+ * overlay nor a broker's always-allow seam resolves that ask.
  */
 
 import type { PermissionEngine, PermissionRequest, PermissionRuling } from "../types/permissions.js";
@@ -63,6 +69,18 @@ export class ModePermissionEngine implements PermissionEngine {
       return {
         decision: "ask",
         reason: `${toolName}: requires approval in ${mode} mode`,
+      };
+    }
+
+    // mandatoryApproval: "always asks" means ALWAYS — the ask survives yolo
+    // and auto too. An allow from the mode table is escalated in every mode;
+    // deny rulings pass untouched, so plan mode still refuses the tool
+    // outright. The rule layers (rules.ts) and the brokers never resolve this
+    // ask: only a human answer settles it.
+    if (ruling.decision === "allow" && metadata.mandatoryApproval) {
+      return {
+        decision: "ask",
+        reason: `${toolName}: this tool asks for approval on every call`,
       };
     }
 

@@ -17,8 +17,8 @@ import {
   recognizeScopedRunnerCommand,
   splitBashSegments,
 } from "./rules.js";
-import { bashTool, editTool, globTool, grepTool, readTool, webFetchTool, writeTool } from "../tools/index.js";
-import type { PermissionEngine, PermissionMode, PermissionRequest } from "../types/permissions.js";
+import { bashTool, createBrowserControlTools, editTool, globTool, grepTool, readTool, webFetchTool, writeTool } from "../tools/index.js";
+import type { PermissionEngine, PermissionMode, PermissionRequest, PermissionRuling } from "../types/permissions.js";
 import type { ToolMetadata } from "../types/tools.js";
 
 describe("SessionPermissionRules", () => {
@@ -1363,5 +1363,56 @@ describe("ProfilePermissionEngine — md-profile permissions.allow/deny overlay"
       deny: [],
     });
     expect(bash(valid, "rm -rf /tmp/x", "build")).toBe("allow");
+  });
+});
+
+/**
+ * mandatoryApproval ("always asks" means ALWAYS): a bare or already-persisted
+ * `{toolName:"BrowserEval"}` allow rule must never resolve the tool's ask in
+ * any mode. Red on the old code: the ask was downgraded to allow by
+ * RuleAwarePermissionEngine and by the profile overlay alike.
+ */
+describe("mandatoryApproval — allow rules never resolve the ask", () => {
+  const base = new ModePermissionEngine();
+  const evalMetadata = createBrowserControlTools().eval.metadata;
+
+  const evalCheck = (engine: PermissionEngine, mode: PermissionMode): PermissionRuling =>
+    engine.check({ toolName: "BrowserEval", input: { expression: "1" }, metadata: evalMetadata, mode });
+
+  it("the mode engine asks in yolo/auto/build and still denies in plan", () => {
+    expect(evalCheck(base, "yolo").decision).toBe("ask");
+    expect(evalCheck(base, "auto").decision).toBe("ask");
+    expect(evalCheck(base, "build").decision).toBe("ask");
+    expect(evalCheck(base, "plan").decision).toBe("deny");
+  });
+
+  it("a seeded bare BrowserEval rule downgrades nothing (build, auto, yolo)", () => {
+    const rules = new SessionPermissionRules();
+    rules.add({ toolName: "BrowserEval" });
+    const engine = new RuleAwarePermissionEngine(base, rules);
+    expect(evalCheck(engine, "build").decision).toBe("ask");
+    expect(evalCheck(engine, "auto").decision).toBe("ask");
+    expect(evalCheck(engine, "yolo").decision).toBe("ask");
+  });
+
+  it("a profile allow overlay cannot cover it either; a profile deny still refuses", () => {
+    const allowOverlay = new ProfilePermissionEngine(base, { allow: [{ toolName: "BrowserEval" }], deny: [] });
+    expect(allowOverlay.check({ toolName: "BrowserEval", input: { expression: "1" }, metadata: evalMetadata, mode: "build" }).decision).toBe("ask");
+    expect(allowOverlay.check({ toolName: "BrowserEval", input: { expression: "1" }, metadata: evalMetadata, mode: "yolo" }).decision).toBe("ask");
+    const denyOverlay = new ProfilePermissionEngine(base, { allow: [], deny: [{ toolName: "BrowserEval" }] });
+    expect(denyOverlay.check({ toolName: "BrowserEval", input: { expression: "1" }, metadata: evalMetadata, mode: "build" }).decision).toBe("deny");
+  });
+
+  it("control: ordinary tools keep their rule downgrade", () => {
+    const rules = new SessionPermissionRules();
+    rules.add({ toolName: "Write" });
+    const engine = new RuleAwarePermissionEngine(base, rules);
+    expect(engine.check({
+      toolName: "Write",
+      input: { file_path: "/ws/x", content: "y" },
+      metadata: writeTool.metadata,
+      mode: "build",
+      workspace: { root: "/ws", resolvedPath: "/ws/x" },
+    }).decision).toBe("allow");
   });
 });

@@ -58,6 +58,15 @@ export interface ToolMetadata {
   sideEffectScope: SideEffectScope;
   /** Baseline approval requirement; the permission engine combines it with the session mode. */
   needsApproval: boolean;
+  /**
+   * Mandatory per-call approval: the engine escalates this tool to "ask" in
+   * EVERY mode (yolo and auto included), and neither session/profile allow
+   * rules nor the broker's always-allow seam may resolve that ask — only a
+   * human answer settles it. Deny rulings are untouched, so a mode that
+   * refuses the tool outright (plan) still refuses it. BrowserEval is the
+   * first carrier: page-code execution is approved on every single call.
+   */
+  mandatoryApproval?: boolean;
   /** Default handler timeout, enforced by the dispatcher with an AbortController race. */
   timeoutMs: number;
   /** Upper bound for a per-call timeout override (e.g. the Bash `timeout` input field). */

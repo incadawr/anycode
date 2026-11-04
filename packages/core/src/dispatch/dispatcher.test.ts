@@ -43,11 +43,13 @@ import type { BackgroundTaskPort } from "../ports/tasks.js";
 import type { SessionSubagentPort } from "../ports/session-subagent.js";
 import type { LspPort } from "../ports/lsp.js";
 import type { MediaCapabilityPort } from "../ports/media.js";
+import type { PreviewPort } from "../ports/preview.js";
 import type { CorePorts } from "../ports/index.js";
 import type { ExecResult } from "../ports/execution.js";
 import type { FileSystemPort } from "../ports/file-system.js";
 import { ToolRegistry } from "../tools/registry.js";
 import { bashTool } from "../tools/bash.js";
+import { createBrowserControlTools } from "../tools/browser-control.js";
 import { bashOutputTool } from "../tools/bash-output.js";
 import { writeTool } from "../tools/write.js";
 import { editTool } from "../tools/edit.js";
@@ -2164,5 +2166,76 @@ describe("executeToolCall — bound Bash command", () => {
     const result = await executeToolCall(ctx, call({ command: "ls" }, "Bash"));
     expect(result.status).toBe("success");
     expect(executed).toBe("wc -l file");
+  });
+});
+
+/**
+ * Real pipeline regression: the real dispatcher, the real BrowserEval tool and
+ * the real ModePermissionEngine in yolo mode — the mode that auto-allows
+ * everything else. A mandatory-approval tool must still be escalated to the
+ * broker, and its handler (which passes allowRemote to the preview port) may
+ * only run once a human has answered. Red on the old code: yolo's allow
+ * skipped the broker entirely and the handler ran with zero approvals.
+ */
+describe("executeToolCall — BrowserEval asks in yolo, whatever Full browser access says", () => {
+  function previewRecording() {
+    const calls: Array<{ opts: { allowRemote?: boolean } }> = [];
+    const port = {
+      control: async (_request: unknown, opts: { allowRemote?: boolean }) => {
+        calls.push({ opts });
+        return { ok: true, value: { previewId: "p1", url: "http://localhost:3000/", text: "ok" } };
+      },
+    } as unknown as PreviewPort;
+    return { port, calls };
+  }
+
+  function recordingBroker() {
+    const requests: PermissionRequest[] = [];
+    const broker = {
+      requestPermission: async (request: PermissionRequest) => {
+        requests.push(request);
+        return { behavior: "allow" as const };
+      },
+    };
+    return { broker: broker as unknown as PermissionBroker, requests };
+  }
+
+  for (const fullAccess of [false, true] as const) {
+    it(`Full browser access ${fullAccess ? "on" : "off"}: the broker is asked once, allowRemote rides that approval`, async () => {
+      const { port, calls } = previewRecording();
+      const { broker, requests } = recordingBroker();
+      const ctx = makeCtx({
+        registry: makeRegistry({ BrowserEval: createBrowserControlTools({ fullAccess: () => fullAccess }).eval }),
+        permissionEngine: new ModePermissionEngine(),
+        permissionBroker: broker,
+        mode: "yolo",
+        preview: port,
+      });
+
+      const outcome = await executeToolCall(ctx, call({ expression: "document.cookie" }, "BrowserEval"));
+
+      expect(outcome.status).toBe("success");
+      expect(requests).toHaveLength(1);
+      expect(requests[0]!.toolName).toBe("BrowserEval");
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.opts.allowRemote).toBe(true);
+    });
+  }
+
+  it("Full browser access on: a broker deny refuses the call and the preview port is never reached", async () => {
+    const { port, calls } = previewRecording();
+    const ctx = makeCtx({
+      registry: makeRegistry({ BrowserEval: createBrowserControlTools({ fullAccess: () => true }).eval }),
+      permissionEngine: new ModePermissionEngine(),
+      permissionBroker: makeBroker({ behavior: "deny", reason: "denied by user" }),
+      mode: "yolo",
+      preview: port,
+    });
+
+    const outcome = await executeToolCall(ctx, call({ expression: "document.cookie" }, "BrowserEval"));
+
+    expect(outcome.status).toBe("denied");
+    expect(outcome.modelText).toBe("denied by user");
+    expect(calls).toHaveLength(0);
   });
 });
