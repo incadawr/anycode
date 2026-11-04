@@ -7,7 +7,7 @@ describe("GLM coding-plan quota", () => {
   // data.level + data.limits[]; CREDIT_LIMIT entries carry unit/number,
   // usage (limit), currentValue (used), percentage, nextResetTime (epoch ms).
   const entry = (fields: object) => ({ type: "CREDIT_LIMIT", ...fields });
-  const response = (limits: object[]) => ({ data: { level: "pro", limits } });
+  const response = (limits: unknown[]) => ({ data: { level: "pro", limits } });
 
   it("maps unit 3 to the 5-hour window and unit 6 to the week", () => {
     expect(

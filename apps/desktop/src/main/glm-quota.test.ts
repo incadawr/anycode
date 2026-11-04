@@ -12,11 +12,14 @@ const response = () => new Response(JSON.stringify({ data: { level: "pro", limit
 ] } }));
 const route = { kind: "direct", why: "explicit-direct" } as const;
 
+// The persisted `lastQuota` windows shape (shared/settings.ts).
+interface QuotaWindows { usedPercent: number; windowDurationMins?: number; resetsAt?: number; secondary?: Omit<QuotaWindows, "secondary"> }
+
 describe("GLM quota polling", () => {
   it("sends the key raw in Authorization — NO Bearer — and records both windows", async () => {
     let now = 0;
     const fetch = vi.fn().mockResolvedValue(response());
-    const record = vi.fn(async () => {});
+    const record = vi.fn(async (_id: string, _guard: string, _quota: QuotaWindows) => {});
     const poller = createGlmQuotaPoller({ resolve: async () => ({ apiKey: "secret-key", guard: "guard", route }), fetch: () => fetch, record, now: () => now });
     await poller.refresh("one");
     expect(fetch).toHaveBeenCalledTimes(1);

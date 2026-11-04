@@ -40,9 +40,9 @@ export function parseGlmQuota(raw: unknown, now = Date.now()): ProviderQuotaUpda
       usedPercent = Math.min(100, Math.round((100 * currentValue) / usage));
     }
     if (usedPercent === undefined) return undefined;
-    const plausibleReset =
-      typeof fields.nextResetTime === "number" && Number.isFinite(fields.nextResetTime) && fields.nextResetTime >= now && fields.nextResetTime <= now + windowDurationMins * 60_000;
-    return { usedPercent, windowDurationMins, ...(plausibleReset ? { resetsAt: Math.round(fields.nextResetTime / 1000) } : {}) };
+    const resetMs = fields.nextResetTime;
+    const plausibleReset = typeof resetMs === "number" && Number.isFinite(resetMs) && resetMs >= now && resetMs <= now + windowDurationMins * 60_000;
+    return { usedPercent, windowDurationMins, ...(plausibleReset ? { resetsAt: Math.round(resetMs / 1000) } : {}) };
   }
   let fiveHours: ProviderQuotaWindow | undefined;
   let week: ProviderQuotaWindow | undefined;
