@@ -239,6 +239,18 @@ function bashUnknownShellHint(toolName: string, input: unknown): string | null {
   return verdict.class === "unknown" && verdict.shellExpression ? UNKNOWN_SHELL_HINT : null;
 }
 
+/** the honest data policy for a BrowserEval ask: the expression runs as page
+ * code, so it has the page's own reach. Static UI text (never scrubbed),
+ * shown above the input; the allow/deny/remember mechanics are unchanged.
+ * Exported for the copy-pinning test. */
+export const BROWSER_EVAL_POLICY_HINT =
+  "BrowserEval runs the expression as page code: the script can read the shown page's cookies and storage. HttpOnly cookies, other partitions and OS or browser-stored credentials stay out of reach.";
+
+/** Resolves the BrowserEval policy hint; null for every other tool. */
+export function browserEvalPolicyHint(toolName: string): string | null {
+  return toolName === "BrowserEval" ? BROWSER_EVAL_POLICY_HINT : null;
+}
+
 /** re-exports of the shared plaque API (see the import above) —
  * the desktop modal is where the plaque was born (7d633a64/4ebfbe12); these
  * keep every existing import from this module working unchanged. */
@@ -309,7 +321,7 @@ export function describePermissionAsk(
       sentence: formatPermissionTitle(toolName).sentence,
       allowLabel: "Allow",
       denyLabel: "Deny",
-      hint: bashUnknownShellHint(toolName, input),
+      hint: bashUnknownShellHint(toolName, input) ?? browserEvalPolicyHint(toolName),
       plaque,
       neutralRiskLabel: metadata === undefined ? null : neutralRiskLabelFor(metadata, plaque),
       canRemember: true,

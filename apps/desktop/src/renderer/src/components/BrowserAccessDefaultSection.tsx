@@ -10,7 +10,7 @@ import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
 
 export const BROWSER_DEFAULT_LABEL = "Full browser access for new sessions";
 export const BROWSER_DEFAULT_WARNING =
-  "The agent can open any website, click, type (including passwords) and run JavaScript in the preview without asking. Folders you have not trusted stay off.";
+  "The agent can open any website, click, type (including passwords) and run JavaScript in the preview without asking. Running JavaScript can read the shown page's cookies and storage; HttpOnly cookies, other partitions and OS or browser-stored credentials stay out of reach. Folders you have not trusted stay off.";
 
 /** The patch a switch change sends. Deep-merged, so no sibling key is touched. */
 export function browserDefaultPatch(on: boolean): SettingsPatch {
