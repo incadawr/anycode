@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Roles settings: one "Save roles" no longer leaves the pane marked as unsaved (leaving the section asked "Discard unsaved roles?" right after a successful save). The profile actions are a real popover menu with keyboard support, Delete is styled as the dangerous action, profile names are edited in a compact form with a clear heading, long profile and model names truncate with a full-text tooltip, role rows wrap instead of overlapping, and the roles pane shows whether a project uses the global profile or its own override.
+
 ## [0.0.74] — 2026-11-04
 
 ### Fixed
