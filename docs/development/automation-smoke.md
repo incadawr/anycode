@@ -224,6 +224,23 @@ The assertion logic itself is unit-tested in
 headless environment can still verify the judgements the live run makes.
 PNG evidence lands in `apps/desktop/out/workflow-map-smoke/`.
 
+## Running preview loopback smoke
+
+For the pinned per-preview loopback grant, run:
+
+```bash
+node apps/desktop/scripts/preview-loopback-smoke.mjs
+# or: pnpm --filter @anycode/desktop smoke:preview-loopback
+```
+
+This starts an isolated development profile and two throwaway loopback HTTP
+fixtures and checks four legs: a preview opened on one origin serves its
+relative assets while a second port, the `127.0.0.1` spelling and a WebSocket
+to them are denied and legible in the preview console, in-page navigation to
+the second port does not commit, a `file:` preview has no loopback grant, and
+an explicit open loads the second port and pins only it. No provider
+credentials or model requests are needed.
+
 ## Workflow for a coding agent
 
 Ask the agent to follow this sequence:
