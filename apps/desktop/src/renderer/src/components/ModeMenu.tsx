@@ -16,7 +16,7 @@ import type { KeyboardEvent } from "react";
 import type { PermissionMode } from "@anycode/core";
 import type { TurnState } from "../store.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
-import { Check, Chevron } from "./icons.js";
+import { Check, Chevron, Orchestrate } from "./icons.js";
 // Reuse, not re-derive (R1 anti-clip lesson, same fix ModelPill's own popover
 // already applies — see ModelPill.tsx's import comment): the chip lives in
 // `.composer-footer-left`, which carries `overflow:hidden` (P7.13 narrow-width
@@ -424,7 +424,10 @@ export function ModeMenu({ mode, disabled, onChange, orchestrateActive = false, 
                   {orchestrateActive ? <Check /> : null}
                 </span>
                 <span className="mode-menu-item-body">
-                  <span className="mode-menu-item-name">Orchestrate</span>
+                  <span className="mode-menu-item-name">
+                    <Orchestrate className="mode-menu-item-glyph" />
+                    Orchestrate
+                  </span>
                   <span className="mode-menu-item-desc">{ORCHESTRATE_ROW_DESCRIPTION}</span>
                 </span>
               </button>
