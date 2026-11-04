@@ -4,6 +4,14 @@ import type { RoleRouteResolution, SessionSubagentRequest, SessionSubagentOutcom
 import type { ChildSessionPort } from "./child-session-port.js";
 import { classifyInfraFailure, decideRoutedTerminal, entryLabel, respawnReportId, type RoleHealthCache } from "./role-route.js";
 
+/** A restricted role must never respawn onto a native engine child; say how to fix the route instead. */
+function engineFallbackRefusal(role: string, engine: string): string {
+  return (
+    `Agent: role ${role} cannot fall back to engine ${engine} — native engine children cannot enforce this profile’s tool or permission restrictions. ` +
+    "Give the role an available API connection in Settings → Roles, or remove the engine entry."
+  );
+}
+
 export function createRoutedChildComposition(options: {
   health: RoleHealthCache;
   describeError: (error: unknown) => string;
@@ -56,6 +64,13 @@ export function createRoutedChildComposition(options: {
     }
     if (decision.action === "deliver_exhausted") {
       outcome.finalText = `${outcome.finalText}\n[role ${record!.role}: all route entries failed]`;
+      return false;
+    }
+    // Defense for chains a restricted role should never fall back onto:
+    // a native engine child cannot enforce the role's restrictions, so the
+    // respawn is refused with the fix instead of running one.
+    if ((req.restrictions !== undefined || req.nativeRestrictionsUnsupported === true) && decision.entry.engine !== undefined) {
+      outcome.finalText = engineFallbackRefusal(record!.role, decision.entry.engine);
       return false;
     }
     const respawnId = randomUUID();
@@ -144,6 +159,21 @@ export function createRoutedChildComposition(options: {
             const kind = readiness ? (classified === "none" ? "unreachable" : classified) : startFailed ? "unreachable" : "none";
             const decision = decideRoutedTerminal(facts, outcome.status, outcome.finalText, options.health, Date.now(), undefined, kind);
             if (decision.action === "respawn") {
+              if ((req.restrictions !== undefined || req.nativeRestrictionsUnsupported === true) && decision.entry.engine !== undefined) {
+                routedSpawns.delete(req.spawnToolCallId);
+                const { admissionRejectReason: _reason, ...refused } = outcome;
+                const refusal: SessionSubagentOutcome = {
+                  ...refused,
+                  status: "error",
+                  finalText: engineFallbackRefusal(facts.role, decision.entry.engine),
+                  truncated: false,
+                  turns: 0,
+                  toolCalls: 0,
+                  childSessionId: "",
+                };
+                options.record(refusal, budgeted);
+                return refusal;
+              }
               routedSpawns.set(req.spawnToolCallId, { ...decision.next, rest: [...decision.next.rest] });
               const { engine: _engine, connectionId: _connection, provider: _provider, model: _model, effort: _effort, ...rest } = current;
               current = { ...rest, ...(decision.entry.engine !== undefined ? { engine: decision.entry.engine } : {}),
