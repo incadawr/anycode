@@ -328,6 +328,24 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
         if (!wc.isDestroyed()) wc.session.removeListener("will-download", onWillDownload);
       });
     },
+    // Same session-scoped scheme as above; the check path hands a null
+    // webContents over for worker checks, and the deny policy ignores
+    // webContents/frame/details entirely.
+    setPermissionCheckHandler: (handler) => {
+      wc.session.setPermissionCheckHandler((_webContents, permission, requestingOrigin) =>
+        handler(permission, requestingOrigin),
+      );
+    },
+    setDevicePermissionHandler: (handler) => {
+      wc.session.setDevicePermissionHandler(() => handler());
+    },
+    setDisplayMediaRequestHandler: (handler) => {
+      wc.session.setDisplayMediaRequestHandler((_request, callback) =>
+        // The seam's stream shape is deliberately Electron-free; the real
+        // `Streams` payload passes through untouched (deny is `callback({})`).
+        handler((streams) => callback(streams as Parameters<typeof callback>[0])),
+      );
+    },
     onDidFinishLoad: (listener) => {
       wc.on("did-finish-load", () => listener());
     },

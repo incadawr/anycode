@@ -10,6 +10,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - Page-initiated downloads in embedded previews are now cancelled by default and reported in the preview console.
+- Preview sessions now deny all permission checks, device access (HID/USB/serial), and screen capture in addition to the existing permission-request deny, consistently for both the panel and pop-out windows. Full-screen, pointer-lock, and DRM (media key system) requests are denied the same way.
 
 ## [0.0.74] — 2026-11-04
 

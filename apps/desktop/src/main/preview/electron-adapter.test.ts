@@ -118,6 +118,9 @@ class FakeWebContents extends EventEmitter {
   webRTCIPHandlingPolicyCalls: string[] = [];
   windowOpenHandler?: (details: { url: string }) => { action: string };
   permissionRequestHandler?: (wc: unknown, permission: string, callback: (granted: boolean) => void) => void;
+  permissionCheckHandler?: (wc: unknown, permission: string, requestingOrigin: string, details: unknown) => boolean;
+  devicePermissionHandler?: (details: unknown) => boolean;
+  displayMediaRequestHandler?: (request: unknown, callback: (streams: unknown) => void) => void;
   capturePageResult: { toPNG(): Buffer; getSize(): { width: number; height: number }; isEmpty(): boolean } = {
     toPNG: () => Buffer.from("png-bytes"),
     getSize: () => ({ width: 42, height: 24 }),
@@ -138,6 +141,15 @@ class FakeWebContents extends EventEmitter {
       if (event === "will-download") {
         this.willDownloadHandlers = this.willDownloadHandlers.filter((h) => h !== handler);
       }
+    },
+    setPermissionCheckHandler: (handler: typeof this.permissionCheckHandler) => {
+      this.permissionCheckHandler = handler;
+    },
+    setDevicePermissionHandler: (handler: typeof this.devicePermissionHandler) => {
+      this.devicePermissionHandler = handler;
+    },
+    setDisplayMediaRequestHandler: (handler: typeof this.displayMediaRequestHandler) => {
+      this.displayMediaRequestHandler = handler;
     },
     webRequest: {
       onBeforeRequest: (...args: unknown[]) => {
@@ -377,6 +389,34 @@ describe("createElectronPreviewWindow — handler passthrough (the deny POLICY i
 
     expect(handler).toHaveBeenCalledWith("camera", expect.any(Function));
     expect(granted).toHaveBeenCalledWith(false);
+  });
+
+  it("setPermissionCheckHandler maps to the SESSION and still denies when webContents is null (worker check)", () => {
+    const win = createElectronPreviewWindow({ previewId: "p3a" });
+    const fake = latestWindow();
+    const handler = vi.fn((_permission: string, _requestingOrigin: string) => false);
+    win.webContents.setPermissionCheckHandler(handler);
+
+    const denied = fake.webContents.permissionCheckHandler?.(null, "camera", "https://evil.example", {});
+
+    expect(handler).toHaveBeenCalledWith("camera", "https://evil.example");
+    expect(denied).toBe(false);
+  });
+
+  it("setDevicePermissionHandler and setDisplayMediaRequestHandler map to the SESSION", () => {
+    const win = createElectronPreviewWindow({ previewId: "p3b" });
+    const fake = latestWindow();
+
+    const deviceHandler = vi.fn(() => false);
+    win.webContents.setDevicePermissionHandler(deviceHandler);
+    expect(fake.webContents.devicePermissionHandler).toBeTypeOf("function");
+    expect(fake.webContents.devicePermissionHandler?.({ deviceType: "hid" })).toBe(false);
+    expect(deviceHandler).toHaveBeenCalledTimes(1);
+
+    const streams = vi.fn();
+    win.webContents.setDisplayMediaRequestHandler((callback) => callback({}));
+    fake.webContents.displayMediaRequestHandler?.({}, streams);
+    expect(streams).toHaveBeenCalledWith({});
   });
 });
 
@@ -829,7 +869,7 @@ describe("createElectronPanelView — WebContentsView construction (panel-track 
     expect(view.visibleCalls).toEqual([false, true]);
   });
 
-  it("shares the SAME wrapWebContents mapping as the window adapter — setWindowOpenHandler/setPermissionRequestHandler/setRequestGate all wired", () => {
+  it("shares the SAME wrapWebContents mapping as the window adapter — setWindowOpenHandler/setPermissionRequestHandler/setPermissionCheckHandler/setDevicePermissionHandler/setDisplayMediaRequestHandler/setRequestGate all wired", () => {
     const win = new FakeMainWindow();
     const panel = createElectronPanelView({ previewId: "panel-f" }, { getWindow: () => win as unknown as BrowserWindow });
     const view = latestPanelView();
@@ -845,6 +885,22 @@ describe("createElectronPanelView — WebContentsView construction (panel-track 
     view.webContents.permissionRequestHandler?.({}, "camera", granted);
     expect(permHandler).toHaveBeenCalledWith("camera", expect.any(Function));
     expect(granted).toHaveBeenCalledWith(false);
+
+    const checkHandler = vi.fn((_permission: string, _requestingOrigin: string) => false);
+    panel.webContents.setPermissionCheckHandler(checkHandler);
+    const denied = view.webContents.permissionCheckHandler?.(null, "camera", "https://evil.example", {});
+    expect(checkHandler).toHaveBeenCalledWith("camera", "https://evil.example");
+    expect(denied).toBe(false);
+
+    const deviceHandler = vi.fn(() => false);
+    panel.webContents.setDevicePermissionHandler(deviceHandler);
+    expect(view.webContents.devicePermissionHandler).toBeTypeOf("function");
+    expect(view.webContents.devicePermissionHandler?.({ deviceType: "usb" })).toBe(false);
+
+    const streams = vi.fn();
+    panel.webContents.setDisplayMediaRequestHandler((callback) => callback({}));
+    view.webContents.displayMediaRequestHandler?.({}, streams);
+    expect(streams).toHaveBeenCalledWith({});
 
     panel.webContents.setRequestGate(async () => true);
     expect(view.webContents.onBeforeRequestCalls).toHaveLength(1);

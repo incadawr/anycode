@@ -289,6 +289,9 @@ function makeFakeWc(): FakeWc {
     setWindowOpenHandler: () => {},
     setPermissionRequestHandler: () => {},
     onWillDownload: () => {},
+    setPermissionCheckHandler: () => {},
+    setDevicePermissionHandler: () => {},
+    setDisplayMediaRequestHandler: () => {},
     onDidFinishLoad: (listener) => {
       finishListeners.push(listener);
     },
