@@ -224,6 +224,18 @@ describe("browser control tools (Phase A)", () => {
     expect(tools.eval.formatResultForModel!({ ok: true, output: { previewId: "p", url: "u", text: "x" } })).toContain("untrusted data");
   });
 
+  // The description is the contract: it states the real data policy instead of
+  // a cookie-read ban the code cannot enforce.
+  it("the BrowserEval description states the honest data policy", () => {
+    const description = tools.eval.metadata.description;
+    expect(description).toContain("arbitrary JavaScript");
+    expect(description).toContain("can read that page's cookies and storage");
+    expect(description).toContain("HttpOnly cookies");
+    expect(description).toContain("credentials stay out of reach");
+    expect(description).toContain("Always asks the user first");
+    expect(description).not.toContain("cannot read");
+  });
+
   it("BrowserConsole is read-only and maps tail and levels onto the port request", async () => {
     expect(tools.console.metadata).toMatchObject({ readOnly: true, needsApproval: false });
     const { control, calls } = recordingControl();

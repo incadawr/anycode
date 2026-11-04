@@ -9,6 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- BrowserEval is now described honestly everywhere (tool description, approval dialogs, Full browser access prompts, docs): it runs arbitrary JavaScript in the preview page and can read that page's cookies and storage, while HttpOnly cookies, other partitions and OS or browser-stored credentials stay out of reach; the old keyword blocklist, which was not a real security boundary, was removed.
 - Page-initiated downloads in embedded previews are now cancelled by default and reported in the preview console.
 - Preview sessions now deny all permission checks, device access (HID/USB/serial), and screen capture in addition to the existing permission-request deny, consistently for both the panel and pop-out windows. Full-screen, pointer-lock, and DRM (media key system) requests are denied the same way.
 - Browser results (read, snapshot, console, eval) now state the preview URL and id and carry an explicit untrusted-data boundary in the text models see, so page-controlled output stays attributable across native, Codex and Claude tabs.
