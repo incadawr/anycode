@@ -98,6 +98,16 @@ describe("claude context-window section — mounted", () => {
     expect(setPatch).toHaveBeenCalledExactlyOnceWith({ claude: { contextWindowTokens: "" } });
   });
 
+  it("an untouched blank field with nothing persisted never writes on blur", async () => {
+    const setPatch = vi.fn().mockResolvedValue({ ok: true });
+    const input = await mount({}, setPatch);
+    await blur(input);
+    // Blank with nothing persisted is a no-op, not a clear: the "" sentinel
+    // compares as undefined (== not configured) before any write is sent.
+    expect(setPatch).not.toHaveBeenCalled();
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
   it("an out-of-range edit refuses the save with an error and never calls setPatch", async () => {
     const setPatch = vi.fn().mockResolvedValue({ ok: true });
     const input = await mount({}, setPatch);

@@ -75,7 +75,10 @@ export function ClaudeContextWindowSection({ store = useSettingsStore }: { store
       setError(parsed.error);
       return;
     }
-    if (parsed.value === persisted) {
+    // A blank field with nothing persisted is a no-op: `""` is the CLEAR
+    // sentinel, not the persisted value, so it compares as `undefined` —
+    // otherwise every untouched blur would send a needless settings write.
+    if ((parsed.value === "" ? undefined : parsed.value) === persisted) {
       setError(null);
       return;
     }
