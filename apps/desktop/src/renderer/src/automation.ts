@@ -77,6 +77,7 @@ import {
 import type { ProfilePhase } from "./components/profile-loader.js";
 import { submitStartDraft, type StartSubmitDeps } from "./start-session.js";
 import { handleCreateTabResult } from "./components/SessionPicker.js";
+import { resumeWithMarker } from "./pending-resumes.js";
 import { tabRegistry, type DesktopStoreApi, type TabRegistry } from "./tab-registry.js";
 import { useTabsStore, type TabInfo, type TabsStoreApi } from "./tabs-store.js";
 import { childLayoutStore as defaultChildLayoutStore, type ChildLayoutStoreApi, type ChildLayoutView } from "./child-layout.js";
@@ -7992,9 +7993,10 @@ export function createAutomationFacade(
     },
 
     async resumeSession(sessionId: string, replacementConnectionId?: string): Promise<CreateTabResult> {
-      const result = await bridge.createTab(
-        replacementConnectionId !== undefined ? { kind: "resume", sessionId, replacementConnectionId } : { kind: "resume", sessionId },
-      );
+      // Same shared pending-resume seam as the UI resume paths (Sidebar,
+      // command palette, Codex import) — an automation-opened tab suppresses
+      // the session's history row in the sidebar identically.
+      const result = await resumeWithMarker(sessionId, (request) => bridge.createTab(request), replacementConnectionId);
       handleCreateTabResult(result, {
         onTabCreated: ({ tabId, workspace }) => {
           tabsStore.getState().addTab({ tabId, workspace });

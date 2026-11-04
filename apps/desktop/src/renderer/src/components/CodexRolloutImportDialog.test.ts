@@ -35,6 +35,7 @@ import {
   type RolloutStageFailureReason,
   type RolloutTabOpenDeps,
 } from "./CodexRolloutImportDialog.js";
+import { usePendingResumes } from "../pending-resumes.js";
 
 function profile(overrides: Partial<CodexProfileRecord> = {}): CodexProfileRecord {
   return { id: "personal", label: "Personal", createdAt: "2026-07-14T00:00:00.000Z", ...overrides };
@@ -461,6 +462,48 @@ describe("openImportedSession", () => {
     expect(addTab).not.toHaveBeenCalled();
     expect(setActiveTab).not.toHaveBeenCalled();
     expect(message).toBe("Cannot open another tab — the maximum number of tabs is already open.");
+  });
+
+  it("arms the shared pending-resume marker synchronously — BEFORE the createTab reply lands — and settles it with the resulting tabId", async () => {
+    // Red-proof of the shared-marker wiring: if the import path ever skipped
+    // the `resumeWithMarker` seam, the sidebar would paint the imported
+    // session's history row next to its open row while the tab hydrates.
+    usePendingResumes.setState({ marks: new Map() });
+    let resolve!: (result: CreateTabResult) => void;
+    const createTab = vi.fn(
+      () =>
+        new Promise<CreateTabResult>((res) => {
+          resolve = res;
+        }),
+    );
+
+    const pending = openImportedSession("session-abc", { createTab, tabsStore: fakeTabsStore().tabsStore });
+
+    // The reply is still pending, yet the marker is already armed (null tabId).
+    expect(usePendingResumes.getState().marks.get("session-abc")).toBeNull();
+    resolve({ ok: true, tabId: "tab-77", workspace: "/real/workspace" });
+    await pending;
+    expect(usePendingResumes.getState().marks.get("session-abc")).toBe("tab-77");
+  });
+
+  it("a failed open clears the shared pending-resume marker so the sidebar's history row comes back", async () => {
+    usePendingResumes.setState({ marks: new Map() });
+    let reject!: (error: unknown) => void;
+    const createTab = vi.fn(
+      () =>
+        new Promise<CreateTabResult>((_resolve, rej) => {
+          reject = rej;
+        }),
+    );
+
+    const pending = openImportedSession("session-abc", { createTab, tabsStore: fakeTabsStore().tabsStore });
+
+    // Armed while the call is in flight…
+    expect(usePendingResumes.getState().marks.get("session-abc")).toBeNull();
+    reject(new Error("ipc down"));
+    await expect(pending).rejects.toThrow("ipc down");
+    // …and gone once it fails, so the history row is reachable again.
+    expect(usePendingResumes.getState().marks.has("session-abc")).toBe(false);
   });
 });
 
