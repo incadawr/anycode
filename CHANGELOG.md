@@ -22,6 +22,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Fixed the model pill in the composer footer sliding under the context meter in narrow windows and panes: the footer's left group now shrinks to the space it actually has, truncating the model name (full name stays on hover) instead of overlapping the context indicator. The Codex speed chip truncates the same way inside its own border, and pill labels keep a short readable stub instead of collapsing to an empty chevron.
 - A corrupt sibling field in the Claude settings block no longer silently drops a configured context-window limit, and an untouched blank limit field no longer triggers a redundant settings write on every blur.
 - Orchestrate no longer dead-ends a restricted role (planner, reviewer, explore) on a native engine fallback it cannot enforce: the refusal names the role and explains the fix in Settings → Roles, and the preset toast during orchestration says to turn Orchestrate off first.
+- Engine-restriction refusals now name the right fix for the profile's actual owner: a role configured only in Settings → Roles is no longer told to edit a profile file that does not exist, and a workflow step on a role claimed by a profile file points at that file (whose engine line outranks role settings) instead of at Settings.
 
 
 ## [0.0.74] — 2026-11-04
