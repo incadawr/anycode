@@ -78,9 +78,11 @@ const MD_PREVIEW_PARTITION = "md-preview";
  * settings, plugins, trust, secrets, tabs, proxy — is refused even from this
  * window's own top frame. Channel literals are imported from their
  * registration sites so the allow-list can never silently drift from what
- * main actually registers.
+ * main actually registers. Exported so the test can pin its CONTENT (exact
+ * equality with the document plane, cross-checked against the narrow
+ * bridge's own invoke channels) — an appended channel must fail CI.
  */
-const MD_WINDOW_CHANNELS = [
+export const MD_WINDOW_CHANNELS = [
   MD_PREVIEW_READ_CHANNEL,
   MD_PREVIEW_NAVIGATE_CHANNEL,
   PREVIEW_LIST_CHANNEL,

@@ -24,6 +24,8 @@
  * did-start-navigation listeners + the window-open handler).
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const { capturedHandle, capturedOn, createdWindows } = vi.hoisted(() => ({
   capturedHandle: new Map<string, (...args: unknown[]) => unknown>(),
@@ -108,11 +110,18 @@ import {
   MD_PREVIEW_READ_CHANNEL,
   MD_PREVIEW_WINDOW_ARGV_FLAG,
 } from "../../shared/md-preview.js";
-import { PREVIEW_LIST_CHANNEL } from "../../shared/preview-panel.js";
-import { ARTIFACT_READ_IMAGE_CHANNEL, ARTIFACT_REVEAL_CHANNEL } from "../artifacts-ipc.js";
+import { PREVIEW_LIST_CHANNEL, PREVIEW_SET_CONTAINER_CHANNEL } from "../../shared/preview-panel.js";
+import {
+  ARTIFACT_ALLOW_CHANNEL,
+  ARTIFACT_OPEN_CHANNEL,
+  ARTIFACT_PREVIEWABLE_CHANNEL,
+  ARTIFACT_PREVIEW_CHANNEL,
+  ARTIFACT_READ_IMAGE_CHANNEL,
+  ARTIFACT_REVEAL_CHANNEL,
+} from "../artifacts-ipc.js";
 import { guardedIpcHandle, isTrustedIpcSender, resetIpcGuardForTests, setIpcGuardMainWindow } from "../ipc-guard.js";
 import { mdWindowTargetOf, resetMdWindowTargetsForTests } from "./md-window-targets.js";
-import { createMdPreviewWindow } from "./md-window-adapter.js";
+import { createMdPreviewWindow, MD_WINDOW_CHANNELS } from "./md-window-adapter.js";
 
 const MAIN_SENDER = { mainFrame: { frame: "main" } };
 
@@ -133,6 +142,46 @@ function rig() {
   });
   const fake = createdWindows[0]!;
   return { win, fake, loadRenderer };
+}
+
+/** The document plane, spelled out literal by literal — the exact content the popout's allow-list must have. */
+const DOCUMENT_PLANE_CHANNELS = [
+  MD_PREVIEW_READ_CHANNEL,
+  MD_PREVIEW_NAVIGATE_CHANNEL,
+  PREVIEW_LIST_CHANNEL,
+  PREVIEW_SET_CONTAINER_CHANNEL,
+  ARTIFACT_READ_IMAGE_CHANNEL,
+  ARTIFACT_OPEN_CHANNEL,
+  ARTIFACT_REVEAL_CHANNEL,
+  ARTIFACT_ALLOW_CHANNEL,
+  ARTIFACT_PREVIEW_CHANNEL,
+  ARTIFACT_PREVIEWABLE_CHANNEL,
+];
+
+/**
+ * The channels the NARROW BRIDGE actually invokes, extracted from
+ * preload/md-preview-bridge.ts's own source: the identifier passed to each
+ * `ipcRenderer.invoke` call, resolved to its literal (locally defined
+ * artifact literals parsed from the file; the shared-module imports resolved
+ * through the same constants the bridge imports).
+ */
+function narrowBridgeInvokeChannels(): string[] {
+  const source = readFileSync(fileURLToPath(new URL("../../preload/md-preview-bridge.ts", import.meta.url)), "utf8");
+  const localDefs = new Map<string, string>();
+  for (const match of source.matchAll(/const\s+([A-Z_]+)\s*=\s*"(anycode:[^"]+)"/g)) {
+    localDefs.set(match[1]!, match[2]!);
+  }
+  const imported = new Map<string, string>([
+    ["MD_PREVIEW_READ_CHANNEL", MD_PREVIEW_READ_CHANNEL],
+    ["MD_PREVIEW_NAVIGATE_CHANNEL", MD_PREVIEW_NAVIGATE_CHANNEL],
+    ["PREVIEW_LIST_CHANNEL", PREVIEW_LIST_CHANNEL],
+    ["PREVIEW_SET_CONTAINER_CHANNEL", PREVIEW_SET_CONTAINER_CHANNEL],
+  ]);
+  const names = [...source.matchAll(/ipcRenderer\.invoke\(\s*([A-Z_]+)/g)].map((match) => match[1]!);
+  // An identifier that resolves to neither the file's own literals nor the
+  // known imports stays as its own name — the equality assertion below then
+  // fails loudly instead of the scan silently dropping the channel.
+  return [...new Set(names)].map((name) => localDefs.get(name) ?? imported.get(name) ?? name).sort();
 }
 
 describe("md window adapter — guard trust wiring", () => {
@@ -226,6 +275,17 @@ describe("md window adapter — channel-scoped guard allow-list", () => {
     for (const channel of refused) {
       expect(() => capturedHandle.get(channel)?.(mdEvent)).toThrow(/refused/);
     }
+  });
+
+  it("the exported allow-list IS the document plane — and exactly what the narrow bridge invokes", () => {
+    // The behavioral test above registers its OWN channel list, so appending
+    // e.g. anycode:settings-get to MD_WINDOW_CHANNELS would keep it green.
+    // Exact equality against the spelled-out document plane closes that gap.
+    expect([...MD_WINDOW_CHANNELS]).toEqual(DOCUMENT_PLANE_CHANNELS);
+    // Cross-check with the bridge: the allow-list must name exactly the
+    // channels the popout's renderer can actually invoke — drift on either
+    // side (a channel appended or removed) fails here.
+    expect(narrowBridgeInvokeChannels()).toEqual([...MD_WINDOW_CHANNELS].sort());
   });
 });
 
