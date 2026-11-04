@@ -48,4 +48,23 @@ describe("main window navigation", () => {
     }
     expect(open.mock.calls.map(([url]) => url)).toEqual(["https://example.com/", "https://example.com/", "https://example.com/", "http://example.com/", "mailto:a@example.com"]);
   });
+
+  it("recovers through a supplied document loader instead of the bare renderer URL", async () => {
+    const handlers: Record<string, (...args: any[]) => unknown> = {};
+    const wc = { on: (name: string, fn: (...args: any[]) => unknown) => { handlers[name] = fn; }, setWindowOpenHandler: (fn: (event: any) => unknown) => { handlers.open = fn; }, stop: vi.fn(), isDestroyed: () => false, loadURL: vi.fn().mockResolvedValue(undefined) };
+    const loadDocument = vi.fn();
+    protectMainNavigation(wc as unknown as WebContents, "file:///app/index.html", vi.fn().mockResolvedValue(undefined), loadDocument);
+    // The slipped-navigation recovery reloads the window's own DOCUMENT (for
+    // the md popout: rendererUrl + ?view=md-preview&tabId&previewId, rebuilt
+    // by the supplied loader) — never the bare renderer URL, which would
+    // mount the full app shell inside the narrowed bridge.
+    handlers["did-navigate"]!({}, "about:blank");
+    expect(loadDocument).toHaveBeenCalledTimes(1);
+    handlers["did-start-navigation"]!({ url: "about:blank", isMainFrame: true, isSameDocument: false });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(wc.stop).toHaveBeenCalledTimes(1);
+    expect(loadDocument).toHaveBeenCalledTimes(2);
+    // The bare-URL reload default is fully replaced by the loader.
+    expect(wc.loadURL).not.toHaveBeenCalled();
+  });
 });

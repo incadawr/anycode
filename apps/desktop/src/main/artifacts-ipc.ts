@@ -69,6 +69,7 @@
  */
 
 import { guardedIpcHandle } from "./ipc-guard.js";
+import { mdWindowMayUseTab, mdWindowTargetOf } from "./preview/md-window-targets.js";
 import * as fsp from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { isAbsolute, join, relative as pathRelative, resolve as pathResolve, sep } from "node:path";
@@ -279,6 +280,29 @@ export interface ArtifactsIpcDeps {
    * preview. Never given a raw model-authored path.
    */
   openPreview(tabId: string, realPath: string): Promise<PreviewResult<PreviewOpenSuccess>>;
+  /**
+   * Reopens/focuses ONE registered preview BY (tabId, previewId) — bound at
+   * the wiring site (main/index.ts) to
+   * `PreviewHostHandle.openForPreviewId`. Used ONLY by the md-popout
+   * restriction of the preview channel below: once the requested path has
+   * passed the own-document realpath cap, the reload must address exactly
+   * the sender's own preview — two previews of the SAME document can be
+   * live in one tab, and `openPreview`'s by-realpath search would reload
+   * and focus whichever match comes FIRST, not the popout that asked.
+   */
+  openPreviewForId(tabId: string, previewId: string, realPath: string): Promise<PreviewResult<PreviewOpenSuccess>>;
+  /**
+   * The CURRENT realpath of a live dom-md preview's rendered source — bound
+   * at the wiring site (main/index.ts) to
+   * `PreviewHostHandle.getMdDocRef(...)?.realSourcePath`; `undefined` for
+   * no-such-preview / wrong tab / a destroyed record / a "web" record. Used
+   * ONLY by the md-popout restriction of the preview channel below: a
+   * registered popout may open a path only when it resolves to its OWN
+   * preview's document (a reload of its own document) — without this fact
+   * the popout could reload and steer ANY path that resolves, including one
+   * belonging to a different live preview that sits in the same tab.
+   */
+  mdPreviewRealSourcePath(tabId: string, previewId: string): string | undefined;
 }
 
 // ── payload schemas ──
@@ -749,8 +773,25 @@ export async function handleArtifactAllow(deps: ArtifactsIpcDeps, raw: unknown):
  * regardless, so this gate simply fails the same request honestly and
  * earlier. The extension gate is disjoint from `OPENABLE_EXTENSIONS` (raster
  * images, `shell.openPath`) — this channel never touches `shell.openPath`.
+ *
+ * `ownPreviewOnly` narrows the channel for a DETACHED MD POPOUT sender (the
+ * registration wrapper below passes its own target's document realpath AND
+ * previewId, looked up live via `deps.mdPreviewRealSourcePath`): the popout
+ * may open a path only when it resolves to its OWN preview's document — a
+ * reload of the document it was created for — and the reload itself addresses
+ * exactly that (tabId, previewId) via `deps.openPreviewForId`, because two
+ * previews of the same document can be live in one tab and `openPreview`'s
+ * by-realpath search would reload/focus the FIRST match instead of the
+ * popout that asked. Any other path gets the same safe negative a malformed
+ * payload would get. `undefined` (the main window and every other
+ * unregistered sender) stays unrestricted: `deps.openPreview`
+ * (`openForPathClick`) keeps its find-by-path reuse semantics.
  */
-export async function handleArtifactPreview(deps: ArtifactsIpcDeps, raw: unknown): Promise<PreviewResult<PreviewOpenSuccess>> {
+export async function handleArtifactPreview(
+  deps: ArtifactsIpcDeps,
+  raw: unknown,
+  ownPreviewOnly?: { realSourcePath: string; previewId: string },
+): Promise<PreviewResult<PreviewOpenSuccess>> {
   const parsed = pathSchema.safeParse(raw);
   if (!parsed.success) {
     return { ok: false, error: "invalid artifact-preview request", errorKind: "invalid_input" };
@@ -761,6 +802,20 @@ export async function handleArtifactPreview(deps: ArtifactsIpcDeps, raw: unknown
   }
   if (!PREVIEWABLE_DOC_EXTENSIONS.has(extensionOf(resolved.realPath))) {
     return { ok: false, error: `cannot preview ${parsed.data.path}: unsupported extension`, errorKind: "invalid_input" };
+  }
+  // Same case/separator rules as the containment check itself (both sides
+  // are realpaths, so this is exact equality on POSIX; darwin/win32
+  // case-variant spellings of the SAME file still match).
+  if (
+    ownPreviewOnly !== undefined &&
+    normalizeForCompare(resolved.realPath, process.platform) !== normalizeForCompare(ownPreviewOnly.realSourcePath, process.platform)
+  ) {
+    return { ok: false, error: "invalid artifact-preview request", errorKind: "invalid_input" };
+  }
+  if (ownPreviewOnly !== undefined) {
+    // The cap passed — reload/focus exactly the sender's own preview, never
+    // a by-path search (two previews of this same document may be live).
+    return deps.openPreviewForId(parsed.data.tabId, ownPreviewOnly.previewId, resolved.realPath);
   }
   return deps.openPreview(parsed.data.tabId, resolved.realPath);
 }
@@ -826,12 +881,51 @@ export async function handleArtifactPreviewable(deps: ArtifactsIpcDeps, raw: unk
   return { paths: verified };
 }
 
+/** The payload's tabId, if a plain string — used ONLY for the md-popout binding check below; zod stays the payload authority. */
+function payloadTabId(raw: unknown): string | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const tabId = (raw as { tabId?: unknown }).tabId;
+  return typeof tabId === "string" ? tabId : undefined;
+}
+
 /** Wires the six channels onto ipcMain. An unvalidatable payload gets a safe negative from the handler itself. */
 export function registerArtifactsIpc(deps: ArtifactsIpcDeps): void {
-  guardedIpcHandle(ARTIFACT_READ_IMAGE_CHANNEL, (_event, raw: unknown) => handleArtifactReadImage(deps, raw));
-  guardedIpcHandle(ARTIFACT_OPEN_CHANNEL, (_event, raw: unknown) => handleArtifactOpen(deps, raw));
-  guardedIpcHandle(ARTIFACT_REVEAL_CHANNEL, (_event, raw: unknown) => handleArtifactReveal(deps, raw));
-  guardedIpcHandle(ARTIFACT_ALLOW_CHANNEL, (_event, raw: unknown) => handleArtifactAllow(deps, raw));
-  guardedIpcHandle(ARTIFACT_PREVIEW_CHANNEL, (_event, raw: unknown) => handleArtifactPreview(deps, raw));
-  guardedIpcHandle(ARTIFACT_PREVIEWABLE_CHANNEL, (_event, raw: unknown) => handleArtifactPreviewable(deps, raw));
+  // The detached md popout may act only on ITS OWN tab's artifacts
+  // (md-window-targets.ts); the main window is unrestricted. Each refusal
+  // reuses that handler's own closest safe-negative shape, exactly like a
+  // malformed payload would get.
+  guardedIpcHandle(ARTIFACT_READ_IMAGE_CHANNEL, (event, raw: unknown) =>
+    mdWindowMayUseTab(event.sender, payloadTabId(raw)) ? handleArtifactReadImage(deps, raw) : Promise.resolve({ ok: false as const, reason: "no_workspace" as const }));
+  guardedIpcHandle(ARTIFACT_OPEN_CHANNEL, (event, raw: unknown) =>
+    mdWindowMayUseTab(event.sender, payloadTabId(raw)) ? handleArtifactOpen(deps, raw) : Promise.resolve({ ok: false as const, reason: "no_workspace" as const }));
+  guardedIpcHandle(ARTIFACT_REVEAL_CHANNEL, (event, raw: unknown) =>
+    mdWindowMayUseTab(event.sender, payloadTabId(raw)) ? handleArtifactReveal(deps, raw) : Promise.resolve({ ok: false as const, reason: "no_workspace" as const }));
+  guardedIpcHandle(ARTIFACT_ALLOW_CHANNEL, (event, raw: unknown) =>
+    mdWindowMayUseTab(event.sender, payloadTabId(raw)) ? handleArtifactAllow(deps, raw) : Promise.resolve({ ok: false as const, reason: "no_workspace" as const }));
+  // The preview channel binds a popout one level tighter than the tab-only
+  // helpers above: reusing an already-open preview for the requested path's
+  // REALPATH means a tabId check alone would let the popout reload/focus
+  // ANOTHER live preview in its own tab. The wrapper resolves the popout's
+  // own document realpath live on every call (a preview that has since been
+  // closed, transferred or flipped to web has none) and hands the handler an
+  // own-preview-only cap carrying its own (tabId, previewId) target, so the
+  // reload addresses exactly that preview; the main window stays unrestricted.
+  guardedIpcHandle(ARTIFACT_PREVIEW_CHANNEL, (event, raw: unknown) => {
+    const target = mdWindowTargetOf(event.sender);
+    if (target === undefined) {
+      return handleArtifactPreview(deps, raw);
+    }
+    // Tab-level binding first (a foreign tab is refused even if it happens to
+    // contain a file at the same realpath), then the own-preview cap.
+    if (!mdWindowMayUseTab(event.sender, payloadTabId(raw))) {
+      return Promise.resolve({ ok: false as const, error: "invalid artifact-preview request", errorKind: "invalid_input" as const });
+    }
+    const ownRealPath = deps.mdPreviewRealSourcePath(target.tabId, target.previewId);
+    if (ownRealPath === undefined) {
+      return Promise.resolve({ ok: false as const, error: "invalid artifact-preview request", errorKind: "invalid_input" as const });
+    }
+    return handleArtifactPreview(deps, raw, { realSourcePath: ownRealPath, previewId: target.previewId });
+  });
+  guardedIpcHandle(ARTIFACT_PREVIEWABLE_CHANNEL, (event, raw: unknown) =>
+    mdWindowMayUseTab(event.sender, payloadTabId(raw)) ? handleArtifactPreviewable(deps, raw) : Promise.resolve({ paths: [] }));
 }

@@ -125,3 +125,77 @@ describe("preload PORT_ENVELOPE_TYPE forwarding", () => {
     expect(posted.child).toEqual(CHILD_FIELD);
   });
 });
+
+/**
+ * preview-ipc-risk F2: the detached md popout (argv-flagged by
+ * main/md-window-adapter.ts) must NOT receive the full app surface — it gets
+ * the narrow document bridge of md-preview-bridge.ts instead, and only while
+ * it shows the app's own renderer URL (same gate as the full bridge).
+ */
+describe("preload narrow bridge for the detached md popout", () => {
+  it("exposes ONLY the narrow document surface (platform/mdPreview/previewPanel/artifacts) and no port listeners", async () => {
+    const { contextBridge } = await import("electron");
+    vi.mocked(contextBridge.exposeInMainWorld).mockClear();
+    mockListeners.clear();
+    vi.resetModules();
+    vi.stubGlobal("window", { location: { href: "file:///app/index.html" } });
+    vi.stubGlobal("process", {
+      ...process,
+      argv: ["--anycode-renderer-url=file:///app/index.html", "--anycode-md-preview-window"],
+    });
+    await import("./index.js");
+    // The full bridge's port-forwarding listeners must not exist in this window.
+    expect(mockListeners.size).toBe(0);
+    expect(contextBridge.exposeInMainWorld).toHaveBeenCalledTimes(1);
+    const [key, api] = vi.mocked(contextBridge.exposeInMainWorld).mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(key).toBe("anycode");
+    expect(Object.keys(api).sort()).toEqual(["artifacts", "mdPreview", "platform", "previewPanel"]);
+    expect(Object.keys(api["mdPreview"] as object).sort()).toEqual(["navigate", "read"]);
+    expect(Object.keys(api["previewPanel"] as object).sort()).toEqual(["list", "setContainer"]);
+    expect(Object.keys(api["artifacts"] as object).sort()).toEqual([
+      "allow",
+      "open",
+      "preview",
+      "previewable",
+      "readImage",
+      "reveal",
+    ]);
+    // The privileged families are not even nameable from this window.
+    for (const absent of ["settings", "secrets", "plugins", "trust", "tabBootstrap", "tabs", "proxy", "windowState", "getPathForFile", "automation"]) {
+      expect(api[absent]).toBeUndefined();
+    }
+  });
+
+  it("exposes NOTHING when the md window navigated away from the app renderer", async () => {
+    const { contextBridge } = await import("electron");
+    vi.mocked(contextBridge.exposeInMainWorld).mockClear();
+    mockListeners.clear();
+    vi.resetModules();
+    vi.stubGlobal("window", { location: { href: "https://evil.example/" } });
+    vi.stubGlobal("process", {
+      ...process,
+      argv: ["--anycode-renderer-url=file:///app/index.html", "--anycode-md-preview-window"],
+    });
+    await import("./index.js");
+    expect(contextBridge.exposeInMainWorld).not.toHaveBeenCalled();
+    expect(mockListeners.size).toBe(0);
+  });
+
+  it("without the flag the full app surface is unchanged (privilege families still present)", async () => {
+    const { contextBridge } = await import("electron");
+    vi.mocked(contextBridge.exposeInMainWorld).mockClear();
+    mockListeners.clear();
+    vi.resetModules();
+    vi.stubGlobal("window", { postMessage: vi.fn(), location: { href: "file:///app/index.html" } });
+    vi.stubGlobal("process", { ...process, argv: ["--anycode-renderer-url=file:///app/index.html"] });
+    await import("./index.js");
+    expect(contextBridge.exposeInMainWorld).toHaveBeenCalledTimes(1);
+    const [key, api] = vi.mocked(contextBridge.exposeInMainWorld).mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(key).toBe("anycode");
+    // The full surface keeps its privileged families (sampling, not exhaustive).
+    for (const present of ["settings", "tabBootstrap", "previewPanel", "mdPreview", "artifacts"]) {
+      expect(api[present]).toBeDefined();
+    }
+    expect(Object.keys(api).length).toBeGreaterThan(10);
+  });
+});

@@ -9,6 +9,15 @@
  * file stays near-untouched (CUT.md Gap 3 sequencing note / RISK REGISTER §2).
  */
 
+/**
+ * argv flag main passes to the detached md-preview WINDOW (webPreferences
+ * additionalArguments, preview/md-window-adapter.ts). The shared preload
+ * reads it and exposes the NARROW document bridge (preload/md-preview-bridge.ts)
+ * instead of the full app bridge in that window — a wire contract between
+ * main and preload, which is why it lives beside the channels it guards.
+ */
+export const MD_PREVIEW_WINDOW_ARGV_FLAG = "--anycode-md-preview-window";
+
 /** invoke (renderer→main): (re)read the LIVE source of a dom-md preview's document — Reload is the SAME invoke, no cache. */
 export const MD_PREVIEW_READ_CHANNEL = "anycode:md-preview-read";
 // zod: { tabId: z.string().min(1), previewId: z.string().min(1) }

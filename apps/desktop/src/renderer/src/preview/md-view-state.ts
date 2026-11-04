@@ -14,6 +14,8 @@
  * keeps that same mode after following a link, now showing the NEW
  * document's source.
  */
+import { parseAccent, type Accent } from "../accent.js";
+import { parseDensity, type Density } from "../density.js";
 import type { MdDocPayload, MdDocReadResult } from "../../../shared/md-preview.js";
 
 export type MdViewPhase = "loading" | "ready" | "error";
@@ -101,6 +103,35 @@ export function parseMdWindowTarget(search: string): { tabId: string; previewId:
   const tabId = params.get("tabId") ?? "";
   const previewId = params.get("previewId") ?? "";
   return tabId !== "" && previewId !== "" ? { tabId, previewId } : null;
+}
+
+export type MdWindowTheme = "light" | "dark";
+
+export interface MdWindowAppearance {
+  theme: MdWindowTheme;
+  accent: Accent;
+  density: Density;
+}
+
+/**
+ * The md-preview WINDOW's boot appearance, handed over by main in the SAME
+ * query that carries `view`/`tabId`/`previewId` (main/preview/
+ * md-window-appearance.ts probes the main window's applied `<html>` stamps).
+ * This window cannot derive the values itself: the narrow bridge has no
+ * settings family and the in-memory partition's localStorage starts empty,
+ * so the localStorage readers would only ever yield defaults. Absent or
+ * garbage params fail safe to exactly those defaults (dark / current /
+ * compact), so a main and renderer that disagree about the handoff still
+ * boot a correctly-shaped window.
+ */
+export function parseMdWindowAppearanceQuery(search: string): MdWindowAppearance {
+  const params = new URLSearchParams(search);
+  const theme = params.get("theme");
+  return {
+    theme: theme === "light" || theme === "dark" ? theme : "dark",
+    accent: parseAccent(params.get("accent")),
+    density: parseDensity(params.get("density")),
+  };
 }
 
 /**

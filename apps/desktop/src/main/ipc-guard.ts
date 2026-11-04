@@ -7,8 +7,9 @@
  * refused. The one non-main window that legitimately carries the preload
  * bridge (the detached Markdown popout, which loads the app's OWN renderer
  * bundle) is allow-listed by its creator (preview/md-window-adapter.ts) via
- * `addIpcGuardTrustedWindow`; the registration is window-level, and narrower
- * per-channel policies can extend the same seam later.
+ * `addIpcGuardTrustedWindow` — restricted to exactly the document channels
+ * that popout needs, so its trust does NOT extend to settings/plugins/tab or
+ * any other privileged family even from its own top frame.
  *
  * Refusal style: `guardedIpcHandle` THROWS (so a renderer `invoke` rejects —
  * handlers keep their own result shapes and no fabricated refusal payload is
@@ -29,17 +30,29 @@ import type { IpcMainEvent, IpcMainInvokeEvent } from "electron";
 
 /** Live accessor for the app's main window webContents; null until boot wires it. */
 let mainWindowSource: (() => unknown) | null = null;
-/** Explicitly allow-listed app windows' webContents (the detached Markdown popout today). */
-const trustedWindows = new Set<unknown>();
+/**
+ * Explicitly allow-listed app windows' webContents (the detached Markdown
+ * popout today) with the channels each may invoke: `null` = the whole
+ * privileged surface (the pre-channel-scoping default, still what an
+ * allow-list call without a channel list gets), a `Set` = exactly those
+ * channels. The main window never enters this map — its trust is the
+ * closure above, over every channel.
+ */
+const trustedWindows = new Map<unknown, ReadonlySet<string> | null>();
 
 /** Wires (or re-wires) the main-window source; the closure is read per event, never captured. */
 export function setIpcGuardMainWindow(getter: () => unknown): void {
   mainWindowSource = getter;
 }
 
-/** Adds an app window's webContents to the trusted allow-list (whole-window trust). */
-export function addIpcGuardTrustedWindow(webContents: unknown): void {
-  trustedWindows.add(webContents);
+/**
+ * Adds an app window's webContents to the trusted allow-list. Without
+ * `channels` the window is trusted for EVERY channel (window-level trust);
+ * with a channel list it may invoke exactly those — a call on any other
+ * channel is refused even from the window's own top frame.
+ */
+export function addIpcGuardTrustedWindow(webContents: unknown, channels?: readonly string[]): void {
+  trustedWindows.set(webContents, channels === undefined ? null : new Set(channels));
 }
 
 /** Removes an allow-listed window's webContents (its creator does this on close). */
@@ -80,10 +93,18 @@ export function isTopFrameIpcEvent(event: unknown): boolean {
   }
 }
 
-/** Trusted sender AND top frame; a missing/undefined event is never trusted. */
-function isTrustedTopFrameIpcEvent(event: unknown): boolean {
+/**
+ * Trusted sender AND top frame AND — for an allow-listed window that was
+ * registered WITH a channel list — a channel inside that list. A missing or
+ * undefined event is never trusted; the main window and channel-less
+ * allow-list entries are trusted on every channel.
+ */
+function isTrustedTopFrameIpcEvent(event: unknown, channel: string): boolean {
   if (typeof event !== "object" || event === null) return false;
-  return isTrustedIpcSender((event as { sender?: unknown }).sender) && isTopFrameIpcEvent(event);
+  const sender = (event as { sender?: unknown }).sender;
+  if (!isTrustedIpcSender(sender) || !isTopFrameIpcEvent(event)) return false;
+  const channels = trustedWindows.get(sender);
+  return channels === undefined || channels === null || channels.has(channel);
 }
 
 function ipcGuardRefusal(channel: string): Error {
@@ -100,7 +121,7 @@ export function guardedIpcHandle(
   handler: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown,
 ): void {
   ipcMain.handle(channel, (event, ...args) => {
-    if (!isTrustedTopFrameIpcEvent(event)) throw ipcGuardRefusal(channel);
+    if (!isTrustedTopFrameIpcEvent(event, channel)) throw ipcGuardRefusal(channel);
     return handler(event, ...args);
   });
 }
@@ -114,7 +135,7 @@ export function guardedIpcOn(
   listener: (event: IpcMainEvent, ...args: unknown[]) => void,
 ): void {
   ipcMain.on(channel, (event, ...args) => {
-    if (!isTrustedTopFrameIpcEvent(event)) return;
+    if (!isTrustedTopFrameIpcEvent(event, channel)) return;
     listener(event, ...args);
   });
 }

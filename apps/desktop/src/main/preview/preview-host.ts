@@ -446,6 +446,23 @@ export interface PreviewHostHandle {
    * (RPC "open" op) is left completely untouched by this method's existence.
    */
   openForPathClick(tabId: string, path: string): Promise<PreviewResult<PreviewOpenSuccess>>;
+  /**
+   * The BY-ID twin of `openForPathClick`: reopens (reuse-navigates) and
+   * focuses ONE already-open preview addressed exactly by (tabId, previewId),
+   * never a by-path search. Bound at the wiring site (main/index.ts) into
+   * `ArtifactsIpcDeps.openPreviewForId` — the reload leg of the md popout's
+   * preview-channel restriction (artifacts-ipc.ts): after that channel's
+   * own-document realpath cap has passed, TWO previews of the SAME document
+   * can be live in the sender's tab, and `openForPathClick`'s
+   * first-by-realpath match would reload/focus whichever one the map yields
+   * first instead of the popout that asked. Refusal set mirrors `openForTab`'s
+   * own previewId-reuse validation: no-such-preview / wrong tab / destroyed
+   * record -> `invalid_input`. The path itself is not re-capped here beyond
+   * `openForTab`'s ordinary containment resolution — the own-document cap is
+   * artifacts-ipc.ts's security decision; this method only adds "address
+   * exactly THIS preview".
+   */
+  openForPreviewId(tabId: string, previewId: string, path: string): Promise<PreviewResult<PreviewOpenSuccess>>;
   /** The RPC entrypoint: dispatches `message.op`, then posts the correlated response itself. Never rejects. */
   handleRequest(tabId: string, message: PreviewRequestMessage): Promise<void>;
   /** Turn-end auto-open (cut §1(a)): fire-and-forget, setting-gated, dedup'd by realpath. */
@@ -852,9 +869,36 @@ class PreviewHost implements PreviewHostHandle {
   async openForPathClick(tabId: string, path: string): Promise<PreviewResult<PreviewOpenSuccess>> {
     const resolved = await this.deps.resolveArtifact(tabId, path);
     const existing = "realPath" in resolved ? this.findLiveByRealPath(tabId, resolved.realPath) : undefined;
-    const result = await this.openForTab(tabId, { path, previewId: existing?.previewId });
-    if (result.ok && existing !== undefined) {
-      this.focusExistingPreview(existing);
+    if (existing === undefined) {
+      return this.openForTab(tabId, { path });
+    }
+    return this.reuseAndFocus(tabId, existing, path);
+  }
+
+  async openForPreviewId(tabId: string, previewId: string, path: string): Promise<PreviewResult<PreviewOpenSuccess>> {
+    const record = this.previews.get(previewId);
+    // Same guard and refusal shape as openForTab's own previewId-reuse
+    // validation — the caller above this module has already capped the path
+    // to the sender's own document; this only ensures the id addresses a
+    // live record of THIS tab.
+    if (record === undefined || record.destroyed || record.tabId !== tabId) {
+      return this.fail("invalid_input", `no such preview: ${previewId}`);
+    }
+    return this.reuseAndFocus(tabId, record, path);
+  }
+
+  /**
+   * The shared reuse tail of `openForPathClick` and `openForPreviewId`:
+   * reuse-navigates THIS record to `path` via `openForTab`'s previewId path,
+   * then brings it to the front. The record captured before the navigate is
+   * the one focused — a cross-viewKind flip destroys it, and the destroyed
+   * guards inside `focusExistingPreview` turn that into a no-op, exactly as
+   * before the split.
+   */
+  private async reuseAndFocus(tabId: string, record: PreviewRecord, path: string): Promise<PreviewResult<PreviewOpenSuccess>> {
+    const result = await this.openForTab(tabId, { path, previewId: record.previewId });
+    if (result.ok) {
+      this.focusExistingPreview(record);
     }
     return result;
   }

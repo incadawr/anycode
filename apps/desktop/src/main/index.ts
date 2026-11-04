@@ -230,6 +230,7 @@ import { createElectronPanelView } from "./preview/panel-adapter.js";
 // "renderer-URL/query construction closed over at the wiring site" half
 // CONTRACTS calls for).
 import { createMdPreviewWindow } from "./preview/md-window-adapter.js";
+import { mdWindowDocumentQuery, readAppliedAppearance } from "./preview/md-window-appearance.js";
 import { registerPreviewPanelIpc } from "./preview/panel-ipc.js";
 import { PREVIEW_CHANGED_CHANNEL } from "../shared/preview-panel.js";
 // M1: native DOM markdown preview's doc-read IPC (CUT.md CONTRACTS) —
@@ -772,15 +773,44 @@ function resolveRendererUrl(): string {
  * `file://...?...` string. This is the "renderer-URL/query construction
  * closed over at the wiring site" half of CONTRACTS' `md-window-adapter.ts`
  * doc comment — the adapter itself never decides dev vs packaged.
+ *
+ * The query also carries the appearance handoff (md-window-appearance.ts):
+ * the narrowed popout has no settings family on its bridge and its
+ * in-memory partition starts with empty localStorage, so main resolves the
+ * theme/accent/density from the main window's applied `<html>` stamps and
+ * passes them beside the routing triple. The probe is one async
+ * round-trip to the main window, so the actual navigation runs fire-and-
+ * forget (same posture as the old synchronous `void win.loadURL`); a popout
+ * that closes mid-probe skips its load.
  */
-function loadMdPreviewWindow(win: BrowserWindow, opts: { previewId: string; tabId: string }): void {
-  const query = { view: "md-preview", tabId: opts.tabId, previewId: opts.previewId };
+function loadMdPreviewWindow(popout: BrowserWindow, opts: { previewId: string; tabId: string }): void {
+  void loadMdPreviewWindowDocument(popout, opts);
+}
+
+async function loadMdPreviewWindowDocument(popout: BrowserWindow, opts: { previewId: string; tabId: string }): Promise<void> {
+  // The probe reads the MAIN window's applied stamps (module `win`) — a
+  // BrowserWindow exposes executeJavaScript on its webContents, so the source
+  // is wrapped structurally and stays null when the main window is gone.
+  const mainWindow = win;
+  const appearance = await readAppliedAppearance(mainWindow === null ? null : {
+    executeJavaScript: (script) => mainWindow.webContents.executeJavaScript(script),
+  });
+  if (popout.isDestroyed()) {
+    return;
+  }
+  const query = mdWindowDocumentQuery(opts, appearance);
   const rendererDevServerUrl = process.env["ELECTRON_RENDERER_URL"];
-  if (rendererDevServerUrl !== undefined) {
-    const params = new URLSearchParams(query);
-    void win.loadURL(`${rendererDevServerUrl}?${params.toString()}`);
-  } else {
-    void win.loadFile(resolveRendererIndex(), { query });
+  try {
+    if (rendererDevServerUrl !== undefined) {
+      const params = new URLSearchParams(query);
+      await popout.loadURL(`${rendererDevServerUrl}?${params.toString()}`);
+    } else {
+      await popout.loadFile(resolveRendererIndex(), { query });
+    }
+  } catch {
+    // The popout can be destroyed (fast close/transfer) between the probe
+    // and the navigation — the same benign race the old fire-and-forget
+    // loadURL swallowed.
   }
 }
 
@@ -2289,6 +2319,21 @@ void app.whenReady().then(async () => {
       previewHost !== null
         ? previewHost.openForPathClick(tabId, realPath)
         : Promise.resolve({ ok: false, error: "preview host not ready", errorKind: "unavailable" }),
+    // The md popout's own-document reload (artifacts-ipc.ts's preview
+    // channel): after the popout's path passed its own-preview cap, the
+    // reload/focus must address exactly the registered (tabId, previewId) —
+    // `openForPathClick` matches by realpath and would reload the FIRST
+    // preview of that document, which need not be the popout that asked.
+    // Same forward-reference posture as `openPreview` above.
+    openPreviewForId: (tabId, previewId, realPath) =>
+      previewHost !== null
+        ? previewHost.openForPreviewId(tabId, previewId, realPath)
+        : Promise.resolve({ ok: false, error: "preview host not ready", errorKind: "unavailable" }),
+    // The md popout's preview-channel binding (md-window-targets.ts): the
+    // CURRENT realpath of the popout's own dom-md document, re-read live on
+    // every invoke. Same forward-reference posture as `openPreview` above —
+    // `previewHost` is assigned just below, before any renderer can invoke.
+    mdPreviewRealSourcePath: (tabId, previewId) => previewHost?.getMdDocRef(tabId, previewId)?.realSourcePath,
     // Opening OUTSIDE the allowed roots is permitted, but only through this
     // modal: `cancelId`/`defaultId` both point at Cancel, so a stray Return or
     // a dismissed sheet reads as "no". The full path is spelled out — the

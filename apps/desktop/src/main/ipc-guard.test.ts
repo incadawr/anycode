@@ -47,6 +47,7 @@ import {
   PREVIEW_PANEL_SET_BOUNDS_CHANNEL,
 } from "../shared/preview-panel.js";
 import { MD_PREVIEW_READ_CHANNEL } from "../shared/md-preview.js";
+import { SETTINGS_GET_CHANNEL } from "../shared/settings.js";
 import { TAB_BOOTSTRAP_CHANNEL } from "../shared/tabs.js";
 import {
   addIpcGuardTrustedWindow,
@@ -339,6 +340,49 @@ describe("ipc guard behavior — the allow-listed Markdown popout is served from
     expect(host.setPanelBounds).not.toHaveBeenCalled();
     fireOn(PREVIEW_PANEL_SET_BOUNDS_CHANNEL, MAIN_EVENT, { tabId: "t", x: 1, y: 1, width: 2, height: 2 });
     expect(host.setPanelBounds).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ipc guard behavior — channel-scoped allow-list entries", () => {
+  it("an allow-listed window with a channel set is served ONLY on those channels, even from its top frame", () => {
+    resetIpcGuardForTests();
+    setIpcGuardMainWindow(() => MAIN_SENDER);
+    capturedHandle.clear();
+    guardedIpcHandle(MD_PREVIEW_READ_CHANNEL, () => "doc");
+    // The popout is allow-listed for its document plane; a privileged family
+    // channel (settings) is deliberately NOT in the list.
+    guardedIpcHandle(SETTINGS_GET_CHANNEL, () => "settings");
+    addIpcGuardTrustedWindow(MD_SENDER, [MD_PREVIEW_READ_CHANNEL]);
+    expect(invokeHandle(MD_PREVIEW_READ_CHANNEL, MD_EVENT)).toBe("doc");
+    // Even from its own top frame, a channel outside the list is refused —
+    // the md popout must not be able to invoke settings by any path.
+    expect(() => invokeHandle(SETTINGS_GET_CHANNEL, MD_EVENT)).toThrow(/refused/);
+    // The MAIN window stays trusted on that same privileged channel.
+    expect(invokeHandle(SETTINGS_GET_CHANNEL, MAIN_EVENT)).toBe("settings");
+  });
+
+  it("a channel-less allow-list entry keeps the whole-surface trust (pre-scoping callers unchanged)", () => {
+    resetIpcGuardForTests();
+    setIpcGuardMainWindow(() => MAIN_SENDER);
+    capturedHandle.clear();
+    guardedIpcHandle(MD_PREVIEW_READ_CHANNEL, () => "doc");
+    guardedIpcHandle(SETTINGS_GET_CHANNEL, () => "settings");
+    addIpcGuardTrustedWindow(MD_SENDER);
+    expect(invokeHandle(MD_PREVIEW_READ_CHANNEL, MD_EVENT)).toBe("doc");
+    expect(invokeHandle(SETTINGS_GET_CHANNEL, MD_EVENT)).toBe("settings");
+  });
+
+  it("a channel-scoped entry is still subject to the top-frame and removal rules on its allowed channels", () => {
+    resetIpcGuardForTests();
+    setIpcGuardMainWindow(() => MAIN_SENDER);
+    capturedHandle.clear();
+    guardedIpcHandle(MD_PREVIEW_READ_CHANNEL, () => "doc");
+    addIpcGuardTrustedWindow(MD_SENDER, [MD_PREVIEW_READ_CHANNEL]);
+    // Subframe of the scoped window: refused even on an allowed channel.
+    expect(() => invokeHandle(MD_PREVIEW_READ_CHANNEL, { sender: MD_SENDER, senderFrame: { frame: "md-sub" } })).toThrow(/refused/);
+    // Removed from the allow-list: refused again.
+    removeIpcGuardTrustedWindow(MD_SENDER);
+    expect(() => invokeHandle(MD_PREVIEW_READ_CHANNEL, MD_EVENT)).toThrow(/refused/);
   });
 });
 
