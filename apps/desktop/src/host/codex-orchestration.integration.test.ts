@@ -154,7 +154,7 @@ async function nativeRig() {
   initial.threadId = "fresh-thread";
   const original = initial.request.bind(initial);
   initial.request = <T>(method: string, params?: unknown, opts?: { timeoutMs?: number }) => {
-    if (method === "config/read") return Promise.resolve({ config: { mcp_servers: {}, features: { multi_agent: true }, sandbox_mode: "workspace-write", approval_policy: "on-request" }, layers: [] } as T);
+    if (method === "config/read") return Promise.resolve({ config: { mcp_servers: {}, features: { multi_agent: true, remote_plugin: true }, sandbox_mode: "workspace-write", approval_policy: "on-request" }, layers: [] } as T);
     if (method === "thread/read") return Promise.resolve({ thread: { id: "fresh-thread", turns: Array.from({ length: 81 }, (_, i) => ({ id: `old-${i}` })) } } as T);
     return original<T>(method, params, opts);
   };
@@ -170,7 +170,7 @@ async function nativeRig() {
     };
     const request = server.request.bind(server);
     server.request = <T>(method: string, params?: unknown, opts?: { timeoutMs?: number }) => {
-      if (method === "config/read") return Promise.resolve({ config: { mcp_servers: {}, features: { multi_agent: false }, apps: { _default: { enabled: false } }, sandbox_mode: "read-only", approval_policy: "never" } } as T);
+      if (method === "config/read") return Promise.resolve({ config: { mcp_servers: {}, features: { multi_agent: false, remote_plugin: false }, apps: { _default: { enabled: false } }, sandbox_mode: "read-only", approval_policy: "never" } } as T);
       if (method === "thread/resume") { server.calls.push({ method, params }); return Promise.resolve({ thread: { id: "fresh-thread" }, model: "gpt-native", approvalPolicy: "never", sandbox: { type: "readOnly", networkAccess: false } } as T); }
       return request<T>(method, params, opts);
     };
