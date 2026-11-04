@@ -260,6 +260,30 @@ describe("buildSidebarGroups", () => {
     useTabsStore.setState({ tabs: [] });
   });
 
+  it("two delayed resumes with only one tab published keep the unpublished session's history row (its marker must not bind the other resume's tab)", () => {
+    const store = createPendingResumesStore();
+    const s1 = session({ id: "s1", workspace: "/w" });
+    const s2 = session({ id: "s2", workspace: "/w" });
+
+    // Two resumes in flight; only the first resume's tab arrives through the
+    // port envelope before either reply lands.
+    store.getState().mark("s1");
+    store.getState().mark("s2");
+    const tabs = [tab({ tabId: "t1", workspace: "/w" })];
+    useTabsStore.setState({ tabs });
+    store.getState().prune(tabs);
+    const { opening, arming } = pendingResumeRowSets(store.getState().marks);
+    const groups = buildSidebarGroups(tabs, [s1, s2], undefined, opening, arming);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.rows).toHaveLength(2);
+    expect(groups[0]!.rows[0]).toMatchObject({ kind: "open", key: "t1" });
+    // The second session keeps its row as an opening placeholder — binding its
+    // marker to the first resume's tab would hide it without a replacement.
+    expect(groups[0]!.rows[1]).toMatchObject({ kind: "resumable", sessionId: "s2", opening: true });
+
+    useTabsStore.setState({ tabs: [] });
+  });
+
   it("a refusal before tab publication keeps exactly one row — the history row never leaves", () => {
     const store = createPendingResumesStore();
     const s1 = session({ id: "s1", workspace: "/w" });

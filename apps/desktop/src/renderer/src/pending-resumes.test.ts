@@ -169,6 +169,65 @@ describe("promoteArmedResumes (the envelope-before-reply window)", () => {
     expect(promoted.marks.get("s-armed")).toBe("t-new");
     expect(prev.get("s-armed")).toBeNull();
   });
+
+  it("two armed markers, one new tab: the first-armed marker claims it, the second stays armed (a tab represents one session)", () => {
+    // Both markers see t-new as fresh; only the first (arm order) may bind it —
+    // the second keeps waiting, its history row staying visible as a placeholder.
+    const prev = new Map<string, string | null>([
+      ["s1", null],
+      ["s2", null],
+    ]);
+    const baselines = new Map<string, ReadonlySet<string>>([
+      ["s1", new Set(["t-old"])],
+      ["s2", new Set(["t-old"])],
+    ]);
+    const tabs = [
+      tab({ tabId: "t-old", workspace: "/w" }),
+      tab({ tabId: "t-new", workspace: "/w" }),
+    ];
+    const promoted = promoteArmedResumes(prev, tabs, baselines);
+    expect(promoted.marks).toEqual(
+      new Map<string, string | null>([
+        ["s1", "t-new"],
+        ["s2", null],
+      ]),
+    );
+    expect(promoted.baselines.has("s1")).toBe(false);
+    expect(promoted.baselines.get("s2")).toBe(baselines.get("s2"));
+  });
+
+  it("a fresh tab already bound to this session outranks unbound candidates (the envelope can publish it bound)", () => {
+    const prev = new Map<string, string | null>([
+      ["s1", null],
+      ["s2", null],
+    ]);
+    const baselines = new Map<string, ReadonlySet<string>>([
+      ["s1", new Set()],
+      ["s2", new Set()],
+    ]);
+    const tabs = [
+      tab({ tabId: "t-bound", workspace: "/w", sessionId: "s2" }), // s2's own tab, published bound
+      tab({ tabId: "t-unbound", workspace: "/w" }), // s1's tab
+    ];
+    const promoted = promoteArmedResumes(prev, tabs, baselines);
+    expect(promoted.marks).toEqual(
+      new Map<string, string | null>([
+        ["s1", "t-unbound"],
+        ["s2", "t-bound"],
+      ]),
+    );
+  });
+
+  it("an armed marker never claims a tab another marker already represents", () => {
+    const prev = new Map<string, string | null>([
+      ["s-settled", "t-live"],
+      ["s-armed", null],
+    ]);
+    const baselines = new Map<string, ReadonlySet<string>>([["s-armed", new Set()]]);
+    const tabs = [tab({ tabId: "t-live", workspace: "/w" })];
+    const promoted = promoteArmedResumes(prev, tabs, baselines);
+    expect(promoted.marks.get("s-armed")).toBeNull();
+  });
 });
 
 describe("settlePendingResume (settlement reconciles with the tabs as they are)", () => {
@@ -351,6 +410,29 @@ describe("createPendingResumesStore (the factory; test isolation like createTabs
     store.getState().mark("s2");
     store.getState().prune([tab({ tabId: "t-dead", workspace: "/w", hostExited: true })]);
     expect(store.getState().marks.has("s2")).toBe(false);
+  });
+
+  it("two delayed resumes, one envelope-published tab: exactly one marker binds, the sibling stays armed", () => {
+    const store = createPendingResumesStore();
+    store.getState().mark("s1");
+    store.getState().mark("s2");
+    // Only the first resume's tab arrives through the port envelope before
+    // either reply lands: the second marker must NOT bind that tab (its
+    // history row must stay visible as an opening placeholder).
+    const tabs = [tab({ tabId: "t1", workspace: "/w" })];
+    useTabsStore.setState({ tabs });
+    store.getState().prune(tabs);
+    expect(store.getState().marks).toEqual(
+      new Map<string, string | null>([
+        ["s1", "t1"],
+        ["s2", null],
+      ]),
+    );
+    expect(pendingResumeRowSets(store.getState().marks)).toEqual({
+      opening: new Set(["s1"]),
+      arming: new Set(["s2"]),
+    });
+    useTabsStore.setState({ tabs: [] });
   });
 });
 

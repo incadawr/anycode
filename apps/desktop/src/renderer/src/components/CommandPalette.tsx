@@ -223,6 +223,37 @@ export function buildPaletteRows(args: {
     : buildSessionRows(query, groups, tabOrder, platform);
 }
 
+/**
+ * A row the palette must not land on or run: a disabled action, or an
+ * "Opening…" session (the armed marker's inert placeholder — firing a second
+ * resume could only race the first one).
+ */
+function rowDisabled(row: PaletteRow): boolean {
+  return (row.kind === "action" && !row.action.enabled) || (row.kind === "session" && row.opening === true);
+}
+
+/**
+ * Arrow navigation over the selectable rows that SKIPS disabled ones
+ * (`rowDisabled`): stepping onto an inert row would strand the selection —
+ * Enter cannot run it and the next arrow moves nowhere useful. Wraps like
+ * `nextRovingIndex`; stays put when nothing is enabled. Exported pure for
+ * CommandPalette.test.ts.
+ */
+export function nextEnabledIndex(rows: readonly PaletteRow[], current: number, delta: number): number {
+  const count = rows.length;
+  if (count === 0) {
+    return 0;
+  }
+  let index = current;
+  for (let step = 0; step < count; step += 1) {
+    index = nextRovingIndex(index, delta, count);
+    if (!rowDisabled(rows[index]!)) {
+      return index;
+    }
+  }
+  return current;
+}
+
 export function CommandPalette({
   mode,
   actions,
@@ -345,12 +376,14 @@ export function CommandPalette({
     }
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      setSelected(nextRovingIndex(activeIndex, 1, selectable.length));
+      // Skip disabled rows (Opening… sessions, disabled actions) — landing on
+      // an inert row would strand the roving selection.
+      setSelected(nextEnabledIndex(selectable, activeIndex, 1));
       return;
     }
     if (event.key === "ArrowUp") {
       event.preventDefault();
-      setSelected(nextRovingIndex(activeIndex, -1, selectable.length));
+      setSelected(nextEnabledIndex(selectable, activeIndex, -1));
       return;
     }
     if (event.key === "Enter") {
@@ -432,8 +465,7 @@ export function CommandPalette({
           selectableIndex += 1;
           const optIndex = selectableIndex;
           const optId = `palette-opt-${optIndex}`;
-          const disabled =
-            (row.kind === "action" && !row.action.enabled) || (row.kind === "session" && row.opening === true);
+          const disabled = rowDisabled(row);
           const key =
             row.kind === "action" ? `action-${row.action.id}` : row.kind === "tab" ? `tab-${row.tabId}` : `session-${row.sessionId}`;
           return (
