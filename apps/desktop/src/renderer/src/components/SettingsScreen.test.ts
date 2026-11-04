@@ -933,6 +933,7 @@ describe("customProviderCatalogEntries (saved records become selectable drawer p
         models: [{ id: "a" }, { id: "b" }],
         defaultTransport: "openai-chat-completions",
         supportedTransports: ["openai-chat-completions", "openai-responses"],
+        catalogBaseUrl: "http://localhost:1234/v1",
       },
     ]);
   });
