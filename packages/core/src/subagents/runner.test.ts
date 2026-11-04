@@ -71,7 +71,7 @@ import {
   createSubagentRunner,
   withSubagents,
 } from "./runner.js";
-import { PERSONAS, getPersona, type PersonaDefinition } from "./personas.js";
+import { PERSONAS, ROLE_TURN_BUDGETS, getPersona, type PersonaDefinition } from "./personas.js";
 import { discoverAgentProfiles, type AgentProfileRoot } from "./profiles.js";
 import { buildSubagentTelemetryTap } from "../telemetry/records.js";
 import type { TelemetryPort, TelemetryRecord } from "../ports/telemetry.js";
@@ -2644,6 +2644,43 @@ describe("engineProfile(CUT-S4 §2.1)", () => {
     const without = createSubagentRunner(makeParent(), { profiles: [codexPersona] });
     const info = without.engineProfile?.("codex-worker");
     expect(info && "effort" in info).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isMdProfile(): the flag tools/agent.ts and the workflow engine read to
+// tailor engine-restriction refusals. True ONLY for entries that really come
+// from a profile file — the settings-derived role personas the desktop host
+// appends (origin "settings") exist without any file behind them, so a
+// refusal for one must keep pointing at Settings → Roles, not at a file that
+// was never written.
+
+describe("isMdProfile()", () => {
+  /** The exact shape the desktop host's derived builder pushes for a role configured only in Settings → Roles. */
+  const settingsPlanner: PersonaDefinition = {
+    name: "planner",
+    description: PERSONAS.planner.description,
+    tools: PERSONAS.planner.tools,
+    systemPrompt: PERSONAS.planner.systemPrompt,
+    turnBudget: ROLE_TURN_BUDGETS.planner,
+    engine: "claude",
+    origin: "settings",
+  };
+
+  it("a settings-derived role persona (origin \"settings\") is NOT an md profile", () => {
+    const runner = createSubagentRunner(makeParent(), { profiles: [settingsPlanner] });
+    expect(runner.isMdProfile?.("planner")).toBe(false);
+  });
+
+  it("an entry without the settings origin (a discovered profile file) IS an md profile", () => {
+    const filePlanner = { ...settingsPlanner, origin: undefined };
+    const runner = createSubagentRunner(makeParent(), { profiles: [filePlanner] });
+    expect(runner.isMdProfile?.("planner")).toBe(true);
+  });
+
+  it("an unknown agent type is not an md profile", () => {
+    const runner = createSubagentRunner(makeParent(), { profiles: [settingsPlanner] });
+    expect(runner.isMdProfile?.("no-such-type")).toBe(false);
   });
 });
 

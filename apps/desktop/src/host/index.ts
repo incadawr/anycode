@@ -4482,7 +4482,10 @@ async function boot(): Promise<void> {
           // effort) and ROLE_TURN_BUDGETS' turn budget. Precedence (§2.1):
           // md-profile > settings-derived > built-in — md-discovery's own
           // list stays FIRST and untouched; the derived entries trail it, and
-          // the runner's profile-wins resolution handles the rest.
+          // the runner's profile-wins resolution handles the rest. The
+          // origin tag keeps the runner's isMdProfile false for these entries:
+          // engine-restriction refusals point at Settings → Roles, never at a
+          // file that was never written.
           profiles: () => {
             refreshRolesSettings();
             const claimed = new Set(ext.profiles.map((p) => p.name));
@@ -4498,6 +4501,7 @@ async function boot(): Promise<void> {
                 tools: builtIn.tools,
                 systemPrompt: builtIn.systemPrompt,
                 turnBudget: ROLE_TURN_BUDGETS[role],
+                origin: "settings",
                 ...(primary.model !== undefined ? { model: primary.model } : {}),
                 ...(primary.effort !== undefined ? { effort: primary.effort } : {}),
                 ...(primary.engine !== undefined ? { engine: primary.engine } : {}),

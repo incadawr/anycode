@@ -106,6 +106,15 @@ export interface PersonaDefinition {
   /** Md-profile `provider:` frontmatter — catalog provider id resolved by main's resolveProviderConnection. */
   provider?: string;
   /**
+   * Where a non-builtin persona entry came from. Md-discovered profiles leave
+   * it undefined (they ARE file-backed); the only entries that set it today
+   * are the settings-derived role personas the desktop host appends for
+   * planner/executor/reviewer not claimed by a profile file. The runner's
+   * isMdProfile reads it so engine-restriction refusals keep pointing at
+   * Settings → Roles instead of a file that does not exist.
+   */
+  origin?: "settings";
+  /**
    * Md-profile `permissions.allow` / `permissions.deny` frontmatter — this
    * profile's own permission overlay for its children, wrapped around the
    * session's engine by buildChildConfig (ProfilePermissionEngine). Never wider
