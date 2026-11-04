@@ -1,5 +1,6 @@
 import { providerProxyConfig } from "./provider-proxy-config.mjs";
 import { createMiniMaxQuotaService } from "./minimax-quota.js";
+import { createGlmQuotaService } from "./glm-quota.js";
 import { protectMainNavigation } from "./main-navigation.js";
 import { resolveCoreConnectionForModel } from "../shared/core-model-connection.js";
 import { initializeIsolatedSmoke, isolatedSmokeStorage } from "./isolated-smoke.js";
@@ -3255,6 +3256,18 @@ void app.whenReady().then(async () => {
   ipcMain.handle("anycode:minimax-quota-refresh", (_event, id: unknown) => {
     if (id !== undefined && (typeof id !== "string" || id.length > 256)) return;
     void miniMaxQuota.refresh(id);
+  });
+  // GLM coding-plan quota (Z.AI): the same poll/record/notify chain pointed
+  // at api.z.ai's monitor endpoint; the service self-gates to coding-plan
+  // bases (api.z.ai + /api/anthropic), so a pay-as-you-go key never polls.
+  const glmQuota = createGlmQuotaService({
+    settingsPath, vault, systemProxy: systemProxyDelegate,
+    fetch: route => fetchForProxyChain([], route),
+    onPersisted: () => sendToMainWindow(win, PROVIDER_QUOTA_CHANGED_CHANNEL),
+  });
+  ipcMain.handle("anycode:glm-quota-refresh", (_event, id: unknown) => {
+    if (id !== undefined && (typeof id !== "string" || id.length > 256)) return;
+    void glmQuota.refresh(id);
   });
   registerProviderIpc({
     vault,
