@@ -1119,10 +1119,10 @@ export interface McpPaneDom {
   setFormText(label: "Name" | "Command" | "URL" | "Arguments (one per line)", value: string): boolean;
   /** The named form field's current text value, or `null` if not rendered. */
   formTextValue(label: "Name" | "Command" | "URL" | "Arguments (one per line)"): string | null;
-  /** A real `.click()` on the named radio group's matching input (skipped if already checked); `false` if absent OR disabled. */
-  clickFormRadio(group: "mcp-scope" | "mcp-transport", value: "project" | "user" | "stdio" | "http"): boolean;
+  /** A real `.click()` on the named radio group's matching input (skipped if already checked); `false` if absent OR disabled. Only `mcp-transport` exists in the form markup — the scope radio is gone (the write target follows the header scope bar, driven via `ScopeDom`). */
+  clickFormRadio(group: "mcp-transport", value: "stdio" | "http"): boolean;
   /** Whether the named radio group's matching input is currently checked. */
-  formRadioChecked(group: "mcp-scope" | "mcp-transport", value: "project" | "user" | "stdio" | "http"): boolean;
+  formRadioChecked(group: "mcp-transport", value: "stdio" | "http"): boolean;
   /** A real `.click()` on the form dialog's submit (primary) button; `false` if the form isn't open or the button is currently `disabled`. */
   clickFormSubmit(): boolean;
   /** The form dialog's `.mcp-problem-strip` text (the submit-refusal surface), or `null` if none. */
@@ -1174,10 +1174,11 @@ export interface SkillsPaneState {
  * injectable-for-tests discipline as `McpPaneDom`. The drive methods fire
  * real `.click()`/checkbox-toggle calls on the SAME nodes a user would touch
  * (a row's enable switch, the row's delete-then-confirm buttons, the header
- * import button, an import candidate's own checkbox, the dialog's scope
- * radio, the dialog's Apply button) — no synthetic bridge poke, since the
- * pane's mutations all round-trip through the real `SkillsBridge` the
- * component itself calls.
+ * import button, an import candidate's own checkbox, the dialog's Apply
+ * button) — no synthetic bridge poke, since the pane's mutations all
+ * round-trip through the real `SkillsBridge` the component itself calls.
+ * Scope is NOT driven here: the dialog's "Import into" radios are gone, the
+ * write target follows the header scope bar (`ScopeDom`'s picks).
  */
 export interface SkillsPaneDom {
   /** Whether `.skills-pane` is currently mounted (Settings open with the "skills" pane selected). */
@@ -1206,8 +1207,6 @@ export interface SkillsPaneDom {
   importCandidates(): SkillsPaneImportCandidateState[];
   /** Clicks the named candidate's own checkbox (identified by its stable `id`, never by name alone — design §5 W2 note) until it reads `checked`; `false` if no such candidate row is rendered. */
   setCandidateChecked(id: string, checked: boolean): boolean;
-  /** Clicks the dialog's "Import into" scope radio for `scope` until it reads checked; a no-op if the dialog isn't open or the radio is already there. */
-  setImportScope(scope: SkillScope): void;
   /** A real `.click()` on the header's "Import skills" button. */
   clickImportButton(): void;
   /** A real `.click()` on the open dialog's Apply button; `false` if the dialog isn't open or the button is currently `disabled` (nothing selected). */
@@ -2860,6 +2859,29 @@ export interface ScopeStateResult {
 }
 export interface ScopeDom {
   state(): ScopeStateResult;
+  /** A real `.click()` on the trigger, then — once the menu's commit lands — on the menu's user option; `false` when either node never appears. */
+  pickUser(): Promise<boolean>;
+  /** A real `.click()` on the trigger, then — once the menu's commit lands — on the menu's first enabled workspace option; `false` when none is rendered. */
+  pickFirstWorkspace(): Promise<boolean>;
+}
+/** Shared drive for `realScopeDom`'s picks: click the trigger open (skipped when `aria-expanded` already says so — its own onClick toggles), wait out the menu's commit (a discrete user click flushes synchronously in the app shell, but a facade-fired `.click()` under test lands a macrotask later), then click the option `choose` selects. */
+async function clickScopeOption(choose: (options: HTMLElement[]) => HTMLElement | null): Promise<boolean> {
+  const trigger = document.querySelector<HTMLButtonElement>("[data-scope-trigger]");
+  if (!trigger) {
+    return false;
+  }
+  if (trigger.getAttribute("aria-expanded") !== "true") {
+    trigger.click();
+    if (!(await waitUntil(() => trigger.getAttribute("aria-expanded") === "true", SCOPE_SWITCH_COMMIT_DEADLINE_MS))) {
+      return false;
+    }
+  }
+  const option = choose(Array.from(document.querySelectorAll<HTMLElement>("[data-scope-option]")));
+  if (!option) {
+    return false;
+  }
+  option.click();
+  return true;
 }
 function realScopeDom(): ScopeDom {
   return {
@@ -2872,6 +2894,12 @@ function realScopeDom(): ScopeDom {
         count: document.querySelector<HTMLElement>("[data-scope-count]")?.textContent?.trim() || null,
       };
     },
+    pickUser: () =>
+      clickScopeOption((options) => options.find((el) => el.getAttribute("data-scope-option") === "user") ?? null),
+    pickFirstWorkspace: () =>
+      clickScopeOption((options) =>
+        options.find((el) => el.getAttribute("data-scope-option") !== "user" && el.getAttribute("aria-disabled") !== "true") ?? null,
+      ),
   };
 }
 
@@ -4463,13 +4491,6 @@ export function realSkillsPaneDom(): SkillsPaneDom {
         input.click();
       }
       return true;
-    },
-    setImportScope: (scope) => {
-      const label = importDialog()?.querySelector<HTMLLabelElement>(`.mcp-import-scope label[data-skills-import-scope="${scope}"]`);
-      const input = label?.querySelector<HTMLInputElement>('input[type="radio"]');
-      if (input && !input.checked) {
-        input.click();
-      }
     },
     clickImportButton: () => {
       document.querySelector<HTMLButtonElement>('.skills-pane .skills-icon-button[aria-label="Import skills"]')?.click();
@@ -6188,6 +6209,46 @@ const SKILLS_PANE_SCAN_DEADLINE_MS = 10_000;
 
 /** Deadline for `skillsToggle`/`skillsDelete`/`skillsImportApply`'s post-click settle polls (design §5 W4) — same rationale as `MCP_PANE_APPLY_DEADLINE_MS`: a real main-process config/catalog write round-tripped over IPC. */
 const SKILLS_PANE_APPLY_DEADLINE_MS = 10_000;
+
+/** Deadline for `ensurePaneScope`'s post-pick readback poll — the ScopeSwitcher's pick is a synchronous local `useState` commit flipping the trigger's `data-scope-value`, no IPC round-trip, same rationale as `SKILLS_PANE_COMMIT_DEADLINE_MS`. */
+const SCOPE_SWITCH_COMMIT_DEADLINE_MS = 500;
+
+/**
+ * Drives the Settings scope bar (ScopeSwitcher) to the requested pane scope
+ * BEFORE the caller's write targets it. Both config panes derive their write
+ * scope from the bar alone (`SkillsPane.tsx`/`McpServersPane.tsx`'s
+ * `scopeMode`) — the per-dialog scope radios are gone — so writing against a
+ * stale bar would silently land in the wrong catalog, and driving a
+ * nonexistent radio refuses outright. "user" maps to the bar's user option;
+ * "project" to its first enabled workspace option (the bar stores an opaque
+ * workspace id there, and ANY non-"user" id reads as the panes' project mode).
+ * Returns `null` once the bar reads the requested scope (already there, or
+ * after a pick confirmed by the trigger's own `data-scope-value` readback),
+ * or an explicit `scope_unavailable` refusal when the bar isn't mounted or
+ * the requested scope isn't selectable (no workspace in the menu) — a loud
+ * refusal, never a silent write elsewhere.
+ */
+async function ensurePaneScope(scopeDom: ScopeDom, scope: "project" | "user"): Promise<FacadeResult | null> {
+  const matches = () => {
+    const selection = scopeDom.state().selection;
+    if (selection === null) {
+      return false;
+    }
+    return scope === "user" ? selection === "user" : selection !== "user";
+  };
+  if (matches()) {
+    return null;
+  }
+  const picked = await (scope === "user" ? scopeDom.pickUser() : scopeDom.pickFirstWorkspace());
+  if (!picked) {
+    return { ok: false, reason: "scope_unavailable" };
+  }
+  await nextTick();
+  if (matches() || (await waitUntil(matches, SCOPE_SWITCH_COMMIT_DEADLINE_MS))) {
+    return null;
+  }
+  return { ok: false, reason: "scope_unavailable" };
+}
 
 /** Deadline for `waitUntil` polls inside `subagentsOpenEditor`'s open-commit (design §4 W4) — generous enough to cover `openEdit`'s real `bridge.read()` IPC round-trip (main re-resolves the path + fs read), same rationale as `MCP_PANE_SCAN_DEADLINE_MS`. */
 const SUBAGENTS_PANE_OPEN_DEADLINE_MS = 10_000;
@@ -8996,6 +9057,15 @@ export function createAutomationFacade(
     async mcpAddServer(args: { name: string; command?: string; argsText?: string; url?: string; transport?: "stdio" | "http"; scope?: "project" | "user" }): Promise<FacadeResult> {
       if (!mcpPaneDom.mounted()) return { ok: false, reason: "pane_not_mounted" };
       if (mcpPaneDom.formOpen()) return { ok: false, reason: "form_already_open" };
+      // The form seeds its scope from the pane's write target AT OPEN TIME
+      // (`blankMcpFormFields(scopeMode)` — the in-form "Add to" radios are
+      // gone), so the header scope bar must already read the requested scope
+      // before the form opens; switching afterwards would silently write to
+      // the seeded target, so a mismatch refuses here instead.
+      if (args.scope !== undefined) {
+        const refused = await ensurePaneScope(scopeDom, args.scope);
+        if (refused) return refused;
+      }
       mcpPaneDom.clickAddServerButton();
       if (!(await waitUntil(() => mcpPaneDom.formOpen(), MCP_PANE_COMMIT_DEADLINE_MS))) return { ok: false, reason: "did_not_open" };
       // Radio clicks before text fills — switching transport swaps which fields render.
@@ -9017,16 +9087,6 @@ export function createAutomationFacade(
         await nextTick();
         if (!mcpPaneDom.formRadioChecked("mcp-transport", transport)) {
           if (!(await waitUntil(() => mcpPaneDom.formRadioChecked("mcp-transport", transport), MCP_PANE_COMMIT_DEADLINE_MS))) {
-            return { ok: false, reason: "set_failed" };
-          }
-        }
-      }
-      if (args.scope !== undefined) {
-        const scope = args.scope;
-        if (!mcpPaneDom.clickFormRadio("mcp-scope", scope)) return { ok: false, reason: "field_not_found" };
-        await nextTick();
-        if (!mcpPaneDom.formRadioChecked("mcp-scope", scope)) {
-          if (!(await waitUntil(() => mcpPaneDom.formRadioChecked("mcp-scope", scope), MCP_PANE_COMMIT_DEADLINE_MS))) {
             return { ok: false, reason: "set_failed" };
           }
         }
@@ -9165,12 +9225,20 @@ export function createAutomationFacade(
           }
         }
       }
-      skillsPaneDom.setImportScope(scope);
+      // The dialog's "Import into" radios are gone — the write target follows
+      // the header scope bar (SkillsPane.tsx's `scopeMode`), so the bar must
+      // already read the requested scope before Apply fires. The old in-dialog
+      // radio drive silently no-op'd once the radios were removed (importing
+      // into whichever scope the bar happened to carry); driving the bar HERE,
+      // before the click, refuses loudly when the scope isn't selectable
+      // instead of silently landing the import somewhere else.
+      const refused = await ensurePaneScope(scopeDom, scope);
+      if (refused) return refused;
       const before = skillsPaneDom.importResultsSignature();
       // A real click on the dialog's Apply button (design §5 W4) — not a
       // synthetic bridge call, so the smoke exercises the exact same
-      // `applyImport` path a user's click fires, including the scope the
-      // `setImportScope` call above just drove onto the SAME radio group.
+      // `applyImport` path a user's click fires, writing into the scope the
+      // `ensurePaneScope` call above confirmed on the scope bar.
       if (!skillsPaneDom.clickApplyButton()) {
         return { ok: false, reason: "apply_disabled" };
       }

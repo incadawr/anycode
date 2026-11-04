@@ -37,6 +37,7 @@ import {
   type AgentCardDom,
   type McpPaneDom,
   type SkillsPaneDom,
+  type ScopeDom,
   type SkillsPaneImportCandidateState,
   type SkillsPaneRowState,
   type SubagentsPaneDom,
@@ -89,7 +90,6 @@ import {
   type ReplayTimer,
 } from "./replay.js";
 import { dispatchTryAgain } from "./App.js";
-import type { SkillScope } from "../../shared/skills-config.js";
 import { ruleRemoveAriaLabel } from "./components/PermissionsEditor.js";
 import type { GitDestructiveIntent, RetryOffer, TranscriptBlock } from "./store.js";
 import { createTabRegistry, type TabRegistry } from "./tab-registry.js";
@@ -172,6 +172,35 @@ function stubBridge(overrides: Partial<AnycodeBridge> = {}): AnycodeBridge {
     closeTab: vi.fn(async (): Promise<CloseTabResult> => ({ ok: true })),
     listSessions: vi.fn(async (): Promise<SessionSummary[]> => []),
     ...overrides,
+  };
+}
+
+/**
+ * A fake `ScopeDom` for the Settings scope bar (ScopeSwitcher): reads as the
+ * selection id a real trigger carries (`"user"` or an opaque workspace id),
+ * and the pick methods flip it exactly like the real bar's commit — the user
+ * option always exists, a workspace pick succeeds only when `workspaces`
+ * lists one (mirroring the real menu's empty "No recent folders" state).
+ */
+function fakeScopeDom(
+  overrides: { selection?: string | null; workspaces?: string[] } = {},
+): ScopeDom {
+  const workspaces = overrides.workspaces ?? [];
+  let selection = overrides.selection === undefined ? "user" : overrides.selection;
+  return {
+    state: () => ({ selection, label: null, count: null }),
+    pickUser: vi.fn(async () => {
+      selection = "user";
+      return true;
+    }),
+    pickFirstWorkspace: vi.fn(async () => {
+      const first = workspaces[0];
+      if (first === undefined) {
+        return false;
+      }
+      selection = first;
+      return true;
+    }),
   };
 }
 
@@ -4378,8 +4407,8 @@ describe("automation facade — Skills pane probe/driver (design/slice-P7.20-cut
     return store;
   }
 
-  /** Builds a facade wired ONLY for the Skills methods — the tab/registry/settings plumbing is present (required by the fixed-arity signature) but never exercised by these tests. */
-  function buildFacade(dom: SkillsPaneDom) {
+  /** Builds a facade wired ONLY for the Skills methods — the fake sits at the `skillsPaneDom` slot, a scope-bar fake at the END (`scopeDom` is the factory's last parameter; the params in between keep their lazy real defaults, never exercised here). */
+  function buildFacade(dom: SkillsPaneDom, scope: ScopeDom = fakeScopeDom()) {
     const tabsStore: TabsStoreApi = createTabsStore();
     const registry: TabRegistry = createTabRegistry(tabsStore);
     return createAutomationFacade(
@@ -4396,6 +4425,16 @@ describe("automation facade — Skills pane probe/driver (design/slice-P7.20-cut
       inertAgentCardDom4,
       inertMcpPaneDom4,
       dom,
+      // positions 14-41: subagents/profile/slash/shortcuts/lsp/hooks/block/
+      // try-again/provider/codex/chip/import/trust-dialog/trusted-binaries/
+      // child-layout/sidebar/settings-layout/dock/workflow-steps/vision/
+      // replay-store/replay-timer/child-close/child-split/workflow-map/
+      // workflow-ticks/mode-menu/role-picker
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      scope,
     );
   }
 
@@ -4448,7 +4487,6 @@ describe("automation facade — Skills pane probe/driver (design/slice-P7.20-cut
       importScanLoaded: () => overrides.importScanLoaded ?? true,
       importCandidates: () => overrides.importCandidates ?? [],
       setCandidateChecked: vi.fn<(id: string, checked: boolean) => boolean>(() => overrides.setCandidateCheckedResult ?? true),
-      setImportScope: vi.fn<(scope: SkillScope) => void>(),
       clickImportButton: vi.fn<() => void>(),
       clickApplyButton: vi.fn<() => boolean>(() => overrides.clickApplyButtonResult ?? true),
       importResultsSignature: () => overrides.importResultsSignature ?? "",
@@ -4653,11 +4691,10 @@ describe("automation facade — Skills pane probe/driver (design/slice-P7.20-cut
       });
     });
 
-    it("selects EXACTLY the requested ids (every other candidate explicitly unchecked), sets scope, clicks Apply, and succeeds once the results signature changes", async () => {
+    it("selects EXACTLY the requested ids (every other candidate explicitly unchecked), drives the scope bar to the requested scope BEFORE Apply, and succeeds once the results signature changes", async () => {
       const candidates = [skillCandidate({ id: "c1" }), skillCandidate({ id: "c2", alreadyPresent: true })];
       let signature = "";
       const setCandidateChecked = vi.fn((_id: string, _checked: boolean) => true);
-      const setImportScope = vi.fn();
       const clickApplyButton = vi.fn(() => {
         setTimeout(() => {
           signature = "c1: imported|c2: imported (renamed to avoid a conflict)";
@@ -4667,16 +4704,65 @@ describe("automation facade — Skills pane probe/driver (design/slice-P7.20-cut
       const dom: SkillsPaneDom = {
         ...fakeSkillsPaneDom({ importOpen: true, importScanLoaded: true, importCandidates: candidates }),
         setCandidateChecked,
-        setImportScope,
         clickApplyButton,
         importResultsSignature: () => signature,
       };
-      const facade = buildFacade(dom);
+      const scope = fakeScopeDom({ selection: "user", workspaces: ["ws_1"] });
+      const facade = buildFacade(dom, scope);
       await expect(facade.skillsImportApply({ scope: "project", ids: ["c1", "c2"] })).resolves.toEqual({ ok: true });
       expect(setCandidateChecked).toHaveBeenCalledWith("c1", true);
       expect(setCandidateChecked).toHaveBeenCalledWith("c2", true);
-      expect(setImportScope).toHaveBeenCalledWith("project");
+      expect(scope.pickFirstWorkspace).toHaveBeenCalledTimes(1);
+      expect(scope.state().selection).toBe("ws_1");
       expect(clickApplyButton).toHaveBeenCalledTimes(1);
+    });
+
+    it("drives the scope bar to user (pickUser) when the bar currently carries a workspace and the request is user-scope", async () => {
+      let signature = "";
+      const clickApplyButton = vi.fn(() => {
+        setTimeout(() => {
+          signature = "c1: imported";
+        }, 0);
+        return true;
+      });
+      const dom: SkillsPaneDom = {
+        ...fakeSkillsPaneDom({ importOpen: true, importScanLoaded: true }),
+        clickApplyButton,
+        importResultsSignature: () => signature,
+      };
+      const scope = fakeScopeDom({ selection: "ws_1", workspaces: ["ws_1"] });
+      const facade = buildFacade(dom, scope);
+      await expect(facade.skillsImportApply({ scope: "user" })).resolves.toEqual({ ok: true });
+      expect(scope.pickUser).toHaveBeenCalledTimes(1);
+      expect(clickApplyButton).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves the scope bar untouched when it already reads the requested scope (no pick calls)", async () => {
+      let signature = "";
+      const clickApplyButton = vi.fn(() => {
+        setTimeout(() => {
+          signature = "c1: imported";
+        }, 0);
+        return true;
+      });
+      const dom: SkillsPaneDom = {
+        ...fakeSkillsPaneDom({ importOpen: true, importScanLoaded: true }),
+        clickApplyButton,
+        importResultsSignature: () => signature,
+      };
+      const scope = fakeScopeDom({ selection: "user", workspaces: ["ws_1"] });
+      const facade = buildFacade(dom, scope);
+      await expect(facade.skillsImportApply({ scope: "user" })).resolves.toEqual({ ok: true });
+      expect(scope.pickUser).not.toHaveBeenCalled();
+      expect(scope.pickFirstWorkspace).not.toHaveBeenCalled();
+    });
+
+    it("refuses with scope_unavailable when the requested project scope has no workspace to pick — never clicks Apply", async () => {
+      const dom = fakeSkillsPaneDom({ importOpen: true, importScanLoaded: true });
+      const scope = fakeScopeDom({ selection: "user", workspaces: [] });
+      const facade = buildFacade(dom, scope);
+      await expect(facade.skillsImportApply({ scope: "project" })).resolves.toEqual({ ok: false, reason: "scope_unavailable" });
+      expect(dom.clickApplyButton).not.toHaveBeenCalled();
     });
 
     it("leaves the dialog's own current selection as-is when ids is omitted (no setCandidateChecked calls)", async () => {
@@ -4765,8 +4851,8 @@ describe("automation facade — MCP pane add-server driver (item 4)", () => {
     return store;
   }
 
-  /** Builds a facade wired ONLY for the MCP add-server method — the fake sits at the `mcpPaneDom` slot (12 positional args; the remaining params keep their defaults). */
-  function buildMcpAddFacade(dom: McpPaneDom) {
+  /** Builds a facade wired ONLY for the MCP add-server method — the fake sits at the `mcpPaneDom` slot, a scope-bar fake at the END (`scopeDom` is the factory's last parameter; the params in between keep their lazy real defaults, never exercised here). */
+  function buildMcpAddFacade(dom: McpPaneDom, scope: ScopeDom = fakeScopeDom()) {
     const tabsStore: TabsStoreApi = createTabsStore();
     const registry: TabRegistry = createTabRegistry(tabsStore);
     return createAutomationFacade(
@@ -4782,6 +4868,17 @@ describe("automation facade — MCP pane add-server driver (item 4)", () => {
       inertCtxPopoverDom6,
       inertAgentCardDom6,
       dom,
+      // positions 13-41: skills/subagents/profile/slash/shortcuts/lsp/hooks/
+      // block/try-again/provider/codex/chip/import/trust-dialog/
+      // trusted-binaries/child-layout/sidebar/settings-layout/dock/
+      // workflow-steps/vision/replay-store/replay-timer/child-close/
+      // child-split/workflow-map/workflow-ticks/mode-menu/role-picker
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined,
+      scope,
     );
   }
 
@@ -4802,7 +4899,7 @@ describe("automation facade — MCP pane add-server driver (item 4)", () => {
       submitDisabled: boolean;
       refuseWithError: string;
       missingField: FormLabel;
-      disabledRadios: Array<"mcp-scope:project" | "mcp-scope:user" | "mcp-transport:stdio" | "mcp-transport:http">;
+      disabledRadios: Array<"mcp-transport:stdio" | "mcp-transport:http">;
       radioCommitDelayMs: number;
       radioNeverCommits: boolean;
       fieldCommitDelayMs: number;
@@ -4814,7 +4911,6 @@ describe("automation facade — MCP pane add-server driver (item 4)", () => {
       errorText: null as string | null,
       texts: new Map<string, string>(),
       radios: new Map<string, boolean>([
-        ["mcp-scope:project", true],
         ["mcp-transport:stdio", true],
       ]),
     };
@@ -4852,9 +4948,9 @@ describe("automation facade — MCP pane add-server driver (item 4)", () => {
         return true;
       }),
       formTextValue: (label: FormLabel) => state.texts.get(label) ?? "",
-      clickFormRadio: vi.fn((group: "mcp-scope" | "mcp-transport", value: string) => {
+      clickFormRadio: vi.fn((group: "mcp-transport", value: string) => {
         const key = `${group}:${value}`;
-        if (disabled.has(key as "mcp-scope:project")) {
+        if (disabled.has(key as "mcp-transport:stdio")) {
           return false;
         }
         if (!overrides.radioNeverCommits) {
@@ -4864,7 +4960,7 @@ describe("automation facade — MCP pane add-server driver (item 4)", () => {
         }
         return true;
       }),
-      formRadioChecked: (group: "mcp-scope" | "mcp-transport", value: string) => state.radios.get(`${group}:${value}`) ?? false,
+      formRadioChecked: (group: "mcp-transport", value: string) => state.radios.get(`${group}:${value}`) ?? false,
       clickFormSubmit: vi.fn(() => {
         if (overrides.submitDisabled) {
           return false;
@@ -4939,13 +5035,44 @@ describe("automation facade — MCP pane add-server driver (item 4)", () => {
     expect(dom.clickFormSubmit).not.toHaveBeenCalled();
   });
 
-  it("refuses field_not_found for a disabled Project radio (supervisor correction 2) — never submits", async () => {
-    const dom = fakeMcpPaneDom({ disabledRadios: ["mcp-scope:project"] });
-    const facade = buildMcpAddFacade(dom);
+  it("drives the scope bar to the requested scope BEFORE opening the form (the form seeds its scope at open time)", async () => {
+    const dom = fakeMcpPaneDom();
+    const scope = fakeScopeDom({ selection: "user", workspaces: ["ws_1"] });
+    const facade = buildMcpAddFacade(dom, scope);
+    await expect(facade.mcpAddServer({ name: "srv", command: "node", scope: "project" })).resolves.toEqual({ ok: true });
+    const pickOrder = (scope.pickFirstWorkspace as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!;
+    const openOrder = (dom.clickAddServerButton as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!;
+    expect(pickOrder).toBeLessThan(openOrder);
+    expect(scope.state().selection).toBe("ws_1");
+  });
+
+  it("drives the scope bar back to user (pickUser) when a workspace is selected and the request is user-scope", async () => {
+    const dom = fakeMcpPaneDom();
+    const scope = fakeScopeDom({ selection: "ws_1", workspaces: ["ws_1"] });
+    const facade = buildMcpAddFacade(dom, scope);
+    await expect(facade.mcpAddServer({ name: "srv", command: "node", scope: "user" })).resolves.toEqual({ ok: true });
+    expect(scope.pickUser).toHaveBeenCalledTimes(1);
+    expect(dom.clickAddServerButton).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the scope bar untouched when it already reads the requested scope", async () => {
+    const dom = fakeMcpPaneDom();
+    const scope = fakeScopeDom({ selection: "user", workspaces: ["ws_1"] });
+    const facade = buildMcpAddFacade(dom, scope);
+    await expect(facade.mcpAddServer({ name: "srv", command: "node", scope: "user" })).resolves.toEqual({ ok: true });
+    expect(scope.pickUser).not.toHaveBeenCalled();
+    expect(scope.pickFirstWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("refuses scope_unavailable when the requested project scope has no workspace to pick — never opens the form", async () => {
+    const dom = fakeMcpPaneDom();
+    const scope = fakeScopeDom({ selection: "user", workspaces: [] });
+    const facade = buildMcpAddFacade(dom, scope);
     await expect(facade.mcpAddServer({ name: "srv", command: "node", scope: "project" })).resolves.toEqual({
       ok: false,
-      reason: "field_not_found",
+      reason: "scope_unavailable",
     });
+    expect(dom.clickAddServerButton).not.toHaveBeenCalled();
     expect(dom.clickFormSubmit).not.toHaveBeenCalled();
   });
 
@@ -5008,16 +5135,40 @@ describe("automation facade — MCP pane add-server driver (item 4)", () => {
     const committed = {
       texts: new Map<string, string>(),
       radios: new Map<string, boolean>([
-        ["mcp-scope:project", true],
-        ["mcp-scope:user", false],
         ["mcp-transport:stdio", true],
         ["mcp-transport:http", false],
       ]),
+      /** The committed Settings scope-bar selection ("user" or a workspace id) — the form seeds its scope from this at open time. */
+      scope: "ws_1",
     };
     let formMounted = false;
     const scheduleCommit = (fn: () => void) => {
       setTimeout(fn, 0); // React commit lands on the next macrotask
     };
+    // The Settings scope bar (ScopeSwitcher): the trigger's data-scope-value
+    // reads COMMITTED state; an option's click commits on the next macrotask,
+    // same discipline as the form stub — the facade must await the readback.
+    let scopeMenuOpen = false;
+    const scopeTrigger = {
+      textContent: " Folder ",
+      getAttribute: (attr: string) =>
+        attr === "data-scope-value" ? committed.scope : attr === "aria-expanded" ? (scopeMenuOpen ? "true" : "false") : null,
+      click: () => {
+        scopeMenuOpen = true;
+        return undefined as void;
+      },
+    };
+    const scopeOptions = [
+      "user",
+      "ws_1",
+    ].map((id) => ({
+      getAttribute: (attr: string) => (attr === "data-scope-option" ? id : null),
+      click: () =>
+        scheduleCommit(() => {
+          committed.scope = id;
+          scopeMenuOpen = false;
+        }),
+    }));
     function makeTextInput(label: string) {
       const node = {
         _value: "",
@@ -5061,8 +5212,6 @@ describe("automation facade — MCP pane add-server driver (item 4)", () => {
       return node;
     }
     const radios = [
-      makeRadio("mcp-scope", "project", "Project"),
-      makeRadio("mcp-scope", "user", "User"),
       makeRadio("mcp-transport", "stdio", "stdio"),
       makeRadio("mcp-transport", "http", "http"),
     ];
@@ -5113,8 +5262,10 @@ describe("automation facade — MCP pane add-server driver (item 4)", () => {
         if (sel === '.mcp-pane .mcp-pane-actions [aria-label="Add MCP server"]') {
           return { click: () => (formMounted = true) };
         }
+        if (sel === "[data-scope-trigger]") return scopeTrigger;
         return null;
       },
+      querySelectorAll: (sel: string) => (sel === "[data-scope-option]" ? scopeOptions : []),
     };
     return {
       document,
@@ -5158,14 +5309,16 @@ describe("automation facade — MCP pane add-server driver (item 4)", () => {
     );
   }
 
-  it("REGRESSION (defect 1, real adapter): explicit scope and HTTP transport drive PAST radio selection — a present enabled radio clicks (click() returns undefined) and reports true, never field_not_found", async () => {
+  it("REGRESSION (defect 1, real adapter): explicit scope and HTTP transport drive PAST selection — the scope bar picks back to user BEFORE the form opens and the transport radio clicks (click() returns undefined), never field_not_found", async () => {
     const stub = stubFormDocument();
     const facade = buildRealAdapterFacade(stub);
     try {
+      // The bar starts on a workspace ("ws_1"); requesting user-scope must drive it back via the real accessor's clicks.
+      expect(stub.committed.scope).toBe("ws_1");
       const result = await facade.mcpAddServer({ name: "srv", transport: "http", url: "https://x", scope: "user" });
       expect(result).toEqual({ ok: true }); // NOT { ok: false, reason: "field_not_found" }
       expect(stub.committed.radios.get("mcp-transport:http")).toBe(true);
-      expect(stub.committed.radios.get("mcp-scope:user")).toBe(true);
+      expect(stub.committed.scope).toBe("user");
       expect(stub.committed.texts.get("Name")).toBe("srv");
       expect(stub.committed.texts.get("URL")).toBe("https://x");
       expect(stub.getFormMounted()).toBe(false); // submitted
@@ -5292,7 +5445,6 @@ describe("automation facade — Subagents pane probe/driver (design/slice-P7.21-
     importScanLoaded: () => false,
     importCandidates: () => [],
     setCandidateChecked: () => false,
-    setImportScope: vi.fn(),
     clickImportButton: vi.fn(),
     clickApplyButton: () => false,
     importResultsSignature: () => "",

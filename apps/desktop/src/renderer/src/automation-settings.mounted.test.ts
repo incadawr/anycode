@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
 import { act, createElement, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, expect, it, vi } from "vitest";
-import { realMcpPaneDom, realSkillsPaneDom, realSubagentsPaneDom, realProviderPaneDom, realSettingsDom, realVisionPaneDom, realCodexPaneDom } from "./automation.js";
-import { McpFormDialog, McpImportDialog, McpRowItem, blankMcpFormFields } from "./components/McpServersPane.js";
-import { SkillImportDialog, SkillRowItem } from "./components/SkillsPane.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createAutomationFacade, realMcpPaneDom, realSkillsPaneDom, realSubagentsPaneDom, realProviderPaneDom, realSettingsDom, realVisionPaneDom, realCodexPaneDom, type AnycodeBridge } from "./automation.js";
+import { McpFormDialog, McpImportDialog, McpRowItem, McpServersPane, blankMcpFormFields, type McpConfigBridge } from "./components/McpServersPane.js";
+import { SkillImportDialog, SkillRowItem, SkillsPane, type SkillsBridge } from "./components/SkillsPane.js";
+import { ScopeDropdown } from "./components/ScopeSwitcher.js";
+import { USER_SCOPE, scopeRefFor, type ScopeSelection } from "./components/scope-model.js";
+import type { ScopeWorkspaceEntry } from "../../shared/scope-workspaces.js";
 import { SubagentsPane } from "./components/SubagentsPane.js";
 import { createStore } from "zustand/vanilla";
 import { cloneDefaults } from "../../settings/schema.js";
@@ -13,6 +16,8 @@ import { VisionPane } from "./components/VisionPane.js";
 import { ConnectionDrawerFields } from "./components/ConnectionDrawer.js";
 import { CodexEnginePane } from "./components/CodexEnginePane.js";
 import { ConnectionTile, connectionSecretKey } from "./components/ConnectionTile.js";
+import { createTabRegistry } from "./tab-registry.js";
+import { createTabsStore } from "./tabs-store.js";
 
 vi.mock("@xterm/xterm", () => ({ Terminal: class {} }));
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -167,4 +172,126 @@ it("finds the Codex install button in the rendered pane", async () => {
   const secrets=[{key:connectionSecretKey("c","oauth"),set:true,source:"vault"}];
   await mount(createElement("div",{className:"welcome-screen"},createElement(ConnectionDrawerFields,{mode:"edit",editConnection:connection,catalog,connections:[connection],secrets,readOnly:false,store} as never)));
   expect(realProviderPaneDom().drawer()?.clearKeyEnabled).toBe(true);
+});
+
+// ── facade over the REAL Settings scope bar + panes ──────────────────────────
+// SettingsScreen's exact wiring, reduced to the parts the scope drives: the
+// one ScopeDropdown above the pane, whose `scopeRefFor` resolution becomes the
+// pane's `tabId` — the panes' write target (`scopeMode`). The facade runs with
+// its REAL DOM accessors (no DI): skillsImportApply/mcpAddServer must drive the
+// rendered ScopeSwitcher itself, since neither pane carries in-dialog scope
+// radios anymore.
+
+function scopeHarness(props: { entries: ScopeWorkspaceEntry[]; skillsBridge?: SkillsBridge; mcpBridge?: McpConfigBridge }) {
+  const [selection, setSelection] = useState<ScopeSelection>(USER_SCOPE);
+  const ref = scopeRefFor(selection, props.entries);
+  return createElement(
+    "div",
+    { className: "settings-screen" },
+    createElement(ScopeDropdown, { selection, entries: props.entries, loading: false, onOpen: noop, onSelect: setSelection }),
+    props.skillsBridge
+      ? createElement(SkillsPane, { tabId: ref, bridge: props.skillsBridge as never })
+      : createElement(McpServersPane, { servers: [], tabId: ref, bridge: props.mcpBridge as never }),
+  );
+}
+
+const wsEntry = (id: string): ScopeWorkspaceEntry => ({ id, name: "alpha", displayPath: "~/work/alpha", exists: true, tabIds: [] });
+
+// McpServersPane renders <McpSecretsBlock /> unconditionally; its default
+// bridge reads `window.anycode.mcpSecrets`, which only exists in the real
+// app shell — stub the three calls these tests never touch.
+beforeEach(() => {
+  (window as unknown as { anycode: unknown }).anycode = {
+    mcpSecrets: {
+      list: vi.fn(async () => ({ ok: true as const, names: [] })),
+      set: vi.fn(async () => ({ ok: true as const, names: [] })),
+      delete: vi.fn(async () => ({ ok: true as const, names: [] })),
+    },
+  };
+});
+
+function mountedFacade(): ReturnType<typeof createAutomationFacade> {
+  const tabsStore = createTabsStore();
+  const registry = createTabRegistry(tabsStore);
+  return createAutomationFacade(registry, tabsStore, {
+    createTab: vi.fn(),
+    closeTab: vi.fn(),
+    listSessions: vi.fn(async () => []),
+  } as unknown as AnycodeBridge);
+}
+
+it("skillsImportApply drives the rendered ScopeSwitcher to the requested workspace BEFORE Apply — the import lands there, not in the stale personal catalog", async () => {
+  const snapshot = { rows: [], problems: [] };
+  const importApply = vi.fn(async (_req: unknown) => ({
+    ok: true as const,
+    results: [{ id: "one", name: "browser", applied: true, suffixed: false, converted: false, notes: [] }],
+    snapshot,
+  }));
+  const bridge = {
+    list: vi.fn(async () => snapshot),
+    setEnabled: vi.fn(),
+    delete: vi.fn(),
+    create: vi.fn(),
+    reveal: vi.fn(),
+    importScan: vi.fn(async () => ({
+      candidates: [{ id: "one", harness: "claude", sourceDir: "skills/browser", name: "browser", description: "Browser", compatible: true, needsConversion: false, conversionNotes: [], alreadyPresent: false }],
+      problems: [],
+    })),
+    importApply,
+  };
+  await mount(createElement(scopeHarness, { entries: [wsEntry("ws_1")], skillsBridge: bridge as never }));
+  const facade = mountedFacade();
+  // The facade methods run UNWRAPPED: they poll the real DOM until React's
+  // (unact-ed) commits land, and awaiting them inside `act` deadlocks the
+  // act flush loop in this environment.
+  await expect(facade.skillsImportOpen()).resolves.toEqual({ ok: true });
+  // The bar still reads the user scope here — the apply must pick the workspace through the REAL switcher first.
+  expect(realSkillsPaneDom().importOpen()).toBe(true);
+  await expect(facade.skillsImportApply({ scope: "project" })).resolves.toEqual({ ok: true });
+  expect(importApply).toHaveBeenCalledTimes(1);
+  expect(importApply.mock.calls[0]![0]).toEqual({ tabId: "ws_1", scope: "project", ids: ["one"] });
+});
+
+it("skillsImportApply refuses with scope_unavailable when no workspace exists to pick — the import never fires into the wrong catalog", async () => {
+  const snapshot = { rows: [], problems: [] };
+  const importApply = vi.fn(async (_req: unknown) => ({ ok: true as const, results: [], snapshot }));
+  const bridge = {
+    list: vi.fn(async () => snapshot),
+    setEnabled: vi.fn(),
+    delete: vi.fn(),
+    create: vi.fn(),
+    reveal: vi.fn(),
+    importScan: vi.fn(async () => ({
+      candidates: [{ id: "one", harness: "claude", sourceDir: "skills/browser", name: "browser", description: "Browser", compatible: true, needsConversion: false, conversionNotes: [], alreadyPresent: false }],
+      problems: [],
+    })),
+    importApply,
+  };
+  await mount(createElement(scopeHarness, { entries: [], skillsBridge: bridge as never }));
+  const facade = mountedFacade();
+  await expect(facade.skillsImportOpen()).resolves.toEqual({ ok: true });
+  await expect(facade.skillsImportApply({ scope: "project" })).resolves.toEqual({ ok: false, reason: "scope_unavailable" });
+  expect(importApply).not.toHaveBeenCalled();
+});
+
+it("mcpAddServer drives the rendered ScopeSwitcher BEFORE the form opens — the real form seeds and submits the requested scope", async () => {
+  const snapshot = { entries: [], problems: [], projectAvailable: true };
+  const upsert = vi.fn(async (_req: unknown) => ({ ok: true as const, snapshot }));
+  const bridge = { get: vi.fn(async () => snapshot), upsert, delete: vi.fn(), setEnabled: vi.fn(), promoteCompat: vi.fn(), importScan: vi.fn(), importApply: vi.fn() };
+  await mount(createElement(scopeHarness, { entries: [wsEntry("ws_1")], mcpBridge: bridge as never }));
+  const facade = mountedFacade();
+  await expect(facade.mcpAddServer({ name: "srv", command: "node", scope: "project" })).resolves.toEqual({ ok: true });
+  expect(upsert).toHaveBeenCalledTimes(1);
+  expect(upsert.mock.calls[0]![0]).toMatchObject({ tabId: "ws_1", scope: "project", name: "srv" });
+});
+
+it("mcpAddServer refuses with scope_unavailable when no workspace exists to pick — the form never even opens", async () => {
+  const snapshot = { entries: [], problems: [], projectAvailable: true };
+  const upsert = vi.fn(async (_req: unknown) => ({ ok: true as const, snapshot }));
+  const bridge = { get: vi.fn(async () => snapshot), upsert, delete: vi.fn(), setEnabled: vi.fn(), promoteCompat: vi.fn(), importScan: vi.fn(), importApply: vi.fn() };
+  await mount(createElement(scopeHarness, { entries: [], mcpBridge: bridge as never }));
+  const facade = mountedFacade();
+  await expect(facade.mcpAddServer({ name: "srv", command: "node", scope: "project" })).resolves.toEqual({ ok: false, reason: "scope_unavailable" });
+  expect(realMcpPaneDom().formOpen()).toBe(false);
+  expect(upsert).not.toHaveBeenCalled();
 });
