@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the sidebar showing a session twice while it was opening: clicking a saved session now folds its history row into the new tab's row immediately, so each session appears once during loading instead of as an active tab plus a stale history entry.
+
 ## [0.0.74] — 2026-11-04
 
 ### Fixed
