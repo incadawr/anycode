@@ -15,6 +15,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `/new` in the telegram-remote example drops only the single separator between its flags and the message: a message starting on the next line now keeps its indentation, and a trailing newline survives.
 - `/new` in the telegram-remote example recognizes its `key:value` flags only before the message starts; the message itself now reaches the session verbatim, with line breaks and indentation intact.
 - The connection drawer's "Reasoning replay" setting is hidden for transports that cannot replay reasoning (an OpenAI Responses endpoint), and saving such a connection no longer writes the hidden setting's value.
 - A weekly-only GLM quota answer no longer keeps the reset time of the earlier 5-hour window.

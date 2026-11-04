@@ -229,23 +229,31 @@ const NEW_FLAG_PATTERN = /^(engine|model|effort|handle):(.+)$/;
  * the three real values count), model, effort and handle — but only while they
  * lead, before the message starts. Everything from the first non-flag token on
  * is the message, passed through verbatim (newlines and indentation kept).
+ * Only the one separator between the last leading token and the message —
+ * same-line spaces and tabs, or a single newline — is dropped.
  */
 export function parseNewArgs(args) {
-  let rest = String(args ?? "").trim();
+  let rest = String(args ?? "").replace(/^\s+/, "");
+  const dropSeparator = () => {
+    rest = rest.replace(/^(?:[ \t]*\r?\n|[ \t]+)/, "");
+  };
   const takeToken = () => {
     const match = /^\S+/.exec(rest);
     if (!match) return undefined;
-    const token = match[0];
-    rest = rest.slice(token.length).replace(/^\s+/, "");
-    return token;
+    rest = rest.slice(match[0].length);
+    dropSeparator();
+    return match[0];
   };
   const projectRef = takeToken();
   const flags = {};
   while (rest !== "") {
-    const match = NEW_FLAG_PATTERN.exec(/^\S+/.exec(rest)[0]);
+    const token = /^\S+/.exec(rest)?.[0];
+    if (token === undefined) break;
+    const match = NEW_FLAG_PATTERN.exec(token);
     if (!match || (match[1] === "engine" && !["core", "codex", "claude"].includes(match[2]))) break;
     flags[match[1]] = match[2];
-    rest = rest.slice(match[0].length).replace(/^\s+/, "");
+    rest = rest.slice(token.length);
+    dropSeparator();
   }
   return {
     projectRef,
@@ -253,7 +261,8 @@ export function parseNewArgs(args) {
     ...(flags.model !== undefined ? { model: flags.model } : {}),
     ...(flags.effort !== undefined ? { effort: flags.effort } : {}),
     ...(flags.handle !== undefined ? { handle: flags.handle } : {}),
-    text: rest,
+    // A tail of pure whitespace is still no message.
+    text: rest.trim() === "" ? "" : rest,
   };
 }
 

@@ -369,6 +369,18 @@ describe("telegram-remote example", () => {
     expect(lib.parseNewArgs("ws-build engine:codex model:terra effort:high handle:flag-bot go")).toEqual({ projectRef: "ws-build", engine: "codex", model: "terra", effort: "high", handle: "flag-bot", text: "go" });
   });
 
+  it("T5c /new drops only the one separator between the flags and the message", async () => {
+    const lib = await loadExample("lib.mjs");
+    // Spaces on the flag's own line are the separator; the rest of the line is the message.
+    expect(lib.parseNewArgs("ws-build model:terra    alpha\nbeta\n")).toEqual({ projectRef: "ws-build", model: "terra", text: "alpha\nbeta\n" });
+    // A message starting on the next line keeps its indentation and its trailing newline;
+    // only the separator newline itself is dropped.
+    expect(lib.parseNewArgs("ws-build model:terra\n    alpha\n    beta\n")).toEqual({ projectRef: "ws-build", model: "terra", text: "    alpha\n    beta\n" });
+    // A tail of pure whitespace is still no message.
+    expect(lib.parseNewArgs("ws-build model:terra\n  \n")).toEqual({ projectRef: "ws-build", model: "terra", text: "" });
+    expect(lib.parseNewArgs("ws-build go")).toEqual({ projectRef: "ws-build", text: "go" });
+  });
+
   // ── Telegram transport ──
 
   it("T6 a 409 conflict backs off on the ladder, logs once, never calls deleteWebhook and recovers", async () => {
