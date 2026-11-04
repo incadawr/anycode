@@ -799,20 +799,39 @@ describe("PreviewHost — will-navigate matrix (risk §5.2, layer 2)", () => {
     expect(wc.loadedUrls).toHaveLength(before);
   });
 
-  it("allows in-page navigation to localhost", async () => {
+  it("denies in-page navigation from a file preview to a localhost port", async () => {
     const rig = await openedRig();
     const wc = rig.windows[0]!.webContents;
+    const before = wc.loadedUrls.length;
     wc.fireWillNavigate("http://localhost:8080/page2");
     await flush();
-    expect(wc.loadedUrls.at(-1)).toBe("http://localhost:8080/page2");
+    expect(wc.loadedUrls).toHaveLength(before);
   });
 
-  it("allows in-page navigation to 127.0.0.1", async () => {
+  it("denies in-page navigation from a file preview to 127.0.0.1", async () => {
     const rig = await openedRig();
     const wc = rig.windows[0]!.webContents;
+    const before = wc.loadedUrls.length;
     wc.fireWillNavigate("http://127.0.0.1:3000/");
     await flush();
-    expect(wc.loadedUrls.at(-1)).toBe("http://127.0.0.1:3000/");
+    expect(wc.loadedUrls).toHaveLength(before);
+  });
+
+  it("a localhost preview navigates in-page within its OWN pinned origin", async () => {
+    const rig = await openedRig({ url: "http://localhost:5173/" });
+    const wc = rig.windows[0]!.webContents;
+    wc.fireWillNavigate("http://localhost:5173/page2");
+    await flush();
+    expect(wc.loadedUrls.at(-1)).toBe("http://localhost:5173/page2");
+  });
+
+  it("a localhost preview cannot navigate in-page to a SECOND loopback port", async () => {
+    const rig = await openedRig({ url: "http://localhost:5173/" });
+    const wc = rig.windows[0]!.webContents;
+    const before = wc.loadedUrls.length;
+    wc.fireWillNavigate("http://localhost:9000/");
+    await flush();
+    expect(wc.loadedUrls).toHaveLength(before);
   });
 
   it("denies in-page navigation to an un-consented remote origin", async () => {
@@ -2195,11 +2214,12 @@ describe("PreviewHost — request gate (cut §1.1/F2, GATE-MATRIX)", () => {
     await expect(gate({ url: "blob:https://example.com/some-uuid", resourceType: "xhr" })).resolves.toBe(true);
   });
 
-  it("file-kind preview: localhost xhr+ws ALLOW", async () => {
+  it("file-kind preview: localhost xhr+ws DENY (no loopback grant without a pinned dev origin)", async () => {
     const rig = await openedRig({ path: `${WORKSPACE_ROOT}/a.html` });
     const gate = gateOf(rig);
-    await expect(gate({ url: "http://localhost:5173/api", resourceType: "xhr" })).resolves.toBe(true);
-    await expect(gate({ url: "ws://localhost:5173/socket", resourceType: "webSocket" })).resolves.toBe(true);
+    await expect(gate({ url: "http://localhost:5173/api", resourceType: "xhr" })).resolves.toBe(false);
+    await expect(gate({ url: "ws://localhost:5173/socket", resourceType: "webSocket" })).resolves.toBe(false);
+    await expect(gate({ url: "http://localhost:5173/", resourceType: "mainFrame" })).resolves.toBe(false);
   });
 
   it("file-kind preview: remote script|img|xhr|webSocket|subFrame DENY (consentedOrigins empty)", async () => {
@@ -2217,25 +2237,36 @@ describe("PreviewHost — request gate (cut §1.1/F2, GATE-MATRIX)", () => {
     }
   });
 
-  it("localhost-kind preview: same-origin ALLOW, second localhost port ALLOW, remote DENY, contained file: subresource DENY", async () => {
+  it("localhost-kind preview: own origin ALLOW (all resource types), every other loopback origin/port DENY, remote DENY, contained file: subresource DENY", async () => {
     const rig = await openedRig({ url: "http://localhost:5173/" });
     const gate = gateOf(rig);
+    // Relative dev assets: the pinned origin serves every resource type.
     await expect(gate({ url: "http://localhost:5173/api", resourceType: "xhr" })).resolves.toBe(true);
-    await expect(gate({ url: "http://localhost:9000/ws", resourceType: "webSocket" })).resolves.toBe(true);
+    await expect(gate({ url: "http://localhost:5173/assets/app.js", resourceType: "script" })).resolves.toBe(true);
+    await expect(gate({ url: "http://localhost:5173/", resourceType: "mainFrame" })).resolves.toBe(true);
+    await expect(gate({ url: "ws://localhost:5173/socket", resourceType: "webSocket" })).resolves.toBe(true);
+    // A second loopback port is a DIFFERENT origin — never auto-granted.
+    await expect(gate({ url: "http://localhost:9000/ws", resourceType: "webSocket" })).resolves.toBe(false);
+    await expect(gate({ url: "http://localhost:9000/", resourceType: "mainFrame" })).resolves.toBe(false);
+    // A different loopback host spelling is a different origin too.
+    await expect(gate({ url: "http://127.0.0.1:5173/api", resourceType: "xhr" })).resolves.toBe(false);
     await expect(gate({ url: "https://evil.tld/", resourceType: "xhr" })).resolves.toBe(false);
     const fileUrl = pathToFileURL(`${WORKSPACE_ROOT}/a.html`).href;
     await expect(gate({ url: fileUrl, resourceType: "image" })).resolves.toBe(false);
+    await expect(gate({ url: fileUrl, resourceType: "mainFrame" })).resolves.toBe(false);
   });
 
-  it("remote-kind preview (consented https://a.tld): own origin ALLOW incl. wss://a.tld, other remote DENY, localhost DENY, file: DENY", async () => {
+  it("remote-kind preview (consented https://a.tld): own origin ALLOW incl. wss://a.tld, other remote DENY, localhost DENY incl. mainFrame, file: DENY", async () => {
     const rig = await openedRig({ url: "https://a.tld/app", allowRemote: true });
     const gate = gateOf(rig);
     await expect(gate({ url: "https://a.tld/script.js", resourceType: "script" })).resolves.toBe(true);
     await expect(gate({ url: "wss://a.tld/socket", resourceType: "webSocket" })).resolves.toBe(true);
     await expect(gate({ url: "https://other.tld/", resourceType: "xhr" })).resolves.toBe(false);
     await expect(gate({ url: "http://localhost:3000/", resourceType: "xhr" })).resolves.toBe(false);
+    await expect(gate({ url: "http://localhost:3000/", resourceType: "mainFrame" })).resolves.toBe(false);
     const fileUrl = pathToFileURL(`${WORKSPACE_ROOT}/a.html`).href;
     await expect(gate({ url: fileUrl, resourceType: "image" })).resolves.toBe(false);
+    await expect(gate({ url: fileUrl, resourceType: "mainFrame" })).resolves.toBe(false);
   });
 
   it("unparseable URL and devtools: scheme DENY", async () => {
@@ -2495,7 +2526,7 @@ describe("PreviewHost — redirect gate (cut §1.2/F1, REDIRECT)", () => {
     expect(prevented).toBe(false);
   });
 
-  it("does not prevent a redirect to localhost", async () => {
+  it("prevents a redirect from a consented remote page to localhost (no loopback pivot via redirect legs)", async () => {
     const rig = makeRig();
     const openPromise = rig.host.openForTab(TAB, { url: "https://a.tld/app", allowRemote: true });
     await flush();
@@ -2503,7 +2534,18 @@ describe("PreviewHost — redirect gate (cut §1.2/F1, REDIRECT)", () => {
     await openPromise;
     const wc = rig.windows[0]!.webContents;
     const prevented = wc.fireWillRedirect("http://localhost:8080/");
-    expect(prevented).toBe(false);
+    expect(prevented).toBe(true);
+  });
+
+  it("does not prevent a redirect within the pinned localhost origin, prevents a second port", async () => {
+    const rig = makeRig();
+    const openPromise = rig.host.openForTab(TAB, { url: "http://localhost:5173/" });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    await openPromise;
+    const wc = rig.windows[0]!.webContents;
+    expect(wc.fireWillRedirect("http://localhost:5173/other")).toBe(false);
+    expect(wc.fireWillRedirect("http://localhost:9000/")).toBe(true);
   });
 
   it("localhost-kind record: a redirect to a remote origin IS prevented (zero-consent open-redirect path)", async () => {
@@ -2525,6 +2567,156 @@ describe("PreviewHost — redirect gate (cut §1.2/F1, REDIRECT)", () => {
     await openPromise;
     const wc = rig.windows[0]!.webContents;
     await expect(wc.requestGate!({ url: "https://evil.tld/", resourceType: "mainFrame" })).resolves.toBe(false);
+  });
+});
+
+describe("PreviewHost — the loopback grant stays pinned across reuse, transfer, navigate and history", () => {
+  async function openedLocalRig(url: string): Promise<Rig> {
+    const rig = makeRig();
+    const openPromise = rig.host.openForTab(TAB, { url });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    await openPromise;
+    return rig;
+  }
+
+  function gateOf(container: FakeWindow | FakePanelView): (req: { url: string; resourceType: string }) => Promise<boolean> {
+    const gate = container.webContents.requestGate;
+    if (gate === undefined) {
+      throw new Error("request gate was never installed by wireWindow");
+    }
+    return gate;
+  }
+
+  async function controlRequest(rig: Rig, request: PreviewControlRequest): Promise<PreviewResult<PreviewControlSuccess>> {
+    await rig.host.handleRequest(TAB, {
+      type: PREVIEW_REQUEST_TYPE,
+      requestId: `pin-${Math.random()}`,
+      op: { kind: "control", request },
+    });
+    const posted = rig.posted.at(-1)!;
+    if (posted.message.type !== PREVIEW_RESPONSE_TYPE) throw new Error("no response");
+    return posted.message.result as PreviewResult<PreviewControlSuccess>;
+  }
+
+  /** Drains microtasks until `run` reports done — a queued control action reaches its status mutation deterministically. */
+  async function until(run: () => boolean): Promise<void> {
+    for (let i = 0; i < 100 && !run(); i += 1) {
+      await flush();
+    }
+  }
+
+  it("a reuse-navigate onto a second dev-server port RE-PINS the grant (old origin revoked, not widened)", async () => {
+    const rig = await openedLocalRig("http://localhost:5173/");
+    const previewId = rig.windows[0]!.previewId;
+    const second = rig.host.openForTab(TAB, { url: "http://localhost:9999/", previewId });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    await second;
+
+    const gate = gateOf(rig.windows[0]!);
+    await expect(gate({ url: "http://localhost:9999/api", resourceType: "xhr" })).resolves.toBe(true);
+    await expect(gate({ url: "http://localhost:5173/api", resourceType: "xhr" })).resolves.toBe(false);
+    await expect(gate({ url: "http://localhost:5173/", resourceType: "mainFrame" })).resolves.toBe(false);
+  });
+
+  it("BrowserNavigate by url is the explicit-permission path: it re-pins the grant to the addressed dev-server port", async () => {
+    const rig = await openedLocalRig("http://localhost:5173/");
+    const previewId = rig.windows[0]!.previewId;
+    const navigating = controlRequest(rig, { action: "navigate", previewId, to: { url: "http://localhost:9999/" } });
+    await until(() => rig.windows[0]!.webContents.loadedUrls.at(-1) === "http://localhost:9999/");
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const result = await navigating;
+    expect(result.ok).toBe(true);
+
+    const gate = gateOf(rig.windows[0]!);
+    await expect(gate({ url: "http://localhost:9999/api", resourceType: "xhr" })).resolves.toBe(true);
+    await expect(gate({ url: "http://localhost:5173/api", resourceType: "xhr" })).resolves.toBe(false);
+  });
+
+  it("a panel<->window transfer keeps the grant narrow (same record, same pinned origin)", async () => {
+    const rig = await openedLocalRig("http://localhost:5173/");
+    const previewId = rig.windows[0]!.previewId;
+    const transfer = rig.host.setContainer(TAB, previewId, "panel");
+    await flush();
+    rig.panelViews[0]!.webContents.fireDidFinishLoad();
+    await transfer;
+
+    const gate = gateOf(rig.panelViews[0]!);
+    await expect(gate({ url: "http://localhost:5173/api", resourceType: "xhr" })).resolves.toBe(true);
+    await expect(gate({ url: "http://localhost:9999/", resourceType: "mainFrame" })).resolves.toBe(false);
+  });
+
+  it("history back/forward is judged by the same policy: a foreign loopback entry is refused, a pinned-origin entry navigates", async () => {
+    const rig = await openedLocalRig("http://localhost:5173/");
+    const wc = rig.windows[0]!.webContents;
+    const previewId = rig.windows[0]!.previewId;
+
+    wc.navigationHistoryEntries = [
+      { url: "http://localhost:9999/old", title: "old" },
+      { url: "http://localhost:5173/now", title: "now" },
+    ];
+    wc.navigationHistoryIndex = 1;
+    const refused = await controlRequest(rig, { action: "navigate", previewId, to: { history: "back" } });
+    expect(refused).toMatchObject({ ok: false, errorKind: "not_allowed" });
+    expect(wc.goToOffsetCalls).toHaveLength(0);
+
+    wc.navigationHistoryEntries = [
+      { url: "http://localhost:5173/older", title: "older" },
+      { url: "http://localhost:5173/now", title: "now" },
+    ];
+    const navigating = controlRequest(rig, { action: "navigate", previewId, to: { history: "back" } });
+    await until(() => wc.goToOffsetCalls.length === 1);
+    wc.fireDidFinishLoad();
+    const allowed = await navigating;
+    expect(allowed.ok).toBe(true);
+    expect(wc.goToOffsetCalls).toEqual([-1]);
+  });
+
+  it("navigating away to the approved remote origin DROPS the grant: the remote document cannot reach the dev server", async () => {
+    // Repro of the surviving-grant hole: approved remote open -> reuse the
+    // preview for the dev server -> navigate back to the approved page. The
+    // committed remote document must not inherit the dev-server grant.
+    const rig = makeRig();
+    const first = rig.host.openForTab(TAB, { url: "https://a.tld/app", allowRemote: true });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    await first;
+
+    const second = rig.host.openForTab(TAB, { url: "http://localhost:5173/", previewId: rig.windows[0]!.previewId });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    await second;
+
+    const wc = rig.windows[0]!.webContents;
+    const gate = gateOf(rig.windows[0]!);
+    await expect(gate({ url: "http://localhost:5173/api", resourceType: "xhr" })).resolves.toBe(true);
+
+    // The dev-server page links to the approved origin: the in-page jump is
+    // allowed (consented) and the remote document commits.
+    expect(wc.fireWillNavigate("https://a.tld/app")).toBe(true);
+    await flush();
+    expect(wc.loadedUrls.at(-1)).toBe("https://a.tld/app");
+    wc.fireDidNavigate("https://a.tld/app");
+
+    // The grant did not survive the navigation away ...
+    await expect(gate({ url: "http://localhost:5173/api", resourceType: "xhr" })).resolves.toBe(false);
+    await expect(gate({ url: "ws://localhost:5173/", resourceType: "webSocket" })).resolves.toBe(false);
+    // ... the remote document keeps its own consented access ...
+    await expect(gate({ url: "https://a.tld/api", resourceType: "xhr" })).resolves.toBe(true);
+    // ... and cannot pivot into loopback by navigating back, either.
+    const before = wc.loadedUrls.length;
+    wc.fireWillNavigate("http://localhost:5173/");
+    await flush();
+    expect(wc.loadedUrls).toHaveLength(before);
+  });
+
+  it("a committed navigation WITHIN the pinned origin keeps the grant (reload, same-origin path change)", async () => {
+    const rig = await openedLocalRig("http://localhost:5173/");
+    const gate = gateOf(rig.windows[0]!);
+    rig.windows[0]!.webContents.fireDidNavigate("http://localhost:5173/other-path");
+    await expect(gate({ url: "http://localhost:5173/api", resourceType: "xhr" })).resolves.toBe(true);
+    await expect(gate({ url: "http://localhost:9999/", resourceType: "mainFrame" })).resolves.toBe(false);
   });
 });
 
@@ -2825,19 +3017,20 @@ describe("PreviewHost — IPv6 loopback normalize (cut §1.6)", () => {
     }
   });
 
-  it("the request gate treats [::1] as local for a mainFrame request", async () => {
+  it("the request gate pins the bracketed origin: [::1]:3000 ALLOW, [::1]:4000 DENY", async () => {
     const rig = makeRig();
     const openPromise = rig.host.openForTab(TAB, { url: "http://[::1]:3000/" });
     await flush();
     rig.windows[0]!.webContents.fireDidFinishLoad();
     await openPromise;
     const wc = rig.windows[0]!.webContents;
-    await expect(wc.requestGate!({ url: "http://[::1]:4000/", resourceType: "mainFrame" })).resolves.toBe(true);
+    await expect(wc.requestGate!({ url: "http://[::1]:3000/api", resourceType: "xhr" })).resolves.toBe(true);
+    await expect(wc.requestGate!({ url: "http://[::1]:4000/", resourceType: "mainFrame" })).resolves.toBe(false);
   });
 
-  it("in-page navigation to [::1] is allowed", async () => {
+  it("in-page navigation within the pinned bracketed origin is allowed", async () => {
     const rig = makeRig();
-    const openPromise = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    const openPromise = rig.host.openForTab(TAB, { url: "http://[::1]:3000/" });
     await flush();
     rig.windows[0]!.webContents.fireDidFinishLoad();
     await openPromise;
@@ -2847,7 +3040,7 @@ describe("PreviewHost — IPv6 loopback normalize (cut §1.6)", () => {
     expect(wc.loadedUrls.at(-1)).toBe("http://[::1]:3000/page2");
   });
 
-  it("a redirect to [::1] is not prevented", async () => {
+  it("a redirect to a bracketed loopback origin is prevented", async () => {
     const rig = makeRig();
     const openPromise = rig.host.openForTab(TAB, { url: "https://a.tld/app", allowRemote: true });
     await flush();
@@ -2855,7 +3048,7 @@ describe("PreviewHost — IPv6 loopback normalize (cut §1.6)", () => {
     await openPromise;
     const wc = rig.windows[0]!.webContents;
     const prevented = wc.fireWillRedirect("http://[::1]:9000/");
-    expect(prevented).toBe(false);
+    expect(prevented).toBe(true);
   });
 });
 
@@ -3410,13 +3603,13 @@ describe("PreviewHost — panel container: security regression (invariant 7, sam
     expect(view.webContents.loadedUrls).toHaveLength(before);
   });
 
-  it("will-navigate: allows localhost, denies an un-consented remote origin", async () => {
+  it("will-navigate: denies localhost from a file preview (no loopback grant), denies an un-consented remote origin", async () => {
     const { view } = await openedPanelRig();
+    const before = view.webContents.loadedUrls.length;
     view.webContents.fireWillNavigate("http://localhost:8080/page2");
     await flush();
-    expect(view.webContents.loadedUrls.at(-1)).toBe("http://localhost:8080/page2");
+    expect(view.webContents.loadedUrls).toHaveLength(before);
 
-    const before = view.webContents.loadedUrls.length;
     view.webContents.fireWillNavigate("https://not-consented.example/");
     await flush();
     expect(view.webContents.loadedUrls).toHaveLength(before);

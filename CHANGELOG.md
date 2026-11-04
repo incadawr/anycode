@@ -25,6 +25,13 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - The OpenCode Go connection speaking Anthropic's protocol now suggests models that the endpoint serves on that protocol natively (MiniMax M3, Qwen3.8 Max/Flash, Qwen3.7 Plus, Claude Haiku 5.5) instead of Kimi, which the endpoint only routes through translation on that door; the OpenAI-compatible connection keeps Kimi first, and Kimi's declared context windows on both were corrected against the endpoint's own model list.
 - The Agent tool now warns up front, instead of after a failed call, when an agent type needs its own connection and cannot run in the current context.
+### Security
+
+- Embedded previews no longer grant the whole loopback: a preview opened on a local dev server can reach exactly the `host:port` it was opened with (relative dev-server assets and its WebSocket keep working), while a second loopback port, `127.0.0.1` vs `localhost` spellings, and any other local service are denied for page navigation, redirects, subresources, fetch, and WebSockets alike. Documents loaded from files or remote sites have no loopback access at all, so a remote page can no longer pivot into local services via a navigation or redirect leg; opening a different local target goes through its own open (or an explicit navigate), which re-pins the grant instead of widening it, and navigating the preview away from the dev server drops the grant entirely, so the page that takes over the frame cannot keep reaching it. Preview-to-panel transfers and history navigation are judged by the same rule, and denials stay legible in the preview console.
+
+### Added
+
+- An isolated smoke driver exercises the pinned preview loopback grant end to end against throwaway loopback fixtures (`pnpm --filter @anycode/desktop smoke:preview-loopback`), with no provider credentials or model requests.
 
 ## [0.0.75] — 2026-11-04
 
