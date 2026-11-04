@@ -227,8 +227,16 @@ export interface PersistencePort {
    * view, or `/sessions` command may read — a child session is structurally
    * unreachable through it, filtered in SQL before any LIMIT is applied (a
    * post-limit JS filter would silently starve the page instead).
+   *
+   * `limit` caps the page GLOBALLY (recency order across all projects).
+   * `perWorkspaceLimit` instead caps WITHIN every project — the sidebar's
+   * default view fetches this, so one busy project cannot push other
+   * projects' folders out of the page while a project with thousands of
+   * sessions still costs at most its own bounded slice. The partition key is
+   * the project-identity key (`projectRoot ?? workspace`, the sidebar's
+   * grouping key). Rows still come back in one global recency order.
    */
-  listRootSessions(opts?: { workspace?: string; limit?: number }): Promise<SessionMeta[]>;
+  listRootSessions(opts?: { workspace?: string; limit?: number; perWorkspaceLimit?: number }): Promise<SessionMeta[]>;
   /** UX-facing point read: null for both an unknown id AND a child session's id (no resume-through-id escape hatch). */
   getRootSession(id: string): Promise<SessionMeta | null>;
   /**

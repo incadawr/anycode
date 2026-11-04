@@ -1976,10 +1976,10 @@ describe("handleSessionsList", () => {
     expect(res.map((s) => s.id)).toEqual(["newer", "older"]);
     expect(res[0]!.updatedAt).toBe(30); // the sidebar age label's source
   });
-  it("forwards a valid limit as { limit } — the sidebar's capped default page", async () => {
+  it("forwards a valid limit as a per-project page ({ perWorkspaceLimit }) — the sidebar's capped default view", async () => {
     const listRootSessions = vi.fn(async () => []);
     await handleSessionsList(rig(listRootSessions), { limit: 51 });
-    expect(listRootSessions).toHaveBeenCalledWith({ limit: 51 });
+    expect(listRootSessions).toHaveBeenCalledWith({ perWorkspaceLimit: 51 });
   });
   it("a malformed request fails open to the full list", async () => {
     const listRootSessions = vi.fn(async () => []);

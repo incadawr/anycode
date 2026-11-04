@@ -245,6 +245,35 @@ describe("SqlitePersistenceAdapter", () => {
       expect(limited.map((s) => s.id)).toEqual(["c"]);
     });
 
+    it("perWorkspaceLimit caps WITHIN each project — a busy project cannot push another project's sessions out of the page", async () => {
+      const adapter = new SqlitePersistenceAdapter(":memory:");
+      for (let i = 0; i < 60; i++) {
+        vi.setSystemTime(10_000 + i);
+        await adapter.createSession({ id: `a${i}`, workspace: "/a", model: "m", mode: "build" });
+      }
+      for (let i = 0; i < 3; i++) {
+        vi.setSystemTime(1_000 + i);
+        await adapter.createSession({ id: `b${i}`, workspace: "/b", model: "m", mode: "build" });
+      }
+
+      const page = await adapter.listRootSessions({ perWorkspaceLimit: 51 });
+      const aRows = page.filter((s) => s.workspace === "/a");
+      const bRows = page.filter((s) => s.workspace === "/b");
+      expect(aRows).toHaveLength(51); // the probe slice (LIMIT+1), recency-ordered
+      expect(aRows[0]!.id).toBe("a59");
+      expect(bRows.map((s) => s.id)).toEqual(["b2", "b1", "b0"]); // the old project survives whole
+      expect(page.map((s) => s.id)).toEqual([
+        ...Array.from({ length: 51 }, (_, i) => `a${59 - i}`),
+        "b2",
+        "b1",
+        "b0",
+      ]);
+
+      // the global limit keeps its meaning on top of the per-project slice
+      const limited = await adapter.listRootSessions({ perWorkspaceLimit: 51, limit: 1 });
+      expect(limited.map((s) => s.id)).toEqual(["a59"]);
+    });
+
     it("touchSession patches title/mode/model and bumps updatedAt", async () => {
       const adapter = new SqlitePersistenceAdapter(":memory:");
       await adapter.createSession({ id: "s1", workspace: "/w", model: "m1", mode: "build" });
