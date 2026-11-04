@@ -86,6 +86,7 @@ export async function runLive(args, { smoke = false } = {}) {
     for (let i = 0; i < args.length; i++) {
       const key = args[i];
       if (key === '--live') { if (parsed.live) throw Error('arguments'); parsed.live = true; continue; }
+      if (key === '--config-only' && smoke && !parsed.configOnly) { parsed.configOnly = true; continue; }
       if (!['--bin', '--root', '--auth-from', '--model'].includes(key) || parsed[key] || !args[i + 1] || args[i + 1].startsWith('--')) throw Error('arguments');
       parsed[key] = args[++i];
     }
@@ -152,7 +153,8 @@ createInterface({ input: process.stdin }).on('line', line => {
 `);
     const fixtureConfig = name => ({ command: process.execPath, args: [fixture, name] });
     const tomlString = value => JSON.stringify(value);
-    writeFileSync(join(codexHome, 'config.toml'), `[features]\nmulti_agent = true\nremote_plugin = false\n[mcp_servers.ambient]\ncommand = ${tomlString(process.execPath)}\nargs = [${tomlString(fixture)}, "ambient"]\n[mcp_servers.second]\ncommand = ${tomlString(process.execPath)}\nargs = [${tomlString(fixture)}, "second"]\n`);
+    const fixtureToml = `[features]\nmulti_agent = true\n[mcp_servers.ambient]\ncommand = ${tomlString(process.execPath)}\nargs = [${tomlString(fixture)}, "ambient"]\n[mcp_servers.second]\ncommand = ${tomlString(process.execPath)}\nargs = [${tomlString(fixture)}, "second"]\n`;
+    if (!smoke) writeFileSync(join(codexHome, 'config.toml'), fixtureToml);
     const send = message => child.stdin.write(JSON.stringify(message) + '\n');
     const failPending = () => { for (const p of pending.values()) { clearTimeout(p.timer); p.reject(Error('server-exited')); } pending.clear(); if (activeTurn) activeTurn.reject(Error('server-exited')); };
     function request(method, params, timeout = RPC_MS) {
@@ -257,6 +259,28 @@ createInterface({ input: process.stdin }).on('line', line => {
     startServer();
     await request('initialize', { clientInfo: { name: 'orchestration-probe', version: '0.0.0' }, capabilities: { experimentalApi: true } });
     send({ method: 'initialized', params: {} });
+    if (smoke) {
+      const ts = await import('typescript');
+      const source = readFileSync(new URL('../src/host/engines/codex/orchestration-policy.ts', import.meta.url), 'utf8');
+      const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext } }).outputText;
+      const policy = await import(`data:text/javascript;base64,${Buffer.from(js).toString('base64')}`);
+      for (const name of ['default-profile', 'mcp-profile']) {
+        if (name === 'mcp-profile') { writeFileSync(join(codexHome, 'config.toml'), fixtureToml.replace('[features]\nmulti_agent = true\n', '')); await restartServer(); }
+        const initial = await request('config/read', { cwd, includeLayers: true });
+        policy.requireCompleteReadback(initial);
+        const base = policy.captureBaseConfig(initial);
+        await restartServer(policy.orchestrationOverrides(base));
+        const on = await request('config/read', { cwd, includeLayers: true });
+        policy.verifyConfig(on, base, true);
+        await restartServer();
+        const off = await request('config/read', { cwd, includeLayers: true });
+        policy.verifyConfig(off, base, false);
+        result.checks[name] = { status: 'PASS', baseRemotePlugin: base.remotePlugin ?? null, baseMultiAgent: base.features ?? null, mcpCount: base.names.length, onRemotePlugin: on.config.features.remote_plugin, onMultiAgent: on.config.features.multi_agent, restored: true };
+      }
+      if (parsed.configOnly) { result.outcome = 'config-verified'; return; }
+      writeFileSync(join(codexHome, 'config.toml'), fixtureToml);
+      await restartServer();
+    }
     const models = await request('model/list', { limit: 100 });
     const available = models.data || [];
     const model = parsed['--model'] ? available.find(x => x.id === parsed['--model'] || x.model === parsed['--model']) : available.find(x => /luna/i.test(x.id) && x.supportedReasoningEfforts?.some(e => e.reasoningEffort === 'low')) || available.find(x => /mini/i.test(x.id) && x.supportedReasoningEfforts?.some(e => e.reasoningEffort === 'low'));

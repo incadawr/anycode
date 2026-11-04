@@ -9,7 +9,7 @@ const args = process.argv.slice(2);
 const modes = ['--fixture-only', '--live'].filter(x => args.includes(x));
 const option = name => { const i = args.indexOf(name); return i < 0 ? undefined : args[i + 1]; };
 if (args.includes('--help')) {
-  console.log('Usage: --fixture-only [--keep] | --live --bin PATH --auth-from AUTH_JSON [--model MODEL] [--keep]');
+  console.log('Usage: --fixture-only [--keep] | --live --bin PATH --auth-from AUTH_JSON [--model MODEL] [--config-only] [--keep]');
   process.exit(0);
 }
 if (modes.length !== 1) throw Error('Choose exactly one of --fixture-only or --live');
@@ -32,6 +32,7 @@ try {
     const { runLive } = await import('./codex-orchestrate-live-probe.mjs');
     const liveArgs = ['--live', '--bin', resolve(option('--bin')), '--root', root, '--auth-from', resolve(option('--auth-from'))];
     if (option('--model')) liveArgs.push('--model', option('--model'));
+    if (args.includes('--config-only')) liveArgs.push('--config-only');
     await runLive(liveArgs, { smoke: true });
     if (args.includes('--keep')) console.log(JSON.stringify({ root }));
   }
