@@ -19,6 +19,9 @@ It intentionally differs from local `working-docs/`:
   developer/diagnostic override.
 - [Agent communication](agent-communication.md) — opt-in production MCP, scoped
   session messages and native Codex steering (unreleased).
+- [Reasoning history](reasoning-history.md) — the per-provider thinking-replay
+  support table, wire fields, doc citations, and how to measure a provider
+  yourself.
 - [Channel plugins](channel-plugins.md) — author guide for plugin services that
   bridge an outside channel to Sessions API sessions, with the
   [channel-echo example](../../examples/channel-echo/).

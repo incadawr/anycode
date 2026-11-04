@@ -686,6 +686,12 @@ export function customProviderCatalogEntries(
     models: record.models.map((id) => ({ id })),
     defaultTransport: CUSTOM_KIND_DEFAULT_TRANSPORT[record.kind],
     supportedTransports: CUSTOM_KIND_SUPPORTED_TRANSPORTS[record.kind],
+    // GitHub #41 review: the record's own endpoint under the same key the
+    // builtin summary uses, so the drawer can tell when a `custom:<id>`
+    // connection's base URL normalises onto a BUILTIN catalog entry — there
+    // core's replay gate resolves the provider by base URL and the entry's
+    // own flag governs, making the connection override inert.
+    ...(record.baseUrl === "" ? {} : { catalogBaseUrl: record.baseUrl }),
     ...(record.authOptional === true ? { authOptional: true } : {}),
   }));
 }

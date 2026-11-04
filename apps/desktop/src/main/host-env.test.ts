@@ -25,6 +25,7 @@ import {
   ENV_IMAGE_INPUT_MODEL_OVERRIDE,
   ENV_INCLUDE_USAGE,
   ENV_MAX_OUTPUT_TOKENS,
+  ENV_PRESERVE_REASONING,
   ENV_PROVIDER_TRANSPORT,
   ENV_PROMPT_CACHE_OPTIONS,
   ENV_REASONING_EFFORT,
@@ -661,6 +662,65 @@ describe("buildHostEnv — ANYCODE_INCLUDE_USAGE (GitHub #1: per-connection usag
     expect(shellOff[ENV_INCLUDE_USAGE]).toBe("0");
     expect(parse(shellOff).includeUsage).toBe(false);
     expect(resolveIncludeUsage("openai-chat-completions", parse(shellOff).includeUsage)).toBe(false);
+  });
+});
+
+describe("buildHostEnv — ANYCODE_PRESERVE_REASONING (per-connection replay override, env wins)", () => {
+  /** A connection carrying an optional persisted replay override; `false` must survive projection. */
+  function replayConn(connectionId: string, value: boolean | undefined) {
+    const conn = connectionFixture({ connectionId, id: "z-ai", model: "m" });
+    return { ...conn, ...(value !== undefined ? { preserveReasoning: value } : {}) };
+  }
+  /** Core's parser, for the "the fork sees what the gate reads" half of each case. */
+  const parse = (env: NodeJS.ProcessEnv) => loadEnvConfig({ ...env, ANYCODE_API_KEY: "sk-test", ANYCODE_MODEL: "m" });
+
+  it("emits an explicit true/false verbatim and nothing when the connection has no opinion", async () => {
+    const base = settings();
+    const on = await buildHostEnv({
+      bootEnv: {},
+      settings: { ...base, provider: providerV2Multi("conn-a", [replayConn("conn-a", true)]) },
+      getSecret: noSecret,
+    });
+    expect(on[ENV_PRESERVE_REASONING]).toBe("true");
+    expect(parse(on).preserveReasoning).toBe(true);
+
+    const off = await buildHostEnv({
+      bootEnv: {},
+      settings: { ...base, provider: providerV2Multi("conn-a", [replayConn("conn-a", false)]) },
+      getSecret: noSecret,
+    });
+    // `false` is a MEANING (an explicit opt-out): the literal string, never an
+    // omitted key or "".
+    expect(off[ENV_PRESERVE_REASONING]).toBe("false");
+    expect(parse(off).preserveReasoning).toBe(false);
+
+    const automatic = await buildHostEnv({
+      bootEnv: {},
+      settings: settings({ provider: { id: "z-ai", model: "m" } }),
+      getSecret: noSecret,
+    });
+    // Automatic emits NOTHING — core's catalog gate applies.
+    expect(ENV_PRESERVE_REASONING in automatic).toBe(false);
+    expect(parse(automatic).preserveReasoning).toBeUndefined();
+  });
+
+  it("a shell value wins in BOTH directions", async () => {
+    const base = settings();
+    const shellOn = await buildHostEnv({
+      bootEnv: { [ENV_PRESERVE_REASONING]: "1" },
+      settings: { ...base, provider: providerV2Multi("conn-a", [replayConn("conn-a", false)]) },
+      getSecret: noSecret,
+    });
+    expect(shellOn[ENV_PRESERVE_REASONING]).toBe("1");
+    expect(parse(shellOn).preserveReasoning).toBe(true);
+
+    const shellOff = await buildHostEnv({
+      bootEnv: { [ENV_PRESERVE_REASONING]: "0" },
+      settings: { ...base, provider: providerV2Multi("conn-a", [replayConn("conn-a", true)]) },
+      getSecret: noSecret,
+    });
+    expect(shellOff[ENV_PRESERVE_REASONING]).toBe("0");
+    expect(parse(shellOff).preserveReasoning).toBe(false);
   });
 });
 
@@ -1439,6 +1499,10 @@ describe("envOverrides", () => {
 
   it("includes ANYCODE_INCLUDE_USAGE (ladder addition)", () => {
     expect(envOverrides({ ANYCODE_INCLUDE_USAGE: "off" })).toEqual([ENV_INCLUDE_USAGE]);
+  });
+
+  it("includes ANYCODE_PRESERVE_REASONING (reasoning-replay rung)", () => {
+    expect(envOverrides({ ANYCODE_PRESERVE_REASONING: "1" })).toEqual([ENV_PRESERVE_REASONING]);
   });
 });
 

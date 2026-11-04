@@ -122,6 +122,19 @@ const ENTRIES: CatalogProviderEntry[] = [
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
+    // Reasoning replay (GitHub #41): deliberately OFF. The docs describe the
+    // strictest replay contract of any provider here (platform.claude.com/
+    // docs/en/build-with-claude/thinking, "Preserving thinking blocks"): pass
+    // every thinking block back "complete and unmodified", "Modified thinking
+    // blocks are rejected with a 400 error", the signature is validated, and
+    // Claude 5.1+ adds prefix checks on preserved thinking. No direct-API
+    // matrix exists (no API key in the smoke-secret set), and the owner rule
+    // requires doc citation AND measurement before claiming support — so the
+    // flag stays unset even though the docs read as compatible with
+    // AnyCode's original-thinking replay. Check method (when a key exists):
+    // first call returns thinking+tool_use; continuation replays (a) the
+    // original thinking+signature and (d) thinking dropped; support = both 200
+    // and more input tokens under (a). Table: docs/development/reasoning-history.md.
     models: [
       // Live Claude lineup, checked 2026-10-27. Specs (API id, 1M-token
       // context, 128K max output, text+image input) come from
@@ -159,6 +172,12 @@ const ENTRIES: CatalogProviderEntry[] = [
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
+    // Reasoning replay (GitHub #41): ON — the endpoint accepts the replayed
+    // assistant `thinking` block + signature (sdk-mapping.ts wire shape).
+    // Evidence: 2026-11-02 direct-API matrix — every replay variant (original
+    // thinking+signature, replaced text, empty signature, dropped) returned
+    // HTTP 200, and replayed thinking grows input tokens (208 vs 187 dropped),
+    // so the blocks reach the model; the signature is not validated.
     preserveReasoning: true,
     // (2026-08-15): refreshed to the live docs.z.ai model line (guides/llm
     // sidebar + each page's spec box and code samples). Fresh-first so the first
@@ -266,6 +285,11 @@ const ENTRIES: CatalogProviderEntry[] = [
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
+    // Reasoning replay (GitHub #41): ON — same wire shape as z-ai (assistant
+    // `thinking` + signature). Evidence: 2026-11-02 direct-API matrix — replay
+    // variants a/c/d returned 200 (36-char signature not validated).
+    // Input-token growth was NOT recorded on this host (the matrix measured
+    // it only for z.ai and MiniMax International).
     preserveReasoning: true,
     models: [
       // (2026-10-10): rows replaced from the supplied authoritative
@@ -295,6 +319,12 @@ const ENTRIES: CatalogProviderEntry[] = [
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
+    // Reasoning replay (GitHub #41): ON — assistant `thinking` block, wire
+    // shape per sdk-mapping.ts. Evidence: 2026-11-02 direct-API matrix, run on
+    // the SGP token plan only (mimo-v2.6-pro) — every replay variant 200; MiMo
+    // sends NO thinking signature, so there is nothing to validate. This host
+    // was not probed and input-token growth was not recorded for MiMo:
+    // inferred from the same vendor, not measured here.
     preserveReasoning: true,
     models: MIMO_MODELS,
   },
@@ -307,6 +337,8 @@ const ENTRIES: CatalogProviderEntry[] = [
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
+    // Reasoning replay (GitHub #41): ON — measured on this host (2026-11-02
+    // matrix, mimo-v2.6-pro): every replay variant 200, no signature sent.
     preserveReasoning: true,
     models: MIMO_MODELS,
   },
@@ -319,6 +351,8 @@ const ENTRIES: CatalogProviderEntry[] = [
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
+    // Reasoning replay (GitHub #41): ON — inferred from the same vendor's SGP
+    // token plan (measured 2026-11-02, mimo-v2.6-pro); not measured on this host.
     preserveReasoning: true,
     models: MIMO_MODELS,
   },
@@ -331,6 +365,8 @@ const ENTRIES: CatalogProviderEntry[] = [
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
+    // Reasoning replay (GitHub #41): ON — inferred from the same vendor's SGP
+    // token plan (measured 2026-11-02, mimo-v2.6-pro); not measured on this host.
     preserveReasoning: true,
     models: MIMO_MODELS,
   },
@@ -345,6 +381,17 @@ const ENTRIES: CatalogProviderEntry[] = [
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
+    // Reasoning replay (GitHub #41): deliberately OFF. Kimi's docs
+    // (platform.kimi.ai/docs/guide/use-thinking-models) DO describe replay —
+    // chat-completions `reasoning_content`, "pass the complete assistant
+    // message returned by the API back to messages as-is (including
+    // reasoning_content)", `thinking: { keep: "all" }` (K2.6), always-on for
+    // K2.7-Code/K3/K3.1 — but that is documented for the /v1 Chat Completions
+    // route, NOT for the /anthropic transport this entry uses. No key in the
+    // smoke-secret set → no matrix on the transport we actually speak, and
+    // doc citation alone does not enable the flag. Check method: the same
+    // thinking+tool_use continuation probe as Anthropic above.
+    // Table: docs/development/reasoning-history.md.
     models: [
       // Current platform models, checked 2026-10-27 against
       // platform.kimi.ai/docs/models (the provider's Model List). The two rows
@@ -421,6 +468,11 @@ const ENTRIES: CatalogProviderEntry[] = [
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
+    // Reasoning replay (GitHub #41): deliberately OFF — same reasoning as the
+    // Moonshot platform entry above: the documented replay fields are for the
+    // /v1 Chat Completions route, this endpoint speaks /anthropic, and no key
+    // exists to run the matrix. Check method: the thinking+tool_use
+    // continuation probe (docs/development/reasoning-history.md).
     models: [
       // Model list checked 2026-10-27 against
       // kimi.com/code/docs/en/kimi-code/models (the product's own "Model
@@ -475,6 +527,10 @@ const ENTRIES: CatalogProviderEntry[] = [
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
+    // Reasoning replay (GitHub #41): ON — assistant `thinking` block +
+    // signature (sdk-mapping.ts). Evidence: 2026-11-02 direct-API matrix —
+    // every replay variant 200 (64-char signature not validated), replayed
+    // thinking grows input tokens (135 vs 54 dropped).
     preserveReasoning: true,
     models: MINIMAX_MODELS,
   },
@@ -491,6 +547,8 @@ const ENTRIES: CatalogProviderEntry[] = [
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
+    // Reasoning replay (GitHub #41): ON — inferred from the same vendor's
+    // International host (measured 2026-11-02); this CN host was not probed.
     preserveReasoning: true,
     models: MINIMAX_MODELS,
   },
@@ -534,6 +592,11 @@ const ENTRIES: CatalogProviderEntry[] = [
   {
     id: "openrouter",
     name: "OpenRouter",
+    // Reasoning replay (GitHub #41): ON — chat-completions `reasoning_content`
+    // + `reasoning_details` (sdk-mapping.ts). Doc-cited (OpenRouter documents
+    // reasoning passthrough) but NOT direct-API measured: no matrix exists for
+    // OpenRouter, so this flag rests on the documented field alone. See
+    // docs/development/reasoning-history.md for the check method.
     preserveReasoning: true,
     baseUrl: "https://openrouter.ai/api/v1",
     defaultTransport: "openai-chat-completions",
