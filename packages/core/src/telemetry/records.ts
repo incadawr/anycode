@@ -45,10 +45,12 @@ export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | nu
         preTokens: event.preTokens,
         postTokens: event.postTokens,
         durationMs: event.durationMs,
-        // Carried verbatim: core already redacts compaction errors at source
-        // (the whitelist-derived safe message), so no raw text can arrive here.
-        ...(event.error !== undefined ? { error: event.error } : {}),
-        ...(event.skipped !== undefined ? { skipped: event.skipped } : {}),
+        // Presence-only: the same AgentEvent reaches this mapper from the
+        // desktop engine taps, whose messages are arbitrary transport/RPC
+        // text — no reason text crosses this port (the reason's durable home
+        // is the transcript row, not telemetry).
+        ...(event.error !== undefined ? { error: true as const } : {}),
+        ...(event.skipped !== undefined ? { skipped: true as const } : {}),
       };
     case "microcompact":
       return {

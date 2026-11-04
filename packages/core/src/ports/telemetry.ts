@@ -55,10 +55,10 @@ export type TelemetryEventRecord =
       preTokens?: number;
       postTokens?: number;
       durationMs: number;
-      /** Failure/skip reason. Joins the classified-error-text-only rule above:
-       *  core derives it from the whitelist safe message before the event
-       *  exists, so the raw provider text never reaches this port. */
-      error?: string;
+      /** Presence-only: the cycle failed or was skipped. Never text — the same
+       *  event is emitted by the desktop engine taps with arbitrary
+       *  transport/RPC text in `error`, so no reason text crosses this port. */
+      error?: true;
       /** True when the cycle was a structural no-op (nothing to compact). */
       skipped?: true;
     }
