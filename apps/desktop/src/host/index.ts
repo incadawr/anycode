@@ -1,4 +1,4 @@
-import { scrubApprovalText } from "@anycode/core";
+import { scrubFailureText } from "@anycode/core";
 import { childBootFailure, sanitizeBootFailure } from "./child-boot-failure.js";
 import { engineChildPrompt } from "./engine-child-prompt.js";
 import { listConnectionTargets } from "./list-connections.js";
@@ -387,6 +387,7 @@ import {
   hostDiagnosticSink,
   isChildSessionBoot,
   parseHostArgs,
+  parseHostArgsForFailure,
   readConnectionModelCapabilities,
   readConnectionModelSettingsSync,
   resolveChildMaxTurns,
@@ -759,7 +760,7 @@ function deliverDetachedChildReport(outcome: SessionSubagentOutcome, req: Sessio
   childReportQueue.add(outcome.spawnToolCallId, text, {
     status: outcome.status,
     durationMs: outcome.durationMs,
-    ...(outcome.status === "error" ? { failureReason: scrubApprovalText(outcome.finalText).slice(0, 2000) } : {}),
+    ...(outcome.status === "error" ? { failureReason: scrubFailureText(outcome.finalText.slice(0, 2000)) } : {}),
     ...(outcome.finalTurnFinishReason === "length" ? { finalTurnFinishReason: "length" } : {}),
     // cross-review F2: the ceiling summary rides the report's
     // metadata so the renderer's card shows the budget line on this path too.
@@ -1460,6 +1461,9 @@ async function bootCodexSession(
       codexChildPort = port;
     }
     codexAgentBridge = new CodexDynamicToolBridge(catalog, port, agentCardLog, resolveCatalog, codexEngineBrowserBridge, foreignComposition.call);
+  }
+  if (args.child !== undefined) {
+    prepareChildPrompt = (prompt) => engineChildPrompt(prompt, codexChildPort !== undefined);
   }
   if (args.child !== undefined) {
     prepareChildPrompt = (prompt) => engineChildPrompt(prompt, codexChildPort !== undefined);
@@ -4097,7 +4101,10 @@ async function boot(): Promise<void> {
     // already reflects it (no post-boot recompose needed for the common
     // case of a blind model booting with a recognizer already configured).
     recomputeInspectImageRegistration();
-    restrictChildRegistry(registry, args.child?.restrictions);
+    if (isChildSessionBoot(args, sessionMeta)) {
+      for (const name of ["Agent", "Workflow"]) registry.unregister(name);
+      restrictChildRegistry(registry, args.child?.restrictions);
+    }
 
     // Boot section components computed once (design P7.17/W2): renderRepoMap()'s
     // repoMapStatus side effect fires here, before Session's envStatus seam reads
@@ -4451,7 +4458,7 @@ async function boot(): Promise<void> {
     // profile authored into `.anycode/agents/` mid-session becomes a callable
     // agent_type without recreating this AgentLoop.
     const loop = new AgentLoop(
-      withWorkflows(
+      isChildSessionBoot(args, sessionMeta) ? config : withWorkflows(
         withSubagents(config, {
           createUsageRecorder: (model) => {
             const subagentId = randomUUID();
@@ -5127,16 +5134,18 @@ async function boot(): Promise<void> {
     // main (MVP.2) validates ANYCODE_API_KEY/MODEL before spawning, so this is a
     // defensive path: surface the failure to the UI on connect rather than dying
     // silently. No core is instantiated in degraded mode.
-    const safeFailure = sanitizeBootFailure(`host failed to initialize: ${describeError(error)}`);
+    const rawFailure = `host failed to initialize: ${describeError(error)}`;
+    const safeFailure = sanitizeBootFailure(rawFailure);
     initFailure = safeFailure.message;
-    if (parseHostArgs(process.argv.slice(2)).child !== undefined) {
+    const failureArgs = parseHostArgsForFailure(process.argv.slice(2));
+    if (failureArgs.child !== undefined) {
       postHostControlMessage(childBootFailure(initFailure, safeFailure.truncated));
     }
-    console.error("[host]", initFailure);
+    console.error("[host]", scrubFailureText(rawFailure) === rawFailure ? rawFailure : initFailure);
     // make the crash cause visible in the per-session diagnostic
     // file too (host stdio is inherited, so this console.error alone would not
     // reach a diagnostic artifact). Safe, fixed-vocabulary code only.
-    recordHostBootFailure(process.env.ANYCODE_DIAGNOSTICS_DIR, parseHostArgs(process.argv.slice(2)).sessionId, error);
+    recordHostBootFailure(process.env.ANYCODE_DIAGNOSTICS_DIR, failureArgs.sessionId, error);
   } finally {
     // Env-hardening (ruling §3, slice 2.2.3): runs on BOTH the success and the
     // init-failure path (defense-in-depth — a degraded host still leaks

@@ -184,6 +184,10 @@ way you read what comes back.
 \`provider\`, \`detach\`, \`continue_session\` and \`send_to\` are
 session-tier-only fields; on any other tier the call fails fast.
 
+\`provider\` takes the CATALOG provider id of that connection
+(\`connection.providerId\` in \`~/.anycode/settings.json\` — e.g. \`z-ai\`, \`custom:<uuid>\`),
+never the \`conn-…\` connection id; a \`model\` passed with it must belong to that connection.
+
 ## Models
 
 An explicit \`Agent(model: …)\` argument wins over the profile's

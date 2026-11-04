@@ -64,6 +64,13 @@ describe("resolveProviderConnection (CUT-S2 §10.9.3 F4)", () => {
     expect(resolveProviderConnection(settings, "")).toBeUndefined();
   });
 
+  it("never resolves a connection id — the parameter is the catalog providerId", () => {
+    const known = connectionFixture({ id: "anthropic", connectionId: "conn-1234" });
+    const settings = settingsWith("conn-1234", [known]);
+
+    expect(resolveProviderConnection(settings, "conn-1234")).toBeUndefined();
+  });
+
   it("an unknown/deleted providerId resolves to undefined", () => {
     const known = connectionFixture({ id: "anthropic", connectionId: "conn-known" });
     const settings = settingsWith("conn-known", [known]);

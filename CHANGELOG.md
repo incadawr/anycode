@@ -11,45 +11,59 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Orchestrate Codex sessions with role-based delegation and a read-only parent when the runtime policy can be verified.
 
-- Export and import provider connections and role profiles as a key-free setup file.
-
-- Prepare key-free connection and role profile sharing for plugins.
-
-- Show five-hour and weekly MiniMax subscription quotas on provider connection cards.
+## [0.0.72] — 2026-11-03
 
 ### Fixed
 
-- Prevent duplicate preview errors after reconnecting, limit console groups, and update background agent buttons efficiently.
-
-- Block plan-mode Bash commands whose Unicode whitespace could redirect execution to a workspace program, and clarify the dedicated read-only tool alternatives.
-
-- Keep user skill discovery inside the configured isolated profile.
-
-- Show subagent activity in the dock and allow splitting the active panel alongside a preview.
-
+- Reject planner, reviewer, and explore roles assigned to Codex or Claude in Settings.
+- Remove Bash access from inline reviewers.
+- Remove Agent and Workflow tools from core child sessions.
+- Show the reason when a background agent fails to start.
+- Show subagent activity in the dock and allow splitting the active dock tab alongside a preview.
 - Keep orchestrated sessions in orchestrate mode and ask before side-effecting actions while allowing local previews.
-
-- Allow more time and retry engine version checks, and report child startup failures immediately.
-
-- Protect imported catalog connections from unsafe destination overrides.
-
-- Keep background agent tool counts current after a burst of tool calls.
-- Keep SubAgent status badges visible when model and engine names are long.
-- Insert dropped file and folder paths into the composer, while keeping image attachments for supported models.
-
+- Allow more time and retry engine version checks, and report child startup failures immediately without exposing credentials.
 - Preserve profile tool and permission restrictions for core child sessions, including delegation through engine bridges and workflows.
+- Keep reviewer sessions read-only, including when the parent permits unrestricted commands.
+- Block plan-mode Bash commands whose Unicode whitespace could redirect execution to a workspace program.
+- Prevent duplicate preview errors after reconnecting, limit console groups, and update background agent buttons efficiently.
+- Keep skill and plugin discovery inside isolated temporary profiles.
 
-- Give actionable alternatives when a connection-bound agent cannot be spawned.
+## [0.0.71] — 2026-11-03
 
-- Block local file requests from an old preview while its replacement is loading.
+### Added
 
-- Allow local previews to load workspace files when the workspace path is a symlink.
+- Settings can export your provider connections and role profiles to a JSON file without any API keys, and import such a file on another machine or profile. The import shows a preview with the destination URL of every connection and lets you update, copy or skip each entry; a connection whose destination changed is imported as a copy, and you enter its key afterwards.
 
-- Keep errors from discarded turns from reappearing after rewinding a conversation.
+## [0.0.70] — 2026-11-03
 
-- Keep background agent action buttons visible when progress text is long.
+### Added
 
-- Keep preview console messages visible after debugger detachment without duplicating them on reconnect.
+- A MiniMax subscription connection now shows its remaining five-hour and weekly quota with reset times on its card in Settings. Pay-as-you-go keys are left alone.
+- Dropping a file or folder onto the composer inserts its path (relative to the session's workspace when inside it, quoted if it contains spaces). Images are still attached on models that accept them; on models that do not, their path is inserted instead.
+
+### Fixed
+
+- The background-agent row above the composer now refreshes its tool counts right after a burst of tool calls instead of waiting for the next model output.
+- Collapsed SubAgent cards no longer let long model or engine names run under the status badge or push the permission button out of view.
+- Local previews: file requests from the previous page are blocked while its replacement is loading, and a workspace reached through a symlink loads its files again.
+- Rewinding a conversation no longer brings back errors from the turns that were discarded.
+- When an agent cannot be started from a session (for example a role bound to its own connection when called inline, or a restricted profile that session delegation cannot honour), the refusal now says what to do instead. Engine child sessions are told that delegation is unavailable to them.
+
+## [0.0.69] — 2026-11-03
+
+### Changed
+
+- Desktop general-purpose subagent calls without a tier now run as child sessions while the parent waits; other profiles stay inline. Move running children to the background individually or together; when session capacity is full, eligible calls use a lightweight inline child.
+
+### Fixed
+
+- Use readable Enter key names in task and permission hints. Refresh Git status when returning to its dock tab.
+
+- Make composer keyboard hints readable and separate them from the model selector.
+
+- Local HTML previews can no longer load files outside their own folder (or workspace), including the app profile and shared temp folders. The restriction follows the preview as it navigates, and a document inside the app profile is never widened by a workspace.
+
+- A session host that keeps crashing now explains common startup failures.
 
 - Keep preview errors visible during noisy logs and retain resource diagnostics and readable collection values.
 
@@ -57,55 +71,100 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Show readable preview console objects in the console panel and browser tools.
 
-- Keep local preview file access closed while a navigated document is being resolved or cannot be resolved.
+- Keep preview console messages available after the debugger detaches.
 
-- Preserve read-only and profile restrictions when delegating without an explicit tier.
+- Keep background agent action buttons visible when progress text is long.
 
-- Use readable Enter key names in task and permission hints. Refresh Git status when returning to its dock tab.
 - Restore terminal turn errors in session transcripts after reopening a session.
+
 - Return the sanitized error in session results when a core turn fails without a completed answer.
-- A session host that keeps crashing now explains common startup failures.
-- Make composer keyboard hints readable and separate them from the model selector.
+
+## [0.0.68] — 2026-11-03
+
+### Fixed
+
 - Restore compact, right-aligned user messages in conversations.
+
+### Changed
+
+- Softened message text and primary usage statistics in the dark theme for more comfortable reading. Headings and code blocks keep their colours.
+
+## [0.0.67] — 2026-11-03
+
+### Fixed
+
 - Keep suggested write permissions scoped to the workspace for files inside it, and reject broad macOS directory aliases and temporary directories.
 - Close OpenRouter reasoning indicators when answers or tool calls begin, and when streams end unexpectedly, including when reasoning replay is disabled.
 - Close hidden subagent menus so they cannot intercept shortcuts or hide previews.
 - Reopening a preview focuses its dock tab, and closing a preview selects the adjacent tab consistently.
 - Keep dock panel state when switching tabs, and update preview tab titles as they change.
 - Closing the Review dock tab or using its close shortcut now works.
+
+## [0.0.66] — 2026-11-03
+
+### Fixed
+
 - Always-allow write rules can use a scoped absolute path mask outside the workspace. Path aliases and new directories are handled consistently, and broad system and home scopes are rejected.
 - Prevent external pages from replacing the main application window or opening uncontrolled child windows.
-
 - Model previews for new connections use the provider endpoint and selected proxy, including for loopback endpoints.
 - Folder trust and agent-opened tasks now require an existing directory and stop if a symlink changes its target during confirmation.
-
 - Folders without project settings can now be trusted when enabling agent-opened tasks. Invalid trust records no longer hide other remembered folders.
-
 - Preserve signed OpenRouter reasoning blocks and empty reasoning details when continuing conversations.
 - Preserve separate OpenRouter reasoning blocks in streams and count their replayed payloads when checking context limits.
 - Preserve OpenRouter reasoning across model steps when the upstream provider supports replay.
 - Codex turn failures now show classified errors and validated usage-limit retry times without exposing server details. Completed answers remain available after a later error.
 
-- Z.AI (GLM), MiniMax, Xiaomi MiMo and DeepSeek now get their own reasoning back on later requests, in tool loops and across turns, so the model keeps its earlier thinking. Reasoning is sent only to the provider and model that produced it, and reloaded sessions show it as collapsed blocks. Set `ANYCODE_PRESERVE_REASONING=on|off` to override this for supported providers and custom connections (#41).
-- Conversation history written by this version cannot be read by older versions.
-- Local HTML previews can no longer load files outside their own folder (or workspace), including the app profile and shared temp folders. The restriction follows in-page navigation, and a document inside the app profile is never widened by a workspace.
+### Changed
+
+- Dialogs and utility panels use the same visual style as the main window.
+- Settings use the same look as the main window.
+- New always-allow write rules must use an absolute path mask; relative patterns such as `src/**` can no longer be added (existing ones keep working inside the workspace).
+
+## [0.0.65] — 2026-11-02
 
 ### Added
 
-- Fetch models while adding a keyed connection, and select or clear filtered models in the model picker.
+- The model can list configured connections and their models without keys or URLs, and route a subagent to a chosen connection by its returned id.
+- Experimental reasoning-history modes are available through `ANYCODE_REASONING_HISTORY`; they are off by default and do not change behavior unless enabled.
+
+### Changed
+
+- Refined the main window design across the sidebar, conversation, composer, dock tabs and preview headers. Gold is the new default accent alongside Blue, Indigo, Teal and Ember; accent names appear immediately on hover or focus.
+- The connection dialog header stays pinned while the form scrolls.
+
+## [0.0.64] — 2026-11-02
+
+### Fixed
+
+- Z.AI (GLM), MiniMax, Xiaomi MiMo and DeepSeek now get their own reasoning back on later requests, in tool loops and across turns, so the model keeps its earlier thinking. Reasoning is sent only to the provider and model that produced it, and reloaded sessions show it as collapsed blocks. Set `ANYCODE_PRESERVE_REASONING=on|off` to override this for supported providers and custom connections (#41).
+- Conversation history written by this version cannot be read by older versions.
+
+## [0.0.63] — 2026-11-02
+
+### Changed
+
+- Settings panels and the provider connection editor use the shared UI kit: one look for buttons, fields, switches, badges and notices across Appearance, Network, Codex, Claude, Roles, Subagents, Skills, MCP servers, Plugins, Language servers, Vision, Profile, Shortcuts, Permissions and Sessions API.
+
+### Fixed
+
+- Keyboard use in settings: radio groups no longer change the selection when focused, segmented controls take one Tab stop and move with the arrow keys, and Escape in a menu inside a dialog closes only the menu.
+
+## [0.0.62] — 2026-11-01
+
+### Added
+
 - Choose the accent color (Blue, Gold, Indigo, Teal, Ember) in Settings → Appearance; the choice is saved on this device.
 
 ### Changed
 
-- Desktop subagent calls without a tier now run as child sessions while the parent waits. Move running children to the background individually or together; when session capacity is full, eligible calls use a lightweight inline child.
-
-- Softened message text and primary usage statistics in the dark theme for more comfortable reading.
-- Blockquote headings and code retain their original colours, and Stats tiles use the softened text colour.
-- Dialogs and utility panels use the same visual style as the main window.
-- Settings use the same look as the main window.
 - Refreshed the main window with the updated dark and light design palette, sidebar, conversation, composer, and dock.
 
 - Panels that referenced undefined background, border, and radius tokens now use the intended surfaces and corners, slightly changing their appearance.
+
+## [0.0.61] — 2026-11-01
+
+### Changed
+
 - Continue a Codex conversation on another account is available again, and the transfer no longer guesses: a conversation is copied by its exact thread id rather than by a partial match, never published half-written, never opened twice, and two competing transfers of one conversation refuse each other. A settings switch (`codexContinueOnAnotherAccount`, `"off"`) pauses the action if needed. Limit worth knowing: a rollout being written at the same moment by another program can go undetected — the size and modification-time check only narrows that window, it does not close it.
 - Redesign provider connection editing with a compact model picker and per-model pricing table.
 
@@ -117,6 +176,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Prevent continuing a Codex conversation from an existing target copy that may be stale, and retain its session if opening the new tab has an uncertain outcome.
 - Preserve shared engine history when deleting one of the sessions that references it.
 - Connection editing now protects unsaved changes when closing and keeps disabled price values readable.
+- Resuming a session from the command line now checks that the session belongs to the CLI's engine, and reads its history together with the session admission, before the database is migrated.
+- The `Agent` tool now describes the catalog `providerId` for `Agent(provider:)`, and its refusal message shows the expected format.
 
 ## [0.0.60] — 2026-10-31
 

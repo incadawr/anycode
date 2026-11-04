@@ -45,6 +45,7 @@ import {
   childRetryPolicy,
   isChildSessionBoot,
   parseHostArgs,
+  parseHostArgsForFailure,
   resolveChildMaxTurns,
   resolveEngineDraftPresetId,
   resolveBootSession,
@@ -1302,4 +1303,10 @@ describe("resolveEngineDraftPresetId — the engine boots' argv→preset seam (f
     const args = parseHostArgs(CODEX_CHILD_ARGV);
     expect(resolveEngineDraftPresetId(args.child, "workspace", claudeChildPresetId)).toBe("ask");
   });
+});
+
+it("reads child linkage when restrictions are malformed during failure reporting", () => {
+  const args = ["--session", "s", "--child-parent", "p", "--child-spawn-call", "c", "--child-mode", "build", "--child-restrictions", "{"];
+  expect(() => parseHostArgs(args)).toThrow();
+  expect(parseHostArgsForFailure(args)).toMatchObject({ sessionId: "s", child: { parentSessionId: "p" } });
 });

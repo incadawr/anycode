@@ -556,7 +556,7 @@ describe("host subagent model-override wiring", () => {
     // — not the first textual occurrence of "withWorkflows(" (comments well
     // above the call also spell the name).
     const assignment = "config.sessionSubagents = childSessionPortHandle;";
-    const call = source.match(/const loop = new AgentLoop\(\s*withWorkflows\(/);
+    const call = source.match(/const loop = new AgentLoop\(\s*isChildSessionBoot\(args, sessionMeta\) \? config : withWorkflows\(/);
 
     expect(source.includes(assignment)).toBe(true);
     expect(call).not.toBeNull();
@@ -2947,7 +2947,7 @@ describe("host degraded-mode port bind — immediate fatal (GitHub #4)", () => {
 
   it("sends the same sanitized startup error to the renderer and child terminal", async () => {
     const source = await readHostSource();
-    expect(source).toContain("const safeFailure = sanitizeBootFailure(`host failed to initialize: ${describeError(error)}`);");
+    expect(source).toContain("const safeFailure = sanitizeBootFailure(rawFailure);");
     expect(source).toContain("initFailure = safeFailure.message;");
     expect(source).toContain("childBootFailure(initFailure, safeFailure.truncated)");
     const run = compileDegradedBlock(extractDegradedElseBlock(source));
@@ -3362,4 +3362,16 @@ describe("host diagnostics-ring answer ordering (GitHub #18)", () => {
     expect(reply).toContain("hostDiagnosticsRing.snapshot(");
     expect(reply).not.toContain("session.");
   });
+});
+
+
+it("bounds and sanitizes detached failure reasons without losing diagnostic text", async () => {
+  const source = await import("node:fs/promises").then(fs => fs.readFile(new URL("./index.ts", import.meta.url), "utf8"));
+  const expression = source.match(/failureReason: (.*?) } : \{\}\)/)?.[1];
+  expect(expression).toBeDefined();
+  const { scrubFailureText, scrubApprovalText } = await import("@anycode/core");
+  const run = new Function("outcome", "scrubFailureText", "scrubApprovalText", `return ${expression}`);
+  const reason = "ANYCODE_API_KEY is not set; Codex authentication required";
+  expect(run({ finalText: reason }, scrubFailureText, scrubApprovalText)).toBe(reason);
+  expect(run({ finalText: "x".repeat(100_000) }, scrubFailureText, scrubApprovalText).length).toBeLessThanOrEqual(2000);
 });

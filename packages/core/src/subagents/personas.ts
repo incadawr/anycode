@@ -162,8 +162,8 @@ const PLANNER_TOOLS = ["Read", "Git", "Grep", "Glob", "TodoRead", "TodoWrite", "
 /** §3.1: EXECUTOR_TOOLS = GENERAL_PURPOSE_TOOLS (full toolset under the parent's gate). */
 const EXECUTOR_TOOLS = GENERAL_PURPOSE_TOOLS;
 
-/** §3.1: a reviewer runs tests — Bash included, under the parent's permission gate. */
-const REVIEWER_TOOLS = ["Read", "Git", "Grep", "Glob", "TodoRead", "TodoWrite", "WebFetch", "Bash"] as const;
+/** Reviewer has the same read-only tools as explore. */
+const REVIEWER_TOOLS = EXPLORE_TOOLS;
 
 const GENERAL_PURPOSE_SYSTEM_PROMPT = [
   "You are the general-purpose subagent: a versatile executor for one delegated subtask.",
@@ -198,7 +198,7 @@ const EXECUTOR_SYSTEM_PROMPT = [
 const REVIEWER_SYSTEM_PROMPT = [
   "You are the reviewer: an independent, adversarial second reader.",
   "Check the change against the task's definition of done and the repository conventions; hunt security holes, data loss, races, wrong error handling, and untested new behavior.",
-  "For every finding give file:line, a concrete failure scenario (inputs leading to a wrong result), and a severity; run the targeted tests before you report.",
+  "For every finding give file:line, a concrete failure scenario (inputs leading to a wrong result), and a severity. Read the code and tests; do not run tests. If tests need to be run, ask the caller to run them in your report.",
   "You are read-only: no edits, no commits. Start the report with a verdict line: CLEAN, MINOR, or DEFECTS.",
 ].join(" ");
 

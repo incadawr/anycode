@@ -2418,7 +2418,7 @@ describe("TabHostManager — child-session admission is ATOMIC (CUT-S2 B3)", () 
         kind: "rejected",
         reason: "not_ready",
         message:
-          'Agent: provider connection "ghost" is not available in this host. Omit "provider" to use the parent session\'s connection.',
+          'Agent: no provider connection matches providerId "ghost". "provider" takes the CATALOG provider id (for example "z-ai", "kimi", "custom:<uuid>"), not the connection id from the connection list. Omit "provider" to use the parent session\'s connection.',
       },
     ]);
   });
@@ -6561,7 +6561,7 @@ describe("child spawn — profile-declared connection routing", () => {
     expect(childRunEvents(rootHost).find((e) => e.requestId === "A")).toMatchObject({
       kind: "rejected",
       reason: "not_ready",
-      message: 'Agent: provider connection "mystery" is not available in this host. Omit "provider" to use the parent session\'s connection.',
+      message: 'Agent: no provider connection matches providerId "mystery". "provider" takes the CATALOG provider id (for example "z-ai", "kimi", "custom:<uuid>"), not the connection id from the connection list. Omit "provider" to use the parent session\'s connection.',
     });
     expect(prepareSpy).not.toHaveBeenCalled();
     expect(hosts).toHaveLength(1); // never silently on the parent's conn-parent

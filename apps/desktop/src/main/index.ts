@@ -391,7 +391,7 @@ function resolveSubagentsHome(env: NodeJS.ProcessEnv, isPackaged: boolean): stri
 /**
  * Dev-only override for the Profile-stats pane's `home` (design/slice-P7.22-
  * cut.md §2-D2/D5 W2), same "duplicated on purpose" rule as
- * `resolveSubagentsHome` above (`ANYCODE_PROFILE_HOME`, local to this
+ * `resolveSkillsProfileHome` (`ANYCODE_PROFILE_HOME`, local to this
  * registration site). Same double gate: `ANYCODE_AUTOMATION==="1" &&
  * !isPackaged`, plus a non-empty ABSOLUTE path — a packaged production build
  * NEVER honors the var, so `home()` always falls back to `os.homedir()` there.
@@ -991,7 +991,7 @@ const mcpSecretCache = new McpSecretForkCache({
     getMcpSecretValues: (names) => (vault === null ? Promise.resolve({}) : vault.getMcpSecretValues(names)),
   },
   fs: new NodeMcpConfigFs(),
-  home: () => selfCheckProfile ?? resolveSubagentsHome(process.env, app.isPackaged) ?? homedir(),
+  home: () => selfCheckProfile ?? resolveSkillsProfileHome(process.env, app.isPackaged) ?? homedir(),
   logger: (line) => console.warn(line),
 });
 const getSecret = (key: Parameters<Vault["getSecretValue"]>[0]): Promise<string | undefined> =>
@@ -2263,7 +2263,7 @@ void app.whenReady().then(async () => {
   // never on a host respawn.
   const artifactConsentStore = new ArtifactConsentStore();
   const artifactsIpcDeps: ArtifactsIpcDeps = {
-    home: () => (selfCheckProfile ?? resolveSubagentsHome(process.env, app.isPackaged)) ?? homedir(),
+    home: () => (selfCheckProfile ?? resolveSkillsProfileHome(process.env, app.isPackaged)) ?? homedir(),
     tmpdir: () => tmpdir(),
     workspaceForTab: (tabId) => manager?.getTab(tabId)?.workspace,
     fs: new NodeArtifactsFs(),
@@ -2554,7 +2554,7 @@ void app.whenReady().then(async () => {
     manager: () => manager,
     sessions: () => communicationSessions,
     realpathSync,
-    readTrustStore: () => readTrustStore(nodeTrustStoreFs, defaultTrustStorePath(selfCheckProfile ?? resolveSubagentsHome(process.env, app.isPackaged) ?? homedir())),
+    readTrustStore: () => readTrustStore(nodeTrustStoreFs, defaultTrustStorePath(selfCheckProfile ?? resolveSkillsProfileHome(process.env, app.isPackaged) ?? homedir())),
     mcpSecretPrime: (key) => mcpSecretCache.prime(key),
     currentSettings,
     primeNewSessionPin,
@@ -3155,7 +3155,7 @@ void app.whenReady().then(async () => {
   // through one queue inside the module.
   registerWorkspaceTrustIpc({
     fs: nodeTrustStoreFs,
-    home: selfCheckProfile ?? resolveSubagentsHome(process.env, app.isPackaged) ?? homedir(),
+    home: selfCheckProfile ?? resolveSkillsProfileHome(process.env, app.isPackaged) ?? homedir(),
     tabs: {
       workspaceTrustPendingFor: (tabId) => manager?.workspaceTrustPendingFor(tabId) ?? "unknown_tab",
       clearWorkspaceTrustPending: (tabId) => {
@@ -3179,7 +3179,7 @@ void app.whenReady().then(async () => {
   // logged and ignored, and the read-side legacy fallback keeps old keys
   // working either way.
   queueStoreMutation(() =>
-    migrateTrustStoreKeys(nodeTrustStoreFs, defaultTrustStorePath(selfCheckProfile ?? resolveSubagentsHome(process.env, app.isPackaged) ?? homedir()), realpathSync),
+    migrateTrustStoreKeys(nodeTrustStoreFs, defaultTrustStorePath(selfCheckProfile ?? resolveSkillsProfileHome(process.env, app.isPackaged) ?? homedir()), realpathSync),
   )
     .then(({ migrated }) => {
       if (migrated > 0) {
@@ -3495,7 +3495,7 @@ void app.whenReady().then(async () => {
     // be wrong — force. (Active profile only, same shape as onChanged above.)
     void codexOnboarding?.recheck(undefined, { force: true }).catch(() => {});
   };
-  if (selfCheckProfile === undefined && !(resolveSubagentsHome(process.env, app.isPackaged) && process.env.ANYCODE_ISOLATED_SMOKE === "1")) {
+  if (selfCheckProfile === undefined && !(resolveSkillsProfileHome(process.env, app.isPackaged) && process.env.ANYCODE_ISOLATED_SMOKE === "1")) {
     void refreshCodexManifest({ cacheFile: codexManifestCacheFile })
       .then((result) => {
         // BM4: only an ACTUAL policy change re-spawns the doctor — an
@@ -3669,7 +3669,7 @@ void app.whenReady().then(async () => {
       agentProjects: communicationAgentProjects,
       offerEmptyFolderTrust: (workspace) => offerEmptyFolderTrust(
         new NodeLspConfigFs(), nodeTrustStoreFs, workspace,
-        selfCheckProfile ?? resolveSubagentsHome(process.env, app.isPackaged) ?? homedir(),
+        selfCheckProfile ?? resolveSubagentsHome(process.env, app.isPackaged) ?? resolveSkillsProfileHome(process.env, app.isPackaged) ?? homedir(),
         realpathSync,
         (folder) => confirmEmptyFolderTrust(folder, (options) => dialog.showMessageBox(win!, options)),
       ),

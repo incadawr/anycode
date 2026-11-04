@@ -2,11 +2,17 @@ import { expect, it } from "vitest";
 import { parseChildTerminal } from "../shared/child-sessions.js";
 import { childBootFailure, sanitizeBootFailure } from "./child-boot-failure.js";
 
+it("bounds adversarial inputs before scrubbing", () => {
+  const start = performance.now();
+  for (const value of ["key", "password", "a@", '"']) sanitizeBootFailure(value.repeat(100_000));
+  expect(performance.now() - start).toBeLessThan(2000);
+}, 3000);
+
 it("reports a startup error with the original engine message", () => {
   const reason = "host failed to initialize: Codex version preflight timed out after 15000ms";
   expect(parseChildTerminal(childBootFailure(reason))).toMatchObject({
     status: "error", turns: 0, toolCalls: 0,
-    finalText: `${reason}\nThis is a startup failure; retry the task unchanged.`,
+    finalText: `${reason}\nThis is a startup failure; do not retry the task unchanged.`,
   });
 });
 
@@ -24,6 +30,11 @@ it("bounds a long failure while preserving the startup hint and terminal validit
   const result = childBootFailure(safe.message, safe.truncated);
   expect(result.truncated).toBe(true);
   expect(result.finalText.length).toBeLessThanOrEqual(100_000);
-  expect(result.finalText).toContain("retry the task unchanged");
+  expect(result.finalText).toContain("do not retry the task unchanged");
   expect(parseChildTerminal(result)).toEqual(result);
+});
+
+it("hides URL credentials while keeping the failure cause", () => {
+  const safe = sanitizeBootFailure("proxy https://alice:hunter2@proxy.local refused the connection");
+  expect(safe.message).toBe("proxy https://[redacted]@proxy.local refused the connection");
 });

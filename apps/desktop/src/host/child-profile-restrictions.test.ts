@@ -3,6 +3,14 @@ import { createDefaultToolRegistry, ModePermissionEngine, PERSONAS, sessionRestr
 import { restrictChildPermissions, restrictChildRegistry } from "./child-profile-restrictions.js";
 
 describe("child profile restrictions", () => {
+  it("denies reviewer shell redirection in yolo mode", () => {
+    const restrictions = sessionRestrictionsForPersona(PERSONAS.reviewer)!;
+    const registry = createDefaultToolRegistry();
+    const engine = restrictChildPermissions(new ModePermissionEngine(), restrictions);
+    restrictChildRegistry(registry, restrictions);
+    expect(registry.has("Bash")).toBe(false);
+    expect(engine.check({ toolName: "Bash", input: { command: "printf changed > tracked.txt" }, metadata: createDefaultToolRegistry().getMetadata("Bash")!, mode: "yolo" }).decision).toBe("deny");
+  });
   it("leaves unrestricted sessions able to use existing and later-registered tools", () => {
     const registry = createDefaultToolRegistry();
     const restrictions = sessionRestrictionsForPersona(PERSONAS["general-purpose"], true);
@@ -22,6 +30,14 @@ describe("child profile restrictions", () => {
     for (const name of ["Write", "Edit", "Bash"]) expect(registry.has(name)).toBe(false);
     registry.register(createDefaultToolRegistry().get("Write")!);
     expect(registry.has("Write")).toBe(false);
+  });
+
+  it("removes spawn tools from explicit child tool lists", () => {
+    const registry = createDefaultToolRegistry();
+    restrictChildRegistry(registry, { tools: ["Read", "Agent", "Workflow"], readOnly: false });
+    expect(registry.list()).toEqual(["Read"]);
+    registry.register(createDefaultToolRegistry().get("Agent")!);
+    expect(registry.has("Agent")).toBe(false);
   });
 
   it("enforces read-only writes and commands even in yolo mode", () => {

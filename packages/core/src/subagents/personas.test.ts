@@ -112,12 +112,14 @@ describe("personas", () => {
     expect(executor.systemPrompt).toContain("implement a written brief literally");
   });
 
-  it("reviewer exists with read-only tools plus Bash, budget 40, and its prompt body", () => {
+  it("reviewer exists with read-only tools, budget 40, and its prompt body", () => {
     const reviewer = PERSONAS.reviewer;
-    expect([...reviewer.tools]).toEqual([...PERSONAS.explore.tools, "Bash"]);
+    expect([...reviewer.tools]).toEqual([...PERSONAS.explore.tools]);
     expect(reviewer.turnBudget).toBe(40);
     expect(ROLE_TURN_BUDGETS.reviewer).toBe(40);
     expect(reviewer.systemPrompt).toContain("CLEAN, MINOR, or DEFECTS");
+    expect(reviewer.systemPrompt).not.toContain("run the targeted tests before you report");
+    expect(reviewer.systemPrompt).toContain("do not run tests");
   });
 
   it("OVERRIDABLE_PERSONAS is exactly the three role personas; the legacy built-ins stay reserved", () => {

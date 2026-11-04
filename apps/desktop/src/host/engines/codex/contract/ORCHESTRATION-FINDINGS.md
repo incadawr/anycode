@@ -1,6 +1,6 @@
 # Orchestration contract findings
 
-Tested recommended 0.166.0 at `/Users/dev/.npm-global/bin/codex` and lower fixture 0.144.3 at `/opt/homebrew/bin/codex`. On this machine `/usr/local/bin/codex` points to the latter. Both experimental schema subsets were generated after checking the supported `--experimental` flag. Execution used isolated HOME, CODEX_HOME, workspace and user-data roots. The live attempt used an auth.json symlink and an additional OS sandbox denying writes outside the temporary root; no owner profile was copied.
+Tested recommended 0.166.0 at `<home>/.npm-global/bin/codex` and lower fixture 0.144.3 at `/opt/homebrew/bin/codex`. On this machine `/usr/local/bin/codex` points to the latter. Both experimental schema subsets were generated after checking the supported `--experimental` flag. Execution used isolated HOME, CODEX_HOME, workspace and user-data roots. The live attempt used an auth.json symlink and an additional OS sandbox denying writes outside the temporary root; no owner profile was copied.
 
 | Mechanism | Schema | Configuration / transport observations (both versions) | Inference |
 | --- | --- | --- | --- |
