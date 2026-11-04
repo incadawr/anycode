@@ -7,31 +7,22 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Fixed
+## [0.0.76] — 2026-11-04
 
-- The sidebar's default view no longer lets one busy project crowd every other project's folder out of the task list: the recent-tasks page is now counted per project, so each project keeps its newest sessions and stays visible, while "Show all tasks" and search still reach the full history.
-### Added
-
-- The first-run screen gains three subscription shortcuts — GLM Coding Plan, MiniMax M Plan and Kimi (kimi.com): each opens the API connection form with the provider's template preselected and a link to the provider's own key page, so pasting the subscription key, connecting and landing on the catalog's default model is one stop. The key link only shows while the form still uses the seeded template, and re-clicking the already-chosen path keeps whatever has been typed so far.
-
-### Fixed
-
-- Re-clicking a first-run subscription shortcut (GLM Coding Plan, MiniMax M Plan, Kimi) now re-seeds the connection form to that shortcut's template. Previously a form manually moved to another provider kept showing it while the shortcut's key link came back, so the link advertised a key page for a provider the form was no longer using.
-### Added
-
-- OpenCode Go (Kimi models over a subscription) is available as a provider: two connections, one speaking Anthropic's protocol and one OpenAI-compatible, both sending a per-session marker and an Anycode user-agent with every request so the endpoint sees one stable identity per conversation.
-
-### Fixed
-
-- The OpenCode Go connection speaking Anthropic's protocol now suggests models that the endpoint serves on that protocol natively (MiniMax M3, Qwen3.8 Max/Flash, Qwen3.7 Plus, Claude Haiku 5.5) instead of Kimi, which the endpoint only routes through translation on that door; the OpenAI-compatible connection keeps Kimi first, and Kimi's declared context windows on both were corrected against the endpoint's own model list.
-- The Agent tool now warns up front, instead of after a failed call, when an agent type needs its own connection and cannot run in the current context.
 ### Security
 
 - Embedded previews no longer grant the whole loopback: a preview opened on a local dev server can reach exactly the `host:port` it was opened with (relative dev-server assets and its WebSocket keep working), while a second loopback port, `127.0.0.1` vs `localhost` spellings, and any other local service are denied for page navigation, redirects, subresources, fetch, and WebSockets alike. Documents loaded from files or remote sites have no loopback access at all, so a remote page can no longer pivot into local services via a navigation or redirect leg; opening a different local target goes through its own open (or an explicit navigate), which re-pins the grant instead of widening it, and navigating the preview away from the dev server drops the grant entirely, so the page that takes over the frame cannot keep reaching it. Preview-to-panel transfers and history navigation are judged by the same rule, and denials stay legible in the preview console.
 
 ### Added
 
+- The first-run screen gains three subscription shortcuts — GLM Coding Plan, MiniMax M Plan and Kimi (kimi.com): each opens the API connection form with the provider's template preselected and a link to the provider's own key page, so pasting the subscription key, connecting and landing on the catalog's default model is one stop. The key link only shows while the form still uses the seeded template, and re-clicking the already-chosen path keeps whatever has been typed so far.
+- OpenCode Go (a subscription gateway) is available as a provider: two connections, one speaking Anthropic's protocol and one OpenAI-compatible, both sending a per-session marker and an Anycode user-agent with every request so the endpoint sees one stable identity per conversation. The Anthropic-protocol connection suggests the models the endpoint serves on that protocol natively (MiniMax M3, Qwen3.8 Max/Flash, Qwen3.7 Plus, Claude Haiku 5.5), the OpenAI-compatible one leads with Kimi, and the declared context windows follow the endpoint's own model list.
 - An isolated smoke driver exercises the pinned preview loopback grant end to end against throwaway loopback fixtures (`pnpm --filter @anycode/desktop smoke:preview-loopback`), with no provider credentials or model requests.
+
+### Fixed
+
+- The sidebar's default view no longer lets one busy project crowd every other project's folder out of the task list: the recent-tasks page is now counted per project, so each project keeps its newest sessions and stays visible, while "Show all tasks" and search still reach the full history.
+- The Agent tool now warns up front, instead of after a failed call, when an agent type needs its own connection and cannot run in the current context.
 - Auto-compaction no longer no-ops with "the conversation is too short" on sessions driven by a single prompt: the compaction boundary now falls back to an assistant message when no later user message exists, so the context can shrink instead of growing past the model's window. After repeated failures with the context still above the threshold the turn stops with a clear error instead of running until the provider rejects the request — and so does every later prompt, until the session is restarted or the context is reduced; a manual /compact never feeds that breaker — neither its no-op skip nor a failed attempt (provider error, cancel, empty summary) — and the telemetry `compaction_end` record carries only failure/skip flags, never the error text (engine error messages are arbitrary transport text).
 
 ## [0.0.75] — 2026-11-04
