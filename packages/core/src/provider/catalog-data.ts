@@ -98,17 +98,40 @@ const MINIMAX_MODELS: CatalogProviderEntry["models"] = [
   { id: "MiniMax-M3", name: "MiniMax M3", contextWindow: 1_000_000, imageInput: true, reasoning: false },
 ];
 
-// Kimi rows as served through the OpenCode Go subscription (best-effort
-// hints, shared by both protocol entries): the ids follow the moonshot
-// platform spelling and are UNVERIFIED until the endpoint's own live
-// `modelsUrl` list is fetched; free text is always accepted. Context is the
-// K2-series 262,144-token window (platform.kimi.ai/docs/pricing/chat) —
-// the endpoint's own declaration wins once known. Capabilities (image
-// input, reasoning) are left unpinned for the same reason.
-const OPENCODE_MODELS: CatalogProviderEntry["models"] = [
-  { id: "kimi-k3", name: "Kimi K3", contextWindow: 262_144 },
-  { id: "kimi-k3.1-pro", name: "Kimi K3.1 Pro", contextWindow: 262_144 },
-  { id: "kimi-k2.7-code", name: "Kimi K2.7 Code", contextWindow: 262_144 },
+// Kimi rows as served through the OpenCode Go subscription, shared by both
+// protocol doors: the OpenAI one lists them first (Chat Completions is the
+// Kimi family's native protocol there), the Anthropic one appends them
+// after its own Messages rows. Specs are the endpoint's own declaration
+// (public https://opencode.ai/inference/go/v1/models, fetched without a
+// key, 2026-11-04): kimi-k3 / kimi-k3.1-pro declare the full 1,048,576-
+// token window there, not the smaller hint these rows carried before the
+// list was fetched. Capability flags (image input, reasoning) stay
+// unpinned until verified through this app's own request mapping.
+const OPENCODE_KIMI_MODELS: CatalogProviderEntry["models"] = [
+  { id: "kimi-k3", name: "Kimi K3", contextWindow: 1_048_576, maxOutputTokens: 131_072 },
+  { id: "kimi-k3.1-pro", name: "Kimi K3.1 Pro", contextWindow: 1_048_576, maxOutputTokens: 131_072 },
+  { id: "kimi-k2.7-code", name: "Kimi K2.7 Code", contextWindow: 262_144, maxOutputTokens: 262_144 },
+];
+
+const OPENCODE_MODELS: CatalogProviderEntry["models"] = [...OPENCODE_KIMI_MODELS];
+
+// The Anthropic door serves /anthropic/v1/messages, and the endpoint's own
+// models list names exactly five models that speak Messages natively there
+// (checked 2026-11-04) — Kimi is not one of them, a Kimi id sent to this
+// door only works through the endpoint's own translation, which is not
+// verified. Rows lead with the native models so the suggested default is
+// one of them; the context/output limits are that list's declaration.
+// claude-haiku-5-5 is included on the same evidence (1M context, 128K
+// output). Capability flags stay unpinned: the list declares image input
+// and reasoning support, but how they behave through this app's Messages
+// transport is not verified.
+const OPENCODE_ANTHROPIC_MODELS: CatalogProviderEntry["models"] = [
+  { id: "minimax-m3", name: "MiniMax M3", contextWindow: 1_000_000, maxOutputTokens: 131_072 },
+  { id: "qwen3.8-max", name: "Qwen3.8 Max", contextWindow: 1_000_000, maxOutputTokens: 131_072 },
+  { id: "qwen3.8-flash", name: "Qwen3.8 Flash", contextWindow: 1_000_000, maxOutputTokens: 131_072 },
+  { id: "qwen3.7-plus", name: "Qwen3.7 Plus", contextWindow: 1_000_000, maxOutputTokens: 65_536 },
+  { id: "claude-haiku-5-5", name: "Claude Haiku 5.5", contextWindow: 1_000_000, maxOutputTokens: 128_000 },
+  ...OPENCODE_KIMI_MODELS,
 ];
 
 // DeepSeek bills by time of day (api-docs.deepseek.com/quick_start/pricing/,
@@ -567,8 +590,9 @@ const ENTRIES: CatalogProviderEntry[] = [
   },
   {
     // OpenCode Go subscription (opencode.ai): one subscription key, two
-    // protocol doors over the same Kimi lineup — an Anthropic-compatible
-    // root and an OpenAI-compatible root. TWO entries instead of one with
+    // protocol doors — an Anthropic-compatible root and an OpenAI-compatible
+    // root, each with its own model order (OPENCODE_ANTHROPIC_MODELS vs
+    // OPENCODE_MODELS). TWO entries instead of one with
     // `transportBaseUrls`: boot plumbing resolves the catalog entry from the
     // connection's single baseUrl (`matchCatalogEntryByBaseUrl`), so one
     // baseUrl per entry keeps that lookup deterministic (same shape as the
@@ -601,7 +625,7 @@ const ENTRIES: CatalogProviderEntry[] = [
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
     headers: { "user-agent": "Anycode/{version}", "x-opencode-session": "{sessionId}" },
-    models: OPENCODE_MODELS,
+    models: OPENCODE_ANTHROPIC_MODELS,
   },
   {
     id: "opencode-openai",

@@ -570,20 +570,55 @@ describe("OpenCode Go subscription entries", () => {
     }
   });
 
-  it("hints the Kimi rows unpriced, with the subscription's 262k context floor", () => {
+  it("leads the Anthropic door with its native Messages models, Kimi rows after", () => {
+    const anthropic = findCatalogEntry("opencode")!;
+    expect(anthropic.models.map((model) => model.id)).toEqual([
+      "minimax-m3",
+      "qwen3.8-max",
+      "qwen3.8-flash",
+      "qwen3.7-plus",
+      "claude-haiku-5-5",
+      "kimi-k3",
+      "kimi-k3.1-pro",
+      "kimi-k2.7-code",
+    ]);
+    expect(anthropic.models.map((model) => model.name)).toEqual([
+      "MiniMax M3",
+      "Qwen3.8 Max",
+      "Qwen3.8 Flash",
+      "Qwen3.7 Plus",
+      "Claude Haiku 5.5",
+      "Kimi K3",
+      "Kimi K3.1 Pro",
+      "Kimi K2.7 Code",
+    ]);
+    // Chat Completions is the Kimi family's native protocol on this
+    // endpoint: the OpenAI door keeps Kimi first.
+    expect(findCatalogEntry("opencode-openai")!.models.map((model) => model.id)).toEqual([
+      "kimi-k3",
+      "kimi-k3.1-pro",
+      "kimi-k2.7-code",
+    ]);
+  });
+
+  it("keeps every row unpriced, with the context windows the live models list declares", () => {
     for (const id of ["opencode", "opencode-openai"]) {
       const entry = findCatalogEntry(id)!;
-      expect(entry.models.map((model) => model.id)).toEqual(["kimi-k3", "kimi-k3.1-pro", "kimi-k2.7-code"]);
-      expect(entry.models.map((model) => model.name)).toEqual(["Kimi K3", "Kimi K3.1 Pro", "Kimi K2.7 Code"]);
       for (const model of entry.models) {
-        expect(model).toMatchObject({ contextWindow: 262_144 });
         // Subscription tariff: no invented per-token rates (kimi.com precedent).
         expect(model.pricing).toBeUndefined();
-        // Unverified on this endpoint: no capability claims.
+        // Unverified through this app's own request mapping: no capability claims.
         expect(model.imageInput).toBeUndefined();
         expect(model.reasoning).toBeUndefined();
       }
     }
+    // kimi-k3 / kimi-k3.1-pro declare the full 1,048,576-token window on the
+    // endpoint's own models list, not the smaller pre-fetch hint.
+    expect(findCatalogEntry("opencode-openai")!.models.map((model) => model.contextWindow)).toEqual([
+      1_048_576,
+      1_048_576,
+      262_144,
+    ]);
   });
 });
 
