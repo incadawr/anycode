@@ -3669,7 +3669,7 @@ void app.whenReady().then(async () => {
       agentProjects: communicationAgentProjects,
       offerEmptyFolderTrust: (workspace) => offerEmptyFolderTrust(
         new NodeLspConfigFs(), nodeTrustStoreFs, workspace,
-        selfCheckProfile ?? resolveSubagentsHome(process.env, app.isPackaged) ?? resolveSkillsProfileHome(process.env, app.isPackaged) ?? homedir(),
+        selfCheckProfile ?? resolveSkillsProfileHome(process.env, app.isPackaged) ?? homedir(),
         realpathSync,
         (folder) => confirmEmptyFolderTrust(folder, (options) => dialog.showMessageBox(win!, options)),
       ),

@@ -161,5 +161,6 @@ describe("resolveSkillsProfileHome", () => {
     expect(resolveSkillsProfileHome({ ...profile, ANYCODE_PROFILE_HOME: "/tmp/root" }, false)).toBe("/tmp/root");
     expect(resolveSkillsProfileHome({ ...profile, ANYCODE_SUBAGENTS_HOME: "/tmp/agents" }, false)).toBe("/tmp/agents");
     expect(resolveSkillsProfileHome({ ...profile, ANYCODE_SKILLS_IMPORT_HOME: "/tmp/skills" }, false)).toBe("/tmp/skills");
+    expect(resolveSkillsProfileHome({ ...profile, ANYCODE_SKILLS_IMPORT_HOME: "/tmp/skills", ANYCODE_SUBAGENTS_HOME: "/tmp/agents" }, false)).toBe("/tmp/skills");
   });
 });
