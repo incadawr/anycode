@@ -304,18 +304,44 @@ describe("Profile actions menu", () => {
     expect(bridge.set).not.toHaveBeenCalled();
   });
 
-  it("returns focus to the menu trigger after the Delete confirm closes", async () => {
+  it("returns focus to the menu trigger once the Delete dialog is gone, on cancel and on confirm", async () => {
     installBridge(settingsWithProfile("Team"));
     await mount();
-    await openMenu();
-    await click(buttonByText("Delete"));
-    // The menu unmounted before the dialog opened, so the dialog has no
-    // opener to hand focus back to — Esc in it must not strand focus.
-    await act(async () => {
-      container.querySelector("dialog")!.dispatchEvent(new Event("cancel", { bubbles: false, cancelable: true }));
-    });
-    expect(container.querySelector("dialog")).toBeNull();
-    expect(document.activeElement).toBe(menuTrigger());
+    // Chromium refuses focus() on anything outside an open modal dialog and
+    // strands focus on <body> when a still-open dialog is removed; jsdom
+    // models neither, so stand in for both here: while a dialog[open] exists,
+    // focusing the trigger must be a no-op, and it must only succeed after
+    // the dialog has left the document.
+    const originalFocus = HTMLElement.prototype.focus;
+    const triggerFocusAttempts: boolean[] = [];
+    HTMLElement.prototype.focus = function (this: HTMLElement, options?: FocusOptions): void {
+      const modal = document.querySelector("dialog[open]");
+      if (this === menuTrigger()) triggerFocusAttempts.push(modal !== null);
+      if (modal !== null && this.closest("dialog[open]") === null) return;
+      return originalFocus.call(this, options);
+    };
+    try {
+      await openMenu();
+      await click(buttonByText("Delete"));
+      expect(document.activeElement).toBe(container.querySelector(".git-confirm-cancel"));
+      await act(async () => {
+        container.querySelector("dialog")!.dispatchEvent(new Event("cancel", { bubbles: false, cancelable: true }));
+      });
+      expect(container.querySelector("dialog")).toBeNull();
+      expect(document.activeElement).toBe(menuTrigger());
+      expect(triggerFocusAttempts).not.toContain(true);
+
+      await openMenu();
+      await click(buttonByText("Delete"));
+      const confirm = [...container.querySelectorAll<HTMLButtonElement>("dialog button")].find((button) => button.textContent === "Delete")!;
+      triggerFocusAttempts.length = 0;
+      await click(confirm);
+      expect(container.querySelector("dialog")).toBeNull();
+      expect(document.activeElement).toBe(menuTrigger());
+      expect(triggerFocusAttempts).not.toContain(true);
+    } finally {
+      HTMLElement.prototype.focus = originalFocus;
+    }
   });
 
   it("keeps arrow roving alive past the disabled built-in Rename and Delete", async () => {

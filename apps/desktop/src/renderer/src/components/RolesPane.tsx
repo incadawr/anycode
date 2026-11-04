@@ -108,6 +108,9 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuFocus, setMenuFocus] = useState(0);
   const menuRef = useRef<HTMLDivElement>(null);
+  // Whether the open dialog was raised by the menu's Delete: only it owes
+  // focus back to the trigger when it goes away.
+  const menuDialogRef = useRef(false);
   const [pending, setPending] = useState<{ title: string; body: string; confirmLabel: string; action: () => void; onCancel?: () => void } | null>(null);
   const writeState = useSyncExternalStore(subscribeRegistryWrites, registryWriteSnapshot, registryWriteSnapshot);
   const busy = writeState.pending;
@@ -219,13 +222,24 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
     setMenuFocus(next);
     items[next]?.focus();
   }
-  // A confirm dialog that replaced the menu hands focus back to the trigger
-  // when it closes; the dialog itself only unmounts, which strands focus.
-  function restoreMenuTrigger(): void {
-    const trigger = menuRef.current?.querySelector<HTMLButtonElement>(".roles-menu-trigger");
-    if (trigger?.isConnected) trigger.focus();
-  }
-  function guard(action: () => void, onCancel?: () => void): void {
+  // The Delete dialog hands focus back to the trigger only once it is gone:
+  // Chromium no-ops focus() outside a still-open modal and strands focus on
+  // <body> when an open dialog is removed, so the restore must wait for the
+  // commit that drops it. The pane's other guard dialogs did not come from
+  // the menu and keep focus wherever it lands.
+  useLayoutEffect(() => {
+    if (!pending) return;
+    const fromMenu = menuDialogRef.current;
+    return () => {
+      if (!fromMenu) return;
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active !== document.body && active !== document.documentElement) return;
+      const trigger = menuRef.current?.querySelector<HTMLButtonElement>(".roles-menu-trigger");
+      if (trigger?.isConnected) trigger.focus();
+    };
+  }, [pending]);
+  function guard(action: () => void, onCancel?: () => void, fromMenu = false): void {
+    menuDialogRef.current = fromMenu;
     if (!dirty) { action(); return; }
     setPending({ title: "Discard unsaved roles?", body: "Your unsaved role changes will be lost.", confirmLabel: "Discard changes", onCancel, action: () => { setDraft(baseline); setCap(baselineCap); action(); } });
   }
@@ -318,7 +332,7 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
         {menuOpen && <div className="roles-menu-items" role="menu" aria-label="Profile actions">
         {(["new", "duplicate", "rename"] as const).map((action, index) => <Button size="sm" type="button" key={action} role="menuitem" className="roles-menu-item" tabIndex={menuFocus === index ? 0 : -1} disabled={busy || (action === "rename" && !selected)} onClick={() => { setMenuOpen(false); setNameAction(action); setName(action === "rename" ? selected?.name ?? "" : ""); }}>{action === "new" ? "New" : action === "duplicate" ? "Duplicate" : "Rename"}</Button>)}
         <div className="roles-menu-divider" role="separator" />
-        <Button size="sm" type="button" role="menuitem" className="roles-menu-item roles-menu-item-danger" tabIndex={3 === menuFocus ? 0 : -1} disabled={busy || !selected} onClick={() => { setMenuOpen(false); if (!selected) return; guard(() => setPending({ title: `Delete ${selected.name}?`, body: `Project mappings to ${selected.name} will be removed and will use the global profile.`, confirmLabel: "Delete", action: () => { void write((current) => { const profiles = current.profiles.filter((p) => p.id !== selected.id); return { profiles, activeId: current.activeId === selected.id ? "" : current.activeId, projects: current.projects.filter((p) => p.profileId !== selected.id) }; }); } })); }}>Delete</Button>
+        <Button size="sm" type="button" role="menuitem" className="roles-menu-item roles-menu-item-danger" tabIndex={3 === menuFocus ? 0 : -1} disabled={busy || !selected} onClick={() => { setMenuOpen(false); if (!selected) return; guard(() => setPending({ title: `Delete ${selected.name}?`, body: `Project mappings to ${selected.name} will be removed and will use the global profile.`, confirmLabel: "Delete", action: () => { void write((current) => { const profiles = current.profiles.filter((p) => p.id !== selected.id); return { profiles, activeId: current.activeId === selected.id ? "" : current.activeId, projects: current.projects.filter((p) => p.profileId !== selected.id) }; }); } }), undefined, true) }}>Delete</Button>
       </div>}</div>
       <select className="settings-field-select roles-preset" aria-label="Apply preset" value="" disabled={busy} onChange={(e) => { const preset = deriveRolePresets(engines, activeConnectionId ?? "").find((p) => p.id === e.target.value); if (preset) guard(() => { setDraft(toDraft(preset.roles)); setCap(baselineCap); }); }}><option value="">Apply preset…</option>{deriveRolePresets(engines, activeConnectionId ?? "").map((p) => <option key={p.id} value={p.id} disabled={!presetApplicable(p, engines)}>{p.label}</option>)}</select>
     </div>
@@ -340,7 +354,7 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
     <details onToggle={(e) => setAdvanced(e.currentTarget.open)}><summary className="settings-button">Advanced {(selected?.roles.maxParallelChildren !== undefined || ROLE_PRESET_ROLES.some((role) => (selected?.roles[role]?.fallbacks?.length ?? 0) > 1)) && <span className="roles-badge">Configured</span>}</summary><label className="settings-field"><span className="settings-field-label">Max parallel children</span><input className="settings-field-input" type="text" inputMode="numeric" aria-label="Max parallel children" disabled={busy} value={cap} onChange={(e) => setCap(e.target.value)} /><span className="settings-field-hint">Optional limit (1–16); blank uses the session limit, default 3.</span></label></details>
     <details><summary className="settings-button">Per-project profiles ({registry.projects.length})</summary><div className="roles-projects">{registry.projects.map((p) => <div className="roles-project" key={p.projectRoot}><span title={p.projectRoot}>{projectLabel(p.projectRoot)}</span><span>{registry.profiles.find((profile) => profile.id === p.profileId)?.name ?? "Missing profile (using global fallback)"}</span><Button size="sm" type="button" disabled={busy} aria-label={`Remove profile for ${p.projectRoot}`} onClick={() => { const run = () => { void write((current) => ({ ...current, projects: current.projects.filter((entry) => entry.projectRoot !== p.projectRoot) })); }; if (projectRoot === p.projectRoot) guard(run); else run(); }}>Remove</Button></div>)}
       <div className="roles-project"><select className="settings-field-select" aria-label="Project to add" disabled={busy} value={addProject} onChange={(e) => setAddProject(e.target.value)}><option value="">Select project</option>{projects.map((p) => <option key={p} value={p}>{projectLabel(p)}</option>)}</select><select className="settings-field-select" aria-label="Profile to add" disabled={busy} value={addProfile} onChange={(e) => setAddProfile(e.target.value)}><option value="">Select profile</option>{registry.profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select><Button size="sm" type="button" disabled={busy || !addProject || !addProfile} onClick={() => { const run = () => { void write((current) => ({ ...current, projects: [...current.projects.filter((p) => p.projectRoot !== addProject), { projectRoot: addProject, profileId: addProfile }] })); }; if (projectRoot === addProject) guard(run); else run(); }}>Add</Button></div></div></details>
-    <ConfirmDialog request={busy ? null : pending} onCancel={() => { const cancel = pending?.onCancel; setPending(null); cancel?.(); restoreMenuTrigger(); }} onConfirm={() => { const action = pending?.action; setPending(null); restoreMenuTrigger(); action?.(); }} />
+    <ConfirmDialog request={busy ? null : pending} onCancel={() => { const cancel = pending?.onCancel; setPending(null); cancel?.(); }} onConfirm={() => { const action = pending?.action; setPending(null); action?.(); }} />
   </div>;
 }
 
