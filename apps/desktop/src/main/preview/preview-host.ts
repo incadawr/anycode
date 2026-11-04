@@ -27,8 +27,10 @@ import { RING_MAX_MSG_CHARS } from "./console-format.js";
  *    through consent for a live script-running window the way there is for
  *    the read-only chat-artifact Open action (77-A is a DIFFERENT threat
  *    model: bytes-into-renderer vs a live page).
- *  - `localhost`/`127.0.0.1` origins (any port): always allowed — a local dev
- *    server the user is actively iterating on.
+ *  - `localhost`/`127.0.0.1` origins: allowed for THE origin the open names
+ *    (`http://localhost:5173`, host:port exact) — a local dev server the
+ *    user is actively iterating on. No other loopback origin, port or host
+ *    spelling is reachable from any preview document.
  *  - Any other remote origin: refused unless the OPEN request itself carries
  *    `allowRemote: true` (the 96-B tool's permission-engine approval IS the
  *    user's consent for that request); consent is recorded per-preview,
@@ -63,12 +65,25 @@ import { RING_MAX_MSG_CHARS } from "./console-format.js";
  * deliberate product choice — "the dev server the user just started") and
  * diverge from `packages/core/src/tools/web-fetch.ts`'s WebFetch tool, which
  * explicitly REFUSES loopback/RFC1918/link-local as an SSRF guard; the
- * approval text for a `url`-form open never names the host:port either. This
- * cut narrows, but does not close, that divergence: a REMOTE page can no
- * longer pivot into loopback (the request gate's rule 4 denies a loopback
- * subresource whenever `record.kind === "remote"`), so what remains is scoped
- * to "the model asks BrowserOpen for a loopback URL directly" — not "any
- * consented remote origin can reach loopback transitively".
+ * approval text for a `url`-form open never names the host:port either.
+ * That divergence stays open for the DIRECT open only: a page can no longer
+ * reach loopback transitively at all (preview-ipc-risk F4). The loopback
+ * grant is pinned to the ONE origin an open names (`record.localOrigins`) —
+ * will-navigate, will-redirect and the request gate all enforce the same
+ * set, for mainFrame and subresource alike, so a remote/file document has
+ * no loopback path and a localhost document cannot widen to a second port,
+ * another loopback host spelling, or a different scheme's port. A different
+ * local target is reachable only through a fresh open/navigate (the
+ * explicit-permission path), which re-pins its own preview.
+ *
+ * Origin-only policy limits (recorded; NOT promised here): all http(s)
+ * checks above compare the URL's HOST STRING — the resolved IP is never
+ * consulted. RFC1918/link-local targets and DNS rebinding (a public name
+ * that resolves to a private address) are outside this policy; webRequest
+ * is not a firewall and no network-layer isolation is claimed. The preview
+ * uses Chromium's own network stack and proxy settings: the app-level proxy
+ * registry does not route preview traffic, and nothing here should be read
+ * as "preview traffic follows the app proxy".
  */
 
 import { randomUUID } from "node:crypto";
@@ -604,6 +619,19 @@ interface WebPreviewRecord {
   renderedFrom?: string;
   title?: string;
   consentedOrigins: Set<string>;
+  /**
+   * The loopback origins this preview may contact (`http(s)://host[:port]`,
+   * scheme-normalized exactly like the request gate's comparisons). Set at
+   * open/reuse-navigate time to the ONE dev-server origin a `localhost`
+   * open carries; every other open clears it. Both halves of preview-ipc-risk
+   * F4 close here: a remote/file document has NO loopback grant (its
+   * mainFrame can neither pivot into loopback nor any loopback port), and a
+   * localhost document is bound to the specific origin it was opened with
+   * instead of the whole loopback. A different local target always needs a
+   * fresh open/navigate (the explicit-permission path), which re-pins or
+   * opens its own preview — never widens this set in place.
+   */
+  localOrigins: Set<string>;
   /** Per-record dedup for the request-gate/redirect-gate legibility ring entry (cut §1.1) — a retry loop cannot flood the ring. */
   gateDeniedKeys: Set<string>;
   /** Per-record dedup for the will-download denial ring entry — separate from `gateDeniedKeys` so gate and download keys never collide. */
@@ -1030,6 +1058,11 @@ class PreviewHost implements PreviewHostHandle {
     if (target.kind === "remote" && target.origin !== undefined && req.allowRemote === true) {
       record.consentedOrigins.add(target.origin);
     }
+    // The loopback grant is re-pointed on EVERY open: a `localhost`
+    // open/reuse-navigate pins THIS origin (the dev server the open named), a
+    // file/remote open clears it. Replacing the set — never adding to it —
+    // keeps a reuse-navigate from accumulating loopback grants across targets.
+    record.localOrigins = target.kind === "localhost" && target.origin !== undefined ? new Set([target.origin]) : new Set();
 
     try {
       void record.window.webContents.loadURL(target.url);
@@ -1184,7 +1217,10 @@ class PreviewHost implements PreviewHostHandle {
       return { ok: false, errorKind: "invalid_input", error: `unsupported url scheme: ${parsed.protocol}` };
     }
     if (isLocalHost(parsed.hostname)) {
-      return { ok: true, kind: "localhost", url: parsed.toString() };
+      // Same normalization the gate uses (`scheme//host[:port]`, default port
+      // dropped by URL parsing) — this origin becomes the record's WHOLE
+      // loopback grant (`record.localOrigins`).
+      return { ok: true, kind: "localhost", url: parsed.toString(), origin: `${parsed.protocol}//${parsed.host}` };
     }
     if (!allowRemote && !fullAccess) {
       return { ok: false, errorKind: "invalid_input", error: "remote URL requires explicit approval (allowRemote)" };
@@ -2512,6 +2548,7 @@ class PreviewHost implements PreviewHostHandle {
       url: "",
       kind: "file",
       consentedOrigins: new Set(),
+      localOrigins: new Set(),
       gateDeniedKeys: new Set(),
       downloadDeniedKeys: new Set(),
       consoleRing: [],
@@ -2880,6 +2917,13 @@ class PreviewHost implements PreviewHostHandle {
     navUrl: string,
   ): Promise<{ allow: false } | { allow: true; loadUrl: string }> {
     if (navUrl.startsWith("file:")) {
+      // Only a `file:` document navigates among contained files in-page; a
+      // remote/localhost page's jump to a local file is denied — the
+      // explicit-permission path for that target is its own open/navigate
+      // through the open-time checks.
+      if (record.kind !== "file") {
+        return { allow: false };
+      }
       let filePath: string;
       try {
         filePath = fileURLToPath(navUrl);
@@ -2901,7 +2945,17 @@ class PreviewHost implements PreviewHostHandle {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return { allow: false };
     }
-    if (isLocalHost(parsed.hostname) || record.consentedOrigins.has(parsed.origin) || this.fullAccessFor(record.tabId)) {
+    // Loopback is pinned-origin only (preview-ipc-risk F4): a page can
+    // navigate to the dev-server origin its preview was OPENED with, never to
+    // another loopback port/host, and a remote/file document cannot pivot
+    // into loopback at all. "Full browser access" does not lift this —
+    // otherwise a consented remote page could pivot transitively.
+    if (isLocalHost(parsed.hostname)) {
+      return record.localOrigins.has(`${parsed.protocol}//${parsed.host}`)
+        ? { allow: true, loadUrl: parsed.toString() }
+        : { allow: false };
+    }
+    if (record.consentedOrigins.has(parsed.origin) || this.fullAccessFor(record.tabId)) {
       return { allow: true, loadUrl: parsed.toString() };
     }
     return { allow: false };
@@ -2912,7 +2966,10 @@ class PreviewHost implements PreviewHostHandle {
    * refuses unsafe schemes as a redirect target, so anything non-http(s) here
    * denies outright; no `file:` resolution is ever needed for a redirect
    * target. Synchronous is both required (`preventDefault` must run inside
-   * the `will-redirect` event turn) and sufficient for that reason.
+   * the `will-redirect` event turn) and sufficient for that reason. Loopback
+   * targets are pinned-origin only (the `evaluateNavigation` rule) — a
+   * redirect leg re-enters the request gate as a fresh mainFrame request
+   * anyway, this is the synchronous belt over the identical policy.
    */
   private evaluateRedirect(record: WebPreviewRecord, url: string): boolean {
     let parsed: URL;
@@ -2924,7 +2981,10 @@ class PreviewHost implements PreviewHostHandle {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return false;
     }
-    return isLocalHost(parsed.hostname) || record.consentedOrigins.has(parsed.origin) || this.fullAccessFor(record.tabId);
+    if (isLocalHost(parsed.hostname)) {
+      return record.localOrigins.has(`${parsed.protocol}//${parsed.host}`);
+    }
+    return record.consentedOrigins.has(parsed.origin) || this.fullAccessFor(record.tabId);
   }
 
   private gateDedupeKeyForRedirect(url: string): string {
@@ -2966,19 +3026,24 @@ class PreviewHost implements PreviewHostHandle {
 
   /**
    * ONE gate policy function (cut §1.1/F2, the keystone fix), closed over the
-   * LIVE `record` — `record.kind`/`record.consentedOrigins` are read at
-   * request time, so a reuse-navigate kind change is honored automatically.
-   * Exhaustive for every `(url, resourceType)`:
+   * LIVE `record` — `record.kind`/`record.consentedOrigins`/`record.localOrigins`
+   * are read at request time, so a reuse-navigate kind change is honored
+   * automatically. Exhaustive for every `(url, resourceType)`:
    *   1. Unparseable URL => deny.
    *   2. `about:`/`data:`/`blob:` => allow (no network egress).
    *   3. `file:` => resolve via `deps.resolveArtifact`; not contained =>
-   *      deny; contained mainFrame => allow; contained subresource => allow
-   *      only if `record.kind === "file"`.
+   *      deny; contained mainFrame => allow only for a `kind:"file"` record
+   *      (a remote/localhost document's jump to a local file needs the
+   *      explicit open path, not an in-page mainFrame request); contained
+   *      subresource => allow only if `record.kind === "file"`.
    *   4. `http(s):`/`ws(s):` — normalize hostname (lowercase + de-bracket)
    *      and the origin's scheme (ws->http, wss->https) before comparing:
-   *        - localhost (any port): mainFrame => allow; subresource => allow
-   *          iff `record.kind !== "remote"` (a consented remote page must
-   *          not be able to pivot into loopback).
+   *        - localhost: allow iff the normalized origin is in
+   *          `record.localOrigins` — the ONE dev-server origin the preview
+   *          was OPENED with (preview-ipc-risk F4) — for mainFrame and
+   *          subresource alike. Every other record kind has an empty set, so
+   *          a remote/file document gets no loopback grant at all, and a
+   *          localhost document cannot reach a second port or host spelling.
    *        - any other origin => allow iff the normalized origin is in
    *          `record.consentedOrigins` — for BOTH mainFrame and subresource,
    *          which is exactly what closes the redirect-to-unconsented-origin
@@ -3024,6 +3089,12 @@ class PreviewHost implements PreviewHostHandle {
         return { allowed: false, dedupeKey: filePath };
       }
       if (req.resourceType === "mainFrame") {
+        // Same kind rule as `evaluateNavigation`'s file: branch: only a
+        // `file:` document navigates among contained files; another kind's
+        // mainFrame file request goes through the explicit open path.
+        if (record.kind !== "file") {
+          return { allowed: false, dedupeKey: filePath };
+        }
         return { allowed: true, dedupeKey: filePath };
       }
       if (record.kind !== "file") {
@@ -3056,10 +3127,10 @@ class PreviewHost implements PreviewHostHandle {
       const normalizedScheme = scheme === "ws:" ? "http:" : scheme === "wss:" ? "https:" : scheme;
       const origin = `${normalizedScheme}//${parsed.host}`;
       if (isLocalHost(parsed.hostname)) {
-        if (req.resourceType === "mainFrame") {
-          return { allowed: true, dedupeKey: origin };
-        }
-        return { allowed: record.kind !== "remote", dedupeKey: origin };
+        // Pinned-origin grant (preview-ipc-risk F4): only the dev-server
+        // origin this preview was opened with, any resource type. An empty
+        // `localOrigins` (file/remote records) denies every loopback request.
+        return { allowed: record.localOrigins.has(origin), dedupeKey: origin };
       }
       // Full browser access (live) lets any http(s) origin load; loopback rules above are unchanged.
       return { allowed: record.consentedOrigins.has(origin) || this.fullAccessFor(record.tabId), dedupeKey: origin };
