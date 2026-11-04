@@ -11,6 +11,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Settings → Claude gains a context-window limit: a value there caps the context meter and Claude Code's own auto-compact threshold for every new Claude session, while blank keeps the CLI's own default.
 
+### Fixed
+
+- A corrupt sibling field in the Claude settings block no longer silently drops a configured context-window limit, and an untouched blank limit field no longer triggers a redundant settings write on every blur.
+
 ## [0.0.74] — 2026-11-04
 
 ### Fixed
