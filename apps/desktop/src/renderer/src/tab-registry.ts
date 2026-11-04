@@ -628,6 +628,10 @@ export function createTabRegistry(
         if (liveConnection(entry) === connection && (saveRecovery(tabId, entry.store.getState()) || !entry.store.getState().orchestrateActive)) connection.send({ type: "child_report_ack", id: message.id });
       }
       if (message.type === "host_ready") {
+        const recovery = entry.store.getState();
+        if (JSON.stringify({ promptQueue: recovery.promptQueue, queueInFlight: recovery.queueInFlight, orchestrationDeliveries: recovery.orchestrationDeliveries, restoredComposerDraft: recovery.restoredComposerDraft }).includes('"attachmentsOmitted":true')) {
+          recovery.setNotice({ kind: "slash_command_rejected", text: "Attachments were not saved during reload. Reattach them before sending." });
+        }
         // Renderer-only quota diagnostics are restored after host_ready's
         // session reset. They are intentionally not part of session_history.
         for (const notice of loadUsageLimitNotices(message.sessionId)) {
@@ -707,7 +711,6 @@ export function createTabRegistry(
         const recovered = loadRecovery(tabId);
         if (recovered) {
           entry.store.setState(recovered);
-          if (JSON.stringify(recovered).includes('"attachmentsOmitted":true')) entry.store.getState().setNotice({ kind: "slash_command_rejected", text: "Attachments were not saved during reload. Reattach them before sending." });
         }
         const initial = loadPendingInitial(tabId) as InitialPrompt | null;
         if (!pendingInitialPrompts.has(tabId) && initial && typeof initial.text === "string") {

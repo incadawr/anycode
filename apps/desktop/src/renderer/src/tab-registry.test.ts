@@ -768,6 +768,16 @@ describe("tab-registry — child-session registration (CUT-S2 §2.5, slice S2c C
 });
 
 describe("tab-registry — queueInitialPrompt (slice P7.12 §4.2)", () => {
+  it("shows omitted attachment warning after the host handshake", () => {
+    const saved = JSON.stringify({ promptQueue: [{ id: "draft", text: "draft", images: [], attachmentsOmitted: true, requiresRestore: true }], orchestrationDeliveries: [] });
+    vi.stubGlobal("sessionStorage", { getItem: (key: string) => key.endsWith(":tab-a") ? saved : null, setItem: () => {}, removeItem: () => {} });
+    try {
+      const { registry } = createTestRegistry(createTabsStore()); const port = new FakeMessagePort();
+      registry.registerPort("tab-a", "/ws/a", asPort(port));
+      port.emit(HOST_READY("/ws/a", "sess-a"));
+      expect(registry.getStore("tab-a")!.getState().notice).toMatchObject({ text: expect.stringContaining("Attachments were not saved") });
+    } finally { vi.unstubAllGlobals(); }
+  });
   it("keeps ordinary delivery and report acknowledgement alive when storage is full", () => {
     vi.stubGlobal("sessionStorage", { getItem: () => null, setItem: () => { throw new Error("quota"); }, removeItem: () => {} });
     try {
