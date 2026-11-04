@@ -7,6 +7,18 @@ const protocol = { version: 1 as const, hostIncarnation: "host", connectionId: "
 
 describe("orchestration delivery recovery", () => {
   afterEach(() => vi.unstubAllGlobals());
+  it("omits large attachments from quota-limited recovery and holds restored drafts", () => {
+    const data = new Map<string, string>();
+    vi.stubGlobal("sessionStorage", { setItem: (key: string, value: string) => { if (value.length > 2000) throw new Error("quota"); data.set(key, value); }, getItem: (key: string) => data.get(key) ?? null });
+    const store = createDesktopStore();
+    const image = { name: "large.png", sizeBytes: 10000, attachment: { mediaType: "image/png" as const, data: "A".repeat(10000) } };
+    store.getState().enqueuePrompt({ text: "draft", images: [image] });
+    expect(saveRecovery("tab", store.getState())).toBe(true);
+    expect(loadRecovery("tab")?.promptQueue).toMatchObject([{ text: "draft", images: [], attachmentsOmitted: true, requiresRestore: true }]);
+    expect([...data.values()].join("")).not.toContain("A".repeat(100));
+    vi.stubGlobal("sessionStorage", { setItem: () => { throw new Error("quota"); } });
+    expect(saveRecovery("tab", store.getState())).toBe(false);
+  });
   it("survives renderer reload without automatically resending an unconfirmed task or losing a report", () => {
     const data = new Map<string, string>();
     vi.stubGlobal("sessionStorage", { setItem: (key: string, value: string) => data.set(key, value), getItem: (key: string) => data.get(key) ?? null });

@@ -768,6 +768,20 @@ describe("tab-registry — child-session registration (CUT-S2 §2.5, slice S2c C
 });
 
 describe("tab-registry — queueInitialPrompt (slice P7.12 §4.2)", () => {
+  it("keeps ordinary delivery and report acknowledgement alive when storage is full", () => {
+    vi.stubGlobal("sessionStorage", { getItem: () => null, setItem: () => { throw new Error("quota"); }, removeItem: () => {} });
+    try {
+      const { registry } = createTestRegistry(createTabsStore());
+      const port = new FakeMessagePort();
+      registry.registerPort("tab-a", "/ws/a", asPort(port));
+      port.emit(HOST_READY("/ws/a", "sess-a"));
+      registry.queueInitialPrompt("tab-a", "hello");
+      port.emit({ type: "child_report", id: "report", text: "result" });
+      expect(port.sent).toContainEqual(expect.objectContaining({ type: "user_message", text: "hello" }));
+      expect(port.sent).toContainEqual({ type: "child_report_ack", id: "report" });
+      expect(registry.getStore("tab-a")?.getState().connection).toBe("ready");
+    } finally { vi.unstubAllGlobals(); }
+  });
   it("dispatches immediately when the tab is already ready", () => {
     const tabsStore = createTabsStore();
     const { registry } = createTestRegistry(tabsStore);

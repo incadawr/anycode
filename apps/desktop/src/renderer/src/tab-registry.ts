@@ -421,7 +421,7 @@ export function createTabRegistry(
     entry.store.getState().recordSentMessage(text, deliveredImages, requestId, orchestrate ? "enable" : undefined, picks ?? {});
     const connection = liveConnection(entry);
     try {
-      if (!connection || !saveRecovery(tabId, entry.store.getState())) throw new Error("connection or recovery storage unavailable");
+      if (!connection || (orchestrate && !saveRecovery(tabId, entry.store.getState()))) throw new Error("connection or recovery storage unavailable");
       connection.send({ type: "user_message", requestId, text, ...(deliveredImages.length > 0 ? { images: deliveredImages.map((image) => image.attachment) } : {}), ...(connectionId ? { orchestrate: "enable" as const, connectionId } : {}) });
       if (liveConnection(entry) !== connection) entry.store.getState().markOrchestrationDeliveryUnknown(requestId);
     } catch {
@@ -472,7 +472,7 @@ export function createTabRegistry(
     if (!retryStillRejected()) { cancelRetry(); return; }
     if (!recoveryStillSafe()) { entry.store.getState().holdBlockedRecovery(requestId); return; }
     try {
-      if (!saveRecovery(tabId, entry.store.getState())) throw new Error("recovery storage unavailable");
+      if ((item.orchestrate || item.trackDelivery || item.retryOf || entry.store.getState().orchestrateActive) && !saveRecovery(tabId, entry.store.getState())) throw new Error("recovery storage unavailable");
       connection.send({
         type: "user_message", requestId, text: item.text,
         ...(item.images.length > 0 ? { images: item.images.map((image) => image.attachment) } : {}),
@@ -625,7 +625,7 @@ export function createTabRegistry(
       if (message.type === "child_report") {
         // Acknowledge enqueue only after the renderer recovery state is saved.
         // This is not evidence that the model consumed the report.
-        if (liveConnection(entry) === connection && saveRecovery(tabId, entry.store.getState())) connection.send({ type: "child_report_ack", id: message.id });
+        if (liveConnection(entry) === connection && (saveRecovery(tabId, entry.store.getState()) || !entry.store.getState().orchestrateActive)) connection.send({ type: "child_report_ack", id: message.id });
       }
       if (message.type === "host_ready") {
         // Renderer-only quota diagnostics are restored after host_ready's
@@ -705,10 +705,13 @@ export function createTabRegistry(
         };
         entries.set(tabId, entry);
         const recovered = loadRecovery(tabId);
-        if (recovered) entry.store.setState(recovered);
+        if (recovered) {
+          entry.store.setState(recovered);
+          if (JSON.stringify(recovered).includes('"attachmentsOmitted":true')) entry.store.getState().setNotice({ kind: "slash_command_rejected", text: "Attachments were not saved during reload. Reattach them before sending." });
+        }
         const initial = loadPendingInitial(tabId) as InitialPrompt | null;
         if (!pendingInitialPrompts.has(tabId) && initial && typeof initial.text === "string") {
-          if (!initial.requestId || !recovered?.orchestrationDeliveries.some(delivery => delivery.requestId === initial.requestId)) holdInitial(entry, initial, "The initial draft was restored after reload. Review it before sending.");
+          if (!initial.requestId || !recovered?.orchestrationDeliveries.some(delivery => delivery.requestId === initial.requestId)) holdInitial(entry, initial, "The initial draft was restored after reload. Attachments were not saved; review and reattach them before sending.");
           if (saveRecovery(tabId, entry.store.getState())) clearPendingInitial(tabId);
         }
         entry.unsubscribeRecovery = entry.store.subscribe((state, previous) => {
