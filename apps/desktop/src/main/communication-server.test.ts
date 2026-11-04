@@ -1113,7 +1113,7 @@ describe("External approvals on the Sessions API", () => {
 
 describe("Sessions API create_session", () => {
   type FixtureTab = { sessionId: string; workspace: string; state: string; pid: number };
-  async function createFixture(options: { opened?: Set<string>; exposed?: (id: string) => boolean; closer?: (id: string, tabs: FixtureTab[]) => Promise<CloseSessionOutcome>; creator?: (request: CreateSessionRequest, tabs: FixtureTab[]) => Promise<CreateSessionOutcome>; projects?: string[]; ready?: boolean; clock?: { now: number }; dispatchTimeoutMs?: number; writeLedger?: (path: string, text: string) => Promise<void> } = {}) {
+  async function createFixture(options: { opened?: Set<string>; exposed?: (id: string) => boolean; closer?: (id: string, tabs: FixtureTab[]) => Promise<CloseSessionOutcome>; creator?: (request: CreateSessionRequest, tabs: FixtureTab[]) => Promise<CreateSessionOutcome>; projects?: string[]; workspaces?: string[]; ready?: boolean; clock?: { now: number }; dispatchTimeoutMs?: number; writeLedger?: (path: string, text: string) => Promise<void> } = {}) {
     const dir = await mkdtemp(join(tmpdir(), "anycode-create-")); cleanups.push(() => rm(dir, { recursive: true, force: true }));
     const discoveryFile = join(dir, "communication.json");
     const tabs: FixtureTab[] = [];
@@ -1131,7 +1131,7 @@ describe("Sessions API create_session", () => {
     const clock = options.clock;
     const manager = { listTabs: () => tabs, communicationRequest: request };
     const service = await startCommunicationServer({
-      manager, userData: dir, config: { workspaces: [], discoveryFile },
+      manager, userData: dir, config: { workspaces: options.workspaces ?? [], discoveryFile },
       createSessionByAgent: (input) => creator(input, tabs),
       ...(options.projects ? { listAgentProjects: () => options.projects! } : {}),
       ...(options.opened ? { agentOpenedSessions: options.opened } : {}),
@@ -1160,6 +1160,18 @@ describe("Sessions API create_session", () => {
   it("list_agent_projects answers an empty list without a hook (env-file mode fails closed)", async () => {
     const f = await createFixture();
     expect(value(await f.client.callTool({ name: "list_agent_projects", arguments: {} }))).toEqual({ projects: [] });
+  });
+
+  it("list_agent_projects lists only rows the Sessions API folders list admits, so create_session never refuses a listed project", async () => {
+    const inside = await mkdtemp(join(tmpdir(), "anycode-projects-in-")); cleanups.push(() => rm(inside, { recursive: true, force: true }));
+    const outside = await mkdtemp(join(tmpdir(), "anycode-projects-out-")); cleanups.push(() => rm(outside, { recursive: true, force: true }));
+    // Both projects have the agent switch on, but only `inside` is in the Sessions API folders list.
+    const keys = [realpathSync(inside), realpathSync(outside)];
+    const f = await createFixture({ workspaces: [inside], projects: keys });
+    expect(value(await f.client.callTool({ name: "list_agent_projects", arguments: {} }))).toEqual({ projects: [{ workspace: keys[0] }] });
+    // The one advertised row is exactly what create_session accepts; the filtered one is refused.
+    expect(value(await f.client.callTool({ name: "create_session", arguments: { workspace: keys[0] } })).sessionId).toBe("agent-1");
+    expect(errorText(await f.client.callTool({ name: "create_session", arguments: { workspace: keys[1] } }))).toMatch(/^create_session not_allowed:/);
   });
 
   it("close_session validates input and fails closed without a hook", async () => {

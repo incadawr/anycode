@@ -628,7 +628,16 @@ export async function startCommunicationServer(options: CommunicationServerOptio
       }
       case "list_agent_projects": {
         z.object({}).strict().parse(raw);
-        return { projects: (options.listAgentProjects?.() ?? []).map((workspace) => ({ workspace })) };
+        // The list must match exactly what `create_session` will accept: rows
+        // outside the Sessions API folders list are filtered out through the
+        // same `isAllowed` gate (which retries missing entries), so /projects
+        // never advertises a folder the create would refuse and never
+        // discloses paths outside the configured share scope.
+        const projects: Array<{ workspace: string }> = [];
+        for (const key of options.listAgentProjects?.() ?? []) {
+          if (!restricted || await isAllowed(key)) projects.push({ workspace: key });
+        }
+        return { projects };
       }
       case "close_session": {
         const input = sessionSchema.parse(raw);
