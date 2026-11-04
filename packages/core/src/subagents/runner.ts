@@ -764,6 +764,16 @@ export function createSubagentRunner(
         ...(persona.effort !== undefined ? { effort: persona.effort } : {}),
       };
     },
+    // Whether the agent type resolves to a hand-authored md profile —
+    // reads the SAME thunk as engineProfile above, so a mid-session rescan is
+    // visible here too. Built-ins are never md-backed, and neither are the
+    // settings-derived role personas (origin "settings"): their entries exist
+    // without any profile file, so refusals must keep pointing at
+    // Settings → Roles, not at a file that was never written.
+    isMdProfile(agentType: string): boolean {
+      const persona = currentProfiles().get(agentType);
+      return persona !== undefined && persona.origin !== "settings";
+    },
     sessionRestrictions(agentType: string) {
       const persona = (isKnownPersona(agentType) && isReservedPersonaName(agentType))
         ? getPersona(agentType)

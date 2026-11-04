@@ -17,6 +17,7 @@ const BASELINE: Record<string, number> = {
   "components/ChildReportBlock.tsx": 1,
   "components/ChildSplitPane.tsx": 2,
   "components/ClaudeEnginePane.tsx": 0,
+  "components/ClaudeContextWindowSection.tsx": 1,
   "components/CodexEnginePane.tsx": 1,
   "components/CodexRolloutImportDialog.tsx": 6,
   "components/CommandPalette.tsx": 2,

@@ -11,6 +11,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Privileged IPC is now guarded by sender identity: every `anycode:*` channel answers only the app's main window (and the detached Markdown popout, explicitly allow-listed), and only from the renderer's top frame. Subframes, preview views, and other windows that somehow carry the preload bridge get refused, so a compromised renderer frame or stray window can no longer read settings, secrets, or drive sessions.
 
+### Added
+
+- Settings → Claude gains a context-window limit: a value there caps the context meter and Claude Code's own auto-compact threshold for every new Claude session, while blank keeps the CLI's own default.
+
 ### Changed
 
 - BrowserEval is now described honestly everywhere (tool description, approval dialogs, Full browser access prompts, docs): it runs arbitrary JavaScript in the preview page and can read that page's cookies and storage and anything else the page can see, including values typed into its fields, while HttpOnly cookies, other partitions and OS or browser-stored credentials stay out of reach; the old keyword blocklist, which was not a real security boundary, was removed. BrowserEval now asks on every call — in every session mode (including YOLO), with Full browser access on, and even when an older always-allow rule for it exists; new such rules can no longer be saved from the approval prompt.
@@ -25,7 +29,11 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Fixed the sidebar and command palette while opening a saved session: the history row now stays visible as a non-clickable "Opening…" placeholder until the new tab appears, then folds into it — the session no longer vanishes during a slow open, flickers on a refusal, or shows twice when the opened tab's host dies before it is ready.
 - Fixed two rough edges of that opening placeholder: with several sessions opening at once, each now binds only its own tab (the still-opening session's row stays visible instead of disappearing), and Up/Down navigation in the sidebar and command palette skips the inert "Opening…" rows instead of getting stuck on them.
 - Scope selection for skills import and MCP add-server is honoured again: the requested folder (this computer, or the active session's folder) is picked in the Settings scope switcher before the write lands, and the action stops with a clear error instead of silently writing into another folder's config when the folder can't be selected.
+- The Codex composer's Orchestrate control is now a compact icon toggle (on the start screen and in the session footer, with the same icon on the mode-menu row and the session header badge) instead of a text chip that wrapped to two lines and pushed ink under the neighbouring chips. The chip row keeps one fixed height at any window width: labels truncate with an ellipsis (full text stays on hover) instead of wrapping or overlapping.
 - Fixed the model pill in the composer footer sliding under the context meter in narrow windows and panes: the footer's left group now shrinks to the space it actually has, truncating the model name (full name stays on hover) instead of overlapping the context indicator. The Codex speed chip truncates the same way inside its own border, and pill labels keep a short readable stub instead of collapsing to an empty chevron.
+- A corrupt sibling field in the Claude settings block no longer silently drops a configured context-window limit, and an untouched blank limit field no longer triggers a redundant settings write on every blur.
+- Orchestrate no longer dead-ends a restricted role (planner, reviewer, explore) on a native engine fallback it cannot enforce: the refusal names the role and explains the fix in Settings → Roles, and the preset toast during orchestration says to turn Orchestrate off first.
+- Engine-restriction refusals now name the right fix for the profile's actual owner: a role configured only in Settings → Roles is no longer told to edit a profile file that does not exist, and a workflow step on a role claimed by a profile file points at that file (whose engine line outranks role settings) instead of at Settings.
 
 ## [0.0.74] — 2026-11-04
 

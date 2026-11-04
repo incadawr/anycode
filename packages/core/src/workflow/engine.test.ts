@@ -1927,6 +1927,38 @@ describe("workflow engine role-route (engine-profile steps)", () => {
     expect(outcomeOf(result.steps, "a").finalText).toContain("native engine");
   });
 
+  it("an md-claimed role's native-engine refusal points at the profile file, not Settings → Roles", async () => {
+    // The planner.md case: the role is claimed by a profile file (the route
+    // resolver answers null, exactly as production does for md-claimed roles)
+    // and the file's engine cannot carry the role's restrictions.
+    const restrictions = { tools: ["Read"], readOnly: true };
+    const mdClaimed = new RoutedSubagentPort(
+      ["planner"], (id, req, opts) => emitAndComplete(opts, req, `inline:${id}`), PLANNER_PROFILES,
+      new Map([["planner", null]]),
+    );
+    const session = okSession();
+    const result = await runPlanner(Object.assign(mdClaimed, {
+      sessionRestrictions: () => restrictions,
+      isMdProfile: (agentType: string) => agentType === "planner",
+    }), session);
+    expect(session.requests).toHaveLength(0);
+    const text = outcomeOf(result.steps, "a").finalText;
+    expect(text).toContain(`Remove the engine line from the "planner" profile file`);
+    expect(text).not.toContain("Settings → Roles");
+
+    // A role configured only in Settings (no profile file) keeps the
+    // Settings advice — the same split the Agent tool draws.
+    const settingsOnly = new RoutedSubagentPort(
+      ["planner"], (id, req, opts) => emitAndComplete(opts, req, `inline:${id}`), PLANNER_PROFILES,
+      new Map([["planner", null]]),
+    );
+    const settingsSession = okSession();
+    const settingsResult = await runPlanner(Object.assign(settingsOnly, {
+      sessionRestrictions: () => restrictions,
+    }), settingsSession);
+    expect(outcomeOf(settingsResult.steps, "a").finalText).toContain("Settings → Roles");
+  });
+
   it("(a) healthy primary (no skips): the profile request is unchanged, no route stamps", async () => {
     const port = new RoutedSubagentPort(
       ["planner"],

@@ -52,7 +52,7 @@ import { PromptQueue } from "./PromptQueue.js";
 import { SlashMenu } from "./SlashMenu.js";
 import { RolePickerDialog } from "./RolePickerDialog.js";
 import { needsRolePicker, orchestrateToggleNeedsRolePicker } from "../orchestrate-start.js";
-import { ArrowUp, ImageIcon, Stop, X } from "./icons.js";
+import { ArrowUp, ImageIcon, Orchestrate, Stop, X } from "./icons.js";
 // Reuse, not re-derive (R1 anti-clip lesson): the same fixed-position
 // viewport-clamp ModelPill's own popover uses to escape `.composer-footer-*`'s
 // `overflow:hidden` (see ModelPill.tsx's import comment) — the ctx-popover
@@ -2560,8 +2560,19 @@ export function Composer() {
               stays false for Codex, so the two are mutually exclusive). */}
           {supportsCorePermissions && <ModeMenu mode={mode ?? "plan"} disabled={modeChangeDisabled(turn.status, ready)} onChange={handleModeChange} {...(supportsOrchestration ? { orchestrateActive, onToggleOrchestrate: handleToggleOrchestrate } : {})} />}
           {engine?.id === "codex" && supportsOrchestration && (
-            <button type="button" className="mode-chip" aria-pressed={orchestrateActive} disabled={engineControlDisabled(turn.status, queueInFlight, ready) || orchestration.posture === "transitioning" || orchestration.posture === "quarantined"} onClick={() => handleToggleOrchestrate(!orchestrateActive)}>
-              {orchestrateActive ? "Orchestrate on" : "Orchestrate"}
+            // Icon-only toggle (the start-screen draft toggle's footprint):
+            // the text chip wrapped to two lines and inflated the chip row.
+            // State reads off aria-pressed; the label rides title/aria-label.
+            <button
+              type="button"
+              className="orchestrate-toggle"
+              aria-pressed={orchestrateActive}
+              aria-label={orchestrateActive ? "Orchestration is on: child agents do the work" : "Orchestrate: delegate work to child agents"}
+              title={orchestrateActive ? "Orchestration is on: child agents do the work" : "Orchestrate: delegate work to child agents"}
+              disabled={engineControlDisabled(turn.status, queueInFlight, ready) || orchestration.posture === "transitioning" || orchestration.posture === "quarantined"}
+              onClick={() => handleToggleOrchestrate(!orchestrateActive)}
+            >
+              <Orchestrate />
             </button>
           )}
           {engine?.permissions && (

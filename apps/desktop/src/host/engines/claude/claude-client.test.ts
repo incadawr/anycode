@@ -16,10 +16,11 @@ import {
   buildClaudeChildEnv,
   buildClaudeSpawnArgs,
   checkClaudeBinaryTrustOnDisk,
+  parseClaudeContextWindowOverride,
   redactHomePaths,
 } from "./claude-client.js";
 import { EngineVersionError } from "./protocol.js";
-import { ENV_CLAUDE_PROXY_URL, LOOPBACK_NO_PROXY, encodeEngineProxyCarrier } from "../../../shared/engines.js";
+import { ENV_CLAUDE_CONTEXT_WINDOW, ENV_CLAUDE_PROXY_URL, LOOPBACK_NO_PROXY, encodeEngineProxyCarrier } from "../../../shared/engines.js";
 
 // Executables the real trust gate DOES stat — see test-scratch.ts's module doc
 // on why os.tmpdir() cannot serve this (its ancestor chain is world-writable
@@ -738,6 +739,39 @@ describe("buildClaudeChildEnv — session tool env (A-4)", () => {
     expect(env.ANYCODE_API_KEY).toBeUndefined();
     expect(env.ANYCODE_WORKSPACE).toBeUndefined();
     expect(env.ANYCODE_SESSION_ID).toBe("sess-claude");
+  });
+});
+
+describe("buildClaudeChildEnv — context-window carrier", () => {
+  it("translates the ANYCODE_CLAUDE_CONTEXT_WINDOW carrier into the CLI's auto-compact window override", () => {
+    const env = buildClaudeChildEnv(
+      { HOME: "/home/test", PATH: "/usr/bin", [ENV_CLAUDE_CONTEXT_WINDOW]: "260000" },
+      undefined,
+      "darwin",
+    );
+    expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("260000");
+    // the carrier itself never reaches the child under its private name
+    expect(env.ANYCODE_CLAUDE_CONTEXT_WINDOW).toBeUndefined();
+  });
+
+  it("absent carrier -> no override key at all (without-the-setting behavior is byte-identical)", () => {
+    const env = buildClaudeChildEnv({ HOME: "/home/test", PATH: "/usr/bin" }, undefined, "darwin");
+    expect("CLAUDE_CODE_AUTO_COMPACT_WINDOW" in env).toBe(false);
+  });
+
+  it("fail-soft: garbage, blank, and out-of-range carriers emit nothing", () => {
+    for (const raw of ["", "   ", "abc", "99999", "1000001", "260000.5"]) {
+      const env = buildClaudeChildEnv({ HOME: "/home/test", PATH: "/usr/bin", [ENV_CLAUDE_CONTEXT_WINDOW]: raw }, undefined, "darwin");
+      expect(`CLAUDE_CODE_AUTO_COMPACT_WINDOW` in env).toBe(false);
+    }
+  });
+
+  it("range bounds: 100000 and 1000000 pass, everything just outside fails (parseClaudeContextWindowOverride)", () => {
+    expect(parseClaudeContextWindowOverride("100000")).toBe(100_000);
+    expect(parseClaudeContextWindowOverride("1000000")).toBe(1_000_000);
+    expect(parseClaudeContextWindowOverride(undefined)).toBeUndefined();
+    expect(parseClaudeContextWindowOverride("")).toBeUndefined();
+    expect(parseClaudeContextWindowOverride("260000")).toBe(260_000);
   });
 });
 

@@ -32,7 +32,7 @@ import { useContext, useEffect, useRef, useState } from "react";
 import { TabContext, useTabSend, useTabStore } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
 import type { ConnectionPhase, TurnState } from "../store.js";
-import { Collapse, Dot, Globe, TaskList, Terminal } from "./icons.js";
+import { Collapse, Dot, Globe, Orchestrate, TaskList, Terminal } from "./icons.js";
 import { EnvironmentMenu } from "./EnvironmentMenu.js";
 import { browserAccessChipVisible, useBrowserAccessState } from "./BrowserAccessRow.js";
 import { usePreviewStore } from "../preview/preview-store.js";
@@ -284,6 +284,7 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
       {orchestrationPosture === "quarantined" && <span className="session-header-agent" role="alert" title="Session policy could not be verified. Close this tab to stop the session.">Policy unverified · close tab</span>}
       {orchestrateActive && (
         <span className="session-header-agent session-header-orchestrate" data-testid="session-header-orchestrate" title="Orchestrating: child agents do the work">
+          <Orchestrate />
           Orchestrate
         </span>
       )}

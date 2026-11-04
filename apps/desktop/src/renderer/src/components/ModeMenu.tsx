@@ -16,7 +16,7 @@ import type { KeyboardEvent } from "react";
 import type { PermissionMode } from "@anycode/core";
 import type { TurnState } from "../store.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
-import { Check, Chevron } from "./icons.js";
+import { Check, Chevron, Orchestrate } from "./icons.js";
 // Reuse, not re-derive (R1 anti-clip lesson, same fix ModelPill's own popover
 // already applies — see ModelPill.tsx's import comment): the chip lives in
 // `.composer-footer-left`, which carries `overflow:hidden` (P7.13 narrow-width
@@ -358,7 +358,11 @@ export function ModeMenu({ mode, disabled, onChange, orchestrateActive = false, 
         aria-haspopup="menu"
         aria-expanded={open}
         aria-pressed={showOrchestrateRow ? orchestrateActive : undefined}
-        title={orchestrateOn ? "Orchestrate is on: child agents do the work, the session runs in Plan" : undefined}
+        // The chip truncates at narrow widths (the label's `min-width: 3ch`
+        // floor), so the full text rides the title in EVERY state — not only
+        // orchestrate's note; otherwise a truncated chip hides its mode with
+        // no hover recovery.
+        title={orchestrateOn ? "Orchestrate is on: child agents do the work, the session runs in Plan" : chipLabel}
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
         onKeyDown={onChipKeyDown}
@@ -424,7 +428,10 @@ export function ModeMenu({ mode, disabled, onChange, orchestrateActive = false, 
                   {orchestrateActive ? <Check /> : null}
                 </span>
                 <span className="mode-menu-item-body">
-                  <span className="mode-menu-item-name">Orchestrate</span>
+                  <span className="mode-menu-item-name">
+                    <Orchestrate className="mode-menu-item-glyph" />
+                    Orchestrate
+                  </span>
                   <span className="mode-menu-item-desc">{ORCHESTRATE_ROW_DESCRIPTION}</span>
                 </span>
               </button>
