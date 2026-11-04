@@ -134,6 +134,16 @@ export interface PreviewWebContentsLike {
   setWindowOpenHandler(handler: (details: { url: string }) => { action: "deny" }): void;
   /** Always wired to deny every permission (camera/mic/geolocation/notifications/…). */
   setPermissionRequestHandler(handler: (permission: string, callback: (granted: boolean) => void) => void): void;
+  /**
+   * Always wired to deny — the synchronous check-path Electron consults on top
+   * of the request handler (worker checks arrive with a null webContents);
+   * unknown permission strings must answer `false` too.
+   */
+  setPermissionCheckHandler(handler: (permission: string, requestingOrigin: string) => boolean): void;
+  /** Always wired to deny — HID/USB/serial device access. */
+  setDevicePermissionHandler(handler: () => boolean): void;
+  /** Always wired to deny — screen capture answers with an empty stream set. */
+  setDisplayMediaRequestHandler(handler: (callback: (streams: { video?: unknown; audio?: unknown }) => void) => void): void;
   onDidFinishLoad(listener: () => void): void;
   onDidFailLoad(listener: (errorCode: number, errorDescription: string, isMainFrame: boolean) => void): void;
   onRenderProcessGone(listener: (reason: string) => void): void;
@@ -2626,9 +2636,11 @@ class PreviewHost implements PreviewHostHandle {
    * this method again for it, which makes every listener from a PRIOR call
    * (still attached to the now-superseded container) an early-return no-op
    * forever after. `setWindowOpenHandler`/`setPermissionRequestHandler`/
-   * `setRequestGate` are deliberately NOT guarded: they are stateless
-   * deny-everything policy (or read live `record` fields shared across
-   * containers) with no "stale container" hazard to guard against.
+   * `setPermissionCheckHandler`/`setDevicePermissionHandler`/
+   * `setDisplayMediaRequestHandler`/`setRequestGate` are deliberately NOT
+   * guarded: they are stateless deny-everything policy (or read live `record`
+   * fields shared across containers) with no "stale container" hazard to
+   * guard against.
    */
   private wireWindow(record: WebPreviewRecord): void {
     const container = record.window;
@@ -2638,6 +2650,9 @@ class PreviewHost implements PreviewHostHandle {
 
     wc.setWindowOpenHandler(() => ({ action: "deny" }));
     wc.setPermissionRequestHandler((_permission, callback) => callback(false));
+    wc.setPermissionCheckHandler(() => false);
+    wc.setDevicePermissionHandler(() => false);
+    wc.setDisplayMediaRequestHandler((callback) => callback({}));
 
     wc.onDidFinishLoad(guard(() => {
       this.settle(record, "ready");
