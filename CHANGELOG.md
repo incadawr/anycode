@@ -7,9 +7,11 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.74] — 2026-11-04
+
 ### Fixed
 
-- Prevent conversations from overlapping when switching between tasks.
+- Fixed conversations from different tabs overlapping in one pane: after switching tabs (or after an agent opened a new session), messages, progress panels and scroll buttons of other sessions stayed on screen on top of the current one.
 
 ## [0.0.73] — 2026-11-04
 
