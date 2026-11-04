@@ -55,3 +55,24 @@ The engine owns an AppServerClient per Codex session boot: `startCodexEngine` an
 The product currently sends `dynamicTools` on both thread/start and thread/resume, although 0.166.0's experimental resume schema omits the field. A bridge handler being wired does not prove the model receives declarations after restarting. The completed process run called the harmless Agent fixture before restart, after restart with no resume declarations, and after a further restart with the product's undeclared `dynamicTools` field. Each call and fixture reply was observed, establishing availability of the tested route. This is not yet an actual detached-child lifecycle test.
 
 **P5/P6 recommendation and gate:** use a per-session app-server restart plus resume of the same native thread as the candidate ON/OFF transport for process-level MCP isolation; the owner-run test confirms reversible fixture inventory and history across that boundary. Do not claim developer-priority instruction delivery: the process marker was present in config but absent from the model response, so instruction composition/removal remains blocked. The Agent fixture was callable across restarts, while lifecycle tests must still cover detached children, report delivery, approvals and failure quarantine. The decision for context delivery is per-turn `additionalContext`, without a developer-priority claim; do not provide a writable fallback. Include startup latency, temporary unavailability, restart failure, empty threads with no rollout, selection/preset preservation, and profile/config precedence in the design. Restore the base process configuration on OFF and verify the effective inventory before reopening admission.
+
+
+## Current smoke and remaining evidence
+
+The isolated fixture smoke exercises the engine's scripted restart, policy echo,
+quarantine and read-only turn settings without inference. Production admission
+requires a version inside the delivered verified support range and a complete
+config inventory; a warning, risk acceptance, missing policy or weak readback
+does not enable orchestration. Subsequent transitions still verify process
+config and the read-only/never echo before committing the posture.
+
+The new opt-in app-server smoke asks the model to attempt patch, workspace and
+temporary-directory shell writes, escalation and native delegation, then checks
+real disk sentinels. It reports SKIP when no matching attempt is observed;
+absence alone does not prove enforcement. It also checks read access, the
+fixture Agent and an application-context marker through restart/resume. This
+marker does not demonstrate developer-priority instruction delivery, and the
+OFF response can be influenced by prior history. The live smoke and UI menu,
+slash and reconnect checks remain unrun for this change; no live acceptance
+or cross-platform sandbox claim follows from the fixture. See
+`docs/development/automation-smoke.md` for invocation and artifact custody.

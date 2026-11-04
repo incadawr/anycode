@@ -1054,7 +1054,7 @@ describe("Codex orchestration restart", () => {
     const initial = new FakeAppServer();
     const baseRequest = initial.request.bind(initial);
     initial.request = <T>(method: string, params?: unknown, opts?: { timeoutMs?: number }) => {
-      if (method === "config/read") return Promise.resolve({ config: options.noInventory ? {} : baseConfig } as T);
+      if (method === "config/read") return Promise.resolve({ config: options.noInventory ? {} : baseConfig, layers: [] } as T);
       if (method === "thread/read") return options.readUnsupported ? Promise.reject(new Error("list_turns is not supported yet")) : Promise.resolve({ thread: { id: "fresh-thread", turns: options.empty ? [] : [{ id: "prior" }] } } as T);
       return baseRequest<T>(method, params, opts);
     };
@@ -1065,7 +1065,7 @@ describe("Codex orchestration restart", () => {
     let releaseFactory: (() => void) | undefined;
     engine.installOrchestration((args) => {
       overrides.push([...args]);
-      const next = new FakeAppServer(); servers.push(next);
+      const next = new FakeAppServer(); Object.assign(next, { orchestrationVersionVerified: true }); servers.push(next);
       const original = next.request.bind(next);
       next.request = <T>(method: string, params?: unknown, opts?: { timeoutMs?: number }): Promise<T> => {
         if (method === "config/read") return Promise.resolve({ config: args.length ? onConfig : baseConfig } as T);
@@ -1079,8 +1079,22 @@ describe("Codex orchestration restart", () => {
       };
       return { client: next, start: () => options.neverFactory ? new Promise<void>((resolve) => { releaseFactory = resolve; }) : Promise.resolve() };
     }, persist);
+    await engine.verifyOrchestrationAvailability(true);
     return { initial, engine, servers, overrides, persist, releaseFactory: () => releaseFactory?.(), controller: new OrchestrationController(engine.orchestrationPolicy) };
   }
+
+  it("requires verified version and complete readback before advertising availability", async () => {
+    const r = await setup();
+    expect(r.engine.orchestrationPolicy!.availability().supported).toBe(true);
+    await r.engine.verifyOrchestrationAvailability(false);
+    expect(r.engine.orchestrationPolicy!.availability().supported).toBe(false);
+    for (const config of [{ mcp_servers: {} }, { mcp_servers: {}, features: { multi_agent: false }, sandbox_mode: "read-only" }]) {
+      r.initial.request = async <T>() => ({ config, layers: [] } as T);
+      await r.engine.verifyOrchestrationAvailability(true);
+      expect(r.engine.orchestrationPolicy!.availability().supported).toBe(false);
+    }
+    await r.engine.dispose("session-close");
+  });
 
   it("fails closed without an MCP inventory before restarting", async () => {
     const r = await setup({ noInventory: true });

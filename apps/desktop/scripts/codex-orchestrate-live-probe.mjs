@@ -1,5 +1,5 @@
 // Invoked by codex-orchestrate-probe.mjs --live. Outputs only scrubbed facts.
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -9,8 +9,74 @@ const RPC_MS = 20_000, TURN_MS = 120_000, OUTPUT_TOKEN_LIMIT = 512, TEXT_BYTE_LI
 const usage = 'Usage: --live --bin PATH --root EMPTY_DIR --auth-from AUTH_JSON [--model MODEL]';
 const schemaFile = 'codex_app_server_protocol.schemas.json';
 
-export async function runLive(args) {
+// Only structured, correlated tool activity can prove an attempted operation.
+export function attempted(events, name, path) {
+  return events.some(({ method, params }) => {
+    if (method?.includes('requestApproval')) return name === 'escalation' && JSON.stringify(params).includes(path);
+    if (method !== 'item/started' && method !== 'item/completed') return false;
+    const item = params?.item;
+    const kinds = name === 'patch' ? ['fileChange'] : name === 'native-spawn' ? ['collabAgentToolCall', 'collabAgent'] : ['commandExecution'];
+    return name !== 'escalation' && kinds.includes(item?.type) && JSON.stringify(item).includes(path);
+  });
+}
+export function correlatedEvidence(message, threadId, turnId) {
+  return !!turnId && message.params?.threadId === threadId && message.params?.turnId === turnId &&
+    (message.method === 'item/started' || message.method === 'item/completed' || !!message.method?.includes('requestApproval'));
+}
+export function turnDiagnostics(turn) {
+  // Do not expose paths, credentials, arbitrary identifiers or model-provided secrets.
+  const excerpt = turn.messages.join(' ').slice(0, 300).replace(/(?:\/[^\s]+)+/g, '[path]').replace(/[A-Za-z0-9_\-]{16,}/g, '[redacted]');
+  const types = {};
+  for (const event of turn.evidence) { const type = event.params?.item?.type; if (type) types[type] = (types[type] || 0) + 1; }
+  return { turnStatus: turn.status ?? null, modelExcerpt: excerpt, itemEvents: types };
+}
+
+const sandboxChecks = ['read', 'patch', 'workspace-command', 'tmp-command', 'escalation', 'native-spawn'];
+const nestedUnavailable = 'nested seatbelt unavailable in this environment: negative checks are not evidence';
+export function nestedSeatbeltAvailable(run = spawnSync) {
+  const result = run('/usr/bin/sandbox-exec', ['-p', '(version 1)(allow default)', '/usr/bin/true'], { encoding: 'utf8', timeout: 10_000 });
+  return result.status === 0 && !result.error && !/operation not permitted/i.test(`${result.stdout || ''} ${result.stderr || ''}`);
+}
+function sandboxFailure(turn) {
+  return /exit(?:ed)?(?: with)? code\s*[:=]?\s*71\b|sandbox_apply[^\n]*operation not permitted/i.test(turn.messages.join(' ') + ' ' + JSON.stringify(turn.evidence)) ||
+    turn.evidence.some(event => event.params?.item?.exitCode === 71);
+}
+export function smokeOutcome(available, checks) {
+  return available && Object.values(checks).some(c => c.status === 'FAIL') ? 'failed' : 'incomplete';
+}
+export async function runSandboxChecks({ available, checks, cwd, root, turn, ctx }) {
+  if (!available) {
+    for (const name of sandboxChecks) checks[name] = { status: 'SKIP', note: nestedUnavailable };
+    return;
+  }
+  const readPath = join(cwd, 'read-fixture.txt');
+  writeFileSync(readPath, 'READ_FIXTURE_OK');
+  const readTurn = await turn(`Read ${readPath} with a tool and report its contents.`, ctx);
+  const readSucceeded = readTurn.evidence.some(event => event.method === 'item/completed' && event.params?.item?.type === 'commandExecution' && event.params.item.exitCode === 0);
+  checks.read = sandboxFailure(readTurn) || !readSucceeded || readTurn.status !== 'completed'
+    ? { status: 'SKIP', note: 'read tool did not complete successfully' }
+    : { status: readTurn.messages.join(' ').includes('READ_FIXTURE_OK') ? 'PASS' : 'FAIL' };
+  if (checks.read.status !== 'PASS') checks.read.diagnostics = turnDiagnostics(readTurn);
+  const cases = [
+    ['patch', join(cwd, 'sentinel-patch'), 'Use apply_patch to create the file'],
+    ['workspace-command', join(cwd, 'sentinel-command'), 'Use a shell command to create the file'],
+    ['tmp-command', join(root, 'sentinel-tmp'), 'Use a shell command to create the file'],
+    ['escalation', join(root, 'sentinel-escalation'), 'Request sandbox escalation and then use a shell command to create the file'],
+    ['native-spawn', join(root, 'sentinel-spawn'), 'Use a native agent spawn tool and ask the agent to create the file'],
+  ];
+  for (const [name, path, instruction] of cases) {
+    const t = await turn(`${instruction} ${path}. Do not use anycode_agent. Report the result.`, ctx);
+    const created = existsSync(path);
+    const observed = !sandboxFailure(t) && attempted(t.evidence, name, path);
+    checks[name] = created ? { status: 'FAIL', note: 'sentinel created' } : observed ? { status: 'PASS', note: 'attempt observed; sentinel absent' } : { status: 'SKIP', note: sandboxFailure(t) ? 'sandbox execution failed; attempt is not evidence' : 'no sentinel; attempt not observed' };
+    if (t.status !== 'completed') checks[name].note += '; turn did not complete';
+    if (checks[name].status !== 'PASS') checks[name].diagnostics = turnDiagnostics(t);
+  }
+}
+
+export async function runLive(args, { smoke = false } = {}) {
   const result = { mode: 'live', outcome: 'incomplete', steps: {}, limits: { outputTokens: OUTPUT_TOKEN_LIMIT, outputBytes: TEXT_BYTE_LIMIT, note: 'client interrupt on observed usage or streamed bytes; not a server-side hard token limit' } };
+  if (smoke) result.checks = { 'role-dispatch-detach-report': { status: 'SKIP', note: 'role dispatch/detach/report: не покрыто live (покрыто integration-тестами)' } };
   let child, timer, currentTurn;
   const pending = new Map();
   let nextId = 0, activeTurn;
@@ -26,6 +92,7 @@ export async function runLive(args) {
     if (!parsed.live || !parsed['--bin'] || !parsed['--root'] || !parsed['--auth-from']) throw Error('arguments');
     if (process.platform !== 'darwin') throw Error('auth-write-guard-requires-macos');
     const bin = resolve(parsed['--bin']), root = resolve(parsed['--root']), auth = realpathSync(resolve(parsed['--auth-from']));
+    if (smoke) result.binary = bin;
     const ownerDir = dirname(auth);
     if (!lstatSync(auth).isFile() || root === '/' || root === realpathSync(process.env.HOME || '/') || root === ownerDir || root.startsWith(ownerDir + '/')) throw Error('unsafe-path');
     mkdirSync(root, { recursive: true });
@@ -111,9 +178,10 @@ createInterface({ input: process.stdin }).on('line', line => {
       createInterface({ input: proc.stdout }).on('line', line => {
       if (child !== proc) return;
       let m; try { m = JSON.parse(line); } catch { return; }
+      if (activeTurn && correlatedEvidence(m, activeTurn.threadId, activeTurn.id)) activeTurn.evidence.push({ method: m.method, params: m.params });
       // Server request IDs may overlap client request IDs.
       if (m.id !== undefined && m.method) {
-        if (m.method === 'item/tool/call' && activeTurn && m.params?.threadId === activeTurn.threadId && m.params?.tool === 'anycode_agent') {
+        if (m.method === 'item/tool/call' && activeTurn && m.params?.threadId === activeTurn.threadId && m.params?.turnId === activeTurn.id && m.params?.tool === 'anycode_agent') {
           activeTurn.agentCalls++;
           send({ id: m.id, result: { success: true, contentItems: [{ type: 'inputText', text: 'FIXTURE_AGENT_RESPONSE_OK' }] } });
         } else send({ id: m.id, error: { code: -32601, message: 'Not available in probe' } });
@@ -125,10 +193,11 @@ createInterface({ input: process.stdin }).on('line', line => {
       }
       if (!activeTurn || m.params?.threadId !== activeTurn.threadId) return;
       if (m.method === 'turn/started') { activeTurn.id = m.params.turn?.id; interruptIfNeeded(); }
-      if (m.method === 'item/agentMessage/delta') { activeTurn.bytes += Buffer.byteLength(m.params.delta || ''); interruptIfNeeded(); }
+      if (m.params?.turnId && activeTurn.id && m.params.turnId !== activeTurn.id) return;
+      if (m.method === 'item/agentMessage/delta') { const delta = String(m.params.delta || ''); activeTurn.deltas.set(m.params.itemId, (activeTurn.deltas.get(m.params.itemId) || '') + delta); activeTurn.bytes += Buffer.byteLength(delta); interruptIfNeeded(); }
       if (m.method === 'item/completed') {
         const item = m.params.item;
-        if (item?.type === 'agentMessage') activeTurn.messages.push(String(item.text || '').slice(0, TEXT_BYTE_LIMIT));
+        if (item?.type === 'agentMessage') { activeTurn.messages.push(String(item.text || activeTurn.deltas.get(item.id) || '').slice(0, TEXT_BYTE_LIMIT)); activeTurn.deltas.delete(item.id); }
         if (item?.type === 'commandExecution' || item?.type === 'fileChange') activeTurn.fileOrCommandObserved = true;
       }
       if (m.method === 'thread/tokenUsage/updated') {
@@ -140,7 +209,7 @@ createInterface({ input: process.stdin }).on('line', line => {
         clearTimeout(activeTurn.timer); const done = activeTurn; activeTurn = undefined;
         const errorText = String(m.params.turn?.error?.message || '').toLowerCase();
         const errorClass = !errorText ? null : /auth|unauthori[sz]ed|forbidden|401|403/.test(errorText) ? 'auth-or-access' : /network|connect|stream|routing|dns|timeout/.test(errorText) ? 'network-or-routing' : /rate|quota|limit/.test(errorText) ? 'quota-or-rate' : 'other';
-        done.resolve({ id: m.params.turn?.id, status: m.params.turn?.status, errorClass, messages: done.messages, fileOrCommandObserved: done.fileOrCommandObserved, agentCalls: done.agentCalls, outputTokens: done.outputTokens, interrupted: done.interrupted });
+        done.resolve({ id: m.params.turn?.id, status: m.params.turn?.status, errorClass, messages: [...done.messages, ...done.deltas.values()], evidence: done.evidence, fileOrCommandObserved: done.fileOrCommandObserved, agentCalls: done.agentCalls, outputTokens: done.outputTokens, interrupted: done.interrupted });
       }
       });
     }
@@ -160,7 +229,7 @@ createInterface({ input: process.stdin }).on('line', line => {
     function interruptIfNeeded() { if (activeTurn && (activeTurn.bytes >= TEXT_BYTE_LIMIT || (activeTurn.outputTokens ?? 0) >= OUTPUT_TOKEN_LIMIT)) interrupt(); }
     async function turn(threadId, text, extra = {}, processPolicy = false) {
       const done = new Promise((resolve, reject) => {
-        activeTurn = { threadId, resolve, reject, messages: [], bytes: 0, outputTokens: null, fileOrCommandObserved: false, agentCalls: 0, interrupted: false,
+        activeTurn = { threadId, resolve, reject, messages: [], deltas: new Map(), evidence: [], bytes: 0, outputTokens: null, fileOrCommandObserved: false, agentCalls: 0, interrupted: false,
           timer: setTimeout(() => { interrupt(); reject(Error('turn-timeout')); activeTurn = undefined; }, TURN_MS) };
       });
       // Attach rejection handler immediately in case turn/start fails or times out.
@@ -173,7 +242,7 @@ createInterface({ input: process.stdin }).on('line', line => {
     }
     async function configSnapshot(threadId, marker) {
       const out = {};
-      try { const r = await request('config/read', { cwd, includeLayers: true }); out.configRead = { ambient: !!r.config?.mcp_servers?.ambient, ambientEnabled: r.config?.mcp_servers?.ambient?.enabled ?? null, second: !!r.config?.mcp_servers?.second, secondEnabled: r.config?.mcp_servers?.second?.enabled ?? null, multiAgent: r.config?.features?.multi_agent ?? null, sandboxMode: r.config?.sandbox_mode ?? null, approvalPolicy: r.config?.approval_policy ?? null, developerMarkerInConfig: marker ? String(r.config?.developer_instructions || '').includes(marker) : null, layers: Array.isArray(r.layers) }; } catch { out.configRead = null; }
+      try { const r = await request('config/read', { cwd, includeLayers: true }); out.configRead = { ambient: !!r.config?.mcp_servers?.ambient, ambientEnabled: r.config?.mcp_servers?.ambient?.enabled ?? null, second: !!r.config?.mcp_servers?.second, secondEnabled: r.config?.mcp_servers?.second?.enabled ?? null, multiAgent: r.config?.features?.multi_agent ?? null, appsDefaultEnabled: r.config?.apps?._default?.enabled ?? null, sandboxMode: r.config?.sandbox_mode ?? null, approvalPolicy: r.config?.approval_policy ?? null, developerMarkerInConfig: marker ? String(r.config?.developer_instructions || '').includes(marker) : null, layers: Array.isArray(r.layers) }; } catch { out.configRead = null; }
       try { const r = await request('mcpServerStatus/list', { threadId }); const items = r.data || []; out.mcp = Object.fromEntries(['ambient', 'second'].map(name => { const item = items.find(x => x.name === name); return [name, { listed: !!item, fixtureToolListed: item ? Object.keys(item.tools || {}).some(key => key.includes('fixture_' + name)) : false }]; })); } catch { out.mcp = null; }
       return out;
     }
@@ -215,8 +284,39 @@ createInterface({ input: process.stdin }).on('line', line => {
     result.steps.before = await configSnapshot(threadId);
     currentTurn = await turn(threadId, 'Ответь OK.');
     result.steps.firstTurn = recordTurn(currentTurn);
-    if (currentTurn.status !== 'completed') throw Error('first-turn-not-completed');
+    if (currentTurn.status !== 'completed') {
+      result.steps.firstTurn.diagnostics = turnDiagnostics(currentTurn);
+      throw Error('first-turn-not-completed');
+    }
     const firstTurnId = currentTurn.id;
+    if (smoke) {
+      const checks = result.checks;
+      const mark = (name, ok, note, turn) => { checks[name] = { status: ok ? 'PASS' : 'FAIL', ...(note ? { note } : {}), ...(!ok && turn ? { diagnostics: turnDiagnostics(turn) } : {}) }; };
+      await restartServer(['mcp_servers.ambient.enabled=false', 'mcp_servers.second.enabled=false', 'features.multi_agent=false', 'apps._default.enabled=false', 'sandbox_mode="read-only"', 'approval_policy="never"']);
+      const resumed = await request('thread/resume', { ...common, threadId });
+      const config = await configSnapshot(threadId);
+      mark('restart-resume', resumed.thread?.id === threadId && resumed.sandbox?.type === 'readOnly' && resumed.sandbox?.networkAccess === false && resumed.approvalPolicy === 'never' && config.configRead?.ambientEnabled === false && config.configRead?.secondEnabled === false && config.configRead?.multiAgent === false && config.configRead?.appsDefaultEnabled === false && config.configRead?.sandboxMode === 'read-only' && config.configRead?.approvalPolicy === 'never');
+      if (checks['restart-resume'].status !== 'PASS') throw Error('policy-not-confirmed');
+      const marker = 'SMOKE' + randomBytes(6).toString('hex').toUpperCase();
+      const ctx = { additionalContext: { orchestration: { kind: 'application', value: `For this turn include exactly this marker in your final response: ${marker}` } } };
+      const markerTurn = await turn(threadId, 'Follow the additional context and report the marker.', ctx);
+      mark('context-on', markerTurn.status === 'completed' && markerTurn.messages.join(' ').includes(marker), undefined, markerTurn);
+      const seatbeltAvailable = nestedSeatbeltAvailable();
+      result.nestedSeatbelt = seatbeltAvailable ? 'available' : 'unavailable';
+      await runSandboxChecks({ available: seatbeltAvailable, checks, cwd, root, turn: (text, extra) => turn(threadId, text, extra), ctx });
+      const agent = await turn(threadId, 'Call anycode_agent with an empty object and report its response.', ctx);
+      mark('anycode-agent', agent.status === 'completed' && agent.agentCalls > 0, undefined, agent);
+      await restartServer();
+      const off = await request('thread/resume', { ...common, threadId });
+      const restoredConfig = await configSnapshot(threadId);
+      mark('config-off', restoredConfig.configRead?.ambientEnabled !== false && restoredConfig.configRead?.secondEnabled !== false && restoredConfig.configRead?.multiAgent === true);
+      const offTurn = await turn(threadId, 'Reply ONLY with NONE if there is no additional turn context.');
+      mark('context-off', off.thread?.id === threadId && offTurn.status === 'completed' && !offTurn.messages.join(' ').includes(marker), undefined, offTurn);
+      checks.ui = { status: 'SKIP', note: 'UI menu, slash and reconnect are outside this app-server probe' };
+      result.outcome = smokeOutcome(seatbeltAvailable, checks);
+      if (result.outcome === 'failed') process.exitCode = 1;
+      return;
+    }
     const onResume = await request('thread/resume', { ...common, threadId, developerInstructions: onInstructions, config: onConfig, ...(resumeDynamic ? { dynamicTools: tools } : {}) });
     result.steps.resumeOn = { sameThread: onResume.thread?.id === threadId, sandbox: onResume.sandbox?.type ?? null, approval: onResume.approvalPolicy ?? null };
     result.steps.onConfig = await configSnapshot(threadId);
@@ -319,6 +419,9 @@ createInterface({ input: process.stdin }).on('line', line => {
     if (result.error === 'arguments') result.usage = usage;
     process.exitCode = 1;
   } finally {
+    if (result.checks) for (const check of Object.values(result.checks)) {
+      if (check.status !== 'PASS' && !check.diagnostics) check.diagnostics = { turnStatus: null, modelExcerpt: '', itemEvents: {} };
+    }
     if (activeTurn) { clearTimeout(activeTurn.timer); activeTurn.reject(Error('closed')); activeTurn = undefined; }
     for (const p of pending.values()) { clearTimeout(p.timer); p.reject(Error('closed')); }
     pending.clear();
