@@ -14,7 +14,7 @@ names them `BrowserOpen`, `BrowserNavigate`, ....
 2. Approvals always apply in these tabs (there is no auto/yolo mode that
    skips them): a remote navigation and `remote:true` click/type ask first
    unless Full browser access is on; `BrowserEval` asks always, even with it
-   on.
+   on, and no saved always-allow rule exempts it.
 3. `BrowserOpen` of a remote url asks even with Full browser access on, as in
    native tabs.
 4. A Codex session resumed after an app restart gets the browser tools back
@@ -98,7 +98,8 @@ takes a new snapshot.
 - A non-localhost origin: `BrowserNavigate` to it asks first. Clicking or
   typing on a page from that origin asks again (`remote: true`). If you decline,
   the agent does not retry around the refusal.
-- `BrowserEval` always asks, on every origin. The expression runs as page
+- `BrowserEval` always asks, on every origin — in every mode, and no saved
+  always-allow rule exempts it. The expression runs as page
   code: it can read the shown page's cookies and storage, and anything else
   the page can see, including values typed into its fields. HttpOnly cookies,
   other preview partitions and OS or browser-stored credentials stay out of
@@ -106,14 +107,15 @@ takes a new snapshot.
   own reach.
 - Modes `auto` and `yolo` do not escalate approvals, so a `remote: true` call
   runs without a prompt there. This matches how `BrowserOpen` already treats
-  remote URLs.
+  remote URLs. `BrowserEval` is the exception: it asks in those modes too.
 
 ## Full browser access (per session)
 
 Each session has a **Full browser access** switch in its environment menu
 (the folder/branch menu in the header). While it is on, the agent can open any
 http(s) site, click and type (including passwords) in that session's preview
-without asking; `BrowserEval` keeps asking on every call. Turning it on asks
+without asking; `BrowserEval` keeps asking on every call — modes and saved
+rules never exempt it. Turning it on asks
 you first; turning it off is immediate and takes effect on the next navigation
 or action.
 

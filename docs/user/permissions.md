@@ -99,7 +99,8 @@ and the session's mode. You can:
 - **Deny**: the call is refused, and the model sees the refusal. Closing the
   prompt or pressing Esc also denies.
 - **Always allow** (a checkbox next to Allow): saves a rule with the pattern shown,
-  which you can edit, and then runs the call.
+  which you can edit, and then runs the call. A few asks offer no checkbox —
+  a plan review and `BrowserEval` — because they ask on every call.
 
 ## How to verify it applied
 
@@ -115,7 +116,9 @@ writes or runs a shell command runs, whatever the rules say. For more causes, se
 
 `BrowserNavigate`, `BrowserClick` and `BrowserType` ask for approval when they
 reach a non-localhost origin (a remote url, or a click or type the agent marks
-`remote: true`). `BrowserEval` always asks. Snapshot, wait and console calls,
+`remote: true`). `BrowserEval` always asks — in every mode, and
+always-allow rules never exempt it (an older saved rule for it no longer
+applies). Snapshot, wait and console calls,
 and anything on a localhost page or a local file, do not prompt. See
 [browser.md](browser.md).
 
