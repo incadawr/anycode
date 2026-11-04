@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- Embedded previews no longer grant the whole loopback: a preview opened on a local dev server can reach exactly the `host:port` it was opened with (relative dev-server assets and its WebSocket keep working), while a second loopback port, `127.0.0.1` vs `localhost` spellings, and any other local service are denied for page navigation, redirects, subresources, fetch, and WebSockets alike. Documents loaded from files or remote sites have no loopback access at all, so a remote page can no longer pivot into local services via a navigation or redirect leg; opening a different local target goes through its own open (or an explicit navigate), which re-pins the grant instead of widening it. Preview-to-panel transfers and history navigation are judged by the same rule, and denials stay legible in the preview console.
+
 ## [0.0.75] — 2026-11-04
 
 ### Security
