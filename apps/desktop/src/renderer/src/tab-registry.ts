@@ -472,7 +472,7 @@ export function createTabRegistry(
     if (!retryStillRejected()) { cancelRetry(); return; }
     if (!recoveryStillSafe()) { entry.store.getState().holdBlockedRecovery(requestId); return; }
     try {
-      if ((item.orchestrate || item.trackDelivery || item.retryOf || entry.store.getState().orchestrateActive) && !saveRecovery(tabId, entry.store.getState())) throw new Error("recovery storage unavailable");
+      if ((item.orchestrate || entry.store.getState().orchestrateActive) && !saveRecovery(tabId, entry.store.getState())) throw new Error("recovery storage unavailable");
       connection.send({
         type: "user_message", requestId, text: item.text,
         ...(item.images.length > 0 ? { images: item.images.map((image) => image.attachment) } : {}),

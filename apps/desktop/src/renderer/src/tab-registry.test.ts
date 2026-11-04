@@ -776,8 +776,10 @@ describe("tab-registry — queueInitialPrompt (slice P7.12 §4.2)", () => {
       registry.registerPort("tab-a", "/ws/a", asPort(port));
       port.emit(HOST_READY("/ws/a", "sess-a"));
       registry.queueInitialPrompt("tab-a", "hello");
+      registry.getStore("tab-a")!.getState().enqueuePrompt({ text: "recovered", images: [], trackDelivery: true });
       port.emit({ type: "child_report", id: "report", text: "result" });
       expect(port.sent).toContainEqual(expect.objectContaining({ type: "user_message", text: "hello" }));
+      expect(port.sent).toContainEqual(expect.objectContaining({ type: "user_message", text: "recovered" }));
       expect(port.sent).toContainEqual({ type: "child_report_ack", id: "report" });
       expect(registry.getStore("tab-a")?.getState().connection).toBe("ready");
     } finally { vi.unstubAllGlobals(); }
