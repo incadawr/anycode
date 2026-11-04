@@ -3422,7 +3422,7 @@
 .roles-header .roles-preset { margin-left: auto; flex-basis: 13rem; }
 .roles-menu { position: relative; }
 .roles-menu-items { position: absolute; top: calc(100% + 4px); right: 0; z-index: 20; min-width: 9rem; display: grid; gap: 1px; padding: var(--sp-1); background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow-menu); }
-.roles-menu-items .roles-menu-item { justify-self: stretch; border: 0; background: transparent; text-align: left; }
+.roles-menu-items .roles-menu-item { justify-self: stretch; border: 0; background: transparent; text-align: left; justify-content: flex-start; }
 .roles-menu-items .roles-menu-item:hover:not(:disabled),
 .roles-menu-items .roles-menu-item:focus-visible { background: var(--bg-hover); }
 .roles-menu-items .roles-menu-item-danger { color: var(--danger); }
