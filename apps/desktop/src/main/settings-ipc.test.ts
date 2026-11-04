@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSettings } from "../settings/files.js";
+import { cloneDefaults } from "../settings/schema.js";
 import type { CatalogSummary, SecretKey, SecretStatus, SettingsSnapshot } from "../shared/settings.js";
 import { activeConnection, activeProviderView } from "../shared/settings.js";
 import {
@@ -886,6 +887,26 @@ describe("handleSet — claude.contextWindowTokens", () => {
     const noop = await handleSet(makeDeps(), { claude: { contextWindowTokens: "" } });
     expect(noop.ok).toBe(true);
     expect((await loadSettings(settingsPath)).settings.claude?.contextWindowTokens).toBeUndefined();
+  });
+
+  it("a present-but-undefined value in a whole-block patch is accepted as not supplied", async () => {
+    // The schema's per-field catch leaves the key PRESENT with value undefined
+    // on an invalid persisted value; a caller spreading that whole parsed block
+    // back into a patch (the `{ claude: { ...snapshot.settings.claude, x } }`
+    // pattern) must not be refused for a field it does not touch — deepMerge
+    // treats undefined as "not supplied".
+    await writeFile(
+      settingsPath,
+      JSON.stringify({ ...cloneDefaults(), claude: { binaryPath: "/usr/local/bin/claude", contextWindowTokens: 99999 } }),
+    );
+    const block = (await loadSettings(settingsPath)).settings.claude;
+    expect(Object.hasOwn(block ?? {}, "contextWindowTokens")).toBe(true);
+    expect(block?.contextWindowTokens).toBeUndefined();
+    const res = await handleSet(makeDeps(), { claude: { ...block, binaryPath: "/opt/homebrew/bin/claude" } });
+    expect(res.ok).toBe(true);
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.claude?.binaryPath).toBe("/opt/homebrew/bin/claude");
+    expect(loaded.settings.claude?.contextWindowTokens).toBeUndefined();
   });
 });
 

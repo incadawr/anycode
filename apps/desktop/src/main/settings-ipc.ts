@@ -1083,6 +1083,9 @@ export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<Se
   // key, so the value is stripped from the patch here and the persisted key
   // is removed from the merged document after the merge (the connection
   // channel's `contextWindowTokens` field uses the same "" convention).
+  // `undefined` (key present, value absent — e.g. a caller spreading the whole
+  // parsed claude block after the schema's per-field catch left the key
+  // undefined) is "not supplied": deepMerge skips it, so the gate accepts it.
   let claudeClearsContextWindow = false;
   if (isPlainObjectLike(rawPatch.claude) && "contextWindowTokens" in rawPatch.claude) {
     const requested = (rawPatch.claude as Record<string, unknown>).contextWindowTokens;
@@ -1091,10 +1094,11 @@ export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<Se
       (rawPatch as Record<string, unknown>).claude = restClaude;
       claudeClearsContextWindow = true;
     } else if (
-      typeof requested !== "number" ||
-      !Number.isInteger(requested) ||
-      requested < CLAUDE_CONTEXT_WINDOW_MIN ||
-      requested > CLAUDE_CONTEXT_WINDOW_MAX
+      requested !== undefined &&
+      (typeof requested !== "number" ||
+        !Number.isInteger(requested) ||
+        requested < CLAUDE_CONTEXT_WINDOW_MIN ||
+        requested > CLAUDE_CONTEXT_WINDOW_MAX)
     ) {
       return { ok: false, reason: "invalid" };
     }
