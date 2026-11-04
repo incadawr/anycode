@@ -96,6 +96,8 @@ describe("profile restriction transport", () => {
     const outcome = await port.run({ agentType: "reviewer", description: "d", prompt: "p", spawnToolCallId: "call", engine: "codex", restrictions: { tools: ["Read"], readOnly: true } }, {});
     expect(outcome.status).toBe("error");
     expect(outcome.finalText).toContain("native engine");
+    expect(outcome.finalText).toContain('role "reviewer" cannot run on engine codex');
+    expect(outcome.finalText).toContain("Settings → Roles");
     expect(sent).toHaveLength(0);
   });
   it("forwards the restrictions through the validated spawn message", async () => {

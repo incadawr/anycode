@@ -3148,7 +3148,7 @@ export class Session {
         // the engine's own frozen table. No sandbox object, no approvalPolicy, no
         // raw config JSON is accepted from the renderer, by construction of this
         // message (DoD-4). Between-turns discipline mirrors set_model.
-        if (this.orchestrate || this.postureBlocked()) { this.outbound.emit({ type: "mode_change_rejected", reason: "Permission presets cannot change during orchestration." }); break; }
+        if (this.orchestrate || this.postureBlocked()) { this.outbound.emit({ type: "mode_change_rejected", reason: "Permission presets cannot change during orchestration. Turn Orchestrate off first, then change the preset." }); break; }
         if (this.engineSettings === undefined) break;
         // cross-review finding 2: an engine CHILD's posture is
         // FROZEN. The child tab renders the same SessionSurface (and therefore

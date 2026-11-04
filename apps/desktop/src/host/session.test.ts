@@ -9563,6 +9563,18 @@ describe("Session — set_orchestrate (§3.7 / A1)", () => {
       expect(engine.mode()).toBe("plan");
     } finally { h.close(); }
   });
+  it("tells the owner how to change a preset during orchestration", async () => {
+    const h = createHarness({ steps: [], engine: orchestrateEngine({}) });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "set_orchestrate", enabled: true });
+      await h.waitUntil(() => h.received.some(m => m.type === "orchestrate_changed" && m.enabled));
+      h.send({ type: "set_engine_preset", presetId: "full-access" });
+      await h.waitFor(isModeChangeRejected);
+      expect(h.received.find(isModeChangeRejected)?.reason).toMatch(/Turn Orchestrate off/);
+    } finally { h.close(); }
+  });
   it("a reserved frame reusing a started ID is diagnostic only for host and renderer", async () => {
     let release: (() => void) | undefined;
     let calls = 0;

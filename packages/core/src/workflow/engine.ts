@@ -48,7 +48,7 @@ import type {
   WorkflowStepDefinition,
   WorkflowStepOutcome,
 } from "../ports/workflow.js";
-import { buildSessionSubagentRequest } from "../subagents/agent-bridge.js";
+import { buildSessionSubagentRequest, engineRestrictionRefusal } from "../subagents/agent-bridge.js";
 import { listPersonaNames } from "../subagents/personas.js";
 import {
   buildRoleRouteRequestFields,
@@ -389,7 +389,7 @@ function createRunner(
             routeNotice = engineRoute?.notice;
             const refusal = missingRestrictions ? "Agent: profile restrictions are unavailable for this child session."
               : request.engine !== undefined && request.nativeRestrictionsUnsupported
-                ? "Agent: native engine children cannot enforce this profile’s tool or permission restrictions."
+                ? engineRestrictionRefusal(step.agentType, request.engine)
                 : undefined;
             const sessionOutcome = refusal !== undefined
               ? { status: "error" as const, finalText: refusal, truncated: false, turns: 0, toolCalls: 0, durationMs: 0, spawnToolCallId }

@@ -55,7 +55,13 @@ export function createForeignOrchestrationComposition(options: {
         ...(entry?.provider ? { provider: entry.provider } : {}), ...(entry?.model ? { model: entry.model } : {}),
         ...(entry?.effort ? { effort: entry.effort } : {}),
       }];
-      const candidates = source.map(item => ({ item, resolved: target(item, context?.settings, input.model) }));
+      const restricted = entry?.restrictions !== undefined;
+      const candidates = source.map(item => {
+        // A native engine child cannot enforce a restricted role's read-only
+        // rules, so engine entries never qualify for one.
+        const blockedEngine = restricted && item.engine !== undefined ? item.engine : undefined;
+        return { item, blockedEngine, resolved: blockedEngine === undefined ? target(item, context?.settings, input.model) : undefined };
+      });
       const valid = candidates.flatMap(candidate => candidate.resolved ? [candidate.resolved] : []);
       const resolved = valid[0] ? resolveRoleRouteChain({
         role, config: { primary: valid[0], fallbacks: valid.slice(1) }, claimedByMdProfile: false,
@@ -66,7 +72,9 @@ export function createForeignOrchestrationComposition(options: {
       const skipped: { entry: RoleRouteEntry; reason: string }[] = [];
       let validIndex = 0;
       for (const candidate of candidates) {
-        if (candidate.resolved === undefined) {
+        if (candidate.blockedEngine !== undefined) {
+          skipped.push({ entry: candidate.item, reason: `engine ${candidate.blockedEngine} cannot enforce this role's read-only restrictions` });
+        } else if (candidate.resolved === undefined) {
           skipped.push({ entry: candidate.item, reason: "connection or model is unavailable; configure the role" });
         } else if (validIndex === pickedIndex) break;
         else {
@@ -94,7 +102,7 @@ export function createForeignOrchestrationComposition(options: {
       },
       send: original.send.bind(original),
     };
-    const result = await runAgentBridgeCall(input, { ...deps, port, policy: { resolveRoleRoute: resolver, defaultDetach: enabled } });
+    const result = await runAgentBridgeCall(input, { ...deps, claimedRoles: context?.claimed ? new Set([input.agent_type]) : undefined, port, policy: { resolveRoleRoute: resolver, defaultDetach: enabled } });
     const selected: RoleRouteResolution | undefined = snapshot;
     if (selected && selected.entries[0] && selected.skipped.length && !result.isError) {
       return { ...result, text: `Role ${input.agent_type} ran on ${entryLabel(selected.entries[0])} because ${selected.skipped[0]!.reason}.\n${result.text}` };

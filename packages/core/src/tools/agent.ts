@@ -66,6 +66,7 @@ import { SUBAGENT_OUTPUT_MAX_BYTES, SUBAGENT_TIME_BUDGET_MS } from "../types/con
 import { getPersona, isKnownPersona, listPersonaNames, ROLE_TURN_BUDGETS, type RolePersonaName } from "../subagents/personas.js";
 import {
   buildSessionSubagentRequest,
+  engineRestrictionRefusal,
   formatResultForModel,
   mapProgressToEvent,
   outcomeToResult,
@@ -301,7 +302,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
         const engineRoute = ctx.subagents?.resolveRoleRoute?.(agentType) ?? null;
         const selectsNative = engineRoute === null || engineRoute.skipped.length === 0 || engineRoute.entries[0]?.engine !== undefined;
         if (restricted && selectsNative) {
-          return { ok: false, errorKind: "invalid_input", error: `Agent: profile "${agentType}" has tool or permission restrictions that native engine children cannot enforce; use a core profile or do the work yourself.` };
+          return { ok: false, errorKind: "invalid_input", error: engineRestrictionRefusal(agentType, engineProfile.engine, ctx.subagents?.isMdProfile?.(agentType) === true) };
         }
         if (engineRoute !== null && engineRoute.skipped.length > 0) {
           const degrade = {
@@ -351,7 +352,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
       const roleRoute = ctx.subagents?.resolveRoleRoute?.(agentType) ?? null;
       if (tier === "session" && restricted && roleRoute?.entries[0]?.engine !== undefined &&
           input.continue_session === undefined && input.send_to === undefined) {
-        return { ok: false, errorKind: "invalid_input", error: `Agent: profile "${agentType}" has tool or permission restrictions that native engine children cannot enforce; use a core profile or do the work yourself.` };
+        return { ok: false, errorKind: "invalid_input", error: engineRestrictionRefusal(agentType, roleRoute.entries[0]!.engine, ctx.subagents?.isMdProfile?.(agentType) === true) };
       }
       if (roleRoute !== null) {
         // An entry carrying connection/engine selects its own connection —

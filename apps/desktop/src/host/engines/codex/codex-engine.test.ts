@@ -1122,7 +1122,7 @@ describe("Codex orchestration restart", () => {
     expect(r.initial.closeCount).toBe(1);
     expect(r.overrides[0]).toContain('mcp_servers.ambient.enabled=false');
     expect(r.servers[0]!.calls.find((c) => c.method === "thread/resume")?.params).toMatchObject({ threadId: "fresh-thread", sandbox: "read-only", approvalPolicy: "never" });
-    expect(r.engine.selectPreset("full-access").ok).toBe(false);
+    expect(r.engine.selectPreset("full-access")).toEqual({ ok: false, reason: expect.stringMatching(/Turn Orchestrate off/) });
     await runTurn(r.servers[0]!, r.engine); await runTurn(r.servers[0]!, r.engine);
     for (const params of r.servers[0]!.turnStartParams()) expect(params).toMatchObject({ approvalPolicy: "never", sandboxPolicy: { type: "readOnly", networkAccess: false }, additionalContext: { orchestration: { kind: "application", value: expect.stringContaining("anycode_agent") } } });
     expect(await r.controller.apply(false, authority)).toBe(true);
