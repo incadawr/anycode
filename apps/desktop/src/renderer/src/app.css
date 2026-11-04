@@ -4557,9 +4557,12 @@ body {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  justify-self: start;
   min-width: 0;
   overflow: hidden;
+  /* Must stretch to its minmax(0,1fr) track: a start-aligned item is
+     fit-content sized, and that size floors at the row's min-content
+     (nowrap chips never shrink), so a narrow footer-left box itself
+     spills into the right column and underlaps the context meter. */
 }
 
 /* Same row as footer-left: the visually-hidden hint sits between them in the
