@@ -69,6 +69,7 @@ import {
   reasoningReplayCreateValue,
   reasoningReplayUpdateValue,
   reasoningReplayVisible,
+  reasoningReplayBaseUrlMatch,
   reasoningReplayEnvHint,
   REASONING_REPLAY_HELP,
   REASONING_REPLAY_ONELINER,
@@ -2160,6 +2161,24 @@ describe("reasoning replay helpers (GitHub #41)", () => {
     };
     expect(advancedHasValues(tuning)).toBe(false);
     expect(advancedHasValues({ ...tuning, replay: "off" })).toBe(true);
+  });
+
+  it("matches a custom record's base URL onto the builtin entry the host would resolve", () => {
+    const builtin: CatalogSummaryEntry = { id: "openai", name: "OpenAI", authKind: "api_key", models: [], catalogBaseUrl: "https://api.openai.com/v1" };
+    const record: CatalogSummaryEntry = { id: "custom:fixture", name: "OpenAI mirror", authKind: "api_key", models: [], catalogBaseUrl: "https://api.openai.com/v1/" };
+    const catalog = [builtin, record];
+    // Same normalisation the host's matchCatalogEntryByBaseUrl applies
+    // (normalizeAnthropicBaseUrl on BOTH sides): trailing slash dropped, /v1
+    // ensured — so a bare origin matches the /v1 entry too.
+    expect(reasoningReplayBaseUrlMatch(catalog, record.catalogBaseUrl)).toBe(builtin);
+    expect(reasoningReplayBaseUrlMatch(catalog, "https://api.openai.com")).toBe(builtin);
+    // Only BUILTIN entries can match — the record's own synthesized entry and
+    // other custom records are never candidates (the host matches the builtin
+    // catalog only), and nothing matches an absent/blank base URL.
+    expect(reasoningReplayBaseUrlMatch(catalog, "https://api.z.ai/api/anthropic")).toBeUndefined();
+    expect(reasoningReplayBaseUrlMatch(catalog.filter((e) => e.id !== "openai"), record.catalogBaseUrl)).toBeUndefined();
+    expect(reasoningReplayBaseUrlMatch(catalog, undefined)).toBeUndefined();
+    expect(reasoningReplayBaseUrlMatch(catalog, "   ")).toBeUndefined();
   });
 
   it("pins the env hint and the agreed copy", () => {

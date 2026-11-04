@@ -1500,6 +1500,10 @@ describe("envOverrides", () => {
   it("includes ANYCODE_INCLUDE_USAGE (ladder addition)", () => {
     expect(envOverrides({ ANYCODE_INCLUDE_USAGE: "off" })).toEqual([ENV_INCLUDE_USAGE]);
   });
+
+  it("includes ANYCODE_PRESERVE_REASONING (reasoning-replay rung)", () => {
+    expect(envOverrides({ ANYCODE_PRESERVE_REASONING: "1" })).toEqual([ENV_PRESERVE_REASONING]);
+  });
 });
 
 describe("shouldSkipConnectionHealthBinding (W11 env-override rule)", () => {

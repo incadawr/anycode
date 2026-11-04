@@ -1147,6 +1147,17 @@ export interface CatalogSummaryEntry {
    * choices off this, never off `needsBaseUrl`.
    */
   isCustom?: boolean;
+  /**
+   * True when the entry's own catalog flag enables reasoning replay
+   * (`preserveReasoning: true`), projected only when declared (same
+   * conditional-spread rule as `isCustom`) — absence means the entry has no
+   * flag, exactly the reading core's `catalogPreservesReasoning` applies. The
+   * drawer matches a `custom:<id>` record's base URL against it: a matched
+   * entry without the flag makes the connection-level replay override inert
+   * (core's gate resolves the provider by base URL and returns undefined
+   * before consulting the override), so the drawer hides the select there.
+   */
+  preserveReasoning?: boolean;
   /** Transport this endpoint uses when neither env nor settings pick one (W5). */
   defaultTransport?: ProviderTransportId;
   /** Every transport this endpoint is known to speak; a UI may only offer these (W5). */

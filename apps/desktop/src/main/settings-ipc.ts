@@ -663,6 +663,8 @@ export interface CatalogEntryShape {
   }[];
   /** True for the literal `custom` sentinel (W5-FIX); main supplies it from core's `isCustomProvider`. */
   isCustom?: boolean;
+  /** The entry's own reasoning-replay flag (`preserveReasoning`); `boolean`-typed to keep this module core-import-free. */
+  preserveReasoning?: boolean;
   /** True when the endpoint serves both a pay-as-you-go key and a subscription key; projected only when declared. */
   sharedBillingEndpoint?: boolean;
   /** Wire transport fields (W5); `string`-typed to keep this module core-import-free. */
@@ -714,6 +716,14 @@ export function projectCatalogSummary(providers: readonly CatalogEntryShape[]): 
     })),
     ...(entry.baseUrl === "" ? { needsBaseUrl: true } : { catalogBaseUrl: entry.baseUrl }),
     ...(entry.isCustom === true ? { isCustom: true } : {}),
+    // GitHub #41 review: the entry's own reasoning-replay flag, projected only
+    // when declared (same conditional-spread precedent) so a legacy fixture
+    // stays byte-identical and absence reads exactly like core's
+    // `catalogPreservesReasoning` (flag === true). The drawer matches a
+    // `custom:<id>` record's base URL against it — for a matched entry without
+    // the flag, core's replay gate makes the override inert, so the select must
+    // not offer On.
+    ...(entry.preserveReasoning === true ? { preserveReasoning: true } : {}),
     // only when declared, same conditional-spread
     // precedent as above — legacy fixtures stay byte-identical.
     ...(entry.brand !== undefined ? { brand: entry.brand } : {}),

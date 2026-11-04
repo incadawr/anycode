@@ -547,6 +547,38 @@ export function reasoningReplayVisible(providerId: string | undefined): boolean 
   return providerId === "custom" || providerId === "vllm" || isCustomRecordProviderId(providerId ?? "");
 }
 
+/**
+ * Renderer mirror of core's `normalizeAnthropicBaseUrl` — the exact transform
+ * `matchCatalogEntryByBaseUrl` (host, `@anycode/core`) applies to BOTH sides
+ * before comparing: trailing slashes stripped, `/v1` ensured. Renderer modules
+ * don't import that internal, so the two must be kept in step by review.
+ */
+function normalizeReplayMatchUrl(url: string): string {
+  const trimmed = url.trim().replace(/\/+$/, "");
+  return trimmed === "" ? "" : trimmed.endsWith("/v1") ? trimmed : `${trimmed}/v1`;
+}
+
+/**
+ * The BUILTIN catalog entry a `custom:<id>` record's base URL normalises onto
+ * (same matching rule the host applies when it resolves the connection's
+ * `providerName`), or undefined when nothing matches. Only non-custom entries
+ * can match: the host matches the builtin catalog, and other custom records
+ * are not part of it. Exported for direct testing (no jsdom).
+ */
+export function reasoningReplayBaseUrlMatch(
+  catalog: CatalogSummary,
+  recordBaseUrl: string | undefined,
+): CatalogSummaryEntry | undefined {
+  if (recordBaseUrl === undefined || recordBaseUrl.trim() === "") return undefined;
+  const target = normalizeReplayMatchUrl(recordBaseUrl);
+  return catalog.find(
+    (entry) =>
+      !isCustomRecordProviderId(entry.id) &&
+      entry.catalogBaseUrl !== undefined &&
+      normalizeReplayMatchUrl(entry.catalogBaseUrl) === target,
+  );
+}
+
 /** Local literal, same convention as the env hints below — renderer modules don't import main. */
 const ENV_PRESERVE_REASONING = "ANYCODE_PRESERVE_REASONING";
 
@@ -1693,7 +1725,18 @@ export function ConnectionDrawerFields({
   );
   // GitHub #41: the reasoning-replay select is shown only where the catalog has
   // no own policy — the custom sentinel, a custom:<id> record, and vllm.
-  const replayShown = reasoningReplayVisible(effectiveProviderId);
+  const replayCatalogMatch = reasoningReplayBaseUrlMatch(catalog, selectedEntry?.catalogBaseUrl);
+  const replayShown =
+    reasoningReplayVisible(effectiveProviderId) &&
+    // GitHub #41 review: a custom:<id> record whose base URL normalises onto a
+    // BUILTIN catalog entry is governed by that entry's own flag — the host
+    // resolves `providerName` by base URL (`matchCatalogEntryByBaseUrl`) and
+    // core's replay gate (`model-port.ts` `reasoningReplaySource`) returns
+    // undefined for a catalog entry without the flag BEFORE it ever consults
+    // the connection override, so On (and Off) would be silently inert. Hide
+    // the select there; a matched entry WITH the flag keeps it — the override's
+    // explicit opt-out (`false` disables replay) still bites in that direction.
+    (replayCatalogMatch === undefined || replayCatalogMatch.preserveReasoning === true);
   const authKind = selectedEntry?.authKind ?? "api_key";
   // A custom:<id> connection's credential lives on the custom provider's OWN
   // shared vault key (exactly what main reads for it); everything else uses its

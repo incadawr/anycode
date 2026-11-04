@@ -287,8 +287,9 @@ const ENTRIES: CatalogProviderEntry[] = [
     auth: { kind: "api_key" },
     // Reasoning replay (GitHub #41): ON — same wire shape as z-ai (assistant
     // `thinking` + signature). Evidence: 2026-11-02 direct-API matrix — replay
-    // variants 200 (36-char signature not validated), input tokens grow with
-    // thinking replayed.
+    // variants a/c/d returned 200 (36-char signature not validated).
+    // Input-token growth was NOT recorded on this host (the matrix measured
+    // it only for z.ai and MiniMax International).
     preserveReasoning: true,
     models: [
       // (2026-10-10): rows replaced from the supplied authoritative
@@ -319,9 +320,11 @@ const ENTRIES: CatalogProviderEntry[] = [
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
     // Reasoning replay (GitHub #41): ON — assistant `thinking` block, wire
-    // shape per sdk-mapping.ts. Evidence: 2026-11-02 direct-API matrix on this
-    // endpoint family — every replay variant 200, input tokens grow; MiMo
-    // sends NO thinking signature, so there is nothing to validate.
+    // shape per sdk-mapping.ts. Evidence: 2026-11-02 direct-API matrix, run on
+    // the SGP token plan only (mimo-v2.6-pro) — every replay variant 200; MiMo
+    // sends NO thinking signature, so there is nothing to validate. This host
+    // was not probed and input-token growth was not recorded for MiMo:
+    // inferred from the same vendor, not measured here.
     preserveReasoning: true,
     models: MIMO_MODELS,
   },
@@ -348,8 +351,8 @@ const ENTRIES: CatalogProviderEntry[] = [
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
-    // Reasoning replay (GitHub #41): ON — same host family and same wire
-    // behaviour as the SGP token plan (2026-11-02 matrix).
+    // Reasoning replay (GitHub #41): ON — inferred from the same vendor's SGP
+    // token plan (measured 2026-11-02, mimo-v2.6-pro); not measured on this host.
     preserveReasoning: true,
     models: MIMO_MODELS,
   },
@@ -362,8 +365,8 @@ const ENTRIES: CatalogProviderEntry[] = [
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
-    // Reasoning replay (GitHub #41): ON — same host family and same wire
-    // behaviour as the SGP token plan (2026-11-02 matrix).
+    // Reasoning replay (GitHub #41): ON — inferred from the same vendor's SGP
+    // token plan (measured 2026-11-02, mimo-v2.6-pro); not measured on this host.
     preserveReasoning: true,
     models: MIMO_MODELS,
   },
@@ -544,8 +547,8 @@ const ENTRIES: CatalogProviderEntry[] = [
     defaultTransport: "anthropic-messages",
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
-    // Reasoning replay (GitHub #41): ON — same protocol and same measured
-    // wire behaviour as the International host (2026-11-02 matrix).
+    // Reasoning replay (GitHub #41): ON — inferred from the same vendor's
+    // International host (measured 2026-11-02); this CN host was not probed.
     preserveReasoning: true,
     models: MINIMAX_MODELS,
   },

@@ -47,15 +47,17 @@ matrix run.
 
 "Matrix" = direct-API measurement of 2026-11-02 (see below). "Not measured"
 means no key was available; those rows must not be read as support claims.
+Cells marked "inferred" are extrapolations from a measured host of the same
+vendor or family — they are not measurements on that host.
 
 | Provider (catalog entry) | Transport · wire field | Replay in AnyCode | Doc source | Matrix result |
 |---|---|---|---|---|
-| Z.AI (GLM) | anthropic-messages · assistant `thinking` + `signature` | On (full replay) | endpoint follows the Anthropic thinking contract (field table below) | all replay variants HTTP 200; replayed thinking grows input tokens (z.ai 208 vs 187 when dropped); signature not validated |
-| DeepSeek | anthropic-messages · assistant `thinking` + `signature` | On (full replay) | same | variants a/c/d HTTP 200; input tokens grow; signature (36 chars) not validated |
-| MiniMax (International, `minimax`) | anthropic-messages · assistant `thinking` + `signature` | On (full replay) | same | variants a/b/b2/c/d all HTTP 200; signature (64 chars) not validated |
-| MiniMax (China, `minimax-cn`) | anthropic-messages · assistant `thinking` + `signature` | On (full replay) | same host family as International | all variants HTTP 200 |
-| Xiaomi MiMo (`xiaomi-mimo-api/sgp/cn/ams`) | anthropic-messages · assistant `thinking` (MiMo sends NO signature) | On (full replay) | same | all variants HTTP 200 — nothing to validate, replay accepted |
-| OpenRouter | openai-chat-completions · `reasoning_content` + `reasoning_details` | On (full replay) | OpenRouter documents reasoning fields on its reasoning docs page | not measured — no matrix exists for OpenRouter |
+| Z.AI (GLM) | anthropic-messages · assistant `thinking` + `signature` | On (full replay) | measured directly on the live endpoint (2026-11-02 matrix, provenance below) | all replay variants HTTP 200; replayed thinking grows input tokens (208 vs 187 when dropped); signature not validated |
+| DeepSeek | anthropic-messages · assistant `thinking` + `signature` | On (full replay) | measured directly on the live endpoint (2026-11-02 matrix, provenance below) | variants a/c/d HTTP 200; signature (36 chars) not validated; input-token growth NOT recorded on this host (only z.ai and MiniMax International have token evidence) |
+| MiniMax (International, `minimax`) | anthropic-messages · assistant `thinking` + `signature` | On (full replay) | measured directly on the live endpoint (2026-11-02 matrix, provenance below) | variants a/b/b2/c/d all HTTP 200; signature (64 chars) not validated; replayed thinking grows input tokens (135 vs 54 when dropped) |
+| MiniMax (China, `minimax-cn`) | anthropic-messages · assistant `thinking` + `signature` | On (full replay) | same vendor as International — inferred, not measured on this host | not measured on this host (`api.minimaxi.com` was not probed) — inferred from the same vendor (International endpoint measured) |
+| Xiaomi MiMo (`xiaomi-mimo-api/sgp/cn/ams`) | anthropic-messages · assistant `thinking` (MiMo sends NO signature) | On (full replay) | measured on the SGP token plan only — inferred for the other hosts, not measured here | SGP token plan (mimo-v2.6-pro): all variants HTTP 200, nothing to validate. `api.xiaomimimo.com` and token-plan-cn/ams: not measured — inferred from the same vendor |
+| OpenRouter | openai-chat-completions · `reasoning_content` + `reasoning_details` | On (full replay) — flag predates this evidence pass and stays unmeasured (fails criterion 2 of the rule above) | [Reasoning Tokens](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens), "Preserving Reasoning": pass `reasoning_details` (alias `reasoning` / `reasoning_content`) back on Chat Completions, sequence unmodified | not measured — no matrix exists for OpenRouter |
 | Anthropic | anthropic-messages · `thinking` + `signature` | Off (catalog flag unset) | [Preserving thinking blocks](https://platform.claude.com/docs/en/build-with-claude/thinking): pass every thinking block back "complete and unmodified"; "Modified thinking blocks are rejected with a 400 error"; the signature is validated; Claude 5.1+ adds prefix checks on preserved thinking | not measured — no API key in the smoke-secret set |
 | Moonshot (platform API) | anthropic-messages · `thinking` | Off (catalog flag unset) | [Kimi thinking models](https://platform.kimi.ai/docs/guide/use-thinking-models): `reasoning_content` on Chat Completions; "pass the complete assistant message returned by the API back to messages as-is (including reasoning_content)"; `thinking: { keep: "all" }` (K2.6), always-on for K2.7-Code/K3/K3.1 — documented for the `/v1` Chat Completions route, NOT for the `/anthropic` transport this entry uses | not measured — no API key |
 | Kimi subscription (`kimi`, kimi.com) | anthropic-messages · `thinking` | Off (catalog flag unset) | same doc family as Moonshot, different product/endpoint | not measured — no API key |
@@ -65,8 +67,11 @@ means no key was available; those rows must not be read as support claims.
 
 Note on the matrix rows: "replay accepted" means the continuation returned
 HTTP 200 AND input tokens grew when thinking was replayed — i.e. the blocks
-reached the model, not merely that the endpoint tolerated them. No measured
-provider validated the thinking signature; MiMo does not send one at all. The
+reached the model, not merely that the endpoint tolerated them. Token growth
+was recorded for z.ai and MiniMax International only; the DeepSeek and MiMo
+cells record HTTP 200 responses only, so their "blocks reach the model"
+evidence is weaker. No measured provider validated the thinking signature;
+MiMo does not send one at all. The
 matrix is single-repetition per cell and its own notes say token differences
 are within noise; it does NOT support changing any default
 `ANYCODE_REASONING_HISTORY` mode.
