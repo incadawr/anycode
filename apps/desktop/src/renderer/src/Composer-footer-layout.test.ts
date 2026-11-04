@@ -20,8 +20,8 @@ const stylesRoot = import.meta.dirname;
 const css = ["tokens.css", "app.css"].map((file) => readFileSync(resolve(stylesRoot, file), "utf8")).join("\n");
 
 const MODEL_LABEL = "GPT-6.1 Terra · high";
-/** 600 stays under the 640px container query (no hint column), 460/340 squeeze. */
-const COMPOSER_WIDTHS = [600, 460, 340, 690];
+/** 600 stays under the 640px container query (no hint column), 400/340 squeeze. */
+const COMPOSER_WIDTHS = [600, 400, 340, 690];
 
 const fixture = `<!doctype html><html data-theme="dark"><head><meta charset="utf-8"><style>${css}
   body { margin: 0; }
@@ -32,7 +32,7 @@ const fixture = `<!doctype html><html data-theme="dark"><head><meta charset="utf
     <div class="composer-footer">
       <div class="composer-footer-left">
         <div class="model-pill"><button type="button" class="model-pill-chip"><span class="model-pill-label">Read Only</span></button></div>
-        <button type="button" class="model-pill-chip">Standard</button>
+        <button type="button" class="model-pill-chip" title="Standard"><span class="model-pill-label">Standard</span></button>
         <button type="button" class="composer-attach"><span>+</span></button>
         <div class="model-pill"><button type="button" class="model-pill-chip" title="${MODEL_LABEL}"><span class="model-pill-label">${MODEL_LABEL}</span><span class="model-pill-chevron">▾</span></button></div>
       </div>
@@ -63,6 +63,10 @@ const fixture = `<!doctype html><html data-theme="dark"><head><meta charset="utf
         labelClient: label.clientWidth,
         labelScroll: label.scrollWidth,
         tooltip: pills[pills.length - 1].querySelector('.model-pill-chip').title,
+        kids: [...root.querySelectorAll('.composer-footer-left > *, .composer-footer-right > *')].map((el) => {
+          const s = getComputedStyle(el);
+          return { cls: String(el.className), cw: el.clientWidth, sw: el.scrollWidth, ox: s.overflowX, to: s.textOverflow };
+        }),
       };
     });
     document.querySelector('#result').textContent = JSON.stringify(rows);
@@ -80,7 +84,7 @@ describe("composer bottom row layout", () => {
         expect(run.status, run.stderr).toBe(0);
         const match = run.stdout.match(/<pre id="result">([^<]+)<\/pre>/);
         expect(match, run.stdout.slice(-500)).not.toBeNull();
-        const rows = JSON.parse(match![1]!) as Array<{ width: number; windowWidth: number; pillRight: number; meterLeft: number; leftRight: number; rightLeft: number; composerRight: number; hintLeft: number; labelClient: number; labelScroll: number; tooltip: string }>;
+        const rows = JSON.parse(match![1]!) as Array<{ width: number; windowWidth: number; pillRight: number; meterLeft: number; leftRight: number; rightLeft: number; composerRight: number; hintLeft: number; labelClient: number; labelScroll: number; tooltip: string; kids: Array<{ cls: string; cw: number; sw: number; ox: string; to: string }> }>;
         expect(rows.map((row) => row.width)).toEqual(COMPOSER_WIDTHS);
         for (const row of rows) {
           // The pill never slides under the context meter, and the left
@@ -91,11 +95,19 @@ describe("composer bottom row layout", () => {
           expect(row.rightLeft, `window ${windowWidth} width ${row.width}`).toBeLessThanOrEqual(row.composerRight + 0.5);
           // The full model name stays reachable via the tooltip.
           expect(row.tooltip).toBe(MODEL_LABEL);
+          // Per control: the content stays inside its own border box — or the
+          // element itself is the clipping layer (overflow hidden + ellipsis).
+          // A squeezed chip must never paint past its own border.
+          for (const kid of row.kids) {
+            expect(kid.sw <= kid.cw + 1 || (kid.ox === "hidden" && kid.to === "ellipsis"), `window ${windowWidth} width ${row.width} <${kid.cls}> content ${kid.sw} > box ${kid.cw}`).toBe(true);
+          }
         }
         // Squeezing truncates the model label instead of overlapping. A
         // pane under the 640px container query that fits the row shows the
         // whole name; the two narrow panes truncate (and so does a wide
-        // pane's pill, which yields room to the centered hint column).
+        // pane's pill, which yields room to the centered hint column). The
+        // 400px pane keeps over a quarter of the label's width as truncation
+        // slack, so a somewhat narrower system font cannot flip it to "fits".
         const [wide2col, squeezed, tight, wide3col] = rows;
         if (wide2col!.windowWidth > wide2col!.width + 1) {
           expect(wide2col!.labelScroll, `window ${windowWidth}: ${JSON.stringify(rows)}`).toBeLessThanOrEqual(wide2col!.labelClient + 1);

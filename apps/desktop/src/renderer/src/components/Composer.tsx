@@ -2328,6 +2328,10 @@ export function Composer() {
       : text.trim().length === 0 && attachedImages.length === 0
         ? "Type a message to send"
         : undefined;
+  // The speed chip mirrors the model pill's label containment: the span
+  // ellipsizes when the row runs out instead of painting past the pill
+  // border, and the tooltip carries the full state beside the explanation.
+  const speedLabel = `${engine?.fast === undefined ? "Speed" : engine.fast ? "Fast" : "Standard"}${pendingEngineChange?.fast !== undefined ? ` → ${pendingEngineChange.fast ? "Fast" : "Standard"} (next turn)` : ""}`;
 
   return (
     <div
@@ -2569,8 +2573,8 @@ export function Composer() {
             />
           )}
           {engine?.id === "codex" && engine.model?.available.find((model) => model.id === (pendingEngineChange?.model ?? engine.model?.current))?.supportsFast && (
-            <button type="button" className="model-pill-chip" aria-label="Codex speed" disabled={engineControlDisabled(turn.status, queueInFlight, ready)} title="Fast is quicker but consumes your usage limit faster. Changes apply on the next turn." onClick={() => sendToHost({ type: "set_engine_fast", fast: !(pendingEngineChange?.fast ?? engine.fast) })}>
-              {engine.fast === undefined ? "Speed" : engine.fast ? "Fast" : "Standard"}{pendingEngineChange?.fast !== undefined ? ` → ${pendingEngineChange.fast ? "Fast" : "Standard"} (next turn)` : ""}
+            <button type="button" className="model-pill-chip" aria-label="Codex speed" disabled={engineControlDisabled(turn.status, queueInFlight, ready)} title={`${speedLabel}. Fast is quicker but consumes your usage limit faster. Changes apply on the next turn.`} onClick={() => sendToHost({ type: "set_engine_fast", fast: !(pendingEngineChange?.fast ?? engine.fast) })}>
+              <span className="model-pill-label">{speedLabel}</span>
             </button>
           )}
           {supportsImages && (

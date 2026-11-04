@@ -5680,6 +5680,10 @@ body {
   height: var(--ctl-h-sm);
   min-width: 0;
   max-width: 100%;
+  /* Backstop for the squeeze below the label's floor: the ellipsis span stops
+     at its min-width, so a harder-squeezed chip would let ink paint past its
+     own border into the row — clipped here instead. */
+  overflow: hidden;
   padding: 0.15rem var(--sp-2);
   border-radius: var(--r-full);
   border: 1px solid var(--border-control);
@@ -5701,7 +5705,9 @@ body {
 }
 
 .model-pill-label {
-  min-width: 0;
+  /* Readable floor: truncation ends at a stub, never at an empty pill —
+     the selected model stays identifiable however narrow the row gets. */
+  min-width: 3ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
