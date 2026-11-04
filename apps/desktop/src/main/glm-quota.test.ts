@@ -41,6 +41,18 @@ describe("GLM quota polling", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
+  it("passes secondary explicitly (undefined) when only one window arrives, so a stale week never survives the merge", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { level: "pro", limits: [
+      { type: "CREDIT_LIMIT", unit: 3, number: 5, usage: 12000, currentValue: 128, remaining: 11872, percentage: 1.07, nextResetTime: Date.now() + 60_000 },
+    ] } })));
+    const record = vi.fn(async (_id: string, _guard: string, _quota: QuotaWindows) => {});
+    const poller = createGlmQuotaPoller({ resolve: async () => ({ apiKey: "secret-key", guard: "guard", route }), fetch: () => fetch, record });
+    await poller.refresh("one");
+    const windows = record.mock.calls[0]![2];
+    expect("secondary" in windows).toBe(true);
+    expect(windows.secondary).toBeUndefined();
+  });
+
   it("silently ignores non-2xx, unknown shapes, redirects and throws — no record", async () => {
     const log = vi.spyOn(console, "error"); const warn = vi.spyOn(console, "warn");
     const record = vi.fn(async () => {});
