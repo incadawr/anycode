@@ -1,11 +1,9 @@
 /** Isolated Electron check of the preview loopback grant: one pinned dev-server origin per preview, every other loopback target denied.
  *
- * STATUS: unverified live. The script never completed a leg during bring-up:
- * the flattened CDP session for the preview target evaluates the app window's
- * document (the connect-time session from isolated-cdp.mjs), so every check
- * below timed out. The policy itself is covered by the unit matrix in
- * preview-host.test.ts ("the loopback grant stays pinned..." describe and the
- * updated gate/navigation/redirect/IPv6 blocks).
+ * STATUS: unverified live. The first bring-up never completed a leg: this
+ * script's own CDP wrapper dropped the per-target session argument, so every
+ * Runtime.evaluate landed on the connect-time app-window session instead of
+ * the preview target and timed out. isolated-cdp.mjs itself is fine.
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -46,11 +44,15 @@ window.__devChecks = async (portB, portA) => {
 };
 </script>`);
 });
+// serverB has no WebSocket endpoint: an upgrade attempt means the gate let a
+// denied request through, so count and destroy instead of answering.
+let upgradesB = 0;
 const serverB = createServer((req, res) => {
   hitsB += 1;
   res.setHeader("content-type", req.url === "/b-asset.txt" ? "text/plain" : "text/html");
   res.end(req.url === "/b-asset.txt" ? "synthetic-second-port" : "<!doctype html><title>Second fixture</title>");
 });
+serverB.on("upgrade", (req, socket) => { upgradesB += 1; socket.destroy(); });
 const listen = server => new Promise(resolve => server.listen(0, "127.0.0.1", () => resolve(server.address().port)));
 const portA = await listen(serverA);
 const portB = await listen(serverB);
@@ -74,7 +76,7 @@ let cdp;
 try {
   cdp = await connectIsolatedCdp({ profile, env, launcher: app, wait });
   mkdirSync(join(profile, ".anycode"), { recursive: true });
-  const call = (method, params = {}) => cdp.call(method, params);
+  const call = (method, params = {}, session) => cdp.call(method, params, session);
   const info = await wait(() => { try { return JSON.parse(readFileSync(join(profile, "automation.json"), "utf8")); } catch { return null; } });
   const api = async (method, path, body) => { const r = await cdp.automation(info, path, method, body); if (!r.ok) throw new Error(`${method} ${path} failed`); return r.result; };
   const tab = await api("POST", "/tabs", { kind: "new", workspace: profile });
@@ -119,7 +121,7 @@ try {
   assert.equal(checks.rel, "synthetic-dev-asset", "relative dev assets must load from the pinned origin");
   assert.equal(checks.otherPort, null, "fetch to a second loopback port must be denied");
   assert.equal(checks.otherHost, null, "fetch via 127.0.0.1 spelling must be denied");
-  assert.notEqual(checks.ws, "open", "WebSocket to a second loopback port must be denied");
+  assert.equal(upgradesB, 0, "WebSocket to a second loopback port must be denied: no upgrade attempt may reach it");
   console.log(`PASS: pinned origin serves relative assets (${checks.rel}); other port/host/ws denied`);
   const blocked = await api("GET", `/tabs/${tab.tabId}/previews/${devPreview.value.previewId}/console?tail=100`);
   assert.ok(blocked.entries.some(entry => entry.message.includes("blocked by security policy") && entry.message.includes(`http://localhost:${portB}`)), "denials are legible in the preview console");
