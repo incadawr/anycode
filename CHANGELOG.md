@@ -10,6 +10,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - Fixed the sidebar and command palette while opening a saved session: the history row now stays visible as a non-clickable "Opening…" placeholder until the new tab appears, then folds into it — the session no longer vanishes during a slow open, flickers on a refusal, or shows twice when the opened tab's host dies before it is ready.
+- Fixed two rough edges of that opening placeholder: with several sessions opening at once, each now binds only its own tab (the still-opening session's row stays visible instead of disappearing), and Up/Down navigation in the sidebar and command palette skips the inert "Opening…" rows instead of getting stuck on them.
 
 ## [0.0.74] — 2026-11-04
 

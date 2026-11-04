@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { SidebarGroup } from "./Sidebar.js";
-import { buildPaletteRows, type PaletteAction, type PaletteRow } from "./CommandPalette.js";
+import { buildPaletteRows, nextEnabledIndex, type PaletteAction, type PaletteRow } from "./CommandPalette.js";
 
 type ActionRow = Extract<PaletteRow, { kind: "action" }>;
 type TabRow = Extract<PaletteRow, { kind: "tab" }>;
@@ -180,5 +180,74 @@ describe("buildPaletteRows — sessions mode", () => {
     expect(s1.displayTitle).toBe("Untitled task");
     expect(s2.title).toBe("Real Title");
     expect(s2.displayTitle).toBe("Real Title");
+  });
+});
+
+describe("nextEnabledIndex (arrow navigation skips disabled rows)", () => {
+  const enabledAction = (label: string): PaletteRow => ({
+    kind: "action",
+    action: action({ id: "session.new", label }),
+    ranges: [],
+  });
+  const disabledAction = (label: string): PaletteRow => ({
+    kind: "action",
+    action: action({ id: "terminal.toggle", label, enabled: false }),
+    ranges: [],
+  });
+  const sessionRow = (sessionId: string, opening?: true): PaletteRow => ({
+    kind: "session",
+    sessionId,
+    title: sessionId,
+    displayTitle: sessionId,
+    workspaceLabel: "w",
+    age: "1h",
+    ...(opening ? { opening: true as const } : {}),
+    ranges: [],
+  });
+
+  it("steps past an Opening… session row in both directions: A → C, C → A", () => {
+    const rows = [sessionRow("a"), sessionRow("b", true), sessionRow("c")];
+    expect(nextEnabledIndex(rows, 0, 1)).toBe(2);
+    expect(nextEnabledIndex(rows, 2, -1)).toBe(0);
+  });
+
+  it("steps past a disabled action row in both directions", () => {
+    const rows = [enabledAction("A"), disabledAction("B-disabled"), enabledAction("C")];
+    expect(nextEnabledIndex(rows, 0, 1)).toBe(2);
+    expect(nextEnabledIndex(rows, 2, -1)).toBe(0);
+  });
+
+  it("wraps past disabled rows at the edges", () => {
+    const rows = [enabledAction("A"), sessionRow("b", true), sessionRow("c", true), sessionRow("d")];
+    // Forward from the first row skips two Opening… rows; backward from the
+    // last wraps and skips them again.
+    expect(nextEnabledIndex(rows, 0, 1)).toBe(3);
+    expect(nextEnabledIndex(rows, 3, -1)).toBe(0);
+  });
+
+  it("stays put when every row is disabled (nothing to land on)", () => {
+    const rows = [disabledAction("A-disabled"), sessionRow("b", true)];
+    expect(nextEnabledIndex(rows, 0, 1)).toBe(0);
+    expect(nextEnabledIndex(rows, 0, -1)).toBe(0);
+  });
+
+  it("an empty list stays at 0", () => {
+    expect(nextEnabledIndex([], 0, 1)).toBe(0);
+  });
+
+  it("over buildPaletteRows output: an armed session's Opening… row is skipped", () => {
+    const group: SidebarGroup = {
+      workspace: "/w",
+      label: "w",
+      rows: [
+        { kind: "resumable", key: "a", title: "A", age: "1h", sessionId: "a" },
+        { kind: "resumable", key: "b", title: "B", age: "1h", sessionId: "b", opening: true },
+        { kind: "resumable", key: "c", title: "C", age: "1h", sessionId: "c" },
+      ],
+    };
+    // Row 0 is the group header; the selectable rows a/b-opening/c sit at 1..3.
+    const rows = buildPaletteRows({ mode: "sessions", query: "", actions: [], groups: [group], tabOrder: [], platform: "darwin" });
+    expect(nextEnabledIndex(rows, 1, 1)).toBe(3);
+    expect(nextEnabledIndex(rows, 3, -1)).toBe(1);
   });
 });

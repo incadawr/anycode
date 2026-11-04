@@ -1041,9 +1041,9 @@ export function Sidebar({
   // tab — the same condition hideWorkspace enforces (§2F.2).
   const menuHasOpenRow = menuFor !== null && tabs.some((t) => t.workspace === menuFor.workspace);
 
-  /** Rendered row buttons in DOM order — collapsed-group and filtered-out rows are unmounted, so this IS the visible list. */
+  /** Rendered row buttons in DOM order — collapsed-group and filtered-out rows are unmounted, so this IS the visible list. Disabled rows (an opening placeholder) are excluded: focus() on a disabled button is a no-op, so stepping onto one would strand the arrow navigation. */
   function visibleRows(): HTMLButtonElement[] {
-    return Array.from(scrollRef.current?.querySelectorAll<HTMLButtonElement>(".sidebar-row") ?? []);
+    return Array.from(scrollRef.current?.querySelectorAll<HTMLButtonElement>(".sidebar-row") ?? []).filter((row) => !row.disabled);
   }
 
   function focusSearchInput(): void {
