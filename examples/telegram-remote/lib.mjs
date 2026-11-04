@@ -225,30 +225,35 @@ const NEW_FLAG_PATTERN = /^(engine|model|effort|handle):(.+)$/;
 
 /**
  * Parses `/new` arguments: the first token selects the project (a number from
- * `/projects` or a folder name), later `key:value` tokens set engine (only the
- * three real values count), model, effort and handle, and whatever is left
- * becomes the first message. Unknown `key:value` tokens stay in the message.
+ * `/projects` or a folder name), then `key:value` tokens may set engine (only
+ * the three real values count), model, effort and handle — but only while they
+ * lead, before the message starts. Everything from the first non-flag token on
+ * is the message, passed through verbatim (newlines and indentation kept).
  */
 export function parseNewArgs(args) {
-  const tokens = String(args ?? "").trim().split(/\s+/).filter((token) => token !== "");
+  let rest = String(args ?? "").trim();
+  const takeToken = () => {
+    const match = /^\S+/.exec(rest);
+    if (!match) return undefined;
+    const token = match[0];
+    rest = rest.slice(token.length).replace(/^\s+/, "");
+    return token;
+  };
+  const projectRef = takeToken();
   const flags = {};
-  const rest = [];
-  for (const [index, token] of tokens.entries()) {
-    const match = index > 0 ? NEW_FLAG_PATTERN.exec(token) : null;
-    if (match && (match[1] !== "engine" || ["core", "codex", "claude"].includes(match[2]))) {
-      flags[match[1]] = match[2];
-      continue;
-    }
-    rest.push(token);
+  while (rest !== "") {
+    const match = NEW_FLAG_PATTERN.exec(/^\S+/.exec(rest)[0]);
+    if (!match || (match[1] === "engine" && !["core", "codex", "claude"].includes(match[2]))) break;
+    flags[match[1]] = match[2];
+    rest = rest.slice(match[0].length).replace(/^\s+/, "");
   }
-  const [projectRef, ...textTokens] = rest;
   return {
     projectRef,
     ...(flags.engine !== undefined ? { engine: flags.engine } : {}),
     ...(flags.model !== undefined ? { model: flags.model } : {}),
     ...(flags.effort !== undefined ? { effort: flags.effort } : {}),
     ...(flags.handle !== undefined ? { handle: flags.handle } : {}),
-    text: textTokens.join(" "),
+    text: rest,
   };
 }
 

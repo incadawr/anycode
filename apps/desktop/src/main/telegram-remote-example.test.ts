@@ -358,6 +358,17 @@ describe("telegram-remote example", () => {
     expect(lib.jitter(1000, 0.999)).toBeLessThanOrEqual(1200);
   });
 
+  it("T5b /new parses flags only before the message starts and keeps the message text verbatim", async () => {
+    const lib = await loadExample("lib.mjs");
+    // A key:value token after the message has begun is message text, not a flag.
+    expect(lib.parseNewArgs("1 Explain model:foo")).toEqual({ projectRef: "1", text: "Explain model:foo" });
+    // Leading flags still apply; a later one stays in the text.
+    expect(lib.parseNewArgs("1 model:terra Explain model:foo")).toEqual({ projectRef: "1", model: "terra", text: "Explain model:foo" });
+    // Multi-line text keeps its newlines and indentation.
+    expect(lib.parseNewArgs("ws-build\ndef foo():\n    return 1")).toEqual({ projectRef: "ws-build", text: "def foo():\n    return 1" });
+    expect(lib.parseNewArgs("ws-build engine:codex model:terra effort:high handle:flag-bot go")).toEqual({ projectRef: "ws-build", engine: "codex", model: "terra", effort: "high", handle: "flag-bot", text: "go" });
+  });
+
   // ── Telegram transport ──
 
   it("T6 a 409 conflict backs off on the ladder, logs once, never calls deleteWebhook and recovers", async () => {
