@@ -20,10 +20,24 @@ export function isExternalUrl(target: string): boolean {
   }
 }
 
-export function protectMainNavigation(wc: WebContents, rendererUrl: string, openExternal: (url: string) => Promise<void>): void {
+export function protectMainNavigation(wc: WebContents, rendererUrl: string, openExternal: (url: string) => Promise<void>, loadDocument?: () => void): void {
   let recovery = 0;
   const open = (url: string): void => {
     if (isExternalUrl(url)) void openExternal(url).catch(() => {});
+  };
+  // Recovery must rebuild the document the window was created for, not just
+  // its bare URL: the md popout's document lives in its query string
+  // (?view=md-preview&tabId&previewId), so reloading the bare renderer URL
+  // would bring the full app shell back inside the narrowed bridge — a
+  // permanently non-functional window instead of a restored one. Callers
+  // whose document IS the bare renderer URL (the main window) omit
+  // loadDocument and keep the plain reload.
+  const reload = (): void => {
+    if (loadDocument !== undefined) {
+      loadDocument();
+      return;
+    }
+    void wc.loadURL(rendererUrl).catch(() => {});
   };
   wc.on("did-start-navigation", (event) => {
     if (event.isMainFrame && !event.isSameDocument && !isRendererUrl(event.url, rendererUrl)) {
@@ -31,14 +45,14 @@ export function protectMainNavigation(wc: WebContents, rendererUrl: string, open
       setImmediate(() => {
         if (wc.isDestroyed() || recovery !== attempt) return;
         wc.stop();
-        void wc.loadURL(rendererUrl).catch(() => {});
+        reload();
       });
     }
   });
   wc.on("did-navigate", (_event, url) => {
     if (!isRendererUrl(url, rendererUrl)) {
       ++recovery;
-      void wc.loadURL(rendererUrl).catch(() => {});
+      reload();
     }
   });
   wc.on("will-navigate", (event) => {

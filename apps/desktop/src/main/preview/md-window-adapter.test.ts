@@ -318,4 +318,20 @@ describe("md window adapter — shared navigation guard is wired", () => {
     // ...and its own window-open handler (replacing the old deny-only one).
     expect((fake.webContents as { setWindowOpenHandler: ReturnType<typeof vi.fn> }).setWindowOpenHandler).toHaveBeenCalledTimes(1);
   });
+
+  it("recovery after a slipped navigation reloads the window's own document (loadRenderer), not the bare renderer URL", () => {
+    // The popout's document identity lives in its query
+    // (?view=md-preview&tabId&previewId); a recovery that reloads the bare
+    // renderer URL would bring the full app shell back inside the narrowed
+    // bridge — a permanently non-functional window. The adapter supplies
+    // loadRenderer as the guard's recovery loader, with the SAME opts.
+    const { fake, loadRenderer } = rig();
+    expect(loadRenderer).toHaveBeenCalledTimes(1);
+    for (const listener of fake.contentsEvents.get("did-navigate") ?? []) {
+      listener({}, "https://evil.example/");
+    }
+    expect(loadRenderer).toHaveBeenCalledTimes(2);
+    expect(loadRenderer.mock.calls[1]![0]).toBe(fake);
+    expect(loadRenderer.mock.calls[1]![1]).toEqual({ previewId: "p1", tabId: "t1" });
+  });
 });

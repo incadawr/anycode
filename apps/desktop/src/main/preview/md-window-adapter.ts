@@ -143,7 +143,11 @@ export function createMdPreviewWindow(
   // foreign will-navigate/will-redirect are prevented (http(s)/mailto ride
   // out through the OS opener), did-navigate restores the renderer, and
   // window.open is denied — this popout must never leave its own renderer.
-  protectMainNavigation(contents, deps.rendererUrl, (url) => shell.openExternal(url));
+  // Recovery reloads through the SAME loadRenderer closure that created the
+  // window, so the restored document keeps its own query
+  // (?view=md-preview&tabId&previewId) — a bare rendererUrl reload would
+  // mount the full app shell inside the narrowed bridge.
+  protectMainNavigation(contents, deps.rendererUrl, (url) => shell.openExternal(url), () => deps.loadRenderer(win, opts));
   // The popout is the ONE non-main window with the preload bridge, and it
   // loads the app's own renderer bundle (same trust domain as the main
   // window). Its allow-list entry is CHANNEL-SCOPED to its document plane
