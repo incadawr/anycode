@@ -244,7 +244,7 @@ function bashUnknownShellHint(toolName: string, input: unknown): string | null {
  * shown above the input; the allow/deny/remember mechanics are unchanged.
  * Exported for the copy-pinning test. */
 export const BROWSER_EVAL_POLICY_HINT =
-  "BrowserEval runs the expression as page code: the script can read the shown page's cookies and storage. HttpOnly cookies, other partitions and OS or browser-stored credentials stay out of reach.";
+  "BrowserEval runs the expression as page code: the script can read the shown page's cookies and storage, and anything else the page can see, including values typed into its fields. HttpOnly cookies, other partitions and OS or browser-stored credentials stay out of reach.";
 
 /** Resolves the BrowserEval policy hint; null for every other tool. */
 export function browserEvalPolicyHint(toolName: string): string | null {

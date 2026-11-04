@@ -412,6 +412,7 @@ describe("describePermissionAsk — BrowserEval policy hint", () => {
     expect(presentation.canRemember).toBe(true);
     expect(BROWSER_EVAL_POLICY_HINT).toContain("page code");
     expect(BROWSER_EVAL_POLICY_HINT).toContain("can read the shown page's cookies and storage");
+    expect(BROWSER_EVAL_POLICY_HINT).toContain("anything else the page can see, including values typed into its fields");
     expect(BROWSER_EVAL_POLICY_HINT).toContain("HttpOnly cookies");
     expect(BROWSER_EVAL_POLICY_HINT).toContain("credentials stay out of reach");
     expect(BROWSER_EVAL_POLICY_HINT).not.toContain("cannot read");

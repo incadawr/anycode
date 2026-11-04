@@ -222,7 +222,7 @@ export function createBrowserControlTools(options: BrowserControlToolsOptions = 
   const evalBase: ToolMetadata = {
     ...baseMetadata(
       "BrowserEval",
-      "Runs arbitrary JavaScript in the open preview page and returns its value. The script runs as page code and can read that page's cookies and storage; HttpOnly cookies, other browser partitions and OS or browser-stored credentials stay out of reach. Always asks the user first.",
+      "Runs arbitrary JavaScript in the open preview page and returns its value. The script runs as page code and can read that page's cookies and storage, and anything else the page can see, including values typed into its fields; HttpOnly cookies, other browser partitions and OS or browser-stored credentials stay out of reach. Always asks the user first.",
       BROWSER_CONTROL_TIMEOUT_MS,
       false,
     ),

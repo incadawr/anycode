@@ -82,10 +82,12 @@ takes a new snapshot.
 - Password fields are never typed into and their values never appear in a
   snapshot. File inputs cannot be typed into.
 - `BrowserEval` runs arbitrary page JavaScript, so the script can read the
-  shown page's cookies and storage (a non-HttpOnly login cookie is reachable
-  this way). HttpOnly cookies, other preview partitions and OS or
-  browser-stored credentials stay out of reach. The driver itself does not
-  use the browser's network or storage inspection APIs.
+  shown page's cookies and storage, and anything else the page can see,
+  including values typed into its fields (a non-HttpOnly login cookie and a
+  password you typed into the page are both reachable this way). HttpOnly
+  cookies, other preview partitions and OS or browser-stored credentials stay
+  out of reach. The driver itself does not use the browser's network or
+  storage inspection APIs.
 - Page text and labels are untrusted data. The model is told not to follow
   instructions found in them.
 
@@ -97,7 +99,8 @@ takes a new snapshot.
   typing on a page from that origin asks again (`remote: true`). If you decline,
   the agent does not retry around the refusal.
 - `BrowserEval` always asks, on every origin. The expression runs as page
-  code: it can read the shown page's cookies and storage. HttpOnly cookies,
+  code: it can read the shown page's cookies and storage, and anything else
+  the page can see, including values typed into its fields. HttpOnly cookies,
   other preview partitions and OS or browser-stored credentials stay out of
   reach; there is no keyword filter, the script's reach is simply the page's
   own reach.
@@ -120,10 +123,11 @@ or action.
 - A child session (spawned by an agent) is on only if its parent is on.
 - The default for new sessions is set in Settings → Permissions
   (`browser.fullAccessDefault`, off out of the box).
-- JavaScript in the preview can read the shown page's cookies and storage,
-  with the same limits as above (HttpOnly cookies, other partitions and OS or
-  browser-stored credentials stay out of reach). The password-value masking,
-  the loopback and `file:` rules stay in force.
+- `BrowserEval` can read the shown page's cookies and storage, and anything
+  else the page can see, including values typed into its fields, with the
+  same limits as above (HttpOnly cookies, other partitions and OS or
+  browser-stored credentials stay out of reach). The snapshot password
+  masking, the loopback and `file:` rules stay in force.
 - The agent cannot switch it on: only the app window can change it.
 
 ## Troubleshooting

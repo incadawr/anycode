@@ -237,6 +237,7 @@ describe("browser control tools (Phase A)", () => {
     const description = tools.eval.metadata.description;
     expect(description).toContain("arbitrary JavaScript");
     expect(description).toContain("can read that page's cookies and storage");
+    expect(description).toContain("anything else the page can see, including values typed into its fields");
     expect(description).toContain("HttpOnly cookies");
     expect(description).toContain("credentials stay out of reach");
     expect(description).toContain("Always asks the user first");
