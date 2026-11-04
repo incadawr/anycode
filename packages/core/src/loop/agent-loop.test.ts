@@ -3311,6 +3311,41 @@ describe("AgentLoop.runTurn — auto compaction under pressure (single-steer ses
     expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "error" });
     expect(modelPort.step).toBe(10);
   });
+
+  it("a second prompt after the breaker tripped stops again instead of growing the context", async () => {
+    const modelPort = new MockModelPort([
+      heavyToolStep(1),
+      heavyToolStep(2),
+      heavyToolStep(3),
+      heavyToolStep(4),
+      heavyToolStep(5),
+      failingSummary, // compaction failure 1 (breaker 1/3)
+      heavyToolStep(6),
+      failingSummary, // compaction failure 2 (breaker 2/3)
+      heavyToolStep(7),
+      failingSummary, // compaction failure 3 -> breaker trips, first turn stops
+      completionStep, // never reached
+    ]);
+    const loop = makeLoop({ modelPort, context: tightWindow });
+
+    const first = await collect(loop.runTurn("please act"));
+    expect(first.at(-1)).toMatchObject({ type: "loop_end", reason: "error" });
+    expect(modelPort.step).toBe(10);
+
+    // The breaker disables shouldAutoCompact() for the rest of the session,
+    // so the trip-turn guard can never fire again: the next prompt must stop
+    // BEFORE the model call instead of silently growing the history until the
+    // provider rejects an overflowed request.
+    const second = await collect(loop.runTurn("keep going anyway"));
+    const error = second.find((e): e is Extract<AgentEvent, { type: "error" }> => e.type === "error");
+    expect(error).toBeDefined();
+    expect(error!.safe?.message).toMatch(/auto-compaction failed 3 times in a row/i);
+    expect(second.some((e) => e.type === "compaction_start")).toBe(false);
+    expect(second.some((e) => e.type === "text_delta")).toBe(false);
+    expect(second.at(-1)).toMatchObject({ type: "loop_end", reason: "error" });
+    // No model step was consumed on the second prompt.
+    expect(modelPort.step).toBe(10);
+  });
 });
 
 describe("AgentLoop.runTurn — system prompt", () => {
