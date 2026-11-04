@@ -1216,6 +1216,66 @@ describe("PreviewHost — openForPathClick (owner smoke-test defect fix: repeate
   });
 });
 
+// The md popout's preview channel reloads BY ID (artifacts-ipc.ts binds its
+// reload leg to `openForPreviewId`): two previews of ONE document can be
+// live in a tab, and the by-path click search would always reload/focus
+// whichever same-realpath record the map yields first.
+describe("PreviewHost — openForPreviewId (the md popout's by-id reload)", () => {
+  /** Two dom-md previews of the SAME document in one tab (openForTab never dedups), panel containers so focus is the visible slot. */
+  async function twoSameDocPreviews(): Promise<{ rig: Rig; p1: string; p2: string }> {
+    const rig = makeRig();
+    rig.displayModeValue.value = "panel";
+    const first = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.md` });
+    const second = await rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/doc.md` });
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    const p1 = first.ok ? first.value.previewId : "";
+    const p2 = second.ok ? second.value.previewId : "";
+    expect(rig.host.listForPanel(TAB).previews).toHaveLength(2);
+    return { rig, p1, p2 };
+  }
+
+  it("reloads and focuses exactly the addressed preview — the other same-realpath preview stays untouched", async () => {
+    const { rig, p1, p2 } = await twoSameDocPreviews();
+    rig.host.selectPanelPreview(TAB, p1); // the user is looking at p1
+    expect(rig.host.listForPanel(TAB).visiblePanelPreviewId).toBe(p1);
+
+    // from p2's popout sender: p2 reloads (docVersion bumps, becomes the visible slot), p1 untouched
+    const fromP2 = await rig.host.openForPreviewId(TAB, p2, `${WORKSPACE_ROOT}/doc.md`);
+    expect(fromP2.ok).toBe(true);
+    if (fromP2.ok) {
+      expect(fromP2.value.previewId).toBe(p2);
+    }
+    expect(rig.host.getMdDocRef(TAB, p2)?.docVersion).toBe(1);
+    expect(rig.host.getMdDocRef(TAB, p1)?.docVersion).toBe(0);
+    expect(rig.host.listForPanel(TAB).visiblePanelPreviewId).toBe(p2);
+
+    // from p1's popout sender: the opposite
+    const fromP1 = await rig.host.openForPreviewId(TAB, p1, `${WORKSPACE_ROOT}/doc.md`);
+    expect(fromP1.ok).toBe(true);
+    if (fromP1.ok) {
+      expect(fromP1.value.previewId).toBe(p1);
+    }
+    expect(rig.host.getMdDocRef(TAB, p1)?.docVersion).toBe(1);
+    expect(rig.host.getMdDocRef(TAB, p2)?.docVersion).toBe(1);
+    expect(rig.host.listForPanel(TAB).visiblePanelPreviewId).toBe(p1);
+
+    expect(rig.host.listForPanel(TAB).previews).toHaveLength(2); // never stacked a third preview
+  });
+
+  it("refuses an unknown id, a foreign-tab id and a destroyed record with openForTab's own negative", async () => {
+    const { rig, p1 } = await twoSameDocPreviews();
+    const noSuch = await rig.host.openForPreviewId(TAB, "no-such", `${WORKSPACE_ROOT}/doc.md`);
+    expect(noSuch).toMatchObject({ ok: false, errorKind: "invalid_input" });
+    const foreign = await rig.host.openForPreviewId("tab-other", p1, `${WORKSPACE_ROOT}/doc.md`);
+    expect(foreign).toMatchObject({ ok: false, errorKind: "invalid_input" });
+    rig.host.closePreview(TAB, p1);
+    const destroyed = await rig.host.openForPreviewId(TAB, p1, `${WORKSPACE_ROOT}/doc.md`);
+    expect(destroyed).toMatchObject({ ok: false, errorKind: "invalid_input" });
+    expect(rig.host.getMdDocRef(TAB, p1)).toBeUndefined();
+  });
+});
+
 describe("PreviewHost — read op", () => {
   async function readyRig(): Promise<{ rig: Rig; previewId: string }> {
     const rig = makeRig();

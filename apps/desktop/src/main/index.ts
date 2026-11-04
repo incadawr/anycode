@@ -2316,6 +2316,16 @@ void app.whenReady().then(async () => {
       previewHost !== null
         ? previewHost.openForPathClick(tabId, realPath)
         : Promise.resolve({ ok: false, error: "preview host not ready", errorKind: "unavailable" }),
+    // The md popout's own-document reload (artifacts-ipc.ts's preview
+    // channel): after the popout's path passed its own-preview cap, the
+    // reload/focus must address exactly the registered (tabId, previewId) —
+    // `openForPathClick` matches by realpath and would reload the FIRST
+    // preview of that document, which need not be the popout that asked.
+    // Same forward-reference posture as `openPreview` above.
+    openPreviewForId: (tabId, previewId, realPath) =>
+      previewHost !== null
+        ? previewHost.openForPreviewId(tabId, previewId, realPath)
+        : Promise.resolve({ ok: false, error: "preview host not ready", errorKind: "unavailable" }),
     // The md popout's preview-channel binding (md-window-targets.ts): the
     // CURRENT realpath of the popout's own dom-md document, re-read live on
     // every invoke. Same forward-reference posture as `openPreview` above —

@@ -14,6 +14,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A detached Markdown popout asking to reload its own document now reloads exactly its own preview: when the same document is open twice in one tab, the popout's request no longer lands on whichever same-file preview happens to come first (the main window's click-to-preview behaviour is unchanged).
 - A detached Markdown preview window now releases its IPC access and its preview binding the moment the window closes, so neither can outlive it.
 - Scope selection for skills import and MCP add-server is honoured again: the requested folder (this computer, or the active session's folder) is picked in the Settings scope switcher before the write lands, and the action stops with a clear error instead of silently writing into another folder's config when the folder can't be selected.
 - Fixed the model pill in the composer footer sliding under the context meter in narrow windows and panes: the footer's left group now shrinks to the space it actually has, truncating the model name (full name stays on hover) instead of overlapping the context indicator. The Codex speed chip truncates the same way inside its own border, and pill labels keep a short readable stub instead of collapsing to an empty chevron.

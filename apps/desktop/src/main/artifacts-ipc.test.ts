@@ -36,6 +36,7 @@ vi.mock("electron", () => ({
 
 import { addIpcGuardTrustedWindow, setIpcGuardMainWindow } from "./ipc-guard.js";
 import { registerMdWindowTarget, resetMdWindowTargetsForTests } from "./preview/md-window-targets.js";
+import { registerPreviewHost, type MdPreviewWindowLike, type PreviewCapturedImage } from "./preview/preview-host.js";
 import { ARTIFACT_PREVIEW_CHANNEL, ARTIFACT_PREVIEWABLE_CHANNEL, ARTIFACT_READ_IMAGE_CHANNEL, registerArtifactsIpc } from "./artifacts-ipc.js";
 import {
   allowedArtifactRoots,
@@ -87,6 +88,7 @@ interface Rig {
   confirmOpen: ReturnType<typeof vi.fn<(path: string) => Promise<boolean>>>;
   consent: ArtifactConsentStore;
   openPreview: ReturnType<typeof vi.fn<ArtifactsIpcDeps["openPreview"]>>;
+  openPreviewForId: ReturnType<typeof vi.fn<ArtifactsIpcDeps["openPreviewForId"]>>;
   mdPreviewRealSourcePath: ReturnType<typeof vi.fn<ArtifactsIpcDeps["mdPreviewRealSourcePath"]>>;
   tailIndex: WorkspaceTailIndex;
 }
@@ -115,6 +117,10 @@ async function makeRig(opts?: {
     ok: true,
     value: { previewId: "preview-1", url: "file:///stub", kind: "file" },
   });
+  const openPreviewForId = vi.fn<ArtifactsIpcDeps["openPreviewForId"]>().mockResolvedValue({
+    ok: true,
+    value: { previewId: "preview-1", url: "file:///stub", kind: "file" },
+  });
   const mdPreviewRealSourcePath = vi.fn<ArtifactsIpcDeps["mdPreviewRealSourcePath"]>();
   const deps: ArtifactsIpcDeps = {
     home: () => home,
@@ -127,9 +133,10 @@ async function makeRig(opts?: {
     consent,
     tailIndex,
     openPreview,
+    openPreviewForId,
     mdPreviewRealSourcePath,
   };
-  return { deps, workspace, home, tmp, openPath, reveal, confirmOpen, consent, openPreview, mdPreviewRealSourcePath, tailIndex };
+  return { deps, workspace, home, tmp, openPath, reveal, confirmOpen, consent, openPreview, openPreviewForId, mdPreviewRealSourcePath, tailIndex };
 }
 
 // ---------------------------------------------------------------------------
@@ -353,6 +360,7 @@ describe("tail-match base", () => {
       consent: new ArtifactConsentStore(),
       tailIndex: new WorkspaceTailIndex(),
       openPreview: async () => ({ ok: false, error: "unused" }) as never,
+      openPreviewForId: async () => ({ ok: false, error: "unused" }) as never,
       mdPreviewRealSourcePath: () => undefined,
     };
     expect(await resolveContainedPath(truncatedDeps, TAB_ID, "dup.md")).toEqual({ failure: "not_found" });
@@ -834,10 +842,34 @@ describe("registerArtifactsIpc — the md popout is bound to its own tab", () =>
   });
 });
 
+/**
+ * Minimal md popout window double for the real-PreviewHost test below.
+ * Counts show() calls because a dom-md window is shown ONCE at creation —
+ * distinguishing a later FOCUS show from that is the whole point.
+ */
+class StubMdWindow implements MdPreviewWindowLike {
+  showCalls = 0;
+  constructor(public readonly previewId: string) {}
+  isDestroyed(): boolean {
+    return false;
+  }
+  destroy(): void {}
+  show(): void {
+    this.showCalls += 1;
+  }
+  showInactive(): void {}
+  onClosed(): void {}
+  capturePage(): Promise<PreviewCapturedImage> {
+    throw new Error("not used in this suite");
+  }
+  setBackgroundThrottling(): void {}
+}
+
 // The preview channel binds a popout one level tighter than the tab-only
-// artifact channels above: `openForPathClick` reuses/reloads the live preview
-// matching the requested path's REALPATH, so a tabId check alone would let
-// the popout reload and focus a DIFFERENT preview sitting in its own tab.
+// artifact channels above: reusing an already-open preview for the requested
+// path's REALPATH would let the popout reload/focus a DIFFERENT preview of
+// the same document sitting in its own tab, so a passing request is reloaded
+// BY ID (deps.openPreviewForId), never by a path search.
 describe("registerArtifactsIpc — the md popout's preview channel is bound to its own preview", () => {
   const MAIN_SENDER = { mainFrame: { frame: "main" } };
   const MAIN_EVENT = { sender: MAIN_SENDER, senderFrame: MAIN_SENDER.mainFrame };
@@ -879,18 +911,20 @@ describe("registerArtifactsIpc — the md popout's preview channel is bound to i
       path: join(rig.workspace, "report.html"),
     });
     expect(response).toEqual({ ok: false, error: "invalid artifact-preview request", errorKind: "invalid_input" });
-    // p2 was neither reloaded nor focused: openPreview never ran.
+    // p2 was neither reloaded nor focused: neither open leg ever ran.
     expect(rig.openPreview).not.toHaveBeenCalled();
+    expect(rig.openPreviewForId).not.toHaveBeenCalled();
   });
 
-  it("a popout still reloads ITS OWN document — a path resolving to its own preview opens", async () => {
+  it("a popout still reloads ITS OWN document — addressed BY ID, not by the path's first preview", async () => {
     const { rig, ownRealPath } = await makePopoutRig();
     const response = await invoke(ARTIFACT_PREVIEW_CHANNEL, POPOUT_EVENT, {
       tabId: TAB_ID,
       path: join(rig.workspace, "notes.md"),
     });
     expect(response).toMatchObject({ ok: true });
-    expect(rig.openPreview).toHaveBeenCalledWith(TAB_ID, ownRealPath);
+    expect(rig.openPreviewForId).toHaveBeenCalledWith(TAB_ID, "p1", ownRealPath);
+    expect(rig.openPreview).not.toHaveBeenCalled(); // the main-window by-path leg stays out of the popout path
   });
 
   it("the main-window sender stays unrestricted — the same other-preview path still opens", async () => {
@@ -912,6 +946,7 @@ describe("registerArtifactsIpc — the md popout's preview channel is bound to i
     });
     expect(response).toEqual({ ok: false, error: "invalid artifact-preview request", errorKind: "invalid_input" });
     expect(rig.openPreview).not.toHaveBeenCalled();
+    expect(rig.openPreviewForId).not.toHaveBeenCalled();
   });
 
   it("a popout cannot steer a FOREIGN tab — refused even before the own-preview lookup", async () => {
@@ -922,5 +957,98 @@ describe("registerArtifactsIpc — the md popout's preview channel is bound to i
     });
     expect(response).toEqual({ ok: false, error: "invalid artifact-preview request", errorKind: "invalid_input" });
     expect(rig.openPreview).not.toHaveBeenCalled();
+    expect(rig.openPreviewForId).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The exact repro behind the by-id reload: the same document opened TWICE
+   * in one tab (BrowserOpen without a previewId) leaves two live previews
+   * with the same realpath, and a by-path search would always reload the
+   * FIRST one. This test wires the guarded handler to a REAL PreviewHost
+   * over fake md windows (resolveArtifact bound exactly like main/index.ts
+   * binds it) and asserts sender→preview isolation on docVersion/focus.
+   */
+  it("two live previews of ONE document: the sender's OWN preview reloads/focuses, the first path match stays untouched", async () => {
+    resetMdWindowTargetsForTests();
+    setIpcGuardMainWindow(() => MAIN_SENDER);
+    const P1_SENDER = { mainFrame: { frame: "md-popout-1" } };
+    const P1_EVENT = { sender: P1_SENDER, senderFrame: P1_SENDER.mainFrame };
+    const P2_SENDER = { mainFrame: { frame: "md-popout-2" } };
+    const P2_EVENT = { sender: P2_SENDER, senderFrame: P2_SENDER.mainFrame };
+    addIpcGuardTrustedWindow(P1_SENDER, [ARTIFACT_PREVIEW_CHANNEL]);
+    addIpcGuardTrustedWindow(P2_SENDER, [ARTIFACT_PREVIEW_CHANNEL]);
+    const rig = await makeRig();
+
+    const mdWindows = new Map<string, StubMdWindow>();
+    const host = registerPreviewHost({
+      createWindow: () => {
+        throw new Error("web windows are not used in this scenario");
+      },
+      createPanelView: () => {
+        throw new Error("panel views are not used in this scenario");
+      },
+      createMdWindow: (opts) => {
+        const win = new StubMdWindow(opts.previewId);
+        mdWindows.set(opts.previewId, win);
+        return win;
+      },
+      displayMode: () => "window",
+      // Same binding main/index.ts uses: the artifacts deps' own strict resolver.
+      resolveArtifact: (tabId, path) => resolveContainedPath(rig.deps, tabId, path),
+      autoOpenEnabled: () => false,
+      liveReloadEnabled: () => false,
+      watchFile: () => ({ close() {} }),
+      postToHost: () => false,
+      statMdSource: async () => ({ size: 1, isFile: true }),
+      readMdSourceNoFollow: async () => Buffer.from(""),
+      captureMainWindowRect: async () => null,
+      logger: { log() {}, warn() {}, error() {} },
+      now: () => 1,
+    });
+    rig.deps.openPreview = (tabId, realPath) => host.openForPathClick(tabId, realPath);
+    rig.deps.openPreviewForId = (tabId, previewId, realPath) => host.openForPreviewId(tabId, previewId, realPath);
+    rig.deps.mdPreviewRealSourcePath = (tabId, previewId) => host.getMdDocRef(tabId, previewId)?.realSourcePath;
+
+    capturedArtifactHandlers.clear();
+    registerArtifactsIpc(rig.deps);
+
+    await seed(join(rig.workspace, "doc.md"), "# doc");
+    const docPath = join(rig.workspace, "doc.md");
+    const open1 = await host.openForTab(TAB_ID, { path: docPath });
+    const open2 = await host.openForTab(TAB_ID, { path: docPath });
+    expect(open1.ok).toBe(true);
+    expect(open2.ok).toBe(true);
+    const p1 = open1.ok ? open1.value.previewId : "";
+    const p2 = open2.ok ? open2.value.previewId : "";
+    expect(p1).not.toBe(p2);
+    expect(host.listForTab(TAB_ID)).toHaveLength(2);
+    registerMdWindowTarget(P1_SENDER, { tabId: TAB_ID, previewId: p1 });
+    registerMdWindowTarget(P2_SENDER, { tabId: TAB_ID, previewId: p2 });
+
+    // From p2's popout: p2 reloads (docVersion bumps, focus show), p1 untouched.
+    const fromP2 = await invoke(ARTIFACT_PREVIEW_CHANNEL, P2_EVENT, { tabId: TAB_ID, path: docPath });
+    expect(fromP2).toMatchObject({ ok: true, value: { previewId: p2 } });
+    expect(host.getMdDocRef(TAB_ID, p2)?.docVersion).toBe(1);
+    expect(host.getMdDocRef(TAB_ID, p1)?.docVersion).toBe(0);
+    expect(mdWindows.get(p2)!.showCalls).toBe(2); // creation + the focus show
+    expect(mdWindows.get(p1)!.showCalls).toBe(1); // creation only — untouched
+
+    // From p1's popout: the opposite.
+    const fromP1 = await invoke(ARTIFACT_PREVIEW_CHANNEL, P1_EVENT, { tabId: TAB_ID, path: docPath });
+    expect(fromP1).toMatchObject({ ok: true, value: { previewId: p1 } });
+    expect(host.getMdDocRef(TAB_ID, p1)?.docVersion).toBe(1);
+    expect(host.getMdDocRef(TAB_ID, p2)?.docVersion).toBe(1);
+    expect(mdWindows.get(p1)!.showCalls).toBe(2);
+    expect(mdWindows.get(p2)!.showCalls).toBe(2);
+
+    // The main window keeps the unchanged by-path click contract: the FIRST
+    // same-realpath preview (p1) is the one a path click reloads/focuses.
+    const fromMain = await invoke(ARTIFACT_PREVIEW_CHANNEL, MAIN_EVENT, { tabId: TAB_ID, path: docPath });
+    expect(fromMain).toMatchObject({ ok: true, value: { previewId: p1 } });
+    expect(host.getMdDocRef(TAB_ID, p1)?.docVersion).toBe(2);
+    expect(host.getMdDocRef(TAB_ID, p2)?.docVersion).toBe(1);
+    expect(mdWindows.get(p1)!.showCalls).toBe(3);
+    expect(mdWindows.get(p2)!.showCalls).toBe(2);
+    expect(host.listForTab(TAB_ID)).toHaveLength(2); // never stacked a third preview
   });
 });

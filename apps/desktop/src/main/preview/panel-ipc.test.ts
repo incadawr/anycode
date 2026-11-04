@@ -62,6 +62,9 @@ function fakeHost(overrides: Partial<PreviewHostHandle> = {}): PreviewHostHandle
     // Owner smoke-test defect fix (click-dedup): type-level fake addition
     // only — this suite never drives the click-to-preview path directly.
     openForPathClick: vi.fn(async () => ({ ok: true as const, value: { previewId: "p", url: "", kind: "file" as const } })),
+    // The md popout's by-id reload: type-level fake addition only — this
+    // suite never drives the popout preview path directly.
+    openForPreviewId: vi.fn(async () => ({ ok: true as const, value: { previewId: "p", url: "", kind: "file" as const } })),
     handleRequest: vi.fn(async () => {}),
     handleArtifacts: vi.fn(),
     closeForTab: vi.fn(),
