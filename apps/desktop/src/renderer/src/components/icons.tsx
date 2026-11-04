@@ -469,6 +469,18 @@ export function Route(props: IconProps) {
   );
 }
 
+/** Orchestrate — a node fanning out to child nodes (delegate work to child agents: start-screen/session toggle, mode-menu row, header badge). */
+export function Orchestrate(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <circle cx="3.25" cy="8" r="1.6" />
+      <circle cx="12.5" cy="3.75" r="1.25" />
+      <circle cx="12.5" cy="12.25" r="1.25" />
+      <path d="M4.7 7.3L11.3 4.25M4.7 8.7l6.6 3.05" />
+    </Icon>
+  );
+}
+
 /** Sparkle — a model/assistant identity glyph (Settings → Claude nav icon; distinct from Codex's Cube). */
 export function Sparkle(props: IconProps) {
   return (

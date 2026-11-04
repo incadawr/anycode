@@ -314,3 +314,117 @@ describe("cost popover layout", () => {
     } finally { rmSync(directory, { recursive: true, force: true }); }
   }, 40_000);
 });
+
+describe("composer chip row geometry", () => {
+  /**
+   * The owner-reported chip-row bug: the Orchestrate text chip wrapped to two
+   * lines and its ink painted past the footer's fixed 28px height, reading as
+   * overlapping buttons. The contract: every chip stays one 28px line, the
+   * row never overflows (session footer clips; the start screen's open footer
+   * must not spill into the send column), and narrow width truncates labels
+   * with an ellipsis instead of wrapping or overlapping.
+   */
+  it.skipIf(!existsSync(chrome))("keeps the codex chip row one fixed-height line, no wrap and no overlap, at narrow and wide widths", () => {
+    const cssRoot = resolve(import.meta.dirname, "..");
+    const css = ["tokens.css", "app.css"].map((file) => readFileSync(resolve(cssRoot, file), "utf8")).join("\n");
+    // One codex session row (overflow-hidden footer) and one start-screen
+    // codex draft row (overflow-visible footer), each at wide and narrow
+    // width — the four surfaces of one contract, verified in a single run.
+    // Plus one CORE session row: it pins the mode chip's own truncation
+    // contract (the `min-width: 3ch` label floor) at the narrow target.
+    const row = (id: string, width: number, start: boolean): string =>
+      `<div class="composer${start ? " start-composer" : ""}" style="width:${width}px">` +
+      `<div class="composer-footer"><div class="composer-footer-left" id="${id}">` +
+      `<button class="orchestrate-toggle" aria-pressed="true" aria-label="Orchestrate"><svg width="16" height="16"></svg></button>` +
+      `<div class="model-pill"><button class="model-pill-chip"><span class="model-pill-label">Full access</span><svg class="model-pill-chevron" width="12" height="12"></svg></button></div>` +
+      `<button class="composer-attach"><svg width="16" height="16"></svg></button>` +
+      `<div class="model-pill"><button class="model-pill-chip"><span class="model-pill-label">GPT-6.1-Sol · medium</span><svg class="model-pill-chevron" width="12" height="12"></svg></button></div>` +
+      `</div><div class="composer-footer-right"><button class="composer-send">Send</button></div></div></div>`;
+    const coreRow = (id: string, width: number): string =>
+      `<div class="composer" style="width:${width}px">` +
+      `<div class="composer-footer"><div class="composer-footer-left" id="${id}">` +
+      `<button class="mode-chip mode-chip-build"><span class="mode-chip-label">build</span><svg class="mode-chip-chevron" width="12" height="12"></svg></button>` +
+      `<button class="composer-attach"><svg width="16" height="16"></svg></button>` +
+      `<div class="model-pill"><button class="model-pill-chip"><span class="model-pill-label">Claude Sonnet 4.5 · Thinking high</span><svg class="model-pill-chevron" width="12" height="12"></svg></button></div>` +
+      `</div><div class="composer-footer-right"><button class="composer-send">Send</button></div></div></div>`;
+    const directory = mkdtempSync(resolve(tmpdir(), "anycode-chip-row-layout-"));
+    try {
+      const file = resolve(directory, "fixture.html");
+      writeFileSync(file, `<!doctype html><html data-theme="dark"><head><meta charset="utf-8"><style>${css}</style></head><body>
+        ${row("session-wide", 700, false)}
+        ${row("session-narrow", 300, false)}
+        ${row("start-wide", 700, true)}
+        ${row("start-narrow", 300, true)}
+        ${coreRow("core-narrow", 240)}
+        <pre id="result"></pre><script>
+          const read = id => {
+            const left = document.getElementById(id);
+            const chips = [...left.children].filter(el => el.getBoundingClientRect().height > 0);
+            const boxes = chips.map(el => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, height: r.height, scrollH: el.scrollHeight, clientH: el.clientHeight }; });
+            // Pairwise overlap probe, in row order (flex layout never reorders).
+            const overlaps = [];
+            for (let i = 1; i < boxes.length; i++) if (boxes[i].left < boxes[i - 1].right - 0.6) overlaps.push(i);
+            const label = left.querySelector('.model-pill:last-child .model-pill-label');
+            const modeLabel = left.querySelector('.mode-chip-label');
+            return {
+              heights: boxes.map(box => box.height),
+              wrapped: boxes.filter(box => box.scrollH > box.clientH + 0.6).length,
+              overlaps,
+              rowSpill: left.scrollWidth - left.clientWidth,
+              // The row's INK, not the container's edge: composer-footer-left
+              // fills a minmax(0,1fr) track, so its own right edge cannot move
+              // past the send column even while a child paints under it.
+              inkRight: Math.max(...[...left.children].map(c => c.getBoundingClientRect().right)),
+              sendLeft: left.parentElement.querySelector('.composer-footer-right').getBoundingClientRect().left,
+              labelTruncated: label.scrollWidth - label.clientWidth > 0.6,
+              toggleWidth: left.querySelector('.orchestrate-toggle') ? left.querySelector('.orchestrate-toggle').getBoundingClientRect().width : null,
+              modeLabel: modeLabel ? {
+                width: modeLabel.getBoundingClientRect().width,
+                floor: parseFloat(getComputedStyle(modeLabel).minWidth),
+                truncated: modeLabel.scrollWidth - modeLabel.clientWidth > 0.6,
+              } : null,
+            };
+          };
+          const ids = ['session-wide', 'session-narrow', 'start-wide', 'start-narrow', 'core-narrow'];
+          document.querySelector('#result').textContent = JSON.stringify(Object.fromEntries(ids.map(id => [id, read(id)])));
+        </script></body></html>`);
+      const run = spawnSync(chrome, ["--headless", "--no-sandbox", "--disable-gpu", "--disable-background-networking", "--no-first-run", `--user-data-dir=${directory}/profile`, "--dump-dom", `file://${file}`], { encoding: "utf8", timeout: 30_000 });
+      expect(run.status, run.stderr).toBe(0);
+      const match = run.stdout.match(/<pre id="result">([^<]+)<\/pre>/);
+      expect(match).not.toBeNull();
+      const result = JSON.parse(match![1]!) as Record<string, { heights: number[]; wrapped: number; overlaps: number[]; rowSpill: number; inkRight: number; sendLeft: number; labelTruncated: boolean; toggleWidth: number | null; modeLabel: { width: number; floor: number; truncated: boolean } | null }>;
+      for (const [id, row] of Object.entries(result)) {
+        // One fixed-height line: every control is the 28px footer surface and
+        // nothing grew a second line of ink.
+        expect(row.heights, id).toEqual(new Array(row.heights.length).fill(28));
+        expect(row.wrapped, id).toBe(0);
+        expect(row.overlaps, id).toEqual([]);
+        if (row.toggleWidth !== null) expect(row.toggleWidth, id).toBe(28);
+      }
+      // Narrow must truncate, not clip: the model label actually ellipsizes.
+      expect(result["session-narrow"]!.labelTruncated).toBe(true);
+      // The session footer contains its row (the chips FIT in the clipped box,
+      // ellipsis did the yielding — not the clip edge).
+      expect(result["session-narrow"]!.rowSpill).toBeLessThanOrEqual(0.6);
+      expect(result["core-narrow"]!.rowSpill).toBeLessThanOrEqual(0.6);
+      // The mode chip truncates with the same readable floor as the model
+      // pill: at the narrow target the label keeps its `min-width: 3ch` stub
+      // (never collapses to a bare chevron) while actually ellipsizing.
+      // Regression pin — without the floor this label measured 3.2px here.
+      const coreMode = result["core-narrow"]!.modeLabel!;
+      expect(coreMode.floor).toBeGreaterThan(0);
+      expect(coreMode.width).toBeGreaterThanOrEqual(coreMode.floor - 0.6);
+      expect(coreMode.truncated).toBe(true);
+      // The start screen's overflow-visible footer must not spill into the
+      // send column at either width. The probe is the INK (max child right
+      // edge), not the container's own right edge: the container fills its
+      // minmax(0,1fr) track, so its edge cannot fail even when a
+      // non-shrinking chip paints under the send button — the old assert was
+      // structurally green (red-proofed: such a chip passes the old probe at
+      // 67.5px past the send column while this one fails).
+      for (const id of ["start-wide", "start-narrow"]) {
+        expect(result[id]!.inkRight, id).toBeLessThanOrEqual(result[id]!.sendLeft + 0.6);
+      }
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  }, 60_000);
+});

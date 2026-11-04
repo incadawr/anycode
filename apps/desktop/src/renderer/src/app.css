@@ -1189,9 +1189,17 @@ body {
 /* The tab-level orchestrate flag: same badge shape as `agent`, accent-tinted
    so it reads as the tab's mode rather than metadata about how it was opened. */
 .session-header-orchestrate {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   color: var(--text-2);
   border-color: var(--border);
   background: var(--neutral-soft);
+}
+
+.session-header-orchestrate svg {
+  width: 12px;
+  height: 12px;
 }
 
 .sidebar-row-worktree {
@@ -4617,6 +4625,43 @@ body {
   cursor: not-allowed;
 }
 
+/* ── orchestrate icon toggle (start-screen codex draft + codex session
+   composer): the attach button's 28px footprint, so the chip row keeps one
+   fixed height — the old text chip wrapped and inflated the row. The on
+   state rides aria-pressed (accent tint, the `.mode-chip-orchestrate`
+   posture). ── */
+.orchestrate-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border-control);
+  border-radius: var(--r-full);
+  background: var(--bg-control);
+  color: var(--text-2);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+
+.orchestrate-toggle:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text-1);
+}
+
+.orchestrate-toggle:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.orchestrate-toggle[aria-pressed="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-soft-text);
+  border-color: var(--border-strong);
+}
+
 /* Footer hint: default visually hidden AND out of flow — never
    display:none (it is the textarea's aria-describedby target) and never a
    footer grid row, so a narrow split-pane composer is a single footer row.
@@ -5409,6 +5454,10 @@ body {
 .mode-menu {
   position: relative;
   display: inline-flex;
+  /* Shrinkable in the composer footer's flex row (the `.model-pill` pattern):
+     the chip ellipsizes instead of overflowing into its neighbours. */
+  min-width: 0;
+  max-width: 100%;
 }
 
 .mode-chip {
@@ -5424,6 +5473,14 @@ body {
   cursor: pointer;
   text-transform: capitalize;
   transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast);
+  /* One line, always: a wrapped label painted past the chip's fixed height
+     and read as overlapping ink under the neighbouring chips (P7.13's
+     fixed-height footer). Truncation, not wrapping. */
+  white-space: nowrap;
+  min-width: 0;
+  /* Backstop for the squeeze below the label's floor: clipped here instead of
+     painting past the chip's own border into the row (`.model-pill-chip`). */
+  overflow: hidden;
 }
 
 .mode-chip:disabled {
@@ -5431,9 +5488,19 @@ body {
   opacity: 0.5;
 }
 
+.mode-chip-label {
+  /* Readable floor, the same stub contract as `.model-pill-label`: the mode
+     stays identifiable however narrow the row gets, and it is the model pill
+     that yields first, not the mode chip collapsing to a bare chevron. */
+  min-width: 3ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .mode-chip-chevron {
   width: 12px;
   height: 12px;
+  flex-shrink: 0;
   opacity: 0.7;
 }
 
@@ -5471,6 +5538,7 @@ body {
 /* Composer controls share the same 28px surface in every mode. */
 .composer-footer .mode-chip {
   height: var(--ctl-h-sm);
+  min-width: 0;
   background: var(--bg-control);
   border-color: var(--border-control);
 }
@@ -5540,6 +5608,17 @@ body {
   font-size: var(--fs-sm);
   font-weight: var(--w-medium);
   text-transform: capitalize;
+}
+
+/* The Orchestrate row's glyph: the shared orchestrate icon, inline before the
+   name so the row reads as the same state the header badge and the composer
+   toggle show. */
+.mode-menu-item-glyph {
+  width: 13px;
+  height: 13px;
+  margin-right: var(--sp-1);
+  vertical-align: -2px;
+  opacity: 0.75;
 }
 
 .mode-menu-item-desc {

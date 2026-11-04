@@ -69,7 +69,7 @@ import { useTabsStore, type SessionDraft, type TabsStoreApi } from "../tabs-stor
 import type { QueuedPromptImage } from "../store.js";
 import { useSettingsStore } from "../settings-store.js";
 import { submitStartDraft, type StartSubmitResult } from "../start-session.js";
-import { Folder, ArrowUp, BrandMark, Check, Chevron, Clipboard, ImageIcon, Search, Terminal, Warning, X } from "./icons.js";
+import { Folder, ArrowUp, BrandMark, Check, Chevron, Clipboard, ImageIcon, Orchestrate, Search, Terminal, Warning, X } from "./icons.js";
 import { EFFORT_LABELS, modelDisplayName, pillLabel, providerModelsFor, resolvePid } from "./ModelPill.js";
 import {
   buildStartModelGroups,
@@ -1806,14 +1806,19 @@ export function StartScreen({ onToast }: StartScreenProps) {
                   onPick={(id) => useTabsStore.getState().setDraftEnginePreset(id)}
                 />
                 {showCodexDraftOrchestrateToggle(draft.engine, availableEngines) && (
+                  // Icon-only toggle, the attach button's footprint: a text
+                  // chip wrapped to two lines and inflated the row. The state
+                  // reads off aria-pressed (accent-highlighted via CSS); the
+                  // label rides title/aria-label.
                   <button
                     type="button"
-                    className="mode-chip"
+                    className="orchestrate-toggle"
                     aria-pressed={draft.orchestrate === true}
-                    title="Request orchestration when the session starts"
+                    aria-label={draft.orchestrate === true ? "Orchestration requested" : "Orchestrate: request orchestration when the session starts"}
+                    title={draft.orchestrate === true ? "Orchestration requested" : "Orchestrate: request orchestration when the session starts"}
                     onClick={() => toggleDraftOrchestrate(draft.orchestrate !== true)}
                   >
-                    Orchestrate{draft.orchestrate ? " (requested)" : ""}
+                    <Orchestrate />
                   </button>
                 )}
                 {codexModels.length > 0 && (

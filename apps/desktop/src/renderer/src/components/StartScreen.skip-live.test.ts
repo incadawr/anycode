@@ -179,6 +179,66 @@ describe("Start screen mode menu's Orchestrate row", () => {
   });
 });
 
+describe("Start screen codex draft's Orchestrate icon toggle", () => {
+  async function mountCodexDraft(): Promise<void> {
+    // The screen loads its engine list from the host bridge on mount and
+    // keeps it in local state — the mock must advertise codex up front, a
+    // store patch after mount would be overwritten by that load.
+    Object.defineProperty(window, "anycode", {
+      configurable: true,
+      value: {
+        createTab,
+        listSessions: vi.fn(async () => []),
+        listAvailableEngines: vi.fn(async () => ({ engineIds: ["core", "codex"] })),
+        onEnginesChanged: vi.fn(() => () => {}),
+        pickWorkspace: vi.fn(async () => ({ workspace: null })),
+        codex: {
+          recheck: vi.fn(async () => ({ report: { status: "unavailable" } })),
+          listProfiles: vi.fn(async () => ({ profiles: [] })),
+        },
+      },
+    });
+    await mount();
+    await act(async () => {
+      useTabsStore.getState().openDraft("/ws/a");
+      useTabsStore.getState().setDraftEngine("codex");
+    });
+  }
+
+  /**
+   * The toggle is icon-only on purpose: the old text chip read
+   * "Orchestrate (requested)", wrapped to two lines and inflated the chip
+   * row. The state now rides aria-pressed + the accessible name, and no
+   * state ever spells "(requested)" back into the row.
+   */
+  it("toggles via aria-pressed and never renders the (requested) text", async () => {
+    await mountCodexDraft();
+
+    const toggle = container.querySelector<HTMLButtonElement>("button.orchestrate-toggle")!;
+    expect(toggle).not.toBeNull();
+    expect(toggle.querySelector("svg")).not.toBeNull();
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    expect(toggle.getAttribute("aria-label")).toBe("Orchestrate: request orchestration when the session starts");
+    expect(toggle.textContent).not.toContain("(requested)");
+
+    await act(async () => toggle.click());
+    // The draft flag flips immediately; the first run asks for roles, and
+    // Skip keeps the flag (the same flow the mode-menu row pins).
+    const on = container.querySelector<HTMLButtonElement>("button.orchestrate-toggle")!;
+    expect(on.getAttribute("aria-pressed")).toBe("true");
+    expect(on.getAttribute("aria-label")).toBe("Orchestration requested");
+    expect(useTabsStore.getState().draft?.orchestrate).toBe(true);
+    expect(on.textContent).not.toContain("(requested)");
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-testid="role-picker-skip"]')!.click();
+    });
+
+    await act(async () => on.click());
+    expect(container.querySelector<HTMLButtonElement>("button.orchestrate-toggle")!.getAttribute("aria-pressed")).toBe("false");
+    expect(useTabsStore.getState().draft?.orchestrate).toBe(false);
+  });
+});
+
 describe("Start screen first-run role dialog", () => {
   it("Skip starts the orchestration task instead of only closing the dialog", async () => {
     const queueInitialPrompt = vi.spyOn(tabRegistry, "queueInitialPrompt");
