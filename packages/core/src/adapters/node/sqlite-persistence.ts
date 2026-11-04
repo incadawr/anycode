@@ -1218,19 +1218,45 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
    * row order and the returned `updatedAt` both follow the shared
    * activity rule (SESSION_LAST_ACTIVITY_SQL) — a metadata edit after the
    * last history record no longer floats the row.
+   *
+   * `perWorkspaceLimit` pages WITHIN each project: a ROW_NUMBER window
+   * partitions by the project-identity key (COALESCE(project_root, workspace)
+   * — the sidebar's grouping key, the same rule listSessionsOlderThan trusts)
+   * and keeps only each partition's N most recent roots, so one busy project
+   * cannot push other projects' folders out of the page. Children are still
+   * excluded by the same WHERE clause before any window is ranked.
    */
-  async listRootSessions(opts?: { workspace?: string; limit?: number }): Promise<SessionMeta[]> {
+  async listRootSessions(opts?: { workspace?: string; limit?: number; perWorkspaceLimit?: number }): Promise<SessionMeta[]> {
     const db = this.open();
-    let sql = `SELECT s.*, ${SESSION_LAST_ACTIVITY_SQL} AS last_activity FROM sessions s WHERE s.parent_session_id IS NULL`;
     const params: (string | number)[] = [];
-    if (opts?.workspace !== undefined) {
-      sql += " AND s.workspace = ?";
-      params.push(opts.workspace);
-    }
-    sql += " ORDER BY last_activity DESC";
-    if (opts?.limit !== undefined) {
-      sql += " LIMIT ?";
-      params.push(opts.limit);
+    let sql: string;
+    if (opts?.perWorkspaceLimit !== undefined) {
+      sql = `SELECT * FROM (
+        SELECT s.*, ${SESSION_LAST_ACTIVITY_SQL} AS last_activity,
+          ROW_NUMBER() OVER (PARTITION BY COALESCE(s.project_root, s.workspace) ORDER BY ${SESSION_LAST_ACTIVITY_SQL} DESC) AS rn
+        FROM sessions s WHERE s.parent_session_id IS NULL`;
+      if (opts.workspace !== undefined) {
+        sql += " AND s.workspace = ?";
+        params.push(opts.workspace);
+      }
+      sql += ") WHERE rn <= ?";
+      params.push(opts.perWorkspaceLimit);
+      sql += " ORDER BY last_activity DESC";
+      if (opts.limit !== undefined) {
+        sql += " LIMIT ?";
+        params.push(opts.limit);
+      }
+    } else {
+      sql = `SELECT s.*, ${SESSION_LAST_ACTIVITY_SQL} AS last_activity FROM sessions s WHERE s.parent_session_id IS NULL`;
+      if (opts?.workspace !== undefined) {
+        sql += " AND s.workspace = ?";
+        params.push(opts.workspace);
+      }
+      sql += " ORDER BY last_activity DESC";
+      if (opts?.limit !== undefined) {
+        sql += " LIMIT ?";
+        params.push(opts.limit);
+      }
     }
     const rows = db.prepare(sql).all(...params) as unknown as (SessionRow & { last_activity: number })[];
     return rows.map((row) => rowToSessionMeta({ ...row, updated_at: row.last_activity }));
