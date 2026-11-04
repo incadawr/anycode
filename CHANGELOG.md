@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- Privileged IPC is now guarded by sender identity: every `anycode:*` channel answers only the app's main window (and the detached Markdown popout, explicitly allow-listed), and only from the renderer's top frame. Subframes, preview views, and other windows that somehow carry the preload bridge get refused, so a compromised renderer frame or stray window can no longer read settings, secrets, or drive sessions.
+
 ## [0.0.73] — 2026-11-04
 
 ### Added
