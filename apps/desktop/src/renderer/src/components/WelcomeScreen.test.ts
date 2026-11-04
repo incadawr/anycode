@@ -11,8 +11,9 @@
  * `resolveCreatedConnectionId`/`liveModelSuggestions`.
  */
 import { describe, expect, it } from "vitest";
+import { getBuiltinCatalog } from "@anycode/core/catalog";
 import type { ProviderConnection } from "../../../shared/settings.js";
-import { initialConnectionsView, resolveWelcomeView, type WelcomeConnectionsView } from "./WelcomeScreen.js";
+import { initialConnectionsView, resolveWelcomeView, welcomeFormKey, WELCOME_SUBSCRIPTIONS, type WelcomeConnectionsView } from "./WelcomeScreen.js";
 
 function conn(id: string, providerId = "z-ai"): ProviderConnection {
   return { id, providerId };
@@ -66,5 +67,41 @@ describe("resolveWelcomeView", () => {
     const editA = resolveWelcomeView({ mode: "edit", connectionId: "a" }, connections);
     const editB = resolveWelcomeView({ mode: "edit", connectionId: "b" }, connections);
     expect(editA.key).not.toBe(editB.key);
+  });
+});
+
+describe("welcomeFormKey", () => {
+  it("a subscription pick on the fresh-create form keys the form per template", () => {
+    expect(welcomeFormKey("add", "z-ai")).toBe("add:z-ai");
+    expect(welcomeFormKey("add", "minimax")).toBe("add:minimax");
+    expect(welcomeFormKey("add", "kimi")).toBe("add:kimi");
+  });
+
+  it("different picks yield different keys (typed values must not leak across templates)", () => {
+    expect(welcomeFormKey("add", "z-ai")).not.toBe(welcomeFormKey("add", "minimax"));
+  });
+
+  it("no pick keeps the plain key", () => {
+    expect(welcomeFormKey("add", null)).toBe("add");
+  });
+
+  it("any other view passes its key through untouched", () => {
+    expect(welcomeFormKey("conn-a", "z-ai")).toBe("conn-a");
+    expect(welcomeFormKey("conn-a", null)).toBe("conn-a");
+  });
+});
+
+describe("WELCOME_SUBSCRIPTIONS", () => {
+  it("every pick is a builtin catalog template a key-paste connection can use", () => {
+    const catalog = getBuiltinCatalog();
+    for (const sub of WELCOME_SUBSCRIPTIONS) {
+      const entry = catalog.providers.find((provider) => provider.id === sub.id);
+      // A drift guard: a renamed/removed catalog template would seed the
+      // first-run Provider select with an id no entry resolves.
+      expect(entry, `catalog template "${sub.id}" missing`).toBeDefined();
+      expect(entry!.auth.kind, `template "${sub.id}" must be key paste, not OAuth`).toBe("api_key");
+      // The prefilled default model (the curated list's first entry) must exist.
+      expect(entry!.models.length, `template "${sub.id}" has no models to prefill`).toBeGreaterThan(0);
+    }
   });
 });
