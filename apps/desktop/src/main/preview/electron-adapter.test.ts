@@ -702,7 +702,7 @@ describe("createElectronPreviewWindow — will-download policy (deny-by-default)
     expect(item.savePaths).toEqual(["/host/chosen/report.pdf"]);
   });
 
-  it("unregisters the session listener on window close (registerCleanup) and skips an already-destroyed contents", () => {
+  it("unregisters the session listener on window close (registerCleanup), even when the contents is already destroyed", () => {
     const win = createElectronPreviewWindow({ previewId: "dl-d" });
     const fake = latestWindow();
     win.webContents.onWillDownload(() => {});
@@ -711,13 +711,14 @@ describe("createElectronPreviewWindow — will-download policy (deny-by-default)
     fake.emit("closed");
     expect(fake.webContents.willDownloadHandlers).toHaveLength(0);
 
-    // An already-destroyed contents must not touch its session at cleanup time.
+    // The per-preview session outlives the webContents across transfers: removal
+    // must not depend on wc liveness, or repeated transfers accumulate dead listeners.
     const win2 = createElectronPreviewWindow({ previewId: "dl-e" });
     const fake2 = latestWindow();
     win2.webContents.onWillDownload(() => {});
     fake2.webContents.destroyedFlag = true;
     fake2.emit("closed");
-    expect(fake2.webContents.willDownloadHandlers).toHaveLength(1);
+    expect(fake2.webContents.willDownloadHandlers).toHaveLength(0);
   });
 });
 

@@ -323,9 +323,14 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
           { cancel: () => event.preventDefault(), saveTo: (path) => item.setSavePath(path) },
         );
       };
-      wc.session.on("will-download", onWillDownload);
+      // Captured before cleanup: the per-preview session OUTLIVES the
+      // webContents across transfers, so removal must not depend on
+      // wc liveness — a destroyed contents still needs its listener off
+      // the shared session or repeated transfers accumulate dead ones.
+      const session = wc.session;
+      session.on("will-download", onWillDownload);
       registerCleanup(() => {
-        if (!wc.isDestroyed()) wc.session.removeListener("will-download", onWillDownload);
+        session.removeListener("will-download", onWillDownload);
       });
     },
     // Same session-scoped scheme as above; the check path hands a null
