@@ -21,7 +21,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { ipcMain } from "electron";
+import { guardedIpcHandle } from "./ipc-guard.js";
 import { z } from "zod";
 import {
   capabilities,
@@ -853,16 +853,16 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
 
   // ── channel registration ──
 
-  ipcMain.handle(PLUGINS_LIST_CHANNEL, async (): Promise<PluginsSnapshot> => {
+  guardedIpcHandle(PLUGINS_LIST_CHANNEL, async (): Promise<PluginsSnapshot> => {
     return buildSnapshot(deps);
   });
 
-  ipcMain.handle(PLUGINS_CHECK_UPDATES_CHANNEL, async (): Promise<PluginsSnapshot> => {
+  guardedIpcHandle(PLUGINS_CHECK_UPDATES_CHANNEL, async (): Promise<PluginsSnapshot> => {
     const check = await checkIndex();
     return buildSnapshot(deps, check);
   });
 
-  ipcMain.handle(PLUGINS_INSTALL_PREPARE_CHANNEL, async (_event, payload: unknown): Promise<PluginInstallPrepareResult> => {
+  guardedIpcHandle(PLUGINS_INSTALL_PREPARE_CHANNEL, async (_event, payload: unknown): Promise<PluginInstallPrepareResult> => {
     const parsed = prepareSchema.safeParse(payload);
     if (!parsed.success) {
       return refusal("invalid", "payload rejected");
@@ -870,7 +870,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     return handlePrepare(parsed.data.source);
   });
 
-  ipcMain.handle(PLUGINS_INSTALL_COMMIT_CHANNEL, async (_event, payload: unknown) => {
+  guardedIpcHandle(PLUGINS_INSTALL_COMMIT_CHANNEL, async (_event, payload: unknown) => {
     const parsed = commitSchema.safeParse(payload);
     if (!parsed.success) {
       return refusal("invalid", "payload rejected");
@@ -881,7 +881,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     });
   });
 
-  ipcMain.handle(PLUGINS_UPDATE_CHANNEL, async (_event, payload: unknown) => {
+  guardedIpcHandle(PLUGINS_UPDATE_CHANNEL, async (_event, payload: unknown) => {
     const parsed = nameSchema.safeParse(payload);
     if (!parsed.success) return refusal("invalid");
     const check = await checkIndex();
@@ -895,7 +895,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     return { ok: true } satisfies PluginsMutationResult;
   });
 
-  ipcMain.handle(PLUGINS_ROLLBACK_CHANNEL, async (_event, payload: unknown): Promise<PluginsMutationResult> => {
+  guardedIpcHandle(PLUGINS_ROLLBACK_CHANNEL, async (_event, payload: unknown): Promise<PluginsMutationResult> => {
     const parsed = nameSchema.safeParse(payload);
     if (!parsed.success) return refusal("invalid");
     const result = await storeRollbackPlugin(storeOpts(), parsed.data.name);
@@ -904,7 +904,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     return { ok: true };
   });
 
-  ipcMain.handle(PLUGINS_SET_PINNED_CHANNEL, async (_event, payload: unknown): Promise<PluginsMutationResult> => {
+  guardedIpcHandle(PLUGINS_SET_PINNED_CHANNEL, async (_event, payload: unknown): Promise<PluginsMutationResult> => {
     const parsed = setNameSchema.safeParse(payload);
     if (!parsed.success) return refusal("invalid");
     const result = await storeSetPinned(storeOpts(), parsed.data.name, parsed.data.value);
@@ -913,7 +913,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     return { ok: true };
   });
 
-  ipcMain.handle(PLUGINS_SET_ENABLED_CHANNEL, async (_event, payload: unknown): Promise<PluginsMutationResult> => {
+  guardedIpcHandle(PLUGINS_SET_ENABLED_CHANNEL, async (_event, payload: unknown): Promise<PluginsMutationResult> => {
     const parsed = setNameSchema.safeParse(payload);
     if (!parsed.success) return refusal("invalid");
     const result = await storeSetEnabled(storeOpts(), parsed.data.name, parsed.data.value);
@@ -922,7 +922,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     return { ok: true };
   });
 
-  ipcMain.handle(PLUGINS_REMOVE_CHANNEL, async (_event, payload: unknown): Promise<PluginsMutationResult> => {
+  guardedIpcHandle(PLUGINS_REMOVE_CHANNEL, async (_event, payload: unknown): Promise<PluginsMutationResult> => {
     const parsed = nameSchema.safeParse(payload);
     if (!parsed.success) return refusal("invalid");
     // xfix M4: tombstoning must not depend on the OFFLINE cache
@@ -945,7 +945,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     return { ok: true };
   });
 
-  ipcMain.handle(PLUGINS_APPROVE_MCP_CHANNEL, async (_event, payload: unknown): Promise<PluginsMutationResult> => {
+  guardedIpcHandle(PLUGINS_APPROVE_MCP_CHANNEL, async (_event, payload: unknown): Promise<PluginsMutationResult> => {
     const parsed = nameSchema.safeParse(payload);
     if (!parsed.success) return refusal("invalid");
     // Grant consent for the plugin's CURRENT serversHash (read from scan).
@@ -977,7 +977,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     return { ok: true };
   });
 
-  ipcMain.handle(PLUGINS_APPROVE_SERVICES_CHANNEL, async (_event, payload: unknown): Promise<PluginsMutationResult> => {
+  guardedIpcHandle(PLUGINS_APPROVE_SERVICES_CHANNEL, async (_event, payload: unknown): Promise<PluginsMutationResult> => {
     const parsed = approveServicesSchema.safeParse(payload);
     if (!parsed.success) return refusal("invalid");
     // Consent is keyed by the CURRENT servicesHash main computes from its own scan.
@@ -1001,15 +1001,15 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
   });
 
   // the services read model (state only), bounded logs and manual restart.
-  ipcMain.handle(PLUGINS_SERVICES_CHANNEL, (): PluginServiceView[] => deps.services?.snapshot() ?? []);
+  guardedIpcHandle(PLUGINS_SERVICES_CHANNEL, (): PluginServiceView[] => deps.services?.snapshot() ?? []);
 
-  ipcMain.handle(PLUGINS_SERVICE_LOGS_CHANNEL, (_event, payload: unknown): string[] | PluginsMutationResult => {
+  guardedIpcHandle(PLUGINS_SERVICE_LOGS_CHANNEL, (_event, payload: unknown): string[] | PluginsMutationResult => {
     const parsed = serviceRefSchema.safeParse(payload);
     if (!parsed.success) return refusal("invalid");
     return deps.services?.logs(parsed.data.plugin, parsed.data.name) ?? [];
   });
 
-  ipcMain.handle(PLUGINS_SERVICE_RESTART_CHANNEL, async (_event, payload: unknown): Promise<PluginsMutationResult> => {
+  guardedIpcHandle(PLUGINS_SERVICE_RESTART_CHANNEL, async (_event, payload: unknown): Promise<PluginsMutationResult> => {
     const parsed = serviceRefSchema.safeParse(payload);
     if (!parsed.success) return refusal("invalid");
     if (deps.services === undefined) return refusal("not_found", "services are not available");
@@ -1017,7 +1017,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     return { ok: true };
   });
 
-  ipcMain.handle(PLUGINS_REVEAL_CHANNEL, async (_event, payload: unknown): Promise<PluginsMutationResult> => {
+  guardedIpcHandle(PLUGINS_REVEAL_CHANNEL, async (_event, payload: unknown): Promise<PluginsMutationResult> => {
     const parsed = nameSchema.safeParse(payload);
     if (!parsed.success) return refusal("invalid");
     // Resolve main-side only (path custody): .store/<name>/<active>.
@@ -1036,7 +1036,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     }
   });
 
-  ipcMain.handle(PLUGINS_SET_AUTO_UPDATE_CHANNEL, async (_event, payload: unknown): Promise<PluginsMutationResult> => {
+  guardedIpcHandle(PLUGINS_SET_AUTO_UPDATE_CHANNEL, async (_event, payload: unknown): Promise<PluginsMutationResult> => {
     const parsed = setAutoUpdateSchema.safeParse(payload);
     if (!parsed.success) return refusal("invalid");
     await deps.settings.setAutoUpdateOfficial(parsed.data.value);

@@ -51,24 +51,36 @@ class FakeHostProcess {
   once = vi.fn(() => this);
 }
 
+// Shared fake webContents: main/index.ts's guard source resolves to
+// `win.webContents`, so the rig must present THIS identity as the trusted
+// sender (plus its top frame) when driving captured handlers.
+const FAKE_MAIN_WEBCONTENTS = {
+  setWindowOpenHandler: vi.fn(),
+  on: vi.fn(),
+  send: vi.fn((channel: string) => {
+    sentChannels.push(channel);
+  }),
+  postMessage: vi.fn(),
+  isDestroyed: vi.fn(() => false),
+  mainFrame: { frame: "main" },
+};
+
 class FakeBrowserWindow {
+  /** Set by the constructor; beforeEach clears it so a wrapper never serves a PREVIOUS boot's window. */
+  static created = false;
   // `isDestroyed` on both the window and its webContents models a LIVE window
   // (sendToMainWindow asks before touching `.webContents`).
-  webContents = {
-    setWindowOpenHandler: vi.fn(),
-    on: vi.fn(),
-    send: vi.fn((channel: string) => {
-      sentChannels.push(channel);
-    }),
-    postMessage: vi.fn(),
-    isDestroyed: vi.fn(() => false),
-  };
+  webContents = FAKE_MAIN_WEBCONTENTS;
   on = vi.fn();
   isMaximized = vi.fn(() => false);
   isFullScreen = vi.fn(() => false);
   isDestroyed = vi.fn(() => false);
   loadFile = vi.fn(async () => undefined);
   loadURL = vi.fn(async () => undefined);
+
+  constructor() {
+    FakeBrowserWindow.created = true;
+  }
 }
 
 vi.mock("electron", () => ({
@@ -185,7 +197,13 @@ async function waitForHandler(channel: string, timeoutMs = 5000): Promise<IpcHan
   const start = Date.now();
   for (;;) {
     const handler = ipcHandlers.get(channel);
-    if (handler !== undefined) return handler;
+    if (handler !== undefined && FakeBrowserWindow.created) {
+      // The guard only serves a trusted main-window top-frame event; wrap so
+      // drive sites keep their ({}, payload) shape while the real handler gets
+      // the exact event Electron would deliver from the main window.
+      return ((_event: unknown, ...args: unknown[]) =>
+        handler({ sender: FAKE_MAIN_WEBCONTENTS, senderFrame: FAKE_MAIN_WEBCONTENTS.mainFrame } as unknown, ...args)) as IpcHandler;
+    }
     if (Date.now() - start > timeoutMs) {
       throw new Error(`ipcMain.handle(${channel}) was never registered within ${timeoutMs}ms`);
     }
@@ -212,6 +230,7 @@ function enginesChangedCount(): number {
 
 beforeEach(async () => {
   ipcHandlers.clear();
+  FakeBrowserWindow.created = false;
   sentChannels.length = 0;
   doctorMock.runCodexDoctor.mockClear();
   manifestMocks.refreshCodexManifest.mockClear();

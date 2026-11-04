@@ -40,6 +40,7 @@ import {
   type PreviewChangedPayload,
 } from "../../shared/preview-panel.js";
 import { registerPreviewPanelIpc } from "./panel-ipc.js";
+import { setIpcGuardMainWindow } from "../ipc-guard.js";
 import {
   registerPreviewHost,
   type PreviewHostHandle,
@@ -48,6 +49,10 @@ import {
   type PreviewWindowLike,
 } from "./preview-host.js";
 import { fakeCdp } from "./fake-cdp.js";
+
+/** The guard serves only a trusted main-window top-frame invoke; the rig wires a fake main window and drives captured wrappers with its event. */
+const MAIN_SENDER = { mainFrame: { frame: "main" } };
+const TRUSTED_EVENT = { sender: MAIN_SENDER, senderFrame: MAIN_SENDER.mainFrame };
 
 /** A fake PreviewHostHandle (mirrors automation/handlers.test.ts's own fake) — every panel method is a spy so a test can assert exactly what panel-ipc.ts forwarded. */
 function fakeHost(overrides: Partial<PreviewHostHandle> = {}): PreviewHostHandle {
@@ -82,10 +87,11 @@ function fakeHost(overrides: Partial<PreviewHostHandle> = {}): PreviewHostHandle
 function register(host: PreviewHostHandle): { invoke: (channel: string, raw: unknown) => unknown; send: (channel: string, raw: unknown) => void } {
   mockHandlers.clear();
   mockOnListeners.clear();
+  setIpcGuardMainWindow(() => MAIN_SENDER);
   registerPreviewPanelIpc({ host });
   return {
-    invoke: (channel, raw) => mockHandlers.get(channel)?.({}, raw),
-    send: (channel, raw) => mockOnListeners.get(channel)?.({}, raw),
+    invoke: (channel, raw) => mockHandlers.get(channel)?.(TRUSTED_EVENT, raw),
+    send: (channel, raw) => mockOnListeners.get(channel)?.(TRUSTED_EVENT, raw),
   };
 }
 

@@ -15,7 +15,7 @@
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { existsSync } from "node:fs";
-import { ipcMain } from "electron";
+import { guardedIpcHandle, guardedIpcOn } from "./ipc-guard.js";
 import { z } from "zod";
 import type { HistoryItem, PersistencePort, SessionMeta } from "@anycode/core";
 import {
@@ -1061,16 +1061,16 @@ export async function handleTabRebind(deps: TabIpcDeps, req: TabRebindRequest): 
  */
 export function registerTabIpc(deps: TabIpcDeps): void {
   let selectedTabId: string | null = null;
-  ipcMain.on(TAB_SELECT_CHANNEL, (_event, raw: unknown) => {
+  guardedIpcOn(TAB_SELECT_CHANNEL, (_event, raw: unknown) => {
     if (typeof raw === "string" && deps.manager.listTabs().some((tab) => tab.tabId === raw && !tab.childOf)) {
       selectedTabId = raw;
     }
   });
-  ipcMain.handle(TAB_BOOTSTRAP_CHANNEL, () => {
+  guardedIpcHandle(TAB_BOOTSTRAP_CHANNEL, () => {
     const tabs = deps.manager.listTabs().filter((tab) => !tab.childOf).map(({ tabId, workspace }) => ({ tabId, workspace }));
     return { tabs, activeTabId: tabs.some((tab) => tab.tabId === selectedTabId) ? selectedTabId : null };
   });
-  ipcMain.handle(TAB_CREATE_CHANNEL, async (_event, raw: unknown): Promise<CreateTabResult> => {
+  guardedIpcHandle(TAB_CREATE_CHANNEL, async (_event, raw: unknown): Promise<CreateTabResult> => {
     const parsed = createTabRequestSchema.safeParse(raw);
     if (!parsed.success) {
       // A create request main cannot understand is treated as a no-op cancel.
@@ -1079,7 +1079,7 @@ export function registerTabIpc(deps: TabIpcDeps): void {
     return handleCreate(deps, parsed.data);
   });
 
-  ipcMain.handle(TAB_CLOSE_CHANNEL, async (_event, raw: unknown): Promise<CloseTabResult> => {
+  guardedIpcHandle(TAB_CLOSE_CHANNEL, async (_event, raw: unknown): Promise<CloseTabResult> => {
     const parsed = closeTabRequestSchema.safeParse(raw);
     if (!parsed.success) {
       return { ok: false, reason: "unknown_tab" };
@@ -1089,7 +1089,7 @@ export function registerTabIpc(deps: TabIpcDeps): void {
 
   // cut-2: a malformed re-bind request is the same safe negative as
   // an unknown tab — nothing is mutated and the tab keeps running.
-  ipcMain.handle(TAB_REBIND_CHANNEL, async (_event, raw: unknown): Promise<TabRebindResult> => {
+  guardedIpcHandle(TAB_REBIND_CHANNEL, async (_event, raw: unknown): Promise<TabRebindResult> => {
     const parsed = tabRebindRequestSchema.safeParse(raw);
     if (!parsed.success) {
       return { ok: false, reason: "unknown_tab" };
@@ -1097,11 +1097,11 @@ export function registerTabIpc(deps: TabIpcDeps): void {
     return handleTabRebind(deps, parsed.data);
   });
 
-  ipcMain.handle(SESSIONS_LIST_CHANNEL, async (_event, raw: unknown): Promise<SessionSummary[]> =>
+  guardedIpcHandle(SESSIONS_LIST_CHANNEL, async (_event, raw: unknown): Promise<SessionSummary[]> =>
     handleSessionsList(deps, raw),
   );
 
-  ipcMain.handle(SESSION_DELETE_CHANNEL, async (_event, raw: unknown): Promise<DeleteSessionResult> => {
+  guardedIpcHandle(SESSION_DELETE_CHANNEL, async (_event, raw: unknown): Promise<DeleteSessionResult> => {
     const parsed = sessionDeleteRequestSchema.safeParse(raw);
     if (!parsed.success) {
       return { ok: false, reason: "not_found" };
@@ -1109,7 +1109,7 @@ export function registerTabIpc(deps: TabIpcDeps): void {
     return handleSessionDelete(deps, parsed.data.sessionId);
   });
 
-  ipcMain.handle(SESSIONS_DELETE_OLDER_CHANNEL, async (_event, raw: unknown): Promise<DeleteSessionsOlderResult> => {
+  guardedIpcHandle(SESSIONS_DELETE_OLDER_CHANNEL, async (_event, raw: unknown): Promise<DeleteSessionsOlderResult> => {
     const parsed = sessionsDeleteOlderRequestSchema.safeParse(raw);
     if (!parsed.success) {
       return { ok: false, reason: "unknown_workspace" };
@@ -1117,13 +1117,13 @@ export function registerTabIpc(deps: TabIpcDeps): void {
     return handleSessionsDeleteOlder(deps, parsed.data);
   });
 
-  ipcMain.handle(WORKSPACE_PICK_CHANNEL, async (): Promise<WorkspacePickResult> => handleWorkspacePick(deps));
+  guardedIpcHandle(WORKSPACE_PICK_CHANNEL, async (): Promise<WorkspacePickResult> => handleWorkspacePick(deps));
 
-  ipcMain.handle(CHILD_HISTORY_CHANNEL, async (_event, raw: unknown): Promise<ChildHistoryResult> =>
+  guardedIpcHandle(CHILD_HISTORY_CHANNEL, async (_event, raw: unknown): Promise<ChildHistoryResult> =>
     handleChildHistory(deps, raw),
   );
 
-  ipcMain.handle(ENGINES_LIST_CHANNEL, (): AvailableEngines => ({
+  guardedIpcHandle(ENGINES_LIST_CHANNEL, (): AvailableEngines => ({
     // SLICE-CC C5: "claude" is now a real candidate — CC-A's unconditional
     // `canSpawn("claude") === false` was removed once `bootClaude` existed
     // (main/tabs.ts), so the Claude button appears exactly when the doctor

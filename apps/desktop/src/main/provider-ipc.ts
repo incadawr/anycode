@@ -55,7 +55,7 @@ import type { SystemProxyResolver } from "../shared/proxy.js";
 import { readFileSync, watch, type FSWatcher } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename, dirname } from "node:path";
-import { ipcMain } from "electron";
+import { guardedIpcHandle } from "./ipc-guard.js";
 import { z } from "zod";
 import { findCatalogEntry } from "@anycode/core/catalog";
 import type { FileIoLogger } from "../settings/files.js";
@@ -1266,10 +1266,10 @@ export interface ProviderIpcHandle {
 }
 
 export function registerProviderIpc(deps: ProviderIpcDeps): ProviderIpcHandle {
-  ipcMain.handle(CUSTOM_PROVIDER_CREATE_CHANNEL, (_event, raw: unknown) => handleCustomProviderCreate(deps, raw));
-  ipcMain.handle(CUSTOM_PROVIDER_UPDATE_CHANNEL, (_event, raw: unknown) => handleCustomProviderUpdate(deps, raw));
-  ipcMain.handle(CUSTOM_PROVIDER_DELETE_CHANNEL, (_event, raw: unknown) => handleCustomProviderDelete(deps, raw));
-  ipcMain.handle(CUSTOM_PROVIDER_FETCH_MODELS_CHANNEL, (_event, raw: unknown) =>
+  guardedIpcHandle(CUSTOM_PROVIDER_CREATE_CHANNEL, (_event, raw: unknown) => handleCustomProviderCreate(deps, raw));
+  guardedIpcHandle(CUSTOM_PROVIDER_UPDATE_CHANNEL, (_event, raw: unknown) => handleCustomProviderUpdate(deps, raw));
+  guardedIpcHandle(CUSTOM_PROVIDER_DELETE_CHANNEL, (_event, raw: unknown) => handleCustomProviderDelete(deps, raw));
+  guardedIpcHandle(CUSTOM_PROVIDER_FETCH_MODELS_CHANNEL, (_event, raw: unknown) =>
     handleCustomProviderFetchModels(deps, raw),
   );
   // notify the running host of schema-valid EXTERNAL settings edits

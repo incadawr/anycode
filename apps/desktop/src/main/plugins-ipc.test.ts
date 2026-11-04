@@ -45,11 +45,17 @@ vi.mock("electron", () => ({
 }));
 
 import { activePluginsWorkspace, registerPluginsIpc, type PluginsIpcDeps } from "./plugins-ipc.js";
+import { setIpcGuardMainWindow } from "./ipc-guard.js";
+
+/** The guard serves only a trusted main-window top-frame invoke; the rig wires a fake main window once and drives captured wrappers with its event. */
+const MAIN_SENDER = { mainFrame: { frame: "main" } };
+const TRUSTED_EVENT = { sender: MAIN_SENDER, senderFrame: MAIN_SENDER.mainFrame };
+setIpcGuardMainWindow(() => MAIN_SENDER);
 
 async function invoke(channel: string, payload?: unknown): Promise<any> {
   const handler = handlers.get(channel);
   if (handler === undefined) throw new Error(`no handler for ${channel}`);
-  return handler({}, payload);
+  return handler(TRUSTED_EVENT, payload);
 }
 
 // ── fixtures ──

@@ -13,7 +13,7 @@
  * the preview cannot end up shipping different data.
  */
 
-import { ipcMain } from "electron";
+import { guardedIpcHandle } from "./ipc-guard.js";
 import {
   DIAGNOSTICS_MAX_BUNDLE_BYTES,
   DIAGNOSTICS_PREVIEW_CHANNEL,
@@ -204,6 +204,6 @@ export function createDiagnosticsIpcSession(
  */
 export function registerDiagnosticsIpc(deps: DiagnosticsIpcDeps): void {
   const session = createDiagnosticsIpcSession(deps);
-  ipcMain.handle(DIAGNOSTICS_PREVIEW_CHANNEL, (_event, raw: unknown) => session.preview(raw));
-  ipcMain.handle(DIAGNOSTICS_SAVE_CHANNEL, (_event, raw: unknown) => session.save(raw));
+  guardedIpcHandle(DIAGNOSTICS_PREVIEW_CHANNEL, (_event, raw: unknown) => session.preview(raw));
+  guardedIpcHandle(DIAGNOSTICS_SAVE_CHANNEL, (_event, raw: unknown) => session.save(raw));
 }

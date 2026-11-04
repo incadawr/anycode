@@ -26,7 +26,7 @@
  * from a renderer-supplied string.
  */
 
-import { ipcMain } from "electron";
+import { guardedIpcHandle } from "./ipc-guard.js";
 import * as fsp from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
@@ -746,11 +746,11 @@ export async function handleMcpImportApply(deps: McpConfigIpcDeps, raw: unknown)
 
 /** Wires the five channels onto ipcMain. A payload the handler cannot validate is answered with a safe negative. */
 export function registerMcpConfigIpc(deps: McpConfigIpcDeps): void {
-  ipcMain.handle(MCP_CONFIG_GET_CHANNEL, (_event, raw: unknown) => handleMcpConfigGet(deps, raw));
-  ipcMain.handle(MCP_CONFIG_UPSERT_CHANNEL, (_event, raw: unknown) => handleMcpUpsert(deps, raw));
-  ipcMain.handle(MCP_CONFIG_DELETE_CHANNEL, (_event, raw: unknown) => handleMcpDelete(deps, raw));
-  ipcMain.handle(MCP_CONFIG_SET_ENABLED_CHANNEL, (_event, raw: unknown) => handleMcpSetEnabled(deps, raw));
-  ipcMain.handle(MCP_CONFIG_PROMOTE_COMPAT_CHANNEL, (_event, raw: unknown) => handleMcpPromoteCompat(deps, raw));
-  ipcMain.handle(MCP_IMPORT_SCAN_CHANNEL, (_event, raw: unknown) => handleMcpImportScan(deps, raw));
-  ipcMain.handle(MCP_IMPORT_APPLY_CHANNEL, (_event, raw: unknown) => handleMcpImportApply(deps, raw));
+  guardedIpcHandle(MCP_CONFIG_GET_CHANNEL, (_event, raw: unknown) => handleMcpConfigGet(deps, raw));
+  guardedIpcHandle(MCP_CONFIG_UPSERT_CHANNEL, (_event, raw: unknown) => handleMcpUpsert(deps, raw));
+  guardedIpcHandle(MCP_CONFIG_DELETE_CHANNEL, (_event, raw: unknown) => handleMcpDelete(deps, raw));
+  guardedIpcHandle(MCP_CONFIG_SET_ENABLED_CHANNEL, (_event, raw: unknown) => handleMcpSetEnabled(deps, raw));
+  guardedIpcHandle(MCP_CONFIG_PROMOTE_COMPAT_CHANNEL, (_event, raw: unknown) => handleMcpPromoteCompat(deps, raw));
+  guardedIpcHandle(MCP_IMPORT_SCAN_CHANNEL, (_event, raw: unknown) => handleMcpImportScan(deps, raw));
+  guardedIpcHandle(MCP_IMPORT_APPLY_CHANNEL, (_event, raw: unknown) => handleMcpImportApply(deps, raw));
 }

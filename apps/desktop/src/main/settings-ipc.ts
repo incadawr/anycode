@@ -23,7 +23,7 @@ import { resolveWriteMask } from "@anycode/core/permissions/write-mask-node";
 import { randomUUID } from "node:crypto";
 import { prepareModelFetchContext } from "./model-fetch-guard.js";
 import { isAbsolute } from "node:path";
-import { ipcMain } from "electron";
+import { guardedIpcHandle } from "./ipc-guard.js";
 import { z } from "zod";
 import { mergeModelIds, normalizeModelId } from "../shared/settings.js";
 import { patchModelOverride } from "../shared/model-overrides.js";
@@ -2785,31 +2785,31 @@ export async function handleRecognizerSet(deps: SettingsIpcDeps, raw: unknown): 
  * channels (slice 2.5) are additive.
  */
 export function registerSettingsIpc(deps: Omit<SettingsIpcDeps, "vault"> & { vault: Vault }): void {
-  ipcMain.handle(SETTINGS_GET_CHANNEL, () => handleGet(deps));
-  ipcMain.handle(SETTINGS_SET_CHANNEL, (_event, raw: unknown) => handleSet(deps, raw));
-  ipcMain.handle(SECRET_SET_CHANNEL, (_event, raw: unknown) => handleSetSecret(deps, raw));
-  ipcMain.handle(SECRET_CLEAR_CHANNEL, (_event, raw: unknown) => handleClearSecret(deps, raw));
-  ipcMain.handle("anycode:home-directory", () => homedir());
-  ipcMain.handle(PERMISSION_RULE_ADD_CHANNEL, (_event, raw: unknown) => handleAddRule(deps, raw));
-  ipcMain.handle(BINARY_TRUST_GRANT_CHANNEL, (_event, raw: unknown) => handleBinaryTrustGrant(deps, raw));
-  ipcMain.handle(BINARY_TRUST_REVOKE_CHANNEL, (_event, raw: unknown) => handleBinaryTrustRevoke(deps, raw));
-  ipcMain.handle(OAUTH_START_CHANNEL, (_event, raw: unknown) => handleOAuthStart(deps, raw));
-  ipcMain.handle(OAUTH_CANCEL_CHANNEL, (_event, raw: unknown) => handleOAuthCancel(deps, raw));
+  guardedIpcHandle(SETTINGS_GET_CHANNEL, () => handleGet(deps));
+  guardedIpcHandle(SETTINGS_SET_CHANNEL, (_event, raw: unknown) => handleSet(deps, raw));
+  guardedIpcHandle(SECRET_SET_CHANNEL, (_event, raw: unknown) => handleSetSecret(deps, raw));
+  guardedIpcHandle(SECRET_CLEAR_CHANNEL, (_event, raw: unknown) => handleClearSecret(deps, raw));
+  guardedIpcHandle("anycode:home-directory", () => homedir());
+  guardedIpcHandle(PERMISSION_RULE_ADD_CHANNEL, (_event, raw: unknown) => handleAddRule(deps, raw));
+  guardedIpcHandle(BINARY_TRUST_GRANT_CHANNEL, (_event, raw: unknown) => handleBinaryTrustGrant(deps, raw));
+  guardedIpcHandle(BINARY_TRUST_REVOKE_CHANNEL, (_event, raw: unknown) => handleBinaryTrustRevoke(deps, raw));
+  guardedIpcHandle(OAUTH_START_CHANNEL, (_event, raw: unknown) => handleOAuthStart(deps, raw));
+  guardedIpcHandle(OAUTH_CANCEL_CHANNEL, (_event, raw: unknown) => handleOAuthCancel(deps, raw));
   // Connection CRUD (W9): main-authoritative, additive channels.
-  ipcMain.handle(CONNECTION_CREATE_CHANNEL, (_event, raw: unknown) => handleConnectionCreate(deps, raw));
-  ipcMain.handle(CONNECTION_UPDATE_CHANNEL, (_event, raw: unknown) => handleConnectionUpdate(deps, raw));
-  ipcMain.handle(CONNECTION_SET_ACTIVE_CHANNEL, (_event, raw: unknown) => handleConnectionSetActive(deps, raw));
-  ipcMain.handle(CONNECTION_DELETE_CHANNEL, (_event, raw: unknown) => handleConnectionDelete(deps, raw));
-  ipcMain.handle(CONNECTION_CHECK_CHANNEL, (_event, raw: unknown) => handleConnectionCheck(deps, raw));
+  guardedIpcHandle(CONNECTION_CREATE_CHANNEL, (_event, raw: unknown) => handleConnectionCreate(deps, raw));
+  guardedIpcHandle(CONNECTION_UPDATE_CHANNEL, (_event, raw: unknown) => handleConnectionUpdate(deps, raw));
+  guardedIpcHandle(CONNECTION_SET_ACTIVE_CHANNEL, (_event, raw: unknown) => handleConnectionSetActive(deps, raw));
+  guardedIpcHandle(CONNECTION_DELETE_CHANNEL, (_event, raw: unknown) => handleConnectionDelete(deps, raw));
+  guardedIpcHandle(CONNECTION_CHECK_CHANNEL, (_event, raw: unknown) => handleConnectionCheck(deps, raw));
   // Engine-level proxy: main-authoritative, additive — the only write
   // path the engine panes' proxy field may use.
   // Proxy registry: the profile CRUD + the scope-ref write. The
   // CHECK channel is not here — it spawns a probe child and lives in
   // main/network-ipc.ts, which has no business inside the settings lock.
-  ipcMain.handle(PROXY_PROFILE_UPSERT_CHANNEL, (_event, raw: unknown) => handleProxyProfileUpsert(deps, raw));
-  ipcMain.handle(PROXY_PROFILE_DELETE_CHANNEL, (_event, raw: unknown) => handleProxyProfileDelete(deps, raw));
-  ipcMain.handle(PROXY_REF_SET_CHANNEL, (_event, raw: unknown) => handleProxyRefSet(deps, raw));
+  guardedIpcHandle(PROXY_PROFILE_UPSERT_CHANNEL, (_event, raw: unknown) => handleProxyProfileUpsert(deps, raw));
+  guardedIpcHandle(PROXY_PROFILE_DELETE_CHANNEL, (_event, raw: unknown) => handleProxyProfileDelete(deps, raw));
+  guardedIpcHandle(PROXY_REF_SET_CHANNEL, (_event, raw: unknown) => handleProxyRefSet(deps, raw));
   // the vision-fallback recognizer's dedicated write channel — the
   // only path that can DELETE `settings.recognizer` (see handleRecognizerSet).
-  ipcMain.handle(RECOGNIZER_SET_CHANNEL, (_event, raw: unknown) => handleRecognizerSet(deps, raw));
+  guardedIpcHandle(RECOGNIZER_SET_CHANNEL, (_event, raw: unknown) => handleRecognizerSet(deps, raw));
 }

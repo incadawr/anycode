@@ -22,7 +22,12 @@ vi.mock("electron", () => ({
 
 import { MD_PREVIEW_NAVIGATE_CHANNEL, MD_PREVIEW_READ_CHANNEL } from "../../shared/md-preview.js";
 import { registerMdDocIpc } from "./md-doc-ipc.js";
+import { setIpcGuardMainWindow } from "../ipc-guard.js";
 import type { MdDocDeps } from "./md-doc.js";
+
+/** The guard serves only a trusted main-window top-frame invoke; the rig wires a fake main window and drives captured wrappers with its event. */
+const MAIN_SENDER = { mainFrame: { frame: "main" } };
+const TRUSTED_EVENT = { sender: MAIN_SENDER, senderFrame: MAIN_SENDER.mainFrame };
 
 function fakeDeps(overrides: Partial<MdDocDeps> = {}): MdDocDeps {
   return {
@@ -37,8 +42,9 @@ function fakeDeps(overrides: Partial<MdDocDeps> = {}): MdDocDeps {
 
 function register(deps: MdDocDeps): { invoke: (channel: string, raw: unknown) => unknown } {
   mockHandlers.clear();
+  setIpcGuardMainWindow(() => MAIN_SENDER);
   registerMdDocIpc(deps);
-  return { invoke: (channel, raw) => mockHandlers.get(channel)?.({}, raw) };
+  return { invoke: (channel, raw) => mockHandlers.get(channel)?.(TRUSTED_EVENT, raw) };
 }
 
 describe("registerMdDocIpc — MD_PREVIEW_READ", () => {

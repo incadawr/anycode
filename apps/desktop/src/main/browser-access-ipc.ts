@@ -12,7 +12,6 @@
  * Every response is the EFFECTIVE (trust-gated) value, never the raw stored
  * switch, so the UI cannot show ON for an untrusted folder.
  */
-import { ipcMain } from "electron";
 import { z } from "zod";
 import {
   BROWSER_ACCESS_GET_CHANNEL,
@@ -22,6 +21,7 @@ import {
   type BrowserAccessTabState,
 } from "../shared/browser-access.js";
 import { effectiveFullAccess, type BrowserAccessStore } from "./browser-access.js";
+import { guardedIpcHandle, isTopFrameIpcEvent } from "./ipc-guard.js";
 
 export interface BrowserAccessIpcDeps {
   store: BrowserAccessStore;
@@ -109,8 +109,12 @@ export function createBrowserAccessNotifier(deps: {
 }
 
 export function registerBrowserAccessIpc(deps: BrowserAccessIpcDeps): void {
-  ipcMain.handle(BROWSER_ACCESS_GET_CHANNEL, (event, raw: unknown) =>
-    handleBrowserAccessGet(deps, raw, event.senderFrame === event.sender.mainFrame ? event.sender : null));
-  ipcMain.handle(BROWSER_ACCESS_SET_CHANNEL, (event, raw: unknown) =>
-    handleBrowserAccessSet(deps, raw, event.senderFrame === event.sender.mainFrame ? event.sender : null));
+  // The guard refuses everything but a trusted top-frame invoke; the handlers
+  // KEEP their stricter main-window-only check on top (an allow-listed app
+  // window that is not the main window — the detached Markdown popout — must
+  // not be able to read or toggle this switch, only the main window may).
+  guardedIpcHandle(BROWSER_ACCESS_GET_CHANNEL, (event, raw: unknown) =>
+    handleBrowserAccessGet(deps, raw, isTopFrameIpcEvent(event) ? event.sender : null));
+  guardedIpcHandle(BROWSER_ACCESS_SET_CHANNEL, (event, raw: unknown) =>
+    handleBrowserAccessSet(deps, raw, isTopFrameIpcEvent(event) ? event.sender : null));
 }

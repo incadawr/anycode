@@ -45,7 +45,7 @@
  * configuration (`app-update.yml` / `electron-builder.yml`'s `publish`), so
  * there is structurally nothing for a compromised renderer to redirect.
  */
-import { ipcMain } from "electron";
+import { guardedIpcHandle } from "./ipc-guard.js";
 import {
   UPDATE_CHECK_CHANNEL,
   UPDATE_DOWNLOAD_CHANNEL,
@@ -304,9 +304,9 @@ export function createUpdaterController(deps: UpdaterDeps): UpdaterController {
  */
 export function registerUpdater(deps: UpdaterDeps): UpdaterController {
   const controller = createUpdaterController(deps);
-  ipcMain.handle(UPDATE_CHECK_CHANNEL, () => controller.check());
-  ipcMain.handle(UPDATE_DOWNLOAD_CHANNEL, () => controller.download());
-  ipcMain.handle(UPDATE_INSTALL_CHANNEL, () => controller.install());
-  ipcMain.handle(UPDATE_OPEN_RELEASES_CHANNEL, () => controller.openReleasesPage());
+  guardedIpcHandle(UPDATE_CHECK_CHANNEL, () => controller.check());
+  guardedIpcHandle(UPDATE_DOWNLOAD_CHANNEL, () => controller.download());
+  guardedIpcHandle(UPDATE_INSTALL_CHANNEL, () => controller.install());
+  guardedIpcHandle(UPDATE_OPEN_RELEASES_CHANNEL, () => controller.openReleasesPage());
   return controller;
 }

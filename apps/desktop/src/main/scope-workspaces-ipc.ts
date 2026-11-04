@@ -4,7 +4,7 @@
  * of the registry entries (id, name, displayPath, exists, tabIds). No
  * renderer-supplied path exists anywhere on this channel.
  */
-import { ipcMain } from "electron";
+import { guardedIpcHandle } from "./ipc-guard.js";
 import { z } from "zod";
 import {
   SCOPE_WORKSPACES_LIST_CHANNEL,
@@ -50,6 +50,6 @@ export function handleScopeWorkspaceResolve(deps: ScopeWorkspacesIpcDeps, raw: u
 }
 
 export function registerScopeWorkspacesIpc(deps: ScopeWorkspacesIpcDeps): void {
-  ipcMain.handle(SCOPE_WORKSPACES_LIST_CHANNEL, (_event, raw: unknown) => handleScopeWorkspacesList(deps, raw));
-  ipcMain.handle(SCOPE_WORKSPACES_RESOLVE_CHANNEL, (_event, raw: unknown) => handleScopeWorkspaceResolve(deps, raw));
+  guardedIpcHandle(SCOPE_WORKSPACES_LIST_CHANNEL, (_event, raw: unknown) => handleScopeWorkspacesList(deps, raw));
+  guardedIpcHandle(SCOPE_WORKSPACES_RESOLVE_CHANNEL, (_event, raw: unknown) => handleScopeWorkspaceResolve(deps, raw));
 }

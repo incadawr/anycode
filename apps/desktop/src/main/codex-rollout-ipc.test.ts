@@ -31,6 +31,11 @@ import {
   registerCodexRolloutIpc,
   type CodexRolloutIpcDeps,
 } from "./codex-rollout-ipc.js";
+import { setIpcGuardMainWindow } from "./ipc-guard.js";
+
+/** The guard serves only a trusted main-window top-frame invoke; the registration-level tests drive the captured wrapper with this event. */
+const MAIN_SENDER = { mainFrame: { frame: "main" } };
+const TRUSTED_EVENT = { sender: MAIN_SENDER, senderFrame: MAIN_SENDER.mainFrame };
 
 const dirs: string[] = [];
 
@@ -419,6 +424,7 @@ describe("handleCodexRolloutImport — S4-1 connection pin + pending model (W4-F
 describe("registerCodexRolloutIpc — consume-once pending import model (S4-1 arm 2, W4-F1)", () => {
   it("import registers the pick; the returned consumer reads-and-deletes it exactly once", async () => {
     mockHandlers.clear();
+    setIpcGuardMainWindow(() => MAIN_SENDER);
     const sessionsDir = await tmp();
     const relPath = "2026/07/01/rollout-reg.jsonl";
     await seedRollout(sessionsDir, relPath, BASIC_RECORDS);
@@ -429,7 +435,7 @@ describe("registerCodexRolloutIpc — consume-once pending import model (S4-1 ar
     });
     const importHandler = mockHandlers.get(CODEX_ROLLOUT_IMPORT_CHANNEL);
     expect(importHandler).toBeDefined();
-    const result = (await importHandler!(null, { profileId: "p1", fileName: relPath, model: "gpt-oss-20b" })) as {
+    const result = (await importHandler!(TRUSTED_EVENT, { profileId: "p1", fileName: relPath, model: "gpt-oss-20b" })) as {
       ok: boolean;
       sessionId?: string;
     };
@@ -444,6 +450,7 @@ describe("registerCodexRolloutIpc — consume-once pending import model (S4-1 ar
 
   it("peek reads WITHOUT deleting; consume deletes; peek after consume ⇒ undefined (L4·1 peek-then-confirm)", async () => {
     mockHandlers.clear();
+    setIpcGuardMainWindow(() => MAIN_SENDER);
     const sessionsDir = await tmp();
     const relPath = "2026/07/01/rollout-peek.jsonl";
     await seedRollout(sessionsDir, relPath, BASIC_RECORDS);
@@ -454,7 +461,7 @@ describe("registerCodexRolloutIpc — consume-once pending import model (S4-1 ar
     });
     const importHandler = mockHandlers.get(CODEX_ROLLOUT_IMPORT_CHANNEL);
     expect(importHandler).toBeDefined();
-    const result = (await importHandler!(null, { profileId: "p1", fileName: relPath, model: "gpt-oss-20b" })) as {
+    const result = (await importHandler!(TRUSTED_EVENT, { profileId: "p1", fileName: relPath, model: "gpt-oss-20b" })) as {
       ok: boolean;
       sessionId?: string;
     };
