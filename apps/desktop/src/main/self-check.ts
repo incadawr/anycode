@@ -55,7 +55,10 @@ export async function runSelfCheck(win: CheckWindow, root: string, allowUnavaila
     writeFileSync(join(root, name), image.toPNG());
   };
   const deadline = Date.now() + 30_000;
-  while (!await evaluate("document.querySelectorAll('.welcome-path').length === 3")) {
+  // The subscription shortcuts share the .welcome-path class, so count and
+  // click only the engine path tiles inside the .welcome-paths group — the
+  // bare selector matches six tiles and the gate below would never open.
+  while (!await evaluate("document.querySelectorAll('.welcome-paths .welcome-path').length === 3")) {
     if (Date.now() >= deadline) throw new Error("First-run screen did not appear");
     await new Promise(resolve => setTimeout(resolve, 100));
   }
@@ -64,7 +67,7 @@ export async function runSelfCheck(win: CheckWindow, root: string, allowUnavaila
   await capture("welcome.png");
   // UI-bound choices and error recovery without external auth or network.
   for (const index of [0, 1, 2]) {
-    await evaluate(`document.querySelectorAll('.welcome-path')[${index}].click()`);
+    await evaluate(`document.querySelectorAll('.welcome-paths .welcome-path')[${index}].click()`);
     await new Promise(resolve => setTimeout(resolve, 250));
     if (!await evaluate("!!document.querySelector('.welcome-setup')")) throw new Error("Selected setup pane is missing");
   }
