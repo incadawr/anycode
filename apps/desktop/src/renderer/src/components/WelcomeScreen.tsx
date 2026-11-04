@@ -147,13 +147,14 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
   // provider field on mount so a keyboard/SR user lands directly on the one
   // actionable control (an intentional focus-steal, scoped here rather than in
   // the shared ProviderSettings, which the settings dialog also mounts).
-  // also re-steer on every view switch (key change) — the form
-  // instance underneath is a different mount now, same "land on the one
-  // actionable control" rationale as the original mount-only steal.
+  // also re-steer on every view switch (key change) and on every
+  // subscription re-pick — each remounts the form instance underneath, same
+  // "land on the one actionable control" rationale as the original mount-only
+  // steal.
   useEffect(() => {
     cardRef.current?.querySelector<HTMLElement>(".welcome-setup select, .welcome-setup input, .welcome-setup button, .welcome-paths button")?.focus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resolved.key, activePath]);
+  }, [resolved.key, activePath, subscription]);
 
   return (
     <div className="welcome-screen">
@@ -201,7 +202,10 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
           ] as const).map(([id, title, description]) => (
             <button key={id} type="button" className="welcome-path" aria-pressed={activePath === id} onClick={() => {
               setPath(id);
-              setSubscription(null);
+              // Re-clicking the already-active path must stay inert — clearing
+              // the pick here would remount the form and silently discard a
+              // half-typed key, model and label.
+              if (path !== id) setSubscription(null);
               onSelectEngine?.(id === "api" ? "core" : id);
             }}>
               <strong>{title}</strong><span>{description}</span>
