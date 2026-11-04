@@ -1,8 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { captureBaseConfig, orchestrationOverrides, verifyConfig, verifyReadOnlyEcho } from "./orchestration-policy.js";
+import { captureBaseConfig, orchestrationOverrides, requireCompleteReadback, verifyConfig, verifyReadOnlyEcho } from "./orchestration-policy.js";
 
 describe("Codex orchestration process policy", () => {
   const base = captureBaseConfig({ config: { mcp_servers: { 'a-b': { enabled: true }, ambient: {} }, features: { multi_agent: true } } });
+  it("accepts omitted base defaults only to replace them with verified explicit values", () => {
+    const initial = { config: { mcp_servers: {}, features: { remote_plugin: true } } };
+    expect(() => requireCompleteReadback(initial)).not.toThrow();
+    expect(() => requireCompleteReadback({ config: { features: { multi_agent: "no" } } })).toThrow();
+    const base = captureBaseConfig(initial);
+    const on = { config: { mcp_servers: {}, features: { multi_agent: false, remote_plugin: false }, apps: { _default: { enabled: false } }, sandbox_mode: "read-only", approval_policy: "never" } };
+    expect(() => verifyConfig(on, base, true)).not.toThrow();
+    expect(() => verifyConfig({ config: { ...on.config, features: { remote_plugin: false } } }, base, true)).toThrow();
+    expect(() => verifyConfig(initial, base, false)).not.toThrow();
+  });
   it("disables remote plugins and verifies restoration", () => {
     const base = captureBaseConfig({ config: { mcp_servers: {}, features: { remote_plugin: true } } });
     expect(orchestrationOverrides(base)).toContain("features.remote_plugin=false");

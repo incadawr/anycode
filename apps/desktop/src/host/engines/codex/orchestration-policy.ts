@@ -17,9 +17,11 @@ export interface BaseConfig {
 
 export function requireCompleteReadback(response: unknown): void {
   const config = object(object(response)?.config);
-  if (!config || typeof object(config.features)?.multi_agent !== "boolean" ||
-      typeof config.sandbox_mode !== "string" || !config.sandbox_mode ||
-      typeof config.approval_policy !== "string" || !config.approval_policy) throw new Error("Incomplete Codex config readback");
+  const features = object(config?.features);
+  if (!config || (config.features != null && !features) ||
+      (features?.multi_agent !== undefined && typeof features.multi_agent !== "boolean") ||
+      (config.sandbox_mode != null && (typeof config.sandbox_mode !== "string" || !config.sandbox_mode)) ||
+      (config.approval_policy != null && (typeof config.approval_policy !== "string" || !config.approval_policy))) throw new Error("Incomplete Codex config readback");
 }
 
 export function captureBaseConfig(response: unknown, forwarded: Record<string, unknown> = {}): BaseConfig {
