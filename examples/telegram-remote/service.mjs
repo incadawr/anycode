@@ -422,6 +422,8 @@ export function createBridge(options = {}) {
   // ── pending turns and result waiters ──
 
   const pendingFor = (chatId) => state.pending.filter((entry) => entry.chatId === chatId);
+  /** The per-chat waiting cap, shared by plain text (sendTurn) and /new's first turn. */
+  const chatAtTurnCap = (chatId) => pendingFor(chatId).length >= TURNS_PER_CHAT_MAX;
 
   async function addPending(entry) {
     if (state.pending.some((item) => item.messageId === entry.messageId)) return;
@@ -547,7 +549,7 @@ export function createBridge(options = {}) {
       await reply(chatId, `Message too long (max ${SESSION_PAYLOAD_MAX}).`);
       return;
     }
-    if (pendingFor(chatId).length >= TURNS_PER_CHAT_MAX) {
+    if (chatAtTurnCap(chatId)) {
       await reply(chatId, "Too many pending messages, wait for an answer.");
       return;
     }
@@ -685,6 +687,12 @@ export function createBridge(options = {}) {
         await reply(chatId, `Message too long (max ${SESSION_PAYLOAD_MAX}).`);
         return;
       }
+      // /new's first turn waits in the same per-chat queue as plain text, so the
+      // waiting cap applies before a session is even created.
+      if (chatAtTurnCap(chatId)) {
+        await reply(chatId, "Too many pending messages, wait for an answer.");
+        return;
+      }
       let created;
       try {
         created = await api("create_session", {
@@ -696,6 +704,18 @@ export function createBridge(options = {}) {
           ...(parsed.text !== "" ? { firstMessage: parsed.text } : {}),
         });
       } catch (error) {
+        // A failure AFTER the tab exists (firstMessage not delivered, or the tab
+        // landed outside the folders list) names the ids it created. The tab is
+        // real: record it so /close can close it, select it, and answer in plain
+        // words — the raw error sentence would drop ids into the chat.
+        const carriedId = error instanceof ToolError ? /sessionId (\S+), tabId \S+/.exec(error.message)?.[1] : undefined;
+        if (carriedId !== undefined) {
+          state.created = [...state.created, carriedId].slice(-CREATED_MAX);
+          state.chats[String(chatId)] = { sessionId: carriedId };
+          await persist();
+          await reply(chatId, "The session was opened but the first message could not be delivered. It is selected here — send your text as a new message, or close it with /close.");
+          return;
+        }
         const code = error instanceof ToolError ? /^create_session ([a-z_]+):/.exec(error.message)?.[1] : undefined;
         if (code === "not_allowed") {
           await reply(chatId, 'This project does not allow agents. In AnyCode, open the project\'s sidebar menu and switch on "Allow agents to open tasks here", then send /projects.');

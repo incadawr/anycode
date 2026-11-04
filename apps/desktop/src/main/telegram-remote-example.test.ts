@@ -676,6 +676,63 @@ describe("telegram-remote example", () => {
     expect(texts(many)[0]).toContain("/close");
   });
 
+  it("/new when the first message cannot be delivered: the created id is recorded and closable, and no raw ids reach the chat", async () => {
+    let counter = 0;
+    const createSession = vi.fn<CreateHook>(async () => {
+      counter += 1;
+      return { ok: true, sessionId: `agent-${String(counter).padStart(4, "0")}aaaa`, tabId: `tab-${counter}` };
+    });
+    const closeSession = vi.fn(async (_sessionId: string): Promise<{ ok: boolean; reason?: string }> => ({ ok: true }));
+    const opts: { agentProjects: string[]; createSession: CreateHook; closeSession: (sessionId: string) => Promise<{ ok: boolean; reason?: string }> } = { agentProjects: [], createSession, closeSession };
+    const h = await harness(opts);
+    opts.agentProjects.push(join(h.dir, "ws-build"));
+    // The tab is created (listed and shared), but the first turn is refused on delivery.
+    h.send.state = "rejected";
+    h.tg.push(msg(1, "/new ws-build go"));
+    await waitFor(() => texts(h).length === 1);
+    const sid = "agent-0001aaaa";
+    const answer = texts(h)[0]!;
+    // Friendly text only: the raw error sentence carries the ids and must not surface.
+    expect(answer).toContain("could not be delivered");
+    expect(answer).not.toContain(sid);
+    expect(answer).not.toContain("tab-1");
+    expect(answer).not.toContain("sessionId");
+    expect(h.bridge.state().created).toEqual([sid]);
+    expect(h.bridge.state().chats[String(USER)]).toEqual({ sessionId: sid });
+    // The recorded tab is closable from the chat even though create_session errored.
+    h.tg.push(msg(2, "/close"));
+    await waitFor(() => texts(h).some((text) => text.startsWith("Closed ")));
+    expect(closeSession).toHaveBeenCalledWith(sid);
+    expect(h.bridge.state().created).toEqual([]);
+  });
+
+  it("/new's first turn honours the same per-chat waiting cap as plain text", async () => {
+    let counter = 0;
+    const createSession = vi.fn<CreateHook>(async () => {
+      counter += 1;
+      return { ok: true, sessionId: `agent-${String(counter).padStart(4, "0")}aaaa`, tabId: `tab-${counter}` };
+    });
+    const opts: { agentProjects: string[]; createSession: CreateHook } = { agentProjects: [], createSession };
+    const h = await harness(opts);
+    opts.agentProjects.push(join(h.dir, "ws-build"));
+    h.tg.push(msg(1, "/use build-bot"));
+    h.tg.push(msg(2, "one"));
+    h.tg.push(msg(3, "two"));
+    h.tg.push(msg(4, "three"));
+    await waitFor(() => h.bridge.state().pending.length === 3);
+    h.tg.push(msg(5, "/new ws-build go"));
+    await waitFor(() => texts(h).includes("Too many pending messages, wait for an answer."));
+    expect(createSession).not.toHaveBeenCalled();
+    // Once the queue drains, /new works again.
+    for (const call of apiCallsOf(h, "send_message")) {
+      h.results.set((call.payload as { messageId: string }).messageId, () => ({ state: "done", latestResult: { publicAnswer: "A", turnId: "t" }, limitation: "L" }));
+    }
+    await waitFor(() => h.bridge.state().pending.length === 0);
+    h.tg.push(msg(6, "/new ws-build go"));
+    await waitFor(() => texts(h).some((text) => text.startsWith("Created ")));
+    expect(createSession).toHaveBeenCalledTimes(1);
+  });
+
   it("/close closes only a session this bridge created; busy and restarted cases are explained", async () => {
     const closeSession = vi.fn(async (sessionId: string): Promise<{ ok: boolean; reason?: string }> => ({ ok: true }));
     let counter = 0;
