@@ -18,7 +18,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Roles settings: one "Save roles" no longer leaves the pane marked as unsaved (leaving the section asked "Discard unsaved roles?" right after a successful save). The profile actions are a real popover menu with keyboard support, Delete is styled as the dangerous action, profile names are edited in a compact form with a clear heading, long profile and model names truncate with a full-text tooltip, role rows wrap instead of overlapping, and the roles pane shows whether a project uses the global profile or its own override.
 - Roles settings: Escape in the profile actions menu, and dismissing or confirming its Delete dialog, return keyboard focus to the `⋯` trigger instead of losing it; menu item labels align to the left like other menu rows, the arrow keys skip disabled items so the menu never goes dead, and Escape closes the menu even while a save is in flight without cancelling the running turn.
-- Fixed the sidebar showing a session twice while it was opening: opening a saved session — from the sidebar, the command palette, or a Codex rollout import — now folds its history row into the new tab's row immediately, so each session appears once during loading instead of as an active tab plus a stale history entry.
+- Fixed the sidebar and command palette while opening a saved session: the history row now stays visible as a non-clickable "Opening…" placeholder until the new tab appears, then folds into it — the session no longer vanishes during a slow open, flickers on a refusal, or shows twice when the opened tab's host dies before it is ready.
 
 ## [0.0.74] — 2026-11-04
 

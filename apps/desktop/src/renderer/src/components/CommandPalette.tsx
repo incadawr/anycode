@@ -22,7 +22,7 @@ import type { TabInfo } from "../tabs-store.js";
 import type { SessionSummary } from "../../../shared/tabs.js";
 import type { DesktopPlatform } from "../../../shared/window.js";
 import { buildSidebarGroups, type SidebarGroup, type SidebarRow } from "./Sidebar.js";
-import { usePendingResumes } from "../pending-resumes.js";
+import { pendingResumeRowSets, usePendingResumes } from "../pending-resumes.js";
 import { nextRovingIndex } from "./ModeMenu.js";
 import { fuzzyMatch, type MatchRange } from "../fuzzy.js";
 import { highlight } from "./highlight.js";
@@ -75,6 +75,8 @@ export type PaletteRow =
       displayTitle: string;
       workspaceLabel: string;
       age: string;
+      /** Armed resume marker with no representing tab yet — selecting the row is inert (Sidebar's opening placeholder). */
+      opening?: true;
       ranges: readonly MatchRange[];
     };
 
@@ -112,6 +114,7 @@ function makeSessionRow(row: SidebarRow, workspaceLabel: string, ranges: readonl
     displayTitle,
     workspaceLabel,
     age: row.age ?? "",
+    ...(row.opening === true ? { opening: true as const } : {}),
     ranges,
   };
 }
@@ -277,12 +280,14 @@ export function CommandPalette({
     setSelected(0);
   }, [mode]);
 
-  // Same dedupe facts as the Sidebar: a session currently opening (the shared
-  // pending-resume marker, written by every resume entry point) or already
-  // bound folds into its open row here too, so the sessions mode never lists
-  // a session twice while it hydrates.
+  // Same dedupe facts as the Sidebar: a session with a representing tab
+  // (settled marker) or already bound folds into its open row here too, so the
+  // sessions mode never lists a session twice while it hydrates; a session
+  // still awaiting its tab (armed marker) stays listed as an inert opening
+  // row instead of vanishing.
   const pendingResumes = usePendingResumes((state) => state.marks);
-  const groups = buildSidebarGroups(tabs, sessions, undefined, new Set(pendingResumes.keys()));
+  const { opening, arming } = pendingResumeRowSets(pendingResumes);
+  const groups = buildSidebarGroups(tabs, sessions, undefined, opening, arming);
   const tabOrder = tabs.map((t) => t.tabId);
   const rows = buildPaletteRows({ mode, query, actions, groups, tabOrder, platform });
   const selectable = rows.filter((r) => r.kind !== "group");
@@ -318,6 +323,11 @@ export function CommandPalette({
       onClose();
       const { tabId } = row;
       requestAnimationFrame(() => onSelectTab(tabId));
+      return;
+    }
+    // Armed resume placeholder: the session's tab has not been published yet —
+    // firing a second resume could only race the first one.
+    if (row.opening === true) {
       return;
     }
     onClose();
@@ -422,7 +432,8 @@ export function CommandPalette({
           selectableIndex += 1;
           const optIndex = selectableIndex;
           const optId = `palette-opt-${optIndex}`;
-          const disabled = row.kind === "action" && !row.action.enabled;
+          const disabled =
+            (row.kind === "action" && !row.action.enabled) || (row.kind === "session" && row.opening === true);
           const key =
             row.kind === "action" ? `action-${row.action.id}` : row.kind === "tab" ? `tab-${row.tabId}` : `session-${row.sessionId}`;
           return (
@@ -453,7 +464,7 @@ export function CommandPalette({
                 <>
                   <span className="command-palette-row-label">{highlight(row.displayTitle, row.ranges)}</span>
                   <span className="command-palette-row-meta">{row.workspaceLabel}</span>
-                  <span className="command-palette-age">{row.age}</span>
+                  <span className="command-palette-age">{row.opening === true ? "Opening…" : row.age}</span>
                 </>
               )}
             </li>

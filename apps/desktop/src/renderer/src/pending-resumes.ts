@@ -13,11 +13,25 @@
  *    the `createTab` reply lands — because the new tab can enter the
  *    tabs-store via the port envelope before the IPC reply (a one-frame
  *    duplicate otherwise). `tabId` stays null until the reply names the
- *    representing tab;
- *  - the reply settles it: ok → the new tab's id, `already_open` → the focused
- *    existing tab's id (`resumedRepresentingTabId`). Any other refusal — or a
- *    rejected call — CLEARS the marker (`clearPendingResume`): the prune
- *    effect alone cannot, since `tabs` does not change on a failure;
+ *    representing tab. While armed the history row stays visible (consumers
+ *    render it as an opening placeholder): nothing represents the session
+ *    yet, so removing the row would blank it for the whole slow createTab —
+ *    and on a refusal it would flicker;
+ *  - when a NEW unbound tab appears (the resume's own tab arriving through
+ *    the port envelope before the reply), the store's prune promotes the
+ *    armed marker to that tab (`promoteArmedResumes` — arm-time tab ids are
+ *    the baseline that tells "new" from pre-existing), restoring the one-row
+ *    dedupe for the envelope-before-reply window without waiting for the
+ *    reply;
+ *  - the reply settles the marker: ok → the new tab's id, `already_open` →
+ *    the focused existing tab's id (`resumedRepresentingTabId`). Settlement
+ *    reconciles against the tabs AS THEY ARE THEN (`settlePendingResume`): a
+ *    representing tab whose host already exited drops the marker — it died
+ *    while the reply was in flight, and the prune effect alone runs on
+ *    `tabs` changes, never on settlements. An absent tab keeps the marker
+ *    (the envelope may still be in flight). Any other refusal — or a
+ *    rejected call — CLEARS the marker: the prune effect alone cannot,
+ *    since `tabs` does not change on a failure;
  *  - `prunePendingResumes` retires settled markers on tabs-store changes:
  *    bound → drop (the sessionId dedupe in buildSidebarGroups takes over),
  *    representing tab gone → drop (closed mid-hydration — the history row must
@@ -35,10 +49,19 @@
  */
 import { create } from "zustand";
 import type { CreateTabResult } from "../../shared/tabs.js";
+import { useTabsStore } from "./tabs-store.js";
 import type { TabInfo } from "./tabs-store.js";
 
 /** sessionId → the tabId that currently represents it; null = armed, the `createTab` reply has not named the tab yet. */
 export type PendingResumeMarks = ReadonlyMap<string, string | null>;
+
+/**
+ * sessionId → the tabIds already present when that session's marker was armed.
+ * A tab appearing AFTER arming is this resume's own tab coming through the
+ * port envelope; one present at arm time belongs to someone else. Internal to
+ * the store — exposed in its state only so tests can pin the promotion.
+ */
+export type PendingResumeArmBaselines = ReadonlyMap<string, ReadonlySet<string>>;
 
 /** Arms (or re-targets) a session's marker. Without `tabId` the marker is armed before the reply names the representing tab. */
 export function markPendingResume(prev: PendingResumeMarks, sessionId: string, tabId?: string): PendingResumeMarks {
@@ -78,6 +101,86 @@ export function prunePendingResumes(prev: PendingResumeMarks, tabs: readonly Tab
     }
   }
   return next ?? prev;
+}
+
+/**
+ * Promotes armed (null-tabId) markers to a representing tab: the FIRST unbound
+ * tab that was not present when the marker was armed is this resume's own tab
+ * arriving through the port envelope before the `createTab` reply. A promoted
+ * marker rejoins the settled lifecycle (the caller prunes right after, so a
+ * promotion onto a dead tab drops at once). Pure: returns the inputs untouched
+ * when nothing promotes. Armed markers without a recorded baseline stay armed —
+ * without the arm-time context a pre-existing unbound tab is indistinguishable
+ * from the resume's own.
+ */
+export function promoteArmedResumes(
+  prev: PendingResumeMarks,
+  tabs: readonly TabInfo[],
+  baselines: PendingResumeArmBaselines,
+): { marks: PendingResumeMarks; baselines: PendingResumeArmBaselines } {
+  let marks: Map<string, string | null> | null = null;
+  let nextBaselines: Map<string, ReadonlySet<string>> | null = null;
+  for (const [sessionId, tabId] of prev) {
+    if (tabId !== null) {
+      continue;
+    }
+    const baseline = baselines.get(sessionId);
+    if (baseline === undefined) {
+      continue;
+    }
+    const fresh = tabs.find((t) => t.sessionId === null && !baseline.has(t.tabId));
+    if (fresh === undefined) {
+      continue;
+    }
+    if (marks === null) {
+      marks = new Map(prev);
+      nextBaselines = new Map(baselines);
+    }
+    marks!.set(sessionId, fresh.tabId);
+    nextBaselines!.delete(sessionId);
+  }
+  return marks === null ? { marks: prev, baselines } : { marks, baselines: nextBaselines! };
+}
+
+/**
+ * Settles an armed marker from the `createTab` reply and reconciles it with
+ * the tabs AS THEY ARE at that moment. The production prune runs on `tabs`
+ * changes only, so a representing tab whose host died while the reply was in
+ * flight would otherwise leave a stale marker that nothing re-checks (the
+ * history row would stay hidden until an unrelated tabs change). A tab absent
+ * from the store keeps the marker — the port envelope may still be in flight;
+ * the next tabs change owns the absent case.
+ */
+export function settlePendingResume(
+  prev: PendingResumeMarks,
+  sessionId: string,
+  tabId: string,
+  tabs: readonly TabInfo[],
+): PendingResumeMarks {
+  if (tabs.some((t) => t.sessionId === sessionId)) {
+    return clearPendingResume(prev, sessionId); // bound — the sessionId dedupe takes over
+  }
+  const representing = tabs.find((t) => t.tabId === tabId);
+  if (representing !== undefined && representing.hostExited) {
+    return clearPendingResume(prev, sessionId); // the host died before host_ready — the session must be re-resumable
+  }
+  return markPendingResume(prev, sessionId, tabId);
+}
+
+/**
+ * The two sets buildSidebarGroups consumers feed it: `opening` names sessions
+ * whose history row folds into their representing tab's row (settled marker —
+ * the tab exists), `arming` names sessions still awaiting their tab, whose
+ * history row stays visible as an opening placeholder. Splitting at the feed
+ * keeps the armed-but-no-tab-yet window from blanking the session.
+ */
+export function pendingResumeRowSets(marks: PendingResumeMarks): { opening: ReadonlySet<string>; arming: ReadonlySet<string> } {
+  const opening = new Set<string>();
+  const arming = new Set<string>();
+  for (const [sessionId, tabId] of marks) {
+    (tabId === null ? arming : opening).add(sessionId);
+  }
+  return { opening, arming };
 }
 
 /**
@@ -130,6 +233,8 @@ export async function resumeWithMarker(
 
 export interface PendingResumesState {
   marks: PendingResumeMarks;
+  /** Arm-time tab ids per armed marker (see `PendingResumeArmBaselines`); cleared on promotion, settlement and clear. */
+  armBaselines: PendingResumeArmBaselines;
   mark(sessionId: string, tabId?: string): void;
   clear(sessionId: string): void;
   /** Retires settled markers; called on every tabs-store change (the Sidebar's prune effect). */
@@ -139,17 +244,43 @@ export interface PendingResumesState {
 export function createPendingResumesStore() {
   return create<PendingResumesState>()((set, get) => ({
     marks: new Map(),
+    armBaselines: new Map(),
 
     mark(sessionId, tabId): void {
-      set({ marks: markPendingResume(get().marks, sessionId, tabId) });
+      if (tabId === undefined) {
+        // Arming: record the tabIds already present so the prune can tell the
+        // resume's own envelope-published tab (new since arming) from a
+        // pre-existing one.
+        const baseline = new Set(useTabsStore.getState().tabs.map((t) => t.tabId));
+        set({
+          marks: markPendingResume(get().marks, sessionId),
+          armBaselines: new Map(get().armBaselines).set(sessionId, baseline),
+        });
+        return;
+      }
+      // Settlement: re-check the tabs right here — nothing else runs the prune
+      // on a settlement (see settlePendingResume).
+      const baselines = new Map(get().armBaselines);
+      baselines.delete(sessionId);
+      set({
+        marks: settlePendingResume(get().marks, sessionId, tabId, useTabsStore.getState().tabs),
+        armBaselines: baselines,
+      });
     },
 
     clear(sessionId): void {
-      set({ marks: clearPendingResume(get().marks, sessionId) });
+      const baselines = new Map(get().armBaselines);
+      baselines.delete(sessionId);
+      set({ marks: clearPendingResume(get().marks, sessionId), armBaselines: baselines });
     },
 
     prune(tabs): void {
-      set({ marks: prunePendingResumes(get().marks, tabs) });
+      const promoted = promoteArmedResumes(get().marks, tabs, get().armBaselines);
+      const marks = prunePendingResumes(promoted.marks, tabs);
+      if (marks === promoted.marks && promoted.marks === get().marks && promoted.baselines === get().armBaselines) {
+        return; // nothing changed — skip the notification (no spurious writes)
+      }
+      set({ marks, armBaselines: promoted.baselines });
     },
   }));
 }
