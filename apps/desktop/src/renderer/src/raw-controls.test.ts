@@ -58,7 +58,7 @@ const BASELINE: Record<string, number> = {
   "components/ProxySection.tsx": 3,
   "components/ReasoningBlock.tsx": 1,
   "components/RolePickerDialog.tsx": 12,
-  "components/RolesPane.tsx": 6,
+  "components/RolesPane.tsx": 7,
   "components/ScopeSwitcher.tsx": 2,
   "components/SessionAccessRow.tsx": 3,
   "components/SessionHeader.tsx": 7,

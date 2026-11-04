@@ -12,8 +12,9 @@ names them `BrowserOpen`, `BrowserNavigate`, ....
 1. Same tools, same approval rules, same **Full browser access** switch and
    domain policy as native tabs.
 2. Approvals always apply in these tabs (there is no auto/yolo mode that
-   skips them): a remote navigation, `remote:true` click/type and
-   `BrowserEval` ask first unless Full browser access is on.
+   skips them): a remote navigation and `remote:true` click/type ask first
+   unless Full browser access is on; `BrowserEval` asks always, even with it
+   on, and no saved always-allow rule exempts it.
 3. `BrowserOpen` of a remote url asks even with Full browser access on, as in
    native tabs.
 4. A Codex session resumed after an app restart gets the browser tools back
@@ -40,7 +41,7 @@ names them `BrowserOpen`, `BrowserNavigate`, ....
 | `BrowserType` | types text into an input, textarea or contenteditable | `remote: true` asks first |
 | `BrowserWaitFor` | waits until some text or a selector appears (or, with `gone`, disappears) | none |
 | `BrowserConsole` | returns the page's recent console output and uncaught errors (default 50 lines) | none |
-| `BrowserEval` | runs a JavaScript expression in the page and returns its value | always asks |
+| `BrowserEval` | runs arbitrary JavaScript in the page; the script has the page's own reach and can read that page's cookies and storage | always asks |
 
 The existing `BrowserOpen`, `BrowserRead` and `BrowserScreenshot` tools are
 unchanged.
@@ -80,8 +81,13 @@ takes a new snapshot.
   60 000 at most). The output says how many nodes were left out.
 - Password fields are never typed into and their values never appear in a
   snapshot. File inputs cannot be typed into.
-- Cookies, storage and credentials are never read. The driver does not use the
-  browser's network or storage inspection APIs.
+- `BrowserEval` runs arbitrary page JavaScript, so the script can read the
+  shown page's cookies and storage, and anything else the page can see,
+  including values typed into its fields (a non-HttpOnly login cookie and a
+  password you typed into the page are both reachable this way). HttpOnly
+  cookies, other preview partitions and OS or browser-stored credentials stay
+  out of reach. The driver itself does not use the browser's network or
+  storage inspection APIs.
 - Page text and labels are untrusted data. The model is told not to follow
   instructions found in them.
 
@@ -92,20 +98,26 @@ takes a new snapshot.
 - A non-localhost origin: `BrowserNavigate` to it asks first. Clicking or
   typing on a page from that origin asks again (`remote: true`). If you decline,
   the agent does not retry around the refusal.
-- `BrowserEval` always asks, on every origin. It cannot read cookies, storage,
-  or credentials: those words are refused before the script runs, and the
-  driver never uses the browser's network or storage inspection APIs.
+- `BrowserEval` always asks, on every origin — in every mode, and no saved
+  always-allow rule exempts it. The expression runs as page
+  code: it can read the shown page's cookies and storage, and anything else
+  the page can see, including values typed into its fields. HttpOnly cookies,
+  other preview partitions and OS or browser-stored credentials stay out of
+  reach; there is no keyword filter, the script's reach is simply the page's
+  own reach.
 - Modes `auto` and `yolo` do not escalate approvals, so a `remote: true` call
   runs without a prompt there. This matches how `BrowserOpen` already treats
-  remote URLs.
+  remote URLs. `BrowserEval` is the exception: it asks in those modes too.
 
 ## Full browser access (per session)
 
 Each session has a **Full browser access** switch in its environment menu
 (the folder/branch menu in the header). While it is on, the agent can open any
-http(s) site, click, type (including passwords) and run JavaScript in that
-session's preview without asking. Turning it on asks you first; turning it off
-is immediate and takes effect on the next navigation or action.
+http(s) site, click and type (including passwords) in that session's preview
+without asking; `BrowserEval` keeps asking on every call — modes and saved
+rules never exempt it. Turning it on asks
+you first; turning it off is immediate and takes effect on the next navigation
+or action.
 
 - A header chip, "Full browser access", shows while it is on.
 - A folder whose trust is not decided yet is always off: the row says
@@ -113,8 +125,11 @@ is immediate and takes effect on the next navigation or action.
 - A child session (spawned by an agent) is on only if its parent is on.
 - The default for new sessions is set in Settings → Permissions
   (`browser.fullAccessDefault`, off out of the box).
-- It still does not read cookies or stored credentials, and the eval blocklist,
-  the password-value masking, the loopback and `file:` rules stay in force.
+- `BrowserEval` can read the shown page's cookies and storage, and anything
+  else the page can see, including values typed into its fields, with the
+  same limits as above (HttpOnly cookies, other partitions and OS or
+  browser-stored credentials stay out of reach). The snapshot password
+  masking, the loopback and `file:` rules stay in force.
 - The agent cannot switch it on: only the app window can change it.
 
 ## Troubleshooting

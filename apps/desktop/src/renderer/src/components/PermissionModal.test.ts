@@ -18,6 +18,7 @@ import {
 } from "@anycode/core/permissions/safe-command";
 import {
   BASH_RISK_PLAQUE,
+  BROWSER_EVAL_POLICY_HINT,
   NEUTRAL_RISK_LABEL,
   PLAN_PREVIEW_MAX_CHARS,
   UNKNOWN_SHELL_HINT,
@@ -25,6 +26,7 @@ import {
   bashRiskFacts,
   bashRiskPlaque,
   bashWriteCapablePlaque,
+  browserEvalPolicyHint,
   buildAlwaysAllowRule,
   buildPermissionAllowMessage,
   canRememberPermission,
@@ -399,6 +401,38 @@ describe("describePermissionAsk — Bash unknown shell expression", () => {
 
   it("UM7: plan asks are unaffected — the plan hint keeps saying 'still ask' (already pinned at :261; not duplicated here)", () => {
     expect(describePermissionAsk("ExitPlanMode", { plan: "x" }).hint).toContain("still ask");
+  });
+});
+
+describe("describePermissionAsk — BrowserEval policy hint", () => {
+  it("a BrowserEval ask carries the honest data policy: page-code reach, HttpOnly/partition/credential limits", () => {
+    const presentation = describePermissionAsk("BrowserEval", { expression: "1" });
+    expect(presentation.hint).toBe(BROWSER_EVAL_POLICY_HINT);
+    expect(presentation.kind).toBe("generic");
+    expect(BROWSER_EVAL_POLICY_HINT).toContain("page code");
+    expect(BROWSER_EVAL_POLICY_HINT).toContain("can read the shown page's cookies and storage");
+    expect(BROWSER_EVAL_POLICY_HINT).toContain("anything else the page can see, including values typed into its fields");
+    expect(BROWSER_EVAL_POLICY_HINT).toContain("HttpOnly cookies");
+    expect(BROWSER_EVAL_POLICY_HINT).toContain("credentials stay out of reach");
+    expect(BROWSER_EVAL_POLICY_HINT).not.toContain("cannot read");
+  });
+
+  // "Always allow" means ALWAYS for this tool: the modal never offers the
+  // checkbox, because the rule engines and the broker ignore such rules —
+  // saving one would silently do nothing.
+  it("a mandatory-approval ask (BrowserEval) is never rememberable; ordinary asks still are", () => {
+    const evalMeta = { riskLevel: "high", destructive: false, mandatoryApproval: true } as const;
+    expect(describePermissionAsk("BrowserEval", { expression: "1" }, evalMeta).canRemember).toBe(false);
+    const ordinaryMeta = { riskLevel: "low", destructive: false, mandatoryApproval: false } as const;
+    expect(describePermissionAsk("Write", { file_path: "/tmp/x", content: "y" }, ordinaryMeta).canRemember).toBe(true);
+    expect(describePermissionAsk("Write", { file_path: "/tmp/x", content: "y" }).canRemember).toBe(true);
+  });
+
+  it("every other tool keeps its own hint resolution (no policy hint)", () => {
+    expect(describePermissionAsk("Write", { file_path: "/tmp/x", content: "y" }).hint).toBeNull();
+    expect(describePermissionAsk("Bash", { command: "rm -rf /" }).hint).toBeNull();
+    expect(browserEvalPolicyHint("Bash")).toBeNull();
+    expect(browserEvalPolicyHint("BrowserSnapshot")).toBeNull();
   });
 });
 

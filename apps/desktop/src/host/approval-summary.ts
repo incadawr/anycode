@@ -87,7 +87,7 @@ function describeKnown(toolName: string, input: unknown): string | undefined {
     case "BrowserType":
       return `on ${originOf(stringField(input, "url"))}`;
     case "BrowserEval":
-      return "run JavaScript in the page";
+      return "run arbitrary JavaScript in the page (the script can read the page's data and storage)";
     default:
       return undefined;
   }

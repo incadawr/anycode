@@ -90,6 +90,25 @@ type OnBeforeRequestListener = (
   callback: (response: { cancel?: boolean }) => void,
 ) => void;
 
+/** Structural slice of Electron's DownloadItem the will-download mapping touches. */
+interface FakeDownloadItem {
+  savePaths: string[];
+  getURL(): string;
+  getFilename(): string;
+  setSavePath(path: string): void;
+}
+
+function makeDownloadItem(url: string, filename: string): FakeDownloadItem {
+  return {
+    savePaths: [],
+    getURL: () => url,
+    getFilename: () => filename,
+    setSavePath(path) {
+      this.savePaths.push(path);
+    },
+  };
+}
+
 class FakeWebContents extends EventEmitter {
   loadURLCalls: string[] = [];
   /** stage 4: reload() passthrough recorder. */
@@ -99,6 +118,9 @@ class FakeWebContents extends EventEmitter {
   webRTCIPHandlingPolicyCalls: string[] = [];
   windowOpenHandler?: (details: { url: string }) => { action: string };
   permissionRequestHandler?: (wc: unknown, permission: string, callback: (granted: boolean) => void) => void;
+  permissionCheckHandler?: (wc: unknown, permission: string, requestingOrigin: string, details: unknown) => boolean;
+  devicePermissionHandler?: (details: unknown) => boolean;
+  displayMediaRequestHandler?: (request: unknown, callback: (streams: unknown) => void) => void;
   capturePageResult: { toPNG(): Buffer; getSize(): { width: number; height: number }; isEmpty(): boolean } = {
     toPNG: () => Buffer.from("png-bytes"),
     getSize: () => ({ width: 42, height: 24 }),
@@ -106,9 +128,28 @@ class FakeWebContents extends EventEmitter {
   };
   onBeforeRequestCalls: unknown[][] = [];
   private onBeforeRequestListener?: OnBeforeRequestListener;
+  /** `session.on("will-download")` handlers — real sessions ACCUMULATE these (unlike the single-slot webRequest/permission setters). */
+  willDownloadHandlers: Array<(event: { preventDefault(): void }, item: FakeDownloadItem) => void> = [];
   session = {
     setPermissionRequestHandler: (handler: typeof this.permissionRequestHandler) => {
       this.permissionRequestHandler = handler;
+    },
+    on: (event: string, handler: (event: { preventDefault(): void }, item: FakeDownloadItem) => void) => {
+      if (event === "will-download") this.willDownloadHandlers.push(handler);
+    },
+    removeListener: (event: string, handler: (event: { preventDefault(): void }, item: FakeDownloadItem) => void) => {
+      if (event === "will-download") {
+        this.willDownloadHandlers = this.willDownloadHandlers.filter((h) => h !== handler);
+      }
+    },
+    setPermissionCheckHandler: (handler: typeof this.permissionCheckHandler) => {
+      this.permissionCheckHandler = handler;
+    },
+    setDevicePermissionHandler: (handler: typeof this.devicePermissionHandler) => {
+      this.devicePermissionHandler = handler;
+    },
+    setDisplayMediaRequestHandler: (handler: typeof this.displayMediaRequestHandler) => {
+      this.displayMediaRequestHandler = handler;
     },
     webRequest: {
       onBeforeRequest: (...args: unknown[]) => {
@@ -176,6 +217,14 @@ class FakeWebContents extends EventEmitter {
   /** Drives the LAST-registered `onBeforeRequest` listener (real Electron only ever expects one). */
   fireBeforeRequest(details: { url: string; resourceType: string }, callback: (response: { cancel?: boolean }) => void): void {
     this.onBeforeRequestListener?.(details, callback);
+  }
+  /** Drives EVERY registered session "will-download" handler; reports whether any called event.preventDefault(). */
+  fireWillDownload(item: FakeDownloadItem): boolean {
+    let prevented = false;
+    for (const handler of this.willDownloadHandlers) {
+      handler({ preventDefault: () => (prevented = true) }, item);
+    }
+    return prevented;
   }
 }
 
@@ -340,6 +389,34 @@ describe("createElectronPreviewWindow — handler passthrough (the deny POLICY i
 
     expect(handler).toHaveBeenCalledWith("camera", expect.any(Function));
     expect(granted).toHaveBeenCalledWith(false);
+  });
+
+  it("setPermissionCheckHandler maps to the SESSION and still denies when webContents is null (worker check)", () => {
+    const win = createElectronPreviewWindow({ previewId: "p3a" });
+    const fake = latestWindow();
+    const handler = vi.fn((_permission: string, _requestingOrigin: string) => false);
+    win.webContents.setPermissionCheckHandler(handler);
+
+    const denied = fake.webContents.permissionCheckHandler?.(null, "camera", "https://evil.example", {});
+
+    expect(handler).toHaveBeenCalledWith("camera", "https://evil.example");
+    expect(denied).toBe(false);
+  });
+
+  it("setDevicePermissionHandler and setDisplayMediaRequestHandler map to the SESSION", () => {
+    const win = createElectronPreviewWindow({ previewId: "p3b" });
+    const fake = latestWindow();
+
+    const deviceHandler = vi.fn(() => false);
+    win.webContents.setDevicePermissionHandler(deviceHandler);
+    expect(fake.webContents.devicePermissionHandler).toBeTypeOf("function");
+    expect(fake.webContents.devicePermissionHandler?.({ deviceType: "hid" })).toBe(false);
+    expect(deviceHandler).toHaveBeenCalledTimes(1);
+
+    const streams = vi.fn();
+    win.webContents.setDisplayMediaRequestHandler((callback) => callback({}));
+    fake.webContents.displayMediaRequestHandler?.({}, streams);
+    expect(streams).toHaveBeenCalledWith({});
   });
 });
 
@@ -588,6 +665,63 @@ describe("createElectronPreviewWindow — request gate (cut §1.1/F2)", () => {
   });
 });
 
+describe("createElectronPreviewWindow — will-download policy (deny-by-default)", () => {
+  it("registers session.on(will-download) on the preview's own session (accumulating, not single-slot)", () => {
+    const win = createElectronPreviewWindow({ previewId: "dl-a" });
+    const fake = latestWindow();
+    win.webContents.onWillDownload(() => {});
+    expect(fake.webContents.willDownloadHandlers).toHaveLength(1);
+    // Session-scoped: the handler lives on this preview's session, and a second
+    // wiring ACCUMULATES (mirrors `session.on` — the host epoch-guards stale ones).
+    win.webContents.onWillDownload(() => {});
+    expect(fake.webContents.willDownloadHandlers).toHaveLength(2);
+  });
+
+  it("maps url/filename from item.getURL()/getFilename(); cancel() prevents the default save flow; saveTo() sets the host-chosen path", () => {
+    const win = createElectronPreviewWindow({ previewId: "dl-b" });
+    const fake = latestWindow();
+    let seen: { url: string; filename: string } | undefined;
+    win.webContents.onWillDownload((download, control) => {
+      seen = download;
+      control.cancel();
+    });
+    const item = makeDownloadItem("https://example.com/report.pdf", "report.pdf");
+    expect(fake.webContents.fireWillDownload(item)).toBe(true); // event.preventDefault() ran -> no dialog, no file
+    expect(seen).toEqual({ url: "https://example.com/report.pdf", filename: "report.pdf" });
+    expect(item.savePaths).toEqual([]);
+  });
+
+  it("saveTo(path) routes to item.setSavePath and never preventDefault on its own", () => {
+    const win = createElectronPreviewWindow({ previewId: "dl-c" });
+    const fake = latestWindow();
+    win.webContents.onWillDownload((_download, control) => {
+      control.saveTo("/host/chosen/report.pdf");
+    });
+    const item = makeDownloadItem("blob:https://example.com/8f2e", "blob.bin");
+    expect(fake.webContents.fireWillDownload(item)).toBe(false); // no preventDefault — the save proceeds
+    expect(item.savePaths).toEqual(["/host/chosen/report.pdf"]);
+  });
+
+  it("unregisters the session listener on window close (registerCleanup), even when the contents is already destroyed", () => {
+    const win = createElectronPreviewWindow({ previewId: "dl-d" });
+    const fake = latestWindow();
+    win.webContents.onWillDownload(() => {});
+    expect(fake.webContents.willDownloadHandlers).toHaveLength(1);
+    // The adapter registered cleanup via win.once("closed", ...) — closing removes ours.
+    fake.emit("closed");
+    expect(fake.webContents.willDownloadHandlers).toHaveLength(0);
+
+    // The per-preview session outlives the webContents across transfers: removal
+    // must not depend on wc liveness, or repeated transfers accumulate dead listeners.
+    const win2 = createElectronPreviewWindow({ previewId: "dl-e" });
+    const fake2 = latestWindow();
+    win2.webContents.onWillDownload(() => {});
+    fake2.webContents.destroyedFlag = true;
+    fake2.emit("closed");
+    expect(fake2.webContents.willDownloadHandlers).toHaveLength(0);
+  });
+});
+
 describe("createElectronPreviewWindow — redirect gate + WebRTC hardening (cut §1.2/F1, §1.1/F2)", () => {
   it("subscribes to will-redirect and plumbs preventDefault through", () => {
     const win = createElectronPreviewWindow({ previewId: "redir-a" });
@@ -736,7 +870,7 @@ describe("createElectronPanelView — WebContentsView construction (panel-track 
     expect(view.visibleCalls).toEqual([false, true]);
   });
 
-  it("shares the SAME wrapWebContents mapping as the window adapter — setWindowOpenHandler/setPermissionRequestHandler/setRequestGate all wired", () => {
+  it("shares the SAME wrapWebContents mapping as the window adapter — setWindowOpenHandler/setPermissionRequestHandler/setPermissionCheckHandler/setDevicePermissionHandler/setDisplayMediaRequestHandler/setRequestGate all wired", () => {
     const win = new FakeMainWindow();
     const panel = createElectronPanelView({ previewId: "panel-f" }, { getWindow: () => win as unknown as BrowserWindow });
     const view = latestPanelView();
@@ -752,6 +886,22 @@ describe("createElectronPanelView — WebContentsView construction (panel-track 
     view.webContents.permissionRequestHandler?.({}, "camera", granted);
     expect(permHandler).toHaveBeenCalledWith("camera", expect.any(Function));
     expect(granted).toHaveBeenCalledWith(false);
+
+    const checkHandler = vi.fn((_permission: string, _requestingOrigin: string) => false);
+    panel.webContents.setPermissionCheckHandler(checkHandler);
+    const denied = view.webContents.permissionCheckHandler?.(null, "camera", "https://evil.example", {});
+    expect(checkHandler).toHaveBeenCalledWith("camera", "https://evil.example");
+    expect(denied).toBe(false);
+
+    const deviceHandler = vi.fn(() => false);
+    panel.webContents.setDevicePermissionHandler(deviceHandler);
+    expect(view.webContents.devicePermissionHandler).toBeTypeOf("function");
+    expect(view.webContents.devicePermissionHandler?.({ deviceType: "usb" })).toBe(false);
+
+    const streams = vi.fn();
+    panel.webContents.setDisplayMediaRequestHandler((callback) => callback({}));
+    view.webContents.displayMediaRequestHandler?.({}, streams);
+    expect(streams).toHaveBeenCalledWith({});
 
     panel.webContents.setRequestGate(async () => true);
     expect(view.webContents.onBeforeRequestCalls).toHaveLength(1);

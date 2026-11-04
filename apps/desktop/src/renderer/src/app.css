@@ -1245,6 +1245,17 @@ body {
   transition: opacity var(--dur-1) var(--ease-out);
 }
 
+/* Armed resume placeholder (pending-resumes.ts): the history row of a session
+   still inside its createTab call stays visible but inert — dimmed title, no
+   pointer, the shared 10px spinner sits in the age slot. */
+.sidebar-row-resumable:disabled {
+  cursor: default;
+}
+
+.sidebar-row-resumable:disabled .sidebar-row-title {
+  color: var(--text-3);
+}
+
 /* review (live smoke 15.08): the delete affordance reused the close
    (×) geometry verbatim — absolutely positioned over the row's right edge.
    Safe for an OPEN row, which paints nothing there; a resumable row paints

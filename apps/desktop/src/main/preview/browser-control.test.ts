@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import vm from "node:vm";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -547,8 +548,13 @@ describe("checkInteractionPolicy matrix", () => {
     });
   });
 
-  it("full access allows any interaction on a remote origin without approval", () => {
+  it("full access allows click and type on a remote origin without approval but never eval", () => {
     expect(checkInteractionPolicy("click", "remote", false, "https://example.org/", true).allow).toBe(true);
+    expect(checkInteractionPolicy("type", "remote", false, "https://example.org/", true).allow).toBe(true);
+    expect(checkInteractionPolicy("eval", "remote", false, "https://example.org/", true)).toMatchObject({
+      allow: false,
+      errorKind: "not_allowed",
+    });
   });
 });
 
@@ -560,6 +566,40 @@ describe("driver source guard", () => {
     for (const forbidden of ["Network.getCookies", "Network.enable", "Storage.", "getAllCookies"]) {
       expect(source).not.toContain(forbidden);
     }
+  });
+
+  // Eval runs page JavaScript by contract; no content filter under any name
+  // may pretend to be a data boundary on top of it.
+  it("keeps no eval blocklist: the eval path forwards the expression with no expression-inspection branch", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(join(here, "browser-control.ts"), "utf8");
+    expect(source).not.toContain("EVAL_BLOCKLIST");
+    expect(source).not.toContain("reading cookies/storage/credentials is not permitted");
+    // Slice the driver's eval path (the evaluate method, up to the next
+    // section) and forbid content inspection of the expression there: the
+    // only expression-dependent branch allowed is the length robustness cap,
+    // so a blocklist re-introduced under another name fails here, and the
+    // behavioural tests above fail anything that slips past a rename.
+    const evalBody = source.slice(source.indexOf("private async evaluate("), source.indexOf("// ── domains ──"));
+    expect(evalBody).toContain("Runtime.evaluate");
+    expect(evalBody).toMatch(/expression\.length/);
+    for (const inspection of [
+      "expression.includes(",
+      "expression.match(",
+      "expression.indexOf(",
+      "expression.search(",
+      "expression.split(",
+      "expression.startsWith(",
+      "expression.endsWith(",
+      "expression.toLowerCase(",
+      "expression.toUpperCase(",
+      "expression.replace(",
+      "expression.trim(",
+      "expression.test(",
+    ]) {
+      expect(evalBody).not.toContain(inspection);
+    }
+    expect(evalBody).not.toMatch(/BLOCKLIST|BLOCKED_EXPRESSIONS|SENSITIVE_PATTERN|FORBIDDEN/i);
   });
 });
 
@@ -608,7 +648,7 @@ describe("BrowserController console (Phase B)", () => {
   });
 
   // Test 25
-  it("eval: result is JSON, capped at 20 000 chars; a page exception is an 'error:' answer; blocklisted tokens are refused before any send; a hung script is a timeout", async () => {
+  it("eval: result is JSON, capped at 20 000 chars; a page exception is an 'error:' answer; a hung script is a timeout", async () => {
     const plain = setup();
     plain.cdp.respond("Runtime.evaluate", { result: { value: { a: 1, b: "two" } } });
     const json = await plain.run({ action: "eval", expression: "({a:1,b:'two'})" });
@@ -638,13 +678,6 @@ describe("BrowserController console (Phase B)", () => {
         text: "error: ReferenceError: nope is not defined",
       },
     });
-
-    for (const token of ["document.cookie", "DOCUMENT.COOKIE", "localStorage.getItem('t')", "SESSIONSTORAGE", "indexedDB.open('x')", "cookieStore.getAll()", "navigator.Credentials.get()"]) {
-      const blocked = setup();
-      const result = await blocked.run({ action: "eval", expression: token });
-      expect(result).toMatchObject({ ok: false, errorKind: "not_allowed" });
-      expect(blocked.cdp.methods()).not.toContain("Runtime.evaluate");
-    }
 
     const hung = setup();
     hung.cdp.respond("Runtime.evaluate", new Error("CDP command timed out"));
@@ -749,12 +782,111 @@ describe("BrowserController hard limits while Full browser access is on (brief 4
     expect(cdp.methods()).not.toContain("Input.insertText");
   });
 
-  it("the policy keeps the eval blocklist to the driver: ON allows the eval step, the driver still refuses cookie reads", async () => {
-    expect(checkInteractionPolicy("eval", "remote", false, "https://example.org/", true)).toEqual({ allow: true });
+  it("the switch never covers eval: the policy refuses unapproved eval even ON; an approved call runs on the page", async () => {
+    expect(checkInteractionPolicy("eval", "remote", false, "https://example.org/", true)).toEqual({
+      allow: false,
+      errorKind: "not_allowed",
+      error: "BrowserEval always needs the user's approval",
+    });
     const { run, cdp } = setup({ url: "https://example.org/" });
-    const refused = await run({ action: "eval", expression: "document.cookie" });
-    expect(refused).toMatchObject({ ok: false, errorKind: "not_allowed" });
-    expect(cdp.methods()).not.toContain("Runtime.evaluate");
+    cdp.respond("Runtime.evaluate", { result: { value: "fake-page-value" } });
+    const result = await run({ action: "eval", expression: "document.title" });
+    expect(result.ok && result.value.text).toBe('"fake-page-value"');
+    expect(cdp.methods()).toContain("Runtime.evaluate");
+  });
+});
+
+/**
+ * A fake page for the eval data contract: a node:vm context standing in for
+ * the preview page, driven through the REAL BrowserController over FakeCdp's
+ * `Runtime.evaluate` seam. The fake cookie jar models the browser invariant
+ * the policy relies on: an HttpOnly cookie is stored in the jar but never
+ * exposed to `document.cookie`, and the script's world is the page's own
+ * main context — eval never names another one.
+ */
+const VISIBLE_COOKIE = "sid=fake-visible-cookie-sentinel";
+const HTTPONLY_COOKIE = "fake-httponly-cookie-sentinel";
+const LOCAL_TOKEN = "fake-localstorage-sentinel";
+
+function fakePartition() {
+  const jar = [VISIBLE_COOKIE, HTTPONLY_COOKIE].map((cookie) => ({ value: cookie, httpOnly: cookie === HTTPONLY_COOKIE }));
+  const store = new Map([["token", LOCAL_TOKEN]]);
+  const sandbox = {
+    document: {
+      get cookie() {
+        return jar.filter((entry) => !entry.httpOnly).map((entry) => entry.value).join("; ");
+      },
+    },
+    localStorage: {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+    },
+    window: {} as { localStorage?: unknown },
+  };
+  sandbox.window.localStorage = sandbox.localStorage;
+  const world = vm.createContext(sandbox);
+  // A page-defined helper that reads the cookie, exactly as a real page could.
+  vm.runInContext("function leakCookie() { return document.cookie; }", world);
+  const { cdp, run } = setup();
+  cdp.respond("Runtime.evaluate", (params?: object) => {
+    const expression = (params as { expression?: string } | undefined)?.expression ?? "";
+    try {
+      return { result: { value: vm.runInContext(expression, world, { timeout: 250 }) } };
+    } catch (error) {
+      return { exceptionDetails: { text: error instanceof Error ? error.message : String(error) } };
+    }
+  });
+  return { cdp, run };
+}
+
+describe("BrowserController eval data contract (runs page code, states it)", () => {
+  it("literal, aliased, concatenated and page-function cookie/storage reads return the page's own values", async () => {
+    const page = fakePartition();
+    for (const expression of [
+      "document.cookie",
+      'document["coo" + "kie"]',
+      "const d = document; d.cookie",
+      "leakCookie()",
+      'const s = window.localStorage; s.getItem("token")',
+    ]) {
+      const result = await page.run({ action: "eval", expression });
+      expect(result.ok, expression).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.text, expression).toContain(expression.includes("localStorage") ? LOCAL_TOKEN : VISIBLE_COOKIE);
+    }
+    expect(page.cdp.methods()).toContain("Runtime.evaluate");
+  });
+
+  it("an HttpOnly cookie in the page's own jar is not reachable", async () => {
+    const page = fakePartition();
+    const result = await page.run({ action: "eval", expression: "document.cookie + ' | ' + leakCookie()" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.text).toContain(VISIBLE_COOKIE);
+    expect(result.value.text).not.toContain(HTTPONLY_COOKIE);
+  });
+
+  it("eval rides only the page's own context: no Network./Storage. CDP traffic and no explicit context id", async () => {
+    const page = fakePartition();
+    const result = await page.run({ action: "eval", expression: "document.cookie + ' | ' + leakCookie()" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.text).toContain(VISIBLE_COOKIE);
+    // The isolation the policy relies on is structural: eval goes through
+    // Runtime.evaluate in the page's main world — the driver never enables a
+    // Network.*/Storage.* domain (no cookie/storage inspection traffic) and
+    // never names another execution context.
+    const methods = page.cdp.methods();
+    expect(methods).toContain("Runtime.evaluate");
+    for (const method of methods) {
+      expect(method.startsWith("Network.")).toBe(false);
+      expect(method.startsWith("Storage.")).toBe(false);
+    }
+    for (const call of page.cdp.calls.filter((entry) => entry.method === "Runtime.evaluate")) {
+      const params = call.params as { contextId?: unknown; uniqueContextId?: unknown };
+      expect(params.contextId).toBeUndefined();
+      expect(params.uniqueContextId).toBeUndefined();
+    }
   });
 });
 

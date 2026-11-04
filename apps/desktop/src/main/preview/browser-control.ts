@@ -5,10 +5,14 @@
  * surface and to a few callbacks PreviewHost supplies, so every behaviour is
  * unit-tested against `fake-cdp.ts`.
  *
- * Security boundary (see docs/user/browser.md): the driver never enables the
- * Network/Storage CDP domains, so cookies and storage are not reachable from
- * here; password VALUES never leave a snapshot; typing into password and file
- * fields is refused. Policy decisions (who may act on which origin) live in
+ * Boundary facts (see docs/user/browser.md): the driver never enables the
+ * Network/Storage CDP domains, so no CDP-level cookie/storage inspection
+ * happens here; password VALUES never leave a snapshot; typing into password
+ * and file fields is refused. Eval is different by design: it runs arbitrary
+ * page JavaScript, so the script can read the shown page's cookies and
+ * storage — documented and approved, not filtered. HttpOnly cookies, other
+ * preview partitions and OS/browser-stored credentials stay out of reach.
+ * Policy decisions (who may act on which origin) live in
  * `checkInteractionPolicy`, called by PreviewHost before any action runs.
  */
 
@@ -49,12 +53,6 @@ const EVAL_TIMEOUT_MS = 5_000;
 const ACTION_DEADLINE_MS = 25_000;
 export const NOT_VISIBLE_MESSAGE =
   "the preview is not visible (nothing is painting, so input cannot be delivered); open it in the pane or window and retry";
-/**
- * Best-effort defence in depth (case-insensitive substring, checked before anything is
- * sent). The real boundary: the preview partition is non-persistent and holds only what
- * the page itself loaded, and the driver never enables Network/Storage CDP domains.
- */
-const EVAL_BLOCKLIST = ["document.cookie", "localStorage", "sessionStorage", "indexedDB", "cookieStore", "navigator.credentials"];
 
 /** Roles that become a snapshot line (everything else is dropped; its children are still walked). */
 const KEPT_ROLES = new Set([
@@ -138,7 +136,7 @@ export type InteractionKind = "file" | "localhost" | "remote" | "dom-md" | "unkn
  *   - dom-md, unknown: refused.
  * Reading actions (snapshot, waitFor, history navigation) are always allowed on a web page.
  * `fullAccess` (the per-session "Full browser access" switch) allows every
- * http(s) interaction without approval.
+ * http(s) interaction without approval — except BrowserEval, which asks always.
  */
 export function checkInteractionPolicy(
   action: PreviewControlRequest["action"] | "eval",
@@ -160,6 +158,11 @@ export function checkInteractionPolicy(
   if (action !== "click" && action !== "type" && action !== "eval") {
     return { allow: true };
   }
+  // BrowserEval asks always: the full-access switch never covers it, only an
+  // approved call (allowRemote) runs.
+  if (action === "eval" && !allowRemote) {
+    return { allow: false, errorKind: "not_allowed", error: "BrowserEval always needs the user's approval" };
+  }
   if (fullAccess) {
     return { allow: true };
   }
@@ -169,9 +172,6 @@ export function checkInteractionPolicy(
       errorKind: "not_allowed",
       error: `this preview shows a remote origin (${originOf(url)}); the call needs the user's approval. Retry with remote:true so the user is asked.`,
     };
-  }
-  if (action === "eval" && !allowRemote) {
-    return { allow: false, errorKind: "not_allowed", error: "BrowserEval always needs the user's approval" };
   }
   return { allow: true };
 }
@@ -354,17 +354,16 @@ export class BrowserController {
   // ── eval ──
 
   /**
-   * Runs a page-side expression. Approval is enforced by checkInteractionPolicy
-   * before this runs; the blocklist is checked here before anything is sent.
-   * A thrown page error is an answer (`error: ...`), not a tool failure.
+   * Runs a page-side expression as page code. Approval is enforced by
+   * checkInteractionPolicy before this runs; the script has the page's own
+   * reach, so it can read the shown page's cookies and storage (HttpOnly
+   * cookies, other partitions and OS/browser-stored credentials stay out of
+   * reach). Length and timeout are robustness caps, not security. A thrown
+   * page error is an answer (`error: ...`), not a tool failure.
    */
   private async evaluate(expression: string, ctx: BrowserControlContext): Promise<ControlResult> {
     if (expression.length > EVAL_MAX_EXPRESSION_CHARS) {
       return failure("invalid_input", `expression is longer than ${EVAL_MAX_EXPRESSION_CHARS} characters`);
-    }
-    const lowered = expression.toLowerCase();
-    if (EVAL_BLOCKLIST.some((token) => lowered.includes(token.toLowerCase()))) {
-      return failure("not_allowed", "reading cookies/storage/credentials is not permitted");
     }
     const enableError = await this.ensureDomains(ctx);
     if (enableError) {

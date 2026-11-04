@@ -1,5 +1,5 @@
 import { Button } from "../ui/index.js";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { SubagentsSnapshot } from "../../../shared/subagents-config.js";
 import { useSettingsStore } from "../settings-store.js";
 import { useTabsStore } from "../tabs-store.js";
@@ -105,6 +105,12 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
   const [recovery, setRecovery] = useState<Partial<Record<PresetRole, boolean>>>({});
   const [nameAction, setNameAction] = useState<"new" | "duplicate" | "rename" | null>(null);
   const [name, setName] = useState("");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuFocus, setMenuFocus] = useState(0);
+  const menuRef = useRef<HTMLDivElement>(null);
+  // Whether the open dialog was raised by the menu's Delete: only it owes
+  // focus back to the trigger when it goes away.
+  const menuDialogRef = useRef(false);
   const [pending, setPending] = useState<{ title: string; body: string; confirmLabel: string; action: () => void; onCancel?: () => void } | null>(null);
   const writeState = useSyncExternalStore(subscribeRegistryWrites, registryWriteSnapshot, registryWriteSnapshot);
   const busy = writeState.pending;
@@ -155,6 +161,30 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
     }).catch(() => {});
     return () => { live = false; };
   }, []);
+  // The profile menu is the app's popover idiom (sidebar project menu): focus
+  // roves the items, and Esc, Tab, or an outside click closes it.
+  useEffect(() => {
+    if (menuOpen) menuRef.current?.querySelectorAll<HTMLButtonElement>(".roles-menu-item")[menuFocus]?.focus();
+  }, [menuOpen, menuFocus]);
+  // Every close hands focus back to the trigger (the kit Popover's rule):
+  // Delete closes the menu before its confirm dialog opens, so the dialog's
+  // own close would otherwise strand focus on <body>. Skip it when the close
+  // already moved focus somewhere (the name form, the dialog).
+  useLayoutEffect(() => {
+    if (!menuOpen) return;
+    return () => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active !== document.body && active !== document.documentElement) return;
+      const trigger = menuRef.current?.querySelector<HTMLButtonElement>(".roles-menu-trigger");
+      if (trigger?.isConnected) trigger.focus();
+    };
+  }, [menuOpen]);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onPointer = (event: MouseEvent) => { if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false); };
+    document.addEventListener("mousedown", onPointer);
+    return () => document.removeEventListener("mousedown", onPointer);
+  }, [menuOpen]);
   useEffect(() => {
     const bridge = window.anycode?.subagents;
     if (!bridge) return;
@@ -166,7 +196,50 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
   }, [tabId, snapshot]);
   const projects = [...new Set([...tabs.map((t) => t.projectRoot ?? t.workspace).filter(isAbsoluteProject), ...sessionProjects, ...registry.projects.map((p) => p.projectRoot)])];
   const projectLabel = (path: string) => projects.filter((p) => projectFolderName(p) === projectFolderName(path)).length > 1 ? `${projectFolderName(path)} — ${path}` : projectFolderName(path);
-  function guard(action: () => void, onCancel?: () => void): void {
+  function onMenuKeyDown(event: React.KeyboardEvent): void {
+    // The handler sits on the wrapper so it also sees the trigger (while a
+    // save is in flight every item is disabled and focus stays there); a
+    // closed menu must stay transparent to the app-level Esc handlers.
+    if (!menuOpen) return;
+    if (event.key === "Escape") {
+      // preventDefault: the window-level Esc handlers must not also see it.
+      event.preventDefault();
+      event.stopPropagation();
+      setMenuOpen(false);
+      menuRef.current?.querySelector<HTMLButtonElement>(".roles-menu-trigger")?.focus();
+      return;
+    }
+    if (event.key === "Tab") { setMenuOpen(false); return; }
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    event.preventDefault();
+    // Roving skips disabled items (a save in flight, or the built-ins'
+    // Rename/Delete) — a modulo over them parks focus and kills the menu.
+    const items = menuRef.current ? [...menuRef.current.querySelectorAll<HTMLButtonElement>(".roles-menu-item")].filter((item) => !item.disabled) : [];
+    if (!items.length) return;
+    const offset = event.key === "ArrowDown" ? 1 : -1;
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next = current === -1 ? (offset === 1 ? 0 : items.length - 1) : (current + offset + items.length) % items.length;
+    setMenuFocus(next);
+    items[next]?.focus();
+  }
+  // The Delete dialog hands focus back to the trigger only once it is gone:
+  // Chromium no-ops focus() outside a still-open modal and strands focus on
+  // <body> when an open dialog is removed, so the restore must wait for the
+  // commit that drops it. The pane's other guard dialogs did not come from
+  // the menu and keep focus wherever it lands.
+  useLayoutEffect(() => {
+    if (!pending) return;
+    const fromMenu = menuDialogRef.current;
+    return () => {
+      if (!fromMenu) return;
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && active !== document.body && active !== document.documentElement) return;
+      const trigger = menuRef.current?.querySelector<HTMLButtonElement>(".roles-menu-trigger");
+      if (trigger?.isConnected) trigger.focus();
+    };
+  }, [pending]);
+  function guard(action: () => void, onCancel?: () => void, fromMenu = false): void {
+    menuDialogRef.current = fromMenu;
     if (!dirty) { action(); return; }
     setPending({ title: "Discard unsaved roles?", body: "Your unsaved role changes will be lost.", confirmLabel: "Discard changes", onCancel, action: () => { setDraft(baseline); setCap(baselineCap); action(); } });
   }
@@ -230,23 +303,41 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
       const profile = { id, name: existing?.name ?? createProfileName("", current.profiles.map((p) => p.name)), roles: built.roles };
       return { ...current, profiles: existing ? current.profiles.map((p) => p.id === id ? profile : p) : [...current.profiles, profile], ...(projectRoot ? {} : { activeId: id }), ...(!selected && projectRoot ? { projects: [...current.projects.filter((p) => p.projectRoot !== projectRoot), { projectRoot, profileId: id }] } : {}) };
     }, "Roles saved.");
-    if (ok) { setBaseline(draft); setBaselineCap(cap); }
+    if (ok) {
+      // The post-write effects rebuild the draft from the persisted roles,
+      // whose normalized shape drops UI-only fields (a pending Custom… flag,
+      // stray whitespace). Seeding the baseline from the raw draft would
+      // disagree with that rebuild and re-arm the unsaved-changes guard right
+      // after a successful save, so both sides read the same fresh snapshot.
+      const saved = roleProfiles(useSettingsStore.getState().snapshot?.settings ?? {}).profiles.find((p) => p.id === id);
+      const next = toDraft(saved?.roles ?? fromDraft(draft).roles);
+      const nextCap = saved?.roles.maxParallelChildren?.toString() ?? "";
+      setDraft(next); setBaseline(next); setCap(nextCap); setBaselineCap(nextCap);
+    }
   }
-  const title = projectRoot ? mapped ? `project override for ${projectFolderName(projectRoot)}` : `inherited global profile for ${projectFolderName(projectRoot)}` : "";
+  // The grey parenthetical used to hide which profile actually governs a
+  // project; a short badge with the detail in its tooltip says it at a glance.
+  const profileScopeBadge = projectRoot
+    ? mapped
+      ? { label: "Project override", title: `This project uses the “${mapped.name}” profile instead of the global one.` }
+      : { label: "Global", title: "No override for this project — the global selection applies to its roles." }
+    : null;
   return <div className="settings-pane roles-pane" data-testid="settings-roles-pane">
     {busy && <p className="settings-field-hint" role="status">Saving…</p>}
     <div className="roles-header"><span>Profile:</span>
       {registry.profiles.length ? <select className="settings-field-select" aria-label="Role profile" title={selected?.name ?? "Default"} value={projectRoot ? mapped?.id ?? "" : selected?.id ?? ""} disabled={busy} onChange={(e) => selectProfile(e.target.value)}>
         {projectRoot ? <option value="">{`Use global (${registry.profiles.find((p) => p.id === registry.activeId)?.name ?? "Built-in roles"})`}</option> : <option value="">Built-in roles</option>}{registry.profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}      </select> : <strong>Built-in roles</strong>}
-      {title && <span className="settings-field-hint">({title})</span>}
-      <details className="roles-menu"><summary className="settings-button" aria-label="Profile actions">⋯</summary><div className="roles-menu-items">
-        {(["new", "duplicate", "rename"] as const).map((action) => <Button size="sm" type="button" key={action} disabled={busy || (action === "rename" && !selected)} onClick={() => { setNameAction(action); setName(action === "rename" ? selected?.name ?? "" : ""); }}>{action === "new" ? "New" : action === "duplicate" ? "Duplicate" : "Rename"}</Button>)}
-        <Button size="sm" type="button" disabled={busy || !selected} onClick={() => { if (!selected) return; guard(() => setPending({ title: `Delete ${selected.name}?`, body: `Project mappings to ${selected.name} will be removed and will use the global profile.`, confirmLabel: "Delete", action: () => { void write((current) => { const profiles = current.profiles.filter((p) => p.id !== selected.id); return { profiles, activeId: current.activeId === selected.id ? "" : current.activeId, projects: current.projects.filter((p) => p.profileId !== selected.id) }; }); } })); }}>Delete</Button>
-      </div></details>
+      {profileScopeBadge && <span className="roles-badge" title={profileScopeBadge.title}>{profileScopeBadge.label}</span>}
+      <div className="roles-menu" ref={menuRef} onKeyDown={onMenuKeyDown}><Button size="sm" type="button" className="roles-menu-trigger" aria-label="Profile actions" aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => { setMenuFocus(0); setMenuOpen((open) => !open); }}>⋯</Button>
+        {menuOpen && <div className="roles-menu-items" role="menu" aria-label="Profile actions">
+        {(["new", "duplicate", "rename"] as const).map((action, index) => <Button size="sm" type="button" key={action} role="menuitem" className="roles-menu-item" tabIndex={menuFocus === index ? 0 : -1} disabled={busy || (action === "rename" && !selected)} onClick={() => { setMenuOpen(false); setNameAction(action); setName(action === "rename" ? selected?.name ?? "" : ""); }}>{action === "new" ? "New" : action === "duplicate" ? "Duplicate" : "Rename"}</Button>)}
+        <div className="roles-menu-divider" role="separator" />
+        <Button size="sm" type="button" role="menuitem" className="roles-menu-item roles-menu-item-danger" tabIndex={3 === menuFocus ? 0 : -1} disabled={busy || !selected} onClick={() => { setMenuOpen(false); if (!selected) return; guard(() => setPending({ title: `Delete ${selected.name}?`, body: `Project mappings to ${selected.name} will be removed and will use the global profile.`, confirmLabel: "Delete", action: () => { void write((current) => { const profiles = current.profiles.filter((p) => p.id !== selected.id); return { profiles, activeId: current.activeId === selected.id ? "" : current.activeId, projects: current.projects.filter((p) => p.profileId !== selected.id) }; }); } }), undefined, true) }}>Delete</Button>
+      </div>}</div>
       <select className="settings-field-select roles-preset" aria-label="Apply preset" value="" disabled={busy} onChange={(e) => { const preset = deriveRolePresets(engines, activeConnectionId ?? "").find((p) => p.id === e.target.value); if (preset) guard(() => { setDraft(toDraft(preset.roles)); setCap(baselineCap); }); }}><option value="">Apply preset…</option>{deriveRolePresets(engines, activeConnectionId ?? "").map((p) => <option key={p.id} value={p.id} disabled={!presetApplicable(p, engines)}>{p.label}</option>)}</select>
     </div>
     {mapping && !mapped && <p className="settings-field-hint">Missing project profile; using the global fallback.</p>}
-    {nameAction && <form className="roles-name-form" onSubmit={(e) => { e.preventDefault(); void submitName(); }}><label className="settings-field-label" htmlFor="role-profile-name">{nameAction === "rename" ? "Rename profile" : nameAction === "duplicate" ? "Duplicate profile name" : "New profile name"}</label><input id="role-profile-name" className="settings-field-input" disabled={busy} value={name} onChange={(e) => setName(e.target.value)} /><Button size="sm" variant="primary" type="submit" disabled={busy || (nameAction === "rename" && !canRenameProfile(selected?.name, name))}>Save</Button><Button size="sm" type="button" disabled={busy} onClick={() => setNameAction(null)}>Cancel</Button></form>}
+    {nameAction && <form className="roles-name-form" onSubmit={(e) => { e.preventDefault(); void submitName(); }}><label className="settings-field-label roles-name-form-title" htmlFor="role-profile-name">{nameAction === "rename" ? "Rename profile" : nameAction === "duplicate" ? "Duplicate profile" : "New profile"}</label><input id="role-profile-name" className="settings-field-input" autoFocus disabled={busy} value={name} onChange={(e) => setName(e.target.value)} /><Button size="sm" variant="primary" type="submit" disabled={busy || (nameAction === "rename" && !canRenameProfile(selected?.name, name))}>Save</Button><Button size="sm" type="button" disabled={busy} onClick={() => setNameAction(null)}>Cancel</Button></form>}
     <fieldset className="roles-editor" disabled={busy}><div className="roles-table" aria-label="Role routes">{ROLE_PRESET_ROLES.map((role) => {
       const entry = draft[role].primary;
       const unavailable = entry.engine === "claude" ? !engines.claudeReady : entry.engine === "codex" ? !engines.codexReady : false;

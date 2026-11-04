@@ -35,6 +35,7 @@ import { useTabsStore, type TabsState } from "../tabs-store.js";
 import { createAsyncEpochGate, issueGuarded } from "./async-epoch-gate.js";
 import { modelMenuItems, providerModelsFor } from "./ModelPill.js";
 import { handleCreateTabResult } from "./SessionPicker.js";
+import { resumeWithMarker } from "../pending-resumes.js";
 
 // ── duplicated wire types (see file header) ──
 
@@ -316,15 +317,20 @@ function defaultTabOpenDeps(): RolloutTabOpenDeps {
 }
 
 /**
- * Opens the just-imported session via the EXISTING resume path — byte for
- * byte `Sidebar.tsx`'s `resumeSession`/`App.tsx`'s `runResumeSession`: a
- * `kind:"resume"` createTab call, then `handleCreateTabResult` (already_open
- * -> focus that tab instead of opening a second writer). Returns the notice
+ * Opens the just-imported session via the EXISTING resume path — the same
+ * shared seam (`resumeWithMarker`) as `Sidebar.tsx`'s `resumeSession` and
+ * `App.tsx`'s `runResumeSession`: a `kind:"resume"` createTab call with the
+ * pending-resume marker armed, then `handleCreateTabResult` (already_open ->
+ * focus that tab instead of opening a second writer). Returns the notice
  * text on a resume-stage failure (session IS persisted either way — only the
  * live tab failed to open), or `null` on success. Exported for unit testing.
  */
 export async function openImportedSession(sessionId: string, deps: RolloutTabOpenDeps): Promise<string | null> {
-  const result = await deps.createTab({ kind: "resume", sessionId });
+  // The shared pending-resume seam (pending-resumes.ts): arms the marker
+  // before the call so the sidebar never paints both the imported session's
+  // history row and its new open row while the tab hydrates; cleared
+  // automatically on a refusal/rejection.
+  const result = await resumeWithMarker(sessionId, deps.createTab);
   return handleCreateTabResult(result, {
     onTabCreated: ({ tabId, workspace }) => {
       deps.tabsStore.getState().addTab({ tabId, workspace });

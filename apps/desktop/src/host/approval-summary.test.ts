@@ -34,7 +34,9 @@ describe("describeApproval", () => {
     expect(describeApproval("WebFetch", { url: "https://u:p@example.com/a?token=x#f" })).toBe("https://example.com/a");
     expect(describeApproval("BrowserOpen", { url: "not a url" })).toBe("(invalid url)");
     expect(describeApproval("BrowserType", { ref: "e1", text: "my-secret-password", submit: true })).toBe("on page");
-    expect(describeApproval("BrowserEval", { expression: "document.cookie" })).toBe("run JavaScript in the page");
+    expect(describeApproval("BrowserEval", { expression: "document.cookie" })).toBe(
+      "run arbitrary JavaScript in the page (the script can read the page's data and storage)",
+    );
     const unknown = describeApproval("mcp__x__tool", { alpha: "SECRET_VALUE_1", beta: 2, gamma: null, d: 1, e: 1, f: 1 });
     expect(unknown).toBe("mcp__x__tool with 6 argument(s): alpha, beta, gamma, d, e, +1 more");
     expect(unknown).not.toContain("SECRET_VALUE_1");

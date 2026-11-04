@@ -108,6 +108,20 @@ function buttonByText(text: string): HTMLButtonElement {
   return button as HTMLButtonElement;
 }
 
+/** The `…` popover trigger; menu items only exist while it is open. */
+function menuTrigger(): HTMLButtonElement {
+  const trigger = container.querySelector<HTMLButtonElement>('[aria-label="Profile actions"]');
+  if (trigger === null) throw new Error("no profile menu trigger");
+  return trigger;
+}
+
+async function openMenu(): Promise<HTMLDivElement> {
+  await click(menuTrigger());
+  const menu = container.querySelector<HTMLDivElement>('[role="menu"][aria-label="Profile actions"]');
+  if (menu === null) throw new Error("profile menu did not open");
+  return menu;
+}
+
 async function click(button: HTMLButtonElement): Promise<void> {
   await act(async () => {
     button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -208,6 +222,7 @@ describe("Create/Duplicate without typing a name", () => {
     await mount();
 
     for (const action of ["New", "New", "Duplicate", "Duplicate"]) {
+      await openMenu();
       await click(buttonByText(action));
       await click(buttonByText("Save"));
     }
@@ -225,6 +240,7 @@ describe("Create/Duplicate without typing a name", () => {
   it("a typed name is still used as typed", async () => {
     const bridge = installBridge(settingsWithProfile("Team"));
     await mount();
+    await openMenu();
     await click(buttonByText("New"));
     const input = container.querySelector<HTMLInputElement>("#role-profile-name")!;
     await act(async () => type(input, "Reviewers"));
@@ -232,6 +248,116 @@ describe("Create/Duplicate without typing a name", () => {
     await click(buttonByText("Save"));
 
     expect(profileNames(bridge.current())).toEqual(["Team", "Reviewers"]);
+  });
+});
+
+describe("Profile actions menu", () => {
+  it("opens as a popover, navigates with the arrow keys, and closes on Escape and outside clicks", async () => {
+    installBridge(settingsWithProfile("Team"));
+    await mount();
+    expect(menuTrigger().getAttribute("aria-expanded")).toBe("false");
+    const menu = await openMenu();
+    expect(menuTrigger().getAttribute("aria-expanded")).toBe("true");
+    // Focus lands on the first item and roves with the arrows.
+    const items = [...menu.querySelectorAll<HTMLButtonElement>(".roles-menu-item")];
+    expect(items.map((item) => item.textContent?.trim())).toEqual(["New", "Duplicate", "Rename", "Delete"]);
+    expect(document.activeElement).toBe(items[0]);
+    await act(async () => { menu.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })); });
+    expect(document.activeElement).toBe(items[1]);
+    await act(async () => { menu.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })); });
+    expect(document.activeElement).toBe(items[0]);
+    // Escape closes it and returns focus to the trigger.
+    await act(async () => { menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    expect(container.querySelector('[role="menu"]')).toBeNull();
+    expect(document.activeElement).toBe(menuTrigger());
+    // A mousedown outside closes it; the trigger toggles it back open.
+    await openMenu();
+    await act(async () => { container.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); });
+    expect(container.querySelector('[role="menu"]')).toBeNull();
+  });
+
+  it("opens the compact name form with a clear action title and the menu closed", async () => {
+    installBridge(settingsWithProfile("Team"));
+    await mount();
+    for (const [action, heading] of [["New", "New profile"], ["Duplicate", "Duplicate profile"], ["Rename", "Rename profile"]] as const) {
+      await openMenu();
+      await click(buttonByText(action));
+      expect(container.querySelector('[role="menu"]')).toBeNull();
+      expect(container.querySelector(".roles-name-form-title")?.textContent).toBe(heading);
+      expect(document.activeElement).toBe(container.querySelector("#role-profile-name"));
+      await click(buttonByText("Cancel"));
+      expect(container.querySelector(".roles-name-form")).toBeNull();
+    }
+  });
+
+  it("marks Delete as dangerous and still confirms before writing", async () => {
+    const bridge = installBridge(settingsWithProfile("Team"));
+    await mount();
+    await openMenu();
+    const del = buttonByText("Delete");
+    expect(del.className).toContain("roles-menu-item-danger");
+    await click(del);
+    expect(container.querySelector('[role="menu"]')).toBeNull();
+    expect(container.querySelector("dialog")?.textContent).toContain("Delete Team?");
+    expect(bridge.set).not.toHaveBeenCalled();
+    await click(buttonByText("Cancel"));
+    expect(bridge.set).not.toHaveBeenCalled();
+  });
+
+  it("returns focus to the menu trigger once the Delete dialog is gone, on cancel and on confirm", async () => {
+    installBridge(settingsWithProfile("Team"));
+    await mount();
+    // Chromium refuses focus() on anything outside an open modal dialog and
+    // strands focus on <body> when a still-open dialog is removed; jsdom
+    // models neither, so stand in for both here: while a dialog[open] exists,
+    // focusing the trigger must be a no-op, and it must only succeed after
+    // the dialog has left the document.
+    const originalFocus = HTMLElement.prototype.focus;
+    const triggerFocusAttempts: boolean[] = [];
+    HTMLElement.prototype.focus = function (this: HTMLElement, options?: FocusOptions): void {
+      const modal = document.querySelector("dialog[open]");
+      if (this === menuTrigger()) triggerFocusAttempts.push(modal !== null);
+      if (modal !== null && this.closest("dialog[open]") === null) return;
+      return originalFocus.call(this, options);
+    };
+    try {
+      await openMenu();
+      await click(buttonByText("Delete"));
+      expect(document.activeElement).toBe(container.querySelector(".git-confirm-cancel"));
+      await act(async () => {
+        container.querySelector("dialog")!.dispatchEvent(new Event("cancel", { bubbles: false, cancelable: true }));
+      });
+      expect(container.querySelector("dialog")).toBeNull();
+      expect(document.activeElement).toBe(menuTrigger());
+      expect(triggerFocusAttempts).not.toContain(true);
+
+      await openMenu();
+      await click(buttonByText("Delete"));
+      const confirm = [...container.querySelectorAll<HTMLButtonElement>("dialog button")].find((button) => button.textContent === "Delete")!;
+      triggerFocusAttempts.length = 0;
+      await click(confirm);
+      expect(container.querySelector("dialog")).toBeNull();
+      expect(document.activeElement).toBe(menuTrigger());
+      expect(triggerFocusAttempts).not.toContain(true);
+    } finally {
+      HTMLElement.prototype.focus = originalFocus;
+    }
+  });
+
+  it("keeps arrow roving alive past the disabled built-in Rename and Delete", async () => {
+    const initial = cloneDefaults();
+    initial.roleProfiles = undefined;
+    installBridge(initial);
+    await mount();
+    const menu = await openMenu();
+    const items = [...menu.querySelectorAll<HTMLButtonElement>(".roles-menu-item")];
+    // Only New and Duplicate are enabled; the arrows must rove over those two
+    // and wrap, never park on a disabled item.
+    expect(document.activeElement).toBe(items[0]);
+    await act(async () => { menu.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })); });
+    expect(document.activeElement).toBe(items[1]);
+    await act(async () => { menu.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })); });
+    expect(document.activeElement).toBe(items[0]);
   });
 });
 
@@ -267,7 +393,7 @@ describe("Profile and project interactions", () => {
     const bridge = installBridge(initial);
     root = createRoot(container);
     await act(async () => root?.render(createElement<RolesPaneProps>(RolesPane, { projectRoot: "/projects/app" })));
-    expect(container.textContent).toContain("project override for app");
+    expect(container.textContent).toContain("Project override");
     expect(bridge.set).not.toHaveBeenCalled();
     const effort = container.querySelector<HTMLSelectElement>('[aria-label="executor primary effort"]')!;
     await act(async () => { effort.value = "high"; effort.dispatchEvent(new Event("change", { bubbles: true })); });
@@ -310,11 +436,13 @@ describe("Deletion confirmation", () => {
     initial.roleProfiles!.projects = [{ projectRoot: "/project", profileId: "p" }];
     const bridge = installBridge(initial);
     await mount();
+    await openMenu();
     await click(buttonByText("Delete"));
     expect(container.querySelector("dialog")?.textContent).toContain("Project mappings to Team");
     expect(bridge.set).not.toHaveBeenCalled();
     await click(buttonByText("Cancel"));
     expect(bridge.set).not.toHaveBeenCalled();
+    await openMenu();
     await click(buttonByText("Delete"));
     const dialog = container.querySelector("dialog")!;
     const confirm = [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Delete")!;
@@ -360,23 +488,26 @@ describe("Project selection and profile naming", () => {
     const bridge = installBridge(initial);
     root = createRoot(container);
     await act(async () => root?.render(createElement<RolesPaneProps>(RolesPane, { projectRoot: "/projects/app" })));
-    expect(container.textContent).toContain("inherited global profile for app");
+    expect(container.querySelector(".roles-badge")?.getAttribute("title")).toContain("No override for this project");
     const select = container.querySelector<HTMLSelectElement>('[aria-label="Role profile"]')!;
     await act(async () => { select.value = "b"; select.dispatchEvent(new Event("change", { bubbles: true })); });
     expect(bridge.current().roleProfiles?.activeId).toBe("a");
     expect(bridge.current().roleProfiles?.projects).toEqual([{ projectRoot: "/projects/app", profileId: "b" }]);
-    expect(container.textContent).toContain("project override for app");
+    expect(container.textContent).toContain("Project override");
+    expect(container.querySelector(".roles-badge")?.getAttribute("title")).toContain("instead of the global one");
   });
 
   it("renames through an inline form and cancellation writes nothing", async () => {
     const bridge = installBridge(settingsWithProfile("Team"));
     await mount();
+    await openMenu();
     await click(buttonByText("Rename"));
     const input = container.querySelector<HTMLInputElement>("#role-profile-name")!;
     expect(input.value).toBe("Team");
     await act(async () => type(input, "  Review  "));
     await click(buttonByText("Cancel"));
     expect(bridge.set).not.toHaveBeenCalled();
+    await openMenu();
     await click(buttonByText("Rename"));
     await act(async () => type(container.querySelector<HTMLInputElement>("#role-profile-name")!, "  Review  "));
     await click(buttonByText("Save"));
@@ -447,6 +578,7 @@ describe("Secondary controls", () => {
     initial.roles = undefined;
     const bridge = installBridge(initial);
     await mount();
+    await openMenu();
     expect(buttonByText("Rename").disabled).toBe(true);
     expect(buttonByText("Delete").disabled).toBe(true);
     expect(container.querySelector('[aria-label="Role profile"]')).toBeNull();
@@ -465,10 +597,87 @@ describe("In-flight saves", () => {
     await click(buttonByText("Save roles"));
     expect(buttonByText("Save roles").disabled).toBe(true);
     expect(container.querySelector<HTMLFieldSetElement>(".roles-editor")?.disabled).toBe(true);
+    await openMenu();
     expect(buttonByText("New").disabled).toBe(true);
     await act(async () => { release(); await waiting; });
     expect(bridge.set).toHaveBeenCalledTimes(1);
     expect(buttonByText("Save roles").disabled).toBe(false);
+  });
+
+  it("closes the busy menu from the trigger on Escape without interrupting the write", async () => {
+    const bridge = installBridge(settingsWithProfile("Team"));
+    let release!: () => void;
+    const waiting = new Promise<void>((resolve) => { release = resolve; });
+    const original = bridge.set.getMockImplementation()!;
+    bridge.set.mockImplementationOnce(async (patch) => { await waiting; return original(patch); });
+    await mount();
+    await click(buttonByText("Save roles"));
+    await openMenu();
+    // Every item is disabled, so focus stays on the trigger — outside the
+    // items' keydown handler. Escape there must still close the menu and must
+    // not reach the window-level Esc-to-interrupt handler.
+    const windowEscape = vi.fn();
+    window.addEventListener("keydown", windowEscape);
+    try {
+      await act(async () => { menuTrigger().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
+      expect(container.querySelector('[role="menu"]')).toBeNull();
+      expect(windowEscape).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", windowEscape);
+    }
+    await act(async () => { release(); await waiting; });
+  });
+});
+
+/**
+ * The first save used to leave the pane dirty: the baseline was seeded from
+ * the raw draft while the post-write effects rebuilt it from the persisted
+ * (normalized) roles, so a UI-only field — a pending Custom… model flag —
+ * made them disagree and leaving the section asked "Discard unsaved roles?"
+ * right after "Roles saved.".
+ */
+describe("One save clears the unsaved-changes guard", () => {
+  /** The owner's edit shape: a Custom… model carries the UI-only customModel flag. */
+  async function editCustomModel(): Promise<void> {
+    const model = container.querySelector<HTMLSelectElement>('[aria-label="executor primary model"]')!;
+    await act(async () => { model.value = "custom"; model.dispatchEvent(new Event("change", { bubbles: true })); });
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    await act(async () => {
+      const custom = container.querySelector<HTMLInputElement>('[aria-label="executor primary custom model"]')!;
+      setter?.call(custom, "my-model");
+      custom.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+
+  it.each([
+    ["an existing global profile", (pane: Partial<RolesPaneProps>) => { pane.tabId = undefined; }, settingsWithProfile("Team")],
+    ["a new profile from the built-ins", (pane: Partial<RolesPaneProps>) => { pane.tabId = undefined; }, cloneDefaults()],
+    ["an existing project override", (pane: Partial<RolesPaneProps>) => { pane.projectRoot = "/projects/app"; }, (() => {
+      const settings = cloneDefaults();
+      settings.roleProfiles = {
+        profiles: [{ id: "g", name: "Global", roles: {} }, { id: "j", name: "Job", roles: {} }],
+        activeId: "g",
+        projects: [{ projectRoot: "/projects/app", profileId: "j" }],
+      };
+      return settings;
+    })()],
+    ["a new project profile", (pane: Partial<RolesPaneProps>) => { pane.projectRoot = "/projects/app"; }, cloneDefaults()],
+  ])("after one save of %s, leaving does not ask to discard", async (_label, configure, initial) => {
+    installBridge(initial);
+    const actions: string[] = [];
+    let guard: ((action: () => void, onCancel?: () => void) => void) | null = null;
+    const props: RolesPaneProps = {};
+    configure(props);
+    props.registerGuard = (registered) => { guard = registered; };
+    root = createRoot(container);
+    await act(async () => root?.render(createElement(RolesPane as React.ComponentType<RolesPaneProps>, props)));
+    await editCustomModel();
+    await click(buttonByText("Save roles"));
+    expect(container.textContent).toContain("Roles saved.");
+    guard!(() => { actions.push("left"); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(container.querySelector('[aria-label="Discard unsaved roles?"]')).toBeNull();
+    expect(actions).toEqual(["left"]);
   });
 });
 
@@ -476,6 +685,7 @@ describe("Control appearance and unavailable routes", () => {
   it("uses shared styles for default, prompt, project, and advanced controls", async () => {
     installBridge(settingsWithProfile("Team"));
     await mount();
+    await openMenu();
     await click(buttonByText("New"));
     expect(container.querySelector("#role-profile-name")?.classList.contains("settings-field-input")).toBe(true);
     expect([...container.querySelectorAll(".roles-pane select")].every((el) => el.classList.contains("settings-field-select"))).toBe(true);

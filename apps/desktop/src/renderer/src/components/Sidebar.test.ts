@@ -8,9 +8,11 @@
  * DOM-rendering the component.
  */
 import { readFileSync } from "node:fs";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionSummary } from "../../../shared/tabs.js";
 import type { TabInfo } from "../tabs-store.js";
+import { useTabsStore } from "../tabs-store.js";
+import { createPendingResumesStore, pendingResumeRowSets, type PendingResumeMarks } from "../pending-resumes.js";
 import { AGENT_PROJECT_SWITCH_LABEL } from "./project-agent-switch.js";
 import {
   applyHiddenProjects,
@@ -66,6 +68,12 @@ function session(overrides: Partial<SessionSummary> & Pick<SessionSummary, "id" 
     ...overrides,
   };
 }
+
+// The opening-marker integration tests seed the app tabs-store singleton
+// (pending-resumes.ts reads its `tabs`); never leak a fixture into the next test.
+afterEach(() => {
+  useTabsStore.setState({ tabs: [] });
+});
 
 describe("buildSidebarGroups", () => {
   it("marks engine rows via engineId: open tab from a codex session, claude resumable, absent/core get none (п.5)", () => {
@@ -155,6 +163,147 @@ describe("buildSidebarGroups", () => {
     );
 
     expect(groups[0]!.rows.map((r) => r.kind)).toEqual(["open", "resumable"]);
+  });
+
+  it("dedupes a session whose id matches a live tab's bound sessionId even when the session index is stale (no openInTabId yet)", () => {
+    // Hydration window: host_ready landed (the tab bound s1) but the session
+    // index has not refetched, so the persisted row still lacks openInTabId.
+    const groups = buildSidebarGroups(
+      [tab({ tabId: "t1", workspace: "/ws", title: "Same session", sessionId: "s1" })],
+      [session({ id: "s1", workspace: "/ws", title: "Same session" })],
+    );
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.rows).toHaveLength(1);
+    expect(groups[0]!.rows[0]).toMatchObject({ kind: "open", key: "t1", tabId: "t1" });
+  });
+
+  it("carries the engine label onto the open row via the bound sessionId when openInTabId is not there yet", () => {
+    const groups = buildSidebarGroups(
+      [tab({ tabId: "t1", workspace: "/ws", sessionId: "s1" })],
+      [session({ id: "s1", workspace: "/ws", engineId: "codex" })],
+    );
+
+    expect(groups[0]!.rows[0]).toMatchObject({ kind: "open", engineId: "codex" });
+  });
+
+  it("hides a resumable row for a session currently opening in an unbound tab (click → hydration)", () => {
+    // The click created the tab (title forwarded) but host_ready has not
+    // landed: no bound sessionId, no refetched index — only the `opening`
+    // marker says this history row is already represented by the open tab.
+    const groups = buildSidebarGroups(
+      [tab({ tabId: "t1", workspace: "/ws", title: "Привет. Что у нас по задачам?" })],
+      [session({ id: "s1", workspace: "/ws", title: "Привет. Что у нас по задачам?", updatedAt: 0 })],
+      undefined,
+      new Set(["s1"]),
+    );
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.rows).toHaveLength(1);
+    expect(groups[0]!.rows[0]).toMatchObject({ kind: "open", key: "t1" });
+  });
+
+  it("keeps resumable rows that the opening marker does not name", () => {
+    const groups = buildSidebarGroups(
+      [tab({ tabId: "t1", workspace: "/ws" })],
+      [session({ id: "s1", workspace: "/ws" }), session({ id: "s2", workspace: "/ws" })],
+      undefined,
+      new Set(["s1"]),
+    );
+
+    expect(groups[0]!.rows.map((r) => r.kind)).toEqual(["open", "resumable"]);
+    expect(groups[0]!.rows[1]).toMatchObject({ kind: "resumable", sessionId: "s2" });
+  });
+
+  it("keeps the history row visible as an opening placeholder while the marker is armed and no tab exists", () => {
+    // The click arms the shared marker before the createTab reply; until the
+    // representing tab is published the history row must stay (inert) — hiding
+    // it would blank the session for the whole slow createTab and flicker on a
+    // refusal.
+    const groups = buildSidebarGroups(
+      [],
+      [session({ id: "s1", workspace: "/ws" })],
+      undefined,
+      new Set(),
+      new Set(["s1"]),
+    );
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.rows).toHaveLength(1);
+    expect(groups[0]!.rows[0]).toMatchObject({ kind: "resumable", sessionId: "s1", opening: true });
+  });
+
+  it("a delayed resume keeps exactly one row: armed placeholder → envelope-published tab row", () => {
+    const store = createPendingResumesStore();
+    const s1 = session({ id: "s1", workspace: "/w" });
+
+    // Click: armed, reply outstanding, nothing published yet.
+    store.getState().mark("s1");
+    let { opening, arming } = pendingResumeRowSets(store.getState().marks);
+    let groups = buildSidebarGroups([], [s1], undefined, opening, arming);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.rows).toHaveLength(1);
+    expect(groups[0]!.rows[0]).toMatchObject({ kind: "resumable", sessionId: "s1", opening: true });
+
+    // The tab arrives through the port envelope BEFORE the reply: the armed
+    // marker promotes onto it (arm-time baseline), and the open row replaces
+    // the history row — never two rows for one session.
+    const tabs = [tab({ tabId: "t1", workspace: "/w" })];
+    useTabsStore.setState({ tabs });
+    store.getState().prune(tabs);
+    ({ opening, arming } = pendingResumeRowSets(store.getState().marks));
+    groups = buildSidebarGroups(tabs, [s1], undefined, opening, arming);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.rows).toHaveLength(1);
+    expect(groups[0]!.rows[0]).toMatchObject({ kind: "open", key: "t1" });
+
+    useTabsStore.setState({ tabs: [] });
+  });
+
+  it("two delayed resumes with only one tab published keep the unpublished session's history row (its marker must not bind the other resume's tab)", () => {
+    const store = createPendingResumesStore();
+    const s1 = session({ id: "s1", workspace: "/w" });
+    const s2 = session({ id: "s2", workspace: "/w" });
+
+    // Two resumes in flight; only the first resume's tab arrives through the
+    // port envelope before either reply lands.
+    store.getState().mark("s1");
+    store.getState().mark("s2");
+    const tabs = [tab({ tabId: "t1", workspace: "/w" })];
+    useTabsStore.setState({ tabs });
+    store.getState().prune(tabs);
+    const { opening, arming } = pendingResumeRowSets(store.getState().marks);
+    const groups = buildSidebarGroups(tabs, [s1, s2], undefined, opening, arming);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.rows).toHaveLength(2);
+    expect(groups[0]!.rows[0]).toMatchObject({ kind: "open", key: "t1" });
+    // The second session keeps its row as an opening placeholder — binding its
+    // marker to the first resume's tab would hide it without a replacement.
+    expect(groups[0]!.rows[1]).toMatchObject({ kind: "resumable", sessionId: "s2", opening: true });
+
+    useTabsStore.setState({ tabs: [] });
+  });
+
+  it("a refusal before tab publication keeps exactly one row — the history row never leaves", () => {
+    const store = createPendingResumesStore();
+    const s1 = session({ id: "s1", workspace: "/w" });
+
+    store.getState().mark("s1");
+    const { opening, arming } = pendingResumeRowSets(store.getState().marks);
+    let groups = buildSidebarGroups([], [s1], undefined, opening, arming);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.rows).toHaveLength(1);
+    expect(groups[0]!.rows[0]).toMatchObject({ kind: "resumable", sessionId: "s1", opening: true });
+
+    // The reply refuses (tabs never change, so the prune effect cannot react);
+    // the seam clears the marker and the plain history row remains.
+    store.getState().clear("s1");
+    const settled = pendingResumeRowSets(store.getState().marks);
+    groups = buildSidebarGroups([], [s1], undefined, settled.opening, settled.arming);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.rows).toHaveLength(1);
+    expect(groups[0]!.rows[0]).toMatchObject({ kind: "resumable", sessionId: "s1" });
+    expect(groups[0]!.rows[0]!.opening).toBeUndefined();
   });
 
   it("orders groups by first-seen across tabs then sessions, so open-tab workspaces float above session-only ones", () => {

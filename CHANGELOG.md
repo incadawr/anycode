@@ -7,6 +7,20 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- BrowserEval is now described honestly everywhere (tool description, approval dialogs, Full browser access prompts, docs): it runs arbitrary JavaScript in the preview page and can read that page's cookies and storage and anything else the page can see, including values typed into its fields, while HttpOnly cookies, other partitions and OS or browser-stored credentials stay out of reach; the old keyword blocklist, which was not a real security boundary, was removed. BrowserEval now asks on every call — in every session mode (including YOLO), with Full browser access on, and even when an older always-allow rule for it exists; new such rules can no longer be saved from the approval prompt.
+- Page-initiated downloads in embedded previews are now cancelled by default and reported in the preview console.
+- Preview sessions now deny all permission checks, device access (HID/USB/serial), and screen capture in addition to the existing permission-request deny, consistently for both the panel and pop-out windows. Full-screen, pointer-lock, and DRM (media key system) requests are denied the same way.
+- Browser results (read, snapshot, console, eval) now state the preview URL and id and carry an explicit untrusted-data boundary in the text models see, so page-controlled output stays attributable across native, Codex and Claude tabs.
+
+### Fixed
+
+- Roles settings: one "Save roles" no longer leaves the pane marked as unsaved (leaving the section asked "Discard unsaved roles?" right after a successful save). The profile actions are a real popover menu with keyboard support, Delete is styled as the dangerous action, profile names are edited in a compact form with a clear heading, long profile and model names truncate with a full-text tooltip, role rows wrap instead of overlapping, and the roles pane shows whether a project uses the global profile or its own override.
+- Roles settings: Escape in the profile actions menu, and dismissing or confirming its Delete dialog, return keyboard focus to the `⋯` trigger instead of losing it; menu item labels align to the left like other menu rows, the arrow keys skip disabled items so the menu never goes dead, and Escape closes the menu even while a save is in flight without cancelling the running turn.
+- Fixed the sidebar and command palette while opening a saved session: the history row now stays visible as a non-clickable "Opening…" placeholder until the new tab appears, then folds into it — the session no longer vanishes during a slow open, flickers on a refusal, or shows twice when the opened tab's host dies before it is ready.
+- Fixed two rough edges of that opening placeholder: with several sessions opening at once, each now binds only its own tab (the still-opening session's row stays visible instead of disappearing), and Up/Down navigation in the sidebar and command palette skips the inert "Opening…" rows instead of getting stuck on them.
+
 ## [0.0.74] — 2026-11-04
 
 ### Fixed

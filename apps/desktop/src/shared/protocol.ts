@@ -199,6 +199,8 @@ export interface WireToolMeta {
   destructive: boolean;
   riskLevel: RiskLevel;
   sideEffectScope: SideEffectScope;
+  /** True only for a mandatory-approval tool: the modal hides its "Always allow" checkbox. */
+  mandatoryApproval?: boolean;
 }
 
 /**

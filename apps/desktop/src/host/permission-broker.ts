@@ -178,6 +178,7 @@ export function toWireToolMeta(metadata: ToolMetadata): WireToolMeta {
     destructive: metadata.destructive,
     riskLevel: metadata.riskLevel,
     sideEffectScope: metadata.sideEffectScope,
+    ...(metadata.mandatoryApproval ? { mandatoryApproval: true } : {}),
   };
 }
 
@@ -336,6 +337,9 @@ export class IpcPermissionBroker implements PermissionBroker {
    * retains its existing broad scope.
    */
   private ruleAllows(request: PermissionRequest): boolean {
+    // A mandatory-approval tool has no always-allow shortcut at all — the ask
+    // reaches the UI even with a bare, already-persisted matching rule.
+    if (request.metadata.mandatoryApproval) return false;
     if (this.rules === null) return false;
     // Use the core request matcher for write rules, including resolved path masks.
     if (WORKSPACE_CONFINED_WRITE_TOOLS.has(request.toolName) && this.rules.matchesRequest) {

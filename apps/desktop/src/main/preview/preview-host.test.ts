@@ -81,6 +81,14 @@ class FakeWebContents implements PreviewWebContentsLike {
   backgroundThrottlingCalls: boolean[] = [];
   windowOpenHandler?: (details: { url: string }) => { action: "deny" };
   permissionRequestHandler?: (permission: string, callback: (granted: boolean) => void) => void;
+  willDownloadListeners: Array<
+    (download: { url: string; filename: string }, control: { cancel(): void; saveTo(path: string): void }) => void
+  > = [];
+  /** Snapshot of `loadedUrls.length` taken when the host wired `onWillDownload` — proves registration precedes the first load. */
+  loadedUrlsAtWillDownloadWire?: number;
+  permissionCheckHandler?: (permission: string, requestingOrigin: string) => boolean;
+  devicePermissionHandler?: () => boolean;
+  displayMediaRequestHandler?: (callback: (streams: { video?: unknown; audio?: unknown }) => void) => void;
   capturePageImpl: () => Promise<PreviewCapturedImage> = () => Promise.resolve(fakeImage());
   /** D18: consumed in order — each queued error rejects the NEXT `capturePage()` call instead of running `capturePageImpl`. */
   captureRejections: Error[] = [];
@@ -135,6 +143,21 @@ class FakeWebContents implements PreviewWebContentsLike {
   setPermissionRequestHandler(handler: (permission: string, callback: (granted: boolean) => void) => void): void {
     this.permissionRequestHandler = handler;
   }
+  onWillDownload(
+    listener: (download: { url: string; filename: string }, control: { cancel(): void; saveTo(path: string): void }) => void,
+  ): void {
+    this.loadedUrlsAtWillDownloadWire = this.loadedUrls.length;
+    this.willDownloadListeners.push(listener);
+  }
+  setPermissionCheckHandler(handler: (permission: string, requestingOrigin: string) => boolean): void {
+    this.permissionCheckHandler = handler;
+  }
+  setDevicePermissionHandler(handler: () => boolean): void {
+    this.devicePermissionHandler = handler;
+  }
+  setDisplayMediaRequestHandler(handler: (callback: (streams: { video?: unknown; audio?: unknown }) => void) => void): void {
+    this.displayMediaRequestHandler = handler;
+  }
   onDidFinishLoad(listener: () => void): void {
     this.didFinishLoad.push(listener);
   }
@@ -188,6 +211,15 @@ class FakeWebContents implements PreviewWebContentsLike {
     let prevented = false;
     for (const l of this.willRedirect) l(url, () => (prevented = true));
     return prevented;
+  }
+  /** Simulates Electron firing session "will-download"; reports whether a listener cancelled and every saveTo path. */
+  fireWillDownload(url: string, filename = "report.bin"): { cancelled: boolean; savePaths: string[] } {
+    let cancelled = false;
+    const savePaths: string[] = [];
+    for (const l of this.willDownloadListeners) {
+      l({ url, filename }, { cancel: () => (cancelled = true), saveTo: (path) => savePaths.push(path) });
+    }
+    return { cancelled, savePaths };
   }
   fireConsoleMessage(level: PreviewConsoleEntry["level"], message: string): void {
     for (const l of this.consoleMessage) l(level, message);
@@ -530,6 +562,136 @@ describe("PreviewHost — window security invariants (cut §2.5, non-negotiable)
       });
       expect(granted).toBe(false);
     }
+  });
+
+  it("wires onWillDownload to cancel every page-initiated download, one ring entry per URL (dedupe on repeat)", async () => {
+    const rig = makeRig();
+    const openPromise = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const opened = await openPromise;
+    const previewId = opened.ok ? opened.value.previewId : "";
+
+    const wc = rig.windows[0]!.webContents;
+    for (const url of [
+      "https://example.com/report.pdf",
+      "blob:https://example.com/8f2e-4b1a",
+      "data:text/plain;base64,SGVsbG8=",
+    ]) {
+      const result = wc.fireWillDownload(url);
+      expect(result.cancelled).toBe(true);
+      expect(result.savePaths).toEqual([]);
+    }
+    // Repeating the same URL must not add a second ring entry (per-record dedupe).
+    expect(wc.fireWillDownload("https://example.com/report.pdf").cancelled).toBe(true);
+    // A >200-char URL still dedupes: the ring KEY is bounded the same way as the message.
+    const longUrl = `https://example.com/${"x".repeat(300)}`;
+    expect(wc.fireWillDownload(longUrl).cancelled).toBe(true);
+    expect(wc.fireWillDownload(longUrl).cancelled).toBe(true);
+
+    const console_ = rig.host.getConsole(TAB, previewId);
+    const entries = "entries" in console_ ? console_.entries : [];
+    const downloadEntries = entries.filter((e) => e.message.includes("blocked by security policy: download"));
+    expect(downloadEntries).toHaveLength(4);
+    expect(downloadEntries.every((e) => e.level === "warn")).toBe(true);
+  });
+
+  it("installs the download policy at wiring time, before the first load", async () => {
+    const rig = makeRig();
+    void rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    const wc = rig.windows[0]!.webContents;
+    expect(wc.willDownloadListeners).toHaveLength(1);
+    // Snapshot taken inside onWillDownload: zero URLs had been loaded when the policy was installed.
+    expect(wc.loadedUrlsAtWillDownloadWire).toBe(0);
+    expect(wc.loadedUrls.length).toBeGreaterThan(0);
+  });
+
+  it("after a container transfer the live listener still cancels and the superseded one fully no-ops", async () => {
+    const rig = makeRig();
+    const openPromise = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const opened = await openPromise;
+    const previewId = opened.ok ? opened.value.previewId : "";
+    const oldWc = rig.windows[0]!.webContents;
+    expect(oldWc.fireWillDownload("https://example.com/before.pdf").cancelled).toBe(true);
+
+    const transferPromise = rig.host.setContainer(TAB, previewId, "panel");
+    await flush();
+    rig.panelViews[0]!.webContents.fireDidFinishLoad();
+    await transferPromise;
+
+    const downloadRingCount = (): number => {
+      const console_ = rig.host.getConsole(TAB, previewId);
+      const entries = "entries" in console_ ? console_.entries : [];
+      return entries.filter((e) => e.message.includes("blocked by security policy: download")).length;
+    };
+    const ringBefore = downloadRingCount();
+
+    // Stale listener on the superseded container: full no-op — no cancel, no ring entry.
+    const stale = rig.windows[0]!.webContents.fireWillDownload("https://example.com/stale.pdf");
+    expect(stale.cancelled).toBe(false);
+    expect(stale.savePaths).toEqual([]);
+    expect(downloadRingCount()).toBe(ringBefore);
+
+    // Live listener on the new container: still cancels and logs.
+    const live = rig.panelViews[0]!.webContents.fireWillDownload("https://example.com/after.pdf");
+    expect(live.cancelled).toBe(true);
+    expect(live.savePaths).toEqual([]);
+    expect(downloadRingCount()).toBe(ringBefore + 1);
+  });
+
+  it("wires setPermissionCheckHandler to synchronously deny every permission, incl. unknown strings", async () => {
+    const rig = makeRig();
+    void rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    const win = rig.windows[0]!;
+    for (const permission of [
+      "camera",
+      "microphone",
+      "clipboard-read",
+      "geolocation",
+      "notifications",
+      "hid",
+      "usb",
+      "serial",
+      "totally-unknown-permission",
+    ]) {
+      expect(win.webContents.permissionCheckHandler?.(permission, "https://evil.example")).toBe(false);
+    }
+  });
+
+  it("wires setDevicePermissionHandler to deny", async () => {
+    const rig = makeRig();
+    void rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    expect(rig.windows[0]!.webContents.devicePermissionHandler?.()).toBe(false);
+  });
+
+  it("wires setDisplayMediaRequestHandler to deny with an empty stream set", async () => {
+    const rig = makeRig();
+    void rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    const streams = vi.fn();
+    rig.windows[0]!.webContents.displayMediaRequestHandler?.(streams);
+    expect(streams).toHaveBeenCalledWith({});
+  });
+
+  it("full access grants no system permissions — all four permission handlers still deny", async () => {
+    const rig = makeRig({ fullAccess: () => true });
+    void rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    const win = rig.windows[0]!;
+    const granted = await new Promise<boolean>((resolve) => {
+      win.webContents.permissionRequestHandler?.("camera", resolve);
+    });
+    expect(granted).toBe(false);
+    expect(win.webContents.permissionCheckHandler?.("camera", "https://evil.example")).toBe(false);
+    expect(win.webContents.devicePermissionHandler?.()).toBe(false);
+    const streams = vi.fn();
+    win.webContents.displayMediaRequestHandler?.(streams);
+    expect(streams).toHaveBeenCalledWith({});
   });
 });
 
@@ -3126,6 +3288,54 @@ describe("PreviewHost — panel container: security regression (invariant 7, sam
     }
   });
 
+  it("wires setPermissionCheckHandler to synchronously deny every permission, incl. unknown strings", async () => {
+    const { view } = await openedPanelRig();
+    for (const permission of [
+      "camera",
+      "microphone",
+      "clipboard-read",
+      "geolocation",
+      "notifications",
+      "hid",
+      "usb",
+      "serial",
+      "totally-unknown-permission",
+    ]) {
+      expect(view.webContents.permissionCheckHandler?.(permission, "https://evil.example")).toBe(false);
+    }
+  });
+
+  it("wires setDevicePermissionHandler to deny", async () => {
+    const { view } = await openedPanelRig();
+    expect(view.webContents.devicePermissionHandler?.()).toBe(false);
+  });
+
+  it("wires setDisplayMediaRequestHandler to deny with an empty stream set", async () => {
+    const { view } = await openedPanelRig();
+    const streams = vi.fn();
+    view.webContents.displayMediaRequestHandler?.(streams);
+    expect(streams).toHaveBeenCalledWith({});
+  });
+
+  it("full access grants no system permissions — all four permission handlers still deny", async () => {
+    const rig = makeRig({ fullAccess: () => true });
+    rig.displayModeValue.value = "panel";
+    const openPromise = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    const view = rig.panelViews[0]!;
+    view.webContents.fireDidFinishLoad();
+    await openPromise;
+    const granted = await new Promise<boolean>((resolve) => {
+      view.webContents.permissionRequestHandler?.("camera", resolve);
+    });
+    expect(granted).toBe(false);
+    expect(view.webContents.permissionCheckHandler?.("camera", "https://evil.example")).toBe(false);
+    expect(view.webContents.devicePermissionHandler?.()).toBe(false);
+    const streams = vi.fn();
+    view.webContents.displayMediaRequestHandler?.(streams);
+    expect(streams).toHaveBeenCalledWith({});
+  });
+
   it("will-navigate: allows a file under an allowed root, denies one outside", async () => {
     const { view } = await openedPanelRig();
     const target = pathToFileURL(`${WORKSPACE_ROOT}/other.html`).href;
@@ -4387,15 +4597,21 @@ describe("PreviewHost — Full browser access, live limits and forged access ops
     expect(offTyped).toMatchObject({ ok: false, errorKind: "not_allowed" });
   });
 
-  // Test 44: ON does not weaken the hard limits.
-  it("ON keeps the eval blocklist: cookie and storage reads are refused before any Runtime.evaluate is sent", async () => {
+  // Test 44: the Full access switch never covers eval — without approval the
+  // op is refused even while ON; an approved call (allowRemote) reaches the
+  // page and its value comes back.
+  it("ON does not cover eval: unapproved eval is refused, an approved call reaches the page", async () => {
     const on = { value: true };
     const { rig, previewId } = await remote(on);
-    for (const expression of ["document.cookie", "localStorage.getItem('t')", "navigator.credentials.get()"]) {
-      const result = await call(rig, { kind: "control", request: { action: "eval", previewId, expression } });
-      expect(result).toMatchObject({ ok: false, errorKind: "not_allowed" });
-    }
+    const refused = await call(rig, { kind: "control", request: { action: "eval", previewId, expression: "document.cookie" } });
+    expect(refused).toMatchObject({ ok: false, errorKind: "not_allowed", error: "BrowserEval always needs the user's approval" });
     expect(rig.windows[0]!.webContents.cdp.methods()).not.toContain("Runtime.evaluate");
+
+    rig.windows[0]!.webContents.cdp.respond("Runtime.evaluate", { result: { value: "fake-page-sentinel" } });
+    const approved = await call(rig, { kind: "control", request: { action: "eval", previewId, expression: "document.cookie" }, allowRemote: true });
+    expect(approved.ok).toBe(true);
+    expect(approved.ok && approved.value.text).toContain("fake-page-sentinel");
+    expect(rig.windows[0]!.webContents.cdp.methods()).toContain("Runtime.evaluate");
   });
 
   // Test 45(a): the op union has no set-access kind; a forged one is refused and changes nothing.

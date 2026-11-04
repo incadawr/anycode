@@ -239,6 +239,18 @@ function bashUnknownShellHint(toolName: string, input: unknown): string | null {
   return verdict.class === "unknown" && verdict.shellExpression ? UNKNOWN_SHELL_HINT : null;
 }
 
+/** the honest data policy for a BrowserEval ask: the expression runs as page
+ * code, so it has the page's own reach. Static UI text (never scrubbed),
+ * shown above the input; the allow/deny/remember mechanics are unchanged.
+ * Exported for the copy-pinning test. */
+export const BROWSER_EVAL_POLICY_HINT =
+  "BrowserEval runs the expression as page code: the script can read the shown page's cookies and storage, and anything else the page can see, including values typed into its fields. HttpOnly cookies, other partitions and OS or browser-stored credentials stay out of reach.";
+
+/** Resolves the BrowserEval policy hint; null for every other tool. */
+export function browserEvalPolicyHint(toolName: string): string | null {
+  return toolName === "BrowserEval" ? BROWSER_EVAL_POLICY_HINT : null;
+}
+
 /** re-exports of the shared plaque API (see the import above) —
  * the desktop modal is where the plaque was born (7d633a64/4ebfbe12); these
  * keep every existing import from this module working unchanged. */
@@ -292,9 +304,10 @@ export function describePermissionAsk(
   input: unknown,
   /** the ask's live metadata, when the caller has it — drives
    * the header neutralisation (a static-high core Bash ask whose command the
-   * classifier proves read-only). Absent → no neutralisation (fail-closed to
-   * today's metadata-driven badge). */
-  metadata?: { riskLevel: RiskLevel; destructive: boolean },
+   * classifier proves read-only) and hides the Always-allow checkbox for a
+   * mandatory-approval tool. Absent → no neutralisation (fail-closed to
+   * today's metadata-driven badge) and the checkbox stays offered. */
+  metadata?: { riskLevel: RiskLevel; destructive: boolean; mandatoryApproval?: boolean },
 ): PermissionAskPresentation {
   const raw =
     toolName === "ExitPlanMode"
@@ -309,10 +322,13 @@ export function describePermissionAsk(
       sentence: formatPermissionTitle(toolName).sentence,
       allowLabel: "Allow",
       denyLabel: "Deny",
-      hint: bashUnknownShellHint(toolName, input),
+      hint: bashUnknownShellHint(toolName, input) ?? browserEvalPolicyHint(toolName),
       plaque,
       neutralRiskLabel: metadata === undefined ? null : neutralRiskLabelFor(metadata, plaque),
-      canRemember: true,
+      // A mandatory-approval tool (metadata.mandatoryApproval) is never
+      // rememberable: the broker and the rule engines ignore such rules, so
+      // offering the checkbox would save a rule that does nothing.
+      canRemember: metadata?.mandatoryApproval !== true,
     };
   }
   const elidedChars = Math.max(0, raw.length - PLAN_PREVIEW_MAX_CHARS);
@@ -552,6 +568,7 @@ export function PermissionModal({
   const presentation = describePermissionAsk(request.toolName, request.input, {
     riskLevel: request.metadata.riskLevel,
     destructive: request.metadata.destructive,
+    mandatoryApproval: request.metadata.mandatoryApproval === true,
   });
   const isPlan = presentation.kind === "plan";
   const showRemember = allowRemember && presentation.canRemember;
