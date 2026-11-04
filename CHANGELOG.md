@@ -13,6 +13,12 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Reasoning-history replay can now be enabled per connection for custom endpoints and vLLM (connection drawer, "Reasoning replay" setting), and a per-provider replay support table is published in the developer documentation.
 - Z.AI (GLM) connections on a coding-plan key now show their 5-hour and weekly quota windows (percent left, reset time) on the connection card, same as the MiniMax M Plan tile. Pay-as-you-go Z.AI keys are not polled.
 
+### Fixed
+
+- `/new` in the telegram-remote example recognizes its `key:value` flags only before the message starts; the message itself now reaches the session verbatim, with line breaks and indentation intact.
+- The connection drawer's "Reasoning replay" setting is hidden for transports that cannot replay reasoning (an OpenAI Responses endpoint), and saving such a connection no longer writes the hidden setting's value.
+- A weekly-only GLM quota answer no longer keeps the reset time of the earlier 5-hour window.
+
 ## [0.0.74] — 2026-11-04
 
 ### Fixed
