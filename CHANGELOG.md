@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- OpenCode Go (Kimi models over a subscription) is available as a provider: two connections, one speaking Anthropic's protocol and one OpenAI-compatible, both sending a per-session marker and an Anycode user-agent with every request so the endpoint sees one stable identity per conversation.
+
 ## [0.0.75] — 2026-11-04
 
 ### Security
