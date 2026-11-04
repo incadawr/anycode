@@ -12,12 +12,12 @@
  * from its own test.
  */
 
-import { ipcMain } from "electron";
+import { guardedIpcHandle } from "./ipc-guard.js";
 import { RECOGNIZER_PROBE_CHANNEL } from "../shared/recognizer.js";
 import { handleRecognizerProbeRequest, type RecognizerProbeDeps } from "./recognizer-probe.js";
 
 export type { RecognizerProbeDeps };
 
 export function registerRecognizerProbeIpc(deps: RecognizerProbeDeps): void {
-  ipcMain.handle(RECOGNIZER_PROBE_CHANNEL, (_event, raw: unknown) => handleRecognizerProbeRequest(deps, raw));
+  guardedIpcHandle(RECOGNIZER_PROBE_CHANNEL, (_event, raw: unknown) => handleRecognizerProbeRequest(deps, raw));
 }

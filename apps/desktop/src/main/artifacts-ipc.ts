@@ -68,7 +68,7 @@
  * this exact file" provenance.
  */
 
-import { ipcMain } from "electron";
+import { guardedIpcHandle } from "./ipc-guard.js";
 import * as fsp from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { isAbsolute, join, relative as pathRelative, resolve as pathResolve, sep } from "node:path";
@@ -828,10 +828,10 @@ export async function handleArtifactPreviewable(deps: ArtifactsIpcDeps, raw: unk
 
 /** Wires the six channels onto ipcMain. An unvalidatable payload gets a safe negative from the handler itself. */
 export function registerArtifactsIpc(deps: ArtifactsIpcDeps): void {
-  ipcMain.handle(ARTIFACT_READ_IMAGE_CHANNEL, (_event, raw: unknown) => handleArtifactReadImage(deps, raw));
-  ipcMain.handle(ARTIFACT_OPEN_CHANNEL, (_event, raw: unknown) => handleArtifactOpen(deps, raw));
-  ipcMain.handle(ARTIFACT_REVEAL_CHANNEL, (_event, raw: unknown) => handleArtifactReveal(deps, raw));
-  ipcMain.handle(ARTIFACT_ALLOW_CHANNEL, (_event, raw: unknown) => handleArtifactAllow(deps, raw));
-  ipcMain.handle(ARTIFACT_PREVIEW_CHANNEL, (_event, raw: unknown) => handleArtifactPreview(deps, raw));
-  ipcMain.handle(ARTIFACT_PREVIEWABLE_CHANNEL, (_event, raw: unknown) => handleArtifactPreviewable(deps, raw));
+  guardedIpcHandle(ARTIFACT_READ_IMAGE_CHANNEL, (_event, raw: unknown) => handleArtifactReadImage(deps, raw));
+  guardedIpcHandle(ARTIFACT_OPEN_CHANNEL, (_event, raw: unknown) => handleArtifactOpen(deps, raw));
+  guardedIpcHandle(ARTIFACT_REVEAL_CHANNEL, (_event, raw: unknown) => handleArtifactReveal(deps, raw));
+  guardedIpcHandle(ARTIFACT_ALLOW_CHANNEL, (_event, raw: unknown) => handleArtifactAllow(deps, raw));
+  guardedIpcHandle(ARTIFACT_PREVIEW_CHANNEL, (_event, raw: unknown) => handleArtifactPreview(deps, raw));
+  guardedIpcHandle(ARTIFACT_PREVIEWABLE_CHANNEL, (_event, raw: unknown) => handleArtifactPreviewable(deps, raw));
 }

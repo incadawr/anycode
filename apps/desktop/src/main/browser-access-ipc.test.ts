@@ -2,7 +2,7 @@
  * "Full browser access" IPC and notifier: brief tests 45(b), 46, 47.
  * Pure handlers over a fake deps bag (no ipcMain), like communication-ipc.test.ts.
  */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { BROWSER_ACCESS_GET_CHANNEL, BROWSER_ACCESS_SET_CHANNEL } from "../shared/browser-access.js";
 const handlers = vi.hoisted(() => new Map<string, (...args: any[]) => any>());
 vi.mock("electron", () => ({ ipcMain: { handle: (channel: string, handler: (...args: any[]) => any) => handlers.set(channel, handler) } }));
@@ -14,10 +14,15 @@ import {
   registerBrowserAccessIpc,
   type BrowserAccessIpcDeps,
 } from "./browser-access-ipc.js";
+import { resetIpcGuardForTests, setIpcGuardMainWindow } from "./ipc-guard.js";
 import { createBrowserAccessStore, type BrowserAccessStore } from "./browser-access.js";
 
 const MAIN = { name: "main-window-webcontents" };
 const PREVIEW = { name: "preview-webcontents" };
+
+beforeEach(() => {
+  resetIpcGuardForTests();
+});
 
 function rig(options: { trust?: Record<string, unknown>; onChanged?: (tabId: string) => void } = {}) {
   const on = new Set<string>();
@@ -42,14 +47,18 @@ function rig(options: { trust?: Record<string, unknown>; onChanged?: (tabId: str
 }
 
 describe("browser access IPC — test 45(b): only the main window may call it", () => {
-  it("rejects subframes even when they share the main webContents", () => {
+  it("the guard refuses a main-window SUBFRAME before the handler runs; a top-frame call passes both checks", () => {
     const { deps, on } = rig();
     const mainFrame = {};
     const sender = Object.assign(MAIN, { mainFrame });
+    setIpcGuardMainWindow(() => sender);
     registerBrowserAccessIpc(deps);
     const event = { sender, senderFrame: {} };
-    expect(handlers.get(BROWSER_ACCESS_GET_CHANNEL)!(event, {})).toEqual({ ok: false, reason: "not_main_window" });
-    expect(handlers.get(BROWSER_ACCESS_SET_CHANNEL)!(event, { tabId: "tab-1", enabled: true })).toEqual({ ok: false, reason: "not_main_window" });
+    // A subframe never reaches the handler at all: the guard wrapper throws,
+    // so the renderer's invoke rejects (the not_main_window shape below is
+    // only reachable by driving the pure handler directly).
+    expect(() => handlers.get(BROWSER_ACCESS_GET_CHANNEL)!(event, {})).toThrow(/refused/);
+    expect(() => handlers.get(BROWSER_ACCESS_SET_CHANNEL)!(event, { tabId: "tab-1", enabled: true })).toThrow(/refused/);
     expect(on.size).toBe(0);
     expect(handlers.get(BROWSER_ACCESS_SET_CHANNEL)!({ sender, senderFrame: mainFrame }, { tabId: "tab-1", enabled: true }).ok).toBe(true);
   });

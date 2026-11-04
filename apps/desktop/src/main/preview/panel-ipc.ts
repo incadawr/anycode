@@ -13,7 +13,7 @@
  * zod-validated the same way as SELECT/CLOSE (`tabId`/`previewId`, plus the
  * container-kind enum), forwarding verbatim to `PreviewHostHandle.setContainer`.
  */
-import { ipcMain } from "electron";
+import { guardedIpcHandle, guardedIpcOn } from "../ipc-guard.js";
 import { z } from "zod";
 import {
   PREVIEW_CLOSE_CHANNEL,
@@ -69,7 +69,7 @@ function emptyChangedPayload(tabId: string): PreviewChangedPayload {
  * registerTabIpc/registerWindowIpc (called once at boot).
  */
 export function registerPreviewPanelIpc(deps: PreviewPanelIpcDeps): void {
-  ipcMain.handle(PREVIEW_PANEL_SET_STATE_CHANNEL, (_event, raw: unknown): void => {
+  guardedIpcHandle(PREVIEW_PANEL_SET_STATE_CHANNEL, (_event, raw: unknown): void => {
     const parsed = setStateSchema.safeParse(raw);
     if (!parsed.success) {
       // A state publish main cannot understand is dropped — the renderer's
@@ -81,7 +81,7 @@ export function registerPreviewPanelIpc(deps: PreviewPanelIpcDeps): void {
 
   // D9 deliberate deviation: one-way `ipcMain.on`, no reply — a malformed
   // payload is silently dropped, the next valid rAF measure self-corrects.
-  ipcMain.on(PREVIEW_PANEL_SET_BOUNDS_CHANNEL, (_event, raw: unknown) => {
+  guardedIpcOn(PREVIEW_PANEL_SET_BOUNDS_CHANNEL, (_event, raw: unknown) => {
     const parsed = boundsSchema.safeParse(raw);
     if (!parsed.success) {
       return;
@@ -90,7 +90,7 @@ export function registerPreviewPanelIpc(deps: PreviewPanelIpcDeps): void {
     deps.host.setPanelBounds(clampPanelBounds(bounds));
   });
 
-  ipcMain.handle(PREVIEW_PANEL_SELECT_CHANNEL, (_event, raw: unknown): { ok: boolean; error?: string } => {
+  guardedIpcHandle(PREVIEW_PANEL_SELECT_CHANNEL, (_event, raw: unknown): { ok: boolean; error?: string } => {
     const parsed = tabPreviewSchema.safeParse(raw);
     if (!parsed.success) {
       return { ok: false, error: "invalid request" };
@@ -98,7 +98,7 @@ export function registerPreviewPanelIpc(deps: PreviewPanelIpcDeps): void {
     return deps.host.selectPanelPreview(parsed.data.tabId, parsed.data.previewId);
   });
 
-  ipcMain.handle(PREVIEW_CLOSE_CHANNEL, (_event, raw: unknown): { ok: boolean; error?: string } => {
+  guardedIpcHandle(PREVIEW_CLOSE_CHANNEL, (_event, raw: unknown): { ok: boolean; error?: string } => {
     const parsed = tabPreviewSchema.safeParse(raw);
     if (!parsed.success) {
       return { ok: false, error: "invalid request" };
@@ -106,7 +106,7 @@ export function registerPreviewPanelIpc(deps: PreviewPanelIpcDeps): void {
     return deps.host.closePreview(parsed.data.tabId, parsed.data.previewId);
   });
 
-  ipcMain.handle(PREVIEW_LIST_CHANNEL, (_event, raw: unknown): PreviewChangedPayload => {
+  guardedIpcHandle(PREVIEW_LIST_CHANNEL, (_event, raw: unknown): PreviewChangedPayload => {
     const parsed = listSchema.safeParse(raw);
     if (!parsed.success) {
       return emptyChangedPayload("");
@@ -116,7 +116,7 @@ export function registerPreviewPanelIpc(deps: PreviewPanelIpcDeps): void {
 
   // 96-P3: the transfer handler — P1/P2 only ever exported/exposed the
   // constant (CUT.md §0/§3); this is the module's one additional registration.
-  ipcMain.handle(PREVIEW_SET_CONTAINER_CHANNEL, (_event, raw: unknown): Promise<PreviewSetContainerResult> => {
+  guardedIpcHandle(PREVIEW_SET_CONTAINER_CHANNEL, (_event, raw: unknown): Promise<PreviewSetContainerResult> => {
     const parsed = setContainerSchema.safeParse(raw);
     if (!parsed.success) {
       return Promise.resolve({ ok: false, error: "invalid request" });

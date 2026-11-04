@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+- Privileged IPC is now guarded by sender identity: every `anycode:*` channel answers only the app's main window (and the detached Markdown popout, explicitly allow-listed), and only from the renderer's top frame. Subframes, preview views, and other windows that somehow carry the preload bridge get refused, so a compromised renderer frame or stray window can no longer read settings, secrets, or drive sessions.
+
 ### Changed
 
 - BrowserEval is now described honestly everywhere (tool description, approval dialogs, Full browser access prompts, docs): it runs arbitrary JavaScript in the preview page and can read that page's cookies and storage and anything else the page can see, including values typed into its fields, while HttpOnly cookies, other partitions and OS or browser-stored credentials stay out of reach; the old keyword blocklist, which was not a real security boundary, was removed. BrowserEval now asks on every call — in every session mode (including YOLO), with Full browser access on, and even when an older always-allow rule for it exists; new such rules can no longer be saved from the approval prompt.
@@ -20,6 +24,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Roles settings: Escape in the profile actions menu, and dismissing or confirming its Delete dialog, return keyboard focus to the `⋯` trigger instead of losing it; menu item labels align to the left like other menu rows, the arrow keys skip disabled items so the menu never goes dead, and Escape closes the menu even while a save is in flight without cancelling the running turn.
 - Fixed the sidebar and command palette while opening a saved session: the history row now stays visible as a non-clickable "Opening…" placeholder until the new tab appears, then folds into it — the session no longer vanishes during a slow open, flickers on a refusal, or shows twice when the opened tab's host dies before it is ready.
 - Fixed two rough edges of that opening placeholder: with several sessions opening at once, each now binds only its own tab (the still-opening session's row stays visible instead of disappearing), and Up/Down navigation in the sidebar and command palette skips the inert "Opening…" rows instead of getting stuck on them.
+- Scope selection for skills import and MCP add-server is honoured again: the requested folder (this computer, or the active session's folder) is picked in the Settings scope switcher before the write lands, and the action stops with a clear error instead of silently writing into another folder's config when the folder can't be selected.
+- Fixed the model pill in the composer footer sliding under the context meter in narrow windows and panes: the footer's left group now shrinks to the space it actually has, truncating the model name (full name stays on hover) instead of overlapping the context indicator. The Codex speed chip truncates the same way inside its own border, and pill labels keep a short readable stub instead of collapsing to an empty chevron.
 
 ## [0.0.74] — 2026-11-04
 

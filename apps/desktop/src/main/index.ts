@@ -67,7 +67,6 @@ import {
   MessageChannelMain,
   app,
   dialog,
-  ipcMain,
   nativeImage,
   net,
   powerMonitor,
@@ -238,6 +237,7 @@ import { PREVIEW_CHANGED_CHANNEL } from "../shared/preview-panel.js";
 import { registerMdDocIpc } from "./preview/md-doc-ipc.js";
 import type { MdDocDeps } from "./preview/md-doc.js";
 import { OAuthEngine, oauthConfigFromEntry } from "./oauth.js";
+import { guardedIpcHandle, setIpcGuardMainWindow } from "./ipc-guard.js";
 import { registerSetupIpc } from "./setup-ipc.js";
 import { registerProviderIpc } from "./provider-ipc.js";
 import { flushPendingConnectionQuota, handleProviderQuotaMessage } from "./connection-quota.js";
@@ -2428,6 +2428,15 @@ void app.whenReady().then(async () => {
     now: () => Date.now(),
   });
 
+  // IPC sender guard: wire the main-window source ONCE, BEFORE the first
+  // register*Ipc call below. The closure reads the module-level nullable `win`
+  // live per event (never captured), so window recreation needs no re-wiring.
+  // From here on every privileged anycode:* channel is served only to the main
+  // window's top frame (plus windows explicitly allow-listed at creation, the
+  // detached Markdown popout today); subframes, preview views and foreign
+  // windows are refused.
+  setIpcGuardMainWindow(() => (win !== null && !win.isDestroyed() ? win.webContents : null));
+
   // Panel-side preview IPC (panel-track CUT.md §3 96-P1 item 4): SET_STATE/
   // SET_BOUNDS/SELECT/CLOSE/LIST. Registered right after previewHost so its
   // handlers close over the SAME live handle every other preview wiring
@@ -3014,7 +3023,7 @@ void app.whenReady().then(async () => {
   // new tab goes through tab-ipc's resume path — the same gate (readiness,
   // capacity, argv resolution) a tab reopened from the session list takes.
   // The exhausted tab is untouched: its account cannot change under a live host.
-  registerCodexContinueIpc(ipcMain, () => {
+  registerCodexContinueIpc({ handle: guardedIpcHandle }, () => {
     const store = persistence;
     if (store === null) return null;
     return {
@@ -3251,7 +3260,7 @@ void app.whenReady().then(async () => {
     fetch: route => fetchForProxyChain([], route),
     onPersisted: () => sendToMainWindow(win, PROVIDER_QUOTA_CHANGED_CHANNEL),
   });
-  ipcMain.handle("anycode:minimax-quota-refresh", (_event, id: unknown) => {
+  guardedIpcHandle("anycode:minimax-quota-refresh", (_event, id: unknown) => {
     if (id !== undefined && (typeof id !== "string" || id.length > 256)) return;
     void miniMaxQuota.refresh(id);
   });
@@ -3368,7 +3377,7 @@ void app.whenReady().then(async () => {
   // running on?" Read-only and presentation-only — the answer is the tab's own
   // resolved profile id (`system` when it never pinned one) plus its registry
   // label, never a credential or a path.
-  ipcMain.handle(CODEX_TAB_ACCOUNT_CHANNEL, (_event, tabId: unknown) => {
+  guardedIpcHandle(CODEX_TAB_ACCOUNT_CHANNEL, (_event, tabId: unknown) => {
     const id = typeof tabId === "string" && tabId !== "" ? tabId : undefined;
     if (id === undefined) return { ok: false, reason: "unknown_tab" };
     return handleCodexTabAccount(

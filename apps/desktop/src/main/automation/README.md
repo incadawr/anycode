@@ -742,12 +742,20 @@ candidate unchecked — not merely "ensure these are checked", so a caller can
 apply one specific candidate at a time regardless of the dialog's own
 default-checked seeding), sets the consent checkbox, clicks Apply, and waits
 for the results list to visibly change before returning (a real main-process
-config write, `config-write.ts`'s atomic tmp+rename).
+config write, `config-write.ts`'s atomic tmp+rename). `POST .../mcp/add`
+drives the Settings scope bar to the requested `scope` BEFORE the form opens
+(the form seeds its target at open time): "project" means the ACTIVE tab's
+workspace option (resolved through the same main-side folder list the bar
+renders from; no active tab, or none rendered for it, refuses
+`scope_unavailable` instead of falling back to the first open tab), "user"
+the bar's User option — then fills the requested fields on the real form,
+submits, and waits for the form to close or surface its error strip.
 
 | Method / path | Body | Returns |
 |---|---|---|
 | `GET /settings/mcp` | — | `{rows:[{name, source, enabled, dotKind, toolsBadge, commandLine}], problems, importOpen, importCandidates:[{harness, name, checked, alreadyConfigured}], consentChecked}` |
 | `POST /settings/mcp/toggle` | `{name}` | `{ok:true}` \| `{ok:false, reason:"pane_not_mounted"\|"row_not_found"\|"not_toggleable"\|"did_not_toggle"}` |
+| `POST /settings/mcp/add` | `{name, command?, argsText?, url?, transport?, scope?}` | `{ok:true}` \| `{ok:false, reason:"pane_not_mounted"\|"form_already_open"\|"scope_unavailable"\|"did_not_open"\|"field_not_found"\|"set_failed"\|"submit_disabled"\|"did_not_settle"\|"refused"}` |
 | `POST /settings/mcp/import/open` | `{}` | `{ok:true}` \| `{ok:false, reason:"pane_not_mounted"\|"did_not_open"\|"scan_timeout"}` |
 | `POST /settings/mcp/import/apply` | `{consent, names?}` | `{ok:true}` \| `{ok:false, reason:"dialog_not_open"\|"scan_not_loaded"\|"candidate_not_found"\|"apply_disabled"\|"apply_timeout"}` |
 
@@ -803,9 +811,13 @@ optionally sets the dialog's own candidate checkboxes to EXACTLY the requested
 `ids` (candidate stable IDENTITIES, `${harness} ${sourceDir} ${name}` — never
 bare names, two harnesses can share one; every other listed candidate
 unchecked; omitted ⇒ leave the dialog's own current default-checked selection
-as-is), sets the "Import into" scope radio, clicks Apply, and waits for the
-results list to visibly change before returning (a real main-process
-convert+copy into the target catalog).
+as-is), drives the Settings scope bar to the requested scope before Apply —
+"project" means the ACTIVE tab's workspace option (resolved through the same
+main-side folder list the bar renders from; no active tab, or none rendered
+for it, refuses instead of falling back to the first open tab), "user" the
+bar's User option — then clicks Apply, and waits for the results list to
+visibly change before returning (a real main-process convert+copy into the
+target catalog).
 
 | Method / path | Body | Returns |
 |---|---|---|
@@ -813,7 +825,7 @@ convert+copy into the target catalog).
 | `POST /settings/skills/toggle` | `{name}` | `{ok:true}` \| `{ok:false, reason:"pane_not_mounted"\|"row_not_found"\|"not_toggleable"\|"did_not_toggle"}` |
 | `POST /settings/skills/delete` | `{name}` | `{ok:true}` \| `{ok:false, reason:"pane_not_mounted"\|"row_not_found"\|"not_deletable"\|"confirm_not_shown"\|"did_not_delete"}` |
 | `POST /settings/skills/import/open` | `{}` | `{ok:true}` \| `{ok:false, reason:"pane_not_mounted"\|"did_not_open"\|"scan_timeout"}` |
-| `POST /settings/skills/import/apply` | `{scope, ids?}` | `{ok:true}` \| `{ok:false, reason:"dialog_not_open"\|"scan_not_loaded"\|"candidate_not_found"\|"apply_disabled"\|"apply_timeout"}` |
+| `POST /settings/skills/import/apply` | `{scope, ids?}` | `{ok:true}` \| `{ok:false, reason:"scope_unavailable"\|"dialog_not_open"\|"scan_not_loaded"\|"candidate_not_found"\|"apply_disabled"\|"apply_timeout"}` |
 
 ```bash
 curl "${A[@]}" "${J[@]}" -X POST $B/settings/pane -d '{"paneId":"skills"}'

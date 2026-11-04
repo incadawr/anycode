@@ -1,10 +1,11 @@
-import { dialog, ipcMain } from "electron";
+import { dialog } from "electron";
 import { open, writeFile } from "node:fs/promises";
 import { z } from "zod";
 import { loadSettings, saveSettings, withSettingsFileLock } from "../settings/files.js";
 import { roleProfiles } from "../shared/role-profiles.js";
 import { applySetupImport, buildSetupContent, planSetupImport, validateSetupContent, SetupExportError, type SetupContent } from "./setup-content.js";
 import { handleGet, type SettingsIpcDeps } from "./settings-ipc.js";
+import { guardedIpcHandle } from "./ipc-guard.js";
 
 interface Dialogs {
   showSaveDialog(options: { defaultPath: string; filters: Array<{ name: string; extensions: string[] }> }): Promise<{ canceled: boolean; filePath?: string }>;
@@ -85,7 +86,7 @@ export function createSetupHandlers(deps: SettingsIpcDeps, dialogs: Dialogs = di
 
 export function registerSetupIpc(deps: SettingsIpcDeps): void {
   const handlers = createSetupHandlers(deps);
-  ipcMain.handle("anycode:setup-export", () => handlers.exportFile());
-  ipcMain.handle("anycode:setup-preview", () => handlers.preview());
-  ipcMain.handle("anycode:setup-apply", (_event, choices: unknown) => handlers.apply(choices));
+  guardedIpcHandle("anycode:setup-export", () => handlers.exportFile());
+  guardedIpcHandle("anycode:setup-preview", () => handlers.preview());
+  guardedIpcHandle("anycode:setup-apply", (_event, choices: unknown) => handlers.apply(choices));
 }

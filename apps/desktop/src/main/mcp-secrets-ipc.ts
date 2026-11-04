@@ -11,7 +11,7 @@
  * fixed string plus the error message, after the submitted value is redacted from it.
  */
 
-import { ipcMain } from "electron";
+import { guardedIpcHandle } from "./ipc-guard.js";
 import { z } from "zod";
 import {
   MCP_SECRETS_LIST_CHANNEL,
@@ -106,7 +106,7 @@ export async function handleMcpSecretDelete(deps: McpSecretsIpcDeps, raw: unknow
 
 /** Registers the three handlers on `ipcMain`. */
 export function registerMcpSecretsIpc(deps: McpSecretsIpcDeps): void {
-  ipcMain.handle(MCP_SECRETS_LIST_CHANNEL, () => handleMcpSecretsList(deps));
-  ipcMain.handle(MCP_SECRET_SET_CHANNEL, (_event, raw: unknown) => handleMcpSecretSet(deps, raw));
-  ipcMain.handle(MCP_SECRET_DELETE_CHANNEL, (_event, raw: unknown) => handleMcpSecretDelete(deps, raw));
+  guardedIpcHandle(MCP_SECRETS_LIST_CHANNEL, () => handleMcpSecretsList(deps));
+  guardedIpcHandle(MCP_SECRET_SET_CHANNEL, (_event, raw: unknown) => handleMcpSecretSet(deps, raw));
+  guardedIpcHandle(MCP_SECRET_DELETE_CHANNEL, (_event, raw: unknown) => handleMcpSecretDelete(deps, raw));
 }

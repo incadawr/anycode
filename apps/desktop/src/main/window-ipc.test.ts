@@ -13,10 +13,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { BrowserWindow } from "electron";
 
 // Capture every ipcMain.handle registration so a test can drive the handler
-// directly (no ipc event is read by any handler, so calling it with none is
-// faithful). `mock`-prefixed so vitest's hoisted vi.mock factory may close over it.
+// directly. Every registration sits behind the IPC sender guard, so the fake
+// source is wired to a fake main-window webContents and handlers are driven
+// with a trusted top-frame event — the exact shape Electron delivers.
 const { mockHandlers } = vi.hoisted(() => ({
-  mockHandlers: new Map<string, () => unknown>(),
+  mockHandlers: new Map<string, (...args: unknown[]) => unknown>(),
 }));
 
 vi.mock("electron", () => ({
@@ -35,7 +36,11 @@ import {
   WINDOW_TOGGLE_MAXIMIZE_CHANNEL,
   type WindowState,
 } from "../shared/window.js";
+import { setIpcGuardMainWindow } from "./ipc-guard.js";
 import { readWindowState, registerWindowIpc, wireWindowStateEvents } from "./window-ipc.js";
+
+const MAIN_SENDER = { mainFrame: { frame: "main" } };
+const TRUSTED_EVENT = { sender: MAIN_SENDER, senderFrame: MAIN_SENDER.mainFrame };
 
 type WindowEvent = "maximize" | "unmaximize" | "enter-full-screen" | "leave-full-screen";
 
@@ -70,8 +75,9 @@ class FakeWindow {
 /** registerWindowIpc against `win`, returning a thin invoker over the captured handlers. */
 function register(win: BrowserWindow | null): (channel: string) => unknown {
   mockHandlers.clear();
+  setIpcGuardMainWindow(() => MAIN_SENDER);
   registerWindowIpc({ getWindow: () => win });
-  return (channel: string) => mockHandlers.get(channel)?.();
+  return (channel: string) => mockHandlers.get(channel)?.(TRUSTED_EVENT);
 }
 
 function asWindow(win: FakeWindow): BrowserWindow {

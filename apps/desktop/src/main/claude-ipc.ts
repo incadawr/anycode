@@ -23,7 +23,7 @@
  * renderer/src/anycode-window.d.ts hold byte-identical copies of these
  * constants, kept in sync by contract.
  */
-import { ipcMain } from "electron";
+import { guardedIpcHandle } from "./ipc-guard.js";
 import type { ClaudeDoctorReport } from "../shared/claude-doctor.js";
 import type { SettingsMutationResult } from "../shared/settings.js";
 import { ENV_CLAUDE_BIN, ENV_CLAUDE_PROXY_URL, stripEngineProxyCarriers } from "../shared/engines.js";
@@ -479,9 +479,9 @@ export function createClaudeOnboardingController(deps: ClaudeIpcDeps): ClaudeOnb
 /** Wires the four invoke channels onto ipcMain. Returns the controller so main/index.ts can also drive `recheck()` directly for the fire-and-forget boot-time check, and read `readyFor()`/`hasVerdictFor()` as the tab gate's engineReady/engineReadyKnown source. */
 export function registerClaudeIpc(deps: ClaudeIpcDeps): ClaudeOnboardingController {
   const controller = createClaudeOnboardingController(deps);
-  ipcMain.handle(CLAUDE_RECHECK_CHANNEL, () => controller.recheck());
-  ipcMain.handle(CLAUDE_PICK_BINARY_CHANNEL, () => controller.pickBinary());
-  ipcMain.handle(CLAUDE_LOGIN_START_CHANNEL, () => controller.loginStart());
-  ipcMain.handle(CLAUDE_LOGIN_CANCEL_CHANNEL, () => controller.loginCancel());
+  guardedIpcHandle(CLAUDE_RECHECK_CHANNEL, () => controller.recheck());
+  guardedIpcHandle(CLAUDE_PICK_BINARY_CHANNEL, () => controller.pickBinary());
+  guardedIpcHandle(CLAUDE_LOGIN_START_CHANNEL, () => controller.loginStart());
+  guardedIpcHandle(CLAUDE_LOGIN_CANCEL_CHANNEL, () => controller.loginCancel());
   return controller;
 }

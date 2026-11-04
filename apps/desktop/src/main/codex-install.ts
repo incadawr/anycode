@@ -22,7 +22,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { Readable } from "node:stream";
 import { createGunzip } from "node:zlib";
-import { ipcMain } from "electron";
+import { guardedIpcHandle } from "./ipc-guard.js";
 import type { CodexDoctorReport } from "../shared/codex-doctor.js";
 import {
   CODEX_NPM_PACKAGE,
@@ -761,16 +761,16 @@ export function createCodexInstallController(deps: CodexInstallControllerDeps): 
 /** ipcMain wiring for the controller above — called from main/index.ts (the register call is the ONLY index.ts delta this lane needs; snippet in the lane report). */
 export function registerCodexInstallIpc(deps: CodexInstallControllerDeps): CodexInstallController {
   const controller = createCodexInstallController(deps);
-  ipcMain.handle(CODEX_INSTALL_CHANNEL, (_event, args?: unknown) => {
+  guardedIpcHandle(CODEX_INSTALL_CHANNEL, (_event, args?: unknown) => {
     const version = (args as { version?: unknown } | undefined)?.version;
     return controller.install(typeof version === "string" ? version : undefined);
   });
-  ipcMain.handle(CODEX_RISK_ACCEPT_CHANNEL, (_event, args?: unknown) => {
+  guardedIpcHandle(CODEX_RISK_ACCEPT_CHANNEL, (_event, args?: unknown) => {
     const version = (args as { version?: unknown } | undefined)?.version;
     if (typeof version !== "string") return { ok: false, error: "a version string is required" };
     return controller.acceptRisk(version);
   });
-  ipcMain.handle(CODEX_SUPPORT_STATUS_CHANNEL, () => controller.supportStatus());
-  ipcMain.handle(CODEX_MANIFEST_REFRESH_CHANNEL, () => controller.refreshManifest());
+  guardedIpcHandle(CODEX_SUPPORT_STATUS_CHANNEL, () => controller.supportStatus());
+  guardedIpcHandle(CODEX_MANIFEST_REFRESH_CHANNEL, () => controller.refreshManifest());
   return controller;
 }

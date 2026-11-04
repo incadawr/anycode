@@ -32,7 +32,7 @@
  * detail says so in words.
  */
 
-import { ipcMain } from "electron";
+import { guardedIpcHandle } from "./ipc-guard.js";
 import { LOOPBACK_NO_PROXY } from "../shared/engines.js";
 import {
   PROXY_CHECK_CHANNEL,
@@ -404,5 +404,5 @@ export async function handleProxyCheck(deps: NetworkIpcDeps, raw: unknown): Prom
 
 /** Registers the network channels on ipcMain. Mirrors main/mcp-config-ipc.ts's split: logic above, wiring here. */
 export function registerNetworkIpc(deps: NetworkIpcDeps): void {
-  ipcMain.handle(PROXY_CHECK_CHANNEL, (_event, raw: unknown) => handleProxyCheck(deps, raw));
+  guardedIpcHandle(PROXY_CHECK_CHANNEL, (_event, raw: unknown) => handleProxyCheck(deps, raw));
 }

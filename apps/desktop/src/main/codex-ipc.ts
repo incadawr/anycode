@@ -17,7 +17,7 @@
  * preload/index.ts and renderer/src/anycode-window.d.ts hold byte-identical
  * copies of these five constants, kept in sync by contract.
  */
-import { ipcMain } from "electron";
+import { guardedIpcHandle } from "./ipc-guard.js";
 import { statSync } from "node:fs";
 import type { CodexDoctorReport } from "../shared/codex-doctor.js";
 import type { SettingsMutationResult } from "../shared/settings.js";
@@ -1177,23 +1177,23 @@ export function registerCodexIpc(deps: CodexIpcDeps): CodexOnboardingController 
     ...deps,
     discoverAlternates: deps.discoverAlternates ?? (() => ladderAlternates(deps)),
   });
-  ipcMain.handle(CODEX_RECHECK_CHANNEL, (_event, args?: unknown) => controller.recheck(profileIdArg(args), { force: forceArg(args) }));
-  ipcMain.handle(CODEX_PICK_BINARY_CHANNEL, () => controller.pickBinary());
-  ipcMain.handle(CODEX_USE_BINARY_CHANNEL, (_event, args?: unknown) => {
+  guardedIpcHandle(CODEX_RECHECK_CHANNEL, (_event, args?: unknown) => controller.recheck(profileIdArg(args), { force: forceArg(args) }));
+  guardedIpcHandle(CODEX_PICK_BINARY_CHANNEL, () => controller.pickBinary());
+  guardedIpcHandle(CODEX_USE_BINARY_CHANNEL, (_event, args?: unknown) => {
     const binaryPath = (args as { binaryPath?: unknown } | undefined)?.binaryPath;
     return typeof binaryPath === "string" && binaryPath.trim() !== "" ? controller.useBinary(binaryPath) : { ok: false, reason: "invalid" };
   });
-  ipcMain.handle(CODEX_LOGIN_START_CHANNEL, (_event, args?: unknown) => {
+  guardedIpcHandle(CODEX_LOGIN_START_CHANNEL, (_event, args?: unknown) => {
     const mode = (args as { mode?: unknown } | undefined)?.mode;
     if (mode !== undefined && mode !== "browser" && mode !== "device") {
       return { ok: false, reason: "failed", detail: `unsupported login mode: ${String(mode).slice(0, 32)}` };
     }
     return controller.loginStart(profileIdArg(args), mode);
   });
-  ipcMain.handle(CODEX_LOGIN_CANCEL_CHANNEL, () => controller.loginCancel());
-  ipcMain.handle(CODEX_LOGIN_OPEN_DEVICE_PAGE_CHANNEL, () => controller.loginOpenDevicePage());
-  ipcMain.handle(CODEX_PROFILE_LIST_CHANNEL, () => controller.listProfiles());
-  ipcMain.handle(CODEX_PROFILE_CREATE_CHANNEL, (_event, request: unknown) => {
+  guardedIpcHandle(CODEX_LOGIN_CANCEL_CHANNEL, () => controller.loginCancel());
+  guardedIpcHandle(CODEX_LOGIN_OPEN_DEVICE_PAGE_CHANNEL, () => controller.loginOpenDevicePage());
+  guardedIpcHandle(CODEX_PROFILE_LIST_CHANNEL, () => controller.listProfiles());
+  guardedIpcHandle(CODEX_PROFILE_CREATE_CHANNEL, (_event, request: unknown) => {
     const label = (request as { label?: unknown } | undefined)?.label;
     const authLink = (request as { authLink?: unknown } | undefined)?.authLink;
     const linkedHome = (request as { linkedHome?: unknown } | undefined)?.linkedHome;
@@ -1206,8 +1206,8 @@ export function registerCodexIpc(deps: CodexIpcDeps): CodexOnboardingController 
       ...(typeof linkedHome === "string" ? { linkedHome } : {}),
     });
   });
-  ipcMain.handle(CODEX_PROFILE_DELETE_CHANNEL, (_event, args: unknown) => controller.deleteProfile(idArg(args)));
-  ipcMain.handle(CODEX_PROFILE_SET_ACTIVE_CHANNEL, (_event, args: unknown) => controller.setActiveProfile(idArg(args)));
-  ipcMain.handle(CODEX_PROFILE_REPAIR_LINK_CHANNEL, (_event, args: unknown) => controller.repairProfileLink(idArg(args)));
+  guardedIpcHandle(CODEX_PROFILE_DELETE_CHANNEL, (_event, args: unknown) => controller.deleteProfile(idArg(args)));
+  guardedIpcHandle(CODEX_PROFILE_SET_ACTIVE_CHANNEL, (_event, args: unknown) => controller.setActiveProfile(idArg(args)));
+  guardedIpcHandle(CODEX_PROFILE_REPAIR_LINK_CHANNEL, (_event, args: unknown) => controller.repairProfileLink(idArg(args)));
   return controller;
 }

@@ -24,7 +24,7 @@
  * report's ESCALATE note on how a later preload wire-up should consume these.
  */
 
-import { ipcMain } from "electron";
+import { guardedIpcHandle } from "./ipc-guard.js";
 import { constants as fsConstants } from "node:fs";
 import * as fsp from "node:fs/promises";
 import { randomUUID } from "node:crypto";
@@ -367,9 +367,9 @@ export function registerCodexRolloutIpc(deps: CodexRolloutIpcDeps): CodexRollout
       pendingImportModels.set(sessionId, model);
     },
   };
-  ipcMain.handle(CODEX_ROLLOUT_LIST_CHANNEL, (_event, raw: unknown) => handleCodexRolloutList(wired, raw));
-  ipcMain.handle(CODEX_ROLLOUT_PREVIEW_CHANNEL, (_event, raw: unknown) => handleCodexRolloutPreview(wired, raw));
-  ipcMain.handle(CODEX_ROLLOUT_IMPORT_CHANNEL, (_event, raw: unknown) => handleCodexRolloutImport(wired, raw));
+  guardedIpcHandle(CODEX_ROLLOUT_LIST_CHANNEL, (_event, raw: unknown) => handleCodexRolloutList(wired, raw));
+  guardedIpcHandle(CODEX_ROLLOUT_PREVIEW_CHANNEL, (_event, raw: unknown) => handleCodexRolloutPreview(wired, raw));
+  guardedIpcHandle(CODEX_ROLLOUT_IMPORT_CHANNEL, (_event, raw: unknown) => handleCodexRolloutImport(wired, raw));
   return {
     consumePendingImportModel(sessionId: string): string | undefined {
       const model = pendingImportModels.get(sessionId);

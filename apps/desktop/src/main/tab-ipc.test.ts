@@ -12,6 +12,11 @@ const ipcHandlers = vi.hoisted(() => new Map<string, (...args: any[]) => any>())
 const ipcListeners = vi.hoisted(() => new Map<string, (...args: any[]) => any>());
 vi.mock("electron", () => ({ ipcMain: { handle: (channel: string, handler: (...args: any[]) => any) => ipcHandlers.set(channel, handler), on: (channel: string, handler: (...args: any[]) => any) => ipcListeners.set(channel, handler) } }));
 import { TAB_REBIND_CHANNEL, TAB_BOOTSTRAP_CHANNEL, TAB_SELECT_CHANNEL } from "../shared/tabs.js";
+import { setIpcGuardMainWindow } from "./ipc-guard.js";
+
+/** The guard serves only a trusted main-window top-frame invoke; rigs drive the captured wrappers with this event. */
+const MAIN_SENDER = { mainFrame: { frame: "main" } };
+const TRUSTED_EVENT = { sender: MAIN_SENDER, senderFrame: MAIN_SENDER.mainFrame };
 import { EventEmitter } from "node:events";
 import { homedir, tmpdir } from "node:os";
 import { mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
@@ -2169,11 +2174,12 @@ function makeRebindDeps(
 describe("handleTabRebind — cut-2 (§D6 fail-closed order)", () => {
   it("forwards the prior effort through the registered IPC parser and switch handler", async () => {
     const { deps, rebindTab } = makeRebindDeps(runningCoreTab(), { connectionExists: () => true });
+    setIpcGuardMainWindow(() => MAIN_SENDER);
     registerTabIpc(deps);
     const handler = ipcHandlers.get(TAB_REBIND_CHANNEL)!;
-    expect(await handler({}, { tabId: "tab-1", connectionId: "conn-new", priorEffort: "high" })).toEqual({ ok: true, connectionId: "conn-new" });
+    expect(await handler(TRUSTED_EVENT, { tabId: "tab-1", connectionId: "conn-new", priorEffort: "high" })).toEqual({ ok: true, connectionId: "conn-new" });
     expect(rebindTab).toHaveBeenCalledWith(expect.objectContaining({ tabId: "tab-1" }), "conn-new", "high", { cancelChildren: false });
-    expect(await handler({}, { tabId: "tab-1", connectionId: "conn-new", priorEffort: "invalid" })).toEqual({ ok: false, reason: "unknown_tab" });
+    expect(await handler(TRUSTED_EVENT, { tabId: "tab-1", connectionId: "conn-new", priorEffort: "invalid" })).toEqual({ ok: false, reason: "unknown_tab" });
     expect(rebindTab).toHaveBeenCalledTimes(1);
   });
 
@@ -3069,10 +3075,11 @@ it("bootstraps the selected live root tab and excludes children and stale select
     { tabId: "child", workspace: "/a", childOf: { parentTabId: "a", requestId: "r" } },
   ];
   const manager = { listTabs: () => tabs } as unknown as TabHostManager;
+  setIpcGuardMainWindow(() => MAIN_SENDER);
   registerTabIpc({ manager } as TabIpcDeps);
-  ipcListeners.get(TAB_SELECT_CHANNEL)!(null, "b");
-  ipcListeners.get(TAB_SELECT_CHANNEL)!(null, "child");
-  expect(ipcHandlers.get(TAB_BOOTSTRAP_CHANNEL)!(null)).toEqual({ tabs: tabs.slice(0, 2), activeTabId: "b" });
+  ipcListeners.get(TAB_SELECT_CHANNEL)!(TRUSTED_EVENT, "b");
+  ipcListeners.get(TAB_SELECT_CHANNEL)!(TRUSTED_EVENT, "child");
+  expect(ipcHandlers.get(TAB_BOOTSTRAP_CHANNEL)!(TRUSTED_EVENT)).toEqual({ tabs: tabs.slice(0, 2), activeTabId: "b" });
   tabs.splice(1, 1);
-  expect(ipcHandlers.get(TAB_BOOTSTRAP_CHANNEL)!(null)).toEqual({ tabs: [tabs[0]], activeTabId: null });
+  expect(ipcHandlers.get(TAB_BOOTSTRAP_CHANNEL)!(TRUSTED_EVENT)).toEqual({ tabs: [tabs[0]], activeTabId: null });
 });
