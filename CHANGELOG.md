@@ -9,7 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- A child session or other restricted host no longer burns turns on subagent types it can never run: the Agent tool's refusals for connection-routed agent types now list the types that can actually be spawned there (instead of advising a tier the caller cannot use), and the restricted Agent tool description warns up front that types pinned to their own connection or engine cannot be spawned in that context.
+- The Agent tool now warns up front, instead of after a failed call, when an agent type needs its own connection and cannot run in the current context.
 
 ## [0.0.75] — 2026-11-04
 
