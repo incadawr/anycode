@@ -4597,15 +4597,16 @@ describe("PreviewHost — Full browser access, live limits and forged access ops
     expect(offTyped).toMatchObject({ ok: false, errorKind: "not_allowed" });
   });
 
-  // Test 44: ON does not weaken the hard limits.
-  it("ON keeps the eval blocklist: cookie and storage reads are refused before any Runtime.evaluate is sent", async () => {
+  // Test 44: ON does not weaken the hard limits — but eval is page code by
+  // contract, so the expression reaches the page and its value comes back.
+  it("ON lets eval run: the expression reaches the page and the page value is returned", async () => {
     const on = { value: true };
     const { rig, previewId } = await remote(on);
-    for (const expression of ["document.cookie", "localStorage.getItem('t')", "navigator.credentials.get()"]) {
-      const result = await call(rig, { kind: "control", request: { action: "eval", previewId, expression } });
-      expect(result).toMatchObject({ ok: false, errorKind: "not_allowed" });
-    }
-    expect(rig.windows[0]!.webContents.cdp.methods()).not.toContain("Runtime.evaluate");
+    rig.windows[0]!.webContents.cdp.respond("Runtime.evaluate", { result: { value: "fake-page-sentinel" } });
+    const result = await call(rig, { kind: "control", request: { action: "eval", previewId, expression: "document.cookie" } });
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.value.text).toContain("fake-page-sentinel");
+    expect(rig.windows[0]!.webContents.cdp.methods()).toContain("Runtime.evaluate");
   });
 
   // Test 45(a): the op union has no set-access kind; a forged one is refused and changes nothing.
