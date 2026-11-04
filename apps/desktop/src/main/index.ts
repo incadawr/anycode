@@ -2316,6 +2316,11 @@ void app.whenReady().then(async () => {
       previewHost !== null
         ? previewHost.openForPathClick(tabId, realPath)
         : Promise.resolve({ ok: false, error: "preview host not ready", errorKind: "unavailable" }),
+    // The md popout's preview-channel binding (md-window-targets.ts): the
+    // CURRENT realpath of the popout's own dom-md document, re-read live on
+    // every invoke. Same forward-reference posture as `openPreview` above —
+    // `previewHost` is assigned just below, before any renderer can invoke.
+    mdPreviewRealSourcePath: (tabId, previewId) => previewHost?.getMdDocRef(tabId, previewId)?.realSourcePath,
     // Opening OUTSIDE the allowed roots is permitted, but only through this
     // modal: `cancelId`/`defaultId` both point at Cancel, so a stray Return or
     // a dismissed sheet reads as "no". The full path is spelled out — the

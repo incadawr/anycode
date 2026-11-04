@@ -36,7 +36,7 @@ vi.mock("electron", () => ({
 
 import { addIpcGuardTrustedWindow, setIpcGuardMainWindow } from "./ipc-guard.js";
 import { registerMdWindowTarget, resetMdWindowTargetsForTests } from "./preview/md-window-targets.js";
-import { ARTIFACT_PREVIEWABLE_CHANNEL, ARTIFACT_READ_IMAGE_CHANNEL, registerArtifactsIpc } from "./artifacts-ipc.js";
+import { ARTIFACT_PREVIEW_CHANNEL, ARTIFACT_PREVIEWABLE_CHANNEL, ARTIFACT_READ_IMAGE_CHANNEL, registerArtifactsIpc } from "./artifacts-ipc.js";
 import {
   allowedArtifactRoots,
   ArtifactConsentStore,
@@ -87,6 +87,7 @@ interface Rig {
   confirmOpen: ReturnType<typeof vi.fn<(path: string) => Promise<boolean>>>;
   consent: ArtifactConsentStore;
   openPreview: ReturnType<typeof vi.fn<ArtifactsIpcDeps["openPreview"]>>;
+  mdPreviewRealSourcePath: ReturnType<typeof vi.fn<ArtifactsIpcDeps["mdPreviewRealSourcePath"]>>;
   tailIndex: WorkspaceTailIndex;
 }
 
@@ -114,6 +115,7 @@ async function makeRig(opts?: {
     ok: true,
     value: { previewId: "preview-1", url: "file:///stub", kind: "file" },
   });
+  const mdPreviewRealSourcePath = vi.fn<ArtifactsIpcDeps["mdPreviewRealSourcePath"]>();
   const deps: ArtifactsIpcDeps = {
     home: () => home,
     tmpdir: () => tmp,
@@ -125,8 +127,9 @@ async function makeRig(opts?: {
     consent,
     tailIndex,
     openPreview,
+    mdPreviewRealSourcePath,
   };
-  return { deps, workspace, home, tmp, openPath, reveal, confirmOpen, consent, openPreview, tailIndex };
+  return { deps, workspace, home, tmp, openPath, reveal, confirmOpen, consent, openPreview, mdPreviewRealSourcePath, tailIndex };
 }
 
 // ---------------------------------------------------------------------------
@@ -350,6 +353,7 @@ describe("tail-match base", () => {
       consent: new ArtifactConsentStore(),
       tailIndex: new WorkspaceTailIndex(),
       openPreview: async () => ({ ok: false, error: "unused" }) as never,
+      mdPreviewRealSourcePath: () => undefined,
     };
     expect(await resolveContainedPath(truncatedDeps, TAB_ID, "dup.md")).toEqual({ failure: "not_found" });
     expect(truncatedCalls).toEqual([workspace, docsDir]); // bounded: no deeper readdir
@@ -827,5 +831,96 @@ describe("registerArtifactsIpc — the md popout is bound to its own tab", () =>
       paths: string[];
     };
     expect(response).toEqual({ paths: [] });
+  });
+});
+
+// The preview channel binds a popout one level tighter than the tab-only
+// artifact channels above: `openForPathClick` reuses/reloads the live preview
+// matching the requested path's REALPATH, so a tabId check alone would let
+// the popout reload and focus a DIFFERENT preview sitting in its own tab.
+describe("registerArtifactsIpc — the md popout's preview channel is bound to its own preview", () => {
+  const MAIN_SENDER = { mainFrame: { frame: "main" } };
+  const MAIN_EVENT = { sender: MAIN_SENDER, senderFrame: MAIN_SENDER.mainFrame };
+  const POPOUT_SENDER = { mainFrame: { frame: "md-popout" } };
+  const POPOUT_EVENT = { sender: POPOUT_SENDER, senderFrame: POPOUT_SENDER.mainFrame };
+
+  function invoke(channel: string, event: unknown, raw: unknown): Promise<unknown> | unknown {
+    const guarded = capturedArtifactHandlers.get(channel);
+    if (guarded === undefined) throw new Error(`no registered handler for ${channel}`);
+    return guarded(event, raw);
+  }
+
+  /**
+   * p1 = the popout's own dom-md preview backed by notes.md; p2 = an HTML
+   * preview of report.html living in the SAME tab — exactly the shape a
+   * compromised popout would aim at.
+   */
+  async function makePopoutRig() {
+    resetMdWindowTargetsForTests();
+    setIpcGuardMainWindow(() => MAIN_SENDER);
+    addIpcGuardTrustedWindow(POPOUT_SENDER, [ARTIFACT_PREVIEW_CHANNEL]);
+    registerMdWindowTarget(POPOUT_SENDER, { tabId: TAB_ID, previewId: "p1" });
+    const rig = await makeRig();
+    capturedArtifactHandlers.clear();
+    registerArtifactsIpc(rig.deps);
+    await seed(join(rig.workspace, "notes.md"), "# own doc");
+    await seed(join(rig.workspace, "report.html"), "<html></html>");
+    const ownRealPath = await realpath(join(rig.workspace, "notes.md"));
+    rig.mdPreviewRealSourcePath.mockImplementation((tabId: string, previewId: string) =>
+      tabId === TAB_ID && previewId === "p1" ? ownRealPath : undefined,
+    );
+    return { rig, ownRealPath };
+  }
+
+  it("a popout cannot open ANOTHER preview's path in its own tab — negative shape, no reload/focus", async () => {
+    const { rig } = await makePopoutRig();
+    const response = await invoke(ARTIFACT_PREVIEW_CHANNEL, POPOUT_EVENT, {
+      tabId: TAB_ID,
+      path: join(rig.workspace, "report.html"),
+    });
+    expect(response).toEqual({ ok: false, error: "invalid artifact-preview request", errorKind: "invalid_input" });
+    // p2 was neither reloaded nor focused: openPreview never ran.
+    expect(rig.openPreview).not.toHaveBeenCalled();
+  });
+
+  it("a popout still reloads ITS OWN document — a path resolving to its own preview opens", async () => {
+    const { rig, ownRealPath } = await makePopoutRig();
+    const response = await invoke(ARTIFACT_PREVIEW_CHANNEL, POPOUT_EVENT, {
+      tabId: TAB_ID,
+      path: join(rig.workspace, "notes.md"),
+    });
+    expect(response).toMatchObject({ ok: true });
+    expect(rig.openPreview).toHaveBeenCalledWith(TAB_ID, ownRealPath);
+  });
+
+  it("the main-window sender stays unrestricted — the same other-preview path still opens", async () => {
+    const { rig } = await makePopoutRig();
+    const response = await invoke(ARTIFACT_PREVIEW_CHANNEL, MAIN_EVENT, {
+      tabId: TAB_ID,
+      path: join(rig.workspace, "report.html"),
+    });
+    expect(response).toMatchObject({ ok: true });
+    expect(rig.openPreview).toHaveBeenCalledWith(TAB_ID, await realpath(join(rig.workspace, "report.html")));
+  });
+
+  it("a popout whose own md preview is gone (closed/transferred/flipped to web) gets the negative shape", async () => {
+    const { rig } = await makePopoutRig();
+    rig.mdPreviewRealSourcePath.mockReturnValue(undefined);
+    const response = await invoke(ARTIFACT_PREVIEW_CHANNEL, POPOUT_EVENT, {
+      tabId: TAB_ID,
+      path: join(rig.workspace, "notes.md"),
+    });
+    expect(response).toEqual({ ok: false, error: "invalid artifact-preview request", errorKind: "invalid_input" });
+    expect(rig.openPreview).not.toHaveBeenCalled();
+  });
+
+  it("a popout cannot steer a FOREIGN tab — refused even before the own-preview lookup", async () => {
+    const { rig } = await makePopoutRig();
+    const response = await invoke(ARTIFACT_PREVIEW_CHANNEL, POPOUT_EVENT, {
+      tabId: "tab-other",
+      path: join(rig.workspace, "report.html"),
+    });
+    expect(response).toEqual({ ok: false, error: "invalid artifact-preview request", errorKind: "invalid_input" });
+    expect(rig.openPreview).not.toHaveBeenCalled();
   });
 });
