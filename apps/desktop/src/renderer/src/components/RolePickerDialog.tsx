@@ -405,13 +405,19 @@ export function EntryRow({ label, entry, connections, modelSources, onChange, on
     () => connectionRouteLabels(connections, modelSources.catalog, modelSources.custom),
     [connections, modelSources.catalog, modelSources.custom],
   );
+  /** Full model name for the title tooltip the truncated select relies on. */
+  const modelTitle = selection === "custom"
+    ? entry.model
+    : selection === "default"
+      ? "Default"
+      : models[Number(selection.slice("model:".length))]?.name ?? entry.model;
   return (
     <div className={`role-picker-entry${engineOffline ? " role-picker-entry-engine-offline" : ""}`} data-route={route}>
       <span className="role-picker-entry-label">{label}</span>
       <select
         className={compact ? "settings-field-select role-picker-entry-route" : "role-picker-entry-route"}
         aria-label={`${label} route`}
-        title={entry.engine ? `${entry.engine} engine${engineOffline ? ` (${engineOffline} is not connected)` : ""}` : entry.provider ? `Provider: ${entry.provider}` : entry.connection ? routeLabels.get(entry.connection) ?? `Unavailable connection: ${entry.connection}` : "Session’s connection"}
+        title={entry.engine ? `${entry.engine} engine${engineOffline ? ` (${engineOffline} is not connected)` : ""}` : entry.provider ? `Provider: ${entry.provider}` : entry.connection ? routeLabels.get(entry.connection) ?? "Unavailable connection — pick another route or restore the connection in Settings" : "Session’s connection"}
         value={route}
         onChange={(event) => onChange(routePatch(event.target.value))}
       >
@@ -419,7 +425,7 @@ export function EntryRow({ label, entry, connections, modelSources, onChange, on
         <option value="engine:codex">{engineReadiness && !engineReadiness.codexReady ? "Codex engine (not connected)" : "Codex engine"}</option>
         <option value="connection:active">Session's connection</option>
         {entry.provider && <option value={`provider:${entry.provider}`}>Provider: {entry.provider}</option>}
-        {entry.connection.trim() && !connections.some((connection) => connection.id === entry.connection) && <option value={`connection:${entry.connection}`}>Unavailable connection: {entry.connection}</option>}
+        {entry.connection.trim() && !connections.some((connection) => connection.id === entry.connection) && <option value={`connection:${entry.connection}`}>Unavailable connection — pick another</option>}
         {connections.map((connection) => (
           <option key={connection.id} value={`connection:${connection.id}`}>
             {routeLabels.get(connection.id) ?? "Connection"}
@@ -429,6 +435,7 @@ export function EntryRow({ label, entry, connections, modelSources, onChange, on
       <select
         className={compact ? "settings-field-select role-picker-entry-model" : "role-picker-entry-model"}
         aria-label={`${label} model`}
+        title={modelTitle}
         value={selection}
         onChange={(event) => {
           const next = event.target.value;

@@ -139,12 +139,12 @@ it("renders provider names in every route and preserves route values", () => {
 it("renders profile and project selection controls", () => {
   const html = renderToStaticMarkup(createElement(RolesPane));
   expect(html).toContain('aria-label="Profile actions"');
+  expect(html).toContain('aria-haspopup="menu"');
   expect(html).toContain('aria-label="Project to add"');
   expect(html).toContain('aria-label="Profile to add"');
-  expect(html).toContain('>New</button>');
-  expect(html).toContain('>Duplicate</button>');
-  expect(html).toContain('>Rename</button>');
-  expect(html).toContain('>Delete</button>');
+  // The actions are a popover menu: closed, it is only the trigger advertising
+  // its popup — the items mount only while it is open.
+  expect(html).toContain('aria-haspopup="menu" aria-expanded="false"');
 });
 
 it("an empty saved profile displays the active connection instead of an unsaved preset", () => {
@@ -378,5 +378,45 @@ describe("preset chip follows the seeded draft (production fromDraft path)", () 
     }));
     const active = html.match(/<button[^>]*role-picker-preset-chip-active[^>]*data-testid="([^"]+)"/);
     expect(active?.[1]).toBe("role-preset-claude-leads-codex-builds");
+  });
+});
+
+/**
+ * The compact role rows truncate long route/model labels; the full text must
+ * stay reachable as a tooltip, and a route to a connection that no longer
+ * exists must say what to do instead of showing a raw id.
+ */
+describe("Truncated route labels keep their full text reachable", () => {
+  const snapshot = (executor: { primary: { connection: string; model: string } }): SettingsSnapshot => ({
+    settings: {
+      version: 2,
+      provider: { connections: [{ id: "c", providerId: "vendor", models: ["live-model"] }], activeConnectionId: "c" },
+      roleProfiles: { activeId: "p", profiles: [{ id: "p", name: "P", roles: { executor } }], projects: [] },
+      tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false },
+    },
+    secrets: [], providerReady: true, envOverrides: [], readOnly: false,
+    catalog: [{ id: "vendor", name: "Vendor", authKind: "api_key", models: [{ id: "catalog-model", name: "Catalog model" }] }],
+  } as unknown as SettingsSnapshot);
+
+  it("the model select carries the full model name as its tooltip", () => {
+    useSettingsStore.setState({ snapshot: snapshot({ primary: { connection: "c", model: "live-model" } }) });
+    const html = renderToStaticMarkup(createElement(RolesPane));
+    expect(html).toContain('aria-label="executor primary model" title="live-model"');
+  });
+
+  it("the model tooltip prefers the resolved model's display name over the raw value", () => {
+    // "catalog-model" resolves from the vendor catalog WITH a display name,
+    // exercising the name branch instead of the raw-value fallback.
+    useSettingsStore.setState({ snapshot: snapshot({ primary: { connection: "c", model: "catalog-model" } }) });
+    const html = renderToStaticMarkup(createElement(RolesPane));
+    expect(html).toContain('aria-label="executor primary model" title="Catalog model"');
+  });
+
+  it("an unavailable connection reads as guidance, never as a raw id", () => {
+    useSettingsStore.setState({ snapshot: snapshot({ primary: { connection: "gone-1", model: "saved" } }) });
+    const html = renderToStaticMarkup(createElement(RolesPane));
+    expect(html).toContain(">Unavailable connection — pick another</option>");
+    expect(html).toContain('title="Unavailable connection — pick another route or restore the connection in Settings"');
+    expect(html).not.toContain(">gone-1<");
   });
 });
