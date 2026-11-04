@@ -80,9 +80,10 @@ describe("createAgentTool — restricted vs. full declaration (CUT-S2 §2.1/§5.
     expect(explicit.metadata.description).toBe(agentTool.metadata.description);
   });
 
-  it("restricted tool description does not mention the session tier", () => {
+  it("restricted tool description does not mention the session tier and warns about its own-connection types", () => {
     const restricted = createAgentTool();
     expect(restricted.metadata.description).not.toContain("session");
+    expect(restricted.metadata.description).toContain("cannot be spawned");
   });
 
   it("full (sessionTier:true) DOES declare tier:\"session\" and a provider key in the serialized JSON schema", () => {
@@ -95,7 +96,11 @@ describe("createAgentTool — restricted vs. full declaration (CUT-S2 §2.1/§5.
   it("full tool description mentions the session tier (one added sentence)", () => {
     const full = createAgentTool({ sessionTier: true });
     expect(full.metadata.description).toContain("session");
-    expect(full.metadata.description.startsWith(agentTool.metadata.description)).toBe(true);
+    // Both declarations share the same base text and each appends its own
+    // tier-honest suffix — the restricted one cannot advertise what its
+    // schema cannot offer.
+    expect(full.metadata.description.startsWith("Delegate a task to a subagent.")).toBe(true);
+    expect(agentTool.metadata.description.startsWith("Delegate a task to a subagent.")).toBe(true);
   });
 
   it("restricted schema rejects tier:\"session\" at the ZOD level (a hallucinating model gets a validation error, not a silent inline downgrade)", () => {
@@ -2016,6 +2021,44 @@ describe("agentTool handler — role route stamping (§3.3)", () => {
     if (!result.ok) {
       expect(result.error).not.toContain('tier "session"');
       expect(result.error).toContain("Use a persona without its own connection inline, or do the work yourself");
+    }
+  });
+
+  it("restricted refusal lists the types that CAN run here when the port can tell (retry-loop stopper)", async () => {
+    const restricted = createAgentTool({ sessionTier: false });
+    const subagents: SubagentPort = {
+      run: async () => {
+        throw new Error("inline run not expected");
+      },
+      listAgentTypes: () => ["general-purpose", "explore", "reviewer"],
+      resolveRoleRoute: (agentType: string) =>
+        agentType === "explore" ? ({ entries: [{ connection: "conn-luna" }], skipped: [] }) : null,
+    };
+    const input = restricted.inputSchema.parse({ description: "d", prompt: "p", agent_type: "explore" });
+    const result = await restricted.handler(input, makeCtx({ subagents }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).not.toContain('tier "session"');
+      expect(result.error).toContain('Agent: profile "explore" selects its own connection and cannot be spawned from here.');
+      expect(result.error).toContain("Types that can be spawned inline here: general-purpose, reviewer.");
+    }
+  });
+
+  it("restricted refusal for a routed md-PROFILE carries the same honest shape (routing branch)", async () => {
+    const restricted = createAgentTool({ sessionTier: false });
+    const { ctx } = roleCtx(null, true);
+    // Only SOME of this port's types are profile-routed — the refusal must
+    // name the concrete survivors and keep the routed ones out of the tail.
+    ctx.subagents!.profileRouting = (agentType: string) =>
+      agentType === "reviewer" || agentType === "planner" ? { connection: "conn" } : null;
+    const input = restricted.inputSchema.parse({ description: "d", prompt: "p", agent_type: "reviewer" });
+    const result = await restricted.handler(input, ctx);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).not.toContain('tier "session"');
+      expect(result.error).toContain('Agent: profile "reviewer" selects its own connection and cannot be spawned from here.');
+      expect(result.error).toContain("Types that can be spawned inline here: general-purpose, explore, executor.");
+      expect(result.error).not.toContain("planner"); // a routed type never lands in the tail
     }
   });
 

@@ -96,6 +96,45 @@ const BASE_DESCRIPTION =
 const SESSION_TIER_DESCRIPTION_SUFFIX =
   ' By default general-purpose runs as a session child while you wait; explore and other profiles default to inline to preserve their restrictions. Session children enforce profile restrictions on core connections. The user can move a session to the background, and a long wait is handed off automatically with a later report as a new turn. Use tier "inline" for lightweight short lookups. send_to delivers a follow-up to your own still-running session child.';
 
+// Restricted hosts (CLI, child sessions) can never honor a connection/engine
+// routing decision, so the description says so up front — a caller that reads
+// it never burns a turn trying a type the refusals below would reject. Same
+// vocabulary as those refusals, and (like the restricted schema's own tier
+// description) no mention of the undiscoverable session tier.
+const RESTRICTED_DESCRIPTION_SUFFIX =
+  " In this context agent types that select their own connection or engine cannot be spawned — do the work yourself or use a type without its own connection.";
+
+/**
+ * The agent types this caller can actually reach on the inline tier, for the
+ * actionable tail of a connection-routing refusal: no engine profile, no
+ * profile routing, and a role route whose resolved entry does not pin a
+ * connection/engine — the same conditions those refusals fire on. Advisory
+ * only (a tail on a refusal, never a substitute for it); a port without the
+ * probes yields an empty list and the tail is omitted.
+ */
+function inlineSpawnableTypes(ctx: ToolContext, available: string[]): string[] {
+  return available.filter((type) => {
+    if ((ctx.subagents?.engineProfile?.(type) ?? null) !== null) return false;
+    if ((ctx.subagents?.profileRouting?.(type) ?? null) !== null) return false;
+    const resolved = ctx.subagents?.resolveRoleRoute?.(type)?.entries[0];
+    return resolved === undefined || (resolved.connection === undefined && resolved.engine === undefined);
+  });
+}
+
+/**
+ * The restricted declaration's connection-routing refusal. The full
+ * declaration's arm can honestly say `call it with tier "session"`; the
+ * restricted arm must not (its schema cannot discover that tier, so following
+ * the advice is impossible — the retry-loop shape the routing refusals once
+ * had). It names the honest alternatives instead and, when the port can tell,
+ * the concrete types that CAN run here.
+ */
+function restrictedConnectionRefusal(agentType: string, ctx: ToolContext, available: string[]): string {
+  const spawnable = inlineSpawnableTypes(ctx, available);
+  const tail = spawnable.length > 0 ? ` Types that can be spawned inline here: ${spawnable.join(", ")}.` : "";
+  return `Agent: profile "${agentType}" selects its own connection and cannot be spawned from here. Use a persona without its own connection inline, or do the work yourself.${tail}`;
+}
+
 export interface CreateAgentToolOptions {
   /**
    * true: the FULL declaration (`agentInputSchema` — `tier`/`provider` reach
@@ -112,7 +151,7 @@ export interface CreateAgentToolOptions {
 function buildMetadata(sessionTier: boolean): ToolMetadata {
   return {
     name: "Agent",
-    description: sessionTier ? BASE_DESCRIPTION + SESSION_TIER_DESCRIPTION_SUFFIX : BASE_DESCRIPTION,
+    description: sessionTier ? BASE_DESCRIPTION + SESSION_TIER_DESCRIPTION_SUFFIX : BASE_DESCRIPTION + RESTRICTED_DESCRIPTION_SUFFIX,
     readOnly: true,
     destructive: false,
     concurrentSafe: true,
@@ -342,7 +381,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
           errorKind: "invalid_input",
           error: sessionTier
             ? `Agent: profile "${agentType}" selects its own connection and runs as a child session; call it with tier "session".`
-            : `Agent: profile "${agentType}" selects its own connection and cannot be spawned from here. Use a persona without its own connection inline, or do the work yourself.`,
+            : restrictedConnectionRefusal(agentType, ctx, available),
         };
       }
 
@@ -371,7 +410,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
             errorKind: "invalid_input",
             error: sessionTier
             ? `Agent: profile "${agentType}" selects its own connection and runs as a child session; call it with tier "session".`
-            : `Agent: profile "${agentType}" selects its own connection and cannot be spawned from here. Use a persona without its own connection inline, or do the work yourself.`,
+            : restrictedConnectionRefusal(agentType, ctx, available),
           };
         }
       }

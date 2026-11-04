@@ -24,6 +24,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - The OpenCode Go connection speaking Anthropic's protocol now suggests models that the endpoint serves on that protocol natively (MiniMax M3, Qwen3.8 Max/Flash, Qwen3.7 Plus, Claude Haiku 5.5) instead of Kimi, which the endpoint only routes through translation on that door; the OpenAI-compatible connection keeps Kimi first, and Kimi's declared context windows on both were corrected against the endpoint's own model list.
+- The Agent tool now warns up front, instead of after a failed call, when an agent type needs its own connection and cannot run in the current context.
 
 ## [0.0.75] — 2026-11-04
 
