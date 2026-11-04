@@ -315,12 +315,17 @@ export function wrapWebContents(wc: WebContents, registerCleanup: (fn: () => voi
       // per-preview partition — never the main app window's session. Unlike the
       // single-slot webRequest/permission handlers, `session.on` ACCUMULATES
       // listeners, and a panel↔window transfer re-wires the same shared
-      // session; the host epoch-guards its stale listeners.
-      wc.session.on("will-download", (event, item) => {
+      // session; the host epoch-guards its stale listeners, and the cleanup
+      // below removes ours when the container goes away.
+      const onWillDownload = (event: { preventDefault(): void }, item: Electron.DownloadItem): void => {
         listener(
           { url: item.getURL(), filename: item.getFilename() },
           { cancel: () => event.preventDefault(), saveTo: (path) => item.setSavePath(path) },
         );
+      };
+      wc.session.on("will-download", onWillDownload);
+      registerCleanup(() => {
+        if (!wc.isDestroyed()) wc.session.removeListener("will-download", onWillDownload);
       });
     },
     onDidFinishLoad: (listener) => {

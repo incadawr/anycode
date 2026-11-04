@@ -134,6 +134,11 @@ class FakeWebContents extends EventEmitter {
     on: (event: string, handler: (event: { preventDefault(): void }, item: FakeDownloadItem) => void) => {
       if (event === "will-download") this.willDownloadHandlers.push(handler);
     },
+    removeListener: (event: string, handler: (event: { preventDefault(): void }, item: FakeDownloadItem) => void) => {
+      if (event === "will-download") {
+        this.willDownloadHandlers = this.willDownloadHandlers.filter((h) => h !== handler);
+      }
+    },
     webRequest: {
       onBeforeRequest: (...args: unknown[]) => {
         this.onBeforeRequestCalls.push(args);
@@ -655,6 +660,24 @@ describe("createElectronPreviewWindow — will-download policy (deny-by-default)
     const item = makeDownloadItem("blob:https://example.com/8f2e", "blob.bin");
     expect(fake.webContents.fireWillDownload(item)).toBe(false); // no preventDefault — the save proceeds
     expect(item.savePaths).toEqual(["/host/chosen/report.pdf"]);
+  });
+
+  it("unregisters the session listener on window close (registerCleanup) and skips an already-destroyed contents", () => {
+    const win = createElectronPreviewWindow({ previewId: "dl-d" });
+    const fake = latestWindow();
+    win.webContents.onWillDownload(() => {});
+    expect(fake.webContents.willDownloadHandlers).toHaveLength(1);
+    // The adapter registered cleanup via win.once("closed", ...) — closing removes ours.
+    fake.emit("closed");
+    expect(fake.webContents.willDownloadHandlers).toHaveLength(0);
+
+    // An already-destroyed contents must not touch its session at cleanup time.
+    const win2 = createElectronPreviewWindow({ previewId: "dl-e" });
+    const fake2 = latestWindow();
+    win2.webContents.onWillDownload(() => {});
+    fake2.webContents.destroyedFlag = true;
+    fake2.emit("closed");
+    expect(fake2.webContents.willDownloadHandlers).toHaveLength(1);
   });
 });
 

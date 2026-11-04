@@ -572,11 +572,15 @@ describe("PreviewHost — window security invariants (cut §2.5, non-negotiable)
     }
     // Repeating the same URL must not add a second ring entry (per-record dedupe).
     expect(wc.fireWillDownload("https://example.com/report.pdf").cancelled).toBe(true);
+    // A >200-char URL still dedupes: the ring KEY is bounded the same way as the message.
+    const longUrl = `https://example.com/${"x".repeat(300)}`;
+    expect(wc.fireWillDownload(longUrl).cancelled).toBe(true);
+    expect(wc.fireWillDownload(longUrl).cancelled).toBe(true);
 
     const console_ = rig.host.getConsole(TAB, previewId);
     const entries = "entries" in console_ ? console_.entries : [];
     const downloadEntries = entries.filter((e) => e.message.includes("blocked by security policy: download"));
-    expect(downloadEntries).toHaveLength(3);
+    expect(downloadEntries).toHaveLength(4);
     expect(downloadEntries.every((e) => e.level === "warn")).toBe(true);
   });
 

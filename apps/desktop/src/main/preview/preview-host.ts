@@ -2662,7 +2662,8 @@ class PreviewHost implements PreviewHostHandle {
         control.cancel();
         this.recordDeniedOnce(
           record,
-          `download:${download.url}`,
+          // The key is page-controlled and lives for the record's lifetime — bound it like the message.
+          `download:${download.url.slice(0, 200)}`,
           `[preview] blocked by security policy: download ${download.filename.slice(0, 200)} from ${download.url.slice(0, 200)}`,
           record.downloadDeniedKeys,
         );
