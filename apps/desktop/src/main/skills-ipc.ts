@@ -26,7 +26,7 @@
  * surface to defend beyond that lookup.
  */
 
-import { ipcMain } from "electron";
+import { guardedIpcHandle } from "./ipc-guard.js";
 import * as fsp from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { dirname } from "node:path";
@@ -638,11 +638,11 @@ export async function handleSkillsImportApply(deps: SkillsIpcDeps, raw: unknown)
 
 /** Wires the seven channels onto ipcMain. A payload the handler cannot validate is answered with a safe negative. */
 export function registerSkillsIpc(deps: SkillsIpcDeps): void {
-  ipcMain.handle(SKILLS_LIST_CHANNEL, (_event, raw: unknown) => handleSkillsList(deps, raw));
-  ipcMain.handle(SKILLS_SET_ENABLED_CHANNEL, (_event, raw: unknown) => handleSkillsSetEnabled(deps, raw));
-  ipcMain.handle(SKILLS_DELETE_CHANNEL, (_event, raw: unknown) => handleSkillsDelete(deps, raw));
-  ipcMain.handle(SKILLS_CREATE_CHANNEL, (_event, raw: unknown) => handleSkillsCreate(deps, raw));
-  ipcMain.handle(SKILLS_REVEAL_CHANNEL, (_event, raw: unknown) => handleSkillsReveal(deps, raw));
-  ipcMain.handle(SKILLS_IMPORT_SCAN_CHANNEL, (_event, raw: unknown) => handleSkillsImportScan(deps, raw));
-  ipcMain.handle(SKILLS_IMPORT_APPLY_CHANNEL, (_event, raw: unknown) => handleSkillsImportApply(deps, raw));
+  guardedIpcHandle(SKILLS_LIST_CHANNEL, (_event, raw: unknown) => handleSkillsList(deps, raw));
+  guardedIpcHandle(SKILLS_SET_ENABLED_CHANNEL, (_event, raw: unknown) => handleSkillsSetEnabled(deps, raw));
+  guardedIpcHandle(SKILLS_DELETE_CHANNEL, (_event, raw: unknown) => handleSkillsDelete(deps, raw));
+  guardedIpcHandle(SKILLS_CREATE_CHANNEL, (_event, raw: unknown) => handleSkillsCreate(deps, raw));
+  guardedIpcHandle(SKILLS_REVEAL_CHANNEL, (_event, raw: unknown) => handleSkillsReveal(deps, raw));
+  guardedIpcHandle(SKILLS_IMPORT_SCAN_CHANNEL, (_event, raw: unknown) => handleSkillsImportScan(deps, raw));
+  guardedIpcHandle(SKILLS_IMPORT_APPLY_CHANNEL, (_event, raw: unknown) => handleSkillsImportApply(deps, raw));
 }

@@ -10,7 +10,7 @@
  */
 import { readdir } from "node:fs/promises";
 import { parse } from "node:path";
-import { ipcMain } from "electron";
+import { guardedIpcHandle } from "./ipc-guard.js";
 import { PATH_ROOTS_CHANNEL, type PathRootsResult } from "../shared/path-roots.js";
 
 /** Cap on names returned. A real filesystem root has a few dozen entries. */
@@ -42,5 +42,5 @@ export function registerPathRootsIpc(
     readdir: async (path) => readdir(path),
   },
 ): void {
-  ipcMain.handle(PATH_ROOTS_CHANNEL, () => handlePathRoots(deps));
+  guardedIpcHandle(PATH_ROOTS_CHANNEL, () => handlePathRoots(deps));
 }

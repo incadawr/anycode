@@ -14,7 +14,7 @@
  * index.ts (the exact seam tabs.ts / updater.ts use): the window may be null
  * mid-teardown, so every handler no-ops safely against a null window.
  */
-import { ipcMain } from "electron";
+import { guardedIpcHandle } from "./ipc-guard.js";
 import type { BrowserWindow } from "electron";
 import {
   WINDOW_CLOSE_CHANNEL,
@@ -48,11 +48,11 @@ export function readWindowState(win: BrowserWindow | null): WindowState {
  * at boot); none of the handlers reads its ipc payload.
  */
 export function registerWindowIpc(deps: WindowIpcDeps): void {
-  ipcMain.handle(WINDOW_MINIMIZE_CHANNEL, () => {
+  guardedIpcHandle(WINDOW_MINIMIZE_CHANNEL, () => {
     deps.getWindow()?.minimize();
   });
 
-  ipcMain.handle(WINDOW_TOGGLE_MAXIMIZE_CHANNEL, () => {
+  guardedIpcHandle(WINDOW_TOGGLE_MAXIMIZE_CHANNEL, () => {
     const win = deps.getWindow();
     if (win === null) {
       return;
@@ -64,11 +64,11 @@ export function registerWindowIpc(deps: WindowIpcDeps): void {
     }
   });
 
-  ipcMain.handle(WINDOW_CLOSE_CHANNEL, () => {
+  guardedIpcHandle(WINDOW_CLOSE_CHANNEL, () => {
     deps.getWindow()?.close();
   });
 
-  ipcMain.handle(WINDOW_STATE_GET_CHANNEL, (): WindowState => readWindowState(deps.getWindow()));
+  guardedIpcHandle(WINDOW_STATE_GET_CHANNEL, (): WindowState => readWindowState(deps.getWindow()));
 }
 
 /**

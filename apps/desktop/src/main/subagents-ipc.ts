@@ -29,7 +29,7 @@
  * beyond that lookup.
  */
 
-import { ipcMain } from "electron";
+import { guardedIpcHandle } from "./ipc-guard.js";
 import * as fsp from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { dirname } from "node:path";
@@ -615,11 +615,11 @@ export function handleSubagentsPreview(raw: unknown): SubagentsPreviewResult {
 
 /** Wires the seven channels onto ipcMain. A payload the handler cannot validate is answered with a safe negative. */
 export function registerSubagentsIpc(deps: SubagentsIpcDeps): void {
-  ipcMain.handle(SUBAGENTS_LIST_CHANNEL, (_event, raw: unknown) => handleSubagentsList(deps, raw));
-  ipcMain.handle(SUBAGENTS_READ_CHANNEL, (_event, raw: unknown) => handleSubagentsRead(deps, raw));
-  ipcMain.handle(SUBAGENTS_SAVE_CHANNEL, (_event, raw: unknown) => handleSubagentsSave(deps, raw));
-  ipcMain.handle(SUBAGENTS_CREATE_CHANNEL, (_event, raw: unknown) => handleSubagentsCreate(deps, raw));
-  ipcMain.handle(SUBAGENTS_DELETE_CHANNEL, (_event, raw: unknown) => handleSubagentsDelete(deps, raw));
-  ipcMain.handle(SUBAGENTS_REVEAL_CHANNEL, (_event, raw: unknown) => handleSubagentsReveal(deps, raw));
-  ipcMain.handle(SUBAGENTS_PREVIEW_CHANNEL, (_event, raw: unknown) => handleSubagentsPreview(raw));
+  guardedIpcHandle(SUBAGENTS_LIST_CHANNEL, (_event, raw: unknown) => handleSubagentsList(deps, raw));
+  guardedIpcHandle(SUBAGENTS_READ_CHANNEL, (_event, raw: unknown) => handleSubagentsRead(deps, raw));
+  guardedIpcHandle(SUBAGENTS_SAVE_CHANNEL, (_event, raw: unknown) => handleSubagentsSave(deps, raw));
+  guardedIpcHandle(SUBAGENTS_CREATE_CHANNEL, (_event, raw: unknown) => handleSubagentsCreate(deps, raw));
+  guardedIpcHandle(SUBAGENTS_DELETE_CHANNEL, (_event, raw: unknown) => handleSubagentsDelete(deps, raw));
+  guardedIpcHandle(SUBAGENTS_REVEAL_CHANNEL, (_event, raw: unknown) => handleSubagentsReveal(deps, raw));
+  guardedIpcHandle(SUBAGENTS_PREVIEW_CHANNEL, (_event, raw: unknown) => handleSubagentsPreview(raw));
 }

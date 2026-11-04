@@ -14,7 +14,7 @@
  * Every response is a projection built here, from an allow-list. Nothing in this
  * file reads the discovery file, so the bearer token cannot reach a payload.
  */
-import { ipcMain } from "electron";
+import { guardedIpcHandle } from "./ipc-guard.js";
 import { basename, isAbsolute } from "node:path";
 import { z } from "zod";
 import { loadSettings, saveSettings, withSettingsFileLock } from "../settings/files.js";
@@ -402,19 +402,19 @@ export async function handleCopyConfig(deps: CommunicationIpcDeps, raw: unknown)
 
 /** Wires the Sessions API channels. Each handler is also exported for tests. */
 export function registerCommunicationIpc(deps: CommunicationIpcDeps): void {
-  ipcMain.handle(COMMUNICATION_GET_CHANNEL, (_event, raw: unknown) => handleCommunicationGet(deps, raw));
-  ipcMain.handle(COMMUNICATION_SET_ENABLED_CHANNEL, (_event, raw: unknown) => handleSetEnabled(deps, raw));
-  ipcMain.handle(COMMUNICATION_SET_PORT_CHANNEL, (_event, raw: unknown) => handleSetPort(deps, raw));
-  ipcMain.handle(COMMUNICATION_ADD_WORKSPACE_CHANNEL, (_event, raw: unknown) => handleAddWorkspace(deps, raw));
-  ipcMain.handle(COMMUNICATION_REMOVE_WORKSPACE_CHANNEL, (_event, raw: unknown) => handleRemoveWorkspace(deps, raw));
-  ipcMain.handle(COMMUNICATION_REGENERATE_TOKEN_CHANNEL, (_event, raw: unknown) => handleRegenerateToken(deps, raw));
-  ipcMain.handle(COMMUNICATION_COPY_CONFIG_CHANNEL, (_event, raw: unknown) => handleCopyConfig(deps, raw));
-  ipcMain.handle(COMMUNICATION_SET_DEFAULT_ACCESS_CHANNEL, (_event, raw: unknown) => handleSetDefaultAccess(deps, raw));
-  ipcMain.handle(COMMUNICATION_SET_SESSION_ACCESS_CHANNEL, (_event, raw: unknown) => handleSetSessionAccess(deps, raw));
-  ipcMain.handle(COMMUNICATION_SET_SESSION_HANDLE_CHANNEL, (_event, raw: unknown) => handleSetSessionHandle(deps, raw));
-  ipcMain.handle(COMMUNICATION_AGENT_PROJECTS_GET_CHANNEL, (_event, raw: unknown) => handleAgentProjectsGet(deps, raw));
-  ipcMain.handle(COMMUNICATION_AGENT_PROJECTS_LIST_CHANNEL, (_event, raw: unknown) => handleAgentProjectsList(deps, raw));
-  ipcMain.handle(COMMUNICATION_AGENT_PROJECTS_SET_CHANNEL, (_event, raw: unknown) => handleAgentProjectsSet(deps, raw));
-  ipcMain.handle(COMMUNICATION_AGENT_PROJECTS_OFF_CHANNEL, (_event, raw: unknown) => handleAgentProjectsOff(deps, raw));
-  ipcMain.handle(COMMUNICATION_SET_SESSION_APPROVALS_CHANNEL, (_event, raw: unknown) => handleSetSessionApprovals(deps, raw));
+  guardedIpcHandle(COMMUNICATION_GET_CHANNEL, (_event, raw: unknown) => handleCommunicationGet(deps, raw));
+  guardedIpcHandle(COMMUNICATION_SET_ENABLED_CHANNEL, (_event, raw: unknown) => handleSetEnabled(deps, raw));
+  guardedIpcHandle(COMMUNICATION_SET_PORT_CHANNEL, (_event, raw: unknown) => handleSetPort(deps, raw));
+  guardedIpcHandle(COMMUNICATION_ADD_WORKSPACE_CHANNEL, (_event, raw: unknown) => handleAddWorkspace(deps, raw));
+  guardedIpcHandle(COMMUNICATION_REMOVE_WORKSPACE_CHANNEL, (_event, raw: unknown) => handleRemoveWorkspace(deps, raw));
+  guardedIpcHandle(COMMUNICATION_REGENERATE_TOKEN_CHANNEL, (_event, raw: unknown) => handleRegenerateToken(deps, raw));
+  guardedIpcHandle(COMMUNICATION_COPY_CONFIG_CHANNEL, (_event, raw: unknown) => handleCopyConfig(deps, raw));
+  guardedIpcHandle(COMMUNICATION_SET_DEFAULT_ACCESS_CHANNEL, (_event, raw: unknown) => handleSetDefaultAccess(deps, raw));
+  guardedIpcHandle(COMMUNICATION_SET_SESSION_ACCESS_CHANNEL, (_event, raw: unknown) => handleSetSessionAccess(deps, raw));
+  guardedIpcHandle(COMMUNICATION_SET_SESSION_HANDLE_CHANNEL, (_event, raw: unknown) => handleSetSessionHandle(deps, raw));
+  guardedIpcHandle(COMMUNICATION_AGENT_PROJECTS_GET_CHANNEL, (_event, raw: unknown) => handleAgentProjectsGet(deps, raw));
+  guardedIpcHandle(COMMUNICATION_AGENT_PROJECTS_LIST_CHANNEL, (_event, raw: unknown) => handleAgentProjectsList(deps, raw));
+  guardedIpcHandle(COMMUNICATION_AGENT_PROJECTS_SET_CHANNEL, (_event, raw: unknown) => handleAgentProjectsSet(deps, raw));
+  guardedIpcHandle(COMMUNICATION_AGENT_PROJECTS_OFF_CHANNEL, (_event, raw: unknown) => handleAgentProjectsOff(deps, raw));
+  guardedIpcHandle(COMMUNICATION_SET_SESSION_APPROVALS_CHANNEL, (_event, raw: unknown) => handleSetSessionApprovals(deps, raw));
 }

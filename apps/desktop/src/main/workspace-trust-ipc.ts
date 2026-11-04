@@ -18,7 +18,7 @@
 
 import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { ipcMain } from "electron";
+import { guardedIpcHandle } from "./ipc-guard.js";
 import {
   canonicalWorkspaceKey,
   defaultTrustStorePath,
@@ -280,7 +280,7 @@ export async function handleWorkspaceTrustForget(
 }
 
 export function registerWorkspaceTrustIpc(deps: WorkspaceTrustIpcDeps): void {
-  ipcMain.handle(WORKSPACE_TRUST_DECIDE_CHANNEL, (_event, raw: unknown) => handleWorkspaceTrustDecide(deps, raw));
-  ipcMain.handle(WORKSPACE_TRUST_LIST_CHANNEL, () => handleWorkspaceTrustList(deps));
-  ipcMain.handle(WORKSPACE_TRUST_FORGET_CHANNEL, (_event, raw: unknown) => handleWorkspaceTrustForget(deps, raw));
+  guardedIpcHandle(WORKSPACE_TRUST_DECIDE_CHANNEL, (_event, raw: unknown) => handleWorkspaceTrustDecide(deps, raw));
+  guardedIpcHandle(WORKSPACE_TRUST_LIST_CHANNEL, () => handleWorkspaceTrustList(deps));
+  guardedIpcHandle(WORKSPACE_TRUST_FORGET_CHANNEL, (_event, raw: unknown) => handleWorkspaceTrustForget(deps, raw));
 }

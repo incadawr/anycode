@@ -7,7 +7,7 @@
  * an `unknown` — main never trusts a shape/range a compromised renderer
  * could have sent.
  */
-import { ipcMain } from "electron";
+import { guardedIpcHandle } from "../ipc-guard.js";
 import { z } from "zod";
 import { MD_PREVIEW_NAVIGATE_CHANNEL, MD_PREVIEW_READ_CHANNEL, type MdDocReadResult } from "../../shared/md-preview.js";
 import { navigateMdDoc, readMdDoc, type MdDocDeps } from "./md-doc.js";
@@ -29,7 +29,7 @@ const navigateSchema = z.object({
  * registerPreviewPanelIpc/registerTabIpc (called once at boot).
  */
 export function registerMdDocIpc(deps: MdDocDeps): void {
-  ipcMain.handle(MD_PREVIEW_READ_CHANNEL, (_event, raw: unknown): Promise<MdDocReadResult> => {
+  guardedIpcHandle(MD_PREVIEW_READ_CHANNEL, (_event, raw: unknown): Promise<MdDocReadResult> => {
     const parsed = readSchema.safeParse(raw);
     if (!parsed.success) {
       // No `invalid` reason exists on this frozen result type (CUT.md
@@ -42,7 +42,7 @@ export function registerMdDocIpc(deps: MdDocDeps): void {
     return readMdDoc(deps, parsed.data.tabId, parsed.data.previewId);
   });
 
-  ipcMain.handle(MD_PREVIEW_NAVIGATE_CHANNEL, (_event, raw: unknown): Promise<MdDocReadResult> => {
+  guardedIpcHandle(MD_PREVIEW_NAVIGATE_CHANNEL, (_event, raw: unknown): Promise<MdDocReadResult> => {
     const parsed = navigateSchema.safeParse(raw);
     if (!parsed.success) {
       // Same "bucket under the closest honest reason" precedent as READ

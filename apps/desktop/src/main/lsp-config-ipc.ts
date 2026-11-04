@@ -22,7 +22,7 @@
  * renderer — never a resolved absolute path.
  */
 
-import { ipcMain } from "electron";
+import { guardedIpcHandle } from "./ipc-guard.js";
 import * as fsp from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
@@ -488,8 +488,8 @@ async function writeAndRefresh(
 
 /** Wires the four channels onto ipcMain. A payload the handler cannot validate is answered with a safe negative. */
 export function registerLspConfigIpc(deps: LspConfigIpcDeps): void {
-  ipcMain.handle(LSP_CATALOG_STATUS_CHANNEL, (_event, raw: unknown) => handleLspCatalogStatus(deps, raw));
-  ipcMain.handle(LSP_ENABLE_CHANNEL, (_event, raw: unknown) => handleLspEnable(deps, raw));
-  ipcMain.handle(LSP_DISABLE_CHANNEL, (_event, raw: unknown) => handleLspDisable(deps, raw));
-  ipcMain.handle(LSP_CUSTOM_UPSERT_CHANNEL, (_event, raw: unknown) => handleLspCustomUpsert(deps, raw));
+  guardedIpcHandle(LSP_CATALOG_STATUS_CHANNEL, (_event, raw: unknown) => handleLspCatalogStatus(deps, raw));
+  guardedIpcHandle(LSP_ENABLE_CHANNEL, (_event, raw: unknown) => handleLspEnable(deps, raw));
+  guardedIpcHandle(LSP_DISABLE_CHANNEL, (_event, raw: unknown) => handleLspDisable(deps, raw));
+  guardedIpcHandle(LSP_CUSTOM_UPSERT_CHANNEL, (_event, raw: unknown) => handleLspCustomUpsert(deps, raw));
 }

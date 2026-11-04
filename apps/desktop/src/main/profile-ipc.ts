@@ -45,7 +45,7 @@
  * `./telemetry-admin` subpath does not export the enabled-agnostic form.
  */
 
-import { ipcMain } from "electron";
+import { guardedIpcHandle } from "./ipc-guard.js";
 import * as fsp from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { dirname } from "node:path";
@@ -530,9 +530,9 @@ export async function handleProfileRevealDir(deps: ProfileIpcDeps): Promise<Prof
 
 /** Wires the five channels onto ipcMain. A payload the handler cannot validate is answered with a safe negative. */
 export function registerProfileIpc(deps: ProfileIpcDeps): void {
-  ipcMain.handle(PROFILE_STATS_GET_CHANNEL, () => handleProfileStatsGet(deps));
-  ipcMain.handle(PROFILE_STATS_CACHED_CHANNEL, () => handleProfileStatsCached(deps));
-  ipcMain.handle(PROFILE_STATS_REBUILD_CHANNEL, () => handleProfileStatsRebuild(deps));
-  ipcMain.handle(PROFILE_TELEMETRY_SET_CHANNEL, (_event, raw: unknown) => handleProfileTelemetrySet(deps, raw));
-  ipcMain.handle(PROFILE_REVEAL_DIR_CHANNEL, () => handleProfileRevealDir(deps));
+  guardedIpcHandle(PROFILE_STATS_GET_CHANNEL, () => handleProfileStatsGet(deps));
+  guardedIpcHandle(PROFILE_STATS_CACHED_CHANNEL, () => handleProfileStatsCached(deps));
+  guardedIpcHandle(PROFILE_STATS_REBUILD_CHANNEL, () => handleProfileStatsRebuild(deps));
+  guardedIpcHandle(PROFILE_TELEMETRY_SET_CHANNEL, (_event, raw: unknown) => handleProfileTelemetrySet(deps, raw));
+  guardedIpcHandle(PROFILE_REVEAL_DIR_CHANNEL, () => handleProfileRevealDir(deps));
 }
