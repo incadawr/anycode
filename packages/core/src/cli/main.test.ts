@@ -5363,6 +5363,125 @@ describe("buildCliEndpointConfig (endpoint-builder)", () => {
     });
     expect("declaredEffortLevels" in undeclared).toBe(false);
   });
+
+  it("forwards the resolved per-session headers, absent stays byte-identical", () => {
+    // The OpenCode-Go shape: resolveProviderHeaders output arrives pre-built
+    // and must ride the config into BOTH port constructions.
+    const resolved = { "user-agent": "Anycode/9.9.9", "x-opencode-session": "sess-123" };
+    const withHeaders = buildCliEndpointConfig({
+      transport: "anthropic-messages",
+      envConfig: envConfig("https://opencode.ai/inference/go/anthropic"),
+      catalogEntry: catalogEntry("OpenCode Go (Anthropic)"),
+      retryOverride: {},
+      includeUsageResolved: false,
+      model: "kimi-k3",
+      headers: resolved,
+    });
+    expect(withHeaders.headers).toEqual(resolved);
+
+    const without = buildCliEndpointConfig({
+      transport: "anthropic-messages",
+      envConfig: envConfig("https://api.anthropic.com"),
+      catalogEntry: catalogEntry("Anthropic"),
+      retryOverride: {},
+      includeUsageResolved: false,
+      model: "claude-x",
+    });
+    expect("headers" in without).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// the ONE session id per CLI run is resolved before the model port is built
+// (catalog entries that require per-session request headers template it, and
+// the session row persists the same value). A resumed run must keep its
+// persisted id — the reorder may not re-roll ids.
+// ─────────────────────────────────────────────────────────────────────────
+describe("CLI session id hoisting (per-session request headers)", () => {
+  /** The boot stamp writes the real process.env; snapshot/restore around each drive. */
+  function withSessionEnvReset(run: () => Promise<void>): Promise<void> {
+    const previous = process.env.ANYCODE_SESSION_ID;
+    delete process.env.ANYCODE_SESSION_ID;
+    return run().finally(() => {
+      if (previous === undefined) delete process.env.ANYCODE_SESSION_ID;
+      else process.env.ANYCODE_SESSION_ID = previous;
+    });
+  }
+
+  it("a fresh run persists the hoisted id, stamps it into the environment, and the factory sees it stamped", async () => {
+    const { workspace, dbPath, home } = setupTitleTestDirs();
+    let envAtFactoryBuild: string | undefined;
+    await withSessionEnvReset(async () => {
+      const input = new PassThrough();
+      const output = new PassThrough();
+      const getText = collectOutput(output);
+
+      const runPromise = runCli({
+        argv: [],
+        env: makeTitleTestEnv(dbPath, home),
+        home,
+        input,
+        output,
+        modelPort: new CountingModelPort(),
+        // A /model switch rebuilds through this factory: the env must already
+        // carry the session id when a NEW port is built.
+        modelPortFactory: () => {
+          envAtFactoryBuild = process.env.ANYCODE_SESSION_ID;
+          return new TextModelPort("switched");
+        },
+        cwd: workspace,
+      });
+
+      input.write("/model glm-4.7\n");
+      input.write("hello there\n");
+      input.write("/quit\n");
+
+      expect(await runPromise).toBe(0);
+      expect(getText()).toContain("switched");
+
+      const persisted = await readSessionTitle(dbPath, workspace);
+      expect(persisted.id).toBeTruthy();
+      expect(process.env.ANYCODE_SESSION_ID).toBe(persisted.id);
+      expect(envAtFactoryBuild).toBe(persisted.id);
+    });
+  });
+
+  it("a resumed run keeps the persisted session id", async () => {
+    const { workspace, dbPath, home } = setupTitleTestDirs();
+    await withSessionEnvReset(async () => {
+      const firstInput = new PassThrough();
+      const firstRun = runCli({
+        argv: [],
+        env: makeTitleTestEnv(dbPath, home),
+        home,
+        input: firstInput,
+        output: new PassThrough(),
+        modelPort: new CountingModelPort(),
+        cwd: workspace,
+      });
+      firstInput.write("first turn\n");
+      firstInput.end();
+      expect(await firstRun).toBe(0);
+      const first = await readSessionTitle(dbPath, workspace);
+
+      const secondInput = new PassThrough();
+      const secondRun = runCli({
+        argv: ["--continue", "-p", "second turn"],
+        env: makeTitleTestEnv(dbPath, home),
+        home,
+        input: secondInput,
+        output: new PassThrough(),
+        errorOutput: new PassThrough(),
+        modelPort: new CountingModelPort(),
+        cwd: workspace,
+      });
+      expect(await secondRun).toBe(0);
+
+      const after = await readSessionTitle(dbPath, workspace);
+      expect(after.id).toBe(first.id);
+      expect(process.env.ANYCODE_SESSION_ID).toBe(first.id);
+    });
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────

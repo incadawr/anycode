@@ -98,6 +98,7 @@ import { AiSdkModelPort } from "../provider/model-port.js";
 import { createProbeOnlyNetworkWaiter } from "../provider/network-waiter.js";
 import { createMediaProjectionPort } from "../provider/media-projection.js";
 import { resolveIncludeUsage } from "../provider/openai-compatible.js";
+import { resolveProviderHeaders } from "../provider/session-headers.js";
 import type { RetryPolicy } from "../provider/retry.js";
 import { createSkillPort } from "../skills/discovery.js";
 import { withSubagents } from "../subagents/index.js";
@@ -229,14 +230,21 @@ export function buildCliEndpointConfig(args: {
   /** Resolved usage-streaming verdict (`resolveIncludeUsage` output); true ⇒ spread the flag in. */
   includeUsageResolved: boolean;
   model: string;
+  /**
+   * Pre-resolved per-session headers for catalog entries that require them
+   * (`resolveProviderHeaders` output). Absent = spread nothing, byte-identical
+   * to the pre-headers shape.
+   */
+  headers?: Record<string, string>;
 }): EndpointConfig {
-  const { transport, envConfig, catalogEntry, retryOverride, includeUsageResolved, model } = args;
+  const { transport, envConfig, catalogEntry, retryOverride, includeUsageResolved, model, headers } = args;
   return {
     transport,
     baseUrl: envConfig.baseUrl,
     apiKey: envConfig.apiKey,
     model,
     ...(catalogEntry !== undefined ? { providerName: catalogEntry.name } : {}),
+    ...(headers !== undefined ? { headers } : {}),
     // The connection's declared effort vocabulary (ANYCODE_EFFORT_LEVELS):
     // forwarded so the model port can tell a custom Anthropic-compatible
     // endpoint that declared its effort levels (⇒ it speaks the effort enum,
@@ -703,6 +711,14 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
   // resolutions below share the same lookup.
   const catalogEntry = matchCatalogEntryByBaseUrl(getBuiltinCatalog(), envConfig.baseUrl);
 
+  // The ONE session id for this run, resolved BEFORE the model port is built:
+  // catalog entries that require per-session request headers (OpenCode Go)
+  // template it into their headers, and the session row below persists the
+  // same value — a resumed run keeps its persisted id, a fresh run draws one
+  // here. `??=` keeps a value the caller already set.
+  const sessionId = resumedSession?.id ?? globalThis.crypto.randomUUID();
+  process.env.ANYCODE_SESSION_ID ??= sessionId;
+
   // Single back-compat resolution point for the wire transport (§0.4):
   // the mandatory discriminant is applied here, once, instead of being defaulted
   // inside EndpointConfig. Env always wins; the catalog's declared default is
@@ -738,6 +754,7 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
         retryOverride,
         includeUsageResolved: includeUsage,
         model: envConfig.model,
+        headers: resolveProviderHeaders(catalogEntry, sessionId, process.env.ANYCODE_APP_VERSION),
       }),
     );
   // Port factory for /model and Agent-tool model overrides (design
@@ -758,6 +775,7 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
               retryOverride,
               includeUsageResolved: includeUsage,
               model: m,
+              headers: resolveProviderHeaders(catalogEntry, sessionId, process.env.ANYCODE_APP_VERSION),
             }),
           )
       : undefined);
@@ -1273,16 +1291,17 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
   const session =
     resumedSession ??
     (await persistence.createSession({
-      id: globalThis.crypto.randomUUID(),
+      id: sessionId,
       workspace: cwd,
       model: envConfig.model,
       mode,
     }));
 
   // part A: the session's tools (Bash, hooks) see their session id
-  // and workspace. `??=` keeps a value the caller already set; the CLI has no
+  // and workspace. The id itself was stamped into the env right after it was
+  // resolved (before the port build, above); `??=` there keeps a value the
+  // caller already set; the CLI has no
   // launch-directive collision (ANYCODE_WORKSPACE is not written here).
-  process.env.ANYCODE_SESSION_ID ??= session.id;
   process.env.ANYCODE_SESSION_WORKSPACE ??= cwd;
 
   // Title state (Phase 4 slice 4.4-T, design §3): mirrors host/session.ts's
