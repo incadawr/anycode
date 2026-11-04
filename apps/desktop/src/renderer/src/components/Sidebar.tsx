@@ -10,7 +10,7 @@
  * grouping / dedupe / ordering / label logic and are unit-tested directly
  * (Sidebar.test.ts), same discipline as SessionPicker's helpers.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import type { SessionSummary } from "../../../shared/tabs.js";
 import { isEngineId } from "../../../shared/engines.js";
@@ -21,7 +21,7 @@ import { fuzzyMatch, type MatchRange } from "../fuzzy.js";
 import { rowStatusKind, useTabStatusStore, type RowStatusKind } from "../tab-status-store.js";
 import { nextRovingIndex } from "./ModeMenu.js";
 import { handleCreateTabResult, resolveConnectionMissingAction } from "./SessionPicker.js";
-import { resumeWithMarker, usePendingResumes } from "../pending-resumes.js";
+import { pendingResumeRowSets, resumeWithMarker, usePendingResumes } from "../pending-resumes.js";
 import { ConfirmDialog } from "./ConfirmDialog.js";
 import { highlight } from "./highlight.js";
 import { ArrowUp, Chevron, Collapse, Cube, Dot, Ellipsis, Folder, Gear, Plus, Search, Spinner, Trash, X } from "./icons.js";
@@ -117,6 +117,13 @@ export interface SidebarRow {
   engineId?: string;
   /** open rows only — a Sessions API agent opened this tab. */
   openedByAgent?: true;
+  /**
+   * resumable rows only — the shared resume marker is armed for this session
+   * and its representing tab has not been published yet (still inside the
+   * createTab call). The history row stays visible as an inert opening
+   * placeholder instead of vanishing for the whole slow createTab.
+   */
+  opening?: true;
 }
 
 export interface SidebarGroup {
@@ -161,9 +168,14 @@ export function formatAge(epochMs: number, now: number = Date.now()): string {
  *    of appearing twice — matched either by main's `openInTabId` annotation or
  *    by the tab's own bound `sessionId` (the session index only refetches after
  *    the bind, so during hydration the annotation is not there yet);
- *  - `opening` (session ids currently being opened in an unbound tab) is
- *    deduped the same way: the open tab row replaces the history row for the
+ *  - `opening` (session ids with a representing tab — the marker settled or a
+ *    tab bound) is deduped: the open tab row replaces the history row for the
  *    whole click → hydration window, so the session never renders twice;
+ *  - `arming` (session ids still awaiting their representing tab — armed
+ *    markers whose tab has not been published yet) keeps the history row
+ *    visible, flagged so it renders as an inert opening placeholder: nothing
+ *    represents the session yet, so hiding the row would blank it for the
+ *    whole slow createTab and flicker it on a refusal;
  *  - `sessions === null` = still loading → open tabs still render, no resumable
  *    rows (fail-soft).
  */
@@ -172,6 +184,7 @@ export function buildSidebarGroups(
   sessions: readonly SessionSummary[] | null,
   now?: number,
   opening?: ReadonlySet<string>,
+  arming?: ReadonlySet<string>,
 ): SidebarGroup[] {
   const liveTabIds = new Set(tabs.map((t) => t.tabId));
   // Session ids the live tabs already bound (host_ready landed). Same dedupe
@@ -251,6 +264,7 @@ export function buildSidebarGroups(
         sessionId: s.id,
         ...(s.worktree !== undefined ? { worktree: s.worktree } : {}),
         ...((s.engineId === "codex" || s.engineId === "claude") ? { engineId: s.engineId } : {}),
+        ...(arming?.has(s.id) ? { opening: true as const } : {}),
       }));
 
     const rows = [...openRows, ...resumableRows];
@@ -957,9 +971,13 @@ export function Sidebar({
   // prune: the tab bound the session (buildSidebarGroups's sessionId dedupe
   // takes over), or the representing tab is gone / its host exited before
   // host_ready (the history row must come back so the session can be
-  // re-resumed). Failures never change `tabs`, so the seam clears those
-  // itself (pending-resumes.ts).
-  useEffect(() => {
+  // re-resumed). It also promotes armed markers onto their envelope-published
+  // tab (pending-resumes.ts) — this [tabs] effect is the only place a new tab
+  // can be observed while the createTab reply is still in flight, and it must
+  // promote BEFORE the tab's first paint (layout effect), or the envelope
+  // window would paint the history row next to it for a frame. Failures never
+  // change `tabs`, so the seam clears those itself (pending-resumes.ts).
+  useLayoutEffect(() => {
     usePendingResumes.getState().prune(tabs);
   }, [tabs]);
 
@@ -1015,7 +1033,8 @@ export function Sidebar({
 
   // Compose the hidden-project filter BETWEEN grouping and the search filter
 
-  const visibleGroups = applyHiddenProjects(buildSidebarGroups(tabs, sessions, undefined, new Set(pendingResumes.keys())), hiddenWorkspaces);
+  const { opening, arming } = pendingResumeRowSets(pendingResumes);
+  const visibleGroups = applyHiddenProjects(buildSidebarGroups(tabs, sessions, undefined, opening, arming), hiddenWorkspaces);
   const filtering = query !== "";
   const filtered = filterSidebarGroups(visibleGroups, query);
   // "Remove project" is disabled while the open menu's project still has a live
@@ -1270,6 +1289,8 @@ export function Sidebar({
                       <button
                         type="button"
                         className="sidebar-row sidebar-row-resumable"
+                        disabled={row.opening === true}
+                        aria-busy={row.opening === true || undefined}
                         onClick={() => void resumeSession(row.sessionId!)}
                       >
                         <span className="sidebar-row-title">{highlight(row.title, ranges)}</span>
@@ -1283,7 +1304,14 @@ export function Sidebar({
                             WT · {row.worktree.id}
                           </span>
                         )}
-                        {row.age && <span className="sidebar-row-age">{row.age}</span>}
+                        {/* Armed resume placeholder: the session's tab has not
+                            been published yet — the row stays visible but
+                            inert, with the shared spinner in the age slot. */}
+                        {row.opening === true ? (
+                          <Spinner className="sidebar-row-spinner icon-spin" />
+                        ) : (
+                          row.age && <span className="sidebar-row-age">{row.age}</span>
+                        )}
                       </button>
                       {/* hard-delete affordance. Same hover-reveal +
                           disabled-inert pattern as the open row's close (×):

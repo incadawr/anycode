@@ -10,16 +10,20 @@
  * suite cannot render.
  */
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { TabInfo } from "./tabs-store.js";
+import { useTabsStore } from "./tabs-store.js";
 import type { CreateTabResult } from "../../shared/tabs.js";
 import {
   clearPendingResume,
   createPendingResumesStore,
   markPendingResume,
+  pendingResumeRowSets,
+  promoteArmedResumes,
   prunePendingResumes,
   resumedRepresentingTabId,
   resumeWithMarker,
+  settlePendingResume,
   usePendingResumes,
 } from "./pending-resumes.js";
 
@@ -34,6 +38,14 @@ function tab(overrides: Partial<TabInfo> & Pick<TabInfo, "tabId" | "workspace">)
     ...overrides,
   };
 }
+
+// Several tests seed the app singletons (the seam reads the tabs-store's
+// `tabs` for arm-time baselines and settlement reconciliation); never leak a
+// fixture into the next test.
+afterEach(() => {
+  useTabsStore.setState({ tabs: [] });
+  usePendingResumes.setState({ marks: new Map(), armBaselines: new Map() });
+});
 
 describe("markPendingResume / clearPendingResume", () => {
   it("arms without a tabId as null (the reply has not named the representing tab yet)", () => {
@@ -119,6 +131,84 @@ describe("prunePendingResumes (the marker lifecycle)", () => {
   });
 });
 
+describe("promoteArmedResumes (the envelope-before-reply window)", () => {
+  it("promotes an armed marker onto the first unbound tab that appeared after arming", () => {
+    const prev = new Map<string, string | null>([["s1", null]]);
+    const baselines = new Map<string, ReadonlySet<string>>([["s1", new Set(["t-old"])]]);
+    const tabs = [
+      tab({ tabId: "t-old", workspace: "/w" }),
+      tab({ tabId: "t-new", workspace: "/w" }),
+    ];
+    const promoted = promoteArmedResumes(prev, tabs, baselines);
+    expect(promoted.marks).toEqual(new Map([["s1", "t-new"]]));
+    expect(promoted.baselines.has("s1")).toBe(false);
+  });
+
+  it("keeps the marker armed while only pre-arm tabs are unbound (they belong to someone else)", () => {
+    const prev = new Map<string, string | null>([["s1", null]]);
+    const baselines = new Map<string, ReadonlySet<string>>([["s1", new Set(["t-old"])]]);
+    const tabs = [tab({ tabId: "t-old", workspace: "/w" })];
+    expect(promoteArmedResumes(prev, tabs, baselines)).toEqual({ marks: prev, baselines });
+  });
+
+  it("leaves armed markers without a recorded baseline alone (no arm-time context to tell new from old)", () => {
+    const prev = new Map<string, string | null>([["s1", null]]);
+    const tabs = [tab({ tabId: "t-new", workspace: "/w" })];
+    expect(promoteArmedResumes(prev, tabs, new Map())).toEqual({ marks: prev, baselines: new Map() });
+  });
+
+  it("leaves settled markers and the input untouched (purity)", () => {
+    const prev = new Map<string, string | null>([
+      ["s-settled", "t1"],
+      ["s-armed", null],
+    ]);
+    const baselines = new Map<string, ReadonlySet<string>>([["s-armed", new Set()]]);
+    const tabs = [tab({ tabId: "t-new", workspace: "/w" })];
+    const promoted = promoteArmedResumes(prev, tabs, baselines);
+    expect(promoted.marks.get("s-settled")).toBe("t1");
+    expect(promoted.marks.get("s-armed")).toBe("t-new");
+    expect(prev.get("s-armed")).toBeNull();
+  });
+});
+
+describe("settlePendingResume (settlement reconciles with the tabs as they are)", () => {
+  it("keeps the marker on a live unbound representing tab (the hydration window)", () => {
+    const prev = new Map<string, string | null>([["s1", null]]);
+    const tabs = [tab({ tabId: "t1", workspace: "/w" })];
+    expect(settlePendingResume(prev, "s1", "t1", tabs)).toEqual(new Map([["s1", "t1"]]));
+  });
+
+  it("keeps the marker when the named tab is absent — the port envelope may still be in flight", () => {
+    const prev = new Map<string, string | null>([["s1", null]]);
+    expect(settlePendingResume(prev, "s1", "t1", [])).toEqual(new Map([["s1", "t1"]]));
+  });
+
+  it("drops the marker when the named tab's host already exited — it died while the reply was in flight", () => {
+    const prev = new Map<string, string | null>([["s1", null]]);
+    const tabs = [tab({ tabId: "t1", workspace: "/w", hostExited: true })];
+    expect(settlePendingResume(prev, "s1", "t1", tabs)).toEqual(new Map());
+  });
+
+  it("drops the marker when some tab already bound the session", () => {
+    const prev = new Map<string, string | null>([["s1", null]]);
+    const tabs = [tab({ tabId: "t9", workspace: "/w", sessionId: "s1" })];
+    expect(settlePendingResume(prev, "s1", "t1", tabs)).toEqual(new Map());
+  });
+});
+
+describe("pendingResumeRowSets (what buildSidebarGroups consumers feed it)", () => {
+  it("splits settled markers (suppress) from armed ones (arming placeholder)", () => {
+    const marks = new Map<string, string | null>([
+      ["s-open", "t1"],
+      ["s-armed", null],
+    ]);
+    expect(pendingResumeRowSets(marks)).toEqual({
+      opening: new Set(["s-open"]),
+      arming: new Set(["s-armed"]),
+    });
+  });
+});
+
 describe("resumedRepresentingTabId", () => {
   it("ok → the new tab; already_open → the focused existing tab", () => {
     expect(resumedRepresentingTabId({ ok: true, tabId: "t1", workspace: "/w" })).toBe("t1");
@@ -198,6 +288,32 @@ describe("resumeWithMarker (against the app singleton, reset per test)", () => {
     });
     expect(seen).toEqual({ kind: "resume", sessionId: "s1" });
   });
+
+  it("a reply settling onto a tab whose host already exited drops the marker at once (arm → prune → settle)", async () => {
+    reset();
+    // The envelope published the resume's tab — and its host exited — while
+    // the reply was still in flight.
+    const tabs = [tab({ tabId: "t1", workspace: "/w", hostExited: true })];
+    useTabsStore.setState({ tabs });
+    let resolve!: (result: CreateTabResult) => void;
+    const pending = resumeWithMarker(
+      "s1",
+      () =>
+        new Promise<CreateTabResult>((res) => {
+          resolve = res;
+        }),
+    );
+    expect(usePendingResumes.getState().marks.get("s1")).toBeNull(); // armed, reply outstanding
+    // The Sidebar's [tabs] prune effect runs on the change: the armed marker
+    // survives it — t1 was already present at arm time, so nothing looks fresh.
+    usePendingResumes.getState().prune(tabs);
+    expect(usePendingResumes.getState().marks.get("s1")).toBeNull();
+    resolve({ ok: true, tabId: "t1", workspace: "/w" });
+    await expect(pending).resolves.toEqual({ ok: true, tabId: "t1", workspace: "/w" });
+    // Settlement reconciles right here — no tabs change follows a reply, so
+    // nothing else would ever re-check this marker against the dead tab.
+    expect(usePendingResumes.getState().marks.has("s1")).toBe(false);
+  });
 });
 
 describe("createPendingResumesStore (the factory; test isolation like createTabsStore)", () => {
@@ -216,6 +332,25 @@ describe("createPendingResumesStore (the factory; test isolation like createTabs
     expect(store.getState().marks.size).toBe(0);
     store.getState().clear("s1");
     expect(store.getState().marks.size).toBe(0);
+  });
+
+  it("arming records the tabs present, so prune promotes onto a tab that appeared AFTER arming only", () => {
+    const store = createPendingResumesStore();
+    useTabsStore.setState({ tabs: [tab({ tabId: "t-old", workspace: "/w" })] });
+    store.getState().mark("s1"); // baseline = { t-old }
+    // A prune seeing only pre-arm tabs keeps the marker armed.
+    store.getState().prune([tab({ tabId: "t-old", workspace: "/w" })]);
+    expect(store.getState().marks.get("s1")).toBeNull();
+    // The resume's own tab arrives through the port envelope before the reply.
+    store.getState().prune([
+      tab({ tabId: "t-old", workspace: "/w" }),
+      tab({ tabId: "t-new", workspace: "/w" }),
+    ]);
+    expect(store.getState().marks.get("s1")).toBe("t-new");
+    // An armed sibling promoted onto a DEAD fresh tab drops at once.
+    store.getState().mark("s2");
+    store.getState().prune([tab({ tabId: "t-dead", workspace: "/w", hostExited: true })]);
+    expect(store.getState().marks.has("s2")).toBe(false);
   });
 });
 
@@ -277,10 +412,13 @@ describe("every resume entry point goes through resumeWithMarker (source wiring)
   });
 
   it("both buildSidebarGroups consumers feed it the shared markers", () => {
-    const call = /buildSidebarGroups\(tabs, sessions, undefined, new Set\(pendingResumes\.keys\(\)\)\)/;
+    const call = /buildSidebarGroups\(tabs, sessions, undefined, opening, arming\)/;
+    const feed = /pendingResumeRowSets\(pendingResumes\)/;
     expect(src("./components/Sidebar.tsx")).toMatch(call);
+    expect(src("./components/Sidebar.tsx")).toMatch(feed);
     const palette = src("./components/CommandPalette.tsx");
     expect(palette).toMatch(call);
+    expect(palette).toMatch(feed);
     expect(palette).toMatch(/usePendingResumes\(/);
   });
 });
