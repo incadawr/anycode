@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Orchestrate no longer dead-ends a restricted role (planner, reviewer, explore) on a native engine fallback it cannot enforce: the refusal names the role and explains the fix in Settings → Roles, and the preset toast during orchestration says to turn Orchestrate off first.
+
 ## [0.0.74] — 2026-11-04
 
 ### Fixed

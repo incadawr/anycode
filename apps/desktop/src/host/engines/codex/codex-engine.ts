@@ -1278,7 +1278,7 @@ export class CodexEngine implements SessionEngine {
 
   /** Membership in the frozen preset table is the ONLY way a posture is expressible — no raw policy/config from the renderer. */
   selectPreset(id: string): CodexSettingsChange {
-    if (this.orchestrationState !== "off") return { ok: false, reason: "Permission presets cannot change during orchestration." };
+    if (this.orchestrationState !== "off") return { ok: false, reason: "Permission presets cannot change during orchestration. Turn Orchestrate off first, then change the preset." };
     const settings = this.settings;
     if (settings === undefined) return { ok: false, reason: "Codex permission presets are unavailable for this session." };
     const preset = findCodexPreset(id);
