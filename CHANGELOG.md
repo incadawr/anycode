@@ -10,9 +10,11 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Security
 
 - Privileged IPC is now guarded by sender identity: every `anycode:*` channel answers only the app's main window (and the detached Markdown popout, explicitly allow-listed), and only from the renderer's top frame. Subframes, preview views, and other windows that somehow carry the preload bridge get refused, so a compromised renderer frame or stray window can no longer read settings, secrets, or drive sessions.
+- The detached Markdown popout's trust is now narrowed twice: its allow-list entry covers only its own document channels (settings, plugins, secrets and tab control are refused even from its own top frame), and each document call is bound to the exact preview the window was created for — a compromised popout renderer can no longer read or steer another tab's preview. The popout also runs in its own in-memory session (no shared cookies/storage with the main window), gets a reduced preload bridge without the privileged surfaces, and carries the same navigation guard as the main window.
 
 ### Fixed
 
+- Fixed the desktop app throwing "Object has been destroyed" in the main process (and popping the Electron error modal) when quitting with an open detached Markdown preview window; quitting now exits cleanly, and the window's access entries can no longer outlive it.
 - Scope selection for skills import and MCP add-server is honoured again: the requested folder (this computer, or the active session's folder) is picked in the Settings scope switcher before the write lands, and the action stops with a clear error instead of silently writing into another folder's config when the folder can't be selected.
 - Fixed the model pill in the composer footer sliding under the context meter in narrow windows and panes: the footer's left group now shrinks to the space it actually has, truncating the model name (full name stays on hover) instead of overlapping the context indicator. The Codex speed chip truncates the same way inside its own border, and pill labels keep a short readable stub instead of collapsing to an empty chevron.
 
