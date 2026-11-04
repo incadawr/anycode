@@ -9,7 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Preview sessions now deny all permission checks, device access (HID/USB/serial), and screen capture in addition to the existing permission-request deny, consistently for both the panel and pop-out windows.
+- Preview sessions now deny all permission checks, device access (HID/USB/serial), and screen capture in addition to the existing permission-request deny, consistently for both the panel and pop-out windows. Full-screen, pointer-lock, and DRM (media key system) requests are denied the same way.
 
 ## [0.0.73] — 2026-11-04
 

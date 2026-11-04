@@ -47,7 +47,12 @@ try {
   await rejects("getUserMedia video", `navigator.mediaDevices.getUserMedia({video:true}).then(() => "granted").catch(e => "denied:" + e.name)`);
   await rejects("getUserMedia audio", `navigator.mediaDevices.getUserMedia({audio:true}).then(() => "granted").catch(e => "denied:" + e.name)`);
   await rejects("getDisplayMedia", `navigator.mediaDevices.getDisplayMedia({video:true}).then(() => "granted").catch(e => "denied:" + e.name)`);
-  await rejects("clipboard.readText (focus=" + (await evaluate("document.hasFocus()")) + ")", `navigator.clipboard.readText().then(() => "granted").catch(e => "denied:" + e.name)`);
+  // clipboard.readText() refuses an UNFOCUSED document regardless of any
+  // permission handler — focus the page first so the rejection below is
+  // attributable to the deny policy.
+  await call("Page.bringToFront", {}, session);
+  await wait(async () => (await evaluate("document.hasFocus()")) === true, 10000);
+  await rejects(`clipboard.readText (focused=${await evaluate("document.hasFocus()")})`, `navigator.clipboard.readText().then(() => "granted").catch(e => "denied:" + e.name)`);
   await rejects("hid.requestDevice", `navigator.hid.requestDevice({filters:[]}).then(() => "granted").catch(e => "denied:" + e.name)`);
   await rejects("usb.requestDevice", `navigator.usb.requestDevice({filters:[]}).then(() => "granted").catch(e => "denied:" + e.name)`);
   await rejects("serial.requestPort", `navigator.serial.requestPort().then(() => "granted").catch(e => "denied:" + e.name)`);
