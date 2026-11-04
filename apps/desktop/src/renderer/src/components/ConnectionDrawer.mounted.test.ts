@@ -212,6 +212,94 @@ it("reports the connection it created so the dialog header stops saying Add, and
   } finally { await act(async () => root.unmount()); container.remove(); rig.cleanup(); }
 });
 
+// ── Reasoning replay (the per-connection thinking-replay override) ──
+
+function replayField(container: HTMLElement): HTMLSelectElement | undefined {
+  return [...container.querySelectorAll("label.settings-field")]
+    .find(l => l.textContent?.includes("Reasoning replay"))
+    ?.querySelector("select") ?? undefined;
+}
+
+it("shows the reasoning-replay select on a custom-record connection and persists Off as a real false", async () => {
+  const connection = { id:"c", providerId:"custom:test", model:"a", preserveReasoning:true };
+  const rig = catalogRig(connection);
+  const { container, root } = await mountEdit(connection, rig);
+  try {
+    // Saved On opens On.
+    const replay = replayField(container)!;
+    expect(replay.value).toBe("on");
+    await act(async () => { replay.value = "off"; replay.dispatchEvent(new Event("change", {bubbles:true})); });
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    // `false` is a MEANING — it must reach the payload, not be dropped as falsy.
+    await act(async () => { await vi.waitFor(() => expect(rig.update).toHaveBeenCalledWith(expect.objectContaining({ id:"c", preserveReasoning:false }))); });
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it("hides the reasoning-replay select for a catalog provider and clears with Automatic", async () => {
+  const connection = { id:"c1", providerId:"glm", model:"glm-5.3" };
+  const rig = catalogRig(connection);
+  const { container, root } = await mountEdit(connection, rig);
+  try {
+    // Catalog entries keep their own policy — the override has nothing to do.
+    expect(replayField(container)).toBeUndefined();
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it("hides the reasoning-replay select on a custom record whose base URL lands on a flagless catalog entry", async () => {
+  // The record's endpoint IS api.openai.com — the host resolves providerName
+  // "OpenAI" by base URL and core's replay gate returns undefined BEFORE it
+  // reads the connection override, so On would be silently inert: no select.
+  const connection = { id:"c2", providerId:"custom:fixture", model:"gpt-x" };
+  const rig = catalogRig(connection);
+  const { container, root } = await mountEdit(connection, rig, [
+    { id:"openai", name:"OpenAI", authKind:"api_key", models:[], catalogBaseUrl:"https://api.openai.com/v1" },
+    { id:"custom:fixture", name:"OpenAI mirror", authKind:"api_key", models:[], catalogBaseUrl:"https://api.openai.com/v1/" },
+  ]);
+  try {
+    expect(replayField(container)).toBeUndefined();
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it("keeps the reasoning-replay select when the base-URL-matched catalog entry carries the flag", async () => {
+  // A matched entry WITH preserveReasoning keeps the override meaningful in
+  // the opt-out direction (explicit false disables replay), so it stays shown.
+  const connection = { id:"c3", providerId:"custom:fixture", model:"glm-5.3" };
+  const rig = catalogRig(connection);
+  const { container, root } = await mountEdit(connection, rig, [
+    { id:"z-ai", name:"Z.AI (GLM)", authKind:"api_key", models:[], catalogBaseUrl:"https://api.z.ai/api/anthropic", preserveReasoning:true },
+    { id:"custom:fixture", name:"GLM mirror", authKind:"api_key", models:[], catalogBaseUrl:"https://api.z.ai/api/anthropic" },
+  ]);
+  try {
+    expect(replayField(container)).toBeDefined();
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it.each(["on", "off", "auto"] as const)("persists reasoning replay %s through the custom-endpoint create", async (setting) => {
+  const rig = createScenarioRig();
+  const { container, root } = await mountAddDrawer(rig);
+  try {
+    await pickCustomTemplate(container);
+    await typeInto(container.querySelector('input[placeholder="e.g. LM Studio"]')!, "Replay Fixture");
+    await typeInto(container.querySelector('input[placeholder="http://localhost:1234/v1"]')!, "http://127.0.0.1:9/v1");
+    await typeInto(container.querySelector('input[placeholder="Enter a model ID"]')!, "m1");
+    const noAuth = [...container.querySelectorAll("input[type=checkbox]")].find(x => x.parentElement?.textContent?.includes("doesn't need")) as HTMLInputElement;
+    await act(async () => noAuth.click());
+    const replay = replayField(container)!;
+    await act(async () => { replay.value = setting; replay.dispatchEvent(new Event("change", {bubbles:true})); });
+    await clickCreate(container);
+    await act(async () => { await vi.waitFor(() => expect(rig.create).toHaveBeenCalledOnce()); });
+    // The mock's resolution can beat the async settings write — poll the
+    // persisted file like the neighbour create test above instead of a
+    // single read (was an observed CI flake).
+    if (setting === "auto") {
+      // Automatic is the ABSENT key, never false (create has no "" sentinel).
+      await act(async () => { await vi.waitFor(async () => expect("preserveReasoning" in ((await loadSettings(rig.path)).settings.provider.connections[0] ?? {})).toBe(false)); });
+    } else {
+      await act(async () => { await vi.waitFor(async () => expect((await loadSettings(rig.path)).settings.provider.connections[0]?.preserveReasoning).toBe(setting === "on")); });
+    }
+  } finally { await act(async () => root.unmount()); container.remove(); rig.cleanup(); }
+});
+
 // ── Drawer polish: the Advanced section's vertical rhythm and rate-input
 // styling, an explicit save confirmation, and a save no longer reordering the
 // offered models ──
@@ -227,11 +315,11 @@ function catalogRig(connection: Record<string, unknown>) {
   return { snapshot, update, load, fetchModels, store, customProvider:{fetchModels} as never };
 }
 
-async function mountEdit(connection: Record<string, unknown>, rig: ReturnType<typeof catalogRig>) {
+async function mountEdit(connection: Record<string, unknown>, rig: ReturnType<typeof catalogRig>, catalog: readonly unknown[] = CATALOG) {
   const container = document.createElement("div"); document.body.append(container);
   const root = createRoot(container);
   await act(async () => root.render(createElement(ConnectionDrawerFields, {
-    mode:"edit", editConnection:connection as never, catalog: CATALOG as never, connections:[connection] as never,
+    mode:"edit", editConnection:connection as never, catalog: catalog as never, connections:[connection] as never,
     secrets:[], readOnly:false, store:rig.store, customProvider:rig.customProvider,
   })));
   return { container, root };

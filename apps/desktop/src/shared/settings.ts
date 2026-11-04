@@ -345,6 +345,21 @@ export interface ProviderConnection {
    */
   includeUsage?: boolean;
   /**
+   * Per-connection reasoning-replay override for endpoints the catalog has no
+   * policy for (custom/vLLM connections resolve `providerName` undefined, so
+   * core's replay gate falls through to this value). Absent = the catalog
+   * default (Off for an unknown endpoint), `true` = replay the endpoint's
+   * thinking blocks, `false` = an explicit opt-out. Materialised as
+   * `ANYCODE_PRESERVE_REASONING` on the fork env, so a launching shell's own
+   * value always wins — the same env > settings ladder as `includeUsage`.
+   * Note the override is genuine in BOTH directions: on a catalog entry whose
+   * own flag is on, an explicit `false` turns replay OFF.
+   *
+   * `false` is a MEANING, not an absence: the key is persisted verbatim and
+   * every truthiness check on the read path must compare against `undefined`.
+   */
+  preserveReasoning?: boolean;
+  /**
    * Explicit output-token ceiling for this connection, materialised
    * as `ANYCODE_MAX_OUTPUT_TOKENS` on the fork env — so an env value set by the
    * launching shell still wins, exactly like `reasoningEffort`.
@@ -499,6 +514,8 @@ export interface ActiveProviderView {
   promptCache?: ImplicitPromptCache;
   /** The active connection's streaming-usage policy (GitHub #1); absent = transport default, `false` = explicit opt-out. */
   includeUsage?: boolean;
+  /** The active connection's reasoning-replay override; absent = catalog policy, `false` = explicit opt-out (overrides a replay-enabled catalog entry too). */
+  preserveReasoning?: boolean;
   /** The active connection's explicit output-token ceiling; absent = catalog/default. */
   maxOutputTokens?: number;
   /** The active connection's per-model context-window override and the model it binds to; absent = catalog/assumed fallback. */
@@ -1142,6 +1159,17 @@ export interface CatalogSummaryEntry {
    * choices off this, never off `needsBaseUrl`.
    */
   isCustom?: boolean;
+  /**
+   * True when the entry's own catalog flag enables reasoning replay
+   * (`preserveReasoning: true`), projected only when declared (same
+   * conditional-spread rule as `isCustom`) — absence means the entry has no
+   * flag, exactly the reading core's `catalogPreservesReasoning` applies. The
+   * drawer matches a `custom:<id>` record's base URL against it: a matched
+   * entry without the flag makes the connection-level replay override inert
+   * (core's gate resolves the provider by base URL and returns undefined
+   * before consulting the override), so the drawer hides the select there.
+   */
+  preserveReasoning?: boolean;
   /** Transport this endpoint uses when neither env nor settings pick one (W5). */
   defaultTransport?: ProviderTransportId;
   /** Every transport this endpoint is known to speak; a UI may only offer these (W5). */
@@ -1338,6 +1366,8 @@ export interface ConnectionCreateRequest {
    * `""` sentinel on create, because omission already means Automatic.
    */
   includeUsage?: boolean;
+  /** Reasoning-replay opt-in (see `ProviderConnection.preserveReasoning`); omitted = the catalog default — no `""` sentinel on create, because omission already means Automatic. */
+  preserveReasoning?: boolean;
   /** Output-token ceiling (see `ProviderConnection.maxOutputTokens`); omitted = catalog/default. */
   maxOutputTokens?: number;
   /**
@@ -1421,6 +1451,14 @@ export interface ConnectionUpdateRequest {
    * truthiness check — the key is deleted ONLY on `""`.
    */
   includeUsage?: boolean | "";
+  /**
+   * Reasoning-replay override (GitHub #41) with the same `""` clear sentinel
+   * as `includeUsage` above: absent = keep the current value, `true`/`false` =
+   * set it, `""` = clear back to the catalog default. `false` is a MEANING
+   * (it disables replay even on a catalog entry whose own flag is on) and is
+   * deleted ONLY on `""`.
+   */
+  preserveReasoning?: boolean | "";
   /**
    * Output-token ceiling with the same `""` clear sentinel as
    * `transport`/`proxyRef` above: absent = keep the current value, a positive
@@ -1652,6 +1690,9 @@ export function activeProviderView(settings: AnycodeSettings): ActiveProviderVie
     // Conditional spread, NOT a bare assignment: `false` is a meaningful
     // opt-out and must survive projection (unlike an absent key).
     ...(connection.includeUsage !== undefined ? { includeUsage: connection.includeUsage } : {}),
+    // Same conditional-spread discipline: `false` is a MEANING here too —
+    // an explicit opt-out that must reach the host-env emission unharmed.
+    ...(connection.preserveReasoning !== undefined ? { preserveReasoning: connection.preserveReasoning } : {}),
     maxOutputTokens: connection.maxOutputTokens,
     contextWindowTokens: override?.contextWindowTokens ?? connection.contextWindowTokens,
     contextWindowModel: override?.contextWindowTokens !== undefined ? model : connection.contextWindowModel,

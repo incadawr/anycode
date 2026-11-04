@@ -850,6 +850,19 @@ describe("preserveReasoning (GitHub #41)", () => {
     ]);
   });
 
+  // The measured set has direct-API matrix evidence (2026-11-02); the off set
+  // is pinned NEGATIVELY on purpose: Anthropic/Moonshot/Kimi have doc
+  // citations but no matrix (no key), OpenAI's transport is out of scope, and
+  // vllm/custom have no catalog policy at all — none of them may drift into
+  // the enabled set without a measurement.
+  it("keeps the doc-cited-but-unmeasured and out-of-scope providers OFF", () => {
+    const off = ["anthropic", "moonshot", "kimi", "openai", "vllm", "custom"];
+    for (const id of off) {
+      expect(getBuiltinCatalog().providers.find((entry) => entry.id === id)?.preserveReasoning).toBeUndefined();
+      expect(getBuiltinCatalog().providers.filter((entry) => entry.preserveReasoning === true).map((entry) => entry.id)).not.toContain(id);
+    }
+  });
+
   it("is looked up by entry name; unknown and custom endpoints are off", () => {
     expect(catalogPreservesReasoning("Z.AI (GLM)")).toBe(true);
     expect(catalogPreservesReasoning("MiniMax (China)")).toBe(true);

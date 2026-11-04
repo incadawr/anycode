@@ -24,7 +24,7 @@ const BASELINE: Record<string, number> = {
   "components/CompactionCard.tsx": 2,
   "components/Composer.tsx": 18,
   "components/ConfirmDialog.tsx": 3,
-  "components/ConnectionDrawer.tsx": 33,
+  "components/ConnectionDrawer.tsx": 34,
   "components/ConnectionTile.tsx": 9,
   "components/ConsentDialog.tsx": 3,
   "components/ContextWindowSettings.tsx": 2,

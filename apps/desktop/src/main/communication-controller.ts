@@ -39,6 +39,8 @@ export interface CommunicationControllerDeps {
   isExternalApprovalEnabled?(sessionId: string): boolean;
   /** opens a tab for `create_session`. Absent = create_session always refuses. Settings mode only; the env-file mode never gets it. */
   createSessionByAgent?(request: CreateSessionRequest): Promise<CreateSessionOutcome>;
+  /** canonical keys with the per-project agent switch on, for `list_agent_projects`. Settings mode only; the env-file mode never gets it. */
+  listAgentProjects?(): string[];
   agentOpenedSessions?: Set<string>;
   closeSessionByAgent?(sessionId: string): Promise<CloseSessionOutcome>;
   /** Number of sessions currently switched on, for the status line. */
@@ -110,6 +112,7 @@ export function createCommunicationController(deps: CommunicationControllerDeps)
         ...(deps.agentOpenedSessions ? { agentOpenedSessions: deps.agentOpenedSessions } : {}),
         ...(deps.closeSessionByAgent ? { closeSessionByAgent: (sessionId: string) => deps.closeSessionByAgent!(sessionId) } : {}),
         ...(deps.createSessionByAgent ? { createSessionByAgent: (request: CreateSessionRequest) => deps.createSessionByAgent!(request) } : {}),
+        ...(deps.listAgentProjects ? { listAgentProjects: () => deps.listAgentProjects!() } : {}),
         ...(deps.isExternalApprovalEnabled ? { isExternalApprovalEnabled: (sessionId: string) => deps.isExternalApprovalEnabled?.(sessionId) === true } : {}),
       });
       mode = "settings";

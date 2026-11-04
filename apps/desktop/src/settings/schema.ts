@@ -300,6 +300,12 @@ const connectionSchema = z.object({
   // contract, so a hand-edited non-boolean drops just this field and reads back
   // as "Automatic" (the transport default) rather than resetting the document.
   includeUsage: z.boolean().optional().catch(undefined),
+  // Per-connection reasoning-replay override for endpoints the catalog has no
+  // policy for (custom/vLLM; see shared/settings.ts
+  // `ProviderConnection.preserveReasoning`). Same fail-soft `.catch(undefined)`
+  // discipline as `includeUsage` above, and `false` is likewise a MEANING
+  // (an explicit opt-out) that must survive the round trip.
+  preserveReasoning: z.boolean().optional().catch(undefined),
   // Live-fetched model ids (connection-scoped fetch, main/provider-ipc.ts) —
   // advisory display data, same round-trip discipline as `lastHealth`.
   models: z.array(z.string()).optional(),

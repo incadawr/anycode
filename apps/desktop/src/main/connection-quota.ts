@@ -136,8 +136,11 @@ export function withConnectionQuota(
     const previous = connection.lastQuota;
     const lastQuota: LastQuota = {
       // Same-source observations merge sparsely (absent fields keep their
-      // known values); a different source starts from a clean window.
-      ...(previous?.source === source && source !== "minimax-token-plan" ? previous : {}),
+      // known values); a different source starts from a clean window. The two
+      // plan pollers (MiniMax, GLM coding plan) are excluded: each of their
+      // answers is a COMPLETE snapshot, so it replaces the whole line — a
+      // weekly-only answer must not keep the earlier 5-hour window's resetsAt.
+      ...(previous?.source === source && source !== "minimax-token-plan" && source !== "glm-coding-plan" ? previous : {}),
       ...quota,
       observedAt,
       source,

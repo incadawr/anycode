@@ -38,12 +38,16 @@ import {
   chunkText,
   classifyTelegramError,
   clampMaxReply,
+  folderName,
   jitter,
   nextBackoff,
   parseAllowlist,
   parseCommand,
+  parseNewArgs,
   redact,
+  renderProjects,
   renderSessions,
+  resolveProject,
   resolveSession,
   screenUpdate,
   sessionLabel,
@@ -56,6 +60,7 @@ const TURNS_PER_CHAT_MAX = 3;
 const UPDATES_PER_MINUTE_MAX = 20;
 const WAIT_MAX_MS = 60 * 60 * 1000;
 const NUMBERED_TTL_MS = 10 * 60 * 1000;
+const CREATED_MAX = 50;
 const HEARTBEAT_MS = 10 * 60 * 1000;
 const UNKNOWN_LOG_MS = 60 * 1000;
 const RESULT_RETRY_MAX = 3;
@@ -109,7 +114,7 @@ export function validApiBase(base) {
 }
 
 function emptyState() {
-  return { offset: undefined, lastUpdateId: 0, chats: {}, pending: [], approvals: [], tokenSeq: 0 };
+  return { offset: undefined, lastUpdateId: 0, chats: {}, pending: [], approvals: [], tokenSeq: 0, created: [] };
 }
 
 /** Tolerant load: anything unreadable or malformed becomes defaults. Pending turns older than 2 h are dropped. */
@@ -139,7 +144,11 @@ export function sanitizeState(raw, now) {
         .slice(-APPROVAL_TOKEN_MAX)
     : [];
   const tokenSeq = Number.isSafeInteger(raw.tokenSeq) && raw.tokenSeq >= 0 ? raw.tokenSeq : 0;
-  return { offset, lastUpdateId, chats, pending, approvals, tokenSeq };
+  // Sessions this bridge created with /new (oldest dropped): the only ones /close may close.
+  const created = Array.isArray(raw.created)
+    ? raw.created.filter((id) => typeof id === "string" && id !== "").slice(-CREATED_MAX)
+    : [];
+  return { offset, lastUpdateId, chats, pending, approvals, tokenSeq, created };
 }
 
 /** The default state store: a 0700 directory and 0600 files, written atomically. */
@@ -215,6 +224,7 @@ export function createBridge(options = {}) {
   const lastSentByChat = new Map();
   const waiters = new Map();
   const numbered = new Map();
+  const projectNumbers = new Map();
   const updateWindows = new Map();
   const lastNoticeAt = new Map();
   const lastUnknownLogAt = new Map();
@@ -412,6 +422,8 @@ export function createBridge(options = {}) {
   // ── pending turns and result waiters ──
 
   const pendingFor = (chatId) => state.pending.filter((entry) => entry.chatId === chatId);
+  /** The per-chat waiting cap, shared by plain text (sendTurn) and /new's first turn. */
+  const chatAtTurnCap = (chatId) => pendingFor(chatId).length >= TURNS_PER_CHAT_MAX;
 
   async function addPending(entry) {
     if (state.pending.some((item) => item.messageId === entry.messageId)) return;
@@ -510,6 +522,11 @@ export function createBridge(options = {}) {
     return Array.isArray(list?.sessions) ? list.sessions : [];
   }
 
+  async function projectsNow() {
+    const list = await api("list_agent_projects", {});
+    return Array.isArray(list?.projects) ? list.projects : [];
+  }
+
   /** Revalidates the selected session against a fresh list. Clears the selection and tells the user when it is gone. */
   async function revalidate(chatId) {
     const chat = state.chats[String(chatId)];
@@ -532,7 +549,7 @@ export function createBridge(options = {}) {
       await reply(chatId, `Message too long (max ${SESSION_PAYLOAD_MAX}).`);
       return;
     }
-    if (pendingFor(chatId).length >= TURNS_PER_CHAT_MAX) {
+    if (chatAtTurnCap(chatId)) {
       await reply(chatId, "Too many pending messages, wait for an answer.");
       return;
     }
@@ -640,6 +657,121 @@ export function createBridge(options = {}) {
       state.chats[String(chatId)] = { sessionId: found.session.sessionId, ...(found.session.handle ? { handle: found.session.handle } : {}) };
       await persist();
       await reply(chatId, `Selected ${sessionLabel(found.session)}.`);
+      return;
+    }
+    if (name === "projects") {
+      const projects = await projectsNow();
+      projectNumbers.set(chatId, { at: now(), workspaces: projects.map((project) => project.workspace) });
+      await reply(chatId, renderProjects(projects));
+      return;
+    }
+    if (name === "new") {
+      if (args === "") {
+        await reply(chatId, "Usage: /new <number|name> [engine:core|codex|claude] [model:…] [effort:…] [handle:…] <text>. Send /projects first.");
+        return;
+      }
+      const projects = await projectsNow();
+      const fresh = projectNumbers.get(chatId);
+      const workspaces = fresh !== undefined && now() - fresh.at <= NUMBERED_TTL_MS ? fresh.workspaces : undefined;
+      const parsed = parseNewArgs(args);
+      const found = resolveProject(projects, parsed.projectRef, workspaces);
+      if (found.error === "ambiguous") {
+        await reply(chatId, "Ambiguous project name, use the number from /projects.");
+        return;
+      }
+      if (found.error !== undefined) {
+        await reply(chatId, "No such project. Send /projects.");
+        return;
+      }
+      if (parsed.text.length > SESSION_PAYLOAD_MAX) {
+        await reply(chatId, `Message too long (max ${SESSION_PAYLOAD_MAX}).`);
+        return;
+      }
+      // /new's first turn waits in the same per-chat queue as plain text, so the
+      // waiting cap applies before a session is even created.
+      if (chatAtTurnCap(chatId)) {
+        await reply(chatId, "Too many pending messages, wait for an answer.");
+        return;
+      }
+      let created;
+      try {
+        created = await api("create_session", {
+          workspace: found.project.workspace,
+          ...(parsed.engine ? { engine: parsed.engine } : {}),
+          ...(parsed.model ? { model: parsed.model } : {}),
+          ...(parsed.effort ? { effort: parsed.effort } : {}),
+          ...(parsed.handle ? { handle: parsed.handle } : {}),
+          ...(parsed.text !== "" ? { firstMessage: parsed.text } : {}),
+        });
+      } catch (error) {
+        // A failure AFTER the tab exists (firstMessage not delivered, or the tab
+        // landed outside the folders list) names the ids it created. The tab is
+        // real: record it so /close can close it, select it, and answer in plain
+        // words — the raw error sentence would drop ids into the chat.
+        const carriedId = error instanceof ToolError ? /sessionId (\S+), tabId \S+/.exec(error.message)?.[1] : undefined;
+        if (carriedId !== undefined) {
+          state.created = [...state.created, carriedId].slice(-CREATED_MAX);
+          state.chats[String(chatId)] = { sessionId: carriedId };
+          await persist();
+          await reply(chatId, "The session was opened but the first message could not be delivered. It is selected here — send your text as a new message, or close it with /close.");
+          return;
+        }
+        const code = error instanceof ToolError ? /^create_session ([a-z_]+):/.exec(error.message)?.[1] : undefined;
+        if (code === "not_allowed") {
+          await reply(chatId, 'This project does not allow agents. In AnyCode, open the project\'s sidebar menu and switch on "Allow agents to open tasks here", then send /projects.');
+          return;
+        }
+        if (code === "rate_limited") {
+          await reply(chatId, "Too many sessions created just now (max 5 per minute); try again in a minute.");
+          return;
+        }
+        if (code === "too_many") {
+          await reply(chatId, "At most 8 sessions opened by agents can be alive; close one with /close (or in AnyCode) first.");
+          return;
+        }
+        throw error;
+      }
+      const label = sessionLabel(created);
+      state.created = [...state.created, created.sessionId].slice(-CREATED_MAX);
+      state.chats[String(chatId)] = { sessionId: created.sessionId, ...(created.handle ? { handle: created.handle } : {}) };
+      await persist();
+      await reply(chatId, `Created ${label} in ${folderName(found.project.workspace)}.`);
+      if (typeof created.messageId === "string" && created.messageId !== "") {
+        const entry = { chatId, sessionId: created.sessionId, messageId: created.messageId, startedAt: now(), label };
+        await addPending(entry);
+        startWaiter(entry);
+      } else {
+        await reply(chatId, "The session is open but no first message was sent; send your text as a new message.");
+      }
+      return;
+    }
+    if (name === "close") {
+      const chat = state.chats[String(chatId)];
+      if (!chat) {
+        await reply(chatId, "No session selected. Send /sessions, then /use <name>.");
+        return;
+      }
+      if (!state.created.includes(chat.sessionId)) {
+        await reply(chatId, "Only sessions created from Telegram can be closed here.");
+        return;
+      }
+      try {
+        await api("close_session", { sessionId: chat.sessionId });
+      } catch (error) {
+        const code = error instanceof ToolError ? /^close_session ([a-z_]+):/.exec(error.message)?.[1] : undefined;
+        if (code === "busy") {
+          await reply(chatId, "Stop it first: /stop, then /close.");
+          return;
+        }
+        if (code === "not_agent_opened") {
+          await reply(chatId, "AnyCode was restarted; close this tab in AnyCode.");
+          return;
+        }
+        throw error;
+      }
+      state.created = state.created.filter((id) => id !== chat.sessionId);
+      await clearSelectionIf(chatId, chat.sessionId);
+      await reply(chatId, `Closed ${sessionLabel(chat)}.`);
       return;
     }
     if (name === "steer") {

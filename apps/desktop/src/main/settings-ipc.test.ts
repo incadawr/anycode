@@ -602,6 +602,54 @@ describe("handleConnectionCreate/Update — includeUsage policy (GitHub #1)", ()
   });
 });
 
+// The reasoning-replay override mirrors the usage policy's lifecycle exactly —
+// including the non-negotiable part: `false` is a MEANING (an explicit opt-out
+// that also disables replay on a replay-enabled catalog entry), so it must
+// reach disk and survive every truthiness check, and only the `""` sentinel
+// clears the key.
+describe("handleConnectionCreate/Update — preserveReasoning override", () => {
+  it("creates true/false, updates set/clear-\\\"\\\"/keep-absent without touching the sibling", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    expect((await handleConnectionCreate(deps, { providerId: "z-ai", model: "m", preserveReasoning: true })).ok).toBe(true); // conn-1
+    expect((await handleConnectionCreate(deps, { providerId: "z-ai", model: "m", preserveReasoning: false })).ok).toBe(true); // conn-2
+    expect((await handleConnectionCreate(deps, { providerId: "z-ai", model: "m" })).ok).toBe(true); // conn-3
+    let loaded = await loadSettings(settingsPath);
+    // Create persists the booleans verbatim (Automatic is the ABSENT key, never false).
+    expect(loaded.settings.provider.connections[0]?.preserveReasoning).toBe(true);
+    expect(loaded.settings.provider.connections[1]?.preserveReasoning).toBe(false);
+    expect("preserveReasoning" in (loaded.settings.provider.connections[2] ?? {})).toBe(false);
+
+    // Update to a boolean, clear with "", keep on an unrelated edit — and
+    // conn-2's explicit false survives a label edit untouched.
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", preserveReasoning: false })).ok).toBe(true);
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", preserveReasoning: "" })).ok).toBe(true);
+    expect((await handleConnectionUpdate(deps, { id: "conn-2", label: "Work" })).ok).toBe(true);
+    loaded = await loadSettings(settingsPath);
+    expect("preserveReasoning" in (loaded.settings.provider.connections[0] ?? {})).toBe(false);
+    expect(loaded.settings.provider.connections[1]?.preserveReasoning).toBe(false);
+    expect(loaded.settings.provider.connections[1]?.label).toBe("Work");
+    expect("preserveReasoning" in (loaded.settings.provider.connections[2] ?? {})).toBe(false);
+  });
+
+  it("refuses nonboolean values at the IPC boundary", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await handleConnectionCreate(deps, { providerId: "z-ai", model: "m" }); // conn-1
+    for (const bad of ["true", "off", 0, 1, null]) {
+      expect(await handleConnectionCreate(deps, { providerId: "z-ai", model: "m", preserveReasoning: bad })).toEqual({
+        ok: false,
+        reason: "invalid",
+      });
+      expect(await handleConnectionUpdate(deps, { id: "conn-1", preserveReasoning: bad })).toEqual({
+        ok: false,
+        reason: "invalid",
+      });
+    }
+    const loaded = await loadSettings(settingsPath);
+    expect(loaded.settings.provider.connections.length).toBe(1);
+    expect("preserveReasoning" in (loaded.settings.provider.connections[0] ?? {})).toBe(false);
+  });
+});
+
 describe("handleGet — snapshot projection", () => {
   it("returns a full snapshot with SecretStatus (never a value)", async () => {
     const snap = await handleGet(makeDeps());

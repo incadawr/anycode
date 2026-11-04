@@ -34,6 +34,9 @@ rules for services are in [channel plugins](../../docs/development/channel-plugi
 | --- | --- |
 | `/sessions` | Lists shared sessions. Numbers work with `/use` for 10 minutes. |
 | `/use <handle, id, id prefix or number>` | Selects a session. `/use` alone shows the selection. |
+| `/projects` | Lists the projects where **Allow agents to open tasks here** is on. Numbers work with `/new` for 10 minutes. |
+| `/new <number or name> [engine:core/codex/claude] [model:…] [effort:…] [handle:…] <text>` | Opens a session in such a project, selects it and sends the text as its first turn. |
+| `/close` | Closes the selected session, but only one this bridge opened with `/new`. |
 | any other text | Sends a new turn to the selected session (queued while it is busy). |
 | `/steer <text>` | Adds text to the running turn. Codex only; other engines may refuse it. |
 | `/stop` | Stops the running turn of the selected session, like the Stop button. |
@@ -70,8 +73,11 @@ does not start until you save that secret; saving it starts the service.
   Groups, channels, edited messages, buttons and bot senders are dropped before any
   reply or parsing. A stranger gets no reply. The log shows at most one
   `[ignored]` line per minute per id, never the text.
-- The bridge adds no sessions. It only sees sessions you switched on in the Sessions
-  API, and it names them by handle, state and folder name (not the full path).
+- The bridge only sees sessions you switched on in the Sessions API, and it names
+  them by handle, state and folder name (not the full path).
+- The bridge can open a session only in a project where you switched on **Allow
+  agents to open tasks here** (the Sessions API allows at most 5 per minute and 8
+  such tabs at once), and `/close` closes only a session the bridge itself opened.
 - Session output is plain text. The Sessions API token and the bot token are
   redacted from every reply, log line and state file.
 - Approvals reach Telegram only where the session's **External approvals** switch

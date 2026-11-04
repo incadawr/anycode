@@ -38,7 +38,7 @@ export function clampMaxReply(raw) {
   return Math.min(60000, Math.max(1000, value));
 }
 
-const KNOWN_COMMANDS = new Set(["start", "help", "sessions", "use", "steer", "status", "stop", "approvals"]);
+const KNOWN_COMMANDS = new Set(["start", "help", "sessions", "use", "projects", "new", "close", "steer", "status", "stop", "approvals"]);
 
 /**
  * Splits an incoming text into a plain message or a command. Commands are
@@ -193,6 +193,79 @@ export function resolveSession(sessions, query, numbered) {
   return { error: "none" };
 }
 
+/** `/projects` text: one numbered line per project that allows agents, or how to turn the switch on. */
+export function renderProjects(projects) {
+  if (!Array.isArray(projects) || projects.length === 0) {
+    return 'No projects allow agents yet. In AnyCode, open a project\'s sidebar menu and switch on "Allow agents to open tasks here", then send /projects.';
+  }
+  return projects.map((project, index) => `${index + 1}. ${folderName(project.workspace)}`).join("\n");
+}
+
+/**
+ * Resolves a `/new` project argument against a fresh project list: a number from
+ * the last `/projects` (`numbered` is that list of workspace paths, or undefined
+ * when expired), then an exact folder-name match, then a unique folder-name prefix.
+ */
+export function resolveProject(projects, query, numbered) {
+  const q = String(query ?? "").trim();
+  if (/^[0-9]+$/.test(q) && numbered !== undefined) {
+    const workspace = numbered[Number(q) - 1];
+    const project = workspace === undefined ? undefined : projects.find((candidate) => candidate.workspace === workspace);
+    if (project) return { project };
+  }
+  const byName = projects.filter((project) => folderName(project.workspace) === q);
+  if (byName.length === 1) return { project: byName[0] };
+  const prefixed = projects.filter((project) => folderName(project.workspace).startsWith(q));
+  if (prefixed.length === 1) return { project: prefixed[0] };
+  if (prefixed.length > 1) return { error: "ambiguous" };
+  return { error: "none" };
+}
+
+const NEW_FLAG_PATTERN = /^(engine|model|effort|handle):(.+)$/;
+
+/**
+ * Parses `/new` arguments: the first token selects the project (a number from
+ * `/projects` or a folder name), then `key:value` tokens may set engine (only
+ * the three real values count), model, effort and handle — but only while they
+ * lead, before the message starts. Everything from the first non-flag token on
+ * is the message, passed through verbatim (newlines and indentation kept).
+ * Only the one separator between the last leading token and the message —
+ * same-line spaces and tabs, or a single newline — is dropped.
+ */
+export function parseNewArgs(args) {
+  let rest = String(args ?? "").replace(/^\s+/, "");
+  const dropSeparator = () => {
+    rest = rest.replace(/^(?:[ \t]*\r?\n|[ \t]+)/, "");
+  };
+  const takeToken = () => {
+    const match = /^\S+/.exec(rest);
+    if (!match) return undefined;
+    rest = rest.slice(match[0].length);
+    dropSeparator();
+    return match[0];
+  };
+  const projectRef = takeToken();
+  const flags = {};
+  while (rest !== "") {
+    const token = /^\S+/.exec(rest)?.[0];
+    if (token === undefined) break;
+    const match = NEW_FLAG_PATTERN.exec(token);
+    if (!match || (match[1] === "engine" && !["core", "codex", "claude"].includes(match[2]))) break;
+    flags[match[1]] = match[2];
+    rest = rest.slice(token.length);
+    dropSeparator();
+  }
+  return {
+    projectRef,
+    ...(flags.engine !== undefined ? { engine: flags.engine } : {}),
+    ...(flags.model !== undefined ? { model: flags.model } : {}),
+    ...(flags.effort !== undefined ? { effort: flags.effort } : {}),
+    ...(flags.handle !== undefined ? { handle: flags.handle } : {}),
+    // A tail of pure whitespace is still no message.
+    text: rest.trim() === "" ? "" : rest,
+  };
+}
+
 /** Conflict ladder 5, 10, 20, 40, 60 s (cap 60). Offline ladder 1, 2, 4 ... 30 s (cap 30). Exact values. */
 export function nextBackoff(kind, attempt) {
   const step = Math.max(0, attempt);
@@ -225,6 +298,9 @@ export const HELP_TEXT = [
   "AnyCode remote control",
   "/sessions — list shared sessions",
   "/use <name|id|number> — choose a session",
+  "/projects — list projects that allow agents to open tasks",
+  "/new <number|name> [engine:core|codex|claude] [model:…] [effort:…] [handle:…] <text> — open a session in a project",
+  "/close — close the selected session if this bridge created it",
   "/steer <text> — add to the running turn (Codex only)",
   "/stop — stop the running turn of the selected session",
   "/approvals — list the approvals waiting in the selected session",

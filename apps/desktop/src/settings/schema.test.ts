@@ -1425,6 +1425,69 @@ describe("connection.includeUsage (GitHub #1) — an explicit false survives, ma
   });
 });
 
+describe("connection.preserveReasoning — an explicit false survives, malformed fails soft", () => {
+  it("parses true/false/absent and drops only a hand-edited non-boolean", () => {
+    const valid = settingsSchema.safeParse(
+      JSON.parse(
+        JSON.stringify({
+          ...cloneDefaults(),
+          provider: {
+            activeConnectionId: "c1",
+            connections: [
+              { id: "c1", providerId: "z-ai", label: "Work", preserveReasoning: false },
+              { id: "c2", providerId: "openai", model: "gpt-5", preserveReasoning: true },
+            ],
+          },
+        }),
+      ),
+    );
+    expect(valid.success).toBe(true);
+    if (valid.success) {
+      // `false` is a MEANING, not an absence — it must survive the round trip.
+      expect(valid.data.provider.connections[0]?.preserveReasoning).toBe(false);
+      expect(JSON.stringify(valid.data.provider.connections[0])).toContain('"preserveReasoning":false');
+      expect(valid.data.provider.connections[1]?.preserveReasoning).toBe(true);
+    }
+
+    // Absent = the catalog default: no key is invented.
+    const absent = settingsSchema.safeParse(
+      JSON.parse(JSON.stringify({ ...cloneDefaults(), provider: { connections: [{ id: "c1", providerId: "z-ai" }] } })),
+    );
+    expect(absent.success).toBe(true);
+    if (absent.success) {
+      expect("preserveReasoning" in (absent.data.provider.connections[0] ?? {})).toBe(false);
+    }
+
+    // A hand-edited bad value drops JUST this field; the rest of the document
+    // survives (same `.catch(undefined)` fail-soft contract as includeUsage).
+    for (const garbage of ["true", "off", 0, 1, null, {}]) {
+      const parsedGarbage = settingsSchema.safeParse({
+        version: 2,
+        provider: {
+          activeConnectionId: "c1",
+          connections: [
+            { id: "c1", providerId: "z-ai", label: "Work", preserveReasoning: garbage },
+            { id: "c2", providerId: "openai", model: "gpt-5" },
+          ],
+        },
+        tools: { maxTurns: 7 },
+        permissions: { alwaysAllow: [{ toolName: "Bash", pattern: "git *" }] },
+        ui: { theme: "dark" },
+        security: { allowWeakSecretStorage: false },
+      });
+      expect(parsedGarbage.success).toBe(true);
+      if (parsedGarbage.success) {
+        expect(parsedGarbage.data.provider.connections[0]?.preserveReasoning).toBeUndefined();
+        expect(JSON.stringify(parsedGarbage.data.provider.connections[0])).not.toContain("preserveReasoning");
+        expect(parsedGarbage.data.provider.connections[0]?.label).toBe("Work");
+        expect(parsedGarbage.data.provider.connections[1]).toEqual({ id: "c2", providerId: "openai", model: "gpt-5" });
+        expect(parsedGarbage.data.tools).toEqual({ maxTurns: 7 });
+        expect(parsedGarbage.data.ui).toEqual({ theme: "dark" });
+      }
+    }
+  });
+});
+
 describe("provider.custom (cut §9.2) — round-trip + zod-granularity", () => {
   it("reads a file with no provider.custom, round-tripping byte-identically", () => {
     const base = cloneDefaults();

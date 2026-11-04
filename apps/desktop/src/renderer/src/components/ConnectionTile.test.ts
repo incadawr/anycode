@@ -433,6 +433,16 @@ describe("connectionQuotaLine (the provider-reported quota line)", () => {
     }, NOW)).toBe("5h · 20% left · resets in 5h | Weekly · 40% left · resets in 5d");
   });
 
+  // The GLM coding-plan observation (source "glm-coding-plan") renders in
+  // the same 5h + Weekly slots — the tile is provider-agnostic.
+  it("renders the GLM coding-plan line in the same 5h + Weekly slots", () => {
+    expect(connectionQuotaLine({
+      usedPercent: 6, windowDurationMins: 300, resetsAt: Date.parse("2026-11-05T00:57:00.000Z") / 1000,
+      secondary: { usedPercent: 79, windowDurationMins: 10080, resetsAt: Date.parse("2026-11-04T23:56:00.000Z") / 1000 },
+      observedAt: "2026-10-24T12:00:00.000Z", source: "glm-coding-plan",
+    }, Date.parse("2026-11-04T12:00:00.000Z"))).toBe("5h · 94% left · resets in 13h | Weekly · 21% left · resets in 12h");
+  });
+
   it("returns null for an absent lastQuota (no block, no fabricated 0%)", () => {
     expect(connectionQuotaLine(undefined, NOW)).toBeNull();
   });

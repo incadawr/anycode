@@ -100,7 +100,7 @@ import { CodexEnginePane } from "./CodexEnginePane.js";
 import { ClaudeEnginePane } from "./ClaudeEnginePane.js";
 import { ClaudeContextWindowSection } from "./ClaudeContextWindowSection.js";
 import { ConnectionDrawer } from "./ConnectionDrawer.js";
-import { useMiniMaxQuotaPoll } from "../minimax-quota-poll.js";
+import { useProviderQuotaPoll } from "../provider-quota-poll.js";
 import { ProxyProfilesPane } from "./ProxyProfilesPane.js";
 import { ProxyRefPicker } from "./ProxyRefPicker.js";
 import { ConnectionTile, connectionCredentialKey, connectionDisplayName, connectionSecretKey } from "./ConnectionTile.js";
@@ -687,6 +687,12 @@ export function customProviderCatalogEntries(
     models: record.models.map((id) => ({ id })),
     defaultTransport: CUSTOM_KIND_DEFAULT_TRANSPORT[record.kind],
     supportedTransports: CUSTOM_KIND_SUPPORTED_TRANSPORTS[record.kind],
+    // GitHub #41 review: the record's own endpoint under the same key the
+    // builtin summary uses, so the drawer can tell when a `custom:<id>`
+    // connection's base URL normalises onto a BUILTIN catalog entry — there
+    // core's replay gate resolves the provider by base URL and the entry's
+    // own flag governs, making the connection override inert.
+    ...(record.baseUrl === "" ? {} : { catalogBaseUrl: record.baseUrl }),
     ...(record.authOptional === true ? { authOptional: true } : {}),
   }));
 }
@@ -2460,7 +2466,7 @@ function UpdateNoticeBanner({ status, store }: { status: UpdateStatus; store: Se
  * once — same idempotent `set()`.
  */
 export function SettingsDialog({ open, onClose, store = useSettingsStore }: SettingsDialogProps) {
-  useMiniMaxQuotaPoll(open);
+  useProviderQuotaPoll(open);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const leaveGuardRef = useRef<((action: () => void, onCancel?: () => void) => void) | null>(null);
   const registerLeaveGuard = useCallback((guard: ((action: () => void, onCancel?: () => void) => void) | null) => { leaveGuardRef.current = guard; }, []);

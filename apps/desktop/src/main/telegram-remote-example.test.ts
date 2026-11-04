@@ -5,6 +5,7 @@
  * Only T22 spawns the service script as a child process.
  */
 import { spawn, type ChildProcess } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -136,7 +137,9 @@ function msg(updateId: number, text: string, from: number = USER): Record<string
   return { update_id: updateId, message: { message_id: updateId, from: { id: from, is_bot: false }, chat: { id: from, type: "private" }, text } };
 }
 
-async function harness(opts: { env?: Record<string, string | undefined>; bridge?: Record<string, unknown>; sessionsOn?: boolean; noSessions?: boolean; autoStart?: boolean } = {}): Promise<Harness> {
+type CreateHook = (request: { workspace: string; engine?: string; model?: string; effort?: string; handle?: string }) => Promise<{ ok: true; sessionId: string; tabId: string; handle?: string } | { ok: false; reason: string; detail?: string }>;
+
+async function harness(opts: { env?: Record<string, string | undefined>; bridge?: Record<string, unknown>; sessionsOn?: boolean; noSessions?: boolean; autoStart?: boolean; agentProjects?: string[]; createSession?: CreateHook; closeSession?: (sessionId: string) => Promise<{ ok: boolean; reason?: string }> } = {}): Promise<Harness> {
   const dir = await mkdtemp(join(tmpdir(), "anycode-telegram-remote-"));
   cleanups.push(() => rm(dir, { recursive: true, force: true }));
   const tg = await startFakeTelegram();
@@ -179,6 +182,29 @@ async function harness(opts: { env?: Record<string, string | undefined>; bridge?
       return undefined;
     }),
   };
+  // The /new hooks mirror main: a created tab must be listed AND shared at once,
+  // or create_session's firstMessage would stall into not_ready.
+  const createHook = opts.createSession
+    ? async (request: { workspace: string }) => {
+        const outcome = await opts.createSession!(request as { workspace: string });
+        if (outcome && outcome.ok === true) {
+          tabs.push({ id: outcome.sessionId, ws: request.workspace });
+          exposed.add(outcome.sessionId);
+        }
+        return outcome;
+      }
+    : undefined;
+  const closeHook = opts.closeSession
+    ? async (sessionId: string) => {
+        const outcome = await opts.closeSession!(sessionId);
+        if (outcome && outcome.ok === true) {
+          const at = tabs.findIndex((tab) => tab.id === sessionId);
+          if (at >= 0) tabs.splice(at, 1);
+          exposed.delete(sessionId);
+        }
+        return outcome;
+      }
+    : undefined;
   const service = await startCommunicationServer({
     manager,
     userData: dir,
@@ -186,6 +212,9 @@ async function harness(opts: { env?: Record<string, string | undefined>; bridge?
     isSessionExposed: (sid: string) => exposed.has(sid),
     isExternalApprovalEnabled: (sid: string) => approvalsOn.has(sid),
     handleOf: (sid: string) => handles[sid],
+    listAgentProjects: () => [...(opts.agentProjects ?? [])],
+    ...(createHook ? { createSessionByAgent: createHook } : {}),
+    ...(closeHook ? { closeSessionByAgent: closeHook } : {}),
     pollMs: 10,
   } as any);
   cleanups.push(() => service.close());
@@ -327,6 +356,29 @@ describe("telegram-remote example", () => {
     expect(offline).toEqual([1000, 2000, 4000, 8000, 16000, 30000, 30000]);
     expect(lib.jitter(1000, 0)).toBe(800);
     expect(lib.jitter(1000, 0.999)).toBeLessThanOrEqual(1200);
+  });
+
+  it("T5b /new parses flags only before the message starts and keeps the message text verbatim", async () => {
+    const lib = await loadExample("lib.mjs");
+    // A key:value token after the message has begun is message text, not a flag.
+    expect(lib.parseNewArgs("1 Explain model:foo")).toEqual({ projectRef: "1", text: "Explain model:foo" });
+    // Leading flags still apply; a later one stays in the text.
+    expect(lib.parseNewArgs("1 model:terra Explain model:foo")).toEqual({ projectRef: "1", model: "terra", text: "Explain model:foo" });
+    // Multi-line text keeps its newlines and indentation.
+    expect(lib.parseNewArgs("ws-build\ndef foo():\n    return 1")).toEqual({ projectRef: "ws-build", text: "def foo():\n    return 1" });
+    expect(lib.parseNewArgs("ws-build engine:codex model:terra effort:high handle:flag-bot go")).toEqual({ projectRef: "ws-build", engine: "codex", model: "terra", effort: "high", handle: "flag-bot", text: "go" });
+  });
+
+  it("T5c /new drops only the one separator between the flags and the message", async () => {
+    const lib = await loadExample("lib.mjs");
+    // Spaces on the flag's own line are the separator; the rest of the line is the message.
+    expect(lib.parseNewArgs("ws-build model:terra    alpha\nbeta\n")).toEqual({ projectRef: "ws-build", model: "terra", text: "alpha\nbeta\n" });
+    // A message starting on the next line keeps its indentation and its trailing newline;
+    // only the separator newline itself is dropped.
+    expect(lib.parseNewArgs("ws-build model:terra\n    alpha\n    beta\n")).toEqual({ projectRef: "ws-build", model: "terra", text: "    alpha\n    beta\n" });
+    // A tail of pure whitespace is still no message.
+    expect(lib.parseNewArgs("ws-build model:terra\n  \n")).toEqual({ projectRef: "ws-build", model: "terra", text: "" });
+    expect(lib.parseNewArgs("ws-build go")).toEqual({ projectRef: "ws-build", text: "go" });
   });
 
   // ── Telegram transport ──
@@ -548,6 +600,199 @@ describe("telegram-remote example", () => {
     expect(text.split("\n")).toHaveLength(31);
     expect(text.endsWith("…and 5 more")).toBe(true);
     expect(lib.renderSessions([], undefined)).toContain("Sessions API row");
+  });
+
+  // ── /projects, /new and /close ──
+
+  it("/projects lists the agent-allowed projects numbered, or names the switch when there are none", async () => {
+    const lib = await loadExample("lib.mjs");
+    expect(lib.renderProjects([{ workspace: "/home/me/app" }, { workspace: "/home/me/tools" }])).toBe("1. app\n2. tools");
+    expect(lib.renderProjects([])).toContain("Allow agents to open tasks here");
+
+    const empty = await harness();
+    empty.tg.push(msg(1, "/projects"));
+    await waitFor(() => texts(empty).length === 1);
+    expect(texts(empty)[0]).toContain("Allow agents to open tasks here");
+
+    const opts: { agentProjects: string[] } = { agentProjects: [] };
+    const h = await harness(opts);
+    opts.agentProjects.push(join(h.dir, "ws-build"), join(h.dir, "ws-notes"));
+    h.tg.push(msg(1, "/projects"));
+    await waitFor(() => texts(h).length === 1);
+    expect(texts(h)[0]).toBe("1. ws-build\n2. ws-notes");
+  });
+
+  it("/new by number opens a session end to end: first message delivered, selection set, next text goes there, answer returns", async () => {
+    let counter = 0;
+    const createSession = vi.fn<CreateHook>(async (request) => {
+      counter += 1;
+      const sessionId = `agent-${String(counter).padStart(4, "0")}aaaa`;
+      return { ok: true, sessionId, tabId: `tab-${counter}`, ...(request.handle ? { handle: request.handle } : {}) };
+    });
+    const opts: { agentProjects: string[]; createSession: CreateHook } = { agentProjects: [], createSession };
+    const h = await harness(opts);
+    opts.agentProjects.push(join(h.dir, "ws-build"), join(h.dir, "ws-notes"));
+    h.tg.push(msg(1, "/projects"));
+    h.tg.push(msg(2, "/new 2 fix the bug"));
+    await waitFor(() => texts(h).some((text) => text.startsWith("Created ")));
+    const sid = "agent-0001aaaa";
+    expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ workspace: realpathSync(join(h.dir, "ws-notes")) }));
+    const first = apiCallsOf(h, "send_message")[0]!;
+    expect(first.sid).toBe(sid);
+    expect(first.payload).toMatchObject({ payload: "fix the bug", mode: "next_turn" });
+    expect(h.bridge.state().chats[String(USER)]).toEqual({ sessionId: sid });
+    expect(h.bridge.state().created).toEqual([sid]);
+    const messageId = (first.payload as { messageId: string }).messageId;
+    h.results.set(messageId, () => ({ state: "done", latestResult: { publicAnswer: "NEW ANSWER", turnId: "t" }, limitation: "L" }));
+    await waitFor(() => texts(h).some((text) => text === `[${sid.slice(0, 8)}] NEW ANSWER`));
+    h.tg.push(msg(3, "and then this"));
+    await waitFor(() => apiCallsOf(h, "send_message").length === 2);
+    expect(apiCallsOf(h, "send_message")[1]!.sid).toBe(sid);
+  });
+
+  it("/new forwards the engine, model, effort and handle flags and selects with the handle", async () => {
+    const createSession = vi.fn<CreateHook>(async () => ({ ok: true, sessionId: "agent-flags-01", tabId: "tab-1", handle: "flag-bot" }));
+    const opts: { agentProjects: string[]; createSession: CreateHook } = { agentProjects: [], createSession };
+    const h = await harness(opts);
+    opts.agentProjects.push(join(h.dir, "ws-build"));
+    h.tg.push(msg(1, "/new ws-build engine:codex model:terra effort:high handle:flag-bot go"));
+    await waitFor(() => texts(h).some((text) => text.startsWith("Created ")));
+    expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ workspace: realpathSync(join(h.dir, "ws-build")), engine: "codex", model: "terra", effort: "high", handle: "flag-bot" }));
+    expect(texts(h)[0]).toBe("Created flag-bot in ws-build.");
+    expect(h.bridge.state().chats[String(USER)]).toEqual({ sessionId: "agent-flags-01", handle: "flag-bot" });
+  });
+
+  it("/new refusals: not_allowed without a create hook, rate_limited and too_many from the hook, usage, unknown and ambiguous projects, over 32000 chars", async () => {
+    // No create hook wired: the real server refuses not_allowed (fail closed).
+    const opts: { agentProjects: string[] } = { agentProjects: [] };
+    const h = await harness(opts);
+    opts.agentProjects.push(join(h.dir, "ws-build"), join(h.dir, "ws-notes"));
+    h.tg.push(msg(1, "/new ws-build go"));
+    await waitFor(() => texts(h).length === 1);
+    expect(texts(h)[0]).toContain("does not allow agents");
+    expect(texts(h)[0]).toContain("Allow agents to open tasks here");
+    expect(h.bridge.state().created).toEqual([]);
+
+    h.tg.push(msg(2, "/new"));
+    h.tg.push(msg(3, "/new no-such-project hi"));
+    h.tg.push(msg(4, "/new ws go"));
+    h.tg.push(msg(5, `/new ws-build ${"x".repeat(32001)}`));
+    await waitFor(() => texts(h).length === 5);
+    expect(texts(h)[1]).toContain("Usage: /new");
+    expect(texts(h)[2]).toBe("No such project. Send /projects.");
+    expect(texts(h)[3]).toBe("Ambiguous project name, use the number from /projects.");
+    expect(texts(h)[4]).toBe("Message too long (max 32000).");
+
+    const rateOpts: { agentProjects: string[]; createSession: CreateHook } = { agentProjects: [], createSession: async () => ({ ok: false, reason: "rate_limited" }) };
+    const rate = await harness(rateOpts);
+    rateOpts.agentProjects.push(join(rate.dir, "ws-build"));
+    rate.tg.push(msg(1, "/new ws-build go"));
+    await waitFor(() => texts(rate).length === 1);
+    expect(texts(rate)[0]).toContain("max 5 per minute");
+
+    const manyOpts: { agentProjects: string[]; createSession: CreateHook } = { agentProjects: [], createSession: async () => ({ ok: false, reason: "too_many" }) };
+    const many = await harness(manyOpts);
+    manyOpts.agentProjects.push(join(many.dir, "ws-build"));
+    many.tg.push(msg(1, "/new ws-build go"));
+    await waitFor(() => texts(many).length === 1);
+    expect(texts(many)[0]).toContain("At most 8");
+    expect(texts(many)[0]).toContain("/close");
+  });
+
+  it("/new when the first message cannot be delivered: the created id is recorded and closable, and no raw ids reach the chat", async () => {
+    let counter = 0;
+    const createSession = vi.fn<CreateHook>(async () => {
+      counter += 1;
+      return { ok: true, sessionId: `agent-${String(counter).padStart(4, "0")}aaaa`, tabId: `tab-${counter}` };
+    });
+    const closeSession = vi.fn(async (_sessionId: string): Promise<{ ok: boolean; reason?: string }> => ({ ok: true }));
+    const opts: { agentProjects: string[]; createSession: CreateHook; closeSession: (sessionId: string) => Promise<{ ok: boolean; reason?: string }> } = { agentProjects: [], createSession, closeSession };
+    const h = await harness(opts);
+    opts.agentProjects.push(join(h.dir, "ws-build"));
+    // The tab is created (listed and shared), but the first turn is refused on delivery.
+    h.send.state = "rejected";
+    h.tg.push(msg(1, "/new ws-build go"));
+    await waitFor(() => texts(h).length === 1);
+    const sid = "agent-0001aaaa";
+    const answer = texts(h)[0]!;
+    // Friendly text only: the raw error sentence carries the ids and must not surface.
+    expect(answer).toContain("could not be delivered");
+    expect(answer).not.toContain(sid);
+    expect(answer).not.toContain("tab-1");
+    expect(answer).not.toContain("sessionId");
+    expect(h.bridge.state().created).toEqual([sid]);
+    expect(h.bridge.state().chats[String(USER)]).toEqual({ sessionId: sid });
+    // The recorded tab is closable from the chat even though create_session errored.
+    h.tg.push(msg(2, "/close"));
+    await waitFor(() => texts(h).some((text) => text.startsWith("Closed ")));
+    expect(closeSession).toHaveBeenCalledWith(sid);
+    expect(h.bridge.state().created).toEqual([]);
+  });
+
+  it("/new's first turn honours the same per-chat waiting cap as plain text", async () => {
+    let counter = 0;
+    const createSession = vi.fn<CreateHook>(async () => {
+      counter += 1;
+      return { ok: true, sessionId: `agent-${String(counter).padStart(4, "0")}aaaa`, tabId: `tab-${counter}` };
+    });
+    const opts: { agentProjects: string[]; createSession: CreateHook } = { agentProjects: [], createSession };
+    const h = await harness(opts);
+    opts.agentProjects.push(join(h.dir, "ws-build"));
+    h.tg.push(msg(1, "/use build-bot"));
+    h.tg.push(msg(2, "one"));
+    h.tg.push(msg(3, "two"));
+    h.tg.push(msg(4, "three"));
+    await waitFor(() => h.bridge.state().pending.length === 3);
+    h.tg.push(msg(5, "/new ws-build go"));
+    await waitFor(() => texts(h).includes("Too many pending messages, wait for an answer."));
+    expect(createSession).not.toHaveBeenCalled();
+    // Once the queue drains, /new works again.
+    for (const call of apiCallsOf(h, "send_message")) {
+      h.results.set((call.payload as { messageId: string }).messageId, () => ({ state: "done", latestResult: { publicAnswer: "A", turnId: "t" }, limitation: "L" }));
+    }
+    await waitFor(() => h.bridge.state().pending.length === 0);
+    h.tg.push(msg(6, "/new ws-build go"));
+    await waitFor(() => texts(h).some((text) => text.startsWith("Created ")));
+    expect(createSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("/close closes only a session this bridge created; busy and restarted cases are explained", async () => {
+    const closeSession = vi.fn(async (sessionId: string): Promise<{ ok: boolean; reason?: string }> => ({ ok: true }));
+    let counter = 0;
+    const createSession = vi.fn<CreateHook>(async () => {
+      counter += 1;
+      return { ok: true, sessionId: `agent-${String(counter).padStart(4, "0")}aaaa`, tabId: `tab-${counter}` };
+    });
+    const opts = { agentProjects: [] as string[], createSession, closeSession };
+    const h = await harness(opts);
+    opts.agentProjects.push(join(h.dir, "ws-build"));
+    h.tg.push(msg(1, "/new ws-build go"));
+    await waitFor(() => texts(h).some((text) => text.startsWith("Created ")));
+    expect(h.bridge.state().created).toEqual(["agent-0001aaaa"]);
+    h.tg.push(msg(2, "/close"));
+    await waitFor(() => texts(h).some((text) => text.startsWith("Closed ")));
+    expect(closeSession).toHaveBeenCalledWith("agent-0001aaaa");
+    expect(h.bridge.state().created).toEqual([]);
+    expect(h.bridge.state().chats[String(USER)]).toBeUndefined();
+
+    // A session selected with /use is refused without a close call.
+    h.tg.push(msg(3, "/use build-bot"));
+    await waitFor(() => texts(h).some((text) => text.startsWith("Selected build-bot.")));
+    h.tg.push(msg(4, "/close"));
+    await waitFor(() => texts(h).includes("Only sessions created from Telegram can be closed here."));
+    expect(closeSession).toHaveBeenCalledTimes(1);
+
+    // A running turn: stop first. After an app restart the tab is no longer agent-opened.
+    closeSession.mockResolvedValue({ ok: false, reason: "busy" });
+    h.tg.push(msg(5, "/new ws-build again"));
+    await waitFor(() => texts(h).filter((text) => text.startsWith("Created ")).length === 2);
+    h.tg.push(msg(6, "/close"));
+    await waitFor(() => texts(h).includes("Stop it first: /stop, then /close."));
+    closeSession.mockResolvedValue({ ok: false, reason: "not_agent_opened" });
+    h.tg.push(msg(7, "/close"));
+    await waitFor(() => texts(h).includes("AnyCode was restarted; close this tab in AnyCode."));
+    expect(h.bridge.state().created).toEqual(["agent-0002aaaa"]);
+    expect(h.bridge.state().chats[String(USER)].sessionId).toBe("agent-0002aaaa");
   });
 
   it("T15 plain text needs a selection; with one it sends a next_turn with the update id as key; 32001 chars and non-text are refused locally", async () => {
