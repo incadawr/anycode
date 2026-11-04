@@ -134,6 +134,17 @@ export interface PreviewWebContentsLike {
   setWindowOpenHandler(handler: (details: { url: string }) => { action: "deny" }): void;
   /** Always wired to deny every permission (camera/mic/geolocation/notifications/…). */
   setPermissionRequestHandler(handler: (permission: string, callback: (granted: boolean) => void) => void): void;
+  /**
+   * Session-scoped download policy (the adapter maps this to
+   * `session.on("will-download")` on the preview's own per-preview
+   * partition), installed at wiring time BEFORE the first load. Every
+   * page-initiated download is always cancelled — no file is written, no
+   * save dialog appears. `saveTo` exists only so a future consent flow
+   * could save to a HOST-chosen path; the shipped wiring never calls it.
+   */
+  onWillDownload(
+    listener: (download: { url: string; filename: string }, control: { cancel(): void; saveTo(path: string): void }) => void,
+  ): void;
   onDidFinishLoad(listener: () => void): void;
   onDidFailLoad(listener: (errorCode: number, errorDescription: string, isMainFrame: boolean) => void): void;
   onRenderProcessGone(listener: (reason: string) => void): void;
@@ -568,6 +579,8 @@ interface WebPreviewRecord {
   consentedOrigins: Set<string>;
   /** Per-record dedup for the request-gate/redirect-gate legibility ring entry (cut §1.1) — a retry loop cannot flood the ring. */
   gateDeniedKeys: Set<string>;
+  /** Per-record dedup for the will-download denial ring entry — separate from `gateDeniedKeys` so gate and download keys never collide. */
+  downloadDeniedKeys: Set<string>;
   consoleRing: PreviewConsoleEntry[];
   consoleDropped: number;
   eventWindowStart: number;
@@ -2446,6 +2459,7 @@ class PreviewHost implements PreviewHostHandle {
       kind: "file",
       consentedOrigins: new Set(),
       gateDeniedKeys: new Set(),
+      downloadDeniedKeys: new Set(),
       consoleRing: [],
       consoleDropped: 0,
       eventWindowStart: now,
@@ -2629,6 +2643,11 @@ class PreviewHost implements PreviewHostHandle {
    * `setRequestGate` are deliberately NOT guarded: they are stateless
    * deny-everything policy (or read live `record` fields shared across
    * containers) with no "stale container" hazard to guard against.
+   * `onWillDownload` IS guarded: the adapter maps it to
+   * `session.on("will-download")`, which ACCUMULATES listeners on the
+   * per-preview session a transfer SHARES — a stale listener left on that
+   * session must fully no-op instead of cancelling/logging into the record
+   * that moved on.
    */
   private wireWindow(record: WebPreviewRecord): void {
     const container = record.window;
@@ -2638,6 +2657,18 @@ class PreviewHost implements PreviewHostHandle {
 
     wc.setWindowOpenHandler(() => ({ action: "deny" }));
     wc.setPermissionRequestHandler((_permission, callback) => callback(false));
+    wc.onWillDownload(
+      guard((download, control) => {
+        control.cancel();
+        this.recordDeniedOnce(
+          record,
+          // The key is page-controlled and lives for the record's lifetime — bound it like the message.
+          `download:${download.url.slice(0, 200)}`,
+          `[preview] blocked by security policy: download ${download.filename.slice(0, 200)} from ${download.url.slice(0, 200)}`,
+          record.downloadDeniedKeys,
+        );
+      }),
+    );
 
     wc.onDidFinishLoad(guard(() => {
       this.settle(record, "ready");

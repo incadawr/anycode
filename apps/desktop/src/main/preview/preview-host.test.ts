@@ -81,6 +81,11 @@ class FakeWebContents implements PreviewWebContentsLike {
   backgroundThrottlingCalls: boolean[] = [];
   windowOpenHandler?: (details: { url: string }) => { action: "deny" };
   permissionRequestHandler?: (permission: string, callback: (granted: boolean) => void) => void;
+  willDownloadListeners: Array<
+    (download: { url: string; filename: string }, control: { cancel(): void; saveTo(path: string): void }) => void
+  > = [];
+  /** Snapshot of `loadedUrls.length` taken when the host wired `onWillDownload` — proves registration precedes the first load. */
+  loadedUrlsAtWillDownloadWire?: number;
   capturePageImpl: () => Promise<PreviewCapturedImage> = () => Promise.resolve(fakeImage());
   /** D18: consumed in order — each queued error rejects the NEXT `capturePage()` call instead of running `capturePageImpl`. */
   captureRejections: Error[] = [];
@@ -135,6 +140,12 @@ class FakeWebContents implements PreviewWebContentsLike {
   setPermissionRequestHandler(handler: (permission: string, callback: (granted: boolean) => void) => void): void {
     this.permissionRequestHandler = handler;
   }
+  onWillDownload(
+    listener: (download: { url: string; filename: string }, control: { cancel(): void; saveTo(path: string): void }) => void,
+  ): void {
+    this.loadedUrlsAtWillDownloadWire = this.loadedUrls.length;
+    this.willDownloadListeners.push(listener);
+  }
   onDidFinishLoad(listener: () => void): void {
     this.didFinishLoad.push(listener);
   }
@@ -188,6 +199,15 @@ class FakeWebContents implements PreviewWebContentsLike {
     let prevented = false;
     for (const l of this.willRedirect) l(url, () => (prevented = true));
     return prevented;
+  }
+  /** Simulates Electron firing session "will-download"; reports whether a listener cancelled and every saveTo path. */
+  fireWillDownload(url: string, filename = "report.bin"): { cancelled: boolean; savePaths: string[] } {
+    let cancelled = false;
+    const savePaths: string[] = [];
+    for (const l of this.willDownloadListeners) {
+      l({ url, filename }, { cancel: () => (cancelled = true), saveTo: (path) => savePaths.push(path) });
+    }
+    return { cancelled, savePaths };
   }
   fireConsoleMessage(level: PreviewConsoleEntry["level"], message: string): void {
     for (const l of this.consoleMessage) l(level, message);
@@ -530,6 +550,84 @@ describe("PreviewHost — window security invariants (cut §2.5, non-negotiable)
       });
       expect(granted).toBe(false);
     }
+  });
+
+  it("wires onWillDownload to cancel every page-initiated download, one ring entry per URL (dedupe on repeat)", async () => {
+    const rig = makeRig();
+    const openPromise = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const opened = await openPromise;
+    const previewId = opened.ok ? opened.value.previewId : "";
+
+    const wc = rig.windows[0]!.webContents;
+    for (const url of [
+      "https://example.com/report.pdf",
+      "blob:https://example.com/8f2e-4b1a",
+      "data:text/plain;base64,SGVsbG8=",
+    ]) {
+      const result = wc.fireWillDownload(url);
+      expect(result.cancelled).toBe(true);
+      expect(result.savePaths).toEqual([]);
+    }
+    // Repeating the same URL must not add a second ring entry (per-record dedupe).
+    expect(wc.fireWillDownload("https://example.com/report.pdf").cancelled).toBe(true);
+    // A >200-char URL still dedupes: the ring KEY is bounded the same way as the message.
+    const longUrl = `https://example.com/${"x".repeat(300)}`;
+    expect(wc.fireWillDownload(longUrl).cancelled).toBe(true);
+    expect(wc.fireWillDownload(longUrl).cancelled).toBe(true);
+
+    const console_ = rig.host.getConsole(TAB, previewId);
+    const entries = "entries" in console_ ? console_.entries : [];
+    const downloadEntries = entries.filter((e) => e.message.includes("blocked by security policy: download"));
+    expect(downloadEntries).toHaveLength(4);
+    expect(downloadEntries.every((e) => e.level === "warn")).toBe(true);
+  });
+
+  it("installs the download policy at wiring time, before the first load", async () => {
+    const rig = makeRig();
+    void rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    const wc = rig.windows[0]!.webContents;
+    expect(wc.willDownloadListeners).toHaveLength(1);
+    // Snapshot taken inside onWillDownload: zero URLs had been loaded when the policy was installed.
+    expect(wc.loadedUrlsAtWillDownloadWire).toBe(0);
+    expect(wc.loadedUrls.length).toBeGreaterThan(0);
+  });
+
+  it("after a container transfer the live listener still cancels and the superseded one fully no-ops", async () => {
+    const rig = makeRig();
+    const openPromise = rig.host.openForTab(TAB, { path: `${WORKSPACE_ROOT}/a.html` });
+    await flush();
+    rig.windows[0]!.webContents.fireDidFinishLoad();
+    const opened = await openPromise;
+    const previewId = opened.ok ? opened.value.previewId : "";
+    const oldWc = rig.windows[0]!.webContents;
+    expect(oldWc.fireWillDownload("https://example.com/before.pdf").cancelled).toBe(true);
+
+    const transferPromise = rig.host.setContainer(TAB, previewId, "panel");
+    await flush();
+    rig.panelViews[0]!.webContents.fireDidFinishLoad();
+    await transferPromise;
+
+    const downloadRingCount = (): number => {
+      const console_ = rig.host.getConsole(TAB, previewId);
+      const entries = "entries" in console_ ? console_.entries : [];
+      return entries.filter((e) => e.message.includes("blocked by security policy: download")).length;
+    };
+    const ringBefore = downloadRingCount();
+
+    // Stale listener on the superseded container: full no-op — no cancel, no ring entry.
+    const stale = rig.windows[0]!.webContents.fireWillDownload("https://example.com/stale.pdf");
+    expect(stale.cancelled).toBe(false);
+    expect(stale.savePaths).toEqual([]);
+    expect(downloadRingCount()).toBe(ringBefore);
+
+    // Live listener on the new container: still cancels and logs.
+    const live = rig.panelViews[0]!.webContents.fireWillDownload("https://example.com/after.pdf");
+    expect(live.cancelled).toBe(true);
+    expect(live.savePaths).toEqual([]);
+    expect(downloadRingCount()).toBe(ringBefore + 1);
   });
 });
 

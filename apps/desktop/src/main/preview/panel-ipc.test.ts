@@ -288,6 +288,7 @@ function makeFakeWc(): FakeWc {
     setBackgroundThrottling: () => {},
     setWindowOpenHandler: () => {},
     setPermissionRequestHandler: () => {},
+    onWillDownload: () => {},
     onDidFinishLoad: (listener) => {
       finishListeners.push(listener);
     },

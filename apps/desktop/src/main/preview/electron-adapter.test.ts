@@ -90,6 +90,25 @@ type OnBeforeRequestListener = (
   callback: (response: { cancel?: boolean }) => void,
 ) => void;
 
+/** Structural slice of Electron's DownloadItem the will-download mapping touches. */
+interface FakeDownloadItem {
+  savePaths: string[];
+  getURL(): string;
+  getFilename(): string;
+  setSavePath(path: string): void;
+}
+
+function makeDownloadItem(url: string, filename: string): FakeDownloadItem {
+  return {
+    savePaths: [],
+    getURL: () => url,
+    getFilename: () => filename,
+    setSavePath(path) {
+      this.savePaths.push(path);
+    },
+  };
+}
+
 class FakeWebContents extends EventEmitter {
   loadURLCalls: string[] = [];
   /** stage 4: reload() passthrough recorder. */
@@ -106,9 +125,19 @@ class FakeWebContents extends EventEmitter {
   };
   onBeforeRequestCalls: unknown[][] = [];
   private onBeforeRequestListener?: OnBeforeRequestListener;
+  /** `session.on("will-download")` handlers — real sessions ACCUMULATE these (unlike the single-slot webRequest/permission setters). */
+  willDownloadHandlers: Array<(event: { preventDefault(): void }, item: FakeDownloadItem) => void> = [];
   session = {
     setPermissionRequestHandler: (handler: typeof this.permissionRequestHandler) => {
       this.permissionRequestHandler = handler;
+    },
+    on: (event: string, handler: (event: { preventDefault(): void }, item: FakeDownloadItem) => void) => {
+      if (event === "will-download") this.willDownloadHandlers.push(handler);
+    },
+    removeListener: (event: string, handler: (event: { preventDefault(): void }, item: FakeDownloadItem) => void) => {
+      if (event === "will-download") {
+        this.willDownloadHandlers = this.willDownloadHandlers.filter((h) => h !== handler);
+      }
     },
     webRequest: {
       onBeforeRequest: (...args: unknown[]) => {
@@ -176,6 +205,14 @@ class FakeWebContents extends EventEmitter {
   /** Drives the LAST-registered `onBeforeRequest` listener (real Electron only ever expects one). */
   fireBeforeRequest(details: { url: string; resourceType: string }, callback: (response: { cancel?: boolean }) => void): void {
     this.onBeforeRequestListener?.(details, callback);
+  }
+  /** Drives EVERY registered session "will-download" handler; reports whether any called event.preventDefault(). */
+  fireWillDownload(item: FakeDownloadItem): boolean {
+    let prevented = false;
+    for (const handler of this.willDownloadHandlers) {
+      handler({ preventDefault: () => (prevented = true) }, item);
+    }
+    return prevented;
   }
 }
 
@@ -585,6 +622,62 @@ describe("createElectronPreviewWindow — request gate (cut §1.1/F2)", () => {
     fake.webContents.fireBeforeRequest({ url: "https://a.tld/", resourceType: "xhr" }, callback);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(callback).toHaveBeenCalledWith({ cancel: true });
+  });
+});
+
+describe("createElectronPreviewWindow — will-download policy (deny-by-default)", () => {
+  it("registers session.on(will-download) on the preview's own session (accumulating, not single-slot)", () => {
+    const win = createElectronPreviewWindow({ previewId: "dl-a" });
+    const fake = latestWindow();
+    win.webContents.onWillDownload(() => {});
+    expect(fake.webContents.willDownloadHandlers).toHaveLength(1);
+    // Session-scoped: the handler lives on this preview's session, and a second
+    // wiring ACCUMULATES (mirrors `session.on` — the host epoch-guards stale ones).
+    win.webContents.onWillDownload(() => {});
+    expect(fake.webContents.willDownloadHandlers).toHaveLength(2);
+  });
+
+  it("maps url/filename from item.getURL()/getFilename(); cancel() prevents the default save flow; saveTo() sets the host-chosen path", () => {
+    const win = createElectronPreviewWindow({ previewId: "dl-b" });
+    const fake = latestWindow();
+    let seen: { url: string; filename: string } | undefined;
+    win.webContents.onWillDownload((download, control) => {
+      seen = download;
+      control.cancel();
+    });
+    const item = makeDownloadItem("https://example.com/report.pdf", "report.pdf");
+    expect(fake.webContents.fireWillDownload(item)).toBe(true); // event.preventDefault() ran -> no dialog, no file
+    expect(seen).toEqual({ url: "https://example.com/report.pdf", filename: "report.pdf" });
+    expect(item.savePaths).toEqual([]);
+  });
+
+  it("saveTo(path) routes to item.setSavePath and never preventDefault on its own", () => {
+    const win = createElectronPreviewWindow({ previewId: "dl-c" });
+    const fake = latestWindow();
+    win.webContents.onWillDownload((_download, control) => {
+      control.saveTo("/host/chosen/report.pdf");
+    });
+    const item = makeDownloadItem("blob:https://example.com/8f2e", "blob.bin");
+    expect(fake.webContents.fireWillDownload(item)).toBe(false); // no preventDefault — the save proceeds
+    expect(item.savePaths).toEqual(["/host/chosen/report.pdf"]);
+  });
+
+  it("unregisters the session listener on window close (registerCleanup) and skips an already-destroyed contents", () => {
+    const win = createElectronPreviewWindow({ previewId: "dl-d" });
+    const fake = latestWindow();
+    win.webContents.onWillDownload(() => {});
+    expect(fake.webContents.willDownloadHandlers).toHaveLength(1);
+    // The adapter registered cleanup via win.once("closed", ...) — closing removes ours.
+    fake.emit("closed");
+    expect(fake.webContents.willDownloadHandlers).toHaveLength(0);
+
+    // An already-destroyed contents must not touch its session at cleanup time.
+    const win2 = createElectronPreviewWindow({ previewId: "dl-e" });
+    const fake2 = latestWindow();
+    win2.webContents.onWillDownload(() => {});
+    fake2.webContents.destroyedFlag = true;
+    fake2.emit("closed");
+    expect(fake2.webContents.willDownloadHandlers).toHaveLength(1);
   });
 });
 
