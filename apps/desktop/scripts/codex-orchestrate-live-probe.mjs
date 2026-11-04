@@ -292,7 +292,12 @@ createInterface({ input: process.stdin }).on('line', line => {
     if (smoke) {
       const checks = result.checks;
       const mark = (name, ok, note, turn) => { checks[name] = { status: ok ? 'PASS' : 'FAIL', ...(note ? { note } : {}), ...(!ok && turn ? { diagnostics: turnDiagnostics(turn) } : {}) }; };
-      await restartServer(['mcp_servers.ambient.enabled=false', 'mcp_servers.second.enabled=false', 'features.multi_agent=false', 'apps._default.enabled=false', 'sandbox_mode="read-only"', 'approval_policy="never"']);
+      const ts = await import('typescript');
+      const policySource = readFileSync(new URL('../src/host/engines/codex/orchestration-policy.ts', import.meta.url), 'utf8');
+      const policyJs = ts.transpileModule(policySource, { compilerOptions: { module: ts.ModuleKind.ESNext } }).outputText;
+      const policy = await import(`data:text/javascript;base64,${Buffer.from(policyJs).toString('base64')}`);
+      const inventory = await request('config/read', { cwd, includeLayers: true });
+      await restartServer(policy.orchestrationOverrides(policy.captureBaseConfig(inventory)));
       const resumed = await request('thread/resume', { ...common, threadId });
       const config = await configSnapshot(threadId);
       mark('restart-resume', resumed.thread?.id === threadId && resumed.sandbox?.type === 'readOnly' && resumed.sandbox?.networkAccess === false && resumed.approvalPolicy === 'never' && config.configRead?.ambientEnabled === false && config.configRead?.secondEnabled === false && config.configRead?.multiAgent === false && config.configRead?.appsDefaultEnabled === false && config.configRead?.sandboxMode === 'read-only' && config.configRead?.approvalPolicy === 'never');

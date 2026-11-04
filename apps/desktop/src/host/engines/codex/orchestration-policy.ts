@@ -55,6 +55,9 @@ export function captureBaseConfig(response: unknown, forwarded: Record<string, u
     appValues.set(name, entry.enabled);
   }
   const names = [...new Set([...Object.keys(servers), ...Object.keys(forwarded)])].sort();
+  if ([...names, ...appValues.keys()].some((name) => !/^[A-Za-z0-9_-]+$/.test(name))) {
+    throw new Error("Codex orchestration unavailable: unsupported config name");
+  }
   return { names, ambientNames: Object.keys(servers).sort(), values: new Map(names.map((name) => [name, object(servers[name])?.enabled])),
     features: object(config.features)?.multi_agent, sandbox: config.sandbox_mode, approval: config.approval_policy,
     apps: appValues, plugins: config.plugins };
@@ -64,9 +67,9 @@ export function orchestrationOverrides(base: BaseConfig): string[] {
   // A forwarded-only server has no process-level transport to merge with.
   // Supply an inert stdio transport; never expose forwarded credentials on argv.
   const transports = base.names.filter((name) => !base.ambientNames.includes(name))
-    .map((name) => `mcp_servers.${JSON.stringify(name)}.command="anycode-disabled-mcp"`);
-  return [...transports, ...base.names.map((name) => `mcp_servers.${JSON.stringify(name)}.enabled=false`),
-    ...[...new Set(["_default", ...base.apps.keys()])].map((name) => `apps.${JSON.stringify(name)}.enabled=false`),
+    .map((name) => `mcp_servers.${name}.command="anycode-disabled-mcp"`);
+  return [...transports, ...base.names.map((name) => `mcp_servers.${name}.enabled=false`),
+    ...[...new Set(["_default", ...base.apps.keys()])].map((name) => `apps.${name}.enabled=false`),
     "features.multi_agent=false", 'sandbox_mode="read-only"', 'approval_policy="never"'];
 }
 
