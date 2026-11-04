@@ -787,6 +787,42 @@ describe("ContextManager.runCompaction — success", () => {
     expect(manager.shouldAutoCompact()).toBe(false);
   });
 
+  it("a structural skip under pressure on a manual /compact stays benign and never feeds the breaker", async () => {
+    // Same shape as the auto case above (summary-only prefix, above the
+    // threshold), but the caller is the user's own /compact: a structural
+    // no-op there must not trip the breaker — the user pressing it three
+    // times would otherwise disable auto-compaction for the whole session.
+    const history = buildHistory([userMsg("seed")]);
+    history.replaceAll(
+      [0, 1, 2, 3].map((i) => ({
+        id: globalThis.crypto.randomUUID(),
+        createdAt: Date.now(),
+        message: userMsg(`summary ${i} ${"x".repeat(2_000)}`),
+        tokenEstimate: 600,
+        kind: "compact_summary" as const,
+      })),
+    );
+    const port = new ScriptedModelPort(summaryScript("SHOULD NOT RUN"));
+    const manager = makeManager(history, port, {
+      keepRecentMessages: 2,
+      contextWindowTokens: 2_000,
+      outputReserveTokens: 100,
+      compactBufferTokens: 100,
+    });
+
+    for (let i = 0; i < 3; i += 1) {
+      const result = await manager.runCompaction({ trigger: "manual" });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.skipped).toBe(true);
+        expect(result.error).toBe("Nothing to compact yet — the earlier conversation is already summarized");
+      }
+    }
+    expect(port.requests).toHaveLength(0);
+    expect(manager.breakerTripped()).toBe(false);
+    expect(manager.shouldAutoCompact()).toBe(true);
+  });
+
   it("a skip on a genuinely short history stays benign even under pressure", async () => {
     // Degraded small-window boot: the request overhead alone sits above the
     // compaction threshold while the history is still shorter than the

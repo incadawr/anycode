@@ -1340,9 +1340,12 @@ export class AgentLoop {
           // request (rendered from `safe`, never the raw error).
           if (compacted === false && this.context.breakerTripped()) {
             const max = this.context.getBudgetConfig().maxConsecutiveCompactionFailures;
+            // No /compact advice: whether it can help depends on WHY the
+            // breaker tripped (a structural skip fails identically by hand),
+            // and the message cannot tell the two apart.
             const message =
               `Auto-compaction failed ${max} times in a row with the context still above the compaction threshold; ` +
-              "this turn is stopped before the context window overflows. Run /compact or start a new session.";
+              "this turn is stopped before the context window overflows. Start a new session or reduce the context.";
             yield { type: "error", error: new Error(message), safe: { code: "unknown", message } };
             // The consumer may abort while paused on the yielded error event
             // (before this generator resumes) — re-check so a synchronous
@@ -2128,7 +2131,7 @@ export class AgentLoop {
   ): AsyncGenerator<AgentEvent, boolean, unknown> {
     yield { type: "compaction_start", trigger };
     const startedAt = Date.now();
-    const result = await this.context.runCompaction({ signal });
+    const result = await this.context.runCompaction({ signal, trigger });
     if (result.ok) {
       yield {
         type: "compaction_end",

@@ -260,8 +260,15 @@ export class ContextManager {
    * as a breaker failure. On
    * error/empty-summary/abort the history is untouched and the failure counter
    * increments; the configured number of consecutive failures trips the breaker.
+   * The pressured structural skip counts toward the breaker only on the auto
+   * trigger; a manual /compact never feeds it (its skip stays a benign no-op).
    */
-  async runCompaction(opts: { signal?: AbortSignal }): Promise<RunCompactionResult> {
+  async runCompaction(opts: { signal?: AbortSignal; trigger?: "auto" | "manual" }): Promise<RunCompactionResult> {
+    // A manual /compact never feeds the breaker: a structural skip there is
+    // the benign no-op it is below the threshold — the user is present and
+    // can read the row, unlike the auto path where a skip would repeat on
+    // every turn while the context keeps growing.
+    const trigger = opts.trigger ?? "auto";
     const preTokens = this.estimate().tokens;
     const signal = opts.signal;
     const items = this.deps.history.items;
@@ -276,8 +283,9 @@ export class ContextManager {
     // would never end. Only when the history is long enough for compaction to
     // be the remedy, though: overhead-dominated pressure on a still-short
     // history (e.g. a degraded small-window boot) skips benignly, exactly as
-    // below the threshold.
+    // below the threshold. The auto trigger only — see runCompaction's head.
     const underPressure =
+      trigger === "auto" &&
       preTokens >= compactThresholdTokens(this.deps.config) &&
       items.length > this.deps.config.keepRecentMessages;
     // boundary <= 0 => empty prefix: nothing to compact. Not a failure below
