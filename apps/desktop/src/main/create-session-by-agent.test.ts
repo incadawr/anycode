@@ -30,6 +30,7 @@ import { SqlitePersistenceAdapter } from "@anycode/core";
 import { AGENT_MESSAGE_HEADER_PREFIX } from "../shared/communication.js";
 import { createSessionForAgent, type CreateSessionByAgentDeps } from "./create-session-by-agent.js";
 import { offerEmptyFolderTrust } from "./workspace-trust-ipc.js";
+import { resolveSkillsProfileHome } from "./dev-profile.js";
 import { readTrustStore, defaultTrustStorePath } from "@anycode/core/workspace-trust";
 import { primeNewSessionPin, type ResumePinResult } from "./session-pin.js";
 import { TabHostManager, type HostForkFn, type WindowLike } from "./tabs.js";
@@ -264,9 +265,11 @@ describe("create_session — the production creation path primes a non-active co
       mkdir: async () => {}, readdir: async () => [],
     };
     const r = rig();
-    const deps = r.deps({ readTrustStore: () => readTrustStore(fs, defaultTrustStorePath("/home/test")) });
+    const profile = resolveSkillsProfileHome({ ANYCODE_AUTOMATION: "1", ANYCODE_SKILLS_IMPORT_HOME: "/home/skills", ANYCODE_SUBAGENTS_HOME: "/home/agents" }, false)!;
+    const deps = r.deps({ readTrustStore: () => readTrustStore(fs, defaultTrustStorePath(profile)) });
     expect(await createSessionForAgent({ workspace: "/ws" }, deps)).toEqual({ ok: false, reason: "not_trusted" });
-    await offerEmptyFolderTrust(fs, fs, "/ws", "/home/test", (p) => p, async () => true);
+    await offerEmptyFolderTrust(fs, fs, "/ws", profile, (p) => p, async () => true);
+    expect((await readTrustStore(fs, defaultTrustStorePath("/home/agents"))).folders["/ws"]).toBeUndefined();
     expect((await createSessionForAgent({ workspace: "/ws" }, deps)).ok).toBe(true);
   });
   it("a core `model` naming the NON-active GLM connection forks with THAT connection's env", async () => {

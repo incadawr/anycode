@@ -1484,7 +1484,6 @@ export class Session {
   private orchestrationPosture: "stable" | "transitioning" | "quarantined" = "stable";
   private orchestrationController?: OrchestrationController;
   private orchestrationAdmission?: OrchestrationAdmission;
-  private legacyOrchestration = false;
   private postureBlocked(includeAdmission = true): boolean {
     const state = this.orchestrationController?.state.status;
     return this.orchestrationPosture !== "stable" || state === "transitioning" || state === "quarantined" || (includeAdmission && this.orchestrationAdmission?.locked === true);
@@ -3064,7 +3063,9 @@ export class Session {
           const replyGeneration = this.boundGeneration;
           const connectionId = message.requestId === undefined ? this.boundGeneration ?? "" : message.connectionId ?? "";
           const id = message.requestId ?? randomUUID();
-          void this.admission().toggle(id, connectionId, message.enabled).then(result => {
+          const transition = this.admission().toggle(id, connectionId, message.enabled);
+          if (this.orchestrationController?.state.status === "transitioning") this.pushOrchestrationState();
+          void transition.then(result => {
             this.drainAgentInbox();
             this.pushOrchestrationState();
             if (message.requestId !== undefined && this.boundGeneration === replyGeneration && replyGeneration !== null) this.sendOrchestrationResult(id, replyGeneration, result);
@@ -4293,7 +4294,6 @@ export class Session {
       this.settingsBarrierActive = false;
       this.updateContextUsage(null);
       this.engine = next;
-      this.legacyOrchestration = false;
       this.orchestrationController?.invalidate();
       this.orchestrationController = undefined;
       this.orchestrationAdmission = undefined;
@@ -6189,16 +6189,15 @@ export class Session {
     if (this.orchestrationAdmission) return this.orchestrationAdmission;
     const engine = this.engine;
     const policy: OrchestrationPolicy = {
-      availability: () => this.engine === engine && (this.legacyOrchestration || this.orchestrationAvailable())
+      availability: () => this.engine === engine && this.orchestrationAvailable()
         ? { supported: true } : { supported: false, reason: "unavailable" },
       apply: async (enabled, baseAuthority) => {
         if (this.settingsBarrierActive) await this.settingsBarrier;
         await this.engineSettings?.waitForSettingsChanges?.();
         if (this.shuttingDown || this.engine !== engine || this.relocating || this.orchestrationController?.state.status !== "transitioning") throw new Error("Session changed during orchestration transition");
-        if (engine.id === "core" || (this.legacyOrchestration && !enabled)) {
+        if (engine.id === "core") {
           this.onSetOrchestrate(enabled);
           if (this.orchestrate !== enabled) throw new Error("Core orchestration transition failed");
-          if (!enabled) this.legacyOrchestration = false;
           return { enabled, baseAuthority };
         }
         // Capture the preset after queued settings have settled, before the
@@ -6244,7 +6243,7 @@ export class Session {
 
   private submitOrchestration(message: Extract<UiToHostMessage, { type: "user_message" }>): void {
     const connectionId = message.connectionId ?? "";
-    if (this.legacyOrchestration || connectionId !== this.boundGeneration) {
+    if (connectionId !== this.boundGeneration) {
       this.outbound.sendDirect({ type: "user_message_unavailable", requestId: message.requestId, reason: "orchestrate_unavailable" });
       return;
     }
@@ -6255,11 +6254,13 @@ export class Session {
       return;
     }
     const fingerprint = createHash("sha256").update(JSON.stringify([message.text, message.images, message.origin])).digest("hex");
-    void this.admission().submit(message.requestId, connectionId, () => {
+    const transition = this.admission().submit(message.requestId, connectionId, () => {
       if (message.origin !== "system") this.broker.noteHumanPresent();
       // acceptUserMessage claims busy synchronously, before admission resolves.
       this.acceptUserMessage(message.requestId, message.text, message.images, message.origin, true);
-    }, fingerprint).then(result => {
+    }, fingerprint);
+    if (this.orchestrationController?.state.status === "transitioning") this.pushOrchestrationState();
+    void transition.then(result => {
       if (!("kind" in result) && result.outcome === "unknown" && result.reason === "admission") this.orchestrationController?.quarantine("Turn admission was not confirmed");
       this.drainAgentInbox();
       this.pushOrchestrationState();
@@ -6351,7 +6352,6 @@ export class Session {
     if (!this.orchestrate) return;
     this.engine.setCoreOrchestrate?.(false);
     this.orchestrate = false;
-    this.legacyOrchestration = false;
     this.orchestrationController?.coreModeExited();
     this.preOrchestrateMode = null;
     this.onOrchestrateChanged?.(false);

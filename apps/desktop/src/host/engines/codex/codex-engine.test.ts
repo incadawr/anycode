@@ -1120,7 +1120,7 @@ describe("Codex orchestration restart", () => {
     const r = await setup(); const authority = { preset: "ask" };
     expect(await r.controller.apply(true, authority)).toBe(true);
     expect(r.initial.closeCount).toBe(1);
-    expect(r.overrides[0]).toContain('mcp_servers."ambient".enabled=false');
+    expect(r.overrides[0]).toContain('mcp_servers.ambient.enabled=false');
     expect(r.servers[0]!.calls.find((c) => c.method === "thread/resume")?.params).toMatchObject({ threadId: "fresh-thread", sandbox: "read-only", approvalPolicy: "never" });
     expect(r.engine.selectPreset("full-access").ok).toBe(false);
     await runTurn(r.servers[0]!, r.engine); await runTurn(r.servers[0]!, r.engine);

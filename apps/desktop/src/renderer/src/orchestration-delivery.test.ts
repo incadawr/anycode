@@ -19,6 +19,15 @@ describe("orchestration delivery recovery", () => {
     vi.stubGlobal("sessionStorage", { setItem: () => { throw new Error("quota"); } });
     expect(saveRecovery("tab", store.getState())).toBe(false);
   });
+  it("retains an ordinary draft refused during a policy transition", () => {
+    const store = createDesktopStore();
+    store.getState().applyHostMessage(hello);
+    store.getState().appendUserText("ordinary", "draft");
+    store.getState().recordSentMessage("draft", [], "ordinary");
+    store.getState().applyHostMessage({ type: "user_message_unavailable", requestId: "ordinary", reason: "posture_unavailable" });
+    expect(store.getState().promptQueue).toMatchObject([{ id: "ordinary", text: "draft", requiresRestore: true }]);
+    expect(store.getState().queuePaused).toBe(true);
+  });
   it("survives renderer reload without automatically resending an unconfirmed task or losing a report", () => {
     const data = new Map<string, string>();
     vi.stubGlobal("sessionStorage", { setItem: (key: string, value: string) => data.set(key, value), getItem: (key: string) => data.get(key) ?? null });

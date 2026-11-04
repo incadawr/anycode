@@ -7833,7 +7833,10 @@ export function createAutomationFacade(
       if (store.getState().connection !== "ready") {
         return { ok: false, reason: "not_ready" };
       }
-      const message: UiToHostMessage = { type: "set_orchestrate", enabled };
+      const requestId = crypto.randomUUID();
+      const connectionId = store.getState().beginOrchestrationToggle(requestId);
+      if (!connectionId) return { ok: false, reason: "not_ready" };
+      const message: UiToHostMessage = { type: "set_orchestrate", enabled, requestId, connectionId };
       registry.sendToTab(tabId, message);
       return { ok: true };
     },

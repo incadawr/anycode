@@ -128,6 +128,7 @@ describe("session orchestration admission", () => {
     try {
       const connectionId = await ready(h);
       h.send({ type: "set_orchestrate", enabled: true, requestId: "on", connectionId });
+      expect(await h.waitFor((m): m is Of<"orchestration_state"> => m.type === "orchestration_state" && m.posture === "transitioning")).toMatchObject({ available: false });
       expect(await h.waitFor((m): m is Of<"orchestrate_result"> => m.type === "orchestrate_result" && m.requestId === "on")).toMatchObject({ outcome: "unknown" });
       h.send({ type: "user_message", requestId: "ordinary", text: "unsafe" });
       expect(await h.waitFor((m): m is Of<"user_message_unavailable"> => m.type === "user_message_unavailable" && m.requestId === "ordinary")).toMatchObject({ reason: "posture_unavailable" });

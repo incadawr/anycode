@@ -5215,6 +5215,19 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           case "orchestrate_frame_diagnostic":
             return;
           case "user_message_unavailable":
+            if (message.reason === "posture_unavailable") {
+              const state = get();
+              const delivery = state.orchestrationDeliveries.find(item => item.requestId === message.requestId && item.status === "pending");
+              const inFlight = state.queueInFlight?.requestId === message.requestId ? state.queueInFlight.item : undefined;
+              const steer = state.pendingSteers.find(item => item.requestId === message.requestId);
+              const direct = pendingSentMessages.get(message.requestId) ?? steer?.sentMessage;
+              const draft = inFlight ?? (delivery ? { id: message.requestId, text: delivery.text, images: delivery.images, ...(delivery.orchestrate ? { orchestrate: delivery.orchestrate } : {}), ...(delivery.initialPicks ? { initialPicks: delivery.initialPicks } : {}) } : direct ? { id: message.requestId, ...direct } : undefined);
+              if (draft && !state.promptQueue.some(item => item.id === draft.id)) {
+                set({ promptQueue: [{ ...draft, requiresRestore: true }, ...state.promptQueue], queueInFlight: inFlight ? null : state.queueInFlight, queuePaused: true, queuePauseReason: "rejected", pendingSteers: state.pendingSteers.filter(item => item.requestId !== message.requestId), uiSteerPending: state.uiSteerPending.filter(id => id !== message.requestId), orchestrationDeliveries: state.orchestrationDeliveries.map(item => item.requestId === message.requestId && item.status === "pending" ? deliveryRejected(item) : item), orchestration: state.orchestration.pendingSubmit === message.requestId ? { ...state.orchestration, pendingSubmit: null } : state.orchestration, transcript: state.transcript.filter(block => block.kind !== "user_text" || block.id !== message.requestId), notice: { kind: "turn_rejected", text: "Session policy is changing. Restore the draft before sending again." } });
+                pendingSentMessages.delete(message.requestId);
+              }
+              return;
+            }
             set((state) => state.orchestration.pendingSubmit !== message.requestId || !state.orchestrationDeliveries.some(item => item.requestId === message.requestId && item.status === "pending") ? {} : {
               orchestrationDeliveries: state.orchestrationDeliveries.map(item => item.requestId === message.requestId ? deliveryUnknown(item) : item),
               orchestration: { ...state.orchestration, pendingSubmit: null, posture: "quarantined", observedEnabled: null },

@@ -152,7 +152,7 @@ createInterface({ input: process.stdin }).on('line', line => {
 `);
     const fixtureConfig = name => ({ command: process.execPath, args: [fixture, name] });
     const tomlString = value => JSON.stringify(value);
-    writeFileSync(join(codexHome, 'config.toml'), `[features]\nmulti_agent = true\n[mcp_servers.ambient]\ncommand = ${tomlString(process.execPath)}\nargs = [${tomlString(fixture)}, "ambient"]\n[mcp_servers.second]\ncommand = ${tomlString(process.execPath)}\nargs = [${tomlString(fixture)}, "second"]\n`);
+    writeFileSync(join(codexHome, 'config.toml'), `[features]\nmulti_agent = true\nremote_plugin = false\n[mcp_servers.ambient]\ncommand = ${tomlString(process.execPath)}\nargs = [${tomlString(fixture)}, "ambient"]\n[mcp_servers.second]\ncommand = ${tomlString(process.execPath)}\nargs = [${tomlString(fixture)}, "second"]\n`);
     const send = message => child.stdin.write(JSON.stringify(message) + '\n');
     const failPending = () => { for (const p of pending.values()) { clearTimeout(p.timer); p.reject(Error('server-exited')); } pending.clear(); if (activeTurn) activeTurn.reject(Error('server-exited')); };
     function request(method, params, timeout = RPC_MS) {

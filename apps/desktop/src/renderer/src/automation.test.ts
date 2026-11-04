@@ -807,13 +807,14 @@ describe("automation facade — setMode", () => {
 describe("automation facade — setOrchestrate / modeMenuState", () => {
   it("OR1: sends set_orchestrate when ready, valid against uiToHostMessageSchema", () => {
     const { registry, tabsStore, port, tabId } = setupReadyTab();
+    port.emit({ type: "host_ready", workspace: "/ws/a", sessionId: "sess-a", mode: "build", model: "m1", orchestration: { enabled: false, available: true, posture: "off" }, orchestrationProtocol: { version: 1, hostIncarnation: "host", connectionId: "conn", atomicSubmit: true, correlatedToggle: true } });
     const facade = createAutomationFacade(registry, tabsStore, stubBridge());
 
     const result = facade.setOrchestrate(tabId, true);
 
     expect(result).toEqual({ ok: true });
     const sentMessages = port.sent.filter((m) => (m as { type: string }).type !== "ui_ready");
-    expect(sentMessages).toEqual([{ type: "set_orchestrate", enabled: true }]);
+    expect(sentMessages).toEqual([{ type: "set_orchestrate", enabled: true, requestId: expect.any(String), connectionId: "conn" }]);
     expect(uiToHostMessageSchema.safeParse(sentMessages[0]).success).toBe(true);
   });
 
