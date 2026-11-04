@@ -9,7 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- Fixed the sidebar showing a session twice while it was opening: opening a saved session — from the sidebar, the command palette, or a Codex rollout import — now folds its history row into the new tab's row immediately, so each session appears once during loading instead of as an active tab plus a stale history entry.
+- Fixed the sidebar and command palette while opening a saved session: the history row now stays visible as a non-clickable "Opening…" placeholder until the new tab appears, then folds into it — the session no longer vanishes during a slow open, flickers on a refusal, or shows twice when the opened tab's host dies before it is ready.
 
 ## [0.0.74] — 2026-11-04
 
