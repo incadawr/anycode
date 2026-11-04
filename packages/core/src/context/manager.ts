@@ -25,6 +25,10 @@ export const MICROCOMPACT_CLEARED_TEXT =
 /** Own wrapper prefixed to the LLM summary when it replaces the compacted prefix (design §2.6). */
 const COMPACT_SUMMARY_PREFIX = "Session continued. Summary of the earlier conversation:\n\n";
 
+/** Failure reason when a structural skip happens while the context is under compaction pressure. */
+const COMPACTION_SKIP_UNDER_PRESSURE =
+  "compaction skipped but the context is still above the compaction threshold";
+
 export interface ContextManagerDeps {
   history: ConversationHistory;
   tokenizer: Tokenizer;
@@ -241,17 +245,34 @@ export class ContextManager {
   /**
    * LLM compaction, transactional. The prefix is everything before a boundary
    * placed at `len - keepRecentMessages` and shifted BACK to the nearest user
-   * item, so the verbatim tail always starts with a user message and no
-   * tool_call is ever separated from its result. The prefix is summarized via
+   * item — or, when the only user item sits before the whole window (a
+   * single-steer session), to the nearest assistant item, which starts a block
+   * so its tool results stay with it. Either way the verbatim tail never
+   * splits a tool_call from its result. The prefix is summarized via
    * modelPort (text only; tool calls ignored) and the whole history is swapped
    * for [compact_summary user item, ...tail] in one replaceAll. On an empty
    * prefix — or one consisting only of existing compact_summary items (
    * a repeated compaction of an already-summarized prefix) — the call is a
-   * structural no-op (not a breaker failure). On
-   * error/empty-summary/abort the history is untouched and the failure counter
-   * increments; the configured number of consecutive failures trips the breaker.
+   * structural no-op. Below the compaction threshold that is not a breaker
+   * failure, and neither on a still-short history whose pressure comes from
+   * the request overhead alone; on a longer history under pressure the skip
+   * would repeat on every turn while the context keeps growing, so it counts
+   * as a breaker failure. On
+   * error/empty-summary/abort the history is untouched and — on the auto
+   * trigger — the failure counter increments; the configured number of
+   * consecutive failures trips the breaker. The breaker is fed on the auto
+   * trigger only: a manual /compact never changes its state (its structural
+   * skip stays a benign no-op, and a failed attempt leaves the breaker alone —
+   * the user is present, reads the error, and simply retries).
    */
-  async runCompaction(opts: { signal?: AbortSignal }): Promise<RunCompactionResult> {
+  async runCompaction(opts: { signal?: AbortSignal; trigger?: "auto" | "manual" }): Promise<RunCompactionResult> {
+    // A manual /compact never feeds the breaker: a structural skip there is
+    // the benign no-op it is below the threshold, and none of its real
+    // failures (provider error, cancel, empty summary) may disable the
+    // session's auto-compaction — the user is present and can read the row
+    // and retry, unlike the auto path where a skip would repeat on every turn
+    // while the context keeps growing.
+    const trigger = opts.trigger ?? "auto";
     const preTokens = this.estimate().tokens;
     const signal = opts.signal;
     const items = this.deps.history.items;
@@ -261,8 +282,22 @@ export class ContextManager {
     const modelId = this.deps.modelPort.modelId;
 
     const boundary = this.compactionBoundary(items);
-    // boundary <= 0 => empty prefix: nothing to compact. Not a failure.
+    // Under pressure a structural skip would repeat on every turn while the
+    // context keeps growing — invisible to the breaker, so the retry loop
+    // would never end. Only when the history is long enough for compaction to
+    // be the remedy, though: overhead-dominated pressure on a still-short
+    // history (e.g. a degraded small-window boot) skips benignly, exactly as
+    // below the threshold. The auto trigger only — see runCompaction's head.
+    const underPressure =
+      trigger === "auto" &&
+      preTokens >= compactThresholdTokens(this.deps.config) &&
+      items.length > this.deps.config.keepRecentMessages;
+    // boundary <= 0 => empty prefix: nothing to compact. Not a failure below
+    // the compaction threshold; under pressure it counts as one.
     if (boundary <= 0) {
+      if (underPressure) {
+        return this.recordFailure(preTokens, COMPACTION_SKIP_UNDER_PRESSURE, modelId, trigger === "auto");
+      }
       return {
         ok: false,
         preTokens,
@@ -276,6 +311,9 @@ export class ContextManager {
     // /compact right after a prior success) has nothing new to summarize.
     // Pure structural check on `kind`; same skip semantics as an empty prefix.
     if (items.slice(0, boundary).every((item) => item.kind === "compact_summary")) {
+      if (underPressure) {
+        return this.recordFailure(preTokens, COMPACTION_SKIP_UNDER_PRESSURE, modelId, trigger === "auto");
+      }
       return {
         ok: false,
         preTokens,
@@ -326,14 +364,14 @@ export class ContextManager {
     }
 
     if (aborted || signal?.aborted) {
-      return this.recordFailure(preTokens, "compaction aborted", modelId);
+      return this.recordFailure(preTokens, "compaction aborted", modelId, trigger === "auto");
     }
     if (streamError !== null) {
-      return this.recordFailure(preTokens, streamError, modelId);
+      return this.recordFailure(preTokens, streamError, modelId, trigger === "auto");
     }
     const trimmed = summary.trim();
     if (trimmed.length === 0) {
-      return this.recordFailure(preTokens, "compaction produced an empty summary", modelId);
+      return this.recordFailure(preTokens, "compaction produced an empty summary", modelId, trigger === "auto");
     }
 
     const summaryText = `${COMPACT_SUMMARY_PREFIX}${trimmed}`;
@@ -368,26 +406,43 @@ export class ContextManager {
   /**
    * Boundary index: the largest index <= (len - keepRecentMessages) whose item
    * is a user message. The prefix is items[0..boundary); the tail items[boundary..].
-   * Returns 0 when no clean boundary exists before the keep-recent window
-   * (caller treats <= 0 as an empty prefix / skip).
+   * A single-steer session has no user item in that range (its only one sits
+   * before the whole window), so the boundary falls back to the largest
+   * assistant item there — an assistant item starts a block, so its tool
+   * results stay with it in the tail and no tool_call is ever separated from
+   * its result. Returns 0 when no clean boundary exists before the keep-recent
+   * window (caller treats <= 0 as an empty prefix / skip).
    */
   private compactionBoundary(items: readonly HistoryItem[]): number {
     const raw = items.length - this.deps.config.keepRecentMessages;
     const upper = Math.min(raw, items.length - 1);
-    for (let i = upper; i >= 0; i -= 1) {
+    for (let i = upper; i >= 1; i -= 1) {
       if (items[i]!.message.role === "user") {
+        return i;
+      }
+    }
+    for (let i = upper; i >= 1; i -= 1) {
+      if (items[i]!.message.role === "assistant") {
         return i;
       }
     }
     return 0;
   }
 
+  /**
+   * Records a failed attempt. Feeds the circuit breaker only when the caller
+   * asked for the compaction itself (the auto trigger): a manual /compact
+   * failure returns the error to its caller without touching breaker state.
+   */
   private recordFailure(
     preTokens: number,
     error: string,
     modelId: string | undefined,
+    feedsBreaker: boolean,
   ): RunCompactionResult {
-    this.consecutiveFailures += 1;
+    if (feedsBreaker) {
+      this.consecutiveFailures += 1;
+    }
     return {
       ok: false,
       preTokens,

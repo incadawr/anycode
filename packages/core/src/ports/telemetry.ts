@@ -49,7 +49,19 @@ export type TelemetryEventRecord =
   | { t: "tool"; tool: string; status: ToolCallStatus; durationMs: number }
   | { t: "loop_end"; reason: LoopEndReason; turns: number }
   | { t: "compaction_start"; trigger: "auto" | "manual" }
-  | { t: "compaction_end"; ok: boolean; preTokens?: number; postTokens?: number; durationMs: number }
+  | {
+      t: "compaction_end";
+      ok: boolean;
+      preTokens?: number;
+      postTokens?: number;
+      durationMs: number;
+      /** Presence-only: the cycle failed or was skipped. Never text — the same
+       *  event is emitted by the desktop engine taps with arbitrary
+       *  transport/RPC text in `error`, so no reason text crosses this port. */
+      error?: true;
+      /** True when the cycle was a structural no-op (nothing to compact). */
+      skipped?: true;
+    }
   | { t: "microcompact"; clearedToolResults: number; savedTokens: number }
   | {
       t: "context_usage";

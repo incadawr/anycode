@@ -45,6 +45,12 @@ export function telemetryRecordFor(event: AgentEvent): TelemetryEventRecord | nu
         preTokens: event.preTokens,
         postTokens: event.postTokens,
         durationMs: event.durationMs,
+        // Presence-only: the same AgentEvent reaches this mapper from the
+        // desktop engine taps, whose messages are arbitrary transport/RPC
+        // text — no reason text crosses this port (the reason's durable home
+        // is the transcript row, not telemetry).
+        ...(event.error !== undefined ? { error: true as const } : {}),
+        ...(event.skipped !== undefined ? { skipped: true as const } : {}),
       };
     case "microcompact":
       return {

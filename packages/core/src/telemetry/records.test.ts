@@ -3,7 +3,8 @@
  * telemetryRecordFor, verified unit-by-unit. Every mapped AgentEvent variant
  * projects field-by-field; every unmapped variant (including a synthetic
  * future one) maps to null; and a sentinel string planted in EVERY
- * text-bearing carrier never survives into the serialized record.
+ * text-bearing carrier never survives into the serialized record
+ * (compaction_end.error is presence-only on this port, so it is guarded too).
  */
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -97,18 +98,36 @@ describe("telemetryRecordFor — mapped variants (whitelist, field-by-field)", (
     expect(telemetryRecordFor(event)).toEqual({ t: "compaction_start", trigger: "manual" });
   });
 
-  it("compaction_end (error dropped)", () => {
+  it("compaction_end carries error/skipped as presence flags only (no reason text)", () => {
     const event: AgentEvent = {
       type: "compaction_end",
       ok: false,
       preTokens: 1000,
-      postTokens: 400,
       durationMs: 50,
-      error: SENTINEL,
+      error: "request failed with a server error",
+      skipped: true,
     };
     expect(telemetryRecordFor(event)).toEqual({
       t: "compaction_end",
       ok: false,
+      preTokens: 1000,
+      durationMs: 50,
+      error: true,
+      skipped: true,
+    });
+  });
+
+  it("compaction_end (no error/skipped -> the fields stay off)", () => {
+    const event: AgentEvent = {
+      type: "compaction_end",
+      ok: true,
+      preTokens: 1000,
+      postTokens: 400,
+      durationMs: 50,
+    };
+    expect(telemetryRecordFor(event)).toEqual({
+      t: "compaction_end",
+      ok: true,
       preTokens: 1000,
       postTokens: 400,
       durationMs: 50,
@@ -562,7 +581,7 @@ describe("telemetryRecordFor — unmapped variants -> null (fail-closed)", () =>
   });
 });
 
-describe("telemetryRecordFor — sentinel-leak invariant across every text carrier", () => {
+describe("telemetryRecordFor — sentinel-leak invariant across sentinel-guarded text carriers", () => {
   function assertNoLeak(event: AgentEvent): void {
     const rec = telemetryRecordFor(event);
     const serialized = JSON.stringify(rec);
@@ -584,7 +603,7 @@ describe("telemetryRecordFor — sentinel-leak invariant across every text carri
         durationMs: 1,
       },
     }));
-  it("compaction_end.error", () =>
+  it("compaction_end.error (presence-only: no engine tap transport text survives)", () =>
     assertNoLeak({
       type: "compaction_end",
       ok: false,
@@ -824,6 +843,30 @@ describe("buildEngineTelemetryTap", () => {
     expect(records).toHaveLength(2);
     expect(records[0]).toMatchObject({ t: "usage", inputTokens: 200, outputTokens: 50, totalTokens: 250 });
     expect(records[1]).toMatchObject({ t: "usage", inputTokens: 30, outputTokens: 10, totalTokens: 40 });
+  });
+
+  it("a compaction_end from an engine tap carries error/skipped as presence flags — the raw message never reaches the record", () => {
+    const { port, records } = makeRecordingPort();
+    const tap = buildEngineTelemetryTap(port, "session-codex");
+    tap({
+      type: "compaction_end",
+      ok: false,
+      preTokens: 5_000,
+      durationMs: 12,
+      error: `thread/compact/start failed: ${SENTINEL}`,
+    });
+    expect(records).toHaveLength(1);
+    expect(JSON.stringify(records[0])).not.toContain(SENTINEL);
+    expect(records[0]).toEqual({
+      v: 1,
+      ts: expect.any(Number),
+      session: "session-codex",
+      t: "compaction_end",
+      ok: false,
+      preTokens: 5_000,
+      durationMs: 12,
+      error: true,
+    });
   });
 
   it("reset pin: total resets (250->40) while input does NOT (200->210) — each counter independent, none negative", () => {

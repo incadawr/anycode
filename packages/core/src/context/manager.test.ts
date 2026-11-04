@@ -720,6 +720,139 @@ describe("ContextManager.runCompaction — success", () => {
     expect((manager as unknown as { consecutiveFailures: number }).consecutiveFailures).toBe(0);
   });
 
+  it("a single-steer session (only user item at index 0) compacts with the tail starting at an assistant item", async () => {
+    const messages: ChatMessage[] = [userMsg("the one brief")];
+    for (let t = 0; t < 8; t += 1) {
+      messages.push(assistantToolCall(`c${t}`));
+      messages.push(toolResult(`c${t}`, `result ${t} ${"x".repeat(200)}`));
+    }
+    const history = buildHistory(messages);
+    const port = new ScriptedModelPort(summaryScript("CONDENSED"));
+    const manager = makeManager(history, port, { keepRecentMessages: 4 });
+    const before = history.items;
+
+    const result = await manager.runCompaction({});
+
+    // The old boundary rule found only the index-0 user item and returned a
+    // skipped ok:false, so an auto compaction under pressure no-oped every turn.
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(port.requests).toHaveLength(1);
+    expect(port.requests[0]!.messages.at(-1)).toEqual({ role: "user", content: COMPACTION_INSTRUCTION });
+    expect(history.items[0]!.kind).toBe("compact_summary");
+    // The verbatim tail is an exact suffix of the old history and starts at an
+    // assistant item, so its tool results stay with it.
+    const tail = history.items.slice(1);
+    expect(tail).toEqual(before.slice(13));
+    expect(tail[0]!.message.role).toBe("assistant");
+    expect(history.unansweredToolCallIds()).toEqual([]);
+  });
+
+  it("a structural skip under compaction pressure counts as a breaker failure", async () => {
+    // A summary-only prefix (nothing new to summarize) on a history longer
+    // than the keep-recent window, above the compaction threshold on a tight
+    // window: the skip would repeat on every turn while nothing else shrinks
+    // the context, so it counts toward the breaker instead of benignly
+    // no-oping.
+    const history = buildHistory([userMsg("seed")]);
+    history.replaceAll(
+      [0, 1, 2, 3].map((i) => ({
+        id: globalThis.crypto.randomUUID(),
+        createdAt: Date.now(),
+        message: userMsg(`summary ${i} ${"x".repeat(2_000)}`),
+        tokenEstimate: 600,
+        kind: "compact_summary" as const,
+      })),
+    );
+    const port = new ScriptedModelPort(summaryScript("SHOULD NOT RUN"));
+    const manager = makeManager(history, port, {
+      keepRecentMessages: 2,
+      contextWindowTokens: 2_000,
+      outputReserveTokens: 100,
+      compactBufferTokens: 100,
+    });
+
+    for (let i = 0; i < 3; i += 1) {
+      const result = await manager.runCompaction({});
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        // Under pressure the skip is a real failure: no benign flag, a human
+        // reason, and the model was never called.
+        expect(result.skipped).toBeUndefined();
+        expect(result.error).toBe("compaction skipped but the context is still above the compaction threshold");
+      }
+    }
+    expect(port.requests).toHaveLength(0);
+    expect(manager.breakerTripped()).toBe(true);
+    expect(manager.shouldAutoCompact()).toBe(false);
+  });
+
+  it("a structural skip under pressure on a manual /compact stays benign and never feeds the breaker", async () => {
+    // Same shape as the auto case above (summary-only prefix, above the
+    // threshold), but the caller is the user's own /compact: a structural
+    // no-op there must not trip the breaker — the user pressing it three
+    // times would otherwise disable auto-compaction for the whole session.
+    const history = buildHistory([userMsg("seed")]);
+    history.replaceAll(
+      [0, 1, 2, 3].map((i) => ({
+        id: globalThis.crypto.randomUUID(),
+        createdAt: Date.now(),
+        message: userMsg(`summary ${i} ${"x".repeat(2_000)}`),
+        tokenEstimate: 600,
+        kind: "compact_summary" as const,
+      })),
+    );
+    const port = new ScriptedModelPort(summaryScript("SHOULD NOT RUN"));
+    const manager = makeManager(history, port, {
+      keepRecentMessages: 2,
+      contextWindowTokens: 2_000,
+      outputReserveTokens: 100,
+      compactBufferTokens: 100,
+    });
+
+    for (let i = 0; i < 3; i += 1) {
+      const result = await manager.runCompaction({ trigger: "manual" });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.skipped).toBe(true);
+        expect(result.error).toBe("Nothing to compact yet — the earlier conversation is already summarized");
+      }
+    }
+    expect(port.requests).toHaveLength(0);
+    expect(manager.breakerTripped()).toBe(false);
+    expect(manager.shouldAutoCompact()).toBe(true);
+  });
+
+  it("a skip on a genuinely short history stays benign even under pressure", async () => {
+    // Degraded small-window boot: the request overhead alone sits above the
+    // compaction threshold while the history is still shorter than the
+    // keep-recent window. Compaction is not the remedy there (nothing to
+    // summarize), so the skip must stay a no-op and never feed the breaker.
+    const history = buildHistory([
+      userMsg("one brief"),
+      assistantToolCall("c0"),
+      toolResult("c0", "x".repeat(7_000)),
+    ]);
+    const port = new ScriptedModelPort(summaryScript("SHOULD NOT RUN"));
+    const manager = makeManager(history, port, {
+      contextWindowTokens: 2_000,
+      outputReserveTokens: 100,
+      compactBufferTokens: 100,
+    });
+
+    for (let i = 0; i < 3; i += 1) {
+      const result = await manager.runCompaction({});
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.skipped).toBe(true);
+        expect(result.error).toBe("Nothing to compact yet — the conversation is too short");
+      }
+    }
+    expect(port.requests).toHaveLength(0);
+    expect(manager.breakerTripped()).toBe(false);
+    expect(manager.shouldAutoCompact()).toBe(true);
+  });
+
   it("repeated compaction of a summary-only prefix skips the model call entirely", async () => {
     const messages: ChatMessage[] = [
       userMsg("turn 0"),
@@ -954,6 +1087,116 @@ describe("ContextManager.runCompaction — atomic on failure/abort", () => {
   });
 });
 
+describe("ContextManager.runCompaction — manual failures never feed the breaker", () => {
+  // Six heavy turns on a tight window: every failure below is a real
+  // summarizing attempt (no structural skip), the context sits ABOVE the
+  // compaction threshold exactly as in the auto path (shouldAutoCompact true),
+  // and the failure ceiling sits at the default 3.
+  const tightWindow = {
+    keepRecentMessages: 4,
+    contextWindowTokens: 2_000,
+    outputReserveTokens: 100,
+    compactBufferTokens: 100,
+  };
+  const longMessages = (): ChatMessage[] => {
+    const messages: ChatMessage[] = [];
+    for (let t = 0; t < 6; t += 1) {
+      messages.push(userMsg(`turn ${t}`));
+      messages.push(assistantToolCall(`c${t}`));
+      messages.push(toolResult(`c${t}`, "x".repeat(1_200)));
+    }
+    return messages;
+  };
+
+  /** Port failing the first `failures` calls with `failingScript`, then summarizing successfully. */
+  const flakyPort = (
+    failures: number,
+    failingScript: () => ModelStreamEvent[],
+  ): { port: ModelPort; callsMade: () => number } => {
+    let calls = 0;
+    const port: ModelPort = {
+      streamText: (request: ModelRequest) => {
+        const events = calls < failures ? failingScript() : summaryScript("OK");
+        calls += 1;
+        const signal = request.abortSignal;
+        return (async function* () {
+          for (const event of events) {
+            if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+            yield event;
+          }
+        })();
+      },
+    };
+    return { port, callsMade: () => calls };
+  };
+
+  const expectBreakerUntouched = (manager: ContextManager): void => {
+    expect(manager.breakerTripped()).toBe(false);
+    // Under pressure the auto path would still be allowed to try: only a
+    // tripped breaker (or a drop below the threshold) answers false here.
+    expect(manager.shouldAutoCompact()).toBe(true);
+    expect((manager as unknown as { consecutiveFailures: number }).consecutiveFailures).toBe(0);
+  };
+
+  it("three manual runs failing on a provider error leave the breaker untripped and the next auto attempt runs", async () => {
+    const { port, callsMade } = flakyPort(3, errorScript);
+    const history = buildHistory(longMessages());
+    const manager = makeManager(history, port, tightWindow);
+    expect(manager.shouldAutoCompact()).toBe(true); // fixture precondition: real pressure
+
+    for (let i = 0; i < 3; i += 1) {
+      const result = await manager.runCompaction({ trigger: "manual" });
+      expect(result.ok).toBe(false);
+    }
+    expectBreakerUntouched(manager);
+
+    // The next AUTO attempt is neither blocked nor pre-failed: it reaches the
+    // model (4th call) and compacts.
+    expect((await manager.runCompaction({})).ok).toBe(true);
+    expect(callsMade()).toBe(4);
+    expect(history.items[0]!.kind).toBe("compact_summary");
+  });
+
+  it("three cancelled manual runs leave the breaker untripped and the next auto attempt runs", async () => {
+    const port = new ScriptedModelPort(summaryScript("CONDENSED"));
+    const history = buildHistory(longMessages());
+    const manager = makeManager(history, port, tightWindow);
+    expect(manager.shouldAutoCompact()).toBe(true); // fixture precondition: real pressure
+
+    for (let i = 0; i < 3; i += 1) {
+      const controller = new AbortController();
+      controller.abort();
+      const result = await manager.runCompaction({ signal: controller.signal, trigger: "manual" });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toBe("compaction aborted");
+      }
+    }
+    expectBreakerUntouched(manager);
+
+    expect((await manager.runCompaction({})).ok).toBe(true);
+    expect(port.requests).toHaveLength(4);
+    expect(history.items[0]!.kind).toBe("compact_summary");
+  });
+
+  it("three manual runs producing an empty summary leave the breaker untripped and the next auto attempt runs", async () => {
+    const { port, callsMade } = flakyPort(3, emptyScript);
+    const history = buildHistory(longMessages());
+    const manager = makeManager(history, port, tightWindow);
+    expect(manager.shouldAutoCompact()).toBe(true); // fixture precondition: real pressure
+
+    for (let i = 0; i < 3; i += 1) {
+      const result = await manager.runCompaction({ trigger: "manual" });
+      expect(result.ok).toBe(false);
+    }
+    expectBreakerUntouched(manager);
+
+    expect((await manager.runCompaction({})).ok).toBe(true);
+    expect(callsMade()).toBe(4);
+    expect(history.items[0]!.kind).toBe("compact_summary");
+  });
+});
+
 describe("ContextManager.runCompaction — property: never splits a tool pair", () => {
   it("keeps every tool_call/tool_result pair intact across random valid histories", async () => {
     for (let seed = 1; seed <= 60; seed += 1) {
@@ -976,10 +1219,12 @@ describe("ContextManager.runCompaction — property: never splits a tool pair", 
       expect(noOrphanToolResults(history)).toBe(true);
 
       if (result.ok) {
-        // The compacted history starts with the summary; the tail's first
-        // message is a user message (the clean-boundary rule).
+        // The compacted history starts with the summary; the tail starts at a
+        // user item when one exists in range, else at an assistant item (a
+        // single-steer session) — never a bare tool result, so no
+        // tool_call is ever separated from its result.
         expect(history.items[0]!.kind).toBe("compact_summary");
-        expect(history.items[1]!.message.role).toBe("user");
+        expect(["user", "assistant"]).toContain(history.items[1]!.message.role);
       }
     }
   });
