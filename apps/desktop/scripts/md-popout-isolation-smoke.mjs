@@ -1,6 +1,6 @@
 /**
- * Live smoke for  (preview-ipc-risk F1/F2 main-process hardening of
- * the detached markdown popout): drives a REAL Electron dev instance over the
+ * Live smoke for the detached markdown popout's main-process hardening
+ * (preview-ipc-risk F1/F2): drives a REAL Electron dev instance over the
  * automation HTTP channel (main/automation/*, automation/README.md) and pins
  * the app-level behavior the unit tests cannot reach:
  *
