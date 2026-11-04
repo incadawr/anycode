@@ -105,6 +105,9 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
   const [recovery, setRecovery] = useState<Partial<Record<PresetRole, boolean>>>({});
   const [nameAction, setNameAction] = useState<"new" | "duplicate" | "rename" | null>(null);
   const [name, setName] = useState("");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuFocus, setMenuFocus] = useState(0);
+  const menuRef = useRef<HTMLDivElement>(null);
   const [pending, setPending] = useState<{ title: string; body: string; confirmLabel: string; action: () => void; onCancel?: () => void } | null>(null);
   const writeState = useSyncExternalStore(subscribeRegistryWrites, registryWriteSnapshot, registryWriteSnapshot);
   const busy = writeState.pending;
@@ -155,6 +158,17 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
     }).catch(() => {});
     return () => { live = false; };
   }, []);
+  // The profile menu is the app's popover idiom (sidebar project menu): focus
+  // roves the items, and Esc, Tab, or an outside click closes it.
+  useEffect(() => {
+    if (menuOpen) menuRef.current?.querySelectorAll<HTMLButtonElement>(".roles-menu-item")[menuFocus]?.focus();
+  }, [menuOpen, menuFocus]);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onPointer = (event: MouseEvent) => { if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false); };
+    document.addEventListener("mousedown", onPointer);
+    return () => document.removeEventListener("mousedown", onPointer);
+  }, [menuOpen]);
   useEffect(() => {
     const bridge = window.anycode?.subagents;
     if (!bridge) return;
@@ -166,6 +180,25 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
   }, [tabId, snapshot]);
   const projects = [...new Set([...tabs.map((t) => t.projectRoot ?? t.workspace).filter(isAbsoluteProject), ...sessionProjects, ...registry.projects.map((p) => p.projectRoot)])];
   const projectLabel = (path: string) => projects.filter((p) => projectFolderName(p) === projectFolderName(path)).length > 1 ? `${projectFolderName(path)} — ${path}` : projectFolderName(path);
+  function onMenuKeyDown(event: React.KeyboardEvent): void {
+    if (event.key === "Escape") {
+      // preventDefault: the window-level Esc handlers must not also see it.
+      event.preventDefault();
+      event.stopPropagation();
+      setMenuOpen(false);
+      menuRef.current?.querySelector<HTMLButtonElement>(".roles-menu-trigger")?.focus();
+      return;
+    }
+    if (event.key === "Tab") { setMenuOpen(false); return; }
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    event.preventDefault();
+    const items = menuRef.current ? [...menuRef.current.querySelectorAll<HTMLButtonElement>(".roles-menu-item")] : [];
+    if (!items.length) return;
+    const offset = event.key === "ArrowDown" ? 1 : -1;
+    const next = (items.indexOf(document.activeElement as HTMLButtonElement) + offset + items.length) % items.length;
+    setMenuFocus(next);
+    items[next]?.focus();
+  }
   function guard(action: () => void, onCancel?: () => void): void {
     if (!dirty) { action(); return; }
     setPending({ title: "Discard unsaved roles?", body: "Your unsaved role changes will be lost.", confirmLabel: "Discard changes", onCancel, action: () => { setDraft(baseline); setCap(baselineCap); action(); } });
@@ -249,14 +282,16 @@ export function RolesPane({ tabId, projectRoot, registerGuard }: RolesPaneProps 
       {registry.profiles.length ? <select className="settings-field-select" aria-label="Role profile" title={selected?.name ?? "Default"} value={projectRoot ? mapped?.id ?? "" : selected?.id ?? ""} disabled={busy} onChange={(e) => selectProfile(e.target.value)}>
         {projectRoot ? <option value="">{`Use global (${registry.profiles.find((p) => p.id === registry.activeId)?.name ?? "Built-in roles"})`}</option> : <option value="">Built-in roles</option>}{registry.profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}      </select> : <strong>Built-in roles</strong>}
       {title && <span className="settings-field-hint">({title})</span>}
-      <details className="roles-menu"><summary className="settings-button" aria-label="Profile actions">⋯</summary><div className="roles-menu-items">
-        {(["new", "duplicate", "rename"] as const).map((action) => <Button size="sm" type="button" key={action} disabled={busy || (action === "rename" && !selected)} onClick={() => { setNameAction(action); setName(action === "rename" ? selected?.name ?? "" : ""); }}>{action === "new" ? "New" : action === "duplicate" ? "Duplicate" : "Rename"}</Button>)}
-        <Button size="sm" type="button" disabled={busy || !selected} onClick={() => { if (!selected) return; guard(() => setPending({ title: `Delete ${selected.name}?`, body: `Project mappings to ${selected.name} will be removed and will use the global profile.`, confirmLabel: "Delete", action: () => { void write((current) => { const profiles = current.profiles.filter((p) => p.id !== selected.id); return { profiles, activeId: current.activeId === selected.id ? "" : current.activeId, projects: current.projects.filter((p) => p.profileId !== selected.id) }; }); } })); }}>Delete</Button>
-      </div></details>
+      <div className="roles-menu" ref={menuRef}><Button size="sm" type="button" className="roles-menu-trigger" aria-label="Profile actions" aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => { setMenuFocus(0); setMenuOpen((open) => !open); }}>⋯</Button>
+        {menuOpen && <div className="roles-menu-items" role="menu" aria-label="Profile actions" onKeyDown={onMenuKeyDown}>
+        {(["new", "duplicate", "rename"] as const).map((action, index) => <Button size="sm" type="button" key={action} role="menuitem" className="roles-menu-item" tabIndex={menuFocus === index ? 0 : -1} disabled={busy || (action === "rename" && !selected)} onClick={() => { setMenuOpen(false); setNameAction(action); setName(action === "rename" ? selected?.name ?? "" : ""); }}>{action === "new" ? "New" : action === "duplicate" ? "Duplicate" : "Rename"}</Button>)}
+        <div className="roles-menu-divider" role="separator" />
+        <Button size="sm" type="button" role="menuitem" className="roles-menu-item roles-menu-item-danger" tabIndex={3 === menuFocus ? 0 : -1} disabled={busy || !selected} onClick={() => { setMenuOpen(false); if (!selected) return; guard(() => setPending({ title: `Delete ${selected.name}?`, body: `Project mappings to ${selected.name} will be removed and will use the global profile.`, confirmLabel: "Delete", action: () => { void write((current) => { const profiles = current.profiles.filter((p) => p.id !== selected.id); return { profiles, activeId: current.activeId === selected.id ? "" : current.activeId, projects: current.projects.filter((p) => p.profileId !== selected.id) }; }); } })); }}>Delete</Button>
+      </div>}</div>
       <select className="settings-field-select roles-preset" aria-label="Apply preset" value="" disabled={busy} onChange={(e) => { const preset = deriveRolePresets(engines, activeConnectionId ?? "").find((p) => p.id === e.target.value); if (preset) guard(() => { setDraft(toDraft(preset.roles)); setCap(baselineCap); }); }}><option value="">Apply preset…</option>{deriveRolePresets(engines, activeConnectionId ?? "").map((p) => <option key={p.id} value={p.id} disabled={!presetApplicable(p, engines)}>{p.label}</option>)}</select>
     </div>
     {mapping && !mapped && <p className="settings-field-hint">Missing project profile; using the global fallback.</p>}
-    {nameAction && <form className="roles-name-form" onSubmit={(e) => { e.preventDefault(); void submitName(); }}><label className="settings-field-label" htmlFor="role-profile-name">{nameAction === "rename" ? "Rename profile" : nameAction === "duplicate" ? "Duplicate profile name" : "New profile name"}</label><input id="role-profile-name" className="settings-field-input" disabled={busy} value={name} onChange={(e) => setName(e.target.value)} /><Button size="sm" variant="primary" type="submit" disabled={busy || (nameAction === "rename" && !canRenameProfile(selected?.name, name))}>Save</Button><Button size="sm" type="button" disabled={busy} onClick={() => setNameAction(null)}>Cancel</Button></form>}
+    {nameAction && <form className="roles-name-form" onSubmit={(e) => { e.preventDefault(); void submitName(); }}><label className="settings-field-label roles-name-form-title" htmlFor="role-profile-name">{nameAction === "rename" ? "Rename profile" : nameAction === "duplicate" ? "Duplicate profile" : "New profile"}</label><input id="role-profile-name" className="settings-field-input" autoFocus disabled={busy} value={name} onChange={(e) => setName(e.target.value)} /><Button size="sm" variant="primary" type="submit" disabled={busy || (nameAction === "rename" && !canRenameProfile(selected?.name, name))}>Save</Button><Button size="sm" type="button" disabled={busy} onClick={() => setNameAction(null)}>Cancel</Button></form>}
     <fieldset className="roles-editor" disabled={busy}><div className="roles-table" aria-label="Role routes">{ROLE_PRESET_ROLES.map((role) => {
       const entry = draft[role].primary;
       const unavailable = entry.engine === "claude" ? !engines.claudeReady : entry.engine === "codex" ? !engines.codexReady : false;

@@ -139,12 +139,11 @@ it("renders provider names in every route and preserves route values", () => {
 it("renders profile and project selection controls", () => {
   const html = renderToStaticMarkup(createElement(RolesPane));
   expect(html).toContain('aria-label="Profile actions"');
+  expect(html).toContain('aria-haspopup="menu"');
   expect(html).toContain('aria-label="Project to add"');
   expect(html).toContain('aria-label="Profile to add"');
-  expect(html).toContain('>New</button>');
-  expect(html).toContain('>Duplicate</button>');
-  expect(html).toContain('>Rename</button>');
-  expect(html).toContain('>Delete</button>');
+  // The actions are a popover menu: its items mount only while it is open.
+  expect(html).not.toContain('role="menu"');
 });
 
 it("an empty saved profile displays the active connection instead of an unsaved preset", () => {

@@ -108,6 +108,20 @@ function buttonByText(text: string): HTMLButtonElement {
   return button as HTMLButtonElement;
 }
 
+/** The `…` popover trigger; menu items only exist while it is open. */
+function menuTrigger(): HTMLButtonElement {
+  const trigger = container.querySelector<HTMLButtonElement>('[aria-label="Profile actions"]');
+  if (trigger === null) throw new Error("no profile menu trigger");
+  return trigger;
+}
+
+async function openMenu(): Promise<HTMLDivElement> {
+  await click(menuTrigger());
+  const menu = container.querySelector<HTMLDivElement>('[role="menu"][aria-label="Profile actions"]');
+  if (menu === null) throw new Error("profile menu did not open");
+  return menu;
+}
+
 async function click(button: HTMLButtonElement): Promise<void> {
   await act(async () => {
     button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -208,6 +222,7 @@ describe("Create/Duplicate without typing a name", () => {
     await mount();
 
     for (const action of ["New", "New", "Duplicate", "Duplicate"]) {
+      await openMenu();
       await click(buttonByText(action));
       await click(buttonByText("Save"));
     }
@@ -225,6 +240,7 @@ describe("Create/Duplicate without typing a name", () => {
   it("a typed name is still used as typed", async () => {
     const bridge = installBridge(settingsWithProfile("Team"));
     await mount();
+    await openMenu();
     await click(buttonByText("New"));
     const input = container.querySelector<HTMLInputElement>("#role-profile-name")!;
     await act(async () => type(input, "Reviewers"));
@@ -232,6 +248,60 @@ describe("Create/Duplicate without typing a name", () => {
     await click(buttonByText("Save"));
 
     expect(profileNames(bridge.current())).toEqual(["Team", "Reviewers"]);
+  });
+});
+
+describe("Profile actions menu", () => {
+  it("opens as a popover, navigates with the arrow keys, and closes on Escape and outside clicks", async () => {
+    installBridge(settingsWithProfile("Team"));
+    await mount();
+    expect(menuTrigger().getAttribute("aria-expanded")).toBe("false");
+    const menu = await openMenu();
+    expect(menuTrigger().getAttribute("aria-expanded")).toBe("true");
+    // Focus lands on the first item and roves with the arrows.
+    const items = [...menu.querySelectorAll<HTMLButtonElement>(".roles-menu-item")];
+    expect(items.map((item) => item.textContent?.trim())).toEqual(["New", "Duplicate", "Rename", "Delete"]);
+    expect(document.activeElement).toBe(items[0]);
+    await act(async () => { menu.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true })); });
+    expect(document.activeElement).toBe(items[1]);
+    await act(async () => { menu.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true })); });
+    expect(document.activeElement).toBe(items[0]);
+    // Escape closes it and returns focus to the trigger.
+    await act(async () => { menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    expect(container.querySelector('[role="menu"]')).toBeNull();
+    expect(document.activeElement).toBe(menuTrigger());
+    // A mousedown outside closes it; the trigger toggles it back open.
+    await openMenu();
+    await act(async () => { container.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); });
+    expect(container.querySelector('[role="menu"]')).toBeNull();
+  });
+
+  it("opens the compact name form with a clear action title and the menu closed", async () => {
+    installBridge(settingsWithProfile("Team"));
+    await mount();
+    for (const [action, heading] of [["New", "New profile"], ["Duplicate", "Duplicate profile"], ["Rename", "Rename profile"]] as const) {
+      await openMenu();
+      await click(buttonByText(action));
+      expect(container.querySelector('[role="menu"]')).toBeNull();
+      expect(container.querySelector(".roles-name-form-title")?.textContent).toBe(heading);
+      expect(document.activeElement).toBe(container.querySelector("#role-profile-name"));
+      await click(buttonByText("Cancel"));
+      expect(container.querySelector(".roles-name-form")).toBeNull();
+    }
+  });
+
+  it("marks Delete as dangerous and still confirms before writing", async () => {
+    const bridge = installBridge(settingsWithProfile("Team"));
+    await mount();
+    await openMenu();
+    const del = buttonByText("Delete");
+    expect(del.className).toContain("roles-menu-item-danger");
+    await click(del);
+    expect(container.querySelector('[role="menu"]')).toBeNull();
+    expect(container.querySelector("dialog")?.textContent).toContain("Delete Team?");
+    expect(bridge.set).not.toHaveBeenCalled();
+    await click(buttonByText("Cancel"));
+    expect(bridge.set).not.toHaveBeenCalled();
   });
 });
 
@@ -310,11 +380,13 @@ describe("Deletion confirmation", () => {
     initial.roleProfiles!.projects = [{ projectRoot: "/project", profileId: "p" }];
     const bridge = installBridge(initial);
     await mount();
+    await openMenu();
     await click(buttonByText("Delete"));
     expect(container.querySelector("dialog")?.textContent).toContain("Project mappings to Team");
     expect(bridge.set).not.toHaveBeenCalled();
     await click(buttonByText("Cancel"));
     expect(bridge.set).not.toHaveBeenCalled();
+    await openMenu();
     await click(buttonByText("Delete"));
     const dialog = container.querySelector("dialog")!;
     const confirm = [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Delete")!;
@@ -371,12 +443,14 @@ describe("Project selection and profile naming", () => {
   it("renames through an inline form and cancellation writes nothing", async () => {
     const bridge = installBridge(settingsWithProfile("Team"));
     await mount();
+    await openMenu();
     await click(buttonByText("Rename"));
     const input = container.querySelector<HTMLInputElement>("#role-profile-name")!;
     expect(input.value).toBe("Team");
     await act(async () => type(input, "  Review  "));
     await click(buttonByText("Cancel"));
     expect(bridge.set).not.toHaveBeenCalled();
+    await openMenu();
     await click(buttonByText("Rename"));
     await act(async () => type(container.querySelector<HTMLInputElement>("#role-profile-name")!, "  Review  "));
     await click(buttonByText("Save"));
@@ -447,6 +521,7 @@ describe("Secondary controls", () => {
     initial.roles = undefined;
     const bridge = installBridge(initial);
     await mount();
+    await openMenu();
     expect(buttonByText("Rename").disabled).toBe(true);
     expect(buttonByText("Delete").disabled).toBe(true);
     expect(container.querySelector('[aria-label="Role profile"]')).toBeNull();
@@ -465,6 +540,7 @@ describe("In-flight saves", () => {
     await click(buttonByText("Save roles"));
     expect(buttonByText("Save roles").disabled).toBe(true);
     expect(container.querySelector<HTMLFieldSetElement>(".roles-editor")?.disabled).toBe(true);
+    await openMenu();
     expect(buttonByText("New").disabled).toBe(true);
     await act(async () => { release(); await waiting; });
     expect(bridge.set).toHaveBeenCalledTimes(1);
@@ -528,6 +604,7 @@ describe("Control appearance and unavailable routes", () => {
   it("uses shared styles for default, prompt, project, and advanced controls", async () => {
     installBridge(settingsWithProfile("Team"));
     await mount();
+    await openMenu();
     await click(buttonByText("New"));
     expect(container.querySelector("#role-profile-name")?.classList.contains("settings-field-input")).toBe(true);
     expect([...container.querySelectorAll(".roles-pane select")].every((el) => el.classList.contains("settings-field-select"))).toBe(true);
