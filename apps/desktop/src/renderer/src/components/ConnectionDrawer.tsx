@@ -1440,6 +1440,20 @@ export interface ConnectionDrawerFieldsProps {
   /** First-run form: keep connection tuning behind a disclosure. */
   simplified?: boolean;
   /**
+   * Template preselected for a first-run create (WelcomeScreen's subscription
+   * shortcuts). A mount-time seed for the Provider select in add mode only —
+   * an `editConnection` always wins, and the embed remounts with a new key
+   * when the pick changes, so the value is never re-read after mount.
+   */
+  initialProviderId?: string;
+  /**
+   * Fired when the add-mode Provider select changes (the select is editable
+   * only before create — `templateLocked`). WelcomeScreen's embedded form
+   * uses it to stop advertising the seeded template's key page once the form
+   * has moved to another provider.
+   */
+  onProviderIdChange?(providerId: string): void;
+  /**
    * Fired with the id of a connection this form CREATED (both create flows).
    * The dialog chrome needs it to stop calling a saved connection "Add
    * connection"; nothing else may infer it (a connection appearing in the list
@@ -1465,6 +1479,8 @@ export function ConnectionDrawerFields({
   onBusyChange,
   interactionBlocked = false,
   simplified = false,
+  initialProviderId,
+  onProviderIdChange,
   onConnectionCreated,
 }: ConnectionDrawerFieldsProps) {
   const labelInputRef = useRef<HTMLInputElement>(null);
@@ -1484,7 +1500,7 @@ export function ConnectionDrawerFields({
   // connection"; edit mode: fixed to the connection's own id for this drawer's
   // whole lifetime (the template can never change post-creation).
   const [createdConnectionId, setCreatedConnectionId] = useState<string | null>(editConnection?.id ?? null);
-  const [providerId, setProviderId] = useState<string>(editConnection?.providerId ?? "");
+  const [providerId, setProviderId] = useState<string>(editConnection?.providerId ?? initialProviderId ?? "");
   const [label, setLabel] = useState(editConnection?.label ?? "");
   // an existing catalog connection persisted with a blank model
   // (the live trap — readiness fails on it with a key-blaming toast) opens
@@ -2839,6 +2855,7 @@ export function ConnectionDrawerFields({
           disabled={readOnly || templateLocked}
           onChange={(e) => {
             setProviderId(e.target.value);
+            onProviderIdChange?.(e.target.value);
             // switching provider clears the model, so the per-model
             // window must go with it. Forced: the new model is empty, and an
             // already-empty owner must not make this look like a no-op.

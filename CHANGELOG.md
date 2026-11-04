@@ -10,6 +10,13 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - The sidebar's default view no longer lets one busy project crowd every other project's folder out of the task list: the recent-tasks page is now counted per project, so each project keeps its newest sessions and stays visible, while "Show all tasks" and search still reach the full history.
+### Added
+
+- The first-run screen gains three subscription shortcuts — GLM Coding Plan, MiniMax M Plan and Kimi (kimi.com): each opens the API connection form with the provider's template preselected and a link to the provider's own key page, so pasting the subscription key, connecting and landing on the catalog's default model is one stop. The key link only shows while the form still uses the seeded template, and re-clicking the already-chosen path keeps whatever has been typed so far.
+
+### Fixed
+
+- Re-clicking a first-run subscription shortcut (GLM Coding Plan, MiniMax M Plan, Kimi) now re-seeds the connection form to that shortcut's template. Previously a form manually moved to another provider kept showing it while the shortcut's key link came back, so the link advertised a key page for a provider the form was no longer using.
 
 ## [0.0.75] — 2026-11-04
 

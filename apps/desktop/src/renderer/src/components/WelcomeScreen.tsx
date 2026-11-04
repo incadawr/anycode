@@ -1,5 +1,6 @@
 /**
- * First-run setup: choose ChatGPT/Codex, Claude Code, or API/local models.
+ * First-run setup: choose ChatGPT/Codex, Claude Code, a coding subscription
+ * (key paste into the API form, not OAuth), or API/local models.
  * Subscription paths reuse the existing account panes; API setup uses the
  * shared connection form with optional tuning collapsed. App owns readiness
  * and advances to the project draft after setup. Saved incomplete connections
@@ -43,6 +44,61 @@ export function initialConnectionsView(connections: readonly Pick<ProviderConnec
 }
 
 /**
+ * The coding-subscription shortcuts rendered beside the engine paths. Each
+ * opens the API form with `id` — a builtin catalog template id, seeded into
+ * the Provider select at mount — and a link to the provider's own key page.
+ * Key-page sources: the Z.AI URL is the "API Keys" page the developer docs
+ * (docs.z.ai) link in their own site nav; the MiniMax URL is "Plan Details",
+ * named by the official M Plan quickstart
+ * (platform.minimax.io/docs/m-plan/quickstart) as where the M Plan API key
+ * lives; the Kimi console URL is UNVERIFIED — the provider SPA serves no
+ * readable content and no doc page naming it was found when this was
+ * written. Every pick is a plain key paste: none of these is an OAuth flow.
+ */
+export type WelcomeSubscriptionId = "z-ai" | "minimax" | "kimi";
+
+export interface WelcomeSubscription {
+  readonly id: WelcomeSubscriptionId;
+  readonly title: string;
+  readonly description: string;
+  readonly keyUrl: string;
+}
+
+export const WELCOME_SUBSCRIPTIONS: readonly WelcomeSubscription[] = [
+  { id: "z-ai", title: "GLM Coding Plan", description: "Use your Z.AI coding plan key", keyUrl: "https://z.ai/manage-apikey/apikey-list" },
+  { id: "minimax", title: "MiniMax M Plan", description: "Use your MiniMax M Plan key", keyUrl: "https://platform.minimax.io/console/plan" },
+  { id: "kimi", title: "Kimi (kimi.com)", description: "Use your Kimi for Coding key", keyUrl: "https://www.kimi.com/code/console" },
+];
+
+/**
+ * The mount key for the embedded API form: a subscription pick gets its own
+ * key (`add:<template>#<pick>`) so switching picks remounts the form with the
+ * new template seeded (typed values must never leak across templates — the
+ * same discipline as the switcher's per-connection keys), while any other view
+ * keeps its plain stable key and no template. `pick` is a nonce bumped on
+ * every subscription click, including a re-pick of the already-active one:
+ * the bare subscription state no-ops on an identical re-pick, so without the
+ * nonce no key change and no remount would follow — and the pick's fresh-seed
+ * reset would then describe a form that never happened (the key link reviving
+ * over a form still showing another provider). Exported for direct testing.
+ */
+export function welcomeFormKey(resolvedKey: string, subscription: WelcomeSubscriptionId | null, pick: number): string {
+  return resolvedKey === "add" && subscription !== null ? `add:${subscription}#${pick}` : resolvedKey;
+}
+
+/**
+ * Whether the active pick's key link still describes the form being rendered.
+ * The add-mode Provider select stays editable until create, so the form can
+ * move off the seeded template: `formProviderId` is what the drawer's select
+ * now shows (`null` = still the untouched seed). The link hides while they
+ * disagree and revives when the template is picked back. Exported for direct
+ * testing (no jsdom — see WelcomeScreen.test.ts's docstring).
+ */
+export function welcomeKeyLinkVisible(activeSubscription: WelcomeSubscription | undefined, formProviderId: string | null): boolean {
+  return activeSubscription !== undefined && (formProviderId === null || formProviderId === activeSubscription.id);
+}
+
+/**
  * Resolves a `WelcomeConnectionsView` against the LIVE connections list into
  * exactly what the form needs to render: which mode to pass
  * `ConnectionDrawerFields` (drives its Create/Save button label), which
@@ -81,6 +137,22 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
   const consentSaving = useStore(store, (s) => s.consentSaving);
   const [path, setPath] = useState<"api" | "codex" | "claude" | null>(null);
   const activePath = path ?? (connections.length > 0 ? "api" : null);
+  // The subscription shortcut picked on this screen, if any. It only drives
+  // the API form while the view is still the fresh-create form it opened
+  // (`welcomeFormKey`'s `add:<template>#<pick>` rule) — switching to edit another
+  // connection or to a generic add drops it, exactly like any other
+  // half-typed form state.
+  const [subscription, setSubscription] = useState<WelcomeSubscriptionId | null>(null);
+  // Bumped on every subscription click so each pick — even of the template
+  // already shown — yields a fresh form key. Without it an identical re-pick
+  // would no-op the subscription state and leave the old form instance (say,
+  // switched to another provider) under a freshly reset key link.
+  const [pick, setPick] = useState(0);
+  // The provider the embedded form's select currently shows (`null` = the
+  // untouched seed), reported through `onProviderIdChange`. A select change
+  // away from the seeded template must take the key link with it, or the pane
+  // would advertise one provider's key page over another provider's form.
+  const [formProviderId, setFormProviderId] = useState<string | null>(null);
 
   // `null` until the user explicitly switches views — the live default
   // (`initialConnectionsView`) tracks the connections list until then, so a
@@ -88,6 +160,13 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
   const [viewOverride, setViewOverride] = useState<WelcomeConnectionsView | null>(null);
   const view = viewOverride ?? initialConnectionsView(connections);
   const resolved = resolveWelcomeView(view, connections);
+  // The subscription pick only survives while the form is still the fresh
+  // create it opened — any other resolved view hides the key link and keeps
+  // the template out of the form.
+  const activeSubscription = resolved.key === "add" && subscription !== null
+    ? WELCOME_SUBSCRIPTIONS.find((sub) => sub.id === subscription)
+    : undefined;
+  const keyLinkVisible = welcomeKeyLinkVisible(activeSubscription, formProviderId);
   // union the builtin catalog with saved custom records so a
   // just-created "Custom endpoint…" resolves its own synthesized entry
   // (models/transports) for the post-create model step — shared by the form
@@ -100,13 +179,14 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
   // provider field on mount so a keyboard/SR user lands directly on the one
   // actionable control (an intentional focus-steal, scoped here rather than in
   // the shared ProviderSettings, which the settings dialog also mounts).
-  // also re-steer on every view switch (key change) — the form
-  // instance underneath is a different mount now, same "land on the one
-  // actionable control" rationale as the original mount-only steal.
+  // also re-steer on every view switch (key change) and on every
+  // subscription re-pick — each remounts the form instance underneath, same
+  // "land on the one actionable control" rationale as the original mount-only
+  // steal.
   useEffect(() => {
     cardRef.current?.querySelector<HTMLElement>(".welcome-setup select, .welcome-setup input, .welcome-setup button, .welcome-paths button")?.focus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resolved.key, activePath]);
+  }, [resolved.key, activePath, subscription, pick]);
 
   return (
     <div className="welcome-screen">
@@ -154,9 +234,32 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
           ] as const).map(([id, title, description]) => (
             <button key={id} type="button" className="welcome-path" aria-pressed={activePath === id} onClick={() => {
               setPath(id);
+              // Re-clicking the already-active path must stay inert — clearing
+              // the pick here would remount the form and silently discard a
+              // half-typed key, model and label.
+              if (path !== id) setSubscription(null);
               onSelectEngine?.(id === "api" ? "core" : id);
             }}>
               <strong>{title}</strong><span>{description}</span>
+            </button>
+          ))}
+        </div>
+
+        {/* Coding-subscription shortcuts: each opens the API form with its
+            template preselected — a key paste, not an OAuth flow. */}
+        <div className="welcome-subscriptions" role="group" aria-label="Connect a coding subscription">
+          {WELCOME_SUBSCRIPTIONS.map((sub) => (
+            <button key={sub.id} type="button" className="welcome-path welcome-subscription" onClick={() => {
+              setPath("api");
+              setSubscription(sub.id);
+              setPick((n) => n + 1);
+              // A fresh seed: the remounted form's select shows the new
+              // template again, whatever the previous form had been switched to.
+              setFormProviderId(null);
+              setViewOverride({ mode: "add" });
+              onSelectEngine?.("core");
+            }}>
+              <strong>{sub.title}</strong><span>{sub.description}</span>
             </button>
           ))}
         </div>
@@ -168,7 +271,10 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
               <button
                 type="button"
                 className="settings-button welcome-connections-add"
-                onClick={() => setViewOverride({ mode: "add" })}
+                onClick={() => {
+                  setViewOverride({ mode: "add" });
+                  setSubscription(null);
+                }}
               >
                 <Plus aria-hidden="true" />
                 Add another provider
@@ -202,7 +308,10 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
                     role="listitem"
                     className={`welcome-connection-row${selected ? " welcome-connection-row-selected" : ""}`}
                     aria-pressed={selected}
-                    onClick={() => setViewOverride({ mode: "edit", connectionId: connection.id })}
+                    onClick={() => {
+                      setViewOverride({ mode: "edit", connectionId: connection.id });
+                      setSubscription(null);
+                    }}
                   >
                     <span className="welcome-connection-row-provider">{catalogEntry?.name ?? "Custom"}</span>
                     <span className="welcome-connection-row-name">{displayName}</span>
@@ -221,17 +330,28 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
           {activePath === "codex" && <CodexEnginePane onboarding />}
           {activePath === "claude" && <ClaudeEnginePane onboarding />}
           {activePath === "api" && snapshot && (
-            <ConnectionDrawerFields
-              key={resolved.key}
-              mode={resolved.mode}
-              editConnection={resolved.editConnection}
-              catalog={catalog}
-              connections={connections}
-              secrets={snapshot.secrets}
-              readOnly={snapshot.readOnly}
-              store={store}
-              simplified
-            />
+            <>
+              {keyLinkVisible && activeSubscription && (
+                <p className="welcome-subscription-key">
+                  <a href={activeSubscription.keyUrl} target="_blank" rel="noreferrer">
+                    Get a {activeSubscription.title} key
+                  </a>
+                </p>
+              )}
+              <ConnectionDrawerFields
+                key={welcomeFormKey(resolved.key, subscription, pick)}
+                mode={resolved.mode}
+                editConnection={resolved.editConnection}
+                catalog={catalog}
+                connections={connections}
+                secrets={snapshot.secrets}
+                readOnly={snapshot.readOnly}
+                store={store}
+                simplified
+                initialProviderId={activeSubscription?.id}
+                onProviderIdChange={setFormProviderId}
+              />
+            </>
           )}
         </div>
 

@@ -81,7 +81,8 @@ try {
     pending.delete(response.id); clearTimeout(item.timer);
     if (response.error) item.reject(new Error(JSON.stringify(response.error))); else item.resolve(response.result);
   };
-  await poll(() => evaluate("document.querySelectorAll('.welcome-path').length === 3"));
+  await poll(() => evaluate("document.querySelectorAll('.welcome-paths .welcome-path').length === 3"));
+  assert.equal(await evaluate("document.querySelectorAll('.welcome-subscription').length === 3"), true);
   assert.equal(await evaluate("document.querySelector('.connection-drawer-body') === null"), true);
   assert.equal(await evaluate("document.activeElement?.classList.contains('welcome-path')"), true);
   await sleep(500);
@@ -110,9 +111,26 @@ try {
   await click("API key or local modelConnect any provider or your own server");
   await poll(() => evaluate("!!document.querySelector('.connection-drawer-body')"));
   assert.equal(await evaluate("document.querySelector('.connection-drawer-advanced').open"), false);
-  await evaluate(`(() => { const select = document.querySelector('.welcome-setup select'); select.value = 'z-ai'; select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
-  await sleep(250);
+  // No template picked yet: the Provider select sits on its empty option and
+  // the key link is absent.
+  assert.equal(await evaluate("document.querySelector('.welcome-setup select').value"), "");
+  assert.equal(await evaluate("document.querySelector('.welcome-subscription-key') === null"), true);
+  // Subscription shortcuts: each seeds the Provider template at mount and
+  // links the provider's own key page; switching picks remounts the form.
+  await click("GLM Coding PlanUse your Z.AI coding plan key");
+  await poll(() => evaluate("document.querySelector('.welcome-setup select')?.value === 'z-ai'"));
   assert(await evaluate("document.querySelector('input[list=welcome-model-suggestions]').value.length > 0"));
+  assert.equal(await evaluate("document.querySelector('.welcome-subscription-key a')?.href ?? null"), "https://z.ai/manage-apikey/apikey-list");
+  assert.equal(await evaluate("document.querySelector('.connection-drawer-advanced').open"), false);
+  await click("MiniMax M PlanUse your MiniMax M Plan key");
+  await poll(() => evaluate("document.querySelector('.welcome-setup select')?.value === 'minimax'"));
+  assert.equal(await evaluate("document.querySelector('.welcome-subscription-key a')?.href ?? null"), "https://platform.minimax.io/console/plan");
+  await click("Kimi (kimi.com)Use your Kimi for Coding key");
+  await poll(() => evaluate("document.querySelector('.welcome-setup select')?.value === 'kimi'"));
+  assert.equal(await evaluate("document.querySelector('.welcome-subscription-key a')?.href ?? null"), "https://www.kimi.com/code/console");
+  await click("GLM Coding PlanUse your Z.AI coding plan key");
+  await poll(() => evaluate("document.querySelector('.welcome-setup select')?.value === 'z-ai'"));
+  assert.equal(await evaluate("document.querySelector('.welcome-subscription-key a')?.href ?? null"), "https://z.ai/manage-apikey/apikey-list");
   assert(await evaluate("document.querySelector('.welcome-setup .ak-btn--primary').disabled"), "Missing API key must block Connect");
   await sleep(400);
   const setupPng = await call("Page.captureScreenshot", { format: "png" });
@@ -127,13 +145,19 @@ try {
   await poll(() => evaluate("!document.querySelector('.welcome-screen')"));
   await poll(() => evaluate("!!document.querySelector('.start-screen')"));
   await call("Page.reload", {});
-  await poll(() => evaluate("!!document.querySelector('.start-screen') && !document.querySelector('.welcome-screen')"));
+  // Post-reload the app boots to the empty task shell (zero tabs, no active
+  // start-screen draft — the shell fallback since slice P7.12), so readiness
+  // retained means exactly this: the welcome screen must not come back and
+  // the shell must render.
+  await poll(() => evaluate("!!document.querySelector('.sidebar-empty') && !document.querySelector('.welcome-screen')"));
   assert.equal(await evaluate("document.querySelector('.connection-drawer-body') === null"), true);
   const settings = JSON.parse(readFileSync(join(profile, "settings.json"), "utf8"));
   assert.equal(settings.provider.connections.length, 1);
+  assert.equal(settings.provider.connections[0].providerId, "z-ai");
+  assert.equal(settings.provider.connections[0].model, "glm-5.3");
   assert(settings.provider.connections[0].model);
   assert(!JSON.stringify(settings).includes("sk-first-run-smoke-only"));
-  console.log(`PASS: first-run choices, focus, engine panes, settings escape, hidden tuning, one-click API connection, ready-profile reload. Evidence: ${profile}`);
+  console.log(`PASS: first-run choices, focus, engine panes, settings escape, subscription shortcuts (template seed + key link + pick switch), one-click API connection on the catalog default model, ready-profile reload. Evidence: ${profile}`);
 } finally {
   if (ws?.readyState === WebSocket.OPEN) await call("Browser.close", {}).catch(() => {});
   ws?.close();

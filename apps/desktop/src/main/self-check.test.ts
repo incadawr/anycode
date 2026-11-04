@@ -129,6 +129,59 @@ describe("runSelfCheck capture under Xvfb", () => {
   });
 });
 
+describe("runSelfCheck first-run gate when subscription tiles share the path class", () => {
+  // Fresh-profile DOM model: the three engine path tiles live inside
+  // .welcome-paths, and the subscription shortcuts ALSO carry the
+  // welcome-path class — the bare selector counts six, the scoped one three.
+  async function runGate() {
+    const root = createSelfCheckProfile(["--self-check"])!;
+    const expressions: string[] = [];
+    const ids = Array.from({ length: SELF_CHECK_MIN_SETTINGS_PANES }, (_, i) => `pane-${i}`);
+    let settingsOpen = false;
+    const capturePage = vi.fn(async () => ({ toPNG: () => Buffer.from("png") }));
+    const executeJavaScript = vi.fn(async (expression: string): Promise<unknown> => {
+      expressions.push(expression);
+      if (expression.includes("querySelectorAll('.welcome-paths .welcome-path').length === 3")) return true;
+      if (expression.includes("querySelectorAll('.welcome-path').length === 3")) return false;
+      if (expression.includes("querySelectorAll('.welcome-paths .welcome-path')[")) return undefined;
+      if (expression.includes("querySelectorAll('.welcome-path')[")) throw new Error(`unscoped tile click would hit a subscription tile: ${expression}`);
+      if (expression === "document.querySelector('.connection-drawer-body') === null") return true;
+      if (expression === "!!document.querySelector('.welcome-setup')") return true;
+      if (expression === "!!document.querySelector('.connection-drawer-body') && !document.querySelector('.connection-drawer-advanced').open") return true;
+      if (expression === "document.querySelector('.welcome-setup .ak-btn--primary').disabled") return true;
+      if (expression === "!!document.querySelector('.settings-dialog')?.open") return settingsOpen;
+      if (expression.includes("=== 'Open settings'")) { settingsOpen = true; return undefined; }
+      if (expression.includes("window.anycode.settings.get()")) return { provider: { connections: [] } };
+      if (expression.includes("querySelectorAll('.settings-dialog [role=tab]")) return ids;
+      if (expression.includes("extraModal")) return { open: true, panel: true, failed: false, extraModal: false };
+      if (expression.includes("getElementById(") && expression.includes(".click()")) return undefined;
+      if (expression.includes("Back to app")) { settingsOpen = false; return undefined; }
+      throw new Error(`unexpected expression ${expression}`);
+    });
+    vi.useFakeTimers();
+    try {
+      const result = runSelfCheck({ webContents: { capturePage, executeJavaScript } }, root)
+        .then(() => undefined, (error: unknown) => error);
+      // Past the 30 s first-run deadline, so an unscoped poll that never
+      // becomes true surfaces its error instead of hanging the await.
+      await vi.advanceTimersByTimeAsync(35_000);
+      return { result: await result, expressions };
+    } finally {
+      vi.useRealTimers();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  it("counts and clicks only the engine paths, never the subscription tiles", async () => {
+    const { result, expressions } = await runGate();
+    expect(result).toBeUndefined();
+    expect(expressions.filter(item => item.includes(".welcome-path"))).toEqual([
+      "document.querySelectorAll('.welcome-paths .welcome-path').length === 3",
+      ...[0, 1, 2].map(index => `document.querySelectorAll('.welcome-paths .welcome-path')[${index}].click()`),
+    ]);
+  });
+});
+
 describe("checkReloadProtection (GitHub #19 packaged reload-shortcut check)", () => {
   function fakeWin(overrides: Partial<{ clearOnKey: boolean; loadOnKey: boolean; undelivered: boolean; dropShift: boolean }> = {}) {
     const state = {
