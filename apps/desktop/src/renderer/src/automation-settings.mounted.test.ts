@@ -184,18 +184,38 @@ it("finds the Codex install button in the rendered pane", async () => {
 
 function scopeHarness(props: { entries: ScopeWorkspaceEntry[]; skillsBridge?: SkillsBridge; mcpBridge?: McpConfigBridge }) {
   const [selection, setSelection] = useState<ScopeSelection>(USER_SCOPE);
-  const ref = scopeRefFor(selection, props.entries);
+  // SettingsScreen's real lifecycle: scopeEntries starts EMPTY and fills only
+  // after the scopeBridge.list() round-trip lands, and every menu open
+  // refetches (the onOpen prop). A scope:"project" drive issued right after
+  // the pane mounts must therefore wait out the list landing — and refuse
+  // only once it is genuinely empty — never against the pre-load frame.
+  const [entries, setEntries] = useState<ScopeWorkspaceEntry[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const refetch = () => {
+    void Promise.resolve().then(() => {
+      setEntries(props.entries);
+      setLoaded(true);
+    });
+  };
+  const ref = scopeRefFor(selection, entries);
   return createElement(
     "div",
     { className: "settings-screen" },
-    createElement(ScopeDropdown, { selection, entries: props.entries, loading: false, onOpen: noop, onSelect: setSelection }),
+    createElement(ScopeDropdown, { selection, entries, loading: !loaded, onOpen: refetch, onSelect: setSelection }),
     props.skillsBridge
       ? createElement(SkillsPane, { tabId: ref, bridge: props.skillsBridge as never })
       : createElement(McpServersPane, { servers: [], tabId: ref, bridge: props.mcpBridge as never }),
   );
 }
 
-const wsEntry = (id: string): ScopeWorkspaceEntry => ({ id, name: "alpha", displayPath: "~/work/alpha", exists: true, tabIds: [] });
+const wsEntry = (id: string, tabIds: string[] = []): ScopeWorkspaceEntry => ({ id, name: "alpha", displayPath: "~/work/alpha", exists: true, tabIds });
+
+/** The same list source the real bar renders from (`window.anycode.scopeWorkspaces.list`) — what `scope:"project"` resolves the ACTIVE tab's option against. */
+function stubScopeList(entries: ScopeWorkspaceEntry[]): void {
+  (window as unknown as { anycode: { scopeWorkspaces: unknown } }).anycode.scopeWorkspaces = {
+    list: vi.fn(async () => ({ ok: true as const, workspaces: entries })),
+  };
+}
 
 // McpServersPane renders <McpSecretsBlock /> unconditionally; its default
 // bridge reads `window.anycode.mcpSecrets`, which only exists in the real
@@ -210,9 +230,11 @@ beforeEach(() => {
   };
 });
 
-function mountedFacade(): ReturnType<typeof createAutomationFacade> {
+function mountedFacade(tabs: Array<{ tabId: string; workspace: string }> = [], activeTabId?: string): ReturnType<typeof createAutomationFacade> {
   const tabsStore = createTabsStore();
   const registry = createTabRegistry(tabsStore);
+  for (const tab of tabs) tabsStore.getState().addTab(tab);
+  if (activeTabId !== undefined) tabsStore.getState().setActiveTab(activeTabId);
   return createAutomationFacade(registry, tabsStore, {
     createTab: vi.fn(),
     closeTab: vi.fn(),
@@ -239,8 +261,10 @@ it("skillsImportApply drives the rendered ScopeSwitcher to the requested workspa
     })),
     importApply,
   };
-  await mount(createElement(scopeHarness, { entries: [wsEntry("ws_1")], skillsBridge: bridge as never }));
-  const facade = mountedFacade();
+  const entries = [wsEntry("ws_1", ["tab-a"])];
+  await mount(createElement(scopeHarness, { entries, skillsBridge: bridge as never }));
+  stubScopeList(entries);
+  const facade = mountedFacade([{ tabId: "tab-a", workspace: "/ws/a" }]);
   // The facade methods run UNWRAPPED: they poll the real DOM until React's
   // (unact-ed) commits land, and awaiting them inside `act` deadlocks the
   // act flush loop in this environment.
@@ -250,6 +274,38 @@ it("skillsImportApply drives the rendered ScopeSwitcher to the requested workspa
   await expect(facade.skillsImportApply({ scope: "project" })).resolves.toEqual({ ok: true });
   expect(importApply).toHaveBeenCalledTimes(1);
   expect(importApply.mock.calls[0]![0]).toEqual({ tabId: "ws_1", scope: "project", ids: ["one"] });
+});
+
+it("skillsImportApply scope:project targets the ACTIVE tab's workspace — even when the active tab is NOT the first open tab", async () => {
+  // tab-a opened first (its workspace lists first in the menu), tab-b ACTIVE:
+  // a first-rendered-option pick would silently land the import in ws_a's
+  // catalog instead of the folder the user is looking at.
+  const snapshot = { rows: [], problems: [] };
+  const importApply = vi.fn(async (_req: unknown) => ({
+    ok: true as const,
+    results: [{ id: "one", name: "browser", applied: true, suffixed: false, converted: false, notes: [] }],
+    snapshot,
+  }));
+  const bridge = {
+    list: vi.fn(async () => snapshot),
+    setEnabled: vi.fn(),
+    delete: vi.fn(),
+    create: vi.fn(),
+    reveal: vi.fn(),
+    importScan: vi.fn(async () => ({
+      candidates: [{ id: "one", harness: "claude", sourceDir: "skills/browser", name: "browser", description: "Browser", compatible: true, needsConversion: false, conversionNotes: [], alreadyPresent: false }],
+      problems: [],
+    })),
+    importApply,
+  };
+  const entries = [wsEntry("ws_a", ["tab-a"]), wsEntry("ws_b", ["tab-b"])];
+  await mount(createElement(scopeHarness, { entries, skillsBridge: bridge as never }));
+  stubScopeList(entries);
+  const facade = mountedFacade([{ tabId: "tab-a", workspace: "/ws/a" }, { tabId: "tab-b", workspace: "/ws/b" }], "tab-b");
+  await expect(facade.skillsImportOpen()).resolves.toEqual({ ok: true });
+  await expect(facade.skillsImportApply({ scope: "project" })).resolves.toEqual({ ok: true });
+  expect(importApply).toHaveBeenCalledTimes(1);
+  expect(importApply.mock.calls[0]![0]).toEqual({ tabId: "ws_b", scope: "project", ids: ["one"] });
 });
 
 it("skillsImportApply refuses with scope_unavailable when no workspace exists to pick — the import never fires into the wrong catalog", async () => {
@@ -268,18 +324,51 @@ it("skillsImportApply refuses with scope_unavailable when no workspace exists to
     importApply,
   };
   await mount(createElement(scopeHarness, { entries: [], skillsBridge: bridge as never }));
-  const facade = mountedFacade();
+  stubScopeList([]);
+  const facade = mountedFacade([{ tabId: "tab-a", workspace: "/ws/a" }]);
   await expect(facade.skillsImportOpen()).resolves.toEqual({ ok: true });
   await expect(facade.skillsImportApply({ scope: "project" })).resolves.toEqual({ ok: false, reason: "scope_unavailable" });
   expect(importApply).not.toHaveBeenCalled();
+  // The refusal must not leave the scope dropdown hanging open.
+  expect(document.querySelector("[data-scope-trigger]")?.getAttribute("aria-expanded")).toBe("false");
+});
+
+it("skillsImportApply refuses with scope_unavailable when the active tab's folder is not among the RENDERED options — the opened menu is closed again, no Apply", async () => {
+  // The list the facade consults maps the active tab to ws_ghost, but the
+  // bar's rendered menu only ever shows ws_1 (a list/render race): the pick
+  // must fail against the RENDERED options and close the menu — never fall
+  // back to the first rendered workspace.
+  const snapshot = { rows: [], problems: [] };
+  const importApply = vi.fn(async (_req: unknown) => ({ ok: true as const, results: [], snapshot }));
+  const bridge = {
+    list: vi.fn(async () => snapshot),
+    setEnabled: vi.fn(),
+    delete: vi.fn(),
+    create: vi.fn(),
+    reveal: vi.fn(),
+    importScan: vi.fn(async () => ({
+      candidates: [{ id: "one", harness: "claude", sourceDir: "skills/browser", name: "browser", description: "Browser", compatible: true, needsConversion: false, conversionNotes: [], alreadyPresent: false }],
+      problems: [],
+    })),
+    importApply,
+  };
+  await mount(createElement(scopeHarness, { entries: [wsEntry("ws_1", ["tab-a"])], skillsBridge: bridge as never }));
+  stubScopeList([wsEntry("ws_ghost", ["tab-a"])]);
+  const facade = mountedFacade([{ tabId: "tab-a", workspace: "/ws/a" }]);
+  await expect(facade.skillsImportOpen()).resolves.toEqual({ ok: true });
+  await expect(facade.skillsImportApply({ scope: "project" })).resolves.toEqual({ ok: false, reason: "scope_unavailable" });
+  expect(importApply).not.toHaveBeenCalled();
+  expect(document.querySelector("[data-scope-trigger]")?.getAttribute("aria-expanded")).toBe("false");
 });
 
 it("mcpAddServer drives the rendered ScopeSwitcher BEFORE the form opens — the real form seeds and submits the requested scope", async () => {
   const snapshot = { entries: [], problems: [], projectAvailable: true };
   const upsert = vi.fn(async (_req: unknown) => ({ ok: true as const, snapshot }));
   const bridge = { get: vi.fn(async () => snapshot), upsert, delete: vi.fn(), setEnabled: vi.fn(), promoteCompat: vi.fn(), importScan: vi.fn(), importApply: vi.fn() };
-  await mount(createElement(scopeHarness, { entries: [wsEntry("ws_1")], mcpBridge: bridge as never }));
-  const facade = mountedFacade();
+  const entries = [wsEntry("ws_1", ["tab-a"])];
+  await mount(createElement(scopeHarness, { entries, mcpBridge: bridge as never }));
+  stubScopeList(entries);
+  const facade = mountedFacade([{ tabId: "tab-a", workspace: "/ws/a" }]);
   await expect(facade.mcpAddServer({ name: "srv", command: "node", scope: "project" })).resolves.toEqual({ ok: true });
   expect(upsert).toHaveBeenCalledTimes(1);
   expect(upsert.mock.calls[0]![0]).toMatchObject({ tabId: "ws_1", scope: "project", name: "srv" });
@@ -290,8 +379,11 @@ it("mcpAddServer refuses with scope_unavailable when no workspace exists to pick
   const upsert = vi.fn(async (_req: unknown) => ({ ok: true as const, snapshot }));
   const bridge = { get: vi.fn(async () => snapshot), upsert, delete: vi.fn(), setEnabled: vi.fn(), promoteCompat: vi.fn(), importScan: vi.fn(), importApply: vi.fn() };
   await mount(createElement(scopeHarness, { entries: [], mcpBridge: bridge as never }));
-  const facade = mountedFacade();
+  stubScopeList([]);
+  const facade = mountedFacade([{ tabId: "tab-a", workspace: "/ws/a" }]);
   await expect(facade.mcpAddServer({ name: "srv", command: "node", scope: "project" })).resolves.toEqual({ ok: false, reason: "scope_unavailable" });
   expect(realMcpPaneDom().formOpen()).toBe(false);
   expect(upsert).not.toHaveBeenCalled();
+  // The refusal must not leave the scope dropdown hanging open.
+  expect(document.querySelector("[data-scope-trigger]")?.getAttribute("aria-expanded")).toBe("false");
 });

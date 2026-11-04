@@ -109,6 +109,7 @@ import { activeProviderView } from "../../shared/settings.js";
 import type { McpConfigSource, McpHarnessKind } from "../../shared/mcp-config.js";
 import type { SkillHarnessKind, SkillScope, SkillSourceKind } from "../../shared/skills-config.js";
 import type { SubagentSourceKind } from "../../shared/subagents-config.js";
+import type { ScopeWorkspaceEntry } from "../../shared/scope-workspaces.js";
 
 /**
  * Mirrors Composer.tsx's `PERMISSION_MODE_OPTIONS` (deliberately duplicated,
@@ -2861,23 +2862,47 @@ export interface ScopeDom {
   state(): ScopeStateResult;
   /** A real `.click()` on the trigger, then — once the menu's commit lands — on the menu's user option; `false` when either node never appears. */
   pickUser(): Promise<boolean>;
-  /** A real `.click()` on the trigger, then — once the menu's commit lands — on the menu's first enabled workspace option; `false` when none is rendered. */
-  pickFirstWorkspace(): Promise<boolean>;
+  /** A real `.click()` on the trigger, then — once the menu's commit lands — on the option for `workspaceId`; `false` when no enabled option with that id is rendered (the menu is closed again before returning). */
+  pickWorkspace(workspaceId: string): Promise<boolean>;
 }
-/** Shared drive for `realScopeDom`'s picks: click the trigger open (skipped when `aria-expanded` already says so — its own onClick toggles), wait out the menu's commit (a discrete user click flushes synchronously in the app shell, but a facade-fired `.click()` under test lands a macrotask later), then click the option `choose` selects. */
+/** Shared drive for `realScopeDom`'s picks: click the trigger open (skipped when `aria-expanded` already says so — its own onClick toggles), wait out the menu's commit (a discrete user click flushes synchronously in the app shell, but a facade-fired `.click()` under test lands a macrotask later), then click the option `choose` selects. A zero-option first read re-opens the trigger ONCE — the menu can race closed under a concurrent pick, and reopening also resets a user-typed filter — and a choice not yet listed waits out one commit before the pick is judged refused (the bar refetches its folder list on every open, so an option can land a render after the menu). Every failure path closes the trigger again: a refused call never leaves the dropdown hanging open. */
 async function clickScopeOption(choose: (options: HTMLElement[]) => HTMLElement | null): Promise<boolean> {
   const trigger = document.querySelector<HTMLButtonElement>("[data-scope-trigger]");
   if (!trigger) {
     return false;
   }
-  if (trigger.getAttribute("aria-expanded") !== "true") {
-    trigger.click();
-    if (!(await waitUntil(() => trigger.getAttribute("aria-expanded") === "true", SCOPE_SWITCH_COMMIT_DEADLINE_MS))) {
+  const openMenu = async (): Promise<boolean> => {
+    if (trigger.getAttribute("aria-expanded") !== "true") {
+      trigger.click();
+      if (!(await waitUntil(() => trigger.getAttribute("aria-expanded") === "true", SCOPE_SWITCH_COMMIT_DEADLINE_MS))) {
+        return false;
+      }
+    }
+    return true;
+  };
+  const closeMenu = async (): Promise<void> => {
+    if (trigger.getAttribute("aria-expanded") === "true") {
+      trigger.click();
+      await waitUntil(() => trigger.getAttribute("aria-expanded") !== "true", SCOPE_SWITCH_COMMIT_DEADLINE_MS);
+    }
+  };
+  const scopeOptions = () => Array.from(document.querySelectorAll<HTMLElement>("[data-scope-option]"));
+  if (!(await openMenu())) {
+    return false;
+  }
+  if (scopeOptions().length === 0) {
+    await closeMenu();
+    if (!(await openMenu()) || scopeOptions().length === 0) {
+      await closeMenu();
       return false;
     }
   }
-  const option = choose(Array.from(document.querySelectorAll<HTMLElement>("[data-scope-option]")));
+  let option = choose(scopeOptions());
   if (!option) {
+    option = (await waitUntil(() => choose(scopeOptions()) !== null, SCOPE_SWITCH_COMMIT_DEADLINE_MS)) ? choose(scopeOptions()) : null;
+  }
+  if (!option) {
+    await closeMenu();
     return false;
   }
   option.click();
@@ -2896,9 +2921,9 @@ function realScopeDom(): ScopeDom {
     },
     pickUser: () =>
       clickScopeOption((options) => options.find((el) => el.getAttribute("data-scope-option") === "user") ?? null),
-    pickFirstWorkspace: () =>
+    pickWorkspace: (workspaceId: string) =>
       clickScopeOption((options) =>
-        options.find((el) => el.getAttribute("data-scope-option") !== "user" && el.getAttribute("aria-disabled") !== "true") ?? null,
+        options.find((el) => el.getAttribute("data-scope-option") === workspaceId && el.getAttribute("aria-disabled") !== "true") ?? null,
       ),
   };
 }
@@ -6220,26 +6245,38 @@ const SCOPE_SWITCH_COMMIT_DEADLINE_MS = 500;
  * `scopeMode`) — the per-dialog scope radios are gone — so writing against a
  * stale bar would silently land in the wrong catalog, and driving a
  * nonexistent radio refuses outright. "user" maps to the bar's user option;
- * "project" to its first enabled workspace option (the bar stores an opaque
- * workspace id there, and ANY non-"user" id reads as the panes' project mode).
- * Returns `null` once the bar reads the requested scope (already there, or
- * after a pick confirmed by the trigger's own `data-scope-value` readback),
- * or an explicit `scope_unavailable` refusal when the bar isn't mounted or
- * the requested scope isn't selectable (no workspace in the menu) — a loud
- * refusal, never a silent write elsewhere.
+ * "project" to the option for the ACTIVE TAB's workspace — the pane's
+ * pre-scope-bar meaning ("the folder the session you are looking at lives
+ * in"). The menu's DOM exposes no per-tab attribute (options carry only the
+ * opaque entry id), so the active tab's option is resolved through the same
+ * main-side list that feeds the bar — `scopeWorkspaces.list()`'s entries
+ * carry `tabIds` — and the pick re-verifies that id against the RENDERED
+ * options. No active tab, or one whose folder has no option, refuses
+ * `scope_unavailable` WITHOUT touching the bar: tab-opening order is not a
+ * fallback (the old first-enabled-option pick silently targeted a background
+ * tab's folder). Returns `null` once the bar reads the requested scope
+ * (already there, or after a pick confirmed by the trigger's own
+ * `data-scope-value` readback) — a loud refusal, never a silent write
+ * elsewhere.
  */
-async function ensurePaneScope(scopeDom: ScopeDom, scope: "project" | "user"): Promise<FacadeResult | null> {
-  const matches = () => {
-    const selection = scopeDom.state().selection;
-    if (selection === null) {
-      return false;
-    }
-    return scope === "user" ? selection === "user" : selection !== "user";
-  };
+async function ensurePaneScope(scopeDom: ScopeDom, scope: "project" | "user", tabsStore: TabsStoreApi): Promise<FacadeResult | null> {
+  if (scope === "user") {
+    return drivePaneScopeTo(scopeDom, "user");
+  }
+  const workspaceId = await activeTabWorkspaceOptionId(tabsStore);
+  if (workspaceId === null) {
+    return { ok: false, reason: "scope_unavailable" };
+  }
+  return drivePaneScopeTo(scopeDom, workspaceId);
+}
+
+/** Clicks the bar to the exact selection id (`"user"` or a workspace id) and confirms on the trigger's own `data-scope-value` readback; `scope_unavailable` when the pick never lands. */
+async function drivePaneScopeTo(scopeDom: ScopeDom, target: string): Promise<FacadeResult | null> {
+  const matches = () => scopeDom.state().selection === target;
   if (matches()) {
     return null;
   }
-  const picked = await (scope === "user" ? scopeDom.pickUser() : scopeDom.pickFirstWorkspace());
+  const picked = await (target === "user" ? scopeDom.pickUser() : scopeDom.pickWorkspace(target));
   if (!picked) {
     return { ok: false, reason: "scope_unavailable" };
   }
@@ -6248,6 +6285,39 @@ async function ensurePaneScope(scopeDom: ScopeDom, scope: "project" | "user"): P
     return null;
   }
   return { ok: false, reason: "scope_unavailable" };
+}
+
+/** The scope-workspaces list the Settings bar itself renders from, fetched the same way it is (`scopeWorkspaces.list()`); `null` when the bridge is absent (plain-node test context) or the fetch failed — same lazy-`window` discipline as `realBridge`. */
+async function scopeWorkspaceEntries(): Promise<ScopeWorkspaceEntry[] | null> {
+  const bridge = typeof window === "undefined" ? undefined : window.anycode?.scopeWorkspaces;
+  if (!bridge) {
+    return null;
+  }
+  try {
+    const result = await bridge.list();
+    return result.ok ? result.workspaces : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `scope:"project"`'s concrete pick target: the workspace entry the ACTIVE
+ * tab maps to (`entry.tabIds` — the main registry's tab→folder join, the
+ * only tab↔workspace mapping the renderer gets), or `null` when there is no
+ * active tab or no entry for it.
+ */
+async function activeTabWorkspaceOptionId(tabsStore: TabsStoreApi): Promise<string | null> {
+  const activeTabId = tabsStore.getState().activeTabId;
+  if (activeTabId === null) {
+    return null;
+  }
+  const entries = await scopeWorkspaceEntries();
+  if (entries === null) {
+    return null;
+  }
+  const entry = entries.find((candidate) => candidate.tabIds.includes(activeTabId));
+  return entry === undefined ? null : entry.id;
 }
 
 /** Deadline for `waitUntil` polls inside `subagentsOpenEditor`'s open-commit (design §4 W4) — generous enough to cover `openEdit`'s real `bridge.read()` IPC round-trip (main re-resolves the path + fs read), same rationale as `MCP_PANE_SCAN_DEADLINE_MS`. */
@@ -9063,7 +9133,7 @@ export function createAutomationFacade(
       // before the form opens; switching afterwards would silently write to
       // the seeded target, so a mismatch refuses here instead.
       if (args.scope !== undefined) {
-        const refused = await ensurePaneScope(scopeDom, args.scope);
+        const refused = await ensurePaneScope(scopeDom, args.scope, tabsStore);
         if (refused) return refused;
       }
       mcpPaneDom.clickAddServerButton();
@@ -9232,7 +9302,7 @@ export function createAutomationFacade(
       // into whichever scope the bar happened to carry); driving the bar HERE,
       // before the click, refuses loudly when the scope isn't selectable
       // instead of silently landing the import somewhere else.
-      const refused = await ensurePaneScope(scopeDom, scope);
+      const refused = await ensurePaneScope(scopeDom, scope, tabsStore);
       if (refused) return refused;
       const before = skillsPaneDom.importResultsSignature();
       // A real click on the dialog's Apply button (design §5 W4) — not a

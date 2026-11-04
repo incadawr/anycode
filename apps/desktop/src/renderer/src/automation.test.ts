@@ -180,7 +180,8 @@ function stubBridge(overrides: Partial<AnycodeBridge> = {}): AnycodeBridge {
  * selection id a real trigger carries (`"user"` or an opaque workspace id),
  * and the pick methods flip it exactly like the real bar's commit — the user
  * option always exists, a workspace pick succeeds only when `workspaces`
- * lists one (mirroring the real menu's empty "No recent folders" state).
+ * lists THAT id (mirroring the real menu, which renders only the folder
+ * options main reports and refuses an unrendered pick).
  */
 function fakeScopeDom(
   overrides: { selection?: string | null; workspaces?: string[] } = {},
@@ -193,15 +194,33 @@ function fakeScopeDom(
       selection = "user";
       return true;
     }),
-    pickFirstWorkspace: vi.fn(async () => {
-      const first = workspaces[0];
-      if (first === undefined) {
+    pickWorkspace: vi.fn(async (workspaceId: string) => {
+      if (!workspaces.includes(workspaceId)) {
         return false;
       }
-      selection = first;
+      selection = workspaceId;
       return true;
     }),
   };
+}
+
+/**
+ * Stubs `window.anycode.scopeWorkspaces.list` — the same list source the real
+ * Settings bar renders from, which `scope:"project"` resolves the ACTIVE
+ * tab's option against (`entry.tabIds`). Plain-node context: `window` does
+ * not exist here unless stubbed. Pair with `try/finally vi.unstubAllGlobals()`.
+ */
+function stubScopeWorkspaceList(entries: Array<{ id: string; tabIds: string[] }>): void {
+  vi.stubGlobal("window", {
+    anycode: {
+      scopeWorkspaces: {
+        list: vi.fn(async () => ({
+          ok: true as const,
+          workspaces: entries.map((entry) => ({ exists: true, name: "alpha", displayPath: "~/work/alpha", ...entry }) as never),
+        })),
+      },
+    },
+  });
 }
 
 /** Builds a fresh registry/tabsStore pair and registers+readies one tab. Returns everything a test needs to drive it further. */
@@ -4407,10 +4426,11 @@ describe("automation facade — Skills pane probe/driver (design/slice-P7.20-cut
     return store;
   }
 
-  /** Builds a facade wired ONLY for the Skills methods — the fake sits at the `skillsPaneDom` slot, a scope-bar fake at the END (`scopeDom` is the factory's last parameter; the params in between keep their lazy real defaults, never exercised here). */
-  function buildFacade(dom: SkillsPaneDom, scope: ScopeDom = fakeScopeDom()) {
+  /** Builds a facade wired ONLY for the Skills methods — the fake sits at the `skillsPaneDom` slot, a scope-bar fake at the END (`scopeDom` is the factory's last parameter; the params in between keep their lazy real defaults, never exercised here). `activeTab` registers one tab (first tab ⇒ active) for the project-scope tests. */
+  function buildFacade(dom: SkillsPaneDom, scope: ScopeDom = fakeScopeDom(), activeTab: { tabId: string; workspace: string } | null = null) {
     const tabsStore: TabsStoreApi = createTabsStore();
     const registry: TabRegistry = createTabRegistry(tabsStore);
+    if (activeTab) tabsStore.getState().addTab(activeTab);
     return createAutomationFacade(
       registry,
       tabsStore,
@@ -4708,11 +4728,17 @@ describe("automation facade — Skills pane probe/driver (design/slice-P7.20-cut
         importResultsSignature: () => signature,
       };
       const scope = fakeScopeDom({ selection: "user", workspaces: ["ws_1"] });
-      const facade = buildFacade(dom, scope);
-      await expect(facade.skillsImportApply({ scope: "project", ids: ["c1", "c2"] })).resolves.toEqual({ ok: true });
+      const facade = buildFacade(dom, scope, { tabId: "tab-a", workspace: "/ws/a" });
+      stubScopeWorkspaceList([{ id: "ws_1", tabIds: ["tab-a"] }]);
+      try {
+        await expect(facade.skillsImportApply({ scope: "project", ids: ["c1", "c2"] })).resolves.toEqual({ ok: true });
+      } finally {
+        vi.unstubAllGlobals();
+      }
       expect(setCandidateChecked).toHaveBeenCalledWith("c1", true);
       expect(setCandidateChecked).toHaveBeenCalledWith("c2", true);
-      expect(scope.pickFirstWorkspace).toHaveBeenCalledTimes(1);
+      expect(scope.pickWorkspace).toHaveBeenCalledTimes(1);
+      expect(scope.pickWorkspace).toHaveBeenCalledWith("ws_1");
       expect(scope.state().selection).toBe("ws_1");
       expect(clickApplyButton).toHaveBeenCalledTimes(1);
     });
@@ -4754,14 +4780,20 @@ describe("automation facade — Skills pane probe/driver (design/slice-P7.20-cut
       const facade = buildFacade(dom, scope);
       await expect(facade.skillsImportApply({ scope: "user" })).resolves.toEqual({ ok: true });
       expect(scope.pickUser).not.toHaveBeenCalled();
-      expect(scope.pickFirstWorkspace).not.toHaveBeenCalled();
+      expect(scope.pickWorkspace).not.toHaveBeenCalled();
     });
 
-    it("refuses with scope_unavailable when the requested project scope has no workspace to pick — never clicks Apply", async () => {
+    it("refuses with scope_unavailable when the active tab's folder has no option to pick — never clicks Apply", async () => {
       const dom = fakeSkillsPaneDom({ importOpen: true, importScanLoaded: true });
       const scope = fakeScopeDom({ selection: "user", workspaces: [] });
-      const facade = buildFacade(dom, scope);
-      await expect(facade.skillsImportApply({ scope: "project" })).resolves.toEqual({ ok: false, reason: "scope_unavailable" });
+      const facade = buildFacade(dom, scope, { tabId: "tab-a", workspace: "/ws/a" });
+      stubScopeWorkspaceList([]);
+      try {
+        await expect(facade.skillsImportApply({ scope: "project" })).resolves.toEqual({ ok: false, reason: "scope_unavailable" });
+      } finally {
+        vi.unstubAllGlobals();
+      }
+      expect(scope.pickWorkspace).not.toHaveBeenCalled();
       expect(dom.clickApplyButton).not.toHaveBeenCalled();
     });
 
@@ -4851,10 +4883,11 @@ describe("automation facade — MCP pane add-server driver (item 4)", () => {
     return store;
   }
 
-  /** Builds a facade wired ONLY for the MCP add-server method — the fake sits at the `mcpPaneDom` slot, a scope-bar fake at the END (`scopeDom` is the factory's last parameter; the params in between keep their lazy real defaults, never exercised here). */
-  function buildMcpAddFacade(dom: McpPaneDom, scope: ScopeDom = fakeScopeDom()) {
+  /** Builds a facade wired ONLY for the MCP add-server method — the fake sits at the `mcpPaneDom` slot, a scope-bar fake at the END (`scopeDom` is the factory's last parameter; the params in between keep their lazy real defaults, never exercised here). `activeTab` registers one tab (first tab ⇒ active) for the project-scope tests. */
+  function buildMcpAddFacade(dom: McpPaneDom, scope: ScopeDom = fakeScopeDom(), activeTab: { tabId: string; workspace: string } | null = null) {
     const tabsStore: TabsStoreApi = createTabsStore();
     const registry: TabRegistry = createTabRegistry(tabsStore);
+    if (activeTab) tabsStore.getState().addTab(activeTab);
     return createAutomationFacade(
       registry,
       tabsStore,
@@ -5035,14 +5068,20 @@ describe("automation facade — MCP pane add-server driver (item 4)", () => {
     expect(dom.clickFormSubmit).not.toHaveBeenCalled();
   });
 
-  it("drives the scope bar to the requested scope BEFORE opening the form (the form seeds its scope at open time)", async () => {
+  it("drives the scope bar to the ACTIVE tab's workspace BEFORE opening the form (the form seeds its scope at open time)", async () => {
     const dom = fakeMcpPaneDom();
     const scope = fakeScopeDom({ selection: "user", workspaces: ["ws_1"] });
-    const facade = buildMcpAddFacade(dom, scope);
-    await expect(facade.mcpAddServer({ name: "srv", command: "node", scope: "project" })).resolves.toEqual({ ok: true });
-    const pickOrder = (scope.pickFirstWorkspace as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!;
+    const facade = buildMcpAddFacade(dom, scope, { tabId: "tab-a", workspace: "/ws/a" });
+    stubScopeWorkspaceList([{ id: "ws_1", tabIds: ["tab-a"] }]);
+    try {
+      await expect(facade.mcpAddServer({ name: "srv", command: "node", scope: "project" })).resolves.toEqual({ ok: true });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    const pickOrder = (scope.pickWorkspace as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!;
     const openOrder = (dom.clickAddServerButton as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!;
     expect(pickOrder).toBeLessThan(openOrder);
+    expect(scope.pickWorkspace).toHaveBeenCalledWith("ws_1");
     expect(scope.state().selection).toBe("ws_1");
   });
 
@@ -5061,17 +5100,23 @@ describe("automation facade — MCP pane add-server driver (item 4)", () => {
     const facade = buildMcpAddFacade(dom, scope);
     await expect(facade.mcpAddServer({ name: "srv", command: "node", scope: "user" })).resolves.toEqual({ ok: true });
     expect(scope.pickUser).not.toHaveBeenCalled();
-    expect(scope.pickFirstWorkspace).not.toHaveBeenCalled();
+    expect(scope.pickWorkspace).not.toHaveBeenCalled();
   });
 
-  it("refuses scope_unavailable when the requested project scope has no workspace to pick — never opens the form", async () => {
+  it("refuses scope_unavailable when the active tab's folder has no option to pick — never opens the form", async () => {
     const dom = fakeMcpPaneDom();
     const scope = fakeScopeDom({ selection: "user", workspaces: [] });
-    const facade = buildMcpAddFacade(dom, scope);
-    await expect(facade.mcpAddServer({ name: "srv", command: "node", scope: "project" })).resolves.toEqual({
-      ok: false,
-      reason: "scope_unavailable",
-    });
+    const facade = buildMcpAddFacade(dom, scope, { tabId: "tab-a", workspace: "/ws/a" });
+    stubScopeWorkspaceList([]);
+    try {
+      await expect(facade.mcpAddServer({ name: "srv", command: "node", scope: "project" })).resolves.toEqual({
+        ok: false,
+        reason: "scope_unavailable",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(scope.pickWorkspace).not.toHaveBeenCalled();
     expect(dom.clickAddServerButton).not.toHaveBeenCalled();
     expect(dom.clickFormSubmit).not.toHaveBeenCalled();
   });
@@ -5154,7 +5199,9 @@ describe("automation facade — MCP pane add-server driver (item 4)", () => {
       getAttribute: (attr: string) =>
         attr === "data-scope-value" ? committed.scope : attr === "aria-expanded" ? (scopeMenuOpen ? "true" : "false") : null,
       click: () => {
-        scopeMenuOpen = true;
+        // The real trigger's onClick TOGGLES (open ⇄ close) — a pick that
+        // closes the menu again clicks the same node a second time.
+        scopeMenuOpen = !scopeMenuOpen;
         return undefined as void;
       },
     };
@@ -5168,8 +5215,7 @@ describe("automation facade — MCP pane add-server driver (item 4)", () => {
           committed.scope = id;
           scopeMenuOpen = false;
         }),
-    }));
-    function makeTextInput(label: string) {
+    }));    function makeTextInput(label: string) {
       const node = {
         _value: "",
         disabled: false,
@@ -5265,13 +5311,17 @@ describe("automation facade — MCP pane add-server driver (item 4)", () => {
         if (sel === "[data-scope-trigger]") return scopeTrigger;
         return null;
       },
-      querySelectorAll: (sel: string) => (sel === "[data-scope-option]" ? scopeOptions : []),
+      // The real ScopeSwitcher renders option nodes ONLY while the menu is
+      // open — a pick must open the trigger first, never shortcut off an
+      // always-present list.
+      querySelectorAll: (sel: string) => (sel === "[data-scope-option]" && scopeMenuOpen ? scopeOptions : []),
     };
     return {
       document,
       committed,
       radios,
       getFormMounted: () => formMounted,
+      scopeTrigger,
       /** Browser classes `setNativeInputValue`'s descriptor lookup needs in a node test env — the fallback plain-assign + `input` event path then runs against the stub inputs. */
       browserGlobals: {
         HTMLInputElement: class {},
@@ -5286,14 +5336,15 @@ describe("automation facade — MCP pane add-server driver (item 4)", () => {
     };
   }
 
-  /** Builds a facade wired with the REAL `realMcpPaneDom` adapter (deliberately NO explicit mcpPaneDom) against a stubbed `document` global. */
-  function buildRealAdapterFacade(stub: ReturnType<typeof stubFormDocument>) {
+  /** Builds a facade wired with the REAL `realMcpPaneDom` adapter (deliberately NO explicit mcpPaneDom) against a stubbed `document` global. `activeTab` registers one tab (first tab ⇒ active) for the project-scope tests. */
+  function buildRealAdapterFacade(stub: ReturnType<typeof stubFormDocument>, activeTab: { tabId: string; workspace: string } | null = null) {
     vi.stubGlobal("document", stub.document);
     vi.stubGlobal("HTMLInputElement", stub.browserGlobals.HTMLInputElement);
     vi.stubGlobal("HTMLTextAreaElement", stub.browserGlobals.HTMLTextAreaElement);
     vi.stubGlobal("Event", stub.browserGlobals.Event);
     const tabsStore: TabsStoreApi = createTabsStore();
     const registry: TabRegistry = createTabRegistry(tabsStore);
+    if (activeTab) tabsStore.getState().addTab(activeTab);
     return createAutomationFacade(
       registry,
       tabsStore,
@@ -5346,6 +5397,27 @@ describe("automation facade — MCP pane add-server driver (item 4)", () => {
       expect(stub.committed.texts.get("Name")).toBe("srv-b");
       expect(stub.committed.texts.get("URL")).toBe("https://x");
       expect(stub.committed.radios.get("mcp-transport:http")).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("REGRESSION (scope target, real adapter): scope:project whose active-tab folder is NOT among the rendered options refuses scope_unavailable and CLOSES the trigger again — never opens the form", async () => {
+    const stub = stubFormDocument();
+    // The active tab maps to ws_2, but the menu only renders user + ws_1 (the
+    // bar's own list source below serves exactly that) — no fallback to the
+    // first rendered workspace.
+    stubScopeWorkspaceList([{ id: "ws_2", tabIds: ["tab-a"] }]);
+    const facade = buildRealAdapterFacade(stub, { tabId: "tab-a", workspace: "/ws/a" });
+    try {
+      expect(stub.committed.scope).toBe("ws_1"); // the bar carries a DIFFERENT workspace
+      await expect(facade.mcpAddServer({ name: "srv", command: "node", scope: "project" })).resolves.toEqual({
+        ok: false,
+        reason: "scope_unavailable",
+      });
+      expect(stub.scopeTrigger.getAttribute("aria-expanded")).toBe("false"); // menu closed again
+      expect(stub.committed.scope).toBe("ws_1"); // the bar left untouched
+      expect(stub.getFormMounted()).toBe(false); // the form never even opened
     } finally {
       vi.unstubAllGlobals();
     }
