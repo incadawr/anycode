@@ -104,7 +104,11 @@ try {
   for (const trigger of triggers) {
     assert.equal(await evaluate(trigger.run), true, trigger.label);
     // Downloads denied by the policy leave NOTHING on disk and log ONE ring entry.
-    const logged = await wait(async () => await consoleHas(trigger.filename), 10000).catch(() => false);
+    const logged = await wait(async () => await consoleHas(trigger.filename), 10000).catch((error) => {
+      // Only a routing timeout is an honest SKIP — a launcher crash mid-run must fail loudly.
+      if (!(error instanceof Error) || !error.message.startsWith("Timed out")) throw error;
+      return false;
+    });
     assert.deepEqual(markerFiles(profile), [], `trigger ${trigger.id}: a download was saved into the isolated profile`);
     if (!logged) {
       skipped += 1;

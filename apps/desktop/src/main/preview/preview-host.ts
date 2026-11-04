@@ -2663,7 +2663,7 @@ class PreviewHost implements PreviewHostHandle {
         this.recordDeniedOnce(
           record,
           `download:${download.url}`,
-          `[preview] blocked by security policy: download ${download.filename} from ${download.url.slice(0, 200)}`,
+          `[preview] blocked by security policy: download ${download.filename.slice(0, 200)} from ${download.url.slice(0, 200)}`,
           record.downloadDeniedKeys,
         );
       }),
