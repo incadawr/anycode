@@ -2047,14 +2047,18 @@ describe("agentTool handler — role route stamping (§3.3)", () => {
   it("restricted refusal for a routed md-PROFILE carries the same honest shape (routing branch)", async () => {
     const restricted = createAgentTool({ sessionTier: false });
     const { ctx } = roleCtx(null, true);
+    // Only SOME of this port's types are profile-routed — the refusal must
+    // name the concrete survivors and keep the routed ones out of the tail.
+    ctx.subagents!.profileRouting = (agentType: string) =>
+      agentType === "reviewer" || agentType === "planner" ? { connection: "conn" } : null;
     const input = restricted.inputSchema.parse({ description: "d", prompt: "p", agent_type: "reviewer" });
     const result = await restricted.handler(input, ctx);
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).not.toContain('tier "session"');
       expect(result.error).toContain('Agent: profile "reviewer" selects its own connection and cannot be spawned from here.');
-      // every type this port knows is itself routed, so no inline tail is offered
-      expect(result.error).not.toContain("Types that can be spawned inline here");
+      expect(result.error).toContain("Types that can be spawned inline here: general-purpose, explore, executor.");
+      expect(result.error).not.toContain("planner"); // a routed type never lands in the tail
     }
   });
 
