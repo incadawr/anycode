@@ -86,6 +86,36 @@
   display: none;
 }
 
+/* Coding-subscription shortcuts: same tile look as the path buttons, but a
+   secondary three-across row (they lead into the same API form, they are not
+   a fourth setup mode). The setup beat collapses descriptions exactly like
+   the paths row above. */
+.welcome-subscriptions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-2);
+}
+
+.welcome-subscription span {
+  color: var(--text-2);
+  font-size: var(--fs-xs);
+}
+
+.welcome-screen-card-setup .welcome-subscription span {
+  display: none;
+}
+
+/* The subscription pick's link to the provider's own key page. */
+.welcome-subscription-key {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.welcome-subscription-key a {
+  color: var(--accent);
+}
+
 .welcome-screen-card-setup .welcome-mark {
   width: 32px;
   height: 32px;

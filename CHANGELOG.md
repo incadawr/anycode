@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- The first-run screen gains three subscription shortcuts — GLM Coding Plan, MiniMax M Plan and Kimi (kimi.com): each opens the API connection form with the provider's template preselected and a link to the provider's own key page, so pasting the subscription key, connecting and landing on the catalog's default model is one stop.
+
 ## [0.0.75] — 2026-11-04
 
 ### Security

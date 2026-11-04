@@ -1440,6 +1440,13 @@ export interface ConnectionDrawerFieldsProps {
   /** First-run form: keep connection tuning behind a disclosure. */
   simplified?: boolean;
   /**
+   * Template preselected for a first-run create (WelcomeScreen's subscription
+   * shortcuts). A mount-time seed for the Provider select in add mode only —
+   * an `editConnection` always wins, and the embed remounts with a new key
+   * when the pick changes, so the value is never re-read after mount.
+   */
+  initialProviderId?: string;
+  /**
    * Fired with the id of a connection this form CREATED (both create flows).
    * The dialog chrome needs it to stop calling a saved connection "Add
    * connection"; nothing else may infer it (a connection appearing in the list
@@ -1465,6 +1472,7 @@ export function ConnectionDrawerFields({
   onBusyChange,
   interactionBlocked = false,
   simplified = false,
+  initialProviderId,
   onConnectionCreated,
 }: ConnectionDrawerFieldsProps) {
   const labelInputRef = useRef<HTMLInputElement>(null);
@@ -1484,7 +1492,7 @@ export function ConnectionDrawerFields({
   // connection"; edit mode: fixed to the connection's own id for this drawer's
   // whole lifetime (the template can never change post-creation).
   const [createdConnectionId, setCreatedConnectionId] = useState<string | null>(editConnection?.id ?? null);
-  const [providerId, setProviderId] = useState<string>(editConnection?.providerId ?? "");
+  const [providerId, setProviderId] = useState<string>(editConnection?.providerId ?? initialProviderId ?? "");
   const [label, setLabel] = useState(editConnection?.label ?? "");
   // an existing catalog connection persisted with a blank model
   // (the live trap — readiness fails on it with a key-blaming toast) opens

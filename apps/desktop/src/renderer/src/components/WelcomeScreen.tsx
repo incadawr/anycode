@@ -1,5 +1,6 @@
 /**
- * First-run setup: choose ChatGPT/Codex, Claude Code, or API/local models.
+ * First-run setup: choose ChatGPT/Codex, Claude Code, a coding subscription
+ * (key paste into the API form, not OAuth), or API/local models.
  * Subscription paths reuse the existing account panes; API setup uses the
  * shared connection form with optional tuning collapsed. App owns readiness
  * and advances to the project draft after setup. Saved incomplete connections
@@ -43,6 +44,40 @@ export function initialConnectionsView(connections: readonly Pick<ProviderConnec
 }
 
 /**
+ * The coding-subscription shortcuts rendered beside the engine paths. Each
+ * opens the API form with `id` — a builtin catalog template id, seeded into
+ * the Provider select at mount — and a link to the provider's own key page
+ * (Z.AI console key list, MiniMax M Plan "Plan Details", the Kimi Code
+ * console; each was the provider's documented key page when this was
+ * written). Every pick is a plain key paste: none of these is an OAuth flow.
+ */
+export type WelcomeSubscriptionId = "z-ai" | "minimax" | "kimi";
+
+export interface WelcomeSubscription {
+  readonly id: WelcomeSubscriptionId;
+  readonly title: string;
+  readonly description: string;
+  readonly keyUrl: string;
+}
+
+export const WELCOME_SUBSCRIPTIONS: readonly WelcomeSubscription[] = [
+  { id: "z-ai", title: "GLM Coding Plan", description: "Use your Z.AI coding plan key", keyUrl: "https://z.ai/manage-apikey/apikey-list" },
+  { id: "minimax", title: "MiniMax M Plan", description: "Use your MiniMax M Plan key", keyUrl: "https://platform.minimax.io/console/plan" },
+  { id: "kimi", title: "Kimi (kimi.com)", description: "Use your Kimi for Coding key", keyUrl: "https://www.kimi.com/code/console" },
+];
+
+/**
+ * The mount key for the embedded API form: a subscription pick gets its own
+ * key (`add:<template>`) so switching picks remounts the form with the new
+ * template seeded (typed values must never leak across templates — the same
+ * discipline as the switcher's per-connection keys), while any other view
+ * keeps its plain stable key and no template. Exported for direct testing.
+ */
+export function welcomeFormKey(resolvedKey: string, subscription: WelcomeSubscriptionId | null): string {
+  return resolvedKey === "add" && subscription !== null ? `add:${subscription}` : resolvedKey;
+}
+
+/**
  * Resolves a `WelcomeConnectionsView` against the LIVE connections list into
  * exactly what the form needs to render: which mode to pass
  * `ConnectionDrawerFields` (drives its Create/Save button label), which
@@ -81,6 +116,12 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
   const consentSaving = useStore(store, (s) => s.consentSaving);
   const [path, setPath] = useState<"api" | "codex" | "claude" | null>(null);
   const activePath = path ?? (connections.length > 0 ? "api" : null);
+  // The subscription shortcut picked on this screen, if any. It only drives
+  // the API form while the view is still the fresh-create form it opened
+  // (`welcomeFormKey`'s `add:<template>` rule) — switching to edit another
+  // connection or to a generic add drops it, exactly like any other
+  // half-typed form state.
+  const [subscription, setSubscription] = useState<WelcomeSubscriptionId | null>(null);
 
   // `null` until the user explicitly switches views — the live default
   // (`initialConnectionsView`) tracks the connections list until then, so a
@@ -88,6 +129,12 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
   const [viewOverride, setViewOverride] = useState<WelcomeConnectionsView | null>(null);
   const view = viewOverride ?? initialConnectionsView(connections);
   const resolved = resolveWelcomeView(view, connections);
+  // The subscription pick only survives while the form is still the fresh
+  // create it opened — any other resolved view hides the key link and keeps
+  // the template out of the form.
+  const activeSubscription = resolved.key === "add" && subscription !== null
+    ? WELCOME_SUBSCRIPTIONS.find((sub) => sub.id === subscription)
+    : undefined;
   // union the builtin catalog with saved custom records so a
   // just-created "Custom endpoint…" resolves its own synthesized entry
   // (models/transports) for the post-create model step — shared by the form
@@ -154,9 +201,25 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
           ] as const).map(([id, title, description]) => (
             <button key={id} type="button" className="welcome-path" aria-pressed={activePath === id} onClick={() => {
               setPath(id);
+              setSubscription(null);
               onSelectEngine?.(id === "api" ? "core" : id);
             }}>
               <strong>{title}</strong><span>{description}</span>
+            </button>
+          ))}
+        </div>
+
+        {/* Coding-subscription shortcuts: each opens the API form with its
+            template preselected — a key paste, not an OAuth flow. */}
+        <div className="welcome-subscriptions" role="group" aria-label="Connect a coding subscription">
+          {WELCOME_SUBSCRIPTIONS.map((sub) => (
+            <button key={sub.id} type="button" className="welcome-path welcome-subscription" onClick={() => {
+              setPath("api");
+              setSubscription(sub.id);
+              setViewOverride({ mode: "add" });
+              onSelectEngine?.("core");
+            }}>
+              <strong>{sub.title}</strong><span>{sub.description}</span>
             </button>
           ))}
         </div>
@@ -168,7 +231,10 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
               <button
                 type="button"
                 className="settings-button welcome-connections-add"
-                onClick={() => setViewOverride({ mode: "add" })}
+                onClick={() => {
+                  setViewOverride({ mode: "add" });
+                  setSubscription(null);
+                }}
               >
                 <Plus aria-hidden="true" />
                 Add another provider
@@ -202,7 +268,10 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
                     role="listitem"
                     className={`welcome-connection-row${selected ? " welcome-connection-row-selected" : ""}`}
                     aria-pressed={selected}
-                    onClick={() => setViewOverride({ mode: "edit", connectionId: connection.id })}
+                    onClick={() => {
+                      setViewOverride({ mode: "edit", connectionId: connection.id });
+                      setSubscription(null);
+                    }}
                   >
                     <span className="welcome-connection-row-provider">{catalogEntry?.name ?? "Custom"}</span>
                     <span className="welcome-connection-row-name">{displayName}</span>
@@ -221,17 +290,27 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
           {activePath === "codex" && <CodexEnginePane onboarding />}
           {activePath === "claude" && <ClaudeEnginePane onboarding />}
           {activePath === "api" && snapshot && (
-            <ConnectionDrawerFields
-              key={resolved.key}
-              mode={resolved.mode}
-              editConnection={resolved.editConnection}
-              catalog={catalog}
-              connections={connections}
-              secrets={snapshot.secrets}
-              readOnly={snapshot.readOnly}
-              store={store}
-              simplified
-            />
+            <>
+              {activeSubscription && (
+                <p className="welcome-subscription-key">
+                  <a href={activeSubscription.keyUrl} target="_blank" rel="noreferrer">
+                    Get a {activeSubscription.title} key
+                  </a>
+                </p>
+              )}
+              <ConnectionDrawerFields
+                key={welcomeFormKey(resolved.key, subscription)}
+                mode={resolved.mode}
+                editConnection={resolved.editConnection}
+                catalog={catalog}
+                connections={connections}
+                secrets={snapshot.secrets}
+                readOnly={snapshot.readOnly}
+                store={store}
+                simplified
+                initialProviderId={activeSubscription?.id}
+              />
+            </>
           )}
         </div>
 
