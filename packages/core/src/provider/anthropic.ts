@@ -9,6 +9,7 @@ import type { LanguageModel } from "ai";
 import type { EndpointConfig } from "./endpoint.js";
 import { isMiMoModel } from "./mimo.js";
 import { wrapFetchWithQuota } from "./quota-fetch.js";
+import { declaredUserAgent, wrapFetchWithUserAgent } from "./session-headers.js";
 
 export type { AnthropicEndpointConfig } from "./endpoint.js";
 
@@ -95,11 +96,18 @@ export function createAnthropicLanguageModel(
       return fetchWithQuota(input, { ...init, body: JSON.stringify(body) });
     };
   }
+  // A config-declared user-agent must reach the wire EXACTLY: the SDK
+  // appends its own markers to the header value (withUserAgentSuffix), so the
+  // enforcement happens at the fetch layer (session-headers.ts).
+  const userAgent = declaredUserAgent(config.headers);
+  if (userAgent !== undefined) {
+    fetchForProvider = wrapFetchWithUserAgent(fetchForProvider, userAgent);
+  }
   const provider = createAnthropic({
     baseURL: normalizeAnthropicBaseUrl(config.baseUrl),
     apiKey,
     headers: buildDualAuthHeaders(apiKey, config.headers),
-    ...(config.onQuotaHeaders !== undefined || isMiMoModel(config.providerName, config.model)
+    ...(config.onQuotaHeaders !== undefined || isMiMoModel(config.providerName, config.model) || userAgent !== undefined
       ? { fetch: fetchForProvider }
       : {}),
   });

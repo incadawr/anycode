@@ -99,6 +99,19 @@ describe("createOpenAICompatibleLanguageModel quota fetch wiring", () => {
     expect("fetch" in options).toBe(true);
     expect(typeof options.fetch).toBe("function");
   });
+
+  it("forwards per-session config headers into the SDK factory verbatim", () => {
+    // The OpenCode-Go shape: the session marker and non-SDK agent string must
+    // reach the SDK options (the wire-level proof lives in the SSE fixtures).
+    createOpenAICompatibleLanguageModel(config({
+      headers: { "user-agent": "Anycode/9.9.9", "x-opencode-session": "sess-123" },
+    }));
+    const options = mockCreateOpenAICompatible.mock.calls.at(-1)![0];
+    expect(options.headers).toEqual({
+      "user-agent": "Anycode/9.9.9",
+      "x-opencode-session": "sess-123",
+    });
+  });
 });
 
 describe("resolveIncludeUsage", () => {

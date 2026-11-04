@@ -98,6 +98,19 @@ const MINIMAX_MODELS: CatalogProviderEntry["models"] = [
   { id: "MiniMax-M3", name: "MiniMax M3", contextWindow: 1_000_000, imageInput: true, reasoning: false },
 ];
 
+// Kimi rows as served through the OpenCode Go subscription (best-effort
+// hints, shared by both protocol entries): the ids follow the moonshot
+// platform spelling and are UNVERIFIED until the endpoint's own live
+// `modelsUrl` list is fetched; free text is always accepted. Context is the
+// K2-series 262,144-token window (platform.kimi.ai/docs/pricing/chat) —
+// the endpoint's own declaration wins once known. Capabilities (image
+// input, reasoning) are left unpinned for the same reason.
+const OPENCODE_MODELS: CatalogProviderEntry["models"] = [
+  { id: "kimi-k3", name: "Kimi K3", contextWindow: 262_144 },
+  { id: "kimi-k3.1-pro", name: "Kimi K3.1 Pro", contextWindow: 262_144 },
+  { id: "kimi-k2.7-code", name: "Kimi K2.7 Code", contextWindow: 262_144 },
+];
+
 // DeepSeek bills by time of day (api-docs.deepseek.com/quick_start/pricing/,
 // checked 2026-10-27): 01:00–04:00 and 06:00–10:00 UTC on weekdays carry the
 // full (peak) rates listed below; every other minute of the week — including
@@ -551,6 +564,59 @@ const ENTRIES: CatalogProviderEntry[] = [
     // International host (measured 2026-11-02); this CN host was not probed.
     preserveReasoning: true,
     models: MINIMAX_MODELS,
+  },
+  {
+    // OpenCode Go subscription (opencode.ai): one subscription key, two
+    // protocol doors over the same Kimi lineup — an Anthropic-compatible
+    // root and an OpenAI-compatible root. TWO entries instead of one with
+    // `transportBaseUrls`: boot plumbing resolves the catalog entry from the
+    // connection's single baseUrl (`matchCatalogEntryByBaseUrl`), so one
+    // baseUrl per entry keeps that lookup deterministic (same shape as the
+    // Kimi brand pair).
+    //
+    // The endpoint wants a non-SDK agent identity and a stable per-session
+    // marker on every request. `headers` carries the templates;
+    // `resolveProviderHeaders` (provider/session-headers.ts) substitutes
+    // {sessionId} / {version} ONCE per boot, so one id per session/tab is
+    // shared by subagents (which reuse the parent port) and /model
+    // hot-swaps (which rebuild through the same factory) — "stable per
+    // conversation", not per request. This is the first live reader of
+    // `CatalogProviderEntry.headers`; every other entry stays byte-identical
+    // (the helper returns undefined when `headers` is absent).
+    //
+    // NO `pricing` on purpose: the Go tariff is a subscription (kimi.com
+    // precedent) — a connection states that with its own pricing mode
+    // instead of inventing a per-token rate. No `sharedBillingEndpoint`
+    // either: one endpoint serves subscription keys only, so there is no
+    // catalog-rate ambiguity to resolve.
+    id: "opencode",
+    name: "OpenCode Go (Anthropic)",
+    brand: "OpenCode",
+    modeLabel: "Anthropic",
+    baseUrl: "https://opencode.ai/inference/go/anthropic",
+    // The models list is served once for both protocol roots, OpenAI-style
+    // with Bearer auth — hence the explicit modelsUrl (DeepSeek precedent).
+    modelsUrl: "https://opencode.ai/inference/go/v1/models",
+    defaultTransport: "anthropic-messages",
+    supportedTransports: ["anthropic-messages"],
+    auth: { kind: "api_key" },
+    headers: { "user-agent": "Anycode/{version}", "x-opencode-session": "{sessionId}" },
+    models: OPENCODE_MODELS,
+  },
+  {
+    id: "opencode-openai",
+    name: "OpenCode Go (OpenAI)",
+    brand: "OpenCode",
+    modeLabel: "OpenAI compatible",
+    // OpenAI-family factories append nothing to the catalog prefix (§0.5),
+    // so the root carries its own `/v1`.
+    baseUrl: "https://opencode.ai/inference/go/openai/v1",
+    modelsUrl: "https://opencode.ai/inference/go/v1/models",
+    defaultTransport: "openai-chat-completions",
+    supportedTransports: ["openai-chat-completions", "openai-responses"],
+    auth: { kind: "api_key" },
+    headers: { "user-agent": "Anycode/{version}", "x-opencode-session": "{sessionId}" },
+    models: OPENCODE_MODELS,
   },
   {
     id: "openai",

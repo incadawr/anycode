@@ -155,4 +155,19 @@ describe("createAnthropicLanguageModel quota fetch wiring", () => {
     expect("fetch" in options).toBe(true);
     expect(typeof options.fetch).toBe("function");
   });
+
+  it("merges per-session config headers over the dual auth (extras win on Authorization)", () => {
+    // The OpenCode-Go shape: a session marker and a non-SDK agent string ride
+    // EndpointConfig.headers; the SDK factory must receive them alongside —
+    // not instead of — the dual-auth default.
+    createAnthropicLanguageModel(anthropicConfig({
+      headers: { "user-agent": "Anycode/9.9.9", "x-opencode-session": "sess-123" },
+    }));
+    const options = mockCreateAnthropic.mock.calls.at(-1)![0];
+    expect(options.headers).toMatchObject({
+      "Authorization": "Bearer sk-test-123",
+      "user-agent": "Anycode/9.9.9",
+      "x-opencode-session": "sess-123",
+    });
+  });
 });

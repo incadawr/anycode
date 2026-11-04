@@ -14,6 +14,7 @@ import { ResponsesReasoningTextRecovery, reasoningContentText } from "./response
 import type { EndpointConfig } from "./endpoint.js";
 import { normalizeExplicitBaseUrl } from "./endpoint.js";
 import { wrapFetchWithQuota } from "./quota-fetch.js";
+import { declaredUserAgent, wrapFetchWithUserAgent } from "./session-headers.js";
 
 /**
  * Stable public provider name; `@ai-sdk/openai` reads `providerOptions.openai`
@@ -99,12 +100,18 @@ export function createOpenAIResponsesLanguageModel(config: EndpointConfig, onRes
   const transportFetch = wrapResponsesReasoningFetch(onResponseActivity !== undefined
     ? wrapFetchWithActivity(baseFetch, onResponseActivity)
     : baseFetch);
+  // A config-declared user-agent must reach the wire EXACTLY: the SDK
+  // appends its own markers to the header value, so the enforcement happens
+  // at the fetch layer (session-headers.ts), outermost so it sees the final
+  // init the SDK built.
+  const userAgent = declaredUserAgent(config.headers);
+  const finalFetch = userAgent !== undefined ? wrapFetchWithUserAgent(transportFetch, userAgent) : transportFetch;
   const provider = createOpenAI({
     name: OPENAI_RESPONSES_PROVIDER_NAME,
     baseURL: normalizeExplicitBaseUrl(config.baseUrl),
     apiKey: config.apiKey ?? "",
     ...(config.headers !== undefined ? { headers: config.headers } : {}),
-    ...(transportFetch !== undefined ? { fetch: transportFetch } : {}),
+    ...(finalFetch !== undefined ? { fetch: finalFetch } : {}),
   });
   return wrapLanguageModel({
     model: provider.responses(config.model),
