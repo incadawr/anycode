@@ -1,9 +1,11 @@
 /** Isolated Electron check of the preview loopback grant: one pinned dev-server origin per preview, every other loopback target denied.
  *
- * STATUS: unverified live. The first bring-up never completed a leg: this
- * script's own CDP wrapper dropped the per-target session argument, so every
- * Runtime.evaluate landed on the connect-time app-window session instead of
- * the preview target and timed out. isolated-cdp.mjs itself is fine.
+ * Four legs over an isolated profile and two throwaway loopback HTTP
+ * fixtures: the pinned origin serves its relative assets while a second
+ * port, the 127.0.0.1 spelling and a WebSocket are denied (legible in the
+ * preview console); in-page navigation to the second port does not commit;
+ * a file: preview has no loopback grant; an explicit open loads the second
+ * port and pins only it.
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
