@@ -12,8 +12,9 @@ names them `BrowserOpen`, `BrowserNavigate`, ....
 1. Same tools, same approval rules, same **Full browser access** switch and
    domain policy as native tabs.
 2. Approvals always apply in these tabs (there is no auto/yolo mode that
-   skips them): a remote navigation, `remote:true` click/type and
-   `BrowserEval` ask first unless Full browser access is on.
+   skips them): a remote navigation and `remote:true` click/type ask first
+   unless Full browser access is on; `BrowserEval` asks always, even with it
+   on.
 3. `BrowserOpen` of a remote url asks even with Full browser access on, as in
    native tabs.
 4. A Codex session resumed after an app restart gets the browser tools back
@@ -108,9 +109,10 @@ takes a new snapshot.
 
 Each session has a **Full browser access** switch in its environment menu
 (the folder/branch menu in the header). While it is on, the agent can open any
-http(s) site, click, type (including passwords) and run JavaScript in that
-session's preview without asking. Turning it on asks you first; turning it off
-is immediate and takes effect on the next navigation or action.
+http(s) site, click and type (including passwords) in that session's preview
+without asking; `BrowserEval` keeps asking on every call. Turning it on asks
+you first; turning it off is immediate and takes effect on the next navigation
+or action.
 
 - A header chip, "Full browser access", shows while it is on.
 - A folder whose trust is not decided yet is always off: the row says

@@ -548,8 +548,13 @@ describe("checkInteractionPolicy matrix", () => {
     });
   });
 
-  it("full access allows any interaction on a remote origin without approval", () => {
+  it("full access allows click and type on a remote origin without approval but never eval", () => {
     expect(checkInteractionPolicy("click", "remote", false, "https://example.org/", true).allow).toBe(true);
+    expect(checkInteractionPolicy("type", "remote", false, "https://example.org/", true).allow).toBe(true);
+    expect(checkInteractionPolicy("eval", "remote", false, "https://example.org/", true)).toMatchObject({
+      allow: false,
+      errorKind: "not_allowed",
+    });
   });
 });
 
@@ -752,8 +757,12 @@ describe("BrowserController hard limits while Full browser access is on (brief 4
     expect(cdp.methods()).not.toContain("Input.insertText");
   });
 
-  it("the policy leaves eval to the driver: ON allows the eval step and the script runs on the page", async () => {
-    expect(checkInteractionPolicy("eval", "remote", false, "https://example.org/", true)).toEqual({ allow: true });
+  it("the switch never covers eval: the policy refuses unapproved eval even ON; an approved call runs on the page", async () => {
+    expect(checkInteractionPolicy("eval", "remote", false, "https://example.org/", true)).toEqual({
+      allow: false,
+      errorKind: "not_allowed",
+      error: "BrowserEval always needs the user's approval",
+    });
     const { run, cdp } = setup({ url: "https://example.org/" });
     cdp.respond("Runtime.evaluate", { result: { value: "fake-page-value" } });
     const result = await run({ action: "eval", expression: "document.title" });

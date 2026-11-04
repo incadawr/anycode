@@ -25,7 +25,7 @@ export interface BrowserAccessBridge {
 /** The confirm dialog shown before the switch turns ON (OFF never asks). */
 export const BROWSER_ACCESS_CONFIRM: ConfirmDialogRequest = {
   title: "Allow full browser access?",
-  body: "The agent will be able to open any website, click, type (including passwords) and run JavaScript in the preview without asking. Running JavaScript can read the shown page's cookies and storage; HttpOnly cookies, other partitions and OS or browser-stored credentials stay out of reach.",
+  body: "The agent will be able to open any website, click and type (including passwords) in the preview without asking. Running JavaScript (BrowserEval) still asks every time. It can read the shown page's cookies and storage; HttpOnly cookies, other partitions and OS or browser-stored credentials stay out of reach.",
   confirmLabel: "Allow",
 };
 

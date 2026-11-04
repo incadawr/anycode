@@ -4597,15 +4597,20 @@ describe("PreviewHost — Full browser access, live limits and forged access ops
     expect(offTyped).toMatchObject({ ok: false, errorKind: "not_allowed" });
   });
 
-  // Test 44: ON does not weaken the hard limits — but eval is page code by
-  // contract, so the expression reaches the page and its value comes back.
-  it("ON lets eval run: the expression reaches the page and the page value is returned", async () => {
+  // Test 44: the Full access switch never covers eval — without approval the
+  // op is refused even while ON; an approved call (allowRemote) reaches the
+  // page and its value comes back.
+  it("ON does not cover eval: unapproved eval is refused, an approved call reaches the page", async () => {
     const on = { value: true };
     const { rig, previewId } = await remote(on);
+    const refused = await call(rig, { kind: "control", request: { action: "eval", previewId, expression: "document.cookie" } });
+    expect(refused).toMatchObject({ ok: false, errorKind: "not_allowed", error: "BrowserEval always needs the user's approval" });
+    expect(rig.windows[0]!.webContents.cdp.methods()).not.toContain("Runtime.evaluate");
+
     rig.windows[0]!.webContents.cdp.respond("Runtime.evaluate", { result: { value: "fake-page-sentinel" } });
-    const result = await call(rig, { kind: "control", request: { action: "eval", previewId, expression: "document.cookie" } });
-    expect(result.ok).toBe(true);
-    expect(result.ok && result.value.text).toContain("fake-page-sentinel");
+    const approved = await call(rig, { kind: "control", request: { action: "eval", previewId, expression: "document.cookie" }, allowRemote: true });
+    expect(approved.ok).toBe(true);
+    expect(approved.ok && approved.value.text).toContain("fake-page-sentinel");
     expect(rig.windows[0]!.webContents.cdp.methods()).toContain("Runtime.evaluate");
   });
 

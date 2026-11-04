@@ -120,5 +120,6 @@ and anything on a localhost page or a local file, do not prompt. See
 [browser.md](browser.md).
 
 A session's **Full browser access** switch (off by default) removes these
-prompts for that session only, while it is on. Folders you have not trusted
-never get it. See [browser.md](browser.md#full-browser-access-per-session).
+prompts for that session only, while it is on — except `BrowserEval`, which
+keeps asking. Folders you have not trusted never get it. See
+[browser.md](browser.md#full-browser-access-per-session).

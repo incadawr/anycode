@@ -309,7 +309,7 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
         <span
           className="engine-identity session-header-browser-access"
           data-testid="browser-full-access-chip"
-          title="The agent can open any website, click, type and run JavaScript in the preview without asking"
+          title="The agent can open any website, click and type in the preview without asking; BrowserEval always asks"
         >
           Full browser access
         </span>

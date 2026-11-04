@@ -9,7 +9,8 @@
  * Approval model: `resolveMetadata` escalates a remote target (a non-loopback
  * navigate url, or click/type with `remote:true`) to needsApproval, and the
  * handler then passes `allowRemote:true`. Built by a factory so the
- * "Full browser access" switch (`fullAccess()`) can drop the escalation.
+ * "Full browser access" switch (`fullAccess()`) can drop that remote
+ * escalation; BrowserEval is never exempt and asks always.
  */
 
 import { z } from "zod";
@@ -217,7 +218,7 @@ export function createBrowserControlTools(options: BrowserControlToolsOptions = 
     true,
   );
 
-  /** Phase B: BrowserEval always asks, unless the session's full-access switch is on. */
+  /** Phase B: BrowserEval always asks; the full-access switch never covers it. */
   const evalBase: ToolMetadata = {
     ...baseMetadata(
       "BrowserEval",
@@ -399,8 +400,8 @@ export function createBrowserControlTools(options: BrowserControlToolsOptions = 
   const evalTool: ToolDefinition<BrowserEvalInput, PreviewControlSuccess> = {
     metadata: evalBase,
     inputSchema: browserEvalInputSchema,
-    // Asks every time while the switch is off; the handler only runs after approval, so it always passes allowRemote.
-    resolveMetadata: () => (fullAccess() ? { ...evalBase, needsApproval: false } : evalBase),
+    // No resolveMetadata: the ask is static and never depends on the
+    // full-access switch; the handler runs only after approval, so it always passes allowRemote.
     handler: async (input, ctx) => {
       if (!ctx.preview?.control) {
         return unavailable();

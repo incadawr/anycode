@@ -18,9 +18,10 @@
  *     `fullAccess()` closure the native boot uses (host/index.ts
  *     `browserAccess`); the control-tool factory already folds it into
  *     `resolveMetadata`, so with the switch on, remote navigate/click/type
- *     and eval do not ask — exactly like a native tab. `BrowserOpen` of a
- *     remote url asks even with the switch on (its metadata is static), also
- *     exactly like a native tab.
+ *     do not ask — exactly like a native tab. BrowserEval asks always (the
+ *     switch never covers it), and `BrowserOpen` of a remote url asks even
+ *     with the switch on (its metadata is static), also exactly like a
+ *     native tab.
  *   - No preset/mode ever suppresses the ask in engine tabs (native
  *     auto/yolo modes do not exist here) — a deliberate, documented
  *     difference.

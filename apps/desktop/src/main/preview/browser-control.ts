@@ -136,7 +136,7 @@ export type InteractionKind = "file" | "localhost" | "remote" | "dom-md" | "unkn
  *   - dom-md, unknown: refused.
  * Reading actions (snapshot, waitFor, history navigation) are always allowed on a web page.
  * `fullAccess` (the per-session "Full browser access" switch) allows every
- * http(s) interaction without approval.
+ * http(s) interaction without approval — except BrowserEval, which asks always.
  */
 export function checkInteractionPolicy(
   action: PreviewControlRequest["action"] | "eval",
@@ -158,6 +158,11 @@ export function checkInteractionPolicy(
   if (action !== "click" && action !== "type" && action !== "eval") {
     return { allow: true };
   }
+  // BrowserEval asks always: the full-access switch never covers it, only an
+  // approved call (allowRemote) runs.
+  if (action === "eval" && !allowRemote) {
+    return { allow: false, errorKind: "not_allowed", error: "BrowserEval always needs the user's approval" };
+  }
   if (fullAccess) {
     return { allow: true };
   }
@@ -167,9 +172,6 @@ export function checkInteractionPolicy(
       errorKind: "not_allowed",
       error: `this preview shows a remote origin (${originOf(url)}); the call needs the user's approval. Retry with remote:true so the user is asked.`,
     };
-  }
-  if (action === "eval" && !allowRemote) {
-    return { allow: false, errorKind: "not_allowed", error: "BrowserEval always needs the user's approval" };
   }
   return { allow: true };
 }

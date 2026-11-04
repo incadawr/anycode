@@ -211,10 +211,8 @@ describe("browser control tools (Phase A)", () => {
 
   // Test 6 (Phase B)
   it("BrowserEval always needs approval (every input), passes allowRemote once approved, and asks even on loopback", async () => {
-    for (const input of [{ expression: "1+1" }, { preview_id: "p1", expression: "document.title" }]) {
-      expect(tools.eval.resolveMetadata!(input).needsApproval).toBe(true);
-    }
-    expect(createBrowserControlTools({ fullAccess: () => true }).eval.resolveMetadata!({ expression: "1" }).needsApproval).toBe(false);
+    // The ask is static: every input, every origin, every switch state.
+    expect(tools.eval.metadata.needsApproval).toBe(true);
     expect(tools.eval.metadata).toMatchObject({ riskLevel: "high", sideEffectScope: "process" });
 
     const { control, calls } = recordingControl();
@@ -222,6 +220,15 @@ describe("browser control tools (Phase A)", () => {
     expect(calls[0]!.request).toEqual({ action: "eval", expression: "location.href" });
     expect(calls[0]!.opts.allowRemote).toBe(true);
     expect(tools.eval.formatResultForModel!({ ok: true, output: { previewId: "p", url: "u", text: "x" } })).toContain("untrusted data");
+  });
+
+  // Full browser access must never exempt BrowserEval: with the switch ON the
+  // resolved metadata still requires approval (fails on the old exemption).
+  it("with fullAccess on, BrowserEval metadata still resolves to needsApproval", () => {
+    const on = createBrowserControlTools({ fullAccess: () => true });
+    const resolved = on.eval.resolveMetadata?.({ expression: "1" }) ?? on.eval.metadata;
+    expect(resolved.needsApproval).toBe(true);
+    expect(on.eval.metadata.needsApproval).toBe(true);
   });
 
   // The description is the contract: it states the real data policy instead of

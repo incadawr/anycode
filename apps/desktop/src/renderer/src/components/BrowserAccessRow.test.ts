@@ -51,6 +51,9 @@ describe("BrowserAccessRow — test 50", () => {
     expect(browserAccessToggleAction(true, false)).toBe("set");
     expect(BROWSER_ACCESS_CONFIRM.title).toBe("Allow full browser access?");
     expect(BROWSER_ACCESS_CONFIRM.confirmLabel).toBe("Allow");
+    expect(BROWSER_ACCESS_CONFIRM.body).toContain("without asking");
+    expect(BROWSER_ACCESS_CONFIRM.body).toContain("still asks every time");
+    expect(BROWSER_ACCESS_CONFIRM.body).not.toContain("run JavaScript in the preview without asking");
     expect(BROWSER_ACCESS_CONFIRM.body).toContain("can read the shown page's cookies and storage");
     expect(BROWSER_ACCESS_CONFIRM.body).toContain("HttpOnly cookies");
     expect(BROWSER_ACCESS_CONFIRM.body).toContain("credentials stay out of reach");

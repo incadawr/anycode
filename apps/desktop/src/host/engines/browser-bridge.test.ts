@@ -407,7 +407,7 @@ describe("engine browser bridge — approvals (B6..B13)", () => {
     expect(noRemote.broker.requests).toHaveLength(0);
   });
 
-  it("B12: eval always asks with fullAccess off and never with it on; BrowserOpen remote url asks even with fullAccess ON; local opens never ask", async () => {
+  it("B12: eval always asks, even with fullAccess on; BrowserOpen remote url asks even with fullAccess ON; local opens never ask", async () => {
     const off = rig();
     const evalSpec = off.bridge.byCodexName("anycode_browser_eval")!;
     await off.bridge.call(evalSpec, { expression: "1+1" }, signal(), "t-b12a");
@@ -416,12 +416,15 @@ describe("engine browser bridge — approvals (B6..B13)", () => {
 
     const on = rig();
     on.setFullAccess(true);
-    await on.bridge.call(evalSpec, { expression: "1+1" }, signal(), "t-b12b");
-    expect(on.broker.requests).toHaveLength(0);
+    // Specs are rig-local (call matches the entry by identity), so each rig
+    // resolves its own eval spec — the OFF part above never short-circuits here.
+    await on.bridge.call(on.bridge.byCodexName("anycode_browser_eval")!, { expression: "1+1" }, signal(), "t-b12b");
+    expect(on.broker.requests).toHaveLength(1);
+    expect(on.broker.requests[0]!.toolName).toBe("BrowserEval");
     const open = on.bridge.byClaudeName("browser_open")!;
     await on.bridge.call(open, { url: "https://example.com/" }, signal(), "t-b12c");
-    expect(on.broker.requests).toHaveLength(1);
-    expect(on.broker.requests[0]!.toolName).toBe("BrowserOpen");
+    expect(on.broker.requests).toHaveLength(2);
+    expect(on.broker.requests[1]!.toolName).toBe("BrowserOpen");
 
     const local = rig();
     local.setFullAccess(true);

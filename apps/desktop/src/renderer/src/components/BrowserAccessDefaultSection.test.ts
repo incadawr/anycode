@@ -20,6 +20,8 @@ describe("Settings: default full browser access — test 52", () => {
 
   it("the warning names the agent's reach, the data policy and the trust exception", () => {
     expect(BROWSER_DEFAULT_WARNING).toContain("without asking");
+    expect(BROWSER_DEFAULT_WARNING).toContain("still asks every time");
+    expect(BROWSER_DEFAULT_WARNING).not.toContain("run JavaScript in the preview without asking");
     expect(BROWSER_DEFAULT_WARNING).toContain("can read the shown page's cookies and storage");
     expect(BROWSER_DEFAULT_WARNING).toContain("credentials stay out of reach");
     expect(BROWSER_DEFAULT_WARNING).not.toContain("cannot read");
