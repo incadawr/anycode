@@ -9,6 +9,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The telegram-remote example plugin can open and close sessions from the chat with `/projects`, `/new` and `/close`, backed by a new read-only `list_agent_projects` Sessions API tool that lists the projects where agents may open tasks.
+- Reasoning-history replay can now be enabled per connection for custom endpoints and vLLM (connection drawer, "Reasoning replay" setting), and a per-provider replay support table is published in the developer documentation.
+- Z.AI (GLM) connections on a coding-plan key now show their 5-hour and weekly quota windows (percent left, reset time) on the connection card, same as the MiniMax M Plan tile. Pay-as-you-go Z.AI keys are not polled.
+
 ## [0.0.74] — 2026-11-04
 
 ### Fixed
