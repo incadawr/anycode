@@ -24,6 +24,23 @@ vi.mock("node:os", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:os")>();
   return { ...actual, homedir: vi.fn(actual.homedir) };
 });
+// Same seam, same reason: the session-id hoisting guard below must see the
+// EndpointConfigs main.ts hands its TWO AiSdkModelPort constructions (the
+// boot port and the /model factory) as the run builds them, and a module
+// factory is the only way to swap the class in time. The wrapper records the
+// config and delegates unchanged, so every other test here drives the real
+// port untouched.
+const { cliEndpointConfigs } = vi.hoisted(() => ({ cliEndpointConfigs: new Array<unknown>() }));
+vi.mock("../provider/model-port.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../provider/model-port.js")>();
+  class RecordingAiSdkModelPort extends actual.AiSdkModelPort {
+    constructor(...args: ConstructorParameters<typeof actual.AiSdkModelPort>) {
+      cliEndpointConfigs.push(args[0]);
+      super(...args);
+    }
+  }
+  return { ...actual, AiSdkModelPort: RecordingAiSdkModelPort };
+});
 import * as os from "node:os";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -5362,6 +5379,204 @@ describe("buildCliEndpointConfig (endpoint-builder)", () => {
       model: "custom-reasoner",
     });
     expect("declaredEffortLevels" in undeclared).toBe(false);
+  });
+
+  it("forwards the resolved per-session headers, absent stays byte-identical", () => {
+    // The OpenCode-Go shape: resolveProviderHeaders output arrives pre-built
+    // and must ride the config into BOTH port constructions.
+    const resolved = { "user-agent": "Anycode/9.9.9", "x-opencode-session": "sess-123" };
+    const withHeaders = buildCliEndpointConfig({
+      transport: "anthropic-messages",
+      envConfig: envConfig("https://opencode.ai/inference/go/anthropic"),
+      catalogEntry: catalogEntry("OpenCode Go (Anthropic)"),
+      retryOverride: {},
+      includeUsageResolved: false,
+      model: "kimi-k3",
+      headers: resolved,
+    });
+    expect(withHeaders.headers).toEqual(resolved);
+
+    const without = buildCliEndpointConfig({
+      transport: "anthropic-messages",
+      envConfig: envConfig("https://api.anthropic.com"),
+      catalogEntry: catalogEntry("Anthropic"),
+      retryOverride: {},
+      includeUsageResolved: false,
+      model: "claude-x",
+    });
+    expect("headers" in without).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// the ONE session id per CLI run is resolved before the model port is built
+// (catalog entries that require per-session request headers template it, and
+// the session row persists the same value). A resumed run must keep its
+// persisted id — the reorder may not re-roll ids.
+// ─────────────────────────────────────────────────────────────────────────
+describe("CLI session id hoisting (per-session request headers)", () => {
+  /** The boot stamp writes the real process.env; snapshot/restore around each drive. */
+  function withSessionEnvReset(run: () => Promise<void>): Promise<void> {
+    const previous = process.env.ANYCODE_SESSION_ID;
+    delete process.env.ANYCODE_SESSION_ID;
+    return run().finally(() => {
+      if (previous === undefined) delete process.env.ANYCODE_SESSION_ID;
+      else process.env.ANYCODE_SESSION_ID = previous;
+    });
+  }
+
+  it("a fresh run persists the hoisted id, stamps it into the environment, and the factory sees it stamped", async () => {
+    const { workspace, dbPath, home } = setupTitleTestDirs();
+    let envAtFactoryBuild: string | undefined;
+    await withSessionEnvReset(async () => {
+      const input = new PassThrough();
+      const output = new PassThrough();
+      const getText = collectOutput(output);
+
+      const runPromise = runCli({
+        argv: [],
+        env: makeTitleTestEnv(dbPath, home),
+        home,
+        input,
+        output,
+        modelPort: new CountingModelPort(),
+        // A /model switch rebuilds through this factory: the env must already
+        // carry the session id when a NEW port is built.
+        modelPortFactory: () => {
+          envAtFactoryBuild = process.env.ANYCODE_SESSION_ID;
+          return new TextModelPort("switched");
+        },
+        cwd: workspace,
+      });
+
+      input.write("/model glm-4.7\n");
+      input.write("hello there\n");
+      input.write("/quit\n");
+
+      expect(await runPromise).toBe(0);
+      expect(getText()).toContain("switched");
+
+      const persisted = await readSessionTitle(dbPath, workspace);
+      expect(persisted.id).toBeTruthy();
+      expect(process.env.ANYCODE_SESSION_ID).toBe(persisted.id);
+      expect(envAtFactoryBuild).toBe(persisted.id);
+    });
+  });
+
+  it("a resumed run keeps the persisted session id", async () => {
+    const { workspace, dbPath, home } = setupTitleTestDirs();
+    await withSessionEnvReset(async () => {
+      const firstInput = new PassThrough();
+      const firstRun = runCli({
+        argv: [],
+        env: makeTitleTestEnv(dbPath, home),
+        home,
+        input: firstInput,
+        output: new PassThrough(),
+        modelPort: new CountingModelPort(),
+        cwd: workspace,
+      });
+      firstInput.write("first turn\n");
+      firstInput.end();
+      expect(await firstRun).toBe(0);
+      const first = await readSessionTitle(dbPath, workspace);
+
+      const secondInput = new PassThrough();
+      const secondRun = runCli({
+        argv: ["--continue", "-p", "second turn"],
+        env: makeTitleTestEnv(dbPath, home),
+        home,
+        input: secondInput,
+        output: new PassThrough(),
+        errorOutput: new PassThrough(),
+        modelPort: new CountingModelPort(),
+        cwd: workspace,
+      });
+      expect(await secondRun).toBe(0);
+
+      const after = await readSessionTitle(dbPath, workspace);
+      expect(after.id).toBe(first.id);
+      expect(process.env.ANYCODE_SESSION_ID).toBe(first.id);
+    });
+  });
+
+  it("the boot port and the /model factory rebuild both carry the hoisted id in the catalog session header", async () => {
+    const { workspace, dbPath, home } = setupTitleTestDirs();
+    // An OpenCode Go connection: its catalog entry templates {sessionId} into
+    // `x-opencode-session`, so both REAL port constructions must carry the id
+    // (the isolated buildCliEndpointConfig tests above cannot see the call
+    // sites — removing the `headers:` argument at either one keeps them green).
+    // The drive submits no turn, so nothing touches the network.
+    cliEndpointConfigs.length = 0;
+    await withSessionEnvReset(async () => {
+      const input = new PassThrough();
+      const output = new PassThrough();
+      const runPromise = runCli({
+        argv: [],
+        env: { ...makeTitleTestEnv(dbPath, home), ANYCODE_BASE_URL: "https://opencode.ai/inference/go/anthropic" },
+        home,
+        input,
+        output,
+        // No modelPort: the run builds real ports through buildCliEndpointConfig,
+        // which the file-level recorder captures. Refinement/checkpoints stay
+        // off so the boot constructs nothing beyond the two ports under test.
+        sessionTitleRefinement: false,
+        checkpoints: false,
+        cwd: workspace,
+      });
+      input.write("/model kimi-k3\n");
+      input.write("/quit\n");
+      expect(await runPromise).toBe(0);
+
+      const persisted = await readSessionTitle(dbPath, workspace);
+      const built = cliEndpointConfigs as ReturnType<typeof buildCliEndpointConfig>[];
+      expect(built).toHaveLength(2);
+      expect(built[0]!.model).toBe("test-model"); // the base port, built at boot
+      expect(built[0]!.headers?.["x-opencode-session"]).toBe(persisted.id);
+      expect(built[1]!.model).toBe("kimi-k3"); // the /model factory rebuild
+      expect(built[1]!.headers?.["x-opencode-session"]).toBe(persisted.id);
+      expect(process.env.ANYCODE_SESSION_ID).toBe(persisted.id);
+    });
+  });
+
+  it("a resumed run builds its boot port with the persisted id already in the session header", async () => {
+    const { workspace, dbPath, home } = setupTitleTestDirs();
+    await withSessionEnvReset(async () => {
+      const firstInput = new PassThrough();
+      const firstRun = runCli({
+        argv: [],
+        env: makeTitleTestEnv(dbPath, home),
+        home,
+        input: firstInput,
+        output: new PassThrough(),
+        modelPort: new CountingModelPort(),
+        cwd: workspace,
+      });
+      firstInput.write("first turn\n");
+      firstInput.end();
+      expect(await firstRun).toBe(0);
+      const first = await readSessionTitle(dbPath, workspace);
+
+      cliEndpointConfigs.length = 0;
+      const secondInput = new PassThrough();
+      const secondRun = runCli({
+        argv: ["--continue"],
+        env: { ...makeTitleTestEnv(dbPath, home), ANYCODE_BASE_URL: "https://opencode.ai/inference/go/anthropic" },
+        home,
+        input: secondInput,
+        output: new PassThrough(),
+        sessionTitleRefinement: false,
+        checkpoints: false,
+        cwd: workspace,
+      });
+      secondInput.write("/quit\n");
+      expect(await secondRun).toBe(0);
+
+      const built = cliEndpointConfigs as ReturnType<typeof buildCliEndpointConfig>[];
+      expect(built).toHaveLength(1);
+      expect(built[0]!.headers?.["x-opencode-session"]).toBe(first.id);
+      expect(process.env.ANYCODE_SESSION_ID).toBe(first.id);
+    });
   });
 });
 

@@ -34,6 +34,8 @@ describe("built-in catalog v1 (slice 2.5 §2.2 + W5)", () => {
       "kimi",
       "minimax",
       "minimax-cn",
+      "opencode",
+      "opencode-openai",
       "openai",
       "openrouter",
       "vllm",
@@ -515,16 +517,113 @@ describe("assertTransportContract (dev-time invariant, W5)", () => {
 });
 
 describe("modelsUrl (4244)", () => {
-  it("4244: deepseek declares modelsUrl at the bare origin; every other entry leaves it absent", () => {
+  it("4244: deepseek declares modelsUrl at the bare origin; every other pre-existing entry leaves it absent", () => {
     expect(findCatalogEntry("deepseek")?.modelsUrl).toBe("https://api.deepseek.com/models");
     for (const id of ["anthropic", "z-ai", "xiaomi-mimo-api", "xiaomi-mimo-sgp", "xiaomi-mimo-cn", "xiaomi-mimo-ams", "moonshot", "kimi", "openai", "openrouter", "vllm", "custom"]) {
       expect(findCatalogEntry(id)?.modelsUrl).toBeUndefined();
     }
   });
+
+  it("the OpenCode pair declares one shared models list URL (OpenAI-style + Bearer)", () => {
+    for (const id of ["opencode", "opencode-openai"]) {
+      expect(findCatalogEntry(id)?.modelsUrl).toBe("https://opencode.ai/inference/go/v1/models");
+    }
+  });
+});
+
+describe("OpenCode Go subscription entries", () => {
+  it("declares the two protocol doors as one OpenCode brand group", () => {
+    const providers = getBuiltinCatalog().providers;
+    expect(providers.filter((entry) => entry.brand === "OpenCode").map((entry) => entry.id)).toEqual([
+      "opencode",
+      "opencode-openai",
+    ]);
+    expect(findCatalogEntry("opencode")).toMatchObject({
+      name: "OpenCode Go (Anthropic)",
+      brand: "OpenCode",
+      modeLabel: "Anthropic",
+      baseUrl: "https://opencode.ai/inference/go/anthropic",
+      defaultTransport: "anthropic-messages",
+      supportedTransports: ["anthropic-messages"],
+      auth: { kind: "api_key" },
+    });
+    expect(findCatalogEntry("opencode-openai")).toMatchObject({
+      name: "OpenCode Go (OpenAI)",
+      brand: "OpenCode",
+      modeLabel: "OpenAI compatible",
+      baseUrl: "https://opencode.ai/inference/go/openai/v1",
+      defaultTransport: "openai-chat-completions",
+      supportedTransports: ["openai-chat-completions", "openai-responses"],
+      auth: { kind: "api_key" },
+    });
+    // Distinct baseUrls: matchCatalogEntryByBaseUrl resolves one entry per
+    // connection, and the catalog-wide uniqueness test below enforces it too.
+    expect(findCatalogEntry("opencode")!.baseUrl).not.toBe(findCatalogEntry("opencode-openai")!.baseUrl);
+  });
+
+  it("declares the per-session header templates both entries send on every request", () => {
+    for (const id of ["opencode", "opencode-openai"]) {
+      expect(findCatalogEntry(id)?.headers).toEqual({
+        "user-agent": "Anycode/{version}",
+        "x-opencode-session": "{sessionId}",
+      });
+    }
+  });
+
+  it("leads the Anthropic door with its native Messages models, Kimi rows after", () => {
+    const anthropic = findCatalogEntry("opencode")!;
+    expect(anthropic.models.map((model) => model.id)).toEqual([
+      "minimax-m3",
+      "qwen3.8-max",
+      "qwen3.8-flash",
+      "qwen3.7-plus",
+      "claude-haiku-5-5",
+      "kimi-k3",
+      "kimi-k3.1-pro",
+      "kimi-k2.7-code",
+    ]);
+    expect(anthropic.models.map((model) => model.name)).toEqual([
+      "MiniMax M3",
+      "Qwen3.8 Max",
+      "Qwen3.8 Flash",
+      "Qwen3.7 Plus",
+      "Claude Haiku 5.5",
+      "Kimi K3",
+      "Kimi K3.1 Pro",
+      "Kimi K2.7 Code",
+    ]);
+    // Chat Completions is the Kimi family's native protocol on this
+    // endpoint: the OpenAI door keeps Kimi first.
+    expect(findCatalogEntry("opencode-openai")!.models.map((model) => model.id)).toEqual([
+      "kimi-k3",
+      "kimi-k3.1-pro",
+      "kimi-k2.7-code",
+    ]);
+  });
+
+  it("keeps every row unpriced, with the context windows the live models list declares", () => {
+    for (const id of ["opencode", "opencode-openai"]) {
+      const entry = findCatalogEntry(id)!;
+      for (const model of entry.models) {
+        // Subscription tariff: no invented per-token rates (kimi.com precedent).
+        expect(model.pricing).toBeUndefined();
+        // Unverified through this app's own request mapping: no capability claims.
+        expect(model.imageInput).toBeUndefined();
+        expect(model.reasoning).toBeUndefined();
+      }
+    }
+    // kimi-k3 / kimi-k3.1-pro declare the full 1,048,576-token window on the
+    // endpoint's own models list, not the smaller pre-fetch hint.
+    expect(findCatalogEntry("opencode-openai")!.models.map((model) => model.contextWindow)).toEqual([
+      1_048_576,
+      1_048_576,
+      262_144,
+    ]);
+  });
 });
 
 describe("brand grouping", () => {
-  it("groups Kimi modes, Xiaomi MiMo regions and MiniMax regions in catalog order", () => {
+  it("groups Kimi modes, Xiaomi MiMo regions, MiniMax regions and OpenCode modes in catalog order", () => {
     const providers = getBuiltinCatalog().providers;
     expect(providers.filter((entry) => entry.brand === "Kimi").map((entry) => entry.id)).toEqual(["moonshot", "kimi"]);
     expect(providers.filter((entry) => entry.brand === "Xiaomi MiMo").map((entry) => entry.id)).toEqual([
@@ -534,7 +633,10 @@ describe("brand grouping", () => {
     expect(providers.filter((entry) => entry.brand === "MiniMax").map((entry) => entry.id)).toEqual([
       "minimax", "minimax-cn",
     ]);
-    for (const entry of providers.filter((entry) => !["Kimi", "Xiaomi MiMo", "MiniMax"].includes(entry.brand ?? ""))) {
+    expect(providers.filter((entry) => entry.brand === "OpenCode").map((entry) => entry.id)).toEqual([
+      "opencode", "opencode-openai",
+    ]);
+    for (const entry of providers.filter((entry) => !["Kimi", "Xiaomi MiMo", "MiniMax", "OpenCode"].includes(entry.brand ?? ""))) {
       expect(entry.brand).toBeUndefined();
       expect(entry.modeLabel).toBeUndefined();
     }

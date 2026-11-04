@@ -174,6 +174,24 @@ describe("AiSdkModelPort over a real @ai-sdk/openai-compatible SSE stream (W2)",
     expect(events.at(-1)?.type).toBe("finish");
   });
 
+  it("sends EndpointConfig.headers on the wire — a custom user-agent wins over the SDK default", async () => {
+    // The OpenCode-Go contract: the endpoint requires a non-SDK agent string
+    // and a stable per-session marker. Asserted on the CAPTURED request, not
+    // the config, so an SDK/undici default sneaking back in fails here.
+    responseChunks = [
+      { choices: [{ index: 0, delta: { content: "ok" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+    ];
+    const events = await collect(portFor({
+      headers: { "user-agent": "Anycode/9.9.9", "x-opencode-session": "sess-123" },
+    }).streamText({ messages: [{ role: "user", content: "hi" }], tools: [] }));
+
+    expect(events.filter((e) => e.type === "error")).toEqual([]);
+    expect(captured!.headers["user-agent"]).toBe("Anycode/9.9.9");
+    expect(captured!.headers["x-opencode-session"]).toBe("sess-123");
+    // Bearer auth still rides alongside the extra headers.
+    expect(captured!.headers["authorization"]).toBe("Bearer test-key");
+  });
+
   it("serializes tool_choice as a bare STRING when tools are offered (the LiteLLM 400 regression, §1 fact #1)", async () => {
     responseChunks = [
       { choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 5, completion_tokens: 0, total_tokens: 5 } },

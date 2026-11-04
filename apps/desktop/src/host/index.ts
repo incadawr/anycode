@@ -267,6 +267,7 @@ import {
   type ImageModalityLookup,
   resolveIncludeUsage,
   resolveMaxOutputTokens,
+  resolveProviderHeaders,
   clampSubagentMaxOutputTokens,
   resolveReasoningEffort,
   resolveChildReasoningEffort,
@@ -3046,6 +3047,18 @@ async function boot(): Promise<void> {
     // in conditionally, so `false` (strict-server escape hatch) sends nothing.
     const includeUsage = resolveIncludeUsage(providerTransport, envConfig.includeUsage);
 
+    // Per-session request headers (OpenCode Go) resolved ONCE per boot: one
+    // id per host fork, shared by subagents (which reuse this port) and
+    // /model hot-swaps (which rebuild through the factory below). The fork's
+    // ANYCODE_SESSION_ID comes stamped from main; a bare boot draws its own.
+    // Entries without header templates resolve to undefined ⇒ nothing is
+    // spread, byte-identical to the pre-headers factory.
+    const sessionHeaders = resolveProviderHeaders(
+      catalogEntry,
+      process.env.ANYCODE_SESSION_ID ?? randomUUID(),
+      process.env.ANYCODE_APP_VERSION,
+    );
+
     // Slice P7.15 (F14, design §2.1): mid-session model switch mirrors the CLI
     // `/model` recipe (host-side hot-swap, NOT a respawn). The factory rebuilds a
     // fresh AiSdkModelPort per switch (LanguageModel is built per-attempt, so the
@@ -3085,6 +3098,7 @@ async function boot(): Promise<void> {
           ...(envConfig.preserveReasoning !== undefined ? { preserveReasoning: envConfig.preserveReasoning } : {}),
           ...(resolveApiKey !== undefined ? { resolveApiKey } : {}),
           ...(includeUsage ? { includeUsage: true } : {}),
+          ...(sessionHeaders !== undefined ? { headers: sessionHeaders } : {}),
           // GitHub #15: forward the parsed prompt-cache policy into EVERY port
           // this factory builds (hot swaps, classifiers, inline agents), not
           // just the first model instance. Absent = no field, byte-identical.

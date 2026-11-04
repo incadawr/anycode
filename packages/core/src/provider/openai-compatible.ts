@@ -12,6 +12,7 @@ import type { ProviderTransport } from "./catalog.js";
 import type { EndpointConfig } from "./endpoint.js";
 import { normalizeExplicitBaseUrl } from "./endpoint.js";
 import { wrapFetchWithQuota } from "./quota-fetch.js";
+import { declaredUserAgent, wrapFetchWithUserAgent } from "./session-headers.js";
 
 /**
  * Stable public provider name. `@ai-sdk/openai-compatible` reads
@@ -45,6 +46,13 @@ export function openRouterRequestBody(body: Record<string, unknown>, raw: string
 }
 
 export function createOpenAICompatibleLanguageModel(config: EndpointConfig): LanguageModel {
+  const quotaFetch = config.onQuotaHeaders !== undefined
+    ? wrapFetchWithQuota(globalThis.fetch, config.onQuotaHeaders, config.baseUrl)
+    : undefined;
+  // A config-declared user-agent must reach the wire EXACTLY: the SDK
+  // appends its own markers to the header value, so the enforcement happens
+  // at the fetch layer (session-headers.ts).
+  const userAgent = declaredUserAgent(config.headers);
   const provider = createOpenAICompatible({
     name: OPENAI_COMPATIBLE_PROVIDER_NAME,
     baseURL: normalizeExplicitBaseUrl(config.baseUrl),
@@ -52,10 +60,11 @@ export function createOpenAICompatibleLanguageModel(config: EndpointConfig): Lan
     ...(config.apiKey !== undefined ? { apiKey: config.apiKey } : {}),
     ...(config.headers !== undefined ? { headers: config.headers } : {}),
     ...(config.includeUsage === true ? { includeUsage: true } : {}),
-    // dormant unless an observer is set — the conditional
-    // spread keeps the options object byte-identical when unset.
-    ...(config.onQuotaHeaders !== undefined
-      ? { fetch: wrapFetchWithQuota(globalThis.fetch, config.onQuotaHeaders, config.baseUrl) }
+    // dormant unless an observer is set or a user-agent override must be
+    // enforced — the conditional spread keeps the options object
+    // byte-identical when neither applies.
+    ...(quotaFetch !== undefined || userAgent !== undefined
+      ? { fetch: userAgent !== undefined ? wrapFetchWithUserAgent(quotaFetch ?? globalThis.fetch, userAgent) : quotaFetch }
       : {}),
   });
   return provider.chatModel(config.model);

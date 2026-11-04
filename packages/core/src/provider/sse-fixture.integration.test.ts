@@ -73,10 +73,12 @@ describe("AiSdkModelPort over a real @ai-sdk/anthropic SSE stream (slice 3.7 R1)
   let baseUrl: string;
   let cacheRead: number | undefined;
   let capturedRaw: string;
+  let capturedHeaders: Record<string, string | string[] | undefined>;
 
   beforeEach(async () => {
     cacheRead = undefined;
     capturedRaw = "";
+    capturedHeaders = {};
     server = createServer((req, res) => {
       // Drain the request into the capture buffer so the socket is not held
       // open AND the outgoing bytes are inspectable (GitHub #15: the anthropic
@@ -85,6 +87,7 @@ describe("AiSdkModelPort over a real @ai-sdk/anthropic SSE stream (slice 3.7 R1)
       req.on("data", (c: Buffer) => chunks.push(c));
       req.on("end", () => {
         capturedRaw = Buffer.concat(chunks).toString("utf8");
+        capturedHeaders = req.headers;
         res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
       res.end(serializeSse(CHUNKS.map((chunk) => chunk.type === "message_start"
         ? { ...chunk, message: { id: "msg_1", model: "glm-5.2", role: "assistant",
@@ -166,5 +169,25 @@ describe("AiSdkModelPort over a real @ai-sdk/anthropic SSE stream (slice 3.7 R1)
     expect(capturedRaw).not.toContain("prompt_cache_options");
     expect(capturedRaw).not.toContain("promptCacheOptions");
     expect(capturedRaw).not.toContain("cache_control");
+  });
+
+  it("sends EndpointConfig.headers on the wire — a custom user-agent wins over the SDK default", async () => {
+    // The OpenCode-Go contract: the endpoint requires a non-SDK agent string
+    // and a stable per-session marker. Asserted on the CAPTURED request, not
+    // the config, so an SDK default sneaking back in fails here. The dual
+    // auth stays intact alongside the extras.
+    const events = await collect(new AiSdkModelPort({
+      transport: "anthropic-messages",
+      baseUrl,
+      apiKey: "test-key",
+      model: "glm-5.2",
+      retry: { maxRetries: 0, stallTimeoutMs: 0 },
+      headers: { "user-agent": "Anycode/9.9.9", "x-opencode-session": "sess-123" },
+    }).streamText({ messages: [{ role: "user", content: "hi" }], tools: [] }));
+
+    expect(events.filter((e) => e.type === "error")).toEqual([]);
+    expect(capturedHeaders["user-agent"]).toBe("Anycode/9.9.9");
+    expect(capturedHeaders["x-opencode-session"]).toBe("sess-123");
+    expect(capturedHeaders["authorization"]).toBe("Bearer test-key");
   });
 });

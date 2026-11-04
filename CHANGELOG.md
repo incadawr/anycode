@@ -17,6 +17,13 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - Re-clicking a first-run subscription shortcut (GLM Coding Plan, MiniMax M Plan, Kimi) now re-seeds the connection form to that shortcut's template. Previously a form manually moved to another provider kept showing it while the shortcut's key link came back, so the link advertised a key page for a provider the form was no longer using.
+### Added
+
+- OpenCode Go (Kimi models over a subscription) is available as a provider: two connections, one speaking Anthropic's protocol and one OpenAI-compatible, both sending a per-session marker and an Anycode user-agent with every request so the endpoint sees one stable identity per conversation.
+
+### Fixed
+
+- The OpenCode Go connection speaking Anthropic's protocol now suggests models that the endpoint serves on that protocol natively (MiniMax M3, Qwen3.8 Max/Flash, Qwen3.7 Plus, Claude Haiku 5.5) instead of Kimi, which the endpoint only routes through translation on that door; the OpenAI-compatible connection keeps Kimi first, and Kimi's declared context windows on both were corrected against the endpoint's own model list.
 
 ## [0.0.75] — 2026-11-04
 
