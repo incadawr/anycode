@@ -506,20 +506,22 @@ export async function handleSessionsDeleteOlder(
   return { ok: true, summary: { ...deleted, skippedActive } };
 }
 
-/** optional page size for the sidebar's default capped view. Fail-open:
- *  an unparseable request degrades to the full list. Bounds mirror the CLI
- *  picker's limit discipline (1..1000 whole numbers). */
+/** optional page size for the sidebar's default capped view — applied WITHIN
+ *  each project, so one busy project cannot push other projects' folders out
+ *  of the page. Fail-open: an unparseable request degrades to the full list.
+ *  Bounds mirror the CLI picker's limit discipline (1..1000 whole numbers). */
 export const sessionsListRequestSchema = z.object({
   limit: z.number().int().min(1).max(1000).optional(),
 });
 
 /** the sidebar list read, exported for tests (handleSessionsDeleteOlder
  *  precedent). Root-only by construction (S2a §2.4). `limit ===
- *  undefined` = full list (StartScreen/ModelPill/palette/automation keep it). */
+ *  undefined` = full list (StartScreen/ModelPill/palette/automation keep it);
+ *  a limit pages per project (the renderer re-caps and flags the overflow). */
 export async function handleSessionsList(deps: TabIpcDeps, raw?: unknown): Promise<SessionSummary[]> {
   const parsed = sessionsListRequestSchema.safeParse(raw ?? {});
   const limit = parsed.success ? parsed.data.limit : undefined;
-  const sessions = await deps.persistence.listRootSessions(limit !== undefined ? { limit } : undefined);
+  const sessions = await deps.persistence.listRootSessions(limit !== undefined ? { perWorkspaceLimit: limit } : undefined);
   return sessions.map((meta) => toSummary(meta, deps.manager));
 }
 
