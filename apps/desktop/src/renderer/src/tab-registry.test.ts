@@ -1655,6 +1655,19 @@ describe("tab-registry — prompt-queue drainer (slice P7.14 · F15)", () => {
     expect(store.getState().orchestrationDeliveries).toMatchObject([{requestId:sent.requestId,text:"edited retry",status:"rejected"}]);
     expect(userMessages(port)).toHaveLength(1);
   });
+  it("retries a system report after a posture refusal", () => {
+    const {registry} = createTestRegistry(createTabsStore()); const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port)); port.emit(HOST_READY("/ws/a", "sess-a"));
+    const store = registry.getStore("tab-a")!;
+    port.emit({ type: "child_report", id: "report-1", text: "report" });
+    const first = userMessages(port)[0]!;
+    port.emit({ type: "user_message_unavailable", requestId: first.requestId, reason: "posture_unavailable" });
+    expect(store.getState().promptQueue).toEqual([]);
+    expect(store.getState().orchestrationDeliveries[0]).toMatchObject({ status: "rejected", origin: "system" });
+    store.getState().retryRejectedSystemDelivery(first.requestId);
+    expect(userMessages(port)).toHaveLength(2);
+    expect(userMessages(port)[1]).toMatchObject({ text: "report", origin: "system" });
+  });
   it("does not auto-retry a rejected system report and retries once only on explicit request", () => {
     const {registry} = createTestRegistry(createTabsStore()); const port = new FakeMessagePort();
     registry.registerPort("tab-a","/ws/a",asPort(port)); port.emit(HOST_READY("/ws/a","sess-a"));
