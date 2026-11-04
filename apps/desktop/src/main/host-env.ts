@@ -148,6 +148,19 @@ export const ENV_PROVIDER_TRANSPORT = "ANYCODE_PROVIDER_TRANSPORT";
  */
 export const ENV_INCLUDE_USAGE = "ANYCODE_INCLUDE_USAGE";
 /**
+ * Reasoning-replay override: `1/true/on` or `0/false/off`; an explicit
+ * value wins over core's replay gate (`config.preserveReasoning ?? catalog
+ * policy` in `reasoningReplaySource`). Literal mirror of core's
+ * `provider/env.ts` `ENV_PRESERVE_REASONING` — same local-literal convention
+ * (host-env stays core-free). Carries the ACTIVE connection's persisted
+ * `preserveReasoning` (`true`/`false`) through the same env-wins
+ * `fillFromSettings` step as every other connection rung, so ambient/shell env
+ * still wins; an absent setting emits nothing and leaves the catalog policy to
+ * core. The override is genuine in BOTH directions: on a catalog entry whose
+ * own flag is on, a persisted `false` turns replay OFF.
+ */
+export const ENV_PRESERVE_REASONING = "ANYCODE_PRESERVE_REASONING";
+/**
  * Opt-in prompt-cache override (GitHub #15). Literal mirror of core's
  * `provider/env.ts` ENV_PROMPT_CACHE_OPTIONS — same local-literal convention
  * as every var above (host-env stays core-free). Carries the ACTIVE
@@ -1287,6 +1300,17 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
     env,
     ENV_INCLUDE_USAGE,
     view.includeUsage === undefined ? undefined : String(view.includeUsage),
+  );
+  // Reasoning-replay override (custom/vLLM opt-in): the same env rung as the
+  // usage policy above, so a launching shell's own ANYCODE_PRESERVE_REASONING
+  // always wins. `false` is a MEANING (an explicit opt-out that also disables
+  // replay on a catalog entry whose own flag is on), hence `!== undefined`
+  // rather than truthiness: an absent setting emits NOTHING and lets core's
+  // catalog gate decide.
+  fillFromSettings(
+    env,
+    ENV_PRESERVE_REASONING,
+    view.preserveReasoning === undefined ? undefined : String(view.preserveReasoning),
   );
   // Per-model context window: the value and its binding travel as a
   // PAIR and are written from ONE source — never two independent
