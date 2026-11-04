@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSettings } from "../settings/files.js";
 import { createGlmQuotaPoller, createGlmQuotaService } from "./glm-quota.js";
-import { resetConnectionQuotaThrottles } from "./connection-quota.js";
+import { recordConnectionQuota, resetConnectionQuotaThrottles } from "./connection-quota.js";
 
 const response = () => new Response(JSON.stringify({ data: { level: "pro", limits: [
   { type: "CREDIT_LIMIT", unit: 3, number: 5, usage: 12000, currentValue: 128, remaining: 11872, percentage: 1.07, nextResetTime: Date.now() + 60_000 },
@@ -41,7 +41,7 @@ describe("GLM quota polling", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
-  it("passes secondary explicitly (undefined) when only one window arrives, so a stale week never survives the merge", async () => {
+  it("omits secondary when only one window arrives — the observation is a full replacement, so a stale week cannot survive", async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { level: "pro", limits: [
       { type: "CREDIT_LIMIT", unit: 3, number: 5, usage: 12000, currentValue: 128, remaining: 11872, percentage: 1.07, nextResetTime: Date.now() + 60_000 },
     ] } })));
@@ -49,20 +49,25 @@ describe("GLM quota polling", () => {
     const poller = createGlmQuotaPoller({ resolve: async () => ({ apiKey: "secret-key", guard: "guard", route }), fetch: () => fetch, record });
     await poller.refresh("one");
     const windows = record.mock.calls[0]![2];
-    expect("secondary" in windows).toBe(true);
-    expect(windows.secondary).toBeUndefined();
+    expect("secondary" in windows).toBe(false);
   });
 
-  it("silently ignores non-2xx, unknown shapes, redirects and throws — no record", async () => {
+  it("silently ignores non-2xx, unknown shapes, redirects and thrown errors — one fetch per distinct id, no record, the key logged nowhere", async () => {
     const log = vi.spyOn(console, "error"); const warn = vi.spyOn(console, "warn");
     const record = vi.fn(async () => {});
     const fetch = vi.fn()
       .mockResolvedValueOnce(new Response("no", { status: 500 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ error: "not a coding plan" })))
-      .mockRejectedValueOnce(new Error("redirect secret-key"))
+      .mockRejectedValueOnce(new TypeError("fetch redirected for secret-key"))
       .mockRejectedValueOnce(new Error("boom secret-key"));
     const poller = createGlmQuotaPoller({ resolve: async () => ({ apiKey: "secret-key", guard: "guard", route }), fetch: () => fetch, record });
-    for (let i = 0; i < 4; i += 1) await poller.refresh("one");
+    // Distinct ids: the 60 s throttle is per id, so every error path really runs
+    // (four same-id refreshes inside the window would do one fetch only).
+    await poller.refresh("http-500");
+    await poller.refresh("unknown-shape");
+    await poller.refresh("redirect");
+    await poller.refresh("thrown");
+    expect(fetch).toHaveBeenCalledTimes(4);
     expect(record).not.toHaveBeenCalled();
     expect(log).not.toHaveBeenCalled(); expect(warn).not.toHaveBeenCalled();
     log.mockRestore(); warn.mockRestore();
@@ -88,6 +93,26 @@ describe("GLM quota persistence", () => {
       source: "glm-coding-plan",
     });
     expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("a weekly-only answer replaces the whole line — the earlier 5-hour window's resetsAt never survives", async () => {
+    // First observation: both windows, both with reset dates (plausible ones —
+    // the settings schema strips an implausible secondary reset on load).
+    const nowSec = Math.floor(Date.now() / 1000);
+    await recordConnectionQuota({ settingsPath: path }, "c1",
+      { usedPercent: 1, windowDurationMins: 300, resetsAt: nowSec + 3600, secondary: { usedPercent: 78, windowDurationMins: 10080, resetsAt: nowSec + 3 * 86400 } },
+      "glm-coding-plan");
+    expect((await loadSettings(path)).settings.provider.connections[0]?.lastQuota).toMatchObject({ resetsAt: nowSec + 3600, secondary: { resetsAt: nowSec + 3 * 86400 } });
+    resetConnectionQuotaThrottles();
+    // Second observation: only the weekly window, no usable reset time.
+    const service = createGlmQuotaService({ settingsPath: path, vault: { getSecretValue: async () => key }, fetch: () => async () => new Response(JSON.stringify({ data: { level: "pro", limits: [
+      { type: "CREDIT_LIMIT", unit: 6, number: 1, usage: 60000, currentValue: 47004, remaining: 12996, percentage: 78.3 },
+    ] } })), onPersisted: () => {} });
+    await service.refresh("c1");
+    const line = (await loadSettings(path)).settings.provider.connections[0]?.lastQuota;
+    expect(line).toMatchObject({ usedPercent: 78, windowDurationMins: 10080, source: "glm-coding-plan" });
+    expect(line).not.toHaveProperty("resetsAt");
+    expect(line).not.toHaveProperty("secondary");
   });
 
   it("does not poll a pay-as-you-go Z.AI base or another provider", async () => {

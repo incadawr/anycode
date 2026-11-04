@@ -59,7 +59,7 @@ export function createGlmQuotaPoller(deps: {
         });
         if (!response.ok) return;
         const quota = parseGlmQuota(await response.json(), Date.now());
-        if (quota?.primary) await deps.record(id, context.guard, { ...quota.primary, secondary: quota.secondary });
+        if (quota?.primary) await deps.record(id, context.guard, { ...quota.primary, ...(quota.secondary ? { secondary: quota.secondary } : {}) });
       } catch {
         // Quota is advisory; failures leave the last observation untouched.
       }
