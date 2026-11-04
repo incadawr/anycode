@@ -70,17 +70,23 @@ export function createMdPreviewWindow(
       nodeIntegration: false,
     },
   });
+  // Capture the webContents ONCE while the window is alive: in the "closed"
+  // handler the BrowserWindow is already destroyed, and reading `.webContents`
+  // off a destroyed window throws "Object has been destroyed" — the exact
+  // main-process modal the owner saw at app shutdown when closeAll() destroys
+  // an open popout. The allow-list entry is keyed by this same identity.
+  const contents = win.webContents;
   // Hygiene only (module doc) — our own trusted bundle never calls window.open.
-  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  contents.setWindowOpenHandler(() => ({ action: "deny" }));
   // The popout is the ONE non-main window with the preload bridge, and it
   // loads the app's own renderer bundle (same trust domain as the main
   // window), so it is allow-listed as a trusted IPC sender for its whole
   // lifetime — window-level, not per-channel; narrower per-channel policies
   // can extend the same seam later. Dropped on close so a dead window can
   // never keep a stale trust entry alive.
-  addIpcGuardTrustedWindow(win.webContents);
+  addIpcGuardTrustedWindow(contents);
   win.once("closed", () => {
-    removeIpcGuardTrustedWindow(win.webContents);
+    removeIpcGuardTrustedWindow(contents);
   });
   deps.loadRenderer(win, opts);
 
