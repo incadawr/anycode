@@ -76,7 +76,7 @@ export async function runSandboxChecks({ available, checks, cwd, root, turn, ctx
 
 export async function runLive(args, { smoke = false } = {}) {
   const result = { mode: 'live', outcome: 'incomplete', steps: {}, limits: { outputTokens: OUTPUT_TOKEN_LIMIT, outputBytes: TEXT_BYTE_LIMIT, note: 'client interrupt on observed usage or streamed bytes; not a server-side hard token limit' } };
-  if (smoke) result.checks = { 'role-dispatch-detach-report': { status: 'SKIP', note: 'role dispatch/detach/report: не покрыто live (покрыто integration-тестами)' } };
+  if (smoke) result.checks = { 'role-dispatch-detach-report': { status: 'SKIP', note: 'role dispatch/detach/report: not covered by live smoke (covered by integration tests)' } };
   let child, timer, currentTurn;
   const pending = new Map();
   let nextId = 0, activeTurn;

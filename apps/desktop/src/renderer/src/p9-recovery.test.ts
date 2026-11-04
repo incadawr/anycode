@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createDesktopStore } from './store.js';
 const protocol = { version: 1 as const, hostIncarnation: 'host', connectionId: 'conn', atomicSubmit: true, correlatedToggle: true };
 const ready = { type: 'host_ready' as const, workspace: '/ws', mode: 'build' as const, model: 'model', sessionId: 'sess', orchestration: { enabled: true, available: true, posture: 'on' as const }, orchestrationProtocol: protocol };
-describe('P9 review regressions', () => {
+describe('orchestration delivery recovery', () => {
  it('reconciles a completed report from reconnect snapshot before resuming queue', () => {
   const store = createDesktopStore();
   store.getState().applyHostMessage(ready);
