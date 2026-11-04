@@ -40,7 +40,8 @@ import {
   type PreviewChangedPayload,
 } from "../../shared/preview-panel.js";
 import { registerPreviewPanelIpc } from "./panel-ipc.js";
-import { setIpcGuardMainWindow } from "../ipc-guard.js";
+import { addIpcGuardTrustedWindow, removeIpcGuardTrustedWindow, setIpcGuardMainWindow } from "../ipc-guard.js";
+import { registerMdWindowTarget, resetMdWindowTargetsForTests, unregisterMdWindowTarget } from "./md-window-targets.js";
 import {
   registerPreviewHost,
   type PreviewHostHandle,
@@ -433,5 +434,91 @@ describe("registerPreviewPanelIpc — tab-scoping (integration against the real 
     const response = invoke.invoke(PREVIEW_LIST_CHANNEL, { tabId: "tab-a" }) as PreviewChangedPayload;
     expect(response.tabId).toBe("tab-a");
     expect(response.previews).toHaveLength(1);
+  });
+});
+
+// ── the detached md popout may list/transfer only its OWN tab/preview ──
+
+describe("registerPreviewPanelIpc — the md popout is bound to its own tab/preview", () => {
+  const POPOUT_SENDER = { mainFrame: { frame: "md-popout" } };
+  const POPOUT_EVENT = { sender: POPOUT_SENDER, senderFrame: POPOUT_SENDER.mainFrame };
+
+  function registerWithPopout(host: PreviewHostHandle): void {
+    mockHandlers.clear();
+    mockOnListeners.clear();
+    resetMdWindowTargetsForTests();
+    setIpcGuardMainWindow(() => MAIN_SENDER);
+    // The popout's allow-list entry mirrors what md-window-adapter.ts wires:
+    // channel-scoped to its document plane (LIST + SET_CONTAINER here).
+    addIpcGuardTrustedWindow(POPOUT_SENDER, [PREVIEW_LIST_CHANNEL, PREVIEW_SET_CONTAINER_CHANNEL]);
+    registerPreviewPanelIpc({ host });
+  }
+
+  it("LIST from the popout for its OWN tab forwards to host.listForPanel", () => {
+    const host = fakeHost();
+    registerWithPopout(host);
+    registerMdWindowTarget(POPOUT_SENDER, { tabId: "tab-a", previewId: "p1" });
+    const response = mockHandlers.get(PREVIEW_LIST_CHANNEL)?.(POPOUT_EVENT, { tabId: "tab-a" }) as PreviewChangedPayload;
+    expect(host.listForPanel).toHaveBeenCalledWith("tab-a");
+    expect(response.tabId).toBe("tab-a");
+  });
+
+  it("LIST from the popout for a FOREIGN tab returns an empty roster without reaching the host", () => {
+    const host = fakeHost();
+    registerWithPopout(host);
+    registerMdWindowTarget(POPOUT_SENDER, { tabId: "tab-a", previewId: "p1" });
+    const response = mockHandlers.get(PREVIEW_LIST_CHANNEL)?.(POPOUT_EVENT, { tabId: "tab-b" }) as PreviewChangedPayload;
+    expect(host.listForPanel).not.toHaveBeenCalled();
+    expect(response).toEqual({ tabId: "tab-b", previews: [], visiblePanelPreviewId: null });
+  });
+
+  it("SET_CONTAINER from the popout for a FOREIGN preview refuses without reaching the host", async () => {
+    const host = fakeHost();
+    registerWithPopout(host);
+    registerMdWindowTarget(POPOUT_SENDER, { tabId: "tab-a", previewId: "p1" });
+    const response = (await mockHandlers.get(PREVIEW_SET_CONTAINER_CHANNEL)?.(POPOUT_EVENT, {
+      tabId: "tab-b",
+      previewId: "p2",
+      container: "panel",
+    })) as { ok: boolean; error?: string };
+    expect(host.setContainer).not.toHaveBeenCalled();
+    expect(response).toEqual({ ok: false, error: "invalid request" });
+  });
+
+  it("SET_CONTAINER from the popout for ITSELF (window->panel transfer) forwards to the host", async () => {
+    const host = fakeHost();
+    registerWithPopout(host);
+    registerMdWindowTarget(POPOUT_SENDER, { tabId: "tab-a", previewId: "p1" });
+    await mockHandlers.get(PREVIEW_SET_CONTAINER_CHANNEL)?.(POPOUT_EVENT, {
+      tabId: "tab-a",
+      previewId: "p1",
+      container: "panel",
+    });
+    expect(host.setContainer).toHaveBeenCalledWith("tab-a", "p1", "panel");
+  });
+
+  it("after the popout closes, its SET_CONTAINER is refused (the guard's own refusal)", async () => {
+    const host = fakeHost();
+    registerWithPopout(host);
+    registerMdWindowTarget(POPOUT_SENDER, { tabId: "tab-a", previewId: "p1" });
+    // Model close() exactly as the adapter does: BOTH entries die together.
+    removeIpcGuardTrustedWindow(POPOUT_SENDER);
+    unregisterMdWindowTarget(POPOUT_SENDER);
+    expect(() =>
+      mockHandlers.get(PREVIEW_SET_CONTAINER_CHANNEL)?.(POPOUT_EVENT, {
+        tabId: "tab-a",
+        previewId: "p1",
+        container: "panel",
+      }),
+    ).toThrow(/refused/);
+    expect(host.setContainer).not.toHaveBeenCalled();
+  });
+
+  it("the MAIN window stays unrestricted on LIST and SET_CONTAINER", async () => {
+    const host = fakeHost();
+    const { invoke } = register(host);
+    expect((invoke(PREVIEW_LIST_CHANNEL, { tabId: "any-tab" }) as PreviewChangedPayload).tabId).toBe("any-tab");
+    await invoke(PREVIEW_SET_CONTAINER_CHANNEL, { tabId: "any-tab", previewId: "any-p", container: "window" });
+    expect(host.setContainer).toHaveBeenCalledWith("any-tab", "any-p", "window");
   });
 });

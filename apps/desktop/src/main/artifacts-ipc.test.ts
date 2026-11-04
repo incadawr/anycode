@@ -14,6 +14,29 @@ import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+// Registration-level binding tests (bottom of this file) drive the guarded
+// ipcMain surface; the mock is inert for the direct-handler suites above
+// (they never touch ipcMain). Same "capturing fake" precedent as
+// panel-ipc.test.ts / md-doc-ipc.test.ts.
+const { capturedArtifactHandlers } = vi.hoisted(() => ({
+  capturedArtifactHandlers: new Map<string, (event: unknown, raw: unknown) => unknown>(),
+}));
+
+vi.mock("electron", () => ({
+  ipcMain: {
+    handle: (channel: string, listener: (event: unknown, raw: unknown) => unknown): void => {
+      capturedArtifactHandlers.set(channel, listener);
+    },
+    on: (channel: string, listener: (event: unknown, raw: unknown) => void): void => {
+      capturedArtifactHandlers.set(channel, listener as unknown as (event: unknown, raw: unknown) => unknown);
+    },
+  },
+}));
+
+import { addIpcGuardTrustedWindow, setIpcGuardMainWindow } from "./ipc-guard.js";
+import { registerMdWindowTarget, resetMdWindowTargetsForTests } from "./preview/md-window-targets.js";
+import { ARTIFACT_PREVIEWABLE_CHANNEL, ARTIFACT_READ_IMAGE_CHANNEL, registerArtifactsIpc } from "./artifacts-ipc.js";
 import {
   allowedArtifactRoots,
   ArtifactConsentStore,
@@ -750,5 +773,59 @@ describe("handleArtifactPreviewable", () => {
       paths: ["notes.md", "notes.md", "notes.md"],
     });
     expect(result).toEqual({ paths: ["notes.md"] });
+  });
+});
+
+// ── registration-level binding: the detached md popout acts only on its OWN tab ──
+
+describe("registerArtifactsIpc — the md popout is bound to its own tab", () => {
+  const MAIN_SENDER = { mainFrame: { frame: "main" } };
+  const MAIN_EVENT = { sender: MAIN_SENDER, senderFrame: MAIN_SENDER.mainFrame };
+  const POPOUT_SENDER = { mainFrame: { frame: "md-popout" } };
+  const POPOUT_EVENT = { sender: POPOUT_SENDER, senderFrame: POPOUT_SENDER.mainFrame };
+
+  function invoke(channel: string, event: unknown, raw: unknown): Promise<unknown> | unknown {
+    const guarded = capturedArtifactHandlers.get(channel);
+    if (guarded === undefined) throw new Error(`no registered handler for ${channel}`);
+    return guarded(event, raw);
+  }
+
+  it("readImage from the popout: its OWN tab reads the workspace file, a FOREIGN tab refuses no_workspace", async () => {
+    resetMdWindowTargetsForTests();
+    setIpcGuardMainWindow(() => MAIN_SENDER);
+    addIpcGuardTrustedWindow(POPOUT_SENDER, [ARTIFACT_READ_IMAGE_CHANNEL]);
+    registerMdWindowTarget(POPOUT_SENDER, { tabId: TAB_ID, previewId: "p1" });
+    const rig = await makeRig();
+    capturedArtifactHandlers.clear();
+    registerArtifactsIpc(rig.deps);
+    // A file that provably EXISTS inside the rig tab's workspace: the
+    // main-window call for that tab reads it fine (ok:true), so any refusal
+    // on the popout's foreign-tab call can only come from the own-tab
+    // binding, not from the path being unreadable.
+    const img = join(rig.workspace, "probe.png");
+    await seed(img, Buffer.from("not-a-real-png-but-a-file"));
+    const own = (await invoke(ARTIFACT_READ_IMAGE_CHANNEL, POPOUT_EVENT, { tabId: TAB_ID, path: img })) as { ok: boolean };
+    const foreign = (await invoke(ARTIFACT_READ_IMAGE_CHANNEL, POPOUT_EVENT, { tabId: "tab-other", path: img })) as {
+      ok: boolean;
+      reason?: string;
+    };
+    const main = (await invoke(ARTIFACT_READ_IMAGE_CHANNEL, MAIN_EVENT, { tabId: TAB_ID, path: img })) as { ok: boolean };
+    expect(own.ok).toBe(true); // own tab: binding passes, real read happens
+    expect(main).toEqual(own); // the main window gets the identical result
+    expect(foreign).toEqual({ ok: false, reason: "no_workspace" }); // foreign tab: closest safe negative
+  });
+
+  it("previewable from the popout for a FOREIGN tab returns an empty subset without probing", async () => {
+    resetMdWindowTargetsForTests();
+    setIpcGuardMainWindow(() => MAIN_SENDER);
+    addIpcGuardTrustedWindow(POPOUT_SENDER, [ARTIFACT_PREVIEWABLE_CHANNEL]);
+    registerMdWindowTarget(POPOUT_SENDER, { tabId: TAB_ID, previewId: "p1" });
+    const rig = await makeRig();
+    capturedArtifactHandlers.clear();
+    registerArtifactsIpc(rig.deps);
+    const response = (await invoke(ARTIFACT_PREVIEWABLE_CHANNEL, POPOUT_EVENT, { tabId: "tab-other", paths: ["doc.md"] })) as {
+      paths: string[];
+    };
+    expect(response).toEqual({ paths: [] });
   });
 });

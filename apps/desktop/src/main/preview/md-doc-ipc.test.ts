@@ -22,12 +22,16 @@ vi.mock("electron", () => ({
 
 import { MD_PREVIEW_NAVIGATE_CHANNEL, MD_PREVIEW_READ_CHANNEL } from "../../shared/md-preview.js";
 import { registerMdDocIpc } from "./md-doc-ipc.js";
-import { setIpcGuardMainWindow } from "../ipc-guard.js";
+import { addIpcGuardTrustedWindow, removeIpcGuardTrustedWindow, setIpcGuardMainWindow } from "../ipc-guard.js";
+import { registerMdWindowTarget, resetMdWindowTargetsForTests, unregisterMdWindowTarget } from "./md-window-targets.js";
 import type { MdDocDeps } from "./md-doc.js";
 
 /** The guard serves only a trusted main-window top-frame invoke; the rig wires a fake main window and drives captured wrappers with its event. */
 const MAIN_SENDER = { mainFrame: { frame: "main" } };
 const TRUSTED_EVENT = { sender: MAIN_SENDER, senderFrame: MAIN_SENDER.mainFrame };
+/** A live detached md popout's webContents fake, registered as owning (tab-a, p1). */
+const POPOUT_SENDER = { mainFrame: { frame: "md-popout" } };
+const POPOUT_EVENT = { sender: POPOUT_SENDER, senderFrame: POPOUT_SENDER.mainFrame };
 
 function fakeDeps(overrides: Partial<MdDocDeps> = {}): MdDocDeps {
   return {
@@ -177,5 +181,73 @@ describe("registerMdDocIpc — MD_PREVIEW_NAVIGATE (M2)", () => {
     const response = await invoke(MD_PREVIEW_NAVIGATE_CHANNEL, "not-an-object");
     expect(getRecordRef).not.toHaveBeenCalled();
     expect(response).toEqual({ ok: false, reason: "no_preview" });
+  });
+});
+
+// ── the detached md popout is bound to the EXACT preview it was created for ──
+
+describe("registerMdDocIpc — the md popout may only read/navigate its OWN preview", () => {
+  const OWN = { tabId: "tab-a", previewId: "p1" };
+
+  function registerWithPopout(deps: MdDocDeps): void {
+    mockHandlers.clear();
+    resetMdWindowTargetsForTests();
+    setIpcGuardMainWindow(() => MAIN_SENDER);
+    addIpcGuardTrustedWindow(POPOUT_SENDER, [MD_PREVIEW_READ_CHANNEL, MD_PREVIEW_NAVIGATE_CHANNEL]);
+    registerMdWindowTarget(POPOUT_SENDER, OWN);
+    registerMdDocIpc(deps);
+  }
+
+  it("READ from the popout for its OWN preview forwards to the deps spy", async () => {
+    const getRecordRef = vi.fn(() => undefined);
+    registerWithPopout(fakeDeps({ getRecordRef }));
+    const response = (await mockHandlers.get(MD_PREVIEW_READ_CHANNEL)?.(POPOUT_EVENT, OWN)) as { reason?: string };
+    expect(getRecordRef).toHaveBeenCalledWith("tab-a", "p1");
+    expect(response).toEqual({ ok: false, reason: "no_preview" }); // deps' own honest refusal, reached normally
+  });
+
+  it("READ from the popout for a FOREIGN preview refuses no_preview without touching the deps", async () => {
+    const getRecordRef = vi.fn(() => ({ sourcePath: "doc.md", realSourcePath: "/w/doc.md", docDir: "/w", docVersion: 0 }));
+    registerWithPopout(fakeDeps({ getRecordRef }));
+    const response = (await mockHandlers.get(MD_PREVIEW_READ_CHANNEL)?.(POPOUT_EVENT, { tabId: "tab-b", previewId: "p2" })) as { reason?: string };
+    expect(getRecordRef).not.toHaveBeenCalled();
+    expect(response).toEqual({ ok: false, reason: "no_preview" });
+  });
+
+  it("READ from the popout with a swapped previewId (same tab) refuses too", async () => {
+    const getRecordRef = vi.fn();
+    registerWithPopout(fakeDeps({ getRecordRef }));
+    const response = (await mockHandlers.get(MD_PREVIEW_READ_CHANNEL)?.(POPOUT_EVENT, { tabId: "tab-a", previewId: "p2" })) as { reason?: string };
+    expect(getRecordRef).not.toHaveBeenCalled();
+    expect(response).toEqual({ ok: false, reason: "no_preview" });
+  });
+
+  it("NAVIGATE from the popout for a FOREIGN preview refuses no_preview without touching the deps", async () => {
+    const getRecordRef = vi.fn();
+    const commitNavigate = vi.fn(() => 1);
+    registerWithPopout(fakeDeps({ getRecordRef, commitNavigate }));
+    const response = (await mockHandlers.get(MD_PREVIEW_NAVIGATE_CHANNEL)?.(POPOUT_EVENT, { tabId: "tab-b", previewId: "p2", href: "x.md" })) as { reason?: string };
+    expect(getRecordRef).not.toHaveBeenCalled();
+    expect(commitNavigate).not.toHaveBeenCalled();
+    expect(response).toEqual({ ok: false, reason: "no_preview" });
+  });
+
+  it("after the popout closes, its READ is refused (the guard's own refusal, even for the former own preview)", async () => {
+    const getRecordRef = vi.fn();
+    registerWithPopout(fakeDeps({ getRecordRef }));
+    // Model close() exactly as the adapter does: BOTH entries die together.
+    removeIpcGuardTrustedWindow(POPOUT_SENDER);
+    unregisterMdWindowTarget(POPOUT_SENDER);
+    // The guard layer refuses the now-untrusted sender outright.
+    expect(() => mockHandlers.get(MD_PREVIEW_READ_CHANNEL)?.(POPOUT_EVENT, OWN)).toThrow(/refused/);
+    expect(getRecordRef).not.toHaveBeenCalled();
+  });
+
+  it("the MAIN window stays unrestricted: it reads any preview, including the popout's own", async () => {
+    const getRecordRef = vi.fn(() => undefined);
+    registerWithPopout(fakeDeps({ getRecordRef }));
+    const response = (await mockHandlers.get(MD_PREVIEW_READ_CHANNEL)?.(TRUSTED_EVENT, { tabId: "tab-z", previewId: "p9" })) as { reason?: string };
+    expect(getRecordRef).toHaveBeenCalledWith("tab-z", "p9");
+    expect(response).toEqual({ ok: false, reason: "no_preview" }); // deps' own honest refusal, reached normally
   });
 });

@@ -10,6 +10,7 @@
 import { guardedIpcHandle } from "../ipc-guard.js";
 import { z } from "zod";
 import { MD_PREVIEW_NAVIGATE_CHANNEL, MD_PREVIEW_READ_CHANNEL, type MdDocReadResult } from "../../shared/md-preview.js";
+import { mdWindowMayUsePreview } from "./md-window-targets.js";
 import { navigateMdDoc, readMdDoc, type MdDocDeps } from "./md-doc.js";
 
 const readSchema = z.object({
@@ -29,7 +30,7 @@ const navigateSchema = z.object({
  * registerPreviewPanelIpc/registerTabIpc (called once at boot).
  */
 export function registerMdDocIpc(deps: MdDocDeps): void {
-  guardedIpcHandle(MD_PREVIEW_READ_CHANNEL, (_event, raw: unknown): Promise<MdDocReadResult> => {
+  guardedIpcHandle(MD_PREVIEW_READ_CHANNEL, (event, raw: unknown): Promise<MdDocReadResult> => {
     const parsed = readSchema.safeParse(raw);
     if (!parsed.success) {
       // No `invalid` reason exists on this frozen result type (CUT.md
@@ -39,15 +40,26 @@ export function registerMdDocIpc(deps: MdDocDeps): void {
       // precedent as artifacts-ipc.ts's `handleArtifactAllow`.
       return Promise.resolve({ ok: false, reason: "no_preview" });
     }
+    // The detached md popout may only read ITS OWN preview (md-window-targets.ts);
+    // the main window's panel is unrestricted. Same refusal shape as above —
+    // from the asking window's perspective there is no such preview.
+    if (!mdWindowMayUsePreview(event.sender, parsed.data.tabId, parsed.data.previewId)) {
+      return Promise.resolve({ ok: false, reason: "no_preview" });
+    }
     return readMdDoc(deps, parsed.data.tabId, parsed.data.previewId);
   });
 
-  guardedIpcHandle(MD_PREVIEW_NAVIGATE_CHANNEL, (_event, raw: unknown): Promise<MdDocReadResult> => {
+  guardedIpcHandle(MD_PREVIEW_NAVIGATE_CHANNEL, (event, raw: unknown): Promise<MdDocReadResult> => {
     const parsed = navigateSchema.safeParse(raw);
     if (!parsed.success) {
       // Same "bucket under the closest honest reason" precedent as READ
       // above — a malformed payload (missing/oversized href included) has
       // no identifiable preview/target to navigate.
+      return Promise.resolve({ ok: false, reason: "no_preview" });
+    }
+    // Same own-preview binding as READ: a popout may not steer another
+    // preview's document (its own navigate mutates the SAME previewId).
+    if (!mdWindowMayUsePreview(event.sender, parsed.data.tabId, parsed.data.previewId)) {
       return Promise.resolve({ ok: false, reason: "no_preview" });
     }
     return navigateMdDoc(deps, parsed.data.tabId, parsed.data.previewId, parsed.data.href);

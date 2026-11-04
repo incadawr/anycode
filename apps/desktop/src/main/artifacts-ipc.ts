@@ -69,6 +69,7 @@
  */
 
 import { guardedIpcHandle } from "./ipc-guard.js";
+import { mdWindowMayUseTab } from "./preview/md-window-targets.js";
 import * as fsp from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { isAbsolute, join, relative as pathRelative, resolve as pathResolve, sep } from "node:path";
@@ -826,12 +827,29 @@ export async function handleArtifactPreviewable(deps: ArtifactsIpcDeps, raw: unk
   return { paths: verified };
 }
 
+/** The payload's tabId, if a plain string — used ONLY for the md-popout binding check below; zod stays the payload authority. */
+function payloadTabId(raw: unknown): string | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const tabId = (raw as { tabId?: unknown }).tabId;
+  return typeof tabId === "string" ? tabId : undefined;
+}
+
 /** Wires the six channels onto ipcMain. An unvalidatable payload gets a safe negative from the handler itself. */
 export function registerArtifactsIpc(deps: ArtifactsIpcDeps): void {
-  guardedIpcHandle(ARTIFACT_READ_IMAGE_CHANNEL, (_event, raw: unknown) => handleArtifactReadImage(deps, raw));
-  guardedIpcHandle(ARTIFACT_OPEN_CHANNEL, (_event, raw: unknown) => handleArtifactOpen(deps, raw));
-  guardedIpcHandle(ARTIFACT_REVEAL_CHANNEL, (_event, raw: unknown) => handleArtifactReveal(deps, raw));
-  guardedIpcHandle(ARTIFACT_ALLOW_CHANNEL, (_event, raw: unknown) => handleArtifactAllow(deps, raw));
-  guardedIpcHandle(ARTIFACT_PREVIEW_CHANNEL, (_event, raw: unknown) => handleArtifactPreview(deps, raw));
-  guardedIpcHandle(ARTIFACT_PREVIEWABLE_CHANNEL, (_event, raw: unknown) => handleArtifactPreviewable(deps, raw));
+  // The detached md popout may act only on ITS OWN tab's artifacts
+  // (md-window-targets.ts); the main window is unrestricted. Each refusal
+  // reuses that handler's own closest safe-negative shape, exactly like a
+  // malformed payload would get.
+  guardedIpcHandle(ARTIFACT_READ_IMAGE_CHANNEL, (event, raw: unknown) =>
+    mdWindowMayUseTab(event.sender, payloadTabId(raw)) ? handleArtifactReadImage(deps, raw) : Promise.resolve({ ok: false as const, reason: "no_workspace" as const }));
+  guardedIpcHandle(ARTIFACT_OPEN_CHANNEL, (event, raw: unknown) =>
+    mdWindowMayUseTab(event.sender, payloadTabId(raw)) ? handleArtifactOpen(deps, raw) : Promise.resolve({ ok: false as const, reason: "no_workspace" as const }));
+  guardedIpcHandle(ARTIFACT_REVEAL_CHANNEL, (event, raw: unknown) =>
+    mdWindowMayUseTab(event.sender, payloadTabId(raw)) ? handleArtifactReveal(deps, raw) : Promise.resolve({ ok: false as const, reason: "no_workspace" as const }));
+  guardedIpcHandle(ARTIFACT_ALLOW_CHANNEL, (event, raw: unknown) =>
+    mdWindowMayUseTab(event.sender, payloadTabId(raw)) ? handleArtifactAllow(deps, raw) : Promise.resolve({ ok: false as const, reason: "no_workspace" as const }));
+  guardedIpcHandle(ARTIFACT_PREVIEW_CHANNEL, (event, raw: unknown) =>
+    mdWindowMayUseTab(event.sender, payloadTabId(raw)) ? handleArtifactPreview(deps, raw) : Promise.resolve({ ok: false as const, error: "invalid artifact-preview request", errorKind: "invalid_input" as const }));
+  guardedIpcHandle(ARTIFACT_PREVIEWABLE_CHANNEL, (event, raw: unknown) =>
+    mdWindowMayUseTab(event.sender, payloadTabId(raw)) ? handleArtifactPreviewable(deps, raw) : Promise.resolve({ paths: [] }));
 }

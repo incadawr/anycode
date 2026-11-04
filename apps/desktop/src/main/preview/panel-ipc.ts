@@ -26,6 +26,7 @@ import {
   type PreviewPanelBounds,
   type PreviewSetContainerResult,
 } from "../../shared/preview-panel.js";
+import { mdWindowMayUsePreview, mdWindowMayUseTab } from "./md-window-targets.js";
 import { clampPanelBounds, type PreviewHostHandle } from "./preview-host.js";
 
 export interface PreviewPanelIpcDeps {
@@ -106,19 +107,30 @@ export function registerPreviewPanelIpc(deps: PreviewPanelIpcDeps): void {
     return deps.host.closePreview(parsed.data.tabId, parsed.data.previewId);
   });
 
-  guardedIpcHandle(PREVIEW_LIST_CHANNEL, (_event, raw: unknown): PreviewChangedPayload => {
+  guardedIpcHandle(PREVIEW_LIST_CHANNEL, (event, raw: unknown): PreviewChangedPayload => {
     const parsed = listSchema.safeParse(raw);
     if (!parsed.success) {
       return emptyChangedPayload("");
+    }
+    // The detached md popout may list only its OWN tab (it reads the list to
+    // resolve its sourcePath) — a foreign tab lists as empty rather than
+    // leaking another tab's preview roster (md-window-targets.ts).
+    if (!mdWindowMayUseTab(event.sender, parsed.data.tabId)) {
+      return emptyChangedPayload(parsed.data.tabId);
     }
     return deps.host.listForPanel(parsed.data.tabId);
   });
 
   // 96-P3: the transfer handler — P1/P2 only ever exported/exposed the
   // constant (CUT.md §0/§3); this is the module's one additional registration.
-  guardedIpcHandle(PREVIEW_SET_CONTAINER_CHANNEL, (_event, raw: unknown): Promise<PreviewSetContainerResult> => {
+  guardedIpcHandle(PREVIEW_SET_CONTAINER_CHANNEL, (event, raw: unknown): Promise<PreviewSetContainerResult> => {
     const parsed = setContainerSchema.safeParse(raw);
     if (!parsed.success) {
+      return Promise.resolve({ ok: false, error: "invalid request" });
+    }
+    // The popout may transfer only ITSELF back to the panel; the main
+    // window's panel is unrestricted (md-window-targets.ts).
+    if (!mdWindowMayUsePreview(event.sender, parsed.data.tabId, parsed.data.previewId)) {
       return Promise.resolve({ ok: false, error: "invalid request" });
     }
     return deps.host.setContainer(parsed.data.tabId, parsed.data.previewId, parsed.data.container);
