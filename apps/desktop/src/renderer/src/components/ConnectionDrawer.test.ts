@@ -65,6 +65,13 @@ import {
   usageVisible,
   usageEnvHint,
   USAGE_HELP,
+  reasoningReplayInitialValue,
+  reasoningReplayCreateValue,
+  reasoningReplayUpdateValue,
+  reasoningReplayVisible,
+  reasoningReplayEnvHint,
+  REASONING_REPLAY_HELP,
+  REASONING_REPLAY_ONELINER,
   formatTokenCount,
   maxOutputPlaceholder,
   contextWindowPlaceholder,
@@ -192,6 +199,7 @@ describe('buildConnectionUpdatePayload (W12-FIX §3: ""-sentinel clears transpor
     const payload = buildConnectionUpdatePayload({
       promptCacheEnabled: false,
       usage: "auto" as const,
+      replay: "auto" as const,
       connectionId: "conn-1",
       label: "Prod",
       model: "glm-4.6",
@@ -217,6 +225,7 @@ describe('buildConnectionUpdatePayload (W12-FIX §3: ""-sentinel clears transpor
       imageInputOverride: "",
       promptCache: "",
       includeUsage: "",
+      preserveReasoning: "",
     });
   });
 
@@ -224,6 +233,7 @@ describe('buildConnectionUpdatePayload (W12-FIX §3: ""-sentinel clears transpor
     const payload = buildConnectionUpdatePayload({
       promptCacheEnabled: false,
       usage: "auto" as const,
+      replay: "auto" as const,
       connectionId: "conn-1",
       label: "",
       model: "",
@@ -243,6 +253,7 @@ describe('buildConnectionUpdatePayload (W12-FIX §3: ""-sentinel clears transpor
     const shown = buildConnectionUpdatePayload({
       promptCacheEnabled: false,
       usage: "auto" as const,
+      replay: "auto" as const,
       connectionId: "conn-1",
       label: "",
       model: "",
@@ -259,6 +270,7 @@ describe('buildConnectionUpdatePayload (W12-FIX §3: ""-sentinel clears transpor
     const hidden = buildConnectionUpdatePayload({
       promptCacheEnabled: false,
       usage: "auto" as const,
+      replay: "auto" as const,
       connectionId: "conn-1",
       label: "",
       model: "",
@@ -292,6 +304,7 @@ describe('buildConnectionUpdatePayload (W12-FIX §3: ""-sentinel clears transpor
       imageInput: "auto" as const,
     promptCacheEnabled: false,
     usage: "auto" as const,
+    replay: "auto" as const,
   };
     expect(buildConnectionUpdatePayload({ ...base, authOptional: true }).authOptional).toBe(true);
     expect(buildConnectionUpdatePayload({ ...base, authOptional: false }).authOptional).toBe(false);
@@ -312,6 +325,7 @@ describe("buildConnectionUpdatePayload — proxyRef (replacing's proxyUrl)", () 
     imageInput: "auto" as const,
     promptCacheEnabled: false,
     usage: "auto" as const,
+    replay: "auto" as const,
   };
 
   it("sends the picked profile id", () => {
@@ -648,6 +662,7 @@ describe("buildConnectionUpdatePayload — maxOutputTokens (same unconditional-s
     imageInput: "auto" as const,
     promptCacheEnabled: false,
     usage: "auto" as const,
+    replay: "auto" as const,
   };
 
   it("a chosen number lands in the payload", () => {
@@ -767,6 +782,7 @@ describe("buildConnectionUpdatePayload — contextWindowTokens (same uncondition
     imageInput: "auto" as const,
     promptCacheEnabled: false,
     usage: "auto" as const,
+    replay: "auto" as const,
   };
 
   it("omits untouched model settings so a concurrent update survives a label save", () => {
@@ -986,6 +1002,7 @@ describe("contextWindowInitialField / contextWindowAfterModelInput / contextWind
     const payload = buildConnectionUpdatePayload({
       promptCacheEnabled: false,
       usage: "auto" as const,
+      replay: "auto" as const,
       connectionId: "conn-1",
       label: "",
       model: "model-a",
@@ -1644,6 +1661,7 @@ describe("buildConnectionUpdatePayload — imageInputOverride (unconditional sen
     contextWindowTokens: "" as const,
     promptCacheEnabled: false,
     usage: "auto" as const,
+    replay: "auto" as const,
   };
 
   it('sends imageInputOverride:"on" / "off" / "" unconditionally — never omits the key', () => {
@@ -1927,6 +1945,7 @@ describe("prompt cache (GitHub #15)", () => {
     contextWindowTokens: "" as const,
     imageInput: "auto" as const,
     usage: "auto" as const,
+    replay: "auto" as const,
   };
   const conn = { id: "conn-1", providerId: "openai" } as ProviderConnection;
 
@@ -2018,6 +2037,7 @@ describe("usage selection (GitHub #1: Automatic / On / Off, per connection)", ()
     contextWindowTokens: "" as const,
     imageInput: "auto" as const,
     promptCacheEnabled: false,
+    replay: "auto" as const,
   };
   const conn = { id: "conn-1", providerId: "openai" } as ProviderConnection;
 
@@ -2062,6 +2082,7 @@ describe("usage selection (GitHub #1: Automatic / On / Off, per connection)", ()
       proxyRef: PROXY_REF_INHERIT,
       promptCache: false,
       usage: "auto" as const,
+      replay: "auto" as const,
     };
     expect(advancedHasValues(tuning)).toBe(false);
     expect(advancedHasValues({ ...tuning, usage: "off" })).toBe(true);
@@ -2073,6 +2094,79 @@ describe("usage selection (GitHub #1: Automatic / On / Off, per connection)", ()
     expect(USAGE_HELP).toBe(
       "Request streaming token usage on Chat Completions endpoints. Automatic requests usage and retries once without it if a server rejects it.",
     );
+  });
+});
+
+// GitHub #41: the per-connection reasoning-replay override mirrors the usage
+// policy's helper contract point for point — same tri-state shape, same
+// `""`-sentinel on update, same omission on create, same Advanced-open rule.
+describe("reasoning replay helpers (GitHub #41)", () => {
+  const conn = { id: "conn-1", providerId: "custom:test" } as ProviderConnection;
+
+  it("a fresh connection opens on Automatic; an explicit false reopens as Off, never Automatic", () => {
+    expect(reasoningReplayInitialValue(undefined)).toBe("auto");
+    expect(reasoningReplayInitialValue(conn)).toBe("auto");
+    expect(reasoningReplayInitialValue({ ...conn, preserveReasoning: true })).toBe("on");
+    // A truthiness prefill here would read `false` as "no opinion" — the bug.
+    expect(reasoningReplayInitialValue({ ...conn, preserveReasoning: false })).toBe("off");
+  });
+
+  it('update sends a real boolean for On/Off and the "" clear sentinel for Automatic', () => {
+    expect(buildConnectionUpdatePayload({
+      connectionId: "conn-1", label: "", model: "", transport: "", baseUrl: "", showBaseUrl: false,
+      proxyRef: "", authOptional: false, maxOutputTokens: "", imageInput: "auto",
+      promptCacheEnabled: false, usage: "auto", replay: "on",
+    }).preserveReasoning).toBe(true);
+    // `false` must survive the payload builder, not be dropped as falsy.
+    expect(buildConnectionUpdatePayload({
+      connectionId: "conn-1", label: "", model: "", transport: "", baseUrl: "", showBaseUrl: false,
+      proxyRef: "", authOptional: false, maxOutputTokens: "", imageInput: "auto",
+      promptCacheEnabled: false, usage: "auto", replay: "off",
+    }).preserveReasoning).toBe(false);
+    const automatic = buildConnectionUpdatePayload({
+      connectionId: "conn-1", label: "", model: "", transport: "", baseUrl: "", showBaseUrl: false,
+      proxyRef: "", authOptional: false, maxOutputTokens: "", imageInput: "auto",
+      promptCacheEnabled: false, usage: "auto", replay: "auto",
+    });
+    expect(automatic.preserveReasoning).toBe("");
+    expect("preserveReasoning" in automatic).toBe(true);
+    expect(reasoningReplayUpdateValue("auto")).toBe("");
+  });
+
+  it('create omits Automatic (no "" sentinel there) and carries On/Off', () => {
+    expect(reasoningReplayCreateValue("auto")).toBeUndefined();
+    expect(reasoningReplayCreateValue("on")).toBe(true);
+    expect(reasoningReplayCreateValue("off")).toBe(false);
+  });
+
+  it("is visible only for custom endpoints and vLLM — catalog entries keep their own policy", () => {
+    expect(reasoningReplayVisible("custom")).toBe(true);
+    expect(reasoningReplayVisible("custom:test")).toBe(true);
+    expect(reasoningReplayVisible("vllm")).toBe(true);
+    expect(reasoningReplayVisible("z-ai")).toBe(false);
+    expect(reasoningReplayVisible("anthropic")).toBe(false);
+    expect(reasoningReplayVisible("openrouter")).toBe(false);
+    expect(reasoningReplayVisible(undefined)).toBe(false);
+
+    const tuning = {
+      transport: "",
+      maxOutputTokens: "",
+      contextWindowRaw: "",
+      imageInput: "auto" as const,
+      proxyRef: PROXY_REF_INHERIT,
+      promptCache: false,
+      usage: "auto" as const,
+      replay: "auto" as const,
+    };
+    expect(advancedHasValues(tuning)).toBe(false);
+    expect(advancedHasValues({ ...tuning, replay: "off" })).toBe(true);
+  });
+
+  it("pins the env hint and the agreed copy", () => {
+    expect(reasoningReplayEnvHint([])).toBeNull();
+    expect(reasoningReplayEnvHint(["ANYCODE_PRESERVE_REASONING"])).toContain("ANYCODE_PRESERVE_REASONING");
+    expect(REASONING_REPLAY_ONELINER).toBe("Applies to custom endpoints and vLLM.");
+    expect(REASONING_REPLAY_HELP).toContain("Off also stops replay on a provider that normally replays");
   });
 });
 
@@ -2210,7 +2304,7 @@ describe("custom endpoint cache creation", () => {
       },
       modelPersistenceBridge: () => ({}), label: "", transport: "openai-responses", proxyRef: "",
       connectionCreateProxyRefField: () => ({}), promptCacheEnabled: true, IMPLICIT_PROMPT_CACHE,
-      usageSelection: "auto", usageSelectionCreateValue,
+      usageSelection: "auto", usageSelectionCreateValue, replaySelection: "auto", reasoningReplayCreateValue,
       setProviderId: () => {}, setCreatedConnectionId: () => {}, onConnectionCreated: () => {}, onCommitBegin: undefined, onCommitSuccess: undefined, onBusyChange: undefined,
     };
     const run = new Function(...Object.keys(bindings), js)(...Object.values(bindings)) as () => Promise<void>;
@@ -2241,7 +2335,7 @@ describe("custom endpoint cache creation", () => {
         },
         modelPersistenceBridge: () => ({}), label: "", transport: "openai-chat-completions", proxyRef: "",
         connectionCreateProxyRefField: () => ({}), promptCacheEnabled: false,
-        usageSelection, usageSelectionCreateValue,
+        usageSelection, usageSelectionCreateValue, replaySelection: "auto", reasoningReplayCreateValue,
         setProviderId: () => {}, setCreatedConnectionId: () => {}, onConnectionCreated: () => {}, onCommitBegin: undefined, onCommitSuccess: undefined, onBusyChange: undefined,
       };
       const run = new Function(...Object.keys(bindings), js)(...Object.values(bindings)) as () => Promise<void>;

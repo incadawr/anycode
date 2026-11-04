@@ -212,6 +212,63 @@ it("reports the connection it created so the dialog header stops saying Add, and
   } finally { await act(async () => root.unmount()); container.remove(); rig.cleanup(); }
 });
 
+// ── Reasoning replay (the per-connection thinking-replay override) ──
+
+function replayField(container: HTMLElement): HTMLSelectElement | undefined {
+  return [...container.querySelectorAll("label.settings-field")]
+    .find(l => l.textContent?.includes("Reasoning replay"))
+    ?.querySelector("select") ?? undefined;
+}
+
+it("shows the reasoning-replay select on a custom-record connection and persists Off as a real false", async () => {
+  const connection = { id:"c", providerId:"custom:test", model:"a", preserveReasoning:true };
+  const rig = catalogRig(connection);
+  const { container, root } = await mountEdit(connection, rig);
+  try {
+    // Saved On opens On.
+    const replay = replayField(container)!;
+    expect(replay.value).toBe("on");
+    await act(async () => { replay.value = "off"; replay.dispatchEvent(new Event("change", {bubbles:true})); });
+    await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Save")!.click(); });
+    // `false` is a MEANING — it must reach the payload, not be dropped as falsy.
+    await act(async () => { await vi.waitFor(() => expect(rig.update).toHaveBeenCalledWith(expect.objectContaining({ id:"c", preserveReasoning:false }))); });
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it("hides the reasoning-replay select for a catalog provider and clears with Automatic", async () => {
+  const connection = { id:"c1", providerId:"glm", model:"glm-5.3" };
+  const rig = catalogRig(connection);
+  const { container, root } = await mountEdit(connection, rig);
+  try {
+    // Catalog entries keep their own policy — the override has nothing to do.
+    expect(replayField(container)).toBeUndefined();
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it.each(["on", "off", "auto"] as const)("persists reasoning replay %s through the custom-endpoint create", async (setting) => {
+  const rig = createScenarioRig();
+  const { container, root } = await mountAddDrawer(rig);
+  try {
+    await pickCustomTemplate(container);
+    await typeInto(container.querySelector('input[placeholder="e.g. LM Studio"]')!, "Replay Fixture");
+    await typeInto(container.querySelector('input[placeholder="http://localhost:1234/v1"]')!, "http://127.0.0.1:9/v1");
+    await typeInto(container.querySelector('input[placeholder="Enter a model ID"]')!, "m1");
+    const noAuth = [...container.querySelectorAll("input[type=checkbox]")].find(x => x.parentElement?.textContent?.includes("doesn't need")) as HTMLInputElement;
+    await act(async () => noAuth.click());
+    const replay = replayField(container)!;
+    await act(async () => { replay.value = setting; replay.dispatchEvent(new Event("change", {bubbles:true})); });
+    await clickCreate(container);
+    await act(async () => { await vi.waitFor(() => expect(rig.create).toHaveBeenCalledOnce()); });
+    const loaded = (await loadSettings(rig.path)).settings;
+    if (setting === "auto") {
+      // Automatic is the ABSENT key, never false (create has no "" sentinel).
+      expect("preserveReasoning" in (loaded.provider.connections[0] ?? {})).toBe(false);
+    } else {
+      expect(loaded.provider.connections[0]?.preserveReasoning).toBe(setting === "on");
+    }
+  } finally { await act(async () => root.unmount()); container.remove(); rig.cleanup(); }
+});
+
 // ── Drawer polish: the Advanced section's vertical rhythm and rate-input
 // styling, an explicit save confirmation, and a save no longer reordering the
 // offered models ──
