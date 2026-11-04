@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Page-initiated downloads in embedded previews are now cancelled by default and reported in the preview console.
+
 ## [0.0.73] — 2026-11-04
 
 ### Added

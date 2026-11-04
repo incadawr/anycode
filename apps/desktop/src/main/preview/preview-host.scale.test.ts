@@ -74,6 +74,7 @@ class FakeWebContents implements PreviewWebContentsLike {
   setBackgroundThrottling(): void {}
   setWindowOpenHandler(): void {}
   setPermissionRequestHandler(): void {}
+  onWillDownload(): void {}
   onDidFinishLoad(listener: () => void): void {
     this.didFinishLoad.push(listener);
   }
