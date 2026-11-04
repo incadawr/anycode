@@ -105,6 +105,19 @@ describe("dock resize handle placement (GitHub #31)", () => {
     );
   }
 
+  it("removes the previous conversation when switching tabs", async () => {
+    const other = createDesktopStore();
+    const render = async (tabId: string, target: DesktopStoreApi) => act(async () => {
+      root.render(createElement(TabContext.Provider, { value: { tabId, store: target } },
+        createElement(SessionSurface, { tabId, onToast: () => {} })));
+    });
+    await render("first", store);
+    await render("second", other);
+    expect([...container.querySelectorAll(".message-list")].map((node) => node.getAttribute("data-tab-id"))).toEqual(["second"]);
+    await render("first", store);
+    expect([...container.querySelectorAll(".message-list")].map((node) => node.getAttribute("data-tab-id"))).toEqual(["first"]);
+  });
+
   it.each(["direct", "child-steer"] as const)("restores an unknown %s with attachment only after the current edit is cleared", async (kind) => {
     const ready = { type: "host_ready" as const, workspace: "/ws", sessionId: "a", mode: "build" as const, model: "m1", imageInput: true };
     const image = { name: "saved.png", sizeBytes: 1, attachment: { mediaType: "image/png" as const, data: "YQ==" } };

@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Prevent conversations from overlapping when switching between tasks.
+
 ## [0.0.73] — 2026-11-04
 
 ### Added
