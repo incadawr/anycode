@@ -114,6 +114,7 @@ import { randomUUID } from "node:crypto";
 import {
   createChildStatusStore,
   DEFAULT_MAX_TURNS,
+  engineRestrictionRefusal,
   SUBAGENT_STALL_TIMEOUT_MS,
   SubagentStallClock,
   type PermissionMode,
@@ -247,8 +248,10 @@ function isValidFreeText(value: string, maxLength: number): boolean {
  */
 function findSpawnRequestShapeError(req: SessionSubagentRequest): string | null {
   if (req.engine !== undefined && (req.nativeRestrictionsUnsupported || req.restrictions?.readOnly || req.restrictions?.permissions)) {
-    return `Agent: ${req.agentType} cannot run on engine ${req.engine} — native engine children cannot enforce this profile’s tool or permission restrictions. ` +
-      "Give the role an available API connection in Settings → Roles, or remove the engine entry.";
+    // An md-claimed role cannot be detected from the wire request alone;
+    // the layers that know the profile's origin (composition, bridge, Agent
+    // tool) tailor this refusal before it ever reaches the port.
+    return engineRestrictionRefusal(req.agentType, req.engine);
   }
   if (!isValidChildId(req.spawnToolCallId)) {
     return MALFORMED_SPAWN_ID_MESSAGE;

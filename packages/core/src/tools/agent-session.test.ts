@@ -1739,7 +1739,45 @@ describe("agentTool handler — orchestrate default-detach (§2.3)", () => {
       { description: "d", prompt: "p", agent_type: "custom", tier: "session" },
       makeCtx({ subagents, sessionSubagents: { run: sessionRun, send: async () => ({ ok: true }) } }),
     );
-    expect(result).toMatchObject({ ok: false, errorKind: "invalid_input", error: expect.stringContaining("native engine") });
+    expect(result).toMatchObject({ ok: false, errorKind: "invalid_input", error: expect.stringContaining('role "custom" cannot run on engine codex') });
+    expect(result.error).toContain("Settings → Roles");
+    expect(sessionRun).not.toHaveBeenCalled();
+  });
+
+  it("points a restricted md-claimed engine profile at its own file instead of Settings", async () => {
+    const sessionRun = vi.fn(async () => BASE_SESSION_OUTCOME);
+    const subagents: SubagentPort = {
+      listAgentTypes: () => ["planner"],
+      run: async () => { throw new Error("unexpected inline run"); },
+      hasSessionRestrictions: () => true,
+      engineProfile: () => ({ engine: "codex", systemPrompt: "profile" }),
+      isMdProfile: () => true,
+    };
+    const result = await full.handler(
+      { description: "d", prompt: "p", agent_type: "planner", tier: "session" },
+      makeCtx({ subagents, sessionSubagents: { run: sessionRun, send: async () => ({ ok: true }) } }),
+    );
+    expect(result).toMatchObject({ ok: false, errorKind: "invalid_input", error: expect.stringContaining('role "planner" cannot run on engine codex') });
+    expect(result.error).toContain("profile file");
+    expect(result.error).not.toContain("Settings");
+    expect(sessionRun).not.toHaveBeenCalled();
+  });
+
+  it("refuses a restricted role whose route primary is an engine entry, naming role, engine and fix", async () => {
+    const sessionRun = vi.fn(async () => BASE_SESSION_OUTCOME);
+    const subagents: SubagentPort = {
+      listAgentTypes: () => ["reviewer"],
+      run: async () => { throw new Error("unexpected inline run"); },
+      hasSessionRestrictions: () => true,
+      sessionRestrictions: () => ({ tools: ["Read"], readOnly: true }),
+      resolveRoleRoute: () => ({ entries: [{ engine: "claude", model: "opus" }], skipped: [] }),
+    };
+    const result = await full.handler(
+      { description: "d", prompt: "p", agent_type: "reviewer", tier: "session" },
+      makeCtx({ subagents, sessionSubagents: { run: sessionRun, send: async () => ({ ok: true }) } }),
+    );
+    expect(result).toMatchObject({ ok: false, errorKind: "invalid_input", error: expect.stringContaining('role "reviewer" cannot run on engine claude') });
+    expect(result.error).toContain("Settings → Roles");
     expect(sessionRun).not.toHaveBeenCalled();
   });
 

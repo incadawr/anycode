@@ -579,11 +579,26 @@ export interface AgentBridgeCallDeps {
   onEvent?: (event: SubagentCardEvent) => void;
   /** Wall-clock cap for this one call; defaults to SUBAGENT_TIME_BUDGET_MS (§2.3). */
   wallMs?: number;
+  /** Role names claimed by a hand-authored md profile — its own frontmatter outranks role settings, so refusals point at the profile file instead of Settings. */
+  claimedRoles?: ReadonlySet<string>;
   /** Opt-in routing and dispatch policy for native parents. Resolve fresh calls only. */
   policy?: {
     defaultDetach?: boolean;
     resolveRoleRoute?: (role: RoleRouteName) => RoleRouteResolution | undefined | Promise<RoleRouteResolution | undefined>;
   };
+}
+
+/**
+ * The refusal for a restricted role routed onto a native engine child, shared
+ * by the bridge, the native Agent tool and the workflow engine: names the
+ * role, the engine and the fix. An md-claimed role ignores role settings, so
+ * the fix points at the profile file instead of Settings.
+ */
+export function engineRestrictionRefusal(role: string, engine: string, mdClaimed = false): string {
+  const fix = mdClaimed
+    ? `Remove the engine line from the "${role}" profile file; it overrides role settings.`
+    : "Give the role an available API connection in Settings → Roles, or remove the engine entry.";
+  return `Agent: role "${role}" cannot run on engine ${engine} — native engine children cannot enforce this profile’s tool or permission restrictions. ${fix}`;
 }
 
 export interface AgentBridgeCallResult {
@@ -640,8 +655,11 @@ export async function runAgentBridgeCall(
     : undefined;
   if (continueSession === undefined && resolveRoute !== undefined && isRoleRouteName(entry.name) && (route === undefined || route.entries.length === 0)) {
     const reasons = route?.skipped.map(({ reason }) => reason).filter(Boolean).join("; ");
+    const fix = deps.claimedRoles?.has(entry.name) === true
+      ? `Remove the engine line from the "${entry.name}" profile file; it overrides role settings.`
+      : "Give the role an available API connection in Settings → Roles, or remove any engine entry.";
     return {
-      text: `Agent: no usable route for role "${entry.name}".${reasons ? ` ${reasons}.` : ""} Give the role an available API connection in Settings → Roles, or remove any engine entry.`,
+      text: `Agent: no usable route for role "${entry.name}".${reasons ? ` ${reasons}.` : ""} ${fix}`,
       isError: true,
     };
   }
@@ -687,8 +705,7 @@ export async function runAgentBridgeCall(
 
   if (request.engine !== undefined && request.nativeRestrictionsUnsupported) {
     return {
-      text: `Agent: role "${request.agentType}" cannot run on engine ${request.engine} — native engine children cannot enforce this profile’s tool or permission restrictions. ` +
-        "Give the role an available API connection in Settings → Roles, or remove the engine entry.",
+      text: engineRestrictionRefusal(request.agentType, request.engine, deps.claimedRoles?.has(request.agentType) === true),
       isError: true,
     };
   }

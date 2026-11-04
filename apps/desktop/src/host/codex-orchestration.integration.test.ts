@@ -125,10 +125,6 @@ describe("Codex role dispatch through the child wire", () => {
         text: expect.stringMatching(/planner.*all route entries failed/s),
       })],
     }));
-    expect(r.response.result).toHaveBeenCalledWith(expect.objectContaining({
-      success: false,
-      contentItems: [expect.objectContaining({ text: expect.not.stringContaining("cannot enforce") })],
-    }));
   });
 
   it.each([

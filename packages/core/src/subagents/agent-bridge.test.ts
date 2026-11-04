@@ -135,6 +135,21 @@ describe("bridge role routing policy", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  it("points a claimed role's engine refusal at its profile file instead of Settings", async () => {
+    run.mockClear();
+    const restricted = [{ ...catalog[1]!, restrictions: { tools: [], readOnly: true } }];
+    const result = await runAgentBridgeCall({ agent_type: "executor", description: "d", prompt: "p" }, { ...deps, catalog: restricted, claimedRoles: new Set(["executor"]) });
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain("profile file");
+    expect(result.text).not.toContain("Settings");
+    expect(run).not.toHaveBeenCalled();
+    const exhausted = await runAgentBridgeCall({ agent_type: "executor", description: "d", prompt: "p" }, { ...deps, catalog: restricted, claimedRoles: new Set(["executor"]), policy: { resolveRoleRoute: () => ({ entries: [], skipped: [{ entry: { engine: "codex" }, reason: "cooling down" }] }) } });
+    expect(exhausted.isError).toBe(true);
+    expect(exhausted.text).toContain("profile file");
+    expect(exhausted.text).not.toContain("Settings");
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it("stamps the role budget for core profiles", async () => {
     run.mockClear();
     const core = [{ name: "planner", description: "plan", systemPrompt: "body" }];

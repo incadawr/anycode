@@ -148,6 +148,18 @@ describe("foreign orchestration composition", () => {
     expect(result.text).toContain("engine codex");
   });
 
+  it("points an md-claimed role at its profile file instead of Settings", async () => {
+    const s = setup();
+    s.setProfiles([{ ...PERSONAS.planner, engine: "codex" }]);
+    const result = await s.invoke("planner");
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/cannot enforce/);
+    expect(result.text).toContain("planner");
+    expect(result.text).toContain("profile file");
+    expect(result.text).not.toContain("Settings");
+    expect(s.run).not.toHaveBeenCalled();
+  });
+
   it("accepts an explicit model for a configured connection with no default model", async () => {
     const s = setup();
     delete s.settings.provider.connections[0]!.model;

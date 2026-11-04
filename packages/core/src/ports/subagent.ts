@@ -306,6 +306,8 @@ export interface SubagentPort {
   engineProfile?(agentType: string): EngineProfileInfo | null;
   /** Current winning core profile metadata, excluding reserved personas. */
   coreProfile?(agentType: string): { systemPrompt: string; model?: string; effort?: ReasoningEffort } | null;
+  /** Whether the agent type is backed by a hand-authored md profile — its own frontmatter (e.g. `engine:`) outranks role settings. Optional: absent means never md-backed. */
+  isMdProfile?(agentType: string): boolean;
   /** Whether the resolved inline persona has restrictions a session cannot carry. */
   hasSessionRestrictions?(agentType: string): boolean;
   sessionRestrictions?(agentType: string): import("./session-subagent.js").SessionProfileRestrictions | null;

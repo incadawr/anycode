@@ -764,6 +764,12 @@ export function createSubagentRunner(
         ...(persona.effort !== undefined ? { effort: persona.effort } : {}),
       };
     },
+    // Whether the agent type resolves to a hand-authored md profile —
+    // reads the SAME thunk as engineProfile above, so a mid-session rescan is
+    // visible here too. Built-ins are never md-backed.
+    isMdProfile(agentType: string): boolean {
+      return currentProfiles().has(agentType);
+    },
     sessionRestrictions(agentType: string) {
       const persona = (isKnownPersona(agentType) && isReservedPersonaName(agentType))
         ? getPersona(agentType)

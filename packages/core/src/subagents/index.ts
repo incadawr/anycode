@@ -87,6 +87,7 @@ export {
   buildAgentBridgeToolDecl,
   buildSessionSubagentRequest,
   decodeAgentBridgeCallInput,
+  engineRestrictionRefusal,
   formatResultForModel,
   mapProgressToEvent,
   outcomeToResult,

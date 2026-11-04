@@ -102,7 +102,7 @@ export function createForeignOrchestrationComposition(options: {
       },
       send: original.send.bind(original),
     };
-    const result = await runAgentBridgeCall(input, { ...deps, port, policy: { resolveRoleRoute: resolver, defaultDetach: enabled } });
+    const result = await runAgentBridgeCall(input, { ...deps, claimedRoles: context?.claimed ? new Set([input.agent_type]) : undefined, port, policy: { resolveRoleRoute: resolver, defaultDetach: enabled } });
     const selected: RoleRouteResolution | undefined = snapshot;
     if (selected && selected.entries[0] && selected.skipped.length && !result.isError) {
       return { ...result, text: `Role ${input.agent_type} ran on ${entryLabel(selected.entries[0])} because ${selected.skipped[0]!.reason}.\n${result.text}` };
