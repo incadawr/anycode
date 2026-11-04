@@ -60,7 +60,7 @@ describe("production communication MCP over real SDK HTTP", () => {
     const client = new Client({ name: "portable-supervisor", version: "1" });
     await client.connect(new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL("../../../../examples/agent-communication/stdio.mjs", import.meta.url)), f.discoveryFile] }));
     cleanups.push(() => client.close());
-    expect((await client.listTools()).tools).toHaveLength(11);
+    expect((await client.listTools()).tools).toHaveLength(12);
     expect(value(await client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } })).engine).toBe("codex");
   });
   it("reports the main-owned activity through both endpoints", async () => {
@@ -229,7 +229,7 @@ describe("production communication MCP over real SDK HTTP", () => {
   });
   it("initializes, lists/calls tools and enforces auth, origin and workspace scope", async () => {
     const f = await fixture();
-    expect((await f.client.listTools()).tools.map((t) => t.name)).toEqual(["list_sessions", "get_session_status", "get_session_result", "send_message", "get_message_status", "wait_for_result", "list_pending_approvals", "answer_approval", "cancel_turn", "create_session", "close_session"]);
+    expect((await f.client.listTools()).tools.map((t) => t.name)).toEqual(["list_sessions", "get_session_status", "get_session_result", "send_message", "get_message_status", "wait_for_result", "list_pending_approvals", "answer_approval", "cancel_turn", "list_agent_projects", "create_session", "close_session"]);
     expect(value(await f.client.callTool({ name: "list_sessions", arguments: {} })).sessions.map((s: { sessionId: string }) => s.sessionId)).toEqual(["allowed"]);
     expect(value(await f.client.callTool({ name: "get_session_status", arguments: { sessionId: "allowed" } })).state).toBe("idle");
     expect((await f.client.callTool({ name: "send_message", arguments: { sessionId: "forbidden", payload: "no", mode: "next_turn" } })).isError).toBe(true);
@@ -769,9 +769,9 @@ describe("session handles and wait_for_result", () => {
     expect(sessions.every((s) => !("handle" in s))).toBe(true);
   });
 
-  it("tools list has 11 tools in order (close_session last)", async () => {
+  it("tools list has 12 tools in order (close_session last)", async () => {
     const f = await waitFixture();
-    expect((await f.client.listTools()).tools.map((t) => t.name)).toEqual(["list_sessions", "get_session_status", "get_session_result", "send_message", "get_message_status", "wait_for_result", "list_pending_approvals", "answer_approval", "cancel_turn", "create_session", "close_session"]);
+    expect((await f.client.listTools()).tools.map((t) => t.name)).toEqual(["list_sessions", "get_session_status", "get_session_result", "send_message", "get_message_status", "wait_for_result", "list_pending_approvals", "answer_approval", "cancel_turn", "list_agent_projects", "create_session", "close_session"]);
   });
 
   it("wait_for_result resolves done for messageId", async () => {
@@ -1113,7 +1113,7 @@ describe("External approvals on the Sessions API", () => {
 
 describe("Sessions API create_session", () => {
   type FixtureTab = { sessionId: string; workspace: string; state: string; pid: number };
-  async function createFixture(options: { opened?: Set<string>; exposed?: (id: string) => boolean; closer?: (id: string, tabs: FixtureTab[]) => Promise<CloseSessionOutcome>; creator?: (request: CreateSessionRequest, tabs: FixtureTab[]) => Promise<CreateSessionOutcome>; ready?: boolean; clock?: { now: number }; dispatchTimeoutMs?: number; writeLedger?: (path: string, text: string) => Promise<void> } = {}) {
+  async function createFixture(options: { opened?: Set<string>; exposed?: (id: string) => boolean; closer?: (id: string, tabs: FixtureTab[]) => Promise<CloseSessionOutcome>; creator?: (request: CreateSessionRequest, tabs: FixtureTab[]) => Promise<CreateSessionOutcome>; projects?: string[]; ready?: boolean; clock?: { now: number }; dispatchTimeoutMs?: number; writeLedger?: (path: string, text: string) => Promise<void> } = {}) {
     const dir = await mkdtemp(join(tmpdir(), "anycode-create-")); cleanups.push(() => rm(dir, { recursive: true, force: true }));
     const discoveryFile = join(dir, "communication.json");
     const tabs: FixtureTab[] = [];
@@ -1133,6 +1133,7 @@ describe("Sessions API create_session", () => {
     const service = await startCommunicationServer({
       manager, userData: dir, config: { workspaces: [], discoveryFile },
       createSessionByAgent: (input) => creator(input, tabs),
+      ...(options.projects ? { listAgentProjects: () => options.projects! } : {}),
       ...(options.opened ? { agentOpenedSessions: options.opened } : {}),
       ...(options.exposed ? { isSessionExposed: options.exposed } : {}),
       ...(options.closer ? { closeSessionByAgent: (id: string) => options.closer!(id, tabs) } : {}), ...(clock ? { now: () => clock.now } : {}), readyTimeoutMs: 120, readyPollMs: 10,
@@ -1147,6 +1148,19 @@ describe("Sessions API create_session", () => {
     return { dir, client, request, tabs, manager };
   }
   const errorText = (result: unknown) => (result as { isError?: boolean; content: Array<{ text: string }> }).content[0]!.text;
+
+  it("list_agent_projects lists the wired projects as rows and keeps an empty schema", async () => {
+    const f = await createFixture({ projects: ["/tmp/one", "/tmp/two"] });
+    const tool = (await f.client.listTools()).tools.find((t) => t.name === "list_agent_projects")!;
+    expect(tool.inputSchema).toEqual({ type: "object", properties: {}, additionalProperties: false });
+    expect(value(await f.client.callTool({ name: "list_agent_projects", arguments: {} }))).toEqual({ projects: [{ workspace: "/tmp/one" }, { workspace: "/tmp/two" }] });
+    expect((await f.client.callTool({ name: "list_agent_projects", arguments: { extra: true } })).isError).toBe(true);
+  });
+
+  it("list_agent_projects answers an empty list without a hook (env-file mode fails closed)", async () => {
+    const f = await createFixture();
+    expect(value(await f.client.callTool({ name: "list_agent_projects", arguments: {} }))).toEqual({ projects: [] });
+  });
 
   it("close_session validates input and fails closed without a hook", async () => {
     const f = await fixture();

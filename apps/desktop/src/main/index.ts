@@ -2535,6 +2535,7 @@ void app.whenReady().then(async () => {
     countExposed: () => communicationSessions?.exposedCount() ?? 0,
     isExternalApprovalEnabled: (sessionId) => communicationApprovals?.isExposed(sessionId) ?? false,
     createSessionByAgent: (request) => createSessionForAgent(request),
+    listAgentProjects: () => communicationAgentProjects?.allowedKeys() ?? [],
     agentOpenedSessions,
     closeSessionByAgent: (sessionId) => closeSessionForAgent(manager, agentOpenedSessions, sessionId, (tabId) => {
       agentSessionTitles.delete(sessionId);
