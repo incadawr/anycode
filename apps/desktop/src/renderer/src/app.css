@@ -5489,7 +5489,10 @@ body {
 }
 
 .mode-chip-label {
-  min-width: 0;
+  /* Readable floor, the same stub contract as `.model-pill-label`: the mode
+     stays identifiable however narrow the row gets, and it is the model pill
+     that yields first, not the mode chip collapsing to a bare chevron. */
+  min-width: 3ch;
   overflow: hidden;
   text-overflow: ellipsis;
 }
