@@ -6,7 +6,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeTool, NodeFileSystemAdapter, resolveWorkspaceWriteFacts } from "@anycode/core";
+import { writeTool, readTool, createBrowserControlTools, NodeFileSystemAdapter, resolveWorkspaceWriteFacts } from "@anycode/core";
 import { mkdtemp, mkdir, symlink, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -685,6 +685,56 @@ describe("IpcPermissionBroker always-allow rules", () => {
     expect(emitted.filter((m) => m.type === "permission_request")).toHaveLength(1);
     broker.handleResponse(requestId(emitted), "allow");
     await expect(decision).resolves.toMatchObject({ behavior: "allow" });
+  });
+});
+
+/**
+ * mandatoryApproval ("always asks" means ALWAYS): a broker seeded with
+ * persisted rules — exactly what both engine boots do at startup — must not
+ * answer a BrowserEval ask from a stored rule. Red on the old code: a bare
+ * `{toolName:"BrowserEval"}` rule was auto-allowed here before any UI, so an
+ * "Always allow" saved once in the past silently silenced every later ask.
+ */
+describe("IpcPermissionBroker — a mandatory-approval ask ignores the rule seam", () => {
+  const evalRequest = (): PermissionRequest => ({
+    toolName: "BrowserEval",
+    input: { expression: "document.cookie" },
+    metadata: createBrowserControlTools().eval.metadata,
+    mode: "build",
+  });
+
+  function makeSeededBroker(rule: { toolName: string; pattern?: string }): {
+    broker: IpcPermissionBroker;
+    emitted: HostToUiMessage[];
+  } {
+    const emitted: HostToUiMessage[] = [];
+    const rules = new SessionPermissionRules();
+    rules.add(rule);
+    const broker = new IpcPermissionBroker((message) => emitted.push(message), undefined, rules);
+    return { broker, emitted };
+  }
+
+  it("a seeded bare BrowserEval rule does not auto-allow: the ask is presented, and only a UI answer settles it", async () => {
+    const { broker, emitted } = makeSeededBroker({ toolName: "BrowserEval" });
+    const decision = broker.requestPermission(evalRequest());
+
+    const req = emitted.find((m) => m.type === "permission_request");
+    expect(req).toBeDefined();
+    expect(broker.pendingCount).toBe(1);
+    broker.handleResponse(requestId(emitted), "allow");
+    await expect(decision).resolves.toMatchObject({ behavior: "allow" });
+  });
+
+  it("control: the same seam still auto-allows an ordinary rule-matched ask without any UI event", async () => {
+    const { broker, emitted } = makeSeededBroker({ toolName: "Read" });
+    const readRequest: PermissionRequest = {
+      toolName: "Read",
+      input: { file_path: "/workspace/a.txt" },
+      metadata: readTool.metadata,
+      mode: "build",
+    };
+    await expect(broker.requestPermission(readRequest)).resolves.toEqual({ behavior: "allow" });
+    expect(emitted).toEqual([]);
   });
 });
 

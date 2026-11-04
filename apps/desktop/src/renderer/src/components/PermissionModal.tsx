@@ -304,9 +304,10 @@ export function describePermissionAsk(
   input: unknown,
   /** the ask's live metadata, when the caller has it — drives
    * the header neutralisation (a static-high core Bash ask whose command the
-   * classifier proves read-only). Absent → no neutralisation (fail-closed to
-   * today's metadata-driven badge). */
-  metadata?: { riskLevel: RiskLevel; destructive: boolean },
+   * classifier proves read-only) and hides the Always-allow checkbox for a
+   * mandatory-approval tool. Absent → no neutralisation (fail-closed to
+   * today's metadata-driven badge) and the checkbox stays offered. */
+  metadata?: { riskLevel: RiskLevel; destructive: boolean; mandatoryApproval?: boolean },
 ): PermissionAskPresentation {
   const raw =
     toolName === "ExitPlanMode"
@@ -324,7 +325,10 @@ export function describePermissionAsk(
       hint: bashUnknownShellHint(toolName, input) ?? browserEvalPolicyHint(toolName),
       plaque,
       neutralRiskLabel: metadata === undefined ? null : neutralRiskLabelFor(metadata, plaque),
-      canRemember: true,
+      // A mandatory-approval tool (metadata.mandatoryApproval) is never
+      // rememberable: the broker and the rule engines ignore such rules, so
+      // offering the checkbox would save a rule that does nothing.
+      canRemember: metadata?.mandatoryApproval !== true,
     };
   }
   const elidedChars = Math.max(0, raw.length - PLAN_PREVIEW_MAX_CHARS);
@@ -564,6 +568,7 @@ export function PermissionModal({
   const presentation = describePermissionAsk(request.toolName, request.input, {
     riskLevel: request.metadata.riskLevel,
     destructive: request.metadata.destructive,
+    mandatoryApproval: request.metadata.mandatoryApproval === true,
   });
   const isPlan = presentation.kind === "plan";
   const showRemember = allowRemember && presentation.canRemember;

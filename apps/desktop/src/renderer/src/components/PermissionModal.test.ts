@@ -409,13 +409,23 @@ describe("describePermissionAsk — BrowserEval policy hint", () => {
     const presentation = describePermissionAsk("BrowserEval", { expression: "1" });
     expect(presentation.hint).toBe(BROWSER_EVAL_POLICY_HINT);
     expect(presentation.kind).toBe("generic");
-    expect(presentation.canRemember).toBe(true);
     expect(BROWSER_EVAL_POLICY_HINT).toContain("page code");
     expect(BROWSER_EVAL_POLICY_HINT).toContain("can read the shown page's cookies and storage");
     expect(BROWSER_EVAL_POLICY_HINT).toContain("anything else the page can see, including values typed into its fields");
     expect(BROWSER_EVAL_POLICY_HINT).toContain("HttpOnly cookies");
     expect(BROWSER_EVAL_POLICY_HINT).toContain("credentials stay out of reach");
     expect(BROWSER_EVAL_POLICY_HINT).not.toContain("cannot read");
+  });
+
+  // "Always allow" means ALWAYS for this tool: the modal never offers the
+  // checkbox, because the rule engines and the broker ignore such rules —
+  // saving one would silently do nothing.
+  it("a mandatory-approval ask (BrowserEval) is never rememberable; ordinary asks still are", () => {
+    const evalMeta = { riskLevel: "high", destructive: false, mandatoryApproval: true } as const;
+    expect(describePermissionAsk("BrowserEval", { expression: "1" }, evalMeta).canRemember).toBe(false);
+    const ordinaryMeta = { riskLevel: "low", destructive: false, mandatoryApproval: false } as const;
+    expect(describePermissionAsk("Write", { file_path: "/tmp/x", content: "y" }, ordinaryMeta).canRemember).toBe(true);
+    expect(describePermissionAsk("Write", { file_path: "/tmp/x", content: "y" }).canRemember).toBe(true);
   });
 
   it("every other tool keeps its own hint resolution (no policy hint)", () => {
