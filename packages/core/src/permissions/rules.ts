@@ -9,7 +9,10 @@
  *
  * Semantics: a matching rule downgrades ONLY an "ask" ruling to "allow" — a
  * "deny" (plan-mode writes, the unknown-mode fail-closed branch) is never
- * overridden. This engine only ever narrows what escalates to the broker; the
+ * overridden. And a tool whose metadata carries `mandatoryApproval` is never
+ * downgraded at all: its ask always reaches the broker, even with a bare or
+ * already-persisted matching rule (see ToolMetadata.mandatoryApproval). This
+ * engine only ever narrows what escalates to the broker; the
  * dispatcher's own hook-vs-engine DECISION_RANK merge (deny > ask > allow)
  * still applies unchanged on top, so a PreToolUse hook can still ask/deny
  * regardless of a session rule.
@@ -236,6 +239,12 @@ export class ProfilePermissionEngine implements PermissionEngine {
     if (ruling.decision !== "ask") {
       return ruling;
     }
+    // Same mandatory-approval law as RuleAwarePermissionEngine: a profile
+    // overlay is never wider than the session's own gate, and a
+    // mandatory-approval tool's ask has no rule escape hatch at all.
+    if (request.metadata.mandatoryApproval) {
+      return ruling;
+    }
     if (!this.rules.allow.some((rule) => ruleMatches(rule, request.toolName, request.input))) {
       return ruling;
     }
@@ -296,6 +305,12 @@ export class RuleAwarePermissionEngine implements PermissionEngine {
   check(request: PermissionRequest): PermissionRuling {
     const ruling = this.base.check(request);
     if (ruling.decision !== "ask") {
+      return ruling;
+    }
+    // A mandatory-approval tool's ask is never rule-resolvable — not by a
+    // bare rule, not by an already-persisted one (rules seeded from settings
+    // pass through the same store): only a human answer settles it.
+    if (request.metadata.mandatoryApproval) {
       return ruling;
     }
     if (!this.rules.matchesRequest(request)) {

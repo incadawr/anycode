@@ -218,16 +218,18 @@ export function createBrowserControlTools(options: BrowserControlToolsOptions = 
     true,
   );
 
-  /** Phase B: BrowserEval always asks; the full-access switch never covers it. */
+  /** BrowserEval always asks; neither the full-access switch, nor any mode
+   * (yolo/auto included), nor a saved always-allow rule covers it. */
   const evalBase: ToolMetadata = {
     ...baseMetadata(
       "BrowserEval",
-      "Runs arbitrary JavaScript in the open preview page and returns its value. The script runs as page code and can read that page's cookies and storage, and anything else the page can see, including values typed into its fields; HttpOnly cookies, other browser partitions and OS or browser-stored credentials stay out of reach. Always asks the user first.",
+      "Runs arbitrary JavaScript in the open preview page and returns its value. The script runs as page code and can read that page's cookies and storage, and anything else the page can see, including values typed into its fields; HttpOnly cookies, other browser partitions and OS or browser-stored credentials stay out of reach. Always asks the user first; no session mode and no saved rule exempts it.",
       BROWSER_CONTROL_TIMEOUT_MS,
       false,
     ),
     riskLevel: "high",
     needsApproval: true,
+    mandatoryApproval: true,
     resultBudget: { maxModelBytes: BROWSER_CONTROL_MAX_MODEL_BYTES, previewDirection: "head" },
   };
   const consoleMetadata: ToolMetadata = {
