@@ -13,7 +13,7 @@
 import { describe, expect, it } from "vitest";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
 import type { ProviderConnection } from "../../../shared/settings.js";
-import { initialConnectionsView, resolveWelcomeView, welcomeFormKey, WELCOME_SUBSCRIPTIONS, type WelcomeConnectionsView } from "./WelcomeScreen.js";
+import { initialConnectionsView, resolveWelcomeView, welcomeFormKey, welcomeKeyLinkVisible, WELCOME_SUBSCRIPTIONS, type WelcomeConnectionsView } from "./WelcomeScreen.js";
 
 function conn(id: string, providerId = "z-ai"): ProviderConnection {
   return { id, providerId };
@@ -88,6 +88,27 @@ describe("welcomeFormKey", () => {
   it("any other view passes its key through untouched", () => {
     expect(welcomeFormKey("conn-a", "z-ai")).toBe("conn-a");
     expect(welcomeFormKey("conn-a", null)).toBe("conn-a");
+  });
+});
+
+describe("welcomeKeyLinkVisible", () => {
+  const zAi = WELCOME_SUBSCRIPTIONS.find((sub) => sub.id === "z-ai")!;
+
+  it("shows the seeded template's link while the form's Provider select is untouched", () => {
+    expect(welcomeKeyLinkVisible(zAi, null)).toBe(true);
+  });
+
+  it("hides the link once the form moves to another provider (a stale key page is a dead end)", () => {
+    expect(welcomeKeyLinkVisible(zAi, "openai")).toBe(false);
+  });
+
+  it("shows the link again when the seeded template is picked back", () => {
+    expect(welcomeKeyLinkVisible(zAi, "z-ai")).toBe(true);
+  });
+
+  it("no active pick means no link", () => {
+    expect(welcomeKeyLinkVisible(undefined, null)).toBe(false);
+    expect(welcomeKeyLinkVisible(undefined, "openai")).toBe(false);
   });
 });
 

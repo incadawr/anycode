@@ -1447,6 +1447,13 @@ export interface ConnectionDrawerFieldsProps {
    */
   initialProviderId?: string;
   /**
+   * Fired when the add-mode Provider select changes (the select is editable
+   * only before create — `templateLocked`). WelcomeScreen's embedded form
+   * uses it to stop advertising the seeded template's key page once the form
+   * has moved to another provider.
+   */
+  onProviderIdChange?(providerId: string): void;
+  /**
    * Fired with the id of a connection this form CREATED (both create flows).
    * The dialog chrome needs it to stop calling a saved connection "Add
    * connection"; nothing else may infer it (a connection appearing in the list
@@ -1473,6 +1480,7 @@ export function ConnectionDrawerFields({
   interactionBlocked = false,
   simplified = false,
   initialProviderId,
+  onProviderIdChange,
   onConnectionCreated,
 }: ConnectionDrawerFieldsProps) {
   const labelInputRef = useRef<HTMLInputElement>(null);
@@ -2847,6 +2855,7 @@ export function ConnectionDrawerFields({
           disabled={readOnly || templateLocked}
           onChange={(e) => {
             setProviderId(e.target.value);
+            onProviderIdChange?.(e.target.value);
             // switching provider clears the model, so the per-model
             // window must go with it. Forced: the new model is empty, and an
             // already-empty owner must not make this look like a no-op.

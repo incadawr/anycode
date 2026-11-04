@@ -46,10 +46,14 @@ export function initialConnectionsView(connections: readonly Pick<ProviderConnec
 /**
  * The coding-subscription shortcuts rendered beside the engine paths. Each
  * opens the API form with `id` — a builtin catalog template id, seeded into
- * the Provider select at mount — and a link to the provider's own key page
- * (Z.AI console key list, MiniMax M Plan "Plan Details", the Kimi Code
- * console; each was the provider's documented key page when this was
- * written). Every pick is a plain key paste: none of these is an OAuth flow.
+ * the Provider select at mount — and a link to the provider's own key page.
+ * Key-page sources: the Z.AI URL is the "API Keys" page the developer docs
+ * (docs.z.ai) link in their own site nav; the MiniMax URL is "Plan Details",
+ * named by the official M Plan quickstart
+ * (platform.minimax.io/docs/m-plan/quickstart) as where the M Plan API key
+ * lives; the Kimi console URL is UNVERIFIED — the provider SPA serves no
+ * readable content and no doc page naming it was found when this was
+ * written. Every pick is a plain key paste: none of these is an OAuth flow.
  */
 export type WelcomeSubscriptionId = "z-ai" | "minimax" | "kimi";
 
@@ -75,6 +79,18 @@ export const WELCOME_SUBSCRIPTIONS: readonly WelcomeSubscription[] = [
  */
 export function welcomeFormKey(resolvedKey: string, subscription: WelcomeSubscriptionId | null): string {
   return resolvedKey === "add" && subscription !== null ? `add:${subscription}` : resolvedKey;
+}
+
+/**
+ * Whether the active pick's key link still describes the form being rendered.
+ * The add-mode Provider select stays editable until create, so the form can
+ * move off the seeded template: `formProviderId` is what the drawer's select
+ * now shows (`null` = still the untouched seed). The link hides while they
+ * disagree and revives when the template is picked back. Exported for direct
+ * testing (no jsdom — see WelcomeScreen.test.ts's docstring).
+ */
+export function welcomeKeyLinkVisible(activeSubscription: WelcomeSubscription | undefined, formProviderId: string | null): boolean {
+  return activeSubscription !== undefined && (formProviderId === null || formProviderId === activeSubscription.id);
 }
 
 /**
@@ -122,6 +138,11 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
   // connection or to a generic add drops it, exactly like any other
   // half-typed form state.
   const [subscription, setSubscription] = useState<WelcomeSubscriptionId | null>(null);
+  // The provider the embedded form's select currently shows (`null` = the
+  // untouched seed), reported through `onProviderIdChange`. A select change
+  // away from the seeded template must take the key link with it, or the pane
+  // would advertise one provider's key page over another provider's form.
+  const [formProviderId, setFormProviderId] = useState<string | null>(null);
 
   // `null` until the user explicitly switches views — the live default
   // (`initialConnectionsView`) tracks the connections list until then, so a
@@ -135,6 +156,7 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
   const activeSubscription = resolved.key === "add" && subscription !== null
     ? WELCOME_SUBSCRIPTIONS.find((sub) => sub.id === subscription)
     : undefined;
+  const keyLinkVisible = welcomeKeyLinkVisible(activeSubscription, formProviderId);
   // union the builtin catalog with saved custom records so a
   // just-created "Custom endpoint…" resolves its own synthesized entry
   // (models/transports) for the post-create model step — shared by the form
@@ -220,6 +242,9 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
             <button key={sub.id} type="button" className="welcome-path welcome-subscription" onClick={() => {
               setPath("api");
               setSubscription(sub.id);
+              // A fresh seed: the remounted form's select shows the new
+              // template again, whatever the previous form had been switched to.
+              setFormProviderId(null);
               setViewOverride({ mode: "add" });
               onSelectEngine?.("core");
             }}>
@@ -295,7 +320,7 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
           {activePath === "claude" && <ClaudeEnginePane onboarding />}
           {activePath === "api" && snapshot && (
             <>
-              {activeSubscription && (
+              {keyLinkVisible && activeSubscription && (
                 <p className="welcome-subscription-key">
                   <a href={activeSubscription.keyUrl} target="_blank" rel="noreferrer">
                     Get a {activeSubscription.title} key
@@ -313,6 +338,7 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
                 store={store}
                 simplified
                 initialProviderId={activeSubscription?.id}
+                onProviderIdChange={setFormProviderId}
               />
             </>
           )}
