@@ -47,9 +47,9 @@ export function createConnectionModelSettings(deps: {
     const override = modelOverrideFor(connection, model);
     let entry = modelDictionaryEntry(model, deps.catalogEntry, override?.catalogMatchDisabled === true);
     const live = connection?.modelCapabilities?.[model];
-    if (entry?.id === "openrouter" && live?.contextWindow) {
+    if (entry && (live?.contextWindow || live?.maxOutputTokens)) {
       const previous = entry.models.find(row => row.id === model);
-      entry = { ...entry, models: [...entry.models.filter(row => row.id !== model), { ...previous, id: model, contextWindow: live.contextWindow, ...(live.maxOutputTokens ? { maxOutputTokens: live.maxOutputTokens } : {}) }] };
+      if (live.contextWindow || previous) entry = { ...entry, models: [...entry.models.filter(row => row.id !== model), { ...previous, id: model, contextWindow: live.contextWindow ?? previous!.contextWindow, ...(live.maxOutputTokens ? { maxOutputTokens: live.maxOutputTokens } : {}) }] };
     }
     if (entry && (entry !== deps.catalogEntry || override?.reasoningSupported === false)) {
       const live = capabilitiesFor(model);

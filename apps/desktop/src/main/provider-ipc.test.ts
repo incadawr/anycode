@@ -39,6 +39,9 @@ import { Vault, type SecretSetResult } from "./vault.js";
 import { createProxyChainFetch, type ProxyDispatchRequest } from "./provider-proxy-fetch.js";
 import { hostForkProxyChain } from "../shared/proxy.js";
 import { calculateUsageCost, resolveUsagePrice } from "../host/usage-cost.js";
+import { createConnectionModelSettings } from "../host/connection-model-settings.js";
+import { resolveMaxOutputTokens } from "@anycode/core";
+import { findCatalogEntry } from "@anycode/core/catalog";
 
 // Capture ipcMain.handle registrations so a test can drive the real
 // `registerProviderIpc` wiring without an Electron runtime. `mock`-prefixed so
@@ -2182,6 +2185,23 @@ describe("handleCustomProviderFetchModels — 4244 modelsUrl catalog wiring", ()
       }),
     );
   }
+
+  it("persists fetched OpenCode limits for the host across refresh", async () => {
+    await seed4244({ id: "go", providerId: "opencode-openai" });
+    const fixture = await readFile(new URL("./__fixtures__/opencode-go-models.json", import.meta.url), "utf8");
+    const deps = makeDeps({ catalogEntryById: () => ({ id: "opencode-openai", baseUrl: "https://opencode.ai/inference/go/v1", defaultTransport: "openai-chat-completions" }), connectionFetch: () => (async () => new Response(fixture)) as typeof fetch });
+    expect((await handleCustomProviderFetchModels(deps, { connectionId: "go" })).ok).toBe(true);
+    let saved = (await loadSettings(settingsPath)).settings.provider.connections[0]!;
+    const host = createConnectionModelSettings({ catalogEntry: findCatalogEntry("opencode-openai"), connection: saved, readConnection: () => saved, liveCapabilitiesFor: () => undefined });
+    const model = "deepseek-v4.1-flash";
+    host.switchEffort("other", model, "off");
+    expect(host.contextFor(model).tokens).toBe(1_000_000);
+    expect(resolveMaxOutputTokens(model, host.entryFor(model), undefined)).toBe(384_000);
+    saved = { ...saved, modelCapabilities: { ...saved.modelCapabilities, [model]: { contextWindow: 900_000, maxOutputTokens: 300_000 } } };
+    expect(host.refresh()).toBe(true);
+    expect(host.contextFor(model).tokens).toBe(900_000);
+    expect(resolveMaxOutputTokens(model, host.entryFor(model), undefined)).toBe(300_000);
+  });
 
   it("4244: a deepseek connection fetches https://api.deepseek.com/models with Bearer and persists the ids", async () => {
     await seed4244({ id: "conn-ds", providerId: "deepseek" });

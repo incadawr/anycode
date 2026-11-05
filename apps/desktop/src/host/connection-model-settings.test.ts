@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveEffortLevels, resolveReasoningEffort, type ReasoningEffort } from "@anycode/core";
+import { resolveEffortLevels, resolveMaxOutputTokens, resolveReasoningEffort, type ReasoningEffort } from "@anycode/core";
 import { createConnectionModelSettings, nearestSupportedEffort } from "./connection-model-settings.js";
 import { findCatalogEntry } from "@anycode/core/catalog";
 import { createHarness } from "./test-harness.js";
@@ -325,6 +325,21 @@ it("uses cached OpenRouter limits and rates while preserving manual overrides", 
   expect(settings.contextFor(model).tokens).toBe(64000);
   expect(settings.entryFor(model)?.models.find(row => row.id === model)).toMatchObject({ contextWindow: 1048576, maxOutputTokens: 524288 });
   expect(settings.pricingSnapshot()?.models[model]).toEqual({ input: 1, cachedInput: 1, output: 2 });
+});
+
+it("uses refreshed OpenCode Go limits for models outside the catalog", () => {
+  const model = "deepseek-v4.1-flash";
+  let saved = { modelCapabilities: { [model]: { contextWindow: 1_000_000, maxOutputTokens: 384_000 } } };
+  const settings = createConnectionModelSettings({ catalogEntry: findCatalogEntry("opencode-openai"), connection: saved, readConnection: () => saved, liveCapabilitiesFor: () => undefined });
+  settings.switchEffort("other", model, "off");
+  expect(settings.contextFor(model).tokens).toBe(1_000_000);
+  expect(resolveMaxOutputTokens(model, settings.entryFor(model), undefined)).toBe(384_000);
+  saved = { modelCapabilities: { [model]: { contextWindow: 900_000, maxOutputTokens: 300_000 } } };
+  expect(settings.refresh()).toBe(true);
+  expect(settings.contextFor(model).tokens).toBe(900_000);
+  expect(resolveMaxOutputTokens(model, settings.entryFor(model), undefined)).toBe(300_000);
+  const overridden = createConnectionModelSettings({ catalogEntry: findCatalogEntry("opencode-openai"), connection: { ...saved, modelOverrides: { [model]: { contextWindowTokens: 64_000 } } }, envContextWindow: 32_000, liveCapabilitiesFor: () => undefined });
+  expect(overridden.contextFor(model).tokens).toBe(32_000);
 });
 
 
