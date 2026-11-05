@@ -107,6 +107,7 @@ export interface PluginRowView {
     engineSupport: string[];
     promptOverlays: number;
     services: string[];
+    accountSources?: string[];
   };
   mcpServersHash?: string;
   mcpConsentGranted?: boolean;
@@ -175,6 +176,7 @@ export interface PluginInstallPreview {
   /** red rows for each background service (command + args + env KEY names). */
   services?: { name: string; command: string; args: string[]; envKeys: string[]; secretNames?: string[] }[];
   hasHooks: boolean;
+  accountSources?: { id: string; displayName: string; gatewayBaseUrl: string; apiBaseUrl: string }[];
   engines?: string;
   /** True when the manifest is incompatible with this app (grey out). */
   incompatible?: boolean;

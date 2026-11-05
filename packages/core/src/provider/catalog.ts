@@ -24,7 +24,7 @@ export type ProviderTransport =
 export interface ModelPricing {
   basisId: string;
   input: number;
-  cachedInput: number;
+  cachedInput?: number;
   cacheWrite?: number;
   output: number;
   /**

@@ -60,6 +60,7 @@ import { z } from "zod";
 import { findCatalogEntry } from "@anycode/core/catalog";
 import type { FileIoLogger } from "../settings/files.js";
 import { loadSettings, normalizeActiveConnection, saveSettings, settingsWriteEpoch, withSettingsFileLock } from "../settings/files.js";
+import { markOverride } from "./account-sources/sync.js";
 import { isHttpsOrLocalhostUrl, isLoopbackUrl, settingsSchema } from "../settings/schema.js";
 import type { AnycodeSettings, CustomProviderRecord, ProviderConnection, SecretKey } from "../shared/settings.js";
 import { mergeModelIds, normalizeModelId } from "../shared/settings.js";
@@ -702,6 +703,18 @@ export async function handleCustomProviderUpdate(deps: ProviderIpcDeps, raw: unk
       ...loaded.settings,
       provider: { ...loaded.settings.provider, custom, connections },
     };
+    if (req.models !== undefined && loaded.settings.plugins?.accountSources) {
+      const accountSources = structuredClone(loaded.settings.plugins.accountSources);
+      const connectionIds = new Set(connections.filter((connection) => connection.providerId === req.id).map((connection) => connection.id));
+      for (const binding of accountSources.filter((entry) => connectionIds.has(entry.connectionId))) {
+        for (const model of existing.models) if (!req.models.includes(model)) markOverride(binding.ownership, model, "model");
+      }
+      merged.plugins = { ...loaded.settings.plugins, accountSources };
+    }
+    if (((req.baseUrl !== undefined && req.baseUrl !== existing.baseUrl) || (req.kind !== undefined && req.kind !== existing.kind)) && merged.plugins?.accountSources) {
+      const ids = new Set(connections.filter((connection) => connection.providerId === req.id).map((connection) => connection.id));
+      merged.plugins = { ...merged.plugins, accountSources: merged.plugins.accountSources.filter((binding) => !ids.has(binding.connectionId)) };
+    }
     if (!settingsSchema.safeParse(merged).success) {
       return { ok: false, reason: "invalid" };
     }
@@ -764,6 +777,10 @@ export async function handleCustomProviderDelete(deps: ProviderIpcDeps, raw: unk
     await deps.vault.clearSecret(customProviderSecretKey(parsed.data.id));
     const custom = existing.filter((p) => p.id !== parsed.data.id);
     const merged: AnycodeSettings = { ...loaded.settings, provider: { ...loaded.settings.provider, custom } };
+    if (loaded.settings.plugins?.accountSources) {
+      const ids = new Set(loaded.settings.provider.connections.filter((c) => c.providerId === parsed.data.id).map((c) => c.id));
+      merged.plugins = { ...loaded.settings.plugins, accountSources: loaded.settings.plugins.accountSources.filter((binding) => !ids.has(binding.connectionId)) };
+    }
     await saveSettings(deps.settingsPath, merged);
     await deps.onMutation?.(merged);
     return { ok: true, providers: custom };

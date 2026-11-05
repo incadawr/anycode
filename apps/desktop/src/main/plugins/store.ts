@@ -196,6 +196,7 @@ function capabilityList(manifest: PluginManifest): string[] {
   if (caps.agents > 0) list.push("agents");
   if (caps.workflows > 0) list.push("workflows");
   list.push(...caps.mcp.map((name) => `mcp:${name}`));
+  list.push(...(caps.accountSources ?? []).map((id) => `accountSource:${id}`));
   if (caps.commands > 0) list.push("commands");
   if (caps.hooks) list.push("hooks");
   if (caps.docs) list.push("docs");

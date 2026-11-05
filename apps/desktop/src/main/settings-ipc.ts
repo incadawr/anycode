@@ -31,6 +31,7 @@ import { CLAUDE_CONTEXT_WINDOW_MAX, CLAUDE_CONTEXT_WINDOW_MIN } from "../shared/
 import { SESSION_LIMIT_RANGES } from "../shared/session-limits.js";
 import type { FileIoLogger } from "../settings/files.js";
 import { loadSettings, saveSettings, withSettingsFileLock } from "../settings/files.js";
+import { markOverride } from "./account-sources/sync.js";
 import { keybindingsSchema, mergeSettings, settingsSchema, roleProfilesWriteSchema } from "../settings/schema.js";
 import { RECOGNIZER_SET_CHANNEL } from "../shared/recognizer.js";
 import type { RecognizerSetRequest } from "../shared/recognizer.js";
@@ -386,7 +387,7 @@ const CONTEXT_WINDOW_TOKENS_MIN = 1_024;
 const CONTEXT_WINDOW_TOKENS_MAX = 1_000_000;
 const contextWindowTokensSchema = z.number().int().min(CONTEXT_WINDOW_TOKENS_MIN).max(CONTEXT_WINDOW_TOKENS_MAX);
 
-const tokenRatesSchema = z.object({ input: z.number().finite().nonnegative(), cachedInput: z.number().finite().nonnegative(), output: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative().optional() }).strict();
+const tokenRatesSchema = z.object({ input: z.number().finite().nonnegative(), cachedInput: z.number().finite().nonnegative().optional(), output: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative().optional() }).strict();
 const modelIdKey = z.string().refine((id) => normalizeModelId(id) === id);
 const modelPricingSchema = <T extends z.ZodType>(valueSchema: T) =>
   z.unknown().transform((raw, ctx) => {
@@ -1034,6 +1035,10 @@ export async function handleSet(deps: SettingsIpcDeps, raw: unknown): Promise<Se
   // silently stripped (a buggy caller must not believe it persisted).
   const securityPatch = rawPatch.security;
   if (isPlainObjectLike(securityPatch) && "trustedBinaries" in securityPatch) {
+    return { ok: false, reason: "invalid" };
+  }
+  const pluginsPatch = rawPatch.plugins;
+  if (isPlainObjectLike(pluginsPatch) && "accountSources" in pluginsPatch) {
     return { ok: false, reason: "invalid" };
   }
   // custody (design review B-04): the proxy registry and every scope
@@ -1974,6 +1979,15 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
     // `loaded.settings` stays the untouched "before" the health diff compares
     // against. `undefined` = the field was not sent; `null` = clear it.
     const draft: AnycodeSettings = { ...loaded.settings };
+    if (loaded.settings.plugins?.accountSources) {
+      const accountSources = structuredClone(loaded.settings.plugins.accountSources);
+      for (const binding of accountSources.filter((entry) => entry.connectionId === req.id)) {
+        for (const model of Object.keys(req.modelPricing ?? {})) markOverride(binding.ownership, model, "pricing");
+        const target = (req.modelOverrideModel ?? (req.model !== undefined ? req.model : existing.model))?.trim();
+        if (target && req.contextWindowTokens !== undefined) markOverride(binding.ownership, target, "contextWindowTokens");
+      }
+      draft.plugins = { ...loaded.settings.plugins, accountSources };
+    }
     let normalizedProxyRef: string | null | undefined;
     let importedPassword: string | undefined;
     if (req.proxyRef !== undefined) {
@@ -2030,6 +2044,9 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
     // Normalized comparison: `""` and absent both mean "catalog default".
     const baseUrlChanged =
       req.baseUrl !== undefined && req.baseUrl.trim() !== (existing.baseUrl ?? "").trim();
+    if ((baseUrlChanged || (req.transport !== undefined && normalizedTransport !== existing.transport)) && draft.plugins?.accountSources) {
+      draft.plugins.accountSources = draft.plugins.accountSources.filter((binding) => binding.connectionId !== req.id);
+    }
     const updatedConnection: ProviderConnection = {
       ...existing,
       ...(req.label !== undefined ? { label: req.label } : {}),
@@ -2353,7 +2370,9 @@ export async function handleConnectionDelete(deps: SettingsIpcDeps, raw: unknown
       // (snapshot/emit) must NOT revert the tombstone — the metadata is
       // already gone from disk, so reverting here would strand an OAuth blob
       // in the vault under the just-deleted id (reopens fix #2's own DoD).
-      const updated = await saveProviderSettings(deps, loaded.settings, provider);
+      const sourceBindings = loaded.settings.plugins?.accountSources;
+      const beforeSave = sourceBindings ? { ...loaded.settings, plugins: { ...loaded.settings.plugins, accountSources: sourceBindings.filter((binding) => binding.connectionId !== id) } } : loaded.settings;
+      const updated = await saveProviderSettings(deps, beforeSave, provider);
       committed = true;
       const snapshot = await snapshotFrom(deps, updated, false);
       await emitMutation(deps, snapshot);

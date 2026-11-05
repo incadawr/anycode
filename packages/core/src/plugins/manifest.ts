@@ -165,6 +165,44 @@ const legacyDirList = (label: string) =>
  */
 const workflowsList = z.array(z.string().min(1, "workflows entry must be a non-empty string")).optional();
 
+/** A source may use the gateway credential only on the gateway's HTTPS origin. */
+const accountUrl = z.string().max(2048).refine((value) => {
+  try {
+    const url = new URL(value);
+    const loopback = url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+    return (url.protocol === "https:" || loopback) && !url.username && !url.password && !url.search && !url.hash;
+  } catch {
+    return false;
+  }
+}, "must be HTTPS or loopback HTTP, without credentials, query or fragment");
+
+export const accountSourceSchema = z.object({
+  id: z.string().regex(PLUGIN_NAME_RE, NAME_ERROR),
+  protocol: z.literal("anycode.account.v1"),
+  displayName: z.string().min(1).max(128),
+  gateway: z.object({
+    name: z.string().min(1).max(128),
+    baseUrl: accountUrl,
+    kind: z.enum(["openai-compatible", "openai", "anthropic"]),
+  }),
+  apiBaseUrl: accountUrl,
+}).refine((source) => {
+  try { return new URL(source.gateway.baseUrl).origin === new URL(source.apiBaseUrl).origin; }
+  catch { return false; }
+},
+  { message: "account API and gateway must share an origin", path: ["apiBaseUrl"] });
+
+const accountSourcesList = z.array(accountSourceSchema).max(32).superRefine((sources, ctx) => {
+  const seen = new Set<string>();
+  for (const source of sources) {
+    if (seen.has(source.id)) {
+      ctx.addIssue({ code: "custom", message: `duplicate account source id ${JSON.stringify(source.id)}` });
+      return;
+    }
+    seen.add(source.id);
+  }
+}).optional();
+
 export const pluginManifestSchema = z.object({
   /** Optional; absent = legacy manifest, treated as the v1 subset. */
   manifestVersion: z.number().int().min(1).optional(),
@@ -199,6 +237,8 @@ export const pluginManifestSchema = z.object({
   mcpServers: z.record(z.string().regex(PLUGIN_NAME_RE, NAME_ERROR), mcpServerEntrySchema).optional(),
   /** Background services consent-gated, supervised by main. No default — legacy output stays identical. */
   services: servicesList,
+  /** Optional declarative account sources; no code or credentials in the manifest. */
+  accountSources: accountSourcesList,
   // ── Stage 2/3 placeholders: PARSED (shape-known) but NOT contributed by s1 discovery. ──
   commands: z.array(z.string()).optional(),
   hooks: z.string().optional(),
@@ -235,6 +275,8 @@ export interface PluginCapabilities {
   mcp: string[];
   /** Declared service names (sorted); the command/env live only in the manifest. */
   services: string[];
+  /** Account source IDs, when declared; the descriptor is confirmed separately. */
+  accountSources?: string[];
   commands: number;
   hooks: boolean;
   docs: boolean;
@@ -262,6 +304,7 @@ export function capabilities(manifest: PluginManifest): PluginCapabilities {
     workflows: pluginWorkflowsDirs(manifest).length,
     mcp: manifest.mcpServers ? Object.keys(manifest.mcpServers).sort() : [],
     services: manifest.services ? manifest.services.map((s) => s.name).sort() : [],
+    ...(manifest.accountSources?.length ? { accountSources: manifest.accountSources.map((source) => source.id).sort() } : {}),
     commands: manifest.commands?.length ?? 0,
     hooks: manifest.hooks !== undefined,
     docs: manifest.docs !== undefined,

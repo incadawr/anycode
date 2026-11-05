@@ -1,0 +1,82 @@
+import { afterEach, expect, it, vi } from "vitest";
+import { AccountSourcesController, type AccountSourceRuntime } from "./controller.js";
+
+const catalog = { schemaVersion: "anycode.account-catalog.v1", accountId: "a", revision: "1", complete: true, models: [] };
+const budget = { schemaVersion: "anycode.account-budget.v1", accountId: "a", budgetId: "budget", currency: "USD", scale: 6, observedAt: "2026-10-31T12:00:00Z", windows: [] };
+function source(fetcher: AccountSourceRuntime["fetcher"]): AccountSourceRuntime { return { key: { plugin: "p", source: "s" }, displayName: "Company", apiBaseUrl: "https://gateway.example.com/", accountId: "a", connectionId: "conn", fetcher, applyCatalog: vi.fn() }; }
+afterEach(() => vi.useRealTimers());
+it("coalesces refresh and ignores a late response after replacement", async () => {
+  vi.useFakeTimers();
+  let resolve!: (response: Response) => void;
+  const fetcher = vi.fn(() => new Promise<Response>((r) => { resolve = r; }));
+  const controller = new AccountSourcesController(vi.fn());
+  controller.replace([source(fetcher)]);
+  const requests = Array.from({ length: 20 }, () => controller.refresh({ plugin: "p", source: "s" }));
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  controller.replace([]);
+  resolve(new Response(JSON.stringify(catalog)));
+  await Promise.all(requests);
+  expect(controller.snapshot().sources).toEqual([]);
+  controller.dispose();
+});
+it("clears an earlier budget on authentication failure", async () => {
+  vi.useFakeTimers();
+  let fail = false;
+  const fetcher = vi.fn(async (url: string) => fail ? new Response(null, { status: 401 }) : new Response(JSON.stringify(url.endsWith("catalog") ? catalog : budget)));
+  const controller = new AccountSourcesController(vi.fn(), () => Date.parse("2026-10-31T12:00:00Z"));
+  controller.replace([source(fetcher)]);
+  await controller.refresh({ plugin: "p", source: "s" });
+  expect(controller.snapshot().sources[0]?.budget?.budgetId).toBe("budget");
+  fail = true;
+  await controller.refresh({ plugin: "p", source: "s" });
+  expect(controller.snapshot().sources[0]).toMatchObject({ status: "auth_required" });
+  expect(controller.snapshot().sources[0]?.budget).toBeUndefined();
+  controller.dispose();
+});
+it("deduplicates a shared budget and leaves server amounts intact", async () => {
+  vi.useFakeTimers();
+  const fetcher = async (url: string) => new Response(JSON.stringify(url.endsWith("catalog") ? catalog : { ...budget, windows: [{ kind: "day", limit: "0", spent: "1000000", remaining: "0", reserved: "200000", resetsAt: "2026-11-01T00:00:00Z" }] }));
+  const controller = new AccountSourcesController(vi.fn(), () => Date.parse("2026-10-31T12:00:00Z"));
+  controller.replace([source(fetcher), { ...source(fetcher), key: { plugin: "p", source: "second" }, connectionId: "other" }]);
+  await Promise.all([controller.refresh({ plugin: "p", source: "s" }), controller.refresh({ plugin: "p", source: "second" })]);
+  expect(controller.snapshot().sources).toHaveLength(1);
+  expect(controller.snapshot().sources[0]?.budget?.windows[0]).toMatchObject({ limit: "0", spent: "1000000", remaining: "0", reserved: "200000" });
+  controller.dispose();
+});
+it("retains a stale budget on a transient failure and honours retry-after", async () => {
+  vi.useFakeTimers();
+  let now = Date.parse("2026-10-31T12:00:00Z");
+  let failure = false;
+  const fetcher = vi.fn(async (url: string) => failure ? new Response(null, { status: 429, headers: { "retry-after": "120" } }) : new Response(JSON.stringify(url.endsWith("catalog") ? catalog : budget)));
+  const controller = new AccountSourcesController(vi.fn(), () => now);
+  controller.replace([source(fetcher)]);
+  await controller.refresh({ plugin: "p", source: "s" });
+  failure = true;
+  await controller.refresh({ plugin: "p", source: "s" });
+  expect(controller.snapshot().sources[0]?.status).toBe("stale");
+  const calls = fetcher.mock.calls.length;
+  now += 60_000;
+  await controller.refresh({ plugin: "p", source: "s" }, false);
+  expect(fetcher).toHaveBeenCalledTimes(calls);
+  failure = false;
+  await controller.refresh({ plugin: "p", source: "s" });
+  expect(fetcher.mock.calls.length).toBeGreaterThan(calls);
+  expect(controller.snapshot().sources[0]?.status).toBe("ready");
+  controller.dispose();
+});
+it("does not publish an answer when authorization changes during the request", async () => {
+  vi.useFakeTimers();
+  let allow = true;
+  let resolve!: (response: Response) => void;
+  const fetcher = vi.fn(async (url: string) => url.endsWith("catalog") ? new Response(JSON.stringify(catalog)) : await new Promise<Response>((r) => { resolve = r; }));
+  const runtime = { ...source(fetcher), withAuthorization: async (publish: () => void) => { if (allow) publish(); } };
+  const controller = new AccountSourcesController(vi.fn(), () => Date.parse("2026-10-31T12:00:00Z"));
+  controller.replace([runtime]);
+  const request = controller.refresh(runtime.key);
+  await vi.waitFor(() => expect(resolve).toBeDefined());
+  allow = false;
+  resolve(new Response(JSON.stringify(budget)));
+  await request;
+  expect(controller.snapshot().sources[0]?.budget).toBeUndefined();
+  controller.dispose();
+});

@@ -140,7 +140,8 @@ export interface PluginsIpcDeps {
   logger?: { warn(message: string, ...args: unknown[]): void };
   /** called after every plugins mutation (the supervisor reconciles on it). */
   onChanged?(reason: string): void;
-  /** the service supervisor's read model + restart (absent = no services wiring). */
+  onRemoved?(name: string): Promise<void>;
+  /** The service supervisor's read model + restart (absent = no services wiring). */
   services?: {
     snapshot(): PluginServiceView[];
     logs(plugin: string, name: string): string[];
@@ -562,6 +563,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
           capabilities: preview.capabilities,
           mcpServers: preview.mcpServers,
           services: servicePreviewOf(preview.manifest.services),
+          accountSources: (preview.manifest.accountSources ?? []).map((s) => ({ id: s.id, displayName: s.displayName, gatewayBaseUrl: s.gateway.baseUrl, apiBaseUrl: s.apiBaseUrl })),
           hasHooks: preview.capabilities.includes("hooks"),
           engines: preview.manifest.engines?.anycode,
           // xfix L4: compute the real compat verdict with rangeMatches — the
@@ -615,6 +617,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
           capabilities: preview.capabilities,
           mcpServers: preview.mcpServers,
           services: servicePreviewOf(preview.manifest.services),
+          accountSources: (preview.manifest.accountSources ?? []).map((s) => ({ id: s.id, displayName: s.displayName, gatewayBaseUrl: s.gateway.baseUrl, apiBaseUrl: s.apiBaseUrl })),
           hasHooks: preview.capabilities.includes("hooks"),
         },
       };
@@ -652,6 +655,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     if (caps.agents > 0) capabilityList.push("agents");
     if (caps.workflows > 0) capabilityList.push("workflows");
     capabilityList.push(...caps.mcp.map((name) => `mcp:${name}`));
+    capabilityList.push(...(caps.accountSources ?? []).map((id) => `accountSource:${id}`));
     if (caps.commands > 0) capabilityList.push("commands");
     if (caps.hooks) capabilityList.push("hooks");
     if (caps.docs) capabilityList.push("docs");
@@ -686,6 +690,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
         capabilities: capabilityList.sort(),
         mcpServers,
         services: servicePreviewOf(manifest.services),
+        accountSources: (manifest.accountSources ?? []).map((s) => ({ id: s.id, displayName: s.displayName, gatewayBaseUrl: s.gateway.baseUrl, apiBaseUrl: s.apiBaseUrl })),
         hasHooks: caps.hooks,
         ...(manifest.engines?.anycode !== undefined
           ? {
@@ -942,6 +947,7 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
     const result = await storeRemovePlugin(storeOpts(), parsed.data.name, isDefault);
     if (!result.ok) return refusal(result.reason, result.detail);
     notifyChanged("remove");
+    await deps.onRemoved?.(parsed.data.name);
     return { ok: true };
   });
 

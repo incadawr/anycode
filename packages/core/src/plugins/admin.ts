@@ -399,6 +399,9 @@ export {
   expandServiceSecrets,
 } from "./manifest.js";
 export type { PluginManifest, PluginCapabilities, PluginServiceSpec } from "./manifest.js";
+export { accountSourceSchema } from "./manifest.js";
+export { accountBudgetSchema, accountCatalogSchema, accountSourceHash } from "./account-source.js";
+export type { AccountSource } from "./account-source.js";
 // S1-B: the desktop main store reuses the same semver helpers
 // discovery's engines gating uses (one implementation of the grammar).
 export { isValidSemver, parseSemver, rangeMatches, normalizeSemverRange } from "../util/semver-range.js";

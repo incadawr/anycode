@@ -811,6 +811,9 @@ describe("handleClearSecret", () => {
 });
 
 describe("handleSet — merge + read-only", () => {
+  it("refuses account source bindings through the generic settings channel", async () => {
+    expect(await handleSet(makeDeps(), { plugins: { accountSources: [] } })).toMatchObject({ ok: false, reason: "invalid" });
+  });
   it("deep-partial merges a non-provider patch and persists", async () => {
     const res = await handleSet(makeDeps(), { ui: { theme: "dark" } });
     expect(res.ok).toBe(true);

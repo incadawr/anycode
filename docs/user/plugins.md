@@ -153,3 +153,12 @@ installed but contributes nothing.
 
 For authoring your own plugin (manifest reference, layout, signing), see
 [docs/development/plugins-authoring.md](../development/plugins-authoring.md).
+
+### Account sources
+
+A plugin can offer a model catalog and a shared employee budget for a dedicated
+custom gateway connection. Review the gateway and account API addresses, select
+a matching connection, and approve the catalog preview. The budget describes
+server-reported employee spending, not the current chat. Free models remain
+separate from metered models. Disabling the plugin stops refresh; disconnecting
+or removing it does not delete the connection or its credential.

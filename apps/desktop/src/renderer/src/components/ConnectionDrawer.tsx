@@ -1273,8 +1273,8 @@ export function modelAfterCatalogPrefill(current: string, suggestions: readonly 
   return suggestions[0]?.id ?? current;
 }
 
-export function createModelMissing(model: string, suggestions: readonly { id: string }[]): boolean {
-  return modelAfterCatalogPrefill(model, suggestions).trim() === "";
+export function createModelMissing(model: string, suggestions: readonly { id: string }[], accountSource = false, simplified = false): boolean {
+  return !(accountSource && !simplified) && modelAfterCatalogPrefill(model, suggestions).trim() === "";
 }
 
 /**
@@ -1428,6 +1428,7 @@ export interface ConnectionDrawerFieldsProps {
   readOnly: boolean;
   /** Where to steer initial focus (a11y) — "credential" for the tile menu's "Replace key"/"Sign in". */
   initialFocus?: "label" | "credential" | "context";
+  initialCustom?: { name: string; baseUrl: string; kind: CustomProviderRecord["kind"] };
   store?: SettingsStoreApi;
   /** Injectable custom-provider bridge; defaults to the real `window.anycode.customProvider`. */
   customProvider?: CustomProviderBridge;
@@ -1471,6 +1472,7 @@ export function ConnectionDrawerFields({
   secrets,
   readOnly,
   initialFocus,
+  initialCustom,
   store = useSettingsStore,
   customProvider,
   cancelAction,
@@ -1500,7 +1502,7 @@ export function ConnectionDrawerFields({
   // connection"; edit mode: fixed to the connection's own id for this drawer's
   // whole lifetime (the template can never change post-creation).
   const [createdConnectionId, setCreatedConnectionId] = useState<string | null>(editConnection?.id ?? null);
-  const [providerId, setProviderId] = useState<string>(editConnection?.providerId ?? initialProviderId ?? "");
+  const [providerId, setProviderId] = useState<string>(editConnection?.providerId ?? (initialCustom ? "custom" : initialProviderId ?? ""));
   const [label, setLabel] = useState(editConnection?.label ?? "");
   // an existing catalog connection persisted with a blank model
   // (the live trap — readiness fails on it with a key-blaming toast) opens
@@ -1539,7 +1541,7 @@ export function ConnectionDrawerFields({
   );
   const initialRates = editConnection?.pricing?.mode === "rates" ? editConnection.pricing : undefined;
   const [priceInput, setPriceInput] = useState(initialRates ? String(initialRates.input) : "");
-  const [priceCached, setPriceCached] = useState(initialRates ? String(initialRates.cachedInput) : "");
+  const [priceCached, setPriceCached] = useState(initialRates ? initialRates.cachedInput === undefined ? "" : String(initialRates.cachedInput) : "");
   const [priceOutput, setPriceOutput] = useState(initialRates ? String(initialRates.output) : "");
   const [priceWrite, setPriceWrite] = useState(initialRates?.cacheWrite === undefined ? "" : String(initialRates.cacheWrite));
   const pricingPayload = () => {
@@ -1556,7 +1558,7 @@ export function ConnectionDrawerFields({
   const [modelRates, setModelRates] = useState<Record<string, RateDraft>>(() => Object.fromEntries(
     Object.entries(editConnection?.modelOverrides ?? {}).filter(([, value]) => value.pricing !== undefined).map(([id, value]) => {
       const rate = value.pricing!;
-      return [id, { input: String(rate.input), cachedInput: String(rate.cachedInput), output: String(rate.output), cacheWrite: rate.cacheWrite === undefined ? "" : String(rate.cacheWrite) }];
+      return [id, { input: String(rate.input), cachedInput: rate.cachedInput === undefined ? "" : String(rate.cachedInput), output: String(rate.output), cacheWrite: rate.cacheWrite === undefined ? "" : String(rate.cacheWrite) }];
     }),
   ));
   const [dirtyRates, setDirtyRates] = useState<Set<string>>(() => new Set());
@@ -1642,9 +1644,9 @@ export function ConnectionDrawerFields({
   }));
   const [secretValue, dispatchSecret] = useReducer(secretFieldReducer, "");
   // New-custom-endpoint (the builtin `custom` sentinel) record fields.
-  const [customName, setCustomName] = useState("");
-  const [customBaseUrl, setCustomBaseUrl] = useState("");
-  const [customKind, setCustomKind] = useState<CustomProviderRecord["kind"]>("openai-compatible");
+  const [customName, setCustomName] = useState(initialCustom?.name ?? "");
+  const [customBaseUrl, setCustomBaseUrl] = useState(initialCustom?.baseUrl ?? "");
+  const [customKind, setCustomKind] = useState<CustomProviderRecord["kind"]>(initialCustom?.kind ?? "openai-compatible");
   // Custom-provider model fetch/curation (the drawer's model step).
   const [fetchedModels, setFetchedModels] = useState<Extract<FetchModelsOutcome, { ok: true }>["models"] | null>(null);
   const [createFetchNotice, setCreateFetchNotice] = useState<string | null>(null);
@@ -1821,7 +1823,7 @@ export function ConnectionDrawerFields({
   // (the record's own key) or a keyed catalog provider (the connection key).
   // A saved custom record already owns its key; an oauth provider signs in.
   const showKeyInCreate = authKind === "api_key" && (isNewCustomEndpoint || !isCustomRecordConnection);
-  const setupMissingModel = createModelMissing(model, selectedEntry?.models ?? []);
+  const setupMissingModel = createModelMissing(model, selectedEntry?.models ?? [], !!initialCustom, simplified);
   const setupMissingKey = simplified && showKeyInCreate && !noAuth &&
     selectedEntry?.authOptional !== true && secretValue.trim() === "";
   const keyFieldDisabled = readOnly || (isNewCustomEndpoint && noAuth);
@@ -2538,7 +2540,7 @@ export function ConnectionDrawerFields({
                 const livePrice = pricingMode !== "rates" && pricingMode !== "subscription" ? targetConnection?.modelCapabilities?.[id]?.pricing : undefined;
                 const fallback = pricingMode === "rates" ? pricingPayload() : undefined;
                 const inherited = livePrice ?? (fallback && fallback.mode === "rates" ? fallback : undefined) ?? catalogPrice;
-                const inheritedDraft = inherited ? { input: String(inherited.input), cachedInput: String(inherited.cachedInput), output: String(inherited.output), cacheWrite: inherited.cacheWrite === undefined ? "" : String(inherited.cacheWrite) } : empty;
+                const inheritedDraft = inherited ? { input: String(inherited.input), cachedInput: inherited.cachedInput === undefined ? "" : String(inherited.cachedInput), output: String(inherited.output), cacheWrite: inherited.cacheWrite === undefined ? "" : String(inherited.cacheWrite) } : empty;
                 const draft = ownRateDraft(modelRates, id) ?? inheritedDraft;
                 const source = pricingMode === "subscription" ? "Subscription" : livePrice ? "Provider price" : fallback && fallback.mode === "rates" ? "Connection fallback" : catalogPrice?.tariff ? `Catalog peak: ${catalogPrice.tariff.peakUtcDays.map(day => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day]).join(", ")} ${catalogPrice.tariff.peakUtcHours.map(([start, end]) => `${String(start).padStart(2, "0")}–${String(end).padStart(2, "0")}`).join(", ")} UTC; other times ×${catalogPrice.tariff.offPeakMultiplier}` : catalogPrice ? "Catalog price" : "Unknown";
                 return <tr key={id}><th scope="row">{id}<small>{pricingMode === "subscription" ? (custom ? "Subscription · custom rate inactive" : "Subscription") : custom ? "Custom" : source}</small><button type="button" className="settings-button connection-drawer-rate-mode" disabled={readOnly || saving || pricingMode === "subscription"} aria-label={`${id} ${custom ? "use inherited price" : "set custom price"}`} onClick={() => { setModelRates(previous => { const next = { ...previous }; if (custom) delete next[id]; else next[id] = { ...inheritedDraft }; return next; }); setDirtyRates(previous => new Set(previous).add(id)); }}>{custom ? "Use inherited" : "Customize"}</button></th>
@@ -3208,6 +3210,7 @@ export interface ConnectionDrawerProps {
   secrets: readonly SecretStatus[];
   readOnly: boolean;
   initialFocus?: "label" | "credential" | "context";
+  initialCustom?: { name: string; baseUrl: string; kind: CustomProviderRecord["kind"] };
   onClose(): void;
   store?: SettingsStoreApi;
   /** Injectable custom-provider bridge; forwarded to the fields. */

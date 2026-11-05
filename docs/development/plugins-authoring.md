@@ -150,3 +150,37 @@ every index fetch, plus the sha256 check per download.
 4. Sign with the publisher key; verify with the shipped public key.
 5. Upload the archive to the pinned URL — the URL must serve exactly the
    bytes you hashed.
+
+### Account sources
+
+A plugin may declare `accountSources` as in the [example](../../examples/account-source/).
+Each source names a dedicated custom gateway connection and an account API on
+that gateway's HTTPS origin. It must not contain credentials, headers, or
+executable UI. Installation previews the source; a user must select a matching
+connection and approve a catalog preview before synchronization. Changing the
+descriptor requires renewed approval. Disabling or removing a plugin stops
+refresh without deleting the connection or its key. Account sources in a project
+plugin are not global sources.
+
+Packages that rely on this contribution should set `engines.anycode` to the
+first released version that supports it. The example is an unreleased fixture;
+fill in the actual release version before distributing a package.
+
+The API accepts the gateway connection's bearer credential. `GET catalog`
+returns `schemaVersion: "anycode.account-catalog.v1"`, an opaque `accountId`,
+`revision`, `complete: true`, and up to 500 unique `models`. Each model has an
+`id`, optional `displayName`, `billing` (`free` or `metered`), optional
+`capabilities`, and optional `ratesMicrosPerMillionTokens` with decimal integer
+strings for `input`, `output`, optional `cachedInput` and `cacheWrite`. Rates
+are USD per million tokens in millionths of a dollar. Free is explicit zero;
+missing metered rates mean unknown. Account responses cannot choose a URL or
+credential.
+
+`GET budget` returns `schemaVersion: "anycode.account-budget.v1"`, the same
+`accountId`, opaque `budgetId`, `currency: "USD"`, `scale: 6`, ISO `observedAt`,
+and `windows` with unique `day` and/or `month` kinds. Each window supplies
+integer-string `limit`, `spent`, `remaining`, optional `reserved`, and ISO
+`resetsAt`. The server determines spending and resets; the app does not
+calculate a shared ledger. An unavailable or stale budget is not a zero budget.
+Redirects are refused and response sizes are bounded. Adapt non-standard APIs
+at the gateway; no local script or arbitrary renderer code is needed.

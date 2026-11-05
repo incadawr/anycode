@@ -42,6 +42,7 @@ import { CommandPalette, type PaletteAction, type PaletteMode } from "./componen
 import { handleCreateTabResult } from "./components/SessionPicker.js";
 import { resumeWithMarker } from "./pending-resumes.js";
 import { Sidebar, SIDEBAR_SEARCH_EVENT } from "./components/Sidebar.js";
+import { AccountBudgetCard } from "./components/AccountBudgetCard.js";
 import { WindowControls } from "./components/WindowControls.js";
 import { SessionHeader } from "./components/SessionHeader.js";
 import { MessageList } from "./components/MessageList.js";
@@ -1747,6 +1748,7 @@ export function App() {
         <div className="welcome-titlebar" aria-hidden="true" />
         <WelcomeScreen onOpenSettings={() => setSettingsOpen(true)} settingsOpen={settingsOpen}
           onSelectEngine={(engine) => { welcomeEngineRef.current = engine; }} />
+        <div className="account-budget-floating"><AccountBudgetCard collapsed onSettings={() => setSettingsOpen(true)} /></div>
         <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
         {window.anycode?.platform !== "darwin" && <WindowControls maximized={windowState.maximized} />}
       </main>
@@ -1844,6 +1846,7 @@ export function App() {
       />
 
       <div className="main-pane">
+        {collapsed && <div className="account-budget-floating"><AccountBudgetCard collapsed onSettings={() => setSettingsOpen(true)} /></div>}
         {selectMainPaneView(draftActive, Boolean(activeTab && activeStore)) === "start" ? (
           <StartScreen onToast={pushToast} />
         ) : activeTab && activeStore ? (

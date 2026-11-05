@@ -2489,3 +2489,10 @@ it("retains valid model pricing and unrelated fields when one rate is malformed"
   expect(parsed.modelOverrides?.b?.pricing).toBeUndefined();
   expect(parseSettings(JSON.parse(JSON.stringify(parsed ? { ...settings, provider: { ...settings.provider, connections: [parsed] } } : settings))).settings.provider.connections[0]?.modelOverrides?.a?.pricing?.input).toBe(1);
 });
+
+it("keeps valid account source grants when another entry is malformed", () => {
+  const valid = { plugin: "company", source: "cluster", descriptorHash: "a".repeat(64), connectionId: "conn", accountId: "employee", ownership: {} };
+  const input = { ...cloneDefaults(), plugins: { accountSources: [valid, { plugin: "broken" }] } };
+  const parsed = settingsSchema.parse(input);
+  expect(parsed.plugins?.accountSources).toEqual([valid]);
+});

@@ -215,7 +215,7 @@ const promptCacheSchema = z
  * every default is optional (a connection may exist with only a credential, or
  * only a remembered model). `lastHealth` is the advisory cache (W11 writes it).
  */
-const tokenRatesSchema = z.object({ input: z.number().finite().nonnegative(), cachedInput: z.number().finite().nonnegative(), output: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative().optional() }).strict();
+const tokenRatesSchema = z.object({ input: z.number().finite().nonnegative(), cachedInput: z.number().finite().nonnegative().optional(), output: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative().optional() }).strict();
 const connectionPricingSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("subscription") }),
   // The EXPLICIT "the provider's per-token rate applies" choice. Distinct from
@@ -539,6 +539,20 @@ const serviceConsentEntrySchema = z
   })
   .strict();
 
+const accountSourceBindingSchema = z.object({
+  plugin: z.string().min(1), source: z.string().min(1),
+  descriptorHash: z.string().regex(/^[a-f0-9]{64}$/),
+  connectionId: z.string().min(1), accountId: z.string().min(1),
+  ownership: z.record(z.string(), z.object({
+    model: z.object({ value: z.literal(true), overridden: z.boolean().optional() }).optional(),
+    pricing: z.object({ value: tokenRatesSchema, overridden: z.boolean().optional() }).optional(),
+    contextWindowTokens: z.object({ value: z.number().int().min(1024).max(1_000_000), overridden: z.boolean().optional() }).optional(),
+    capabilities: z.object({ value: z.object({ reasoning: z.boolean().optional(), effortLevels: z.array(z.string()).optional(), imageInput: z.literal(true).optional() }), overridden: z.boolean().optional() }).optional(),
+    pricingOverride: z.literal(true).optional(),
+    contextWindowTokensOverride: z.literal(true).optional(),
+  })),
+});
+
 // The `plugins` settings block. `autoUpdateOfficial` absent = false (the
 // scheduler never auto-installs without it); `officialIndexUrl` is a
 // dev/automation override never written by the app; `mcpConsent` undefined =
@@ -551,6 +565,7 @@ const pluginsSettingsSchema = z
     // (undefined still means "not yet migrated" for mcpConsent).
     mcpConsent: z.array(mcpConsentEntrySchema).optional(),
     serviceConsent: z.array(serviceConsentEntrySchema).optional(),
+    accountSources: z.preprocess((raw) => parseElementsTolerantly(accountSourceBindingSchema, raw), z.array(accountSourceBindingSchema)).optional(),
   })
   .strict()
   .optional()
