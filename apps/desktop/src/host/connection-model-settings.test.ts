@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveEffortLevels, resolveMaxOutputTokens, resolveReasoningEffort, type ReasoningEffort } from "@anycode/core";
+import { openCodeGoCatalogEntry, resolveEffortLevels, resolveMaxOutputTokens, resolveReasoningEffort, type ReasoningEffort } from "@anycode/core";
 import { createConnectionModelSettings, nearestSupportedEffort } from "./connection-model-settings.js";
 import { findCatalogEntry } from "@anycode/core/catalog";
 import { createHarness } from "./test-harness.js";
@@ -11,6 +11,25 @@ const connection = {
   },
 };
 const make = () => createConnectionModelSettings({ connection, liveCapabilitiesFor: () => undefined });
+
+it("clamps a connection-wide output cap on Go model switches and snapshot refresh", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { parseOpenCodeGoSnapshot } = await import("../../../../packages/core/src/provider/model-route.js");
+  const fixture = JSON.parse(await readFile(new URL("../../../../packages/core/src/provider/__fixtures__/opencode-go-models.json", import.meta.url), "utf8"));
+  const luna = fixture.data.find((row: { id: string }) => row.id === "gpt-6-luna");
+  luna.limit.output = 64_000;
+  const parsed = parseOpenCodeGoSnapshot(fixture, "2026-11-05T00:00:00Z");
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok) throw new Error("invalid fixture");
+  const catalog = findCatalogEntry("opencode")!;
+  let snapshot: typeof parsed.snapshot | undefined;
+  const settings = createConnectionModelSettings({ catalogEntry: catalog, catalogEntryFor: id => openCodeGoCatalogEntry(catalog, id, snapshot), liveCapabilitiesFor: () => undefined });
+  const cap = 500_000;
+  expect(resolveMaxOutputTokens("grok-4.7", settings.entryFor("grok-4.7"), cap)).toBeGreaterThan(128_000);
+  expect(resolveMaxOutputTokens("gpt-6-luna", settings.entryFor("gpt-6-luna"), cap)).toBe(128_000);
+  snapshot = parsed.snapshot;
+  expect(resolveMaxOutputTokens("gpt-6-luna", settings.entryFor("gpt-6-luna"), cap)).toBe(64_000);
+});
 
 describe("connection model settings (GitHub #26)", () => {
   it("resolves independent windows and an unknown sibling without inheriting the parent's window", () => {

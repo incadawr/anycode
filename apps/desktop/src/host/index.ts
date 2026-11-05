@@ -3577,7 +3577,7 @@ async function boot(): Promise<void> {
       isChildSessionBoot(args, sessionMeta) ? clampSubagentMaxOutputTokens(resolved) : resolved;
     const bootMaxOutputTokens = clampChildOutput(resolveMaxOutputTokens(
       envConfig.model,
-      envConfig.maxOutputTokens === undefined ? entryFor(envConfig.model) : catalogEntry,
+      envConfig.automaticModelRouting || envConfig.maxOutputTokens === undefined ? entryFor(envConfig.model) : catalogEntry,
       envConfig.maxOutputTokens,
       (requested, clamped, modelId) =>
         console.warn(`[host] ${modelId} max output tokens clamped: ${requested} > provider catalog ceiling, using ${clamped}`),
@@ -4685,7 +4685,7 @@ async function boot(): Promise<void> {
         liveContextWindowAssumed = contextInfo.source === "assumed";
         config.maxOutputTokens = clampChildOutput(resolveMaxOutputTokens(
           id,
-          envConfig.maxOutputTokens === undefined ? entryFor(id) : catalogEntry,
+          envConfig.automaticModelRouting || envConfig.maxOutputTokens === undefined ? entryFor(id) : catalogEntry,
           envConfig.maxOutputTokens,
           (requested, clamped, modelId) =>
             console.warn(`[host] ${modelId} max output tokens clamped: ${requested} > provider catalog ceiling, using ${clamped}`),

@@ -16,3 +16,8 @@ it("uses context, not input limit, for the window and honors a lower request", (
   expect(goRequestOutputBudget(request("abc"), go, tokenizer)).toBe(498974);
 });
 it("leaves non-Go requests alone", () => expect(goRequestOutputBudget(request("abc"), port(), tokenizer)).toBe(500000));
+it("clamps an explicit output to the Go ceiling as well as available context", () => {
+  const go = port({ context: 1_050_000, output: 128_000 });
+  expect(goRequestOutputBudget(request("abc"), go, tokenizer)).toBe(128_000);
+  expect(goRequestOutputBudget(request("abc"), go, tokenizer, 50_000)).toBe(48_974);
+});

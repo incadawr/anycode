@@ -11,5 +11,5 @@ export function goRequestOutputBudget(request: ModelRequest, port: ModelPort, to
   const window = contextOverride ?? limits.context;
   const prompt = tokenizer.count(request.system ?? "") + request.messages.reduce((n, message) => n + estimateMessageTokens(tokenizer, message), 0) + estimateToolDeclarationTokens(request.tools, tokenizer);
   const available = Math.max(1, window - Math.ceil(prompt * 1.15) - 1024);
-  return Math.min(request.maxOutputTokens ?? limits.output ?? DEFAULT_MAX_OUTPUT_TOKENS, available);
+  return Math.min(request.maxOutputTokens ?? limits.output ?? DEFAULT_MAX_OUTPUT_TOKENS, limits.output ?? Infinity, available);
 }
