@@ -53,3 +53,24 @@ it("disables OAuth choices and displays the proxy warning with the selected mode
     expect(container.querySelector<HTMLInputElement>('input[inputmode="numeric"]')?.disabled).toBe(false);
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
+
+it("keeps a draft on its model while another model shows its own saved window", async () => {
+  const settings = cloneDefaults();
+  settings.provider.connections = [{ id: "c", providerId: "custom", models: ["a", "b"], modelOverrides: { a: { contextWindowTokens: 32000 }, b: { contextWindowTokens: 64000 } } }];
+  settings.recognizer = { connectionId: "c", modelId: "a" };
+  const store = createStore(() => ({ snapshot: { settings, readOnly: false, catalog: [] } })) as unknown as SettingsStoreApi;
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(VisionPane, { store })));
+    const field = () => container.querySelector<HTMLInputElement>('input[inputmode="numeric"]')!;
+    const select = container.querySelector<HTMLSelectElement>(".vision-pane-model-select")!;
+    expect(field().value).toBe("32000");
+    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field(), "48000"); field().dispatchEvent(new Event("input", { bubbles: true })); });
+    expect(field().value).toBe("48000");
+    await act(async () => { select.value = "model:1"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(field().value).toBe("64000");
+    await act(async () => { select.value = "model:0"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(field().value).toBe("48000");
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
