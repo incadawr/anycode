@@ -1,3 +1,6 @@
+import { findCatalogEntry } from "@anycode/core/catalog";
+import { connectionContextWindow } from "../../../shared/connection-context-window.js";
+import { contextWindowTokensField, modelOverrideFor, patchModelOverride } from "../../../shared/model-overrides.js";
 /**
  * срез E2a — the Vision settings panel: JSX + effects only. Every
  * decision rule the panel needs already lives as a tested pure function in
@@ -61,6 +64,7 @@ export function VisionPane({ store = useSettingsStore }: VisionPaneProps) {
   );
   const [modelId, setModelId] = useState(() => (initialFallback.enabled ? initialFallback.modelId : ""));
   const [customModel, setCustomModel] = useState(false);
+  const [contextDrafts, setContextDrafts] = useState<Record<string, string>>({});
   const selectionRef = useRef(visionDraftKey(connectionId, modelId));
   selectionRef.current = visionDraftKey(connectionId, modelId);
   const [saving, setSaving] = useState(false);
@@ -84,15 +88,23 @@ export function VisionPane({ store = useSettingsStore }: VisionPaneProps) {
   const selectedOption = options.find((option) => option.id === connectionId);
   const selectedConnection = settings.provider.connections.find((c) => c.id === connectionId);
   const modelHints = visionModelHints(selectedConnection, catalog);
+  const draftKey = visionDraftKey(connectionId, modelId);
+  const savedContext = modelOverrideFor(selectedConnection, modelId)?.contextWindowTokens;
+  const contextDirty = Object.hasOwn(contextDrafts, draftKey);
+  const contextValue = contextDrafts[draftKey] ?? (savedContext === undefined ? "" : String(savedContext));
+  const parsedContext = contextWindowTokensField(contextValue);
+  const hintConnection = selectedConnection ? structuredClone(selectedConnection) : undefined;
+  if (hintConnection && contextDirty && parsedContext.ok) patchModelOverride(hintConnection, modelId, { contextWindowTokens: parsedContext.value === "" ? undefined : parsedContext.value });
+  const effectiveContext = connectionContextWindow(hintConnection, modelId, selectedConnection ? findCatalogEntry(selectedConnection.providerId) : undefined);
   const anyOptionDisabled = options.some((option) => !option.selectable);
-  const submitDisabled = readOnly || saving || probing || visionSubmitDisabled(connectionId, modelId);
+  const submitDisabled = readOnly || saving || probing || !parsedContext.ok || visionSubmitDisabled(connectionId, modelId);
   // Probing writes nothing: it runs the candidate pair through the production
   // ladder and reports what came back. A read-only settings file blocks the
   // Save path only — with the fields seeded from the saved pair, probing is
   // exactly how a read-only install answers "is my configured recognizer
   // still working?". Mirroring the runtime's refusals means never adding one
   // the runtime does not have.
-  const probeDisabled = saving || probing || visionSubmitDisabled(connectionId, modelId);
+  const probeDisabled = saving || probing || !parsedContext.ok || visionSubmitDisabled(connectionId, modelId);
   const currentLabel =
     fallback.enabled ? (options.find((option) => option.id === fallback.connectionId)?.label ?? fallback.connectionId) : null;
 
@@ -104,9 +116,11 @@ export function VisionPane({ store = useSettingsStore }: VisionPaneProps) {
     try {
       const result = await window.anycode.settings.recognizerSet({
         recognizer: { connectionId, modelId: modelId.trim() },
+        ...(contextDirty && parsedContext.ok ? { contextWindowTokens: parsedContext.value } : {}),
       });
       if (result.ok) {
         await store.getState().load();
+        setContextDrafts((drafts) => { if (drafts[submitted] !== contextValue) return drafts; const next = { ...drafts }; delete next[submitted]; return next; });
       } else {
         if (selectionRef.current === submitted) setError(describeMutationFailure(result.reason));
       }
@@ -145,6 +159,7 @@ export function VisionPane({ store = useSettingsStore }: VisionPaneProps) {
       const result = await window.anycode.settings.recognizerProbe({
         connectionId,
         modelId: modelId.trim(),
+        ...(contextDirty && parsedContext.ok ? { contextWindowTokens: parsedContext.value } : {}),
       });
       if (selectionRef.current === submitted) setProbeResult(result);
     } catch (err) {
@@ -228,6 +243,14 @@ export function VisionPane({ store = useSettingsStore }: VisionPaneProps) {
           value={modelId} disabled={readOnly} placeholder="e.g. glm-5.3-flash"
           onChange={(e) => { setModelId(e.target.value); setError(null); setProbeResult(null); }} />
       )}
+
+      <Input label="Context window (tokens)" size="sm" type="text" inputMode="numeric"
+        value={contextValue} disabled={readOnly || !modelId} placeholder="Auto"
+        onChange={(e) => setContextDrafts((drafts) => ({ ...drafts, [draftKey]: e.target.value }))} />
+      <div className="settings-field-hint">
+        {parsedContext.ok ? `Effective: ${effectiveContext.tokens.toLocaleString()} tokens (${effectiveContext.source}).` : "Enter an integer from 1024 to 1000000, or leave blank for Auto."}
+        {" "}This override belongs to this connection and model and is shared with chat and connection settings.
+      </div>
 
       <div className="settings-field-row">
         <Button
