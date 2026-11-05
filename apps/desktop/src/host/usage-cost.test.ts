@@ -281,3 +281,9 @@ describe("context pricing tiers", () => {
     expect(calculateUsageCost({ inputTokens: 100001, cachedInputTokens: 1, outputTokens: 0 }, price)?.priceBasisId).toBe("tier+gt-100000");
   });
 });
+
+it("does not price a tier when a usage count is missing", () => {
+  const price = { basisId: "tier", input: 1, cachedInput: .1, output: 2, tiers: [{ gt: 100, input: 2, cachedInput: .2, output: 4 }] };
+  expect(calculateUsageCost({ inputTokens: 101, outputTokens: 1 }, price)).toBeUndefined();
+  expect(calculateUsageCost({ cachedInputTokens: 0, outputTokens: 1 }, price)).toBeUndefined();
+});

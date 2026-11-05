@@ -5,6 +5,7 @@
  * discriminant.
  */
 
+import type { OpenCodeGoEndpointPolicy } from "./opencode-go-policy.js";
 import type { ProviderTransport } from "./catalog.js";
 import type { ProviderQuotaUpdate } from "./quota.js";
 import type { NetworkWaiter } from "./network-waiter.js";
@@ -12,6 +13,8 @@ import type { RetryPolicy } from "./retry.js";
 import type { ImplicitPromptCache, ReasoningEffort } from "../types/config.js";
 
 export interface EndpointConfig {
+  /** Automatic Go policy for this exact model; absent for manual endpoints. */
+  goModelPolicy?: OpenCodeGoEndpointPolicy;
   /**
    * Wire protocol of this endpoint. MANDATORY and deliberately without a
    * default: the back-compat fallback (`anthropic-messages`) is applied exactly

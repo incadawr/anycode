@@ -78,3 +78,19 @@ it("does not publish a base price for unknown conditions", async () => {
   const tierEntry = tier.ok ? tier.snapshot.models[row.id] : undefined;
   expect(tierEntry?.kind === "route" ? tierEntry.route.metadata.pricing : "not a route").toBeUndefined();
 });
+
+it("resolves each supported static model with its own explicit policy", async () => {
+  const { resolveOpenCodeGoEndpointPolicy } = await import("./opencode-go-policy.js");
+  for (const [id, entry] of Object.entries(OPENCODE_GO_MODELS.models)) {
+    const result = resolveOpenCodeGoEndpointPolicy("opencode", id);
+    expect(result.kind).toBe("route");
+    if (result.kind !== "route") continue;
+    expect(result.route.transport).toBe(entry.route.transport);
+    expect(result.route.baseUrl).toBe(entry.route.baseUrl);
+    expect(result.route.metadata).toEqual(entry.route.metadata);
+    expect(result.route.policy.model).toBe(id);
+  }
+  expect(resolveOpenCodeGoEndpointPolicy("opencode", "gemini-4-argon").kind).toBe("refusal");
+  expect(resolveOpenCodeGoEndpointPolicy("other", "glm-5.3").kind).toBe("refusal");
+  expect(resolveOpenCodeGoEndpointPolicy("opencode", "glm-5.3", { version: 1, models: {} }).kind).toBe("refusal");
+});
