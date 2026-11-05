@@ -1908,6 +1908,29 @@ describe("workflow engine role-route (engine-profile steps)", () => {
     return new FakeSessionSubagentPort(async (req) => sessionOutcome(req, { finalText: "ok-plan" }));
   }
 
+  it("uses the workflow step budget over the routed role budget", async () => {
+    const port = new RoutedSubagentPort(["planner"], (id, req, opts) => emitAndComplete(opts, req, `inline:${id}`), PLANNER_PROFILES,
+      new Map([["planner", { entries: [{ connection: "api", model: "m" }], skipped: [], turnBudget: 80 }]]));
+    const session = okSession();
+    const workflow = def("wf-role", [{ id: "a", agentType: "planner", promptTemplate: "${input}", maxTurns: 12 }]);
+    await createWorkflowRunnerForTest(port, [workflow], { sessionSubagents: session }).run({ name: "wf-role", input: "go" }, {});
+    expect(session.requests[0]?.maxTurns).toBe(12);
+  });
+
+  it.each([0, -5])("clamps configured budget %s in routed and engine requests", async budget => {
+    for (const routed of [true, false]) {
+      const profile = { ...getPersona("executor"), name: routed ? "executor" : "worker", origin: "settings" as const, engine: "claude" as const };
+      const port = createSubagentRunner(makeParent({ subagentMaxTurns: budget }), {
+        profiles: [profile],
+        resolveRoleRoute: () => routed ? { entries: [{ engine: "claude" }], skipped: [], turnBudget: 80 } : null,
+      });
+      const session = okSession();
+      const workflow = def("wf-budget", [{ id: "a", agentType: profile.name, promptTemplate: "${input}" }]);
+      await createWorkflowRunnerForTest(port, [workflow], { sessionSubagents: session }).run({ name: "wf-budget", input: "go" }, {});
+      expect(session.requests[0]?.maxTurns).toBe(1);
+    }
+  });
+
   it("carries restrictions to a core fallback and refuses a restricted native target", async () => {
     const restrictions = { tools: ["Read"], readOnly: true };
     const fallback = new RoutedSubagentPort(

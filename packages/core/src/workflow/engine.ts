@@ -57,6 +57,7 @@ import {
   type RoleRouteRequestFields,
 } from "../subagents/role-route.js";
 import {
+  SUBAGENT_MAX_TURNS_CEILING,
   WORKFLOW_OUTPUT_MAX_BYTES,
   WORKFLOW_STEP_PROMPT_MAX_BYTES,
   WORKFLOW_STEP_TIMEOUT_MS,
@@ -375,6 +376,7 @@ function createRunner(
                     spawnToolCallId,
                     ...(restrictions !== undefined ? { restrictions } : {}),
                     profile: engineProfile,
+                    maxTurns: step.maxTurns !== undefined ? Math.min(step.maxTurns, SUBAGENT_MAX_TURNS_CEILING) : engineProfile.turnBudget ?? subagents.sessionTurnBudget?.(step.agentType),
                   })
                 : {
                     ...buildSessionSubagentRequest({
@@ -385,6 +387,7 @@ function createRunner(
                       ...(restrictions !== undefined ? { restrictions } : {}),
                     }),
                     ...engineRoute.fields,
+                    ...(step.maxTurns !== undefined ? { maxTurns: Math.min(step.maxTurns, SUBAGENT_MAX_TURNS_CEILING) } : {}),
                   };
             routeNotice = engineRoute?.notice;
             const refusal = missingRestrictions ? "Agent: profile restrictions are unavailable for this child session."

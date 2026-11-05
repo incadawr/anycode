@@ -599,6 +599,8 @@ async function runSessionTier(
     ? ctx.subagents?.coreProfile?.(agentType) ?? undefined : undefined;
   const useBuiltinRole = configuredCoreProfile === undefined && engineProfile === undefined && degrade === undefined && roleRoute === undefined && builtinRole !== undefined;
   const coreProfile = configuredCoreProfile ?? (useBuiltinRole ? { systemPrompt: getPersona(builtinRole).systemPrompt } : undefined);
+  const sessionBudget = engineProfile?.turnBudget ?? ctx.subagents?.sessionTurnBudget?.(agentType) ??
+    (useBuiltinRole ? ROLE_TURN_BUDGETS[builtinRole] : undefined);
   const profileEffort = engineProfile?.effort ?? (roleRoute === undefined ? coreProfile?.effort : undefined);
   const resolvedRestrictions = ctx.subagents?.sessionRestrictions?.(agentType) ?? undefined;
   if (resumeChildSessionId === undefined && engineProfile === undefined && resolvedRestrictions === undefined && ctx.subagents?.hasSessionRestrictions?.(agentType)) {
@@ -638,7 +640,7 @@ async function runSessionTier(
             ? { systemPrompt: coreProfile.systemPrompt }
             : coreProfile),
           // the profile's own turn budget rides the creating spawn only.
-          ...(engineProfile?.turnBudget !== undefined ? { maxTurns: engineProfile.turnBudget } : useBuiltinRole ? { maxTurns: ROLE_TURN_BUDGETS[builtinRole] } : {}),
+          ...(sessionBudget !== undefined ? { maxTurns: sessionBudget } : {}),
           // A role route supplies its own effort; otherwise preserve the profile's
           // selection for the destination model to resolve at child boot.
           ...(profileEffort !== undefined ? { effort: profileEffort } : {}),

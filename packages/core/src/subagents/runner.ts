@@ -374,6 +374,11 @@ export function buildChildConfig(
     adaptive && req.maxTurns === undefined && persona.turnBudget === undefined && parent.subagentMaxTurns === undefined
       ? parent.subagentBudget?.learned({ role: persona.name, ...(spawnModel !== undefined ? { model: spawnModel } : {}) })
     : undefined;
+  const defaultRoleBudget = persona.origin === "settings" ||
+    (persona.origin === "builtin" && isKnownPersona(persona.name) && persona.turnBudget === getPersona(persona.name).turnBudget);
+  const personaBudget = defaultRoleBudget
+    ? parent.subagentMaxTurns ?? persona.turnBudget
+    : persona.turnBudget ?? parent.subagentMaxTurns;
   return {
 
     // `model` override (slice 4.6, §2.5) resolves to a fixed child-only port
@@ -417,16 +422,16 @@ export function buildChildConfig(
     cwd: parent.cwd,
     // Budget resolution, most specific first: explicit request (a workflow step
     // — the Agent schema has no maxTurns and will not get one) > the role's own
-    // budget (md-profile frontmatter / persona) > host/settings default
-    // (parent.subagentMaxTurns) > DEFAULT_SUBAGENT_MAX_TURNS. Only the runaway
+    // budget (md-profile frontmatter) > host/settings default
+    // (parent.subagentMaxTurns) > built-in role budget > DEFAULT_SUBAGENT_MAX_TURNS. Only the runaway
     // ceiling clamps — until 2026-08-16 the DEFAULT was the clamp, so a caller
     // could lower the budget but nothing could raise it. Turns are the runaway
     // guard, not the working budget: deadlineAt below is what usually ends a
     // long run (§2.4, carried into).
-    maxTurns: Math.min(
-      req.maxTurns ?? persona.turnBudget ?? parent.subagentMaxTurns ?? learned ?? DEFAULT_SUBAGENT_MAX_TURNS,
+    maxTurns: Math.max(1, Math.min(
+      req.maxTurns ?? personaBudget ?? learned ?? DEFAULT_SUBAGENT_MAX_TURNS,
       SUBAGENT_MAX_TURNS_CEILING,
-    ),
+    )),
     ...(extras?.deadlineAt !== undefined ? { deadlineAt: extras.deadlineAt } : {}),
     // Ceiling ladder with the two clamps only a child needs (§1.12):
     // maxTurnsCeiling keeps the budget PLUS every grant under the same runaway
@@ -707,6 +712,13 @@ export function createSubagentRunner(
 
   return {
     supportsInlineProvider: opts?.readConnectionTargets !== undefined,
+    sessionTurnBudget(agentType: string): number | undefined {
+      const profile = currentProfiles().get(agentType);
+      const builtin = isKnownPersona(agentType) ? getPersona(agentType) : undefined;
+      const explicit = profile?.origin !== "settings" ? profile?.turnBudget : undefined;
+      const budget = explicit ?? parent.subagentMaxTurns ?? profile?.turnBudget ?? (profile === undefined ? builtin?.turnBudget : undefined);
+      return budget === undefined ? undefined : Math.max(1, Math.min(budget, SUBAGENT_MAX_TURNS_CEILING));
+    },
     listAgentTypes(): string[] {
       // dedupe — an overridable role name (planner/executor/
       // reviewer) can now appear both as a built-in and as a profile; the
@@ -737,13 +749,14 @@ export function createSubagentRunner(
       // plumbing fix) — omitted entirely when absent, never a present-but-
       // undefined key, matching the discipline every other optional field on
       // this wire already follows.
+      const budget = persona.origin === "settings" ? parent.subagentMaxTurns ?? persona.turnBudget : persona.turnBudget;
       return {
         engine: persona.engine,
         systemPrompt: persona.systemPrompt,
         ...(persona.model !== undefined ? { model: persona.model } : {}),
         // persona.turnBudget rides through the same as model —
         // omitted entirely when absent, never a present-but-undefined key.
-        ...(persona.turnBudget !== undefined ? { turnBudget: persona.turnBudget } : {}),
+        ...(budget !== undefined ? { turnBudget: Math.max(1, Math.min(budget, SUBAGENT_MAX_TURNS_CEILING)) } : {}),
         // persona.effort rides through the same as model — omitted entirely
         // when absent. The target model resolves compatibility for core children.
         ...(persona.effort !== undefined ? { effort: persona.effort } : {}),
@@ -809,8 +822,13 @@ export function createSubagentRunner(
     // reads the real resolver in production (SubagentRunnerOptions.resolveRoleRoute
     // used to be reachable only through faked tests — session-tier route stamping,
     // maxTurns from turnBudget and the inline connection refusal were all dead).
-    // Pure delegation: the host owns settings + health; core only walks the chain.
-    resolveRoleRoute: opts?.resolveRoleRoute ?? ((agentType: string) => null),
+    // Preserve routing while applying the parent session's configured budget.
+    resolveRoleRoute(agentType: string) {
+      const route = opts?.resolveRoleRoute?.(agentType) ?? null;
+      if (route === null) return route;
+      const budget = parent.subagentMaxTurns ?? route.turnBudget;
+      return budget === undefined ? route : { ...route, turnBudget: Math.max(1, Math.min(budget, SUBAGENT_MAX_TURNS_CEILING)) };
+    },
     // the owning AgentLoop registers its human-context thunk
     // here right after construction (the loop owns the live history the thunk
     // reads; the runner is built from the config, before the loop exists).

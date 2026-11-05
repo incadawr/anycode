@@ -396,7 +396,8 @@ export function buildToolsPatch(
   const concurrency = parseOptionalInt(concurrencyText);
   const stallTimeoutMs = parseOptionalInt(stallTimeoutText);
   const maxTurns = parseOptionalInt(maxTurnsText);
-  const subagentMaxTurns = parseOptionalInt(subagentMaxTurnsText);
+  const parsedSubagentMaxTurns = parseOptionalInt(subagentMaxTurnsText);
+  const subagentMaxTurns = parsedSubagentMaxTurns === undefined ? undefined : Math.max(1, parsedSubagentMaxTurns);
   // provider retry knobs, mirrors of
   // ANYCODE_MAX_RETRIES / ANYCODE_NETWORK_RETRY_BUDGET_MS (env > settings).
   const maxRetries = parseOptionalInt(maxRetriesText);
@@ -2023,6 +2024,7 @@ export function SettingsScreen({
                   <span className="settings-field-label">Maximum turns (subagents)</span>
                   <input className="settings-field-input" type="text" inputMode="numeric" value={subagentMaxTurns}
                     disabled={readOnly} placeholder="40" onChange={(e) => setSubagentMaxTurns(e.target.value)} />
+                  <span className="settings-field-hint">Values below 1 are raised to 1; values above 200 are capped at 200 turns.</span>
                 </label>
                 <div className="settings-field">
                   <label className="settings-field-checkbox">

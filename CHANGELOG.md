@@ -17,6 +17,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Image input settings are now saved separately for each model. (GitHub #56)
 - Label provider rate limits clearly for both header formats (GitHub #55).
 - Keep connection tiles aligned and show all quota windows.
+- Subagent turn settings now apply to orchestration roles, up to the 200-turn limit. (GitHub #58)
 
 ## [0.0.77] — 2026-11-05
 

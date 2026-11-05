@@ -54,7 +54,7 @@ export function roleCatalog(
     const profile = discovered.find((entry) => entry.name === name);
     if (profile) return profile;
     const primary = roles?.[name]?.primary;
-    return { ...PERSONAS[name], ...(primary ?? {}) };
+    return { ...PERSONAS[name], ...(primary ?? {}), turnBudget: undefined };
   });
   const names = new Set(builtins.map((entry) => entry.name));
   // Explore is reserved against discovery, so project it explicitly.

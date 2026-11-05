@@ -288,6 +288,8 @@ export type EngineProfileInfo = {
 
 export interface SubagentPort {
   supportsInlineProvider?: boolean;
+  /** Effective settings/profile budget for a fresh session child. */
+  sessionTurnBudget?(agentType: string): number | undefined;
   run(req: SubagentRequest, opts: SubagentRunOptions): Promise<SubagentOutcome>;
   /**
    * Agent-type names this port can run: built-in personas + md-profiles (slice

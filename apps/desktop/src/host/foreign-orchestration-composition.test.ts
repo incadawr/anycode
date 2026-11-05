@@ -27,6 +27,19 @@ function setup() {
 }
 
 describe("foreign orchestration composition", () => {
+  it.each([undefined, 0, -5, 200, 300])("stamps role budgets for setting %s", async budget => {
+    const s = setup();
+    s.settings.tools.subagentMaxTurns = budget;
+    for (const [role, fallback] of [["planner", 30], ["executor", 80], ["reviewer", 40]] as const) {
+      await s.invoke(role);
+      expect(s.run.mock.calls.at(-1)![0].maxTurns).toBe(budget === undefined ? fallback : Math.max(1, Math.min(200, budget)));
+    }
+    s.setProfiles([{ ...PERSONAS.executor, turnBudget: 17 }]);
+    await s.invoke("executor");
+    expect(s.run.mock.calls.at(-1)![0].maxTurns).toBe(17);
+    await s.invoke("executor", { continue_session: "previous" });
+    expect(s.run.mock.calls.at(-1)![0]).not.toHaveProperty("maxTurns");
+  });
   it("uses a pending ask selection over applied full-access when enabling", async () => {
     const s = setup();
     const engine = { snapshot: () => ({ activePresetId: "full-access" }), pendingSnapshot: () => ({ activePresetId: "ask" }) };

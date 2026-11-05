@@ -7,13 +7,13 @@ import { cloneDefaults } from "../settings/schema.js";
 import { bridgeCallableCatalog, readRoleCatalog, roleCatalog } from "./role-catalog.js";
 
 describe("role catalog", () => {
-  it("provides built-ins with their bodies, budgets and restrictions without profiles", () => {
+  it("provides built-ins with their bodies and restrictions without profiles", () => {
     const catalog = roleCatalog([], undefined);
     expect(catalog.map((p) => p.name)).toEqual(["planner", "executor", "reviewer", "explore"]);
-    expect(catalog[0]).toMatchObject({ systemPrompt: PERSONAS.planner.systemPrompt, maxTurns: 30, restrictions: { readOnly: true, tools: [...PERSONAS.planner.tools, "ListConnections"] } });
-    expect(catalog[1]).toMatchObject({ systemPrompt: PERSONAS.executor.systemPrompt, maxTurns: 80 });
+    expect(catalog[0]).toMatchObject({ systemPrompt: PERSONAS.planner.systemPrompt, restrictions: { readOnly: true, tools: [...PERSONAS.planner.tools, "ListConnections"] } });
+    expect(catalog[1]).toMatchObject({ systemPrompt: PERSONAS.executor.systemPrompt });
     expect(catalog[1]).not.toHaveProperty("restrictions");
-    expect(catalog[2]).toMatchObject({ maxTurns: 40, restrictions: { readOnly: true } });
+    expect(catalog[2]).toMatchObject({ restrictions: { readOnly: true } });
     expect(catalog[3]).toMatchObject({ systemPrompt: PERSONAS.explore.systemPrompt, restrictions: { readOnly: true } });
   });
 

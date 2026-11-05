@@ -240,6 +240,11 @@ describe("buildToolsPatch", () => {
     expect(buildToolsPatch("4", "30000", "100")).toEqual({ tools: { concurrency: 4, stallTimeoutMs: 30000, maxTurns: 100 } });
   });
 
+  it("clamps subagent turns to at least one", () => {
+    expect(buildToolsPatch("", "", "", "0")).toEqual({ tools: { subagentMaxTurns: 1 } });
+    expect(buildToolsPatch("", "", "", "-5")).toEqual({ tools: { subagentMaxTurns: 1 } });
+  });
+
   it("includes maxRetries / networkRetryBudgetMs when supplied", () => {
     expect(buildToolsPatch("4", "30000", "100", "", "8", "300000")).toEqual({
       tools: { concurrency: 4, stallTimeoutMs: 30000, maxTurns: 100, maxRetries: 8, networkRetryBudgetMs: 300000 },
