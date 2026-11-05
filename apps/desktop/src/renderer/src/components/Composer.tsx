@@ -1167,6 +1167,7 @@ function CtxPopover({
   }
 
   function handleFocus(): void {
+    clearCloseTimer();
     clearHoverTimer();
     setOpen(true);
   }
@@ -1211,6 +1212,7 @@ function CtxPopover({
         clearCloseTimer();
         closeTimerRef.current = window.setTimeout(close, 250);
       }}
+      onFocus={clearCloseTimer}
       onBlur={handleBlur}
       onKeyDown={handleKeyDown}
     >
