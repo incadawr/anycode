@@ -4221,6 +4221,8 @@ export class Session {
     let release!: () => void;
     const op = new Promise<void>((r) => (release = r));
     this.currentTurn = op;
+    let candidate: SessionEngine | undefined;
+    let committed = false;
     try {
       const previousEngine = this.engine;
       const generation = this.boundGeneration;
@@ -4245,6 +4247,7 @@ export class Session {
       let next: SessionEngine;
       try {
         next = await this.switchEngineFactory(message.engine);
+        candidate = next;
       } catch (error) {
         // Old engine untouched — frame: a failed start leaves the
         // session exactly as it was, next turn still runs on the old engine.
@@ -4259,6 +4262,7 @@ export class Session {
         await next.dispose(this.shuttingDown ? "host-shutdown" : "session-close").catch((error) =>
           console.error(`[host] switched-to engine dispose threw during shutdown: ${describeError(error)}`),
         );
+        candidate = undefined;
         fail("session changed during engine switch");
         return;
       }
@@ -4280,6 +4284,7 @@ export class Session {
           if (invalid()) throw new Error("session changed during engine switch");
         } catch (error) {
           await next.dispose("session-close").catch(() => {});
+          candidate = undefined;
           fail(error instanceof Error ? error.message : String(error));
           return;
         }
@@ -4287,7 +4292,7 @@ export class Session {
       // The import prompt is rendered from `canonical` alone (the old
       // engine's items captured above) — nothing else feeds the render.
       const plan = planEngineSwitchImport(canonical);
-      this.engineSwitchImportPending = {
+      const pendingImport = {
         prompt: renderImportPrompt(previousEngine.id, next.id, plan, this.workspace),
       };
       // Permission posture survives the swap: when both engines run OUR
@@ -4309,6 +4314,9 @@ export class Session {
       this.settingsBarrierActive = false;
       this.updateContextUsage(null);
       this.engine = next;
+      committed = true;
+      candidate = undefined;
+      this.engineSwitchImportPending = pendingImport;
       this.orchestrationController?.invalidate();
       this.orchestrationController = undefined;
       this.orchestrationAdmission = undefined;
@@ -4352,6 +4360,14 @@ export class Session {
         console.error(`[host] previous engine dispose threw: ${error instanceof Error ? error.message : String(error)}`),
       );
       this.outbound.sendDirect({ type: "engine_switched", requestId: message.requestId, engine: next.id, previousEngine: previousEngine.id });
+    } catch (error) {
+      if (candidate !== undefined) {
+        await candidate.dispose("session-close").catch((disposeError) =>
+          console.error(`[host] candidate engine disposal failed: ${describeError(disposeError)}`),
+        );
+      }
+      if (!committed) fail(`engine switch failed: ${describeError(error)}`);
+      else console.error(`[host] committed engine switch cleanup failed: ${describeError(error)}`);
     } finally {
       release();
       if (this.currentTurn === op) this.currentTurn = null;

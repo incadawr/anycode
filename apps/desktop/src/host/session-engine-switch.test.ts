@@ -444,6 +444,25 @@ describe("Session — engine switch", () => {
     }
   });
 
+  it("disposes the candidate if rendering the import fails", async () => {
+    const oldEngine = new SwitchableFakeEngine([]);
+    const bad = { id: "bad", createdAt: 0, get message(): never { throw new Error("render failure"); } } as HistoryItem;
+    (oldEngine as unknown as { readTranscript: () => Promise<readonly HistoryItem[]> }).readTranscript = async () => [bad];
+    const next = new NextFakeEngine();
+    const h = createHarness({ steps: [], engine: oldEngine, switchEngineFactory: async () => next });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "engine_switch_request", requestId: "render-failure", engine: "codex" });
+      expect(await h.waitFor(isEngineSwitchFailed)).toMatchObject({ requestId: "render-failure", reason: expect.stringContaining("render failure") });
+      expect(next.disposeReasons).toEqual(["session-close"]);
+      expect(oldEngine.disposeReasons).toEqual([]);
+      h.send({ type: "user_message", requestId: "after-render-failure", text: "continue" });
+      await h.waitFor(agentEventOf("loop_end"));
+      expect(oldEngine.inputs).toEqual(["continue"]);
+    } finally { h.close(); }
+  });
+
   it("factory absent: the message is refused with the explicit unavailability reason", async () => {
     const oldEngine = new SwitchableFakeEngine(seededHistory());
     const h = createHarness({ steps: [], engine: oldEngine as SessionEngine });
