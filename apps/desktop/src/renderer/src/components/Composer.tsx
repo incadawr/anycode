@@ -998,6 +998,10 @@ export function showCustomPricingHint(target: { connection: ProviderConnection }
  * here too. Anchored to the trigger's RIGHT edge (not left, like ModelPill)
  * since the ctx meter sits at the far right of the footer.
  */
+export function ctxPopoverShouldPreserveFocus(targetIsInteractive: boolean): boolean {
+  return !targetIsInteractive;
+}
+
 function CtxPopover({
   contextUsage,
   contextBreakdown,
@@ -1051,6 +1055,7 @@ function CtxPopover({
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const hoverTimerRef = useRef<number | null>(null);
+  const closeTimerRef = useRef<number | null>(null);
   const previousTurnStatus = useRef(turnStatus);
 
   useEffect(() => {
@@ -1067,14 +1072,22 @@ function CtxPopover({
     }
   }
 
+  function clearCloseTimer(): void {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }
+
   function close(): void {
+    clearCloseTimer();
     clearHoverTimer();
     setOpen(false);
     setStepsExpanded(false);
   }
 
   // Cleanup a pending hover-intent timer on unmount (e.g. a tab switch mid-hover).
-  useEffect(() => () => clearHoverTimer(), []);
+  useEffect(() => () => { clearHoverTimer(); clearCloseTimer(); }, []);
 
   // Fixed-position anchor + on-open fetch (design §2.3): fires
   // `context_breakdown_request` exactly once per closed->open transition
@@ -1137,6 +1150,7 @@ function CtxPopover({
   }, [open, contextBreakdown, supportsContextBreakdown]);
 
   function handleMouseEnter(): void {
+    clearCloseTimer();
     if (open) {
       return;
     }
@@ -1196,7 +1210,11 @@ function CtxPopover({
       className="ctx-popover-root"
       ref={rootRef}
       onMouseEnter={handleMouseEnter}
-      onMouseLeave={close}
+      onMouseLeave={() => {
+        clearHoverTimer();
+        clearCloseTimer();
+        closeTimerRef.current = window.setTimeout(close, 250);
+      }}
       onBlur={handleBlur}
       onKeyDown={handleKeyDown}
     >
@@ -1218,6 +1236,12 @@ function CtxPopover({
         <div
           className={`ctx-popover${tint}`}
           role="dialog"
+          onMouseDown={(event) => {
+            const target = event.target as Element;
+            if (ctxPopoverShouldPreserveFocus(Boolean(target.closest("button, a, input, select, textarea, [tabindex], [contenteditable=true]")))) {
+              event.preventDefault();
+            }
+          }}
           aria-label="Context window breakdown"
           style={anchor ? { left: anchor.left, bottom: anchor.bottom, maxHeight: anchor.maxHeight } : undefined}
         >

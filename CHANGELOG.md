@@ -11,6 +11,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The context-window popover no longer closes while the pointer travels from the meter to its buttons.
+
 - AnyCode no longer writes the tab host's output to a missing console on Windows — the likely cause of the app closing on the first prompt when it is launched from a shortcut.
 
 ## [0.0.76] — 2026-11-05
