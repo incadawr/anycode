@@ -17,6 +17,7 @@ vi.mock("../tabs-store.js", () => ({ useTabsStore: Object.assign((select: any) =
 // `useSettingsStore` is both a selector hook and a store handle: GitHub #33's
 // successful switch re-reads the snapshot main just wrote.
 vi.mock("../settings-store.js", () => ({ useSettingsStore: Object.assign((select: any) => select(harness.settings), { getState: () => harness.settings }) }));
+vi.mock("../account-sources-store.js", () => ({ useAccountSourcesStore: (select: any) => select({ snapshot: { catalogs: [] } }) }));
 vi.mock("../preview/overlay-flag.js", () => ({ useOverlayFlag: () => {} }));
 import { ModelPill } from "./ModelPill.js";
 import { findCatalogEntry } from "@anycode/core/catalog";
