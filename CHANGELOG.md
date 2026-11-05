@@ -7,12 +7,14 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.0.77] — 2026-11-05
-
 ### Fixed
 
 - Label provider rate limits clearly for both header formats (GitHub #55).
 - Keep connection tiles aligned and show all quota windows.
+
+## [0.0.77] — 2026-11-05
+
+### Fixed
 
 - AnyCode no longer writes the tab host's output to a missing console on Windows — the likely cause of the app closing on the first prompt when it is launched from a shortcut.
 
