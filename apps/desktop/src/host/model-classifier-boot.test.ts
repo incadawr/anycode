@@ -117,3 +117,14 @@ describe("resolveModelClassifierBoot (xfix D4)", () => {
     expect(source.asked).toEqual(["glm-4.7-flash"]);
   });
 });
+
+it("resolves a classifier model through its own Go door", async () => {
+  const { applyAutomaticModelRoute } = await import("@anycode/core");
+  let transport = "";
+  const result = resolveModelClassifierBoot({ kind: "model", model: "grok-4.7" }, { sessionModel: "glm-5.3", activeConnectionId: "c", source: {
+    allowedModels: () => ["glm-5.3", "grok-4.7"],
+    portFor: model => { const endpoint = applyAutomaticModelRoute({ model, providerId: "opencode", automaticModelRouting: true, transport: "anthropic-messages", baseUrl: "https://unused.test" }); transport = endpoint.transport; return endpoint; },
+  } });
+  expect(result.ok).toBe(true);
+  expect(transport).toBe("openai-responses");
+});

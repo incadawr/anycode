@@ -6169,3 +6169,19 @@ it("uses the explicit model for child telemetry and adaptive budget when a provi
   expect(telemetry.records.length).toBeGreaterThan(0);
   expect(telemetry.records.every(record => record.sub?.model === "one")).toBe(true);
 });
+
+it("routes a profile's declared Go model through its own endpoint", async () => {
+  const { applyAutomaticModelRoute } = await import("../provider/endpoint.js");
+  const persona = await makeProfile("reviewer", { body: "REVIEWER", model: "grok-4.7" });
+  let resolvedTransport = "";
+  const profilePort = new ScriptedModelPort(() => textStep("done"));
+  const runner = createSubagentRunner(makeParent(), { profiles: [persona], resolveChildModelPort: model => {
+    const endpoint = applyAutomaticModelRoute({ model, providerId: "opencode", automaticModelRouting: true, baseUrl: "https://unused.test", transport: "anthropic-messages" });
+    resolvedTransport = endpoint.transport;
+    return profilePort;
+  } });
+  const outcome = await runner.run({ ...REQ, agentType: "reviewer" }, {});
+  expect(outcome.status).toBe("completed");
+  expect(resolvedTransport).toBe("openai-responses");
+  expect(profilePort.calls).toBeGreaterThan(0);
+});

@@ -326,3 +326,18 @@ describe("agent envelope titles", () => {
     expect(deriveSessionTitle(`${header}\n${header}\nActual message`)).toBe(header);
   });
 });
+
+it("uses the current Go route when a title follows a model switch", async () => {
+  const { applyAutomaticModelRoute } = await import("../provider/endpoint.js");
+  const { AiSdkModelPort } = await import("../provider/model-port.js");
+  const { SwitchableModelPort } = await import("../cli/model.js");
+  const build = (model: string) => new AiSdkModelPort(applyAutomaticModelRoute({ model, apiKey: "fake", providerId: "opencode", automaticModelRouting: true, transport: "anthropic-messages", baseUrl: "https://unused.test", retry: { maxRetries: 0, stallTimeoutMs: 0 } }));
+  const port = new SwitchableModelPort(build("glm-5.3"));
+  port.setPort(build("grok-4.7"));
+  let url = "";
+  const oldFetch = globalThis.fetch;
+  globalThis.fetch = async input => { url = String(input); return new Response("bad", { status: 400 }); };
+  try { await generateSessionTitle({ modelPort: port, text: "A short prompt" }); }
+  finally { globalThis.fetch = oldFetch; }
+  expect(url).toBe("https://opencode.ai/inference/go/openai/v1/responses");
+});

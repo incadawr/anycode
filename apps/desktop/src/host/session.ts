@@ -3139,7 +3139,8 @@ export class Session {
           }
           break;
         }
-        this.applyModelSwitch(id, false, message.requestId);
+        try { this.applyModelSwitch(id, false, message.requestId); }
+        catch (error) { this.reportModelSwitchFailure(error); }
         break;
       }
       case "set_engine_preset":
@@ -3352,7 +3353,7 @@ export class Session {
       }
     } catch (error) {
       this.selectedEffort = previousEffort;
-      throw error;
+      this.reportModelSwitchFailure(error);
     }
   }
 
@@ -3417,6 +3418,12 @@ export class Session {
     });
     this.pushTodoReminderSnapshot();
     return true;
+  }
+
+  private reportModelSwitchFailure(error: unknown): void {
+    this.outbound.emit({ type: "agent_event", turnId: ENGINE_SWITCH_TURN_ID, event: {
+      type: "engine_notice", level: "info", message: error instanceof Error ? error.message : String(error),
+    } });
   }
 
   private pushTodoReminderSnapshot(): void {
