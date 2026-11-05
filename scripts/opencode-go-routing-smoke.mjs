@@ -34,6 +34,10 @@ const files = [
   "apps/desktop/src/host/usage-recording.test.ts",
   "scripts/opencode-go-live-safety.test.ts",
 ];
-const result = spawnSync("pnpm", ["exec", "vitest", "run", ...files], { cwd: root, env, stdio: "inherit" });
-if (result.error || result.status !== 0) process.exitCode = result.status ?? 1;
+const result = spawnSync(process.execPath, [join(root, "node_modules", "vitest", "vitest.mjs"), "run", ...files], { cwd: root, env, stdio: "inherit" });
+if (result.error || result.status !== 0) {
+  if (result.error) console.error(`Could not start fixture test runner: ${result.error.message}`);
+  else if (result.signal) console.error(`Fixture test runner terminated by ${result.signal}`);
+  process.exitCode = result.status ?? 1;
+}
 else console.log("PASS: isolated Go fixture routing, refusals, child inventory, recognizer and usage accounting");
