@@ -8,6 +8,7 @@
  * `claude` binary, mirrors claude-client.test.ts's framing-test fake spawn).
  */
 
+import { buildClaudeRuntime } from "../../engine-switch-runtime.js";
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
 import { CLAUDE_NOT_SIGNED_IN, resumeClaudeEngine, startClaudeEngine } from "./claude-engine.js";
@@ -196,8 +197,9 @@ function baseOptions(spawnImpl: (command: string, args: readonly string[]) => un
 describe("resumeClaudeEngine vs startClaudeEngine (cut §1.5 D2)", () => {
   it("startClaudeEngine spawns --session-id with a fresh uuid", async () => {
     const { spawnImpl, capturedArgs } = fakeSpawn();
-    const connected = await startClaudeEngine(baseOptions(spawnImpl));
+    const connected = await buildClaudeRuntime(baseOptions(spawnImpl));
     try {
+      expect(connected.engineSettings.snapshot()).toEqual(expect.objectContaining({ model: connected.model }));
       const args = capturedArgs();
       expect(args).toContain("--session-id");
       expect(args).not.toContain("--resume");

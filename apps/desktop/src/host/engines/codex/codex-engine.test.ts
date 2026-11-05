@@ -1,3 +1,4 @@
+import { buildCodexRuntime } from "../../engine-switch-runtime.js";
 import { bindCodexUsage } from "../../native-usage.js";
 import { createHarness, MemFs } from "../../test-harness.js";
 import { summarizeProviderUsage, Session, Outbound } from "../../session.js";
@@ -3291,8 +3292,9 @@ describe("startCodexEngine/resumeCodexEngine — bootNotices forwarding", () => 
   });
 
   it("startCodexEngine forwards bootNotices — the warning appears once on the first turn", async () => {
-    const connected = await startCodexEngine(wrapperOptions([BUDGET_NOTICE]));
+    const connected = await buildCodexRuntime(wrapperOptions([BUDGET_NOTICE]));
     try {
+      expect(connected.engineSettings).toBe(connected.engine);
       const events = await firstTurnEvents(connected.engine);
       const notices = events.filter((event): event is Extract<AgentEvent, { type: "engine_notice" }> => event.type === "engine_notice" && event.message.includes("maxTurns (12)"));
       expect(notices).toHaveLength(1);

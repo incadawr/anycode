@@ -462,10 +462,10 @@ function hostProfileHome(): string {
 import { buildCheckpointService } from "./checkpoints.js";
 import { GitBridge } from "./git-bridge.js";
 import { createConnectionModelSettings } from "./connection-model-settings.js";
-import { CoreEngine } from "./engines/core-engine.js";
+import { buildCoreRuntime, buildCodexRuntime, buildClaudeRuntime } from "./engine-switch-runtime.js";
 import { beginEngineBootstrap, type EngineBootstrap } from "./engines/bootstrap.js";
 import { selectEnginePlugin, type EnginePlugin } from "./engines/registry.js";
-import { resumeCodexEngine, startCodexEngine } from "./engines/codex/codex-engine.js";
+import { resumeCodexEngine } from "./engines/codex/codex-engine.js";
 import {
   assertCodexProfileHome,
   ensureChildTempDir,
@@ -1651,7 +1651,7 @@ async function bootCodexSession(
         // (finding 5: the ternary lives in boot.ts's
         // `resolveEngineDraftPresetId` so the argv→preset seam is tested.)
         const childPresetId = resolveEngineDraftPresetId(args.child, draft.preset, codexChildPosture);
-        const created = await startCodexEngine({
+        const created = await buildCodexRuntime({
           ...options,
           selection: {
             ...(draft.model !== undefined ? { model: draft.model } : {}),
@@ -2333,7 +2333,7 @@ async function bootClaudeSession(
         // argv. A non-child boot keeps the byte-identical prior path.
         // (finding 5: same extracted seam as the codex boot.)
         const childPresetId = resolveEngineDraftPresetId(args.child, draft.preset, claudeChildPresetId);
-        const created = await startClaudeEngine({
+        const created = await buildClaudeRuntime({
           ...options,
           selection: {
             ...(draft.model !== undefined ? { model: draft.model } : {}),
@@ -4604,7 +4604,7 @@ async function boot(): Promise<void> {
           ...(availableEffortLevels !== undefined ? { availableEffortLevels } : {}),
         };
       };
-    const engine = new CoreEngine({
+    const { engine } = buildCoreRuntime({
       loop,
       config,
       switchModelImpl,
