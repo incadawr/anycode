@@ -840,7 +840,7 @@ export function formatQuotaWindowLine(
   if (!window) {
     return null;
   }
-  const label = quotaWindowLabel(window.windowDurationMins, limitName);
+  const label = quotaWindowLabel(window.windowDurationMins, window.family ?? limitName);
   const percentLeft = Math.min(100, Math.max(0, Math.round(100 - window.usedPercent)));
   const resetsPart = window.resetsAt != null ? ` · resets in ${formatAge(window.resetsAt * 1000, now)}` : "";
   return `${label} · ${percentLeft}% left${resetsPart}`;

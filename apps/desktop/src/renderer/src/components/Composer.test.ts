@@ -1,3 +1,4 @@
+import { providerQuotaToWire } from "../store.js";
 /**
  * Pure-logic tests for the composer's context-meter percentage (design §2.4).
  * `.test.ts` under a node (no-jsdom) vitest env: `contextMeterPercent` carries
@@ -379,6 +380,11 @@ function quota(overrides: Partial<CodexRateLimitsWire> = {}): CodexRateLimitsWir
 }
 
 describe("buildQuotaPopoverView (cut §6.2 — hidden block, never 0%)", () => {
+  it("uses each family through the provider store conversion", () => {
+    const wire = providerQuotaToWire({ primary: { usedPercent: 80, family: "tokens" }, secondary: { usedPercent: 20, family: "requests" }, sources: [] });
+    expect(buildQuotaPopoverView(wire, 0)).toMatchObject({ primaryLine: "tokens · 20% left", secondaryLine: "requests · 80% left" });
+  });
+
   it("returns null when there is no quota snapshot at all", () => {
     expect(buildQuotaPopoverView(null, 0)).toBeNull();
   });
