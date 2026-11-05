@@ -1352,16 +1352,6 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // GONE — the live image-modality facts ride 4118's modelCapabilities map,
   // which the host reads fail-soft from the connection's settings record at
   // boot (readConnectionModelCapabilities), so nothing is emitted here.
-  // the drawer's per-model override (value+binding in ONE var).
-  // The host applies it only while its current model equals the binding, so it
-  // never un-gates a sibling model after a mid-session switch.
-  if (view.imageInputOverride !== undefined && view.imageInputOverrideModel?.trim()) {
-    fillFromSettings(
-      env,
-      ENV_IMAGE_INPUT_MODEL_OVERRIDE,
-      `${view.imageInputOverride}:${view.imageInputOverrideModel.trim()}`,
-    );
-  }
   // The host fork's own network path (generalised by §2
   // ladder (a)/(b)): the ACTIVE connection's rung, then the app's. Keyed off
   // `activeConnectionId` — the same handle `activeProviderView` reads — so a

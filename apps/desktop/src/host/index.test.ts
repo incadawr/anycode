@@ -3141,7 +3141,7 @@ describe("host imageInputEnabled closure (live-modality rung, per-send honesty)"
     // The real call: 4 arguments, last one imageModalityLookup, model read
     // from currentModel (a `let` the /model switch rewrites).
     expect(source).toContain(
-      "envConfig.imageInput ?? (imageModelOverride?.model === currentModel ? imageModelOverride.override : undefined),\n          imageModalityLookup,",
+      "envConfig.imageInput ?? (imageModelOverride?.model === currentModel ? imageModelOverride.override : undefined) ?? connectionModelSettings.imageInputFor(currentModel),\n          imageModalityLookup,",
     );
     // 4088-on-4118: the lookup reads the caps map (liveCapsFor), NOT an env
     // list; the per-model override still travels through the fork env.

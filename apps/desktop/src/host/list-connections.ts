@@ -19,8 +19,7 @@ export function listConnectionTargets(settings: AnycodeSettings, connectionId?: 
         transport: connection.transport ?? catalog?.defaultTransport,
         readiness: connection.lastHealth?.status ?? "unknown",
         models: ids.map(id => {
-          const imageOverride = connection.imageInputModel === id && connection.imageInputOverride !== undefined
-            ? connection.imageInputOverride : undefined;
+          const imageOverride = effective.imageInputFor(id);
           return {
             id,
             imageInput: resolveImageInput(id, effective.entryFor(id), imageOverride, modelId => connection.modelCapabilities?.[modelId]?.imageInput),

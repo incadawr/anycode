@@ -114,6 +114,7 @@ export function createConnectionModelSettings(deps: {
     pricingSnapshot() { return hasReadConnection ? { fallback: connection?.pricing, models: { ...Object.fromEntries(Object.entries(connection?.modelCapabilities ?? {}).filter(([, value]) => value.pricing !== undefined && connection?.pricing?.mode !== "rates" && connection?.pricing?.mode !== "subscription").map(([id, value]) => [id, value.pricing])), ...Object.fromEntries(Object.entries(connection?.modelOverrides ?? {}).filter(([, value]) => value.pricing !== undefined).map(([id, value]) => [id, value.pricing])) } } : undefined; },
     hasReadConnection() { return hasReadConnection; },
     capabilitiesFor,
+    imageInputFor(model: string) { return modelOverrideFor(connection, model)?.imageInput; },
     effortLevelsFor(model: string) { const override = modelOverrideFor(connection, model); return override?.reasoningSupported === false ? undefined : override?.effortLevels; },
     effortFor,
     contextFor(model: string) {

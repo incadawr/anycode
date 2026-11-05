@@ -3361,8 +3361,7 @@ describe("connection imageInputOverride CRUD — value+binding pair, server-deri
     });
     expect(res.ok).toBe(true);
     const loaded = await loadSettings(settingsPath);
-    expect(loaded.settings.provider.connections[0]?.imageInputOverride).toBe("on");
-    expect(loaded.settings.provider.connections[0]?.imageInputModel).toBe("glm-5.3v");
+    expect(loaded.settings.provider.connections[0]?.modelOverrides?.["glm-5.3v"]?.imageInput).toBe("on");
   });
 
   it('create with "off" persists the pair (both enum arms)', async () => {
@@ -3373,8 +3372,7 @@ describe("connection imageInputOverride CRUD — value+binding pair, server-deri
     });
     expect(res.ok).toBe(true);
     const loaded = await loadSettings(settingsPath);
-    expect(loaded.settings.provider.connections[0]?.imageInputOverride).toBe("off");
-    expect(loaded.settings.provider.connections[0]?.imageInputModel).toBe("glm-5.2");
+    expect(loaded.settings.provider.connections[0]?.modelOverrides?.["glm-5.2"]?.imageInput).toBe("off");
   });
 
   it('create with "on" and a BLANK model is rejected invalid and persists nothing (rule verbatim)', async () => {
@@ -3411,8 +3409,7 @@ describe("connection imageInputOverride CRUD — value+binding pair, server-deri
     });
     expect(res.ok).toBe(true);
     const loaded = await loadSettings(settingsPath);
-    expect(loaded.settings.provider.connections[0]?.imageInputOverride).toBe("on");
-    expect(loaded.settings.provider.connections[0]?.imageInputModel).toBe("stored-model");
+    expect(loaded.settings.provider.connections[0]?.modelOverrides?.["stored-model"]?.imageInput).toBe("on");
   });
 
   it('a model edit rebinding rule: update with "on" alongside a model change re-binds imageInputModel to the NEW effective model', async () => {
@@ -3424,8 +3421,7 @@ describe("connection imageInputOverride CRUD — value+binding pair, server-deri
     });
     expect(res.ok).toBe(true);
     const loaded = await loadSettings(settingsPath);
-    expect(loaded.settings.provider.connections[0]?.imageInputOverride).toBe("on");
-    expect(loaded.settings.provider.connections[0]?.imageInputModel).toBe("new-model");
+    expect(loaded.settings.provider.connections[0]?.modelOverrides?.["new-model"]?.imageInput).toBe("on");
   });
 
   it('update with the "" sentinel deletes BOTH keys from disk', async () => {
@@ -3450,8 +3446,7 @@ describe("connection imageInputOverride CRUD — value+binding pair, server-deri
     const res = await handleConnectionUpdate(makeDeps({ catalogIds: CATALOG_IDS }), { id: "conn-1", label: "Work" });
     expect(res.ok).toBe(true);
     const loaded = await loadSettings(settingsPath);
-    expect(loaded.settings.provider.connections[0]?.imageInputOverride).toBe("on");
-    expect(loaded.settings.provider.connections[0]?.imageInputModel).toBe("glm-5.3v");
+    expect(loaded.settings.provider.connections[0]?.modelOverrides?.["glm-5.3v"]?.imageInput).toBe("on");
   });
 
   it("a model-ONLY update does not re-write a saved pair (stale bindings are handled at consumption, not here)", async () => {
@@ -3465,8 +3460,7 @@ describe("connection imageInputOverride CRUD — value+binding pair, server-deri
     const conn = (await loadSettings(settingsPath)).settings.provider.connections[0];
     // The pair stays as saved — the drawer shows "auto" for model-b (the
     // imageInputInitialValue model-binding rule) until the user re-saves.
-    expect(conn?.imageInputOverride).toBe("off");
-    expect(conn?.imageInputModel).toBe("model-a");
+    expect(conn?.modelOverrides?.["model-a"]?.imageInput).toBe("off");
   });
 
   it('update rejects a non-empty override when the model is explicitly CLEARED — it must not fall back to the stored model', async () => {
@@ -3485,6 +3479,18 @@ describe("connection imageInputOverride CRUD — value+binding pair, server-deri
       imageInputOverride: "maybe",
     });
     expect(res).toEqual({ ok: false, reason: "invalid" });
+  });
+});
+
+
+describe("per-model image input", () => {
+  it("preserves independent overrides and clears only the selected model", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    expect((await handleConnectionCreate(deps, { providerId: "z-ai", model: "a", imageInputOverride: "on" })).ok).toBe(true);
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", model: "b", imageInputOverride: "off" })).ok).toBe(true);
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.modelOverrides).toEqual({ a: { imageInput: "on" }, b: { imageInput: "off" } });
+    expect((await handleConnectionUpdate(deps, { id: "conn-1", model: "a", imageInputOverride: "" })).ok).toBe(true);
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.modelOverrides).toEqual({ b: { imageInput: "off" } });
   });
 });
 
@@ -5271,6 +5277,21 @@ describe("per-model overrides (GitHub #26)", () => {
     expect(disk.reasoningEffort).toBe("high");
   });
 
+  it("migrates legacy image input without overwriting an existing model value", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await handleConnectionCreate(deps, { providerId: "z-ai", model: "a" });
+    const raw = JSON.parse(await readFile(settingsPath, "utf8"));
+    Object.assign(raw.provider.connections[0], { imageInputOverride: "on", imageInputModel: "a", modelOverrides: { b: { imageInput: "off" } } });
+    await writeFile(settingsPath, JSON.stringify(raw));
+    const conn = (await loadSettings(settingsPath)).settings.provider.connections[0]!;
+    expect(conn.modelOverrides).toEqual({ a: { imageInput: "on" }, b: { imageInput: "off" } });
+    expect(conn).not.toHaveProperty("imageInputOverride");
+    expect(conn).not.toHaveProperty("imageInputModel");
+    raw.provider.connections[0].modelOverrides.a = { imageInput: "off" };
+    await writeFile(settingsPath, JSON.stringify(raw));
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.modelOverrides?.a?.imageInput).toBe("off");
+  });
+
   it("reads a legacy-only pair into the map and drops just invalid fields of a malformed sibling", async () => {
     const deps = makeDeps({ catalogIds: CATALOG_IDS });
     await handleConnectionCreate(deps, { providerId: "z-ai", model: "a" });
@@ -5306,8 +5327,7 @@ it("a session context-window patch preserves the default model, image override, 
   const after = (await loadSettings(settingsPath)).settings.provider.connections[0]!;
   expect(after).toEqual({ ...before, modelOverrides: { ...before.modelOverrides, b: {contextWindowTokens: 96000} } });
   expect(after.model).toBe("a");
-  expect(after.imageInputOverride).toBe("on");
-  expect(after.imageInputModel).toBe("a");
+  expect(after.modelOverrides?.a?.imageInput).toBe("on");
 });
 
 

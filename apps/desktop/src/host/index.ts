@@ -2973,15 +2973,7 @@ async function boot(): Promise<void> {
       settingsPathOverride !== undefined && settingsPathOverride.trim() !== "" ? settingsPathOverride : undefined,
     );
 
-    // 4088-on-4118 integration: the per-model override
-    // is parsed ONCE here from the env main stamps for THIS fork's connection
-    // (buildHostEnv runs on the per-tab pinned settings). The live
-    // image-modality set no longer travels through the fork env: it rides
-    // 4118's modelCapabilities map (`imageInput?: true` per model), which this
-    // boot already loaded into `liveCapsFor` (readConnectionModelCapabilities,
-    // fail-soft, fork-connection id first then the session row pin). Both are
-    // consumed per call by `media.imageInputEnabled` (below), which
-    // re-resolves through `currentModel` on every send.
+    // Explicit environment overrides retain priority over saved per-model settings.
     const imageModelOverride = parseImageInputModelOverride(process.env[ENV_IMAGE_INPUT_MODEL_OVERRIDE]);
     const imageModalityLookup: ImageModalityLookup = (id) => (liveCapsFor(id)?.imageInput === true ? true : undefined);
 
@@ -3979,19 +3971,12 @@ async function boot(): Promise<void> {
     gitBridge = new GitBridge({ git: gitEnabled ? gitService : null, outbound });
 
     const media: MediaCapabilityPort = {
-      // Reads currentModel so a P7.15 model switch re-gates image input on the
-      // next send; currentModel === envConfig.model at boot (byte-identical).
-      // imageModalityLookup adds the live /v1/models modality
-      // rung between the env override and the catalog (additive-only, parsed
-      // once at boot above); the verdict still re-resolves per call through
-      // currentModel, so a switch re-gates honestly.
-      // The global ANYCODE_IMAGE_INPUT (shell) wins; otherwise the per-model
-      // override applies only while currentModel is the model it is bound to.
+      // Resolve the current model on every call; explicit environment values win.
       imageInputEnabled: () =>
         resolveImageInput(
           currentModel,
           entryFor(currentModel),
-          envConfig.imageInput ?? (imageModelOverride?.model === currentModel ? imageModelOverride.override : undefined),
+          envConfig.imageInput ?? (imageModelOverride?.model === currentModel ? imageModelOverride.override : undefined) ?? connectionModelSettings.imageInputFor(currentModel),
           imageModalityLookup,
         ),
       // срез C: live verdict for the vision fallback — true whenever

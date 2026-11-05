@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Image input settings are now saved separately for each model. (GitHub #56)
+
 ## [0.0.77] — 2026-11-05
 
 ### Fixed

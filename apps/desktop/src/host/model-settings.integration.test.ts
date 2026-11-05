@@ -63,7 +63,7 @@ describe("persisted model settings through the host", () => {
         expect((await handleCustomProviderCreate({ vault, settingsPath: path, genId: () => "custom:fixture" }, { name: "Fixture", baseUrl: url, kind: "openai-compatible", authOptional: true })).ok).toBe(true);
         expect((await handleConnectionCreate({ vault, settingsPath: path, bootEnv: {}, catalogIds: ["custom:fixture"], isCustom: () => true, genConnectionId: () => "conn-fixture" }, { providerId: "custom:fixture", model: "vision", transport: "openai-chat-completions", imageInputOverride: setting })).ok).toBe(true);
         const loaded = (await loadSettings(path)).settings;
-        expect(loaded.provider.connections[0]).toMatchObject({ imageInputOverride: setting, imageInputModel: "vision" });
+        expect(loaded.provider.connections[0]).toMatchObject({ modelOverrides: { vision: { imageInput: setting } } });
         const env = await buildHostEnv({ bootEnv: {}, settings: loaded, getSecret: async () => undefined });
         Object.assign(process.env, env, { ANYCODE_API_KEY: "test", ANYCODE_BASE_URL: url, ANYCODE_MODEL_SETTINGS_CONNECTION_ID: "conn-fixture" });
         vi.resetModules();

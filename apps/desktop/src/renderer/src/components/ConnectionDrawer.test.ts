@@ -1689,24 +1689,12 @@ describe("imageInputToPayload (the auto -> \"\" mapping)", () => {
   });
 });
 
-describe("imageInputInitialValue (the contextWindowInitialRaw model-binding rule)", () => {
-  it("prefills the override ONLY when it binds to the shown model", () => {
-    expect(
-      imageInputInitialValue({ imageInputOverride: "on", imageInputModel: "glm-5.3v", model: "glm-5.3v" }),
-    ).toBe("on");
-    expect(
-      imageInputInitialValue({ imageInputOverride: "off", imageInputModel: "glm-5.2", model: "glm-5.2" }),
-    ).toBe("off");
-  });
-
-  it('reads "auto" when the pair binds a DIFFERENT model, is half-absent, or missing entirely', () => {
-    expect(
-      imageInputInitialValue({ imageInputOverride: "on", imageInputModel: "other-model", model: "glm-5.3v" }),
-    ).toBe("auto");
-    expect(imageInputInitialValue({ imageInputOverride: "on", model: "glm-5.3v" })).toBe("auto");
-    expect(imageInputInitialValue({ imageInputModel: "glm-5.3v", model: "glm-5.3v" })).toBe("auto");
-    expect(imageInputInitialValue({ model: "glm-5.3v" })).toBe("auto");
-    expect(imageInputInitialValue({})).toBe("auto");
+describe("imageInputInitialValue", () => {
+  it("reads the override for the displayed model", () => {
+    const modelOverrides = { a: { imageInput: "on" as const }, b: { imageInput: "off" as const } };
+    expect(imageInputInitialValue({ modelOverrides, model: "a" })).toBe("on");
+    expect(imageInputInitialValue({ modelOverrides, model: "b" })).toBe("off");
+    expect(imageInputInitialValue({ modelOverrides, model: "c" })).toBe("auto");
   });
 });
 
