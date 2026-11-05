@@ -24,7 +24,7 @@ import { connectionContextWindow } from "../../../shared/connection-context-wind
 import { contextWindowTokensField, modelOverrideFor, patchModelOverride } from "../../../shared/model-overrides.js";
 import { useRef, useState } from "react";
 import { useStore } from "zustand";
-import { Badge, Banner, Button, Field, Input } from "../ui/index.js";
+import { Badge, Banner, Button, Field, Input, Select } from "../ui/index.js";
 import type { RecognizerProbeResult } from "../../../shared/recognizer.js";
 import { describeMutationFailure, useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
 import {
@@ -216,22 +216,19 @@ export function VisionPane({ store = useSettingsStore }: VisionPaneProps) {
         </div>
       )}
 
-      <Field label="Model">
-        {(control) => (
-          <select {...control} className="settings-field-select vision-pane-model-select"
-            value={visionModelSelection(modelId, modelHints, customModel)} disabled={readOnly}
-            onChange={(e) => {
-              const value = e.target.value;
-              setError(null); setProbeResult(null);
-              if (value === "custom") { setCustomModel(true); setModelId(""); }
-              else { setCustomModel(false); setModelId(value === "" ? "" : modelHints[Number(value.slice(6))]?.id ?? ""); }
-            }}>
-            <option value="" disabled>Select a model…</option>
-            {modelHints.map((hint, index) => <option key={hint.id} value={`model:${index}`}>{hint.label}</option>)}
-            <option value="custom">Custom…</option>
-          </select>
-        )}
-      </Field>
+      <Select label="Model" className="settings-field-select vision-pane-model-select"
+        value={visionModelSelection(modelId, modelHints, customModel)} disabled={readOnly}
+        options={[
+          { value: "", label: "Select a model…", disabled: true },
+          ...modelHints.map((hint, index) => ({ value: `model:${index}`, label: hint.label })),
+          { value: "custom", label: "Custom…" },
+        ]}
+        onChange={(e) => {
+          const value = e.target.value;
+          setError(null); setProbeResult(null);
+          if (value === "custom") { setCustomModel(true); setModelId(""); }
+          else { setCustomModel(false); setModelId(value === "" ? "" : modelHints[Number(value.slice(6))]?.id ?? ""); }
+        }} />
       {visionModelSelection(modelId, modelHints, customModel) === "custom" && (
         <Input label="Custom model" size="sm" className="vision-pane-model-input" type="text"
           value={modelId} disabled={readOnly} placeholder="e.g. glm-5.3-flash"
