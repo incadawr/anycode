@@ -101,7 +101,7 @@ const visionConnection = connectionFixture({
 });
 
 it("uses the same dictionary window for a custom proxy in the panel and runtime", async () => {
-  const connection = { id: "c", providerId: "custom:myproxy" };
+  const connection = { id: "c", providerId: "custom:myproxy", modelOverrides: {} };
   const original = settings({ provider: { connections: [connection], custom: [{ id: "custom:myproxy", name: "Proxy", baseUrl: "https://proxy.example/v1", kind: "openai-compatible", models: [] }] } });
   const endpoint = await resolveRecognizerProbeCandidate(original, { connectionId: "c", modelId: "glm-5.3-flash" }, noSecret);
   expect(endpoint).toBeDefined();
