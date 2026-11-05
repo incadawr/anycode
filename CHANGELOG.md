@@ -9,7 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- Plugins can offer a shared account budget and a model catalog for a dedicated custom gateway connection.
+- Plugins can offer a model catalog and show an employee account budget above Settings. Choose a dedicated gateway connection and approve the source to start syncing.
 
 ## [0.0.77] — 2026-11-05
 
