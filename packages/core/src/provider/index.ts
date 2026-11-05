@@ -13,7 +13,9 @@ export {
   createAnthropicLanguageModel,
   normalizeAnthropicBaseUrl,
 } from "./anthropic.js";
-export { normalizeExplicitBaseUrl } from "./endpoint.js";
+export { normalizeExplicitBaseUrl, applyAutomaticModelRoute } from "./endpoint.js";
+export { resolveOpenCodeGoEndpointPolicy } from "./opencode-go-policy.js";
+export type { ModelRouteSnapshot } from "./model-route.js";
 export type { AnthropicEndpointConfig, EndpointConfig } from "./endpoint.js";
 export { createLanguageModel } from "./language-model.js";
 export {

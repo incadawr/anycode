@@ -1,3 +1,4 @@
+import { automaticGoRoute } from "./go-route.js";
 import { providerProxyConfig } from "./provider-proxy-config.mjs";
 import { createMiniMaxQuotaService } from "./minimax-quota.js";
 import { createGlmQuotaService } from "./glm-quota.js";
@@ -1144,6 +1145,10 @@ function selectedTransportInfo(current: AnycodeSettings): {
   // both of those, so an ungated waiver here would let the gate say "ready"
   // for a fork core refuses to boot).
   const connectionAuthOptional = view.authOptional === true;
+  const goRoute = automaticGoRoute(activeConnection(current), bootEnv);
+  if (goRoute) return goRoute.kind === "route"
+    ? { authOptional: false, resolvedTransport: goRoute.route.transport, supportedTransports: [goRoute.route.transport] }
+    : { authOptional: false, resolvedTransport: "unavailable-model", supportedTransports: [] };
   // Legacy / no-catalog branches: still apply the env rung over the active
   // connection's transport, but there is no catalog entry to validate against.
   const resolveLegacy = (): string | undefined =>
@@ -1693,6 +1698,7 @@ async function buildHostEnvFor(current: AnycodeSettings): Promise<NodeJS.Process
   const resolveSelection = (): Promise<ResolvedProviderSelection | undefined> =>
     resolveProviderSelection({
       settings: current,
+      bootEnv,
       resolveCatalog,
       getApiKey: (connectionId) => getSecret(connectionSecretKey(connectionId, "api_key")),
       getAccessToken: getAccessTokenFor,

@@ -92,7 +92,7 @@ import { buildChildModelSettingsResolver } from "../provider/child-model-setting
 import { getBuiltinCatalog } from "../provider/catalog-data.js";
 import type { ProviderTransport } from "../provider/catalog.js";
 import type { CatalogProviderEntry } from "../provider/catalog.js";
-import type { EndpointConfig } from "../provider/endpoint.js";
+import { applyAutomaticModelRoute, type EndpointConfig } from "../provider/endpoint.js";
 import { ENV_API_KEY, ENV_MODEL, loadEnvConfig } from "../provider/env.js";
 import { AiSdkModelPort } from "../provider/model-port.js";
 import { createProbeOnlyNetworkWaiter } from "../provider/network-waiter.js";
@@ -238,7 +238,7 @@ export function buildCliEndpointConfig(args: {
   headers?: Record<string, string>;
 }): EndpointConfig {
   const { transport, envConfig, catalogEntry, retryOverride, includeUsageResolved, model, headers } = args;
-  return {
+  const endpoint: EndpointConfig = {
     transport,
     baseUrl: envConfig.baseUrl,
     apiKey: envConfig.apiKey,
@@ -264,6 +264,9 @@ export function buildCliEndpointConfig(args: {
     // the CLI waits for the network via TCP probes (no OS hints).
     networkWaiter: createProbeOnlyNetworkWaiter(),
   };
+  const routed = applyAutomaticModelRoute(endpoint);
+  if (routed.automaticModelRouting) routed.includeUsage = resolveIncludeUsage(routed.transport, envConfig.includeUsage);
+  return routed;
 }
 
 export interface CliOptions {
@@ -710,7 +713,7 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
   // Catalog entry resolved early so the model port can branch reasoning-effort
   // mapping by provider (GLM enum vs Claude budgetTokens) and the boot budget
   // resolutions below share the same lookup.
-  const catalogEntry = matchCatalogEntryByBaseUrl(getBuiltinCatalog(), envConfig.baseUrl);
+  const catalogEntry = getBuiltinCatalog().providers.find(entry => entry.id === envConfig.providerId) ?? matchCatalogEntryByBaseUrl(getBuiltinCatalog(), envConfig.baseUrl);
 
   // The ONE session id for this run, resolved BEFORE the model port is built:
   // catalog entries that require per-session request headers (OpenCode Go)

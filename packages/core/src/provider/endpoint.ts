@@ -5,7 +5,7 @@
  * discriminant.
  */
 
-import type { OpenCodeGoEndpointPolicy } from "./opencode-go-policy.js";
+import { resolveOpenCodeGoEndpointPolicy, type OpenCodeGoEndpointPolicy } from "./opencode-go-policy.js";
 import type { ProviderTransport } from "./catalog.js";
 import type { ProviderQuotaUpdate } from "./quota.js";
 import type { NetworkWaiter } from "./network-waiter.js";
@@ -13,6 +13,7 @@ import type { RetryPolicy } from "./retry.js";
 import type { ImplicitPromptCache, ReasoningEffort } from "../types/config.js";
 
 export interface EndpointConfig {
+  modelMetadata?: Record<string, unknown>;
   providerId?: string;
   automaticModelRouting?: boolean;
   /** Automatic Go policy for this exact model; absent for manual endpoints. */
@@ -144,4 +145,12 @@ export function normalizeExplicitBaseUrl(rawBaseUrl: string): string {
     throw new Error(`Invalid base URL: "${rawBaseUrl}" is empty after trimming`);
   }
   return trimmed;
+}
+
+/** Resolve an automatic model route before constructing a client or sending a request. */
+export function applyAutomaticModelRoute(config: EndpointConfig, snapshot?: import("./model-route.js").ModelRouteSnapshot<Record<string, unknown>>): EndpointConfig {
+  if (!config.automaticModelRouting) return config;
+  const result = resolveOpenCodeGoEndpointPolicy(config.providerId ?? "", config.model, snapshot);
+  if (result.kind === "refusal") throw new Error(`OpenCode Go model ${config.model} unavailable: ${result.reason}`);
+  return { ...config, transport: result.route.transport, baseUrl: result.route.baseUrl, goModelPolicy: result.route.policy, modelMetadata: result.route.metadata };
 }

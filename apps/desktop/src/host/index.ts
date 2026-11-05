@@ -267,6 +267,7 @@ import {
   resolveImageInput,
   type ImageModalityLookup,
   resolveIncludeUsage,
+  applyAutomaticModelRoute,
   resolveMaxOutputTokens,
   resolveProviderHeaders,
   clampSubagentMaxOutputTokens,
@@ -3030,7 +3031,7 @@ async function boot(): Promise<void> {
     // Catalog entry resolved early so the model port can branch reasoning-effort
     // mapping by provider (slice 6.4-R2: GLM enum vs Claude budgetTokens) and
     // the boot budget/effort resolutions below share the same lookup.
-    const catalogEntry = matchCatalogEntryByBaseUrl(getBuiltinCatalog(), envConfig.baseUrl);
+    const catalogEntry = getBuiltinCatalog().providers.find(entry => entry.id === envConfig.providerId) ?? matchCatalogEntryByBaseUrl(getBuiltinCatalog(), envConfig.baseUrl);
 
     // Single back-compat resolution point for the wire transport, mirroring the
     // CLI (§0.4): the mandatory discriminant is applied once here rather
@@ -3081,8 +3082,12 @@ async function boot(): Promise<void> {
       ...(envConfig.networkRetryBudgetMs !== undefined ? { networkRetryBudgetMs: envConfig.networkRetryBudgetMs } : {}),
       ...(envConfig.networkWaitMaxMs !== undefined ? { networkWaitMaxMs: envConfig.networkWaitMaxMs } : {}),
     };
-    const modelPortFactory = (m: string): ModelPort =>
-      new AiSdkModelPort(
+    const routingConnectionId = process.env[ENV_CONNECTION_ID]?.trim() || process.env.ANYCODE_MODEL_SETTINGS_CONNECTION_ID?.trim();
+    let routeSnapshot = readConnectionModelSettingsSync(routingConnectionId, settingsPathOverride?.trim() || undefined)?.modelRoutes;
+    const modelPortFactory = (m: string): ModelPort => {
+      const current = readConnectionModelSettingsSync(routingConnectionId, settingsPathOverride?.trim() || undefined);
+      if (current) routeSnapshot = current.modelRoutes;
+      const endpoint = applyAutomaticModelRoute(
         {
           transport: providerTransport,
           baseUrl: envConfig.baseUrl,
@@ -3115,9 +3120,10 @@ async function boot(): Promise<void> {
           // as a `provider_quota` event, so the host needs no state of its own.
           onQuotaHeaders: () => {},
           networkWaiter: desktopNetworkWaiter,
-        },
-        hostDiagnosticSink,
-      );
+        }, routeSnapshot);
+      if (endpoint.automaticModelRouting) endpoint.includeUsage = resolveIncludeUsage(endpoint.transport, envConfig.includeUsage);
+      return new AiSdkModelPort(endpoint, hostDiagnosticSink);
+    };
     const switchableModelPort = new SwitchableModelPort(modelPortFactory(envConfig.model));
     // срез C (plan §3): the ONE external decorator around the
     // SwitchableModelPort — mirror of cli/main.ts's own
