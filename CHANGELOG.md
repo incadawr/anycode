@@ -9,6 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Choose a vision model from available models and set its context window separately for each connection. (GitHub #57)
 - Image input settings are now saved separately for each model. (GitHub #56)
 
 ## [0.0.77] — 2026-11-05

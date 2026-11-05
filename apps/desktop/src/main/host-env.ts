@@ -1579,6 +1579,7 @@ export function applyRecognizerEnv(env: NodeJS.ProcessEnv, recognizer: Recognize
   if (!env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW && env.ANYCODE_RECOGNIZER_MODEL === recognizer.model && recognizer.contextWindowTokens !== undefined) {
     env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW = String(recognizer.contextWindowTokens);
     env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_MODEL = recognizer.model;
+    env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_FROM_SETTINGS = "1";
   }
   fillFromSettings(env, ENV_RECOGNIZER_PROVIDER_NAME, recognizer.providerName);
 }

@@ -246,9 +246,10 @@ export function VisionPane({ store = useSettingsStore }: VisionPaneProps) {
 
       <Input label="Context window (tokens)" size="sm" type="text" inputMode="numeric"
         value={contextValue} disabled={readOnly || !modelId} placeholder="Auto"
+        error={parsedContext.ok ? undefined : "Enter an integer from 1024 to 1000000, or leave blank for Auto."}
         onChange={(e) => setContextDrafts((drafts) => ({ ...drafts, [draftKey]: e.target.value }))} />
       <div className="settings-field-hint">
-        {parsedContext.ok ? `Effective: ${effectiveContext.tokens.toLocaleString()} tokens (${effectiveContext.source}).` : "Enter an integer from 1024 to 1000000, or leave blank for Auto."}
+        {parsedContext.ok ? `Effective: ${effectiveContext.tokens.toLocaleString()} tokens (${effectiveContext.source}).` : ""}
         {" "}This override belongs to this connection and model and is shared with chat and connection settings.
       </div>
 
