@@ -271,10 +271,10 @@ export function tileStatusPresentation(
  * reported about this connection's subscription window, straight from
  * response headers. `null` when nothing was ever reported — the caller
  * renders NO block for null (never a fabricated "0% left"; §5).
- * The label comes from `windowDurationMins` when present, else the family
- * name in `source` (e.g. "requests" out of
- * "x-ratelimit-requests-remaining"), else "Limit" — no heuristics beyond
- * that (owner Q2). Stale-but-present still renders: freshness is NOT this
+ * A duration supplies the label; otherwise use the persisted family or, for
+ * the primary window, either header-name order in source, then "Limit".
+ * Requests and tokens header families without a duration are per-minute.
+ * Stale-but-present still renders: freshness is NOT this
  * card's concern (the age rides the title instead).
  */
 export function connectionQuotaLine(
@@ -285,15 +285,15 @@ export function connectionQuotaLine(
     return null;
   }
   const familyName = lastQuota.family ?? lastQuota.source.match(/ratelimit-(?:limit|remaining|reset)-([a-z_-]+)/)?.[1] ?? lastQuota.source.match(/ratelimit-([a-z_-]+)-(?:limit|remaining|reset)/)?.[1] ?? null;
-  const formatWindow = (window: { usedPercent: number; windowDurationMins?: number; resetsAt?: number }) => {
-    const label = quotaWindowLabel(window.windowDurationMins, familyName);
-    const burst = window.windowDurationMins == null && familyName != null;
+  const formatWindow = (window: { usedPercent: number; family?: string; windowDurationMins?: number; resetsAt?: number }, family: string | null) => {
+    const label = quotaWindowLabel(window.windowDurationMins, family);
+    const burst = window.windowDurationMins == null && (family === "requests" || family === "tokens");
     const percentLeft = Math.min(100, Math.max(0, Math.round(100 - window.usedPercent)));
     const resetsPart = window.resetsAt != null ? ` · resets in ${formatAge(window.resetsAt * 1000, now)}` : "";
     return `${label}${burst ? "/min" : ""} · ${percentLeft}% left${resetsPart}`;
   };
-  const primary = formatWindow(lastQuota);
-  return lastQuota.secondary ? `${primary}\n${formatWindow(lastQuota.secondary)}` : primary;
+  const primary = formatWindow(lastQuota, familyName);
+  return lastQuota.secondary ? `${primary}\n${formatWindow(lastQuota.secondary, lastQuota.secondary.family ?? null)}` : primary;
 }
 
 /** What clicking the tile does — it silently changed the default for new sessions before. */
@@ -363,7 +363,7 @@ export function ConnectionTile({
       ? `Reported by provider · observed ${formatAge(Date.parse(connection.lastQuota.observedAt), now)}`
       : "Reported by provider";
 
-  const fullQuotaTitle = connection.lastQuota?.secondary ? `${quotaLine} · ${quotaTitle}` : quotaTitle;
+  const fullQuotaTitle = connection.lastQuota?.secondary ? `${quotaLine?.replace(/\n/g, " | ")} · ${quotaTitle}` : quotaTitle;
 
   useEffect(() => {
     if (!menuOpen) {
