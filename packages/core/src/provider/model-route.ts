@@ -26,6 +26,7 @@ export function resolveModelRoute<Metadata>(
   if (providerId !== "opencode" && providerId !== "opencode-openai") {
     return { kind: "refusal", reason: "unsupported-provider" };
   }
+  if (modelId === "gemini-4-argon") return { kind: "refusal", reason: "unsupported-model" };
   const entry = Object.hasOwn(snapshot.models, modelId) ? snapshot.models[modelId] : undefined;
   if (!entry) return { kind: "refusal", reason: "unknown-model" };
   if (entry.kind === "refusal") return entry;
