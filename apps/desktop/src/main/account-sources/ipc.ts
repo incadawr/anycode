@@ -1,4 +1,4 @@
-import { ipcMain } from "electron";
+import { guardedIpcHandle } from "../ipc-guard.js";
 import { z } from "zod";
 import { accountCatalogSchema } from "@anycode/core/plugins-admin";
 import type { FileSystemPort } from "@anycode/core";
@@ -86,15 +86,15 @@ export function registerAccountSourcesIpc(deps: Deps) {
     deps.publish(ACCOUNT_SOURCES_CATALOG_CHANGED_CHANNEL, null);
     await refreshing;
   } });
-  ipcMain.handle(ACCOUNT_SOURCES_GET_CHANNEL, () => ({ snapshot: controller.snapshot(), candidates: candidateViews }));
-  ipcMain.handle(ACCOUNT_SOURCES_PREVIEW_CHANNEL, async (_event, raw: unknown) => {
+  guardedIpcHandle(ACCOUNT_SOURCES_GET_CHANNEL, () => ({ snapshot: controller.snapshot(), candidates: candidateViews }));
+  guardedIpcHandle(ACCOUNT_SOURCES_PREVIEW_CHANNEL, async (_event, raw: unknown) => {
     const parsed = z.object({ key: keySchema, connectionId: z.string().min(1).max(128) }).strict().safeParse(raw);
     return parsed.success ? binding.preview(parsed.data.key, parsed.data.connectionId) : { ok: false, reason: "invalid" };
   });
-  ipcMain.handle(ACCOUNT_SOURCES_BIND_CHANNEL, async (_event, raw: unknown) => typeof raw === "string" && raw.length <= 128 ? binding.bind(raw) : false);
-  ipcMain.handle(ACCOUNT_SOURCES_UNBIND_CHANNEL, async (_event, raw: unknown) => { const key = keySchema.safeParse(raw); if (key.success) await binding.unbind(key.data); });
-  ipcMain.handle(ACCOUNT_SOURCES_RESET_CHANNEL, async (_event, raw: unknown) => { const key = keySchema.safeParse(raw); if (key.success) await binding.reset(key.data); });
-  ipcMain.handle(ACCOUNT_SOURCES_REFRESH_CHANNEL, async (_event, raw: unknown) => { const key = keySchema.safeParse(raw); if (key.success) await controller.refresh(key.data); });
+  guardedIpcHandle(ACCOUNT_SOURCES_BIND_CHANNEL, async (_event, raw: unknown) => typeof raw === "string" && raw.length <= 128 ? binding.bind(raw) : false);
+  guardedIpcHandle(ACCOUNT_SOURCES_UNBIND_CHANNEL, async (_event, raw: unknown) => { const key = keySchema.safeParse(raw); if (key.success) await binding.unbind(key.data); });
+  guardedIpcHandle(ACCOUNT_SOURCES_RESET_CHANNEL, async (_event, raw: unknown) => { const key = keySchema.safeParse(raw); if (key.success) await binding.reset(key.data); });
+  guardedIpcHandle(ACCOUNT_SOURCES_REFRESH_CHANNEL, async (_event, raw: unknown) => { const key = keySchema.safeParse(raw); if (key.success) await controller.refresh(key.data); });
   void reconcile(true);
   return { reconcile, removePlugin: (name: string) => binding.removePlugin(name), dispose: () => { disposed = true; generation++; binding.invalidate(); controller.dispose(); } };
 }
