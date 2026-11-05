@@ -24,6 +24,7 @@ export interface OpenCodeGoApiCapabilities {
   tools?: { strict?: boolean; choice?: ("auto" | "none" | "required" | "tool")[]; search?: boolean; freeform?: string[]; updates?: boolean };
 }
 export interface OpenCodeGoCompatibility { reasoning_field?: string }
+export interface OpenCodeGoLimits { context?: number; input?: number; output?: number }
 export interface OpenCodeGoModalities { input?: string[]; output?: string[] }
 
 const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -51,6 +52,14 @@ function apiCapabilities(value: unknown): OpenCodeGoApiCapabilities | undefined 
 function compatibility(value: unknown): OpenCodeGoCompatibility | undefined {
   return isObject(value) && (value.reasoning_field === undefined || typeof value.reasoning_field === "string") ? value as OpenCodeGoCompatibility : undefined;
 }
+function limits(value: unknown): OpenCodeGoLimits | undefined {
+  if (!isObject(value)) return undefined;
+  for (const key of ["context", "input", "output"]) {
+    const n = value[key];
+    if (n !== undefined && (typeof n !== "number" || !Number.isFinite(n) || n <= 0)) return undefined;
+  }
+  return value as OpenCodeGoLimits;
+}
 function modalities(value: unknown): OpenCodeGoModalities | undefined {
   return isObject(value) && stringArray(value.input) && stringArray(value.output) ? value as OpenCodeGoModalities : undefined;
 }
@@ -63,6 +72,7 @@ export interface OpenCodeGoEndpointPolicy {
   apiCapabilities?: OpenCodeGoApiCapabilities;
   compatibility?: OpenCodeGoCompatibility;
   modalities?: OpenCodeGoModalities;
+  limits?: OpenCodeGoLimits;
 }
 
 export function resolveOpenCodeGoEndpointPolicy(
@@ -75,6 +85,6 @@ export function resolveOpenCodeGoEndpointPolicy(
   const metadata = entry.route.metadata;
   return { kind: "route" as const, route: { ...entry.route, policy: {
     providerId: providerId as "opencode" | "opencode-openai", model,
-    capabilities: capabilities(metadata.capabilities), apiCapabilities: apiCapabilities(metadata.apiCapabilities), compatibility: compatibility(metadata.compatibility), modalities: modalities(metadata.modalities),
+    capabilities: capabilities(metadata.capabilities), apiCapabilities: apiCapabilities(metadata.apiCapabilities), compatibility: compatibility(metadata.compatibility), modalities: modalities(metadata.modalities), limits: limits(metadata.limit),
   } satisfies OpenCodeGoEndpointPolicy } };
 }

@@ -57,6 +57,8 @@ export class SwitchableModelPort implements ModelPort {
   }
 
   /** Likewise for the title request's output-token ceiling. */
+  get goLimits(): ModelPort["goLimits"] { return this.current.goLimits; }
+
   get titleMaxOutputTokens(): ModelPort["titleMaxOutputTokens"] {
     return this.current.titleMaxOutputTokens;
   }

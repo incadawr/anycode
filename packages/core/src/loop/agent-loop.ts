@@ -54,6 +54,7 @@ import type { PreviewPort } from "../ports/preview.js";
 import type { ArtifactContext } from "../ports/artifacts.js";
 import type { CheckpointCapturer, CheckpointCaptureResult } from "../ports/checkpoints.js";
 import type { ToolRegistry } from "../tools/registry.js";
+import { goRequestOutputBudget } from "./go-output-budget.js";
 import { ConversationHistory } from "../context/history.js";
 import {
   ASK_CLASSIFIER_USER_TURNS,
@@ -716,7 +717,7 @@ export class AgentLoop {
     const tokenizer = config.tokenizer ?? new HeuristicTokenizer();
     this.tokenizer = tokenizer;
     this.history = config.history ?? new ConversationHistory({ tokenizer });
-    const budget = resolveContextBudgetConfig(config.context);
+    const budget = resolveContextBudgetConfig({ ...(config.modelPort.goLimits?.context !== undefined ? { contextWindowTokens: config.modelPort.goLimits.context } : {}), ...config.context });
     this.budgetTokens = effectiveWindowTokens(budget);
     this.context = new ContextManager({
       history: this.history,
@@ -1423,14 +1424,15 @@ export class AgentLoop {
 
         try {
           try {
-            const stream = this.config.modelPort.streamText({
+            const modelRequest = {
               system: appendSystemContext(this.config.systemPrompt, options?.systemContext),
               messages: this.history.toMessages(),
               tools: toToolDeclarations(this.config.registry).filter((tool) => !this.config.orchestrate || tool.name !== "ExitPlanMode"),
               maxOutputTokens: this.config.maxOutputTokens,
               reasoningEffort: this.config.reasoningEffort,
               abortSignal: turnAbort.signal,
-            });
+            };
+            const stream = this.config.modelPort.streamText({ ...modelRequest, maxOutputTokens: goRequestOutputBudget(modelRequest, this.config.modelPort, this.tokenizer, this.context.getBudgetConfig().contextWindowTokens) });
             for await (const event of stream) {
               if (event.type === "reasoning_replay_metadata") {
                 reasoningCapture.observe(event);

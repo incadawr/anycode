@@ -105,6 +105,8 @@ class MediaProjectionModelPort implements ModelPort {
     return this.inner.titleReasoningEffort;
   }
 
+  get goLimits(): ModelPort["goLimits"] { return this.inner.goLimits; }
+
   get titleMaxOutputTokens(): ModelPort["titleMaxOutputTokens"] {
     return this.inner.titleMaxOutputTokens;
   }

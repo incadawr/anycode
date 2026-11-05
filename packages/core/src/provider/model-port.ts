@@ -940,6 +940,8 @@ export class AiSdkModelPort implements ModelPort {
   }
 
   /** Identity readback: the id this port was constructed for (never canonicalized). */
+  get goLimits() { return this.config.goModelPolicy?.limits; }
+
   get modelId(): string {
     return this.config.model;
   }
