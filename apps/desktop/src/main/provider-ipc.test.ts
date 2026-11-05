@@ -1735,6 +1735,7 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     const update = await handleConnectionUpdate({ settingsPath, vault, bootEnv: {} }, { id: "go", fetchedModels: { ...preview.source, models: preview.models, incompatibleModels: preview.incompatibleModels } });
     expect(update.ok).toBe(true);
     const connection = (await loadSettings(settingsPath)).settings.provider.connections[0]!;
+    expect(connection.modelRoutes?.models["gemini-4-argon"]).toMatchObject({ kind: "refusal" });
     expect(connection.model).toBeUndefined();
     expect(connection.models).not.toContain(bad);
     expect(connection.models).toContain("manual-id");
@@ -2215,6 +2216,11 @@ describe("handleCustomProviderFetchModels — 4244 modelsUrl catalog wiring", ()
     const deps = makeDeps({ catalogEntryById: () => ({ id: "opencode-openai", baseUrl: "https://opencode.ai/inference/go/v1", defaultTransport: "openai-chat-completions" }), connectionFetch: () => (async () => new Response(fixture)) as typeof fetch });
     expect((await handleCustomProviderFetchModels(deps, { connectionId: "go" })).ok).toBe(true);
     let saved = (await loadSettings(settingsPath)).settings.provider.connections[0]!;
+    expect(Object.keys(saved.modelRoutes?.models ?? {})).toHaveLength(29);
+    const before = saved.modelRoutes;
+    const failedDeps = makeDeps({ catalogEntryById: () => ({ id: "opencode-openai", baseUrl: "https://opencode.ai/inference/go/v1", defaultTransport: "openai-chat-completions" }), connectionFetch: () => (async () => new Response("{}")) as typeof fetch });
+    expect((await handleCustomProviderFetchModels(failedDeps, { connectionId: "go" })).ok).toBe(false);
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.modelRoutes).toEqual(before);
     const host = createConnectionModelSettings({ catalogEntry: findCatalogEntry("opencode-openai"), connection: saved, readConnection: () => saved, liveCapabilitiesFor: () => undefined });
     const model = "deepseek-v4.1-flash";
     host.switchEffort("other", model, "off");
@@ -2224,6 +2230,14 @@ describe("handleCustomProviderFetchModels — 4244 modelsUrl catalog wiring", ()
     expect(host.refresh()).toBe(true);
     expect(host.contextFor(model).tokens).toBe(900_000);
     expect(resolveMaxOutputTokens(model, host.entryFor(model), undefined)).toBe(300_000);
+  });
+
+  it("does not write a snapshot if settings become read-only during fetch", async () => {
+    await seed4244({ id: "go", providerId: "opencode-openai" });
+    const fixture = await readFile(new URL("./__fixtures__/opencode-go-models.json", import.meta.url), "utf8");
+    const deps = makeDeps({ catalogEntryById: () => ({ id: "opencode-openai", baseUrl: "https://opencode.ai/inference/go/v1", defaultTransport: "openai-chat-completions" }), connectionFetch: () => async () => { await writeFile(settingsPath, READ_ONLY_FIXTURE); return new Response(fixture); } });
+    await handleCustomProviderFetchModels(deps, { connectionId: "go" });
+    expect(await readFile(settingsPath, "utf8")).toBe(READ_ONLY_FIXTURE);
   });
 
   it("uses Responses for a draft preview and keeps chat hints out of a fresh picker", async () => {

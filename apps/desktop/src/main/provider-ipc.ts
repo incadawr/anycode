@@ -48,6 +48,7 @@
  *  - nothing here ever logs the URL, the key, or the body.
  */
 
+import { parseOpenCodeGoSnapshot } from "@anycode/core/model-route";
 import { randomUUID } from "node:crypto";
 import { prepareModelFetchContext } from "./model-fetch-guard.js";
 import type { ProxyRoute } from "./provider-proxy-fetch.js";
@@ -106,7 +107,7 @@ export type FetchModelsFailureReason =
   | "stale_fetch";
 
 export type FetchModelsOutcome =
-  | { ok: true; models: { id: string; reasoning?: boolean; effortLevels?: string[]; imageInput?: true; contextWindow?: number; maxOutputTokens?: number; pricing?: { input: number; cachedInput: number; output: number } }[]; incompatibleModels?: string[]; source?: { baseUrl: string; transport: string; targetUrl: string; guard: string } }
+  | { ok: true; models: { id: string; reasoning?: boolean; effortLevels?: string[]; imageInput?: true; contextWindow?: number; maxOutputTokens?: number; pricing?: { input: number; cachedInput: number; output: number } }[]; incompatibleModels?: string[]; modelRoutes?: ProviderConnection["modelRoutes"]; source?: { baseUrl: string; transport: string; targetUrl: string; guard: string; modelRoutes?: ProviderConnection["modelRoutes"] } }
   | { ok: false; reason: FetchModelsFailureReason };
 
 /** Minimal fetch surface this module needs (injectable; defaults to global fetch — mirrors oauth.ts's `FetchLike`). */
@@ -243,7 +244,10 @@ export async function fetchCustomProviderModels(params: FetchModelsParams): Prom
       if (typeof item !== "object" || item === null || !("id" in item) || typeof item.id !== "string" || !("api" in item) || typeof item.api !== "object" || item.api === null) return [];
       return Object.hasOwn(item.api, goDoor) ? [] : [item.id];
     }) : undefined;
-  return { ok: true, models, ...(incompatibleModels ? { incompatibleModels } : {}) };
+  const snapshot = goDoor ? parseOpenCodeGoSnapshot(parsed, new Date().toISOString()) : undefined;
+  const outcome: FetchModelsOutcome = { ok: true, models, ...(incompatibleModels ? { incompatibleModels } : {}) };
+  if (snapshot?.ok) Object.defineProperty(outcome, "modelRoutes", { value: snapshot.snapshot });
+  return outcome;
 }
 
 /** Reads `response`'s body capped at `maxBytes`, undefined when it (or a lying/absent Content-Length) exceeds the cap. */
@@ -849,7 +853,7 @@ async function handleConnectionAddModels(
       return { ok: false, reason: "read_only" };
     }
     const target = loaded.settings.provider.connections.find((c) => c.id === connectionId);
-    if (target === undefined) {
+    if (target === undefined || target.providerId !== resolved.providerId || (target.baseUrl ?? "").trim() !== resolved.savedBaseUrl || (target.transport ?? "") !== resolved.savedTransport) {
       return { ok: false, reason: "invalid_request" };
     }
     const storedModels = target.models ?? [];
@@ -929,6 +933,7 @@ async function handleConnectionFetchModels(
     const apiKey = prepared ? prepared.apiKey : await deps.vault.getSecretValue(connectionApiKeySecretKey(connectionId));
     return {
       baseUrl: requestBase,
+      providerId: connection.providerId,
       savedBaseUrl: (connection.baseUrl ?? "").trim(),
       transport,
       savedTransport: connection.transport ?? "",
@@ -960,7 +965,7 @@ async function handleConnectionFetchModels(
       const currentContext = await prepareModelFetchContext(loaded.settings, current, deps.vault, resolved.targetUrl, deps.systemProxy);
       return currentContext.ok && currentContext.guard === resolved.prepared.guard;
     });
-    return unchanged ? { ...outcome, source: { baseUrl: resolved.savedBaseUrl, transport: resolved.savedTransport, targetUrl: resolved.targetUrl, guard: resolved.prepared!.guard } } : { ok: false, reason: "stale_fetch" };
+    return unchanged ? { ...outcome, source: { baseUrl: resolved.savedBaseUrl, transport: resolved.savedTransport, targetUrl: resolved.targetUrl, guard: resolved.prepared!.guard, ...(((resolved.providerId === "opencode" || resolved.providerId === "opencode-openai") && resolved.targetUrl === "https://opencode.ai/inference/go/v1/models" && outcome.modelRoutes) ? { modelRoutes: outcome.modelRoutes } : {}) } } : { ok: false, reason: "stale_fetch" };
   }
   if (outcome.models.length === 0) return outcome;
   await withSettingsFileLock(deps.settingsPath, async () => {
@@ -969,7 +974,7 @@ async function handleConnectionFetchModels(
       return;
     }
     const target = loaded.settings.provider.connections.find((c) => c.id === connectionId);
-    if (target === undefined) {
+    if (target === undefined || target.providerId !== resolved.providerId || (target.baseUrl ?? "").trim() !== resolved.savedBaseUrl || (target.transport ?? "") !== resolved.savedTransport) {
       // Deleted mid-fetch: the transient result still reaches the caller, but
       // nothing is resurrected on disk.
       return;
@@ -1012,6 +1017,7 @@ async function handleConnectionFetchModels(
       : target.modelCapabilities;
     const updated: ProviderConnection = {
       ...target,
+      ...((target.providerId === "opencode" || target.providerId === "opencode-openai") && resolved.modelsUrl === "https://opencode.ai/inference/go/v1/models" && outcome.modelRoutes ? { modelRoutes: outcome.modelRoutes } : {}),
       models: mergeModelIds(fetchedIds, (target.models ?? []).filter(id => !outcome.incompatibleModels?.includes(id))),
       ...(target.visibleModels !== undefined ? { visibleModels: target.visibleModels.filter(id => !outcome.incompatibleModels?.includes(id)) } : {}),
       modelsFetchedAt: (deps.now ?? defaultNowIso)(),

@@ -1650,7 +1650,7 @@ export function ConnectionDrawerFields({
   const [createFetchNotice, setCreateFetchNotice] = useState<string | null>(null);
   const [commitFetchedModels, setCommitFetchedModels] = useState(false);
   const [incompatibleModels, setIncompatibleModels] = useState<string[]>([]);
-  const [fetchedSource, setFetchedSource] = useState<{ guard: string; targetUrl: string; baseUrl: string; transport: ProviderTransportId | "" } | null>(null);
+  const [fetchedSource, setFetchedSource] = useState<{ guard: string; targetUrl: string; baseUrl: string; transport: ProviderTransportId | ""; modelRoutes?: ProviderConnection["modelRoutes"] } | null>(null);
   const [fetchingModels, setFetchingModels] = useState(false);
   const fetchGeneration = useRef(0);
   const [modelPopupOpen, setModelPopupOpen] = useState(false);

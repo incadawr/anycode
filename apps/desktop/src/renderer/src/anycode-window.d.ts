@@ -92,6 +92,7 @@ import type {
   CustomProviderRecord,
   OAuthStartResult,
   PermissionRuleAddRequest,
+  ProviderConnection,
   SecretKey,
   SettingsMutationResult,
   SettingsPatch,
@@ -364,7 +365,7 @@ export type FetchModelsFailureReason =
 // a successful fetch may carry live per-model capabilities
 // (OpenRouter-style reasoning meta); both fields are optional additive metadata.
 export type FetchModelsOutcome =
-  | { ok: true; models: { id: string; reasoning?: boolean; effortLevels?: string[]; imageInput?: true; contextWindow?: number; maxOutputTokens?: number; pricing?: { input: number; cachedInput: number; output: number } }[]; incompatibleModels?: string[]; source?: { guard: string; targetUrl: string; baseUrl: string; transport: ProviderTransportId | "" } }
+  | { ok: true; models: { id: string; reasoning?: boolean; effortLevels?: string[]; imageInput?: true; contextWindow?: number; maxOutputTokens?: number; pricing?: { input: number; cachedInput: number; output: number } }[]; incompatibleModels?: string[]; source?: { guard: string; targetUrl: string; baseUrl: string; transport: ProviderTransportId | ""; modelRoutes?: ProviderConnection["modelRoutes"] } }
   | { ok: false; reason: FetchModelsFailureReason };
 
 export interface CustomProviderCreateRequest {
