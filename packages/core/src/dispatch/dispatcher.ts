@@ -71,6 +71,7 @@ import {
 import { consultAskClassifier } from "../permissions/ask-classifier-consult.js";
 
 export interface DispatchContext {
+  foregroundRuns?: import("../subagents/foreground-runs.js").ForegroundRuns;
   registry: ToolRegistry;
   hooks: HookRunner;
   permissionEngine: PermissionEngine;
@@ -402,6 +403,7 @@ export async function executeToolCall(
       const timeoutMs = resolveTimeoutMs(metadata, input);
       const handlerCtx: ToolContext = {
         toolCallId,
+        foregroundRuns: ctx.foregroundRuns,
         abortSignal: controller.signal,
         cwd: ctx.cwd,
         ports: ctx.ports,

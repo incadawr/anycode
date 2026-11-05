@@ -94,6 +94,7 @@ import {
 } from "./todo-reminder.js";
 import type { DispatchContext } from "../dispatch/dispatcher.js";
 import { runToolBatches, type ToolSchedulerConfig } from "../dispatch/scheduler.js";
+import { ForegroundRuns, boundForegroundJoin } from "../subagents/foreground-runs.js";
 import { toToolDeclarations } from "../tools/to-model-tools.js";
 import {
   estimateToolDeclarationTokens,
@@ -1145,6 +1146,11 @@ export class AgentLoop {
       ).id;
     }
 
+    const foregroundRuns = new ForegroundRuns();
+    const cancelForeground = () => foregroundRuns.close(signal?.reason);
+    signal?.addEventListener("abort", cancelForeground, { once: true });
+    if (signal?.aborted) cancelForeground();
+
     // Two sanctioned mid-turn mode mutations exist: (1) a broker-approved
     // ExitPlanMode advancing plan -> planExitMode (design slice-4.3-cut.md
     // §2.3), applied via the PlanModeControl mutation below rather than by
@@ -1161,6 +1167,7 @@ export class AgentLoop {
     const config = this.config;
 
     const dispatchCtx: DispatchContext = {
+      foregroundRuns,
       registry: this.config.registry,
       hooks: this.config.hooks,
       permissionEngine: this.config.permissionEngine,
@@ -1265,6 +1272,7 @@ export class AgentLoop {
     this.activeDispatchCtx = dispatchCtx;
     try {
       let turn = 0;
+      let foregroundParkRounds = 0;
       for (;;) {
         if (signal?.aborted) {
           yield* this.emitLoopEnd("cancelled", turn, signal, turnId, turn);
@@ -1640,6 +1648,31 @@ export class AgentLoop {
         // Sentinel: a step with no proposed tool calls ends the loop.
         if (toolCalls.length === 0) {
           yield { type: "turn_end", turn, finishReason };
+          if (foregroundRuns.hasLive) {
+            if (foregroundParkRounds >= 3) {
+              foregroundRuns.close("foreground wait limit reached");
+              const message = "Foreground work did not finish within the turn's waiting limit and was cancelled.";
+              yield { type: "error", error: new Error(message), safe: { code: "unknown", message } };
+              yield* this.emitLoopEnd("error", turn, signal, turnId, turn);
+              return;
+            }
+            foregroundParkRounds += 1;
+            let frames;
+            try { frames = await foregroundRuns.checkpoint(); } catch {
+              yield* this.emitLoopEnd(signal?.aborted ? "cancelled" : "error", turn, signal, turnId, turn);
+              return;
+            }
+            if (signal?.aborted) {
+              yield* this.emitLoopEnd("cancelled", turn, signal, turnId, turn);
+              return;
+            }
+            const message = foregroundRuns.hasLive
+              ? "Foreground work is still owned by this turn. Inspect progress and join it before finishing: "
+              : "Foreground work finished during the wait. Results: ";
+            this.history.append({ role: "user", content: message + JSON.stringify(frames.map(boundForegroundJoin)) },
+              { origin: "system", ...(turnId !== undefined ? { turnId, step: turn } : {}) });
+            continue;
+          }
           yield* this.emitLoopEnd("completed", turn, signal, turnId, turn);
           return;
         }
@@ -1759,6 +1792,8 @@ export class AgentLoop {
         yield { type: "turn_end", turn, finishReason };
       }
     } finally {
+      signal?.removeEventListener("abort", cancelForeground);
+      foregroundRuns.close();
       if (this.activeDispatchCtx === dispatchCtx) {
         this.activeDispatchCtx = null;
       }

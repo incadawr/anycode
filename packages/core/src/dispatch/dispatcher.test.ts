@@ -7,6 +7,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { ForegroundRuns } from "../subagents/foreground-runs.js";
 import * as fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -191,6 +192,22 @@ function makeCtx(overrides: Partial<DispatchContext>): DispatchContext {
 function call(input: unknown = { value: "x" }, name = "Mock"): ProposedToolCall {
   return { id: "call-1", name, input };
 }
+
+it("keeps a turn-owned lease alive after the dispatcher's local signal is unlinked", async () => {
+  const runs = new ForegroundRuns();
+  let childSignal!: AbortSignal;
+  const tool = makeTool({ handler: async (_input, ctx) => {
+    ctx.foregroundRuns!.start((signal) => { childSignal = signal; return new Promise(() => {}); }, () => undefined);
+    return { ok: true, output: "pending" };
+  } });
+  const parent = new AbortController();
+  const result = await executeToolCall(makeCtx({ registry: makeRegistry({ Mock: tool }), foregroundRuns: runs }), call(), parent.signal);
+  expect(result.status).toBe("success");
+  parent.abort();
+  expect(childSignal.aborted).toBe(false);
+  runs.close();
+  expect(childSignal.aborted).toBe(true);
+});
 
 // ---------------------------------------------------------------------------
 
