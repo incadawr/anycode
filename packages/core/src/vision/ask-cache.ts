@@ -3,7 +3,7 @@
  * host-forked process only — never persisted: a retry/resend of the exact same
  * question shouldn't pay for a second model call, but a disk cache would be a
  * new invalidation surface with no proven need. The key folds in the
- * recognizer's own identity (transport+baseUrl+model) because the endpoint can
+ * recognizer's own identity (transport, base URL, model and effective window) because the endpoint can
  * change live mid-session (plan §1.3) — without that, a cache hit could serve
  * a DIFFERENT model's old answer under a newly-selected recognizer.
  */

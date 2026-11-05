@@ -1,16 +1,7 @@
-import { findCatalogEntry } from "@anycode/core/catalog";
-import { connectionContextWindow } from "../../../shared/connection-context-window.js";
-import { contextWindowTokensField, modelOverrideFor, patchModelOverride } from "../../../shared/model-overrides.js";
 /**
- * срез E2a — the Vision settings panel: JSX + effects only. Every
- * decision rule the panel needs already lives as a tested pure function in
- * `vision-pane-model.ts` (this project's vitest runs `environment: "node"`,
- * no jsdom — see that module's own file docstring for why a `.test.tsx`
- * cannot exist here at all), so this component's own job is narrow: read the
- * settings-store snapshot, hand it to those functions, render what they
- * return, and wire the two recognizer IPC channels
- * (`window.anycode.settings.recognizerSet`/`recognizerProbe`) the panel's
- * Save/Turn off/Probe buttons drive.
+ * The Vision settings panel combines the pure selection helpers with the
+ * settings store and recognizer IPC. Mounted tests cover the interactive
+ * controls and their connection/model-scoped drafts.
  *
  * Save/error/reload shape is `ProxyRefPicker.tsx`'s own standalone-mode
  * pattern verbatim (capture the submitted value before the `await`, reload
@@ -28,6 +19,9 @@ import { contextWindowTokensField, modelOverrideFor, patchModelOverride } from "
  * therefore a second inline button ("Really turn off?"), never a native
  * dialog.
  */
+import { findCatalogEntry } from "@anycode/core/catalog";
+import { connectionContextWindow } from "../../../shared/connection-context-window.js";
+import { contextWindowTokensField, modelOverrideFor, patchModelOverride } from "../../../shared/model-overrides.js";
 import { useRef, useState } from "react";
 import { useStore } from "zustand";
 import { Badge, Banner, Button, Field, Input } from "../ui/index.js";
