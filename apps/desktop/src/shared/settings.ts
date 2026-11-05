@@ -438,7 +438,7 @@ export interface ProviderConnection {
     resetsAt?: number;
     observedAt: string;
     source: string;
-    secondary?: { usedPercent: number; windowDurationMins?: number; resetsAt?: number };
+    secondary?: { usedPercent: number; family?: string; windowDurationMins?: number; resetsAt?: number };
   };
   /**
    * Connection-scoped model ids this connection offers its pickers:
