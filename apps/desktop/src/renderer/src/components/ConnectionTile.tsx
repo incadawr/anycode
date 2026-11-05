@@ -284,15 +284,16 @@ export function connectionQuotaLine(
   if (lastQuota === undefined) {
     return null;
   }
-  const familyName = lastQuota.source.match(/ratelimit-([a-z_]+)-/)?.[1] ?? null;
+  const familyName = lastQuota.family ?? lastQuota.source.match(/ratelimit-(?:limit|remaining|reset)-([a-z_-]+)/)?.[1] ?? lastQuota.source.match(/ratelimit-([a-z_-]+)-(?:limit|remaining|reset)/)?.[1] ?? null;
   const formatWindow = (window: { usedPercent: number; windowDurationMins?: number; resetsAt?: number }) => {
     const label = quotaWindowLabel(window.windowDurationMins, familyName);
+    const burst = window.windowDurationMins == null && familyName != null;
     const percentLeft = Math.min(100, Math.max(0, Math.round(100 - window.usedPercent)));
     const resetsPart = window.resetsAt != null ? ` · resets in ${formatAge(window.resetsAt * 1000, now)}` : "";
-    return `${label} · ${percentLeft}% left${resetsPart}`;
+    return `${label}${burst ? "/min" : ""} · ${percentLeft}% left${resetsPart}`;
   };
   const primary = formatWindow(lastQuota);
-  return lastQuota.secondary ? `${primary} | ${formatWindow(lastQuota.secondary)}` : primary;
+  return lastQuota.secondary ? `${primary}\n${formatWindow(lastQuota.secondary)}` : primary;
 }
 
 /** What clicking the tile does — it silently changed the default for new sessions before. */
@@ -438,12 +439,10 @@ export function ConnectionTile({
       >
         <span className="visually-hidden">{selected ? "Default for new sessions. " : "Make default for new sessions. "}</span>
         <div className="connection-tile-header">
-          <span className="connection-tile-provider">{providerLabel}</span>
-          {selected && (
-            <span className="connection-tile-selected-marker" title="Default for new sessions">
-              <Check className="connection-tile-selected-icon" aria-hidden="true" />
-            </span>
-          )}
+          <span className="connection-tile-provider" title={providerLabel}>{providerLabel}</span>
+          <span className="connection-tile-selected-marker" title={selected ? "Default for new sessions" : undefined}>
+            {selected && <Check className="connection-tile-selected-icon" aria-hidden="true" />}
+          </span>
         </div>
         <div className="connection-tile-name">{displayName}</div>
         <div className="connection-tile-model">{connection.model || "Default model"}</div>

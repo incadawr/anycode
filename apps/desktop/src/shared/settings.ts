@@ -433,6 +433,7 @@ export interface ProviderConnection {
    */
   lastQuota?: {
     usedPercent: number;
+    family?: string;
     windowDurationMins?: number;
     resetsAt?: number;
     observedAt: string;

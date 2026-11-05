@@ -27,7 +27,7 @@ describe("providerQuotaFromHeaders", () => {
       NOW,
     );
     expect(update).toEqual({
-      primary: { usedPercent: 80, resetsAt: 1_789_999_999 },
+      primary: { usedPercent: 80, family: "requests", resetsAt: 1_789_999_999 },
       primarySource: "x-ratelimit-requests-limit",
       sources: ["x-ratelimit-requests-limit", "x-ratelimit-requests-remaining", "x-ratelimit-requests-reset"],
     });
@@ -42,7 +42,7 @@ describe("providerQuotaFromHeaders", () => {
       }),
       NOW,
     );
-    expect(update?.primary).toEqual({ usedPercent: 75 });
+    expect(update?.primary).toEqual({ usedPercent: 75, family: "tokens" });
     expect(update?.secondary).toBeUndefined();
   });
 
@@ -56,7 +56,7 @@ describe("providerQuotaFromHeaders", () => {
       }),
       NOW,
     );
-    expect(update?.primary).toEqual({ usedPercent: 80, resetsAt: 1_789_999_999 });
+    expect(update?.primary).toEqual({ usedPercent: 80, family: "input_tokens", resetsAt: 1_789_999_999 });
   });
 
   // (d) ISO-8601 and HTTP-date reset parsing → epoch seconds
@@ -97,8 +97,8 @@ describe("providerQuotaFromHeaders", () => {
       }),
       NOW,
     );
-    expect(update?.primary).toEqual({ usedPercent: 90 });
-    expect(update?.secondary).toEqual({ usedPercent: 50 });
+    expect(update?.primary).toEqual({ usedPercent: 90, family: "tokens" });
+    expect(update?.secondary).toEqual({ usedPercent: 50, family: "requests" });
   });
 
   it("omits secondary when two families share the same ratio", () => {
@@ -111,7 +111,7 @@ describe("providerQuotaFromHeaders", () => {
       }),
       NOW,
     );
-    expect(update?.primary).toEqual({ usedPercent: 50 });
+    expect(update?.primary).toEqual({ usedPercent: 50, family: "requests" });
     expect(update?.secondary).toBeUndefined();
   });
 
@@ -182,7 +182,7 @@ describe("providerQuotaFromHeaders", () => {
       bag(200, { "x-ratelimit-requests-limit": "10", "x-ratelimit-requests-remaining": "0" }),
       NOW,
     );
-    expect(update?.primary).toEqual({ usedPercent: 100 });
+    expect(update?.primary).toEqual({ usedPercent: 100, family: "requests" });
   });
 
   // (k) sources lists literal original names — as the bag reports them. A
@@ -210,7 +210,7 @@ describe("providerQuotaFromHeaders", () => {
       }),
       NOW,
     );
-    expect(update?.primary).toEqual({ usedPercent: 50, windowDurationMins: 5 });
+    expect(update?.primary).toEqual({ usedPercent: 50, family: "requests", windowDurationMins: 5 });
     expect(update?.sources).toContain("x-ratelimit-requests-window-minutes");
   });
 
@@ -224,7 +224,7 @@ describe("providerQuotaFromHeaders", () => {
       }),
       NOW,
     );
-    expect(update?.primary).toEqual({ usedPercent: 75, resetsAt: NOW / 1000 + 360 });
+    expect(update?.primary).toEqual({ usedPercent: 75, family: "requests", resetsAt: NOW / 1000 + 360 });
   });
 
   it("reads a small numeric reset as a delta in seconds, not as a 1970 epoch", () => {

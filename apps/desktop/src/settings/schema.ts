@@ -351,6 +351,7 @@ const connectionSchema = z.object({
   lastQuota: z
     .object({
       usedPercent: z.number().min(0).max(100),
+      family: z.string().optional(),
       windowDurationMins: z.number().optional(),
       resetsAt: z.number().optional(),
       observedAt: z.string(),

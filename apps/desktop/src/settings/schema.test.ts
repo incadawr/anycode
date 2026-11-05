@@ -230,6 +230,13 @@ describe("settingsSchema (v2)", () => {
     });
   });
 
+  it("preserves the reported quota family", () => {
+    const settings = { ...cloneDefaults(), provider: { connections: [{ id: "c1", providerId: "zai", lastQuota: {
+      usedPercent: 1, family: "tokens", observedAt: "2026-10-24T00:00:00.000Z", source: "x-ratelimit-limit-tokens",
+    } }] } };
+    expect(settingsSchema.parse(settings).provider.connections[0]?.lastQuota?.family).toBe("tokens");
+  });
+
   it("accepts a lastQuota with only the required usedPercent/observedAt/source", () => {
     const settings = {
       ...cloneDefaults(),

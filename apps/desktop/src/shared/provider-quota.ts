@@ -30,6 +30,7 @@ export const PROVIDER_QUOTA_EVENT_TYPE = "anycode:provider-quota";
  */
 export interface ProviderQuotaWindowWire {
   usedPercent: number;
+  family?: string;
   windowDurationMins?: number;
   /** Epoch SECONDS (the wire convention of CodexRateLimitsWire). */
   resetsAt?: number;

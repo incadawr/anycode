@@ -30,6 +30,7 @@ export interface QuotaHeaderBag {
 export interface ProviderQuotaWindow {
   /** 0–100 inclusive; the ONLY required field. */
   usedPercent: number;
+  family?: string;
   windowDurationMins?: number;
   /** Epoch SECONDS (same convention as CodexRateLimitsWire). */
   resetsAt?: number;
@@ -203,6 +204,7 @@ export function providerQuotaFromHeaders(headers: QuotaHeaderBag, now: number): 
       ratio,
       window: {
         usedPercent: Math.round(100 * (1 - ratio)),
+        family,
         ...(acc.windowMins !== undefined ? { windowDurationMins: acc.windowMins } : {}),
         ...(acc.resetValue !== undefined ? { resetsAt: acc.resetValue } : {}),
       },

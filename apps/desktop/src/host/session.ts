@@ -1152,6 +1152,7 @@ export interface SessionOptions {
    * exists purely for the durable write (main is the sole settings writer).
    */
   reportProviderQuota?: (quota: {
+    family?: string;
     usedPercent: number;
     windowDurationMins?: number;
     resetsAt?: number;
