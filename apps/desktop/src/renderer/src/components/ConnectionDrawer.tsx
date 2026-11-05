@@ -1347,11 +1347,16 @@ export function providerSelectDisplayValue(effectiveProviderId: string, template
  * Catalog order is preserved within and across groups.
  */
 export interface ProviderOptionGroup { label: string; options: { id: string; label: string }[] }
-export function providerOptionGroups(catalog: readonly CatalogSummaryEntry[]): ProviderOptionGroup[] {
+export function providerOptionGroups(catalog: readonly CatalogSummaryEntry[], includeLegacyGo = false): ProviderOptionGroup[] {
   const groups: ProviderOptionGroup[] = [];
   const brandIndex = new Map<string, ProviderOptionGroup>();
   for (const entry of catalog) {
+    if (entry.id === "opencode-openai" && !includeLegacyGo) continue;
     const ownLabel = entry.isCustom ? "Custom endpoint…" : entry.name;
+    if (entry.id === "opencode" || entry.id === "opencode-openai") {
+      groups.push({ label: "", options: [{ id: entry.id, label: ownLabel }] });
+      continue;
+    }
     if (entry.brand === undefined || entry.modeLabel === undefined) {
       groups.push({ label: "", options: [{ id: entry.id, label: ownLabel }] });
       continue;
@@ -1812,6 +1817,7 @@ export function ConnectionDrawerFields({
   // before it is saved.
   const automaticGo = (providerId === "opencode" || providerId === "opencode-openai") && !baseUrl.trim() && !transport.trim() && !proxySnapshot?.envOverrides.some(key => key === "ANYCODE_BASE_URL" || key === "ANYCODE_PROVIDER_TRANSPORT");
   const automaticIds = automaticGo ? openCodeGoModelIds(providerId, targetConnection?.modelRoutes) : undefined;
+  if (automaticIds?.includes("kimi-k3")) automaticIds.unshift(...automaticIds.splice(automaticIds.indexOf("kimi-k3"), 1));
   const modelSuggestions = liveModelSuggestions(
     isCustomRecordConnection ? null : fetchedModels,
     automaticGo ? undefined : targetConnection?.models,
@@ -2580,7 +2586,7 @@ export function ConnectionDrawerFields({
       <div className="connection-drawer-advanced-body">
       {simplified && labelFieldVisible && labelField}
 
-      <label className="settings-field">
+      {!automaticGo && <label className="settings-field">
         <span className="settings-field-label">Transport</span>
         <select
           className="settings-field-select"
@@ -2600,7 +2606,7 @@ export function ConnectionDrawerFields({
             </option>
           ))}
         </select>
-      </label>
+      </label>}
 
       {/* GitHub #15: opt-in implicit prompt caching, shown only for the two
           OpenAI transports — Anthropic ignores the field at the model port, so
@@ -2878,7 +2884,7 @@ export function ConnectionDrawerFields({
               render as a single <optgroup> (the brand card) whose options are the
               member modes; brandless entries render exactly as before. The option
               value is still the entry id, so selection/prefill is unchanged. */}
-          {providerOptionGroups(catalog).map((group, gi) =>
+          {providerOptionGroups(catalog, templateLocked).map((group, gi) =>
             group.label === "" ? (
               group.options.map((o) => (<option key={o.id} value={o.id}>{o.label}</option>))
             ) : (

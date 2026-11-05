@@ -14,7 +14,6 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
-import { projectCatalogSummary } from "../../../main/settings-ipc.js";
 import { cloneDefaults } from "../../../settings/schema.js";
 import { useSettingsStore } from "../settings-store.js";
 import { WelcomeScreen } from "./WelcomeScreen.js";
@@ -34,7 +33,7 @@ function snapshot(): SettingsSnapshot {
     providerReady: false,
     envOverrides: [],
     readOnly: false,
-    catalog: projectCatalogSummary(getBuiltinCatalog().providers),
+    catalog: getBuiltinCatalog().providers.map(entry => ({ id: entry.id, name: entry.name, authKind: entry.auth.kind, models: entry.models, defaultTransport: entry.defaultTransport, supportedTransports: entry.supportedTransports, ...(entry.brand ? { brand: entry.brand } : {}), ...(entry.modeLabel ? { modeLabel: entry.modeLabel } : {}) })),
   };
 }
 
@@ -98,6 +97,21 @@ async function pickProvider(value: string): Promise<void> {
 }
 
 describe("subscription re-pick keeps the key link and the form on the same provider", () => {
+  it("opens a single Go form with the Kimi default and no automatic transport selector", async () => {
+    await mount();
+    const go = [...container.querySelectorAll<HTMLButtonElement>(".welcome-subscription")].filter(tile => tile.textContent?.includes("OpenCode Go"));
+    expect(go).toHaveLength(1);
+    await act(async () => go[0]!.click());
+    expect(providerSelect().value).toBe("opencode");
+    expect(container.querySelector<HTMLInputElement>("input[list=welcome-model-suggestions]")?.value).toBe("kimi-k3");
+    expect(providerSelect().querySelector("option[value=opencode-openai]")).toBeNull();
+    expect(container.querySelector(".connection-drawer-advanced")?.textContent).not.toContain("Transport");
+    await pickProvider("openai");
+    expect(keyLink()).toBeNull();
+    await act(async () => go[0]!.click());
+    expect(providerSelect().value).toBe("opencode");
+    expect(keyLink()?.textContent).toContain("OpenCode Go");
+  });
   it("re-seeds the form to the picked template instead of reviving the link over another provider", async () => {
     await mount();
 

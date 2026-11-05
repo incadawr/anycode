@@ -415,6 +415,11 @@ describe("providerSelectDisplayValue (dogfood 16.07: add-mode must show the plac
 // come from this pure projection; brandless catalogs must stay byte-identical
 // to the old flat list (the byte-compat proof for every existing fixture).
 describe("providerOptionGroups (one brand = one card)", () => {
+  it("offers one Go template on add while retaining the legacy template for edit", () => {
+    const catalog = projectCatalogSummary(getBuiltinCatalog().providers);
+    expect(providerOptionGroups(catalog).flatMap(group => group.options).filter(option => option.id.startsWith("opencode"))).toEqual([{ id: "opencode", label: "OpenCode Go" }]);
+    expect(providerOptionGroups(catalog, true).flatMap(group => group.options).map(option => option.id)).toContain("opencode-openai");
+  });
   const BRANDLESS: CatalogSummaryEntry[] = [
     { id: "z-ai", name: "Z.AI (GLM)", authKind: "api_key", models: [] },
     { id: "custom", name: "Custom endpoint", authKind: "api_key", models: [], needsBaseUrl: true, isCustom: true },

@@ -611,7 +611,7 @@ const ENTRIES: CatalogProviderEntry[] = [
     // either: one endpoint serves subscription keys only, so there is no
     // catalog-rate ambiguity to resolve.
     id: "opencode",
-    name: "OpenCode Go (Anthropic)",
+    name: "OpenCode Go",
     brand: "OpenCode",
     modeLabel: "Anthropic",
     baseUrl: "https://opencode.ai/inference/go/anthropic",

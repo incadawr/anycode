@@ -539,7 +539,7 @@ describe("OpenCode Go subscription entries", () => {
       "opencode-openai",
     ]);
     expect(findCatalogEntry("opencode")).toMatchObject({
-      name: "OpenCode Go (Anthropic)",
+      name: "OpenCode Go",
       brand: "OpenCode",
       modeLabel: "Anthropic",
       baseUrl: "https://opencode.ai/inference/go/anthropic",

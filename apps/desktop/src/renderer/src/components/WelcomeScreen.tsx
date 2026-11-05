@@ -55,7 +55,7 @@ export function initialConnectionsView(connections: readonly Pick<ProviderConnec
  * readable content and no doc page naming it was found when this was
  * written. Every pick is a plain key paste: none of these is an OAuth flow.
  */
-export type WelcomeSubscriptionId = "z-ai" | "minimax" | "kimi";
+export type WelcomeSubscriptionId = "z-ai" | "minimax" | "kimi" | "opencode";
 
 export interface WelcomeSubscription {
   readonly id: WelcomeSubscriptionId;
@@ -68,6 +68,7 @@ export const WELCOME_SUBSCRIPTIONS: readonly WelcomeSubscription[] = [
   { id: "z-ai", title: "GLM Coding Plan", description: "Use your Z.AI coding plan key", keyUrl: "https://z.ai/manage-apikey/apikey-list" },
   { id: "minimax", title: "MiniMax M Plan", description: "Use your MiniMax M Plan key", keyUrl: "https://platform.minimax.io/console/plan" },
   { id: "kimi", title: "Kimi (kimi.com)", description: "Use your Kimi for Coding key", keyUrl: "https://www.kimi.com/code/console" },
+  { id: "opencode", title: "OpenCode Go", description: "Use your OpenCode Go key", keyUrl: "https://opencode.ai/console" },
 ];
 
 /**
