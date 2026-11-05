@@ -37,3 +37,36 @@ export function resolveModelRoute<Metadata>(
   if (!expected || baseUrl !== expected) return { kind: "refusal", reason: "invalid-route" };
   return entry;
 }
+
+export interface OpenCodeGoSnapshot extends ModelRouteSnapshot<Record<string, unknown>> {
+  fetchedAt: string;
+}
+
+/** Parse a complete listing without deriving routes from model names. */
+export function parseOpenCodeGoSnapshot(rawJson: unknown, fetchedAt: string):
+  | { ok: true; snapshot: OpenCodeGoSnapshot }
+  | { ok: false; reason: "malformed-response" } {
+  let raw = rawJson;
+  if (typeof raw === "string") {
+    try { raw = JSON.parse(raw); } catch { return { ok: false, reason: "malformed-response" }; }
+  }
+  if (!raw || typeof raw !== "object" || !Array.isArray((raw as { data?: unknown }).data)) return { ok: false, reason: "malformed-response" };
+  const rows = (raw as { data: unknown[] }).data;
+  if (!rows.length || rows.some(row => !row || typeof row !== "object" || typeof (row as { id?: unknown }).id !== "string" || !(row as { id: string }).id)) return { ok: false, reason: "malformed-response" };
+  const models: OpenCodeGoSnapshot["models"] = Object.create(null);
+  for (const item of rows) {
+    const row = item as Record<string, unknown> & { id: string };
+    if (Object.hasOwn(models, row.id)) { models[row.id] = { kind: "refusal", reason: "unsupported-model" }; continue; }
+    const api = row.api;
+    if (row.id === "gemini-4-argon" || !api || typeof api !== "object" || Array.isArray(api)) { models[row.id] = { kind: "refusal", reason: "unsupported-model" }; continue; }
+    const keys = Object.keys(api);
+    const key = keys[0];
+    const transport = key === "messages" ? "anthropic-messages" : key === "chat-completions" ? "openai-chat-completions" : key === "responses" ? "openai-responses" : undefined;
+    if (keys.length !== 1 || !transport) { models[row.id] = { kind: "refusal", reason: "unsupported-model" }; continue; }
+    const details = (api as Record<string, unknown>)[key!];
+    const baseUrl = transport === "anthropic-messages" ? OPENCODE_GO_ANTHROPIC_URL : OPENCODE_GO_OPENAI_URL;
+    if (!details || typeof details !== "object" || (details as { base_url?: unknown }).base_url !== baseUrl) { models[row.id] = { kind: "refusal", reason: "invalid-route" }; continue; }
+    models[row.id] = { kind: "route", route: { transport, baseUrl, metadata: row } };
+  }
+  return { ok: true, snapshot: { version: 1, fetchedAt, models } };
+}
