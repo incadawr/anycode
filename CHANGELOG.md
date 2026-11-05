@@ -275,7 +275,6 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - The diagnostics preview shown before saving now covers the whole bundle that will be saved, in pages with a clear note of how much is shown, instead of silently cutting off at 8,000 characters.
 - The number of redacted secrets in the diagnostics dialog now equals the replacements that actually remain in the saved archive: a replacement swallowed by a later match, and repeated statuses merged into one entry, are no longer counted twice.
 
-
 ## [0.0.58] — 2026-10-31
 
 ### Added

@@ -3876,7 +3876,11 @@ void app.whenReady().then(async () => {
       home: pluginsHome, fs: pluginsFs, appVersion: app.getVersion(), settingsPath,
       allowLoopback: __ANYCODE_DEV_AUTOMATION__ && !app.isPackaged && process.env.ANYCODE_AUTOMATION === "1",
       getSecret, fetchFor: connectionProxyFetch,
-      publish: (channel, value) => { for (const window of BrowserWindow.getAllWindows()) if (!window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send(channel, value); },
+      publish: (channel, value) => {
+        try {
+          for (const window of BrowserWindow.getAllWindows()) if (!window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send(channel, value);
+        } catch { /* The window surface may not be available during startup. */ }
+      },
       settingsChanged: async () => { settings = await withSettingsFileLock(settingsPath, async () => (await loadSettings(settingsPath, fileLogger)).settings); },
     });
     app.on("before-quit", () => accountSources?.dispose());
