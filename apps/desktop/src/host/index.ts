@@ -1,3 +1,4 @@
+import { resolveGoBootModel } from "./go-boot-model.js";
 import "./sdk-warnings.js";
 import { scrubFailureText } from "@anycode/core";
 import { childBootFailure, sanitizeBootFailure } from "./child-boot-failure.js";
@@ -3098,6 +3099,10 @@ async function boot(): Promise<void> {
     };
     const routingConnectionId = process.env[ENV_CONNECTION_ID]?.trim() || process.env.ANYCODE_MODEL_SETTINGS_CONNECTION_ID?.trim();
     let routeSnapshot = readConnectionModelSettingsSync(routingConnectionId, settingsPathOverride?.trim() || undefined)?.modelRoutes;
+    const goBoot = envConfig.automaticModelRouting && envConfig.providerId
+      ? resolveGoBootModel(envConfig.providerId, envConfig.model, catalogEntry?.models[0]?.id, routeSnapshot)
+      : undefined;
+    if (goBoot) envConfig.model = goBoot.model;
     const modelPortFactory = (m: string): ModelPort => {
       const current = readConnectionModelSettingsSync(routingConnectionId, settingsPathOverride?.trim() || undefined);
       if (current) routeSnapshot = current.modelRoutes;
@@ -5182,6 +5187,7 @@ async function boot(): Promise<void> {
     // connection this session is not running on — the classifier is OFF and
     // the user SEES that (engine_notice renders like every other config
     // warning), never a silent fallback to the session's own connection.
+    if (goBoot?.notice) session.emitAgentEvent({ type: "engine_notice", level: "warning", message: goBoot.notice });
     if (modelClassifierOffNotice !== undefined) {
       session.emitAgentEvent({ type: "engine_notice", level: "warning", message: modelClassifierOffNotice });
     }
