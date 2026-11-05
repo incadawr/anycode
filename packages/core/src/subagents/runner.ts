@@ -717,7 +717,7 @@ export function createSubagentRunner(
       const builtin = isKnownPersona(agentType) ? getPersona(agentType) : undefined;
       const explicit = profile?.origin !== "settings" ? profile?.turnBudget : undefined;
       const budget = explicit ?? parent.subagentMaxTurns ?? profile?.turnBudget ?? (profile === undefined ? builtin?.turnBudget : undefined);
-      return budget === undefined ? undefined : Math.min(budget, SUBAGENT_MAX_TURNS_CEILING);
+      return budget === undefined ? undefined : Math.max(1, Math.min(budget, SUBAGENT_MAX_TURNS_CEILING));
     },
     listAgentTypes(): string[] {
       // dedupe — an overridable role name (planner/executor/

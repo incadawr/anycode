@@ -473,6 +473,8 @@ describe("buildChildConfig — §4.1 derivation table", () => {
     );
     expect(makeRunner().sessionTurnBudget?.("executor")).toBe(80);
     expect(makeRunner(300).sessionTurnBudget?.("executor")).toBe(200);
+    expect(makeRunner(0).sessionTurnBudget?.("executor")).toBe(1);
+    expect(makeRunner(-5).sessionTurnBudget?.("executor")).toBe(1);
     expect(makeRunner(150).resolveRoleRoute?.("executor")?.turnBudget).toBe(150);
     expect(makeRunner(150, [{ ...getPersona("executor"), turnBudget: 25 }]).sessionTurnBudget?.("executor")).toBe(25);
     expect(makeRunner(150, [{ ...getPersona("executor"), origin: "settings" }]).sessionTurnBudget?.("executor")).toBe(150);
