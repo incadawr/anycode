@@ -44,6 +44,7 @@ import type {
 } from "../types/permissions.js";
 import { ModePermissionEngine } from "../permissions/index.js";
 import { InMemoryHookRunner } from "../dispatch/hook-runner.js";
+import { createInspectImageTool } from "../tools/inspect-image.js";
 import { exitPlanModeTool } from "../tools/exit-plan-mode.js";
 import { todoWriteTool } from "../tools/todo-write.js";
 import { InMemoryTodoStore } from "../tools/todo-store.js";
@@ -654,6 +655,27 @@ describe("AgentLoop.runTurn — vision fallback (plan §1/§2/§3, slice B1)", (
       },
     };
   }
+
+  it("uses the live recognizer window for overview and subsequent InspectImage requests", async () => {
+    const liveEndpoint = { ...recognizerEndpoint, contextWindowTokens: 8192 };
+    const requests: ModelRequest[] = [];
+    const endpointModels: string[] = [];
+    const portFactory = (endpoint: RecognizerEndpoint) => { endpointModels.push(endpoint.model); return capturingAskPort("fixture answer", requests); };
+    const loop = makeLoop({ modelPort: new MockModelPort([completeStep]), media: blindMedia, recognizer: { ...makeReserve(1), endpoint: liveEndpoint, portFactory } });
+    await collect(loop.runTurn("look", { attachments: [pngImg] }));
+    expect(loop.history.toMessages()[0]?.content).toContain("overview: fixture answer");
+    expect(requests[0]?.maxOutputTokens).toBe(2048);
+    const tool = createInspectImageTool({ recognizer: { endpoint: liveEndpoint, portFactory } });
+    const ctx = { toolCallId: "call", abortSignal: new AbortController().signal, cwd: "/work", ports: {}, images: { resolve: (ref: number) => ref === 1 ? pngImg : undefined } } as ToolContext;
+    const longQuestion = "older ".repeat(3000);
+    expect((await tool.handler({ image: "#1", question: longQuestion }, ctx)).ok).toBe(true);
+    liveEndpoint.contextWindowTokens = 4096;
+    expect((await tool.handler({ image: "#1", question: "follow up" }, ctx)).ok).toBe(true);
+    expect(requests[2]?.maxOutputTokens).toBe(1024);
+    expect(requests[2]?.messages[0]?.content).toContain("follow up");
+    expect(requests[2]?.messages[0]?.content).not.toContain("older older");
+    expect(endpointModels).toEqual(["vision-model", "vision-model", "vision-model"]);
+  });
 
   it("slice G: forwards a user-attached image's cssSize into the overview caption's Viewport CSS size prompt line", async () => {
     const reserve = makeReserve(1);

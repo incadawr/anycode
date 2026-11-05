@@ -159,6 +159,16 @@ describe("handleRecognizerProbeRequest — refuses without spawning (resolveReco
 });
 
 describe("handleRecognizerProbeRequest — success", () => {
+  it("sends the unsaved draft window to the child without persisting it", async () => {
+    const original = settings({ provider: { connections: [{ ...visionConnection, modelOverrides: { "vision-model": { contextWindowTokens: 64000 } } }] } });
+    const snapshot = structuredClone(original);
+    const { spawn, calls } = spawnerFor(rawOutput({ ok: true, text: "ok" }));
+    const result = await handleRecognizerProbeRequest(baseDeps({ readSettings: () => original, spawn }), { connectionId: "conn-vision", modelId: "vision-model", contextWindowTokens: 32000 });
+    expect(result.ok).toBe(true);
+    expect((JSON.parse(calls[0]!.stdin) as RecognizerProbeChildInput).endpoint.contextWindowTokens).toBe(32000);
+    expect(original).toEqual(snapshot);
+  });
+
   it("returns the child's answer verbatim and spawns with the production-resolved endpoint", async () => {
     const { spawn, calls } = spawnerFor(rawOutput({ ok: true, text: "the left square is red, the right is blue" }));
     const deps = baseDeps({
