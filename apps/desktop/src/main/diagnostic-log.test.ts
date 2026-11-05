@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDiagnosticLog, installConsoleLog, redactDiagnostic } from "./diagnostic-log.js";
 import { loadSettings } from "../settings/files.js";
+import { loadHookConfigs, NodeFileSystemAdapter } from "@anycode/core";
+import { logHookConfigFailure } from "../host/hook-config-diagnostics.js";
 import { startLocalCrashReporting } from "./crash-reporting.js";
 
 describe("local crash reporting", () => {
@@ -36,7 +38,7 @@ describe("diagnostic log", () => {
     expect(text).not.toContain("abcdefghijklmnop");
     expect(text).not.toContain("secret123");
     expect(text).not.toContain("anothersecret");
-    expect(text).toContain("[redacted]");
+    expect(text).toContain("[3 host output lines suppressed]");
     expect(redactDiagnostic("sk-abcdefghijklmnop")).toBe("[redacted]");
   });
   it("redacts complete authorization values and encoded parameter names", () => {
@@ -68,6 +70,54 @@ describe("diagnostic log", () => {
     expect(text).toContain("SyntaxError: details omitted");
     expect(text).not.toContain("CONFIDENTIAL_FILE_CONTENT");
     expect(text).not.toContain("invalid JSON");
+  });
+  it("filters host lines and records only safe shapes and suppressed counts", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "diagnostic-host-"));
+    const log = createDiagnosticLog(dir);
+    const host = log.stream("host stdout");
+    host(Buffer.from("[host] started. workspace=/private/path\n[host] arbitrary user secret\nraw text\n(node:123) Warning: sensitive details\n"));
+    host.end();
+    await log.flush();
+    const text = await readFile(join(dir, "anycode.log"), "utf8");
+    expect(text).toContain("[host] started");
+    expect(text).toContain("[2 host output lines suppressed]");
+    expect(text).toContain("Node warning (details suppressed)");
+    expect(text).not.toContain("private/path");
+    expect(text).not.toContain("user secret");
+    expect(text).not.toContain("sensitive details");
+  });
+  it("keeps malformed hook config content out of the host log", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "diagnostic-hooks-"));
+    await mkdir(join(dir, ".anycode"));
+    await writeFile(join(dir, ".anycode", "config.json"), "CONFIDENTIAL_HOOK_CONTENT");
+    const log = createDiagnosticLog(join(dir, "logs"));
+    const host = log.stream("host stderr");
+    const hostSource = await readFile(new URL("../host/index.ts", import.meta.url), "utf8");
+    expect(hostSource).toContain("logHookConfigFailure(error)");
+    try {
+      await loadHookConfigs(new NodeFileSystemAdapter(), dir, dir, { projectTrusted: true });
+      throw new Error("expected parse failure");
+    } catch (error) {
+      logHookConfigFailure(error, (line) => host(Buffer.from(line + "\n")));
+    }
+    host.end();
+    await log.flush();
+    const text = await readFile(join(dir, "logs", "anycode.log"), "utf8");
+    expect(text).toContain("failed to load hook config; no command hooks registered: Error");
+    expect(text).not.toContain("CONFIDENTIAL_HOOK_CONTENT");
+  });
+  it("handles adversarial URL-like input in bounded time", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "diagnostic-flood-"));
+    const log = createDiagnosticLog(dir);
+    const start = performance.now();
+    const host = log.stream("host stderr");
+    for (let i = 0; i < 32; i++) {
+      log.write("main", "?".repeat(8192));
+      host(Buffer.from("?".repeat(8192) + "\n"));
+    }
+    host.end();
+    expect(performance.now() - start).toBeLessThan(1000);
+    await log.flush();
   });
   it("rotates and bounds lines; disk errors never reject", async () => {
     const dir = await mkdtemp(join(tmpdir(), "diagnostic-"));

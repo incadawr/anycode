@@ -1,3 +1,4 @@
+import { logHookConfigFailure } from "./hook-config-diagnostics.js";
 import "./sdk-warnings.js";
 import { scrubFailureText } from "@anycode/core";
 import { childBootFailure, sanitizeBootFailure } from "./child-boot-failure.js";
@@ -3612,7 +3613,7 @@ async function boot(): Promise<void> {
       // Fail-soft (design §2.11): a malformed .anycode/config.json must not
       // crash the host — the session just runs with no command hooks.
       hookConfigError = describeError(error);
-      console.error(`[host] failed to load hook config; no command hooks registered: ${hookConfigError}`);
+      logHookConfigFailure(error);
     }
 
     // Background-task wiring (slice 6.DP-2, mirror of cli/main.ts:442-456): the

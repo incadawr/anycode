@@ -7,20 +7,55 @@ const MAX_FILE = 1024 * 1024;
 const MAX_LINE = 4096;
 const MAX_PENDING = 256;
 
-export function redactDiagnostic(text: string): string {
-  return text
-    // Quoted JSON and unquoted headers both include the scheme and credentials.
-    .replace(/(authorization["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\r\n,;}]+)/gi, "$1[redacted]")
-    .replace(/\b(bearer\s+)[a-z0-9._~+\/-]+=*/gi, "$1[redacted]")
-    .replace(/([?&])([^=&#\s]+)=([^&#\s"']*)/g, (match, separator: string, key: string) => {
-      let normalized: string;
-      try { normalized = decodeURIComponent(key.replace(/\+/g, " ")).toLowerCase(); } catch { return match; }
-      return /^(?:key|api[_-]?key|access[_-]?token|token|secret|password)$/.test(normalized)
-        ? `${separator}${key}=[redacted]` : match;
-    })
-    .replace(/((?:api[_-]?key|access[_-]?token|secret|password|token)["']?\s*[=:]\s*["']?)[^\s&,'";}]+/gi, "$1[redacted]")
-    .replace(/\b(?:sk|pk|ghp|gho|github_pat|xoxb|xoxp)-[a-z0-9_-]{12,}\b/gi, "[redacted]")
-    .replace(/\b(?:ghp|gho|github_pat|xoxb|xoxp)_[a-z0-9_]{12,}\b/gi, "[redacted]");
+const sensitiveNames = new Set(["key", "api_key", "api-key", "apikey", "access_token", "access-token", "accesstoken", "token", "secret", "password"]);
+const isNameChar = (c: string) => /[a-z0-9_%+\-]/i.test(c);
+const isValueEnd = (c: string) => c === "&" || c === "#" || c === "," || c === ";" || c === "}" || c === "\r" || c === "\n";
+
+/** Scan each character at most a constant number of times, including malformed URLs. */
+export function redactDiagnostic(input: string): string {
+  const text = input.slice(0, MAX_LINE * 2);
+  let result = "";
+  let i = 0;
+  while (i < text.length) {
+    if (!isNameChar(text[i]!)) { result += text[i++]; continue; }
+    const start = i;
+    while (i < text.length && isNameChar(text[i]!)) i++;
+    const word = text.slice(start, i);
+    let name = word.toLowerCase();
+    if (word.includes("%") || word.includes("+")) {
+      try { name = decodeURIComponent(word.replace(/\+/g, " ")).toLowerCase(); } catch { /* retain the literal */ }
+    }
+    let next = i;
+    if (text[next] === '"' || text[next] === "'") next++;
+    while (text[next] === " " || text[next] === "\t") next++;
+    if ((name === "authorization" || sensitiveNames.has(name)) && (text[next] === ":" || text[next] === "=")) {
+      next++;
+      while (text[next] === " " || text[next] === "\t") next++;
+      result += text.slice(start, next) + "[redacted]";
+      const quote = text[next] === '"' || text[next] === "'" ? text[next++] : "";
+      if (quote) {
+        while (next < text.length && text[next] !== quote) {
+          if (text[next] === "\\" && next + 1 < text.length) next++;
+          next++;
+        }
+        if (next < text.length) next++;
+      } else {
+        while (next < text.length && !isValueEnd(text[next]!) && (name === "authorization" || !/\s/.test(text[next]!))) next++;
+      }
+      i = next;
+    } else if (name === "bearer") {
+      let value = i;
+      while (text[value] === " " || text[value] === "\t") value++;
+      if (value > i && value < text.length) {
+        result += word + text.slice(i, value) + "[redacted]";
+        while (value < text.length && !isValueEnd(text[value]!) && !/\s/.test(text[value]!) && text[value] !== '"' && text[value] !== "'") value++;
+        i = value;
+      } else result += word;
+    } else if (/^(?:sk|pk|ghp|gho|github_pat|xoxb|xoxp)[_-][a-z0-9_-]{12,}$/i.test(word)) {
+      result += "[redacted]";
+    } else result += word;
+  }
+  return result;
 }
 
 function consoleArgument(arg: unknown): string {
@@ -32,6 +67,16 @@ function consoleArgument(arg: unknown): string {
     return `[${name}${typeof code === "string" && /^E[A-Z0-9_]{1,30}$/.test(code) ? ` ${code}` : ""}: details omitted]`;
   }
   return typeof arg === "string" ? arg : "[non-text argument omitted]";
+}
+
+/** Keep only explicitly understood host messages; dynamic output is suppressed. */
+export function safeHostLine(line: string): string | undefined {
+  if (line.startsWith("[host] started. workspace=")) return "[host] started";
+  if (line.startsWith("[host] initialized. workspace=")) return "[host] initialized";
+  if (line === "[host] UI port wired." || line === "[host] terminal port wired.") return line;
+  if (/^\[host\] failed to load hook config; no command hooks registered: (?:Error|SyntaxError|TypeError|RangeError)(?: E[A-Z0-9_]{1,30})?$/.test(line)) return line;
+  if (/^\(node:[0-9]+\) (?:Warning|[A-Za-z]+Warning):/.test(line)) return "[host] Node warning (details suppressed)";
+  return undefined;
 }
 
 /** Asynchronous, bounded best-effort diagnostics; callers never wait for disk. */
@@ -57,19 +102,29 @@ export function createDiagnosticLog(directory: string) {
     const decoder = new StringDecoder("utf8");
     let partial = "";
     let overflow = false;
+    let suppressed = 0;
+    const flushSuppressed = () => {
+      if (suppressed) write(source, `[${suppressed} host output lines suppressed]`);
+      suppressed = 0;
+    };
+    const emitLine = () => {
+      const safe = overflow ? undefined : safeHostLine(partial);
+      if (safe === undefined) suppressed++;
+      else { flushSuppressed(); write(source, safe); }
+      partial = ""; overflow = false;
+    };
     const receive = (chunk: Buffer) => {
       for (const char of decoder.write(chunk)) {
         if (char === "\n") {
-          write(source, partial + (overflow ? " [truncated]" : ""));
-          partial = ""; overflow = false;
+          emitLine();
         } else if (partial.length < MAX_LINE * 2) partial += char;
         else overflow = true;
       }
     };
     return Object.assign(receive, { end: () => {
       partial += decoder.end();
-      if (partial || overflow) write(source, partial + (overflow ? " [truncated]" : ""));
-      partial = ""; overflow = false;
+      if (partial || overflow) emitLine();
+      flushSuppressed();
     } });
   }
   return { write, stream, flush: () => queue };
