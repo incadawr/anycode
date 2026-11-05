@@ -24,7 +24,6 @@ import type {
   ProviderTransportId,
   SecretKey,
 } from "./settings.js";
-import { modelOverrideFor } from "./model-overrides.js";
 import { connectionById } from "./settings.js";
 
 // ── parentPort message type (main -> host, PUSH only) ──
@@ -144,6 +143,14 @@ export function recognizerCustomRecordSecretKey(customRecordId: string): SecretK
   return `provider.${customRecordId}.apiKey`;
 }
 
+/** Mirror the context fields read by modelOverrideFor without importing core into preload. */
+function recognizerModelContextOverride(connection: ProviderConnection, model: string): { contextWindowTokens?: number; catalogMatchDisabled?: boolean } {
+  const entry = connection.modelOverrides !== undefined && Object.hasOwn(connection.modelOverrides, model)
+    ? connection.modelOverrides[model] : undefined;
+  const legacy = connection.contextWindowModel?.trim() === model ? connection.contextWindowTokens : undefined;
+  return { contextWindowTokens: entry?.contextWindowTokens ?? legacy, catalogMatchDisabled: entry?.catalogMatchDisabled };
+}
+
 /** The fingerprint of `settings.recognizer` right now, or undefined when the fallback names no connection / a dangling one. */
 export function recognizerFingerprint(settings: AnycodeSettings): RecognizerFingerprint | undefined {
   const setting = settings.recognizer;
@@ -154,12 +161,13 @@ export function recognizerFingerprint(settings: AnycodeSettings): RecognizerFing
   if (connection === undefined) {
     return undefined;
   }
+  const override = recognizerModelContextOverride(connection, setting.modelId);
   return {
     connectionId: setting.connectionId,
     modelId: setting.modelId,
     baseUrl: recognizerResolvedBaseUrl(settings, connection),
     transport: connection.transport,
-    contextInputs: JSON.stringify([modelOverrideFor(connection, setting.modelId)?.contextWindowTokens, modelOverrideFor(connection, setting.modelId)?.catalogMatchDisabled, connection.modelCapabilities?.[setting.modelId]?.contextWindow, connection.modelCapabilities?.[setting.modelId]?.maxOutputTokens]),
+    contextInputs: JSON.stringify([override.contextWindowTokens, override.catalogMatchDisabled, connection.modelCapabilities?.[setting.modelId]?.contextWindow, connection.modelCapabilities?.[setting.modelId]?.maxOutputTokens]),
   };
 }
 
