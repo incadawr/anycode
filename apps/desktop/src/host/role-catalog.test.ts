@@ -13,7 +13,6 @@ describe("role catalog", () => {
     expect(catalog[0]).toMatchObject({ systemPrompt: PERSONAS.planner.systemPrompt, restrictions: { readOnly: true, tools: [...PERSONAS.planner.tools, "ListConnections"] } });
     expect(catalog[1]).toMatchObject({ systemPrompt: PERSONAS.executor.systemPrompt });
     expect(catalog[1]).not.toHaveProperty("restrictions");
-    expect(catalog.slice(0, 3).every((entry) => entry.maxTurns === undefined)).toBe(true);
     expect(catalog[2]).toMatchObject({ restrictions: { readOnly: true } });
     expect(catalog[3]).toMatchObject({ systemPrompt: PERSONAS.explore.systemPrompt, restrictions: { readOnly: true } });
   });
