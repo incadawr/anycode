@@ -226,7 +226,7 @@ describe("settingsSchema (v2)", () => {
     };
     const parsed = settingsSchema.parse(settings);
     expect(parsed.provider.connections[0]?.lastQuota?.secondary).toEqual({
-      usedPercent: 60, windowDurationMins: 10080, ...(expected === undefined ? {} : { resetsAt: expected }),
+      usedPercent: 60, family: "tokens", windowDurationMins: 10080, ...(expected === undefined ? {} : { resetsAt: expected }),
     });
   });
 

@@ -16,6 +16,7 @@ import { CollabAgentCardIndex } from "../../host/engines/codex/collab-agent-inde
 import { describe, expect, it, vi } from "vitest";
 import { compactionRowText } from "./components/MessageList.js";
 import {
+  providerQuotaToWire,
   accumulateSessionTokens,
   buildConfirmedGitCommand,
   createDesktopStore,
@@ -9604,4 +9605,10 @@ describe("direct orchestration delivery reconciliation", () => {
     expect(store.getState().orchestrationDeliveries[0]).toMatchObject({status:"conflict",reviewed:true});
     expect(store.getState().promptQueue).toEqual([]);
   });
+});
+
+ it("carries the HTTP quota family to the popover formatter", async () => {
+  const { formatQuotaWindowLine } = await import("./components/Composer.js");
+  const quota = providerQuotaToWire({ primary: { usedPercent: 1, family: "tokens" }, sources: ["x-ratelimit-limit-tokens"] });
+  expect(formatQuotaWindowLine(quota.primary, quota.limitName, 0)).toBe("tokens · 99% left");
 });

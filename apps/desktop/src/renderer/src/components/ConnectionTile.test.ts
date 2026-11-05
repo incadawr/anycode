@@ -456,6 +456,11 @@ describe("connectionQuotaLine (the provider-reported quota line)", () => {
     ).toBe("requests/min · 58% left");
   });
 
+  it("labels each window by its own family without inventing a unit", () => {
+    expect(connectionQuotaLine({ usedPercent: 1, family: "requests", source: "header", observedAt: "2026-10-24T12:00:00.000Z", secondary: { usedPercent: 20, family: "daily" } }, NOW)).toBe("requests/min · 99% left\ndaily · 80% left");
+    expect(connectionQuotaLine({ usedPercent: 1, family: "custom", source: "header", observedAt: "2026-10-24T12:00:00.000Z" }, NOW)).toBe("custom · 99% left");
+  });
+
   it("handles both header orders and prefers the persisted family", () => {
     for (const source of ["x-ratelimit-tokens-limit", "x-ratelimit-limit-tokens"]) {
       expect(connectionQuotaLine({ usedPercent: 1, observedAt: "2026-10-24T12:00:00.000Z", source }, NOW)).toBe("tokens/min · 99% left");
