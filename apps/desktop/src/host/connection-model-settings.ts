@@ -3,7 +3,6 @@ import {
   mapForeignEffortLevels,
   resolveEffortLevels,
   resolveReasoningEffort,
-  resolveContextWindowInfo,
   UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS,
   type CatalogProviderEntry,
   type LiveModelCapabilities,
@@ -128,11 +127,7 @@ export function createConnectionModelSettings(deps: {
     contextFor(model: string) {
       const envApplies = (!deps.envContextWindowFromSettings || !hasReadConnection) && deps.envContextWindow !== undefined &&
         (deps.envContextWindowModel === undefined || deps.envContextWindowModel === model);
-      const override = envApplies ? deps.envContextWindow : modelOverrideFor(connection, model)?.contextWindowTokens;
-      const entry = deps.catalogEntryFor ? entryFor(model) : connection?.modelCapabilities?.[model]?.contextWindow
-        ? entryFor(model)
-        : modelDictionaryEntry(model, deps.catalogEntry, modelOverrideFor(connection, model)?.catalogMatchDisabled === true);
-      return resolveContextWindowInfo(model, entry, override, model);
+      return connectionContextWindow(connection, model, deps.catalogEntry, envApplies ? deps.envContextWindow : undefined, deps.catalogEntryFor || connection?.modelCapabilities?.[model]?.contextWindow ? entryFor : undefined, !deps.catalogEntryFor);
     },
     remember(model: string, effort: ReasoningEffort) {
       selected.set(model, effort);

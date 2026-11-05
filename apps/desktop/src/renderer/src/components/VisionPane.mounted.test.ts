@@ -2,6 +2,8 @@ import { act, createElement } from "react";
 import { createStore } from "zustand/vanilla";
 import { expect, it } from "vitest";
 import { cloneDefaults } from "../../../settings/schema.js";
+import { readFile } from "node:fs/promises";
+import { parseOpenCodeGoSnapshot } from "@anycode/core/model-route";
 import type { SettingsStoreApi } from "../settings-store.js";
 // @ts-expect-error jsdom has no bundled declarations in this workspace.
 import { JSDOM } from "jsdom";
@@ -11,6 +13,25 @@ Object.assign(globalThis, { window: dom.window, document: dom.window.document, H
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const { createRoot } = await import("react-dom/client");
 const { VisionPane } = await import("./VisionPane.js");
+
+it("shows the automatic Go window from static policy and refreshed snapshot", async () => {
+  const fixture = JSON.parse(await readFile(new URL("../../../../../../packages/core/src/provider/__fixtures__/opencode-go-models.json", import.meta.url), "utf8"));
+  fixture.data.find((row: { id: string }) => row.id === "gpt-6-luna").limit.context = 222000;
+  const parsed = parseOpenCodeGoSnapshot(fixture, "2026-11-05T00:00:00Z");
+  if (!parsed.ok) throw new Error("invalid Go fixture");
+  for (const [model, snapshot, expected] of [["grok-4.7", undefined, "500,000"], ["gpt-6-luna", undefined, "1,050,000"], ["gpt-6-luna", parsed.snapshot, "222,000"]] as const) {
+    const settings = cloneDefaults();
+    settings.provider.connections = [{ id: "go", providerId: "opencode", models: [model], modelRoutes: snapshot, modelCapabilities: { [model]: { contextWindow: 12345 } } }];
+    settings.recognizer = { connectionId: "go", modelId: model };
+    const store = createStore(() => ({ snapshot: { settings, readOnly: false, catalog: [{ id: "opencode", name: "OpenCode Go", authKind: "api_key", models: [] }] } })) as unknown as SettingsStoreApi;
+    const container = document.createElement("div"); document.body.append(container);
+    const root = createRoot(container);
+    try {
+      await act(async () => root.render(createElement(VisionPane, { store })));
+      expect(container.textContent).toContain(`${expected} tokens (catalog)`);
+    } finally { await act(async () => root.unmount()); container.remove(); }
+  }
+});
 
 it("shows a saved window in read-only mode while allowing a probe", async () => {
   const settings = cloneDefaults();

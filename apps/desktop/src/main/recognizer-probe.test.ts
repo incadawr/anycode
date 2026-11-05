@@ -13,6 +13,11 @@
 import { findCatalogEntry } from "@anycode/core/catalog";
 import { recognizerContextWindow } from "../../../../packages/core/src/vision/recognizer.js";
 import { connectionContextWindow } from "../shared/connection-context-window.js";
+import { createConnectionModelSettings } from "../host/connection-model-settings.js";
+import { openCodeGoCatalogEntry } from "@anycode/core/opencode-go";
+import { parseOpenCodeGoSnapshot } from "@anycode/core/model-route";
+import { applyRecognizerEnv, resolveRecognizerConfig } from "./host-env.js";
+import { parseRecognizerEnv, recognizerEndpointFromFields, recognizerLiveWindow } from "../host/recognizer-env.js";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -99,6 +104,34 @@ const visionConnection = connectionFixture({
   connectionId: "conn-vision",
   baseUrl: "https://vision.example.com",
   transport: "openai-chat-completions",
+});
+
+it("uses the same automatic Go window for the panel, probe, recognizer boot and live update, and host", async () => {
+  const fixture = JSON.parse(await readFile(new URL("../../../../packages/core/src/provider/__fixtures__/opencode-go-models.json", import.meta.url), "utf8"));
+  fixture.data.find((row: { id: string }) => row.id === "gpt-6-luna").limit.context = 222000;
+  const parsed = parseOpenCodeGoSnapshot(fixture, "2026-11-05T00:00:00Z");
+  if (!parsed.ok) throw new Error("invalid Go fixture");
+  const catalog = findCatalogEntry("opencode")!;
+  for (const [model, expected, snapshot] of [["grok-4.7", 500000, undefined], ["gpt-6-luna", 1050000, undefined], ["gpt-6-luna", 222000, parsed.snapshot]] as const) {
+    const connection = { id: "c", providerId: "opencode", model, modelRoutes: snapshot, modelCapabilities: { [model]: { contextWindow: 12345 } } };
+    const original = settings({ provider: { connections: [connection] }, recognizer: { connectionId: "c", modelId: model } });
+    const catalogFor = () => ({ baseUrl: catalog.baseUrl, defaultTransport: catalog.defaultTransport, contextWindowFor: (selected: import("../shared/settings.js").ProviderConnection, id: string) => connectionContextWindow(selected, id, catalog).tokens });
+    const hint = connectionContextWindow(connection, model, catalog).tokens;
+    const probe = await resolveRecognizerProbeCandidate(original, { connectionId: "c", modelId: model }, noSecret, undefined, catalogFor);
+    const wire = await resolveRecognizerConfig(original, noSecret, undefined, catalogFor);
+    expect(wire).toBeDefined();
+    const env: NodeJS.ProcessEnv = {};
+    applyRecognizerEnv(env, wire);
+    const boot = parseRecognizerEnv(env)!;
+    const live = recognizerEndpointFromFields(wire!)!;
+    const host = createConnectionModelSettings({ connection, catalogEntry: catalog, catalogEntryFor: id => openCodeGoCatalogEntry(catalog, id, snapshot), liveCapabilitiesFor: () => undefined });
+    expect([hint, probe?.contextWindowTokens, recognizerContextWindow(boot), recognizerLiveWindow(env, live), host.contextFor(model).tokens]).toEqual(Array(5).fill(expected));
+    expect(connectionContextWindow(connection, model, catalog, 32000).tokens).toBe(32000);
+    expect(connectionContextWindow({ ...connection, modelOverrides: { [model]: { contextWindowTokens: 64000 } } }, model, catalog).tokens).toBe(64000);
+    expect(createConnectionModelSettings({ connection, catalogEntry: catalog, catalogEntryFor: id => openCodeGoCatalogEntry(catalog, id, snapshot), liveCapabilitiesFor: () => undefined, envContextWindow: 32000 }).contextFor(model).tokens).toBe(32000);
+    expect(connectionContextWindow({ ...connection, baseUrl: "https://manual.example" }, model, catalog).tokens).not.toBe(expected);
+    expect(connectionContextWindow({ ...connection, transport: "openai-responses" }, model, catalog).tokens).not.toBe(expected);
+  }
 });
 
 it("uses the same dictionary window for a custom proxy in the panel and runtime", async () => {
