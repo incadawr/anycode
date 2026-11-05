@@ -387,7 +387,7 @@ const CONTEXT_WINDOW_TOKENS_MIN = 1_024;
 const CONTEXT_WINDOW_TOKENS_MAX = 1_000_000;
 const contextWindowTokensSchema = z.number().int().min(CONTEXT_WINDOW_TOKENS_MIN).max(CONTEXT_WINDOW_TOKENS_MAX);
 
-const tokenRatesSchema = z.object({ input: z.number().finite().nonnegative(), cachedInput: z.number().finite().nonnegative(), output: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative().optional() }).strict();
+const tokenRatesSchema = z.object({ input: z.number().finite().nonnegative(), cachedInput: z.number().finite().nonnegative().optional(), output: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative().optional() }).strict();
 const modelIdKey = z.string().refine((id) => normalizeModelId(id) === id);
 const modelPricingSchema = <T extends z.ZodType>(valueSchema: T) =>
   z.unknown().transform((raw, ctx) => {

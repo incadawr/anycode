@@ -215,7 +215,7 @@ const promptCacheSchema = z
  * every default is optional (a connection may exist with only a credential, or
  * only a remembered model). `lastHealth` is the advisory cache (W11 writes it).
  */
-const tokenRatesSchema = z.object({ input: z.number().finite().nonnegative(), cachedInput: z.number().finite().nonnegative(), output: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative().optional() }).strict();
+const tokenRatesSchema = z.object({ input: z.number().finite().nonnegative(), cachedInput: z.number().finite().nonnegative().optional(), output: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative().optional() }).strict();
 const connectionPricingSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("subscription") }),
   // The EXPLICIT "the provider's per-token rate applies" choice. Distinct from

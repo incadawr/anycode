@@ -8,6 +8,14 @@ import { summarizeProviderUsage } from "./session.js";
 import { calculateUsageCost, catalogRateFor, declaredPricingMode, connectionPricing, resolveUsagePrice } from "./usage-cost.js";
 
 const price = { basisId: "test", input: 0.3, cachedInput: 0.006, output: 1.2 };
+it("prices known rates only when unknown cache pricing is not needed", () => {
+  const resolved = resolveUsagePrice(JSON.stringify({ models: { model: { input: 2, output: 8 } } }), "model", undefined);
+  expect(resolved?.subscription).toBe(false);
+  if (!resolved || resolved.subscription) throw new Error("missing price");
+  expect(calculateUsageCost({ inputTokens: 1000000, cachedInputTokens: 0, outputTokens: 1000000 }, resolved.price)?.costUsd).toBe(10);
+  expect(calculateUsageCost({ inputTokens: 1000000, cachedInputTokens: 1, outputTokens: 1000000 }, resolved.price)).toBeUndefined();
+});
+
 describe("usage cost snapshots", () => {
   it("prices cache hits separately and reports their savings", () => {
     expect(calculateUsageCost({ inputTokens: 1_000_000, cachedInputTokens: 800_000, outputTokens: 100_000 }, price))

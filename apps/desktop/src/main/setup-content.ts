@@ -8,7 +8,7 @@ import { roleProfiles } from "../shared/role-profiles.js";
 const name = z.string().trim().min(1).max(128);
 const model = z.string().refine((value) => normalizeModelId(value) === value, "Invalid model id");
 const effort = z.enum(["off", "low", "medium", "high", "xhigh", "max"]);
-const rates = z.object({ input: z.number().finite().nonnegative(), cachedInput: z.number().finite().nonnegative(), output: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative().optional() }).strict();
+const rates = z.object({ input: z.number().finite().nonnegative(), cachedInput: z.number().finite().nonnegative().optional(), output: z.number().finite().nonnegative(), cacheWrite: z.number().finite().nonnegative().optional() }).strict();
 const overrides = z.object({ catalogMatchDisabled: z.literal(true).optional(), effortLevels: z.array(effort).min(1).max(16).optional(), pricing: rates.optional(), contextWindowTokens: z.number().int().min(1024).max(1000000).optional(), reasoningEffort: effort.optional(), reasoningSupported: z.boolean().optional() }).strict();
 const capability = z.object({ contextWindow: z.number().int().positive().optional(), maxOutputTokens: z.number().int().positive().optional(), pricing: rates.omit({ cacheWrite: true }).optional(), reasoning: z.boolean().optional(), effortLevels: z.array(z.string().max(64)).max(16).optional(), imageInput: z.literal(true).optional() }).strict();
 const connectionSchema = z.object({

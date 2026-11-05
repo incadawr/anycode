@@ -15,13 +15,13 @@ export function calculateUsageCost(
   const { inputTokens: input, cachedInputTokens: cached, outputTokens: output } = usage;
   const write = usage.cacheWriteTokens ?? 0;
   if (price === undefined || input === undefined || cached === undefined || output === undefined ||
-      ![input, cached, write, output, price.input, price.cachedInput, price.output].every((n) => Number.isFinite(n) && n >= 0) ||
-      cached + write > input || (write > 0 && (price.cacheWrite === undefined || !Number.isFinite(price.cacheWrite) || price.cacheWrite < 0))) return undefined;
+      ![input, cached, write, output, price.input, price.output].every((n) => Number.isFinite(n) && n >= 0) ||
+      (cached > 0 && (price.cachedInput === undefined || !Number.isFinite(price.cachedInput) || price.cachedInput < 0)) || cached + write > input || (write > 0 && (price.cacheWrite === undefined || !Number.isFinite(price.cacheWrite) || price.cacheWrite < 0))) return undefined;
   const offPeak = price.tariff !== undefined && timestampMs !== undefined && Number.isFinite(timestampMs) &&
     tariffAt(price.tariff, timestampMs) === "off-peak";
   const rate = offPeak ? price.tariff!.offPeakMultiplier : 1;
-  const costUsd = ((input - cached - write) * price.input * rate + cached * price.cachedInput * rate + write * (price.cacheWrite ?? 0) * rate + output * price.output * rate) / 1_000_000;
-  const cacheSavingsUsd = cached * (price.input - price.cachedInput) * rate / 1_000_000;
+  const costUsd = ((input - cached - write) * price.input * rate + cached * (price.cachedInput ?? 0) * rate + write * (price.cacheWrite ?? 0) * rate + output * price.output * rate) / 1_000_000;
+  const cacheSavingsUsd = cached * (price.input - (price.cachedInput ?? 0)) * rate / 1_000_000;
   if (!Number.isFinite(costUsd) || !Number.isFinite(cacheSavingsUsd)) return undefined;
   return { costUsd, cacheSavingsUsd, priceBasisId: offPeak ? `${price.basisId}+off-peak` : price.basisId };
 }
@@ -107,9 +107,10 @@ export function resolveUsagePrice(raw: string | undefined, model: string, catalo
     const candidate = (models as Record<string, unknown>)[model];
     if (candidate !== null && typeof candidate === "object" && !Array.isArray(candidate)) {
       const rates = candidate as Record<string, unknown>;
-      if ([rates.input, rates.cachedInput, rates.output].every((n) => typeof n === "number" && Number.isFinite(n) && n >= 0) &&
+      if ([rates.input, rates.output].every((n) => typeof n === "number" && Number.isFinite(n) && n >= 0) &&
+          (rates.cachedInput === undefined || (typeof rates.cachedInput === "number" && Number.isFinite(rates.cachedInput) && rates.cachedInput >= 0)) &&
           (rates.cacheWrite === undefined || (typeof rates.cacheWrite === "number" && Number.isFinite(rates.cacheWrite) && rates.cacheWrite >= 0))) {
-        const tuple = { input: rates.input as number, cachedInput: rates.cachedInput as number, output: rates.output as number, ...(rates.cacheWrite === undefined ? {} : { cacheWrite: rates.cacheWrite as number }) };
+        const tuple = { input: rates.input as number, ...(rates.cachedInput === undefined ? {} : { cachedInput: rates.cachedInput as number }), output: rates.output as number, ...(rates.cacheWrite === undefined ? {} : { cacheWrite: rates.cacheWrite as number }) };
         return { subscription: false, price: { ...tuple, basisId: `model:${JSON.stringify([model, tuple])}` } };
       }
     }

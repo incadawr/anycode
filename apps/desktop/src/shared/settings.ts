@@ -234,7 +234,7 @@ export type ProviderHealthStatus =
  * "legacy" bucket (no catalog pick) so `activeProviderView` reads back an
  * absent `provider.id`, exactly like a v1 singleton with no id.
  */
-export interface TokenRates { input: number; cachedInput: number; output: number; cacheWrite?: number }
+export interface TokenRates { input: number; cachedInput?: number; output: number; cacheWrite?: number }
 
 export type ConnectionPricing =
   | { mode: "subscription" }

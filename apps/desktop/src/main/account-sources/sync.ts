@@ -19,8 +19,8 @@ function ratesFor(model: Catalog["models"][number]): TokenRates | undefined {
   if (model.billing === "free") return { input: 0, cachedInput: 0, output: 0, cacheWrite: 0 };
   const r = model.ratesMicrosPerMillionTokens;
   // A missing cache price is unknown, not a free cache price.
-  if (!r || r.cachedInput === undefined) return undefined;
-  return { input: Number(r.input) / 1e6, cachedInput: Number(r.cachedInput) / 1e6, output: Number(r.output) / 1e6,
+  if (!r) return undefined;
+  return { input: Number(r.input) / 1e6, ...(r.cachedInput !== undefined ? { cachedInput: Number(r.cachedInput) / 1e6 } : {}), output: Number(r.output) / 1e6,
     ...(r.cacheWrite !== undefined ? { cacheWrite: Number(r.cacheWrite) / 1e6 } : {}) };
 }
 

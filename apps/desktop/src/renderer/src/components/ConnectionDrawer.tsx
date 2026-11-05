@@ -1541,7 +1541,7 @@ export function ConnectionDrawerFields({
   );
   const initialRates = editConnection?.pricing?.mode === "rates" ? editConnection.pricing : undefined;
   const [priceInput, setPriceInput] = useState(initialRates ? String(initialRates.input) : "");
-  const [priceCached, setPriceCached] = useState(initialRates ? String(initialRates.cachedInput) : "");
+  const [priceCached, setPriceCached] = useState(initialRates ? initialRates.cachedInput === undefined ? "" : String(initialRates.cachedInput) : "");
   const [priceOutput, setPriceOutput] = useState(initialRates ? String(initialRates.output) : "");
   const [priceWrite, setPriceWrite] = useState(initialRates?.cacheWrite === undefined ? "" : String(initialRates.cacheWrite));
   const pricingPayload = () => {
@@ -1558,7 +1558,7 @@ export function ConnectionDrawerFields({
   const [modelRates, setModelRates] = useState<Record<string, RateDraft>>(() => Object.fromEntries(
     Object.entries(editConnection?.modelOverrides ?? {}).filter(([, value]) => value.pricing !== undefined).map(([id, value]) => {
       const rate = value.pricing!;
-      return [id, { input: String(rate.input), cachedInput: String(rate.cachedInput), output: String(rate.output), cacheWrite: rate.cacheWrite === undefined ? "" : String(rate.cacheWrite) }];
+      return [id, { input: String(rate.input), cachedInput: rate.cachedInput === undefined ? "" : String(rate.cachedInput), output: String(rate.output), cacheWrite: rate.cacheWrite === undefined ? "" : String(rate.cacheWrite) }];
     }),
   ));
   const [dirtyRates, setDirtyRates] = useState<Set<string>>(() => new Set());
@@ -2540,7 +2540,7 @@ export function ConnectionDrawerFields({
                 const livePrice = pricingMode !== "rates" && pricingMode !== "subscription" ? targetConnection?.modelCapabilities?.[id]?.pricing : undefined;
                 const fallback = pricingMode === "rates" ? pricingPayload() : undefined;
                 const inherited = livePrice ?? (fallback && fallback.mode === "rates" ? fallback : undefined) ?? catalogPrice;
-                const inheritedDraft = inherited ? { input: String(inherited.input), cachedInput: String(inherited.cachedInput), output: String(inherited.output), cacheWrite: inherited.cacheWrite === undefined ? "" : String(inherited.cacheWrite) } : empty;
+                const inheritedDraft = inherited ? { input: String(inherited.input), cachedInput: inherited.cachedInput === undefined ? "" : String(inherited.cachedInput), output: String(inherited.output), cacheWrite: inherited.cacheWrite === undefined ? "" : String(inherited.cacheWrite) } : empty;
                 const draft = ownRateDraft(modelRates, id) ?? inheritedDraft;
                 const source = pricingMode === "subscription" ? "Subscription" : livePrice ? "Provider price" : fallback && fallback.mode === "rates" ? "Connection fallback" : catalogPrice?.tariff ? `Catalog peak: ${catalogPrice.tariff.peakUtcDays.map(day => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day]).join(", ")} ${catalogPrice.tariff.peakUtcHours.map(([start, end]) => `${String(start).padStart(2, "0")}–${String(end).padStart(2, "0")}`).join(", ")} UTC; other times ×${catalogPrice.tariff.offPeakMultiplier}` : catalogPrice ? "Catalog price" : "Unknown";
                 return <tr key={id}><th scope="row">{id}<small>{pricingMode === "subscription" ? (custom ? "Subscription · custom rate inactive" : "Subscription") : custom ? "Custom" : source}</small><button type="button" className="settings-button connection-drawer-rate-mode" disabled={readOnly || saving || pricingMode === "subscription"} aria-label={`${id} ${custom ? "use inherited price" : "set custom price"}`} onClick={() => { setModelRates(previous => { const next = { ...previous }; if (custom) delete next[id]; else next[id] = { ...inheritedDraft }; return next; }); setDirtyRates(previous => new Set(previous).add(id)); }}>{custom ? "Use inherited" : "Customize"}</button></th>

@@ -18,6 +18,11 @@ describe("catalog ownership reconciliation", () => {
     expect(first.connection.modelOverrides?.paid?.pricing).toBeUndefined();
     expect(reconcileCatalog(first.custom, first.connection, first.ownership, data)).toEqual(first);
   });
+  it("imports documented metered rates without inventing a cache rate", () => {
+    const fixture = { id: "metered", billing: "metered", ratesMicrosPerMillionTokens: { input: "2000000", output: "8000000" } };
+    const result = reconcileCatalog(custom, connection, {}, catalog([fixture]));
+    expect(result.connection.modelOverrides?.metered?.pricing).toEqual({ input: 2, output: 8 });
+  });
   it("keeps a user-deleted model absent and removes only owned models", () => {
     const first = reconcileCatalog(custom, connection, {}, catalog([{ id: "a", billing: "free" }, { id: "b", billing: "free" }]));
     first.custom.models = first.custom.models.filter((id) => id !== "a");
