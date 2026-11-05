@@ -628,6 +628,7 @@ const proxyRefSetSchema = z
  */
 const recognizerSetSchema = z
   .object({
+    contextWindowTokens: z.union([z.literal(""), z.number().int().min(1024).max(1000000)]).optional(),
     recognizer: z.union([
       z.object({ connectionId: z.string().min(1), modelId: z.string().min(1) }).strict(),
       z.null(),
@@ -2798,7 +2799,8 @@ export async function handleRecognizerSet(deps: SettingsIpcDeps, raw: unknown): 
   if (!parsed.success) {
     return { ok: false, reason: "invalid" };
   }
-  const { recognizer } = parsed.data;
+  const { recognizer, contextWindowTokens } = parsed.data;
+  if (recognizer === null && contextWindowTokens !== undefined) return { ok: false, reason: "invalid" };
   if (recognizer !== null && recognizer.modelId.trim() === "") {
     return { ok: false, reason: "invalid" };
   }
@@ -2815,6 +2817,9 @@ export async function handleRecognizerSet(deps: SettingsIpcDeps, raw: unknown): 
       delete draft.recognizer;
     } else {
       draft.recognizer = recognizer;
+      if (contextWindowTokens !== undefined) {
+        patchModelOverride(connectionById(draft, recognizer.connectionId)!, recognizer.modelId, { contextWindowTokens: contextWindowTokens === "" ? undefined : contextWindowTokens });
+      }
     }
     await saveSettings(deps.settingsPath, draft);
     const snapshot = await snapshotFrom(deps, draft, false);

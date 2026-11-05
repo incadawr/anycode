@@ -1626,6 +1626,20 @@ describe("handleSet — communication (settings.communication is written ONLY by
 });
 
 describe("handleRecognizerSet: the only writer that can also DELETE settings.recognizer", () => {
+  it("saves, keeps and clears a model window while turning off retains it", async () => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" });
+    const recognizer = { connectionId: "conn-1", modelId: "vision" };
+    expect((await handleRecognizerSet(makeDeps(), { recognizer, contextWindowTokens: 32000 })).ok).toBe(true);
+    await handleRecognizerSet(makeDeps(), { recognizer });
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.modelOverrides?.vision?.contextWindowTokens).toBe(32000);
+    await handleRecognizerSet(makeDeps(), { recognizer: null });
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.modelOverrides?.vision?.contextWindowTokens).toBe(32000);
+    await handleRecognizerSet(makeDeps(), { recognizer, contextWindowTokens: "" });
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.modelOverrides?.vision?.contextWindowTokens).toBeUndefined();
+    for (const value of [100, 1024.5, 1000001]) expect(await handleRecognizerSet(makeDeps(), { recognizer, contextWindowTokens: value })).toEqual({ ok: false, reason: "invalid" });
+    expect(await handleRecognizerSet(makeDeps(), { recognizer: null, contextWindowTokens: 2048 })).toEqual({ ok: false, reason: "invalid" });
+  });
+
   it("sets settings.recognizer for a connectionId that exists in the live graph", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
     const res = await handleRecognizerSet(makeDeps(), { recognizer: { connectionId: "conn-1", modelId: "glm-vision" } });

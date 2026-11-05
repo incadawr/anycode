@@ -211,6 +211,7 @@ export const RECOGNIZER_PROBE_CHANNEL = "anycode:recognizer-probe";
 export interface RecognizerProbeRequest {
   connectionId: string;
   modelId: string;
+  contextWindowTokens?: number | "";
 }
 
 /**
@@ -264,4 +265,5 @@ export const RECOGNIZER_SET_CHANNEL = "anycode:recognizer-set";
  */
 export interface RecognizerSetRequest {
   recognizer: { connectionId: string; modelId: string } | null;
+  contextWindowTokens?: number | "";
 }
