@@ -20,6 +20,11 @@ it("requires a matching dedicated connection and a fresh single-use preview", as
   const changed = vi.fn();
   let key: string | undefined;
   const service = new AccountBindingService({ settingsPath: path, candidates: async () => [candidate], getSecret: async () => key, fetchFor: () => async () => new Response(JSON.stringify({ schemaVersion: "anycode.account-catalog.v1", accountId: "employee", revision: "1", complete: true, models: [] })), changed });
+  settings.provider.connections.push({ id: "other", providerId: "custom:corp" });
+  await saveSettings(path, settings);
+  expect(await service.preview({ plugin: "company", source: "cluster" }, "conn")).toEqual({ ok: false, reason: "connection_invalid" });
+  settings.provider.connections.pop();
+  await saveSettings(path, settings);
   const preview = await service.preview({ plugin: "company", source: "cluster" }, "conn");
   expect(preview.ok).toBe(true);
   if (!preview.ok) return;
