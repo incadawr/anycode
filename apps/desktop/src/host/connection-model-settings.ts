@@ -4,6 +4,7 @@ import {
   resolveContextWindowInfo,
   resolveEffortLevels,
   resolveReasoningEffort,
+  UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS,
   type CatalogProviderEntry,
   type LiveModelCapabilities,
   type ReasoningEffort,
@@ -49,7 +50,7 @@ export function createConnectionModelSettings(deps: {
     const live = connection?.modelCapabilities?.[model];
     if (entry && (live?.contextWindow || live?.maxOutputTokens)) {
       const previous = entry.models.find(row => row.id === model);
-      if (live.contextWindow || previous) entry = { ...entry, models: [...entry.models.filter(row => row.id !== model), { ...previous, id: model, contextWindow: live.contextWindow ?? previous!.contextWindow, ...(live.maxOutputTokens ? { maxOutputTokens: live.maxOutputTokens } : {}) }] };
+      entry = { ...entry, models: [...entry.models.filter(row => row.id !== model), { ...previous, id: model, contextWindow: live.contextWindow ?? previous?.contextWindow ?? UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS, ...(live.maxOutputTokens ? { maxOutputTokens: live.maxOutputTokens } : {}) }] };
     }
     if (entry && (entry !== deps.catalogEntry || override?.reasoningSupported === false)) {
       const live = capabilitiesFor(model);
@@ -120,7 +121,10 @@ export function createConnectionModelSettings(deps: {
       const envApplies = (!deps.envContextWindowFromSettings || !hasReadConnection) && deps.envContextWindow !== undefined &&
         (deps.envContextWindowModel === undefined || deps.envContextWindowModel === model);
       const override = envApplies ? deps.envContextWindow : modelOverrideFor(connection, model)?.contextWindowTokens;
-      return resolveContextWindowInfo(model, entryFor(model), override, model);
+      const entry = connection?.modelCapabilities?.[model]?.contextWindow
+        ? entryFor(model)
+        : modelDictionaryEntry(model, deps.catalogEntry, modelOverrideFor(connection, model)?.catalogMatchDisabled === true);
+      return resolveContextWindowInfo(model, entry, override, model);
     },
     remember(model: string, effort: ReasoningEffort) {
       selected.set(model, effort);

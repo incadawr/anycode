@@ -342,6 +342,13 @@ it("uses refreshed OpenCode Go limits for models outside the catalog", () => {
   expect(overridden.contextFor(model).tokens).toBe(32_000);
 });
 
+it("uses an output-only live limit without claiming an unknown context window", () => {
+  const model = "unknown-output-only";
+  const settings = createConnectionModelSettings({ catalogEntry: findCatalogEntry("opencode-openai"), connection: { modelCapabilities: { [model]: { maxOutputTokens: 100_000 } } }, liveCapabilitiesFor: () => undefined });
+  expect(settings.contextFor(model)).toEqual({ tokens: 8192, source: "assumed" });
+  expect(resolveMaxOutputTokens(model, settings.entryFor(model), undefined)).toBe(100_000);
+});
+
 
 it("keeps manual connection rates ahead of live catalog rates", () => {
   const manual = { mode: "rates" as const, input: 2, cachedInput: 1, output: 3 };
