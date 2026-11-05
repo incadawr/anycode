@@ -3,6 +3,7 @@ import { loadEnvConfig } from "../provider/env.js";
 import { createListConnectionsTool } from "../tools/list-connections.js";
 import type { ToolContext } from "../types/tools.js";
 import { cliConnectionTargets } from "./connection-targets.js";
+import { findCatalogEntry } from "../provider/catalog-data.js";
 
 it("exposes the configured CLI endpoint without credentials or URLs", async () => {
   const config = loadEnvConfig({ ANYCODE_API_KEY: "fake-cli-key", ANYCODE_BASE_URL: "https://fake-user:fake-password@example.test", ANYCODE_MODEL: "local-model", ANYCODE_TRANSPORT: "openai-chat-completions" });
@@ -11,4 +12,11 @@ it("exposes the configured CLI endpoint without credentials or URLs", async () =
   expect(result).toMatchObject({ ok: true, output: { current: { connectionId: "cli", model: "local-model" }, connections: [{ id: "cli", providerId: "custom", models: [{ id: "local-model", default: true }] }] } });
   const text = JSON.stringify(result);
   for (const secret of ["fake-cli-key", "fake-user", "fake-password", "example.test"]) expect(text).not.toContain(secret);
+});
+
+it("lists all automatic Go routes and excludes the refused model", () => {
+  const config = loadEnvConfig({ ANYCODE_API_KEY: "test", ANYCODE_PROVIDER_ID: "opencode", ANYCODE_MODEL: "kimi-k3" });
+  const models = cliConnectionTargets(config, findCatalogEntry("opencode"), "anthropic-messages", "kimi-k3").connections[0]!.models;
+  expect(models).toHaveLength(28);
+  expect(models.some(model => model.id === "gemini-4-argon")).toBe(false);
 });

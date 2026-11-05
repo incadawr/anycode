@@ -40,6 +40,8 @@ export const OVERVIEW_QUESTION =
  */
 export interface RecognizerEndpoint {
   goModelPolicy?: import("../provider/opencode-go-policy.js").OpenCodeGoEndpointPolicy;
+  modelMetadata?: Record<string, unknown>;
+  pricingRaw?: string;
   transport: ProviderTransport;
   baseUrl: string;
   apiKey?: string;

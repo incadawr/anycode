@@ -515,6 +515,16 @@ describe("AiSdkModelPort — happy path", () => {
     expect(mockStreamText).toHaveBeenCalledTimes(1);
   });
 
+  it("attaches the completed Go port's endpoint metadata to the finish", async () => {
+    const { resolveOpenCodeGoEndpointPolicy } = await import("./opencode-go-policy.js");
+    const route = resolveOpenCodeGoEndpointPolicy("opencode", "grok-4.7");
+    if (route.kind !== "route") throw new Error("missing route");
+    mockStreamText.mockImplementationOnce(() => fakeResult([part(startPart), part(finishPart)]));
+    const port = new AiSdkModelPort({ ...route.route, model: "grok-4.7", apiKey: "test", goModelPolicy: route.route.policy, modelMetadata: route.route.metadata });
+    const events = await collect(port.streamText(baseRequest));
+    expect(events.find(event => event.type === "finish")).toMatchObject({ endpointSnapshot: { model: "grok-4.7", transport: "openai-responses", metadata: { id: "grok-4.7" } } });
+  });
+
   it("calls the SDK with maxRetries: 0 (adapter owns retries, not the SDK)", async () => {
     mockStreamText.mockImplementationOnce(() => fakeResult([part(finishPart)]));
     const port = new AiSdkModelPort(baseConfig());

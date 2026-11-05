@@ -1,6 +1,22 @@
 import { tariffAt, type ModelPricing } from "@anycode/core/catalog";
 import { normalizeAnthropicBaseUrl, resolveBillingMode, type CatalogProviderEntry } from "@anycode/core";
 
+/** Reject incomplete or conditional rates rather than silently charging a base tier. */
+export function endpointSnapshotPrice(metadata: Record<string, unknown>): ModelPricing | undefined {
+  const p = metadata.pricing;
+  if (!p || typeof p !== "object" || Array.isArray(p)) return undefined;
+  const value = p as Record<string, unknown>;
+  const number = (n: unknown) => typeof n === "number" && Number.isFinite(n) && n >= 0;
+  const rates = (r: Record<string, unknown>) => [r.input, r.cachedInput, r.output].every(number) && (r.cacheWrite === undefined || number(r.cacheWrite));
+  if (typeof value.basisId !== "string" || !value.basisId || !rates(value)) return undefined;
+  if (value.tiers !== undefined && (!Array.isArray(value.tiers) || !value.tiers.every(t => t && typeof t === "object" && number(t.gt) && rates(t)))) return undefined;
+  if (value.tariff !== undefined) {
+    const t = value.tariff as Record<string, unknown> | null;
+    if (!t || typeof t !== "object" || !Array.isArray(t.peakUtcDays) || !t.peakUtcDays.every(d => Number.isInteger(d) && d >= 0 && d <= 6) || !Array.isArray(t.peakUtcHours) || !t.peakUtcHours.every(h => Array.isArray(h) && h.length === 2 && h.every((n: unknown) => Number.isInteger(n) && (n as number) >= 0 && (n as number) <= 24) && h[0] < h[1]) || !number(t.offPeakMultiplier)) return undefined;
+  }
+  return value as unknown as ModelPricing;
+}
+
 /**
  * Snapshot a cost only when the provider supplied enough information to price
  * it. `timestampMs` is the step's own timestamp: a price that declares a

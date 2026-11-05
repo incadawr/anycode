@@ -2201,9 +2201,11 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
     if (req.fetchedModels && req.fetchedModels.models.length > 0) {
       if ((existing.providerId === "opencode" || existing.providerId === "opencode-openai") && req.fetchedModels.targetUrl === "https://opencode.ai/inference/go/v1/models" && req.fetchedModels.modelRoutes) updatedConnection.modelRoutes = req.fetchedModels.modelRoutes;
       const incompatible = new Set(req.fetchedModels.incompatibleModels ?? []);
-      updatedConnection.models = mergeModelIds(req.fetchedModels.models.map(item => item.id), (updatedConnection.models ?? []).filter(id => !incompatible.has(id)));
-      if (updatedConnection.visibleModels) updatedConnection.visibleModels = updatedConnection.visibleModels.filter(id => !incompatible.has(id));
-      if (updatedConnection.model && incompatible.has(updatedConnection.model)) delete updatedConnection.model;
+      const automaticGo = (existing.providerId === "opencode" || existing.providerId === "opencode-openai") && !updatedConnection.baseUrl?.trim() && !updatedConnection.transport?.trim() && !deps.bootEnv.ANYCODE_BASE_URL?.trim() && !deps.bootEnv.ANYCODE_PROVIDER_TRANSPORT?.trim() && req.fetchedModels.targetUrl === "https://opencode.ai/inference/go/v1/models";
+      const fetchedIds = req.fetchedModels.models.map(item => item.id);
+      updatedConnection.models = automaticGo ? fetchedIds : mergeModelIds(fetchedIds, (updatedConnection.models ?? []).filter(id => !incompatible.has(id)));
+      if (updatedConnection.visibleModels) updatedConnection.visibleModels = updatedConnection.visibleModels.filter(id => automaticGo ? fetchedIds.includes(id) : !incompatible.has(id));
+      if (!automaticGo && updatedConnection.model && incompatible.has(updatedConnection.model)) delete updatedConnection.model;
       updatedConnection.modelsFetchedAt = (deps.now ?? defaultNowIso)();
       const caps = { ...updatedConnection.modelCapabilities };
       for (const item of req.fetchedModels.models) {

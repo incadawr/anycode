@@ -123,6 +123,8 @@ export interface FetchModelsParams {
   /** Complete models-list URL (catalog `modelsUrl`); replaces the derived `<base>/models` URL and switches auth to Bearer per that field's contract. */
   modelsUrl?: string;
   transport?: string;
+  /** Main-owned marker: this connection resolves each Go model's own door. */
+  automaticGoRouting?: boolean;
   timeoutMs?: number;
   maxBodyBytes?: number;
   /** Injectable fetch (tests point this at a real local HTTP server). */
@@ -230,21 +232,24 @@ export async function fetchCustomProviderModels(params: FetchModelsParams): Prom
   if (looksLikeErrorPayload(parsed)) {
     return { ok: false, reason: "error_payload" };
   }
-  const goDoor = params.modelsUrl?.replace(/\/+$/, "") === "https://opencode.ai/inference/go/v1/models"
+  const goListing = params.modelsUrl?.replace(/\/+$/, "") === "https://opencode.ai/inference/go/v1/models";
+  const goDoor = goListing && !params.automaticGoRouting
     ? (params.transport === "openai-responses" ? "responses" : params.transport === "anthropic-messages" ? "messages" : params.transport ? "chat-completions" : params.kind === "anthropic" ? "messages" : "chat-completions") : undefined;
-  const models = extractModelIds(parsed, new URL(params.baseUrl).hostname === "openrouter.ai", goDoor);
+  const snapshot = goListing ? parseOpenCodeGoSnapshot(parsed, new Date().toISOString()) : undefined;
+  if (params.automaticGoRouting && !snapshot?.ok) return { ok: false, reason: "invalid_response" };
+  const extracted = extractModelIds(parsed, new URL(params.baseUrl).hostname === "openrouter.ai", params.automaticGoRouting ? "automatic" : goDoor);
+  const models = params.automaticGoRouting && snapshot?.ok ? extracted?.filter(item => snapshot.snapshot.models[item.id]?.kind === "route") : extracted;
   if (models === undefined) {
     return { ok: false, reason: "invalid_response" };
   }
   if (models.length === 0) {
     return { ok: false, reason: "empty_models" };
   }
-  const incompatibleModels = goDoor && typeof parsed === "object" && parsed !== null && "data" in parsed && Array.isArray(parsed.data)
+  const incompatibleModels = params.automaticGoRouting && snapshot?.ok ? Object.entries(snapshot.snapshot.models).filter(([, value]) => value.kind === "refusal").map(([id]) => id) : goDoor && typeof parsed === "object" && parsed !== null && "data" in parsed && Array.isArray(parsed.data)
     ? parsed.data.flatMap((item: unknown) => {
       if (typeof item !== "object" || item === null || !("id" in item) || typeof item.id !== "string" || !("api" in item) || typeof item.api !== "object" || item.api === null) return [];
       return Object.hasOwn(item.api, goDoor) ? [] : [item.id];
     }) : undefined;
-  const snapshot = goDoor ? parseOpenCodeGoSnapshot(parsed, new Date().toISOString()) : undefined;
   const outcome: FetchModelsOutcome = { ok: true, models, ...(incompatibleModels ? { incompatibleModels } : {}) };
   if (snapshot?.ok) Object.defineProperty(outcome, "modelRoutes", { value: snapshot.snapshot });
   return outcome;
@@ -349,7 +354,7 @@ const MODEL_CAPABILITY_ID_MAX = 256;
 function extractModelIds(
   value: unknown,
   openrouter = false,
-  goDoor?: "messages" | "chat-completions" | "responses",
+  goDoor?: "messages" | "chat-completions" | "responses" | "automatic",
 ): { id: string; reasoning?: boolean; effortLevels?: string[]; imageInput?: true; contextWindow?: number; maxOutputTokens?: number; pricing?: { input: number; cachedInput: number; output: number } }[] | undefined {
   if (typeof value !== "object" || value === null || !("data" in value)) {
     return undefined;
@@ -369,7 +374,7 @@ function extractModelIds(
     }
     if (goDoor) {
       const row = item as { api?: Record<string, unknown>; limit?: { context?: unknown; output?: unknown }; capabilities?: { reasoning?: { supported?: unknown; effort?: unknown } }; modalities?: { input?: unknown }; cost?: { text?: { input?: { price?: unknown; cache?: { read?: unknown } }; output?: { price?: unknown } }; multipliers?: unknown } };
-      if (!row.api || typeof row.api !== "object" || !Object.hasOwn(row.api, goDoor)) continue;
+      if (!row.api || typeof row.api !== "object" || (goDoor !== "automatic" && !Object.hasOwn(row.api, goDoor))) continue;
       const positive = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v > 0;
       const efforts = row.capabilities?.reasoning?.effort;
       const reasoning = row.capabilities?.reasoning?.supported === true;
@@ -378,9 +383,9 @@ function extractModelIds(
       const rate = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0;
       const pricing = !row.cost?.multipliers && rate(cost?.input?.price) && rate(cost?.input?.cache?.read) && rate(cost?.output?.price) ? { input: cost.input.price, cachedInput: cost.input.cache.read, output: cost.output.price } : undefined;
       models.push({ id: maybe.id, ...(maybe.id.length <= MODEL_CAPABILITY_ID_MAX ? {
-        ...(pricing ? { pricing } : {}),
+        ...(pricing && goDoor !== "automatic" ? { pricing } : {}),
         ...(positive(row.limit?.context) ? { contextWindow: row.limit.context } : {}),
-        ...(positive(row.limit?.output) ? { maxOutputTokens: row.limit.output } : {}),
+        ...(maybe.id !== "kimi-k2.7-code" && positive(row.limit?.output) ? { maxOutputTokens: row.limit.output } : {}),
         ...(reasoning ? { reasoning: true } : {}),
         ...(reasoning && Array.isArray(efforts) && efforts.length > 0 && efforts.length <= 16 && efforts.every(e => typeof e === "string" && e.length <= 64) ? { effortLevels: efforts as string[] } : {}),
         ...(Array.isArray(inputs) && inputs.some(i => typeof i === "string" && (i === "image" || i.startsWith("image/"))) ? { imageInput: true as const } : {}),
@@ -475,6 +480,7 @@ export interface CatalogFetchEntryShape {
 }
 
 export interface ProviderIpcDeps {
+  bootEnv?: NodeJS.ProcessEnv;
   vault: ProviderVaultLike;
   settingsPath: string;
   logger?: FileIoLogger;
@@ -922,10 +928,10 @@ async function handleConnectionFetchModels(
     const custom = preview ? loaded.settings.provider.custom?.find(item => item.id === connection.providerId) : undefined;
     const entry = entryById(connection.providerId);
     if (custom === undefined && (entry === undefined || entry.id === "custom")) return undefined;
-    const baseUrl = custom?.baseUrl ?? (connection.baseUrl?.trim() ? connection.baseUrl.trim() : entry!.baseUrl);
+    const baseUrl = deps.bootEnv?.ANYCODE_BASE_URL?.trim() || custom?.baseUrl || (connection.baseUrl?.trim() ? connection.baseUrl.trim() : entry!.baseUrl);
     if (!baseUrl.trim()) return { error: "invalid_url" as const };
-    const transport = connection.transport ?? entry?.defaultTransport;
-    const modelsUrl = custom || connection.baseUrl?.trim() ? undefined : findCatalogEntry(connection.providerId)?.modelsUrl;
+    const transport = deps.bootEnv?.ANYCODE_PROVIDER_TRANSPORT?.trim() || connection.transport || entry?.defaultTransport;
+    const modelsUrl = custom || connection.baseUrl?.trim() || deps.bootEnv?.ANYCODE_BASE_URL?.trim() ? undefined : findCatalogEntry(connection.providerId)?.modelsUrl;
     const requestBase = custom ? baseUrl : catalogModelsBaseUrl(baseUrl);
     const targetUrl = modelsUrl ? modelsUrl.replace(/\/+$/, "") : `${requestBase.replace(/\/+$/, "")}${MODELS_PATH}`;
     const prepared = preview ? await prepareModelFetchContext(loaded.settings, connection, deps.vault, targetUrl, deps.systemProxy) : undefined;
@@ -937,6 +943,7 @@ async function handleConnectionFetchModels(
       savedBaseUrl: (connection.baseUrl ?? "").trim(),
       transport,
       savedTransport: connection.transport ?? "",
+      automaticGoRouting: (connection.providerId === "opencode" || connection.providerId === "opencode-openai") && !connection.baseUrl?.trim() && !connection.transport?.trim() && !deps.bootEnv?.ANYCODE_BASE_URL?.trim() && !deps.bootEnv?.ANYCODE_PROVIDER_TRANSPORT?.trim(),
       targetUrl,
       prepared,
       apiKey,
@@ -953,6 +960,7 @@ async function handleConnectionFetchModels(
     apiKey: resolved.apiKey,
     kind: resolved.kind,
     transport: resolved.transport,
+    ...(resolved.automaticGoRouting ? { automaticGoRouting: true } : {}),
     ...(resolved.modelsUrl !== undefined ? { modelsUrl: resolved.modelsUrl } : {}),
     ...(preview ? { fetchImpl: deps.preparedConnectionFetch!(resolved.prepared!.route) } : deps.connectionFetch !== undefined ? { fetchImpl: deps.connectionFetch(connectionId) } : {}),
   });
@@ -1018,12 +1026,12 @@ async function handleConnectionFetchModels(
     const updated: ProviderConnection = {
       ...target,
       ...((target.providerId === "opencode" || target.providerId === "opencode-openai") && resolved.modelsUrl === "https://opencode.ai/inference/go/v1/models" && outcome.modelRoutes ? { modelRoutes: outcome.modelRoutes } : {}),
-      models: mergeModelIds(fetchedIds, (target.models ?? []).filter(id => !outcome.incompatibleModels?.includes(id))),
-      ...(target.visibleModels !== undefined ? { visibleModels: target.visibleModels.filter(id => !outcome.incompatibleModels?.includes(id)) } : {}),
+      models: resolved.automaticGoRouting ? fetchedIds : mergeModelIds(fetchedIds, (target.models ?? []).filter(id => !outcome.incompatibleModels?.includes(id))),
+      ...(target.visibleModels !== undefined ? { visibleModels: target.visibleModels.filter(id => resolved.automaticGoRouting ? fetchedIds.includes(id) : !outcome.incompatibleModels?.includes(id)) } : {}),
       modelsFetchedAt: (deps.now ?? defaultNowIso)(),
       ...(mergedCaps !== undefined ? { modelCapabilities: mergedCaps } : {}),
     };
-    if (updated.model && outcome.incompatibleModels?.includes(updated.model)) delete updated.model;
+    if (!resolved.automaticGoRouting && updated.model && outcome.incompatibleModels?.includes(updated.model)) delete updated.model;
     const merged: AnycodeSettings = {
       ...loaded.settings,
       provider: {
@@ -1099,7 +1107,8 @@ export async function handleCustomProviderFetchModels(deps: ProviderIpcDeps, raw
       return prepareModelFetchContext(settings, connection, deps.vault, targetUrl, deps.systemProxy);
     });
     if (!prepared.ok || (prepared.route.kind === "direct" && prepared.route.why === "dangling-ref") || !deps.preparedConnectionFetch) return { ok: false, reason: "network_error" };
-    return fetchModels({ baseUrl, apiKey: draft.apiKey, kind: draft.kind, transport: draft.transport ?? catalog?.defaultTransport, ...(modelsUrl ? { modelsUrl } : {}), fetchImpl: deps.preparedConnectionFetch(prepared.route) });
+    const automaticGoRouting = (catalog?.id === "opencode" || catalog?.id === "opencode-openai") && !!modelsUrl && !draft.transport && !deps.bootEnv?.ANYCODE_BASE_URL?.trim() && !deps.bootEnv?.ANYCODE_PROVIDER_TRANSPORT?.trim();
+    return fetchModels({ baseUrl, apiKey: draft.apiKey, kind: draft.kind, transport: draft.transport ?? catalog?.defaultTransport, ...(automaticGoRouting ? { automaticGoRouting: true } : {}), ...(modelsUrl ? { modelsUrl } : {}), fetchImpl: deps.preparedConnectionFetch(prepared.route) });
   }
   return fetchModels({ baseUrl: parsed.data.baseUrl, apiKey: parsed.data.apiKey, kind: parsed.data.kind });
 }

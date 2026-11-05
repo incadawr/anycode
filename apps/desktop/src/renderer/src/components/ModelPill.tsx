@@ -519,6 +519,8 @@ export function ModelPill() {
     targetConnection?.models,
     targetConnection?.visibleModels,
     targetConnection?.transport,
+    targetConnection,
+    snapshot?.envOverrides,
   );
 
   const [open, setOpen] = useState(false);

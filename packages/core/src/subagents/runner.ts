@@ -121,7 +121,7 @@ export interface ResolvedChildModelSettings {
 export interface SubagentRunnerOptions {
   readConnectionTargets?: () => ConnectionTargets;
   /** One recorder per inline child; called for each completed model request. */
-  createUsageRecorder?: (model: string | undefined) => (usage: TokenUsage) => void;
+  createUsageRecorder?: (model: string | undefined) => (usage: TokenUsage, endpointSnapshot?: import("../types/events.js").UsageEndpointSnapshot) => void;
   /**
    * Md-profile personas (already validated/capped by subagents/profiles.ts).
    * A plain array is a boot-time snapshot. A thunk is re-invoked on every
@@ -1467,6 +1467,7 @@ export function createSubagentRunner(
         // attempt on top of the winning one.
         let usage: TokenUsage | undefined;
         let pendingUsage: TokenUsage | undefined;
+        let pendingEndpoint: import("../types/events.js").UsageEndpointSnapshot | undefined;
         const recordUsage = opts?.createUsageRecorder?.(requestedModel ?? parent.modelPort.modelId);
         // Folds the parked call into the run total and empties the slot, so a
         // value can never be counted twice. `turn_end` and `loop_end` arrive
@@ -1475,9 +1476,10 @@ export function createSubagentRunner(
         // consumes rather than commits: the second caller finds the slot empty.
         const consumePendingUsage = (): void => {
           if (pendingUsage === undefined) return;
-          try { recordUsage?.(pendingUsage); } catch { /* Accounting must not break a child. */ }
+          try { recordUsage?.(pendingUsage, pendingEndpoint); } catch { /* Accounting must not break a child. */ }
           if (hasAnyUsage(pendingUsage)) usage = mergeUsage(usage, pendingUsage);
           pendingUsage = undefined;
+          pendingEndpoint = undefined;
         };
         // Per-run activity-event emission counter (slice P7.18/F16b): the feed is
         // bounded — tool-activity stops emitting past SUBAGENT_ACTIVITY_MAX_EVENTS,
@@ -1536,6 +1538,7 @@ export function createSubagentRunner(
                 // than acquiring an empty object: the card must be able to tell
                 // "not reported" from "reported as none".
                 pendingUsage = event.usage;
+                pendingEndpoint = event.endpointSnapshot;
                 break;
               case "stream_retry":
                 // The step is replayed from scratch; discard the aborted attempt's text.
@@ -1545,6 +1548,7 @@ export function createSubagentRunner(
                 // ...and its spend: the attempt is not billed to the run (see
                 // the pendingUsage comment above).
                 pendingUsage = undefined;
+                pendingEndpoint = undefined;
                 break;
               case "tool_execution_start":
                 // Dispatch-time start (name + raw input), keyed by toolCallId until

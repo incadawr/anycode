@@ -1,4 +1,4 @@
-import { openCodeGoCatalogEntry, resolveOpenCodeGoEndpointPolicy } from "../provider/opencode-go-policy.js";
+import { openCodeGoCatalogEntry, openCodeGoModelIds, resolveOpenCodeGoEndpointPolicy } from "../provider/opencode-go-policy.js";
 import type { ModelBoundCoreEnvConfig } from "../provider/env.js";
 import type { CatalogProviderEntry, ProviderTransport } from "../provider/catalog.js";
 import { resolveContextWindow, resolveEffortLevels, resolveImageInput } from "../provider/capabilities.js";
@@ -11,8 +11,9 @@ export function cliConnectionTargets(
   transport: ProviderTransport,
   model: string,
 ): ConnectionTargets {
-  const candidates = [...new Set([config.model, model, ...((catalog?.models ?? []).map(entry => entry.id))])];
-  const ids = config.automaticModelRouting ? candidates.filter(id => resolveOpenCodeGoEndpointPolicy(config.providerId ?? "", id).kind === "route") : candidates;
+  const candidates = [...new Set([config.model, model, ...(config.automaticModelRouting ? openCodeGoModelIds(config.providerId ?? "") : (catalog?.models ?? []).map(entry => entry.id))])];
+  const isGo = config.providerId === "opencode" || config.providerId === "opencode-openai";
+  const ids = config.automaticModelRouting ? candidates.filter(id => resolveOpenCodeGoEndpointPolicy(config.providerId ?? "", id).kind === "route") : isGo ? candidates.filter(id => id !== "gemini-4-argon") : candidates;
   return {
     current: { connectionId: "cli", model },
     connections: [{

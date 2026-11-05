@@ -1713,7 +1713,7 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
   });
 
   it("prunes explicitly incompatible models after a door-filtered connection fetch", async () => {
-    await seedConnection({ id: "go-door", providerId: "opencode", models: ["deepseek-v4.1-flash"] });
+    await seedConnection({ id: "go-door", providerId: "opencode", transport: "anthropic-messages", models: ["deepseek-v4.1-flash"] });
     const calls: FetchModelsParams[] = [];
     const { deps } = makeCatalogDeps({ catalogEntryById: () => ({ id: "opencode", baseUrl: "https://opencode.ai/inference/go/anthropic", defaultTransport: "anthropic-messages" }), fetchModels: async params => { calls.push(params); return { ok: true, models: [{ id: "live-a" }, { id: "live-b" }], incompatibleModels: ["deepseek-v4.1-flash"] }; } });
     const result = await handleCustomProviderFetchModels(deps, { connectionId: "go-door" });
@@ -1723,9 +1723,19 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     expect(reloaded.settings.provider.connections[0]?.models).toEqual(["live-a", "live-b"]);
   });
 
+  it("respects an environment transport override for a Go connection fetch", async () => {
+    await seedConnection({ id: "go-env", providerId: "opencode" });
+    const calls: FetchModelsParams[] = [];
+    const { deps } = makeCatalogDeps({ catalogEntryById: () => ({ id: "opencode", baseUrl: "https://opencode.ai/inference/go/anthropic", defaultTransport: "anthropic-messages" }), fetchModels: async params => { calls.push(params); return { ok: true, models: [{ id: "live-a" }] }; } });
+    deps.bootEnv = { ANYCODE_PROVIDER_TRANSPORT: "openai-responses" };
+    await handleCustomProviderFetchModels(deps, { connectionId: "go-env" });
+    expect(calls[0]?.automaticGoRouting).toBeUndefined();
+    expect(calls[0]?.transport).toBe("openai-responses");
+  });
+
   it("prunes incompatible saved models through preview, save, reload and picker", async () => {
     const bad = "deepseek-v4.1-flash";
-    await seedConnection({ id: "go", providerId: "opencode", model: bad, models: [bad, "manual-id"], visibleModels: [bad, "manual-id"] });
+    await seedConnection({ id: "go", providerId: "opencode", transport: "anthropic-messages", model: bad, models: [bad, "manual-id"], visibleModels: [bad, "manual-id"] });
     const fixture = await readFile(new URL("./__fixtures__/opencode-go-models.json", import.meta.url), "utf8");
     const { deps } = makeCatalogDeps({ catalogEntryById: () => ({ id: "opencode", baseUrl: "https://opencode.ai/inference/go/anthropic", defaultTransport: "anthropic-messages" }), fetchModels: fetchCustomProviderModels, preparedConnectionFetch: () => async () => new Response(fixture) });
     const preview = await handleCustomProviderFetchModels(deps, { connectionId: "go", preview: true });
@@ -2101,6 +2111,15 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
 // ── 4244: complete-URL models seam (no real server, injected fetchImpl only) ──
 
 describe("OpenCode Go model doors", () => {
+  it("returns all routable models in automatic mode and keeps Gemini diagnostic-only", async () => {
+    const fixture = await readFile(new URL("./__fixtures__/opencode-go-models.json", import.meta.url), "utf8");
+    const outcome = await fetchCustomProviderModels({ baseUrl: "https://opencode.ai/inference/go/anthropic", modelsUrl: "https://opencode.ai/inference/go/v1/models", automaticGoRouting: true, fetchImpl: async () => new Response(fixture) });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) throw new Error("fetch failed");
+    expect(outcome.models).toHaveLength(28);
+    expect(outcome.models.map(m => m.id)).not.toContain("gemini-4-argon");
+    expect(outcome.modelRoutes?.models["gemini-4-argon"]).toMatchObject({ kind: "refusal" });
+  });
   it("filters the public list and retains model capabilities", async () => {
     const { readFile } = await import("node:fs/promises");
     const fixture = await readFile(new URL("./__fixtures__/opencode-go-models.json", import.meta.url), "utf8");

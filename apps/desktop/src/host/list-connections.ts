@@ -5,13 +5,13 @@ import { createConnectionModelSettings } from "./connection-model-settings.js";
 import type { AnycodeSettings } from "../shared/settings.js";
 
 /** Project only routing information; never return connection records themselves. */
-export function listConnectionTargets(settings: AnycodeSettings, connectionId?: string, model?: string): ConnectionTargets {
+export function listConnectionTargets(settings: AnycodeSettings, connectionId?: string, model?: string, manualEnvironment = false): ConnectionTargets {
   return {
     current: { connectionId, model },
-    connections: connectionRoutingSettings(settings, connectionId, model).provider.connections.map(connection => {
+    connections: connectionRoutingSettings(settings, connectionId, model, manualEnvironment).provider.connections.map(connection => {
       const catalog = getBuiltinCatalog().providers.find(p => p.id === connection.providerId);
       const ids = connection.models;
-      const automaticGo = catalog && ["opencode", "opencode-openai"].includes(connection.providerId) && !connection.baseUrl?.trim() && !connection.transport?.trim();
+      const automaticGo = catalog && ["opencode", "opencode-openai"].includes(connection.providerId) && !manualEnvironment && !connection.baseUrl?.trim() && !connection.transport?.trim();
       const effective = createConnectionModelSettings({ connection, catalogEntry: catalog, ...(automaticGo ? { catalogEntryFor: (id: string) => openCodeGoCatalogEntry(catalog, id, connection.modelRoutes) } : {}), liveCapabilitiesFor: id => connection.modelCapabilities?.[id] });
       return {
         id: connection.id,
@@ -24,7 +24,7 @@ export function listConnectionTargets(settings: AnycodeSettings, connectionId?: 
             ? connection.imageInputOverride : undefined;
           return {
             id,
-            imageInput: resolveImageInput(id, effective.entryFor(id), imageOverride, modelId => connection.modelCapabilities?.[modelId]?.imageInput),
+            imageInput: resolveImageInput(id, effective.entryFor(id), imageOverride, automaticGo ? undefined : modelId => connection.modelCapabilities?.[modelId]?.imageInput),
             contextWindow: effective.contextFor(id).tokens,
             effortLevels: resolveEffortLevels(id, effective.entryFor(id), effective.capabilitiesFor(id), effective.effortLevelsFor(id)),
             default: id === connection.model,

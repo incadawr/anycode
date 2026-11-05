@@ -281,6 +281,8 @@ export function importModelOptionsFor(
     activeConnection(snapshot.settings)?.models,
     activeConnection(snapshot.settings)?.visibleModels,
     activeConnection(snapshot.settings)?.transport,
+    activeConnection(snapshot.settings),
+    snapshot.envOverrides,
   );
 }
 

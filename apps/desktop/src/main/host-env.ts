@@ -138,6 +138,7 @@ export const ENV_IMAGE_INPUT_MODEL_OVERRIDE = "ANYCODE_IMAGE_INPUT_MODEL_OVERRID
 export const ENV_PROVIDER_TRANSPORT = "ANYCODE_PROVIDER_TRANSPORT";
 export const ENV_PROVIDER_ID = "ANYCODE_PROVIDER_ID";
 export const ENV_AUTOMATIC_MODEL_ROUTING = "ANYCODE_AUTOMATIC_MODEL_ROUTING";
+export const ENV_ROUTING_ENV_OVERRIDE = "ANYCODE_ROUTING_ENV_OVERRIDE";
 /**
  * Usage-streaming override: `1/true/on` or `0/false/off`; an
  * explicit value wins over resolveIncludeUsage's transport-conditional default
@@ -1136,6 +1137,8 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // Both carriers are authored afresh for each fork, never inherited from a previous pin.
   delete env[ENV_PROVIDER_ID];
   delete env[ENV_AUTOMATIC_MODEL_ROUTING];
+  delete env[ENV_ROUTING_ENV_OVERRIDE];
+  if (envPresent(bootEnv, ENV_BASE_URL) || envPresent(bootEnv, ENV_PROVIDER_TRANSPORT)) env[ENV_ROUTING_ENV_OVERRIDE] = "1";
   if (view.id) {
     env[ENV_PROVIDER_ID] = view.id;
     const go = view.id === "opencode" || view.id === "opencode-openai";
@@ -1580,7 +1583,7 @@ export async function resolveRecognizerConfig(
     baseUrl,
     apiKey: apiKey !== undefined && apiKey !== "" ? apiKey : undefined,
     model: setting.modelId,
-    ...(goRoute ? { goModelPolicy: goRoute.route.policy } : {}),
+    ...(goRoute ? { goModelPolicy: goRoute.route.policy, modelMetadata: goRoute.route.metadata, pricingRaw: JSON.stringify({ fallback: connection.pricing, models: Object.fromEntries(Object.entries(connection.modelOverrides ?? {}).filter(([, value]) => value.pricing !== undefined).map(([id, value]) => [id, value.pricing])) }) } : {}),
     providerName: providerId !== "" ? providerId : undefined,
   };
 }
@@ -1595,10 +1598,16 @@ export async function resolveRecognizerConfig(
  */
 export function applyRecognizerEnv(env: NodeJS.ProcessEnv, recognizer: RecognizerWireConfig | undefined): void {
   delete env.ANYCODE_RECOGNIZER_GO_POLICY;
+  delete env.ANYCODE_RECOGNIZER_GO_METADATA;
+  delete env.ANYCODE_RECOGNIZER_GO_PRICING;
   if (recognizer === undefined) {
     return;
   }
-  if (!envPresent(env, ENV_RECOGNIZER_TRANSPORT) && !envPresent(env, ENV_RECOGNIZER_BASE_URL) && !envPresent(env, ENV_RECOGNIZER_MODEL) && recognizer.goModelPolicy) env.ANYCODE_RECOGNIZER_GO_POLICY = JSON.stringify(recognizer.goModelPolicy);
+  if (!envPresent(env, ENV_RECOGNIZER_TRANSPORT) && !envPresent(env, ENV_RECOGNIZER_BASE_URL) && !envPresent(env, ENV_RECOGNIZER_MODEL) && recognizer.goModelPolicy) {
+    env.ANYCODE_RECOGNIZER_GO_POLICY = JSON.stringify(recognizer.goModelPolicy);
+    if (recognizer.modelMetadata) env.ANYCODE_RECOGNIZER_GO_METADATA = JSON.stringify(recognizer.modelMetadata);
+    if (recognizer.pricingRaw) env.ANYCODE_RECOGNIZER_GO_PRICING = recognizer.pricingRaw;
+  }
   fillFromSettings(env, ENV_RECOGNIZER_TRANSPORT, recognizer.transport);
   fillFromSettings(env, ENV_RECOGNIZER_BASE_URL, recognizer.baseUrl);
   fillFromSettings(env, ENV_RECOGNIZER_API_KEY, recognizer.apiKey);

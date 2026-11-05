@@ -3253,9 +3253,11 @@ it("resolves a recognizer using its own Go model and snapshot", async () => {
   const endpoint = await resolveRecognizerConfig(configured, vaultSecret("test"));
   expect(endpoint?.transport).toBe("openai-responses");
   expect(endpoint?.goModelPolicy?.model).toBe("grok-4.7");
+  expect(endpoint?.modelMetadata?.id).toBe("grok-4.7");
   const env: NodeJS.ProcessEnv = {};
   applyRecognizerEnv(env, endpoint);
   expect(JSON.parse(env.ANYCODE_RECOGNIZER_GO_POLICY!).model).toBe("grok-4.7");
+  expect(JSON.parse(env.ANYCODE_RECOGNIZER_GO_METADATA!).id).toBe("grok-4.7");
   configured.recognizer.modelId = "gemini-4-argon";
   expect(await resolveRecognizerConfig(configured, vaultSecret("test"))).toBeUndefined();
 });

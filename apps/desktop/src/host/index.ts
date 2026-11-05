@@ -2779,6 +2779,8 @@ function recognizerEndpointFromFields(fields: {
   model: string;
   providerName?: string;
   goModelPolicy?: RecognizerEndpoint["goModelPolicy"];
+  modelMetadata?: RecognizerEndpoint["modelMetadata"];
+  pricingRaw?: string;
 }): RecognizerEndpoint | null {
   if (fields.baseUrl === undefined || fields.baseUrl.trim() === "") {
     return null;
@@ -2791,6 +2793,8 @@ function recognizerEndpointFromFields(fields: {
     baseUrl: fields.baseUrl,
     model: fields.model,
     ...(fields.goModelPolicy ? { goModelPolicy: fields.goModelPolicy } : {}),
+    ...(fields.modelMetadata ? { modelMetadata: fields.modelMetadata } : {}),
+    ...(fields.pricingRaw ? { pricingRaw: fields.pricingRaw } : {}),
     ...(fields.apiKey !== undefined && fields.apiKey !== "" ? { apiKey: fields.apiKey } : {}),
     ...(fields.providerName !== undefined && fields.providerName !== "" ? { providerName: fields.providerName } : {}),
   };
@@ -2819,9 +2823,13 @@ function parseRecognizerEnv(env: NodeJS.ProcessEnv): RecognizerEndpoint | null {
     return null;
   }
   let goModelPolicy: RecognizerEndpoint["goModelPolicy"];
+  let modelMetadata: RecognizerEndpoint["modelMetadata"];
   try { goModelPolicy = env.ANYCODE_RECOGNIZER_GO_POLICY ? JSON.parse(env.ANYCODE_RECOGNIZER_GO_POLICY) : undefined; } catch {}
+  try { modelMetadata = env.ANYCODE_RECOGNIZER_GO_METADATA ? JSON.parse(env.ANYCODE_RECOGNIZER_GO_METADATA) : undefined; } catch {}
   return recognizerEndpointFromFields({
     goModelPolicy,
+    modelMetadata,
+    pricingRaw: env.ANYCODE_RECOGNIZER_GO_PRICING,
     transport: env.ANYCODE_RECOGNIZER_TRANSPORT,
     baseUrl: env.ANYCODE_RECOGNIZER_BASE_URL,
     apiKey: env.ANYCODE_RECOGNIZER_API_KEY,
@@ -2844,7 +2852,7 @@ function parseRecognizerEnv(env: NodeJS.ProcessEnv): RecognizerEndpoint | null {
 class VisionTelemetryModelPort implements ModelPort {
   constructor(
     private readonly inner: ModelPort,
-    private readonly report: (usage: TokenUsage) => void,
+    private readonly report: (usage: TokenUsage, endpointSnapshot?: import("@anycode/core").UsageEndpointSnapshot) => void,
   ) {}
 
   async compactReasoning(
@@ -2868,7 +2876,7 @@ class VisionTelemetryModelPort implements ModelPort {
   async *streamText(request: ModelRequest): AsyncIterable<ModelStreamEvent> {
     for await (const event of this.inner.streamText(request)) {
       if (event.type === "finish") {
-        this.report(event.usage);
+        this.report(event.usage, event.endpointSnapshot);
       }
       yield event;
     }
@@ -3173,7 +3181,7 @@ async function boot(): Promise<void> {
     let modelClassifierOffNotice: string | undefined;
     if (askClassifierKindBoot?.kind === "model") {
       const record = askClassifierKindBoot;
-      const allowedChildModels = readAllowedChildModels(process.env.ANYCODE_CHILD_MODELS, envConfig.model);
+      const allowedChildModels = readAllowedChildModels(process.env.ANYCODE_CHILD_MODELS, envConfig.model, envConfig.providerId === "opencode" || envConfig.providerId === "opencode-openai");
       const boot = resolveModelClassifierBoot(
         record,
         {
@@ -3247,7 +3255,7 @@ async function boot(): Promise<void> {
       const raw = JSON.parse(readFileSync(hostSettingsPathOverride() ?? defaultSettingsPath(), "utf8"));
       const parsed = parseSettings(raw);
       if (parsed.status !== "ok") throw new Error("Invalid settings");
-      return listConnectionTargets(parsed.settings, process.env[ENV_CONNECTION_ID] || parsed.settings.provider.activeConnectionId, currentModel);
+      return listConnectionTargets(parsed.settings, process.env[ENV_CONNECTION_ID] || parsed.settings.provider.activeConnectionId, currentModel, process.env.ANYCODE_ROUTING_ENV_OVERRIDE === "1");
     };
     registry.register(createListConnectionsTool(readConnectionTargets));
 
@@ -4115,12 +4123,19 @@ async function boot(): Promise<void> {
     // (the const capture right above, not the mutable `telemetry` let) for
     // the SAME reason the subagentEventTap factory a few lines down does.
     const recognizerPortFactory = (endpoint: RecognizerEndpoint): ModelPort => {
-      const port = new AiSdkModelPort(endpoint, hostDiagnosticSink);
-      if (subagentTelemetry === null) {
+      const completedEndpoint = { ...endpoint };
+      const port = new AiSdkModelPort(completedEndpoint, hostDiagnosticSink);
+      if (subagentTelemetry === null && !completedEndpoint.goModelPolicy) {
         return port;
       }
-      return new VisionTelemetryModelPort(port, (usage) => {
-        subagentTelemetry.port.record({
+      const recognizerId = randomUUID();
+      let recognizerStep = 0;
+      return new VisionTelemetryModelPort(port, (usage, endpointSnapshot) => {
+        if (endpointSnapshot) {
+          const row = subagentUsageRow(usage, { endpointSnapshot, pricingRaw: completedEndpoint.pricingRaw, model: endpointSnapshot.model }, { subagentId: recognizerId, sessionId, step: ++recognizerStep });
+          usageAuditWriteTail = (usageAuditWriteTail ?? Promise.resolve()).then(() => persistence!.recordProviderUsage(row)).catch((e) => console.error("[host] usage audit write failed", e));
+        }
+        subagentTelemetry?.port.record({
           v: 1,
           ts: Date.now(),
           session: subagentTelemetry.session,
@@ -4325,6 +4340,8 @@ async function boot(): Promise<void> {
         liveRecognizerEndpoint.apiKey = next.apiKey;
         liveRecognizerEndpoint.providerName = next.providerName;
         liveRecognizerEndpoint.goModelPolicy = next.goModelPolicy;
+        liveRecognizerEndpoint.modelMetadata = next.modelMetadata;
+        liveRecognizerEndpoint.pricingRaw = next.pricingRaw;
         recognizerConfigured = true;
       }
       config.recognizer!.endpoint = recognizerConfigured ? liveRecognizerEndpoint : undefined;
@@ -4503,10 +4520,10 @@ async function boot(): Promise<void> {
             const subagentId = randomUUID();
             let step = 0;
             const pricingRaw = currentPricingRaw();
-            return (usage) => {
+            return (usage, endpointSnapshot) => {
               // One clock reading inside the row builder: the tariff band and
               // `createdAt` can never disagree (see usage-recording.ts).
-              const row = subagentUsageRow(usage, { catalogEntry, baseUrl: envConfig.baseUrl, pricingRaw, model, now: Date.now }, {
+              const row = subagentUsageRow(usage, { catalogEntry, baseUrl: envConfig.baseUrl, pricingRaw, model: endpointSnapshot?.model ?? model, endpointSnapshot, now: Date.now }, {
                 subagentId,
                 sessionId,
                 step: ++step,
@@ -4559,7 +4576,7 @@ async function boot(): Promise<void> {
           // exactly like an absent option — explore inherits the parent's port.
           exploreModel: envConfig.exploreModel,
           resolveChildModelPort: (id: string) => {
-            assertChildModel(id, readAllowedChildModels(process.env.ANYCODE_CHILD_MODELS, envConfig.model));
+            assertChildModel(id, readAllowedChildModels(process.env.ANYCODE_CHILD_MODELS, envConfig.model, envConfig.providerId === "opencode" || envConfig.providerId === "opencode-openai"));
             return modelPortFactory(id);
           },
           // (F6) + §0b adjudication: unconditional, exactly like the
@@ -5092,7 +5109,7 @@ async function boot(): Promise<void> {
       // can never block or fail a turn.
       usageAudit: {
         sink: {
-          record: (r, finishedAt) => {
+          record: (r, finishedAt, endpointSnapshot) => {
             // Only the exact catalog endpoint is eligible: a proxy or reseller
             // may charge a different price even when it exposes the same model.
             // On an endpoint that serves both a pay-as-you-go key and a
@@ -5105,7 +5122,7 @@ async function boot(): Promise<void> {
             // fall on the far side of a tariff boundary.
             const row = sessionUsageRow(
               r,
-              { catalogEntry, baseUrl: envConfig.baseUrl, pricingRaw: turnPricingRaw, model: r.model, ...(finishedAt !== undefined ? { finishedAt } : {}), now: Date.now },
+              { catalogEntry, baseUrl: envConfig.baseUrl, pricingRaw: turnPricingRaw, model: r.model, endpointSnapshot, ...(finishedAt !== undefined ? { finishedAt } : {}), now: Date.now },
               sessionId,
             );
             // Serialized (chained off the tail, never parallel) so flush()

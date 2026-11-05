@@ -31,6 +31,7 @@ import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import { useStore } from "zustand";
 import { findKnownModel, isGatewayProvider } from "@anycode/core/model-dictionary";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
+import { openCodeGoModelIds } from "@anycode/core/opencode-go";
 import type {
   CatalogSummary,
   CatalogSummaryEntry,
@@ -1809,15 +1810,17 @@ export function ConnectionDrawerFields({
   // record's session-only fetch result is NOT offered on its own: its checkbox
   // list is the selector's authority, so an unticked id must not reappear here
   // before it is saved.
+  const automaticGo = (providerId === "opencode" || providerId === "opencode-openai") && !baseUrl.trim() && !transport.trim() && !proxySnapshot?.envOverrides.some(key => key === "ANYCODE_BASE_URL" || key === "ANYCODE_PROVIDER_TRANSPORT");
+  const automaticIds = automaticGo ? openCodeGoModelIds(providerId, targetConnection?.modelRoutes) : undefined;
   const modelSuggestions = liveModelSuggestions(
     isCustomRecordConnection ? null : fetchedModels,
-    targetConnection?.models,
-    providerId === "opencode-openai" && (transport || selectedEntry?.defaultTransport) === "openai-responses" ? [] : selectedEntry?.models ?? [],
-  );
+    automaticGo ? undefined : targetConnection?.models,
+    automaticIds ? automaticIds.map(id => ({ id })) : providerId === "opencode-openai" && (transport || selectedEntry?.defaultTransport) === "openai-responses" ? [] : selectedEntry?.models ?? [],
+  ).filter(item => !automaticIds || automaticIds.includes(item.id));
   // The ids the catalog itself offers for this provider — a selected one of
   // these needs no entry in the connection's own list (see
   // `shouldAppendModelToList`).
-  const catalogOfferedIds = (selectedEntry?.models ?? []).map((m) => m.id);
+  const catalogOfferedIds = automaticIds ?? (selectedEntry?.models ?? []).map((m) => m.id);
   // Show the API-key field IN the create form (item 3): a NEW custom endpoint
   // (the record's own key) or a keyed catalog provider (the connection key).
   // A saved custom record already owns its key; an oauth provider signs in.
@@ -1826,7 +1829,7 @@ export function ConnectionDrawerFields({
   const setupMissingKey = simplified && showKeyInCreate && !noAuth &&
     selectedEntry?.authOptional !== true && secretValue.trim() === "";
   const keyFieldDisabled = readOnly || (isNewCustomEndpoint && noAuth);
-  const filteredPickerModels = validVisibleModelIds(mergeModelIds(mergeModelIds(fetchedModels?.map(item => item.id) ?? [], modelSuggestions.map(item => item.id)), mergeModelIds(visibleModelDraft, normalizeModelId(model) ? [normalizeModelId(model)!] : []))).filter(id => id.toLowerCase().includes(modelFilter.toLowerCase()));
+  const filteredPickerModels = validVisibleModelIds(mergeModelIds(mergeModelIds(fetchedModels?.map(item => item.id) ?? [], modelSuggestions.map(item => item.id)), mergeModelIds(visibleModelDraft, normalizeModelId(model) ? [normalizeModelId(model)!] : []))).filter(id => (!automaticIds || automaticIds.includes(id)) && id.toLowerCase().includes(modelFilter.toLowerCase()));
   // hints for the Max-output-tokens field (pure logic above): whether
   // the env rung currently silences this field, and what number a blank field
   // actually resolves to. Both read only state already in hand — the drawer's
@@ -2440,7 +2443,7 @@ export function ConnectionDrawerFields({
       const generation = fetchGeneration.current;
       setFetchingModels(true); setError(null); setCreateFetchNotice(null); setFetchedModels(null);
       try {
-        const outcome = await resolvedCustomProvider().fetchModels({ draft: true, baseUrl: requestBase, apiKey: secretValue, kind, ...((transport || selectedEntry?.defaultTransport) ? { transport: (transport || selectedEntry?.defaultTransport) as ProviderTransportId } : {}), ...(!isNewCustomEndpoint ? { catalogProviderId: providerId, useCatalogModelsUrl: !!modelsUrl } : {}), ...connectionCreateProxyRefField(proxyRef) });
+        const outcome = await resolvedCustomProvider().fetchModels({ draft: true, baseUrl: requestBase, apiKey: secretValue, kind, ...(transport ? { transport: transport as ProviderTransportId } : {}), ...(!isNewCustomEndpoint ? { catalogProviderId: providerId, useCatalogModelsUrl: !!modelsUrl } : {}), ...connectionCreateProxyRefField(proxyRef) });
         if (generation !== fetchGeneration.current) return;
         if (outcome.ok) {
           setFetchedModels(outcome.models.filter(item => validVisibleModelIds([item.id]).length > 0));
@@ -3065,7 +3068,7 @@ export function ConnectionDrawerFields({
               <h3>Model</h3>
               <Button type="button" className="connection-drawer-model-open" disabled={readOnly || fetchingModels} aria-expanded={modelPopupOpen} onClick={() => {
                 if (modelPopupOpen) { setModelPopupOpen(false); return; }
-                setVisibleModelDraft(validVisibleModelIds(pendingVisibleModels ?? targetConnection?.visibleModels ?? mergeModelIds(modelSuggestions.map(item => item.id), normalizeModelId(model) ? [normalizeModelId(model)!] : [])));
+                setVisibleModelDraft(validVisibleModelIds(pendingVisibleModels ?? targetConnection?.visibleModels ?? mergeModelIds(modelSuggestions.map(item => item.id), normalizeModelId(model) ? [normalizeModelId(model)!] : [])).filter(id => !automaticIds || automaticIds.includes(id)));
                 setModelFilter("");
                 setDraftDefaultModel(model.trim());
                 setModelPopupOpen(true);
@@ -3073,7 +3076,7 @@ export function ConnectionDrawerFields({
               }}>Fetch models</Button>
             </div>
             <div className="connection-drawer-model-chips" aria-label="Selected models">
-              {(pendingVisibleModels ?? targetConnection?.visibleModels ?? mergeModelIds(modelSuggestions.map(item => item.id), normalizeModelId(model) ? [normalizeModelId(model)!] : [])).map(id => <span key={id} data-model-id={id} className={`connection-drawer-model-chip${id === model.trim() ? " connection-drawer-model-chip-selected" : ""}`}>{id === model.trim() ? "★ " : ""}{id}{id === model.trim() ? " · default" : ""}</span>)}
+              {(pendingVisibleModels ?? targetConnection?.visibleModels ?? mergeModelIds(modelSuggestions.map(item => item.id), normalizeModelId(model) ? [normalizeModelId(model)!] : [])).filter(id => !automaticIds || automaticIds.includes(id)).map(id => <span key={id} data-model-id={id} className={`connection-drawer-model-chip${id === model.trim() ? " connection-drawer-model-chip-selected" : ""}`}>{id === model.trim() ? "★ " : ""}{id}{id === model.trim() ? " · default" : ""}</span>)}
             </div>
             {modelPopupOpen && <div className="connection-drawer-model-popup" role="group" aria-label="Choose models" onKeyDown={event => {
               if (event.key === "Escape") {

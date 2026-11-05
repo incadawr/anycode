@@ -89,6 +89,12 @@ export function resolveOpenCodeGoEndpointPolicy(
   } satisfies OpenCodeGoEndpointPolicy } };
 }
 
+/** The complete current inventory; a fetched snapshot replaces the built-in list. */
+export function openCodeGoModelIds(providerId: string, snapshot?: ModelRouteSnapshot<Record<string, unknown>>): string[] {
+  return Object.keys((snapshot ?? OPENCODE_GO_MODELS).models)
+    .filter(id => resolveOpenCodeGoEndpointPolicy(providerId, id, snapshot).kind === "route");
+}
+
 /** Project this exact Go model's declared metadata into existing capability resolvers. */
 export function openCodeGoCatalogEntry(
   entry: import("./catalog.js").CatalogProviderEntry,

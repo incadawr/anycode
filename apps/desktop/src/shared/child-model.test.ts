@@ -3,6 +3,7 @@ import { connectionFixture, providerV2Multi } from "./provider-v2-fixture.js";
 import type { AnycodeSettings } from "./settings.js";
 import { expect, it } from "vitest";
 import { assertChildModel, connectionChildModels, connectionRoutingSettings, readAllowedChildModels } from "./child-model.js";
+import { providerModelsFor } from "./provider-models.js";
 it("never treats an alias or another provider's model as a valid parent-connection override", () => {
   expect(() => assertChildModel("opus", ["glm-5.3", "glm-5.3-flash"])).toThrow("matching provider/connection");
   expect(() => assertChildModel("claude-opus-5-5", ["glm-5.3"])).toThrow();
@@ -31,4 +32,17 @@ it("routes catalog and manually visible models through the discovery inventory",
 it("does not admit Go models refused by the connection snapshot", () => {
   const connection = { id: "c", providerId: "opencode", model: "glm-5.3", models: ["glm-5.3", "gemini-4-argon"], modelRoutes: { version: 1 as const, fetchedAt: "now", models: { "glm-5.3": { kind: "refusal" as const, reason: "unsupported-model" as const } } } };
   expect(connectionChildModels(connection, [], [])).toEqual([]);
+});
+
+it("offers the complete automatic Go inventory and respects manual overrides", () => {
+  const automatic = connectionChildModels({ id: "c", providerId: "opencode" }, [], []);
+  expect(automatic).toHaveLength(28);
+  expect(automatic).not.toContain("gemini-4-argon");
+  expect(readAllowedChildModels('["gemini-4-argon"]', "gemini-4-argon", true)).toEqual([]);
+  expect(connectionChildModels({ id: "c", providerId: "opencode", transport: "anthropic-messages" }, [], ["manual"])).toEqual(["manual"]);
+  const automaticConnection = { id: "c", providerId: "opencode" };
+  expect(providerModelsFor("opencode", undefined, undefined, undefined, undefined, undefined, automaticConnection)).toHaveLength(28);
+  expect(providerModelsFor("opencode", undefined, undefined, ["manual"], undefined, undefined, automaticConnection, ["ANYCODE_BASE_URL"])).toEqual([{ id: "manual" }]);
+  const manualConnection = { ...automaticConnection, transport: "anthropic-messages" as const };
+  expect(providerModelsFor("opencode", undefined, undefined, ["manual"], undefined, manualConnection.transport, manualConnection)).toEqual([{ id: "manual" }]);
 });

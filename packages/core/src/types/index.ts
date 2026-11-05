@@ -7,6 +7,7 @@ export type {
   ModelStreamEvent,
   ProposedToolCall,
   TokenUsage,
+  UsageEndpointSnapshot,
 } from "./events.js";
 export type {
   AnyToolDefinition,

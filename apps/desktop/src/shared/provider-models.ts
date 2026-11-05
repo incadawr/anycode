@@ -1,4 +1,5 @@
-import type { CatalogSummary, CustomProviderRecord, ProviderTransportId } from "./settings.js";
+import { openCodeGoModelIds } from "@anycode/core/opencode-go";
+import type { CatalogSummary, CustomProviderRecord, ProviderConnection, ProviderTransportId } from "./settings.js";
 import { mergeModelIds } from "./settings.js";
 
 export function providerModelsFor(
@@ -8,7 +9,18 @@ export function providerModelsFor(
   connectionModels?: readonly string[],
   visibleModels?: readonly string[],
   transport?: ProviderTransportId,
+  connection?: ProviderConnection,
+  envOverrides?: readonly string[],
 ): readonly { id: string; name?: string }[] | undefined {
+  if (providerId === "opencode" || providerId === "opencode-openai") {
+    connectionModels = connectionModels?.filter(id => id !== "gemini-4-argon");
+    visibleModels = visibleModels?.filter(id => id !== "gemini-4-argon");
+  }
+  if (connection && (providerId === "opencode" || providerId === "opencode-openai") && !connection.baseUrl?.trim() && !connection.transport?.trim() && !envOverrides?.some(key => key === "ANYCODE_BASE_URL" || key === "ANYCODE_PROVIDER_TRANSPORT")) {
+    const available = openCodeGoModelIds(providerId, connection.modelRoutes);
+    const selected = visibleModels === undefined ? available : visibleModels.filter(id => available.includes(id));
+    return selected.map(id => ({ id }));
+  }
   const catalogHit = providerId === "opencode-openai" && transport === "openai-responses" ? [] : catalog?.find((entry) => entry.id === providerId)?.models;
   const customHit = custom?.find((entry) => entry.id === providerId);
   const baseHints: readonly { id: string; name?: string }[] | undefined =

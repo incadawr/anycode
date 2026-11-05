@@ -45,6 +45,8 @@ export const RECOGNIZER_CONFIG_CHANGED_TYPE = "anycode:recognizer-config-changed
  */
 export interface RecognizerWireConfig {
   goModelPolicy?: import("@anycode/core").OpenCodeGoEndpointPolicy;
+  modelMetadata?: Record<string, unknown>;
+  pricingRaw?: string;
   transport?: ProviderTransportId;
   baseUrl?: string;
   apiKey?: string;

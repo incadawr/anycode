@@ -1386,6 +1386,9 @@ export class AiSdkModelPort implements ModelPort {
           if (event.type === "finish" && event.finishReason !== "error") {
             completedFinish = true;
           }
+          if (event.type === "finish" && this.config.goModelPolicy && this.config.modelMetadata) {
+            event = { ...event, endpointSnapshot: { model: this.config.model, baseUrl: this.config.baseUrl, transport: this.config.transport, metadata: this.config.modelMetadata } };
+          }
           yield event;
           // emit the attempt's quota observation immediately
           // after `finish` — the wrapped fetch populated `#lastQuota` before

@@ -531,6 +531,8 @@ export function SubagentsPane({ tabId, workspace, bridge = window.anycode.subage
       parentActiveConnection?.models,
       parentActiveConnection?.visibleModels,
       parentActiveConnection?.transport,
+      parentActiveConnection,
+      settingsSnapshot?.envOverrides,
     ) ?? [];
 
   useEffect(() => {
