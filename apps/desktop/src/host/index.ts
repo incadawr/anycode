@@ -1,4 +1,4 @@
-import { parseRecognizerEnv, recognizerEndpointFromFields } from "./recognizer-env.js";
+import { parseRecognizerEnv, recognizerEndpointFromFields, recognizerLiveWindow } from "./recognizer-env.js";
 import "./sdk-warnings.js";
 import { scrubFailureText } from "@anycode/core";
 import { childBootFailure, sanitizeBootFailure } from "./child-boot-failure.js";
@@ -4173,8 +4173,11 @@ async function boot(): Promise<void> {
      * the model was already sighted, or already blind-without-fallback,
      * before and after this push).
      */
-    const explicitRecognizerWindow = process.env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_FROM_SETTINGS !== "1" && /^\d+$/.test(process.env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW ?? "") ? Number(process.env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW) : undefined;
-    const explicitRecognizerWindowModel = process.env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_MODEL;
+    const recognizerWindowEnv = {
+      ANYCODE_RECOGNIZER_CONTEXT_WINDOW: process.env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW,
+      ANYCODE_RECOGNIZER_CONTEXT_WINDOW_MODEL: process.env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_MODEL,
+      ANYCODE_RECOGNIZER_CONTEXT_WINDOW_FROM_SETTINGS: process.env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_FROM_SETTINGS,
+    };
     function applyRecognizerEndpoint(next: RecognizerEndpoint | null): void {
       if (next === null) {
         recognizerConfigured = false;
@@ -4184,7 +4187,7 @@ async function boot(): Promise<void> {
         liveRecognizerEndpoint.model = next.model;
         liveRecognizerEndpoint.apiKey = next.apiKey;
         liveRecognizerEndpoint.providerName = next.providerName;
-        liveRecognizerEndpoint.contextWindowTokens = explicitRecognizerWindow !== undefined && Number.isSafeInteger(explicitRecognizerWindow) && explicitRecognizerWindow > 0 && (!explicitRecognizerWindowModel || explicitRecognizerWindowModel === next.model) ? explicitRecognizerWindow : next.contextWindowTokens;
+        liveRecognizerEndpoint.contextWindowTokens = recognizerLiveWindow(recognizerWindowEnv, next);
         recognizerConfigured = true;
       }
       config.recognizer!.endpoint = recognizerConfigured ? liveRecognizerEndpoint : undefined;

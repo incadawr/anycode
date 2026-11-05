@@ -108,3 +108,12 @@ export function parseRecognizerEnv(env: NodeJS.ProcessEnv): RecognizerEndpoint |
   });
 }
 
+
+/** Preserve a shell-supplied window for the model it names across live updates. */
+export function recognizerLiveWindow(env: NodeJS.ProcessEnv, next: RecognizerEndpoint): number | undefined {
+  const raw = env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW;
+  const explicit = env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_FROM_SETTINGS !== "1" && /^\d+$/.test(raw ?? "") ? Number(raw) : undefined;
+  const binding = env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_MODEL;
+  return explicit !== undefined && Number.isSafeInteger(explicit) && explicit > 0 && (!binding || binding === next.model)
+    ? explicit : next.contextWindowTokens;
+}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyRecognizerEnv } from "../main/host-env.js";
-import { parseRecognizerEnv, recognizerEndpointFromFields } from "./recognizer-env.js";
+import { parseRecognizerEnv, recognizerEndpointFromFields, recognizerLiveWindow } from "./recognizer-env.js";
 
 const wire = { model: "vision", baseUrl: "https://example.test", contextWindowTokens: 32000 };
 
@@ -19,6 +19,15 @@ describe("recognizer context delivery", () => {
     const different = { ANYCODE_RECOGNIZER_MODEL: "other" };
     applyRecognizerEnv(different, wire);
     expect(parseRecognizerEnv(different)?.contextWindowTokens).toBeUndefined();
+  });
+  it("applies explicit live windows only to the bound model", () => {
+    const env = { ANYCODE_RECOGNIZER_CONTEXT_WINDOW: "64000", ANYCODE_RECOGNIZER_CONTEXT_WINDOW_MODEL: "vision" };
+    const next = recognizerEndpointFromFields(wire)!;
+    expect(recognizerLiveWindow(env, next)).toBe(64000);
+    expect(recognizerLiveWindow(env, { ...next, model: "other", contextWindowTokens: 48000 })).toBe(48000);
+    expect(recognizerLiveWindow({ ...env, ANYCODE_RECOGNIZER_CONTEXT_WINDOW_FROM_SETTINGS: "1" }, next)).toBe(32000);
+    expect(recognizerLiveWindow({ ...env, ANYCODE_RECOGNIZER_CONTEXT_WINDOW_MODEL: "" }, next)).toBe(64000);
+    expect(recognizerLiveWindow({ ...env, ANYCODE_RECOGNIZER_CONTEXT_WINDOW: "broken" }, next)).toBe(32000);
   });
   it("strips orphan bindings and treats whitespace like an absent window", () => {
     for (const value of [undefined, "", "   "]) {
