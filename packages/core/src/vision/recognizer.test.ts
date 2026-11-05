@@ -104,6 +104,26 @@ function baseOpts(overrides: Partial<AskOptions> = {}): AskOptions {
 }
 
 describe("ask", () => {
+  it("evicts whole oldest pairs and reserves output without mutating the transcript", async () => {
+    const port = new ScriptedModelPort(textScript("ok"));
+    const transcript = [{ question: "old ".repeat(6000), answer: "old answer" }, { question: "recent", answer: "recent answer" }];
+    const original = structuredClone(transcript);
+    const result = await ask(baseOpts({ endpoint: { ...endpoint, contextWindowTokens: 4096 }, transcript, focus: "focus", scale: { pixelWidth: 5, pixelHeight: 6 }, portFactory: () => port }));
+    expect(result.ok).toBe(true);
+    const request = port.requests[0]!;
+    expect(request.maxOutputTokens).toBe(1024);
+    expect(request.messages[0]!.content).not.toContain("old answer");
+    expect(request.messages[0]!.content).toContain("recent answer");
+    expect(request.messages[0]!.content).toContain("focus");
+    expect(request.messages[0]!.content).toContain("5x6");
+    expect(transcript).toEqual(original);
+  });
+  it("refuses mandatory content that does not fit before constructing a port", async () => {
+    let called = false;
+    const result = await ask(baseOpts({ endpoint: { ...endpoint, contextWindowTokens: 1024 }, portFactory: () => { called = true; return new ScriptedModelPort(textScript("ok")); } }));
+    expect(result).toMatchObject({ ok: false, kind: "provider" });
+    expect(called).toBe(false);
+  });
   it("accumulates text_delta chunks into the final answer", async () => {
     const port = new ScriptedModelPort(chunkedTextScript(["The image ", "shows a ", "button."]));
     const result = await ask(baseOpts({ portFactory: () => port }));

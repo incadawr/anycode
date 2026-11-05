@@ -10,6 +10,7 @@
 
 import { createHash } from "node:crypto";
 import type { ImageAttachment } from "../types/images.js";
+import { recognizerContextWindow } from "./recognizer.js";
 import type { AskResult, AskTranscriptEntry, RecognizerEndpoint } from "./recognizer.js";
 
 /** Bounded LRU capacity (plan §7). */
@@ -21,7 +22,7 @@ function sha256Hex(input: string): string {
 
 /** Identity string a live config swap changes — folded into every cache key so a swap always misses. */
 export function recognizerIdentity(endpoint: RecognizerEndpoint): string {
-  return `${endpoint.transport}|${endpoint.baseUrl}|${endpoint.model}`;
+  return JSON.stringify([endpoint.transport, endpoint.baseUrl, endpoint.model, recognizerContextWindow(endpoint)]);
 }
 
 /** Collapses whitespace/case so trivially-equivalent questions collide on one key. */
