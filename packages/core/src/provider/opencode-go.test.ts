@@ -62,3 +62,17 @@ it("parses the complete live listing and rejects ambiguous or malformed routes",
   const duplicate = parseOpenCodeGoSnapshot({ data: [row, row] }, "now");
   expect(duplicate.ok && duplicate.snapshot.models[row.id]?.kind).toBe("refusal");
 });
+
+it("does not publish a base price for unknown conditions", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { parseOpenCodeGoSnapshot } = await import("./model-route.js");
+  const fixture = JSON.parse(await readFile(new URL("./__fixtures__/opencode-go-models.json", import.meta.url), "utf8"));
+  const row = structuredClone(fixture.data[0]);
+  row.cost.multipliers[0].when = { date: { gte: "2030-01-01" } };
+  const parsed = parseOpenCodeGoSnapshot({ data: [row] }, "2026-11-05T00:00:00Z");
+  expect(parsed.ok && parsed.snapshot.models[row.id]?.kind === "route" && parsed.snapshot.models[row.id].route.metadata.pricing).toBeUndefined();
+  delete row.cost.multipliers;
+  row.cost.text.input.overrides = [{ when: { tokens: { gt: 100 } }, price: 2 }];
+  const tier = parseOpenCodeGoSnapshot({ data: [row] }, "2026-11-05T00:00:00Z");
+  expect(tier.ok && tier.snapshot.models[row.id]?.kind === "route" && tier.snapshot.models[row.id].route.metadata.pricing).toBeUndefined();
+});

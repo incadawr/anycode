@@ -79,7 +79,12 @@ function normalizeGoMetadata(row: Record<string, any>, api: Record<string, any>,
   const output = row.cost?.text?.output;
   const metadata: Record<string, unknown> = { id: row.id, name: row.name, limit, modalities: row.modalities, capabilities: row.capabilities, apiCapabilities: api.capabilities ?? {}, compatibility: api.compatibility ?? {} };
   if (input && output && typeof input.price === "number" && typeof output.price === "number") {
-    const multiplier = row.cost?.multipliers?.length ? 2 : 1;
+    const knownMultiplier = [{ when: { utc_days: { in: ["mon", "tue", "wed", "thu", "fri"] }, any: [{ all: [{ utc_hours: { gte: "01:00" } }, { utc_hours: { lt: "04:00" } }] }, { all: [{ utc_hours: { gte: "06:00" } }, { utc_hours: { lt: "10:00" } }] }] }, factor: 2 }];
+    const multipliers = row.cost?.multipliers;
+    if (multipliers !== undefined && JSON.stringify(multipliers) !== JSON.stringify(knownMultiplier)) return metadata;
+    const overrides = [...(input.overrides ?? []), ...(output.overrides ?? [])];
+    if (overrides.some((x: any) => !x || Object.keys(x.when ?? {}).length !== 1 || Object.keys(x.when?.context ?? {}).join() !== "gt" || !Number.isFinite(x.when.context.gt) || typeof x.price !== "number" || Object.keys(x).some(k => !["when", "price", "cache"].includes(k)))) return metadata;
+    const multiplier = multipliers ? 2 : 1;
     const rates = (i: any, o: any) => ({ input: i.price * multiplier, ...(i.cache?.read !== undefined ? { cachedInput: i.cache.read * multiplier } : {}), ...(i.cache?.write !== undefined ? { cacheWrite: i.cache.write * multiplier } : {}), output: o.price * multiplier });
     const thresholds = [...new Set<number>([...(input.overrides ?? []), ...(output.overrides ?? [])].map((x: any) => x.when?.context?.gt).filter((x: unknown): x is number => typeof x === "number"))].sort((a, b) => a - b);
     const tiers = thresholds.map(gt => ({ gt, ...rates((input.overrides ?? []).find((x: any) => x.when?.context?.gt === gt) ?? input, (output.overrides ?? []).find((x: any) => x.when?.context?.gt === gt) ?? output) }));
