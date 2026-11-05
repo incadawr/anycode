@@ -375,7 +375,7 @@ export function buildChildConfig(
       ? parent.subagentBudget?.learned({ role: persona.name, ...(spawnModel !== undefined ? { model: spawnModel } : {}) })
     : undefined;
   const defaultRoleBudget = persona.origin === "settings" ||
-    (isKnownPersona(persona.name) && persona === getPersona(persona.name));
+    (persona.origin === "builtin" && isKnownPersona(persona.name) && persona.turnBudget === getPersona(persona.name).turnBudget);
   const personaBudget = defaultRoleBudget
     ? parent.subagentMaxTurns ?? persona.turnBudget
     : persona.turnBudget ?? parent.subagentMaxTurns;

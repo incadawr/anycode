@@ -111,7 +111,7 @@ export interface PersonaDefinition {
    * isMdProfile reads it so engine-restriction refusals keep pointing at
    * Settings → Roles instead of a file that does not exist.
    */
-  origin?: "settings";
+  origin?: "settings" | "builtin";
   /**
    * Md-profile `permissions.allow` / `permissions.deny` frontmatter — this
    * profile's own permission overlay for its children, wrapped around the
@@ -236,6 +236,7 @@ export const PERSONAS: Record<PersonaName, PersonaDefinition> = {
   // (host wiring §3.6) — precedence: md-profile > settings-derived > built-in.
   planner: {
     name: "planner",
+    origin: "builtin",
     description: "Read-only senior engineer — turns a task into a written executor brief.",
     tools: PLANNER_TOOLS,
     systemPrompt: PLANNER_SYSTEM_PROMPT,
@@ -243,6 +244,7 @@ export const PERSONAS: Record<PersonaName, PersonaDefinition> = {
   },
   executor: {
     name: "executor",
+    origin: "builtin",
     description: "Implements a written brief literally and completely.",
     tools: EXECUTOR_TOOLS,
     systemPrompt: EXECUTOR_SYSTEM_PROMPT,
@@ -250,6 +252,7 @@ export const PERSONAS: Record<PersonaName, PersonaDefinition> = {
   },
   reviewer: {
     name: "reviewer",
+    origin: "builtin",
     description: "Independent adversarial second reader — verdict-line report, no edits.",
     tools: REVIEWER_TOOLS,
     systemPrompt: REVIEWER_SYSTEM_PROMPT,

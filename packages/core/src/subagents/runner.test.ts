@@ -459,6 +459,7 @@ describe("buildChildConfig — §4.1 derivation table", () => {
       const parent = { ...makeParent(), subagentMaxTurns: 150 };
       expect(buildChildConfig(makeParent(), builtin, REQ).maxTurns).toBe(ROLE_TURN_BUDGETS[role]);
       expect(buildChildConfig(parent, builtin, REQ).maxTurns).toBe(150);
+      expect(buildChildConfig(parent, { ...builtin, model: "custom-model" }, REQ).maxTurns).toBe(150);
       expect(buildChildConfig(parent, { ...builtin, origin: "settings" }, REQ).maxTurns).toBe(150);
       expect(buildChildConfig(parent, { ...builtin, turnBudget: 22 }, REQ).maxTurns).toBe(22);
       expect(buildChildConfig(parent, { ...builtin, turnBudget: 22 }, { ...REQ, maxTurns: 33 }).maxTurns).toBe(33);
