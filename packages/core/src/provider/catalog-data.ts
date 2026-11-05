@@ -98,10 +98,7 @@ const MINIMAX_MODELS: CatalogProviderEntry["models"] = [
   { id: "MiniMax-M3", name: "MiniMax M3", contextWindow: 1_000_000, imageInput: true, reasoning: false },
 ];
 
-// Kimi rows as served through the OpenCode Go subscription, shared by both
-// protocol doors: the OpenAI one lists them first (Chat Completions is the
-// Kimi family's native protocol there), the Anthropic one appends them
-// after its own Messages rows. Specs are the endpoint's own declaration
+// Kimi rows as served through the OpenCode Go subscription, served through the Chat Completions door. Specs are the endpoint's own declaration
 // (public https://opencode.ai/inference/go/v1/models, fetched without a
 // key, 2026-11-04): kimi-k3 / kimi-k3.1-pro declare the full 1,048,576-
 // token window there, not the smaller hint these rows carried before the
@@ -132,7 +129,6 @@ const OPENCODE_ANTHROPIC_MODELS: CatalogProviderEntry["models"] = [
   { id: "qwen3.8-flash", name: "Qwen3.8 Flash", contextWindow: 1_000_000, maxOutputTokens: 131_072 },
   { id: "qwen3.7-plus", name: "Qwen3.7 Plus", contextWindow: 1_000_000, maxOutputTokens: 65_536 },
   { id: "claude-haiku-5-5", name: "Claude Haiku 5.5", contextWindow: 1_000_000, maxOutputTokens: 128_000 },
-  ...OPENCODE_KIMI_MODELS,
 ];
 
 // DeepSeek bills by time of day (api-docs.deepseek.com/quick_start/pricing/,

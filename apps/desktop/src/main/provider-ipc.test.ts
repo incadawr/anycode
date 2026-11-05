@@ -2063,6 +2063,19 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
 
 // ── 4244: complete-URL models seam (no real server, injected fetchImpl only) ──
 
+describe("OpenCode Go model doors", () => {
+  it("filters the public list and retains model capabilities", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const fixture = await readFile(new URL("./__fixtures__/opencode-go-models.json", import.meta.url), "utf8");
+    const fetchImpl = (async () => new Response(fixture)) as typeof fetch;
+    const common = { baseUrl: "https://opencode.ai/inference/go/anthropic", modelsUrl: "https://opencode.ai/inference/go/v1/models", fetchImpl };
+    const anthropic = await fetchCustomProviderModels({ ...common, kind: "anthropic" });
+    const openai = await fetchCustomProviderModels({ ...common, kind: "openai-compatible" });
+    expect(anthropic.ok && anthropic.models.some(m => m.id === "deepseek-v4.1-flash")).toBe(false);
+    expect(openai.ok && openai.models.find(m => m.id === "deepseek-v4.1-flash")).toMatchObject({ contextWindow: 1000000, maxOutputTokens: 384000, reasoning: true, effortLevels: ["low", "high", "max"], imageInput: true });
+  });
+});
+
 describe("fetchCustomProviderModels — modelsUrl complete-URL seam (4244)", () => {
   /** Capturing fake fetch returning an OpenAI-style {object:"list",data:[{id}]} body. */
   function makeCapturingFetch(models: { id: string }[]): {

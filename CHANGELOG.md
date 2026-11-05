@@ -11,6 +11,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Fixed OpenCode Go model lists and context limits for each connection.
+
 - AnyCode no longer writes the tab host's output to a missing console on Windows — the likely cause of the app closing on the first prompt when it is launched from a shortcut.
 
 ## [0.0.76] — 2026-11-05

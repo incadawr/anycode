@@ -228,7 +228,9 @@ export async function fetchCustomProviderModels(params: FetchModelsParams): Prom
   if (looksLikeErrorPayload(parsed)) {
     return { ok: false, reason: "error_payload" };
   }
-  const models = extractModelIds(parsed, new URL(params.baseUrl).hostname === "openrouter.ai");
+  const goDoor = params.modelsUrl === "https://opencode.ai/inference/go/v1/models"
+    ? (params.kind === "anthropic" ? "messages" : "chat-completions") : undefined;
+  const models = extractModelIds(parsed, new URL(params.baseUrl).hostname === "openrouter.ai", goDoor);
   if (models === undefined) {
     return { ok: false, reason: "invalid_response" };
   }
@@ -337,6 +339,7 @@ const MODEL_CAPABILITY_ID_MAX = 256;
 function extractModelIds(
   value: unknown,
   openrouter = false,
+  goDoor?: "messages" | "chat-completions",
 ): { id: string; reasoning?: boolean; effortLevels?: string[]; imageInput?: true; contextWindow?: number; maxOutputTokens?: number; pricing?: { input: number; cachedInput: number; output: number } }[] | undefined {
   if (typeof value !== "object" || value === null || !("data" in value)) {
     return undefined;
@@ -352,6 +355,26 @@ function extractModelIds(
     }
     const maybe = item as { id?: unknown };
     if (typeof maybe.id !== "string") {
+      continue;
+    }
+    if (goDoor) {
+      const row = item as { api?: Record<string, unknown>; limit?: { context?: unknown; output?: unknown }; capabilities?: { reasoning?: { supported?: unknown; effort?: unknown } }; modalities?: { input?: unknown }; cost?: { text?: { input?: { price?: unknown; cache?: { read?: unknown } }; output?: { price?: unknown } }; multipliers?: unknown } };
+      if (!row.api || typeof row.api !== "object" || !Object.hasOwn(row.api, goDoor)) continue;
+      const positive = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v > 0;
+      const efforts = row.capabilities?.reasoning?.effort;
+      const reasoning = row.capabilities?.reasoning?.supported === true;
+      const inputs = row.modalities?.input;
+      const cost = row.cost?.text;
+      const rate = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0;
+      const pricing = !row.cost?.multipliers && rate(cost?.input?.price) && rate(cost?.input?.cache?.read) && rate(cost?.output?.price) ? { input: cost.input.price, cachedInput: cost.input.cache.read, output: cost.output.price } : undefined;
+      models.push({ id: maybe.id, ...(maybe.id.length <= MODEL_CAPABILITY_ID_MAX ? {
+        ...(pricing ? { pricing } : {}),
+        ...(positive(row.limit?.context) ? { contextWindow: row.limit.context } : {}),
+        ...(positive(row.limit?.output) ? { maxOutputTokens: row.limit.output } : {}),
+        ...(reasoning ? { reasoning: true } : {}),
+        ...(reasoning && Array.isArray(efforts) && efforts.length > 0 && efforts.length <= 16 && efforts.every(e => typeof e === "string" && e.length <= 64) ? { effortLevels: efforts as string[] } : {}),
+        ...(Array.isArray(inputs) && inputs.some(i => typeof i === "string" && (i === "image" || i.startsWith("image/"))) ? { imageInput: true as const } : {}),
+      } : {}) });
       continue;
     }
     // D-Trust: read only the known fields; a safeParse failure (garbage
@@ -1063,7 +1086,7 @@ export async function handleCustomProviderFetchModels(deps: ProviderIpcDeps, raw
       return prepareModelFetchContext(settings, connection, deps.vault, targetUrl, deps.systemProxy);
     });
     if (!prepared.ok || (prepared.route.kind === "direct" && prepared.route.why === "dangling-ref") || !deps.preparedConnectionFetch) return { ok: false, reason: "network_error" };
-    return fetchModels({ baseUrl, apiKey: draft.apiKey, kind: draft.kind, ...(modelsUrl ? { modelsUrl } : {}), fetchImpl: deps.preparedConnectionFetch(prepared.route) });
+    return fetchModels({ baseUrl, apiKey: draft.apiKey, kind: catalog?.id === "opencode" ? "anthropic" : draft.kind, ...(modelsUrl ? { modelsUrl } : {}), fetchImpl: deps.preparedConnectionFetch(prepared.route) });
   }
   return fetchModels({ baseUrl: parsed.data.baseUrl, apiKey: parsed.data.apiKey, kind: parsed.data.kind });
 }
