@@ -77,6 +77,10 @@ function redactedWireError(
  * (legacy calls, tests of the core path) keeps the previous behaviour exactly.
  */
 export function sanitizeAgentEvent(event: AgentEvent, engine?: string): WireAgentEvent {
+  if (event.type === "finish" && event.endpointSnapshot) {
+    const { endpointSnapshot: _endpointSnapshot, ...wire } = event;
+    return wire;
+  }
   if (event.type === "error") {
     const notice = parseUsageLimitNoticeForEngine(describeError(event.error), engine);
     return {

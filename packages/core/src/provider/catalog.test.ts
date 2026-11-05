@@ -539,7 +539,7 @@ describe("OpenCode Go subscription entries", () => {
       "opencode-openai",
     ]);
     expect(findCatalogEntry("opencode")).toMatchObject({
-      name: "OpenCode Go (Anthropic)",
+      name: "OpenCode Go",
       brand: "OpenCode",
       modeLabel: "Anthropic",
       baseUrl: "https://opencode.ai/inference/go/anthropic",
@@ -570,7 +570,7 @@ describe("OpenCode Go subscription entries", () => {
     }
   });
 
-  it("leads the Anthropic door with its native Messages models, Kimi rows after", () => {
+  it("lists only Messages models for the Anthropic door", () => {
     const anthropic = findCatalogEntry("opencode")!;
     expect(anthropic.models.map((model) => model.id)).toEqual([
       "minimax-m3",
@@ -578,9 +578,6 @@ describe("OpenCode Go subscription entries", () => {
       "qwen3.8-flash",
       "qwen3.7-plus",
       "claude-haiku-5-5",
-      "kimi-k3",
-      "kimi-k3.1-pro",
-      "kimi-k2.7-code",
     ]);
     expect(anthropic.models.map((model) => model.name)).toEqual([
       "MiniMax M3",
@@ -588,9 +585,6 @@ describe("OpenCode Go subscription entries", () => {
       "Qwen3.8 Flash",
       "Qwen3.7 Plus",
       "Claude Haiku 5.5",
-      "Kimi K3",
-      "Kimi K3.1 Pro",
-      "Kimi K2.7 Code",
     ]);
     // Chat Completions is the Kimi family's native protocol on this
     // endpoint: the OpenAI door keeps Kimi first.

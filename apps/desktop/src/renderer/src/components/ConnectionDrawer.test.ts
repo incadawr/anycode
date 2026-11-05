@@ -24,6 +24,7 @@ import {
   buildDrawerSavePayload,
   createConnectionAndPersistModel,
   liveModelSuggestions,
+  prioritizeGoDefault,
   maxOutputPresetSelection,
   maxOutputTokensField,
   modelAfterCatalogPrefill,
@@ -416,6 +417,11 @@ describe("providerSelectDisplayValue (dogfood 16.07: add-mode must show the plac
 // come from this pure projection; brandless catalogs must stay byte-identical
 // to the old flat list (the byte-compat proof for every existing fixture).
 describe("providerOptionGroups (one brand = one card)", () => {
+  it("offers one Go template on add while retaining the legacy template for edit", () => {
+    const catalog = projectCatalogSummary(getBuiltinCatalog().providers);
+    expect(providerOptionGroups(catalog).flatMap(group => group.options).filter(option => option.id.startsWith("opencode"))).toEqual([{ id: "opencode", label: "OpenCode Go" }]);
+    expect(providerOptionGroups(catalog, true).flatMap(group => group.options).map(option => option.id)).toContain("opencode-openai");
+  });
   const BRANDLESS: CatalogSummaryEntry[] = [
     { id: "z-ai", name: "Z.AI (GLM)", authKind: "api_key", models: [] },
     { id: "custom", name: "Custom endpoint", authKind: "api_key", models: [], needsBaseUrl: true, isCustom: true },
@@ -481,6 +487,11 @@ describe("providerOptionGroups (one brand = one card)", () => {
 });
 
 describe("liveModelSuggestions (stable union of fetched + persisted + hints)", () => {
+  it("keeps the Go default first even if the fetched list arrives in another order", () => {
+    const suggestions = prioritizeGoDefault(liveModelSuggestions([{ id: "other" }, { id: "kimi-k3" }], undefined, []));
+    expect(modelAfterCatalogPrefill("", suggestions)).toBe("kimi-k3");
+    expect(modelAfterCatalogPrefill("other", suggestions)).toBe("other");
+  });
   const HINTS = [
     { id: "k3", name: "K3" },
     { id: "kimi-for-coding", name: "K2.7 Coding" },
@@ -1042,7 +1053,7 @@ describe("ConnectionDrawer wiring (NO route may bypass the per-model reset)", ()
   it("the pre-create input, model picker and provider select route through changeModel", () => {
     // simplified pre-create Model input
     expect(source).toMatch(
-      /changeModel\(\s*e\.target\.value,\s*modelAfterCatalogPrefill\(e\.target\.value, selectedEntry\.models\),\s*undefined,\s*\)/,
+      /changeModel\(\s*e\.target\.value,\s*modelAfterCatalogPrefill\(e\.target\.value, modelSuggestions\),\s*undefined,\s*\)/,
     );
     // popup default selection and fallback
     expect(source).toContain("setDraftDefaultModel(id)");
@@ -1383,7 +1394,7 @@ describe("ConnectionDrawer wiring (pre-create Model field in BOTH create flows)"
 
   it("both pre-create Model inputs route through changeModel (no direct setModel, intact)", () => {
     expect(source).toMatch(
-      /changeModel\(\s*e\.target\.value,\s*modelAfterCatalogPrefill\(e\.target\.value, selectedEntry\.models\),\s*undefined,\s*\)/,
+      /changeModel\(\s*e\.target\.value,\s*modelAfterCatalogPrefill\(e\.target\.value, modelSuggestions\),\s*undefined,\s*\)/,
     );
     expect(source).toMatch(/changeModel\(e\.target\.value, e\.target\.value, undefined\)/);
   });

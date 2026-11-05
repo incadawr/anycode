@@ -4,7 +4,7 @@ import type { ImageInputOverride } from "../provider/capabilities.js";
 import type { ProviderTransport } from "../provider/catalog.js";
 import type { ToolResultBudget } from "./tools.js";
 
-export type ReasoningEffort = "off" | "low" | "medium" | "high" | "xhigh" | "max";
+export type ReasoningEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 /**
  * Opt-in implicit prompt caching for OpenAI transports (GitHub #15). This is
@@ -17,6 +17,8 @@ export type ImplicitPromptCache = { mode: "implicit"; ttl: "30m" };
 
 /** Resolved runtime configuration sourced from environment variables. */
 export interface CoreEnvConfig {
+  providerId?: string;
+  automaticModelRouting?: boolean;
   /**
    * API key for the endpoint (ANYCODE_API_KEY). Required (throws) when the
    * resolved transport is `anthropic-messages` or unset; optional for the two

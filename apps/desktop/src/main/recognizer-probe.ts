@@ -123,6 +123,9 @@ function toRecognizerEndpoint(wire: RecognizerWireConfig): RecognizerEndpoint | 
     baseUrl: wire.baseUrl,
     model: wire.model,
     ...(wire.contextWindowTokens !== undefined ? { contextWindowTokens: wire.contextWindowTokens } : {}),
+    ...(wire.goModelPolicy ? { goModelPolicy: wire.goModelPolicy } : {}),
+    ...(wire.modelMetadata ? { modelMetadata: wire.modelMetadata } : {}),
+    ...(wire.pricingRaw ? { pricingRaw: wire.pricingRaw } : {}),
     ...(wire.apiKey !== undefined && wire.apiKey !== "" ? { apiKey: wire.apiKey } : {}),
     ...(wire.providerName !== undefined && wire.providerName !== "" ? { providerName: wire.providerName } : {}),
   };

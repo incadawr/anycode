@@ -89,10 +89,11 @@ import { buildSystemPrompt, type SystemPromptEnv } from "../prompts/identity.js"
 import { buildRepoMapPromptSection, loadRepoMapConfig, type RepoMapConfig } from "../repoMap/index.js";
 import { resolveImageInput, resolveContextWindow, resolveMaxOutputTokens, resolveReasoningEffort } from "../provider/capabilities.js";
 import { buildChildModelSettingsResolver } from "../provider/child-model-settings.js";
+import { openCodeGoCatalogEntry } from "../provider/opencode-go-policy.js";
 import { getBuiltinCatalog } from "../provider/catalog-data.js";
 import type { ProviderTransport } from "../provider/catalog.js";
 import type { CatalogProviderEntry } from "../provider/catalog.js";
-import type { EndpointConfig } from "../provider/endpoint.js";
+import { applyAutomaticModelRoute, type EndpointConfig } from "../provider/endpoint.js";
 import { ENV_API_KEY, ENV_MODEL, loadEnvConfig } from "../provider/env.js";
 import { AiSdkModelPort } from "../provider/model-port.js";
 import { createProbeOnlyNetworkWaiter } from "../provider/network-waiter.js";
@@ -238,11 +239,12 @@ export function buildCliEndpointConfig(args: {
   headers?: Record<string, string>;
 }): EndpointConfig {
   const { transport, envConfig, catalogEntry, retryOverride, includeUsageResolved, model, headers } = args;
-  return {
+  const endpoint: EndpointConfig = {
     transport,
     baseUrl: envConfig.baseUrl,
     apiKey: envConfig.apiKey,
     model,
+    ...(envConfig.providerId !== undefined ? { providerId: envConfig.providerId, automaticModelRouting: envConfig.automaticModelRouting } : {}),
     ...(catalogEntry !== undefined ? { providerName: catalogEntry.name } : {}),
     ...(headers !== undefined ? { headers } : {}),
     // The connection's declared effort vocabulary (ANYCODE_EFFORT_LEVELS):
@@ -263,6 +265,16 @@ export function buildCliEndpointConfig(args: {
     // the CLI waits for the network via TCP probes (no OS hints).
     networkWaiter: createProbeOnlyNetworkWaiter(),
   };
+  const routed = applyAutomaticModelRoute(endpoint);
+  if (routed.automaticModelRouting) {
+    routed.includeUsage = resolveIncludeUsage(routed.transport, envConfig.includeUsage);
+    routed.resolveEndpointForModel = modelId => {
+      const target = applyAutomaticModelRoute({ ...endpoint, model: modelId });
+      target.includeUsage = resolveIncludeUsage(target.transport, envConfig.includeUsage);
+      return target;
+    };
+  }
+  return routed;
 }
 
 export interface CliOptions {
@@ -709,7 +721,11 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
   // Catalog entry resolved early so the model port can branch reasoning-effort
   // mapping by provider (GLM enum vs Claude budgetTokens) and the boot budget
   // resolutions below share the same lookup.
-  const catalogEntry = matchCatalogEntryByBaseUrl(getBuiltinCatalog(), envConfig.baseUrl);
+  const catalogEntry = getBuiltinCatalog().providers.find(entry => entry.id === envConfig.providerId) ?? matchCatalogEntryByBaseUrl(getBuiltinCatalog(), envConfig.baseUrl);
+
+  const entryForModel = (model: string) => envConfig.automaticModelRouting && catalogEntry
+    ? openCodeGoCatalogEntry(catalogEntry, model) : catalogEntry;
+  const bootCatalogEntry = entryForModel(envConfig.model);
 
   // The ONE session id for this run, resolved BEFORE the model port is built:
   // catalog entries that require per-session request headers (OpenCode Go)
@@ -783,10 +799,10 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
   // ContextManager, subagents and titling — a /model setPort re-routes them all
   // between turns. Name kept `modelPort` so loopConfig/titling need no changes.
   const modelPort = new SwitchableModelPort(baseModelPort);
-  const bootContextWindow = resolveContextWindow(envConfig.model, catalogEntry, envConfig.contextWindowTokens, envConfig.contextWindowModel);
+  const bootContextWindow = resolveContextWindow(envConfig.model, bootCatalogEntry, envConfig.contextWindowTokens, envConfig.contextWindowModel);
   const bootMaxOutputTokens = resolveMaxOutputTokens(
     envConfig.model,
-    catalogEntry,
+    bootCatalogEntry,
     envConfig.maxOutputTokens,
     (requested, clamped, modelId) =>
       bootWrite(
@@ -797,7 +813,7 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
         `[warn] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}\n`,
       ),
   );
-  const bootReasoningEffort = resolveReasoningEffort(envConfig.model, catalogEntry, envConfig.reasoningEffort, undefined, envConfig.effortLevels);
+  const bootReasoningEffort = resolveReasoningEffort(envConfig.model, bootCatalogEntry, envConfig.reasoningEffort, undefined, envConfig.effortLevels);
   // the cell model switches re-resolve from starts at the tier the
   // session actually runs at — the model's recorded provider default when the
   // user never chose one — so a switch cannot silently drop it. An explicit
@@ -811,6 +827,7 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
   // wiring closure below.
   const settingsForChild = buildChildModelSettingsResolver({
     catalogEntry,
+    catalogEntryFor: entryForModel,
     effortLevelsFor: () => envConfig.effortLevels,
     envMaxOutputTokens: envConfig.maxOutputTokens,
     envContextWindow: envConfig.contextWindowTokens,
@@ -2016,8 +2033,11 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
               if (modelPortFactory === undefined) {
                 return "model switching is unavailable: this session runs on an injected model port";
               }
+              let nextPort: ModelPort;
+              try { nextPort = modelPortFactory(id); }
+              catch (error) { return error instanceof Error ? error.message : String(error); }
               const previousModel = currentModel;
-              modelPort.setPort(modelPortFactory(id));
+              modelPort.setPort(nextPort);
               loop.setTodoReminderEvery(envConfig.todoReminderEvery ?? catalogEntry?.models.find((m) => m.id === id)?.todoReminderEvery);
               currentModel = id;
 
@@ -2033,10 +2053,10 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
               // for model A must never leak its window onto B. An unknown id resolves
               // the assumed fallback (8192), never a stale previous model's window.
               const contextWindow =
-                resolveContextWindow(id, catalogEntry, envConfig.contextWindowTokens, envConfig.contextWindowModel) ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
+                resolveContextWindow(id, entryForModel(id), envConfig.contextWindowTokens, envConfig.contextWindowModel) ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
               loopConfig.maxOutputTokens = resolveMaxOutputTokens(
                 id,
-                catalogEntry,
+                entryForModel(id),
                 envConfig.maxOutputTokens,
                 (requested, clamped, modelId) =>
                   bootWrite(
@@ -2047,7 +2067,7 @@ async function runCliInner(options: Partial<CliOptions> | undefined, registerPer
                     `[warn] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}\n`,
                   ),
               );
-              loopConfig.reasoningEffort = resolveReasoningEffort(id, catalogEntry, selectedReasoningEffort, undefined, envConfig.effortLevels);
+              loopConfig.reasoningEffort = resolveReasoningEffort(id, entryForModel(id), selectedReasoningEffort, undefined, envConfig.effortLevels);
               liveContextWindow = contextWindow;
               loopConfig.systemPrompt = composeSystemPrompt();
               // Kept in lockstep with systemPrompt above (design slice-P7.17-cut.md

@@ -44,6 +44,12 @@ const CONNECTIONS: ProviderConnection[] = [
 ];
 
 describe("buildSessionDrillRows (cut-2 §D4 — every connection, the TAB's pair)", () => {
+  it("excludes chat hints for Responses and retains manual ids", () => {
+    const conn = connection({ id: "responses", providerId: "opencode-openai", transport: "openai-responses", model: "gpt-6-luna", models: ["gpt-6-luna", "manual-unknown"] });
+    const catalog: CatalogSummary = [{ id: "opencode-openai", name: "OpenCode Go", authKind: "api_key", models: [{ id: "kimi-k3" }] }];
+    const { groups } = buildSessionDrillRows({ connections: [conn], catalog, custom: undefined, currentConnectionId: conn.id, currentModelId: conn.model!, recentModelIds: [] });
+    expect(groups[0]?.items.map(m => m.id)).toEqual(["gpt-6-luna", "manual-unknown"]);
+  });
   it("groups every connected connection, current one first, with the tab's model checkmarked", () => {
     const { groups } = buildSessionDrillRows({
       connections: CONNECTIONS,

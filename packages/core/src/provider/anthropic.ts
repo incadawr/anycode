@@ -4,6 +4,7 @@
  * (GLM, Kimi, MiniMax, DeepSeek, ...) that differ only in baseURL and auth.
  */
 
+import { wrapOpenCodeGoFetch } from "./opencode-go-fetch.js";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import type { LanguageModel } from "ai";
 import type { EndpointConfig } from "./endpoint.js";
@@ -103,11 +104,12 @@ export function createAnthropicLanguageModel(
   if (userAgent !== undefined) {
     fetchForProvider = wrapFetchWithUserAgent(fetchForProvider, userAgent);
   }
+  fetchForProvider = wrapOpenCodeGoFetch(fetchForProvider, config);
   const provider = createAnthropic({
     baseURL: normalizeAnthropicBaseUrl(config.baseUrl),
     apiKey,
     headers: buildDualAuthHeaders(apiKey, config.headers),
-    ...(config.onQuotaHeaders !== undefined || isMiMoModel(config.providerName, config.model) || userAgent !== undefined
+    ...(config.onQuotaHeaders !== undefined || isMiMoModel(config.providerName, config.model) || userAgent !== undefined || config.goModelPolicy !== undefined
       ? { fetch: fetchForProvider }
       : {}),
   });

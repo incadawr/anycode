@@ -1,5 +1,6 @@
 import { connectionContextWindow } from "../shared/connection-context-window.js";
 import type { RecognizerCatalogInfo } from "./host-env.js";
+import { automaticGoRoute } from "./go-route.js";
 import { providerProxyConfig } from "./provider-proxy-config.mjs";
 import { createMiniMaxQuotaService } from "./minimax-quota.js";
 import { createGlmQuotaService } from "./glm-quota.js";
@@ -1148,6 +1149,10 @@ function selectedTransportInfo(current: AnycodeSettings): {
   // both of those, so an ungated waiver here would let the gate say "ready"
   // for a fork core refuses to boot).
   const connectionAuthOptional = view.authOptional === true;
+  const goRoute = automaticGoRoute(activeConnection(current), bootEnv);
+  if (goRoute) return goRoute.kind === "route"
+    ? { authOptional: false, resolvedTransport: goRoute.route.transport, supportedTransports: [goRoute.route.transport] }
+    : { authOptional: false, resolvedTransport: "unavailable-model", supportedTransports: [] };
   // Legacy / no-catalog branches: still apply the env rung over the active
   // connection's transport, but there is no catalog entry to validate against.
   const resolveLegacy = (): string | undefined =>
@@ -1697,6 +1702,7 @@ async function buildHostEnvFor(current: AnycodeSettings): Promise<NodeJS.Process
   const resolveSelection = (): Promise<ResolvedProviderSelection | undefined> =>
     resolveProviderSelection({
       settings: current,
+      bootEnv,
       resolveCatalog,
       getApiKey: (connectionId) => getSecret(connectionSecretKey(connectionId, "api_key")),
       getAccessToken: getAccessTokenFor,
@@ -1738,7 +1744,7 @@ async function buildHostEnvFor(current: AnycodeSettings): Promise<NodeJS.Process
   const connection = activeConnection(current);
   const custom = current.provider.custom?.find(entry => entry.id === connection?.providerId);
   const catalog = getBuiltinCatalog().providers.find(entry => entry.id === connection?.providerId);
-  env.ANYCODE_CHILD_MODELS = JSON.stringify(connectionChildModels(connection, custom?.models ?? [], catalog?.models.map(model => model.id) ?? [], env.ANYCODE_MODEL));
+  env.ANYCODE_CHILD_MODELS = JSON.stringify(connectionChildModels(connection, custom?.models ?? [], catalog?.models.map(model => model.id) ?? [], env.ANYCODE_MODEL, env.ANYCODE_AUTOMATIC_MODEL_ROUTING !== "1"));
   return env;
 }
 
@@ -2733,14 +2739,14 @@ void app.whenReady().then(async () => {
       const connection = connectionId === undefined ? activeConnection(current) : connectionById(current, connectionId);
       const custom = current.provider.custom?.find(entry => entry.id === connection?.providerId);
       const catalog = getBuiltinCatalog().providers.find(entry => entry.id === connection?.providerId);
-      const models = connectionChildModels(connection, custom?.models ?? [], catalog?.models.map(item => item.id) ?? [], connection?.id === current.provider.activeConnectionId ? bootEnv.ANYCODE_MODEL : undefined);
+      const models = connectionChildModels(connection, custom?.models ?? [], catalog?.models.map(item => item.id) ?? [], connection?.id === current.provider.activeConnectionId ? bootEnv.ANYCODE_MODEL : undefined, !!bootEnv.ANYCODE_BASE_URL?.trim() || !!bootEnv.ANYCODE_PROVIDER_TRANSPORT?.trim());
       try { assertChildModel(model, models); }
       catch {
         const result = resolveCoreConnectionForModel({ provider: { ...current.provider, connections: connection ? [{ ...connection, models }] : [] } }, model);
         return result.ok ? `Model ${JSON.stringify(model)} is unavailable on this connection.` : result.detail;
       }
     },
-    resolveChildRoute: (value) => resolveCoreConnectionForModel(connectionRoutingSettings(currentSettings(), currentSettings().provider.activeConnectionId, bootEnv.ANYCODE_MODEL), value),
+    resolveChildRoute: (value) => resolveCoreConnectionForModel(connectionRoutingSettings(currentSettings(), currentSettings().provider.activeConnectionId, bootEnv.ANYCODE_MODEL, !!bootEnv.ANYCODE_BASE_URL?.trim() || !!bootEnv.ANYCODE_PROVIDER_TRANSPORT?.trim()), value),
     resolveProviderConnection: (provider) =>
       settings === null ? undefined : resolveProviderConnection(settings, provider)?.id,
     // a profile's EXACT `connection:` id, checked against the live
@@ -3346,6 +3352,7 @@ void app.whenReady().then(async () => {
     vault,
     settingsPath,
     logger: fileLogger,
+    bootEnv,
     connectionFetch: connectionProxyFetch,
     preparedConnectionFetch: (route) => fetchForProxyChain([], route),
     // The same OS answer every other proxy consumer reads: a `system` profile

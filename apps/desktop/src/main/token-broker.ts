@@ -15,6 +15,7 @@
  * it from `@anycode/core/catalog`).
  */
 
+import { automaticGoRoute } from "./go-route.js";
 import { blobFromTokenResponse, type FetchLike, type OAuthProviderConfig } from "./oauth.js";
 import type { ResolvedProviderSelection } from "./host-env.js";
 import type { OAuthTokenBlob } from "./vault.js";
@@ -197,6 +198,7 @@ export interface CatalogSelectionInfo {
 
 export interface ProviderSelectionDeps {
   settings: AnycodeSettings;
+  bootEnv?: NodeJS.ProcessEnv;
   /** Core-backed lookup: catalog id -> {baseUrl, authKind, isCustom}, or undefined (unknown id). */
   resolveCatalog: (providerId: string) => CatalogSelectionInfo | undefined;
   /** Active connection's api-key read (its connection key). */
@@ -240,10 +242,12 @@ export async function resolveProviderSelection(
   // ladder (env > active-connection transport > this default, with the
   // anthropic-family suppression) is applied by buildHostEnv's single
   // `resolveEffectiveTransport` authority.
-  const defaultTransport = info.defaultTransport;
+  const route = automaticGoRoute(connection, deps.bootEnv ?? {});
+  if (route?.kind === "refusal") throw new Error(`OpenCode Go model ${model} unavailable: ${route.reason}`);
+  const defaultTransport = route?.route.transport ?? info.defaultTransport;
   // A `needsBaseUrl` entry (vLLM template) sources its baseUrl from the
   // connection, exactly like `custom`, even though it is NOT `isCustom`.
-  const baseUrl = info.needsBaseUrl === true ? connection.baseUrl : info.baseUrl;
+  const baseUrl = route?.route.baseUrl ?? (connection.baseUrl?.trim() ? connection.baseUrl : info.needsBaseUrl === true ? connection.baseUrl : info.baseUrl);
   if (info.authKind === "oauth") {
     const apiKey = await deps.getAccessToken(connection.id, id);
     return { baseUrl, model, apiKey, authKind: "oauth", defaultTransport };

@@ -718,7 +718,7 @@ export interface ProviderUsageAudit {
    * complete, so a writer that prices by its own clock would bill a 03:59 UTC
    * step at the off-peak rate. Absent ⇒ the writer's own clock.
    */
-  record(record: Omit<ProviderUsageRecord, "sessionId" | "createdAt">, finishedAt?: number): void;
+  record(record: Omit<ProviderUsageRecord, "sessionId" | "createdAt">, finishedAt?: number, endpointSnapshot?: import("@anycode/core").UsageEndpointSnapshot): void;
   /**
    * cross-review finding 4: OPTIONAL drain of the write-behind
    * queue — resolves once every record() handed over so far has settled.
@@ -1545,7 +1545,7 @@ export class Session {
    * Reconnect-safe: the SQLite PK (session_id, turn_id, step) + INSERT OR
    * IGNORE make a replayed finish after a flush a storage no-op.
    */
-  private pendingUsageAuditRow: (Omit<ProviderUsageRecord, "sessionId" | "createdAt"> & { finishedAt: number }) | null = null;
+  private pendingUsageAuditRow: (Omit<ProviderUsageRecord, "sessionId" | "createdAt"> & { finishedAt: number; endpointSnapshot?: import("@anycode/core").UsageEndpointSnapshot }) | null = null;
   /**
    * the last audit summary the hydration path has
    * read (pushSessionCheckpoint is sync; the summary port is async, so the
@@ -3140,7 +3140,8 @@ export class Session {
           }
           break;
         }
-        this.applyModelSwitch(id, false, message.requestId);
+        try { this.applyModelSwitch(id, false, message.requestId); }
+        catch (error) { this.reportModelSwitchFailure(error); }
         break;
       }
       case "set_engine_preset":
@@ -3341,13 +3342,19 @@ export class Session {
       }
       return;
     }
+    const previousEffort = this.selectedEffort;
     if (effort !== undefined) {
       // The user's SELECTED tier (not the currently effective one): the
       // switch below re-resolves it against the new model's capabilities.
       this.selectedEffort = effort;
     }
-    if (!this.applyModelSwitch(model, effort !== undefined, modelRequestId, effortRequestId) && effort !== undefined) {
-      this.applyReasoningEffort(effort, effortRequestId);
+    try {
+      if (!this.applyModelSwitch(model, effort !== undefined, modelRequestId, effortRequestId) && effort !== undefined) {
+        this.applyReasoningEffort(effort, effortRequestId);
+      }
+    } catch (error) {
+      this.selectedEffort = previousEffort;
+      this.reportModelSwitchFailure(error);
     }
   }
 
@@ -3414,6 +3421,12 @@ export class Session {
     return true;
   }
 
+  private reportModelSwitchFailure(error: unknown): void {
+    this.outbound.emit({ type: "agent_event", turnId: ENGINE_SWITCH_TURN_ID, event: {
+      type: "engine_notice", level: "info", message: error instanceof Error ? error.message : String(error),
+    } });
+  }
+
   private pushTodoReminderSnapshot(): void {
     if (this.engine.todoReminderSnapshot !== undefined) {
       this.outbound.sendDirect({ type: "todo_reminder_snapshot", state: this.engine.todoReminderSnapshot() });
@@ -3454,9 +3467,9 @@ export class Session {
   }
 
   /** Accounting must never terminate a turn when a sink throws synchronously. */
-  private recordUsageAuditRow(row: Parameters<ProviderUsageAudit["record"]>[0], finishedAt?: number): void {
+  private recordUsageAuditRow(row: Parameters<ProviderUsageAudit["record"]>[0], finishedAt?: number, endpointSnapshot?: import("@anycode/core").UsageEndpointSnapshot): void {
     try {
-      this.usageAudit?.sink.record(row, finishedAt);
+      this.usageAudit?.sink.record(row, finishedAt, endpointSnapshot);
     } catch (e) {
       console.error(`[host] usage audit write failed: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -3480,8 +3493,8 @@ export class Session {
     // The instant travels WITH the staged row: a tool round-trip or an
     // approval can push the flush across a tariff boundary, and the step is
     // still billed at the moment it finished.
-    const { finishedAt, ...row } = staged;
-    this.recordUsageAuditRow(row, finishedAt);
+    const { finishedAt, endpointSnapshot, ...row } = staged;
+    this.recordUsageAuditRow(row, finishedAt, endpointSnapshot);
   }
 
   /**
@@ -5635,7 +5648,8 @@ export class Session {
               finishedAt: Date.now(),
               turnId,
               step: this.currentStep,
-              model: this.model,
+              model: event.endpointSnapshot?.model ?? this.model,
+              ...(event.endpointSnapshot ? { endpointSnapshot: event.endpointSnapshot } : {}),
               reasoningEffort: this.selectedEffort,
               costUsd: event.usage.costUsd,
               inputTokens: event.usage.inputTokens,

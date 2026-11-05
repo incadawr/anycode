@@ -1243,7 +1243,7 @@ export const setModeSchema = z
 
 export const setReasoningEffortSchema = z.object({
   type: z.literal("set_reasoning_effort"),
-  effort: z.enum(["off", "low", "medium", "high", "xhigh", "max"]),
+  effort: z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max"]),
   requestId: z.string().min(1).max(128).optional(),
 }).strict();
 

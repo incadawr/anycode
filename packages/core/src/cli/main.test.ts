@@ -3177,9 +3177,10 @@ describe("per-model context window production wiring", () => {
       contextWindowTokens: 50_000,
       contextWindowModel: "glm-5.2",
     };
-    const deps = new Function("envConfig", "catalogEntry", "bootWrite", "console", `return ({${production[0]!}});`)(
+    const deps = new Function("envConfig", "catalogEntry", "entryForModel", "bootWrite", "console", `return ({${production[0]!}});`)(
       envConfig,
       zAiEntry,
+      () => zAiEntry,
       () => {},
       console,
     ) as Parameters<typeof buildChildModelSettingsResolver>[0];
@@ -3204,9 +3205,10 @@ describe("per-model context window production wiring", () => {
     // catalog window — dropping the 4th argument would let A's override govern B.
     const envConfig = { model: "glm-4.6", contextWindowTokens: 50_000, contextWindowModel: "glm-5.2" };
     for (const args of calls) {
-      const [modelId, entry, tokens, bound] = new Function("envConfig", "catalogEntry", "id", `return [${args}];`)(
+      const [modelId, entry, tokens, bound] = new Function("envConfig", "bootCatalogEntry", "entryForModel", "id", `return [${args}];`)(
         envConfig,
         zAiEntry,
+        () => zAiEntry,
         "glm-4.6",
       ) as [string, typeof zAiEntry, number, string | undefined];
       expect(resolveContextWindow(modelId, entry, tokens, bound)).toBe(200_000);

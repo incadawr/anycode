@@ -1,4 +1,5 @@
 import { parseRecognizerEnv, recognizerEndpointFromFields, recognizerLiveWindow } from "./recognizer-env.js";
+import { resolveGoBootModel } from "./go-boot-model.js";
 import "./sdk-warnings.js";
 import { scrubFailureText } from "@anycode/core";
 import { childBootFailure, sanitizeBootFailure } from "./child-boot-failure.js";
@@ -268,6 +269,8 @@ import {
   resolveImageInput,
   type ImageModalityLookup,
   resolveIncludeUsage,
+  applyAutomaticModelRoute,
+  openCodeGoCatalogEntry,
   resolveMaxOutputTokens,
   resolveProviderHeaders,
   clampSubagentMaxOutputTokens,
@@ -2733,7 +2736,7 @@ async function bootClaudeSession(
 class VisionTelemetryModelPort implements ModelPort {
   constructor(
     private readonly inner: ModelPort,
-    private readonly report: (usage: TokenUsage) => void,
+    private readonly report: (usage: TokenUsage, endpointSnapshot?: import("@anycode/core").UsageEndpointSnapshot) => void,
   ) {}
 
   async compactReasoning(
@@ -2757,7 +2760,7 @@ class VisionTelemetryModelPort implements ModelPort {
   async *streamText(request: ModelRequest): AsyncIterable<ModelStreamEvent> {
     for await (const event of this.inner.streamText(request)) {
       if (event.type === "finish") {
-        this.report(event.usage);
+        this.report(event.usage, event.endpointSnapshot);
       }
       yield event;
     }
@@ -2918,7 +2921,7 @@ async function boot(): Promise<void> {
     // Catalog entry resolved early so the model port can branch reasoning-effort
     // mapping by provider (slice 6.4-R2: GLM enum vs Claude budgetTokens) and
     // the boot budget/effort resolutions below share the same lookup.
-    const catalogEntry = matchCatalogEntryByBaseUrl(getBuiltinCatalog(), envConfig.baseUrl);
+    const catalogEntry = getBuiltinCatalog().providers.find(entry => entry.id === envConfig.providerId) ?? matchCatalogEntryByBaseUrl(getBuiltinCatalog(), envConfig.baseUrl);
 
     // Single back-compat resolution point for the wire transport, mirroring the
     // CLI (§0.4): the mandatory discriminant is applied once here rather
@@ -2969,13 +2972,22 @@ async function boot(): Promise<void> {
       ...(envConfig.networkRetryBudgetMs !== undefined ? { networkRetryBudgetMs: envConfig.networkRetryBudgetMs } : {}),
       ...(envConfig.networkWaitMaxMs !== undefined ? { networkWaitMaxMs: envConfig.networkWaitMaxMs } : {}),
     };
-    const modelPortFactory = (m: string): ModelPort =>
-      new AiSdkModelPort(
+    const routingConnectionId = process.env[ENV_CONNECTION_ID]?.trim() || process.env.ANYCODE_MODEL_SETTINGS_CONNECTION_ID?.trim();
+    let routeSnapshot = readConnectionModelSettingsSync(routingConnectionId, settingsPathOverride?.trim() || undefined)?.modelRoutes;
+    const goBoot = envConfig.automaticModelRouting && envConfig.providerId
+      ? resolveGoBootModel(envConfig.providerId, envConfig.model, catalogEntry?.models[0]?.id, routeSnapshot)
+      : undefined;
+    if (goBoot) envConfig.model = goBoot.model;
+    const modelPortFactory = (m: string): ModelPort => {
+      const current = readConnectionModelSettingsSync(routingConnectionId, settingsPathOverride?.trim() || undefined);
+      if (current) routeSnapshot = current.modelRoutes;
+      const endpoint = applyAutomaticModelRoute(
         {
           transport: providerTransport,
           baseUrl: envConfig.baseUrl,
           apiKey: envConfig.apiKey,
           model: m,
+          ...(envConfig.providerId !== undefined ? { providerId: envConfig.providerId, automaticModelRouting: envConfig.automaticModelRouting } : {}),
           ...(catalogEntry !== undefined ? { providerName: catalogEntry.name } : {}),
           // The connection's declared effort vocabulary (ANYCODE_EFFORT_LEVELS):
           // the model port sends `output_config.effort` to a custom
@@ -3002,9 +3014,19 @@ async function boot(): Promise<void> {
           // as a `provider_quota` event, so the host needs no state of its own.
           onQuotaHeaders: () => {},
           networkWaiter: desktopNetworkWaiter,
-        },
-        hostDiagnosticSink,
-      );
+        }, routeSnapshot);
+      if (endpoint.automaticModelRouting) {
+        endpoint.includeUsage = resolveIncludeUsage(endpoint.transport, envConfig.includeUsage);
+        endpoint.resolveEndpointForModel = modelId => {
+          const latest = readConnectionModelSettingsSync(routingConnectionId, settingsPathOverride?.trim() || undefined);
+          if (latest) routeSnapshot = latest.modelRoutes;
+          const target = applyAutomaticModelRoute({ ...endpoint, model: modelId }, routeSnapshot);
+          target.includeUsage = resolveIncludeUsage(target.transport, envConfig.includeUsage);
+          return target;
+        };
+      }
+      return new AiSdkModelPort(endpoint, hostDiagnosticSink);
+    };
     const switchableModelPort = new SwitchableModelPort(modelPortFactory(envConfig.model));
     // срез C (plan §3): the ONE external decorator around the
     // SwitchableModelPort — mirror of cli/main.ts's own
@@ -3039,7 +3061,7 @@ async function boot(): Promise<void> {
     let modelClassifierOffNotice: string | undefined;
     if (askClassifierKindBoot?.kind === "model") {
       const record = askClassifierKindBoot;
-      const allowedChildModels = readAllowedChildModels(process.env.ANYCODE_CHILD_MODELS, envConfig.model);
+      const allowedChildModels = readAllowedChildModels(process.env.ANYCODE_CHILD_MODELS, envConfig.model, envConfig.providerId === "opencode" || envConfig.providerId === "opencode-openai");
       const boot = resolveModelClassifierBoot(
         record,
         {
@@ -3113,7 +3135,7 @@ async function boot(): Promise<void> {
       const raw = JSON.parse(readFileSync(hostSettingsPathOverride() ?? defaultSettingsPath(), "utf8"));
       const parsed = parseSettings(raw);
       if (parsed.status !== "ok") throw new Error("Invalid settings");
-      return listConnectionTargets(parsed.settings, process.env[ENV_CONNECTION_ID] || parsed.settings.provider.activeConnectionId, currentModel);
+      return listConnectionTargets(parsed.settings, process.env[ENV_CONNECTION_ID] || parsed.settings.provider.activeConnectionId, currentModel, process.env.ANYCODE_ROUTING_ENV_OVERRIDE === "1");
     };
     registry.register(createListConnectionsTool(readConnectionTargets));
 
@@ -3271,6 +3293,7 @@ async function boot(): Promise<void> {
       ...(liveCapsConnectionId ? { readConnection: readModelSettings } : {}),
       initialReadSucceeded: Boolean(liveCapsConnectionId) && initialModelSettings !== null,
       catalogEntry,
+      ...(envConfig.automaticModelRouting && catalogEntry ? { catalogEntryFor: (id: string) => openCodeGoCatalogEntry(catalogEntry, id, readModelSettings()?.modelRoutes ?? routeSnapshot) } : {}),
       envContextWindow: envConfig.contextWindowTokens,
       envContextWindowFromSettings: process.env.ANYCODE_CONTEXT_WINDOW_FROM_SETTINGS === "1",
       envContextWindowModel: envConfig.contextWindowModel,
@@ -3429,7 +3452,7 @@ async function boot(): Promise<void> {
       isChildSessionBoot(args, sessionMeta) ? clampSubagentMaxOutputTokens(resolved) : resolved;
     const bootMaxOutputTokens = clampChildOutput(resolveMaxOutputTokens(
       envConfig.model,
-      envConfig.maxOutputTokens === undefined ? entryFor(envConfig.model) : catalogEntry,
+      envConfig.automaticModelRouting || envConfig.maxOutputTokens === undefined ? entryFor(envConfig.model) : catalogEntry,
       envConfig.maxOutputTokens,
       (requested, clamped, modelId) =>
         console.warn(`[host] ${modelId} max output tokens clamped: ${requested} > provider catalog ceiling, using ${clamped}`),
@@ -3973,12 +3996,19 @@ async function boot(): Promise<void> {
     // (the const capture right above, not the mutable `telemetry` let) for
     // the SAME reason the subagentEventTap factory a few lines down does.
     const recognizerPortFactory = (endpoint: RecognizerEndpoint): ModelPort => {
-      const port = new AiSdkModelPort(endpoint, hostDiagnosticSink);
-      if (subagentTelemetry === null) {
+      const completedEndpoint = { ...endpoint };
+      const port = new AiSdkModelPort(completedEndpoint, hostDiagnosticSink);
+      if (subagentTelemetry === null && !completedEndpoint.goModelPolicy) {
         return port;
       }
-      return new VisionTelemetryModelPort(port, (usage) => {
-        subagentTelemetry.port.record({
+      const recognizerId = randomUUID();
+      let recognizerStep = 0;
+      return new VisionTelemetryModelPort(port, (usage, endpointSnapshot) => {
+        if (endpointSnapshot) {
+          const row = subagentUsageRow(usage, { endpointSnapshot, pricingRaw: completedEndpoint.pricingRaw, model: endpointSnapshot.model }, { subagentId: recognizerId, sessionId, step: ++recognizerStep });
+          usageAuditWriteTail = (usageAuditWriteTail ?? Promise.resolve()).then(() => persistence!.recordProviderUsage(row)).catch((e) => console.error("[host] usage audit write failed", e));
+        }
+        subagentTelemetry?.port.record({
           v: 1,
           ts: Date.now(),
           session: subagentTelemetry.session,
@@ -4188,6 +4218,9 @@ async function boot(): Promise<void> {
         liveRecognizerEndpoint.apiKey = next.apiKey;
         liveRecognizerEndpoint.providerName = next.providerName;
         liveRecognizerEndpoint.contextWindowTokens = recognizerLiveWindow(recognizerWindowEnv, next);
+        liveRecognizerEndpoint.goModelPolicy = next.goModelPolicy;
+        liveRecognizerEndpoint.modelMetadata = next.modelMetadata;
+        liveRecognizerEndpoint.pricingRaw = next.pricingRaw;
         recognizerConfigured = true;
       }
       config.recognizer!.endpoint = recognizerConfigured ? liveRecognizerEndpoint : undefined;
@@ -4366,10 +4399,10 @@ async function boot(): Promise<void> {
             const subagentId = randomUUID();
             let step = 0;
             const pricingRaw = currentPricingRaw();
-            return (usage) => {
+            return (usage, endpointSnapshot) => {
               // One clock reading inside the row builder: the tariff band and
               // `createdAt` can never disagree (see usage-recording.ts).
-              const row = subagentUsageRow(usage, { catalogEntry, baseUrl: envConfig.baseUrl, pricingRaw, model, now: Date.now }, {
+              const row = subagentUsageRow(usage, { catalogEntry, baseUrl: envConfig.baseUrl, pricingRaw, model: endpointSnapshot?.model ?? model, endpointSnapshot, now: Date.now }, {
                 subagentId,
                 sessionId,
                 step: ++step,
@@ -4422,7 +4455,7 @@ async function boot(): Promise<void> {
           // exactly like an absent option — explore inherits the parent's port.
           exploreModel: envConfig.exploreModel,
           resolveChildModelPort: (id: string) => {
-            assertChildModel(id, readAllowedChildModels(process.env.ANYCODE_CHILD_MODELS, envConfig.model));
+            assertChildModel(id, readAllowedChildModels(process.env.ANYCODE_CHILD_MODELS, envConfig.model, envConfig.providerId === "opencode" || envConfig.providerId === "opencode-openai"));
             return modelPortFactory(id);
           },
           // (F6) + §0b adjudication: unconditional, exactly like the
@@ -4493,6 +4526,7 @@ async function boot(): Promise<void> {
     // callback (mirror of the CLI's deps.model.set). It stays host-owned while
     // CoreEngine exposes it through the neutral SessionEngine seam.
     const switchModelImpl = (id: string, selectedTier: ReasoningEffort, effortExplicit = false) => {
+        const nextPort = modelPortFactory(id);
         if (isChildSession) connectionModelSettings.refresh();
         else selectedTier = connectionModelSettings.switchEffort(currentModel, id, selectedTier, effortExplicit);
         const effortAdjustment = isChildSession ? undefined : connectionModelSettings.takeAdjustment();
@@ -4507,7 +4541,7 @@ async function boot(): Promise<void> {
         // that decorator forwards to, so every existing holder (loop,
         // ContextManager, subagents, titling) sees the new model without a
         // second wrap.
-        switchableModelPort.setPort(modelPortFactory(id));
+        switchableModelPort.setPort(nextPort);
         currentModel = id;
 
         // and the rebuilt parent prompt see the new modelId.
@@ -4525,7 +4559,7 @@ async function boot(): Promise<void> {
         liveContextWindowAssumed = contextInfo.source === "assumed";
         config.maxOutputTokens = clampChildOutput(resolveMaxOutputTokens(
           id,
-          envConfig.maxOutputTokens === undefined ? entryFor(id) : catalogEntry,
+          envConfig.automaticModelRouting || envConfig.maxOutputTokens === undefined ? entryFor(id) : catalogEntry,
           envConfig.maxOutputTokens,
           (requested, clamped, modelId) =>
             console.warn(`[host] ${modelId} max output tokens clamped: ${requested} > provider catalog ceiling, using ${clamped}`),
@@ -4954,7 +4988,7 @@ async function boot(): Promise<void> {
       // can never block or fail a turn.
       usageAudit: {
         sink: {
-          record: (r, finishedAt) => {
+          record: (r, finishedAt, endpointSnapshot) => {
             // Only the exact catalog endpoint is eligible: a proxy or reseller
             // may charge a different price even when it exposes the same model.
             // On an endpoint that serves both a pay-as-you-go key and a
@@ -4967,7 +5001,7 @@ async function boot(): Promise<void> {
             // fall on the far side of a tariff boundary.
             const row = sessionUsageRow(
               r,
-              { catalogEntry, baseUrl: envConfig.baseUrl, pricingRaw: turnPricingRaw, model: r.model, ...(finishedAt !== undefined ? { finishedAt } : {}), now: Date.now },
+              { catalogEntry, baseUrl: envConfig.baseUrl, pricingRaw: turnPricingRaw, model: r.model, endpointSnapshot, ...(finishedAt !== undefined ? { finishedAt } : {}), now: Date.now },
               sessionId,
             );
             // Serialized (chained off the tail, never parallel) so flush()
@@ -5027,6 +5061,7 @@ async function boot(): Promise<void> {
     // connection this session is not running on — the classifier is OFF and
     // the user SEES that (engine_notice renders like every other config
     // warning), never a silent fallback to the session's own connection.
+    if (goBoot?.notice) session.emitAgentEvent({ type: "engine_notice", level: "warning", message: goBoot.notice });
     if (modelClassifierOffNotice !== undefined) {
       session.emitAgentEvent({ type: "engine_notice", level: "warning", message: modelClassifierOffNotice });
     }

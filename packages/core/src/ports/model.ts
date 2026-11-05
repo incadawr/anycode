@@ -39,6 +39,8 @@ export interface ModelPort {
    * identity, NOT execution identity — no production port canonicalizes ids.
    */
   readonly modelId?: string;
+  /** Go-only declared context and output limits; input is not a context window. */
+  readonly goLimits?: { context?: number; input?: number; output?: number };
   /** Provider-specific minimum effort for lightweight title requests, if needed. */
   readonly titleReasoningEffort?: ReasoningEffort;
   /**

@@ -57,6 +57,8 @@ export class SwitchableModelPort implements ModelPort {
   }
 
   /** Likewise for the title request's output-token ceiling. */
+  get goLimits(): ModelPort["goLimits"] { return this.current.goLimits; }
+
   get titleMaxOutputTokens(): ModelPort["titleMaxOutputTokens"] {
     return this.current.titleMaxOutputTokens;
   }
@@ -100,13 +102,17 @@ export function matchCatalogEntryByBaseUrl(
   catalog: ProviderCatalog,
   baseUrl: string,
 ): CatalogProviderEntry | undefined {
-  const normalizedTarget = normalizeAnthropicBaseUrl(baseUrl);
-  return catalog.providers.find((entry) => {
-    if (entry.baseUrl === "") {
-      return false;
-    }
-    return normalizeAnthropicBaseUrl(entry.baseUrl) === normalizedTarget;
+  const normalizedTarget = baseUrl.trim().replace(/\/+$/, "");
+  const matches = catalog.providers.filter((entry) => {
+    const endpoints = [entry.baseUrl, ...Object.values(entry.transportBaseUrls ?? {})].filter((url): url is string => Boolean(url));
+    return endpoints.some(url => {
+      const candidate = url.trim().replace(/\/+$/, "");
+      if (candidate === normalizedTarget) return true;
+      return candidate === entry.baseUrl.trim().replace(/\/+$/, "") &&
+        entry.defaultTransport === "anthropic-messages" && normalizeAnthropicBaseUrl(candidate) === normalizeAnthropicBaseUrl(normalizedTarget);
+    });
   });
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 /**

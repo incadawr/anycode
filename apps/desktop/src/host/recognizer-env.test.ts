@@ -5,6 +5,16 @@ import { parseRecognizerEnv, recognizerEndpointFromFields, recognizerLiveWindow 
 const wire = { model: "vision", baseUrl: "https://example.test", contextWindowTokens: 32000 };
 
 describe("recognizer context delivery", () => {
+  it("preserves Go carriers with the window across boot and live delivery and clears stale carriers", () => {
+    const go = { ...wire, goModelPolicy: { marker: "policy" }, modelMetadata: { id: "vision" }, pricingRaw: '{"input":1}' } as unknown as Parameters<typeof applyRecognizerEnv>[1];
+    const env: NodeJS.ProcessEnv = {};
+    applyRecognizerEnv(env, go);
+    expect(parseRecognizerEnv(env)).toEqual(recognizerEndpointFromFields(go!));
+    applyRecognizerEnv(env, undefined);
+    expect(env.ANYCODE_RECOGNIZER_GO_POLICY).toBeUndefined();
+    expect(env.ANYCODE_RECOGNIZER_GO_METADATA).toBeUndefined();
+    expect(env.ANYCODE_RECOGNIZER_GO_PRICING).toBeUndefined();
+  });
   it("delivers the settings window with a model binding and matches live delivery", () => {
     const env: NodeJS.ProcessEnv = {};
     applyRecognizerEnv(env, wire);

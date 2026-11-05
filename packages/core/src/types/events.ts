@@ -20,6 +20,14 @@ export interface TokenUsage {
   totalTokens?: number;
 }
 
+/** Public endpoint facts captured from the port which completed this step. */
+export interface UsageEndpointSnapshot {
+  model: string;
+  baseUrl: string;
+  transport: import("../provider/catalog.js").ProviderTransport;
+  metadata: Record<string, unknown>;
+}
+
 export type FinishReason =
   | "stop"
   | "length"
@@ -81,7 +89,7 @@ export type ModelStreamEvent =
    * are absent when the step streamed no output token at all, so a consumer
    * never derives a rate from a wait it cannot attribute to generation.
    */
-  | { type: "finish"; finishReason: FinishReason; usage: TokenUsage; timeToFirstEventMs?: number; generationDurationMs?: number }
+  | { type: "finish"; finishReason: FinishReason; usage: TokenUsage; endpointSnapshot?: UsageEndpointSnapshot; timeToFirstEventMs?: number; generationDurationMs?: number }
   /**
    * `retry` (W7b) is additive-optional terminal-retry metadata the loop
    * attaches to every passing error event: `attemptsMade` is the count of
@@ -122,7 +130,7 @@ export type ModelStreamEvent =
        * Whitelist-derived redacted descriptor (`ProviderFailureSafe` in
        * provider/failure.ts) the loop attaches alongside `retry` from ONE
        * `classifyProviderFailure` call. This is the ONLY field a trust boundary
-       * may surface: `message` is a fixed per-code string (never raw text),
+       * may surface: `message` is sanitized provider text, redacted and bounded to 300 chars,
        * `code`/`statusCode` are safe by construction. Additive-optional and typed
        * inline (string `code`, not the provider union) to keep this file free of a
        * provider-layer dependency, same precedent as `retry.code`.

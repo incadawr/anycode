@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveEffortLevels, resolveReasoningEffort, type ReasoningEffort } from "@anycode/core";
+import { openCodeGoCatalogEntry, resolveEffortLevels, resolveMaxOutputTokens, resolveReasoningEffort, type ReasoningEffort } from "@anycode/core";
 import { createConnectionModelSettings, nearestSupportedEffort } from "./connection-model-settings.js";
 import { findCatalogEntry } from "@anycode/core/catalog";
 import { createHarness } from "./test-harness.js";
@@ -11,6 +11,25 @@ const connection = {
   },
 };
 const make = () => createConnectionModelSettings({ connection, liveCapabilitiesFor: () => undefined });
+
+it("clamps a connection-wide output cap on Go model switches and snapshot refresh", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { parseOpenCodeGoSnapshot } = await import("../../../../packages/core/src/provider/model-route.js");
+  const fixture = JSON.parse(await readFile(new URL("../../../../packages/core/src/provider/__fixtures__/opencode-go-models.json", import.meta.url), "utf8"));
+  const luna = fixture.data.find((row: { id: string }) => row.id === "gpt-6-luna");
+  luna.limit.output = 64_000;
+  const parsed = parseOpenCodeGoSnapshot(fixture, "2026-11-05T00:00:00Z");
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok) throw new Error("invalid fixture");
+  const catalog = findCatalogEntry("opencode")!;
+  let snapshot: typeof parsed.snapshot | undefined;
+  const settings = createConnectionModelSettings({ catalogEntry: catalog, catalogEntryFor: id => openCodeGoCatalogEntry(catalog, id, snapshot), liveCapabilitiesFor: () => undefined });
+  const cap = 500_000;
+  expect(resolveMaxOutputTokens("grok-4.7", settings.entryFor("grok-4.7"), cap)).toBeGreaterThan(128_000);
+  expect(resolveMaxOutputTokens("gpt-6-luna", settings.entryFor("gpt-6-luna"), cap)).toBe(128_000);
+  snapshot = parsed.snapshot;
+  expect(resolveMaxOutputTokens("gpt-6-luna", settings.entryFor("gpt-6-luna"), cap)).toBe(64_000);
+});
 
 describe("connection model settings (GitHub #26)", () => {
   it("resolves independent windows and an unknown sibling without inheriting the parent's window", () => {
@@ -325,6 +344,28 @@ it("uses cached OpenRouter limits and rates while preserving manual overrides", 
   expect(settings.contextFor(model).tokens).toBe(64000);
   expect(settings.entryFor(model)?.models.find(row => row.id === model)).toMatchObject({ contextWindow: 1048576, maxOutputTokens: 524288 });
   expect(settings.pricingSnapshot()?.models[model]).toEqual({ input: 1, cachedInput: 1, output: 2 });
+});
+
+it("uses refreshed OpenCode Go limits for models outside the catalog", () => {
+  const model = "deepseek-v4.1-flash";
+  let saved = { modelCapabilities: { [model]: { contextWindow: 1_000_000, maxOutputTokens: 384_000 } } };
+  const settings = createConnectionModelSettings({ catalogEntry: findCatalogEntry("opencode-openai"), connection: saved, readConnection: () => saved, liveCapabilitiesFor: () => undefined });
+  settings.switchEffort("other", model, "off");
+  expect(settings.contextFor(model).tokens).toBe(1_000_000);
+  expect(resolveMaxOutputTokens(model, settings.entryFor(model), undefined)).toBe(384_000);
+  saved = { modelCapabilities: { [model]: { contextWindow: 900_000, maxOutputTokens: 300_000 } } };
+  expect(settings.refresh()).toBe(true);
+  expect(settings.contextFor(model).tokens).toBe(900_000);
+  expect(resolveMaxOutputTokens(model, settings.entryFor(model), undefined)).toBe(300_000);
+  const overridden = createConnectionModelSettings({ catalogEntry: findCatalogEntry("opencode-openai"), connection: { ...saved, modelOverrides: { [model]: { contextWindowTokens: 64_000 } } }, envContextWindow: 32_000, liveCapabilitiesFor: () => undefined });
+  expect(overridden.contextFor(model).tokens).toBe(32_000);
+});
+
+it("uses an output-only live limit without claiming an unknown context window", () => {
+  const model = "unknown-output-only";
+  const settings = createConnectionModelSettings({ catalogEntry: findCatalogEntry("opencode-openai"), connection: { modelCapabilities: { [model]: { maxOutputTokens: 100_000 } } }, liveCapabilitiesFor: () => undefined });
+  expect(settings.contextFor(model)).toEqual({ tokens: 8192, source: "assumed" });
+  expect(resolveMaxOutputTokens(model, settings.entryFor(model), undefined)).toBe(100_000);
 });
 
 

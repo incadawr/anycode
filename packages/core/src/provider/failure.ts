@@ -5,12 +5,31 @@
  */
 
 import { APICallError } from "ai";
+import { scrubFailureText } from "../utils/scrub-approval-text.js";
 import { classifyNetworkConfigurationFailure } from "./network-failure.js";
 import type { ModelStreamEvent } from "../types/events.js";
 import { isQuotaExhaustion, isRetryableStreamError, USAGE_LIMIT_PATTERN, matchesFailureText } from "./retry.js";
 
 export { MiniMaxBalanceFailure } from "./minimax-failure.js";
 import { MiniMaxBalanceFailure, unwrapMiniMaxFailure } from "./minimax-failure.js";
+
+// Only the request boundary knows the actual key used for this attempt. Keep
+// the sanitized text separately, without mutating SDK errors or retaining keys.
+const providerMessages = new WeakMap<object, string>();
+
+export function captureProviderMessage(error: unknown, apiKey: string | undefined): void {
+  if (!APICallError.isInstance(error) || error.statusCode === undefined || error.statusCode < 400 || error.statusCode >= 500 || typeof error.responseBody !== "string") return;
+  try {
+    const body: unknown = JSON.parse(error.responseBody);
+    if (!body || typeof body !== "object" || Array.isArray(body)) return;
+    const root = body as Record<string, unknown>;
+    const nested = root.error && typeof root.error === "object" && !Array.isArray(root.error) ? root.error as Record<string, unknown> : undefined;
+    const value = nested?.message ?? nested?.type ?? nested?.code ?? root.message;
+    if (typeof value !== "string" || !value.trim()) return;
+    const withoutKey = apiKey ? value.split(apiKey).join("***") : value;
+    providerMessages.set(error, scrubFailureText(withoutKey).replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").slice(0, 300));
+  } catch { /* Non-JSON responses have no displayable provider message. */ }
+}
 
 /** True when `e` is model-generated output (content/reasoning/tool/finish), false for `start`/`error`/`stream_retry`. */
 export function isModelOutputEvent(e: ModelStreamEvent): boolean {
@@ -93,11 +112,8 @@ export interface ProviderFailureClassification {
 }
 
 /**
- * Stable, whitelisted human string per failure code. `safe.message` is derived
- * from the classified `code`, NEVER from the raw provider error text — a
- * provider or custom error that embeds a response body or auth header in its
- * `.message` can therefore never leak it through the redacted descriptor
- * (W7b-FIX #1). `safe.code`/`safe.statusCode` are already safe.
+ * Stable fallback human string per failure code. Provider messages are only
+ * accepted from JSON at the request boundary after key and secret redaction.
  */
 const SAFE_MESSAGES: Record<ProviderFailureCode, string> = {
   proxy_unreachable: "Proxy unavailable. Check the connection proxy address and that the proxy is running, then try again.",
@@ -198,12 +214,12 @@ export function classifyProviderFailure(error: unknown): ProviderFailureClassifi
   const statusCode = extractStatusCode(error);
   const message = extractMessage(error);
 
-  // `safe.message` is derived from the classified `code` (SAFE_MESSAGES), NEVER
-  // from `message` — the raw text is used only for classification below.
+  const original = unwrapMiniMaxFailure(error);
+  const providerMessage = original && typeof original === "object" ? providerMessages.get(original) : undefined;
   const build = (code: ProviderFailureCode, retryable: boolean): ProviderFailureClassification => ({
     code,
     retryable,
-    safe: { code, message: SAFE_MESSAGES[code], ...(statusCode !== undefined ? { statusCode } : {}) },
+    safe: { code, message: providerMessage ?? SAFE_MESSAGES[code], ...(statusCode !== undefined ? { statusCode } : {}) },
   });
 
   const networkConfiguration = classifyNetworkConfigurationFailure(error);

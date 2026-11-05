@@ -117,6 +117,9 @@ describe("welcomeKeyLinkVisible", () => {
 });
 
 describe("WELCOME_SUBSCRIPTIONS", () => {
+  it("offers one OpenCode Go shortcut", () => {
+    expect(WELCOME_SUBSCRIPTIONS.filter(sub => sub.id.startsWith("opencode"))).toEqual([{ id: "opencode", title: "OpenCode Go", description: "Use your OpenCode Go key", keyUrl: "https://opencode.ai/console" }]);
+  });
   it("every pick is a builtin catalog template a key-paste connection can use", () => {
     const catalog = getBuiltinCatalog();
     for (const sub of WELCOME_SUBSCRIPTIONS) {

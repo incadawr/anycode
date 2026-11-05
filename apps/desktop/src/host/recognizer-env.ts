@@ -59,6 +59,9 @@ export function recognizerEndpointFromFields(fields: {
   model: string;
   providerName?: string;
   contextWindowTokens?: number;
+  goModelPolicy?: RecognizerEndpoint["goModelPolicy"];
+  modelMetadata?: RecognizerEndpoint["modelMetadata"];
+  pricingRaw?: string;
 }): RecognizerEndpoint | null {
   if (fields.baseUrl === undefined || fields.baseUrl.trim() === "") {
     return null;
@@ -70,6 +73,9 @@ export function recognizerEndpointFromFields(fields: {
     transport: (fields.transport as ProviderTransport | undefined) ?? "anthropic-messages",
     baseUrl: fields.baseUrl,
     model: fields.model,
+    ...(fields.goModelPolicy ? { goModelPolicy: fields.goModelPolicy } : {}),
+    ...(fields.modelMetadata ? { modelMetadata: fields.modelMetadata } : {}),
+    ...(fields.pricingRaw ? { pricingRaw: fields.pricingRaw } : {}),
     ...(Number.isSafeInteger(fields.contextWindowTokens) && fields.contextWindowTokens! > 0 ? { contextWindowTokens: fields.contextWindowTokens } : {}),
     ...(fields.apiKey !== undefined && fields.apiKey !== "" ? { apiKey: fields.apiKey } : {}),
     ...(fields.providerName !== undefined && fields.providerName !== "" ? { providerName: fields.providerName } : {}),
@@ -98,7 +104,12 @@ export function parseRecognizerEnv(env: NodeJS.ProcessEnv): RecognizerEndpoint |
   if (model === undefined || model.trim() === "") {
     return null;
   }
+  let goModelPolicy: RecognizerEndpoint["goModelPolicy"];
+  let modelMetadata: RecognizerEndpoint["modelMetadata"];
+  try { goModelPolicy = env.ANYCODE_RECOGNIZER_GO_POLICY ? JSON.parse(env.ANYCODE_RECOGNIZER_GO_POLICY) : undefined; } catch {}
+  try { modelMetadata = env.ANYCODE_RECOGNIZER_GO_METADATA ? JSON.parse(env.ANYCODE_RECOGNIZER_GO_METADATA) : undefined; } catch {}
   return recognizerEndpointFromFields({
+    goModelPolicy, modelMetadata, pricingRaw: env.ANYCODE_RECOGNIZER_GO_PRICING,
     transport: env.ANYCODE_RECOGNIZER_TRANSPORT,
     baseUrl: env.ANYCODE_RECOGNIZER_BASE_URL,
     apiKey: env.ANYCODE_RECOGNIZER_API_KEY,

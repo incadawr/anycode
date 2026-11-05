@@ -53,6 +53,15 @@ function mode(path: string): Promise<number> {
 }
 
 describe("loadSettings (fail-soft)", () => {
+  it("removes unsupported Go inventory without clearing the selected model", async () => {
+    const settings = cloneDefaults();
+    settings.provider = providerV2Multi("go", [{ id: "go", providerId: "opencode", model: "gemini-4-argon", models: ["gemini-4-argon", "kimi-k3"], visibleModels: ["gemini-4-argon", "kimi-k3"] }]);
+    await writeFile(settingsPath(), JSON.stringify(settings));
+    const loaded = await loadSettings(settingsPath());
+    expect(loaded.settings.provider.connections[0]).toMatchObject({ model: "gemini-4-argon", models: ["kimi-k3"], visibleModels: ["kimi-k3"] });
+    await saveSettings(settingsPath(), settings);
+    expect(JSON.parse(await readFile(settingsPath(), "utf8")).provider.connections[0]).toMatchObject({ model: "gemini-4-argon", models: ["kimi-k3"], visibleModels: ["kimi-k3"] });
+  });
   it("returns defaults for a missing file, no backup", async () => {
     const result = await loadSettings(settingsPath());
     expect(result.settings).toEqual(DEFAULT_SETTINGS);

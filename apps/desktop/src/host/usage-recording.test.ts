@@ -34,6 +34,19 @@ const NIGHT = Date.UTC(2026, 9, 28, 20, 0);
 const TURN_USAGE = { inputTokens: 1_000_000, cachedInputTokens: 0, outputTokens: 1_000_000 };
 
 describe("provider-usage recording (host writers)", () => {
+  it("prices both writers from the completed model's tiered endpoint snapshot", () => {
+    const endpointSnapshot = { model: "old-model", baseUrl: "https://opencode.ai/inference/go/openai/v1", transport: "openai-responses" as const, metadata: { pricing: { basisId: "go", input: 1, cachedInput: .1, output: 2, tiers: [{ gt: 100, input: 2, cachedInput: .2, output: 4 }] } } };
+    const usage = { inputTokens: 101, cachedInputTokens: 100, outputTokens: 1 };
+    const options = { endpointSnapshot, model: "new-model", baseUrl: "https://different.example", pricingRaw: undefined };
+    const main = sessionUsageRow({ turnId: "t", step: 1, model: "old-model", finishReason: "stop", transportRetries: 0, ...usage }, options, "s");
+    const child = subagentUsageRow(usage, options, { subagentId: "c", sessionId: "s", step: 1 });
+    for (const row of [main, child]) {
+      expect(row.priceBasisId).toBe("go+gt-100");
+      expect(row.costUsd).toBeCloseTo(26 / 1_000_000);
+    }
+    const unknown = sessionUsageRow({ turnId: "t", step: 2, finishReason: "stop", transportRetries: 0, inputTokens: 101, outputTokens: 1 }, options, "s");
+    expect(unknown.costUsd).toBeUndefined();
+  });
   it("prices both the session and the subagent row off the step clock, and the summary survives a reopen", async () => {
     const mainRow = sessionUsageRow(
       { turnId: "turn-1", step: 1, finishReason: "stop", transportRetries: 0, model: "deepseek-v4-pro", ...TURN_USAGE },
@@ -141,17 +154,18 @@ describe("host/index.ts — usage-recording wiring", () => {
   const indexSource = readFileSync(resolve(here, "index.ts"), "utf8");
 
   it("routes both writers through the row builders", () => {
-    // One call site each: the main sink and the subagent recorder.
+    // The main sink, inline subagent recorder, and recognizer recorder.
     const sessionCalls = indexSource.split("sessionUsageRow(").slice(1);
     const subagentCalls = indexSource.split("subagentUsageRow(").slice(1);
     expect(sessionCalls).toHaveLength(1);
-    expect(subagentCalls).toHaveLength(1);
+    expect(subagentCalls).toHaveLength(2);
     // Both hand the host clock over explicitly; the session sink additionally
     // forwards the finish instant the session captured, so a write delayed by
     // tool dispatch cannot move the step's tariff band.
     expect(sessionCalls[0]!.slice(0, 400)).toContain("now: Date.now");
     expect(sessionCalls[0]!.slice(0, 400)).toContain("finishedAt");
-    expect(subagentCalls[0]!.slice(0, 200)).toContain("now: Date.now");
+    expect(subagentCalls.some(call => call.slice(0, 200).includes("now: Date.now"))).toBe(true);
+    expect(subagentCalls.every(call => call.slice(0, 300).includes("endpointSnapshot"))).toBe(true);
   });
 
   it("never prices a step or stamps a row on its own", () => {

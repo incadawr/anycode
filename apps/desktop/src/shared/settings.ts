@@ -171,7 +171,7 @@ export interface RoleRouteEntry {
   /** Catalog provider id; mutually exclusive with engine and connection. */
   provider?: string;
   model?: string;
-  effort?: "off" | "low" | "medium" | "high" | "xhigh" | "max";
+  effort?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 }
 
 /** A role's ordered route: primary first, fallbacks after (parent model is the implicit last resort). */
@@ -189,7 +189,7 @@ export interface RoleConfig {
 export type ProviderTransportId = "anthropic-messages" | "openai-chat-completions" | "openai-responses";
 
 /** Per-model reasoning-effort tier (mirrors core's `ReasoningEffort`; local literal keeps this module zero-import). */
-export type ReasoningEffort = "off" | "low" | "medium" | "high" | "xhigh" | "max";
+export type ReasoningEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 /**
  * Live per-model capability facts a connection's `/v1/models` fetch declared
@@ -465,6 +465,7 @@ export interface ProviderConnection {
   models?: string[];
   /** ISO timestamp of the last successful connection-scoped model-list fetch. */
   modelsFetchedAt?: string;
+  modelRoutes?: { version: 1; fetchedAt: string; models: Record<string, { kind: "refusal"; reason: "unsupported-provider" | "unknown-model" | "unsupported-model" | "invalid-route" } | { kind: "route"; route: { transport: "anthropic-messages" | "openai-chat-completions" | "openai-responses"; baseUrl: string; metadata: Record<string, unknown> } }> };
   /** Explicit model selection for this connection; absent preserves the provider defaults. */
   visibleModels?: string[];
   /**
@@ -997,6 +998,7 @@ export interface CustomProviderRecord {
   models: string[];
   /** ISO timestamp of the last successful model-list fetch. */
   modelsFetchedAt?: string;
+  modelRoutes?: { version: 1; fetchedAt: string; models: Record<string, { kind: "refusal"; reason: "unsupported-provider" | "unknown-model" | "unsupported-model" | "invalid-route" } | { kind: "route"; route: { transport: "anthropic-messages" | "openai-chat-completions" | "openai-responses"; baseUrl: string; metadata: Record<string, unknown> } }> };
   /**
    * User declaration that this endpoint authenticates nothing (local
    * servers — LM Studio/ollama/llama.cpp). Only `true` is persisted (additive,
@@ -1401,7 +1403,7 @@ export interface ConnectionCreateRequest {
 }
 
 export interface ConnectionUpdateRequest {
-  fetchedModels?: { guard: string; targetUrl: string; baseUrl: string; transport: ProviderTransportId | ""; models: ({ id: string } & ModelCapabilitiesDto)[] };
+  fetchedModels?: { guard: string; targetUrl: string; baseUrl: string; transport: ProviderTransportId | ""; models: ({ id: string } & ModelCapabilitiesDto)[]; incompatibleModels?: string[]; modelRoutes?: ProviderConnection["modelRoutes"] };
   visibleModels?: string[] | "";
   openRouterProviders?: string[];
   modelPricing?: Record<string, TokenRates | "">;

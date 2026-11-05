@@ -76,8 +76,9 @@ export function connectionOfferedModels(
   connection: ProviderConnection,
   catalog: CatalogSummary | undefined,
   custom: readonly CustomProviderRecord[] | undefined,
+  envOverrides?: readonly string[],
 ): readonly { id: string; name?: string }[] | undefined {
-  const resolved = providerModelsFor(connection.providerId, catalog, custom, connection.models, connection.visibleModels);
+  const resolved = providerModelsFor(connection.providerId, catalog, custom, connection.models, connection.visibleModels, connection.transport, connection, envOverrides);
   if (resolved === undefined) {
     return undefined;
   }
@@ -135,6 +136,7 @@ export function buildStartModelGroups(
   catalog: CatalogSummary | undefined,
   custom: readonly CustomProviderRecord[] | undefined,
   current: { connectionId: string | undefined; modelId: string },
+  envOverrides?: readonly string[],
 ): StartModelMenuGroup[] {
   const groups: StartModelMenuGroup[] = [];
   // D2 pre-pass: label collision counts must see ALL connections before any
@@ -156,14 +158,14 @@ export function buildStartModelGroups(
       connections,
     );
     const isCurrentConnection = connection.id === current.connectionId;
-    const offered = connectionOfferedModels(connection, catalog, custom);
+    const offered = connectionOfferedModels(connection, catalog, custom, envOverrides);
     let items: StartModelMenuItem[];
     if (isCurrentConnection) {
       // Mirrors the pre-existing current-connection behavior: the current
       // model is always present (appended when the catalog doesn't carry it)
       // so the checkmark's row exists even for an empty/absent list.
       items = (offered ?? []).map((m) => ({ id: m.id, name: m.name ?? m.id, current: false }));
-      if (!items.some((m) => m.id === current.modelId)) {
+      if (!((connection.providerId === "opencode" || connection.providerId === "opencode-openai") && current.modelId === "gemini-4-argon") && !items.some((m) => m.id === current.modelId)) {
         items.push({ id: current.modelId, name: current.modelId, current: false });
       }
       for (const item of items) {
@@ -377,7 +379,7 @@ export function startModelEffortLevels(
 }
 
 /** The closed effort vocabulary a live-declared level must map to by exact name. */
-const START_MODEL_EFFORT_VOCABULARY: readonly string[] = ["off", "low", "medium", "high", "xhigh", "max"];
+const START_MODEL_EFFORT_VOCABULARY: readonly string[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 /**
  * The provider's own default effort tier for a model, or

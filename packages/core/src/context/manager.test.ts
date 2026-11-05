@@ -563,8 +563,8 @@ describe("ContextManager.shouldAutoCompact", () => {
     const small = buildHistory([userMsg("short")]);
     expect(makeManager(small, new ScriptedModelPort([]), tightConfig).shouldAutoCompact()).toBe(false);
 
-    const big = buildHistory([userMsg("x".repeat(4_000))]);
-    expect(makeManager(big, new ScriptedModelPort([]), tightConfig).shouldAutoCompact()).toBe(true);
+    const big = buildHistory([userMsg("x".repeat(4_000)), userMsg("tail")]);
+    expect(makeManager(big, new ScriptedModelPort([]), { ...tightConfig, keepRecentMessages: 1 }).shouldAutoCompact()).toBe(true);
   });
 
   it("stays false once the circuit breaker has tripped", async () => {
@@ -850,7 +850,7 @@ describe("ContextManager.runCompaction — success", () => {
     }
     expect(port.requests).toHaveLength(0);
     expect(manager.breakerTripped()).toBe(false);
-    expect(manager.shouldAutoCompact()).toBe(true);
+    expect(manager.shouldAutoCompact()).toBe(false);
   });
 
   it("repeated compaction of a summary-only prefix skips the model call entirely", async () => {
@@ -1248,14 +1248,15 @@ describe("ContextManager.getBudgetConfig / setBudgetConfig (slice 6.4)", () => {
 
   it("setBudgetConfig changes the outcome of shouldAutoCompact on the NEXT call", () => {
     // Estimate sits far below the default 200k threshold but above a tight window.
-    const history = buildHistory([userMsg("x".repeat(4_000))]);
-    const manager = makeManager(history, new ScriptedModelPort([]));
+    const history = buildHistory([userMsg("x".repeat(4_000)), userMsg("tail")]);
+    const manager = makeManager(history, new ScriptedModelPort([]), { keepRecentMessages: 1 });
     expect(manager.shouldAutoCompact()).toBe(false);
 
     // Swap to a tight window (ew=1_000, threshold=500) — the very next call flips.
     manager.setBudgetConfig(
       fullConfig({
         contextWindowTokens: 1_000,
+        keepRecentMessages: 1,
         outputReserveTokens: 0,
         compactThresholdPercent: 50,
         compactBufferTokens: 0,
@@ -1424,10 +1425,10 @@ describe("reasoning replay context regressions", () => {
   it("counts reloaded OpenRouter encrypted details toward compaction", () => {
     const source = { transport: "openai-chat-completions", provider: "OpenRouter", baseUrl: "https://openrouter.ai", model: "test" };
     const make = (size: number) => {
-      const history = buildHistory([{ role: "assistant", content: [{ type: "reasoning", text: "", source, providerMetadata: { openrouter: { reasoningDetails: [{ type: "reasoning.encrypted", data: "A".repeat(size) }] } } }] }]);
+      const history = buildHistory([userMsg("earlier"), { role: "assistant", content: [{ type: "reasoning", text: "", source, providerMetadata: { openrouter: { reasoningDetails: [{ type: "reasoning.encrypted", data: "A".repeat(size) }] } } }] }]);
       const reloaded = new ConversationHistory({ initial: JSON.parse(JSON.stringify(history.items)) });
       const port: ModelPort = { streamText: () => new ScriptedModelPort([]).streamText({ messages: [], tools: [] }), reasoningReplaySource: () => source };
-      return makeManager(reloaded, port, { contextWindowTokens: 10000, outputReserveTokens: 0, compactThresholdPercent: 50, compactBufferTokens: 0 });
+      return makeManager(reloaded, port, { keepRecentMessages: 1, contextWindowTokens: 10000, outputReserveTokens: 0, compactThresholdPercent: 50, compactBufferTokens: 0 });
     };
     const small = make(100);
     const large = make(100_000);
@@ -1449,7 +1450,7 @@ describe("reasoning replay context regressions", () => {
     const history = buildHistory([userMsg("hello"), unsigned, toolResult("a", "ok")]);
     let current = { ...route, replayUnsigned: true };
     const port: ModelPort = { streamText: () => new ScriptedModelPort([]).streamText({ messages: [], tools: [] }), reasoningReplaySource: () => current };
-    const manager = makeManager(history, port, { contextWindowTokens: 1000, outputReserveTokens: 0, compactThresholdPercent: 50, compactBufferTokens: 0 });
+    const manager = makeManager(history, port, { keepRecentMessages: 1, contextWindowTokens: 1000, outputReserveTokens: 0, compactThresholdPercent: 50, compactBufferTokens: 0 });
     expect(manager.shouldAutoCompact()).toBe(true);
     manager.noteUsage({ inputTokens: 3000 });
     current = { ...route, replayUnsigned: true, model: "two" };

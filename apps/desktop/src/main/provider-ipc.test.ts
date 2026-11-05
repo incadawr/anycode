@@ -39,6 +39,11 @@ import { Vault, type SecretSetResult } from "./vault.js";
 import { createProxyChainFetch, type ProxyDispatchRequest } from "./provider-proxy-fetch.js";
 import { hostForkProxyChain } from "../shared/proxy.js";
 import { calculateUsageCost, resolveUsagePrice } from "../host/usage-cost.js";
+import { createConnectionModelSettings } from "../host/connection-model-settings.js";
+import { resolveMaxOutputTokens } from "@anycode/core";
+import { findCatalogEntry } from "@anycode/core/catalog";
+import { handleConnectionUpdate } from "./settings-ipc.js";
+import { providerModelsFor } from "../shared/provider-models.js";
 
 // Capture ipcMain.handle registrations so a test can drive the real
 // `registerProviderIpc` wiring without an Electron runtime. `mock`-prefixed so
@@ -150,6 +155,8 @@ class FakeVault implements ProviderVaultLike {
     this.store.set(key, value);
     return { ok: true };
   }
+  async statuses() { return []; }
+  async probeSecret() { return { state: "unset" as const }; }
   async clearSecret(key: SecretKey): Promise<void> {
     this.store.delete(key);
   }
@@ -1638,7 +1645,7 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     const res = await handleCustomProviderFetchModels(deps, { connectionId: "conn-1" });
     expect(res).toEqual({ ok: true, models: [{ id: "live-a" }, { id: "live-b" }] });
     expect(calls).toEqual([
-      { baseUrl: "https://api.kimi.com/coding/v1", apiKey: "sk-kimi-secret", kind: "anthropic" },
+      { baseUrl: "https://api.kimi.com/coding/v1", apiKey: "sk-kimi-secret", kind: "anthropic", transport: "anthropic-messages" },
     ]);
     const reloaded = await loadSettings(settingsPath);
     expect(reloaded.settings.provider.connections[0]).toMatchObject({
@@ -1653,7 +1660,7 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     const { deps, calls } = makeCatalogDeps();
     const res = await handleCustomProviderFetchModels(deps, { connectionId: "conn-2" });
     expect(res.ok).toBe(true);
-    expect(calls).toEqual([{ baseUrl: "https://api.openai.com/v1", apiKey: undefined, kind: "openai-compatible" }]);
+    expect(calls).toEqual([{ baseUrl: "https://api.openai.com/v1", apiKey: undefined, kind: "openai-compatible", transport: "openai-responses" }]);
   });
 
   it("a connection-level baseUrl override wins over the entry's (vllm template)", async () => {
@@ -1703,6 +1710,46 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     lockProbe.loadUnderLock = undefined;
     await handleCustomProviderFetchModels(deps, { connectionId: "conn-8" });
     expect(lockProbe.loadUnderLock).toBe(true);
+  });
+
+  it("prunes explicitly incompatible models after a door-filtered connection fetch", async () => {
+    await seedConnection({ id: "go-door", providerId: "opencode", transport: "anthropic-messages", models: ["deepseek-v4.1-flash"] });
+    const calls: FetchModelsParams[] = [];
+    const { deps } = makeCatalogDeps({ catalogEntryById: () => ({ id: "opencode", baseUrl: "https://opencode.ai/inference/go/anthropic", defaultTransport: "anthropic-messages" }), fetchModels: async params => { calls.push(params); return { ok: true, models: [{ id: "live-a" }, { id: "live-b" }], incompatibleModels: ["deepseek-v4.1-flash"] }; } });
+    const result = await handleCustomProviderFetchModels(deps, { connectionId: "go-door" });
+    expect(result.ok).toBe(true);
+    expect(calls[0]?.transport).toBe("anthropic-messages");
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.connections[0]?.models).toEqual(["live-a", "live-b"]);
+  });
+
+  it("respects an environment transport override for a Go connection fetch", async () => {
+    await seedConnection({ id: "go-env", providerId: "opencode" });
+    const calls: FetchModelsParams[] = [];
+    const { deps } = makeCatalogDeps({ catalogEntryById: () => ({ id: "opencode", baseUrl: "https://opencode.ai/inference/go/anthropic", defaultTransport: "anthropic-messages" }), fetchModels: async params => { calls.push(params); return { ok: true, models: [{ id: "live-a" }] }; } });
+    deps.bootEnv = { ANYCODE_PROVIDER_TRANSPORT: "openai-responses" };
+    await handleCustomProviderFetchModels(deps, { connectionId: "go-env" });
+    expect(calls[0]?.automaticGoRouting).toBeUndefined();
+    expect(calls[0]?.transport).toBe("openai-responses");
+  });
+
+  it("prunes incompatible saved models through preview, save, reload and picker", async () => {
+    const bad = "deepseek-v4.1-flash";
+    await seedConnection({ id: "go", providerId: "opencode", transport: "anthropic-messages", model: bad, models: [bad, "manual-id"], visibleModels: [bad, "manual-id"] });
+    const fixture = await readFile(new URL("./__fixtures__/opencode-go-models.json", import.meta.url), "utf8");
+    const { deps } = makeCatalogDeps({ catalogEntryById: () => ({ id: "opencode", baseUrl: "https://opencode.ai/inference/go/anthropic", defaultTransport: "anthropic-messages" }), fetchModels: fetchCustomProviderModels, preparedConnectionFetch: () => async () => new Response(fixture) });
+    const preview = await handleCustomProviderFetchModels(deps, { connectionId: "go", preview: true });
+    if (!preview.ok || !preview.source) throw new Error("preview failed");
+    expect(preview.incompatibleModels).toContain(bad);
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.model).toBe(bad);
+    const update = await handleConnectionUpdate({ settingsPath, vault, bootEnv: {} }, { id: "go", fetchedModels: { ...preview.source, models: preview.models, incompatibleModels: preview.incompatibleModels } });
+    expect(update.ok).toBe(true);
+    const connection = (await loadSettings(settingsPath)).settings.provider.connections[0]!;
+    expect(connection.modelRoutes?.models["gemini-4-argon"]).toMatchObject({ kind: "refusal" });
+    expect(connection.model).toBeUndefined();
+    expect(connection.models).not.toContain(bad);
+    expect(connection.models).toContain("manual-id");
+    expect(providerModelsFor("opencode", undefined, undefined, connection.models, connection.visibleModels)).toEqual([{ id: "manual-id" }]);
   });
 
   it("a failed fetch persists nothing", async () => {
@@ -2063,6 +2110,34 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
 
 // ── 4244: complete-URL models seam (no real server, injected fetchImpl only) ──
 
+describe("OpenCode Go model doors", () => {
+  it("returns all routable models in automatic mode and keeps Gemini diagnostic-only", async () => {
+    const fixture = await readFile(new URL("./__fixtures__/opencode-go-models.json", import.meta.url), "utf8");
+    const outcome = await fetchCustomProviderModels({ baseUrl: "https://opencode.ai/inference/go/anthropic", modelsUrl: "https://opencode.ai/inference/go/v1/models", automaticGoRouting: true, fetchImpl: async () => new Response(fixture) });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) throw new Error("fetch failed");
+    expect(outcome.models).toHaveLength(28);
+    expect(outcome.models.map(m => m.id)).not.toContain("gemini-4-argon");
+    expect(outcome.modelRoutes?.models["gemini-4-argon"]).toMatchObject({ kind: "refusal" });
+  });
+  it("filters the public list and retains model capabilities", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const fixture = await readFile(new URL("./__fixtures__/opencode-go-models.json", import.meta.url), "utf8");
+    const fetchImpl = (async () => new Response(fixture)) as typeof fetch;
+    const common = { baseUrl: "https://opencode.ai/inference/go/anthropic", modelsUrl: "https://opencode.ai/inference/go/v1/models", fetchImpl };
+    const anthropic = await fetchCustomProviderModels({ ...common, kind: "anthropic" });
+    const openai = await fetchCustomProviderModels({ ...common, kind: "openai-compatible" });
+    expect(anthropic.ok).toBe(true);
+    if (!anthropic.ok) throw new Error("fetch failed");
+    expect(anthropic.models.some(m => m.id === "deepseek-v4.1-flash")).toBe(false);
+    const responses = await fetchCustomProviderModels({ ...common, modelsUrl: common.modelsUrl + "/", transport: "openai-responses" });
+    expect(responses.ok).toBe(true);
+    if (!responses.ok) throw new Error("fetch failed");
+    expect(responses.models.some(m => m.id === "gpt-5.6-luna")).toBe(true);
+    expect(openai.ok && openai.models.find(m => m.id === "deepseek-v4.1-flash")).toMatchObject({ contextWindow: 1000000, maxOutputTokens: 384000, reasoning: true, effortLevels: ["low", "high", "max"], imageInput: true });
+  });
+});
+
 describe("fetchCustomProviderModels — modelsUrl complete-URL seam (4244)", () => {
   /** Capturing fake fetch returning an OpenAI-style {object:"list",data:[{id}]} body. */
   function makeCapturingFetch(models: { id: string }[]): {
@@ -2153,6 +2228,49 @@ describe("handleCustomProviderFetchModels — 4244 modelsUrl catalog wiring", ()
       }),
     );
   }
+
+  it("persists fetched OpenCode limits for the host across refresh", async () => {
+    await seed4244({ id: "go", providerId: "opencode-openai" });
+    const fixture = await readFile(new URL("./__fixtures__/opencode-go-models.json", import.meta.url), "utf8");
+    const deps = makeDeps({ catalogEntryById: () => ({ id: "opencode-openai", baseUrl: "https://opencode.ai/inference/go/v1", defaultTransport: "openai-chat-completions" }), connectionFetch: () => (async () => new Response(fixture)) as typeof fetch });
+    expect((await handleCustomProviderFetchModels(deps, { connectionId: "go" })).ok).toBe(true);
+    let saved = (await loadSettings(settingsPath)).settings.provider.connections[0]!;
+    expect(Object.keys(saved.modelRoutes?.models ?? {})).toHaveLength(29);
+    const before = saved.modelRoutes;
+    const failedDeps = makeDeps({ catalogEntryById: () => ({ id: "opencode-openai", baseUrl: "https://opencode.ai/inference/go/v1", defaultTransport: "openai-chat-completions" }), connectionFetch: () => (async () => new Response("{}")) as typeof fetch });
+    expect((await handleCustomProviderFetchModels(failedDeps, { connectionId: "go" })).ok).toBe(false);
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.modelRoutes).toEqual(before);
+    const host = createConnectionModelSettings({ catalogEntry: findCatalogEntry("opencode-openai"), connection: saved, readConnection: () => saved, liveCapabilitiesFor: () => undefined });
+    const model = "deepseek-v4.1-flash";
+    host.switchEffort("other", model, "off");
+    expect(host.contextFor(model).tokens).toBe(1_000_000);
+    expect(resolveMaxOutputTokens(model, host.entryFor(model), undefined)).toBe(384_000);
+    saved = { ...saved, modelCapabilities: { ...saved.modelCapabilities, [model]: { contextWindow: 900_000, maxOutputTokens: 300_000 } } };
+    expect(host.refresh()).toBe(true);
+    expect(host.contextFor(model).tokens).toBe(900_000);
+    expect(resolveMaxOutputTokens(model, host.entryFor(model), undefined)).toBe(300_000);
+  });
+
+  it("does not write a snapshot if settings become read-only during fetch", async () => {
+    await seed4244({ id: "go", providerId: "opencode-openai" });
+    const fixture = await readFile(new URL("./__fixtures__/opencode-go-models.json", import.meta.url), "utf8");
+    const deps = makeDeps({ catalogEntryById: () => ({ id: "opencode-openai", baseUrl: "https://opencode.ai/inference/go/v1", defaultTransport: "openai-chat-completions" }), connectionFetch: () => async () => { await writeFile(settingsPath, READ_ONLY_FIXTURE); return new Response(fixture); } });
+    await handleCustomProviderFetchModels(deps, { connectionId: "go" });
+    expect(await readFile(settingsPath, "utf8")).toBe(READ_ONLY_FIXTURE);
+  });
+
+  it("uses Responses for a draft preview and keeps chat hints out of a fresh picker", async () => {
+    const fixture = await readFile(new URL("./__fixtures__/opencode-go-models.json", import.meta.url), "utf8");
+    const deps = makeDeps({ preparedConnectionFetch: () => async () => new Response(fixture) });
+    const result = await handleCustomProviderFetchModels(deps, { draft: true, catalogProviderId: "opencode-openai", baseUrl: "https://opencode.ai/inference/go/v1", useCatalogModelsUrl: true, kind: "openai-compatible", transport: "openai-responses" });
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.models.map(model => model.id)).toContain("gpt-6-luna");
+    expect(result.models.map(model => model.id)).not.toContain("kimi-k3");
+    const catalog = [{ id: "opencode-openai", models: [{ id: "kimi-k3" }] }] as Parameters<typeof providerModelsFor>[1];
+    const picker = providerModelsFor("opencode-openai", catalog, undefined, [...result.models.map(m => m.id), "manual-id"], undefined, "openai-responses");
+    expect(picker?.map(m => m.id)).not.toContain("kimi-k3");
+    expect(picker?.map(m => m.id)).toContain("manual-id");
+  });
 
   it("4244: a deepseek connection fetches https://api.deepseek.com/models with Bearer and persists the ids", async () => {
     await seed4244({ id: "conn-ds", providerId: "deepseek" });

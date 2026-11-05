@@ -10371,3 +10371,18 @@ describe("orchestration wire", () => {
     expect(userMessageSchema.safeParse({ type: "user_message", requestId: "r", text: "task", orchestrate: "disable" }).success).toBe(false);
   });
 });
+
+it("keeps the desktop model and effort when route resolution refuses a switch", async () => {
+  const h = createHarness({ steps: [], selectedEffort: "high", switchModel: () => { throw new Error("model unavailable: unsupported-model"); } });
+  try {
+    h.send({ type: "ui_ready" });
+    const before = await h.waitFor(isHostReady);
+    h.send({ type: "set_model", model: "gemini-4-argon" });
+    await h.waitFor((message): message is Of<"agent_event"> => message.type === "agent_event" && message.event.type === "engine_notice" && message.event.message.includes("unsupported-model"));
+    h.send({ type: "ui_ready" });
+    await h.flush();
+    const state = h.session as unknown as { model: string; selectedEffort: string };
+    expect(state.model).toBe(before.model);
+    expect(state.selectedEffort).toBe("high");
+  } finally { h.close(); }
+});

@@ -745,6 +745,9 @@ export function StartScreen({ onToast }: StartScreenProps) {
     snapshot?.settings.provider.custom,
     chipConnection?.models,
     chipConnection?.visibleModels,
+    chipConnection?.transport,
+    chipConnection,
+    snapshot?.envOverrides,
   );
   const resolvedDefault = resolveProviderDefaultModel(view?.model, undefined, pid);
   const modelChip = computeModelChipDisplay(draft?.model ?? null, resolvedDefault, catalogModels);
@@ -760,6 +763,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
     snapshot?.catalog,
     snapshot?.settings.provider.custom,
     { connectionId: chipConnectionId, modelId: modelChip.modelId },
+    snapshot?.envOverrides,
   );
   // (owner decision 17.08): the root level's three quick picks,
   // ranked from the user's OWN recent sessions rather than a constant in

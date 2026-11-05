@@ -24,7 +24,7 @@
 
 import type { CatalogProviderEntry, ProviderUsageRecord } from "@anycode/core";
 import type { ModelPricing } from "@anycode/core/catalog";
-import { calculateUsageCost, catalogRateFor, declaredPricingMode, pricingSnapshotWithKeyDefault, resolveUsagePrice } from "./usage-cost.js";
+import { calculateUsageCost, catalogRateFor, declaredPricingMode, endpointSnapshotPrice, pricingSnapshotWithKeyDefault, resolveUsagePrice } from "./usage-cost.js";
 
 /** Provider-reported token counts of one finished step. */
 export interface UsageTokens {
@@ -45,6 +45,7 @@ export interface StepPricing {
   price?: ModelPricing | undefined;
   catalogEntry?: CatalogProviderEntry | undefined;
   baseUrl?: string | undefined;
+  endpointSnapshot?: import("@anycode/core").UsageEndpointSnapshot | undefined;
   /** The connection's override envelope (`ANYCODE_CONNECTION_PRICING`). */
   pricingRaw: string | undefined;
   /** Absent when the provider reported no model id (e.g. an engine child). */
@@ -73,8 +74,8 @@ export function priceUsageStep(
   cost: { costUsd?: number; cacheSavingsUsd?: number; priceBasisId: string } | undefined;
 } {
   const createdAt = pricing.finishedAt ?? (pricing.now ?? Date.now)();
-  const price = pricing.baseUrl === undefined ? pricing.price : catalogRateFor(pricing.catalogEntry, pricing.baseUrl, pricing.model, declaredPricingMode(pricing.pricingRaw));
-  const override = resolveUsagePrice(pricing.pricingRaw, pricing.model ?? "", price);
+  const price = pricing.endpointSnapshot ? endpointSnapshotPrice(pricing.endpointSnapshot.metadata) : pricing.baseUrl === undefined ? pricing.price : catalogRateFor(pricing.catalogEntry, pricing.baseUrl, pricing.model, declaredPricingMode(pricing.pricingRaw));
+  const override = resolveUsagePrice(pricing.pricingRaw, pricing.endpointSnapshot?.model ?? pricing.model ?? "", price);
   const cost = typeof usage.costUsd === "number" && Number.isFinite(usage.costUsd) && usage.costUsd >= 0
     ? { costUsd: usage.costUsd, priceBasisId: "provider" }
     : override?.subscription

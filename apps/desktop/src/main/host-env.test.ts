@@ -2453,7 +2453,7 @@ describe("byte-identity — a registry-free document changes not one byte", () =
     });
     expect(withEmptyRegistry).toEqual(plain);
     // And the whole object, not a filtered view: no proxy var exists at all.
-    expect(plain).toEqual({ PATH: "/usr/bin", HOME: "/home/me", ANYCODE_MODEL: "m", ANYCODE_MODEL_SETTINGS_CONNECTION_ID: "conn-z-ai" });
+    expect(plain).toEqual({ PATH: "/usr/bin", HOME: "/home/me", ANYCODE_MODEL: "m", ANYCODE_MODEL_SETTINGS_CONNECTION_ID: "conn-z-ai", ANYCODE_PROVIDER_ID: "z-ai", ANYCODE_AUTOMATIC_MODEL_ROUTING: "0" });
   });
 
   // The DoD's second half: a document carrying ONLY legacy strings produces the
@@ -2469,6 +2469,8 @@ describe("byte-identity — a registry-free document changes not one byte", () =
       HOME: "/home/me",
       ANYCODE_MODEL: "m",
       ANYCODE_MODEL_SETTINGS_CONNECTION_ID: "conn-z-ai",
+      ANYCODE_PROVIDER_ID: "z-ai",
+      ANYCODE_AUTOMATIC_MODEL_ROUTING: "0",
       HTTPS_PROXY: "http://user:pass@legacy:8080",
       HTTP_PROXY: "http://user:pass@legacy:8080",
       https_proxy: "http://user:pass@legacy:8080",
@@ -3215,4 +3217,47 @@ describe("ENV_APP_VERSION (S1-B, design §7 host wiring)", () => {
   it("the carrier name is the ANYCODE_APP_VERSION contract", () => {
     expect(ENV_APP_VERSION).toBe("ANYCODE_APP_VERSION");
   });
+});
+
+describe("Go routing identity carriers", () => {
+  it.each([
+    [{}, {}, "1"],
+    [{ ANYCODE_BASE_URL: "https://manual.test" }, {}, "0"],
+    [{ ANYCODE_PROVIDER_TRANSPORT: "openai-responses" }, {}, "0"],
+    [{ ANYCODE_BASE_URL: "  ", ANYCODE_PROVIDER_TRANSPORT: " " }, {}, "1"],
+    [{}, { baseUrl: "https://manual.test" }, "0"],
+    [{}, { transport: "openai-responses" as const }, "0"],
+  ])("uses explicit env and connection overrides before automatic routing", async (bootEnv, overrides, expected) => {
+    const configured = settings({ provider: { id: "opencode", ...overrides } });
+    const env = await buildHostEnv({ bootEnv, settings: configured, getSecret: noSecret, resolveSelection: async () => ({ baseUrl: "https://catalog.test", defaultTransport: "openai-chat-completions", model: "kimi-k3", authKind: "api_key" }) });
+    expect(env.ANYCODE_PROVIDER_ID).toBe("opencode");
+    expect(env.ANYCODE_AUTOMATIC_MODEL_ROUTING).toBe(expected);
+    expect(loadEnvConfig({ ...env, ANYCODE_API_KEY: "test" }).automaticModelRouting).toBe(expected === "1");
+  });
+  it("rebuilds both carriers when a different connection is selected", async () => {
+    const bootEnv = { ANYCODE_PROVIDER_ID: "opencode", ANYCODE_AUTOMATIC_MODEL_ROUTING: "1" };
+    const env = await buildHostEnv({ bootEnv, settings: settings({ provider: { id: "anthropic" } }), getSecret: noSecret });
+    expect(env.ANYCODE_PROVIDER_ID).toBe("anthropic");
+    expect(env.ANYCODE_AUTOMATIC_MODEL_ROUTING).toBe("0");
+    const empty = await buildHostEnv({ bootEnv, settings: { ...settings(), provider: { connections: [] } } as AnycodeSettings, getSecret: noSecret });
+    expect(empty.ANYCODE_PROVIDER_ID).toBeUndefined();
+    expect(empty.ANYCODE_AUTOMATIC_MODEL_ROUTING).toBeUndefined();
+  });
+});
+
+it("resolves a recognizer using its own Go model and snapshot", async () => {
+  const configured = settings({ provider: { id: "opencode", model: "glm-5.3" } });
+  const connection = configured.provider.connections[0]!;
+  configured.recognizer = { connectionId: connection.id, modelId: "grok-4.7" };
+  const { resolveRecognizerConfig, applyRecognizerEnv } = await import("./host-env.js");
+  const endpoint = await resolveRecognizerConfig(configured, vaultSecret("test"));
+  expect(endpoint?.transport).toBe("openai-responses");
+  expect(endpoint?.goModelPolicy?.model).toBe("grok-4.7");
+  expect(endpoint?.modelMetadata?.id).toBe("grok-4.7");
+  const env: NodeJS.ProcessEnv = {};
+  applyRecognizerEnv(env, endpoint);
+  expect(JSON.parse(env.ANYCODE_RECOGNIZER_GO_POLICY!).model).toBe("grok-4.7");
+  expect(JSON.parse(env.ANYCODE_RECOGNIZER_GO_METADATA!).id).toBe("grok-4.7");
+  configured.recognizer.modelId = "gemini-4-argon";
+  expect(await resolveRecognizerConfig(configured, vaultSecret("test"))).toBeUndefined();
 });

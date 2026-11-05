@@ -1,4 +1,5 @@
 import type { ProviderConnection } from "../shared/settings.js";
+import { automaticGoRoute } from "./go-route.js";
 /**
  * Host-env composition + the env-scrub primitives (design slice-2.2-cut.md §6/§1
 
@@ -136,6 +137,9 @@ export const ENV_IMAGE_INPUT_MODEL_OVERRIDE = "ANYCODE_IMAGE_INPUT_MODEL_OVERRID
  * core runtime).
  */
 export const ENV_PROVIDER_TRANSPORT = "ANYCODE_PROVIDER_TRANSPORT";
+export const ENV_PROVIDER_ID = "ANYCODE_PROVIDER_ID";
+export const ENV_AUTOMATIC_MODEL_ROUTING = "ANYCODE_AUTOMATIC_MODEL_ROUTING";
+export const ENV_ROUTING_ENV_OVERRIDE = "ANYCODE_ROUTING_ENV_OVERRIDE";
 /**
  * Usage-streaming override: `1/true/on` or `0/false/off`; an
  * explicit value wins over resolveIncludeUsage's transport-conditional default
@@ -1132,6 +1136,18 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // migration the active connection ≡ the former singleton, so the ladder OUTPUT
   // stays byte-equivalent (DoD #5).
   const view = activeProviderView(settings);
+  // Both carriers are authored afresh for each fork, never inherited from a previous pin.
+  delete env[ENV_PROVIDER_ID];
+  delete env[ENV_AUTOMATIC_MODEL_ROUTING];
+  delete env[ENV_ROUTING_ENV_OVERRIDE];
+  if (envPresent(bootEnv, ENV_BASE_URL) || envPresent(bootEnv, ENV_PROVIDER_TRANSPORT)) env[ENV_ROUTING_ENV_OVERRIDE] = "1";
+  if (view.id) {
+    env[ENV_PROVIDER_ID] = view.id;
+    const go = view.id === "opencode" || view.id === "opencode-openai";
+    const explicit = envPresent(bootEnv, ENV_BASE_URL) || envPresent(bootEnv, ENV_PROVIDER_TRANSPORT)
+      || Boolean(view.baseUrl?.trim()) || Boolean(view.transport?.trim());
+    env[ENV_AUTOMATIC_MODEL_ROUTING] = go && !explicit ? "1" : "0";
+  }
   const settingsConnectionId = activeConnection(settings)?.id;
   if (settingsConnectionId !== undefined) env[ENV_MODEL_SETTINGS_CONNECTION_ID] = settingsConnectionId;
   else delete env[ENV_MODEL_SETTINGS_CONNECTION_ID];
@@ -1507,19 +1523,23 @@ export async function resolveRecognizerConfig(
   // address/credential live ONLY on its CustomProviderRecord, and a synthetic
   // `custom:` id has no catalog entry to fall back to anyway; the guard keeps
   // that fail-closed posture explicit.
+  const goRoute = automaticGoRoute(connection, { ANYCODE_MODEL: setting.modelId });
+  if (goRoute?.kind === "refusal") return undefined;
   const catalogInfo = customId === undefined ? catalogFor?.(providerId) : undefined;
   const trimmedConnectionBaseUrl = connection.baseUrl?.trim();
-  const baseUrl =
+  const baseUrl = goRoute?.route.baseUrl ?? (
     customId !== undefined
       ? customRecord?.baseUrl
       : catalogInfo !== undefined
         ? trimmedConnectionBaseUrl ? trimmedConnectionBaseUrl : catalogInfo.baseUrl
-        : connection.baseUrl;
+        : connection.baseUrl);
   if (baseUrl === undefined || baseUrl.trim() === "") {
     return undefined;
   }
   let transport: ProviderTransportId | undefined;
-  if (customId !== undefined) {
+  if (goRoute) {
+    transport = goRoute.route.transport;
+  } else if (customId !== undefined) {
     transport = connection.transport;
   } else {
     const effectiveTransport = resolveEffectiveTransport({
@@ -1555,6 +1575,7 @@ export async function resolveRecognizerConfig(
     baseUrl,
     apiKey: apiKey !== undefined && apiKey !== "" ? apiKey : undefined,
     model: setting.modelId,
+    ...(goRoute ? { goModelPolicy: goRoute.route.policy, modelMetadata: goRoute.route.metadata, pricingRaw: JSON.stringify({ fallback: connection.pricing, models: Object.fromEntries(Object.entries(connection.modelOverrides ?? {}).filter(([, value]) => value.pricing !== undefined).map(([id, value]) => [id, value.pricing])) }) } : {}),
     providerName: providerId !== "" ? providerId : undefined,
     contextWindowTokens: catalogInfo?.contextWindowFor?.(connection, setting.modelId) ?? modelOverrideFor(connection, setting.modelId)?.contextWindowTokens,
   };
@@ -1571,8 +1592,16 @@ export async function resolveRecognizerConfig(
 export function applyRecognizerEnv(env: NodeJS.ProcessEnv, recognizer: RecognizerWireConfig | undefined): void {
   delete env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_FROM_SETTINGS;
   if (!envPresent(env, "ANYCODE_RECOGNIZER_CONTEXT_WINDOW")) delete env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_MODEL;
+  delete env.ANYCODE_RECOGNIZER_GO_POLICY;
+  delete env.ANYCODE_RECOGNIZER_GO_METADATA;
+  delete env.ANYCODE_RECOGNIZER_GO_PRICING;
   if (recognizer === undefined) {
     return;
+  }
+  if (!envPresent(env, ENV_RECOGNIZER_TRANSPORT) && !envPresent(env, ENV_RECOGNIZER_BASE_URL) && !envPresent(env, ENV_RECOGNIZER_MODEL) && recognizer.goModelPolicy) {
+    env.ANYCODE_RECOGNIZER_GO_POLICY = JSON.stringify(recognizer.goModelPolicy);
+    if (recognizer.modelMetadata) env.ANYCODE_RECOGNIZER_GO_METADATA = JSON.stringify(recognizer.modelMetadata);
+    if (recognizer.pricingRaw) env.ANYCODE_RECOGNIZER_GO_PRICING = recognizer.pricingRaw;
   }
   fillFromSettings(env, ENV_RECOGNIZER_TRANSPORT, recognizer.transport);
   fillFromSettings(env, ENV_RECOGNIZER_BASE_URL, recognizer.baseUrl);

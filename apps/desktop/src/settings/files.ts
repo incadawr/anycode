@@ -260,6 +260,17 @@ function errno(err: unknown): string | undefined {
 
 // ── settings.json ──
 
+/** The unsupported Gemini route remains diagnostic only; preserve the selected id. */
+function dropUnsupportedGoInventory(settings: AnycodeSettings): AnycodeSettings {
+  return { ...settings, provider: { ...settings.provider, connections: settings.provider.connections.map(connection => {
+    if (connection.providerId !== "opencode" && connection.providerId !== "opencode-openai") return connection;
+    return { ...connection,
+      ...(connection.models ? { models: connection.models.filter(id => id !== "gemini-4-argon") } : {}),
+      ...(connection.visibleModels ? { visibleModels: connection.visibleModels.filter(id => id !== "gemini-4-argon") } : {}),
+    };
+  }) } };
+}
+
 /**
  * Load settings fail-soft (design §2): missing file -> defaults; corrupt JSON or
  * schema-invalid -> defaults AND the bad file is quarantined to `*.corrupt-<ts>`
@@ -298,12 +309,12 @@ export async function loadSettings(path: string, logger?: FileIoLogger): Promise
   // read out healed too, without this binary ever writing it back.
   // out-of-bounds connection.maxOutputTokens is stripped the same
   // way (in memory only) on both arms.
-  return { settings: migrateConnectionOverrides(dropOutOfBoundsMaxOutputTokens(normalizeActiveConnection(result.settings))), readOnly: result.readOnly };
+  return { settings: dropUnsupportedGoInventory(migrateConnectionOverrides(dropOutOfBoundsMaxOutputTokens(normalizeActiveConnection(result.settings)))), readOnly: result.readOnly };
 }
 
 /** Atomically persist settings.json (0644). Caller is responsible for the read-only guard. */
 export async function saveSettings(path: string, settings: AnycodeSettings): Promise<void> {
-  const data = `${JSON.stringify(migrateConnectionOverrides(settings), null, 2)}\n`;
+  const data = `${JSON.stringify(dropUnsupportedGoInventory(migrateConnectionOverrides(settings)), null, 2)}\n`;
   // …see `settingsWriteEpoch`: bracket the write so a concurrent reader can
   // tell its bytes may predate it.
   bumpSettingsWriteEpoch(path);

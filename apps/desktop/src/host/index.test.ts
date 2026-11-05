@@ -576,9 +576,10 @@ describe("host subagent model-override wiring", () => {
     // `switchableModelPort` (the INNER SwitchableModelPort), not on
     // `modelPort` (the OUTER media-projection decorator, which has no
     // `setPort` method at all) — same `modelPortFactory` closure either way.
-    expect(source).toContain("assertChildModel(id, readAllowedChildModels(process.env.ANYCODE_CHILD_MODELS, envConfig.model))");
+    expect(source).toContain("assertChildModel(id, readAllowedChildModels(process.env.ANYCODE_CHILD_MODELS, envConfig.model, envConfig.providerId === \"opencode\" || envConfig.providerId === \"opencode-openai\"))");
     expect(source).toContain("return modelPortFactory(id)");
-    expect(source).toContain("switchableModelPort.setPort(modelPortFactory(id))");
+    expect(source).toContain("const nextPort = modelPortFactory(id)");
+    expect(source).toContain("switchableModelPort.setPort(nextPort)");
   });
 
   it("threads envConfig.exploreModel into withSubagents when set", async () => {
@@ -656,7 +657,7 @@ describe("host subagent model-override wiring", () => {
     // The runner-side default must be the null fallback, never a live
     // resolver core could invent on its own.
     const runnerSource = await readFile(new URL("../../../../packages/core/src/subagents/runner.ts", import.meta.url), "utf8");
-    expect(runnerSource).toContain("resolveRoleRoute: opts?.resolveRoleRoute ?? ((agentType: string) => null)");
+    expect(runnerSource).toContain("const route = opts?.resolveRoleRoute?.(agentType) ?? null");
   });
 
   it("F5: the respawn notice rides the FAILED child's id; a refused respawn reports honestly", async () => {

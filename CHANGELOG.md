@@ -10,6 +10,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Added
 
 - Plugins can offer a model catalog and show an employee account budget above Settings. Choose a dedicated gateway connection and approve the source to start syncing.
+- Set up OpenCode Go with one connection and choose among its supported models.
 
 ### Fixed
 
@@ -19,6 +20,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Keep connection tiles aligned and show all quota windows.
 - Subagent turn settings now apply to orchestration roles, up to the 200-turn limit. (GitHub #58)
 - The context-window popover no longer closes while the pointer travels from the meter to its buttons.
+- Fixed OpenCode Go model lists and context limits for each connection.
+- OpenCode Go now routes each model to its supported API and applies its declared usage pricing.
+- Prevented automatic compaction from starting when the conversation is too short to compact.
+- Provider request errors now show a sanitized, concise server message when available.
 
 ## [0.0.77] — 2026-11-05
 

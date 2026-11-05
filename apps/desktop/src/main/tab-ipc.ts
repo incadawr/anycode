@@ -374,7 +374,7 @@ const closeTabRequestSchema = z.object({ tabId: z.string().min(1) });
 const tabRebindRequestSchema: z.ZodType<TabRebindRequest> = z.object({
   tabId: z.string().min(1).max(128),
   connectionId: z.string().min(1).max(128),
-  priorEffort: z.enum(["off", "low", "medium", "high", "xhigh", "max"]).optional(),
+  priorEffort: z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max"]).optional(),
   // GitHub #33 (additive): the model the pick chose on the TARGET connection —
   // written by main inside the locked rebind, never by the renderer first.
   model: z.string().min(1).max(256).optional(),

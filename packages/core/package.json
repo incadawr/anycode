@@ -29,6 +29,8 @@
     "./network-failure": "./src/provider/network-failure.ts",
     "./provider/quota": "./src/provider/quota.ts",
     "./connection-resolver": "./src/routing/core-model-connection.ts",
+    "./model-route": "./src/provider/model-route.ts",
+    "./opencode-go": "./src/provider/opencode-go-policy.ts",
     "./catalog": "./src/provider/catalog-data.ts",
     "./capabilities": "./src/provider/capabilities.ts",
     "./model-dictionary": "./src/provider/model-dictionary.ts"

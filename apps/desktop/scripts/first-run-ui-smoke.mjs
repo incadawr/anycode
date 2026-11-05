@@ -36,7 +36,7 @@ const env = { ...process.env,
   ANYCODE_CODEX_BIN: codexBinary, ANYCODE_CLAUDE_BIN: claudeBinary,
   CODEX_HOME: join(profile, "codex-home"), CLAUDE_CONFIG_DIR: join(profile, "claude-home"),
 };
-for (const key of ["ANYCODE_API_KEY", "ANYCODE_MODEL", "ANYCODE_BASE_URL", "ANYCODE_PROVIDER", "ANYCODE_TRANSPORT"]) delete env[key];
+for (const key of ["ANYCODE_API_KEY", "ANYCODE_MODEL", "ANYCODE_BASE_URL", "ANYCODE_PROVIDER", "ANYCODE_TRANSPORT", "ANYCODE_PROVIDER_ID", "ANYCODE_PROVIDER_TRANSPORT", "ANYCODE_AUTOMATIC_MODEL_ROUTING", "ANYCODE_ROUTING_ENV_OVERRIDE"]) delete env[key];
 const app = launchSmokeElectron(spawn, { env, detached: true });
 let ws;
 const pending = new Map();
@@ -82,7 +82,7 @@ try {
     if (response.error) item.reject(new Error(JSON.stringify(response.error))); else item.resolve(response.result);
   };
   await poll(() => evaluate("document.querySelectorAll('.welcome-paths .welcome-path').length === 3"));
-  assert.equal(await evaluate("document.querySelectorAll('.welcome-subscription').length === 3"), true);
+  assert.equal(await evaluate("document.querySelectorAll('.welcome-subscription').length === 4"), true);
   assert.equal(await evaluate("document.querySelector('.connection-drawer-body') === null"), true);
   assert.equal(await evaluate("document.activeElement?.classList.contains('welcome-path')"), true);
   await sleep(500);
@@ -128,9 +128,22 @@ try {
   await click("Kimi (kimi.com)Use your Kimi for Coding key");
   await poll(() => evaluate("document.querySelector('.welcome-setup select')?.value === 'kimi'"));
   assert.equal(await evaluate("document.querySelector('.welcome-subscription-key a')?.href ?? null"), "https://www.kimi.com/code/console");
+  await click("OpenCode GoUse your OpenCode Go key");
+  await poll(() => evaluate("document.querySelector('.welcome-setup select')?.value === 'opencode'"));
+  assert.equal(await evaluate("document.querySelector('input[list=welcome-model-suggestions]').value"), "kimi-k3");
+  assert.equal(await evaluate("document.querySelector('.welcome-subscription-key a')?.href"), "https://opencode.ai/console");
+  assert.equal(await evaluate("document.querySelectorAll('.welcome-subscription').length"), 4);
+  assert.equal(await evaluate("document.querySelectorAll('.welcome-setup option[value=opencode-openai]').length"), 0);
+  assert.equal(await evaluate("[...document.querySelectorAll('.connection-drawer-advanced .settings-field-label')].some(e => e.textContent === 'Transport')"), false);
+  assert.equal(await evaluate("[...document.querySelectorAll('.welcome-subscription')].filter(b => b.getAttribute('aria-pressed') === 'true').map(b => b.querySelector('strong').textContent).join()"), "OpenCode Go");
+  assert.equal(await evaluate("[...document.querySelectorAll('.welcome-paths button')].some(b => b.getAttribute('aria-pressed') === 'true')"), false);
+  const goPng = await call("Page.captureScreenshot", { format: "png" });
+  writeFileSync(join(profile, "opencode-go.png"), Buffer.from(goPng.data, "base64"));
   await click("GLM Coding PlanUse your Z.AI coding plan key");
   await poll(() => evaluate("document.querySelector('.welcome-setup select')?.value === 'z-ai'"));
   assert.equal(await evaluate("document.querySelector('.welcome-subscription-key a')?.href ?? null"), "https://z.ai/manage-apikey/apikey-list");
+  await click("OpenCode GoUse your OpenCode Go key");
+  await poll(() => evaluate("document.querySelector('.welcome-setup select')?.value === 'opencode'"));
   assert(await evaluate("document.querySelector('.welcome-setup .ak-btn--primary').disabled"), "Missing API key must block Connect");
   await sleep(400);
   const setupPng = await call("Page.captureScreenshot", { format: "png" });
@@ -153,8 +166,10 @@ try {
   assert.equal(await evaluate("document.querySelector('.connection-drawer-body') === null"), true);
   const settings = JSON.parse(readFileSync(join(profile, "settings.json"), "utf8"));
   assert.equal(settings.provider.connections.length, 1);
-  assert.equal(settings.provider.connections[0].providerId, "z-ai");
-  assert.equal(settings.provider.connections[0].model, "glm-5.3");
+  assert.equal(settings.provider.connections[0].providerId, "opencode");
+  assert.equal(settings.provider.connections[0].model, "kimi-k3");
+  assert(!settings.provider.connections[0].baseUrl);
+  assert(!settings.provider.connections[0].transport);
   assert(settings.provider.connections[0].model);
   assert(!JSON.stringify(settings).includes("sk-first-run-smoke-only"));
   console.log(`PASS: first-run choices, focus, engine panes, settings escape, subscription shortcuts (template seed + key link + pick switch), one-click API connection on the catalog default model, ready-profile reload. Evidence: ${profile}`);

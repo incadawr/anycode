@@ -6,6 +6,7 @@
  * transport, `openai-compatible.ts`).
  */
 
+import { wrapOpenCodeGoFetch } from "./opencode-go-fetch.js";
 import { wrapResponsesReasoningFetch } from "./responses-reasoning-fetch.js";
 import { wrapFetchWithActivity } from "./activity-fetch.js";
 import { createOpenAI } from "@ai-sdk/openai";
@@ -105,7 +106,7 @@ export function createOpenAIResponsesLanguageModel(config: EndpointConfig, onRes
   // at the fetch layer (session-headers.ts), outermost so it sees the final
   // init the SDK built.
   const userAgent = declaredUserAgent(config.headers);
-  const finalFetch = userAgent !== undefined ? wrapFetchWithUserAgent(transportFetch, userAgent) : transportFetch;
+  const finalFetch = wrapOpenCodeGoFetch(userAgent !== undefined ? wrapFetchWithUserAgent(transportFetch, userAgent) : transportFetch, config);
   const provider = createOpenAI({
     name: OPENAI_RESPONSES_PROVIDER_NAME,
     baseURL: normalizeExplicitBaseUrl(config.baseUrl),

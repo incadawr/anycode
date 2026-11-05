@@ -1,3 +1,4 @@
+import { automaticGoRoute } from "./go-route.js";
 import { homedir } from "node:os";
 import { resolveWriteMask } from "@anycode/core/permissions/write-mask-node";
 /**
@@ -32,7 +33,7 @@ import { SESSION_LIMIT_RANGES } from "../shared/session-limits.js";
 import type { FileIoLogger } from "../settings/files.js";
 import { loadSettings, saveSettings, withSettingsFileLock } from "../settings/files.js";
 import { markOverride } from "./account-sources/sync.js";
-import { keybindingsSchema, mergeSettings, settingsSchema, roleProfilesWriteSchema } from "../settings/schema.js";
+import { keybindingsSchema, mergeSettings, settingsSchema, modelRoutesSchema, roleProfilesWriteSchema } from "../settings/schema.js";
 import { RECOGNIZER_SET_CHANNEL } from "../shared/recognizer.js";
 import type { RecognizerSetRequest } from "../shared/recognizer.js";
 import type { ProxyProfile, ProxyProfileDeleteResult, SystemProxyResolver } from "../shared/proxy.js";
@@ -360,7 +361,7 @@ function isPlainObjectLike(value: unknown): value is Record<string, unknown> {
 
 // ── connection CRUD payload schemas (W9) ──
 const transportEnum = z.enum(["anthropic-messages", "openai-chat-completions", "openai-responses"]);
-const reasoningEffortEnum = z.enum(["off", "low", "medium", "high", "xhigh", "max"]);
+const reasoningEffortEnum = z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 // `.strict()` (custody, §6.5): a CRUD payload carrying a credential field
 // (`apiKey`/`token`/…) is rejected `invalid` — plaintext NEVER crosses IPC on a
 // metadata channel; secrets travel only via `secret-set`.
@@ -479,7 +480,7 @@ const connectionCreateSchema = z
   .strict();
 const connectionUpdateSchema = z
   .object({
-    fetchedModels: z.object({ guard: z.string().regex(/^[a-f0-9]{64}$/), targetUrl: z.string().max(4096), baseUrl: z.string(), transport: z.union([transportEnum, z.literal("")]), models: z.array(z.object({ id: modelIdKey, reasoning: z.boolean().optional(), effortLevels: z.array(z.string().max(64)).max(16).optional(), imageInput: z.literal(true).optional(), contextWindow: z.number().int().positive().optional(), maxOutputTokens: z.number().int().positive().optional(), pricing: tokenRatesSchema.optional() }).strict()).max(10000) }).strict().optional(),
+    fetchedModels: z.object({ guard: z.string().regex(/^[a-f0-9]{64}$/), targetUrl: z.string().max(4096), baseUrl: z.string(), transport: z.union([transportEnum, z.literal("")]), incompatibleModels: z.array(modelIdKey).max(10000).optional(), modelRoutes: modelRoutesSchema, models: z.array(z.object({ id: modelIdKey, reasoning: z.boolean().optional(), effortLevels: z.array(z.string().max(64)).max(16).optional(), imageInput: z.literal(true).optional(), contextWindow: z.number().int().positive().optional(), maxOutputTokens: z.number().int().positive().optional(), pricing: tokenRatesSchema.optional() }).strict()).max(10000) }).strict().optional(),
     visibleModels: z.union([z.array(modelIdKey).max(10000), z.literal("")]).optional(),
     modelPricing: modelPricingSchema(z.union([tokenRatesSchema, z.literal("")])).optional(),
     pricing: z.union([connectionPricingSchema, z.literal("")]).optional(),
@@ -811,6 +812,10 @@ function selectedTransportInfo(
   // both of those, so an ungated waiver here would let the gate say "ready"
   // for a fork core refuses to boot).
   const connectionAuthOptional = view.authOptional === true;
+  const goRoute = automaticGoRoute(activeConnection(settings), deps.bootEnv);
+  if (goRoute) return goRoute.kind === "route"
+    ? { authOptional: false, resolvedTransport: goRoute.route.transport, supportedTransports: [goRoute.route.transport] }
+    : { authOptional: false, resolvedTransport: "unavailable-model", supportedTransports: [] };
   // Legacy / no-catalog branches: still apply the env rung over the active
   // connection's transport, but there is no catalog entry to validate against.
   const resolveLegacy = (): string | undefined =>
@@ -2187,13 +2192,20 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
     if (baseUrlChanged) {
       delete updatedConnection.models;
       delete updatedConnection.modelsFetchedAt;
+      delete updatedConnection.modelRoutes;
       if (req.visibleModels === undefined) delete updatedConnection.visibleModels;
       // capabilities belong to the origin that declared them —
       // a re-pointed connection must not keep the old endpoint's live map.
       delete updatedConnection.modelCapabilities;
     }
     if (req.fetchedModels && req.fetchedModels.models.length > 0) {
-      updatedConnection.models = mergeModelIds(req.fetchedModels.models.map(item => item.id), updatedConnection.models ?? []);
+      if ((existing.providerId === "opencode" || existing.providerId === "opencode-openai") && req.fetchedModels.targetUrl === "https://opencode.ai/inference/go/v1/models" && req.fetchedModels.modelRoutes) updatedConnection.modelRoutes = req.fetchedModels.modelRoutes;
+      const incompatible = new Set(req.fetchedModels.incompatibleModels ?? []);
+      const automaticGo = (existing.providerId === "opencode" || existing.providerId === "opencode-openai") && !updatedConnection.baseUrl?.trim() && !updatedConnection.transport?.trim() && !deps.bootEnv.ANYCODE_BASE_URL?.trim() && !deps.bootEnv.ANYCODE_PROVIDER_TRANSPORT?.trim() && req.fetchedModels.targetUrl === "https://opencode.ai/inference/go/v1/models";
+      const fetchedIds = req.fetchedModels.models.map(item => item.id);
+      updatedConnection.models = automaticGo ? fetchedIds : mergeModelIds(fetchedIds, (updatedConnection.models ?? []).filter(id => !incompatible.has(id)));
+      if (updatedConnection.visibleModels) updatedConnection.visibleModels = updatedConnection.visibleModels.filter(id => automaticGo ? fetchedIds.includes(id) : !incompatible.has(id));
+      if (!automaticGo && updatedConnection.model && incompatible.has(updatedConnection.model)) delete updatedConnection.model;
       updatedConnection.modelsFetchedAt = (deps.now ?? defaultNowIso)();
       const caps = { ...updatedConnection.modelCapabilities };
       for (const item of req.fetchedModels.models) {

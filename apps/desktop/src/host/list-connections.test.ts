@@ -19,7 +19,7 @@ describe("connection targets", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected success");
     expect(result.output?.current).toEqual({ connectionId: "conn-a", model: "extra" });
-    expect(result.output?.connections[0]).toMatchObject({ id: "conn-a", providerId: "z-ai", readiness: "ready", models: expect.arrayContaining([expect.objectContaining({ id: "extra", imageInput: true, contextWindow: 8192, default: false })]) });
+    expect(result.output?.connections[0]).toMatchObject({ id: "conn-a", providerId: "z-ai", readiness: "ready", models: expect.arrayContaining([expect.objectContaining({ id: "extra", imageInput: true, contextWindow: 12345, default: false })]) });
     const text = JSON.stringify(result);
     for (const secret of ["fake-api-key", "fake-token", "fake-header", "fake-user", "fake-password", "proxy-user", "proxy-password", "fake-health-secret"]) expect(text).not.toContain(secret);
   });
@@ -42,4 +42,13 @@ it("projects a legacy image-input pair folded into the per-model map", () => {
   const models = listConnectionTargets(settings, "c").connections[0]!.models;
   expect(models.find(item => item.id === "sighted")?.imageInput).toBe(true);
   expect(models.find(item => item.id === "blind")?.imageInput).toBe(false);
+});
+
+it("reports each routable Go model's own declared context and levels", () => {
+  const connection = { ...connectionFixture({ id: "opencode", connectionId: "c", model: "grok-4.7" }), models: ["grok-4.7", "hy4", "gemini-4-argon"] };
+  const settings = { version: 2, provider: providerV2Multi("c", [connection]), tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false } } as AnycodeSettings;
+  const models = listConnectionTargets(settings, "c").connections[0]!.models;
+  expect(models.find(model => model.id === "grok-4.7")?.contextWindow).toBe(500000);
+  expect(models.find(model => model.id === "hy4")?.effortLevels).toEqual(["off", "high"]);
+  expect(models.some(model => model.id === "gemini-4-argon")).toBe(false);
 });

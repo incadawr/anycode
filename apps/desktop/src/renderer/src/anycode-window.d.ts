@@ -92,6 +92,7 @@ import type {
   CustomProviderRecord,
   OAuthStartResult,
   PermissionRuleAddRequest,
+  ProviderConnection,
   SecretKey,
   SettingsMutationResult,
   SettingsPatch,
@@ -364,7 +365,7 @@ export type FetchModelsFailureReason =
 // a successful fetch may carry live per-model capabilities
 // (OpenRouter-style reasoning meta); both fields are optional additive metadata.
 export type FetchModelsOutcome =
-  | { ok: true; models: { id: string; reasoning?: boolean; effortLevels?: string[]; imageInput?: true; contextWindow?: number; maxOutputTokens?: number; pricing?: { input: number; cachedInput: number; output: number } }[]; source?: { guard: string; targetUrl: string; baseUrl: string; transport: ProviderTransportId | "" } }
+  | { ok: true; models: { id: string; reasoning?: boolean; effortLevels?: string[]; imageInput?: true; contextWindow?: number; maxOutputTokens?: number; pricing?: { input: number; cachedInput: number; output: number } }[]; incompatibleModels?: string[]; source?: { guard: string; targetUrl: string; baseUrl: string; transport: ProviderTransportId | ""; modelRoutes?: ProviderConnection["modelRoutes"] } }
   | { ok: false; reason: FetchModelsFailureReason };
 
 export interface CustomProviderCreateRequest {
@@ -617,7 +618,7 @@ declare global {
             | { id: string }
             | { connectionId: string; addModels: string[] }
             | { connectionId: string; preview?: true }
-            | { baseUrl: string; apiKey?: string; kind?: CustomProviderRecord["kind"]; draft?: true; catalogProviderId?: string; useCatalogModelsUrl?: boolean; proxyRef?: string },
+            | { baseUrl: string; apiKey?: string; kind?: CustomProviderRecord["kind"]; draft?: true; catalogProviderId?: string; useCatalogModelsUrl?: boolean; transport?: "anthropic-messages" | "openai-chat-completions" | "openai-responses"; proxyRef?: string },
         ): Promise<FetchModelsOutcome>;
       };
       // P7.19/F22 (design/slice-P7.19-cut.md §3/§4 W2-W3, W3-FIX): MCP config

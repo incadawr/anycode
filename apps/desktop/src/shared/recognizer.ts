@@ -44,6 +44,9 @@ export const RECOGNIZER_CONFIG_CHANGED_TYPE = "anycode:recognizer-config-changed
  * is non-null.
  */
 export interface RecognizerWireConfig {
+  goModelPolicy?: import("@anycode/core").OpenCodeGoEndpointPolicy;
+  modelMetadata?: Record<string, unknown>;
+  pricingRaw?: string;
   transport?: ProviderTransportId;
   baseUrl?: string;
   apiKey?: string;
@@ -98,6 +101,7 @@ export interface RecognizerFingerprint {
   baseUrl?: string;
   transport?: ProviderTransportId;
   contextInputs?: string;
+  routeSnapshot?: string;
 }
 
 /** Byte-mirror of main/host-env.ts's `CUSTOM_PROVIDER_PREFIX` (the module header's no-import discipline). */
@@ -168,6 +172,7 @@ export function recognizerFingerprint(settings: AnycodeSettings): RecognizerFing
     baseUrl: recognizerResolvedBaseUrl(settings, connection),
     transport: connection.transport,
     contextInputs: JSON.stringify([override.contextWindowTokens, override.catalogMatchDisabled, connection.modelCapabilities?.[setting.modelId]?.contextWindow, connection.modelCapabilities?.[setting.modelId]?.maxOutputTokens]),
+    ...(connection.modelRoutes ? { routeSnapshot: JSON.stringify(connection.modelRoutes) } : {}),
   };
 }
 
@@ -184,7 +189,8 @@ export function recognizerFingerprintsEqual(
     a.modelId === b.modelId &&
     a.baseUrl === b.baseUrl &&
     a.transport === b.transport &&
-    a.contextInputs === b.contextInputs
+    a.contextInputs === b.contextInputs &&
+    a.routeSnapshot === b.routeSnapshot
   );
 }
 

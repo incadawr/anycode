@@ -3,6 +3,8 @@ import {
   mapForeignEffortLevels,
   resolveEffortLevels,
   resolveReasoningEffort,
+  resolveContextWindowInfo,
+  UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS,
   type CatalogProviderEntry,
   type LiveModelCapabilities,
   type ReasoningEffort,
@@ -11,7 +13,7 @@ import { connectionContextWindow } from "../shared/connection-context-window.js"
 import type { ProviderConnection } from "../shared/settings.js";
 import { applyModelReasoningOverride, modelOverrideFor } from "../shared/model-overrides.js";
 
-const EFFORT_ORDER: ReasoningEffort[] = ["off", "low", "medium", "high", "xhigh", "max"];
+const EFFORT_ORDER: ReasoningEffort[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 /** Pick the closest supported tier; ties favor the lower tier. */
 export function nearestSupportedEffort(tier: ReasoningEffort, levels: ReasoningEffort[] | undefined): ReasoningEffort {
@@ -28,6 +30,7 @@ export function createConnectionModelSettings(deps: {
   readConnection?: () => ConnectionSettings | undefined | null;
   initialReadSucceeded?: boolean;
   catalogEntry?: CatalogProviderEntry;
+  catalogEntryFor?: (model: string) => CatalogProviderEntry | undefined;
   envReasoningEffort?: ReasoningEffort;
   envReasoningEffortModel?: string;
   envReasoningEffortFromSettings?: boolean;
@@ -45,11 +48,16 @@ export function createConnectionModelSettings(deps: {
 
   function entryFor(model: string) {
     const override = modelOverrideFor(connection, model);
+    if (deps.catalogEntryFor) {
+      const entry = deps.catalogEntryFor(model);
+      if (!entry || override?.reasoningSupported !== false) return entry;
+      return { ...entry, models: entry.models.map(row => row.id === model ? { ...row, reasoning: false, effortLevels: undefined, defaultEffort: undefined } : row) };
+    }
     let entry = modelDictionaryEntry(model, deps.catalogEntry, override?.catalogMatchDisabled === true);
     const live = connection?.modelCapabilities?.[model];
-    if (entry?.id === "openrouter" && live?.contextWindow) {
+    if (entry && (live?.contextWindow || live?.maxOutputTokens)) {
       const previous = entry.models.find(row => row.id === model);
-      entry = { ...entry, models: [...entry.models.filter(row => row.id !== model), { ...previous, id: model, contextWindow: live.contextWindow, ...(live.maxOutputTokens ? { maxOutputTokens: live.maxOutputTokens } : {}) }] };
+      entry = { ...entry, models: [...entry.models.filter(row => row.id !== model), { ...previous, id: model, contextWindow: live.contextWindow ?? previous?.contextWindow ?? UNKNOWN_MODEL_CONTEXT_WINDOW_TOKENS, ...(live.maxOutputTokens ? { maxOutputTokens: live.maxOutputTokens } : {}) }] };
     }
     if (entry && (entry !== deps.catalogEntry || override?.reasoningSupported === false)) {
       const live = capabilitiesFor(model);
@@ -74,7 +82,7 @@ export function createConnectionModelSettings(deps: {
     const live = deps.readConnection !== undefined
       ? map !== undefined && Object.hasOwn(map, model) ? map[model] : undefined
       : deps.liveCapabilitiesFor(model);
-    return applyModelReasoningOverride(live, modelOverrideFor(connection, model)?.reasoningSupported);
+    return applyModelReasoningOverride(deps.catalogEntryFor ? undefined : live, modelOverrideFor(connection, model)?.reasoningSupported);
   }
 
   function effortFor(model: string): ReasoningEffort | undefined {
@@ -111,7 +119,7 @@ export function createConnectionModelSettings(deps: {
   return {
     refresh,
     entryFor,
-    pricingSnapshot() { return hasReadConnection ? { fallback: connection?.pricing, models: { ...Object.fromEntries(Object.entries(connection?.modelCapabilities ?? {}).filter(([, value]) => value.pricing !== undefined && connection?.pricing?.mode !== "rates" && connection?.pricing?.mode !== "subscription").map(([id, value]) => [id, value.pricing])), ...Object.fromEntries(Object.entries(connection?.modelOverrides ?? {}).filter(([, value]) => value.pricing !== undefined).map(([id, value]) => [id, value.pricing])) } } : undefined; },
+    pricingSnapshot() { return hasReadConnection ? { fallback: connection?.pricing, models: { ...Object.fromEntries(Object.entries(deps.catalogEntryFor ? {} : connection?.modelCapabilities ?? {}).filter(([, value]) => value.pricing !== undefined && connection?.pricing?.mode !== "rates" && connection?.pricing?.mode !== "subscription").map(([id, value]) => [id, value.pricing])), ...Object.fromEntries(Object.entries(connection?.modelOverrides ?? {}).filter(([, value]) => value.pricing !== undefined).map(([id, value]) => [id, value.pricing])) } } : undefined; },
     hasReadConnection() { return hasReadConnection; },
     capabilitiesFor,
     imageInputFor(model: string) { return modelOverrideFor(connection, model)?.imageInput; },
@@ -120,7 +128,11 @@ export function createConnectionModelSettings(deps: {
     contextFor(model: string) {
       const envApplies = (!deps.envContextWindowFromSettings || !hasReadConnection) && deps.envContextWindow !== undefined &&
         (deps.envContextWindowModel === undefined || deps.envContextWindowModel === model);
-      return connectionContextWindow(connection, model, deps.catalogEntry, envApplies ? deps.envContextWindow : undefined);
+      const override = envApplies ? deps.envContextWindow : modelOverrideFor(connection, model)?.contextWindowTokens;
+      const entry = deps.catalogEntryFor ? entryFor(model) : connection?.modelCapabilities?.[model]?.contextWindow
+        ? entryFor(model)
+        : modelDictionaryEntry(model, deps.catalogEntry, modelOverrideFor(connection, model)?.catalogMatchDisabled === true);
+      return resolveContextWindowInfo(model, entry, override, model);
     },
     remember(model: string, effort: ReasoningEffort) {
       selected.set(model, effort);
