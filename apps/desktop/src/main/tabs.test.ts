@@ -12,6 +12,7 @@
 import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -58,6 +59,7 @@ import { ENV_MAX_TURNS, ENV_MODEL } from "./host-env.js";
 import { RECOGNIZER_CONFIG_CHANGED_TYPE, type RecognizerConfigChanged } from "../shared/recognizer.js";
 import {
   guardedHostForwarder,
+  hostOutputUsable,
   DEFAULT_BREAKER_LIMITS,
   TabHostManager,
   workspaceMissing,
@@ -8659,4 +8661,27 @@ describe("host output forwarding", () => {
     expect(() => forward(Buffer.from("x"))).not.toThrow();
     expect(stream.write).toHaveBeenCalledTimes(1);
   });
+});
+
+
+it("forwards redirected Windows output using the default handle check", () => {
+  const directory = mkdtempSync(join(tmpdir(), "host-output-"));
+  const path = join(directory, "output.log");
+  const fd = openSync(path, "w+");
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const stream = Object.assign(new EventEmitter(), {
+    fd, writable: true, destroyed: false, isTTY: false,
+    write: (chunk: Buffer) => { writeSync(fd, chunk); return true; },
+  }) as unknown as NodeJS.WriteStream;
+  try {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    expect(hostOutputUsable(stream)).toBe(true);
+    guardedHostForwarder(stream, hostOutputUsable(stream))(Buffer.from("redirected"));
+    expect(readFileSync(path, "utf8")).toBe("redirected");
+    expect(hostOutputUsable({ ...stream, fd: -1 } as unknown as NodeJS.WriteStream)).toBe(false);
+  } finally {
+    Object.defineProperty(process, "platform", originalPlatform);
+    closeSync(fd);
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

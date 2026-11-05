@@ -20,7 +20,7 @@ import type { AgentDelivery, SessionActivityState } from "../shared/communicatio
  */
 
 import { randomUUID } from "node:crypto";
-import { realpathSync, statSync } from "node:fs";
+import { fstatSync, realpathSync, statSync } from "node:fs";
 import type { MessagePortMain, UtilityProcess } from "electron";
 import type { PermissionMode, ReasoningEffort } from "@anycode/core";
 import type { AgentEnvelope } from "../shared/communication.js";
@@ -665,6 +665,18 @@ export interface TabLogger {
   error(...args: unknown[]): void;
 }
 
+export function hostOutputUsable(stream: NodeJS.WriteStream): boolean {
+  if (process.platform !== "win32") return true;
+  const fd = (stream as NodeJS.WriteStream & { fd?: number }).fd;
+  if (stream.destroyed || !stream.writable || typeof fd !== "number") return false;
+  try {
+    const stat = fstatSync(fd);
+    return stat.isFile() || stat.isFIFO() || stat.isSocket() || stat.isCharacterDevice();
+  } catch {
+    return false;
+  }
+}
+
 const hostOutputFailures = new WeakMap<NodeJS.WriteStream, { failed: boolean }>();
 
 export function guardedHostForwarder(stream: NodeJS.WriteStream, usable: boolean): (chunk: Buffer) => void {
@@ -1173,7 +1185,7 @@ export class TabHostManager {
   private quitting = false;
 
   constructor(private readonly deps: TabHostManagerDeps) {
-    const usable = deps.hostOutputUsable ?? ((stream: NodeJS.WriteStream) => process.platform !== "win32" || !!stream.isTTY);
+    const usable = deps.hostOutputUsable ?? hostOutputUsable;
     this.forwardStdout = guardedHostForwarder(process.stdout, usable(process.stdout));
     this.forwardStderr = guardedHostForwarder(process.stderr, usable(process.stderr));
     this.limits = { ...DEFAULT_BREAKER_LIMITS, ...deps.limits };
