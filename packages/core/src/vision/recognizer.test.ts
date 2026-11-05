@@ -10,10 +10,12 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { ask, ASK_TIMEOUT_MS, OVERVIEW_QUESTION } from "./recognizer.js";
+import { ask, ASK_TIMEOUT_MS, OVERVIEW_QUESTION, recognizerContextWindow } from "./recognizer.js";
 import type { AskOptions, RecognizerEndpoint } from "./recognizer.js";
 import type { ModelPort, ModelRequest } from "../ports/model.js";
 import type { ModelStreamEvent } from "../types/events.js";
+import { createDefaultTokenizer } from "../context/tokenizer.js";
+import { estimateMessageTokens } from "../context/history.js";
 import type { ImageAttachment } from "../types/images.js";
 
 // ---------------------------------------------------------------------------
@@ -104,6 +106,26 @@ function baseOpts(overrides: Partial<AskOptions> = {}): AskOptions {
 }
 
 describe("ask", () => {
+  it("accepts an exact fit and rejects one token less before calling the provider", async () => {
+    const question = "context ".repeat(12000);
+    const tokenizer = await createDefaultTokenizer();
+    const input = estimateMessageTokens(tokenizer, { role: "user", content: question, images: [image] });
+    const window = input + 2048 + 128;
+    expect(window).toBeGreaterThan(8192);
+    const port = new ScriptedModelPort(textScript("ok"));
+    expect((await ask(baseOpts({ question, endpoint: { ...endpoint, contextWindowTokens: window }, portFactory: () => port }))).ok).toBe(true);
+    expect(port.requests[0]?.maxOutputTokens).toBe(2048);
+    expect(await ask(baseOpts({ question, endpoint: { ...endpoint, contextWindowTokens: window - 1 }, portFactory: () => { throw new Error("must not call"); } }))).toMatchObject({ ok: false, kind: "provider", error: expect.stringContaining("exceed") });
+  });
+  it("uses catalog or assumed windows when the endpoint omits a window", async () => {
+    expect(recognizerContextWindow(endpoint)).toBe(8192);
+    const catalogEndpoint = { ...endpoint, providerName: "openai", model: "gpt-4o" };
+    expect(recognizerContextWindow(catalogEndpoint)).toBeGreaterThan(8192);
+    const port = new ScriptedModelPort(textScript("ok"));
+    await ask(baseOpts({ portFactory: () => port }));
+    expect(port.requests[0]?.maxOutputTokens).toBe(2048);
+  });
+
   it("evicts whole oldest pairs and reserves output without mutating the transcript", async () => {
     const port = new ScriptedModelPort(textScript("ok"));
     const transcript = [{ question: "old ".repeat(6000), answer: "old answer" }, { question: "recent", answer: "recent answer" }];
