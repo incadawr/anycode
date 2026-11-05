@@ -119,7 +119,7 @@ export async function readUserTelemetryRetention(fs: RetentionFs, home: string):
     }
     return { ...DEFAULT_TELEMETRY_RETENTION, ...result.data };
   } catch (err) {
-    console.warn(`[telemetry-retention] ignoring unreadable config ${path}: ${err instanceof Error ? err.message : String(err)}`);
+    console.warn(`[telemetry-retention] ignoring unreadable config ${path}:`, err instanceof Error ? err : undefined);
     return { ...DEFAULT_TELEMETRY_RETENTION };
   }
 }
@@ -168,7 +168,7 @@ export async function sweepTelemetryDir(opts: SweepTelemetryDirOptions): Promise
       // itself only lazily mkdirs on first write).
       return { ok: true, scanned: 0, removed: [], removedBytes: 0, protectedKept: 0 };
     }
-    console.warn(`[telemetry-retention] cannot read directory ${dir}: ${err instanceof Error ? err.message : String(err)}`);
+    console.warn(`[telemetry-retention] cannot read directory ${dir}:`, err instanceof Error ? err : undefined);
     return { ok: false };
   }
 
@@ -244,7 +244,7 @@ export async function sweepTelemetryDir(opts: SweepTelemetryDirOptions): Promise
       if (isErrnoException(err, "ENOENT")) {
         // fall through: treat as removed
       } else {
-        console.warn(`[telemetry-retention] cannot remove ${entry.path}: ${err instanceof Error ? err.message : String(err)}`);
+        console.warn(`[telemetry-retention] cannot remove ${entry.path}:`, err instanceof Error ? err : undefined);
         continue;
       }
     }
@@ -320,7 +320,7 @@ export function startTelemetryRetention(deps: TelemetryRetentionDeps): Telemetry
     const run = Promise.resolve()
       .then(runOnce)
       .catch((err: unknown) => {
-        console.warn(`[telemetry-retention] sweep failed: ${err instanceof Error ? err.message : String(err)}`);
+        console.warn(`[telemetry-retention] sweep failed:`, err instanceof Error ? err : undefined);
       })
       .finally(() => {
         inFlight = null;

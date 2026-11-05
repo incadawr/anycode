@@ -11,14 +11,15 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Plugins can offer a model catalog and show an employee account budget above Settings. Choose a dedicated gateway connection and approve the source to start syncing.
 - Set up OpenCode Go with one connection and choose among its supported models.
+- Local crash dumps and diagnostic logs help troubleshoot unexpected app exits.
 
 ### Fixed
 
 - Choose a vision model from available models and set its context window separately for each connection.
-- Image input settings are now saved separately for each model. (GitHub #56)
-- Label provider rate limits clearly for both header formats (GitHub #55).
+- Image input settings are now saved separately for each model.
+- Label provider rate limits clearly for both header formats.
 - Keep connection tiles aligned and show all quota windows.
-- Subagent turn settings now apply to orchestration roles, up to the 200-turn limit. (GitHub #58)
+- Subagent turn settings now apply to orchestration roles, up to the 200-turn limit.
 - The context-window popover no longer closes while the pointer travels from the meter to its buttons.
 - Fixed OpenCode Go model lists and context limits for each connection.
 - OpenCode Go now routes each model to its supported API and applies its declared usage pricing.

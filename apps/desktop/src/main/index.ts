@@ -1,6 +1,9 @@
 import { connectionContextWindow } from "../shared/connection-context-window.js";
 import type { RecognizerCatalogInfo } from "./host-env.js";
 import { automaticGoRoute } from "./go-route.js";
+import { installProcessDiagnostics } from "./process-diagnostics.js";
+import { startLocalCrashReporting } from "./crash-reporting.js";
+import { createDiagnosticLog, installConsoleLog } from "./diagnostic-log.js";
 import { providerProxyConfig } from "./provider-proxy-config.mjs";
 import { createMiniMaxQuotaService } from "./minimax-quota.js";
 import { createGlmQuotaService } from "./glm-quota.js";
@@ -67,6 +70,7 @@ import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   BrowserWindow,
+  crashReporter,
   Menu,
   MessageChannelMain,
   app,
@@ -522,6 +526,19 @@ if (devUserDataOverride !== null && !isolatedSmoke) {
 } else if (!isolatedSmoke && isRefusedUserDataOverride(process.env, app.isPackaged)) {
   console.warn("[main] ANYCODE_USER_DATA_DIR set but refused (packaged build, or a relative path)");
 }
+
+// Configure crash collection before any windows or utility processes are created.
+// The crash service keeps dumps on this machine; no upload endpoint is configured.
+try {
+  startLocalCrashReporting(app, crashReporter);
+} catch (error) {
+  console.warn("[main] could not start local crash reporting", error);
+}
+
+const diagnosticLog = createDiagnosticLog(join(app.getPath("userData"), "logs"));
+installConsoleLog(diagnosticLog);
+installProcessDiagnostics(app, (line) => diagnosticLog.write("main", line));
+console.info("AnyCode started");
 
 /**
  * Environment variable names. These mirror the contract of core's
@@ -2215,7 +2232,7 @@ void app.whenReady().then(async () => {
   } catch (error) {
     // Cleanup is fail-safe. A DB/Git outage leaves ledgers intact for the next
     // startup or the owning session's normal continuation path.
-    console.warn(`[main] worktree janitor skipped: ${error instanceof Error ? error.message : String(error)}`);
+    console.warn("[main] worktree janitor skipped:", error instanceof Error ? error : undefined);
   }
 
 
@@ -2681,6 +2698,7 @@ void app.whenReady().then(async () => {
     },
     onWorkspaceTrustPending: (tabId) => browserAccessNotifier?.refresh(tabId),
     workspaceMissing,
+    hostLogStream: (stream) => diagnosticLog.stream(`host ${stream}`),
     fork: (entry, args, opts) => utilityProcess.fork(entry, [...args], opts),
     workspaceTrustOnce: (workspace) => workspaceTrustOnceFor(workspaceTrustOnceApprovals, workspace, realpathSync),
     mcpSecretsEnv: (workspace) => mcpSecretCache.get(workspace),
@@ -3269,7 +3287,7 @@ void app.whenReady().then(async () => {
     })
     .catch((error) => {
       console.error(
-        `[main] workspace trust key migration skipped: ${error instanceof Error ? error.message : String(error)}`,
+        "[main] workspace trust key migration skipped:", error instanceof Error ? error : undefined,
       );
     });
 
@@ -3627,7 +3645,7 @@ void app.whenReady().then(async () => {
             }
           })
           .catch((error: unknown) => {
-            console.warn(`[main] managed Codex upgrade crashed: ${error instanceof Error ? error.message : String(error)}`);
+            console.warn("[main] managed Codex upgrade crashed:", error instanceof Error ? error : undefined);
           });
       })
       .catch(() => {});
@@ -3998,10 +4016,10 @@ void app.whenReady().then(async () => {
     });
     void (async () => {
       await wipeStaging(pluginsFs, pluginsHome).catch((error) =>
-        fileLogger.warn(`[plugins] staging wipe failed (continuing): ${error instanceof Error ? error.message : String(error)}`),
+        fileLogger.warn("[plugins] staging wipe failed (continuing):", error instanceof Error ? error : undefined),
       );
       const gc = await gcStore(pluginsFs, pluginsHome).catch((error) => {
-        fileLogger.warn(`[plugins] store GC failed (continuing): ${error instanceof Error ? error.message : String(error)}`);
+        fileLogger.warn("[plugins] store GC failed (continuing):", error instanceof Error ? error : undefined);
         return { removed: [], problems: [] };
       });
       for (const problem of gc.problems) {
@@ -4020,7 +4038,7 @@ void app.whenReady().then(async () => {
           await grandfatherPluginsMcpConsent(settingsPath, entries, fileLogger);
         },
       }).catch((error) =>
-        fileLogger.warn(`[plugins] legacy MCP grandfathering failed (continuing): ${error instanceof Error ? error.message : String(error)}`),
+        fileLogger.warn("[plugins] legacy MCP grandfathering failed (continuing):", error instanceof Error ? error : undefined),
       );
       if (isOfficialChannelConfigured()) {
         pluginsScheduler = createPluginsScheduler({
