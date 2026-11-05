@@ -340,6 +340,24 @@ async function boot(): Promise<(request: CreateSessionRequest) => Promise<Create
 }
 
 describe("main/index.ts — create_session on a NON-active connection reaches the fork", () => {
+  it.each(["gemini-4-argon", "removed-model", "glm-5.3"])("boots with Go model %s and lets host recover it", async (model) => {
+    const snapshot = { version: 1 as const, fetchedAt: "2026-01-01", models: {
+      "glm-5.3": { kind: "route" as const, route: { transport: "anthropic-messages" as const, baseUrl: "https://opencode.ai/inference/go/anthropic/v1", metadata: {} } },
+    } };
+    const path = join(dir, "settings.json");
+    const saved = JSON.parse(await readFile(path, "utf8"));
+    saved.provider.connections = [{ id: "go", providerId: "opencode", model, modelRoutes: snapshot }];
+    saved.provider.activeConnectionId = "go";
+    await writeFile(path, JSON.stringify(saved));
+    await import("./index.js");
+    await waitForHandler(TAB_CREATE_CHANNEL);
+    await waitForHandler("anycode:custom-provider-create");
+    expect(FakeBrowserWindow.created).toBe(true);
+    const { resolveGoBootModel } = await import("../host/go-boot-model.js");
+    const result = resolveGoBootModel("opencode", model, "glm-5.3", snapshot);
+    expect(result.model).toBe("glm-5.3");
+    expect(Boolean(result.notice)).toBe(model !== "glm-5.3");
+  });
   it("opens the GLM connection's tab with ITS env instead of crash_looping on a cache miss", async () => {
     const create = await boot();
 

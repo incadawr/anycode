@@ -242,8 +242,11 @@ export async function resolveProviderSelection(
   // ladder (env > active-connection transport > this default, with the
   // anthropic-family suppression) is applied by buildHostEnv's single
   // `resolveEffectiveTransport` authority.
-  const route = automaticGoRoute(connection, deps.bootEnv ?? {});
-  if (route?.kind === "refusal") throw new Error(`OpenCode Go model ${model} unavailable: ${route.reason}`);
+  const candidate = automaticGoRoute(connection, deps.bootEnv ?? {});
+  // Keep the saved model on refusal. The host has the snapshot and owns boot
+  // recovery and its user-facing notice; aborting here prevents the window and
+  // settings from opening at all.
+  const route = candidate?.kind === "route" ? candidate : undefined;
   const defaultTransport = route?.route.transport ?? info.defaultTransport;
   // A `needsBaseUrl` entry (vLLM template) sources its baseUrl from the
   // connection, exactly like `custom`, even though it is NOT `isCustom`.
