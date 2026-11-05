@@ -428,10 +428,10 @@ export function buildChildConfig(
     // could lower the budget but nothing could raise it. Turns are the runaway
     // guard, not the working budget: deadlineAt below is what usually ends a
     // long run (§2.4, carried into).
-    maxTurns: Math.min(
+    maxTurns: Math.max(1, Math.min(
       req.maxTurns ?? personaBudget ?? learned ?? DEFAULT_SUBAGENT_MAX_TURNS,
       SUBAGENT_MAX_TURNS_CEILING,
-    ),
+    )),
     ...(extras?.deadlineAt !== undefined ? { deadlineAt: extras.deadlineAt } : {}),
     // Ceiling ladder with the two clamps only a child needs (§1.12):
     // maxTurnsCeiling keeps the budget PLUS every grant under the same runaway
@@ -756,7 +756,7 @@ export function createSubagentRunner(
         ...(persona.model !== undefined ? { model: persona.model } : {}),
         // persona.turnBudget rides through the same as model —
         // omitted entirely when absent, never a present-but-undefined key.
-        ...(budget !== undefined ? { turnBudget: Math.min(budget, SUBAGENT_MAX_TURNS_CEILING) } : {}),
+        ...(budget !== undefined ? { turnBudget: Math.max(1, Math.min(budget, SUBAGENT_MAX_TURNS_CEILING)) } : {}),
         // persona.effort rides through the same as model — omitted entirely
         // when absent. The target model resolves compatibility for core children.
         ...(persona.effort !== undefined ? { effort: persona.effort } : {}),
@@ -825,8 +825,9 @@ export function createSubagentRunner(
     // Preserve routing while applying the parent session's configured budget.
     resolveRoleRoute(agentType: string) {
       const route = opts?.resolveRoleRoute?.(agentType) ?? null;
-      if (route === null || parent.subagentMaxTurns === undefined) return route;
-      return { ...route, turnBudget: Math.min(parent.subagentMaxTurns, SUBAGENT_MAX_TURNS_CEILING) };
+      if (route === null) return route;
+      const budget = parent.subagentMaxTurns ?? route.turnBudget;
+      return budget === undefined ? route : { ...route, turnBudget: Math.max(1, Math.min(budget, SUBAGENT_MAX_TURNS_CEILING)) };
     },
     // the owning AgentLoop registers its human-context thunk
     // here right after construction (the loop owns the live history the thunk

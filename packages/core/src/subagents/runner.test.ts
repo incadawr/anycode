@@ -479,6 +479,11 @@ describe("buildChildConfig — §4.1 derivation table", () => {
     expect(makeRunner(150).resolveRoleRoute?.("executor")?.turnBudget).toBe(150);
     expect(makeRunner(150, [{ ...getPersona("executor"), turnBudget: 25 }]).sessionTurnBudget?.("executor")).toBe(25);
     expect(makeRunner(150, [{ ...getPersona("executor"), origin: "settings" }]).sessionTurnBudget?.("executor")).toBe(150);
+    for (const budget of [0, -5]) {
+      expect(buildChildConfig({ ...makeParent(), subagentMaxTurns: budget }, getPersona("executor"), REQ).maxTurns).toBe(1);
+      expect(makeRunner(budget).resolveRoleRoute?.("executor")?.turnBudget).toBe(1);
+      expect(makeRunner(budget, [{ ...getPersona("executor"), origin: "settings", engine: "codex" }]).engineProfile?.("executor")?.turnBudget).toBe(1);
+    }
   });
 
   it("threads extras.deadlineAt into the child config and omits the field without it", () => {
