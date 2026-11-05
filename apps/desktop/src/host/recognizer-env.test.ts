@@ -20,6 +20,21 @@ describe("recognizer context delivery", () => {
     applyRecognizerEnv(different, wire);
     expect(parseRecognizerEnv(different)?.contextWindowTokens).toBeUndefined();
   });
+  it("strips orphan bindings and treats whitespace like an absent window", () => {
+    for (const value of [undefined, "", "   "]) {
+      const env: NodeJS.ProcessEnv = { ANYCODE_RECOGNIZER_CONTEXT_WINDOW: value, ANYCODE_RECOGNIZER_CONTEXT_WINDOW_MODEL: "other" };
+      applyRecognizerEnv(env, wire);
+      expect(env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_MODEL).toBe("vision");
+      expect(parseRecognizerEnv(env)?.contextWindowTokens).toBe(32000);
+    }
+    const noSetting: NodeJS.ProcessEnv = { ANYCODE_RECOGNIZER_CONTEXT_WINDOW_MODEL: "other" };
+    applyRecognizerEnv(noSetting, undefined);
+    expect(noSetting.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_MODEL).toBeUndefined();
+    const explicit: NodeJS.ProcessEnv = { ANYCODE_RECOGNIZER_CONTEXT_WINDOW: "64000", ANYCODE_RECOGNIZER_CONTEXT_WINDOW_MODEL: "other", ANYCODE_RECOGNIZER_CONTEXT_WINDOW_FROM_SETTINGS: "1" };
+    applyRecognizerEnv(explicit, wire);
+    expect(explicit.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_MODEL).toBe("other");
+    expect(explicit.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_FROM_SETTINGS).toBeUndefined();
+  });
   it("rejects malformed, unsafe, zero, and mismatched windows and ignores the primary window", () => {
     const base = { ANYCODE_RECOGNIZER_MODEL: "vision", ANYCODE_RECOGNIZER_BASE_URL: "https://example.test", ANYCODE_CONTEXT_WINDOW: "99999" };
     for (const value of ["0", "-1", "1.5", "NaN", "9007199254740992"]) {

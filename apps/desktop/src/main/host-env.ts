@@ -1569,6 +1569,8 @@ export async function resolveRecognizerConfig(
  * wins over the resolved connection.
  */
 export function applyRecognizerEnv(env: NodeJS.ProcessEnv, recognizer: RecognizerWireConfig | undefined): void {
+  delete env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_FROM_SETTINGS;
+  if (!envPresent(env, "ANYCODE_RECOGNIZER_CONTEXT_WINDOW")) delete env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_MODEL;
   if (recognizer === undefined) {
     return;
   }
@@ -1576,7 +1578,7 @@ export function applyRecognizerEnv(env: NodeJS.ProcessEnv, recognizer: Recognize
   fillFromSettings(env, ENV_RECOGNIZER_BASE_URL, recognizer.baseUrl);
   fillFromSettings(env, ENV_RECOGNIZER_API_KEY, recognizer.apiKey);
   fillFromSettings(env, ENV_RECOGNIZER_MODEL, recognizer.model);
-  if (!env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW && env.ANYCODE_RECOGNIZER_MODEL === recognizer.model && recognizer.contextWindowTokens !== undefined) {
+  if (!envPresent(env, "ANYCODE_RECOGNIZER_CONTEXT_WINDOW") && env.ANYCODE_RECOGNIZER_MODEL === recognizer.model && recognizer.contextWindowTokens !== undefined) {
     env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW = String(recognizer.contextWindowTokens);
     env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_MODEL = recognizer.model;
     env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_FROM_SETTINGS = "1";
