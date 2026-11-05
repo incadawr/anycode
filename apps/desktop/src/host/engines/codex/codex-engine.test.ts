@@ -1,6 +1,6 @@
 import { buildCodexRuntime, prepareSwitchRuntime } from "../../engine-switch-runtime.js";
 import { bindCodexUsage } from "../../native-usage.js";
-import { createHarness, MemFs } from "../../test-harness.js";
+import { createHarness, finishStep, MemFs } from "../../test-harness.js";
 import { summarizeProviderUsage, Session, Outbound } from "../../session.js";
 import { readFileSync } from "node:fs";
 import * as fsp from "node:fs/promises";
@@ -3302,6 +3302,31 @@ describe("startCodexEngine/resumeCodexEngine — bootNotices forwarding", () => 
       expect(runtime.engine.historyItems()).toEqual([]);
     } finally {
       await runtime.engine.dispose("session-close");
+    }
+  });
+
+  it("switches a real Session to a prepared Codex runtime after a failed candidate", async () => {
+    const options = wrapperOptions();
+    let model = "unavailable";
+    const h = createHarness({
+      steps: [finishStep()],
+      switchEngineFactory: async () => prepareSwitchRuntime({ engine: "codex", model, options }),
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.some(m => m.type === "host_ready"));
+      h.send({ type: "engine_switch_request", requestId: "failed", engine: "codex" });
+      await h.waitUntil(() => h.received.some(m => m.type === "engine_switch_failed" && m.requestId === "failed"), 5000);
+      expect(h.engine.id).toBe("core");
+      h.send({ type: "user_message", requestId: "still-usable", text: "continue" });
+      await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && m.event.type === "loop_end"), 5000);
+      model = "gpt-test";
+      h.send({ type: "engine_switch_request", requestId: "success", engine: "codex" });
+      await h.waitUntil(() => h.received.some(m => m.type === "engine_switched" && m.requestId === "success"), 5000);
+      expect(h.received).toContainEqual(expect.objectContaining({ type: "engine_switched", engine: "codex", previousEngine: "core" }));
+    } finally {
+      await h.session.shutdown();
+      h.close();
     }
   });
 

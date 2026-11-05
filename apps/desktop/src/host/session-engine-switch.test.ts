@@ -17,6 +17,7 @@ import { describe, expect, it } from "vitest";
 import { AgentLoop, type AgentEvent, type HistoryItem, type PermissionMode } from "@anycode/core";
 import type { HostToUiMessage, UiToHostMessage } from "../shared/protocol.js";
 import type { EngineCapabilities, RunTurnOptions, SessionEngine } from "./engines/session-engine.js";
+import { prepareSwitchRuntime } from "./engine-switch-runtime.js";
 import { ENGINE_SWITCH_TURN_ID } from "./engine-switch.js";
 import { createHarness, finishStep, ScriptedModelPort } from "./test-harness.js";
 import { CoreEngine } from "./engines/core-engine.js";
@@ -238,6 +239,35 @@ describe("Session — engine switch", () => {
       expect(target.calls).toEqual([true, false]);
     } finally { h.close(); }
   });
+  it("commits a prepared core runtime through Session", async () => {
+    const targetHarness = createHarness({ steps: [finishStep()] });
+    const config = targetHarness.config;
+    const source = new NextFakeEngine();
+    const h = createHarness({ steps: [], engine: source, switchEngineFactory: async () => prepareSwitchRuntime({ engine: "core", options: { loop: new AgentLoop(config), config } }) });
+    try {
+      h.send({ type: "ui_ready" }); await h.waitFor(isHostReady);
+      h.send({ type: "engine_switch_request", requestId: "core", engine: "core" });
+      await h.waitFor(isEngineSwitched);
+      expect(source.disposeReasons).toEqual(["session-close"]);
+      h.send({ type: "user_message", requestId: "first", text: "go" });
+      await h.waitFor(agentEventOf("loop_end"));
+      expect((config.modelPort as ScriptedModelPort).requests).toHaveLength(1);
+    } finally { await h.session.shutdown(); h.close(); targetHarness.close(); }
+  });
+
+  it("rejects a candidate with the wrong engine identity", async () => {
+    const old = new SwitchableFakeEngine([]);
+    const wrong = new SwitchableFakeEngine([]);
+    const h = createHarness({ steps: [], engine: old, switchEngineFactory: async () => ({ engine: wrong }) });
+    try {
+      h.send({ type: "ui_ready" }); await h.waitFor(isHostReady);
+      h.send({ type: "engine_switch_request", requestId: "wrong", engine: "codex" });
+      expect((await h.waitFor(isEngineSwitchFailed)).reason).toContain("does not match");
+      expect(wrong.disposeReasons).toEqual(["session-close"]);
+      expect(old.disposeReasons).toEqual([]);
+    } finally { h.close(); }
+  });
+
   it("prepares a core target in plan mode before switching from Codex", async () => {
     class Source extends NextFakeEngine {
       readonly orchestrationPolicy = { availability: () => ({ supported: true as const }), apply: async (enabled: boolean, baseAuthority: unknown) => ({ enabled, baseAuthority }) };

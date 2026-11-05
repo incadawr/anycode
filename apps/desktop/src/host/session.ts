@@ -4262,6 +4262,12 @@ export class Session {
         fail(error instanceof Error ? error.message : String(error));
         return;
       }
+      if (next.id !== message.engine) {
+        await next.dispose("session-close").catch(() => {});
+        candidate = undefined;
+        fail("prepared engine does not match the requested engine");
+        return;
+      }
       // Shutdown raced the factory await: shutdown() already disposed the OLD
       // engine and is waiting on `currentTurn`; the freshly started engine
       // would otherwise never be disposed (orphaned engine process).
