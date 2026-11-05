@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed a crash when sending the first prompt after launching AnyCode from a Windows shortcut.
+
 ## [0.0.76] — 2026-11-05
 
 ### Security

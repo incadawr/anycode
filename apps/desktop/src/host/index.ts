@@ -1,3 +1,4 @@
+import "./sdk-warnings.js";
 import { scrubFailureText } from "@anycode/core";
 import { childBootFailure, sanitizeBootFailure } from "./child-boot-failure.js";
 import { engineChildPrompt } from "./engine-child-prompt.js";

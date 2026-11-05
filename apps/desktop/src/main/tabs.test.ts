@@ -57,6 +57,7 @@ import {
 import { ENV_MAX_TURNS, ENV_MODEL } from "./host-env.js";
 import { RECOGNIZER_CONFIG_CHANGED_TYPE, type RecognizerConfigChanged } from "../shared/recognizer.js";
 import {
+  guardedHostForwarder,
   DEFAULT_BREAKER_LIMITS,
   TabHostManager,
   workspaceMissing,
@@ -408,11 +409,11 @@ describe("TabHostManager — session registration hook", () => {
 });
 
 describe("TabHostManager — host spawn", () => {
-  it("forks with ignored stdin, inherited stdout and piped stderr", () => {
+  it("forks with ignored stdin and piped output", () => {
     const fork = vi.fn<HostForkFn>(() => new FakeHost() as unknown as UtilityProcess);
     const manager = makeManager(fork, windowRig().window);
     expect(manager.createTab({ workspace: "/ws", sessionId: "stdio", resume: false }).ok).toBe(true);
-    expect(fork.mock.calls[0]?.[2].stdio).toEqual(["ignore", "inherit", "pipe"]);
+    expect(fork.mock.calls[0]?.[2].stdio).toEqual(["ignore", "pipe", "pipe"]);
   });
 
   it("rolls back a throwing fork and logs its cause", () => {
@@ -8624,5 +8625,38 @@ describe("TabHostManager — diagnostics ring RPC on a host that is not running 
     expect(request).toBeDefined();
     host.emit("message", { type: "communication_response", requestId: request!.requestId, result: [] });
     await expect(pending).resolves.toEqual([]);
+  });
+});
+
+
+describe("host output forwarding", () => {
+  it("drains and forwards stdout, and keeps stderr when forwarding is disabled", () => {
+    const host = new FakeHost() as FakeHost & { stdout: EventEmitter; stderr: EventEmitter };
+    host.stdout = new EventEmitter();
+    host.stderr = new EventEmitter();
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    let captured = "";
+    const manager = childManager(() => host as unknown as UtilityProcess, windowRig().window, {
+      hostOutputUsable: stream => stream === process.stdout,
+      recordHostFailure: (_id, _reason, _code, stderr) => { captured = stderr ?? ""; },
+      limits: { maxRapidRespawns: 0 },
+    });
+    manager.createTab({ workspace: "/ws", sessionId: "output", resume: false });
+    host.stdout.emit("data", Buffer.from("hello"));
+    expect(write).toHaveBeenCalledWith(Buffer.from("hello"));
+    host.stderr.emit("data", Buffer.from("failure"));
+    host.emit("exit", 1);
+    expect(captured).toBe("failure");
+    write.mockRestore();
+  });
+
+  it("survives synchronous and asynchronous output errors", () => {
+    const stream = new EventEmitter() as NodeJS.WriteStream;
+    stream.write = vi.fn(() => { throw new Error("closed"); }) as typeof stream.write;
+    const forward = guardedHostForwarder(stream, true);
+    expect(() => forward(Buffer.from("x"))).not.toThrow();
+    expect(() => stream.emit("error", new Error("closed"))).not.toThrow();
+    expect(() => forward(Buffer.from("x"))).not.toThrow();
+    expect(stream.write).toHaveBeenCalledTimes(1);
   });
 });

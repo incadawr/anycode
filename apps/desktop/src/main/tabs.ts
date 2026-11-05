@@ -633,7 +633,7 @@ export function decideRespawn(args: {
 export interface HostForkOptions {
   cwd: string;
   env: NodeJS.ProcessEnv;
-  stdio: ["ignore", "inherit", "pipe"];
+  stdio: ["ignore", "pipe", "pipe"];
 }
 
 /** Injected wrapper over utilityProcess.fork (real) / a fake (tests). */
@@ -665,7 +665,25 @@ export interface TabLogger {
   error(...args: unknown[]): void;
 }
 
+const hostOutputFailures = new WeakMap<NodeJS.WriteStream, { failed: boolean }>();
+
+export function guardedHostForwarder(stream: NodeJS.WriteStream, usable: boolean): (chunk: Buffer) => void {
+  if (!usable) return () => {};
+  let state = hostOutputFailures.get(stream);
+  if (!state) {
+    state = { failed: false };
+    const captured = state;
+    stream.on("error", () => { captured.failed = true; });
+    hostOutputFailures.set(stream, state);
+  }
+  return (chunk) => {
+    if (state.failed) return;
+    try { stream.write(chunk); } catch { state.failed = true; }
+  };
+}
+
 export interface TabHostManagerDeps {
+  hostOutputUsable?: (stream: NodeJS.WriteStream) => boolean;
   /**
    * GitHub #18: bounded control-plane ring for the diagnostics export. Fed
    * with message SHAPES only (`type`/`kind`), never payloads. Absent in
@@ -1142,6 +1160,8 @@ export class TabHostManager {
   private readonly now: () => number;
   private readonly genId: () => string;
   private readonly logger: TabLogger;
+  private readonly forwardStdout: (chunk: Buffer) => void;
+  private readonly forwardStderr: (chunk: Buffer) => void;
   /** Fork count within the current storm window; reset by any healthy run. */
   private stormForks = 0;
   /**
@@ -1153,6 +1173,9 @@ export class TabHostManager {
   private quitting = false;
 
   constructor(private readonly deps: TabHostManagerDeps) {
+    const usable = deps.hostOutputUsable ?? ((stream: NodeJS.WriteStream) => process.platform !== "win32" || !!stream.isTTY);
+    this.forwardStdout = guardedHostForwarder(process.stdout, usable(process.stdout));
+    this.forwardStderr = guardedHostForwarder(process.stderr, usable(process.stderr));
     this.limits = { ...DEFAULT_BREAKER_LIMITS, ...deps.limits };
     this.maxTabsReader = deps.maxTabs;
     this.childPerParentReader = deps.childRunsPerParentMax;
@@ -1869,7 +1892,7 @@ export class TabHostManager {
           ...this.workspaceTrustOnceEnv(tab.workspace),
           ...this.browserFullAccessEnv(tab.tabId),
         },
-        stdio: ["ignore", "inherit", "pipe"],
+        stdio: ["ignore", "pipe", "pipe"],
       });
     } catch (error) {
       tab.proc = null;
@@ -1881,8 +1904,9 @@ export class TabHostManager {
       return false;
     }
     let startupStderr = "";
+    child.stdout?.on("data", this.forwardStdout);
     child.stderr?.on("data", (chunk: Buffer) => {
-      process.stderr.write(chunk);
+      this.forwardStderr(chunk);
       startupStderr = (startupStderr + chunk.toString()).slice(-16384);
     });
     tab.proc = child;
