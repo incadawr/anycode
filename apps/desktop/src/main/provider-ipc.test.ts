@@ -1638,7 +1638,7 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     const res = await handleCustomProviderFetchModels(deps, { connectionId: "conn-1" });
     expect(res).toEqual({ ok: true, models: [{ id: "live-a" }, { id: "live-b" }] });
     expect(calls).toEqual([
-      { baseUrl: "https://api.kimi.com/coding/v1", apiKey: "sk-kimi-secret", kind: "anthropic" },
+      { baseUrl: "https://api.kimi.com/coding/v1", apiKey: "sk-kimi-secret", kind: "anthropic", transport: "anthropic-messages" },
     ]);
     const reloaded = await loadSettings(settingsPath);
     expect(reloaded.settings.provider.connections[0]).toMatchObject({
@@ -1653,7 +1653,7 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     const { deps, calls } = makeCatalogDeps();
     const res = await handleCustomProviderFetchModels(deps, { connectionId: "conn-2" });
     expect(res.ok).toBe(true);
-    expect(calls).toEqual([{ baseUrl: "https://api.openai.com/v1", apiKey: undefined, kind: "openai-compatible" }]);
+    expect(calls).toEqual([{ baseUrl: "https://api.openai.com/v1", apiKey: undefined, kind: "openai-compatible", transport: "openai-responses" }]);
   });
 
   it("a connection-level baseUrl override wins over the entry's (vllm template)", async () => {
