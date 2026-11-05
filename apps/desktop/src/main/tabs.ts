@@ -696,6 +696,7 @@ export function guardedHostForwarder(stream: NodeJS.WriteStream, usable: boolean
 
 export interface TabHostManagerDeps {
   hostOutputUsable?: (stream: NodeJS.WriteStream) => boolean;
+  hostLogStream?: (stream: "stdout" | "stderr") => ((chunk: Buffer) => void) & { end(): void };
   /**
    * GitHub #18: bounded control-plane ring for the diagnostics export. Fed
    * with message SHAPES only (`type`/`kind`), never payloads. Absent in
@@ -1916,9 +1917,17 @@ export class TabHostManager {
       return false;
     }
     let startupStderr = "";
-    child.stdout?.on("data", this.forwardStdout);
+    const logStdout = this.deps.hostLogStream?.("stdout");
+    const logStderr = this.deps.hostLogStream?.("stderr");
+    child.stdout?.on("data", (chunk: Buffer) => {
+      this.forwardStdout(chunk);
+      try { logStdout?.(chunk); } catch { /* logging is best effort */ }
+    });
+    child.stdout?.on("end", () => { try { logStdout?.end(); } catch { /* best effort */ } });
+    child.stderr?.on("end", () => { try { logStderr?.end(); } catch { /* best effort */ } });
     child.stderr?.on("data", (chunk: Buffer) => {
       this.forwardStderr(chunk);
+      try { logStderr?.(chunk); } catch { /* logging is best effort */ }
       startupStderr = (startupStderr + chunk.toString()).slice(-16384);
     });
     tab.proc = child;

@@ -12,6 +12,7 @@ It intentionally differs from local `working-docs/`:
 
 ## Documents
 
+- [Crash diagnostics](crash-diagnostics.md) — local dump and log locations and privacy.
 - [Automation smoke](automation-smoke.md) — dev-only loopback automation,
   GUI smoke execution, and release-boundary verification.
 - [Codex onboarding](codex-onboarding.md) — how a user enables the Codex

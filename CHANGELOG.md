@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Local crash dumps and diagnostic logs help troubleshoot unexpected app exits.
+
 ## [0.0.77] — 2026-11-05
 
 ### Fixed
