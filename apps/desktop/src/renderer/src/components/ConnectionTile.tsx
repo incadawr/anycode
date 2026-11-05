@@ -273,7 +273,7 @@ export function tileStatusPresentation(
  * renders NO block for null (never a fabricated "0% left"; §5).
  * A duration supplies the label; otherwise use the persisted family or, for
  * the primary window, either header-name order in source, then "Limit".
- * Requests and tokens header families without a duration are per-minute.
+ * An unknown duration is marked as a rate limit without assuming a period.
  * Stale-but-present still renders: freshness is NOT this
  * card's concern (the age rides the title instead).
  */
@@ -287,10 +287,10 @@ export function connectionQuotaLine(
   const familyName = lastQuota.family ?? lastQuota.source.match(/ratelimit-(?:limit|remaining|reset)-([a-z_-]+)/)?.[1] ?? lastQuota.source.match(/ratelimit-([a-z_-]+)-(?:limit|remaining|reset)/)?.[1] ?? null;
   const formatWindow = (window: { usedPercent: number; family?: string; windowDurationMins?: number; resetsAt?: number }, family: string | null) => {
     const label = quotaWindowLabel(window.windowDurationMins, family);
-    const burst = window.windowDurationMins == null && (family === "requests" || family === "tokens");
+    const unknownRate = window.windowDurationMins == null && family != null;
     const percentLeft = Math.min(100, Math.max(0, Math.round(100 - window.usedPercent)));
     const resetsPart = window.resetsAt != null ? ` · resets in ${formatAge(window.resetsAt * 1000, now)}` : "";
-    return `${label}${burst ? "/min" : ""} · ${percentLeft}% left${resetsPart}`;
+    return `${label}${unknownRate ? " rate limit" : ""} · ${percentLeft}% left${resetsPart}`;
   };
   const primary = formatWindow(lastQuota, familyName);
   return lastQuota.secondary ? `${primary}\n${formatWindow(lastQuota.secondary, lastQuota.secondary.family ?? null)}` : primary;

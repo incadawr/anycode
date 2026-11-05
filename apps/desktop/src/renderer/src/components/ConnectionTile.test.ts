@@ -453,19 +453,25 @@ describe("connectionQuotaLine (the provider-reported quota line)", () => {
         { usedPercent: 42, observedAt: "2026-10-24T12:00:00.000Z", source: "x-ratelimit-requests-remaining" },
         NOW,
       ),
-    ).toBe("requests/min · 58% left");
+    ).toBe("requests rate limit · 58% left");
   });
 
   it("labels each window by its own family without inventing a unit", () => {
-    expect(connectionQuotaLine({ usedPercent: 1, family: "requests", source: "header", observedAt: "2026-10-24T12:00:00.000Z", secondary: { usedPercent: 20, family: "daily" } }, NOW)).toBe("requests/min · 99% left\ndaily · 80% left");
-    expect(connectionQuotaLine({ usedPercent: 1, family: "custom", source: "header", observedAt: "2026-10-24T12:00:00.000Z" }, NOW)).toBe("custom · 99% left");
+    expect(connectionQuotaLine({ usedPercent: 1, family: "requests", source: "header", observedAt: "2026-10-24T12:00:00.000Z", secondary: { usedPercent: 20, family: "daily" } }, NOW)).toBe("requests rate limit · 99% left\ndaily rate limit · 80% left");
+    expect(connectionQuotaLine({ usedPercent: 1, family: "custom", source: "header", observedAt: "2026-10-24T12:00:00.000Z" }, NOW)).toBe("custom rate limit · 99% left");
+  });
+
+  it("does not infer a period from a long or near reset", () => {
+    for (const seconds of [30, 86400]) {
+      expect(connectionQuotaLine({ usedPercent: 10, family: "requests", resetsAt: NOW / 1000 + seconds, observedAt: "2026-10-24T12:00:00.000Z", source: "header" }, NOW)).toContain("requests rate limit · 90% left");
+    }
   });
 
   it("handles both header orders and prefers the persisted family", () => {
     for (const source of ["x-ratelimit-tokens-limit", "x-ratelimit-limit-tokens"]) {
-      expect(connectionQuotaLine({ usedPercent: 1, observedAt: "2026-10-24T12:00:00.000Z", source }, NOW)).toBe("tokens/min · 99% left");
+      expect(connectionQuotaLine({ usedPercent: 1, observedAt: "2026-10-24T12:00:00.000Z", source }, NOW)).toBe("tokens rate limit · 99% left");
     }
-    expect(connectionQuotaLine({ usedPercent: 1, family: "tokens", observedAt: "2026-10-24T12:00:00.000Z", source: "x-ratelimit-limit-requests" }, NOW)).toBe("tokens/min · 99% left");
+    expect(connectionQuotaLine({ usedPercent: 1, family: "tokens", observedAt: "2026-10-24T12:00:00.000Z", source: "x-ratelimit-limit-requests" }, NOW)).toBe("tokens rate limit · 99% left");
   });
 
   it("falls back to 'Limit' when neither window nor family is parseable", () => {
@@ -480,14 +486,14 @@ describe("connectionQuotaLine (the provider-reported quota line)", () => {
         { usedPercent: 50, observedAt: "2026-10-01T00:00:00.000Z", source: "x-ratelimit-tokens-remaining" },
         NOW,
       ),
-    ).toBe("tokens/min · 50% left");
+    ).toBe("tokens rate limit · 50% left");
   });
 
   it("rounds percent-left the same way the Composer popover does", () => {
     // usedPercent 33 → percentLeft = round(67) = 67
     expect(
       connectionQuotaLine({ usedPercent: 33, observedAt: "2026-10-24T12:00:00.000Z", source: "x-ratelimit-requests-remaining" }, NOW),
-    ).toBe("requests/min · 67% left");
+    ).toBe("requests rate limit · 67% left");
   });
 });
 
