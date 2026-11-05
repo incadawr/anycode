@@ -1,13 +1,13 @@
 import {
   modelDictionaryEntry,
   mapForeignEffortLevels,
-  resolveContextWindowInfo,
   resolveEffortLevels,
   resolveReasoningEffort,
   type CatalogProviderEntry,
   type LiveModelCapabilities,
   type ReasoningEffort,
 } from "@anycode/core";
+import { connectionContextWindow } from "../shared/connection-context-window.js";
 import type { ProviderConnection } from "../shared/settings.js";
 import { applyModelReasoningOverride, modelOverrideFor } from "../shared/model-overrides.js";
 
@@ -120,8 +120,7 @@ export function createConnectionModelSettings(deps: {
     contextFor(model: string) {
       const envApplies = (!deps.envContextWindowFromSettings || !hasReadConnection) && deps.envContextWindow !== undefined &&
         (deps.envContextWindowModel === undefined || deps.envContextWindowModel === model);
-      const override = envApplies ? deps.envContextWindow : modelOverrideFor(connection, model)?.contextWindowTokens;
-      return resolveContextWindowInfo(model, entryFor(model), override, model);
+      return connectionContextWindow(connection, model, deps.catalogEntry, envApplies ? deps.envContextWindow : undefined);
     },
     remember(model: string, effort: ReasoningEffort) {
       selected.set(model, effort);
