@@ -2226,6 +2226,19 @@ describe("handleCustomProviderFetchModels — 4244 modelsUrl catalog wiring", ()
     expect(resolveMaxOutputTokens(model, host.entryFor(model), undefined)).toBe(300_000);
   });
 
+  it("uses Responses for a draft preview and keeps chat hints out of a fresh picker", async () => {
+    const fixture = await readFile(new URL("./__fixtures__/opencode-go-models.json", import.meta.url), "utf8");
+    const deps = makeDeps({ preparedConnectionFetch: () => async () => new Response(fixture) });
+    const result = await handleCustomProviderFetchModels(deps, { draft: true, catalogProviderId: "opencode-openai", baseUrl: "https://opencode.ai/inference/go/v1", useCatalogModelsUrl: true, kind: "openai-compatible", transport: "openai-responses" });
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.models.map(model => model.id)).toContain("gpt-6-luna");
+    expect(result.models.map(model => model.id)).not.toContain("kimi-k3");
+    const catalog = [{ id: "opencode-openai", models: [{ id: "kimi-k3" }] }] as Parameters<typeof providerModelsFor>[1];
+    const picker = providerModelsFor("opencode-openai", catalog, undefined, [...result.models.map(m => m.id), "manual-id"], undefined, "openai-responses");
+    expect(picker?.map(m => m.id)).not.toContain("kimi-k3");
+    expect(picker?.map(m => m.id)).toContain("manual-id");
+  });
+
   it("4244: a deepseek connection fetches https://api.deepseek.com/models with Bearer and persists the ids", async () => {
     await seed4244({ id: "conn-ds", providerId: "deepseek" });
     vault.store.set(connectionApiKeySecretKey("conn-ds"), "sk-ds-secret");

@@ -1812,7 +1812,7 @@ export function ConnectionDrawerFields({
   const modelSuggestions = liveModelSuggestions(
     isCustomRecordConnection ? null : fetchedModels,
     targetConnection?.models,
-    selectedEntry?.models ?? [],
+    providerId === "opencode-openai" && (transport || selectedEntry?.defaultTransport) === "openai-responses" ? [] : selectedEntry?.models ?? [],
   );
   // The ids the catalog itself offers for this provider — a selected one of
   // these needs no entry in the connection's own list (see
@@ -1849,7 +1849,7 @@ export function ConnectionDrawerFields({
   // disagree about which model the number belongs to.
   const effectiveFormModel =
     simplified && createdConnectionId === null
-      ? modelAfterCatalogPrefill(model, selectedEntry?.models ?? [])
+      ? modelAfterCatalogPrefill(model, modelSuggestions)
       : model;
   let cwDefaultHint = contextWindowEffectiveHint(
     selectedEntry,
@@ -2090,7 +2090,7 @@ export function ConnectionDrawerFields({
     // binding and the model-list append. A nonblank malformed id makes no
     // create, secret or list call; a blank keeps the pre-existing implicit
     // rules (no model sent).
-    const preflight = preflightModelId(modelAfterCatalogPrefill(model, selectedEntry?.models ?? []));
+    const preflight = preflightModelId(modelAfterCatalogPrefill(model, modelSuggestions));
     if (preflight.kind === "invalid") {
       setError(MODEL_ID_ERROR);
       return;
@@ -2167,7 +2167,7 @@ export function ConnectionDrawerFields({
       // instead of blank, so the follow-up Save can't persist the empty-model
       // trap.
       if (!isCustomRecordProviderId(providerId)) {
-        setModel((m) => modelAfterCatalogPrefill(m, selectedEntry?.models ?? []));
+        setModel((m) => modelAfterCatalogPrefill(m, modelSuggestions));
       }
       // surface a partial failure (connection exists, list does not)
       // WITHOUT losing a concurrent key error — compose one message.
@@ -2440,7 +2440,7 @@ export function ConnectionDrawerFields({
       const generation = fetchGeneration.current;
       setFetchingModels(true); setError(null); setCreateFetchNotice(null); setFetchedModels(null);
       try {
-        const outcome = await resolvedCustomProvider().fetchModels({ draft: true, baseUrl: requestBase, apiKey: secretValue, kind, ...(!isNewCustomEndpoint ? { catalogProviderId: providerId, useCatalogModelsUrl: !!modelsUrl } : {}), ...connectionCreateProxyRefField(proxyRef) });
+        const outcome = await resolvedCustomProvider().fetchModels({ draft: true, baseUrl: requestBase, apiKey: secretValue, kind, ...((transport || selectedEntry?.defaultTransport) ? { transport: (transport || selectedEntry?.defaultTransport) as ProviderTransportId } : {}), ...(!isNewCustomEndpoint ? { catalogProviderId: providerId, useCatalogModelsUrl: !!modelsUrl } : {}), ...connectionCreateProxyRefField(proxyRef) });
         if (generation !== fetchGeneration.current) return;
         if (outcome.ok) {
           setFetchedModels(outcome.models.filter(item => validVisibleModelIds([item.id]).length > 0));
@@ -2952,7 +2952,7 @@ export function ConnectionDrawerFields({
         <label className="settings-field">
           <span className="settings-field-label">Model</span>
           <input className="settings-field-input" type="text" list="welcome-model-suggestions"
-            value={modelAfterCatalogPrefill(model, selectedEntry.models)} disabled={readOnly}
+            value={modelAfterCatalogPrefill(model, modelSuggestions)} disabled={readOnly}
             placeholder="Enter a model ID"
             onChange={(e) =>
               // the pre-create Model input saves the catalog-prefilled
@@ -2960,7 +2960,7 @@ export function ConnectionDrawerFields({
               // the shared change so A's number cannot ride onto B.
               changeModel(
                 e.target.value,
-                modelAfterCatalogPrefill(e.target.value, selectedEntry.models),
+                modelAfterCatalogPrefill(e.target.value, modelSuggestions),
                 undefined,
               )
             } />

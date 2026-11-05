@@ -1130,7 +1130,7 @@ contextBridge.exposeInMainWorld("anycode", {
       req:
         | { id: string }
         | { connectionId: string }
-        | { baseUrl: string; apiKey?: string; kind?: CustomProviderRecord["kind"]; draft?: true; catalogProviderId?: string; useCatalogModelsUrl?: boolean; proxyRef?: string },
+        | { baseUrl: string; apiKey?: string; kind?: CustomProviderRecord["kind"]; draft?: true; catalogProviderId?: string; useCatalogModelsUrl?: boolean; transport?: "anthropic-messages" | "openai-chat-completions" | "openai-responses"; proxyRef?: string },
     ): Promise<FetchModelsOutcome> =>
       ipcRenderer.invoke(CUSTOM_PROVIDER_FETCH_MODELS_CHANNEL, req) as Promise<FetchModelsOutcome>,
   },

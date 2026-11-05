@@ -1,4 +1,4 @@
-import type { CatalogSummary, CustomProviderRecord } from "./settings.js";
+import type { CatalogSummary, CustomProviderRecord, ProviderTransportId } from "./settings.js";
 import { mergeModelIds } from "./settings.js";
 
 export function providerModelsFor(
@@ -7,8 +7,9 @@ export function providerModelsFor(
   custom: readonly CustomProviderRecord[] | undefined,
   connectionModels?: readonly string[],
   visibleModels?: readonly string[],
+  transport?: ProviderTransportId,
 ): readonly { id: string; name?: string }[] | undefined {
-  const catalogHit = catalog?.find((entry) => entry.id === providerId)?.models;
+  const catalogHit = providerId === "opencode-openai" && transport === "openai-responses" ? [] : catalog?.find((entry) => entry.id === providerId)?.models;
   const customHit = custom?.find((entry) => entry.id === providerId);
   const baseHints: readonly { id: string; name?: string }[] | undefined =
     catalogHit ?? (customHit !== undefined ? customHit.models.map((id) => ({ id })) : undefined);

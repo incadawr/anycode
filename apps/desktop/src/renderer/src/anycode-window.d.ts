@@ -617,7 +617,7 @@ declare global {
             | { id: string }
             | { connectionId: string; addModels: string[] }
             | { connectionId: string; preview?: true }
-            | { baseUrl: string; apiKey?: string; kind?: CustomProviderRecord["kind"]; draft?: true; catalogProviderId?: string; useCatalogModelsUrl?: boolean; proxyRef?: string },
+            | { baseUrl: string; apiKey?: string; kind?: CustomProviderRecord["kind"]; draft?: true; catalogProviderId?: string; useCatalogModelsUrl?: boolean; transport?: "anthropic-messages" | "openai-chat-completions" | "openai-responses"; proxyRef?: string },
         ): Promise<FetchModelsOutcome>;
       };
       // P7.19/F22 (design/slice-P7.19-cut.md §3/§4 W2-W3, W3-FIX): MCP config

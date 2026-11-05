@@ -806,7 +806,7 @@ const fetchModelsSchema = z.union([
   z.object({ connectionId: z.string().min(1), addModels: z.array(z.string()).min(1) }).strict(),
   z.object({ id: z.string().min(1) }).strict(),
   z.object({ connectionId: z.string().min(1), preview: z.literal(true).optional() }).strict(),
-  z.object({ draft: z.literal(true), baseUrl: z.string().min(1), apiKey: z.string().optional(), kind: kindSchema.optional(), catalogProviderId: z.string().min(1).optional(), useCatalogModelsUrl: z.boolean().optional(), proxyRef: z.string().min(1).optional() }).strict(),
+  z.object({ draft: z.literal(true), baseUrl: z.string().min(1), apiKey: z.string().optional(), kind: kindSchema.optional(), transport: z.enum(["anthropic-messages", "openai-chat-completions", "openai-responses"]).optional(), catalogProviderId: z.string().min(1).optional(), useCatalogModelsUrl: z.boolean().optional(), proxyRef: z.string().min(1).optional() }).strict(),
   z.object({ baseUrl: z.string().min(1), apiKey: z.string().optional(), kind: kindSchema.optional() }).strict(),
 ]);
 
@@ -1093,7 +1093,7 @@ export async function handleCustomProviderFetchModels(deps: ProviderIpcDeps, raw
       return prepareModelFetchContext(settings, connection, deps.vault, targetUrl, deps.systemProxy);
     });
     if (!prepared.ok || (prepared.route.kind === "direct" && prepared.route.why === "dangling-ref") || !deps.preparedConnectionFetch) return { ok: false, reason: "network_error" };
-    return fetchModels({ baseUrl, apiKey: draft.apiKey, kind: catalog?.id === "opencode" ? "anthropic" : draft.kind, ...(modelsUrl ? { modelsUrl } : {}), fetchImpl: deps.preparedConnectionFetch(prepared.route) });
+    return fetchModels({ baseUrl, apiKey: draft.apiKey, kind: draft.kind, transport: draft.transport ?? catalog?.defaultTransport, ...(modelsUrl ? { modelsUrl } : {}), fetchImpl: deps.preparedConnectionFetch(prepared.route) });
   }
   return fetchModels({ baseUrl: parsed.data.baseUrl, apiKey: parsed.data.apiKey, kind: parsed.data.kind });
 }

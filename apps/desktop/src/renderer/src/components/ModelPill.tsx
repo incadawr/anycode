@@ -517,6 +517,7 @@ export function ModelPill() {
     snapshot?.settings.provider.custom,
     targetConnection?.models,
     targetConnection?.visibleModels,
+    targetConnection?.transport,
   );
 
   const [open, setOpen] = useState(false);

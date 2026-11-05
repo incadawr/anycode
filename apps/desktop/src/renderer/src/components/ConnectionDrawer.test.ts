@@ -1041,7 +1041,7 @@ describe("ConnectionDrawer wiring (NO route may bypass the per-model reset)", ()
   it("the pre-create input, model picker and provider select route through changeModel", () => {
     // simplified pre-create Model input
     expect(source).toMatch(
-      /changeModel\(\s*e\.target\.value,\s*modelAfterCatalogPrefill\(e\.target\.value, selectedEntry\.models\),\s*undefined,\s*\)/,
+      /changeModel\(\s*e\.target\.value,\s*modelAfterCatalogPrefill\(e\.target\.value, modelSuggestions\),\s*undefined,\s*\)/,
     );
     // popup default selection and fallback
     expect(source).toContain("setDraftDefaultModel(id)");
@@ -1382,7 +1382,7 @@ describe("ConnectionDrawer wiring (pre-create Model field in BOTH create flows)"
 
   it("both pre-create Model inputs route through changeModel (no direct setModel, intact)", () => {
     expect(source).toMatch(
-      /changeModel\(\s*e\.target\.value,\s*modelAfterCatalogPrefill\(e\.target\.value, selectedEntry\.models\),\s*undefined,\s*\)/,
+      /changeModel\(\s*e\.target\.value,\s*modelAfterCatalogPrefill\(e\.target\.value, modelSuggestions\),\s*undefined,\s*\)/,
     );
     expect(source).toMatch(/changeModel\(e\.target\.value, e\.target\.value, undefined\)/);
   });
