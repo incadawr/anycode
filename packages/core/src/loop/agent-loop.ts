@@ -93,6 +93,7 @@ import {
 } from "./todo-reminder.js";
 import type { DispatchContext } from "../dispatch/dispatcher.js";
 import { runToolBatches, type ToolSchedulerConfig } from "../dispatch/scheduler.js";
+import { ForegroundRuns } from "../subagents/foreground-runs.js";
 import { toToolDeclarations } from "../tools/to-model-tools.js";
 import {
   estimateToolDeclarationTokens,
@@ -1159,7 +1160,12 @@ export class AgentLoop {
     const mode = options?.mode ?? this.config.mode;
     const config = this.config;
 
+    const foregroundRuns = new ForegroundRuns();
+    const cancelForeground = () => foregroundRuns.close(signal?.reason);
+    signal?.addEventListener("abort", cancelForeground, { once: true });
+    if (signal?.aborted) cancelForeground();
     const dispatchCtx: DispatchContext = {
+      foregroundRuns,
       registry: this.config.registry,
       hooks: this.config.hooks,
       permissionEngine: this.config.permissionEngine,
@@ -1757,6 +1763,8 @@ export class AgentLoop {
         yield { type: "turn_end", turn, finishReason };
       }
     } finally {
+      signal?.removeEventListener("abort", cancelForeground);
+      foregroundRuns.close();
       if (this.activeDispatchCtx === dispatchCtx) {
         this.activeDispatchCtx = null;
       }
