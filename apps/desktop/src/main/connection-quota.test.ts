@@ -104,7 +104,7 @@ it("checks the observation guard again when a delayed write is flushed", async (
 describe("parseProviderQuotaEvent — process-boundary validation", () => {
   const raw = {
     type: "anycode:provider-quota",
-    quota: { usedPercent: 80, resetsAt: 1_789_999_999 },
+    quota: { usedPercent: 80, family: "requests", resetsAt: 1_789_999_999 },
     source: "x-ratelimit-requests-remaining",
   };
 

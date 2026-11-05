@@ -112,7 +112,7 @@ describe("createOpenAIResponsesLanguageModel quota fetch wiring", () => {
     expect(sawAuthorization).toBeUndefined(); // stripped before the wire
     expect(seen).toHaveLength(1); // quota saw the final response
     expect(seen[0]).toEqual({
-      primary: { usedPercent: 80 },
+      primary: { usedPercent: 80, family: "requests" },
       primarySource: "x-ratelimit-requests-limit",
       sources: ["x-ratelimit-requests-limit", "x-ratelimit-requests-remaining"],
     });

@@ -769,8 +769,8 @@ export type AgentEvent =
  * mirroring the wire's multi-bucket view.
  */
 export interface CodexRateLimitsWire {
-  primary?: { usedPercent: number; windowDurationMins?: number | null; resetsAt?: number | null } | null;
-  secondary?: { usedPercent: number; windowDurationMins?: number | null; resetsAt?: number | null } | null;
+  primary?: { usedPercent: number; family?: string; windowDurationMins?: number | null; resetsAt?: number | null } | null;
+  secondary?: { usedPercent: number; family?: string; windowDurationMins?: number | null; resetsAt?: number | null } | null;
   credits?: { hasCredits: boolean; unlimited: boolean; balance?: string | null } | null;
   planType?: string | null;
   limitName?: string | null;

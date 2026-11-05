@@ -838,8 +838,7 @@ export function sessionTokensFromEngineEvent(event: {
  * (provider layer's `ProviderQuotaUpdate`) onto the SAME wire slot the
  * engine brokers use (`CodexRateLimitsWire`, the Composer popover's sole
  * reader) — primary/secondary carry through, `observedAt` stamps the
- * arrival. Credits/planType/limitName stay absent: an HTTP provider's
- * headers never carry them, and absent-means-unreported (never fabricated).
+ * arrival. Credits and planType stay absent; the reported family supplies limitName.
  * Exported for unit testing.
  */
 export function providerQuotaToWire(
@@ -848,6 +847,7 @@ export function providerQuotaToWire(
   return {
     ...(quota.primary !== undefined ? { primary: { ...quota.primary } } : {}),
     ...(quota.secondary !== undefined ? { secondary: { ...quota.secondary } } : {}),
+    ...(quota.primary?.family !== undefined ? { limitName: quota.primary.family } : {}),
     observedAt: new Date().toISOString(),
   };
 }

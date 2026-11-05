@@ -1053,6 +1053,10 @@
 }
 
 .connection-tile-provider {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: var(--fs-2xs);
   font-weight: var(--w-semibold);
   text-transform: uppercase;
@@ -1061,6 +1065,8 @@
 }
 
 .connection-tile-selected-marker {
+  flex: 0 0 0.9rem;
+  height: 0.9rem;
   display: inline-flex;
   color: var(--accent);
 }
@@ -1096,9 +1102,8 @@
 /* Provider-reported subscription quota line:
    rendered only when the provider last reported something. */
 .connection-quota {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
   color: var(--text-3);
   font-size: 12px;
 }

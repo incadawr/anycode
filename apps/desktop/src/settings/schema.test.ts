@@ -217,7 +217,7 @@ describe("settingsSchema (v2)", () => {
     [Date.parse("2026-10-25T00:00:00.000Z"), undefined],
     [Date.parse("2026-10-25T00:00:00.000Z") / 1000, Date.parse("2026-10-25T00:00:00.000Z") / 1000],
   ])("keeps only a plausible weekly reset from settings: %s", (resetsAt, expected) => {
-    const secondary = { usedPercent: 60, windowDurationMins: 10080, resetsAt };
+    const secondary = { usedPercent: 60, family: "tokens", windowDurationMins: 10080, resetsAt };
     const settings = {
       ...cloneDefaults(),
       provider: { connections: [{ id: "c1", providerId: "minimax", lastQuota: {
@@ -226,8 +226,15 @@ describe("settingsSchema (v2)", () => {
     };
     const parsed = settingsSchema.parse(settings);
     expect(parsed.provider.connections[0]?.lastQuota?.secondary).toEqual({
-      usedPercent: 60, windowDurationMins: 10080, ...(expected === undefined ? {} : { resetsAt: expected }),
+      usedPercent: 60, family: "tokens", windowDurationMins: 10080, ...(expected === undefined ? {} : { resetsAt: expected }),
     });
+  });
+
+  it("preserves the reported quota family", () => {
+    const settings = { ...cloneDefaults(), provider: { connections: [{ id: "c1", providerId: "zai", lastQuota: {
+      usedPercent: 1, family: "tokens", observedAt: "2026-10-24T00:00:00.000Z", source: "x-ratelimit-limit-tokens",
+    } }] } };
+    expect(settingsSchema.parse(settings).provider.connections[0]?.lastQuota?.family).toBe("tokens");
   });
 
   it("accepts a lastQuota with only the required usedPercent/observedAt/source", () => {

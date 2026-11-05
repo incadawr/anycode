@@ -83,11 +83,15 @@ export function parseProviderQuotaEvent(raw: unknown): ProviderQuotaEvent | unde
   if (quota === null || typeof quota !== "object") {
     return undefined;
   }
-  const { usedPercent, windowDurationMins, resetsAt } = quota as Record<string, unknown>;
+  const { usedPercent, windowDurationMins, resetsAt, family } = quota as Record<string, unknown>;
   if (typeof usedPercent !== "number" || !Number.isFinite(usedPercent) || usedPercent < 0 || usedPercent > 100) {
     return undefined;
   }
   const window: ProviderQuotaWindowWire = { usedPercent };
+  if (family !== undefined) {
+    if (typeof family !== "string") return undefined;
+    window.family = family;
+  }
   if (windowDurationMins !== undefined) {
     if (typeof windowDurationMins !== "number" || !Number.isFinite(windowDurationMins) || windowDurationMins < 0) {
       return undefined;

@@ -15,6 +15,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Choose a vision model from available models and set its context window separately for each connection.
 - Image input settings are now saved separately for each model. (GitHub #56)
+- Label provider rate limits clearly for both header formats (GitHub #55).
+- Keep connection tiles aligned and show all quota windows.
 
 ## [0.0.77] — 2026-11-05
 

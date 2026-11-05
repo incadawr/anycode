@@ -50,7 +50,7 @@ describe("wrapFetchWithQuota", () => {
     expect(seen).toHaveLength(1);
     expect(seen[0]!.baseUrl).toBe("http://base.example");
     expect(seen[0]!.update).toEqual({
-      primary: { usedPercent: 80, resetsAt: 1_789_999_999 },
+      primary: { usedPercent: 80, family: "requests", resetsAt: 1_789_999_999 },
       primarySource: "x-ratelimit-requests-limit",
       sources: ["x-ratelimit-requests-limit", "x-ratelimit-requests-remaining", "x-ratelimit-requests-reset"],
     });
@@ -107,7 +107,7 @@ describe("wrapFetchWithQuota", () => {
     expect(received.method).toBe("POST");
     expect(received.authorization).toBe("Bearer test-key");
     expect(received.contentType).toBe("application/json");
-    expect(seen[0]?.primary).toEqual({ usedPercent: 20 });
+    expect(seen[0]?.primary).toEqual({ usedPercent: 20, family: "requests" });
   });
 
   it("reports null to the callback when the response carries no quota headers", async () => {
