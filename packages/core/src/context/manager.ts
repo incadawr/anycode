@@ -239,6 +239,9 @@ export class ContextManager {
     if (this.consecutiveFailures >= this.deps.config.maxConsecutiveCompactionFailures) {
       return false;
     }
+    if (this.deps.history.items.length <= this.deps.config.keepRecentMessages) {
+      return false;
+    }
     return this.estimate().tokens >= compactThresholdTokens(this.deps.config);
   }
 
