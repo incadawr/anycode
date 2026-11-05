@@ -599,6 +599,26 @@ describe("Session — engine switch", () => {
     }
   });
 
+  it("refuses a switch when the live transcript cannot be read", async () => {
+    const oldEngine = new SwitchableFakeEngine(seededHistory());
+    (oldEngine as unknown as { readTranscript: () => Promise<readonly HistoryItem[]> }).readTranscript = async () => { throw new Error("read failed"); };
+    let factoryCalled = false;
+    const h = createHarness({ steps: [], engine: oldEngine as SessionEngine, switchEngineFactory: async () => { factoryCalled = true; return new NextFakeEngine(); } });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "engine_switch_request", requestId: "read-failure", engine: "codex" });
+      expect(await h.waitFor(isEngineSwitchFailed)).toMatchObject({ requestId: "read-failure", reason: expect.stringContaining("read failed") });
+      expect(factoryCalled).toBe(false);
+      expect(oldEngine.disposeReasons).toEqual([]);
+      h.send({ type: "user_message", requestId: "after-failure", text: "continue" });
+      await h.waitFor(agentEventOf("loop_end"));
+      expect(oldEngine.inputs).toEqual(["continue"]);
+    } finally {
+      h.close();
+    }
+  });
+
   it("empty import is announced honestly", async () => {
     const oldEngine = new SwitchableFakeEngine([]);
     const next = new NextFakeEngine();

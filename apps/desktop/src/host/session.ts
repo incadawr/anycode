@@ -4237,7 +4237,8 @@ export class Session {
         try {
           liveItems = [...(await previousEngine.readTranscript())];
         } catch (error) {
-          console.error(`[host] engine switch: live transcript read failed, using boot history: ${describeError(error)}`);
+          fail(`could not read current transcript: ${describeError(error)}`);
+          return;
         }
       }
       const canonical: HistoryItem[] = [...this.switchCarriedHistory, ...liveItems];
