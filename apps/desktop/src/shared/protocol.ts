@@ -1287,6 +1287,14 @@ export const setEngineEffortSchema = z
   .object({ type: z.literal("set_engine_effort"), effort: z.string().min(1).max(32) })
   .strict();
 
+/** Renderer selection only. Paths, credentials and runtime options are resolved by main. */
+export const engineSwitchTargetSchema = z.discriminatedUnion("engine", [
+  z.object({ engine: z.literal("core"), model: z.string().min(1).max(128), connectionId: z.string().min(1).max(128) }).strict(),
+  z.object({ engine: z.literal("codex"), model: z.string().min(1).max(128), codexProfileId: z.string().min(1).max(128).optional() }).strict(),
+  z.object({ engine: z.literal("claude"), model: z.string().min(1).max(128) }).strict(),
+]);
+export type EngineSwitchTarget = z.infer<typeof engineSwitchTargetSchema>;
+
 // untrusted engine_switch_request. Mirrors setEnginePresetSchema's
 // bounded-length discipline; `engine` is validated against ENGINE_IDS (the same
 // table isEngineId uses) so a hostile renderer cannot ship an unknown engine id,

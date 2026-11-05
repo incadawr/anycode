@@ -9,6 +9,7 @@ import type {
 import {
   compactRequestSchema,
   engineSwitchRequestSchema,
+  engineSwitchTargetSchema,
   gitCommandMessageSchema,
   lspStatusRequestSchema,
   lspRestartRequestSchema,
@@ -19,6 +20,20 @@ import {
 } from "./protocol.js";
 import type { GitCommandOutcome, HostToUiMessage, WireEnvStatus, WireGitStatus } from "./protocol.js";
 import { userMessageSchema as oldUserMessageSchema, setOrchestrateSchema as oldSetOrchestrateSchema, uiReadySchema as oldUiReadySchema } from "./protocol-legacy-4f1e.fixture.js";
+
+describe("engine switch target selection", () => {
+  it("accepts engine-specific identities and rejects renderer configuration", () => {
+    expect(engineSwitchTargetSchema.safeParse({ engine: "core", model: "m", connectionId: "c" }).success).toBe(true);
+    expect(engineSwitchTargetSchema.safeParse({ engine: "codex", model: "m", codexProfileId: "p" }).success).toBe(true);
+    expect(engineSwitchTargetSchema.safeParse({ engine: "claude", model: "m" }).success).toBe(true);
+    for (const target of [
+      { engine: "core", model: "m" },
+      { engine: "claude", model: "m", connectionId: "c" },
+      { engine: "codex", model: "m", env: { KEY: "secret" } },
+      { engine: "codex", model: "", codexProfileId: "p" },
+    ]) expect(engineSwitchTargetSchema.safeParse(target).success).toBe(false);
+  });
+});
 
 describe("set_model protocol (slice P7.15 · F14)", () => {
   it("accepts a non-empty model id and fails closed on junk", () => {
