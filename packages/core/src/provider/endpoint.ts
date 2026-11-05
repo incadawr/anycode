@@ -14,6 +14,7 @@ import type { ImplicitPromptCache, ReasoningEffort } from "../types/config.js";
 
 export interface EndpointConfig {
   modelMetadata?: Record<string, unknown>;
+  resolveEndpointForModel?: (model: string) => EndpointConfig;
   providerId?: string;
   automaticModelRouting?: boolean;
   /** Automatic Go policy for this exact model; absent for manual endpoints. */

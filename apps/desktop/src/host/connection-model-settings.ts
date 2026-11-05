@@ -29,6 +29,7 @@ export function createConnectionModelSettings(deps: {
   readConnection?: () => ConnectionSettings | undefined | null;
   initialReadSucceeded?: boolean;
   catalogEntry?: CatalogProviderEntry;
+  catalogEntryFor?: (model: string) => CatalogProviderEntry | undefined;
   envReasoningEffort?: ReasoningEffort;
   envReasoningEffortModel?: string;
   envReasoningEffortFromSettings?: boolean;
@@ -46,6 +47,11 @@ export function createConnectionModelSettings(deps: {
 
   function entryFor(model: string) {
     const override = modelOverrideFor(connection, model);
+    if (deps.catalogEntryFor) {
+      const entry = deps.catalogEntryFor(model);
+      if (!entry || override?.reasoningSupported !== false) return entry;
+      return { ...entry, models: entry.models.map(row => row.id === model ? { ...row, reasoning: false, effortLevels: undefined, defaultEffort: undefined } : row) };
+    }
     let entry = modelDictionaryEntry(model, deps.catalogEntry, override?.catalogMatchDisabled === true);
     const live = connection?.modelCapabilities?.[model];
     if (entry && (live?.contextWindow || live?.maxOutputTokens)) {
@@ -121,7 +127,7 @@ export function createConnectionModelSettings(deps: {
       const envApplies = (!deps.envContextWindowFromSettings || !hasReadConnection) && deps.envContextWindow !== undefined &&
         (deps.envContextWindowModel === undefined || deps.envContextWindowModel === model);
       const override = envApplies ? deps.envContextWindow : modelOverrideFor(connection, model)?.contextWindowTokens;
-      const entry = connection?.modelCapabilities?.[model]?.contextWindow
+      const entry = deps.catalogEntryFor ? entryFor(model) : connection?.modelCapabilities?.[model]?.contextWindow
         ? entryFor(model)
         : modelDictionaryEntry(model, deps.catalogEntry, modelOverrideFor(connection, model)?.catalogMatchDisabled === true);
       return resolveContextWindowInfo(model, entry, override, model);

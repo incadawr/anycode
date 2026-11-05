@@ -1,3 +1,4 @@
+import { automaticGoRoute } from "./go-route.js";
 /**
  * Host-env composition + the env-scrub primitives (design slice-2.2-cut.md §6/§1
 
@@ -1527,19 +1528,23 @@ export async function resolveRecognizerConfig(
   // address/credential live ONLY on its CustomProviderRecord, and a synthetic
   // `custom:` id has no catalog entry to fall back to anyway; the guard keeps
   // that fail-closed posture explicit.
+  const goRoute = automaticGoRoute(connection, { ANYCODE_MODEL: setting.modelId });
+  if (goRoute?.kind === "refusal") return undefined;
   const catalogInfo = customId === undefined ? catalogFor?.(providerId) : undefined;
   const trimmedConnectionBaseUrl = connection.baseUrl?.trim();
-  const baseUrl =
+  const baseUrl = goRoute?.route.baseUrl ?? (
     customId !== undefined
       ? customRecord?.baseUrl
       : catalogInfo !== undefined
         ? trimmedConnectionBaseUrl ? trimmedConnectionBaseUrl : catalogInfo.baseUrl
-        : connection.baseUrl;
+        : connection.baseUrl);
   if (baseUrl === undefined || baseUrl.trim() === "") {
     return undefined;
   }
   let transport: ProviderTransportId | undefined;
-  if (customId !== undefined) {
+  if (goRoute) {
+    transport = goRoute.route.transport;
+  } else if (customId !== undefined) {
     transport = connection.transport;
   } else {
     const effectiveTransport = resolveEffectiveTransport({
@@ -1575,6 +1580,7 @@ export async function resolveRecognizerConfig(
     baseUrl,
     apiKey: apiKey !== undefined && apiKey !== "" ? apiKey : undefined,
     model: setting.modelId,
+    ...(goRoute ? { goModelPolicy: goRoute.route.policy } : {}),
     providerName: providerId !== "" ? providerId : undefined,
   };
 }
@@ -1588,9 +1594,11 @@ export async function resolveRecognizerConfig(
  * wins over the resolved connection.
  */
 export function applyRecognizerEnv(env: NodeJS.ProcessEnv, recognizer: RecognizerWireConfig | undefined): void {
+  delete env.ANYCODE_RECOGNIZER_GO_POLICY;
   if (recognizer === undefined) {
     return;
   }
+  if (!envPresent(env, ENV_RECOGNIZER_TRANSPORT) && !envPresent(env, ENV_RECOGNIZER_BASE_URL) && !envPresent(env, ENV_RECOGNIZER_MODEL) && recognizer.goModelPolicy) env.ANYCODE_RECOGNIZER_GO_POLICY = JSON.stringify(recognizer.goModelPolicy);
   fillFromSettings(env, ENV_RECOGNIZER_TRANSPORT, recognizer.transport);
   fillFromSettings(env, ENV_RECOGNIZER_BASE_URL, recognizer.baseUrl);
   fillFromSettings(env, ENV_RECOGNIZER_API_KEY, recognizer.apiKey);

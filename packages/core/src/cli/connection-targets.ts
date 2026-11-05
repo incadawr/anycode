@@ -1,3 +1,4 @@
+import { openCodeGoCatalogEntry, resolveOpenCodeGoEndpointPolicy } from "../provider/opencode-go-policy.js";
 import type { ModelBoundCoreEnvConfig } from "../provider/env.js";
 import type { CatalogProviderEntry, ProviderTransport } from "../provider/catalog.js";
 import { resolveContextWindow, resolveEffortLevels, resolveImageInput } from "../provider/capabilities.js";
@@ -10,19 +11,22 @@ export function cliConnectionTargets(
   transport: ProviderTransport,
   model: string,
 ): ConnectionTargets {
-  const ids = [...new Set([config.model, model, ...((catalog?.models ?? []).map(entry => entry.id))])];
+  const candidates = [...new Set([config.model, model, ...((catalog?.models ?? []).map(entry => entry.id))])];
+  const ids = config.automaticModelRouting ? candidates.filter(id => resolveOpenCodeGoEndpointPolicy(config.providerId ?? "", id).kind === "route") : candidates;
   return {
     current: { connectionId: "cli", model },
     connections: [{
       id: "cli", label: "CLI connection", providerId: catalog?.id ?? "custom", transport,
       readiness: "unknown",
-      models: ids.map(id => ({
-        id,
-        imageInput: resolveImageInput(id, catalog, config.imageInput),
-        contextWindow: resolveContextWindow(id, catalog, config.contextWindowTokens, config.contextWindowModel),
-        effortLevels: resolveEffortLevels(id, catalog, undefined, config.effortLevels),
-        default: id === config.model,
-      })),
+      models: ids.map(id => {
+        const entry = config.automaticModelRouting && catalog ? openCodeGoCatalogEntry(catalog, id) : catalog;
+        return { id,
+          imageInput: resolveImageInput(id, entry, config.imageInput),
+          contextWindow: resolveContextWindow(id, entry, config.contextWindowTokens, config.contextWindowModel),
+          effortLevels: resolveEffortLevels(id, entry, undefined, config.effortLevels),
+          default: id === config.model,
+        };
+      }),
     }],
   };
 }

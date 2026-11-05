@@ -3340,13 +3340,19 @@ export class Session {
       }
       return;
     }
+    const previousEffort = this.selectedEffort;
     if (effort !== undefined) {
       // The user's SELECTED tier (not the currently effective one): the
       // switch below re-resolves it against the new model's capabilities.
       this.selectedEffort = effort;
     }
-    if (!this.applyModelSwitch(model, effort !== undefined, modelRequestId, effortRequestId) && effort !== undefined) {
-      this.applyReasoningEffort(effort, effortRequestId);
+    try {
+      if (!this.applyModelSwitch(model, effort !== undefined, modelRequestId, effortRequestId) && effort !== undefined) {
+        this.applyReasoningEffort(effort, effortRequestId);
+      }
+    } catch (error) {
+      this.selectedEffort = previousEffort;
+      throw error;
     }
   }
 

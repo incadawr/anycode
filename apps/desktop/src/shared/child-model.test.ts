@@ -27,3 +27,8 @@ it("routes catalog and manually visible models through the discovery inventory",
   expect(resolveCoreConnectionForModel(inventory, "claude-sonnet-5-5")).toEqual({ ok: true, connectionId: "c", model: "claude-sonnet-5-5" });
   expect(resolveCoreConnectionForModel(inventory, "manual")).toEqual({ ok: true, connectionId: "c", model: "manual" });
 });
+
+it("does not admit Go models refused by the connection snapshot", () => {
+  const connection = { id: "c", providerId: "opencode", model: "glm-5.3", models: ["glm-5.3", "gemini-4-argon"], modelRoutes: { version: 1 as const, fetchedAt: "now", models: { "glm-5.3": { kind: "refusal" as const, reason: "unsupported-model" as const } } } };
+  expect(connectionChildModels(connection, [], [])).toEqual([]);
+});

@@ -8,3 +8,10 @@ it("honors a connection snapshot, including refusals, before static fallback", (
   expect(automaticGoRoute({ ...connection, modelRoutes }, {})).toEqual({ kind: "refusal", reason: "unsupported-model" });
   expect(automaticGoRoute({ ...connection, modelRoutes }, { ANYCODE_BASE_URL: "https://manual.test" })).toBeUndefined();
 });
+
+it("routes a different requested model without changing the connection default", () => {
+  const route = automaticGoRoute(connection, { ANYCODE_MODEL: "grok-4.7" });
+  expect(route?.kind).toBe("route");
+  if (route?.kind === "route") expect(route.route.transport).toBe("openai-responses");
+  expect(connection.model).toBe("glm-5.3");
+});

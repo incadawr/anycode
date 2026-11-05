@@ -1,9 +1,12 @@
+import { resolveOpenCodeGoEndpointPolicy } from "@anycode/core";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
 import type { AnycodeSettings } from "./settings.js";
 import type { ProviderConnection } from "./settings.js";
 
 export function connectionChildModels(connection: ProviderConnection | undefined, customModels: readonly string[], catalogModels: readonly string[], environmentModel?: string): string[] {
-  return [...new Set([...(connection?.models ?? []), ...(connection?.visibleModels ?? []), ...customModels, ...catalogModels, ...(connection?.model ? [connection.model] : []), ...(environmentModel ? [environmentModel] : [])])];
+  const models = [...new Set([...(connection?.models ?? []), ...(connection?.visibleModels ?? []), ...customModels, ...catalogModels, ...(connection?.model ? [connection.model] : []), ...(environmentModel ? [environmentModel] : [])])];
+  if (!connection || !["opencode", "opencode-openai"].includes(connection.providerId) || connection.baseUrl?.trim() || connection.transport?.trim()) return models;
+  return models.filter(model => resolveOpenCodeGoEndpointPolicy(connection.providerId, model, connection.modelRoutes).kind === "route");
 }
 
 /** A model override is an exact id on the selected connection, never an alias

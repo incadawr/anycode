@@ -268,6 +268,7 @@ import {
   type ImageModalityLookup,
   resolveIncludeUsage,
   applyAutomaticModelRoute,
+  openCodeGoCatalogEntry,
   resolveMaxOutputTokens,
   resolveProviderHeaders,
   clampSubagentMaxOutputTokens,
@@ -2777,6 +2778,7 @@ function recognizerEndpointFromFields(fields: {
   apiKey?: string;
   model: string;
   providerName?: string;
+  goModelPolicy?: RecognizerEndpoint["goModelPolicy"];
 }): RecognizerEndpoint | null {
   if (fields.baseUrl === undefined || fields.baseUrl.trim() === "") {
     return null;
@@ -2788,6 +2790,7 @@ function recognizerEndpointFromFields(fields: {
     transport: (fields.transport as ProviderTransport | undefined) ?? "anthropic-messages",
     baseUrl: fields.baseUrl,
     model: fields.model,
+    ...(fields.goModelPolicy ? { goModelPolicy: fields.goModelPolicy } : {}),
     ...(fields.apiKey !== undefined && fields.apiKey !== "" ? { apiKey: fields.apiKey } : {}),
     ...(fields.providerName !== undefined && fields.providerName !== "" ? { providerName: fields.providerName } : {}),
   };
@@ -2815,7 +2818,10 @@ function parseRecognizerEnv(env: NodeJS.ProcessEnv): RecognizerEndpoint | null {
   if (model === undefined || model.trim() === "") {
     return null;
   }
+  let goModelPolicy: RecognizerEndpoint["goModelPolicy"];
+  try { goModelPolicy = env.ANYCODE_RECOGNIZER_GO_POLICY ? JSON.parse(env.ANYCODE_RECOGNIZER_GO_POLICY) : undefined; } catch {}
   return recognizerEndpointFromFields({
+    goModelPolicy,
     transport: env.ANYCODE_RECOGNIZER_TRANSPORT,
     baseUrl: env.ANYCODE_RECOGNIZER_BASE_URL,
     apiKey: env.ANYCODE_RECOGNIZER_API_KEY,
@@ -3121,7 +3127,16 @@ async function boot(): Promise<void> {
           onQuotaHeaders: () => {},
           networkWaiter: desktopNetworkWaiter,
         }, routeSnapshot);
-      if (endpoint.automaticModelRouting) endpoint.includeUsage = resolveIncludeUsage(endpoint.transport, envConfig.includeUsage);
+      if (endpoint.automaticModelRouting) {
+        endpoint.includeUsage = resolveIncludeUsage(endpoint.transport, envConfig.includeUsage);
+        endpoint.resolveEndpointForModel = modelId => {
+          const latest = readConnectionModelSettingsSync(routingConnectionId, settingsPathOverride?.trim() || undefined);
+          if (latest) routeSnapshot = latest.modelRoutes;
+          const target = applyAutomaticModelRoute({ ...endpoint, model: modelId }, routeSnapshot);
+          target.includeUsage = resolveIncludeUsage(target.transport, envConfig.includeUsage);
+          return target;
+        };
+      }
       return new AiSdkModelPort(endpoint, hostDiagnosticSink);
     };
     const switchableModelPort = new SwitchableModelPort(modelPortFactory(envConfig.model));
@@ -3390,6 +3405,7 @@ async function boot(): Promise<void> {
       ...(liveCapsConnectionId ? { readConnection: readModelSettings } : {}),
       initialReadSucceeded: Boolean(liveCapsConnectionId) && initialModelSettings !== null,
       catalogEntry,
+      ...(envConfig.automaticModelRouting && catalogEntry ? { catalogEntryFor: (id: string) => openCodeGoCatalogEntry(catalogEntry, id, readModelSettings()?.modelRoutes ?? routeSnapshot) } : {}),
       envContextWindow: envConfig.contextWindowTokens,
       envContextWindowFromSettings: process.env.ANYCODE_CONTEXT_WINDOW_FROM_SETTINGS === "1",
       envContextWindowModel: envConfig.contextWindowModel,
@@ -4308,6 +4324,7 @@ async function boot(): Promise<void> {
         liveRecognizerEndpoint.model = next.model;
         liveRecognizerEndpoint.apiKey = next.apiKey;
         liveRecognizerEndpoint.providerName = next.providerName;
+        liveRecognizerEndpoint.goModelPolicy = next.goModelPolicy;
         recognizerConfigured = true;
       }
       config.recognizer!.endpoint = recognizerConfigured ? liveRecognizerEndpoint : undefined;
@@ -4613,6 +4630,7 @@ async function boot(): Promise<void> {
     // callback (mirror of the CLI's deps.model.set). It stays host-owned while
     // CoreEngine exposes it through the neutral SessionEngine seam.
     const switchModelImpl = (id: string, selectedTier: ReasoningEffort, effortExplicit = false) => {
+        const nextPort = modelPortFactory(id);
         if (isChildSession) connectionModelSettings.refresh();
         else selectedTier = connectionModelSettings.switchEffort(currentModel, id, selectedTier, effortExplicit);
         const effortAdjustment = isChildSession ? undefined : connectionModelSettings.takeAdjustment();
@@ -4627,7 +4645,7 @@ async function boot(): Promise<void> {
         // that decorator forwards to, so every existing holder (loop,
         // ContextManager, subagents, titling) sees the new model without a
         // second wrap.
-        switchableModelPort.setPort(modelPortFactory(id));
+        switchableModelPort.setPort(nextPort);
         currentModel = id;
 
         // and the rebuilt parent prompt see the new modelId.

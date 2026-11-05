@@ -899,14 +899,15 @@ export class AiSdkModelPort implements ModelPort {
     if (!mode?.startsWith("factual_") || this.#reasoningSource === undefined) return parts;
     const modelId = this.config.reasoningCompactorModel ?? this.config.model;
     return compactReasoningParts(parts, Number(mode.slice(8)), modelId, async (prompt, system) => {
-      const model = await new AiSdkModelPort({ ...this.config, model: modelId })
-        .buildAttemptModel(this.config.includeUsage);
+      const target = this.config.resolveEndpointForModel?.(modelId) ?? { ...this.config, model: modelId };
+      const model = await new AiSdkModelPort(target)
+        .buildAttemptModel(target.includeUsage);
       return generateText({
         model,
         ...reasoningRequestOptions({
-          messages: [], tools: [], reasoningEffort: "low",
+          messages: [], tools: [], reasoningEffort: target.goModelPolicy ? undefined : "low",
           maxOutputTokens: Number(mode.slice(8)) + 8192,
-        }, this.config.providerName, this.config.transport, undefined, modelId, this.config.declaredEffortLevels),
+        }, target.providerName, target.transport, undefined, modelId, target.declaredEffortLevels, target.goModelPolicy),
         abortSignal: signal,
         maxRetries: 0,
         system,

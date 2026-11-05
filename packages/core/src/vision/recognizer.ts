@@ -39,6 +39,7 @@ export const OVERVIEW_QUESTION =
  * rides the host process's own ambient proxy, never a per-endpoint one.
  */
 export interface RecognizerEndpoint {
+  goModelPolicy?: import("../provider/opencode-go-policy.js").OpenCodeGoEndpointPolicy;
   transport: ProviderTransport;
   baseUrl: string;
   apiKey?: string;

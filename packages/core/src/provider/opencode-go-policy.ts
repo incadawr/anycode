@@ -88,3 +88,28 @@ export function resolveOpenCodeGoEndpointPolicy(
     capabilities: capabilities(metadata.capabilities), apiCapabilities: apiCapabilities(metadata.apiCapabilities), compatibility: compatibility(metadata.compatibility), modalities: modalities(metadata.modalities), limits: limits(metadata.limit),
   } satisfies OpenCodeGoEndpointPolicy } };
 }
+
+/** Project this exact Go model's declared metadata into existing capability resolvers. */
+export function openCodeGoCatalogEntry(
+  entry: import("./catalog.js").CatalogProviderEntry,
+  model: string,
+  snapshot?: ModelRouteSnapshot<Record<string, unknown>>,
+): import("./catalog.js").CatalogProviderEntry {
+  const resolved = resolveOpenCodeGoEndpointPolicy(entry.id, model, snapshot);
+  if (resolved.kind === "refusal") throw new Error(`OpenCode Go model ${model} unavailable: ${resolved.reason}`);
+  const policy = resolved.route.policy;
+  const reasoning = policy.capabilities?.reasoning;
+  const levels = (reasoning?.effort ?? []).map(level => level === "none" ? "off" as const : level);
+  if (reasoning?.toggle && !levels.includes("off")) levels.unshift("off");
+  const defaultEffort = reasoning?.default?.value === "none" ? "off" : reasoning?.default?.value;
+  return { ...entry, models: [{
+    id: model,
+    contextWindow: policy.limits?.context ?? 8192,
+    ...(policy.limits?.output !== undefined ? { maxOutputTokens: policy.limits.output } : {}),
+    reasoning: reasoning?.supported === true,
+    effortLevels: levels,
+    supportsExplicitOff: levels.includes("off"),
+    ...(defaultEffort !== undefined ? { defaultEffort } : {}),
+    imageInput: policy.modalities?.input?.some(m => m.startsWith("image/")) === true,
+  }], retiredModels: [] };
+}

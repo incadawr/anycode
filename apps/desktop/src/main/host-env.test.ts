@@ -3244,3 +3244,18 @@ describe("Go routing identity carriers", () => {
     expect(empty.ANYCODE_AUTOMATIC_MODEL_ROUTING).toBeUndefined();
   });
 });
+
+it("resolves a recognizer using its own Go model and snapshot", async () => {
+  const configured = settings({ provider: { id: "opencode", model: "glm-5.3" } });
+  const connection = configured.provider.connections[0]!;
+  configured.recognizer = { connectionId: connection.id, modelId: "grok-4.7" };
+  const { resolveRecognizerConfig, applyRecognizerEnv } = await import("./host-env.js");
+  const endpoint = await resolveRecognizerConfig(configured, vaultSecret("test"));
+  expect(endpoint?.transport).toBe("openai-responses");
+  expect(endpoint?.goModelPolicy?.model).toBe("grok-4.7");
+  const env: NodeJS.ProcessEnv = {};
+  applyRecognizerEnv(env, endpoint);
+  expect(JSON.parse(env.ANYCODE_RECOGNIZER_GO_POLICY!).model).toBe("grok-4.7");
+  configured.recognizer.modelId = "gemini-4-argon";
+  expect(await resolveRecognizerConfig(configured, vaultSecret("test"))).toBeUndefined();
+});

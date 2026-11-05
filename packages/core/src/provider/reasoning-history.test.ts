@@ -128,3 +128,17 @@ it.each([
   });
   expect(parts[0]).not.toHaveProperty("factualSummary");
 });
+
+it("resolves a factual compactor through its own Go route and policy", async () => {
+  const { applyAutomaticModelRoute } = await import("./endpoint.js");
+  const make = (model: string) => applyAutomaticModelRoute({ transport: "openai-chat-completions", baseUrl: "https://opencode.ai/inference/go/openai/v1", model, apiKey: "fake", providerId: "opencode", automaticModelRouting: true, reasoningHistory: "factual_500", reasoningCompactorModel: "grok-4.7" });
+  const root = make("deepseek-v4.1-flash");
+  root.resolveEndpointForModel = make;
+  generate.mockClear();
+  generate.mockResolvedValueOnce({ text: validSummary, usage: {} });
+  await new AiSdkModelPort(root).compactReasoning(parts);
+  const options = generate.mock.lastCall![0];
+  expect(options.model.modelId).toBe("grok-4.7");
+  expect(options.providerOptions.openai.store).toBe(false);
+  expect(options.providerOptions.openai.reasoningEffort).toBeUndefined();
+});

@@ -94,3 +94,19 @@ it("resolves each supported static model with its own explicit policy", async ()
   expect(resolveOpenCodeGoEndpointPolicy("other", "glm-5.3").kind).toBe("refusal");
   expect(resolveOpenCodeGoEndpointPolicy("opencode", "glm-5.3", { version: 1, models: {} }).kind).toBe("refusal");
 });
+
+it("projects exact model metadata without inventing effort levels or an output cap", async () => {
+  const { openCodeGoCatalogEntry } = await import("./opencode-go-policy.js");
+  const { getBuiltinCatalog } = await import("./catalog-data.js");
+  const entry = getBuiltinCatalog().providers.find(p => p.id === "opencode")!;
+  const kimi = openCodeGoCatalogEntry(entry, "kimi-k2.7-code").models[0]!;
+  expect(kimi.maxOutputTokens).toBeUndefined();
+  expect(kimi.effortLevels).toEqual([]);
+  const grok = openCodeGoCatalogEntry(entry, "grok-4.7").models[0]!;
+  expect(grok.contextWindow).toBe(500000);
+  expect(grok.maxOutputTokens).toBe(500000);
+  const hy = openCodeGoCatalogEntry(entry, "hy4").models[0]!;
+  expect(hy.contextWindow).toBe(1048576);
+  expect(hy.effortLevels).toEqual(["off", "high"]);
+  expect(openCodeGoCatalogEntry(entry, "muse-spark-1.2-contributor").models[0]!.effortLevels?.[0]).toBe("minimal");
+});

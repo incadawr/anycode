@@ -1,5 +1,5 @@
 import { getBuiltinCatalog } from "@anycode/core/catalog";
-import { resolveEffortLevels, resolveImageInput, type ConnectionTargets } from "@anycode/core";
+import { openCodeGoCatalogEntry, resolveEffortLevels, resolveImageInput, type ConnectionTargets } from "@anycode/core";
 import { connectionRoutingSettings } from "../shared/child-model.js";
 import { createConnectionModelSettings } from "./connection-model-settings.js";
 import type { AnycodeSettings } from "../shared/settings.js";
@@ -11,7 +11,8 @@ export function listConnectionTargets(settings: AnycodeSettings, connectionId?: 
     connections: connectionRoutingSettings(settings, connectionId, model).provider.connections.map(connection => {
       const catalog = getBuiltinCatalog().providers.find(p => p.id === connection.providerId);
       const ids = connection.models;
-      const effective = createConnectionModelSettings({ connection, catalogEntry: catalog, liveCapabilitiesFor: id => connection.modelCapabilities?.[id] });
+      const automaticGo = catalog && ["opencode", "opencode-openai"].includes(connection.providerId) && !connection.baseUrl?.trim() && !connection.transport?.trim();
+      const effective = createConnectionModelSettings({ connection, catalogEntry: catalog, ...(automaticGo ? { catalogEntryFor: (id: string) => openCodeGoCatalogEntry(catalog, id, connection.modelRoutes) } : {}), liveCapabilitiesFor: id => connection.modelCapabilities?.[id] });
       return {
         id: connection.id,
         label: connection.label,
