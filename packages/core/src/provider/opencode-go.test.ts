@@ -102,6 +102,9 @@ it("projects exact model metadata without inventing effort levels or an output c
   const kimi = openCodeGoCatalogEntry(entry, "kimi-k2.7-code").models[0]!;
   expect(kimi.maxOutputTokens).toBeUndefined();
   expect(kimi.effortLevels).toEqual([]);
+  const longcat = openCodeGoCatalogEntry(entry, "longcat-2.0").models[0]!;
+  expect(longcat.effortLevels).not.toContain("off");
+  expect(longcat.supportsExplicitOff).toBe(false);
   const grok = openCodeGoCatalogEntry(entry, "grok-4.7").models[0]!;
   expect(grok.contextWindow).toBe(500000);
   expect(grok.maxOutputTokens).toBe(500000);

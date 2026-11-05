@@ -106,7 +106,7 @@ export function openCodeGoCatalogEntry(
   const policy = resolved.route.policy;
   const reasoning = policy.capabilities?.reasoning;
   const levels = (reasoning?.effort ?? []).map(level => level === "none" ? "off" as const : level);
-  if (reasoning?.toggle && !levels.includes("off")) levels.unshift("off");
+  if (reasoning?.toggle && resolved.route.transport === "anthropic-messages" && !levels.includes("off")) levels.unshift("off");
   const defaultEffort = reasoning?.default?.value === "none" ? "off" : reasoning?.default?.value;
   return { ...entry, models: [{
     id: model,
