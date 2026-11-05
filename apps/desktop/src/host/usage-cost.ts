@@ -14,6 +14,8 @@ export function calculateUsageCost(
 ): { costUsd: number; cacheSavingsUsd: number; priceBasisId: string } | undefined {
   const { inputTokens: input, cachedInputTokens: cached, outputTokens: output } = usage;
   const write = usage.cacheWriteTokens ?? 0;
+  const tier = input === undefined ? undefined : price?.tiers?.filter((item) => input > item.gt).sort((a, b) => b.gt - a.gt)[0];
+  if (price && tier) price = { ...price, ...tier, basisId: `${price.basisId}+gt-${tier.gt}` };
   if (price === undefined || input === undefined || cached === undefined || output === undefined ||
       ![input, cached, write, output, price.input, price.cachedInput, price.output].every((n) => Number.isFinite(n) && n >= 0) ||
       cached + write > input || (write > 0 && (price.cacheWrite === undefined || !Number.isFinite(price.cacheWrite) || price.cacheWrite < 0))) return undefined;

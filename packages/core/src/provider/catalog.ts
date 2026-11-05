@@ -27,6 +27,8 @@ export interface ModelPricing {
   cachedInput: number;
   cacheWrite?: number;
   output: number;
+  /** Full rates applied when the step's input token count exceeds `gt`. */
+  tiers?: Array<{ gt: number; input: number; cachedInput: number; cacheWrite?: number; output: number }>;
   /**
    * Time-of-day tariff (DeepSeek): the listed rates above are the PEAK rates;
    * outside the peak windows every rate is billed at `offPeakMultiplier` ×

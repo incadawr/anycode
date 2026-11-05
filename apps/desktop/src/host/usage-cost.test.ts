@@ -273,3 +273,11 @@ it("derives MiniMax billing defaults without overriding explicit choices", async
   }
   expect(pricingSnapshotWithKeyDefault(undefined, findCatalogEntry("deepseek"), "sk-api-example")).toBeUndefined();
 });
+
+describe("context pricing tiers", () => {
+  it("uses the complete tier only above its input threshold", () => {
+    const price = { basisId: "tier", input: 1, cachedInput: .1, output: 2, tiers: [{ gt: 100000, input: 2, cachedInput: .2, output: 4 }] };
+    expect(calculateUsageCost({ inputTokens: 100000, cachedInputTokens: 0, outputTokens: 0 }, price)?.priceBasisId).toBe("tier");
+    expect(calculateUsageCost({ inputTokens: 100001, cachedInputTokens: 1, outputTokens: 0 }, price)?.priceBasisId).toBe("tier+gt-100000");
+  });
+});
