@@ -7,7 +7,7 @@ const MAX_FILE = 1024 * 1024;
 const MAX_LINE = 4096;
 const MAX_PENDING = 256;
 
-const sensitiveNames = new Set(["key", "api_key", "api-key", "apikey", "access_token", "access-token", "accesstoken", "token", "secret", "password"]);
+const sensitiveNames = new Set(["key", "apikey", "accesstoken", "token", "secret", "password", "authorization"]);
 const isNameChar = (c: string) => /[a-z0-9_%+\-]/i.test(c);
 const isValueEnd = (c: string) => c === "&" || c === "#" || c === "," || c === ";" || c === "}" || c === "\r" || c === "\n";
 
@@ -25,10 +25,24 @@ export function redactDiagnostic(input: string): string {
     if (word.includes("%") || word.includes("+")) {
       try { name = decodeURIComponent(word.replace(/\+/g, " ")).toLowerCase(); } catch { /* retain the literal */ }
     }
+    if ((name === "http" || name === "https") && text.slice(i, i + 3) === "://") {
+      let end = i + 3;
+      let at = -1;
+      while (end < text.length && !"/?#\t\r\n \"'".includes(text[end]!)) {
+        if (text[end] === "@") at = end;
+        end++;
+      }
+      result += text.slice(start, i + 3) + (at >= 0 ? `[redacted]@${text.slice(at + 1, end)}` : text.slice(i + 3, end));
+      i = end;
+      continue;
+    }
+    const suffix = name.slice(Math.max(name.lastIndexOf("-"), name.lastIndexOf("_")) + 1);
+    const sensitive = sensitiveNames.has(suffix);
+    const authorization = suffix === "authorization";
     let next = i;
     if (text[next] === '"' || text[next] === "'") next++;
     while (text[next] === " " || text[next] === "\t") next++;
-    if ((name === "authorization" || sensitiveNames.has(name)) && (text[next] === ":" || text[next] === "=")) {
+    if (sensitive && (text[next] === ":" || text[next] === "=")) {
       next++;
       while (text[next] === " " || text[next] === "\t") next++;
       result += text.slice(start, next) + "[redacted]";
@@ -40,7 +54,7 @@ export function redactDiagnostic(input: string): string {
         }
         if (next < text.length) next++;
       } else {
-        while (next < text.length && !isValueEnd(text[next]!) && (name === "authorization" || !/\s/.test(text[next]!))) next++;
+        while (next < text.length && !isValueEnd(text[next]!) && (authorization || !/\s/.test(text[next]!))) next++;
       }
       i = next;
     } else if (name === "bearer") {
@@ -51,7 +65,7 @@ export function redactDiagnostic(input: string): string {
         while (value < text.length && !isValueEnd(text[value]!) && !/\s/.test(text[value]!) && text[value] !== '"' && text[value] !== "'") value++;
         i = value;
       } else result += word;
-    } else if (/^(?:sk|pk|ghp|gho|github_pat|xoxb|xoxp)[_-][a-z0-9_-]{12,}$/i.test(word)) {
+    } else if (/^AIza[A-Za-z0-9_-]{20,}$/.test(word) || /^(?:sk|pk|ghp|gho|github_pat|xoxb|xoxp)[_-][a-z0-9_-]{12,}$/i.test(word)) {
       result += "[redacted]";
     } else result += word;
   }
@@ -75,6 +89,9 @@ export function safeHostLine(line: string): string | undefined {
   if (line.startsWith("[host] initialized. workspace=")) return "[host] initialized";
   if (line === "[host] UI port wired." || line === "[host] terminal port wired.") return line;
   if (/^\[host\] failed to load hook config; no command hooks registered: (?:Error|SyntaxError|TypeError|RangeError)(?: E[A-Z0-9_]{1,30})?$/.test(line)) return line;
+  const error = /^(?:Uncaught\s+)?(Error|SyntaxError|TypeError|RangeError|ReferenceError|URIError|EvalError|AggregateError)(?:\s*\[(ERR_[A-Z0-9_]{1,60})\])?(?::|\s|$)/.exec(line);
+  if (error) return `[host] ${error[1]}${error[2] ? ` [${error[2]}]` : ""} (details suppressed)`;
+  if (line.startsWith("FATAL ERROR:")) return "[host] FATAL ERROR (details suppressed)";
   if (/^\(node:[0-9]+\) (?:Warning|[A-Za-z]+Warning):/.test(line)) return "[host] Node warning (details suppressed)";
   return undefined;
 }

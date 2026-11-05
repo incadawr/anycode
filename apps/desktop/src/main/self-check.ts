@@ -49,7 +49,7 @@ export async function runSelfCheck(win: CheckWindow, root: string, allowUnavaila
       // Xvfb can run the renderer without a usable compositor for capturePage.
       // Only the Linux CI opt-in may omit this evidence; all UI/IPC checks run.
       if (!allowUnavailableCapture || !(error instanceof Error) || error.message !== "UnknownVizError") throw error;
-      console.warn(`[self-check] ${name} unavailable: ${error.message}`);
+      console.warn(`[self-check] ${name} unavailable`, error);
       return;
     }
     writeFileSync(join(root, name), image.toPNG());

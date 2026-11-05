@@ -3,6 +3,10 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDiagnosticLog, installConsoleLog, redactDiagnostic } from "./diagnostic-log.js";
+import type { App } from "electron";
+import { EventEmitter } from "node:events";
+import { installProcessDiagnostics } from "./process-diagnostics.js";
+import { readUserTelemetryRetention, type RetentionFs } from "./telemetry-retention.js";
 import { loadSettings } from "../settings/files.js";
 import { loadHookConfigs, NodeFileSystemAdapter } from "@anycode/core";
 import { logHookConfigFailure } from "../host/hook-config-diagnostics.js";
@@ -49,9 +53,16 @@ describe("diagnostic log", () => {
       "Authorization: Custom schemeSecret",
       "https://example.test/?%61pi_key=urlsecret&ok=1",
       "https://example.test/?%41PI%5FKEY=urlsecret",
+      "x-api-key: urlsecret",
+      "OPENAI_API_KEY=urlsecret",
+      "client_secret=urlsecret",
+      "refresh_token=urlsecret",
+      "Proxy-Authorization: Basic urlsecret",
+      "https://user:urlsecret@example.test/path",
+      "AIzaabcdefghijklmnopqrstuvwxyz123456789",
     ]) {
       const redacted = redactDiagnostic(value);
-      for (const secret of ["dXNlcjpwYXNzd29yZA==", "bearerSecret", "schemeSecret", "urlsecret"]) {
+      for (const secret of ["dXNlcjpwYXNzd29yZA==", "bearerSecret", "schemeSecret", "urlsecret", "abcdefghijklmnopqrstuvwxyz123456789"]) {
         expect(redacted).not.toContain(secret);
       }
       expect(redacted).toContain("[redacted]");
@@ -118,6 +129,49 @@ describe("diagnostic log", () => {
     host.end();
     expect(performance.now() - start).toBeLessThan(1000);
     await log.flush();
+  });
+  it("logs process disappearance with only safe fields", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "diagnostic-process-"));
+    const log = createDiagnosticLog(dir);
+    const app = new EventEmitter();
+    installProcessDiagnostics(app as unknown as Pick<App, "on">, (line) => log.write("main", line));
+    app.emit("child-process-gone", {}, { type: "GPU", reason: "crashed", exitCode: 12, name: "secret" });
+    app.emit("render-process-gone", {}, {}, { reason: "oom", exitCode: 9, serviceName: "secret" });
+    app.emit("child-process-gone", {}, { type: "secret", reason: "secret", exitCode: "secret" });
+    await log.flush();
+    const text = await readFile(join(dir, "anycode.log"), "utf8");
+    expect(text).toContain("type=GPU reason=crashed exitCode=12");
+    expect(text).toContain("type=renderer reason=oom exitCode=9");
+    expect(text).toContain("type=unknown reason=unknown exitCode=unknown");
+    expect(text).not.toContain("secret");
+  });
+  it("keeps error type and code but no host error message", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "diagnostic-errors-"));
+    const log = createDiagnosticLog(dir);
+    const host = log.stream("host stderr");
+    host(Buffer.from("TypeError [ERR_BAD_THING]: SECRET_VALUE\nFATAL ERROR: SECRET_VALUE\nSyntaxError: SECRET_VALUE\n"));
+    host.end();
+    await log.flush();
+    const text = await readFile(join(dir, "anycode.log"), "utf8");
+    expect(text).toContain("TypeError [ERR_BAD_THING] (details suppressed)");
+    expect(text).toContain("FATAL ERROR (details suppressed)");
+    expect(text).toContain("SyntaxError (details suppressed)");
+    expect(text).not.toContain("SECRET_VALUE");
+  });
+  it("omits malformed telemetry config content from the log", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "diagnostic-telemetry-"));
+    const log = createDiagnosticLog(dir);
+    const target = { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Console;
+    installConsoleLog(log, target);
+    const spy = vi.spyOn(console, "warn").mockImplementation((...args) => target.warn(...args));
+    try {
+      const fs = { exists: async () => true, readFile: async () => "CONFIDENTIAL_TELEMETRY_CONTENT" } as unknown as RetentionFs;
+      await readUserTelemetryRetention(fs, dir);
+    } finally { spy.mockRestore(); }
+    await log.flush();
+    const text = await readFile(join(dir, "anycode.log"), "utf8");
+    expect(text).toContain("SyntaxError: details omitted");
+    expect(text).not.toContain("CONFIDENTIAL_TELEMETRY_CONTENT");
   });
   it("rotates and bounds lines; disk errors never reject", async () => {
     const dir = await mkdtemp(join(tmpdir(), "diagnostic-"));

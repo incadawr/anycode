@@ -1,8 +1,9 @@
 # Crash diagnostics
 
 AnyCode saves native crash dumps locally and does not upload them. After a crash,
-look in the `crash-dumps` folder under the app data directory. Electron may put
-completed dumps in its `completed` or `pending` subfolder. The diagnostic log is
+look for `.dmp` files anywhere under the `crash-dumps` folder in the app data
+directory. On Windows, check `reports`; on macOS and Linux, check `completed`
+and sometimes `pending`. The diagnostic log is
 in `logs/anycode.log`, with one rotated file, `anycode.log.1`.
 
 Default app data locations for packaged AnyCode:
