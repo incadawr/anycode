@@ -233,12 +233,12 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
             ["claude", "Claude Code", "Use your Claude account"],
             ["api", "API key or local model", "Connect any provider or your own server"],
           ] as const).map(([id, title, description]) => (
-            <button key={id} type="button" className="welcome-path" aria-pressed={activePath === id} onClick={() => {
+            <button key={id} type="button" className="welcome-path" aria-pressed={activePath === id && !(id === "api" && subscription !== null)} onClick={() => {
               setPath(id);
               // Re-clicking the already-active path must stay inert — clearing
               // the pick here would remount the form and silently discard a
               // half-typed key, model and label.
-              if (path !== id) setSubscription(null);
+              if (path !== id || subscription !== null) setSubscription(null);
               onSelectEngine?.(id === "api" ? "core" : id);
             }}>
               <strong>{title}</strong><span>{description}</span>
@@ -250,7 +250,7 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
             template preselected — a key paste, not an OAuth flow. */}
         <div className="welcome-subscriptions" role="group" aria-label="Connect a coding subscription">
           {WELCOME_SUBSCRIPTIONS.map((sub) => (
-            <button key={sub.id} type="button" className="welcome-path welcome-subscription" onClick={() => {
+            <button key={sub.id} type="button" className="welcome-path welcome-subscription" aria-pressed={subscription === sub.id} onClick={() => {
               setPath("api");
               setSubscription(sub.id);
               setPick((n) => n + 1);

@@ -135,6 +135,8 @@ try {
   assert.equal(await evaluate("document.querySelectorAll('.welcome-subscription').length"), 4);
   assert.equal(await evaluate("document.querySelectorAll('.welcome-setup option[value=opencode-openai]').length"), 0);
   assert.equal(await evaluate("[...document.querySelectorAll('.connection-drawer-advanced .settings-field-label')].some(e => e.textContent === 'Transport')"), false);
+  assert.equal(await evaluate("[...document.querySelectorAll('.welcome-subscription')].filter(b => b.getAttribute('aria-pressed') === 'true').map(b => b.querySelector('strong').textContent).join()"), "OpenCode Go");
+  assert.equal(await evaluate("[...document.querySelectorAll('.welcome-paths button')].some(b => b.getAttribute('aria-pressed') === 'true')"), false);
   const goPng = await call("Page.captureScreenshot", { format: "png" });
   writeFileSync(join(profile, "opencode-go.png"), Buffer.from(goPng.data, "base64"));
   await click("GLM Coding PlanUse your Z.AI coding plan key");
