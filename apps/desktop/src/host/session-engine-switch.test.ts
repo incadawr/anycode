@@ -20,6 +20,7 @@ import type { EngineCapabilities, RunTurnOptions, SessionEngine } from "./engine
 import { ENGINE_SWITCH_TURN_ID } from "./engine-switch.js";
 import { createHarness, finishStep, ScriptedModelPort } from "./test-harness.js";
 import { CoreEngine } from "./engines/core-engine.js";
+import type { EngineSettingsSeam } from "./session.js";
 
 const NO_CORE_CAPS: EngineCapabilities = {
   supportsCorePermissions: false,
@@ -458,6 +459,24 @@ describe("Session — engine switch", () => {
       expect(next.disposeReasons).toEqual(["session-close"]);
       expect(oldEngine.disposeReasons).toEqual([]);
       h.send({ type: "user_message", requestId: "after-render-failure", text: "continue" });
+      await h.waitFor(agentEventOf("loop_end"));
+      expect(oldEngine.inputs).toEqual(["continue"]);
+    } finally { h.close(); }
+  });
+
+  it("keeps the source usable when candidate settings subscription fails", async () => {
+    const oldEngine = new SwitchableFakeEngine([]);
+    const next = new NextFakeEngine();
+    const settings = { onSettingsApplied: () => { throw new Error("settings unavailable"); } } as unknown as EngineSettingsSeam;
+    const h = createHarness({ steps: [], engine: oldEngine, switchEngineFactory: async () => ({ engine: next, engineSettings: settings }) });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "engine_switch_request", requestId: "settings-failure", engine: "codex" });
+      expect(await h.waitFor(isEngineSwitchFailed)).toMatchObject({ reason: expect.stringContaining("settings unavailable") });
+      expect(next.disposeReasons).toEqual(["session-close"]);
+      expect(oldEngine.disposeReasons).toEqual([]);
+      h.send({ type: "user_message", requestId: "after-settings-failure", text: "continue" });
       await h.waitFor(agentEventOf("loop_end"));
       expect(oldEngine.inputs).toEqual(["continue"]);
     } finally { h.close(); }

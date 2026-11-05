@@ -788,19 +788,18 @@ export function summarizeProviderUsage(steps: ProviderUsageRecord[]): {
   return { steps, totals: { input, output, total, stepsReported, stepsWithCache, ...(generationTokensPerSecond !== undefined ? { generationTokensPerSecond } : {}), ...costs, ...(steps.length > priced.length + subscriptionSteps ? { unpricedSteps: steps.length - priced.length - subscriptionSteps } : {}), ...(priced.length || subscriptionSteps ? { unknownSavingsSteps: steps.length - savings.length - subscriptionSteps } : {}), ...(subscriptionSteps ? { subscriptionSteps } : {}) } };
 }
 
+/** Runtime-owned services prepared together and installed only at commit. */
+export interface SwitchRuntime {
+  engine: SessionEngine;
+  engineSettings?: EngineSettingsSeam;
+}
+
 export interface SessionOptions {
   outbound: Outbound;
   /** The host-selected agent runtime; Session never imports an external engine. */
   engine: SessionEngine;
-  /**
-   * (review 23.08 narrowing): builds the replacement
-   * engine for an `engine_switch_request`. Injected by the composition root;
-   * absent -> the message is refused with reason "engine switch is not
-   * available in this host". The production wiring (real startCodexEngine /
-   * bootClaude / CoreEngine construction inside a live host) is a follow-up —
-   * deliberately NOT wired in this cut (owner review pending, §7 Q1).
-   */
-  switchEngineFactory?: (engine: EngineId) => Promise<SessionEngine>;
+  /** Prepare a replacement without changing session-owned services. */
+  switchEngineFactory?: (engine: EngineId) => Promise<SessionEngine | SwitchRuntime>;
   /**
    * the engine's own model catalog + permission presets. Absent for
    * core (and for any engine without native controls) -> `set_engine_preset` is
@@ -1284,7 +1283,7 @@ export class Session {
    * Injected by the composition root; absent -> the message is refused with
    * reason "engine switch is not available in this host".
    */
-  private readonly switchEngineFactory: ((engine: EngineId) => Promise<SessionEngine>) | undefined;
+  private readonly switchEngineFactory: ((engine: EngineId) => Promise<SessionEngine | SwitchRuntime>) | undefined;
   /**
    * engine-native model/preset controls; undefined -> the engine has
    * none. NOT readonly — a successful engine swap resets this to
@@ -1931,7 +1930,12 @@ export class Session {
     // the engine's turn/start, i.e. always while a turn is running and therefore
     // always after ui_ready; it is `emit` (buffered), not sendDirect, so the ack
     // survives a renderer reload via replay rather than racing it.
-    this.engineSettingsUnsubscribe = this.engineSettings?.onSettingsApplied((applied) => {
+    this.engineSettingsUnsubscribe = this.subscribeEngineSettings(this.engineSettings);
+  }
+
+  private subscribeEngineSettings(seam: EngineSettingsSeam | undefined): (() => void) | undefined {
+    return seam?.onSettingsApplied((applied) => {
+      if (this.shuttingDown || this.engineSettings !== seam) return;
       const clearContextUsage = this.model !== applied.model;
       if (clearContextUsage) this.updateContextUsage(null);
       this.model = applied.model;
@@ -4222,6 +4226,7 @@ export class Session {
     const op = new Promise<void>((r) => (release = r));
     this.currentTurn = op;
     let candidate: SessionEngine | undefined;
+    let candidateSettingsUnsubscribe: (() => void) | undefined;
     let committed = false;
     try {
       const previousEngine = this.engine;
@@ -4245,8 +4250,11 @@ export class Session {
       }
       const canonical: HistoryItem[] = [...this.switchCarriedHistory, ...liveItems];
       let next: SessionEngine;
+      let nextSettings: EngineSettingsSeam | undefined;
       try {
-        next = await this.switchEngineFactory(message.engine);
+        const runtime = await this.switchEngineFactory(message.engine);
+        next = "engine" in runtime ? runtime.engine : runtime;
+        nextSettings = "engine" in runtime ? runtime.engineSettings : undefined;
         candidate = next;
       } catch (error) {
         // Old engine untouched — frame: a failed start leaves the
@@ -4307,6 +4315,8 @@ export class Session {
       ) {
         next.setMode(previousEngine.mode());
       }
+      // Subscribe before committing so a broken settings seam leaves the source active.
+      candidateSettingsUnsubscribe = this.subscribeEngineSettings(nextSettings);
       this.pendingEngineEffort = undefined;
       this.inFlightEngineEffort = undefined;
       this.settingsGeneration++;
@@ -4325,9 +4335,10 @@ export class Session {
       this.outbound.clearContextUsage();
       this.engineSwitched = true;
       this.switchCarriedHistory = canonical;
-      this.engineSettings = undefined; // foreign seam re-wired by the composition root later (§7 Q2)
       this.engineSettingsUnsubscribe?.();
-      this.engineSettingsUnsubscribe = undefined;
+      this.engineSettings = nextSettings;
+      this.engineSettingsUnsubscribe = candidateSettingsUnsubscribe;
+      candidateSettingsUnsubscribe = undefined;
       // Transcript continuity: the reload snapshot is rebuilt from the
       // canonical items. cross-review: when that snapshot carries
       // any transcript, the pre-switch turn events in the replay ring must
@@ -4361,6 +4372,7 @@ export class Session {
       );
       this.outbound.sendDirect({ type: "engine_switched", requestId: message.requestId, engine: next.id, previousEngine: previousEngine.id });
     } catch (error) {
+      candidateSettingsUnsubscribe?.();
       if (candidate !== undefined) {
         await candidate.dispose("session-close").catch((disposeError) =>
           console.error(`[host] candidate engine disposal failed: ${describeError(disposeError)}`),
