@@ -349,14 +349,13 @@ describe("main/index.ts — create_session on a NON-active connection reaches th
     saved.provider.connections = [{ id: "go", providerId: "opencode", model, modelRoutes: snapshot }];
     saved.provider.activeConnectionId = "go";
     await writeFile(path, JSON.stringify(saved));
+    process.env.ANYCODE_API_KEY = "test-key";
     await import("./index.js");
-    await waitForHandler(TAB_CREATE_CHANNEL);
+    const create = await waitForHandler(TAB_CREATE_CHANNEL);
     await waitForHandler("anycode:custom-provider-create");
-    expect(FakeBrowserWindow.created).toBe(true);
-    const { resolveGoBootModel } = await import("../host/go-boot-model.js");
-    const result = resolveGoBootModel("opencode", model, "glm-5.3", snapshot);
-    expect(result.model).toBe("glm-5.3");
-    expect(Boolean(result.notice)).toBe(model !== "glm-5.3");
+    expect(await create({}, { kind: "new", workspace })).toMatchObject({ ok: true });
+    expect(forkCalls).toHaveLength(1);
+    expect(forkCalls[0]!.env.ANYCODE_MODEL).toBe(model);
   });
   it("opens the GLM connection's tab with ITS env instead of crash_looping on a cache miss", async () => {
     const create = await boot();

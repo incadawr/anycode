@@ -1,6 +1,6 @@
 import { connectionContextWindow } from "../shared/connection-context-window.js";
 import type { RecognizerCatalogInfo } from "./host-env.js";
-import { automaticGoRoute } from "./go-route.js";
+import { automaticGoBootRoute } from "./go-route.js";
 import { installProcessDiagnostics } from "./process-diagnostics.js";
 import { startLocalCrashReporting } from "./crash-reporting.js";
 import { createDiagnosticLog, installConsoleLog } from "./diagnostic-log.js";
@@ -1166,7 +1166,7 @@ function selectedTransportInfo(current: AnycodeSettings): {
   // both of those, so an ungated waiver here would let the gate say "ready"
   // for a fork core refuses to boot).
   const connectionAuthOptional = view.authOptional === true;
-  const goRoute = automaticGoRoute(activeConnection(current), bootEnv);
+  const goRoute = automaticGoBootRoute(activeConnection(current), bootEnv);
   if (goRoute) return goRoute.kind === "route"
     ? { authOptional: false, resolvedTransport: goRoute.route.transport, supportedTransports: [goRoute.route.transport] }
     : { authOptional: false, resolvedTransport: "unavailable-model", supportedTransports: [] };

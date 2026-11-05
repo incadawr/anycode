@@ -1,4 +1,4 @@
-import { automaticGoRoute } from "./go-route.js";
+import { automaticGoBootRoute } from "./go-route.js";
 import { homedir } from "node:os";
 import { resolveWriteMask } from "@anycode/core/permissions/write-mask-node";
 /**
@@ -812,7 +812,7 @@ function selectedTransportInfo(
   // both of those, so an ungated waiver here would let the gate say "ready"
   // for a fork core refuses to boot).
   const connectionAuthOptional = view.authOptional === true;
-  const goRoute = automaticGoRoute(activeConnection(settings), deps.bootEnv);
+  const goRoute = automaticGoBootRoute(activeConnection(settings), deps.bootEnv);
   if (goRoute) return goRoute.kind === "route"
     ? { authOptional: false, resolvedTransport: goRoute.route.transport, supportedTransports: [goRoute.route.transport] }
     : { authOptional: false, resolvedTransport: "unavailable-model", supportedTransports: [] };
