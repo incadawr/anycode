@@ -49,6 +49,7 @@ it("parses the complete live listing and rejects ambiguous or malformed routes",
   if (!result.ok) return;
   const entries = Object.values(result.snapshot.models);
   expect(entries.filter(e => e.kind === "route")).toHaveLength(28);
+  for (const [id, entry] of Object.entries(OPENCODE_GO_MODELS.models)) expect(result.snapshot.models[id], id).toEqual(entry);
   for (const [transport, count] of [["anthropic-messages", 5], ["openai-chat-completions", 18], ["openai-responses", 5]] as const) expect(entries.filter(e => e.kind === "route" && e.route.transport === transport)).toHaveLength(count);
   expect(result.snapshot.models["gemini-4-argon"]?.kind).toBe("refusal");
   for (const bad of [null, {}, { data: [] }, "{"]) expect(parseOpenCodeGoSnapshot(bad, "now").ok).toBe(false);

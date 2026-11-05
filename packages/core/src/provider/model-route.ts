@@ -66,7 +66,24 @@ export function parseOpenCodeGoSnapshot(rawJson: unknown, fetchedAt: string):
     const details = (api as Record<string, unknown>)[key!];
     const baseUrl = transport === "anthropic-messages" ? OPENCODE_GO_ANTHROPIC_URL : OPENCODE_GO_OPENAI_URL;
     if (!details || typeof details !== "object" || (details as { base_url?: unknown }).base_url !== baseUrl) { models[row.id] = { kind: "refusal", reason: "invalid-route" }; continue; }
-    models[row.id] = { kind: "route", route: { transport, baseUrl, metadata: row } };
+    models[row.id] = { kind: "route", route: { transport, baseUrl, metadata: normalizeGoMetadata(row, details as Record<string, unknown>, fetchedAt) } };
   }
   return { ok: true, snapshot: { version: 1, fetchedAt, models } };
+}
+
+// Keep live metadata independent of the raw wire envelope.
+function normalizeGoMetadata(row: Record<string, any>, api: Record<string, any>, fetchedAt: string): Record<string, unknown> {
+  const limit = { ...row.limit };
+  if (row.id === "kimi-k2.7-code") delete limit.output;
+  const input = row.cost?.text?.input;
+  const output = row.cost?.text?.output;
+  const metadata: Record<string, unknown> = { id: row.id, name: row.name, limit, modalities: row.modalities, capabilities: row.capabilities, apiCapabilities: api.capabilities ?? {}, compatibility: api.compatibility ?? {} };
+  if (input && output && typeof input.price === "number" && typeof output.price === "number") {
+    const multiplier = row.cost?.multipliers?.length ? 2 : 1;
+    const rates = (i: any, o: any) => ({ input: i.price * multiplier, ...(i.cache?.read !== undefined ? { cachedInput: i.cache.read * multiplier } : {}), ...(i.cache?.write !== undefined ? { cacheWrite: i.cache.write * multiplier } : {}), output: o.price * multiplier });
+    const thresholds = [...new Set<number>([...(input.overrides ?? []), ...(output.overrides ?? [])].map((x: any) => x.when?.context?.gt).filter((x: unknown): x is number => typeof x === "number"))].sort((a, b) => a - b);
+    const tiers = thresholds.map(gt => ({ gt, ...rates((input.overrides ?? []).find((x: any) => x.when?.context?.gt === gt) ?? input, (output.overrides ?? []).find((x: any) => x.when?.context?.gt === gt) ?? output) }));
+    metadata.pricing = { basisId: `${row.id}-opencode-go-${fetchedAt.slice(0, 10)}`, ...rates(input, output), ...(tiers.length ? { tiers } : {}), ...(multiplier === 2 ? { tariff: { peakUtcDays: [1, 2, 3, 4, 5], peakUtcHours: [[1, 4], [6, 10]], offPeakMultiplier: 0.5 } } : {}) };
+  }
+  return metadata;
 }
