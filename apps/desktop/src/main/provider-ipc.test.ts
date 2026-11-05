@@ -1705,6 +1705,16 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     expect(lockProbe.loadUnderLock).toBe(true);
   });
 
+  it("replaces stale models after a door-filtered connection fetch", async () => {
+    await seedConnection({ id: "go-door", providerId: "opencode", models: ["deepseek-v4.1-flash"] });
+    const { deps, calls } = makeCatalogDeps({ catalogEntryById: () => ({ id: "opencode", baseUrl: "https://opencode.ai/inference/go/anthropic", defaultTransport: "anthropic-messages" }) });
+    const result = await handleCustomProviderFetchModels(deps, { connectionId: "go-door" });
+    expect(result.ok).toBe(true);
+    expect(calls[0]?.transport).toBe("anthropic-messages");
+    const reloaded = await loadSettings(settingsPath);
+    expect(reloaded.settings.provider.connections[0]?.models).toEqual(["live-a", "live-b"]);
+  });
+
   it("a failed fetch persists nothing", async () => {
     await seedConnection({ id: "conn-9", providerId: "kimi" });
     const { deps } = makeCatalogDeps({
@@ -2071,7 +2081,13 @@ describe("OpenCode Go model doors", () => {
     const common = { baseUrl: "https://opencode.ai/inference/go/anthropic", modelsUrl: "https://opencode.ai/inference/go/v1/models", fetchImpl };
     const anthropic = await fetchCustomProviderModels({ ...common, kind: "anthropic" });
     const openai = await fetchCustomProviderModels({ ...common, kind: "openai-compatible" });
-    expect(anthropic.ok && anthropic.models.some(m => m.id === "deepseek-v4.1-flash")).toBe(false);
+    expect(anthropic.ok).toBe(true);
+    if (!anthropic.ok) throw new Error("fetch failed");
+    expect(anthropic.models.some(m => m.id === "deepseek-v4.1-flash")).toBe(false);
+    const responses = await fetchCustomProviderModels({ ...common, modelsUrl: common.modelsUrl + "/", transport: "openai-responses" });
+    expect(responses.ok).toBe(true);
+    if (!responses.ok) throw new Error("fetch failed");
+    expect(responses.models.some(m => m.id === "gpt-5.6-luna")).toBe(true);
     expect(openai.ok && openai.models.find(m => m.id === "deepseek-v4.1-flash")).toMatchObject({ contextWindow: 1000000, maxOutputTokens: 384000, reasoning: true, effortLevels: ["low", "high", "max"], imageInput: true });
   });
 });

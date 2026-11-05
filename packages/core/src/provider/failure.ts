@@ -27,7 +27,7 @@ export function captureProviderMessage(error: unknown, apiKey: string | undefine
     const value = nested?.message ?? nested?.type ?? nested?.code ?? root.message;
     if (typeof value !== "string" || !value.trim()) return;
     const withoutKey = apiKey ? value.split(apiKey).join("***") : value;
-    providerMessages.set(error, scrubFailureText(withoutKey).slice(0, 300));
+    providerMessages.set(error, scrubFailureText(withoutKey).replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").slice(0, 300));
   } catch { /* Non-JSON responses have no displayable provider message. */ }
 }
 

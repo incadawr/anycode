@@ -103,7 +103,7 @@ export function readPromptFromStdin(input: NodeJS.ReadableStream): Promise<strin
 
 /**
  * stream-json projection of the redacted error descriptor (W7b-FIX #2).
- * Numbers + whitelisted strings only; fails closed to a constant when `safe` is
+ * Numbers and sanitized, redacted provider text bounded to 300 chars; fails closed when `safe` is
  * absent so a legacy/foreign producer can never leak the raw error text.
  */
 function projectStreamError(

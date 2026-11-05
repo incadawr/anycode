@@ -486,7 +486,7 @@ export function renderEvent(
         event.retry && event.retry.attemptsMade > 0
           ? ` (after ${event.retry.attemptsMade} automatic retr${event.retry.attemptsMade === 1 ? "y" : "ies"})`
           : "";
-      // Render EXCLUSIVELY from the whitelist-derived `safe` descriptor (
+      // Render EXCLUSIVELY from the sanitized, redacted and bounded `safe` descriptor (
       // W7b-FIX #2) — never String(event.error), which can embed a raw response
       // body or auth header. Fail closed to a constant when `safe` is absent.
       const safe = event.safe;

@@ -122,7 +122,7 @@ export type ModelStreamEvent =
        * Whitelist-derived redacted descriptor (`ProviderFailureSafe` in
        * provider/failure.ts) the loop attaches alongside `retry` from ONE
        * `classifyProviderFailure` call. This is the ONLY field a trust boundary
-       * may surface: `message` is a fixed per-code string (never raw text),
+       * may surface: `message` is sanitized provider text, redacted and bounded to 300 chars,
        * `code`/`statusCode` are safe by construction. Additive-optional and typed
        * inline (string `code`, not the provider union) to keep this file free of a
        * provider-layer dependency, same precedent as `retry.code`.

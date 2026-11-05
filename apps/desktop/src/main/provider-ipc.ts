@@ -121,6 +121,7 @@ export interface FetchModelsParams {
   kind?: CustomProviderRecord["kind"];
   /** Complete models-list URL (catalog `modelsUrl`); replaces the derived `<base>/models` URL and switches auth to Bearer per that field's contract. */
   modelsUrl?: string;
+  transport?: string;
   timeoutMs?: number;
   maxBodyBytes?: number;
   /** Injectable fetch (tests point this at a real local HTTP server). */
@@ -228,8 +229,8 @@ export async function fetchCustomProviderModels(params: FetchModelsParams): Prom
   if (looksLikeErrorPayload(parsed)) {
     return { ok: false, reason: "error_payload" };
   }
-  const goDoor = params.modelsUrl === "https://opencode.ai/inference/go/v1/models"
-    ? (params.kind === "anthropic" ? "messages" : "chat-completions") : undefined;
+  const goDoor = params.modelsUrl?.replace(/\/+$/, "") === "https://opencode.ai/inference/go/v1/models"
+    ? (params.transport === "openai-responses" ? "responses" : params.transport === "anthropic-messages" ? "messages" : params.transport ? "chat-completions" : params.kind === "anthropic" ? "messages" : "chat-completions") : undefined;
   const models = extractModelIds(parsed, new URL(params.baseUrl).hostname === "openrouter.ai", goDoor);
   if (models === undefined) {
     return { ok: false, reason: "invalid_response" };
@@ -339,7 +340,7 @@ const MODEL_CAPABILITY_ID_MAX = 256;
 function extractModelIds(
   value: unknown,
   openrouter = false,
-  goDoor?: "messages" | "chat-completions",
+  goDoor?: "messages" | "chat-completions" | "responses",
 ): { id: string; reasoning?: boolean; effortLevels?: string[]; imageInput?: true; contextWindow?: number; maxOutputTokens?: number; pricing?: { input: number; cachedInput: number; output: number } }[] | undefined {
   if (typeof value !== "object" || value === null || !("data" in value)) {
     return undefined;
@@ -924,6 +925,7 @@ async function handleConnectionFetchModels(
     return {
       baseUrl: requestBase,
       savedBaseUrl: (connection.baseUrl ?? "").trim(),
+      transport,
       savedTransport: connection.transport ?? "",
       targetUrl,
       prepared,
@@ -940,6 +942,7 @@ async function handleConnectionFetchModels(
     baseUrl: resolved.baseUrl,
     apiKey: resolved.apiKey,
     kind: resolved.kind,
+    transport: resolved.transport,
     ...(resolved.modelsUrl !== undefined ? { modelsUrl: resolved.modelsUrl } : {}),
     ...(preview ? { fetchImpl: deps.preparedConnectionFetch!(resolved.prepared!.route) } : deps.connectionFetch !== undefined ? { fetchImpl: deps.connectionFetch(connectionId) } : {}),
   });
@@ -1004,10 +1007,8 @@ async function handleConnectionFetchModels(
       : target.modelCapabilities;
     const updated: ProviderConnection = {
       ...target,
-      // fetched ids first, then the connection's previously stored
-      // ids (manual additions and earlier fetches), deduped case-sensitively —
-      // so the merge can never replace a manual addition.
-      models: mergeModelIds(fetchedIds, target.models ?? []),
+      // Door-filtered lists replace stale ids; other providers retain stored ids.
+      models: resolved.modelsUrl?.replace(/\/+$/, "") === "https://opencode.ai/inference/go/v1/models" ? fetchedIds : mergeModelIds(fetchedIds, target.models ?? []),
       modelsFetchedAt: (deps.now ?? defaultNowIso)(),
       ...(mergedCaps !== undefined ? { modelCapabilities: mergedCaps } : {}),
     };

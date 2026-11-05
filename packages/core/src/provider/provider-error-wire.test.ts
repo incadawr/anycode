@@ -29,6 +29,7 @@ describe("provider HTTP errors", () => {
     [JSON.stringify({ error: { message: "bad model ".repeat(50) } }), "bad model ".repeat(30)],
     [JSON.stringify({ error: { type: "invalid_request_error" } }), "invalid_request_error"],
     [JSON.stringify({ error: { code: "invalid_request" } }), "invalid_request"],
+    [JSON.stringify({ error: { message: "\u001b[2Jspoofed\nsecond line" } }), " [2Jspoofed second line"],
     ["not JSON, contains " + key, "request failed"],
     [JSON.stringify({ error: { message: "Bearer private-token" } }), "[redacted]"],
   ])("limits and redacts message from fixture", async (body, expected) => {
