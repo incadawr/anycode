@@ -18,6 +18,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Label provider rate limits clearly for both header formats (GitHub #55).
 - Keep connection tiles aligned and show all quota windows.
 - Subagent turn settings now apply to orchestration roles, up to the 200-turn limit. (GitHub #58)
+- The context-window popover no longer closes while the pointer travels from the meter to its buttons.
 
 ## [0.0.77] — 2026-11-05
 
