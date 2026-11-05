@@ -47,6 +47,7 @@ export function planEngineSwitchImport(history: readonly HistoryItem[], maxItems
 
 /** Tool-result texts are capped at this many characters in the rendered prompt. */
 const TOOL_RESULT_MAX_CHARS = 500;
+const IMPORT_MAX_BYTES = 64 * 1024;
 
 /**
  * Renders ONE planned item as a `# role`-prefixed prompt chunk; malformed
@@ -99,12 +100,19 @@ export function renderImportPrompt(from: EngineId, to: EngineId, plan: EngineSwi
   const lines: string[] = [
     `Session continued in this ${to} engine (previous engine: ${from}; workspace: ${workspace}).`,
     plan.truncated
-      ? `Imported the last ${plan.items.length} conversation items (older history was dropped).`
-      : `Imported the full conversation (${plan.items.length} items).`,
+      ? `Conversation excerpts from the last ${plan.items.length} items; older items and non-text content may be omitted.`
+      : `Conversation excerpts from ${plan.items.length} items; non-text content may be omitted.`,
   ];
   for (const item of plan.items) {
     const rendered = renderImportItem(item);
     if (rendered !== "") lines.push(rendered);
   }
-  return lines.join("\n");
+  const prompt = lines.join("\n");
+  const bytes = Buffer.from(prompt, "utf8");
+  if (bytes.length <= IMPORT_MAX_BYTES) return prompt;
+  const notice = "Conversation text excerpt; earlier content was omitted to fit the import limit.\n";
+  const tail = bytes.subarray(bytes.length - (IMPORT_MAX_BYTES - Buffer.byteLength(notice)));
+  // A byte boundary may fall inside a multi-byte character. Drop its partial
+  // prefix instead of emitting a replacement character or exceeding the cap.
+  return notice + tail.toString("utf8").replace(/^\uFFFD/, "");
 }

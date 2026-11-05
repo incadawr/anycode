@@ -681,7 +681,7 @@ describe("Session — engine switch", () => {
       const firstInput = claude.inputs[0] ?? "";
       expect(firstInput).toContain("# user first seeded turn");
       expect(firstInput).toContain("# assistant seeded answer");
-      expect(firstInput).toContain("Imported the full conversation (2 items).");
+      expect(firstInput).toContain("Conversation excerpts from 2 items; non-text content may be omitted.");
 
       // The reload snapshot still carries the seeded transcript.
       const before = h.received.length;
