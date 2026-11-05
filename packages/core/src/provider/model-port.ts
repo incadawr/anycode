@@ -43,7 +43,7 @@ import { linkAbortSignal } from "../util/abort.js";
 import type { ProviderTransport } from "./catalog.js";
 import type { EndpointConfig } from "./endpoint.js";
 import type { ImplicitPromptCache, ReasoningEffort } from "../types/config.js";
-import { blocksAutomaticReplay, classifyProviderFailure, extractStatusCode, isModelOutputEvent } from "./failure.js";
+import { blocksAutomaticReplay, captureProviderMessage, classifyProviderFailure, extractStatusCode, isModelOutputEvent } from "./failure.js";
 import { ResponsesReasoningTextRecovery } from "./responses-reasoning-text.js";
 import { isMiMoModel } from "./mimo.js";
 import { contextualizeMiniMaxBalance, isMiniMaxEffortModel, isMiniMaxModel } from "./minimax.js";
@@ -716,7 +716,7 @@ class StreamStallError extends Error {
 
 /**
  * `stream_retry.reason` rides the wire and is rendered verbatim by the CLI and
- * renderer, so it must be a whitelist-derived safe message — NEVER raw
+ * renderer, so it must be a sanitized safe message — NEVER raw
  * provider `error.message` text, which can embed a response body or auth
  * header (W7b-FIX #2). A `StreamStallError` is locally generated, not
  * provider text, so it gets its own fixed, non-interpolated whitelist reason
@@ -1301,7 +1301,10 @@ export class AiSdkModelPort implements ModelPort {
             for (const id of openRouterOpen) yield { type: "reasoning_end", id, ...replaySource };
             openRouterOpen.clear();
           }
-          if (event.type === "error") event = { ...event, error: contextualizeNetworkFailure(contextualizeMiniMaxBalance(event.error, this.config.providerName, attemptKey), this.config.baseUrl) };
+          if (event.type === "error") {
+            captureProviderMessage(event.error, attemptKey);
+            event = { ...event, error: contextualizeNetworkFailure(contextualizeMiniMaxBalance(event.error, this.config.providerName, attemptKey), this.config.baseUrl) };
+          }
           // this pass IS a probe retry (started by a previous
           // pass) — defer this failure's fate to the resolution block after
           // the try/catch instead of classifying it here, regardless of
@@ -1366,6 +1369,7 @@ export class AiSdkModelPort implements ModelPort {
           }
         }
       } catch (rawError) {
+        captureProviderMessage(rawError, attemptKey);
         for (const id of openRouterOpen) yield { type: "reasoning_end", id, ...replaySource };
         openRouterOpen.clear();
         const error = contextualizeNetworkFailure(contextualizeMiniMaxBalance(rawError, this.config.providerName, attemptKey), this.config.baseUrl);

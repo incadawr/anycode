@@ -472,7 +472,7 @@ function isAbortError(error: unknown): boolean {
 /**
  * Redacted description of a compaction stream failure. Surfaces as
  * `compaction_end.error`, which crosses the host↔renderer wire and is rendered
- * by the CLI, so it must be the whitelist-derived safe message — NEVER the raw
+ * by the CLI, so it must be the sanitized safe message — NEVER the raw
  * `error.message`, which can embed a response body or auth header (
  * W7b-FIX #2).
  */
