@@ -20,6 +20,7 @@ import type {
   CatalogSummary,
   ProviderConnection,
 } from "../../../shared/settings.js";
+import { modelCapabilitiesFor, modelOverrideFor } from "../../../shared/model-overrides.js";
 import { readProxyScope } from "../../../shared/proxy.js";
 import { connectionById } from "../../../shared/settings.js";
 import { connectionDisplayName } from "./ConnectionTile.js";
@@ -213,87 +214,46 @@ export function visionConnectionOptions(
   });
 }
 
-// ── model hints for <input list> + <datalist> (task §3) — UNION, not replace ──
+/** Model candidates are scoped to the selected connection. */
+export interface VisionModelHint { id: string; label: string }
 
-/**
- * The minimal shape this module needs from one catalog model entry.
- *
- * `imageInput` is declared here even though `CatalogSummaryEntry.models`
- * (`shared/settings.ts:670`) does NOT currently project it: core's own catalog
- * carries the flag per model (`packages/core/src/provider/catalog.ts:42`,
- * populated in `catalog-data.ts`), but the main-side projection into the wire
- * type (`projectCatalogSummary`, `main/settings-ipc.ts`) drops it before the
- * snapshot reaches the renderer — confirmed by reading both functions; this is
- * a gap, not an oversight this module should paper over.
- *
- * Declaring the field OPTIONAL here keeps this function callable with
- * TODAY's real `CatalogSummary` (a value missing an optional property is
- * structurally assignable — TypeScript treats the absent property as
- * `undefined`, never a type error) so nothing needs to change here the day
- * the wire gap closes; until then every real snapshot yields `imageInput ===
- * undefined` for every model, so the catalog half of `visionModelHints`
- * contributes NOTHING and only the live `connection.models[]` half offers
- * suggestions — safe (free text still works, per the task's own §3 rationale
- * for `openrouter`/`vllm`/`custom`), but not yet useful for a model the
- * catalog actually knows supports vision. Wiring this pane for real should
- * either extend `CatalogSummaryEntry.models[]`/`projectCatalogSummary` with
- * `imageInput`, or supply an equivalent structurally-compatible array from
- * elsewhere — that decision is intentionally left to the caller.
- */
-export interface VisionCatalogModelHint {
-  id: string;
-  name?: string;
-  imageInput?: boolean;
+export function visionModelHints(connection: ProviderConnection | undefined, catalog: CatalogSummary | undefined): VisionModelHint[] {
+  if (!connection) return [];
+  const catalogModels = catalog?.find((entry) => entry.id === connection.providerId)?.models ?? [];
+  const labels = new Map(catalogModels.map((model) => [model.id, model.name ?? model.id]));
+  const candidates = new Set<string>();
+  for (const model of catalogModels) if (model.imageInput === true) candidates.add(model.id);
+  for (const [id, caps] of Object.entries(connection.modelCapabilities ?? {})) if (caps.imageInput === true) candidates.add(id);
+  for (const [id, override] of Object.entries(connection.modelOverrides ?? {})) if (override.imageInput === "on") candidates.add(id);
+  for (const id of connection.models ?? []) candidates.add(id);
+  const image: VisionModelHint[] = [];
+  const other: VisionModelHint[] = [];
+  for (const id of candidates) {
+    const override = modelOverrideFor(connection, id)?.imageInput;
+    const catalogImage = catalogModels.some((model) => model.id === id && model.imageInput === true);
+    const capable = override === "on" || (override !== "off" && (modelCapabilitiesFor(connection, id)?.imageInput === true || catalogImage));
+    const hint = { id, label: labels.get(id) ?? id };
+    if (capable) image.push(hint);
+
+  }
+  const imageIds = new Set(image.map((hint) => hint.id));
+  for (const id of connection.models ?? []) {
+    if (!imageIds.has(id) && !other.some((hint) => hint.id === id)) other.push({ id, label: labels.get(id) ?? id });
+  }
+  return [...image, ...other];
 }
 
-/** One suggested model id, with the display label to show for it. */
-export interface VisionModelHint {
-  id: string;
-  label: string;
+/** Index values cannot collide with arbitrary model ids. */
+export function visionModelSelection(model: string, models: readonly VisionModelHint[], custom: boolean): string {
+  if (custom) return "custom";
+  if (!model) return "";
+  const index = models.findIndex((candidate) => candidate.id === model);
+  return index < 0 ? "custom" : `model:${index}`;
 }
 
-/**
- * The datalist suggestions for the recognizer's model field (task §3):
- * catalog models of `providerId` with `imageInput: true`, UNIONED with the
- * candidate connection's live-fetched `connection.models[]` — NOT one
- * replacing the other.
- *
- * This is the deliberate anti-canon fix to `ModelPill.tsx`'s
- * `providerModelsFor`, which REPLACES the catalog list wholesale the moment a
- * live list is non-empty (`if (connectionModels !== undefined &&
- * connectionModels.length > 0) { return connectionModels.map(...) }`) — the
- * live defect where a working model vanishes from a picker
- * because the live fetch did not happen to include it. Here, a catalog model
- * already known to support vision NEVER disappears just because the
- * connection's live list is non-empty and does not happen to repeat it.
- *
- * The `imageInput: true` filter applies ONLY to the catalog half — a live id
- * carries no modality information at all, and silently dropping live ids
- * because their modality is unknown would reproduce the exact defect above in
- * a new shape. A live id that duplicates a catalog id already included keeps
- * the CATALOG's display name (dedup by id); a live id with no catalog match
- * is offered under its own raw id, exactly like `providerModelsFor` already
- * does for an unmatched live id.
- */
-export function visionModelHints(
-  providerId: string | undefined,
-  catalog: CatalogSummary | undefined,
-  connectionModels: readonly string[] | undefined,
-): VisionModelHint[] {
-  const catalogModels: readonly VisionCatalogModelHint[] =
-    catalog?.find((entry) => entry.id === providerId)?.models ?? [];
-  const hints = new Map<string, string>();
-  for (const model of catalogModels) {
-    if (model.imageInput === true) {
-      hints.set(model.id, model.name ?? model.id);
-    }
-  }
-  for (const id of connectionModels ?? []) {
-    if (!hints.has(id)) {
-      hints.set(id, id);
-    }
-  }
-  return [...hints.entries()].map(([id, label]) => ({ id, label }));
+/** A collision-free key for drafts belonging to an exact connection/model pair. */
+export function visionDraftKey(connectionId: string, modelId: string): string {
+  return JSON.stringify([connectionId, modelId]);
 }
 
 // ── panel state (task §4) — no "half-configured" middle state ──

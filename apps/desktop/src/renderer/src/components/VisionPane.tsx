@@ -25,7 +25,7 @@
  * therefore a second inline button ("Really turn off?"), never a native
  * dialog.
  */
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useStore } from "zustand";
 import { Badge, Banner, Button, Field, Input } from "../ui/index.js";
 import type { RecognizerProbeResult } from "../../../shared/recognizer.js";
@@ -35,6 +35,8 @@ import {
   visionConnectionOptions,
   visionFallbackState,
   visionModelHints,
+  visionModelSelection,
+  visionDraftKey,
   visionSubmitDisabled,
 } from "./vision-pane-model.js";
 
@@ -58,6 +60,9 @@ export function VisionPane({ store = useSettingsStore }: VisionPaneProps) {
     initialFallback.enabled ? initialFallback.connectionId : "",
   );
   const [modelId, setModelId] = useState(() => (initialFallback.enabled ? initialFallback.modelId : ""));
+  const [customModel, setCustomModel] = useState(false);
+  const selectionRef = useRef(visionDraftKey(connectionId, modelId));
+  selectionRef.current = visionDraftKey(connectionId, modelId);
   const [saving, setSaving] = useState(false);
   const [probing, setProbing] = useState(false);
   const [turningOff, setTurningOff] = useState(false);
@@ -78,7 +83,7 @@ export function VisionPane({ store = useSettingsStore }: VisionPaneProps) {
   const fallback = visionFallbackState(settings, authKindFor);
   const selectedOption = options.find((option) => option.id === connectionId);
   const selectedConnection = settings.provider.connections.find((c) => c.id === connectionId);
-  const modelHints = visionModelHints(selectedConnection?.providerId, catalog, selectedConnection?.models);
+  const modelHints = visionModelHints(selectedConnection, catalog);
   const anyOptionDisabled = options.some((option) => !option.selectable);
   const submitDisabled = readOnly || saving || probing || visionSubmitDisabled(connectionId, modelId);
   // Probing writes nothing: it runs the candidate pair through the production
@@ -92,6 +97,7 @@ export function VisionPane({ store = useSettingsStore }: VisionPaneProps) {
     fallback.enabled ? (options.find((option) => option.id === fallback.connectionId)?.label ?? fallback.connectionId) : null;
 
   async function handleSave(): Promise<void> {
+    const submitted = visionDraftKey(connectionId, modelId);
     setSaving(true);
     setError(null);
     setProbeResult(null);
@@ -102,10 +108,10 @@ export function VisionPane({ store = useSettingsStore }: VisionPaneProps) {
       if (result.ok) {
         await store.getState().load();
       } else {
-        setError(describeMutationFailure(result.reason));
+        if (selectionRef.current === submitted) setError(describeMutationFailure(result.reason));
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save the vision fallback.");
+      if (selectionRef.current === submitted) setError(err instanceof Error ? err.message : "Failed to save the vision fallback.");
     } finally {
       setSaving(false);
     }
@@ -131,6 +137,7 @@ export function VisionPane({ store = useSettingsStore }: VisionPaneProps) {
   }
 
   async function handleProbe(): Promise<void> {
+    const submitted = visionDraftKey(connectionId, modelId);
     setProbing(true);
     setError(null);
     setProbeResult(null);
@@ -139,9 +146,9 @@ export function VisionPane({ store = useSettingsStore }: VisionPaneProps) {
         connectionId,
         modelId: modelId.trim(),
       });
-      setProbeResult(result);
+      if (selectionRef.current === submitted) setProbeResult(result);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to probe the vision fallback.");
+      if (selectionRef.current === submitted) setError(err instanceof Error ? err.message : "Failed to probe the vision fallback.");
     } finally {
       setProbing(false);
     }
@@ -180,7 +187,7 @@ export function VisionPane({ store = useSettingsStore }: VisionPaneProps) {
             className="settings-field-select vision-pane-connection-select"
             value={connectionId}
             disabled={readOnly}
-            onChange={(e) => setConnectionId(e.target.value)}
+            onChange={(e) => { setConnectionId(e.target.value); setModelId(""); setCustomModel(false); setError(null); setProbeResult(null); }}
           >
             <option value="" disabled>
               Select a connection…
@@ -200,22 +207,27 @@ export function VisionPane({ store = useSettingsStore }: VisionPaneProps) {
         </div>
       )}
 
-      <Input label="Model" size="sm"
-            className="vision-pane-model-input"
-            type="text"
-            list="vision-model-suggestions"
-            value={modelId}
-            disabled={readOnly}
-            placeholder="e.g. glm-5.3-flash"
-            onChange={(e) => setModelId(e.target.value)}
-          />
-      <datalist id="vision-model-suggestions">
-        {modelHints.map((hint) => (
-          <option key={hint.id} value={hint.id}>
-            {hint.label}
-          </option>
-        ))}
-      </datalist>
+      <Field label="Model">
+        {(control) => (
+          <select {...control} className="settings-field-select vision-pane-model-select"
+            value={visionModelSelection(modelId, modelHints, customModel)} disabled={readOnly}
+            onChange={(e) => {
+              const value = e.target.value;
+              setError(null); setProbeResult(null);
+              if (value === "custom") { setCustomModel(true); setModelId(""); }
+              else { setCustomModel(false); setModelId(value === "" ? "" : modelHints[Number(value.slice(6))]?.id ?? ""); }
+            }}>
+            <option value="" disabled>Select a model…</option>
+            {modelHints.map((hint, index) => <option key={hint.id} value={`model:${index}`}>{hint.label}</option>)}
+            <option value="custom">Custom…</option>
+          </select>
+        )}
+      </Field>
+      {visionModelSelection(modelId, modelHints, customModel) === "custom" && (
+        <Input label="Custom model" size="sm" className="vision-pane-model-input" type="text"
+          value={modelId} disabled={readOnly} placeholder="e.g. glm-5.3-flash"
+          onChange={(e) => { setModelId(e.target.value); setError(null); setProbeResult(null); }} />
+      )}
 
       <div className="settings-field-row">
         <Button
