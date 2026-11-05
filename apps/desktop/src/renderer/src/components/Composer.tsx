@@ -998,10 +998,6 @@ export function showCustomPricingHint(target: { connection: ProviderConnection }
  * here too. Anchored to the trigger's RIGHT edge (not left, like ModelPill)
  * since the ctx meter sits at the far right of the footer.
  */
-export function ctxPopoverShouldPreserveFocus(targetIsInteractive: boolean): boolean {
-  return !targetIsInteractive;
-}
-
 function CtxPopover({
   contextUsage,
   contextBreakdown,
@@ -1238,7 +1234,7 @@ function CtxPopover({
           role="dialog"
           onMouseDown={(event) => {
             const target = event.target as Element;
-            if (ctxPopoverShouldPreserveFocus(Boolean(target.closest("button, a, input, select, textarea, [tabindex], [contenteditable=true]")))) {
+            if (!target.closest("button, a, input, select, textarea, [tabindex], [contenteditable=true]")) {
               event.preventDefault();
             }
           }}
