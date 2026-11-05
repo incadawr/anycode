@@ -42,6 +42,8 @@ import { calculateUsageCost, resolveUsagePrice } from "../host/usage-cost.js";
 import { createConnectionModelSettings } from "../host/connection-model-settings.js";
 import { resolveMaxOutputTokens } from "@anycode/core";
 import { findCatalogEntry } from "@anycode/core/catalog";
+import { handleConnectionUpdate } from "./settings-ipc.js";
+import { providerModelsFor } from "../shared/provider-models.js";
 
 // Capture ipcMain.handle registrations so a test can drive the real
 // `registerProviderIpc` wiring without an Electron runtime. `mock`-prefixed so
@@ -153,6 +155,8 @@ class FakeVault implements ProviderVaultLike {
     this.store.set(key, value);
     return { ok: true };
   }
+  async statuses() { return []; }
+  async probeSecret() { return { state: "unset" as const }; }
   async clearSecret(key: SecretKey): Promise<void> {
     this.store.delete(key);
   }
@@ -1708,14 +1712,33 @@ describe("handleCustomProviderFetchModels — catalog connection ({connectionId}
     expect(lockProbe.loadUnderLock).toBe(true);
   });
 
-  it("replaces stale models after a door-filtered connection fetch", async () => {
+  it("prunes explicitly incompatible models after a door-filtered connection fetch", async () => {
     await seedConnection({ id: "go-door", providerId: "opencode", models: ["deepseek-v4.1-flash"] });
-    const { deps, calls } = makeCatalogDeps({ catalogEntryById: () => ({ id: "opencode", baseUrl: "https://opencode.ai/inference/go/anthropic", defaultTransport: "anthropic-messages" }) });
+    const calls: FetchModelsParams[] = [];
+    const { deps } = makeCatalogDeps({ catalogEntryById: () => ({ id: "opencode", baseUrl: "https://opencode.ai/inference/go/anthropic", defaultTransport: "anthropic-messages" }), fetchModels: async params => { calls.push(params); return { ok: true, models: [{ id: "live-a" }, { id: "live-b" }], incompatibleModels: ["deepseek-v4.1-flash"] }; } });
     const result = await handleCustomProviderFetchModels(deps, { connectionId: "go-door" });
     expect(result.ok).toBe(true);
     expect(calls[0]?.transport).toBe("anthropic-messages");
     const reloaded = await loadSettings(settingsPath);
     expect(reloaded.settings.provider.connections[0]?.models).toEqual(["live-a", "live-b"]);
+  });
+
+  it("prunes incompatible saved models through preview, save, reload and picker", async () => {
+    const bad = "deepseek-v4.1-flash";
+    await seedConnection({ id: "go", providerId: "opencode", model: bad, models: [bad, "manual-id"], visibleModels: [bad, "manual-id"] });
+    const fixture = await readFile(new URL("./__fixtures__/opencode-go-models.json", import.meta.url), "utf8");
+    const { deps } = makeCatalogDeps({ catalogEntryById: () => ({ id: "opencode", baseUrl: "https://opencode.ai/inference/go/anthropic", defaultTransport: "anthropic-messages" }), fetchModels: fetchCustomProviderModels, preparedConnectionFetch: () => async () => new Response(fixture) });
+    const preview = await handleCustomProviderFetchModels(deps, { connectionId: "go", preview: true });
+    if (!preview.ok || !preview.source) throw new Error("preview failed");
+    expect(preview.incompatibleModels).toContain(bad);
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.model).toBe(bad);
+    const update = await handleConnectionUpdate({ settingsPath, vault, bootEnv: {} }, { id: "go", fetchedModels: { ...preview.source, models: preview.models, incompatibleModels: preview.incompatibleModels } });
+    expect(update.ok).toBe(true);
+    const connection = (await loadSettings(settingsPath)).settings.provider.connections[0]!;
+    expect(connection.model).toBeUndefined();
+    expect(connection.models).not.toContain(bad);
+    expect(connection.models).toContain("manual-id");
+    expect(providerModelsFor("opencode", undefined, undefined, connection.models, connection.visibleModels)).toEqual([{ id: "manual-id" }]);
   });
 
   it("a failed fetch persists nothing", async () => {

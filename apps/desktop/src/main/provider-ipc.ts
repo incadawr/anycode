@@ -106,7 +106,7 @@ export type FetchModelsFailureReason =
   | "stale_fetch";
 
 export type FetchModelsOutcome =
-  | { ok: true; models: { id: string; reasoning?: boolean; effortLevels?: string[]; imageInput?: true; contextWindow?: number; maxOutputTokens?: number; pricing?: { input: number; cachedInput: number; output: number } }[]; source?: { baseUrl: string; transport: string; targetUrl: string; guard: string } }
+  | { ok: true; models: { id: string; reasoning?: boolean; effortLevels?: string[]; imageInput?: true; contextWindow?: number; maxOutputTokens?: number; pricing?: { input: number; cachedInput: number; output: number } }[]; incompatibleModels?: string[]; source?: { baseUrl: string; transport: string; targetUrl: string; guard: string } }
   | { ok: false; reason: FetchModelsFailureReason };
 
 /** Minimal fetch surface this module needs (injectable; defaults to global fetch — mirrors oauth.ts's `FetchLike`). */
@@ -238,7 +238,12 @@ export async function fetchCustomProviderModels(params: FetchModelsParams): Prom
   if (models.length === 0) {
     return { ok: false, reason: "empty_models" };
   }
-  return { ok: true, models };
+  const incompatibleModels = goDoor && typeof parsed === "object" && parsed !== null && "data" in parsed && Array.isArray(parsed.data)
+    ? parsed.data.flatMap((item: unknown) => {
+      if (typeof item !== "object" || item === null || !("id" in item) || typeof item.id !== "string" || !("api" in item) || typeof item.api !== "object" || item.api === null) return [];
+      return Object.hasOwn(item.api, goDoor) ? [] : [item.id];
+    }) : undefined;
+  return { ok: true, models, ...(incompatibleModels ? { incompatibleModels } : {}) };
 }
 
 /** Reads `response`'s body capped at `maxBytes`, undefined when it (or a lying/absent Content-Length) exceeds the cap. */
@@ -1007,11 +1012,12 @@ async function handleConnectionFetchModels(
       : target.modelCapabilities;
     const updated: ProviderConnection = {
       ...target,
-      // Door-filtered lists replace stale ids; other providers retain stored ids.
-      models: resolved.modelsUrl?.replace(/\/+$/, "") === "https://opencode.ai/inference/go/v1/models" ? fetchedIds : mergeModelIds(fetchedIds, target.models ?? []),
+      models: mergeModelIds(fetchedIds, (target.models ?? []).filter(id => !outcome.incompatibleModels?.includes(id))),
+      ...(target.visibleModels !== undefined ? { visibleModels: target.visibleModels.filter(id => !outcome.incompatibleModels?.includes(id)) } : {}),
       modelsFetchedAt: (deps.now ?? defaultNowIso)(),
       ...(mergedCaps !== undefined ? { modelCapabilities: mergedCaps } : {}),
     };
+    if (updated.model && outcome.incompatibleModels?.includes(updated.model)) delete updated.model;
     const merged: AnycodeSettings = {
       ...loaded.settings,
       provider: {

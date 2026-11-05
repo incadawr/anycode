@@ -1649,6 +1649,7 @@ export function ConnectionDrawerFields({
   const [fetchedModels, setFetchedModels] = useState<Extract<FetchModelsOutcome, { ok: true }>["models"] | null>(null);
   const [createFetchNotice, setCreateFetchNotice] = useState<string | null>(null);
   const [commitFetchedModels, setCommitFetchedModels] = useState(false);
+  const [incompatibleModels, setIncompatibleModels] = useState<string[]>([]);
   const [fetchedSource, setFetchedSource] = useState<{ guard: string; targetUrl: string; baseUrl: string; transport: ProviderTransportId | "" } | null>(null);
   const [fetchingModels, setFetchingModels] = useState(false);
   const fetchGeneration = useRef(0);
@@ -2265,6 +2266,10 @@ export function ConnectionDrawerFields({
       setError(CONTEXT_WINDOW_ERROR);
       return;
     }
+    if (commitFetchedModels && incompatibleModels.includes((selectedModelId ?? model).trim())) {
+      setError("The selected model is incompatible with this connection. Choose a compatible model before saving.");
+      return;
+    }
     if (cw.value !== "" && model.trim() === "") {
       setError(CONTEXT_WINDOW_ERROR_MODEL);
       return;
@@ -2306,7 +2311,7 @@ export function ConnectionDrawerFields({
           usage: usageSelection,
           replay: replaySelection,
           replayHidden: !replayTransportShown,
-        }, { contextWindowDirty, contextWindowTokens: cw.value, reasoningSupportedDirty, reasoningSupported, modelEffortDirty, modelEffort, imageInputDirty, effortLevelsDirty, effortLevels }), ...(isCustomRecordConnection && !showBaseUrl ? { baseUrl: undefined } : {}), ...(catalogMatchDirty ? { catalogMatchDisabled: catalogMatchDisabled ? true as const : "" as const } : {}), ...(pendingVisibleModels !== null ? { visibleModels: pendingVisibleModels } : {}), ...(commitFetchedModels && fetchedModels !== null && fetchedSource !== null ? { fetchedModels: { ...fetchedSource, models: fetchedModels } } : {}), pricing, modelPricing },
+        }, { contextWindowDirty, contextWindowTokens: cw.value, reasoningSupportedDirty, reasoningSupported, modelEffortDirty, modelEffort, imageInputDirty, effortLevelsDirty, effortLevels }), ...(isCustomRecordConnection && !showBaseUrl ? { baseUrl: undefined } : {}), ...(catalogMatchDirty ? { catalogMatchDisabled: catalogMatchDisabled ? true as const : "" as const } : {}), ...(pendingVisibleModels !== null ? { visibleModels: pendingVisibleModels } : {}), ...(commitFetchedModels && fetchedModels !== null && fetchedSource !== null ? { fetchedModels: { ...fetchedSource, models: fetchedModels, incompatibleModels } } : {}), pricing, modelPricing },
         selectedModelId !== null && shouldAppendModelToList(selectedModelId, catalogOfferedIds, isCustomRecordConnection)
           ? selectedModelId
           : null,
@@ -2478,6 +2483,7 @@ export function ConnectionDrawerFields({
         return;
       }
       setFetchedSource(outcome.source ?? null);
+      setIncompatibleModels(outcome.incompatibleModels ?? []);
       const validModels = outcome.models.filter(item => validVisibleModelIds([item.id]).length > 0);
       setFetchedModels(validModels);
       if (targetConnection?.visibleModels === undefined && pendingVisibleModels === null) {

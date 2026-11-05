@@ -51,6 +51,7 @@ import { modelSettingsTarget } from "../model-settings-target.js";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import type { ReasoningEffort } from "@anycode/core";
+import { providerModelsFor } from "../../../shared/provider-models.js";
 import type { CatalogSummary, ConnectionUpdateRequest, CustomProviderRecord } from "../../../shared/settings.js";
 import { activeProviderView, connectionById, mergeModelIds } from "../../../shared/settings.js";
 import type { SessionSummary } from "../../../shared/tabs.js";
@@ -305,41 +306,7 @@ export function pillDisplayLabel(
  * synthesized catalog entry exists. Absent/empty `connectionModels` keeps
  * every pre-fetch behavior byte-identical. Exported for unit testing.
  */
-export function providerModelsFor(
-  providerId: string | undefined,
-  catalog: CatalogSummary | undefined,
-  custom: readonly CustomProviderRecord[] | undefined,
-  connectionModels?: readonly string[],
-  visibleModels?: readonly string[],
-): readonly { id: string; name?: string }[] | undefined {
-  const catalogHit = catalog?.find((entry) => entry.id === providerId)?.models;
-  const customHit = custom?.find((entry) => entry.id === providerId);
-  const baseHints: readonly { id: string; name?: string }[] | undefined =
-    catalogHit ?? (customHit !== undefined ? customHit.models.map((id) => ({ id })) : undefined);
-  if (visibleModels !== undefined) {
-    return visibleModels.map((id) => {
-      const hint = baseHints?.find((item) => item.id === id);
-      return hint?.name !== undefined ? { id, name: hint.name } : { id };
-    });
-  }
-  if (connectionModels !== undefined && connectionModels.length > 0) {
-    const union = mergeModelIds(
-      (baseHints ?? []).map((hint) => hint.id),
-      connectionModels,
-    );
-    return union.map((id) => {
-      const hint = baseHints?.find((m) => m.id === id);
-      return hint?.name !== undefined ? { id, name: hint.name } : { id };
-    });
-  }
-  if (catalogHit !== undefined) {
-    return catalogHit;
-  }
-  if (customHit !== undefined) {
-    return customHit.models.map((id) => ({ id }));
-  }
-  return undefined;
-}
+export { providerModelsFor } from "../../../shared/provider-models.js";
 
 /**
  * The Model page's flat list (design §2.2): the provider's offered models

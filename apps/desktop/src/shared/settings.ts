@@ -1390,7 +1390,7 @@ export interface ConnectionCreateRequest {
 }
 
 export interface ConnectionUpdateRequest {
-  fetchedModels?: { guard: string; targetUrl: string; baseUrl: string; transport: ProviderTransportId | ""; models: ({ id: string } & ModelCapabilitiesDto)[] };
+  fetchedModels?: { guard: string; targetUrl: string; baseUrl: string; transport: ProviderTransportId | ""; models: ({ id: string } & ModelCapabilitiesDto)[]; incompatibleModels?: string[] };
   visibleModels?: string[] | "";
   openRouterProviders?: string[];
   modelPricing?: Record<string, TokenRates | "">;

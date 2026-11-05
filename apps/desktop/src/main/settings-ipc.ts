@@ -478,7 +478,7 @@ const connectionCreateSchema = z
   .strict();
 const connectionUpdateSchema = z
   .object({
-    fetchedModels: z.object({ guard: z.string().regex(/^[a-f0-9]{64}$/), targetUrl: z.string().max(4096), baseUrl: z.string(), transport: z.union([transportEnum, z.literal("")]), models: z.array(z.object({ id: modelIdKey, reasoning: z.boolean().optional(), effortLevels: z.array(z.string().max(64)).max(16).optional(), imageInput: z.literal(true).optional(), contextWindow: z.number().int().positive().optional(), maxOutputTokens: z.number().int().positive().optional(), pricing: tokenRatesSchema.optional() }).strict()).max(10000) }).strict().optional(),
+    fetchedModels: z.object({ guard: z.string().regex(/^[a-f0-9]{64}$/), targetUrl: z.string().max(4096), baseUrl: z.string(), transport: z.union([transportEnum, z.literal("")]), incompatibleModels: z.array(modelIdKey).max(10000).optional(), models: z.array(z.object({ id: modelIdKey, reasoning: z.boolean().optional(), effortLevels: z.array(z.string().max(64)).max(16).optional(), imageInput: z.literal(true).optional(), contextWindow: z.number().int().positive().optional(), maxOutputTokens: z.number().int().positive().optional(), pricing: tokenRatesSchema.optional() }).strict()).max(10000) }).strict().optional(),
     visibleModels: z.union([z.array(modelIdKey).max(10000), z.literal("")]).optional(),
     modelPricing: modelPricingSchema(z.union([tokenRatesSchema, z.literal("")])).optional(),
     pricing: z.union([connectionPricingSchema, z.literal("")]).optional(),
@@ -2193,7 +2193,10 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
       delete updatedConnection.modelCapabilities;
     }
     if (req.fetchedModels && req.fetchedModels.models.length > 0) {
-      updatedConnection.models = mergeModelIds(req.fetchedModels.models.map(item => item.id), updatedConnection.models ?? []);
+      const incompatible = new Set(req.fetchedModels.incompatibleModels ?? []);
+      updatedConnection.models = mergeModelIds(req.fetchedModels.models.map(item => item.id), (updatedConnection.models ?? []).filter(id => !incompatible.has(id)));
+      if (updatedConnection.visibleModels) updatedConnection.visibleModels = updatedConnection.visibleModels.filter(id => !incompatible.has(id));
+      if (updatedConnection.model && incompatible.has(updatedConnection.model)) delete updatedConnection.model;
       updatedConnection.modelsFetchedAt = (deps.now ?? defaultNowIso)();
       const caps = { ...updatedConnection.modelCapabilities };
       for (const item of req.fetchedModels.models) {
