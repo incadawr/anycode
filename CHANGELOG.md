@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Subagent turn settings now apply to orchestration roles, up to the 200-turn limit. (GitHub #58)
+
 ## [0.0.77] — 2026-11-05
 
 ### Fixed

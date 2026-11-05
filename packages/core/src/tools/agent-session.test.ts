@@ -1945,6 +1945,16 @@ describe("agentTool handler — role route stamping (§3.3)", () => {
     expect(seen()?.maxTurns).toBe(role === "planner" ? 30 : 40);
   });
 
+  it("uses the resolved session budget for a built-in role and preserves it on continuation", async () => {
+    const { ctx, seen } = roleCtx(null);
+    ctx.subagents!.coreProfile = () => null;
+    ctx.subagents!.sessionTurnBudget = () => 200;
+    await full.handler({ description: "d", prompt: "p", tier: "session", agent_type: "executor" }, ctx);
+    expect(seen()?.maxTurns).toBe(200);
+    await full.handler({ description: "d", prompt: "p", tier: "session", agent_type: "executor", continue_session: "child-9" }, ctx);
+    expect(seen()?.maxTurns).toBeUndefined();
+  });
+
   it("a role route stamps provider/model/effort/maxTurns on a FRESH spawn", async () => {
     const { ctx, seen } = roleCtx({
       entries: [{ provider: "conn-glm", model: "glm-5.3", effort: "high" }],

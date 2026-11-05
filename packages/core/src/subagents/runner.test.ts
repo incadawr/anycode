@@ -453,6 +453,31 @@ describe("buildChildConfig — §4.1 derivation table", () => {
     expect(buildChildConfig(parent, overreaching, REQ).maxTurns).toBe(SUBAGENT_MAX_TURNS_CEILING);
   });
 
+  it("resolves role defaults below settings, explicit profiles and requests", () => {
+    for (const role of ["planner", "executor", "reviewer"] as const) {
+      const builtin = getPersona(role);
+      const parent = { ...makeParent(), subagentMaxTurns: 150 };
+      expect(buildChildConfig(makeParent(), builtin, REQ).maxTurns).toBe(ROLE_TURN_BUDGETS[role]);
+      expect(buildChildConfig(parent, builtin, REQ).maxTurns).toBe(150);
+      expect(buildChildConfig(parent, { ...builtin, origin: "settings" }, REQ).maxTurns).toBe(150);
+      expect(buildChildConfig(parent, { ...builtin, turnBudget: 22 }, REQ).maxTurns).toBe(22);
+      expect(buildChildConfig(parent, { ...builtin, turnBudget: 22 }, { ...REQ, maxTurns: 33 }).maxTurns).toBe(33);
+      expect(buildChildConfig({ ...parent, subagentMaxTurns: 300 }, builtin, REQ).maxTurns).toBe(SUBAGENT_MAX_TURNS_CEILING);
+    }
+  });
+
+  it("resolves session budgets and role routes against the setting", () => {
+    const route = { entries: [{ model: "model" }], skipped: [], turnBudget: 80 };
+    const makeRunner = (budget?: number, profiles: PersonaDefinition[] = []) => createSubagentRunner(
+      { ...makeParent(), subagentMaxTurns: budget }, { profiles, resolveRoleRoute: () => route },
+    );
+    expect(makeRunner().sessionTurnBudget?.("executor")).toBe(80);
+    expect(makeRunner(300).sessionTurnBudget?.("executor")).toBe(200);
+    expect(makeRunner(150).resolveRoleRoute?.("executor")?.turnBudget).toBe(150);
+    expect(makeRunner(150, [{ ...getPersona("executor"), turnBudget: 25 }]).sessionTurnBudget?.("executor")).toBe(25);
+    expect(makeRunner(150, [{ ...getPersona("executor"), origin: "settings" }]).sessionTurnBudget?.("executor")).toBe(150);
+  });
+
   it("threads extras.deadlineAt into the child config and omits the field without it", () => {
     const parent = makeParent();
     const deadlineAt = Date.now() + 1_234;

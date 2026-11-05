@@ -2023,6 +2023,7 @@ export function SettingsScreen({
                   <span className="settings-field-label">Maximum turns (subagents)</span>
                   <input className="settings-field-input" type="text" inputMode="numeric" value={subagentMaxTurns}
                     disabled={readOnly} placeholder="40" onChange={(e) => setSubagentMaxTurns(e.target.value)} />
+                  <span className="settings-field-hint">Values above 200 are capped at 200 turns.</span>
                 </label>
                 <div className="settings-field">
                   <label className="settings-field-checkbox">
