@@ -135,6 +135,8 @@ export const ENV_IMAGE_INPUT_MODEL_OVERRIDE = "ANYCODE_IMAGE_INPUT_MODEL_OVERRID
  * core runtime).
  */
 export const ENV_PROVIDER_TRANSPORT = "ANYCODE_PROVIDER_TRANSPORT";
+export const ENV_PROVIDER_ID = "ANYCODE_PROVIDER_ID";
+export const ENV_AUTOMATIC_MODEL_ROUTING = "ANYCODE_AUTOMATIC_MODEL_ROUTING";
 /**
  * Usage-streaming override: `1/true/on` or `0/false/off`; an
  * explicit value wins over resolveIncludeUsage's transport-conditional default
@@ -1130,6 +1132,16 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // migration the active connection ≡ the former singleton, so the ladder OUTPUT
   // stays byte-equivalent (DoD #5).
   const view = activeProviderView(settings);
+  // Both carriers are authored afresh for each fork, never inherited from a previous pin.
+  delete env[ENV_PROVIDER_ID];
+  delete env[ENV_AUTOMATIC_MODEL_ROUTING];
+  if (view.id) {
+    env[ENV_PROVIDER_ID] = view.id;
+    const go = view.id === "opencode" || view.id === "opencode-openai";
+    const explicit = envPresent(bootEnv, ENV_BASE_URL) || envPresent(bootEnv, ENV_PROVIDER_TRANSPORT)
+      || Boolean(view.baseUrl?.trim()) || Boolean(view.transport?.trim());
+    env[ENV_AUTOMATIC_MODEL_ROUTING] = go && !explicit ? "1" : "0";
+  }
   const settingsConnectionId = activeConnection(settings)?.id;
   if (settingsConnectionId !== undefined) env[ENV_MODEL_SETTINGS_CONNECTION_ID] = settingsConnectionId;
   else delete env[ENV_MODEL_SETTINGS_CONNECTION_ID];

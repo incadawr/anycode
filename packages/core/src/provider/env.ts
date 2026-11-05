@@ -73,6 +73,8 @@ export const ENV_IMAGE_INPUT = "ANYCODE_IMAGE_INPUT";
  */
 export const ENV_IMAGE_INPUT_MODEL_OVERRIDE = "ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE";
 export const ENV_PROVIDER_TRANSPORT = "ANYCODE_PROVIDER_TRANSPORT";
+export const ENV_PROVIDER_ID = "ANYCODE_PROVIDER_ID";
+export const ENV_AUTOMATIC_MODEL_ROUTING = "ANYCODE_AUTOMATIC_MODEL_ROUTING";
 export const ENV_INCLUDE_USAGE = "ANYCODE_INCLUDE_USAGE";
 /** Connection-level override of the catalog `preserveReasoning` flag (GitHub #41). */
 export const ENV_PRESERVE_REASONING = "ANYCODE_PRESERVE_REASONING";
@@ -157,6 +159,10 @@ export function parseImageInputModelOverride(
  */
 export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundCoreEnvConfig {
   const providerTransport = readProviderTransport(env);
+  const providerId = env[ENV_PROVIDER_ID]?.trim() || undefined;
+  const go = providerId === "opencode" || providerId === "opencode-openai";
+  const routingMarker = env[ENV_AUTOMATIC_MODEL_ROUTING];
+  const automaticModelRouting = go && (routingMarker === "1" || (routingMarker === undefined && !env[ENV_BASE_URL]?.trim() && !env[ENV_PROVIDER_TRANSPORT]?.trim()));
 
   const apiKeyRequired = providerTransport === undefined || providerTransport === "anthropic-messages";
   const rawApiKey = env[ENV_API_KEY];
@@ -204,6 +210,7 @@ export function loadEnvConfig(env: NodeJS.ProcessEnv = process.env): ModelBoundC
     apiKey,
     baseUrl,
     model,
+    ...(providerId !== undefined ? { providerId, automaticModelRouting } : {}),
     maxTurns,
     subagentMaxTurns,
     adaptiveTurnBudget,
@@ -305,7 +312,7 @@ function readEffortLevels(env: NodeJS.ProcessEnv): ReasoningEffort[] | undefined
   if (raw === undefined || raw.trim() === "") return undefined;
   try {
     const value: unknown = JSON.parse(raw);
-    const allowed = ["off", "low", "medium", "high", "xhigh", "max"];
+    const allowed = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
     if (Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === "string" && allowed.includes(v))) {
       return [...new Set(value)] as ReasoningEffort[];
     }
@@ -317,7 +324,7 @@ function readEffortLevels(env: NodeJS.ProcessEnv): ReasoningEffort[] | undefined
 function readReasoningEffort(env: NodeJS.ProcessEnv): ReasoningEffort | undefined {
   const raw = env[ENV_REASONING_EFFORT];
   if (raw === undefined || raw.trim() === "") return undefined;
-  if (raw === "off" || raw === "low" || raw === "medium" || raw === "high" || raw === "xhigh" || raw === "max") return raw;
+  if (raw === "off" || raw === "minimal" || raw === "low" || raw === "medium" || raw === "high" || raw === "xhigh" || raw === "max") return raw;
   console.warn(`Invalid ${ENV_REASONING_EFFORT}: "${raw}" is not off, low, medium, high, or max — ignoring`);
   return undefined;
 }

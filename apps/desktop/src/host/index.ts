@@ -3088,6 +3088,7 @@ async function boot(): Promise<void> {
           baseUrl: envConfig.baseUrl,
           apiKey: envConfig.apiKey,
           model: m,
+          ...(envConfig.providerId !== undefined ? { providerId: envConfig.providerId, automaticModelRouting: envConfig.automaticModelRouting } : {}),
           ...(catalogEntry !== undefined ? { providerName: catalogEntry.name } : {}),
           // The connection's declared effort vocabulary (ANYCODE_EFFORT_LEVELS):
           // the model port sends `output_config.effort` to a custom

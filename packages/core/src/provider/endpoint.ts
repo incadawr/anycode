@@ -13,6 +13,8 @@ import type { RetryPolicy } from "./retry.js";
 import type { ImplicitPromptCache, ReasoningEffort } from "../types/config.js";
 
 export interface EndpointConfig {
+  providerId?: string;
+  automaticModelRouting?: boolean;
   /** Automatic Go policy for this exact model; absent for manual endpoints. */
   goModelPolicy?: OpenCodeGoEndpointPolicy;
   /** Internal per-request SDK serialization marker. */

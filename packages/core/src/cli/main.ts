@@ -243,6 +243,7 @@ export function buildCliEndpointConfig(args: {
     baseUrl: envConfig.baseUrl,
     apiKey: envConfig.apiKey,
     model,
+    ...(envConfig.providerId !== undefined ? { providerId: envConfig.providerId, automaticModelRouting: envConfig.automaticModelRouting } : {}),
     ...(catalogEntry !== undefined ? { providerName: catalogEntry.name } : {}),
     ...(headers !== undefined ? { headers } : {}),
     // The connection's declared effort vocabulary (ANYCODE_EFFORT_LEVELS):

@@ -583,3 +583,16 @@ describe("effort vocabulary environment", () => {
     warn.mockRestore();
   });
 });
+
+describe("Go model routing carriers", () => {
+  const base = { ANYCODE_API_KEY: "test", ANYCODE_MODEL: "kimi-k3", ANYCODE_PROVIDER_ID: "opencode" };
+  it("enables CLI automatic routing only without explicit route overrides", () => {
+    expect(loadEnvConfig(base).automaticModelRouting).toBe(true);
+    expect(loadEnvConfig({ ...base, ANYCODE_BASE_URL: "https://manual.test" }).automaticModelRouting).toBe(false);
+    expect(loadEnvConfig({ ...base, ANYCODE_PROVIDER_TRANSPORT: "openai-responses" }).automaticModelRouting).toBe(false);
+  });
+  it("honors the main-authored marker even when catalog defaults were emitted", () => {
+    expect(loadEnvConfig({ ...base, ANYCODE_BASE_URL: "https://catalog.test", ANYCODE_PROVIDER_TRANSPORT: "openai-chat-completions", ANYCODE_AUTOMATIC_MODEL_ROUTING: "1" }).automaticModelRouting).toBe(true);
+    expect(loadEnvConfig({ ...base, ANYCODE_AUTOMATIC_MODEL_ROUTING: "0" }).automaticModelRouting).toBe(false);
+  });
+});
