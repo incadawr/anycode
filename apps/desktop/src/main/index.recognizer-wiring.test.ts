@@ -329,7 +329,7 @@ describe("main/index.ts — recognizer live-push wiring (E1)", () => {
     expect(turnOn).toMatchObject({ ok: true });
     const pushesAfterOn = recognizerPushes(rootHost);
     expect(pushesAfterOn).toHaveLength(1);
-    expect(pushesAfterOn[0]).toEqual({
+    expect(pushesAfterOn[0]).toMatchObject({
       type: RECOGNIZER_CONFIG_CHANGED_TYPE,
       endpoint: {
         transport: "openai-chat-completions",
@@ -345,6 +345,14 @@ describe("main/index.ts — recognizer live-push wiring (E1)", () => {
     const unrelated2 = (await handleSettingsSet({}, { ui: { theme: "light" } })) as SettingsMutationResult;
     expect(unrelated2).toMatchObject({ ok: true });
     expect(recognizerPushes(rootHost)).toHaveLength(1); // unchanged — still exactly the one push from step 2
+
+    const pair = { connectionId: "conn-vision", modelId: "vision-model-x" };
+    await handleRecognizerSet({}, { recognizer: pair, contextWindowTokens: 32000 });
+    expect(recognizerPushes(rootHost)).toHaveLength(2);
+    expect(recognizerPushes(rootHost)[1]).toMatchObject({ endpoint: { contextWindowTokens: 32000 } });
+    await handleRecognizerSet({}, { recognizer: pair, contextWindowTokens: "" });
+    expect(recognizerPushes(rootHost)).toHaveLength(3);
+    expect(recognizerPushes(rootHost)[2]).toMatchObject({ endpoint: { contextWindowTokens: 8192 } });
 
     // 4) `connectionInUse` now also covers the recognizer's connection: delete
     // is refused, with the same reason a pinned-session connection gets.
@@ -394,7 +402,7 @@ describe("main/index.ts — recognizer live-push wiring (E1)", () => {
     expect(rotate).toMatchObject({ ok: true });
     const pushesAfterRotate = recognizerPushes(rootHost);
     expect(pushesAfterRotate).toHaveLength(2);
-    expect(pushesAfterRotate[1]).toEqual({
+    expect(pushesAfterRotate[1]).toMatchObject({
       type: RECOGNIZER_CONFIG_CHANGED_TYPE,
       endpoint: {
         transport: "openai-chat-completions",

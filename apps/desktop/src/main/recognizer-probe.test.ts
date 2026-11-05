@@ -25,6 +25,7 @@ import {
   classifyRecognizerProbeOutput,
   defaultResolveTelemetryDir,
   handleRecognizerProbeRequest,
+  resolveRecognizerProbeCandidate,
   type RecognizerProbeChildInput,
   type RecognizerProbeDeps,
   type RecognizerProbeRawOutput,
@@ -95,6 +96,14 @@ const visionConnection = connectionFixture({
   connectionId: "conn-vision",
   baseUrl: "https://vision.example.com",
   transport: "openai-chat-completions",
+});
+
+it("probes a patched copy without changing persisted settings", async () => {
+  const original = settings({ provider: { connections: [{ id: "c", providerId: "", baseUrl: "https://example.test", modelOverrides: { vision: { contextWindowTokens: 64000, imageInput: "on" } } }] } });
+  const snapshot = structuredClone(original);
+  expect((await resolveRecognizerProbeCandidate(original, { connectionId: "c", modelId: "vision", contextWindowTokens: 32000 }, noSecret))?.contextWindowTokens).toBe(32000);
+  expect((await resolveRecognizerProbeCandidate(original, { connectionId: "c", modelId: "vision", contextWindowTokens: "" }, noSecret))?.contextWindowTokens).toBe(8192);
+  expect(original).toEqual(snapshot);
 });
 
 describe("handleRecognizerProbeRequest — refuses without spawning (resolveRecognizerConfig's own refusals)", () => {
