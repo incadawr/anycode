@@ -1556,7 +1556,7 @@ export async function resolveRecognizerConfig(
     apiKey: apiKey !== undefined && apiKey !== "" ? apiKey : undefined,
     model: setting.modelId,
     providerName: providerId !== "" ? providerId : undefined,
-    contextWindowTokens: catalogInfo?.contextWindowFor?.(connection, setting.modelId) ?? modelOverrideFor(connection, setting.modelId)?.contextWindowTokens ?? 8192,
+    contextWindowTokens: catalogInfo?.contextWindowFor?.(connection, setting.modelId) ?? modelOverrideFor(connection, setting.modelId)?.contextWindowTokens,
   };
 }
 

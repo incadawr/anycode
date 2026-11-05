@@ -352,7 +352,7 @@ describe("main/index.ts — recognizer live-push wiring (E1)", () => {
     expect(recognizerPushes(rootHost)[1]).toMatchObject({ endpoint: { contextWindowTokens: 32000 } });
     await handleRecognizerSet({}, { recognizer: pair, contextWindowTokens: "" });
     expect(recognizerPushes(rootHost)).toHaveLength(3);
-    expect(recognizerPushes(rootHost)[2]).toMatchObject({ endpoint: { contextWindowTokens: 8192 } });
+    expect(recognizerPushes(rootHost)[2]).toMatchObject({ endpoint: { contextWindowTokens: undefined } });
 
     // 4) `connectionInUse` now also covers the recognizer's connection: delete
     // is refused, with the same reason a pinned-session connection gets.

@@ -10,6 +10,8 @@
  * shared (shared/provider-v2-fixture.ts), so those two come from there.
  */
 
+import { recognizerContextWindow } from "../../../../packages/core/src/vision/recognizer.js";
+import { connectionContextWindow } from "../shared/connection-context-window.js";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -98,11 +100,21 @@ const visionConnection = connectionFixture({
   transport: "openai-chat-completions",
 });
 
+it("uses the same dictionary window for a custom proxy in the panel and runtime", async () => {
+  const connection = { id: "c", providerId: "custom:myproxy" };
+  const original = settings({ provider: { connections: [connection], custom: [{ id: "custom:myproxy", name: "Proxy", baseUrl: "https://proxy.example/v1", kind: "openai-compatible", models: [] }] } });
+  const endpoint = await resolveRecognizerProbeCandidate(original, { connectionId: "c", modelId: "glm-5.3-flash" }, noSecret);
+  expect(endpoint).toBeDefined();
+  expect(endpoint!.contextWindowTokens).toBeUndefined();
+  expect(connectionContextWindow(connection, "glm-5.3-flash", undefined).tokens).toBe(300000);
+  expect(recognizerContextWindow(endpoint!)).toBe(300000);
+});
+
 it("probes a patched copy without changing persisted settings", async () => {
   const original = settings({ provider: { connections: [{ id: "c", providerId: "", baseUrl: "https://example.test", modelOverrides: { vision: { contextWindowTokens: 64000, imageInput: "on" } } }] } });
   const snapshot = structuredClone(original);
   expect((await resolveRecognizerProbeCandidate(original, { connectionId: "c", modelId: "vision", contextWindowTokens: 32000 }, noSecret))?.contextWindowTokens).toBe(32000);
-  expect((await resolveRecognizerProbeCandidate(original, { connectionId: "c", modelId: "vision", contextWindowTokens: "" }, noSecret))?.contextWindowTokens).toBe(8192);
+  expect((await resolveRecognizerProbeCandidate(original, { connectionId: "c", modelId: "vision", contextWindowTokens: "" }, noSecret))?.contextWindowTokens).toBeUndefined();
   expect(original).toEqual(snapshot);
 });
 
@@ -193,7 +205,6 @@ describe("handleRecognizerProbeRequest — success", () => {
 
     const childInput = JSON.parse(call.stdin) as RecognizerProbeChildInput;
     expect(childInput.endpoint).toEqual({
-      contextWindowTokens: 8192,
       transport: "openai-chat-completions",
       baseUrl: "https://vision.example.com",
       model: "vision-model",
