@@ -12,7 +12,7 @@ import {
 import type { ProviderConnection } from "../shared/settings.js";
 import { applyModelReasoningOverride, modelOverrideFor } from "../shared/model-overrides.js";
 
-const EFFORT_ORDER: ReasoningEffort[] = ["off", "low", "medium", "high", "xhigh", "max"];
+const EFFORT_ORDER: ReasoningEffort[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 /** Pick the closest supported tier; ties favor the lower tier. */
 export function nearestSupportedEffort(tier: ReasoningEffort, levels: ReasoningEffort[] | undefined): ReasoningEffort {

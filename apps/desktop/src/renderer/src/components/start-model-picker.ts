@@ -377,7 +377,7 @@ export function startModelEffortLevels(
 }
 
 /** The closed effort vocabulary a live-declared level must map to by exact name. */
-const START_MODEL_EFFORT_VOCABULARY: readonly string[] = ["off", "low", "medium", "high", "xhigh", "max"];
+const START_MODEL_EFFORT_VOCABULARY: readonly string[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 /**
  * The provider's own default effort tier for a model, or

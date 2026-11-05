@@ -568,7 +568,7 @@ const CHILD_SPAWN_REQUEST_KEYS = [
   "restrictions",
 ] as const;
 
-const CHILD_EFFORT_VALUES: readonly string[] = ["off", "low", "medium", "high", "xhigh", "max"] satisfies readonly ChildEffort[];
+const CHILD_EFFORT_VALUES: readonly string[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] satisfies readonly ChildEffort[];
 
 export function isChildEffort(value: unknown): value is ChildEffort {
   return typeof value === "string" && CHILD_EFFORT_VALUES.includes(value);

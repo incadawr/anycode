@@ -194,7 +194,7 @@ export const browserSettingsSchema = z
 const transportSchema = z.enum(["anthropic-messages", "openai-chat-completions", "openai-responses"]);
 
 /** Per-model reasoning-effort tiers. */
-const reasoningEffortSchema = z.enum(["off", "low", "medium", "high", "xhigh", "max"]);
+const reasoningEffortSchema = z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 /**
  * Opt-in implicit prompt cache (GitHub #15). Strict on-disk shape: ONLY the
@@ -460,7 +460,7 @@ export const roleRouteEntrySchema = z
     connection: z.string().min(1).optional(),
     provider: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
-    effort: z.enum(["off", "low", "medium", "high", "xhigh", "max"]).optional(),
+    effort: z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max"]).optional(),
   })
   // engine XOR (connection|provider): an engine child runs on its own CLI
   // account and cannot also select a core connection/provider.
@@ -510,7 +510,7 @@ export const roleProfilesSchema = z.object({
 const strictRoleEntrySchema = z.object({
   engine: z.enum(["codex", "claude"]).optional(), connection: z.string().min(1).optional(),
   provider: z.string().min(1).optional(), model: z.string().min(1).optional(),
-  effort: z.enum(["off", "low", "medium", "high", "xhigh", "max"]).optional(),
+  effort: z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max"]).optional(),
 }).strict().refine((entry) => !(entry.engine && (entry.connection || entry.provider)) && !(entry.connection && entry.provider));
 const strictRoleConfigSchema = z.object({ primary: strictRoleEntrySchema, fallbacks: z.array(strictRoleEntrySchema).optional() }).strict();
 const strictRolesSchema = z.object({

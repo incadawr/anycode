@@ -171,7 +171,7 @@ export interface RoleRouteEntry {
   /** Catalog provider id; mutually exclusive with engine and connection. */
   provider?: string;
   model?: string;
-  effort?: "off" | "low" | "medium" | "high" | "xhigh" | "max";
+  effort?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 }
 
 /** A role's ordered route: primary first, fallbacks after (parent model is the implicit last resort). */
@@ -189,7 +189,7 @@ export interface RoleConfig {
 export type ProviderTransportId = "anthropic-messages" | "openai-chat-completions" | "openai-responses";
 
 /** Per-model reasoning-effort tier (mirrors core's `ReasoningEffort`; local literal keeps this module zero-import). */
-export type ReasoningEffort = "off" | "low" | "medium" | "high" | "xhigh" | "max";
+export type ReasoningEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 /**
  * Live per-model capability facts a connection's `/v1/models` fetch declared

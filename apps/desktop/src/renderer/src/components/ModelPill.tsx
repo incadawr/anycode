@@ -110,6 +110,7 @@ import { clampMenuLeft } from "./Sidebar.js";
  */
 export const EFFORT_LABELS: Record<ReasoningEffort, string> = {
   off: "No thinking",
+  minimal: "Minimal",
   low: "Low",
   medium: "Medium",
   high: "High",
