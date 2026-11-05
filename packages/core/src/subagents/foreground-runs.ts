@@ -6,7 +6,12 @@ export const FOREGROUND_QUANTUM_MS = 15_000;
 
 export type ForegroundJoin =
   | { kind: "pending_foreground"; handle: string; progress: ChildStatus | undefined }
-  | { kind: "terminal"; outcome: SubagentOutcome };
+  | { kind: "terminal"; handle: string; outcome: SubagentOutcome };
+
+export function formatForegroundJoin(result: ForegroundJoin): string {
+  if (result.kind === "terminal") return JSON.stringify(result);
+  return `Foreground run is pending. Inspect progress and use Agent wait_for with this handle; do not treat it as complete. ${JSON.stringify(result)}`;
+}
 
 type Lease = {
   controller: AbortController;
@@ -39,16 +44,28 @@ export class ForegroundRuns {
 
   get hasLive(): boolean { return [...this.leases.values()].some((lease) => !lease.outcome); }
 
+  /** Wait once for runs live at the seam; joins do not restart their work. */
+  async checkpoint(): Promise<ForegroundJoin[]> {
+    const handles = [...this.leases].filter(([, lease]) => !lease.outcome).map(([handle]) => handle);
+    return Promise.all(handles.map((handle) => this.join(handle)));
+  }
+
   async join(handle: string): Promise<ForegroundJoin> {
     const lease = this.leases.get(handle);
     if (!lease || this.closed) throw new Error("Unknown foreground run");
     if (!lease.outcome) {
       let timer: ReturnType<typeof setTimeout> | undefined;
+      let onAbort: (() => void) | undefined;
       try {
-        await Promise.race([lease.terminal, new Promise<void>((resolve) => { timer = setTimeout(resolve, this.quantumMs); })]);
-      } finally { if (timer !== undefined) clearTimeout(timer); }
+        await Promise.race([lease.terminal, new Promise<void>((resolve) => { timer = setTimeout(resolve, this.quantumMs); }),
+          new Promise<void>((resolve) => { onAbort = () => resolve(); lease.controller.signal.addEventListener("abort", onAbort, { once: true }); })]);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+        if (onAbort) lease.controller.signal.removeEventListener("abort", onAbort);
+      }
     }
-    if (lease.outcome) return { kind: "terminal", outcome: lease.outcome };
+    if (this.closed) throw new Error("Foreground turn is closed");
+    if (lease.outcome) return { kind: "terminal", handle, outcome: lease.outcome };
     const snapshot = lease.progress();
     const progress = snapshot && {
       ...snapshot,

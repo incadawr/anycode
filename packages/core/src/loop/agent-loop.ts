@@ -1644,6 +1644,20 @@ export class AgentLoop {
         // Sentinel: a step with no proposed tool calls ends the loop.
         if (toolCalls.length === 0) {
           yield { type: "turn_end", turn, finishReason };
+          if (foregroundRuns.hasLive) {
+            let frames;
+            try { frames = await foregroundRuns.checkpoint(); } catch {
+              yield* this.emitLoopEnd(signal?.aborted ? "cancelled" : "error", turn, signal, turnId, turn);
+              return;
+            }
+            if (signal?.aborted) {
+              yield* this.emitLoopEnd("cancelled", turn, signal, turnId, turn);
+              return;
+            }
+            this.history.append({ role: "user", content: `Foreground work is still owned by this turn. Inspect its progress and join it before finishing: ${JSON.stringify(frames.map((frame) => frame.kind === "terminal" ? { kind: frame.kind, handle: frame.handle } : frame))}` },
+              ...(turnId !== undefined ? [{ turnId, step: turn }] as const : []));
+            continue;
+          }
           yield* this.emitLoopEnd("completed", turn, signal, turnId, turn);
           return;
         }

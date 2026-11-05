@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ForegroundRuns } from "./foreground-runs.js";
 import type { SubagentOutcome } from "../ports/subagent.js";
+import { foregroundAgentInputSchema } from "../tools/schemas.js";
 
 const outcome: SubagentOutcome = { status: "completed", finalText: "done", truncated: false, turns: 1, toolCalls: 0, durationMs: 1 };
 
@@ -18,8 +19,8 @@ describe("foreground runs", () => {
     expect(await first).toEqual({ kind: "pending_foreground", handle, progress: undefined });
     const second = runs.join(handle);
     finish(outcome);
-    expect(await second).toEqual({ kind: "terminal", outcome });
-    expect(await runs.join(handle)).toEqual({ kind: "terminal", outcome });
+    expect(await second).toEqual({ kind: "terminal", handle, outcome });
+    expect(await runs.join(handle)).toEqual({ kind: "terminal", handle, outcome });
     expect(run).toHaveBeenCalledOnce();
     expect(runs.hasLive).toBe(false);
   });
@@ -35,5 +36,21 @@ describe("foreground runs", () => {
     expect(signal.aborted).toBe(true);
     await expect(runs.join(handle)).rejects.toThrow("Unknown foreground run");
     expect(() => runs.start(async () => outcome, () => undefined)).toThrow();
+  });
+
+  it("rejects conflicting wait inputs", () => {
+    expect(foregroundAgentInputSchema.safeParse({ wait_for: "run" }).success).toBe(true);
+    expect(foregroundAgentInputSchema.safeParse({ wait_for: "run", prompt: "new", description: "new" }).success).toBe(false);
+    expect(foregroundAgentInputSchema.safeParse({ wait_for: "" }).success).toBe(false);
+  });
+
+  it("reports a terminal that settles at the quantum", async () => {
+    vi.useFakeTimers();
+    const runs = new ForegroundRuns(100);
+    const handle = runs.start(() => new Promise((resolve) => setTimeout(() => resolve(outcome), 100)), () => undefined);
+    await Promise.resolve();
+    const joined = runs.join(handle);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await joined).toEqual({ kind: "terminal", handle, outcome });
   });
 });

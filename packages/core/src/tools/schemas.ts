@@ -371,6 +371,13 @@ export const agentInputSchema = z.object({
 
 export type AgentInput = z.output<typeof agentInputSchema>;
 
+/** Reserved contract; the production Agent declaration remains unchanged. */
+export const foregroundAgentInputSchema = z.union([
+  agentInputSchema.strict(),
+  z.object({ wait_for: z.string().min(1).describe("Join an existing foreground run by handle") }).strict(),
+]);
+export type ForegroundAgentInput = z.output<typeof foregroundAgentInputSchema>;
+
 /** Inline-only declaration; provider selection stays on the current connection. */
 export const restrictedAgentInputSchema = z
   .object({

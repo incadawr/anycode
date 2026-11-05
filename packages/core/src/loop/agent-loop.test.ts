@@ -55,6 +55,7 @@ import { createMediaProjectionPort } from "../provider/media-projection.js";
 import { SqlitePersistenceAdapter } from "../adapters/node/sqlite-persistence.js";
 import { ConversationHistory } from "../context/history.js";
 import type { RecognizerEndpoint } from "../vision/index.js";
+import { formatForegroundJoin } from "../subagents/foreground-runs.js";
 
 // ---------------------------------------------------------------------------
 // Mock model port: replays scripted stream events, one step per streamText call.
@@ -174,6 +175,53 @@ async function collect(iter: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
 }
 
 const types = (events: AgentEvent[]): string[] => events.map((e) => e.type);
+
+it("pairs pending and sibling results before the next request and cancels the held child on turn exit", async () => {
+  vi.useFakeTimers();
+  try {
+    let releaseSibling!: () => void;
+    let childSignal!: AbortSignal;
+    const sibling = new Promise<void>((resolve) => { releaseSibling = resolve; });
+    const agent = makeTool({
+      metadata: { ...baseMetadata, name: "Agent", readOnly: true, concurrentSafe: true, sideEffectScope: "none", timeoutMs: 60_000 },
+      handler: async (_input, ctx) => {
+        const runs = ctx.foregroundRuns!;
+        const handle = runs.start((signal) => { childSignal = signal; return new Promise(() => {}); }, () => undefined);
+        return { ok: true, output: formatForegroundJoin(await runs.join(handle)) };
+      },
+    });
+    const slow = makeTool({
+      metadata: { ...baseMetadata, name: "Read", readOnly: true, concurrentSafe: true, timeoutMs: 60_000 },
+      handler: async () => { await sibling; return { ok: true, output: "read" }; },
+    });
+    const modelPort = new MockModelPort([
+      [{ type: "start" }, { type: "tool_call", toolCall: { id: "a", name: "Agent", input: { value: "x" } } },
+        { type: "tool_call", toolCall: { id: "b", name: "Read", input: { value: "x" } } },
+        { type: "finish", finishReason: "tool_calls", usage: {} }],
+      [{ type: "start" }, { type: "finish", finishReason: "stop", usage: {} }],
+      [{ type: "start" }, { type: "finish", finishReason: "stop", usage: {} }],
+    ]);
+    const controller = new AbortController();
+    const loop = makeLoop({ modelPort, registry: makeRegistry({ Agent: agent, Read: slow }) });
+    const run = collect(loop.runTurn("go", { signal: controller.signal }));
+    await vi.advanceTimersByTimeAsync(15_001);
+    expect(modelPort.requests).toHaveLength(1);
+    releaseSibling();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(modelPort.requests).toHaveLength(2);
+    const results = modelPort.requests[1]!.messages.filter((m) => m.role === "tool");
+    expect(results.flatMap((m) => Array.isArray(m.content) ? m.content.map((p) => "toolCallId" in p ? p.toolCallId : "") : [])).toEqual(["a", "b"]);
+    expect(JSON.stringify(results)).toContain("pending_foreground");
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(modelPort.requests).toHaveLength(3);
+    expect(JSON.stringify(modelPort.requests[2]!.messages)).toContain("Foreground work is still owned");
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(1);
+    const events = await run;
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "cancelled" });
+    expect(childSignal.aborted).toBe(true);
+  } finally { vi.useRealTimers(); }
+});
 
 it("builds the same model request with a stored turn error", async () => {
   const db = new SqlitePersistenceAdapter(":memory:");
