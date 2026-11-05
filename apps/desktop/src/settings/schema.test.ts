@@ -2489,3 +2489,12 @@ it("retains valid model pricing and unrelated fields when one rate is malformed"
   expect(parsed.modelOverrides?.b?.pricing).toBeUndefined();
   expect(parseSettings(JSON.parse(JSON.stringify(parsed ? { ...settings, provider: { ...settings.provider, connections: [parsed] } } : settings))).settings.provider.connections[0]?.modelOverrides?.a?.pricing?.input).toBe(1);
 });
+
+it("round trips a Go snapshot and drops malformed caches without losing connections", () => {
+  const snapshot = { version: 1, fetchedAt: "2026-11-05T00:00:00Z", models: { a: { kind: "route", route: { transport: "anthropic-messages", baseUrl: "https://opencode.ai/inference/go/anthropic/v1", metadata: { id: "a" } } } } };
+  const settings = { ...cloneDefaults(), provider: { ...providerV2({ id: "opencode", model: "a" }), connections: [{ id: "a", providerId: "opencode", modelRoutes: snapshot }, { id: "b", providerId: "opencode-openai", modelRoutes: { ...snapshot, version: 2 } }] } };
+  const parsed = settingsSchema.parse(JSON.parse(JSON.stringify(settings)));
+  expect(parsed.provider.connections[0]?.modelRoutes).toEqual(snapshot);
+  expect(parsed.provider.connections[1]?.modelRoutes).toBeUndefined();
+  expect(parsed.provider.connections[1]?.id).toBe("b");
+});

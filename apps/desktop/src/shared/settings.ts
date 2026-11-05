@@ -455,6 +455,7 @@ export interface ProviderConnection {
   models?: string[];
   /** ISO timestamp of the last successful connection-scoped model-list fetch. */
   modelsFetchedAt?: string;
+  modelRoutes?: { version: 1; fetchedAt: string; models: Record<string, { kind: "refusal"; reason: "unsupported-provider" | "unknown-model" | "unsupported-model" | "invalid-route" } | { kind: "route"; route: { transport: "anthropic-messages" | "openai-chat-completions" | "openai-responses"; baseUrl: string; metadata: Record<string, unknown> } }> };
   /** Explicit model selection for this connection; absent preserves the provider defaults. */
   visibleModels?: string[];
   /**
@@ -986,6 +987,7 @@ export interface CustomProviderRecord {
   models: string[];
   /** ISO timestamp of the last successful model-list fetch. */
   modelsFetchedAt?: string;
+  modelRoutes?: { version: 1; fetchedAt: string; models: Record<string, { kind: "refusal"; reason: "unsupported-provider" | "unknown-model" | "unsupported-model" | "invalid-route" } | { kind: "route"; route: { transport: "anthropic-messages" | "openai-chat-completions" | "openai-responses"; baseUrl: string; metadata: Record<string, unknown> } }> };
   /**
    * User declaration that this endpoint authenticates nothing (local
    * servers — LM Studio/ollama/llama.cpp). Only `true` is persisted (additive,
