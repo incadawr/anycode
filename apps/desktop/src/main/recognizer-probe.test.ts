@@ -10,6 +10,7 @@
  * shared (shared/provider-v2-fixture.ts), so those two come from there.
  */
 
+import { findCatalogEntry } from "@anycode/core/catalog";
 import { recognizerContextWindow } from "../../../../packages/core/src/vision/recognizer.js";
 import { connectionContextWindow } from "../shared/connection-context-window.js";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -107,6 +108,21 @@ it("uses the same dictionary window for a custom proxy in the panel and runtime"
   expect(endpoint).toBeDefined();
   expect(endpoint!.contextWindowTokens).toBeUndefined();
   expect(connectionContextWindow(connection, "glm-5.3-flash", undefined).tokens).toBe(300000);
+  expect(recognizerContextWindow(endpoint!)).toBe(300000);
+});
+
+it.each([
+  { providerId: "", expectedWire: undefined },
+  { providerId: "z-ai", expectedWire: 300000 },
+])("resolves the model window for provider $providerId", async ({ providerId, expectedWire }) => {
+  const connection = { id: "c", providerId, baseUrl: "https://example.test/v1", modelOverrides: {} };
+  const original = settings({ provider: { connections: [connection] } });
+  const entry = findCatalogEntry(providerId);
+  const catalogFor = () => entry ? { baseUrl: entry.baseUrl, defaultTransport: entry.defaultTransport, contextWindowFor: (selected: import("../shared/settings.js").ProviderConnection, model: string) => connectionContextWindow(selected, model, entry).tokens } : undefined;
+  const endpoint = await resolveRecognizerProbeCandidate(original, { connectionId: "c", modelId: "glm-5.3-flash" }, noSecret, undefined, catalogFor);
+  expect(endpoint).toBeDefined();
+  expect(endpoint!.contextWindowTokens).toBe(expectedWire);
+  expect(connectionContextWindow(connection, "glm-5.3-flash", entry).tokens).toBe(300000);
   expect(recognizerContextWindow(endpoint!)).toBe(300000);
 });
 
