@@ -176,6 +176,73 @@ async function collect(iter: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
 
 const types = (events: AgentEvent[]): string[] => events.map((e) => e.type);
 
+it("reports a bounded terminal produced during the park as a system frame", async () => {
+  vi.useFakeTimers();
+  try {
+    let finish!: (value: import("../ports/subagent.js").SubagentOutcome) => void;
+    const agent = makeTool({ handler: async (_input, ctx) => {
+      ctx.foregroundRuns!.start(() => new Promise((resolve) => { finish = resolve; }), () => undefined);
+      return { ok: true, output: "pending" };
+    } });
+    const modelPort = new MockModelPort([
+      [{ type: "tool_call", toolCall: { id: "a", name: "Mock", input: { value: "x" } } }, { type: "finish", finishReason: "tool_calls", usage: {} }],
+      [{ type: "finish", finishReason: "stop", usage: {} }],
+      [{ type: "finish", finishReason: "stop", usage: {} }],
+    ]);
+    const loop = makeLoop({ modelPort, registry: makeRegistry({ Mock: agent }) });
+    const run = collect(loop.runTurn("go", { turnId: "turn" }));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(modelPort.requests).toHaveLength(2);
+    finish({ status: "completed", finalText: "result ".repeat(20_000), truncated: false, turns: 1, toolCalls: 0, durationMs: 1 });
+    await vi.advanceTimersByTimeAsync(1);
+    expect((await run).at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
+    const frame = loop.history.items.find((item) => item.origin === "system" && typeof item.message.content === "string" && item.message.content.includes("Foreground work finished"))!;
+    expect(frame).toMatchObject({ origin: "system", turnId: "turn", step: 2 });
+    expect(String(frame.message.content)).toContain('"truncated":true');
+    expect(Buffer.byteLength(String(frame.message.content))).toBeLessThan(101_000);
+    expect(JSON.stringify(modelPort.requests[2]!.messages)).toContain("Foreground work finished during the wait");
+  } finally { vi.useRealTimers(); }
+});
+
+it.each(["max_turns", "error"] as const)("closes a live lease on %s exit", async (exit) => {
+  let childSignal!: AbortSignal;
+  const agent = makeTool({ handler: async (_input, ctx) => {
+    ctx.foregroundRuns!.start((signal) => { childSignal = signal; return new Promise(() => {}); }, () => undefined);
+    return { ok: true, output: "pending" };
+  } });
+  const first: ModelStreamEvent[] = [{ type: "tool_call", toolCall: { id: "a", name: "Mock", input: { value: "x" } } }, { type: "finish", finishReason: "tool_calls", usage: {} }];
+  const modelPort: ModelPort = exit === "max_turns" ? new MockModelPort([first]) : {
+    streamText: (() => { let step = 0; return () => (async function* () {
+      if (step++ === 0) { for (const event of first) yield event; return; }
+      throw new Error("scripted failure");
+    })(); })(),
+  };
+  const loop = makeLoop({ modelPort, registry: makeRegistry({ Mock: agent }), ...(exit === "max_turns" ? { maxTurns: 1 } : {}) });
+  const events = await collect(loop.runTurn("go"));
+  expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: exit });
+  expect(childSignal.aborted).toBe(true);
+});
+
+it("bounds foreground parking even for a supervised root", async () => {
+  vi.useFakeTimers();
+  try {
+    let childSignal!: AbortSignal;
+    const agent = makeTool({ handler: async (_input, ctx) => {
+      ctx.foregroundRuns!.start((signal) => { childSignal = signal; return new Promise(() => {}); }, () => undefined);
+      return { ok: true, output: "pending" };
+    } });
+    const modelPort = new MockModelPort([[{ type: "tool_call", toolCall: { id: "a", name: "Mock", input: { value: "x" } } }, { type: "finish", finishReason: "tool_calls", usage: {} }]], [{ type: "finish", finishReason: "stop", usage: {} }]);
+    const loop = makeLoop({ modelPort, registry: makeRegistry({ Mock: agent }), maxTurns: 1, ceiling: { supervisedRoot: () => true } });
+    const running = collect(loop.runTurn("go"));
+    await vi.advanceTimersByTimeAsync(46_000);
+    const events = await running;
+    expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "error" });
+    expect(events).toContainEqual(expect.objectContaining({ type: "error", safe: expect.objectContaining({ message: expect.stringContaining("waiting limit") }) }));
+    expect(childSignal.aborted).toBe(true);
+    expect(modelPort.requests).toHaveLength(5);
+  } finally { vi.useRealTimers(); }
+});
+
 it("pairs two pending agents, read, delayed bash, a barrier and an invalid call before the next request", async () => {
   vi.useFakeTimers();
   try {

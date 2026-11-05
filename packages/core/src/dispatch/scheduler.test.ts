@@ -9,6 +9,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { ForegroundRuns } from "../subagents/foreground-runs.js";
 import { planToolBatches, runToolBatches, type ToolBatchEvent } from "./scheduler.js";
 import type { DispatchContext } from "./dispatcher.js";
 import { ToolRegistry } from "../tools/registry.js";
@@ -107,6 +108,28 @@ function makeCtx(overrides: Partial<DispatchContext> = {}): DispatchContext {
 function call(name: string, id = name): ProposedToolCall {
   return { id, name, input: {} };
 }
+
+it("preserves proposal order for foreground pending and a delayed sibling", async () => {
+  vi.useFakeTimers();
+  try {
+    const runs = new ForegroundRuns(10);
+    const gate = deferred<void>();
+    const registry = makeRegistry([
+      makeTool("Agent", { handler: async (_input, ctx) => {
+        const handle = ctx.foregroundRuns!.start(() => new Promise(() => {}), () => undefined);
+        return { ok: true, output: await ctx.foregroundRuns!.join(handle) };
+      } }),
+      makeTool("Read", { handler: async () => { await gate.promise; return { ok: true, output: "read" }; } }),
+    ]);
+    const pending = collect(runToolBatches(makeCtx({ registry, foregroundRuns: runs }), [call("Agent", "a"), call("Read", "r")], { maxConcurrency: 2 }));
+    await vi.advanceTimersByTimeAsync(10);
+    gate.resolve();
+    const { outcomes } = await pending;
+    expect(outcomes.map((item) => item.toolCallId)).toEqual(["a", "r"]);
+    expect(outcomes[0]!.modelText).toContain("pending_foreground");
+    runs.close();
+  } finally { vi.useRealTimers(); }
+});
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void;

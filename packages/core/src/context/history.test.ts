@@ -100,6 +100,18 @@ describe("ConversationHistory", () => {
     expect(history.toMessages()).toEqual([{ role: "user", content: "hi" }]);
   });
 
+  it("preserves system origin and the original pending result on replacement and reload", () => {
+    const history = new ConversationHistory();
+    history.append({ role: "assistant", content: [{ type: "tool_call", toolCallId: "spawn", toolName: "Agent", input: {} }] });
+    history.append({ role: "tool", content: [{ type: "tool_result", toolCallId: "spawn", toolName: "Agent", text: "pending_foreground", status: "success" }] });
+    history.append({ role: "user", content: "foreground update" }, { origin: "system", turnId: "t", step: 1 });
+    history.replaceAll([...history.items]);
+    const restored = new ConversationHistory({ initial: structuredClone([...history.items]) });
+    expect(restored.unansweredToolCallIds()).toEqual([]);
+    expect(restored.items.at(-1)).toMatchObject({ origin: "system", turnId: "t", step: 1 });
+    expect(restored.toMessages()[1]).toMatchObject({ role: "tool", content: [{ toolCallId: "spawn", text: "pending_foreground" }] });
+  });
+
   it("unansweredToolCallIds reports assistant tool_calls without a tool_result", () => {
     const history = new ConversationHistory();
     history.append({

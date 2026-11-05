@@ -93,7 +93,7 @@ import {
 } from "./todo-reminder.js";
 import type { DispatchContext } from "../dispatch/dispatcher.js";
 import { runToolBatches, type ToolSchedulerConfig } from "../dispatch/scheduler.js";
-import { ForegroundRuns } from "../subagents/foreground-runs.js";
+import { ForegroundRuns, boundForegroundJoin } from "../subagents/foreground-runs.js";
 import { toToolDeclarations } from "../tools/to-model-tools.js";
 import {
   estimateToolDeclarationTokens,
@@ -1270,6 +1270,7 @@ export class AgentLoop {
     this.activeDispatchCtx = dispatchCtx;
     try {
       let turn = 0;
+      let foregroundParkRounds = 0;
       for (;;) {
         if (signal?.aborted) {
           yield* this.emitLoopEnd("cancelled", turn, signal, turnId, turn);
@@ -1645,6 +1646,14 @@ export class AgentLoop {
         if (toolCalls.length === 0) {
           yield { type: "turn_end", turn, finishReason };
           if (foregroundRuns.hasLive) {
+            if (foregroundParkRounds >= 3) {
+              foregroundRuns.close("foreground wait limit reached");
+              const message = "Foreground work did not finish within the turn's waiting limit and was cancelled.";
+              yield { type: "error", error: new Error(message), safe: { code: "unknown", message } };
+              yield* this.emitLoopEnd("error", turn, signal, turnId, turn);
+              return;
+            }
+            foregroundParkRounds += 1;
             let frames;
             try { frames = await foregroundRuns.checkpoint(); } catch {
               yield* this.emitLoopEnd(signal?.aborted ? "cancelled" : "error", turn, signal, turnId, turn);
@@ -1654,8 +1663,11 @@ export class AgentLoop {
               yield* this.emitLoopEnd("cancelled", turn, signal, turnId, turn);
               return;
             }
-            this.history.append({ role: "user", content: `Foreground work is still owned by this turn. Inspect its progress and join it before finishing: ${JSON.stringify(frames.map((frame) => frame.kind === "terminal" ? { kind: frame.kind, handle: frame.handle } : frame))}` },
-              ...(turnId !== undefined ? [{ turnId, step: turn }] as const : []));
+            const message = foregroundRuns.hasLive
+              ? "Foreground work is still owned by this turn. Inspect progress and join it before finishing: "
+              : "Foreground work finished during the wait. Results: ";
+            this.history.append({ role: "user", content: message + JSON.stringify(frames.map(boundForegroundJoin)) },
+              { origin: "system", ...(turnId !== undefined ? { turnId, step: turn } : {}) });
             continue;
           }
           yield* this.emitLoopEnd("completed", turn, signal, turnId, turn);

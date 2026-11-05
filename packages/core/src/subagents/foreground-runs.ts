@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { SubagentOutcome } from "../ports/subagent.js";
 import { sanitizeStatusText, type ChildStatus } from "./status.js";
+import { capUtf8Bytes } from "../util/bytes.js";
+import { SUBAGENT_OUTPUT_MAX_BYTES } from "../types/config.js";
 
 export const FOREGROUND_QUANTUM_MS = 15_000;
 
@@ -8,8 +10,14 @@ export type ForegroundJoin =
   | { kind: "pending_foreground"; handle: string; progress: ChildStatus | undefined }
   | { kind: "terminal"; handle: string; outcome: SubagentOutcome };
 
+export function boundForegroundJoin(result: ForegroundJoin): ForegroundJoin {
+  if (result.kind !== "terminal") return result;
+  const capped = capUtf8Bytes(result.outcome.finalText, SUBAGENT_OUTPUT_MAX_BYTES);
+  return { ...result, outcome: { ...result.outcome, finalText: capped.text, truncated: result.outcome.truncated || capped.truncated } };
+}
+
 export function formatForegroundJoin(result: ForegroundJoin): string {
-  if (result.kind === "terminal") return JSON.stringify(result);
+  if (result.kind === "terminal") return JSON.stringify(boundForegroundJoin(result));
   return `Foreground run is pending. Inspect progress and use Agent wait_for with this handle; do not treat it as complete. ${JSON.stringify(result)}`;
 }
 

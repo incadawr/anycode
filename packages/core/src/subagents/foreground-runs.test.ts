@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ForegroundRuns } from "./foreground-runs.js";
+import { ForegroundRuns, formatForegroundJoin } from "./foreground-runs.js";
 import type { SubagentOutcome } from "../ports/subagent.js";
 import { foregroundAgentInputSchema } from "../tools/schemas.js";
 
@@ -42,6 +42,13 @@ describe("foreground runs", () => {
     expect(foregroundAgentInputSchema.safeParse({ wait_for: "run" }).success).toBe(true);
     expect(foregroundAgentInputSchema.safeParse({ wait_for: "run", prompt: "new", description: "new" }).success).toBe(false);
     expect(foregroundAgentInputSchema.safeParse({ wait_for: "" }).success).toBe(false);
+  });
+
+  it("bounds terminal output in UTF-8 and marks it truncated", () => {
+    const text = formatForegroundJoin({ kind: "terminal", handle: "h", outcome: { ...outcome, finalText: "🚢".repeat(40_000) } });
+    const parsed = JSON.parse(text);
+    expect(Buffer.byteLength(parsed.outcome.finalText)).toBeLessThanOrEqual(100_000);
+    expect(parsed.outcome.truncated).toBe(true);
   });
 
   it("reports a terminal that settles at the quantum", async () => {
