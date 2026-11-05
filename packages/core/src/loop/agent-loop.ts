@@ -1145,6 +1145,11 @@ export class AgentLoop {
       ).id;
     }
 
+    const foregroundRuns = new ForegroundRuns();
+    const cancelForeground = () => foregroundRuns.close(signal?.reason);
+    signal?.addEventListener("abort", cancelForeground, { once: true });
+    if (signal?.aborted) cancelForeground();
+
     // Two sanctioned mid-turn mode mutations exist: (1) a broker-approved
     // ExitPlanMode advancing plan -> planExitMode (design slice-4.3-cut.md
     // §2.3), applied via the PlanModeControl mutation below rather than by
@@ -1160,10 +1165,6 @@ export class AgentLoop {
     const mode = options?.mode ?? this.config.mode;
     const config = this.config;
 
-    const foregroundRuns = new ForegroundRuns();
-    const cancelForeground = () => foregroundRuns.close(signal?.reason);
-    signal?.addEventListener("abort", cancelForeground, { once: true });
-    if (signal?.aborted) cancelForeground();
     const dispatchCtx: DispatchContext = {
       foregroundRuns,
       registry: this.config.registry,
