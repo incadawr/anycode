@@ -52,7 +52,7 @@ import type { WorkspaceTransition } from "../ports/worktrees.js";
 import { CEILING_VERDICT_DECLARATION } from "./ceiling.js";
 import { DEGENERATION_CHECK_STRIDE_CHARS, DEGENERATION_MIN_RUN_CHARS, MAX_CEILING_ROUNDS } from "../types/config.js";
 import { createMediaProjectionPort } from "../provider/media-projection.js";
-import { SqlitePersistenceAdapter } from "../adapters/node/sqlite-persistence.js";
+import { SqlitePersistenceAdapter, WriteBehindHistorySink } from "../adapters/node/sqlite-persistence.js";
 import { ConversationHistory } from "../context/history.js";
 import type { RecognizerEndpoint } from "../vision/index.js";
 import { formatForegroundJoin } from "../subagents/foreground-runs.js";
@@ -176,41 +176,49 @@ async function collect(iter: AsyncIterable<AgentEvent>): Promise<AgentEvent[]> {
 
 const types = (events: AgentEvent[]): string[] => events.map((e) => e.type);
 
-it("pairs pending and sibling results before the next request and cancels the held child on turn exit", async () => {
+it("pairs two pending agents, read, delayed bash, a barrier and an invalid call before the next request", async () => {
   vi.useFakeTimers();
   try {
     let releaseSibling!: () => void;
-    let childSignal!: AbortSignal;
+    const childSignals: AbortSignal[] = [];
+    const barrier = vi.fn(async () => ({ ok: true, output: "barrier" }));
     const sibling = new Promise<void>((resolve) => { releaseSibling = resolve; });
     const agent = makeTool({
       metadata: { ...baseMetadata, name: "Agent", readOnly: true, concurrentSafe: true, sideEffectScope: "none", timeoutMs: 60_000 },
       handler: async (_input, ctx) => {
         const runs = ctx.foregroundRuns!;
-        const handle = runs.start((signal) => { childSignal = signal; return new Promise(() => {}); }, () => undefined);
+        const handle = runs.start((signal) => { childSignals.push(signal); return new Promise(() => {}); }, () => undefined);
         return { ok: true, output: formatForegroundJoin(await runs.join(handle)) };
       },
     });
     const slow = makeTool({
-      metadata: { ...baseMetadata, name: "Read", readOnly: true, concurrentSafe: true, timeoutMs: 60_000 },
+      metadata: { ...baseMetadata, name: "Bash", readOnly: true, concurrentSafe: true, timeoutMs: 60_000 },
       handler: async () => { await sibling; return { ok: true, output: "read" }; },
     });
     const modelPort = new MockModelPort([
       [{ type: "start" }, { type: "tool_call", toolCall: { id: "a", name: "Agent", input: { value: "x" } } },
-        { type: "tool_call", toolCall: { id: "b", name: "Read", input: { value: "x" } } },
+        { type: "tool_call", toolCall: { id: "a2", name: "Agent", input: { value: "x" } } },
+        { type: "tool_call", toolCall: { id: "r", name: "Read", input: { value: "x" } } },
+        { type: "tool_call", toolCall: { id: "b", name: "Bash", input: { value: "x" } } },
+        { type: "tool_call", toolCall: { id: "barrier", name: "Barrier", input: { value: "x" } } },
+        { type: "tool_call", toolCall: { id: "bad", name: "Read", input: {}, invalid: { reason: "invalid input" } } },
         { type: "finish", finishReason: "tool_calls", usage: {} }],
       [{ type: "start" }, { type: "finish", finishReason: "stop", usage: {} }],
       [{ type: "start" }, { type: "finish", finishReason: "stop", usage: {} }],
     ]);
     const controller = new AbortController();
-    const loop = makeLoop({ modelPort, registry: makeRegistry({ Agent: agent, Read: slow }) });
+    const loop = makeLoop({ modelPort, registry: makeRegistry({ Agent: agent, Read: makeTool({ metadata: { ...baseMetadata, name: "Read", concurrentSafe: true } }), Bash: slow, Barrier: makeTool({ metadata: { ...baseMetadata, name: "Barrier" }, handler: barrier }) }) });
     const run = collect(loop.runTurn("go", { signal: controller.signal }));
     await vi.advanceTimersByTimeAsync(15_001);
     expect(modelPort.requests).toHaveLength(1);
+    expect(barrier).not.toHaveBeenCalled();
     releaseSibling();
     await vi.advanceTimersByTimeAsync(1);
     expect(modelPort.requests).toHaveLength(2);
     const results = modelPort.requests[1]!.messages.filter((m) => m.role === "tool");
-    expect(results.flatMap((m) => Array.isArray(m.content) ? m.content.map((p) => "toolCallId" in p ? p.toolCallId : "") : [])).toEqual(["a", "b"]);
+    expect(results.flatMap((m) => Array.isArray(m.content) ? m.content.map((p) => "toolCallId" in p ? p.toolCallId : "") : [])).toEqual(["a", "a2", "r", "b", "barrier", "bad"]);
+    expect(JSON.stringify(results)).toContain("invalid_input");
+    expect(barrier).toHaveBeenCalledOnce();
     expect(JSON.stringify(results)).toContain("pending_foreground");
     await vi.advanceTimersByTimeAsync(15_000);
     expect(modelPort.requests).toHaveLength(3);
@@ -219,8 +227,59 @@ it("pairs pending and sibling results before the next request and cancels the he
     await vi.advanceTimersByTimeAsync(1);
     const events = await run;
     expect(events.at(-1)).toMatchObject({ type: "loop_end", reason: "cancelled" });
-    expect(childSignal.aborted).toBe(true);
+    expect(childSignals).toHaveLength(2);
+    expect(childSignals.every((signal) => signal.aborted)).toBe(true);
   } finally { vi.useRealTimers(); }
+});
+
+it("joins a held child once across model requests and preserves paired results after compaction and reload", async () => {
+  vi.useFakeTimers();
+  const db = new SqlitePersistenceAdapter(":memory:");
+  try {
+    await db.createSession({ id: "foreground", workspace: "/work", model: "m", mode: "build" });
+    const sink = new WriteBehindHistorySink(db, "foreground");
+    const history = new ConversationHistory({ sink });
+    history.append({ role: "user", content: "old conversation" });
+    history.append({ role: "assistant", content: [{ type: "text", text: "old answer" }] });
+    let handle = "";
+    let finish!: (outcome: import("../ports/subagent.js").SubagentOutcome) => void;
+    const launch = vi.fn(() => new Promise<import("../ports/subagent.js").SubagentOutcome>((resolve) => { finish = resolve; }));
+    const agent = makeTool({
+      metadata: { ...baseMetadata, name: "Agent", timeoutMs: 60_000 },
+      handler: async (input, ctx) => {
+        const runs = ctx.foregroundRuns!;
+        if ((input as { value: string }).value === "spawn") handle = runs.start(launch, () => undefined);
+        return { ok: true, output: formatForegroundJoin(await runs.join(handle)) };
+      },
+    });
+    const modelPort = new MockModelPort([
+      [{ type: "start" }, { type: "tool_call", toolCall: { id: "spawn", name: "Agent", input: { value: "spawn" } } }, { type: "finish", finishReason: "tool_calls", usage: {} }],
+      [{ type: "start" }, { type: "tool_call", toolCall: { id: "join", name: "Agent", input: { value: "join" } } }, { type: "finish", finishReason: "tool_calls", usage: {} }],
+      [{ type: "start" }, { type: "finish", finishReason: "stop", usage: {} }],
+      [{ type: "text_delta", id: "summary", text: "Earlier conversation." }, { type: "finish", finishReason: "stop", usage: {} }],
+    ]);
+    const loop = makeLoop({ modelPort, history, registry: makeRegistry({ Agent: agent }), context: { keepRecentMessages: 4 } });
+    const running = collect(loop.runTurn("delegate"));
+    await vi.advanceTimersByTimeAsync(15_001);
+    expect(modelPort.requests).toHaveLength(2);
+    expect(JSON.stringify(modelPort.requests[1]!.messages)).toContain("pending_foreground");
+    finish({ status: "completed", finalText: "unique terminal", truncated: false, turns: 1, toolCalls: 0, durationMs: 1 });
+    await vi.advanceTimersByTimeAsync(1);
+    expect((await running).at(-1)).toMatchObject({ type: "loop_end", reason: "completed" });
+    expect(launch).toHaveBeenCalledOnce();
+    const before = history.toMessages().filter((m) => m.role === "tool");
+    expect(JSON.stringify(before).match(/unique terminal/g)).toHaveLength(1);
+    expect(JSON.stringify(before[0])).toContain("pending_foreground");
+    await collect(loop.compactNow());
+    await sink.flushChecked();
+    const reloaded = new ConversationHistory({ initial: await db.loadHistory("foreground") });
+    expect(reloaded.unansweredToolCallIds()).toEqual([]);
+    const after = reloaded.toMessages().filter((m) => m.role === "tool");
+    expect(after).toEqual(before);
+  } finally {
+    await db.close();
+    vi.useRealTimers();
+  }
 });
 
 it("builds the same model request with a stored turn error", async () => {
