@@ -853,7 +853,7 @@ async function handleConnectionAddModels(
       return { ok: false, reason: "read_only" };
     }
     const target = loaded.settings.provider.connections.find((c) => c.id === connectionId);
-    if (target === undefined || target.providerId !== resolved.providerId || (target.baseUrl ?? "").trim() !== resolved.savedBaseUrl || (target.transport ?? "") !== resolved.savedTransport) {
+    if (target === undefined) {
       return { ok: false, reason: "invalid_request" };
     }
     const storedModels = target.models ?? [];

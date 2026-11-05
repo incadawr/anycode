@@ -70,9 +70,11 @@ it("does not publish a base price for unknown conditions", async () => {
   const row = structuredClone(fixture.data[0]);
   row.cost.multipliers[0].when = { date: { gte: "2030-01-01" } };
   const parsed = parseOpenCodeGoSnapshot({ data: [row] }, "2026-11-05T00:00:00Z");
-  expect(parsed.ok && parsed.snapshot.models[row.id]?.kind === "route" && parsed.snapshot.models[row.id].route.metadata.pricing).toBeUndefined();
+  const parsedEntry = parsed.ok ? parsed.snapshot.models[row.id] : undefined;
+  expect(parsedEntry?.kind === "route" ? parsedEntry.route.metadata.pricing : "not a route").toBeUndefined();
   delete row.cost.multipliers;
   row.cost.text.input.overrides = [{ when: { tokens: { gt: 100 } }, price: 2 }];
   const tier = parseOpenCodeGoSnapshot({ data: [row] }, "2026-11-05T00:00:00Z");
-  expect(tier.ok && tier.snapshot.models[row.id]?.kind === "route" && tier.snapshot.models[row.id].route.metadata.pricing).toBeUndefined();
+  const tierEntry = tier.ok ? tier.snapshot.models[row.id] : undefined;
+  expect(tierEntry?.kind === "route" ? tierEntry.route.metadata.pricing : "not a route").toBeUndefined();
 });
