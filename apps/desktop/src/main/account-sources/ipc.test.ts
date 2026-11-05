@@ -10,10 +10,11 @@ const handlers = vi.hoisted(() => new Map<string, (...args: unknown[]) => unknow
 vi.mock("electron", () => ({ ipcMain: { handle: (channel: string, handler: (...args: unknown[]) => unknown) => handlers.set(channel, handler) } }));
 const scan = vi.hoisted(() => vi.fn());
 vi.mock("./candidates.js", () => ({ listAccountSourceCandidates: scan }));
+import { setIpcGuardMainWindow, resetIpcGuardForTests } from "../ipc-guard.js";
 import { registerAccountSourcesIpc } from "./ipc.js";
 import type { FileSystemPort } from "@anycode/core";
 let dir: string;
-afterEach(async () => { handlers.clear(); scan.mockReset(); if (dir) await rm(dir, { recursive: true, force: true }); });
+afterEach(async () => { handlers.clear(); resetIpcGuardForTests(); scan.mockReset(); if (dir) await rm(dir, { recursive: true, force: true }); });
 it("does not lose a source when a second reconciliation overtakes credential resolution", async () => {
   dir = await mkdtemp(join(tmpdir(), "account-ipc-"));
   const path = join(dir, "settings.json");
@@ -27,13 +28,16 @@ it("does not lose a source when a second reconciliation overtakes credential res
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const getSecret = vi.fn().mockImplementationOnce(async () => { await gate; return undefined; }).mockResolvedValue(undefined);
+  const frame = {};
+  const sender = { mainFrame: frame };
+  setIpcGuardMainWindow(() => sender);
   const api = registerAccountSourcesIpc({ fs: {} as FileSystemPort, home: dir, appVersion: "1.0.0", settingsPath: path, getSecret, fetchFor: () => async () => new Response(null, { status: 503 }), publish: vi.fn(), settingsChanged: vi.fn() });
   await vi.waitFor(() => expect(getSecret).toHaveBeenCalledTimes(1));
   const second = api.reconcile();
   release();
   await second;
   await vi.waitFor(() => {
-    const state = handlers.get(ACCOUNT_SOURCES_GET_CHANNEL)!() as { snapshot: { sources: unknown[] } };
+    const state = handlers.get(ACCOUNT_SOURCES_GET_CHANNEL)!({ sender, senderFrame: frame }) as { snapshot: { sources: unknown[] } };
     expect(state.snapshot.sources).toHaveLength(1);
   });
   api.dispose();
