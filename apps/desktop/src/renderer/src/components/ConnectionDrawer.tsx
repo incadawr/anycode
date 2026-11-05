@@ -1273,8 +1273,8 @@ export function modelAfterCatalogPrefill(current: string, suggestions: readonly 
   return suggestions[0]?.id ?? current;
 }
 
-export function createModelMissing(model: string, suggestions: readonly { id: string }[]): boolean {
-  return modelAfterCatalogPrefill(model, suggestions).trim() === "";
+export function createModelMissing(model: string, suggestions: readonly { id: string }[], accountSource = false, simplified = false): boolean {
+  return !(accountSource && !simplified) && modelAfterCatalogPrefill(model, suggestions).trim() === "";
 }
 
 /**
@@ -1823,7 +1823,7 @@ export function ConnectionDrawerFields({
   // (the record's own key) or a keyed catalog provider (the connection key).
   // A saved custom record already owns its key; an oauth provider signs in.
   const showKeyInCreate = authKind === "api_key" && (isNewCustomEndpoint || !isCustomRecordConnection);
-  const setupMissingModel = !(initialCustom && !simplified) && createModelMissing(model, selectedEntry?.models ?? []);
+  const setupMissingModel = createModelMissing(model, selectedEntry?.models ?? [], !!initialCustom, simplified);
   const setupMissingKey = simplified && showKeyInCreate && !noAuth &&
     selectedEntry?.authOptional !== true && secretValue.trim() === "";
   const keyFieldDisabled = readOnly || (isNewCustomEndpoint && noAuth);

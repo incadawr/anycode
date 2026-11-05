@@ -565,7 +565,7 @@ const pluginsSettingsSchema = z
     // (undefined still means "not yet migrated" for mcpConsent).
     mcpConsent: z.array(mcpConsentEntrySchema).optional(),
     serviceConsent: z.array(serviceConsentEntrySchema).optional(),
-    accountSources: z.array(accountSourceBindingSchema).optional().catch(undefined),
+    accountSources: z.preprocess((raw) => parseElementsTolerantly(accountSourceBindingSchema, raw), z.array(accountSourceBindingSchema)).optional(),
   })
   .strict()
   .optional()

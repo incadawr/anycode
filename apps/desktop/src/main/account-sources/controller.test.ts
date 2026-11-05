@@ -56,8 +56,12 @@ it("retains a stale budget on a transient failure and honours retry-after", asyn
   expect(controller.snapshot().sources[0]?.status).toBe("stale");
   const calls = fetcher.mock.calls.length;
   now += 60_000;
-  await controller.refresh({ plugin: "p", source: "s" });
+  await controller.refresh({ plugin: "p", source: "s" }, false);
   expect(fetcher).toHaveBeenCalledTimes(calls);
+  failure = false;
+  await controller.refresh({ plugin: "p", source: "s" });
+  expect(fetcher.mock.calls.length).toBeGreaterThan(calls);
+  expect(controller.snapshot().sources[0]?.status).toBe("ready");
   controller.dispose();
 });
 it("does not publish an answer when authorization changes during the request", async () => {

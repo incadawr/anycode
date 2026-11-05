@@ -43,7 +43,7 @@ export class AccountSourcesController {
     const state = this.states.get(keyOf(key));
     if (!state || this.disposed || state.source.needsCredential) return;
     if (state.inflight) return state.inflight;
-    if (state.nextAttempt > this.now()) return;
+    if (!force && state.nextAttempt > this.now()) return;
     const generation = ++state.generation;
     const abort = new AbortController(); state.abort = abort;
     const timeout = setTimeout(() => abort.abort(), 10_000);

@@ -28,6 +28,7 @@ import {
   maxOutputTokensField,
   modelAfterCatalogPrefill,
   modelSaveBlocked,
+  createModelMissing,
   preflightModelId,
   providerSelectDisplayValue,
   providerOptionGroups,
@@ -2379,6 +2380,36 @@ describe("custom endpoint cache creation", () => {
     expect(calls).toEqual([{ providerId: "custom:fixture", pricing: { mode: "subscription" }, modelPricing: { "fixture-model": { input: 1, cachedInput: 0, output: 2 } }, model: "fixture-model", transport: "openai-responses", promptCache: IMPLICIT_PROMPT_CACHE, ...(imageInput === "auto" ? {} : { imageInputOverride: imageInput }) }]);
   });
 
+  it("creates an account-source endpoint without a model", async () => {
+    const imageInput = "auto";
+    const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
+    const body = source.slice(source.indexOf("  async function createNewCustomEndpoint()"), source.indexOf("  /** ADD: single primary action"));
+    const ts = await import("typescript");
+    const js = ts.transpile(body + "\nreturn createNewCustomEndpoint;", { target: ts.ScriptTarget.ES2022 });
+    const calls: unknown[] = [];
+    const bindings: Record<string, unknown> = {
+      preflightModelId, model: "", buildCustomProviderCreateRequest: () => ({}),
+      pricingPayload: () => ({ mode: "subscription" }), modelPricingPayload: () => ({ "fixture-model": { input: 1, cachedInput: 0, output: 2 } }),
+      contextWindowTokensField, contextWindow: { raw: "" }, catalogMatchDisabled: false, reasoningSupported: undefined, modelEffort: "", effortLevels: [], imageInput, imageInputModelPreflightError,
+      customName: "fixture", customBaseUrl: "http://127.0.0.1", customKind: "openai-compatible",
+      secretValue: "", noAuth: true, setCreating: () => {}, setError: () => {}, catalog: [],
+      isCustomRecordProviderId: () => false, resolvedCustomProvider: () => ({ create: async () => ({ ok: true, providers: [] }) }),
+      dispatchSecret: () => {}, resolveCreatedCustomProviderId: () => "custom:fixture", reloadSnapshot: async () => {},
+      createConnectionAndPersistModel: async (_bridge: unknown, _reload: unknown, request: unknown) => {
+        calls.push(request); return { createdConnectionId: "connection" };
+      },
+      modelPersistenceBridge: () => ({}), label: "", transport: "openai-responses", proxyRef: "",
+      connectionCreateProxyRefField: () => ({}), promptCacheEnabled: true, IMPLICIT_PROMPT_CACHE,
+      usageSelection: "auto", usageSelectionCreateValue, replaySelection: "auto", reasoningReplayCreateValue, replayTransportShown: true,
+      setProviderId: () => {}, setCreatedConnectionId: () => {}, onConnectionCreated: () => {}, onCommitBegin: undefined, onCommitSuccess: undefined, onBusyChange: undefined,
+    };
+    const run = new Function(...Object.keys(bindings), js)(...Object.values(bindings)) as () => Promise<void>;
+    await run();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ providerId: "custom:fixture" });
+    expect(calls[0]).not.toHaveProperty("model");
+  });
+
   // GitHub #1: the usage select is rendered in the pre-create custom-endpoint
   // state too, so its value must ride THIS create — `false` included.
   it.each([["on", true], ["off", false]] as const)(
@@ -2526,4 +2557,11 @@ it("blocks fetch for unsaved address, transport, key or proxy", () => {
   for (const edit of [{ baseUrl: "https://other.example" }, { transport: "anthropic-messages" }, { proxyRef: "proxy-new" }, { secretValue: "fixture-key" }]) {
     expect(hasPendingFetchConnectionChanges({ ...current, ...edit })).toBe(true);
   }
+});
+
+it("allows the account-source drawer to create a model-free endpoint while preserving setup guards", () => {
+  expect(createModelMissing("", [], true, false)).toBe(false);
+  expect(preflightModelId("").kind).toBe("blank");
+  expect(createModelMissing("", [], true, true)).toBe(true);
+  expect(createModelMissing("", [], false, false)).toBe(true);
 });

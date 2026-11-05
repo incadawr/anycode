@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { startAccountSourcesStore, useAccountSourcesStore } from "../account-sources-store.js";
 import { useSettingsStore } from "../settings-store.js";
 import type { AccountSourceCandidateView, AccountSourcePreviewResult } from "../../../shared/account-sources.js";
+import type { AnycodeSettings } from "../../../shared/settings.js";
 import { ConnectionDrawer } from "./ConnectionDrawer.js";
 
 function money(value: string): string {
@@ -10,6 +11,18 @@ function money(value: string): string {
   return `$${amount / 1_000_000n}.${fraction}`;
 }
 function sameUrl(a: string, b: string): boolean { try { return new URL(a).href === new URL(b).href; } catch { return false; } }
+export function eligibleAccountConnections(settings: AnycodeSettings, candidate: AccountSourceCandidateView) {
+  const connections = settings.provider.connections;
+  return connections.filter((c) => {
+    const record = settings.provider.custom?.find((p) => p.id === c.providerId);
+    const transports = record?.kind === "anthropic" ? ["anthropic-messages"] : ["openai-chat-completions", "openai-responses"];
+    return record && record.kind === candidate.gatewayKind && sameUrl(record.baseUrl, candidate.gatewayBaseUrl)
+      && (!c.baseUrl || sameUrl(c.baseUrl, candidate.gatewayBaseUrl))
+      && (!c.transport || transports.includes(c.transport))
+      && connections.filter((other) => other.providerId === record.id).length === 1
+      && !(settings.plugins?.accountSources ?? []).some((b) => b.connectionId === c.id && (b.plugin !== candidate.key.plugin || b.source !== candidate.key.source));
+  });
+}
 function rate(value: string): string { const n = BigInt(value); const f = String(n % 1_000_000n).padStart(6, "0").replace(/0+$/, ""); return `$${n / 1_000_000n}${f ? `.${f}` : ""}`; }
 export function AccountBudgetCard({ collapsed, onSettings }: { collapsed: boolean; onSettings(): void }) {
   const { snapshot, candidates, load } = useAccountSourcesStore();
@@ -25,11 +38,7 @@ export function AccountBudgetCard({ collapsed, onSettings }: { collapsed: boolea
   useEffect(() => startAccountSourcesStore(), []);
   if (!candidates.length && !snapshot.sources.length) return null;
   const connections = settings?.provider.connections ?? [];
-  const custom = settings?.provider.custom ?? [];
-  const eligible = candidate ? connections.filter((c) => {
-    const record = custom.find((p) => p.id === c.providerId);
-    return record && record.kind === candidate.gatewayKind && sameUrl(record.baseUrl, candidate.gatewayBaseUrl) && (!c.baseUrl || sameUrl(c.baseUrl, candidate.gatewayBaseUrl));
-  }) : [];
+  const eligible = candidate && settings ? eligibleAccountConnections(settings, candidate) : [];
   async function showPreview() {
     if (!candidate || !connectionId) return;
     setBusy(true); try { setPreview(await window.anycode.accountSources.preview(candidate.key, connectionId)); } finally { setBusy(false); }
