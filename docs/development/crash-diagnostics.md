@@ -14,7 +14,7 @@ Default app data locations for packaged AnyCode:
 Custom or isolated profiles use their own app data directory. If that directory
 cannot be created, Electron uses its default crash dump location instead.
 
-**Dumps can contain process memory, including secrets and private content.** Logs
+**Dumps can contain process memory, including secrets and private content.** Host output is raw diagnostic output, subject to size limits and redaction. Logs
 redact common credential patterns but may still contain paths, prompts, file
 contents, or secrets. Review what you can and decide whether to share these files;
 AnyCode does not send them automatically.

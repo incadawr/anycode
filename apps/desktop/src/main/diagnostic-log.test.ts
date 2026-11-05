@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDiagnosticLog, redactDiagnostic } from "./diagnostic-log.js";
+import { createDiagnosticLog, installConsoleLog, redactDiagnostic } from "./diagnostic-log.js";
+import { loadSettings } from "../settings/files.js";
 import { startLocalCrashReporting } from "./crash-reporting.js";
 
 describe("local crash reporting", () => {
@@ -37,6 +38,36 @@ describe("diagnostic log", () => {
     expect(text).not.toContain("anothersecret");
     expect(text).toContain("[redacted]");
     expect(redactDiagnostic("sk-abcdefghijklmnop")).toBe("[redacted]");
+  });
+  it("redacts complete authorization values and encoded parameter names", () => {
+    for (const value of [
+      "Authorization: Basic dXNlcjpwYXNzd29yZA==",
+      '"Authorization": "Basic dXNlcjpwYXNzd29yZA=="',
+      "authorization: Bearer bearerSecret",
+      "Authorization: Custom schemeSecret",
+      "https://example.test/?%61pi_key=urlsecret&ok=1",
+      "https://example.test/?%41PI%5FKEY=urlsecret",
+    ]) {
+      const redacted = redactDiagnostic(value);
+      for (const secret of ["dXNlcjpwYXNzd29yZA==", "bearerSecret", "schemeSecret", "urlsecret"]) {
+        expect(redacted).not.toContain(secret);
+      }
+      expect(redacted).toContain("[redacted]");
+    }
+  });
+  it("does not persist file content from a settings JSON parse error", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "diagnostic-settings-"));
+    const path = join(dir, "settings.json");
+    await writeFile(path, "CONFIDENTIAL_FILE_CONTENT invalid JSON");
+    const log = createDiagnosticLog(join(dir, "logs"));
+    const target = { log: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Console;
+    installConsoleLog(log, target);
+    await loadSettings(path, { warn: (message, error) => target.warn(message, error) });
+    await log.flush();
+    const text = await readFile(join(dir, "logs", "anycode.log"), "utf8");
+    expect(text).toContain("SyntaxError: details omitted");
+    expect(text).not.toContain("CONFIDENTIAL_FILE_CONTENT");
+    expect(text).not.toContain("invalid JSON");
   });
   it("rotates and bounds lines; disk errors never reject", async () => {
     const dir = await mkdtemp(join(tmpdir(), "diagnostic-"));
