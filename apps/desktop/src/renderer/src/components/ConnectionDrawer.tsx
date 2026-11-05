@@ -1257,6 +1257,13 @@ export function liveModelSuggestions(
   });
 }
 
+/** Keep the Go default stable when a fetched list arrives in a different order. */
+export function prioritizeGoDefault<T extends { id: string }>(suggestions: T[]): T[] {
+  const index = suggestions.findIndex(item => item.id === "kimi-k3");
+  if (index > 0) suggestions.unshift(...suggestions.splice(index, 1));
+  return suggestions;
+}
+
 /**
  * Model value after a catalog connection's model list becomes available with
  * the field still blank (owner 08.08): the curated list's FIRST
@@ -1818,11 +1825,12 @@ export function ConnectionDrawerFields({
   const automaticGo = (providerId === "opencode" || providerId === "opencode-openai") && !baseUrl.trim() && !transport.trim() && !proxySnapshot?.envOverrides.some(key => key === "ANYCODE_BASE_URL" || key === "ANYCODE_PROVIDER_TRANSPORT");
   const automaticIds = automaticGo ? openCodeGoModelIds(providerId, targetConnection?.modelRoutes) : undefined;
   if (automaticIds?.includes("kimi-k3")) automaticIds.unshift(...automaticIds.splice(automaticIds.indexOf("kimi-k3"), 1));
-  const modelSuggestions = liveModelSuggestions(
+  const mergedSuggestions = liveModelSuggestions(
     isCustomRecordConnection ? null : fetchedModels,
     automaticGo ? undefined : targetConnection?.models,
     automaticIds ? automaticIds.map(id => ({ id })) : providerId === "opencode-openai" && (transport || selectedEntry?.defaultTransport) === "openai-responses" ? [] : selectedEntry?.models ?? [],
   ).filter(item => !automaticIds || automaticIds.includes(item.id));
+  const modelSuggestions = automaticGo ? prioritizeGoDefault(mergedSuggestions) : mergedSuggestions;
   // The ids the catalog itself offers for this provider — a selected one of
   // these needs no entry in the connection's own list (see
   // `shouldAppendModelToList`).

@@ -7,9 +7,14 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Set up OpenCode Go with one connection and choose among its supported models.
+
 ### Fixed
 
 - Fixed OpenCode Go model lists and context limits for each connection.
+- OpenCode Go now routes each model to its supported API and applies its declared usage pricing.
 - Prevented automatic compaction from starting when the conversation is too short to compact.
 - Provider request errors now show a sanitized, concise server message when available.
 

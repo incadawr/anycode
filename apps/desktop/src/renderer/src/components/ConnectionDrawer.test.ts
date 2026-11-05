@@ -24,6 +24,7 @@ import {
   buildDrawerSavePayload,
   createConnectionAndPersistModel,
   liveModelSuggestions,
+  prioritizeGoDefault,
   maxOutputPresetSelection,
   maxOutputTokensField,
   modelAfterCatalogPrefill,
@@ -485,6 +486,11 @@ describe("providerOptionGroups (one brand = one card)", () => {
 });
 
 describe("liveModelSuggestions (stable union of fetched + persisted + hints)", () => {
+  it("keeps the Go default first even if the fetched list arrives in another order", () => {
+    const suggestions = prioritizeGoDefault(liveModelSuggestions([{ id: "other" }, { id: "kimi-k3" }], undefined, []));
+    expect(modelAfterCatalogPrefill("", suggestions)).toBe("kimi-k3");
+    expect(modelAfterCatalogPrefill("other", suggestions)).toBe("other");
+  });
   const HINTS = [
     { id: "k3", name: "K3" },
     { id: "kimi-for-coding", name: "K2.7 Coding" },
