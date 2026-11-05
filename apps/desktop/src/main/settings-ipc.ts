@@ -2838,6 +2838,9 @@ export async function handleRecognizerSet(deps: SettingsIpcDeps, raw: unknown): 
       draft.recognizer = recognizer;
       if (contextWindowTokens !== undefined) {
         patchModelOverride(connectionById(draft, recognizer.connectionId)!, recognizer.modelId, { contextWindowTokens: contextWindowTokens === "" ? undefined : contextWindowTokens });
+        for (const binding of draft.plugins?.accountSources ?? []) {
+          if (binding.connectionId === recognizer.connectionId) markOverride(binding.ownership, recognizer.modelId, "contextWindowTokens");
+        }
       }
     }
     await saveSettings(deps.settingsPath, draft);

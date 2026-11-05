@@ -12,7 +12,9 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadSettings } from "../settings/files.js";
+import { loadSettings, saveSettings } from "../settings/files.js";
+import { accountCatalogSchema } from "@anycode/core/plugins-admin";
+import { persistCatalog } from "./account-sources/persist.js";
 import { cloneDefaults } from "../settings/schema.js";
 import type { CatalogSummary, SecretKey, SecretStatus, SettingsSnapshot } from "../shared/settings.js";
 import { activeConnection, activeProviderView } from "../shared/settings.js";
@@ -1629,6 +1631,24 @@ describe("handleSet — communication (settings.communication is written ONLY by
 });
 
 describe("handleRecognizerSet: the only writer that can also DELETE settings.recognizer", () => {
+  it.each([64000, ""] as const)("preserves a Vision window edit (%s) across account catalog refresh", async (value) => {
+    const settings = cloneDefaults();
+    settings.provider.connections = [{ id: "conn", providerId: "custom:corp" }, { id: "other", providerId: "z-ai", modelOverrides: { vision: { contextWindowTokens: 48000 } } }];
+    settings.provider.custom = [{ id: "custom:corp", name: "Corp", baseUrl: "https://gateway.example.com/v1", kind: "openai-compatible", models: [] }];
+    const expected = { plugin: "company", source: "cluster", descriptorHash: "a".repeat(64), connectionId: "conn", accountId: "employee", gatewayBaseUrl: "https://gateway.example.com/v1", gatewayKind: "openai-compatible" as const };
+    settings.plugins = { accountSources: [{ plugin: expected.plugin, source: expected.source, descriptorHash: expected.descriptorHash, connectionId: expected.connectionId, accountId: expected.accountId, ownership: {} }] };
+    await saveSettings(settingsPath, settings);
+    const catalog = (window: number) => accountCatalogSchema.parse({ schemaVersion: "anycode.account-catalog.v1", accountId: "employee", revision: String(window), complete: true, models: ["vision", "neighbor"].map((id) => ({ id, billing: "free", capabilities: { contextWindowTokens: window } })) });
+    expect(await persistCatalog(settingsPath, expected, catalog(64000), () => true, () => {})).toBe("changed");
+    expect((await handleRecognizerSet(makeDeps(), { recognizer: { connectionId: "conn", modelId: "vision" }, contextWindowTokens: value })).ok).toBe(true);
+    expect(await persistCatalog(settingsPath, expected, catalog(128000), () => true, () => {})).toBe("changed");
+    const result = (await loadSettings(settingsPath)).settings;
+    expect(result.provider.connections[0]?.modelOverrides?.vision?.contextWindowTokens).toBe(value === "" ? undefined : value);
+    expect(result.provider.connections[0]?.modelOverrides?.neighbor?.contextWindowTokens).toBe(128000);
+    expect(result.provider.connections[1]?.modelOverrides?.vision?.contextWindowTokens).toBe(48000);
+    expect(result.plugins?.accountSources?.[0]?.ownership.neighbor?.contextWindowTokensOverride).toBeUndefined();
+  });
+
   it("saves, keeps and clears a model window while turning off retains it", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" });
     const recognizer = { connectionId: "conn-1", modelId: "vision" };
