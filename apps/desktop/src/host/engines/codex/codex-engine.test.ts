@@ -1,4 +1,4 @@
-import { buildCodexRuntime } from "../../engine-switch-runtime.js";
+import { buildCodexRuntime, prepareSwitchRuntime } from "../../engine-switch-runtime.js";
 import { bindCodexUsage } from "../../native-usage.js";
 import { createHarness, MemFs } from "../../test-harness.js";
 import { summarizeProviderUsage, Session, Outbound } from "../../session.js";
@@ -3289,6 +3289,20 @@ describe("startCodexEngine/resumeCodexEngine — bootNotices forwarding", () => 
     try {
       expect(seen).toContainEqual(expect.objectContaining({ method: "mcpServer/startupStatus/updated", params: expect.objectContaining({ name: "broken", status: "failed", error: "spawn failed" }) }));
     } finally { await connected.engine.dispose("session-close"); }
+  });
+
+  it("prepares an independently owned native runtime and rejects a different applied model", async () => {
+    const options = wrapperOptions();
+    const runtime = await prepareSwitchRuntime({ engine: "codex", model: "gpt-test", options });
+    try {
+      expect(runtime.engine.id).toBe("codex");
+      expect("engineSettings" in runtime && runtime.engineSettings).toBe(runtime.engine);
+      await expect(prepareSwitchRuntime({ engine: "codex", model: "unavailable", options }))
+        .rejects.toThrow("Requested model unavailable is unavailable");
+      expect(runtime.engine.historyItems()).toEqual([]);
+    } finally {
+      await runtime.engine.dispose("session-close");
+    }
   });
 
   it("startCodexEngine forwards bootNotices — the warning appears once on the first turn", async () => {
