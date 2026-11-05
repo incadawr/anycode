@@ -122,6 +122,7 @@ function toRecognizerEndpoint(wire: RecognizerWireConfig): RecognizerEndpoint | 
     transport: (wire.transport as ProviderTransport | undefined) ?? "anthropic-messages",
     baseUrl: wire.baseUrl,
     model: wire.model,
+    ...(wire.contextWindowTokens !== undefined ? { contextWindowTokens: wire.contextWindowTokens } : {}),
     ...(wire.apiKey !== undefined && wire.apiKey !== "" ? { apiKey: wire.apiKey } : {}),
     ...(wire.providerName !== undefined && wire.providerName !== "" ? { providerName: wire.providerName } : {}),
   };

@@ -44,6 +44,7 @@ export interface RecognizerEndpoint {
   apiKey?: string;
   model: string;
   providerName?: string;
+  contextWindowTokens?: number;
 }
 
 /** One prior question/answer pair about the same image (threaded-by-value transcript). */

@@ -174,6 +174,7 @@ describe("handleRecognizerProbeRequest — success", () => {
 
     const childInput = JSON.parse(call.stdin) as RecognizerProbeChildInput;
     expect(childInput.endpoint).toEqual({
+      contextWindowTokens: 8192,
       transport: "openai-chat-completions",
       baseUrl: "https://vision.example.com",
       model: "vision-model",

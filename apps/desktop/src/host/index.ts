@@ -2776,6 +2776,7 @@ function recognizerEndpointFromFields(fields: {
   apiKey?: string;
   model: string;
   providerName?: string;
+  contextWindowTokens?: number;
 }): RecognizerEndpoint | null {
   if (fields.baseUrl === undefined || fields.baseUrl.trim() === "") {
     return null;
@@ -2787,6 +2788,7 @@ function recognizerEndpointFromFields(fields: {
     transport: (fields.transport as ProviderTransport | undefined) ?? "anthropic-messages",
     baseUrl: fields.baseUrl,
     model: fields.model,
+    ...(Number.isInteger(fields.contextWindowTokens) && fields.contextWindowTokens! > 0 ? { contextWindowTokens: fields.contextWindowTokens } : {}),
     ...(fields.apiKey !== undefined && fields.apiKey !== "" ? { apiKey: fields.apiKey } : {}),
     ...(fields.providerName !== undefined && fields.providerName !== "" ? { providerName: fields.providerName } : {}),
   };
@@ -2820,6 +2822,7 @@ function parseRecognizerEnv(env: NodeJS.ProcessEnv): RecognizerEndpoint | null {
     apiKey: env.ANYCODE_RECOGNIZER_API_KEY,
     model,
     providerName: env.ANYCODE_RECOGNIZER_PROVIDER_NAME,
+    contextWindowTokens: (!env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_MODEL || env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_MODEL === model) && /^\d+$/.test(env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW ?? "") ? Number(env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW) : undefined,
   });
 }
 
@@ -4286,6 +4289,7 @@ async function boot(): Promise<void> {
         liveRecognizerEndpoint.model = next.model;
         liveRecognizerEndpoint.apiKey = next.apiKey;
         liveRecognizerEndpoint.providerName = next.providerName;
+        liveRecognizerEndpoint.contextWindowTokens = next.contextWindowTokens;
         recognizerConfigured = true;
       }
       config.recognizer!.endpoint = recognizerConfigured ? liveRecognizerEndpoint : undefined;

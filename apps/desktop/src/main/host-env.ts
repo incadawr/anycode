@@ -1,3 +1,4 @@
+import type { ProviderConnection } from "../shared/settings.js";
 /**
  * Host-env composition + the env-scrub primitives (design slice-2.2-cut.md §6/§1
 
@@ -1099,6 +1100,7 @@ export interface HostEnvParams {
 export interface RecognizerCatalogInfo {
   baseUrl: string;
   defaultTransport?: string;
+  contextWindowFor?: (connection: ProviderConnection, model: string) => number;
 }
 
 /**
@@ -1554,6 +1556,7 @@ export async function resolveRecognizerConfig(
     apiKey: apiKey !== undefined && apiKey !== "" ? apiKey : undefined,
     model: setting.modelId,
     providerName: providerId !== "" ? providerId : undefined,
+    contextWindowTokens: catalogInfo?.contextWindowFor?.(connection, setting.modelId) ?? modelOverrideFor(connection, setting.modelId)?.contextWindowTokens ?? 8192,
   };
 }
 
@@ -1573,6 +1576,10 @@ export function applyRecognizerEnv(env: NodeJS.ProcessEnv, recognizer: Recognize
   fillFromSettings(env, ENV_RECOGNIZER_BASE_URL, recognizer.baseUrl);
   fillFromSettings(env, ENV_RECOGNIZER_API_KEY, recognizer.apiKey);
   fillFromSettings(env, ENV_RECOGNIZER_MODEL, recognizer.model);
+  if (!env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW && env.ANYCODE_RECOGNIZER_MODEL === recognizer.model && recognizer.contextWindowTokens !== undefined) {
+    env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW = String(recognizer.contextWindowTokens);
+    env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_MODEL = recognizer.model;
+  }
   fillFromSettings(env, ENV_RECOGNIZER_PROVIDER_NAME, recognizer.providerName);
 }
 

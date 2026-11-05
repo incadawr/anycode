@@ -35,6 +35,14 @@ function settings(over: Partial<AnycodeSettings> = {}): AnycodeSettings {
 }
 
 describe("recognizerFingerprint", () => {
+  it("tracks only the selected model context inputs", () => {
+    const make = (modelOverrides: ProviderConnection["modelOverrides"]) => settings({ provider: { connections: [connection({ modelOverrides })] }, recognizer: { connectionId: "conn-vision", modelId: "vision" } });
+    const base = recognizerFingerprint(make({}));
+    expect(recognizerFingerprintsEqual(base, recognizerFingerprint(make({ other: { contextWindowTokens: 32000 } })))).toBe(true);
+    const changed = recognizerFingerprint(make({ vision: { contextWindowTokens: 32000 } }));
+    expect(recognizerFingerprintsEqual(base, changed)).toBe(false);
+    expect(recognizerFingerprintsEqual(changed, recognizerFingerprint(make({})))).toBe(false);
+  });
   it("is undefined when settings.recognizer is absent", () => {
     expect(recognizerFingerprint(settings())).toBeUndefined();
   });
@@ -52,7 +60,7 @@ describe("recognizerFingerprint", () => {
       provider: { connections: [connection({ baseUrl: "https://vision.example.com", transport: "openai-chat-completions" })] },
       recognizer: { connectionId: "conn-vision", modelId: "vision-model" },
     });
-    expect(recognizerFingerprint(s)).toEqual({
+    expect(recognizerFingerprint(s)).toMatchObject({
       connectionId: "conn-vision",
       modelId: "vision-model",
       baseUrl: "https://vision.example.com",
@@ -129,7 +137,7 @@ describe("recognizerFingerprint — custom-provider route", () => {
 
   it("uses the backing CustomProviderRecord's baseUrl for a custom:* connection, leaving the connection's own (empty) baseUrl out", () => {
     const fingerprint = recognizerFingerprint(customSettings());
-    expect(fingerprint).toEqual({
+    expect(fingerprint).toMatchObject({
       connectionId: "conn-v",
       modelId: "vision-model-x",
       baseUrl: "https://rec.example.com/v1",
@@ -176,7 +184,7 @@ describe("recognizerFingerprint — custom-provider route", () => {
       provider: { connections: [connection({ baseUrl: "https://vision.example.com", transport: "anthropic-messages" })] },
       recognizer: { connectionId: "conn-vision", modelId: "vision-model" },
     });
-    expect(recognizerFingerprint(s)).toEqual({
+    expect(recognizerFingerprint(s)).toMatchObject({
       connectionId: "conn-vision",
       modelId: "vision-model",
       baseUrl: "https://vision.example.com",

@@ -1,3 +1,5 @@
+import { connectionContextWindow } from "../shared/connection-context-window.js";
+import type { RecognizerCatalogInfo } from "./host-env.js";
 import { providerProxyConfig } from "./provider-proxy-config.mjs";
 import { createMiniMaxQuotaService } from "./minimax-quota.js";
 import { createGlmQuotaService } from "./glm-quota.js";
@@ -1042,12 +1044,13 @@ let oauthEngine: OAuthEngine | null = null;
  * fallback). baseUrl is the resolveEndpoint projection; a `custom` entry has an
  * empty baseUrl and the caller substitutes settings.provider.baseUrl.
  */
-function resolveCatalog(id: string): CatalogSelectionInfo | undefined {
+function resolveCatalog(id: string): (CatalogSelectionInfo & RecognizerCatalogInfo) | undefined {
   const entry = findCatalogEntry(id);
   if (entry === undefined) {
     return undefined;
   }
   return {
+    contextWindowFor: (connection, model) => connectionContextWindow(connection, model, entry).tokens,
     baseUrl: resolveEndpoint(entry, "", "").baseUrl,
     authKind: entry.auth.kind,
     isCustom: isCustomProvider(id),

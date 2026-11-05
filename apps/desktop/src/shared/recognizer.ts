@@ -24,6 +24,7 @@ import type {
   ProviderTransportId,
   SecretKey,
 } from "./settings.js";
+import { modelOverrideFor } from "./model-overrides.js";
 import { connectionById } from "./settings.js";
 
 // ── parentPort message type (main -> host, PUSH only) ──
@@ -49,6 +50,7 @@ export interface RecognizerWireConfig {
   apiKey?: string;
   model: string;
   providerName?: string;
+  contextWindowTokens?: number;
 }
 
 /**
@@ -96,6 +98,7 @@ export interface RecognizerFingerprint {
   modelId: string;
   baseUrl?: string;
   transport?: ProviderTransportId;
+  contextInputs?: string;
 }
 
 /** Byte-mirror of main/host-env.ts's `CUSTOM_PROVIDER_PREFIX` (the module header's no-import discipline). */
@@ -156,6 +159,7 @@ export function recognizerFingerprint(settings: AnycodeSettings): RecognizerFing
     modelId: setting.modelId,
     baseUrl: recognizerResolvedBaseUrl(settings, connection),
     transport: connection.transport,
+    contextInputs: JSON.stringify([modelOverrideFor(connection, setting.modelId)?.contextWindowTokens, modelOverrideFor(connection, setting.modelId)?.catalogMatchDisabled, connection.modelCapabilities?.[setting.modelId]?.contextWindow, connection.modelCapabilities?.[setting.modelId]?.maxOutputTokens]),
   };
 }
 
@@ -171,7 +175,8 @@ export function recognizerFingerprintsEqual(
     a.connectionId === b.connectionId &&
     a.modelId === b.modelId &&
     a.baseUrl === b.baseUrl &&
-    a.transport === b.transport
+    a.transport === b.transport &&
+    a.contextInputs === b.contextInputs
   );
 }
 
