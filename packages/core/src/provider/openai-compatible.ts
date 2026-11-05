@@ -6,6 +6,7 @@
  * OpenAI Responses API (that is the separate `openai-responses` transport).
  */
 
+import { wrapOpenCodeGoFetch } from "./opencode-go-fetch.js";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import type { LanguageModel } from "ai";
 import type { ProviderTransport } from "./catalog.js";
@@ -63,8 +64,8 @@ export function createOpenAICompatibleLanguageModel(config: EndpointConfig): Lan
     // dormant unless an observer is set or a user-agent override must be
     // enforced — the conditional spread keeps the options object
     // byte-identical when neither applies.
-    ...(quotaFetch !== undefined || userAgent !== undefined
-      ? { fetch: userAgent !== undefined ? wrapFetchWithUserAgent(quotaFetch ?? globalThis.fetch, userAgent) : quotaFetch }
+    ...(quotaFetch !== undefined || userAgent !== undefined || config.goModelPolicy !== undefined
+      ? { fetch: wrapOpenCodeGoFetch(userAgent !== undefined ? wrapFetchWithUserAgent(quotaFetch ?? globalThis.fetch, userAgent) : quotaFetch ?? globalThis.fetch, config) }
       : {}),
   });
   return provider.chatModel(config.model);

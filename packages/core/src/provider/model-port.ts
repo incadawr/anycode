@@ -42,6 +42,7 @@ import type { ModelStreamEvent } from "../types/events.js";
 import { linkAbortSignal } from "../util/abort.js";
 import type { ProviderTransport } from "./catalog.js";
 import type { EndpointConfig } from "./endpoint.js";
+import type { OpenCodeGoEndpointPolicy } from "./opencode-go-policy.js";
 import type { ImplicitPromptCache, ReasoningEffort } from "../types/config.js";
 import { blocksAutomaticReplay, captureProviderMessage, classifyProviderFailure, extractStatusCode, isModelOutputEvent } from "./failure.js";
 import { ResponsesReasoningTextRecovery } from "./responses-reasoning-text.js";
@@ -182,6 +183,7 @@ export function reasoningRequestOptions(
   promptCache?: ImplicitPromptCache,
   modelId?: string,
   declaredEffortLevels?: readonly ReasoningEffort[],
+  goPolicy?: OpenCodeGoEndpointPolicy,
 ): AnthropicReasoningOptions;
 export function reasoningRequestOptions(
   request: ModelRequest,
@@ -190,6 +192,7 @@ export function reasoningRequestOptions(
   promptCache?: ImplicitPromptCache,
   modelId?: string,
   declaredEffortLevels?: readonly ReasoningEffort[],
+  goPolicy?: OpenCodeGoEndpointPolicy,
 ): OpenAICompatibleReasoningOptions;
 export function reasoningRequestOptions(
   request: ModelRequest,
@@ -198,6 +201,7 @@ export function reasoningRequestOptions(
   promptCache?: ImplicitPromptCache,
   modelId?: string,
   declaredEffortLevels?: readonly ReasoningEffort[],
+  goPolicy?: OpenCodeGoEndpointPolicy,
 ): OpenAIResponsesReasoningOptions;
 export function reasoningRequestOptions(
   request: ModelRequest,
@@ -206,6 +210,7 @@ export function reasoningRequestOptions(
   promptCache?: ImplicitPromptCache,
   modelId?: string,
   declaredEffortLevels?: readonly ReasoningEffort[],
+  goPolicy?: OpenCodeGoEndpointPolicy,
 ): ReasoningOptions;
 export function reasoningRequestOptions(
   request: ModelRequest,
@@ -214,8 +219,27 @@ export function reasoningRequestOptions(
   promptCache?: ImplicitPromptCache,
   modelId?: string,
   declaredEffortLevels?: readonly ReasoningEffort[],
+  goPolicy?: OpenCodeGoEndpointPolicy,
 ): ReasoningOptions {
   const effort = request.reasoningEffort;
+  if (goPolicy) {
+    // Go Messages mapping is based on declarations; the paid door is unverified live.
+    const r = goPolicy.capabilities?.reasoning;
+    const selected = effort === "off" ? "none" : effort;
+    const wire = selected !== undefined && r?.effort?.includes(selected) ? selected
+      : effort === undefined && r?.default && r.effort?.includes(r.default.value) ? r.default.value : undefined;
+    const max = request.maxOutputTokens === undefined ? {} : { maxOutputTokens: request.maxOutputTokens };
+    if (transport === "openai-responses") return { ...max, providerOptions: { openai: { store: false, ...(wire ? { reasoningEffort: wire, forceReasoning: true as const } : {}) } } };
+    if (transport === "openai-chat-completions") return { ...max, ...(wire ? { providerOptions: { openaiCompatible: { reasoningEffort: wire } } } : {}) };
+    if ((effort === undefined || effort === "off") && r?.toggle) return { ...max, providerOptions: { anthropic: { thinking: { type: "disabled" } } } };
+    if (wire && r?.effort) return { ...max, providerOptions: { anthropic: { effort: wire, thinking: { type: "adaptive" } } } };
+    if (effort && effort !== "off" && !r?.effort && r?.budget) {
+      const generic = effort === "low" || effort === "minimal" ? REASONING_BUDGET_TOKENS.low : effort === "medium" ? REASONING_BUDGET_TOKENS.medium : REASONING_BUDGET_TOKENS.high;
+      const budgetTokens = Math.min(generic, r.budget.max ?? generic);
+      return { ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: Math.max(1, request.maxOutputTokens - budgetTokens) } : {}), providerOptions: { anthropic: { thinking: { type: "enabled", budgetTokens } } } };
+    }
+    return max;
+  }
 
   if (transport === "openai-responses") {
     // store:false is unconditional (§0.2): AnyCode owns history end-to-end, and
@@ -768,6 +792,9 @@ function rawResponseModelOf(part: unknown): string | undefined {
 export function reasoningReplaySource(config: EndpointConfig): ReasoningSource | undefined {
   if (config.reasoningHistory === "none") return undefined;
   if (config.transport !== "anthropic-messages" && config.transport !== "openai-chat-completions") return undefined;
+  const goReplay = config.goModelPolicy?.compatibility?.reasoning_field === "reasoning_content" && config.transport === "openai-chat-completions";
+  if (config.goModelPolicy && !goReplay) return undefined;
+  if (goReplay) return { transport: config.transport, ...(config.providerName !== undefined ? { provider: config.providerName } : {}), baseUrl: config.baseUrl, model: config.model };
   const catalogEnabled = catalogPreservesReasoning(config.providerName);
   if (isCatalogProviderName(config.providerName) && !catalogEnabled) return undefined;
   if (!(config.preserveReasoning ?? catalogEnabled)) return undefined;
@@ -889,7 +916,7 @@ export class AiSdkModelPort implements ModelPort {
   }
 
   reasoningReplaySource(effort?: ModelRequest["reasoningEffort"]): ReasoningSource | undefined {
-    const options = reasoningRequestOptions({ messages: [], tools: [], reasoningEffort: effort }, this.config.providerName, this.config.transport, this.config.promptCache, this.config.model, this.config.declaredEffortLevels);
+    const options = reasoningRequestOptions({ messages: [], tools: [], reasoningEffort: effort }, this.config.providerName, this.config.transport, this.config.promptCache, this.config.model, this.config.declaredEffortLevels, this.config.goModelPolicy);
     const thinking = (options.providerOptions as { anthropic?: { thinking?: { type?: string } } } | undefined)?.anthropic?.thinking;
     return thinking?.type === "disabled" ? undefined : this.#reasoningSource;
   }
@@ -960,13 +987,13 @@ export class AiSdkModelPort implements ModelPort {
    * `includeUsage: undefined` key the shape never carried.
    */
   // The factory receives exactly one argument when the activity hook is absent.
-  private async buildAttemptModel(includeUsage: boolean | undefined, onResponseActivity?: () => void, onKey?: (key: string | undefined) => void): Promise<LanguageModel> {
+  private async buildAttemptModel(includeUsage: boolean | undefined, onResponseActivity?: () => void, onKey?: (key: string | undefined) => void, goDisableThinking?: boolean): Promise<LanguageModel> {
     const create = (cfg: EndpointConfig): LanguageModel => onResponseActivity === undefined ? createLanguageModel(cfg) : createLanguageModel(cfg, onResponseActivity);
     const { resolveApiKey } = this.config;
     const usageOverridden = includeUsage !== this.config.includeUsage;
     if (resolveApiKey === undefined) {
       onKey?.(this.config.apiKey);
-      return create(usageOverridden ? { ...this.config, includeUsage } : this.config);
+      return create(goDisableThinking ? { ...this.config, includeUsage, goDisableThinking } : usageOverridden ? { ...this.config, includeUsage } : this.config);
     }
     let apiKey = this.config.apiKey;
     try {
@@ -979,7 +1006,7 @@ export class AiSdkModelPort implements ModelPort {
     }
     onKey?.(apiKey);
     return create(
-      usageOverridden ? { ...this.config, apiKey, includeUsage } : { ...this.config, apiKey },
+      goDisableThinking ? { ...this.config, apiKey, includeUsage, goDisableThinking } : usageOverridden ? { ...this.config, apiKey, includeUsage } : { ...this.config, apiKey },
     );
   }
 
@@ -1152,7 +1179,7 @@ export class AiSdkModelPort implements ModelPort {
 
       let attemptKey: string | undefined;
       try {
-        const model = await this.buildAttemptModel(attemptIncludeUsage, onResponseActivity, (key) => { attemptKey = key; });
+        const model = await this.buildAttemptModel(attemptIncludeUsage, onResponseActivity, (key) => { attemptKey = key; }, this.config.goModelPolicy?.capabilities?.reasoning?.toggle === true && (request.reasoningEffort === undefined || request.reasoningEffort === "off"));
         const requestStartedAt = performance.now();
         // Generation speed is measured from the FIRST OUTPUT TOKEN — text,
         // reasoning or tool content — never from the first stream event. A
@@ -1166,7 +1193,7 @@ export class AiSdkModelPort implements ModelPort {
           // inside `messages`, and its `system` option is deprecated for `instructions`.
           instructions: request.system,
           messages: toSdkMessages(request.messages, this.config.transport, reasoningSource),
-          tools: toSdkTools(request.tools),
+          tools: toSdkTools(this.config.goModelPolicy && this.config.goModelPolicy.capabilities?.tools?.supported !== true ? [] : request.tools),
           // One SDK step per ModelPort call; the multi-turn loop lives in AgentLoop.
           stopWhen: stepCountIs(1),
           // Retries are this adapter's responsibility (Phase 1); none in Phase 0.
@@ -1177,8 +1204,8 @@ export class AiSdkModelPort implements ModelPort {
           abortSignal: attemptController.signal,
           // Raw chunks carry provenance for Anthropic and reasoning text for Responses.
           includeRawChunks: true,
-          ...reasoningRequestOptions(request, this.config.providerName, this.config.transport, this.config.promptCache, this.config.model, this.config.declaredEffortLevels),
-          temperature: request.temperature,
+          ...reasoningRequestOptions(request, this.config.providerName, this.config.transport, this.config.promptCache, this.config.model, this.config.declaredEffortLevels, this.config.goModelPolicy),
+          temperature: this.config.goModelPolicy && this.config.goModelPolicy.capabilities?.temperature !== true ? undefined : request.temperature,
         });
 
         const iterator = result.fullStream[Symbol.asyncIterator]();

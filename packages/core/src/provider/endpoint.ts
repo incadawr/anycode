@@ -15,6 +15,8 @@ import type { ImplicitPromptCache, ReasoningEffort } from "../types/config.js";
 export interface EndpointConfig {
   /** Automatic Go policy for this exact model; absent for manual endpoints. */
   goModelPolicy?: OpenCodeGoEndpointPolicy;
+  /** Internal per-request SDK serialization marker. */
+  goDisableThinking?: boolean;
   /**
    * Wire protocol of this endpoint. MANDATORY and deliberately without a
    * default: the back-compat fallback (`anthropic-messages`) is applied exactly
