@@ -9,7 +9,7 @@ import { applySetupImport, buildSetupContent, planSetupImport, validateSetupCont
 function fixture() {
   const settings = cloneDefaults();
   settings.provider.custom = [{ id: "custom:one", name: "Gateway", kind: "openai-compatible", baseUrl: "https://example.test/v1", models: ["model"], modelsFetchedAt: "yesterday" }];
-  settings.provider.connections = [{ id: "conn-original", providerId: "custom:one", label: "Team", model: "model", lastHealth: { status: "ready", at: "today" }, modelOverrides: { model: { contextWindowTokens: 8192 } } }];
+  settings.provider.connections = [{ id: "conn-original", providerId: "custom:one", label: "Team", model: "model", lastHealth: { status: "ready", at: "today" }, modelOverrides: { model: { contextWindowTokens: 8192, imageInput: "on" }, other: { imageInput: "off" } } }];
   settings.roleProfiles = { profiles: [{ id: "role-original", name: "Team roles", roles: { planner: { primary: { connection: "conn-original", model: "model" }, fallbacks: [{ connection: "conn-original" }] } } }], projects: [{ projectRoot: "/project", profileId: "role-original" }] };
   return settings;
 }
@@ -29,6 +29,7 @@ describe("setup content", () => {
     expect(json).not.toContain("conn-original");
     expect(json).not.toMatch(/lastHealth|modelsFetchedAt|projectRoot/);
     const result = applySetupImport(planSetupImport(content, cloneDefaults()), { connections: {}, roleProfiles: {} });
+    expect(result.provider.connections[0]!.modelOverrides).toEqual({ model: { contextWindowTokens: 8192, imageInput: "on" }, other: { imageInput: "off" } });
     const id = result.provider.connections[0]!.id;
     expect(id).not.toBe("conn-original");
     expect(result.roleProfiles!.profiles[0]!.roles.planner).toEqual({ primary: { connection: id, model: "model" }, fallbacks: [{ connection: id }] });

@@ -276,6 +276,7 @@ const connectionSchema = z.object({
   modelOverrides: z.unknown().transform((raw) => {
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
     const entrySchema = z.object({
+    imageInput: z.enum(["on", "off"]).optional().catch(undefined),
     pricing: tokenRatesSchema.optional().catch(undefined),
     contextWindowTokens: z.number().int().min(1_024).max(1_000_000).optional().catch(undefined),
     reasoningEffort: reasoningEffortSchema.optional().catch(undefined),

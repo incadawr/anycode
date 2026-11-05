@@ -333,3 +333,14 @@ it("keeps manual connection rates ahead of live catalog rates", () => {
   const settings = createConnectionModelSettings({ connection: { pricing: manual, modelCapabilities: { a: { pricing: { input: 9, cachedInput: 9, output: 9 } } }, modelOverrides: { b: { pricing: { input: 4, cachedInput: 4, output: 4 } } } }, liveCapabilitiesFor: () => undefined });
   expect(settings.pricingSnapshot()).toEqual({ fallback: manual, models: { b: { input: 4, cachedInput: 4, output: 4 } } });
 });
+
+ it("resolves image input independently after a model switch and refresh", () => {
+  let saved: { modelOverrides: Record<string, { imageInput: "on" | "off" }> } = { modelOverrides: { a: { imageInput: "on" }, b: { imageInput: "off" } } };
+  const settings = createConnectionModelSettings({ connection: saved, readConnection: () => saved, liveCapabilitiesFor: () => undefined });
+  expect(settings.imageInputFor("a")).toBe("on");
+  expect(settings.imageInputFor("b")).toBe("off");
+  saved = { modelOverrides: { a: { imageInput: "off" }, b: { imageInput: "on" } } };
+  settings.refresh();
+  expect(settings.imageInputFor("a")).toBe("off");
+  expect(settings.imageInputFor("b")).toBe("on");
+});

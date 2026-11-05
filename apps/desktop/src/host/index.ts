@@ -1,3 +1,4 @@
+import { parseRecognizerEnv, recognizerEndpointFromFields, recognizerLiveWindow } from "./recognizer-env.js";
 import "./sdk-warnings.js";
 import { scrubFailureText } from "@anycode/core";
 import { childBootFailure, sanitizeBootFailure } from "./child-boot-failure.js";
@@ -2719,111 +2720,6 @@ async function bootClaudeSession(
 // ── срез C: vision-fallback host wiring — pure helpers ──
 
 /**
- * The three valid `ProviderTransport` ids (packages/core/src/provider/
- * catalog.ts's `PROVIDER_TRANSPORT_VALUES`/env.ts's validation of the same
- * set) — copied as a literal because that list is not exported from the
- * package barrel, and `packages/core/**` is out of reach here regardless.
- * Same "host stays core-free / cross-layer literal mirror" convention this
- * file already follows for the ANYCODE_RECOGNIZER_* env-var names below.
- */
-const RECOGNIZER_TRANSPORT_VALUES: readonly string[] = ["anthropic-messages", "openai-chat-completions", "openai-responses"];
-
-/**
- * Fills the two fields a resolved connection may leave unset (main/host-env.ts's
- * `resolveRecognizerConfig` own doc: "a bare/custom connection has no
- * `providerName`, a keyless local server has no `apiKey`") plus a `transport`
- * DEFAULT for the one case a wire/env source may omit that core's
- * `RecognizerEndpoint` (vision/recognizer.ts) does not accept — the SAME
- * final fallback the primary provider ladder above already uses
- * (`providerTransport = envConfig.providerTransport ?? catalogEntry?.
- * defaultTransport ?? "anthropic-messages"`), never a second policy invented
- * for the recognizer alone.
- *
- * Returns `null` (a disabled recognizer, never a "configured but broken" one)
- * on either of two malformed inputs, checked at this ONE construction point
- * so both callers below (the boot-env snapshot in `parseRecognizerEnv`, and
- * main's live config push) are covered by a single check each:
- *  - `baseUrl` blank after trimming (live-run fix, follow-up): the
- *    unconfigured-recognizer placeholder a few lines below is literally
- *    `{transport: "anthropic-messages", baseUrl: "", model: ""}`, the exact
- *    anthropic+blank-address pair a live run turned into `Invalid Anthropic
- *    base URL: "" is empty after trimming` after `InspectImage` had already
- *    registered and been called;
- *  - `transport` PRESENT but not one of the three known `ProviderTransport`
- *    ids — parity with core's own `loadEnvConfig` validation (env.ts: an
- *    invalid transport "is rejected the same way as any other invalid
- *    value"), restored here because this field's cast to `ProviderTransport`
- *    was unchecked (any string was silently accepted as a valid transport).
- *    A transport that is simply ABSENT is NOT malformed — that is the
- *    documented legacy-fallback default two lines below, shared with the
- *    primary provider ladder, and is left alone.
- *
- * The transport check here is NOT redundant with main/host-env.ts's own
- * `resolveEffectiveTransport`-based ladder in `resolveRecognizerConfig` — the
- * two sit at NON-OVERLAPPING injection points. That ladder governs
- * RESOLUTION (what settings/catalog value main picks, and when it honestly
- * refuses); this check governs what can arrive AFTER resolution, from a path
- * that ladder never sees: `applyRecognizerEnv`'s `fillFromSettings` is
- * env-value-wins, so an ambient `ANYCODE_RECOGNIZER_TRANSPORT` in this
- * fork's OWN environment can override whatever main resolved, and main's
- * live RECOGNIZER_CONFIG_CHANGED push (the other caller below) carries a
- * `transport` string that never passes through main's ladder at all. Drop
- * either gate and the hole the other one does not cover reopens.
- */
-function recognizerEndpointFromFields(fields: {
-  transport?: string;
-  baseUrl?: string;
-  apiKey?: string;
-  model: string;
-  providerName?: string;
-}): RecognizerEndpoint | null {
-  if (fields.baseUrl === undefined || fields.baseUrl.trim() === "") {
-    return null;
-  }
-  if (fields.transport !== undefined && !RECOGNIZER_TRANSPORT_VALUES.includes(fields.transport)) {
-    return null;
-  }
-  return {
-    transport: (fields.transport as ProviderTransport | undefined) ?? "anthropic-messages",
-    baseUrl: fields.baseUrl,
-    model: fields.model,
-    ...(fields.apiKey !== undefined && fields.apiKey !== "" ? { apiKey: fields.apiKey } : {}),
-    ...(fields.providerName !== undefined && fields.providerName !== "" ? { providerName: fields.providerName } : {}),
-  };
-}
-
-/**
- * срез C: `ANYCODE_RECOGNIZER_{TRANSPORT,BASE_URL,API_KEY,MODEL,
- * PROVIDER_NAME}` -> a core `RecognizerEndpoint`, or null when the fallback
- * is unconfigured. Literal local var-name copies mirror main/host-env.ts's
- * `ENV_RECOGNIZER_*` constants by contract — the same "host stays core-free
- * / cross-layer literal mirror, never a wrong-direction import" convention
- * every other env-var family in this file already follows (host never
- * imports from `../main/`). A blank `ANYCODE_RECOGNIZER_MODEL` is one honest
- * "off" signal, checked here; a blank `ANYCODE_RECOGNIZER_BASE_URL` and an
- * unknown `ANYCODE_RECOGNIZER_TRANSPORT` are the other two (live-run fix,
- * follow-up) — `resolveRecognizerConfig` can emit a model with no
- * resolvable address (an unconfigured `needsBaseUrl` catalog template, or a
- * legacy/unknown providerId), and this env family carries no validation of
- * its own on the transport string — both gates live in
- * `recognizerEndpointFromFields` below, the one construction point this and
- * the live-push caller both go through.
- */
-function parseRecognizerEnv(env: NodeJS.ProcessEnv): RecognizerEndpoint | null {
-  const model = env.ANYCODE_RECOGNIZER_MODEL;
-  if (model === undefined || model.trim() === "") {
-    return null;
-  }
-  return recognizerEndpointFromFields({
-    transport: env.ANYCODE_RECOGNIZER_TRANSPORT,
-    baseUrl: env.ANYCODE_RECOGNIZER_BASE_URL,
-    apiKey: env.ANYCODE_RECOGNIZER_API_KEY,
-    model,
-    providerName: env.ANYCODE_RECOGNIZER_PROVIDER_NAME,
-  });
-}
-
-/**
  * Wraps a recognizer `ModelPort` with a usage-telemetry tap (plan §8): `ask()`
  * "reports itself" through the SAME `t:"usage"` shape core's own `finish`
  * events report (telemetry/records.ts's `telemetryRecordFor`), stamped with
@@ -2973,15 +2869,7 @@ async function boot(): Promise<void> {
       settingsPathOverride !== undefined && settingsPathOverride.trim() !== "" ? settingsPathOverride : undefined,
     );
 
-    // 4088-on-4118 integration: the per-model override
-    // is parsed ONCE here from the env main stamps for THIS fork's connection
-    // (buildHostEnv runs on the per-tab pinned settings). The live
-    // image-modality set no longer travels through the fork env: it rides
-    // 4118's modelCapabilities map (`imageInput?: true` per model), which this
-    // boot already loaded into `liveCapsFor` (readConnectionModelCapabilities,
-    // fail-soft, fork-connection id first then the session row pin). Both are
-    // consumed per call by `media.imageInputEnabled` (below), which
-    // re-resolves through `currentModel` on every send.
+    // Explicit environment overrides retain priority over saved per-model settings.
     const imageModelOverride = parseImageInputModelOverride(process.env[ENV_IMAGE_INPUT_MODEL_OVERRIDE]);
     const imageModalityLookup: ImageModalityLookup = (id) => (liveCapsFor(id)?.imageInput === true ? true : undefined);
 
@@ -3979,19 +3867,12 @@ async function boot(): Promise<void> {
     gitBridge = new GitBridge({ git: gitEnabled ? gitService : null, outbound });
 
     const media: MediaCapabilityPort = {
-      // Reads currentModel so a P7.15 model switch re-gates image input on the
-      // next send; currentModel === envConfig.model at boot (byte-identical).
-      // imageModalityLookup adds the live /v1/models modality
-      // rung between the env override and the catalog (additive-only, parsed
-      // once at boot above); the verdict still re-resolves per call through
-      // currentModel, so a switch re-gates honestly.
-      // The global ANYCODE_IMAGE_INPUT (shell) wins; otherwise the per-model
-      // override applies only while currentModel is the model it is bound to.
+      // Resolve the current model on every call; explicit environment values win.
       imageInputEnabled: () =>
         resolveImageInput(
           currentModel,
           entryFor(currentModel),
-          envConfig.imageInput ?? (imageModelOverride?.model === currentModel ? imageModelOverride.override : undefined),
+          envConfig.imageInput ?? (imageModelOverride?.model === currentModel ? imageModelOverride.override : undefined) ?? connectionModelSettings.imageInputFor(currentModel),
           imageModalityLookup,
         ),
       // срез C: live verdict for the vision fallback — true whenever
@@ -4292,6 +4173,11 @@ async function boot(): Promise<void> {
      * the model was already sighted, or already blind-without-fallback,
      * before and after this push).
      */
+    const recognizerWindowEnv = {
+      ANYCODE_RECOGNIZER_CONTEXT_WINDOW: process.env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW,
+      ANYCODE_RECOGNIZER_CONTEXT_WINDOW_MODEL: process.env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_MODEL,
+      ANYCODE_RECOGNIZER_CONTEXT_WINDOW_FROM_SETTINGS: process.env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_FROM_SETTINGS,
+    };
     function applyRecognizerEndpoint(next: RecognizerEndpoint | null): void {
       if (next === null) {
         recognizerConfigured = false;
@@ -4301,6 +4187,7 @@ async function boot(): Promise<void> {
         liveRecognizerEndpoint.model = next.model;
         liveRecognizerEndpoint.apiKey = next.apiKey;
         liveRecognizerEndpoint.providerName = next.providerName;
+        liveRecognizerEndpoint.contextWindowTokens = recognizerLiveWindow(recognizerWindowEnv, next);
         recognizerConfigured = true;
       }
       config.recognizer!.endpoint = recognizerConfigured ? liveRecognizerEndpoint : undefined;

@@ -30,6 +30,7 @@
     "./provider/quota": "./src/provider/quota.ts",
     "./connection-resolver": "./src/routing/core-model-connection.ts",
     "./catalog": "./src/provider/catalog-data.ts",
+    "./capabilities": "./src/provider/capabilities.ts",
     "./model-dictionary": "./src/provider/model-dictionary.ts"
   },
   "scripts": {

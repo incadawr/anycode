@@ -3,13 +3,14 @@
  * host-forked process only — never persisted: a retry/resend of the exact same
  * question shouldn't pay for a second model call, but a disk cache would be a
  * new invalidation surface with no proven need. The key folds in the
- * recognizer's own identity (transport+baseUrl+model) because the endpoint can
+ * recognizer's own identity (transport, base URL, model and effective window) because the endpoint can
  * change live mid-session (plan §1.3) — without that, a cache hit could serve
  * a DIFFERENT model's old answer under a newly-selected recognizer.
  */
 
 import { createHash } from "node:crypto";
 import type { ImageAttachment } from "../types/images.js";
+import { recognizerContextWindow } from "./recognizer.js";
 import type { AskResult, AskTranscriptEntry, RecognizerEndpoint } from "./recognizer.js";
 
 /** Bounded LRU capacity (plan §7). */
@@ -21,7 +22,7 @@ function sha256Hex(input: string): string {
 
 /** Identity string a live config swap changes — folded into every cache key so a swap always misses. */
 export function recognizerIdentity(endpoint: RecognizerEndpoint): string {
-  return `${endpoint.transport}|${endpoint.baseUrl}|${endpoint.model}`;
+  return JSON.stringify([endpoint.transport, endpoint.baseUrl, endpoint.model, recognizerContextWindow(endpoint)]);
 }
 
 /** Collapses whitespace/case so trivially-equivalent questions collide on one key. */

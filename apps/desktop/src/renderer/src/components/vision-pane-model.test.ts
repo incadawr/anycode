@@ -17,6 +17,8 @@ import {
   visionConnectionProxyWarning,
   visionFallbackState,
   visionModelHints,
+  visionModelSelection,
+  visionDraftKey,
   visionSubmitDisabled,
 } from "./vision-pane-model.js";
 
@@ -46,15 +48,6 @@ function settings(over: {
   } as AnycodeSettings;
 }
 
-/**
- * `imageInput` is not yet a real field of `CatalogSummaryEntry.
- * models` — see vision-pane-model.ts's own doc comment — so this fixture
- * type widens the wire type's model shape with the field a closed gap would
- * add, and CATALOG below is built through it instead of a bare object literal
- * (which the real, narrower wire type would reject as an excess property).
- */
-type CatalogModelFixture = CatalogSummary[number]["models"][number] & { imageInput?: boolean };
-
 const CATALOG: CatalogSummary = [
   {
     id: "z-ai",
@@ -63,7 +56,7 @@ const CATALOG: CatalogSummary = [
     models: [
       { id: "glm-5.3-flash", name: "GLM-5.3 Flash", imageInput: true },
       { id: "glm-5.2", name: "GLM-5.2" },
-    ] satisfies CatalogModelFixture[] as CatalogSummary[number]["models"],
+    ],
   },
   { id: "kimi", name: "Kimi", authKind: "api_key", models: [] },
 ];
@@ -241,45 +234,21 @@ describe("visionConnectionLabel", () => {
   });
 });
 
-// ── visionModelHints (task §3 — UNION, not replace) ──
-
-describe("visionModelHints (task §3 anti-canon: union, never ModelPill's replace)", () => {
-  it("includes a catalog model with imageInput:true", () => {
-    const hints = visionModelHints("z-ai", CATALOG, undefined);
-    expect(hints).toContainEqual({ id: "glm-5.3-flash", label: "GLM-5.3 Flash" });
+describe("vision model candidates", () => {
+  it("orders capable candidates before pinned models, deduplicates and preserves labels", () => {
+    const c = connection({ id: "a", providerId: "z-ai", models: ["plain", "glm-5.3-flash", "off"], modelCapabilities: { live: { imageInput: true }, off: { imageInput: true } }, modelOverrides: { forced: { imageInput: "on" }, off: { imageInput: "off" } } });
+    expect(visionModelHints(c, CATALOG)).toEqual([
+      { id: "glm-5.3-flash", label: "GLM-5.3 Flash" }, { id: "live", label: "live" }, { id: "forced", label: "forced" }, { id: "plain", label: "plain" }, { id: "off", label: "off" },
+    ]);
+    expect(visionModelHints({ ...c, models: [], modelOverrides: { "glm-5.3-flash": { imageInput: "off" }, live: { imageInput: "off" }, off: { imageInput: "off" } } }, CATALOG)).toEqual([]);
+    expect(visionModelHints(connection({ id: "b", providerId: "other" }), undefined)).toEqual([]);
   });
-
-  it("excludes a catalog model without imageInput:true", () => {
-    const hints = visionModelHints("z-ai", CATALOG, undefined);
-    expect(hints.some((h) => h.id === "glm-5.2")).toBe(false);
-  });
-
-  it("always includes a live connection model id, regardless of catalog modality", () => {
-    const hints = visionModelHints("z-ai", CATALOG, ["some-live-model"]);
-    expect(hints).toContainEqual({ id: "some-live-model", label: "some-live-model" });
-  });
-
-  it("a catalog imageInput model does NOT disappear when the live list is non-empty (the ModelPill.providerModelsFor defect, fixed)", () => {
-    const hints = visionModelHints("z-ai", CATALOG, ["some-live-model"]);
-    expect(hints).toContainEqual({ id: "glm-5.3-flash", label: "GLM-5.3 Flash" });
-    expect(hints).toContainEqual({ id: "some-live-model", label: "some-live-model" });
-    expect(hints).toHaveLength(2);
-  });
-
-  it("collapses a duplicate id (present in both halves) into ONE entry, named from the catalog", () => {
-    const hints = visionModelHints("z-ai", CATALOG, ["glm-5.3-flash"]);
-    expect(hints.filter((h) => h.id === "glm-5.3-flash")).toHaveLength(1);
-    expect(hints).toContainEqual({ id: "glm-5.3-flash", label: "GLM-5.3 Flash" });
-  });
-
-  it("a provider with an empty catalog models[] and an empty live list yields zero hints — not an error", () => {
-    expect(visionModelHints("kimi", CATALOG, [])).toEqual([]);
-    expect(visionModelHints("kimi", CATALOG, undefined)).toEqual([]);
-  });
-
-  it("an unknown providerId (no catalog entry at all) still returns the live ids", () => {
-    const hints = visionModelHints("openrouter", CATALOG, ["anthropic/claude-x"]);
-    expect(hints).toEqual([{ id: "anthropic/claude-x", label: "anthropic/claude-x" }]);
+  it("keeps arbitrary ids separate from select values and draft pairs", () => {
+    const models = ["custom", "default", "model:0"].map((id) => ({ id, label: id }));
+    expect(models.map((m) => visionModelSelection(m.id, models, false))).toEqual(["model:0", "model:1", "model:2"]);
+    expect(visionModelSelection("unknown", models, false)).toBe("custom");
+    expect(visionModelSelection("", models, true)).toBe("custom");
+    expect(visionDraftKey("a", "b,c")).not.toBe(visionDraftKey("a,b", "c"));
   });
 });
 

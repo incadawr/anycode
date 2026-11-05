@@ -10,6 +10,9 @@
  * shared (shared/provider-v2-fixture.ts), so those two come from there.
  */
 
+import { findCatalogEntry } from "@anycode/core/catalog";
+import { recognizerContextWindow } from "../../../../packages/core/src/vision/recognizer.js";
+import { connectionContextWindow } from "../shared/connection-context-window.js";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,6 +28,7 @@ import {
   classifyRecognizerProbeOutput,
   defaultResolveTelemetryDir,
   handleRecognizerProbeRequest,
+  resolveRecognizerProbeCandidate,
   type RecognizerProbeChildInput,
   type RecognizerProbeDeps,
   type RecognizerProbeRawOutput,
@@ -97,6 +101,39 @@ const visionConnection = connectionFixture({
   transport: "openai-chat-completions",
 });
 
+it("uses the same dictionary window for a custom proxy in the panel and runtime", async () => {
+  const connection = { id: "c", providerId: "custom:myproxy", modelOverrides: {} };
+  const original = settings({ provider: { connections: [connection], custom: [{ id: "custom:myproxy", name: "Proxy", baseUrl: "https://proxy.example/v1", kind: "openai-compatible", models: [] }] } });
+  const endpoint = await resolveRecognizerProbeCandidate(original, { connectionId: "c", modelId: "glm-5.3-flash" }, noSecret);
+  expect(endpoint).toBeDefined();
+  expect(endpoint!.contextWindowTokens).toBeUndefined();
+  expect(connectionContextWindow(connection, "glm-5.3-flash", undefined).tokens).toBe(300000);
+  expect(recognizerContextWindow(endpoint!)).toBe(300000);
+});
+
+it.each([
+  { providerId: "", expectedWire: undefined },
+  { providerId: "z-ai", expectedWire: 300000 },
+])("resolves the model window for provider $providerId", async ({ providerId, expectedWire }) => {
+  const connection = { id: "c", providerId, baseUrl: "https://example.test/v1", modelOverrides: {} };
+  const original = settings({ provider: { connections: [connection] } });
+  const entry = findCatalogEntry(providerId);
+  const catalogFor = () => entry ? { baseUrl: entry.baseUrl, defaultTransport: entry.defaultTransport, contextWindowFor: (selected: import("../shared/settings.js").ProviderConnection, model: string) => connectionContextWindow(selected, model, entry).tokens } : undefined;
+  const endpoint = await resolveRecognizerProbeCandidate(original, { connectionId: "c", modelId: "glm-5.3-flash" }, noSecret, undefined, catalogFor);
+  expect(endpoint).toBeDefined();
+  expect(endpoint!.contextWindowTokens).toBe(expectedWire);
+  expect(connectionContextWindow(connection, "glm-5.3-flash", entry).tokens).toBe(300000);
+  expect(recognizerContextWindow(endpoint!)).toBe(300000);
+});
+
+it("probes a patched copy without changing persisted settings", async () => {
+  const original = settings({ provider: { connections: [{ id: "c", providerId: "", baseUrl: "https://example.test", modelOverrides: { vision: { contextWindowTokens: 64000, imageInput: "on" } } }] } });
+  const snapshot = structuredClone(original);
+  expect((await resolveRecognizerProbeCandidate(original, { connectionId: "c", modelId: "vision", contextWindowTokens: 32000 }, noSecret))?.contextWindowTokens).toBe(32000);
+  expect((await resolveRecognizerProbeCandidate(original, { connectionId: "c", modelId: "vision", contextWindowTokens: "" }, noSecret))?.contextWindowTokens).toBeUndefined();
+  expect(original).toEqual(snapshot);
+});
+
 describe("handleRecognizerProbeRequest — refuses without spawning (resolveRecognizerConfig's own refusals)", () => {
   it("refuses a malformed request body — the probe's own stand-in for \"no recognizer section to resolve\"", async () => {
     const spawn = spawnerThatMustNotRun();
@@ -150,6 +187,16 @@ describe("handleRecognizerProbeRequest — refuses without spawning (resolveReco
 });
 
 describe("handleRecognizerProbeRequest — success", () => {
+  it("sends the unsaved draft window to the child without persisting it", async () => {
+    const original = settings({ provider: { connections: [{ ...visionConnection, modelOverrides: { "vision-model": { contextWindowTokens: 64000 } } }] } });
+    const snapshot = structuredClone(original);
+    const { spawn, calls } = spawnerFor(rawOutput({ ok: true, text: "ok" }));
+    const result = await handleRecognizerProbeRequest(baseDeps({ readSettings: () => original, spawn }), { connectionId: "conn-vision", modelId: "vision-model", contextWindowTokens: 32000 });
+    expect(result.ok).toBe(true);
+    expect((JSON.parse(calls[0]!.stdin) as RecognizerProbeChildInput).endpoint.contextWindowTokens).toBe(32000);
+    expect(original).toEqual(snapshot);
+  });
+
   it("returns the child's answer verbatim and spawns with the production-resolved endpoint", async () => {
     const { spawn, calls } = spawnerFor(rawOutput({ ok: true, text: "the left square is red, the right is blue" }));
     const deps = baseDeps({

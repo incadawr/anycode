@@ -32,3 +32,14 @@ it("reports runtime effective context and disabled reasoning", () => {
   expect(model.contextWindow).toBe(300000);
   expect(model.effortLevels).toBeUndefined();
 });
+
+it("projects a legacy image-input pair folded into the per-model map", () => {
+  // The host's ListConnections tool builds this projection from a raw
+  // `parseSettings` read, without the loader's read-time migration, so the
+  // projection has to fold the legacy pair itself.
+  const connection = { ...connectionFixture({ id: "custom:fixture", connectionId: "c", model: "sighted" }), models: ["sighted", "blind"], imageInputOverride: "on" as const, imageInputModel: "sighted" };
+  const settings = { version: 2, provider: providerV2Multi("c", [connection]), tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false } } as AnycodeSettings;
+  const models = listConnectionTargets(settings, "c").connections[0]!.models;
+  expect(models.find(item => item.id === "sighted")?.imageInput).toBe(true);
+  expect(models.find(item => item.id === "blind")?.imageInput).toBe(false);
+});

@@ -1,13 +1,13 @@
 import {
   modelDictionaryEntry,
   mapForeignEffortLevels,
-  resolveContextWindowInfo,
   resolveEffortLevels,
   resolveReasoningEffort,
   type CatalogProviderEntry,
   type LiveModelCapabilities,
   type ReasoningEffort,
 } from "@anycode/core";
+import { connectionContextWindow } from "../shared/connection-context-window.js";
 import type { ProviderConnection } from "../shared/settings.js";
 import { applyModelReasoningOverride, modelOverrideFor } from "../shared/model-overrides.js";
 
@@ -114,13 +114,13 @@ export function createConnectionModelSettings(deps: {
     pricingSnapshot() { return hasReadConnection ? { fallback: connection?.pricing, models: { ...Object.fromEntries(Object.entries(connection?.modelCapabilities ?? {}).filter(([, value]) => value.pricing !== undefined && connection?.pricing?.mode !== "rates" && connection?.pricing?.mode !== "subscription").map(([id, value]) => [id, value.pricing])), ...Object.fromEntries(Object.entries(connection?.modelOverrides ?? {}).filter(([, value]) => value.pricing !== undefined).map(([id, value]) => [id, value.pricing])) } } : undefined; },
     hasReadConnection() { return hasReadConnection; },
     capabilitiesFor,
+    imageInputFor(model: string) { return modelOverrideFor(connection, model)?.imageInput; },
     effortLevelsFor(model: string) { const override = modelOverrideFor(connection, model); return override?.reasoningSupported === false ? undefined : override?.effortLevels; },
     effortFor,
     contextFor(model: string) {
       const envApplies = (!deps.envContextWindowFromSettings || !hasReadConnection) && deps.envContextWindow !== undefined &&
         (deps.envContextWindowModel === undefined || deps.envContextWindowModel === model);
-      const override = envApplies ? deps.envContextWindow : modelOverrideFor(connection, model)?.contextWindowTokens;
-      return resolveContextWindowInfo(model, entryFor(model), override, model);
+      return connectionContextWindow(connection, model, deps.catalogEntry, envApplies ? deps.envContextWindow : undefined);
     },
     remember(model: string, effort: ReasoningEffort) {
       selected.set(model, effort);

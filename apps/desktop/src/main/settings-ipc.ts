@@ -516,10 +516,7 @@ const connectionUpdateSchema = z
     // Per-model context window with the same `""` clear sentinel as
     // `maxOutputTokens` above; a number sets tokens AND the server-derived binding.
     contextWindowTokens: z.union([contextWindowTokensSchema, z.literal("")]).optional(),
-    // Per-model image-input override with the same
-    // `maxOutputTokens` clear-sentinel discipline: `""` clears BOTH keys
-    // (override + binding), "on"/"off" persists the pair with a server-derived
-    // binding, absent leaves them untouched.
+    // Empty clears the selected model; omission leaves its setting untouched.
     imageInputOverride: z.union([z.enum(["on", "off"]), z.literal("")]).optional(),
     // `false` clears (removed from disk), `true` sets — see ConnectionUpdateRequest.
     authOptional: z.boolean().optional(),
@@ -632,6 +629,7 @@ const proxyRefSetSchema = z
  */
 const recognizerSetSchema = z
   .object({
+    contextWindowTokens: z.union([z.literal(""), z.number().int().min(1024).max(1000000)]).optional(),
     recognizer: z.union([
       z.object({ connectionId: z.string().min(1), modelId: z.string().min(1) }).strict(),
       z.null(),
@@ -1892,10 +1890,9 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
       ...(req.proxyRef !== undefined ? { proxyRef: req.proxyRef } : {}),
       ...(req.promptCache !== undefined ? { promptCache: req.promptCache } : {}),
       ...(req.maxOutputTokens !== undefined ? { maxOutputTokens: req.maxOutputTokens } : {}),
-      // value+binding travel together (the context-window pair
-      // discipline); the binding is server-derived, never renderer-supplied.
+      // The model key is derived from the selected model.
       ...(req.imageInputOverride !== undefined
-        ? { imageInputOverride: req.imageInputOverride, imageInputModel: req.model?.trim() }
+        ? { modelOverrides: { [req.model!.trim()]: { imageInput: req.imageInputOverride } } }
         : {}),
       ...(req.authOptional === true ? { authOptional: true } : {}),
       // Streaming token-usage policy (GitHub #1): `false` is an opt-out and
@@ -2159,24 +2156,10 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
         ...(req.effortLevels !== undefined || req.reasoningSupported === "" ? { effortLevels: req.effortLevels === "" || req.reasoningSupported === "" ? undefined : req.effortLevels } : {}),
       });
     }
-    // Per-model image-input override — the context-window pair
-    // discipline verbatim: `""` deletes BOTH keys, "on"/"off" writes BOTH with
-    // the server-derived binding `imageInputModel = effectiveModel` (a later
-    // model edit re-binds by rewriting the pair under the new effective model),
-    // absent leaves them untouched. A non-empty override with a blank
-    // effective model is rejected — never silently dropped.
     if (req.imageInputOverride !== undefined) {
-      if (req.imageInputOverride === "") {
-        delete updatedConnection.imageInputOverride;
-        delete updatedConnection.imageInputModel;
-      } else {
-        const effectiveModel = (req.model !== undefined ? req.model : existing.model)?.trim();
-        if (effectiveModel === undefined || effectiveModel === "") {
-          return { ok: false, reason: "invalid" };
-        }
-        updatedConnection.imageInputOverride = req.imageInputOverride;
-        updatedConnection.imageInputModel = effectiveModel;
-      }
+      const effectiveModel = (req.modelOverrideModel ?? (req.model !== undefined ? req.model : existing.model))?.trim();
+      if (!effectiveModel) return { ok: false, reason: "invalid" };
+      patchModelOverride(updatedConnection, effectiveModel, { imageInput: req.imageInputOverride === "" ? undefined : req.imageInputOverride });
     }
     // Proxy clear (`""`) must remove the key entirely — identical
     // shape and rationale to the transport branch above: `normalizedProxyUrl
@@ -2835,7 +2818,8 @@ export async function handleRecognizerSet(deps: SettingsIpcDeps, raw: unknown): 
   if (!parsed.success) {
     return { ok: false, reason: "invalid" };
   }
-  const { recognizer } = parsed.data;
+  const { recognizer, contextWindowTokens } = parsed.data;
+  if (recognizer === null && contextWindowTokens !== undefined) return { ok: false, reason: "invalid" };
   if (recognizer !== null && recognizer.modelId.trim() === "") {
     return { ok: false, reason: "invalid" };
   }
@@ -2852,6 +2836,9 @@ export async function handleRecognizerSet(deps: SettingsIpcDeps, raw: unknown): 
       delete draft.recognizer;
     } else {
       draft.recognizer = recognizer;
+      if (contextWindowTokens !== undefined) {
+        patchModelOverride(connectionById(draft, recognizer.connectionId)!, recognizer.modelId, { contextWindowTokens: contextWindowTokens === "" ? undefined : contextWindowTokens });
+      }
     }
     await saveSettings(deps.settingsPath, draft);
     const snapshot = await snapshotFrom(deps, draft, false);

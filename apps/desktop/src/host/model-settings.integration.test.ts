@@ -63,7 +63,7 @@ describe("persisted model settings through the host", () => {
         expect((await handleCustomProviderCreate({ vault, settingsPath: path, genId: () => "custom:fixture" }, { name: "Fixture", baseUrl: url, kind: "openai-compatible", authOptional: true })).ok).toBe(true);
         expect((await handleConnectionCreate({ vault, settingsPath: path, bootEnv: {}, catalogIds: ["custom:fixture"], isCustom: () => true, genConnectionId: () => "conn-fixture" }, { providerId: "custom:fixture", model: "vision", transport: "openai-chat-completions", imageInputOverride: setting })).ok).toBe(true);
         const loaded = (await loadSettings(path)).settings;
-        expect(loaded.provider.connections[0]).toMatchObject({ imageInputOverride: setting, imageInputModel: "vision" });
+        expect(loaded.provider.connections[0]).toMatchObject({ modelOverrides: { vision: { imageInput: setting } } });
         const env = await buildHostEnv({ bootEnv: {}, settings: loaded, getSecret: async () => undefined });
         Object.assign(process.env, env, { ANYCODE_API_KEY: "test", ANYCODE_BASE_URL: url, ANYCODE_MODEL_SETTINGS_CONNECTION_ID: "conn-fixture" });
         vi.resetModules();
@@ -73,6 +73,46 @@ describe("persisted model settings through the host", () => {
       expect(result.stopped).toBe(true);
     } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
   }, 45000);
+
+  it("re-resolves the per-model image input on a mid-session model switch", async () => {
+    const requests: any[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", chunk => { body += chunk; });
+      req.on("end", () => { const input = JSON.parse(body); requests.push(input); respond(res, input.model); });
+    });
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("No fixture address");
+    // Two models on one connection, one sighted and one blind. The custom
+    // provider declares no catalog facts, so only the saved per-model map can
+    // make the difference between them.
+    const settings = { version: 2, provider: { activeConnectionId: "conn-a", connections: [{ id: "conn-a", providerId: "custom:fixture", model: "sighted", modelOverrides: { sighted: { imageInput: "on" as const }, blind: { imageInput: "off" as const } } }] }, tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false } };
+    const image = { mediaType: "image/png", data: "QUJD", sourcePath: "shot.png" };
+    try {
+      const result = await bootHostInTempProfile(async ({ parent }) => {
+        const port = new Port();
+        parent.emit("message", { ports: [port], data: {} });
+        await vi.waitFor(() => expect(port.listenerCount("message")).toBeGreaterThan(0), { timeout: 15000 });
+        port.send({ type: "ui_ready" });
+        await vi.waitFor(() => expect(port.messages.some(m => m.type === "host_ready")).toBe(true));
+        expect(port.messages.find(m => m.type === "host_ready").imageInput).toBe(true);
+        port.send({ type: "set_model", model: "blind", requestId: "switch-blind" });
+        await vi.waitFor(() => expect(port.messages.filter(m => m.type === "model_changed" && m.model === "blind")).toHaveLength(1), { timeout: 15000 });
+        expect(port.messages.filter(m => m.type === "model_changed").at(-1)?.imageInput).toBe(false);
+        port.send({ type: "user_message", requestId: "image-blind", text: "look", images: [image] });
+        await vi.waitFor(() => expect(port.messages).toContainEqual(expect.objectContaining({ type: "turn_rejected", requestId: "image-blind", reason: "unsupported_images" })), { timeout: 15000 });
+        expect(requests).toHaveLength(0);
+        port.send({ type: "set_model", model: "sighted", requestId: "switch-sighted" });
+        await vi.waitFor(() => expect(port.messages.filter(m => m.type === "model_changed" && m.model === "sighted")).toHaveLength(1), { timeout: 15000 });
+        expect(port.messages.filter(m => m.type === "model_changed").at(-1)?.imageInput).toBe(true);
+        port.send({ type: "user_message", requestId: "image-sighted", text: "look again", images: [image] });
+        await vi.waitFor(() => expect(requests.some(r => r.model === "sighted" && r.messages.some((m: any) => Array.isArray(m.content) && m.content.some((part: any) => part.type === "image_url")))).toBe(true), { timeout: 15000 });
+      }, { extraEnv: { ANYCODE_MODEL: "sighted", ANYCODE_BASE_URL: `http://127.0.0.1:${address.port}/v1`, ANYCODE_API_KEY: "test", ANYCODE_PROVIDER_TRANSPORT: "openai-chat-completions", ANYCODE_MODEL_SETTINGS_CONNECTION_ID: "conn-a" }, boot: async () => { vi.resetModules(); writeFileSync(process.env.ANYCODE_SETTINGS_PATH!, JSON.stringify(settings)); await import("./index.js"); } });
+      if (result.error !== null) throw result.error;
+      expect(result.stopped).toBe(true);
+    } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
+  }, 60000);
 
   it("applies vocabulary edits only after the in-flight turn and clears them on the following turn", async () => {
     const requests: any[] = [];

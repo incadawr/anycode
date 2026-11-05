@@ -49,6 +49,7 @@ export interface RecognizerWireConfig {
   apiKey?: string;
   model: string;
   providerName?: string;
+  contextWindowTokens?: number;
 }
 
 /**
@@ -96,6 +97,7 @@ export interface RecognizerFingerprint {
   modelId: string;
   baseUrl?: string;
   transport?: ProviderTransportId;
+  contextInputs?: string;
 }
 
 /** Byte-mirror of main/host-env.ts's `CUSTOM_PROVIDER_PREFIX` (the module header's no-import discipline). */
@@ -141,6 +143,14 @@ export function recognizerCustomRecordSecretKey(customRecordId: string): SecretK
   return `provider.${customRecordId}.apiKey`;
 }
 
+/** Mirror the context fields read by modelOverrideFor without importing core into preload. */
+function recognizerModelContextOverride(connection: ProviderConnection, model: string): { contextWindowTokens?: number; catalogMatchDisabled?: boolean } {
+  const entry = connection.modelOverrides !== undefined && Object.hasOwn(connection.modelOverrides, model)
+    ? connection.modelOverrides[model] : undefined;
+  const legacy = connection.contextWindowModel?.trim() === model ? connection.contextWindowTokens : undefined;
+  return { contextWindowTokens: entry?.contextWindowTokens ?? legacy, catalogMatchDisabled: entry?.catalogMatchDisabled };
+}
+
 /** The fingerprint of `settings.recognizer` right now, or undefined when the fallback names no connection / a dangling one. */
 export function recognizerFingerprint(settings: AnycodeSettings): RecognizerFingerprint | undefined {
   const setting = settings.recognizer;
@@ -151,11 +161,13 @@ export function recognizerFingerprint(settings: AnycodeSettings): RecognizerFing
   if (connection === undefined) {
     return undefined;
   }
+  const override = recognizerModelContextOverride(connection, setting.modelId);
   return {
     connectionId: setting.connectionId,
     modelId: setting.modelId,
     baseUrl: recognizerResolvedBaseUrl(settings, connection),
     transport: connection.transport,
+    contextInputs: JSON.stringify([override.contextWindowTokens, override.catalogMatchDisabled, connection.modelCapabilities?.[setting.modelId]?.contextWindow, connection.modelCapabilities?.[setting.modelId]?.maxOutputTokens]),
   };
 }
 
@@ -171,7 +183,8 @@ export function recognizerFingerprintsEqual(
     a.connectionId === b.connectionId &&
     a.modelId === b.modelId &&
     a.baseUrl === b.baseUrl &&
-    a.transport === b.transport
+    a.transport === b.transport &&
+    a.contextInputs === b.contextInputs
   );
 }
 
@@ -211,6 +224,7 @@ export const RECOGNIZER_PROBE_CHANNEL = "anycode:recognizer-probe";
 export interface RecognizerProbeRequest {
   connectionId: string;
   modelId: string;
+  contextWindowTokens?: number | "";
 }
 
 /**
@@ -264,4 +278,5 @@ export const RECOGNIZER_SET_CHANNEL = "anycode:recognizer-set";
  */
 export interface RecognizerSetRequest {
   recognizer: { connectionId: string; modelId: string } | null;
+  contextWindowTokens?: number | "";
 }

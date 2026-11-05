@@ -120,7 +120,7 @@ describe("recognizerFingerprint — declared no-vault-read property (guard)", ()
     // Both entry points run to completion over a document that refuses every
     // non-data access — no getSecret, no SecretReader, no vault handle.
     const fingerprint = recognizerFingerprint(settings);
-    expect(fingerprint).toEqual({
+    expect(fingerprint).toMatchObject({
       connectionId: "conn-v",
       modelId: "vision-model-x",
       baseUrl: "https://rec.example.com/v1",

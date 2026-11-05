@@ -1,3 +1,4 @@
+import type { ProviderConnection } from "../shared/settings.js";
 /**
  * Host-env composition + the env-scrub primitives (design slice-2.2-cut.md §6/§1
 
@@ -1099,6 +1100,7 @@ export interface HostEnvParams {
 export interface RecognizerCatalogInfo {
   baseUrl: string;
   defaultTransport?: string;
+  contextWindowFor?: (connection: ProviderConnection, model: string) => number;
 }
 
 /**
@@ -1352,16 +1354,6 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
   // GONE — the live image-modality facts ride 4118's modelCapabilities map,
   // which the host reads fail-soft from the connection's settings record at
   // boot (readConnectionModelCapabilities), so nothing is emitted here.
-  // the drawer's per-model override (value+binding in ONE var).
-  // The host applies it only while its current model equals the binding, so it
-  // never un-gates a sibling model after a mid-session switch.
-  if (view.imageInputOverride !== undefined && view.imageInputOverrideModel?.trim()) {
-    fillFromSettings(
-      env,
-      ENV_IMAGE_INPUT_MODEL_OVERRIDE,
-      `${view.imageInputOverride}:${view.imageInputOverrideModel.trim()}`,
-    );
-  }
   // The host fork's own network path (generalised by §2
   // ladder (a)/(b)): the ACTIVE connection's rung, then the app's. Keyed off
   // `activeConnectionId` — the same handle `activeProviderView` reads — so a
@@ -1564,6 +1556,7 @@ export async function resolveRecognizerConfig(
     apiKey: apiKey !== undefined && apiKey !== "" ? apiKey : undefined,
     model: setting.modelId,
     providerName: providerId !== "" ? providerId : undefined,
+    contextWindowTokens: catalogInfo?.contextWindowFor?.(connection, setting.modelId) ?? modelOverrideFor(connection, setting.modelId)?.contextWindowTokens,
   };
 }
 
@@ -1576,6 +1569,8 @@ export async function resolveRecognizerConfig(
  * wins over the resolved connection.
  */
 export function applyRecognizerEnv(env: NodeJS.ProcessEnv, recognizer: RecognizerWireConfig | undefined): void {
+  delete env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_FROM_SETTINGS;
+  if (!envPresent(env, "ANYCODE_RECOGNIZER_CONTEXT_WINDOW")) delete env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_MODEL;
   if (recognizer === undefined) {
     return;
   }
@@ -1583,6 +1578,11 @@ export function applyRecognizerEnv(env: NodeJS.ProcessEnv, recognizer: Recognize
   fillFromSettings(env, ENV_RECOGNIZER_BASE_URL, recognizer.baseUrl);
   fillFromSettings(env, ENV_RECOGNIZER_API_KEY, recognizer.apiKey);
   fillFromSettings(env, ENV_RECOGNIZER_MODEL, recognizer.model);
+  if (!envPresent(env, "ANYCODE_RECOGNIZER_CONTEXT_WINDOW") && env.ANYCODE_RECOGNIZER_MODEL === recognizer.model && recognizer.contextWindowTokens !== undefined) {
+    env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW = String(recognizer.contextWindowTokens);
+    env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_MODEL = recognizer.model;
+    env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_FROM_SETTINGS = "1";
+  }
   fillFromSettings(env, ENV_RECOGNIZER_PROVIDER_NAME, recognizer.providerName);
 }
 

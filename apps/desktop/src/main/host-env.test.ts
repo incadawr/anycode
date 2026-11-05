@@ -905,7 +905,7 @@ describe("buildHostEnv — image-input transport (on 4118's caps map)", () => {
     const conn = { ...connectionFixture({ id: "z-ai", model: "glm-5.3v" }), imageInputOverride: "on" as const, imageInputModel: "glm-5.3v" };
     const build = (bootEnv: NodeJS.ProcessEnv, c: typeof conn | ReturnType<typeof connectionFixture>) =>
       buildHostEnv({ bootEnv, settings: { ...settings(), provider: providerV2Multi(c.id, [c]) }, getSecret: noSecret });
-    expect((await build({}, conn))[ENV_IMAGE_INPUT_MODEL_OVERRIDE]).toBe("on:glm-5.3v");
+    expect((await build({}, conn))[ENV_IMAGE_INPUT_MODEL_OVERRIDE]).toBeUndefined();
     expect((await build({}, connectionFixture({ id: "z-ai", model: "m" })))[ENV_IMAGE_INPUT_MODEL_OVERRIDE]).toBeUndefined();
     expect((await build({ ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE: "off:x" }, conn))[ENV_IMAGE_INPUT_MODEL_OVERRIDE]).toBe("off:x");
   });

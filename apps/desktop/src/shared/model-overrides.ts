@@ -13,12 +13,18 @@ export function modelOverrideFor(connection: ConnectionOverrides | undefined, mo
 
 /** Read-time migration; the next write persists only the map, without rebinding the old pair. */
 export function migrateModelOverrides(connection: ProviderConnection): ProviderConnection {
-  if (connection.contextWindowTokens === undefined && connection.contextWindowModel === undefined) return connection;
+  if (connection.contextWindowTokens === undefined && connection.contextWindowModel === undefined && connection.imageInputOverride === undefined && connection.imageInputModel === undefined) return connection;
   const migrated = { ...connection };
   const model = connection.contextWindowModel?.trim();
   if (model && connection.contextWindowTokens !== undefined) {
     migrated.modelOverrides = { ...connection.modelOverrides, [model]: modelOverrideFor(connection, model)! };
   }
+  const imageModel = connection.imageInputModel?.trim();
+  if (imageModel && connection.imageInputOverride !== undefined && modelOverrideFor(migrated, imageModel)?.imageInput === undefined) {
+    patchModelOverride(migrated, imageModel, { imageInput: connection.imageInputOverride });
+  }
+  delete migrated.imageInputOverride;
+  delete migrated.imageInputModel;
   delete migrated.contextWindowTokens;
   delete migrated.contextWindowModel;
   return migrated;

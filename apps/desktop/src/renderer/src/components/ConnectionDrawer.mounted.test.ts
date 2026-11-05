@@ -8,7 +8,8 @@ import { handleCustomProviderCreate, handleCustomProviderFetchModels } from "../
 import { handleConnectionCreate } from "../../../main/settings-ipc.js";
 import { buildHostEnv } from "../../../main/host-env.js";
 import { loadSettings } from "../../../settings/files.js";
-import { parseImageInputModelOverride, resolveImageInput } from "@anycode/core";
+import { resolveImageInput } from "@anycode/core";
+import { modelOverrideFor } from "../../../shared/model-overrides.js";
 import { cloneDefaults } from "../../../settings/schema.js";
 vi.mock("@xterm/xterm", () => ({ Terminal: class {} }));
 // The test runs a Node-backed DOM so it can exercise the real persistence handlers.
@@ -97,11 +98,15 @@ it.each(["on", "off"] as const)("creates and reloads image input %s through the 
     await act(async () => { [...container.querySelectorAll("button")].find(b => b.textContent?.trim() === "Create connection")!.click(); });
     await act(async () => { await vi.waitFor(() => expect(create).toHaveBeenCalledOnce()); await vi.waitFor(async () => expect((await loadSettings(path)).settings.provider.connections[0]?.models).toContain("vision")); });
     const loaded = (await loadSettings(path)).settings;
-    expect(loaded.provider.connections[0]).toMatchObject({imageInputOverride:setting, imageInputModel:"vision"});
+    const connection = loaded.provider.connections[0]!;
+    expect(connection).toMatchObject({modelOverrides:{vision:{imageInput:setting}}});
+    expect(connection).not.toHaveProperty("imageInputOverride");
+    expect(connection).not.toHaveProperty("imageInputModel");
+    // The per-model choice lives in the settings map the host reads; nothing is
+    // stamped into the fork's environment any more.
     const env = await buildHostEnv({bootEnv:{}, settings:loaded, getSecret:async () => undefined});
-    const override = parseImageInputModelOverride(env.ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE);
-    expect(override).toEqual({override:setting, model:"vision"});
-    expect(resolveImageInput("vision", undefined, override?.model === "vision" ? override.override : undefined)).toBe(setting === "on");
+    expect(env.ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE).toBeUndefined();
+    expect(resolveImageInput("vision", undefined, modelOverrideFor(connection, "vision")?.imageInput)).toBe(setting === "on");
   } finally { await act(async () => root.unmount()); container.remove(); rmSync(dir, {recursive:true, force:true}); }
 });
 

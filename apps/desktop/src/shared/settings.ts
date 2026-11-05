@@ -249,6 +249,7 @@ export type ConnectionPricing =
   | ({ mode: "rates" } & TokenRates);
 
 export interface ModelOverrides {
+  imageInput?: "on" | "off";
   catalogMatchDisabled?: true;
   effortLevels?: ReasoningEffort[];
   pricing?: TokenRates;
@@ -400,17 +401,7 @@ export interface ProviderConnection {
    */
   contextWindowTokens?: number;
   contextWindowModel?: string;
-  /**
-   * Per-model image-input override for this connection (
-   * paired with `imageInputModel` — the model id it binds to (the
-   * pair discipline verbatim). SCOPE is connection+model, NEVER
-   * global: the override governs ONLY the bound model, so enabling image
-   * input for a sighted vLLM model does not un-gate a blind sibling the next
-   * time the user switches — the exact hazard the single global
-   * ANYCODE_IMAGE_INPUT env var had. Main derives `imageInputModel`
-   * server-side from the effective model; the renderer never supplies it.
-   * Absent = "auto" (catalog hint, then the live-modality set below, resolve).
-   */
+  /** Legacy pair, migrated to modelOverrides on load. */
   imageInputOverride?: "on" | "off";
   /** Model id `imageInputOverride` is bound to (see above). */
   imageInputModel?: string;

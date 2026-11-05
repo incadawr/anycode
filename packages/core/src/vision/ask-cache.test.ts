@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { AskCache, ASK_CACHE_MAX_ENTRIES, buildAskCacheKey } from "./ask-cache.js";
+import { recognizerIdentity, AskCache, ASK_CACHE_MAX_ENTRIES, buildAskCacheKey } from "./ask-cache.js";
 import type { RecognizerEndpoint } from "./recognizer.js";
 import type { ImageAttachment } from "../types/images.js";
 import type { AskResult } from "./recognizer.js";
@@ -156,4 +156,8 @@ describe("AskCache", () => {
     expect(cache.get("k1")).toEqual({ ok: true, text: "1" });
     expect(cache.get("overflow")).toEqual({ ok: true, text: "overflow" });
   });
+});
+
+it("changes the key when the effective context budget changes", () => {
+  expect(recognizerIdentity({ ...endpointA, contextWindowTokens: 4096 })).not.toBe(recognizerIdentity({ ...endpointA, contextWindowTokens: 8192 }));
 });

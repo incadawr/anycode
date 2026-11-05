@@ -10,10 +10,12 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { ask, ASK_TIMEOUT_MS, OVERVIEW_QUESTION } from "./recognizer.js";
+import { ask, ASK_TIMEOUT_MS, OVERVIEW_QUESTION, recognizerContextWindow } from "./recognizer.js";
 import type { AskOptions, RecognizerEndpoint } from "./recognizer.js";
 import type { ModelPort, ModelRequest } from "../ports/model.js";
 import type { ModelStreamEvent } from "../types/events.js";
+import { createDefaultTokenizer } from "../context/tokenizer.js";
+import { estimateMessageTokens } from "../context/history.js";
 import type { ImageAttachment } from "../types/images.js";
 
 // ---------------------------------------------------------------------------
@@ -104,6 +106,46 @@ function baseOpts(overrides: Partial<AskOptions> = {}): AskOptions {
 }
 
 describe("ask", () => {
+  it("accepts an exact fit and rejects one token less before calling the provider", async () => {
+    const question = "context ".repeat(12000);
+    const tokenizer = await createDefaultTokenizer();
+    const input = estimateMessageTokens(tokenizer, { role: "user", content: question, images: [image] });
+    const window = input + 2048 + 128;
+    expect(window).toBeGreaterThan(8192);
+    const port = new ScriptedModelPort(textScript("ok"));
+    expect((await ask(baseOpts({ question, endpoint: { ...endpoint, contextWindowTokens: window }, portFactory: () => port }))).ok).toBe(true);
+    expect(port.requests[0]?.maxOutputTokens).toBe(2048);
+    expect(await ask(baseOpts({ question, endpoint: { ...endpoint, contextWindowTokens: window - 1 }, portFactory: () => { throw new Error("must not call"); } }))).toMatchObject({ ok: false, kind: "provider", error: expect.stringContaining("exceed") });
+  });
+  it("uses catalog or assumed windows when the endpoint omits a window", async () => {
+    expect(recognizerContextWindow(endpoint)).toBe(8192);
+    const catalogEndpoint = { ...endpoint, providerName: "openai", model: "gpt-4o" };
+    expect(recognizerContextWindow(catalogEndpoint)).toBeGreaterThan(8192);
+    const port = new ScriptedModelPort(textScript("ok"));
+    await ask(baseOpts({ portFactory: () => port }));
+    expect(port.requests[0]?.maxOutputTokens).toBe(2048);
+  });
+
+  it("evicts whole oldest pairs and reserves output without mutating the transcript", async () => {
+    const port = new ScriptedModelPort(textScript("ok"));
+    const transcript = [{ question: "old ".repeat(6000), answer: "old answer" }, { question: "recent", answer: "recent answer" }];
+    const original = structuredClone(transcript);
+    const result = await ask(baseOpts({ endpoint: { ...endpoint, contextWindowTokens: 4096 }, transcript, focus: "focus", scale: { pixelWidth: 5, pixelHeight: 6 }, portFactory: () => port }));
+    expect(result.ok).toBe(true);
+    const request = port.requests[0]!;
+    expect(request.maxOutputTokens).toBe(1024);
+    expect(request.messages[0]!.content).not.toContain("old answer");
+    expect(request.messages[0]!.content).toContain("recent answer");
+    expect(request.messages[0]!.content).toContain("focus");
+    expect(request.messages[0]!.content).toContain("5x6");
+    expect(transcript).toEqual(original);
+  });
+  it("refuses mandatory content that does not fit before constructing a port", async () => {
+    let called = false;
+    const result = await ask(baseOpts({ endpoint: { ...endpoint, contextWindowTokens: 1024 }, portFactory: () => { called = true; return new ScriptedModelPort(textScript("ok")); } }));
+    expect(result).toMatchObject({ ok: false, kind: "provider" });
+    expect(called).toBe(false);
+  });
   it("accumulates text_delta chunks into the final answer", async () => {
     const port = new ScriptedModelPort(chunkedTextScript(["The image ", "shows a ", "button."]));
     const result = await ask(baseOpts({ portFactory: () => port }));

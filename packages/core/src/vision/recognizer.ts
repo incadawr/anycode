@@ -14,6 +14,11 @@
  * whether the recognizer endpoint keeps any state at all.
  */
 
+import { createDefaultTokenizer } from "../context/tokenizer.js";
+import { estimateMessageTokens } from "../context/history.js";
+import { resolveContextWindowInfo } from "../provider/capabilities.js";
+import { findCatalogEntry } from "../provider/catalog-data.js";
+import { modelDictionaryEntry } from "../provider/model-dictionary.js";
 import { AiSdkModelPort } from "../provider/model-port.js";
 import type { ProviderTransport } from "../provider/catalog.js";
 import type { ModelPort, ModelRequest } from "../ports/model.js";
@@ -22,6 +27,12 @@ import type { ImageAttachment } from "../types/images.js";
 
 /** One-shot call deadline used when the caller supplies no signal of its own. */
 export const ASK_TIMEOUT_MS = 60_000;
+export const ASK_FRAMING_MARGIN_TOKENS = 128;
+
+export function recognizerContextWindow(endpoint: RecognizerEndpoint): number {
+  const catalog = endpoint.providerName ? findCatalogEntry(endpoint.providerName) : undefined;
+  return resolveContextWindowInfo(endpoint.model, modelDictionaryEntry(endpoint.model, catalog), endpoint.contextWindowTokens).tokens;
+}
 
 /**
  * Fixed question for the bootstrap overview caption (plan §1 step 4 / spec
@@ -44,6 +55,7 @@ export interface RecognizerEndpoint {
   apiKey?: string;
   model: string;
   providerName?: string;
+  contextWindowTokens?: number;
 }
 
 /** One prior question/answer pair about the same image (threaded-by-value transcript). */
@@ -164,11 +176,26 @@ export async function ask(opts: AskOptions): Promise<AskResult> {
       return { ok: false, kind: classifyAbort(signal), error: describeError(signal.reason) };
     }
 
-    const port = opts.portFactory ? opts.portFactory(opts.endpoint) : new AiSdkModelPort(opts.endpoint);
+    const endpoint = { ...opts.endpoint };
+    const window = recognizerContextWindow(endpoint);
+    const reserve = Math.min(2048, Math.floor(window / 4));
+    const tokenizer = await createDefaultTokenizer();
+    let transcript = [...(opts.transcript ?? [])];
+    let message = { role: "user" as const, content: buildPrompt({ ...opts, transcript }), images: [opts.image] };
+    while (estimateMessageTokens(tokenizer, message) + reserve + ASK_FRAMING_MARGIN_TOKENS > window && transcript.length > 0) {
+      transcript = transcript.slice(1);
+      message = { ...message, content: buildPrompt({ ...opts, transcript }) };
+    }
+    if (estimateMessageTokens(tokenizer, message) + reserve + ASK_FRAMING_MARGIN_TOKENS > window) {
+      return { ok: false, kind: "provider", error: "The image and question exceed the recognizer context window. Increase its context window or shorten the question." };
+    }
+    if (signal.aborted) return { ok: false, kind: classifyAbort(signal), error: describeError(signal.reason) };
+    const port = opts.portFactory ? opts.portFactory(endpoint) : new AiSdkModelPort(endpoint);
     const request: ModelRequest = {
-      messages: [{ role: "user", content: buildPrompt(opts), images: [opts.image] }],
+      messages: [message],
       tools: [],
       temperature: 0,
+      maxOutputTokens: reserve,
       abortSignal: signal,
     };
 

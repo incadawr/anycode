@@ -11,6 +11,11 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Plugins can offer a model catalog and show an employee account budget above Settings. Choose a dedicated gateway connection and approve the source to start syncing.
 
+### Fixed
+
+- Choose a vision model from available models and set its context window separately for each connection.
+- Image input settings are now saved separately for each model. (GitHub #56)
+
 ## [0.0.77] — 2026-11-05
 
 ### Fixed

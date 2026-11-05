@@ -1165,27 +1165,17 @@ export function imageInputModelPreflightError(selection: ImageInputSelection, mo
     : null;
 }
 
-/**
- * the select value the drawer starts with for a saved
- * connection — the `contextWindowInitialRaw` rule: the saved override is
- * prefilled ONLY when it binds to the model now shown; a pair saved for
- * another model (or no pair) reads as "auto". Exported for direct testing.
- */
+/** The saved image-input choice for the model displayed in the drawer. */
 export function imageInputInitialValue(connection: {
-  imageInputOverride?: "on" | "off";
-  imageInputModel?: string;
+  modelOverrides?: ProviderConnection["modelOverrides"];
   model?: string;
 }): ImageInputSelection {
-  return connection.imageInputOverride !== undefined &&
-    connection.imageInputModel !== undefined &&
-    connection.imageInputModel === (connection.model ?? "")
-    ? connection.imageInputOverride
-    : "auto";
+  const model = connection.model ?? "";
+  return (connection.modelOverrides && Object.hasOwn(connection.modelOverrides, model) ? connection.modelOverrides[model]?.imageInput : undefined) ?? "auto";
 }
 
 /** Local literal, same convention as `ENV_CONTEXT_WINDOW` above — renderer modules don't import main, let alone core. */
-// 4088-on-4118: ANYCODE_IMAGE_INPUT_MODELS is GONE; only the per-model
-// override still rides the fork env.
+// Explicit environment overrides take precedence over saved settings.
 const ENV_IMAGE_INPUT_MODEL_OVERRIDE = "ANYCODE_IMAGE_INPUT_MODEL_OVERRIDE";
 
 /**

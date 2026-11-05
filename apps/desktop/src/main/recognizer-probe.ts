@@ -60,6 +60,7 @@ import { homedir } from "node:os";
 import type { FileStat, FileSystemPort, ImageMediaType, ProviderTransport, RecognizerEndpoint } from "@anycode/core";
 import { loadTelemetryConfig } from "@anycode/core/telemetry-admin";
 import { resolveRecognizerConfig, type RecognizerCatalogInfo, type SecretReader } from "./host-env.js";
+import { patchModelOverride } from "../shared/model-overrides.js";
 import type { AnycodeSettings } from "../shared/settings.js";
 import type {
   RecognizerProbeFailureReason,
@@ -121,6 +122,7 @@ function toRecognizerEndpoint(wire: RecognizerWireConfig): RecognizerEndpoint | 
     transport: (wire.transport as ProviderTransport | undefined) ?? "anthropic-messages",
     baseUrl: wire.baseUrl,
     model: wire.model,
+    ...(wire.contextWindowTokens !== undefined ? { contextWindowTokens: wire.contextWindowTokens } : {}),
     ...(wire.apiKey !== undefined && wire.apiKey !== "" ? { apiKey: wire.apiKey } : {}),
     ...(wire.providerName !== undefined && wire.providerName !== "" ? { providerName: wire.providerName } : {}),
   };
@@ -146,6 +148,14 @@ export async function resolveRecognizerProbeCandidate(
     ...settings,
     recognizer: { connectionId: request.connectionId, modelId: request.modelId },
   };
+  if (request.contextWindowTokens !== undefined) {
+    candidateSettings.provider = { ...settings.provider, connections: settings.provider.connections.map((connection) => {
+      if (connection.id !== request.connectionId) return connection;
+      const copy = structuredClone(connection);
+      patchModelOverride(copy, request.modelId, { contextWindowTokens: request.contextWindowTokens === "" ? undefined : request.contextWindowTokens });
+      return copy;
+    }) };
+  }
   const wire = await resolveRecognizerConfig(candidateSettings, getSecret, authKindFor, catalogFor);
   return wire === undefined ? undefined : toRecognizerEndpoint(wire);
 }
@@ -466,14 +476,16 @@ function parseRecognizerProbeRequest(raw: unknown): RecognizerProbeRequest | und
   if (typeof raw !== "object" || raw === null) {
     return undefined;
   }
-  const candidate = raw as { connectionId?: unknown; modelId?: unknown };
+  const candidate = raw as { connectionId?: unknown; modelId?: unknown; contextWindowTokens?: unknown };
   if (typeof candidate.connectionId !== "string" || candidate.connectionId === "") {
     return undefined;
   }
   if (typeof candidate.modelId !== "string" || candidate.modelId === "") {
     return undefined;
   }
-  return { connectionId: candidate.connectionId, modelId: candidate.modelId };
+  const tokens = candidate.contextWindowTokens;
+  if (tokens !== undefined && tokens !== "" && (typeof tokens !== "number" || !Number.isInteger(tokens) || tokens < 1024 || tokens > 1000000)) return undefined;
+  return { connectionId: candidate.connectionId, modelId: candidate.modelId, ...(tokens !== undefined ? { contextWindowTokens: tokens } : {}) };
 }
 
 /**

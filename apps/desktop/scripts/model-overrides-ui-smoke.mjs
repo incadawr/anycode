@@ -72,6 +72,44 @@ try {
 
   await poll(() => evaluate("!!document.querySelector('.sidebar-settings')"));
   await click("Settings");
+  // Vision settings use this disposable profile and the same loopback fixture.
+  await evaluate("document.querySelector('#settings-tab-vision').click()");
+  await poll(() => evaluate("!!document.querySelector('.vision-pane-model-select')"));
+  async function visionSelect(selector, value) {
+    await evaluate(`(() => { const element = document.querySelector(${JSON.stringify(selector)}); element.value = ${JSON.stringify(value)}; element.dispatchEvent(new Event('change', {bubbles:true})); })()`);
+    await sleep(150);
+  }
+  const visionField = `(() => [...document.querySelectorAll('.vision-pane label')].find(l => l.textContent.includes('Context window'))?.parentElement?.querySelector('input'))()`;
+  async function visionInput(value) {
+    await evaluate(`(() => { const element = ${visionField}; if (!element) throw new Error('Context field missing'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(element, ${JSON.stringify(value)}); element.dispatchEvent(new Event('input', {bubbles:true})); })()`);
+    await sleep(150);
+  }
+  await visionSelect('.vision-pane-connection-select', 'conn-smoke');
+  await visionSelect('.vision-pane-model-select', 'model:0');
+  await visionInput('32000');
+  await click('Save');
+  await poll(() => JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8')).recognizer?.modelId === 'a');
+  await visionSelect('.vision-pane-model-select', 'model:1');
+  await visionInput('64000');
+  await click('Save');
+  await poll(() => JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8')).recognizer?.modelId === 'b');
+  const visionSettings = JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8'));
+  assert.equal(visionSettings.provider.connections[0].model, 'a');
+  assert.equal(visionSettings.provider.connections[0].modelOverrides.a.contextWindowTokens, 32000);
+  assert.equal(visionSettings.provider.connections[0].modelOverrides.b.contextWindowTokens, 64000);
+  await visionInput('');
+  await click('Save');
+  await poll(() => JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8')).provider.connections[0].modelOverrides?.b?.contextWindowTokens === undefined);
+  await visionSelect('.vision-pane-model-select', 'custom');
+  assert(await evaluate("!!document.querySelector('.vision-pane-model-input')"));
+  const visionShot = await call('Page.captureScreenshot', {format:'png'});
+  writeFileSync(join(profile, 'vision-settings.png'), Buffer.from(visionShot.data, 'base64'));
+  await visionSelect('.vision-pane-model-select', 'model:0');
+  await visionInput('');
+  await click('Save');
+  await poll(() => JSON.parse(readFileSync(join(profile, 'settings.json'), 'utf8')).provider.connections[0].modelOverrides?.a?.contextWindowTokens === undefined);
+  await click('Turn off');
+  await click('Really turn off?');
   await evaluate("document.querySelector('#settings-tab-provider').click()");
   await poll(() => evaluate("!!document.querySelector('.connection-tile-menu-trigger') || !!document.querySelector('.connection-tile button[aria-haspopup=menu]')"));
   await evaluate("document.querySelector('.connection-tile button[aria-haspopup=menu]').click()");
@@ -142,7 +180,7 @@ try {
   await call("Page.reload", {});
   await poll(() => evaluate("!!document.querySelector('.sidebar-settings')"));
   const saved = JSON.parse(readFileSync(join(profile, "settings.json"), "utf8")).provider.connections[0];
-  assert.deepEqual(saved.modelOverrides, { a: {contextWindowTokens:128000, reasoningSupported:true, reasoningEffort:"high", effortLevels:["low","high"]}, b:{contextWindowTokens:64000, reasoningSupported:true, reasoningEffort:"low"} });
+  assert.deepEqual(saved.modelOverrides, { a: {imageInput:"on", contextWindowTokens:128000, reasoningSupported:true, reasoningEffort:"high", effortLevels:["low","high"]}, b:{contextWindowTokens:64000, reasoningSupported:true, reasoningEffort:"low"} });
   assert(!Object.hasOwn(saved, "contextWindowTokens"));
   assert(!Object.hasOwn(saved, "contextWindowModel"));
   const info = await poll(() => existsSync(join(profile, "automation.json")) && JSON.parse(readFileSync(join(profile, "automation.json"), "utf8")));
@@ -206,8 +244,7 @@ try {
   assert((await evaluate("window.anycode.settings.connectionUpdate({id:'conn-smoke', model:'a'})")).ok);
   const beforeShortcut = JSON.parse(readFileSync(join(profile, "settings.json"), "utf8")).provider.connections[0];
   assert.equal(beforeShortcut.model, "a");
-  assert.equal(beforeShortcut.imageInputModel, "a");
-  assert.equal(beforeShortcut.imageInputOverride, "on");
+  assert.equal(beforeShortcut.modelOverrides.a.imageInput, "on");
   await api(`/tabs/${tab.tabId}/ctx-popover/open`, "POST", {open:true});
   await poll(() => evaluate("!!document.querySelector('.ctx-popover-assumed')"));
   assert(await evaluate("document.querySelector('.ctx-popover-assumed').textContent.includes('output reserve: 2K')"));
