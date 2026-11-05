@@ -648,10 +648,7 @@ const customProviderSchema = z.object({
   kind: customProviderKindSchema,
   models: z.array(z.string()),
   modelsFetchedAt: z.string().optional(),
-  modelRoutes: z.object({ version: z.literal(1), fetchedAt: z.string().datetime(), models: z.record(z.string().min(1), z.union([
-    z.object({ kind: z.literal("refusal"), reason: z.enum(["unsupported-provider", "unknown-model", "unsupported-model", "invalid-route"]) }),
-    z.object({ kind: z.literal("route"), route: z.object({ transport: z.enum(["anthropic-messages", "openai-chat-completions", "openai-responses"]), baseUrl: z.string(), metadata: z.record(z.string(), z.unknown()) }).refine(route => route.baseUrl === (route.transport === "anthropic-messages" ? "https://opencode.ai/inference/go/anthropic/v1" : "https://opencode.ai/inference/go/openai/v1")) }),
-  ])).refine(models => Object.keys(models).length > 0) }).optional().catch(undefined),
+  modelRoutes: modelRoutesSchema,
   // only-truthy-on-disk keyless declaration (see CustomProviderRecord).
   authOptional: z.boolean().optional(),
 });
