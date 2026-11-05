@@ -56,6 +56,7 @@ import { activeProviderView, connectionById, mergeModelIds } from "../../../shar
 import type { SessionSummary } from "../../../shared/tabs.js";
 import { TabContext, useTabSend, useTabStore, useTabStoreApi } from "../tab-context.js";
 import { useTabsStore } from "../tabs-store.js";
+import { useAccountSourcesStore } from "../account-sources-store.js";
 import { useSettingsStore } from "../settings-store.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
 import type { DesktopState, TurnState } from "../store.js";
@@ -520,6 +521,7 @@ export function ModelPill() {
   const idle = !turnInProgress;
 
   const snapshot = useSettingsStore((state) => state.snapshot);
+  const accountCatalogs = useAccountSourcesStore((state) => state.snapshot.catalogs);
   const connectionUpdate = useSettingsStore((state) => state.connectionUpdate);
 
   // W10-FIX F2: both the model catalog AND the write-target follow this
@@ -1226,6 +1228,8 @@ export function ModelPill() {
               available above the chip, a MAX never a height, so a short level
               renders with no scrollbar at all (DoD 5). */}
           <ModelDrillMenu
+            catalogs={accountCatalogs}
+            bindings={snapshot?.settings.plugins?.accountSources}
             rows={drill.rows}
             page={drillPage}
             placement={placement}

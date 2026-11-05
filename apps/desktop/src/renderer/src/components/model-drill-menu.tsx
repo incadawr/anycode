@@ -23,8 +23,8 @@ import { Fragment } from "react";
 import type { CSSProperties, KeyboardEvent, MutableRefObject, ReactElement } from "react";
 import { Check, Chevron } from "./icons.js";
 import { modelDrillEffortLabel, type ModelDrillPage, type ModelDrillRow } from "./model-drill-rows.js";
-import { useAccountSourcesStore } from "../account-sources-store.js";
-import { useSettingsStore } from "../settings-store.js";
+import type { AccountSourcesSnapshot } from "../../../shared/account-sources.js";
+import type { AnycodeSettings } from "../../../shared/settings.js";
 
 function dollarsPerMillion(micros: string): string {
   const n = BigInt(micros);
@@ -34,6 +34,8 @@ function dollarsPerMillion(micros: string): string {
 
 export interface ModelDrillMenuProps {
   /** The rows of the level currently on screen — a flat list, one roving-focus index across all of them. */
+  catalogs?: AccountSourcesSnapshot["catalogs"];
+  bindings?: NonNullable<AnycodeSettings["plugins"]>["accountSources"];
   rows: readonly ModelDrillRow[];
   /** Which level those rows belong to; also the popover's `data-level` attribute. */
   page: ModelDrillPage;
@@ -76,8 +78,7 @@ export interface ModelDrillMenuProps {
 
 export function ModelDrillMenu(props: ModelDrillMenuProps): ReactElement {
   const { rows, page, placement, backLabel, focusIndex, emptyText, itemRefs } = props;
-  const catalogs = useAccountSourcesStore((state) => state.snapshot.catalogs);
-  const bindings = useSettingsStore((state) => state.snapshot?.settings.plugins?.accountSources);
+  const { catalogs, bindings } = props;
 
   /**
    * One row of whatever level is on screen. Two shapes only: a PICK

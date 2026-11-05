@@ -67,6 +67,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ClipboardEvent, KeyboardEvent } from "react";
 import { useTabsStore, type SessionDraft, type TabsStoreApi } from "../tabs-store.js";
 import type { QueuedPromptImage } from "../store.js";
+import { useAccountSourcesStore } from "../account-sources-store.js";
 import { useSettingsStore } from "../settings-store.js";
 import { submitStartDraft, type StartSubmitResult } from "../start-session.js";
 import { Folder, ArrowUp, BrandMark, Check, Chevron, Clipboard, ImageIcon, Orchestrate, Search, Terminal, Warning, X } from "./icons.js";
@@ -637,6 +638,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
   const draft = useTabsStore((state) => state.draft);
   const hiddenWorkspaces = useTabsStore((state) => state.hiddenWorkspaces);
   const snapshot = useSettingsStore((state) => state.snapshot);
+  const accountCatalogs = useAccountSourcesStore((state) => state.snapshot.catalogs);
   const [sessions, setSessions] = useState<readonly SessionSummary[]>([]);
   // Core is always the local compatibility choice. Codex is appended only
   // after main returns its already-validated availability verdict.
@@ -1899,6 +1901,8 @@ export function StartScreen({ onToast }: StartScreenProps) {
                   renders too, so neither picker can drift from the other. */}
               {modelMenuOpen && (
                 <ModelDrillMenu
+            catalogs={accountCatalogs}
+            bindings={snapshot?.settings.plugins?.accountSources}
                   rows={modelMenuRows}
                   page={modelMenuPage}
                   placement={modelMenuPlacement}
