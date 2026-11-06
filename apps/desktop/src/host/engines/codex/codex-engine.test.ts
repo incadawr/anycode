@@ -2147,8 +2147,8 @@ describe("CodexEngine — readTranscript() live flush-time re-read", () => {
     expect(created.engine.historyItems()).toEqual([]);
     const items = live.filter((item) => item.kind !== "compact_summary");
     expect(items).toEqual([
-      { id: "turn-a:u1", createdAt: 200000, message: { role: "user", content: "post-boot question" } },
-      { id: "turn-a:a1", createdAt: 200001, message: { role: "assistant", content: [{ type: "text", text: "post-boot answer" }] } },
+      { id: "turn-a:u1", turnId: "turn-a", createdAt: 200000, message: { role: "user", content: "post-boot question" } },
+      { id: "turn-a:a1", turnId: "turn-a", createdAt: 200001, message: { role: "assistant", content: [{ type: "text", text: "post-boot answer" }] } },
     ]);
   });
 

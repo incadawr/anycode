@@ -1172,6 +1172,10 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     },"immediate");
   }
 
+  runtimeInputRecoveryNeeded(sessionId: string, segmentId: string): boolean {
+    return !!this.open().prepare("SELECT 1 FROM runtime_inputs WHERE session_id=? AND segment_id=? AND state IN ('dispatching','uncertain')").get(sessionId,segmentId);
+  }
+
   prepareRuntimeInput(sessionId: string, turnId: string, originalText: string, input: string, importConversation: boolean): string {
     return this.transaction(db => {
       const row = db.prepare("SELECT active_runtime_segment FROM sessions WHERE id=?").get(sessionId);

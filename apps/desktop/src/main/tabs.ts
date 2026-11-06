@@ -703,7 +703,7 @@ export function guardedHostForwarder(stream: NodeJS.WriteStream, usable: boolean
 }
 
 export interface TabHostManagerDeps {
-  refreshRuntimeIdentity?: (sessionId: string) => Promise<{identity: Pick<TabHost,"engine" | "engineModel" | "enginePreset" | "modelOverride" | "connectionId" | "codexProfile">;release?: () => void}>;
+  refreshRuntimeIdentity?: (sessionId: string) => Promise<{identity: Pick<TabHost,"engine" | "engineModel" | "enginePreset" | "modelOverride" | "connectionId" | "codexProfile">;release?: () => void} | undefined>;
   hostOutputUsable?: (stream: NodeJS.WriteStream) => boolean;
   hostLogStream?: (stream: "stdout" | "stderr") => ((chunk: Buffer) => void) & { end(): void };
   /**
@@ -1725,6 +1725,7 @@ export class TabHostManager {
     const newSession = !resume;
     const refresh = resume && !opts.identityRefreshed && tab.childOf === undefined
       ? this.deps.refreshRuntimeIdentity?.(tab.sessionId).then(result => {
+          if (!result) return;
           try {
             if (this.spawnAttempts.get(tab) !== attempt || this.quitting || this.tabs.get(tab.tabId) !== tab || tab.state !== "running" || tab.proc !== null) throw new Error("Stale runtime identity refresh");
             Object.assign(tab,result.identity);

@@ -25,6 +25,7 @@ for (const engine of ["codex", "claude"]) {
   binaries[engine] = binary;
 }
 let providerCalls = 0;
+const providerInputs = [];
 const fixture = createServer((request, response) => {
   let body = "";
   request.on("data", chunk => { body += chunk; });
@@ -33,6 +34,7 @@ const fixture = createServer((request, response) => {
     const input = JSON.parse(body);
     assert.equal(input.model, "core-model");
     providerCalls++;
+    providerInputs.push(input.messages);
     response.writeHead(200, { "Content-Type": "text/event-stream" });
     const base = { id: "local-fixture", object: "chat.completion.chunk", created: 0, model: input.model };
     response.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: "assistant", content: "core fixture answer" }, finish_reason: null }] })}\n\n`);
@@ -69,7 +71,7 @@ try {
   const info = await poll(() => { try { return JSON.parse(readFileSync(join(profile, "automation.json"), "utf8")); } catch { return null; } });
   const api = async (path, method = "GET", body) => { const result = await cdp.automation(info, path, method, body); assert(result.ok, JSON.stringify(result.result)); return result.result; };
   await poll(() => evaluate("typeof window.anycode?.createTab === 'function'"));
-  const tab = await evaluate(`window.anycode.createTab({ kind: 'new', workspace: ${JSON.stringify(profile)} })`);
+  let tab = await evaluate(`window.anycode.createTab({ kind: 'new', workspace: ${JSON.stringify(profile)} })`);
   assert(tab.ok, JSON.stringify(tab));
   await poll(() => evaluate("!!document.querySelector('button[aria-label=\"Switch engine\"]')"));
   async function turn(text) {
@@ -78,9 +80,52 @@ try {
     await poll(async () => (await evaluate("document.querySelectorAll('.message-loop-end').length")) > before);
     await poll(async () => (await api(`/state/${tab.tabId}`)).snapshot.states[tab.tabId].turn.status === "idle");
   }
-  await turn("original conversation");
+  const originalTexts = ["original conversation"];
+  await turn(originalTexts[0]);
+  const logicalSessionId = (() => {
+    const db = new DatabaseSync(join(profile,"db.sqlite"),{readOnly:true});
+    try { return db.prepare("SELECT id FROM sessions ORDER BY updated_at DESC LIMIT 1").get().id; }
+    finally { db.close(); }
+  })();
+  const placeholder = await evaluate(`window.anycode.createTab({kind:'new',workspace:${JSON.stringify(profile)}})`);
+  assert(placeholder.ok,JSON.stringify(placeholder));
+  const readRuntime = () => {
+    const db = new DatabaseSync(join(profile,"db.sqlite"),{readOnly:true});
+    try {
+      const row = db.prepare("SELECT id,engine_id,model,codex_profile_id,active_runtime_segment FROM sessions WHERE id=?").get(logicalSessionId);
+      return {row,segment:db.prepare("SELECT native_state FROM runtime_segments WHERE session_id=? AND segment_id=?").get(row.id,row.active_runtime_segment),handoff:JSON.parse(db.prepare("SELECT data FROM runtime_handoffs WHERE session_id=? AND segment_id=?").get(row.id,row.active_runtime_segment)?.data ?? "null"),items:db.prepare("SELECT data FROM runtime_transcript WHERE session_id=? ORDER BY seq").all(row.id).map(item => JSON.parse(item.data)),boundaries:db.prepare("SELECT data FROM runtime_boundaries WHERE session_id=?").all(row.id)};
+    } finally { db.close(); }
+  };
+  async function verify(engine,boundaries) {
+    await poll(() => evaluate(`document.querySelector('button[aria-label="Switch engine"]')?.textContent === ${JSON.stringify(`${engine} ▾`)}`));
+    await poll(async () => (await evaluate("document.querySelectorAll('[data-block-id^=\"engine-boundary:\"]').length")) === boundaries);
+    const runtime = readRuntime();
+    assert.equal(runtime.row.engine_id,engine);
+    assert.equal(runtime.row.model,engine === "core" ? "core-model" : engine === "codex" ? "model-first" : "default");
+    if (engine === "codex") assert.equal(runtime.row.codex_profile_id,"system");
+    assert.equal(runtime.boundaries.length,boundaries);
+    for (const text of originalTexts) {
+      assert.equal(runtime.items.filter(item => item.message.role === "user" && item.message.content === text).length,1,`canonical once: ${text}`);
+      assert.equal(await evaluate(`Array.from(document.querySelectorAll('.message-user')).filter(node => node.textContent.includes(${JSON.stringify(text)})).length`),1,`renderer once: ${text}`);
+    }
+    assert(!runtime.items.some(item => item.message.role === "user" && typeof item.message.content === "string" && item.message.content.includes("# user (current message)")));
+  }
+  async function reload(engine,boundaries) {
+    await cdp.call("Page.reload");
+    await poll(() => evaluate("typeof window.anycode?.createTab === 'function'"));
+    await verify(engine,boundaries);
+  }
+  async function restartHost(engine,boundaries) {
+    const sessionId = readRuntime().row.id;
+    const closed = await evaluate(`window.anycode.closeTab(${JSON.stringify(tab.tabId)})`);
+    assert(closed.ok,JSON.stringify(closed));
+    tab = await evaluate(`window.anycode.createTab({kind:'resume',sessionId:${JSON.stringify(sessionId)}})`);
+    assert(tab.ok,JSON.stringify(tab));
+    await evaluate(`window.anycode.selectTab(${JSON.stringify(tab.tabId)})`);
+    await reload(engine,boundaries);
+  }
   let boundaries = 0;
-  // Covers every directed engine pair without creating another host or tab.
+  // Covers every directed engine pair with fresh host boots around each target turn.
   for (const engine of ["codex", "claude", "core", "claude", "codex", "core"]) {
     await evaluate("document.querySelector('button[aria-label=\"Switch engine\"]').click()");
     await poll(() => evaluate(`!![...document.querySelectorAll('select[aria-label="Target engine and model"] option')].find(option => option.textContent.startsWith(${JSON.stringify(engine === "core" ? "Core ·" : engine === "codex" ? "Codex ·" : "Claude ·")}))`));
@@ -100,13 +145,50 @@ try {
       assert.equal(identity.engine_id, engine);
       assert.equal(identity.model, engine === "core" ? "core-model" : engine === "codex" ? "model-first" : "default");
     } finally { db.close(); }
-    await turn(`turn after switch ${boundaries}`);
+    await reload(engine,boundaries);
+    await restartHost(engine,boundaries);
+    assert.equal(readRuntime().segment.native_state,"fresh");
+    assert.equal(readRuntime().handoff.state,"pending");
+    const text = `turn after switch ${boundaries}`;
+    await turn(text);
+    originalTexts.push(text);
+    await poll(() => readRuntime().handoff.state === "accepted");
+    assert.equal(readRuntime().segment.native_state,"materialized");
+    await reload(engine,boundaries);
+    await restartHost(engine,boundaries);
+    await verify(engine,boundaries);
   }
   assert(providerCalls >= 3);
+  const messages = engine => readFileSync(join(profile,`${engine}.jsonl`),"utf8").trim().split("\n").map(line => JSON.parse(line));
+  const codexMessages = messages("codex");
+  const claudeMessages = messages("claude");
+  const wireInputs = [
+    ...codexMessages.filter(message => message.method === "turn/start").map(message => message.params.input.map(item => item.text ?? "").join("")),
+    ...claudeMessages.filter(message => message.type === "user").map(message => typeof message.message.content === "string" ? message.message.content : message.message.content.map(item => item.text ?? "").join("")),
+    ...providerInputs.slice(1).map(items => { const content = items.findLast(item => item.role === "user")?.content; return typeof content === "string" ? content : content?.map(item => item.text ?? "").join(""); }),
+  ];
+  for (const index of [1,2,3,4,5,6]) {
+    const wire = wireInputs.find(input => typeof input === "string" && input.split("# user (current message)\n")[1]?.startsWith(`turn after switch ${index}`));
+    assert(wire?.includes("original conversation"),`first imported wire turn ${index}`);
+    assert.equal(wire.split("# user (current message)").length,2,`one import prefix ${index}`);
+  }
+  const db = new DatabaseSync(join(profile,"db.sqlite"),{readOnly:true});
+  try {
+    const refs = db.prepare("SELECT engine,native_ref FROM runtime_segments WHERE session_id=?").all(logicalSessionId);
+    const codexRefs = new Set(refs.filter(ref => ref.engine === "codex").map(ref => ref.native_ref));
+    const claudeRefs = new Set(refs.filter(ref => ref.engine === "claude").map(ref => ref.native_ref));
+    for (const message of codexMessages.filter(message => message.method === "thread/resume")) {
+      assert(codexRefs.has(message.params.threadId)); assert(!claudeRefs.has(message.params.threadId));
+    }
+    for (const message of claudeMessages.filter(message => message.fixtureBoot?.args.includes("--resume"))) {
+      const args = message.fixtureBoot.args; const ref = args[args.indexOf("--resume")+1];
+      assert(claudeRefs.has(ref)); assert(!codexRefs.has(ref));
+    }
+  } finally { db.close(); }
   assert.equal(await evaluate("document.querySelectorAll('[data-block-id^=\"engine-boundary:\"]').length"), 6);
   const shot = await cdp.call("Page.captureScreenshot", { format: "png" });
   writeFileSync(join(profile, "all-pairs.png"), Buffer.from(shot.data, "base64"));
-  console.log(JSON.stringify({ ok: true, enginePairs: 6, boundaries: 6, profile }));
+  console.log(JSON.stringify({ ok: true, enginePairs: 6, boundaries: 6, rendererReloads:24, hostRestarts:12, canonicalOriginals:originalTexts.length, profile }));
 } catch (error) {
   writeFileSync(join(profile, "launcher.log"), launchLog);
   console.error(`Isolated artifacts: ${profile}`);

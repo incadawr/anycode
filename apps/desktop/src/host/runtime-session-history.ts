@@ -11,8 +11,21 @@ export class RuntimeSessionHistory {
     this.store.mergeRuntimeTranscript(this.sessionId,state.activeSegmentId,live);
     return this.state();
   }
+  async readTranscript(engine: SessionEngine): Promise<readonly HistoryItem[]> {
+    const state = this.state();
+    const active = state.segments.find(segment => segment.id === state.activeSegmentId)!;
+    // A fresh native allocation has no resumable artifact to read until input
+    // is dispatched. The journal proves whether a checked reconciliation is needed.
+    if (engine.id !== "core" && active.nativeState === "fresh" && !this.store.runtimeInputRecoveryNeeded(this.sessionId,active.id)) return engine.historyItems();
+    return engine.readTranscript?.() ?? engine.historyItems();
+  }
   async hydrate(engine: SessionEngine): Promise<RuntimeSessionSnapshot> {
-    return this.snapshot(await (engine.readTranscript?.() ?? Promise.resolve(engine.historyItems())));
+    try { return this.snapshot(await this.readTranscript(engine)); }
+    catch (error) {
+      const state = this.state();
+      this.store.reconcileRuntimeInputs(this.sessionId,state.activeSegmentId,[]);
+      throw error;
+    }
   }
   prepare(turnId: string, original: string, input: string, genuineUser: boolean): { text: string; hooks: Pick<RunTurnOptions,"onInputDispatched" | "onInputAccepted"> } {
     const state = this.state();
@@ -24,6 +37,12 @@ export class RuntimeSessionHistory {
   }
   assertSettled(): void {
     const state = this.state();
-    if (state.handoff?.state === "uncertain" || state.handoff?.state === "dispatching") throw new Error("Conversation import acceptance is uncertain. Recovery is required.");
+    if (this.store.runtimeInputRecoveryNeeded(this.sessionId,state.activeSegmentId)) throw new Error("Conversation import acceptance is uncertain. Recovery is required.");
   }
+}
+
+/** Disabling new switches must never strand an already committed conversation. */
+export function createRuntimeSessionHistory(store: SqlitePersistenceAdapter, sessionId: string, enabled: boolean, child = false): RuntimeSessionHistory | undefined {
+  if (child || (!enabled && (store.loadRuntimeSession(sessionId)?.revision ?? 0) === 0)) return undefined;
+  return new RuntimeSessionHistory(store,sessionId);
 }

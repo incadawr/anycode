@@ -1442,7 +1442,9 @@ export class ClaudeEngine implements SessionEngine {
             }
           }
         }
-        if (inputDispatched && (raced.value.value.type === "assistant" || (raced.value.value.type === "system" && raced.value.value.subtype === "init"))) options.onInputAccepted?.();
+        const frame = raced.value.value;
+        const ownerSession = frame.session_id === undefined || frame.session_id === this.sessionRef;
+        if (inputDispatched && ownerSession && ((frame.type === "assistant" && frame.parent_tool_use_id == null) || (frame.type === "system" && frame.subtype === "init"))) options.onInputAccepted?.();
         for (const event of translator.onMessage(raced.value.value)) {
           if (event.type === "loop_end") terminal = true;
           yield event;

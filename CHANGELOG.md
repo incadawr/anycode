@@ -9,7 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- An opt-in engine picker imports conversation text when changing engines and keeps the active selection until the change succeeds. Engine switching remains disabled by default.
+- An opt-in engine picker imports conversation text when changing engines and keeps the active selection until the change succeeds. Conversation history and pending text imports survive reconnects and host restarts. Engine switching remains disabled by default.
 
 ## [0.0.78] - 2026-11-06
 

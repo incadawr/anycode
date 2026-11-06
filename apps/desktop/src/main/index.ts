@@ -266,6 +266,7 @@ import { TabHostManager, createPinReservations, workspaceMissing } from "./tabs.
 import { createChildConnectionPreparer } from "./child-connection-preparation.js";
 import { TokenBroker, resolveProviderSelection, type CatalogSelectionInfo } from "./token-broker.js";
 import { handleCreate, registerTabIpc, type ResolveCodexProfileResult, type TabIpcDeps } from "./tab-ipc.js";
+import { runtimeResumeIdentity } from "./runtime-resume.js";
 import { ENV_CODEX_BIN, ENV_ENGINE, ENV_HOST_GENERATION, type EngineId } from "../shared/engines.js";
 // SLICE-CC A1 (cut §1.2): new import line — ENV_CLAUDE_BIN mirrors ENV_CODEX_BIN above.
 import { ENV_CLAUDE_BIN } from "../shared/engines.js";
@@ -2078,8 +2079,8 @@ async function startInitialTab(opts: {
       );
       return;
     }
-    if (resumed.codexProfileId !== undefined) {
-      const resolvedProfile = await resolveCodexProfileForTab(resumed.codexProfileId);
+    if (resumed.engineId === "codex") {
+      const resolvedProfile = await resolveCodexProfileForTab(resumed.codexProfileId ?? SYSTEM_PROFILE_ID);
       if (!resolvedProfile.ok) {
         console.warn(
           `[main] session ${resumed.id} is pinned to a missing Codex profile (${resumed.codexProfileId}); not auto-resuming`,
@@ -2120,6 +2121,7 @@ async function startInitialTab(opts: {
       workspace,
       sessionId,
       resume,
+      ...(resumed !== null ? runtimeResumeIdentity(resumed) : {}),
       ...(connectionId !== undefined ? { connectionId } : {}),
       ...(codexProfileParam !== undefined ? { codexProfile: codexProfileParam } : {}),
     });
@@ -2814,11 +2816,13 @@ void app.whenReady().then(async () => {
     // `~/.codex` plan.
     resolveDefaultCodexProfile: () => resolveCodexProfileForTab(undefined),
     engineSwitchEnabled: () => bootEnv.ANYCODE_ENGINE_SWITCH_ENABLED === "1",
-    ...(bootEnv.ANYCODE_ENGINE_SWITCH_ENABLED === "1" ? {refreshRuntimeIdentity: async (sessionId: string) => {
+    refreshRuntimeIdentity: async (sessionId: string) => {
       const row = await persistence?.getRootSession(sessionId);
+      const switched = (persistence?.loadRuntimeSession(sessionId)?.revision ?? 0) > 0;
+      if (!switched && bootEnv.ANYCODE_ENGINE_SWITCH_ENABLED !== "1") return undefined;
       if (!row) throw new Error("Session is missing");
-      const engine = row.engineId ?? "core";
-      if (engine !== "core" && engine !== "codex" && engine !== "claude") throw new Error("Unsupported session engine");
+      const identity = runtimeResumeIdentity(row);
+      const {engine} = identity;
       const pin = await resolveResumePin(row);
       if (!pin.ok) throw new Error("Session connection is unavailable");
       try {
@@ -2828,9 +2832,9 @@ void app.whenReady().then(async () => {
           if (!resolved.ok) throw new Error("Session profile is unavailable");
           codexProfile = resolved.codexProfile ?? null;
         }
-        return {identity:{engine,engineModel:row.model,enginePreset:row.mode,modelOverride:engine === "core" ? row.model : undefined,connectionId:pin.connectionId,codexProfile},release:pin.release};
+        return {identity:{...identity,connectionId:pin.connectionId,codexProfile},release:pin.release};
       } catch (error) { pin.release?.(); throw error; }
-    }} : {}),
+    },
     prepareEngineSwitch: async (target, tab) => {
       let release: (() => void) | undefined;
       try {

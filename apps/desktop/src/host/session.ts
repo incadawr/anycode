@@ -1299,6 +1299,7 @@ export class Session {
    */
   private readonly engineSwitchCoordinator: SessionOptions["engineSwitchCoordinator"];
   private readonly runtimeHistory: SessionOptions["runtimeHistory"];
+  private runtimeHydrationSequence = 0;
   private readonly engineSwitchRequestIds = new Set<string>();
   private readonly switchEngineFactory: ((engine: EngineId, model: string) => Promise<SessionEngine | SwitchRuntime>) | undefined;
   /**
@@ -2701,7 +2702,7 @@ export class Session {
     this.presentationJournal.clear();
   }
 
-  private route(raw: unknown): void {
+  private route(raw: unknown, canonicalHydrated = false): void {
     const parsed = uiToHostMessageSchema.safeParse(raw);
     if (!parsed.success) {
       // A valid bounded correlation ID lets the caller recover its whole draft.
@@ -2764,6 +2765,27 @@ export class Session {
         default:
           break;
       }
+      return;
+    }
+    if (message.type === "ui_ready" && this.runtimeHistory && !canonicalHydrated) {
+      const sequence = ++this.runtimeHydrationSequence;
+      const generation = this.boundGeneration;
+      const engine = this.engine;
+      void this.runtimeHistory.hydrate(engine).then(state => {
+        if (this.shuttingDown || sequence !== this.runtimeHydrationSequence || generation !== this.boundGeneration) return;
+        if (engine !== this.engine) { this.route(raw); return; }
+        this.sessionHistory = buildSessionHistory(state.items,this.historyMaxItems,this.bootTurnErrors);
+        this.switchBoundaries.splice(0,this.switchBoundaries.length,...state.boundaries.map(boundary => ({
+          type:"agent_event" as const,turnId:ENGINE_SWITCH_TURN_ID,boundaryId:boundary.id,
+          ...(boundary.afterItemId ? {boundaryAfter:boundary.afterItemId} : {}),
+          event:{type:"engine_notice" as const,level:"info" as const,message:boundary.text},
+        })));
+        this.route(raw,true);
+        try { this.runtimeHistory!.assertSettled(); }
+        catch (error) { this.outbound.sendDirect({type:"fatal",message:describeError(error)}); }
+      }).catch(error => {
+        if (!this.shuttingDown && sequence === this.runtimeHydrationSequence && generation === this.boundGeneration) this.outbound.sendDirect({type:"fatal",message:`Could not restore conversation: ${describeError(error)}`});
+      });
       return;
     }
     switch (message.type) {
@@ -2845,13 +2867,13 @@ export class Session {
         // history holds only post-switch turns — rebuilding from it would drop
         // the pre-switch transcript; keep the switch-time snapshot (the ring
         // carries everything newer, the native-engine discipline).
-        if (this.engine.id === "core" && !this.engineSwitched) {
+        if (!this.runtimeHistory && this.engine.id === "core" && !this.engineSwitched) {
           this.sessionHistory = buildSessionHistory([...this.engine.historyItems()], this.historyMaxItems, this.bootTurnErrors);
         }
         this.sendSessionHistory();
-        const historyTracksTurns = this.engine.id === "core" && !this.engineSwitched;
+        const historyTracksTurns = this.runtimeHistory !== undefined || (this.engine.id === "core" && !this.engineSwitched);
         const journalSnapshot = this.presentationJournal.snapshot(
-          historyTracksTurns ? this.engine.historyItems() : undefined,
+          historyTracksTurns ? (this.runtimeHistory ? this.runtimeHistory.state().items : this.engine.historyItems()) : undefined,
           this.turnId ?? undefined,
         );
         if (journalSnapshot.coveredTurnIds.length > 0) {
@@ -4272,9 +4294,9 @@ export class Session {
       // transcript is the prefix (a double switch with no turn between would
       // otherwise import 0 items and blank the reload snapshot).
       let liveItems: HistoryItem[] = [...previousEngine.historyItems()];
-      if (previousEngine.readTranscript !== undefined) {
+      if (this.runtimeHistory || previousEngine.readTranscript !== undefined) {
         try {
-          liveItems = [...(await previousEngine.readTranscript())];
+          liveItems = [...(await (this.runtimeHistory ? this.runtimeHistory.readTranscript(previousEngine) : previousEngine.readTranscript!()))];
         } catch (error) {
           fail(`could not read current transcript: ${describeError(error)}`);
           return;
@@ -4419,8 +4441,8 @@ export class Session {
       this.lastNativeTurnId = null;
       this.checkpointContextUsage = null;
       this.outbound.clearContextUsage();
-      this.engineSwitched = true;
-      this.switchCarriedHistory = canonical;
+      this.engineSwitched = !this.runtimeHistory;
+      this.switchCarriedHistory = this.runtimeHistory ? [] : canonical;
       unsubscribe(this.engineSettingsUnsubscribe);
       this.engineSettings = nextSettings;
       this.engineSettingsUnsubscribe = candidateSettingsUnsubscribe;
