@@ -7,10 +7,13 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.79] - 2026-11-06
+
 ### Added
 
 - OpenCode Go connections show 5-hour, weekly, and monthly subscription usage with reset times and high-usage warnings.
 - Provider icons in connection settings and the welcome screen.
+- Codex CLI 0.167.0 is supported.
 
 ### Changed
 
