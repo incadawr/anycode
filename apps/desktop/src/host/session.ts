@@ -222,6 +222,7 @@ export type EngineSettingsChange =
   | { ok: false; reason: string };
 
 export interface EngineSettingsSeam {
+  onSettingsRejected?(listener: (reason: string) => void): () => void;
   models(): EngineModelChoice[];
   presets(): EnginePermissionPreset[];
   /** The APPLIED settings — what a `turn/start` actually carried. Never a merely-chosen value (see `pendingSnapshot`). */
@@ -798,6 +799,7 @@ export interface SwitchRuntime {
   presentation?: Pick<SessionOptions, "shell" | "imageInputEnabled" | "imageFallbackAvailable" | "contextWindowAssumed" | "modelSettingsConnectionId"> & { pinnedConnection?: { connectionId: string; providerId: string } | null };
   backgroundChildren?: SessionOptions["backgroundChildren"];
   onOrchestrateChanged?: SessionOptions["onOrchestrateChanged"];
+  callbacks?: Pick<SessionOptions, "persistence" | "usageAudit" | "effortResolution" | "saveTurnError" | "saveContextUsage" | "reportProviderHealth" | "reportProviderQuota" | "refineTitle" | "restoreHistoryAndTurnErrors" | "currentTurnErrorIds" | "compactionRecords" | "orchestratorRouteCheck" | "applyRecognizerConfig">;
 }
 
 export interface SessionOptions {
@@ -1342,18 +1344,18 @@ export class Session {
   private readonly onWorkspaceTransition: SessionOptions["onWorkspaceTransition"];
   private readonly worktreeControl: SessionOptions["worktreeControl"];
   /** W11: undefined for Codex / every legacy test -> no-op. */
-  private readonly reportProviderHealth: SessionOptions["reportProviderHealth"];
-  private readonly reportProviderQuota: SessionOptions["reportProviderQuota"];
+  private reportProviderHealth: SessionOptions["reportProviderHealth"];
+  private reportProviderQuota: SessionOptions["reportProviderQuota"];
   // Slice P7.15 (F14): mutable — a mid-session set_model updates the live model.
   private model: string;
   private readonly sessionId: string;
-  private readonly persistence: SessionPersistence | undefined;
-  private readonly saveTurnError: SessionOptions["saveTurnError"];
+  private persistence: SessionPersistence | undefined;
+  private saveTurnError: SessionOptions["saveTurnError"];
   private bootTurnErrors: readonly TurnErrorRecord[];
-  private readonly restoreHistoryAndTurnErrors: SessionOptions["restoreHistoryAndTurnErrors"];
-  private readonly currentTurnErrorIds: SessionOptions["currentTurnErrorIds"];
+  private restoreHistoryAndTurnErrors: SessionOptions["restoreHistoryAndTurnErrors"];
+  private currentTurnErrorIds: SessionOptions["currentTurnErrorIds"];
   /** GitHub #36: durable compaction rows; see SessionOptions.compactionRecords. */
-  private readonly compactionRecords: CompactionRecordSeam | undefined;
+  private compactionRecords: CompactionRecordSeam | undefined;
   /**
    * The trigger of the compaction currently in flight, captured from its
    * `compaction_start` (the `compaction_end` event does not repeat it). Null
@@ -1361,7 +1363,7 @@ export class Session {
    */
   private compactionTrigger: "auto" | "manual" | null = null;
   /** see SessionOptions.usageAudit's own doc. */
-  private readonly usageAudit: SessionOptions["usageAudit"];
+  private usageAudit: SessionOptions["usageAudit"];
   private readonly rules: SessionPermissionRules;
   private readonly git: GitUiBridge | undefined;
   /** Design §2(f): shell capability projection; undefined -> every shell feature defaults to enabled. */
@@ -1374,7 +1376,7 @@ export class Session {
   /** §3.7: host callback on every orchestrate transition (loop-config copy). */
   private onOrchestrateChanged: SessionOptions["onOrchestrateChanged"];
   /** §3.6: turn-start orchestrator-route health check (host-owned health cache). */
-  private readonly orchestratorRouteCheck: SessionOptions["orchestratorRouteCheck"];  /** see SessionOptions.supervisorIdle's own doc. */
+  private orchestratorRouteCheck: SessionOptions["orchestratorRouteCheck"];  /** see SessionOptions.supervisorIdle's own doc. */
   private readonly supervisorIdle: SessionOptions["supervisorIdle"];
   /**
    * the latest turn's final assistant text, captured in
@@ -1394,7 +1396,7 @@ export class Session {
   private contextWindowAssumed: (() => boolean) | undefined;
   private modelSettingsConnectionId: string | null | undefined;
   /** срез C: see SessionOptions.applyRecognizerConfig's own doc. */
-  private readonly applyRecognizerConfigImpl: ((endpoint: RecognizerEndpoint | null) => void) | undefined;
+  private applyRecognizerConfigImpl: ((endpoint: RecognizerEndpoint | null) => void) | undefined;
   /**
    * срез C (plan §1.3): the last recognizer-config push received
    * while `busy` — last-value-wins, applied at the very next busy->idle
@@ -1403,12 +1405,12 @@ export class Session {
    * null}` (an explicit disable) is distinguishable from "nothing pending".
    */
   private pendingRecognizerConfig: { endpoint: RecognizerEndpoint | null } | undefined;
-  private readonly refineTitle: ((text: string) => Promise<string | null>) | undefined;
+  private refineTitle: ((text: string) => Promise<string | null>) | undefined;
   // Slice P7.15 (F14): mutable — re-resolved per new model on a set_model switch.
   private reasoningSupported: boolean;
   private availableEffortLevels: ReasoningEffort[] | undefined;
   private bootEffortAdjustment: { from: ReasoningEffort; to: ReasoningEffort } | undefined;
-  private readonly effortResolution: SessionOptions["effortResolution"];
+  private effortResolution: SessionOptions["effortResolution"];
   /** Slice P7.15 (F14): the user-selected effort tier, persisted across a model switch. */
   private selectedEffort: ReasoningEffort;
   /**
@@ -1610,7 +1612,7 @@ export class Session {
    * reading (latest-wins scalar), captured at emission for the same reason
    * as checkpointSessionTokens above. Null until the first reading.
    */
-  private readonly saveContextUsage: SessionOptions["saveContextUsage"];
+  private saveContextUsage: SessionOptions["saveContextUsage"];
   private contextWriteTail: Promise<void> = Promise.resolve();
   private checkpointContextUsage: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" } | null = null;
   /**
@@ -1955,9 +1957,23 @@ export class Session {
     this.engineSettingsUnsubscribe = this.subscribeEngineSettings(this.engineSettings);
   }
 
-  private subscribeEngineSettings(seam: EngineSettingsSeam | undefined): (() => void) | undefined {
-    return seam?.onSettingsApplied((applied) => {
-      if (this.shuttingDown || this.engineSettings !== seam) return;
+  ownsRuntime(engine: SessionEngine): boolean { return !this.shuttingDown && this.engine === engine; }
+
+  private persistRuntimeSettings(): void {
+    if (!this.runtimeHistory) return;
+    const applied = this.engineSettings?.snapshot();
+    const selected = this.engineSettings?.persistsOnApply ? applied : this.engineSettings?.pendingSnapshot?.() ?? applied;
+    const settings = (value: typeof applied) => value
+      ? {model:value.model,mode:value.activePresetId,...(value.effort !== undefined ? {effort:value.effort} : {}),...(value.fast !== undefined ? {fast:value.fast} : {})}
+      : {model:this.model,mode:this.engine.mode(),effort:this.selectedEffort};
+    this.runtimeHistory.settings(settings(selected),settings(applied));
+  }
+
+  private subscribeEngineSettings(seam: EngineSettingsSeam | undefined, engine = this.engine, generation = this.settingsGeneration): (() => void) | undefined {
+    if (!seam) return;
+    const current = () => this.ownsRuntime(engine) && this.engineSettings === seam && this.settingsGeneration === generation;
+    const appliedSubscription = seam.onSettingsApplied((applied) => {
+      if (!current()) return;
       const clearContextUsage = this.model !== applied.model;
       if (clearContextUsage) this.updateContextUsage(null);
       this.model = applied.model;
@@ -1969,6 +1985,7 @@ export class Session {
       if (this.engineSettings?.persistsOnApply === true) {
         this.persistence?.touch({ model: applied.model, enginePreset: applied.activePresetId });
       }
+      this.persistRuntimeSettings();
       this.outbound.emit({
         type: "engine_settings_changed",
         ...(clearContextUsage ? { clearContextUsage: true } : {}),
@@ -1981,6 +1998,13 @@ export class Session {
       });
       if (this.mergedEngineSettings() !== null) this.publishPendingEngineSettings();
     });
+    const rejectedSubscription = seam.onSettingsRejected?.(reason => {
+      if (!current()) return;
+      this.outbound.emit({type:"mode_change_rejected",reason});
+      this.outbound.emit({type:"engine_settings_changed",...seam.snapshot(),state:"applied",appliesFrom:"next_turn"});
+      this.pushPendingEngineSettings();
+    });
+    return () => { appliedSubscription(); rejectedSubscription?.(); };
   }
 
   /** Attaches (or retargets) the UI wire: routes inbound messages, denies on close. */
@@ -3473,6 +3497,7 @@ export class Session {
       ...(this.contextWindowAssumed !== undefined ? { contextWindowAssumed: this.contextWindowAssumed() } : {}),
     });
     this.pushTodoReminderSnapshot();
+    this.persistRuntimeSettings();
     return true;
   }
 
@@ -3496,6 +3521,7 @@ export class Session {
     this.selectedEffort = effort;
     if (this.engine.setSelectedReasoningEffort) this.engine.setSelectedReasoningEffort(effort);
     else this.engine.setReasoningEffort(effort === "off" ? undefined : effort);
+    this.persistRuntimeSettings();
     this.outbound.emit({
       type: "reasoning_effort_changed",
       ...(requestId !== undefined ? { requestId } : {}),
@@ -3668,7 +3694,9 @@ export class Session {
     this.checkpointContextUsage = usage ?? null;
     const snapshot = usage ? { ...usage, engine: this.engine.id, model: this.model } : null;
     if (this.saveContextUsage) {
-      this.contextWriteTail = this.contextWriteTail.then(() => this.saveContextUsage!(snapshot)).catch((error) => {
+      const save = this.saveContextUsage;
+      const generation = this.settingsGeneration;
+      this.contextWriteTail = this.contextWriteTail.then(() => generation === this.settingsGeneration ? save(snapshot) : undefined).catch((error) => {
         console.error(`[host] context usage write failed: ${describeError(error)}`);
       });
     }
@@ -4297,6 +4325,8 @@ export class Session {
     try {
       const previousEngine = this.engine;
       const generation = this.boundGeneration;
+      if (this.shuttingDown || this.engine !== previousEngine || this.boundGeneration !== generation) throw new Error("session changed during engine switch");
+      this.persistRuntimeSettings();
       // Canonical transcript captured BEFORE anything else. A native engine's
       // `historyItems()` is only its BOOT snapshot (codex) or `[]` (claude);
       // codex can re-read the live thread, so prefer that when available —
@@ -4393,10 +4423,17 @@ export class Session {
         next.setMode(previousEngine.mode());
       }
       // Subscribe before committing so a broken settings seam leaves the source active.
-      candidateSettingsUnsubscribe = this.subscribeEngineSettings(nextSettings);
+      await nextSettings?.waitForSettingsChanges?.();
+      if (invalid()) throw new Error("session changed during engine switch");
+      candidateSettingsUnsubscribe = this.subscribeEngineSettings(nextSettings,next,this.settingsGeneration + 1);
       candidateChildrenUnsubscribe = nextRuntime?.backgroundChildren?.onChange?.(() => this.pushBackgroundChildren());
       const nextHistory = buildSessionHistory(canonical, this.historyMaxItems);
       const nextMode = next.mode();
+      const appliedSettings = nextSettings?.snapshot();
+      const selectedSettings = nextSettings?.persistsOnApply ? appliedSettings : nextSettings?.pendingSnapshot?.() ?? appliedSettings;
+      const runtimeSettings = (value: typeof appliedSettings) => value
+        ? {model:value.model,mode:value.activePresetId,...(value.effort !== undefined ? {effort:value.effort} : {}),...(value.fast !== undefined ? {fast:value.fast} : {})}
+        : {model:message.model,mode:nextMode,...(next.reasoningEffort() !== undefined ? {effort:next.reasoningEffort()} : {})};
       const previousMode = previousEngine.mode();
       const boundaryText = plan.items.length > 0
         ? `Session switched from the "${previousEngine.id}" engine to the "${next.id}" engine. Native engine context was not transferred; the next turn receives a text import of this conversation.`
@@ -4418,7 +4455,7 @@ export class Session {
       const identity = next.id === "core" ? { ...preparedIdentity, mode: nextMode } : preparedIdentity;
       await this.engineSwitchCoordinator?.commit(message.requestId, { ...identity, ...(durableSource ? {runtime:{
         expectedRevision:durableSource.revision,sourceSegmentId:durableSource.activeSegmentId,sourceItems:liveItems,
-        segment:{id:message.requestId,engine:next.id,accountScope:"",nativeState:"fresh",...(identity.externalSessionRef ? {nativeRef:identity.externalSessionRef} : {}),selected:{model:identity.model,mode:identity.mode},applied:{model:identity.model,mode:identity.mode},startedAt:Date.now(),coverage:"available_history"},
+        segment:{id:message.requestId,engine:next.id,accountScope:"",nativeState:"fresh",...(identity.externalSessionRef ? {nativeRef:identity.externalSessionRef} : {}),selected:nextSettings ? runtimeSettings(selectedSettings) : {model:identity.model,mode:identity.mode},applied:nextSettings ? runtimeSettings(appliedSettings) : {model:identity.model,mode:identity.mode},startedAt:Date.now(),coverage:"available_history"},
         boundary:{id:message.requestId,segmentId:message.requestId,...(canonical.at(-1) ? {afterItemId:canonical.at(-1)!.id} : {}),text:boundaryText,createdAt:Date.now()},
         handoff:{id:message.requestId,segmentId:message.requestId,sourceWatermark:canonical.at(-1)?.id ?? null,payload:pendingImport.prompt,digest:createHash("sha256").update(pendingImport.prompt).digest("hex"),state:"pending"},
       }} : {}) });
@@ -4428,6 +4465,26 @@ export class Session {
       this.pendingEngineEffort = undefined;
       this.inFlightEngineEffort = undefined;
       this.settingsGeneration++;
+      if (nextRuntime?.callbacks) {
+        this.persistence = nextRuntime.callbacks.persistence;
+        this.usageAudit = nextRuntime.callbacks.usageAudit;
+        this.effortResolution = nextRuntime.callbacks.effortResolution;
+        this.saveTurnError = nextRuntime.callbacks.saveTurnError;
+        this.saveContextUsage = nextRuntime.callbacks.saveContextUsage;
+        this.reportProviderHealth = nextRuntime.callbacks.reportProviderHealth;
+        this.reportProviderQuota = nextRuntime.callbacks.reportProviderQuota;
+        this.refineTitle = nextRuntime.callbacks.refineTitle;
+        this.restoreHistoryAndTurnErrors = nextRuntime.callbacks.restoreHistoryAndTurnErrors;
+        this.currentTurnErrorIds = nextRuntime.callbacks.currentTurnErrorIds;
+        this.compactionRecords = nextRuntime.callbacks.compactionRecords;
+        this.orchestratorRouteCheck = nextRuntime.callbacks.orchestratorRouteCheck;
+        this.applyRecognizerConfigImpl = nextRuntime.callbacks.applyRecognizerConfig;
+        this.pendingRecognizerConfig = undefined;
+        this.onOrchestrateChanged = nextRuntime.onOrchestrateChanged;
+      }
+      this.selectedEffort = next.reasoningEffort() ?? "off";
+      this.reasoningSupported = next.capabilities.supportsReasoningEffort;
+      this.bootEffortAdjustment = undefined;
       this.settingsBarrier = Promise.resolve();
       this.settingsBarrierActive = false;
       this.updateContextUsage(null);
@@ -6266,6 +6323,7 @@ export class Session {
     // (SLICE-CC §1.5) — writing it here would outlive a REJECTED change and
     // resume the session under a posture the engine never adopted.
     if (this.engineSettings?.persistsOnApply !== true) {
+      this.persistRuntimeSettings();
       if (intent.model !== undefined) {
         // `this.model` is the ACTIVE model echoed in host_ready — advancing it
         // here would present a merely-CHOSEN model as active on the next
@@ -6317,6 +6375,7 @@ export class Session {
       this.clearOrchestrateForLeavingPlan();
     }
     this.engine.setMode(mode);
+    this.persistRuntimeSettings();
     // Persist the mode so a resume restores it (design §4.2); fire-and-forget.
     this.persistence?.touch({ mode });
     this.outbound.emit({ type: "mode_changed", mode });

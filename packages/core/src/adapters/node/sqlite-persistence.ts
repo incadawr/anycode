@@ -1162,6 +1162,16 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     });
   }
 
+  /** Full replacements clear unsupported settings. Retired runtime writers are rejected. */
+  updateRuntimeSettings(sessionId: string, segmentId: string, selected: import("../../ports/runtime-segments.js").RuntimeSettings, applied: import("../../ports/runtime-segments.js").RuntimeSettings): void {
+    this.transaction(db => {
+      const row = db.prepare("SELECT active_runtime_segment FROM sessions WHERE id=?").get(sessionId);
+      if (row?.active_runtime_segment !== segmentId) throw new Error("Stale runtime settings writer");
+      db.prepare("UPDATE runtime_segments SET selected_json=?,applied_json=? WHERE session_id=? AND segment_id=?").run(JSON.stringify(selected),JSON.stringify(applied),sessionId,segmentId);
+      db.prepare("UPDATE sessions SET model=?,mode=?,codex_fast=?,updated_at=? WHERE id=?").run(selected.model,selected.mode,selected.fast === undefined ? null : selected.fast ? 1 : 0,Date.now(),sessionId);
+    },"immediate");
+  }
+
   /** Allocate a fresh native artifact without changing the logical segment or its handoff. */
   setRuntimeNativeReference(sessionId: string, segmentId: string, revision: number, nativeRef: string, materialized = false): void {
     this.transaction(db => {
@@ -1267,8 +1277,8 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       if (next.id === record.sourceSegmentId || next.id !== record.boundary.segmentId || next.id !== record.handoff.segmentId || record.handoff.state !== "pending" || next.nativeState !== "fresh") throw new Error("Invalid runtime boundary");
       if (Buffer.byteLength(record.handoff.payload,"utf8") > 65536 || createHash("sha256").update(record.handoff.payload).digest("hex") !== record.handoff.digest) throw new Error("Invalid handoff payload");
       this.mergeRuntimeHistoryInDb(db,sessionId,record.sourceSegmentId,record.sourceItems);
-      db.prepare(`UPDATE runtime_segments SET ended_at=?,applied_json=?,native_ref=COALESCE(?,native_ref)
-        WHERE session_id=? AND segment_id=?`).run(next.startedAt,JSON.stringify({model:source.model,mode:source.mode}),source.external_session_ref,sessionId,record.sourceSegmentId);
+      db.prepare(`UPDATE runtime_segments SET ended_at=?,native_ref=COALESCE(?,native_ref)
+        WHERE session_id=? AND segment_id=?`).run(next.startedAt,source.external_session_ref,sessionId,record.sourceSegmentId);
       const ordinal = (db.prepare("SELECT COALESCE(MAX(ordinal),-1)+1 AS ordinal FROM runtime_segments WHERE session_id=?").get(sessionId) as {ordinal:number}).ordinal;
       db.prepare("INSERT INTO runtime_segments VALUES(?,?,?,?,?,?,?,?,?,?,?,?,NULL,?)").run(sessionId,next.id,ordinal,next.engine,next.connectionId ?? null,next.profileId ?? null,next.accountScope,next.nativeRef ?? null,next.nativeState,JSON.stringify(next.selected),JSON.stringify(next.applied),next.startedAt,next.coverage);
       db.prepare("INSERT INTO runtime_boundaries VALUES(?,?,?,?)").run(sessionId,next.id,record.boundary.id,JSON.stringify(record.boundary));

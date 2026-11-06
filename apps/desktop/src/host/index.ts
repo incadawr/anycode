@@ -1310,6 +1310,12 @@ async function candidateRouting(sessionId: string, broker: IpcPermissionBroker, 
   return {
     port, browser, catalog, foreign, profiles,
     configure(next: SwitchRuntime) { runtime = next;
+      next.callbacks = {
+        persistence: createCodexSessionTitlePersistence({adapter: () => persistence,sessionId,onError: error => console.error("[host] runtime settings write failed",error)}),
+        usageAudit: foreignUsageAudit(sessionId),
+        saveTurnError: record => persistence!.appendTurnError(sessionId,record),
+        saveContextUsage: snapshot => persistence!.saveContextUsage(sessionId,snapshot === null ? null : JSON.stringify(snapshot)),
+      };
       next.presentation = { imageInputEnabled: () => next.engine.id === "codex" ? (next.engine as CodexEngine).imageInputEnabled() : next.engine.capabilities.supportsImages,
         shell: { gitReadOnly: existsSync(join(workspace, ".git")), gitUserMutations: existsSync(join(workspace, ".git")), terminal: true },
         modelSettingsConnectionId: null,
@@ -1408,7 +1414,7 @@ function hostSwitchFactory(
           forwardOptions: { mcpForward: { ...(mcp.codexServers !== null ? { servers: mcp.codexServers } : {}), notices: mcp.notices } },
         }),
         selection: { presetId: "read-only", origin: "draft" },
-      }, configure: runtime => { routing.configure(runtime); bindCodexUsage(runtime.engine as CodexEngine, foreignUsageAudit(sessionId).sink, () => session); },
+      }, configure: runtime => { routing.configure(runtime); bindCodexUsage(runtime.engine as CodexEngine, runtime.callbacks!.usageAudit!.sink, () => session?.ownsRuntime(runtime.engine) ? session : null); },
       cleanup: () => { routing.cleanup(); mcp.cleanupFile(); } };
     },
     resolveClaude: async () => {
@@ -1431,8 +1437,8 @@ function hostSwitchFactory(
       }, configure: runtime => {
         raw = runtime.engine as ClaudeEngine;
         routing.configure(runtime);
-        bindClaudeUsage(raw, foreignUsageAudit(sessionId).sink, () => session, runtime.identity!.model);
         runtime.engine = new ClaudeShadowTranscriptEngine(raw, new SqliteClaudeShadowTranscript(database), runtime.identity!.externalSessionRef!, []);
+        bindClaudeUsage(raw, runtime.callbacks!.usageAudit!.sink, () => session?.ownsRuntime(runtime.engine) ? session : null, runtime.identity!.model);
       }, cleanup: () => { routing.cleanup(); mcp.cleanupFile(); } };
     },
   });
@@ -1769,6 +1775,7 @@ async function bootCodexSession(
           selection: {
             model: existing.model,
             presetId: existing.mode,
+            ...(active?.selected.effort !== undefined ? { effort: active.selected.effort } : {}),
             ...(existing.codexFast !== undefined ? { fast: existing.codexFast } : {}),
             origin: "persisted",
           },
@@ -2424,7 +2431,7 @@ async function bootClaudeSession(
           // no-server-echo-to-trust discipline codex uses, cut §2(k).4): an
           // unrecognized id (era "build" mode row) silently
           // becomes the default preset rather than failing the resume.
-          selection: { model: existing.model, presetId: existing.mode, origin: "persisted" },
+          selection: { model: existing.model, presetId: existing.mode, ...(active?.selected.effort !== undefined ? {effort:active.selected.effort} : {}), origin: "persisted" },
         });
         if (fresh) persistence!.setRuntimeNativeReference(existing.id,state!.activeSegmentId,state!.revision,resumed.sessionRef);
         return { ...resumed, sessionMeta: existing };
@@ -3575,7 +3582,10 @@ async function boot(): Promise<void> {
     ));
     const isChildSession = isChildSessionBoot(args, sessionMeta);
     const resolveSessionEffort = isChildSession ? resolveChildReasoningEffort : resolveReasoningEffort;
-    const bootSelectedEffort = connectionModelSettings.effortFor(envConfig.model);
+    const runtimeState = persistence.loadRuntimeSession(sessionMeta.id);
+    const runtimeEffort = runtimeState?.segments.find(segment => segment.id === runtimeState.activeSegmentId)?.selected.effort;
+    const restoredEffort = (["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const).find(tier => tier === runtimeEffort);
+    const bootSelectedEffort = restoredEffort ?? connectionModelSettings.effortFor(envConfig.model);
     const priorEffort = process.env.ANYCODE_SWITCH_PRIOR_EFFORT;
     const switchFallback = (["off", "low", "medium", "high", "xhigh", "max"] as const).find((tier) => tier === priorEffort);
     const bootCandidate = bootSelectedEffort ?? resolveSessionEffort(envConfig.model, entryFor(envConfig.model), undefined, liveCapsFor(envConfig.model), effortLevelsFor(envConfig.model)) ?? switchFallback ?? "off";

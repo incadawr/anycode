@@ -15,7 +15,7 @@ import type { AgentEvent, PermissionMode } from "@anycode/core";
 import { SessionPermissionRules } from "@anycode/core";
 import type { HostToUiMessage, UiToHostMessage } from "../shared/protocol.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
-import { Outbound, Session, type EngineSettingsChange, type EngineSettingsSeam, type SessionPersistence } from "./session.js";
+import { Outbound, Session, type EngineSettingsChange, type EngineSettingsSeam, type SessionPersistence, type SwitchRuntime } from "./session.js";
 import type { EngineCapabilities, RunTurnOptions, SessionEngine } from "./engines/session-engine.js";
 import { MemFs, nodeWirePort } from "./test-harness.js";
 
@@ -169,7 +169,7 @@ function fixture(): Fixture {
  * tab's picker turns a `child-ask` boot into `full-access`), so the route is
  * gated on `child === undefined` the same way `compact_request` already is.
  */
-function fixtureWith(opts: { child?: boolean; engine?: FakeEngine; nextEngine?: SessionEngine; replayCapacity?: number }): Fixture {
+function fixtureWith(opts: { child?: boolean; engine?: FakeEngine; nextEngine?: SessionEngine | SwitchRuntime; replayCapacity?: number }): Fixture {
   const channel = new MessageChannel();
   const received: HostToUiMessage[] = [];
   channel.port1.on("message", (value: unknown) => received.push(value as HostToUiMessage));
@@ -232,6 +232,31 @@ function settings(received: HostToUiMessage[]): Extract<HostToUiMessage, { type:
 
 afterEach(() => {
   for (const value of open.splice(0)) value.close();
+});
+
+describe("committed runtime settings ownership", () => {
+  it("uses the replacement persistence and ignores the predecessor's late acknowledgement", async () => {
+    const source = new FakeEngine();
+    Object.defineProperty(source,"id",{value:"claude"});
+    let stale!: Parameters<EngineSettingsSeam["onSettingsApplied"]>[0];
+    const subscribe = source.onSettingsApplied.bind(source);
+    source.onSettingsApplied = listener => { stale = listener; return subscribe(listener); };
+    const next = new FakeEngine();
+    const touch = vi.fn();
+    const ui = fixtureWith({engine:source,nextEngine:{engine:next,engineSettings:next,callbacks:{persistence:{touch}}}});
+    ui.send({type:"ui_ready"}); await ui.settle();
+    ui.send({type:"engine_switch_request",requestId:"switch",engine:"codex",model:next.model}); await ui.settle();
+    expect(ui.received.some(message => message.type === "engine_switched")).toBe(true);
+    ui.touches.length = 0;
+    ui.send({type:"set_model",model:"gpt-5.4-mini"}); await ui.settle();
+    expect(touch).toHaveBeenCalledWith({model:"gpt-5.4-mini"});
+    expect(ui.touches).toEqual([]);
+    const count = settings(ui.received).length;
+    stale({model:"stale-model",activePresetId:"workspace"}); await ui.settle();
+    expect(settings(ui.received)).toHaveLength(count);
+    ui.send({type:"ui_ready"}); await ui.settle();
+    expect(ui.received.filter(message => message.type === "host_ready").at(-1)).toMatchObject({model:next.snapshot().model});
+  });
 });
 
 describe("— host_ready presentation", () => {

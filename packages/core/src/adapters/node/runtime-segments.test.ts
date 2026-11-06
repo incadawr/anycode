@@ -28,6 +28,36 @@ async function legacyDatabase() {
   return path;
 }
 describe("runtime segment schema", () => {
+  it("rolls back both settings projections when the session mirror write fails", async () => {
+    const path = await legacyDatabase();
+    const store = new SqlitePersistenceAdapter(path);
+    const before = store.ensureRuntimeSession("s");
+    const raw = new DatabaseSync(path);
+    raw.exec("CREATE TRIGGER settings_fault BEFORE UPDATE ON sessions BEGIN SELECT RAISE(ABORT,'settings fault'); END");
+    expect(() => store.updateRuntimeSettings("s","legacy",{model:"chosen",mode:"ask",fast:true},{model:"old",mode:"read-only"})).toThrow("settings fault");
+    expect(store.loadRuntimeSession("s")).toEqual(before);
+    expect(await store.getRootSession("s")).toMatchObject({model:"old",mode:"plan"});
+    raw.close(); await store.close();
+  });
+
+  it("retains selected versus applied settings across archive, clears unsupported values and rejects retired acknowledgements", async () => {
+    const store = new SqlitePersistenceAdapter(":memory:");
+    await store.createSession({id:"s",workspace:"/w",model:"old",mode:"plan",engineId:"codex"});
+    store.ensureRuntimeSession("s");
+    const selected = {model:"chosen",mode:"ask",effort:"high",fast:true};
+    const applied = {model:"old",mode:"read-only",effort:"low",fast:false};
+    store.updateRuntimeSettings("s","legacy",selected,applied);
+    expect(await store.getRootSession("s")).toMatchObject({model:"chosen",mode:"ask",codexFast:true});
+    store.commitRuntimeSwitch("s","codex",switchRecord());
+    expect(store.loadRuntimeSession("s")!.segments[0]).toMatchObject({selected,applied});
+    expect(() => store.updateRuntimeSettings("s","legacy",selected,selected)).toThrow("Stale");
+    const target = {model:"next",mode:"read-only"};
+    store.updateRuntimeSettings("s","next",target,target);
+    expect(store.loadRuntimeSession("s")!.segments[1]).toMatchObject({selected:target,applied:target});
+    expect((await store.getRootSession("s"))?.codexFast).toBeUndefined();
+    await store.close();
+  });
+
   it("migrates old identity and available transcript without changing native admission or model history", async () => {
     const path = await legacyDatabase();
     const store = new SqlitePersistenceAdapter(path);

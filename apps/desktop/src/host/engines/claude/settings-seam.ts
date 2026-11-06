@@ -59,6 +59,7 @@ export class ClaudeSettingsSeam implements EngineSettingsSeam {
    */
   private generation = 0;
   private readonly listeners = new Set<(snapshot: SettingsSnapshot) => void>();
+  private readonly rejectedListeners = new Set<(reason: string) => void>();
 
   /**
    * Session persists Claude's model/preset ONLY from `onSettingsApplied`
@@ -205,6 +206,11 @@ export class ClaudeSettingsSeam implements EngineSettingsSeam {
     return () => this.listeners.delete(listener);
   }
 
+  onSettingsRejected(listener: (reason: string) => void): () => void {
+    this.rejectedListeners.add(listener);
+    return () => this.rejectedListeners.delete(listener);
+  }
+
   /** Non-null ONLY during the in-flight control-request window (hazard (д)) — never held until a next turn. */
   pendingSnapshot(): SettingsSnapshot | null {
     return this.pending;
@@ -243,12 +249,14 @@ export class ClaudeSettingsSeam implements EngineSettingsSeam {
           return { ok: true, ...applied };
         }
         this.engine.queueNotice(warningNotice(result.reason));
+        for (const listener of this.rejectedListeners) listener(result.reason);
         return { ok: false, reason: result.reason };
       })
       .catch((error: unknown): EngineSettingsChange => {
         settle();
         const message = error instanceof Error ? error.message : String(error);
         this.engine.queueNotice(warningNotice(`Claude settings change failed: ${message}`));
+        for (const listener of this.rejectedListeners) listener(message);
         return { ok: false, reason: message };
       });
     this.settingsChanges.add(change);

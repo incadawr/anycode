@@ -1,10 +1,14 @@
-import { type HistoryItem, type RuntimeSessionSnapshot, type SqlitePersistenceAdapter } from "@anycode/core";
+import { type HistoryItem, type RuntimeSettings, type RuntimeSessionSnapshot, type SqlitePersistenceAdapter } from "@anycode/core";
 import type { SessionEngine, RunTurnOptions } from "./engines/session-engine.js";
 
 /** Session-owned canonical history; every checked native read belongs to one current segment. */
 export class RuntimeSessionHistory {
   constructor(readonly store: SqlitePersistenceAdapter, readonly sessionId: string) {}
   state(): RuntimeSessionSnapshot { return this.store.ensureRuntimeSession(this.sessionId); }
+  settings(selected: RuntimeSettings, applied: RuntimeSettings): void {
+    const state = this.state();
+    this.store.updateRuntimeSettings(this.sessionId,state.activeSegmentId,selected,applied);
+  }
   snapshot(live: readonly HistoryItem[]): RuntimeSessionSnapshot {
     const state = this.state();
     this.store.reconcileRuntimeInputs(this.sessionId,state.activeSegmentId,live);
