@@ -194,10 +194,12 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
     <div className="welcome-screen">
       <div className={`welcome-screen-card${activePath ? " welcome-screen-card-setup" : ""}`} ref={cardRef}>
         <header className="welcome-brand">
-          <BrandMark className="welcome-mark" />
-          <h1 className="welcome-wordmark">
-            <span className="welcome-wordmark-any">Any</span>Code
-          </h1>
+          <div className="welcome-brand-heading">
+            <BrandMark className="welcome-mark" />
+            <h1 className="welcome-wordmark">
+              <span className="welcome-wordmark-any">Any</span>Code
+            </h1>
+          </div>
           {/* The mode-ramp motif: plan → build → edit → auto → yolo, quoting
               the mode chip's escalation colors. Decorative — aria-hidden. */}
           <div className="welcome-ramp" aria-hidden="true">
@@ -228,30 +230,10 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
           </div>
         )}
 
+        <span id="welcome-subscription-description" className="visually-hidden">Connect a coding subscription</span>
         <div className={`welcome-paths${activePath ? " welcome-paths-compact" : ""}`} role="group" aria-label="Choose how to connect">
-          {([
-            ["codex", "ChatGPT / Codex", "Use your ChatGPT account"],
-            ["claude", "Claude Code", "Use your Claude account"],
-            ["api", "API key or local model", "Connect any provider or your own server"],
-          ] as const).map(([id, title, description]) => (
-            <button key={id} type="button" className="welcome-path" aria-pressed={activePath === id && !(id === "api" && subscription !== null)} onClick={() => {
-              setPath(id);
-              // Re-clicking the already-active path must stay inert — clearing
-              // the pick here would remount the form and silently discard a
-              // half-typed key, model and label.
-              if (path !== id || subscription !== null) setSubscription(null);
-              onSelectEngine?.(id === "api" ? "core" : id);
-            }}>
-              <strong className="welcome-path-title"><ProviderIcon id={id === "codex" ? "openai" : id === "claude" ? "anthropic" : "custom"} />{title}</strong><span>{description}</span>
-            </button>
-          ))}
-        </div>
-
-        {/* Coding-subscription shortcuts: each opens the API form with its
-            template preselected — a key paste, not an OAuth flow. */}
-        <div className="welcome-subscriptions" role="group" aria-label="Connect a coding subscription">
           {WELCOME_SUBSCRIPTIONS.map((sub) => (
-            <button key={sub.id} type="button" className="welcome-path welcome-subscription" aria-pressed={subscription === sub.id} onClick={() => {
+            <button key={sub.id} type="button" className="welcome-path welcome-subscription" aria-describedby="welcome-subscription-description" aria-pressed={subscription === sub.id} onClick={() => {
               setPath("api");
               setSubscription(sub.id);
               setPick((n) => n + 1);
@@ -262,6 +244,22 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
               onSelectEngine?.("core");
             }}>
               <strong className="welcome-path-title"><ProviderIcon id={sub.id} />{sub.title}</strong><span>{sub.description}</span>
+            </button>
+          ))}
+          {([
+            ["api", "API key or local model", "Connect any provider or your own server"],
+            ["codex", "ChatGPT / Codex", "Use your ChatGPT account"],
+            ["claude", "Claude Code", "Use your Claude account"],
+          ] as const).map(([id, title, description]) => (
+            <button key={id} type="button" data-welcome-path={id} className="welcome-path" aria-pressed={activePath === id && !(id === "api" && subscription !== null)} onClick={() => {
+              setPath(id);
+              // Re-clicking the already-active path must stay inert — clearing
+              // the pick here would remount the form and silently discard a
+              // half-typed key, model and label.
+              if (path !== id || subscription !== null) setSubscription(null);
+              onSelectEngine?.(id === "api" ? "core" : id);
+            }}>
+              <strong className="welcome-path-title"><ProviderIcon id={id === "codex" ? "openai" : id === "claude" ? "anthropic" : "custom"} />{title}</strong><span>{description}</span>
             </button>
           ))}
         </div>

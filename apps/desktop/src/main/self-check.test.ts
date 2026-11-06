@@ -130,9 +130,6 @@ describe("runSelfCheck capture under Xvfb", () => {
 });
 
 describe("runSelfCheck first-run gate when subscription tiles share the path class", () => {
-  // Fresh-profile DOM model: the three engine path tiles live inside
-  // .welcome-paths, and the subscription shortcuts ALSO carry the
-  // welcome-path class — the bare selector counts six, the scoped one three.
   async function runGate() {
     const root = createSelfCheckProfile(["--self-check"])!;
     const expressions: string[] = [];
@@ -141,10 +138,8 @@ describe("runSelfCheck first-run gate when subscription tiles share the path cla
     const capturePage = vi.fn(async () => ({ toPNG: () => Buffer.from("png") }));
     const executeJavaScript = vi.fn(async (expression: string): Promise<unknown> => {
       expressions.push(expression);
-      if (expression.includes("querySelectorAll('.welcome-paths .welcome-path').length === 3")) return true;
-      if (expression.includes("querySelectorAll('.welcome-path').length === 3")) return false;
-      if (expression.includes("querySelectorAll('.welcome-paths .welcome-path')[")) return undefined;
-      if (expression.includes("querySelectorAll('.welcome-path')[")) throw new Error(`unscoped tile click would hit a subscription tile: ${expression}`);
+      if (expression.includes(".every(id => document.querySelector")) return true;
+      if (expression.includes("[data-welcome-path=") && expression.endsWith(".click()")) return undefined;
       if (expression === "document.querySelector('.connection-drawer-body') === null") return true;
       if (expression === "!!document.querySelector('.welcome-setup')") return true;
       if (expression === "!!document.querySelector('.connection-drawer-body') && !document.querySelector('.connection-drawer-advanced').open") return true;
@@ -175,9 +170,9 @@ describe("runSelfCheck first-run gate when subscription tiles share the path cla
   it("counts and clicks only the engine paths, never the subscription tiles", async () => {
     const { result, expressions } = await runGate();
     expect(result).toBeUndefined();
-    expect(expressions.filter(item => item.includes(".welcome-path"))).toEqual([
-      "document.querySelectorAll('.welcome-paths .welcome-path').length === 3",
-      ...[0, 1, 2].map(index => `document.querySelectorAll('.welcome-paths .welcome-path')[${index}].click()`),
+    expect(expressions.filter(item => item.includes("[data-welcome-path="))).toEqual([
+      "['codex', 'claude', 'api'].every(id => document.querySelector(`[data-welcome-path=\"${id}\"]`))",
+      ...["codex", "claude", "api"].map(id => `document.querySelector('[data-welcome-path="${id}"]').click()`),
     ]);
   });
 });

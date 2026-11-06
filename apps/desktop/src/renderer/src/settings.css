@@ -51,12 +51,22 @@
   gap: var(--sp-2);
 }
 
+.welcome-brand-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
 .welcome-paths {
   display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: var(--sp-2);
 }
 
 .welcome-path {
+  grid-column: span 3;
+  min-width: 0;
+  overflow-wrap: anywhere;
   display: flex;
   flex-direction: column;
   gap: var(--sp-1);
@@ -84,22 +94,16 @@
   font-size: var(--fs-sm);
 }
 
-.welcome-paths-compact {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+.welcome-paths > :nth-child(-n+3) {
+  grid-column: span 2;
+}
+
+@media (max-width: 420px) {
+  .welcome-paths > .welcome-path { grid-column: span 3; }
 }
 
 .welcome-paths-compact .welcome-path span {
   display: none;
-}
-
-/* Coding-subscription shortcuts: same tile look as the path buttons, but a
-   secondary three-across row (they lead into the same API form, they are not
-   a fourth setup mode). The setup beat collapses descriptions exactly like
-   the paths row above. */
-.welcome-subscriptions {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--sp-2);
 }
 
 .welcome-subscription span {
