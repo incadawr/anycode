@@ -21,6 +21,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The Windows app icon no longer shows black corners around the rounded tile.
 - Complete OpenCode Go catalog hints, reference prices, and request limits for supported models.
 
 ## [0.0.78] - 2026-11-06
