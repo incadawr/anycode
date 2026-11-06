@@ -11,3 +11,13 @@ it("clamps context overrides and output ceilings independently of input", () => 
 it("rejects an over-limit input before a request can be sent", () => {
   expect(() => applyGoRequestLimits({ ...request, system: "x".repeat(1000) }, port({ context: 10000, input: 100, output: 1000 }))).toThrow(/exceeds the provider input limit/);
 });
+
+it("classifies input admission errors with safe actionable guidance", async () => {
+  const { classifyProviderFailure } = await import("./failure.js");
+  try {
+    applyGoRequestLimits({ ...request, system: "x".repeat(1000) }, port({ context: 10000, input: 100 }));
+    throw new Error("expected rejection");
+  } catch (error) {
+    expect(classifyProviderFailure(error)).toMatchObject({ code: "input_limit", retryable: false, safe: { message: expect.stringMatching(/Reduce the prompt or compact/) } });
+  }
+});
