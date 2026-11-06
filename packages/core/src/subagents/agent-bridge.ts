@@ -150,7 +150,7 @@ export function buildAgentBridgeToolDecl(
     description: z.string().min(1).describe("Short 3-5 word description of the subagent task"),
     prompt: z.string().min(1).describe("The task the subagent should carry out"),
     agent_type: z.enum(names).describe("AnyCode subagent profile to run"),
-    provider: z.string().min(1).regex(/\S/).optional().describe("Connection selector for a new core child whose profile and role do not pin a route. Cannot be combined with continue_session."),
+    provider: z.string().min(1).regex(/\S/).optional().describe("Use ListConnections first. Exact connection id, label, provider id, offered model id or provider/model for a new unpinned core child. Unknown or ambiguous selectors return candidates. Cannot override profile/role routes or combine with continue_session."),
     model: z
       .string()
       .min(1)
@@ -590,6 +590,8 @@ export interface AgentBridgeCallDeps {
   /** Opt-in routing and dispatch policy for native parents. Resolve fresh calls only. */
   policy?: {
     defaultDetach?: boolean;
+    /** Roles pinned by Settings, excluding routes synthesized from session defaults. */
+    configuredRoles?: ReadonlySet<string>;
     resolveRoleRoute?: (role: RoleRouteName) => RoleRouteResolution | undefined | Promise<RoleRouteResolution | undefined>;
   };
 }
@@ -654,6 +656,9 @@ export async function runAgentBridgeCall(
     if (!input.provider.trim()) return refuse('Agent: "provider" must be a nonempty connection selector.');
     if (continueSession !== undefined) {
       return refuse('Agent: "continue_session" cannot be combined with "provider" — the resumed child keeps the connection it was started on. Start a new call instead.');
+    }
+    if (deps.policy?.configuredRoles?.has(entry.name)) {
+      return refuse(`Agent: "provider" cannot override the configured route for role "${entry.name}"; omit "provider" or choose an unpinned core profile. Change the role route in Settings → Roles.`);
     }
     if (entry.engine !== undefined) {
       return refuse('Agent: "provider" is not valid for an engine-profile agent — the child runs on its own CLI account; omit "provider" or choose an unpinned core profile.');

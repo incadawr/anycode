@@ -16,6 +16,7 @@ import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, writeSync } fro
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resolveCoreConnectionForModel } from "../shared/core-model-connection.js";
 import { recordHostFailure } from "../host/error-diagnostics.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessagePortMain, UtilityProcess } from "electron";
@@ -5857,6 +5858,42 @@ describe("TabHostManager — recognizer live-config broadcast (E1 §1.2)", () =>
 });
 
 describe("model admission before fork", () => {
+  it.each(["claude", "codex"] as const)("admits a selected API route from a %s parent and refuses stale readiness without fallback", async engine => {
+    const { fork, hosts } = liveForkRig();
+    const connections = [
+      { id: "first", providerId: "api", model: "first-model" },
+      { id: "second", providerId: "api", model: "default-model", models: ["second-model"], label: "Second API" },
+    ];
+    const prepare = vi.fn(async (_connectionId: string) => ({ ok: true as boolean, release: () => {} }));
+    const validate = vi.fn();
+    const manager = childManager(fork, windowRig().window, {
+      engineReady: () => true,
+      resolveChildRoute: value => resolveCoreConnectionForModel({ provider: { connections } }, value),
+      prepareChildConnection: prepare,
+      validateChildModel: validate,
+    });
+    expect(manager.createTab({ workspace: "/ws", sessionId: "native-root", resume: false, engine }).ok).toBe(true);
+    for (const provider of ["unknown", "api"]) {
+      hosts[0]!.emit("message", spawnRequest({ requestId: provider, spawnToolCallId: provider, provider }));
+      await flush();
+      expect(hosts).toHaveLength(1);
+      expect(childRunEvents(hosts[0]!).at(-1)).toMatchObject({ kind: "rejected", message: expect.stringContaining("second") });
+    }
+    hosts[0]!.emit("message", spawnRequest({ requestId: "selected", spawnToolCallId: "selected", provider: "second-model" }));
+    await flush();
+    expect(validate).toHaveBeenCalledWith("second-model", "second");
+    expect(prepare.mock.calls[0]![0]).toBe("second");
+    expect(hosts).toHaveLength(2);
+    prepare.mockClear();
+    prepare.mockResolvedValueOnce({ ok: false, release: () => {} });
+    hosts[0]!.emit("message", spawnRequest({ requestId: "stale", spawnToolCallId: "stale", provider: "Second API" }));
+    await flush();
+    expect(hosts).toHaveLength(2);
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(prepare.mock.calls[0]![0]).toBe("second");
+    expect(childRunEvents(hosts[0]!).at(-1)).toMatchObject({ kind: "rejected", reason: "not_ready" });
+  });
+
   it("returns route candidates for an ambiguous provider before forking", () => {
     const { fork, hosts } = liveForkRig();
     const manager = childManager(fork, windowRig().window, {

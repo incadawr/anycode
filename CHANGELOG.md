@@ -9,6 +9,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Native Claude and Codex Agent calls can select an API connection for unpinned core children, with explicit refusals for ambiguous selectors and pinned routes.
+
 - Claude and Codex root sessions can list API connections and models, alongside their own native model route.
 
 - Connection listings limit oversized display text and filter unexpected nested data from tool responses.
