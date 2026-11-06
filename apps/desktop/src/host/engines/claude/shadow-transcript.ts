@@ -1,3 +1,4 @@
+import { projectClaudeHistory } from "./history-projection.js";
 /**
  * Host-owned fire-and-forget sink of a Claude turn's already-translated
  * `AgentEvent` stream into the additive `claude_transcript_items` SQLite
@@ -37,6 +38,7 @@ export interface ClaudeShadowTranscriptHost extends SessionEngine {
 }
 
 export interface ClaudeShadowTranscriptPort {
+  flushChecked?(): Promise<void>;
   /** Fire-and-forget: called synchronously after a turn finishes, never awaited by the caller. */
   record(sessionRef: string, items: readonly ClaudeTranscriptItem[]): void;
   /** Full mirror for one native session, in write order — the resume-projection's only input. */
@@ -44,14 +46,32 @@ export interface ClaudeShadowTranscriptPort {
 }
 
 export class SqliteClaudeShadowTranscript implements ClaudeShadowTranscriptPort {
+  private tail: Promise<void> = Promise.resolve();
+  private readonly pending = new Map<string, { ref: string; item: ClaudeTranscriptItem }>();
   constructor(private readonly persistence: SqlitePersistenceAdapter) {}
 
   record(sessionRef: string, items: readonly ClaudeTranscriptItem[]): void {
-    for (const item of items) {
-      void this.persistence.recordClaudeTranscriptItem(sessionRef, item).catch((error: unknown) => {
+    for (const value of items) {
+      const item = JSON.parse(JSON.stringify(value)) as ClaudeTranscriptItem;
+      const key = JSON.stringify([sessionRef,item.itemId]);
+      this.pending.set(key,{ref:sessionRef,item});
+      this.tail = this.tail.then(async () => {
+        await this.persistence.recordClaudeTranscriptItem(sessionRef,item);
+        this.pending.delete(key);
+      }).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`[claude] shadow transcript write failed for session ${sessionRef} item ${item.itemId}: ${message}`);
       });
+    }
+  }
+
+  async flushChecked(): Promise<void> {
+    await this.tail;
+    // Retain failed records for an explicit retry; a second read must never
+    // mistake an acknowledged error window for a complete mirror.
+    for (const [key,{ref,item}] of this.pending) {
+      await this.persistence.recordClaudeTranscriptItem(ref,item);
+      this.pending.delete(key);
     }
   }
 
@@ -160,6 +180,7 @@ export function projectClaudeTurn(
 export class ClaudeShadowTranscriptEngine implements SessionEngine {
   readonly id = "claude" as const;
   private nextTurnOrdinal: number;
+  private projectionFailure: unknown;
 
   /**
    * cross-review F1: own-property delegation, installed in the
@@ -202,6 +223,10 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
     }
   }
 
+  get orchestrationPolicy() { return this.engine.orchestrationPolicy; }
+  get orchestrationComposition() { return this.engine.orchestrationComposition; }
+  get orchestrationCompositionReady() { return this.engine.orchestrationCompositionReady; }
+
   get capabilities(): EngineCapabilities {
     return this.engine.capabilities;
   }
@@ -214,6 +239,8 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
     return this.engine.reasoningEffort();
   }
 
+  importBudgetBytes(): number | undefined { return this.engine.importBudgetBytes?.(); }
+
   setReasoningEffort(effort: ReasoningEffort | undefined): void {
     this.engine.setReasoningEffort(effort);
   }
@@ -222,11 +249,18 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
     return this.bootHistory;
   }
 
+  async readTranscript(): Promise<readonly HistoryItem[]> {
+    if (this.projectionFailure) throw new Error("Claude transcript projection failed", { cause: this.projectionFailure });
+    await this.sink.flushChecked?.();
+    return projectClaudeHistory(await this.sink.list(this.sessionRef));
+  }
+
   async *runTurn(input: string, options: RunTurnOptions): AsyncIterable<AgentEvent> {
     const turn = this.nextTurnOrdinal++;
     const events: AgentEvent[] = [];
+    let accepted = options.onInputDispatched === undefined;
     try {
-      for await (const event of this.engine.runTurn(input, options)) {
+      for await (const event of this.engine.runTurn(input, { ...options, onInputAccepted: (nativeId) => { options.onInputAccepted?.(nativeId); accepted = true; } })) {
         events.push(event);
         yield event;
       }
@@ -237,12 +271,14 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
       // of the turn that carried it — and reads the engine's reconciled
       // snapshot rather than raw wire values.
       try {
+        if (!accepted) return;
         const projected = projectClaudeTurn(input, events, this.now, turn).map((item) => options.turnId ? { ...item, turnId: options.turnId } : item);
         this.sink.record(
           this.sessionRef,
           projected.map((data, index) => ({ turnOrdinal: turn, positionInTurn: index, itemId: `${turn}:${index}`, data })),
         );
       } catch (error) {
+        this.projectionFailure = error;
         console.error(`[claude] shadow transcript projection failed for turn ${turn}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }

@@ -682,10 +682,11 @@ export class ClaudeClient {
       });
       const child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), ...args], this.spawnOptions(true));
       this.child = child;
+      this.reportOwnedProcess(child);
+      child.once("close", () => this.reportOwnedProcess(child, true));
       this.options.bootstrap?.adopt(() => this.close());
       this.bindChild(child);
       await this.awaitSpawn(child);
-      this.reportOwnedProcess(child);
     } catch (error) {
       // a failed start still owned the file — release it (and any
       // child a late failure adopted) before propagating. The guard keeps
@@ -894,6 +895,8 @@ export class ClaudeClient {
   private async preflightVersionOnce(): Promise<void> {
     this.assertTrusted();
     const child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), "--version"], this.spawnOptions(true));
+    this.reportOwnedProcess(child);
+    child.once("close", () => this.reportOwnedProcess(child, true));
     const timeoutMs = this.options.versionTimeoutMs ?? CLAUDE_VERSION_PREFLIGHT_TIMEOUT_MS;
     const output = await new Promise<string>((resolve, reject) => {
       let stdout = "";
@@ -1163,12 +1166,13 @@ export class ClaudeClient {
     }
   }
 
-  private reportOwnedProcess(child: ChildProcess): void {
+  private reportOwnedProcess(child: ChildProcess, exited = false): void {
     const ownership = this.options.processOwnership;
     const pid = child.pid;
     if (ownership === undefined || pid === undefined || process.platform === "win32") return;
     ownership.report({
       type: ENGINE_PROCESS_REGISTRATION_TYPE,
+      ...(exited ? { exited: true as const } : {}),
       hostPid: ownership.hostPid,
       generation: ownership.generation,
       enginePid: pid,

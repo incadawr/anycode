@@ -856,6 +856,11 @@ export async function resumeCodexEngine(options: CodexEngineCreateOptions & { ex
 }
 
 export class CodexEngine implements SessionEngine {
+  importBudgetBytes(): number | undefined {
+    if (this.pendingSettings && this.pendingSettings.model !== this.applied.model) return undefined;
+    const usage = this.latestContextUsage;
+    return usage ? Math.max(0,usage.budgetTokens - usage.estimatedTokens - 1024) : undefined;
+  }
   orchestrationPolicy?: OrchestrationPolicy;
   private orchestrationVerified = false;
   private orchestrationState: "off" | "on" | "transitioning" | "quarantined" = "off";
@@ -1127,6 +1132,7 @@ export class CodexEngine implements SessionEngine {
     const threadRead = asThreadRead(rawRead, this.threadId);
     const shadow = this.shadowLog !== undefined ? await this.shadowLog.list(this.threadId) : [];
     return projectCodexHistory(threadRead, shadow, {
+      nativeTurnIds: true,
       maxItems: CODEX_HISTORY_MAX_ITEMS,
       ...(this.agentCardLog ? { agentPresentations: await this.agentCardLog.list() } : {}),
       // Same degradation rule the boot projection uses (cut §2(e)): a thread
@@ -1134,6 +1140,15 @@ export class CodexEngine implements SessionEngine {
       // rather than silently presented as command-output-complete.
       shadowMissing: shadow.length === 0 && (threadRead.thread.turns?.length ?? 0) > 0,
     });
+  }
+
+  async verifyInputAbsent(input: string): Promise<boolean> {
+    const raw = await this.client.request<unknown>("thread/read",{threadId:this.threadId,includeTurns:true},{timeoutMs:this.bounds.bootRpcMs});
+    const read = asThreadRead(raw,this.threadId);
+    // Do not infer absence from the capped display projection or from a partial read.
+    if (!Array.isArray(read.thread.turns) || read.thread.turns.some(turn => !Array.isArray(turn.items))) return false;
+    const items = projectCodexHistory(read,[],{nativeTurnIds:true,maxItems:Number.MAX_SAFE_INTEGER});
+    return !items.some(item => item.message.role === "user" && item.message.content === input);
   }
 
   /**
@@ -1191,6 +1206,13 @@ export class CodexEngine implements SessionEngine {
    * after it was evicted — or that folds it away because it compares equal to a
    * wrongly-advanced "current" — would otherwise show the change as active.
    */
+  /** Restore the durable last accepted posture; a relaunch does not acknowledge a pending turn. */
+  restoreAppliedSettings(previous: import("@anycode/core").RuntimeSettings): void {
+    if (this.disposed || this.operation !== null) throw new Error("Cannot restore settings during an engine operation");
+    this.applied = {model:previous.model,activePresetId:previous.mode,...(previous.effort !== undefined ? {effort:previous.effort} : {}),...(previous.fast !== undefined ? {fast:previous.fast} : {})};
+    this.markPending();
+  }
+
   pendingSnapshot(): { model: string; activePresetId: string; effort?: string; fast?: boolean } | null {
     return this.pendingSettings === null ? null : { ...this.pendingSettings };
   }
@@ -1457,6 +1479,8 @@ export class CodexEngine implements SessionEngine {
       { type: "text" as const, text: input },
       ...(options.attachments ?? []).map((attachment) => codexImageInput(attachment)),
     ];
+    try {
+    options.onInputDispatched?.();
     const request = this.client.request<TurnResult>("turn/start", {
       threadId: this.threadId,
       input: inputItems,
@@ -1467,8 +1491,6 @@ export class CodexEngine implements SessionEngine {
       } : {}),
     }, { timeoutMs: this.bounds.turnStartMs });
     const buffered: JsonRpcNotification[] = [];
-
-    try {
       // Phase A — wait for the native turn id. An abort here cannot interrupt
       // anything yet, so it only latches the intent; the response itself is
       // bounded, so a wedged server cannot park Session as busy forever.
@@ -1510,6 +1532,7 @@ export class CodexEngine implements SessionEngine {
 
       const turnId = result.turn?.id;
       if (typeof turnId !== "string" || turnId.length === 0) throw new Error("Codex turn/start returned no turn id");
+      options.onInputAccepted?.(turnId);
       // Only an accepted native turn advances the next shadow-history ordinal.
       const turnOrdinal = this.nextNativeTurnOrdinal++;
       // Phase 2 of the ack (cut §2(k).3): the server ACCEPTED a turn/start that
@@ -1679,6 +1702,18 @@ export class CodexEngine implements SessionEngine {
       // intercepted it) and released from the finally, after the cancelled
       // children's real outcomes have been joined and flushed.
     } catch (error) {
+      if (this.activeTurn === null && this.terminalError === null && typeof (error as {code?:unknown})?.code === "number") {
+        // A server rejection is a negative acknowledgement, not a transport
+        // failure. The same runtime can serve the user's next attempt.
+        options.onInputNotSent?.();
+        const failure = error instanceof Error ? error : new Error(String(error));
+        heldTerminal = options.signal.aborted ? [...this.cancelledEvents(turn)] : [{type:"error",error:failure},...this.terminalEvents(turn,failure,false)];
+        return;
+      }
+      if (options.signal.aborted && this.activeTurn === null) {
+        heldTerminal = [...this.cancelledEvents(turn)];
+        return;
+      }
       const terminalError = this.terminalError ?? (error instanceof Error ? error : new Error(String(error)));
       this.terminalError = terminalError;
       this.approvals?.denyAll("Codex app-server failed", "turn_cancelled");

@@ -49,6 +49,18 @@ vi.setConfig({ testTimeout: 15_000 });
 // index.*-wiring tests' own local CUSTOM_PROVIDER_*_CHANNEL constants.
 const CUSTOM_PROVIDER_UPDATE_CHANNEL = "anycode:custom-provider-update";
 
+// These tests drive the two IPC mutation hooks. An external-file watcher can
+// replay an intermediate IPC save during a later credential update, so keep
+// it outside this fixture (the watcher has its own production tests).
+vi.mock("./provider-ipc.js", async importOriginal => {
+  const actual = await importOriginal<typeof import("./provider-ipc.js")>();
+  return {...actual,registerProviderIpc:(deps:Parameters<typeof actual.registerProviderIpc>[0]) => {
+    const handle = actual.registerProviderIpc(deps);
+    handle.dispose();
+    return handle;
+  }};
+});
+
 type IpcHandler = (event: unknown, ...args: unknown[]) => unknown;
 
 // `vi.hoisted` so the capturing collections exist before vi.mock's hoisted

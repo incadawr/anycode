@@ -520,7 +520,8 @@ export type UiToHostMessage =
   // honored only between turns (busy/child-attached refusals get an
   // `engine_switch_failed` reply — the switch surface is non-silent, mirror of
   // rewind_request's discipline).
-  | { type: "engine_switch_request"; requestId: string; engine: EngineId }
+  | { type: "engine_switch_request"; requestId: string; engine: EngineId; model: string; generation?: number; connectionId?: string; codexProfileId?: string }
+  | { type: "runtime_input_discard"; turnId: string }
   // Slice 5.7 (design slice-5.7-cut.md §2.1): one user-initiated git command.
   // Untrusted -> validated by `gitCommandMessageSchema` below (fail-closed). NO
 
@@ -585,12 +586,30 @@ export interface WorktreeProjection {
   ownedByAnyCode: boolean;
 }
 
+/** Atomic replacement of every engine-dependent composer projection. */
+export interface EngineSwitchProjection {
+  engine: EnginePresentation | null;
+  shell: ShellCapabilitiesProjection | null;
+  model: string;
+  mode: PermissionMode;
+  reasoningEffort: ReasoningEffort;
+  availableEffortLevels?: ReasoningEffort[];
+  imageInput: boolean;
+  imageFallback: boolean;
+  contextWindowAssumed: boolean;
+  modelSettingsConnectionId: string | null;
+  steering: { supported: boolean; ready: boolean } | null;
+  orchestration: { enabled: boolean; available: boolean };
+  pinnedConnection: { connectionId: string; providerId: string } | null;
+}
+
 export type HostToUiMessage =
   | { type: "todo_reminder_snapshot"; state: { count: number; threshold: number } | null }
   // Phase-2 §3.3: `sessionId` added (host knows it at boot); renderer binds the
   // tab to its session (badge, picker annotation). Additive on the wire.
   | {
       type: "host_ready";
+      engineSwitch?: { enabled: true; generation: number };
       workspace: string;
       /** Stable project identity; differs from workspace while a worktree is active. */
       projectRoot?: string;
@@ -699,6 +718,7 @@ export type HostToUiMessage =
   /** `startedAt` (epoch ms, host clock): when the turn really began — a re-asserted or replayed copy carries the original, so a footer's duration survives a reconnect. Absent from older hosts. */
   | { type: "turn_started"; requestId: string; turnId: string; startedAt?: number }
   | { type: "turn_rejected"; requestId: string; reason: "busy" | "not_ready" | "unsupported_images" }
+  | { type: "runtime_input_recovery"; turnId: string; text: string; status: "pending" | "uncertain" }
   | { type: "user_message_invalid"; requestId: string }
   /** Diagnostic for this frame only; requestId may already name an accepted turn. */
   | { type: "user_message_unavailable"; requestId: string; reason: "orchestrate_unavailable" | "posture_unavailable" }
@@ -713,7 +733,7 @@ export type HostToUiMessage =
    * items share one key space: `${turnId}:${step}`. Core also stamps the
    * attempt within each step, starting at zero and advancing on retry.
    */
-  | { type: "agent_event"; turnId: string; step?: number; attempt?: number; event: WireAgentEvent; /** Host completion time for a loop_end. */ at?: number }
+  | { type: "agent_event"; turnId: string; boundaryId?: string; boundaryAfter?: string; step?: number; attempt?: number; event: WireAgentEvent; /** Host completion time for a loop_end. */ at?: number }
   /**
    * the host's authoritative pending-prompt push (sendDirect,
    * regenerated on every ui_ready — never ring-buffered). Present iff an
@@ -1004,6 +1024,8 @@ export type HostToUiMessage =
   // immediately) stays valid without it.
   | {
       type: "engine_settings_changed";
+      imageInput?: boolean;
+      imageFallback?: boolean;
       clearContextUsage?: boolean;
       model?: string;
       activePresetId?: string;
@@ -1019,12 +1041,12 @@ export type HostToUiMessage =
   // engine is live and the old one disposed, so receiving it means every later
   // message flows through the replacement engine.
   | { type: "context_usage_checkpoint"; contextUsage: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" } | null }
-  | { type: "engine_switched"; requestId: string; engine: EngineId; previousEngine: EngineId }
+  | { type: "engine_switched"; requestId: string; engine: EngineId; previousEngine: EngineId; generation?: number; projection?: EngineSwitchProjection }
   // non-silent refusal for engine_switch_request — mirror of
   // rewind_result's failure shape (the UI must be able to show WHY the switch
   // did not happen: turn running, child attached, same engine, factory absent
   // or the factory's own error e.g. "codex not signed in").
-  | { type: "engine_switch_failed"; requestId: string; reason: string }
+  | { type: "engine_switch_failed"; requestId: string; reason: string; generation?: number }
   // Phase 4 slice 4.4-T (design feature-session-titles.md §4): emitted once
   // the heuristic derives a title from the first user message, and again if
   // the async tier-2 LLM refinement upgrades it. Like `mode_changed` above,
@@ -1287,6 +1309,14 @@ export const setEngineEffortSchema = z
   .object({ type: z.literal("set_engine_effort"), effort: z.string().min(1).max(32) })
   .strict();
 
+/** Renderer selection only. Paths, credentials and runtime options are resolved by main. */
+export const engineSwitchTargetSchema = z.discriminatedUnion("engine", [
+  z.object({ engine: z.literal("core"), model: z.string().min(1).max(128), connectionId: z.string().min(1).max(128) }).strict(),
+  z.object({ engine: z.literal("codex"), model: z.string().min(1).max(128), codexProfileId: z.string().min(1).max(128).optional() }).strict(),
+  z.object({ engine: z.literal("claude"), model: z.string().min(1).max(128) }).strict(),
+]);
+export type EngineSwitchTarget = z.infer<typeof engineSwitchTargetSchema>;
+
 // untrusted engine_switch_request. Mirrors setEnginePresetSchema's
 // bounded-length discipline; `engine` is validated against ENGINE_IDS (the same
 // table isEngineId uses) so a hostile renderer cannot ship an unknown engine id,
@@ -1297,8 +1327,13 @@ export const engineSwitchRequestSchema = z
     type: z.literal("engine_switch_request"),
     requestId: z.string().min(1).max(128),
     engine: z.enum(ENGINE_IDS),
+    model: z.string().min(1).max(128).refine(value => value.trim().length > 0),
+    generation: z.number().int().positive().optional(),
+    connectionId: z.string().min(1).max(128).optional(),
+    codexProfileId: z.string().min(1).max(128).optional(),
   })
-  .strict();
+  .strict()
+  .refine(value => (value.engine === "core" || value.connectionId === undefined) && (value.engine === "codex" || value.codexProfileId === undefined));
 
 // ── git (slice 5.7): untrusted UiToHostMessage side; semantics FROZEN incl. caps.
 // DRIFT-LOCK: GIT_DIFF_TARGETS is the single source of truth for the diff.target
@@ -1496,6 +1531,7 @@ export const uiToHostMessageSchema = z.discriminatedUnion("type", [
   setEngineEffortSchema,
   z.object({ type: z.literal("set_engine_fast"), fast: z.boolean() }).strict(),
   engineSwitchRequestSchema,
+  z.object({ type: z.literal("runtime_input_discard"), turnId: z.string().min(1).max(128) }).strict(),
   gitCommandMessageSchema,
   lspStatusRequestSchema,
   lspRestartRequestSchema,

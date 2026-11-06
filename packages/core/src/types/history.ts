@@ -99,6 +99,12 @@ export interface TurnErrorRecord {
 }
 
 export interface HistoryItem {
+  /** Display-only identity in the durable multi-runtime transcript. */
+  segmentId?: string;
+  sourceItemId?: string;
+  /** Display-only delivery provenance, retained after the transient input journal is pruned. */
+  nativeTurnId?: string;
+  runtimeInputDigest?: string;
   /** Stable uuid; persisted as-is. */
   id: string;
   /** Epoch milliseconds. */

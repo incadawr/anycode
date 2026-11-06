@@ -136,6 +136,7 @@ import type {
   WireUsageAuditStep,
   WireUsageAuditTotals,
   EnginePresentation,
+  EngineSwitchTarget,
   ShellCapabilitiesProjection,
 } from "../../shared/protocol.js";
 import { stripReminderBlocks } from "./transcript-sanitize.js";
@@ -162,6 +163,8 @@ const MANUAL_COMPACTION_TURN_ID = "manual-compaction";
 
 /** Lifecycle of the renderer<->host port itself, independent of the agent turn lifecycle. */
 export type ConnectionPhase = "awaiting_port" | "awaiting_host_ready" | "ready" | "host_exited";
+
+export interface PendingEngineSwitch { requestId: string; generation: number; target: EngineSwitchTarget }
 
 export interface TurnState {
   /**
@@ -662,6 +665,7 @@ export type TranscriptBlock =
    * new model's vocabulary and was therefore reset (§D3): the switch says so
    * out loud rather than substituting a level silently.
    */
+  | { kind: "engine_boundary"; id: string; text: string }
   | {
       kind: "connection_changed";
       id: string;
@@ -998,6 +1002,7 @@ export interface QueuedPrompt {
   orchestrate?: "enable";
   /** The whole draft needs a user's explicit recovery before sending. */
   requiresRestore?: boolean;
+  runtimeRecoveryTurnId?: string;
   initialPicks?: { model?: string; mode?: PermissionMode; effort?: string; reasoningEffort?: string };
   /** Queue identity for edit/delete; a refused steer retains its request id. */
   id: string;
@@ -1328,6 +1333,7 @@ export interface DesktopState {
    */
   orchestrateActive: boolean;
   orchestration: { available: boolean; reason?: string; posture: "off" | "on" | "transitioning" | "quarantined"; protocol: { hostIncarnation: string; connectionId: string; atomicSubmit: boolean; correlatedToggle: boolean } | null; pendingToggle: { requestId: string; connectionId: string } | null; pendingSubmit: string | null; observedEnabled: boolean | null };
+  beginEngineSwitch(requestId: string, target: EngineSwitchTarget): number | null;
   beginOrchestrationToggle(requestId: string): string | null;
   beginOrchestrationSubmit(requestId: string): string | null;
 
@@ -1342,6 +1348,8 @@ export interface DesktopState {
    * pending yet.
    */
   pendingEngineChange: PendingEngineChange | null;
+  engineSwitch: { enabled: true; generation: number } | null;
+  pendingEngineSwitch: PendingEngineSwitch | null;
   /**
    * Host-authoritative shell (AnyCode chrome) capability projection (design
    * §2(f)/§3.2): null for core (legacy wire) OR whenever the host
@@ -1824,6 +1832,8 @@ interface SessionSlice {
   engine: EnginePresentation | null;
   /** Codex-fixes (cut §2(k).3): see `PendingEngineChange`'s own doc comment. */
   pendingEngineChange: PendingEngineChange | null;
+  engineSwitch: { enabled: true; generation: number } | null;
+  pendingEngineSwitch: PendingEngineSwitch | null;
   /** Design §2(f)/§3.2: mirrors `engine` -- reset alongside it on a respawn/reset. */
   shell: ShellCapabilitiesProjection | null;
   turn: TurnState;
@@ -1903,6 +1913,8 @@ function initialSessionSlice(): SessionSlice {
   return {
     engine: null,
     pendingEngineChange: null,
+    engineSwitch: null,
+    pendingEngineSwitch: null,
     shell: null,
     turn: { status: "idle", turnId: null, requestId: null },
     latestTurnId: null,
@@ -3843,7 +3855,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
      * a reconnect never loses accounting. Foreign-engine/legacy envelopes
      * carry no `step` and never engage the fold.
      */
-    function onAgentEvent(turnId: string, event: WireAgentEvent, step: number | undefined, attempt?: number, eventAt?: number): void {
+    function onAgentEvent(turnId: string, event: WireAgentEvent, step: number | undefined, attempt?: number, eventAt?: number, boundaryId?: string, boundaryAfter?: string): void {
       const attemptKey = `${turnId}:${step ?? "_"}`;
       if (attempt !== undefined) {
         const current = currentAttempts.get(attemptKey);
@@ -4814,6 +4826,18 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         // transcript line later — additive on top of this, not a
         // replacement.
         case "engine_notice":
+          if (turnId === ENGINE_SWITCH_NOTICE_TURN_ID && boundaryId) {
+            const id = `engine-boundary:${boundaryId}`;
+            set(state => {
+              if (state.transcript.some(block => block.id === id)) return {};
+              const transcript = [...state.transcript];
+              const anchor = boundaryAfter ? lastBlockIndexOfItem(transcript, boundaryAfter) : -1;
+              const index = anchor < 0 ? transcript.length : anchor + 1;
+              transcript.splice(index, 0, { kind: "engine_boundary", id, text: event.message });
+              return { transcript };
+            });
+            return;
+          }
           set({ notice: { kind: "engine_notice", text: event.message } });
           return;
 
@@ -5156,6 +5180,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             });
             set({
               connection: "ready",
+              engineSwitch: message.engineSwitch ?? null,
               ...(message.activeTurn ? { turn: { status: "running" as const, turnId: message.activeTurn.turnId, requestId: message.activeTurn.requestId, startedAt: message.activeTurn.startedAt ?? Date.now() } } : {}),
               orchestrateActive: message.orchestration?.enabled ?? false,
               orchestration: { available: message.orchestration?.available ?? false, reason: message.orchestration?.reason, posture: message.orchestration?.posture ?? (message.orchestration?.enabled ? "on" : "off"), protocol: message.orchestrationProtocol?.version === 1 ? message.orchestrationProtocol : null, pendingToggle: null, pendingSubmit: null, observedEnabled: null },
@@ -5390,6 +5415,20 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             }
             return;
           }
+          case "runtime_input_recovery": {
+            const state = get();
+            const id = `runtime-recovery:${message.turnId}`;
+            set({
+              ...(message.status === "pending" && !state.promptQueue.some(item => item.id === id) ? {
+                promptQueue:[...state.promptQueue,{id,text:message.text,images:[],requiresRestore:true,runtimeRecoveryTurnId:message.turnId}],
+                queuePaused:true,queuePauseReason:"cancelled" as const,
+              } : {}),
+              notice:{kind:"turn_rejected",text:message.status === "pending"
+                ? "Message was not accepted. Restore the draft to send again, or delete it."
+                : `Delivery is unconfirmed for: ${message.text.slice(0,500)}. Reconnect to check native history before resending this message.`},
+            });
+            return;
+          }
           case "turn_rejected": {
             // Slice P7.14: if the host rejected the very drain we just sent (the
             // race in §0/§2.3 — busy/unsupported_images), return the item to the
@@ -5498,7 +5537,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           }
           case "agent_event":
             if (presentationReplayActive && presentationReplayTurns?.has(message.turnId) && !["context_usage", "engine_quota", "provider_quota", "engine_session_tokens", "todo_reminder_state"].includes(message.event.type)) return;
-            onAgentEvent(message.turnId, message.event, message.step, message.attempt, message.at);
+            onAgentEvent(message.turnId, message.event, message.step, message.attempt, message.at, message.boundaryId, message.boundaryAfter);
             return;
           case "pending_prompt": {
             // the host's authoritative in-flight prompt push. A
@@ -6026,6 +6065,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               if (state.engine === null) {
                 return {};
               }
+              const media = {...(message.imageInput !== undefined ? {imageInput:message.imageInput} : {}),...(message.imageFallback !== undefined ? {imageFallback:message.imageFallback} : {})};
               if (message.state === "pending") {
                 const nextPending: PendingEngineChange = { ...state.pendingEngineChange };
                 let touched = false;
@@ -6075,7 +6115,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                   return {};
                 }
                 const hasPending = nextPending.model !== undefined || nextPending.activePresetId !== undefined || nextPending.effort !== undefined || nextPending.fast !== undefined;
-                return { pendingEngineChange: hasPending ? nextPending : null };
+                return { ...media, pendingEngineChange: hasPending ? nextPending : null };
               }
               // "applied" or absent — actually active now. Clear whichever
               // fields this message confirms out of any stale pending entry
@@ -6104,6 +6144,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               if (message.fast !== undefined) nextEngine.fast = message.fast;
               else if (message.model !== undefined) delete nextEngine.fast;
               return {
+                ...media,
                 ...(message.clearContextUsage ? { contextUsage: null } : {}),
                 engine: {
                   ...nextEngine,
@@ -6297,30 +6338,31 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                 : {}),
             }));
             return;
-          case "engine_switched":
-            // the host swapped the live engine in place between
-            // turns. The wire message carries only the ids (the full
-            // EnginePresentation is host-side state); the honest renderer
-            // update is the identity chip — patch `engine.id` in place, keep
-            // the rest of the projection (capabilities from the OLD engine
-            // stay only until the next ui_ready re-projects host_ready from
-            // the new engine; the host also legally omits the model/permissions
-            // blocks there after a swap, §7 Q2). A stale pendingEngineChange
-            // for the old engine can never apply now — cleared here, same as
-            // a respawn would.
-            set((state) => ({
-              ...(state.engine !== null ? { engine: { ...state.engine, id: message.engine } } : {}),
-              pendingEngineChange: null,
-              contextUsage: null,
-            }));
+          case "engine_switched": {
+            const state = get();
+            const pending = state.pendingEngineSwitch;
+            if (state.engineSwitch && (!pending || pending.requestId !== message.requestId || pending.generation !== message.generation)) return;
+            if (message.projection) {
+              const { orchestration, ...projection } = message.projection;
+              causalFoldEngaged = message.engine === "core";
+              clearFoldCheckpoint();
+              causalFoldEngaged = message.engine === "core";
+              set({ ...projection, quota: projection.engine?.quota ?? null, availableEffortLevels: projection.availableEffortLevels,
+                orchestrateActive: orchestration.enabled,
+                orchestration: { ...state.orchestration, available: orchestration.available, posture: orchestration.enabled ? "on" : "off", pendingToggle: null, pendingSubmit: null, observedEnabled: null },
+                pendingEngineSwitch: null, pendingEngineChange: null, contextUsage: null,
+              });
+            } else if (!state.engineSwitch) {
+              set({ ...(state.engine ? { engine: { ...state.engine, id: message.engine } } : {}), pendingEngineChange: null, contextUsage: null });
+            }
             return;
-          case "engine_switch_failed":
-            // non-silent refusal — the user asked for a switch
-            // that did not happen (turn running / child attached / same
-            // engine / factory unavailable or failed). Toast-only, nothing
-            // else changes: the session keeps running exactly where it was.
-            set({ notice: { kind: "engine_switch_failed", text: message.reason } });
+          }
+          case "engine_switch_failed": {
+            const state = get();
+            if (state.engineSwitch && (state.pendingEngineSwitch?.requestId !== message.requestId || state.pendingEngineSwitch.generation !== message.generation)) return;
+            set({ pendingEngineSwitch: null, notice: { kind: "engine_switch_failed", text: message.reason } });
             return;
+          }
           default: {
             const _exhaustive: never = message;
             void _exhaustive;
@@ -6329,16 +6371,16 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       },
 
       setAwaitingPort(): void {
-        set({ connection: "awaiting_port" });
+        set({ connection: "awaiting_port", pendingEngineSwitch: null });
       },
 
       setPortClosed(): void {
-        set((state) => ({connection:"awaiting_port",...holdInFlightUnknown(state),
+        set((state) => ({connection:"awaiting_port",pendingEngineSwitch:null,...holdInFlightUnknown(state),
           ...(state.promptQueue.some(item => !item.retryOf) ? {queuePaused:true,queuePauseReason:"error" as const} : {})}));
       },
 
       setAwaitingHostReady(): void {
-        set((state) => ({ connection: "awaiting_host_ready", hostFailure: null, orchestrationDeliveries: state.orchestrationDeliveries.map(deliveryUnknown) }));
+        set((state) => ({ connection: "awaiting_host_ready", pendingEngineSwitch: null, hostFailure: null, orchestrationDeliveries: state.orchestrationDeliveries.map(deliveryUnknown) }));
       },
 
       setPinnedConnection(pinnedConnection: { connectionId: string; providerId: string }): void {
@@ -6361,6 +6403,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         set((state) => {
           return {
             connection: "host_exited",
+            pendingEngineSwitch: null,
             ...holdInFlightUnknown(state),
             // GitHub #6: only the missing-folder refusal is terminal; every other
             // exit keeps the reconnecting path open, so the flag follows the call.
@@ -6669,6 +6712,14 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
 
       deleteQueuedPrompt(id: string): void {
         set((state) => { const retryOf = state.promptQueue.find(prompt => prompt.id === id)?.retryOf; return { promptQueue: state.promptQueue.filter((prompt) => prompt.id !== id), queueEditDraft: state.queueEditDraft?.id === id ? null : state.queueEditDraft, ...(retryOf ? {orchestrationDeliveries:state.orchestrationDeliveries.map(item => item.requestId === retryOf ? {...item,retryQueued:false} : item)} : {}) }; });
+      },
+
+      beginEngineSwitch(requestId: string, target: EngineSwitchTarget): number | null {
+        const state = get();
+        if (!state.engineSwitch || state.pendingEngineSwitch || state.connection !== "ready" || state.turn.status !== "idle" || state.queueInFlight || state.permission || state.childSurface || state.backgroundChildren.length || (state.engine?.id ?? "core") === target.engine) return null;
+        const generation = state.engineSwitch.generation;
+        set({ pendingEngineSwitch: { requestId, generation, target } });
+        return generation;
       },
 
       beginOrchestrationToggle(requestId: string): string | null {

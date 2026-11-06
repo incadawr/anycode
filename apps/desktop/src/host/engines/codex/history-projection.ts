@@ -189,6 +189,7 @@ export interface ShadowCommandItem {
 }
 
 export interface ProjectCodexHistoryOptions {
+  nativeTurnIds?: boolean;
   maxItems: number;
   /** Durable AnyCode-only result metadata, keyed by the native dynamic tool call id. */
   agentPresentations?: ReadonlyMap<string, ToolResultPresentation>;
@@ -615,7 +616,7 @@ export function projectCodexHistory(
       turnStartedAtMs,
       opts.agentPresentations,
     );
-    inBounds.push(...merged.items);
+    inBounds.push(...merged.items.map(tagged => opts.nativeTurnIds ? ({...tagged,item:{...tagged.item,turnId:turn.id}}) : tagged));
     cursor = merged.nextCursor;
     shadowByTurn.delete(turnOrdinal);
   });

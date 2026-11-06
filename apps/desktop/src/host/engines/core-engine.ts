@@ -81,6 +81,12 @@ export class CoreEngine implements SessionEngine {
     return this.options.config.reasoningEffort;
   }
 
+  importBudgetBytes(): number {
+    const context = this.options.loop.contextInfo();
+    // At most one token per UTF-8 byte; reserve space for the next user message.
+    return Math.max(0,context.effectiveWindowTokens - context.estimatedTokens - 1024);
+  }
+
   setReasoningEffort(effort: ReasoningEffort | undefined): void {
     this.options.config.reasoningEffort = effort;
     this.options.onReasoningEffortSet?.(effort);
@@ -107,9 +113,22 @@ export class CoreEngine implements SessionEngine {
         );
       }
     }
+    let accepted = false;
+    const acknowledge = () => {
+      if (!accepted && options.turnId && this.historyItems().some(item => item.turnId === options.turnId && item.message.role === "user")) {
+        accepted = true;
+        options.onInputAccepted?.(options.turnId);
+      }
+    };
     try {
-      yield* this.options.loop.runTurn(input, options);
+      options.onInputDispatched?.();
+      for await (const event of this.options.loop.runTurn(input, options)) {
+        acknowledge();
+        yield event;
+      }
     } finally {
+      acknowledge();
+      if (!accepted && options.turnId) options.onInputNotSent?.();
       this.failUndeliveredSteers();
     }
   }
@@ -219,6 +238,11 @@ export class CoreEngine implements SessionEngine {
 
   historyItems() {
     return this.options.loop.history.items;
+  }
+
+  async readTranscript() {
+    await this.options.loop.history.flushChecked();
+    return this.historyItems();
   }
 
   replaceHistory(items: Parameters<NonNullable<SessionEngine["replaceHistory"]>>[0], persist = true): void {

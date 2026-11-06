@@ -12,12 +12,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MessageChannel, type MessagePort as NodeMessagePort } from "node:worker_threads";
 import type { AgentEvent, PermissionMode } from "@anycode/core";
-import { SessionPermissionRules } from "@anycode/core";
+import { SessionPermissionRules, SqlitePersistenceAdapter } from "@anycode/core";
 import type { HostToUiMessage, UiToHostMessage } from "../shared/protocol.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
-import { Outbound, Session, type EngineSettingsChange, type EngineSettingsSeam, type SessionPersistence } from "./session.js";
+import { Outbound, Session, type EngineSettingsChange, type EngineSettingsSeam, type SessionPersistence, type SwitchRuntime } from "./session.js";
 import type { EngineCapabilities, RunTurnOptions, SessionEngine } from "./engines/session-engine.js";
 import { MemFs, nodeWirePort } from "./test-harness.js";
+import { RuntimeSessionHistory } from "./runtime-session-history.js";
 
 const CODEX_CAPABILITIES: EngineCapabilities = {
   supportsCorePermissions: false,
@@ -169,7 +170,7 @@ function fixture(): Fixture {
  * tab's picker turns a `child-ask` boot into `full-access`), so the route is
  * gated on `child === undefined` the same way `compact_request` already is.
  */
-function fixtureWith(opts: { child?: boolean; engine?: FakeEngine; nextEngine?: SessionEngine; replayCapacity?: number }): Fixture {
+function fixtureWith(opts: { child?: boolean; engine?: FakeEngine; nextEngine?: SessionEngine | SwitchRuntime; replayCapacity?: number; runtimeHistory?: RuntimeSessionHistory }): Fixture {
   const channel = new MessageChannel();
   const received: HostToUiMessage[] = [];
   channel.port1.on("message", (value: unknown) => received.push(value as HostToUiMessage));
@@ -187,6 +188,7 @@ function fixtureWith(opts: { child?: boolean; engine?: FakeEngine; nextEngine?: 
     workspace: "/work",
     model: engine.model,
     sessionId: "codex-session",
+    runtimeHistory:opts.runtimeHistory,
     rules: new SessionPermissionRules(),
     ...(opts.nextEngine ? { switchEngineFactory: async () => opts.nextEngine! } : {}),
     persistence: { touch: (patch) => { touches.push(patch); } },
@@ -232,6 +234,65 @@ function settings(received: HostToUiMessage[]): Extract<HostToUiMessage, { type:
 
 afterEach(() => {
   for (const value of open.splice(0)) value.close();
+});
+
+describe("committed runtime settings ownership", () => {
+  it("publishes pending and applied settings even when durable settings writes fail", async () => {
+    const database = new SqlitePersistenceAdapter(":memory:");
+    await database.createSession({id:"codex-session",workspace:"/work",engineId:"codex",model:"gpt-5.6-sol",mode:"ask" as PermissionMode});
+    database.ensureRuntimeSession("codex-session");
+    const ui = fixtureWith({runtimeHistory:new RuntimeSessionHistory(database,"codex-session")});
+    const log = vi.spyOn(console,"error").mockImplementation(() => {});
+    try {
+      ui.send({type:"ui_ready"}); await ui.settle();
+      const write = vi.spyOn(database,"updateRuntimeSettings").mockImplementation(() => {throw new Error("SQLITE_BUSY");});
+      ui.send({type:"set_model",model:"gpt-5.4-mini"}); await ui.settle();
+      expect(settings(ui.received).at(-1)).toMatchObject({state:"pending",model:"gpt-5.4-mini"});
+      ui.send({type:"user_message",requestId:"apply-settings",text:"continue"}); await ui.settle();
+      expect(settings(ui.received).at(-1)).toMatchObject({state:"applied",model:"gpt-5.4-mini"});
+      expect(log).toHaveBeenCalledWith("[host] runtime settings write failed",expect.objectContaining({message:"SQLITE_BUSY"}));
+      expect(write).toHaveBeenCalledTimes(2);
+      ui.engine.finishTurn(); await ui.settle();
+      expect(ui.received.some(message => message.type === "agent_event" && message.event.type === "loop_end")).toBe(true);
+      expect(ui.received.some(message => message.type === "fatal")).toBe(false);
+    } finally {ui.engine.finishTurn();await ui.session.shutdown();ui.close();log.mockRestore();await database.close();}
+  });
+
+  it("publishes the selected target's image gate before the native turn applies its model", async () => {
+    const source = new FakeEngine(); Object.defineProperty(source,"id",{value:"claude"});
+    const next = new FakeEngine();
+    const ui = fixtureWith({engine:source,nextEngine:{engine:next,engineSettings:next,presentation:{imageInputEnabled:() => next.model === "gpt-5.6-sol",imageFallbackAvailable:() => false}}});
+    ui.send({type:"ui_ready"}); await ui.settle();
+    ui.send({type:"engine_switch_request",requestId:"media",engine:"codex",model:next.model}); await ui.settle();
+    ui.send({type:"set_model",model:"gpt-5.4-mini"}); await ui.settle();
+    expect(settings(ui.received).at(-1)).toMatchObject({state:"pending",model:"gpt-5.4-mini",imageInput:false,imageFallback:false});
+    expect(next.snapshot().model).toBe("gpt-5.6-sol");
+    ui.send({type:"set_model",model:"gpt-5.6-sol"}); await ui.settle();
+    expect(settings(ui.received).at(-1)).toMatchObject({imageInput:true});
+  });
+
+  it("uses the replacement persistence and ignores the predecessor's late acknowledgement", async () => {
+    const source = new FakeEngine();
+    Object.defineProperty(source,"id",{value:"claude"});
+    let stale!: Parameters<EngineSettingsSeam["onSettingsApplied"]>[0];
+    const subscribe = source.onSettingsApplied.bind(source);
+    source.onSettingsApplied = listener => { stale = listener; return subscribe(listener); };
+    const next = new FakeEngine();
+    const touch = vi.fn();
+    const ui = fixtureWith({engine:source,nextEngine:{engine:next,engineSettings:next,callbacks:{persistence:{touch}}}});
+    ui.send({type:"ui_ready"}); await ui.settle();
+    ui.send({type:"engine_switch_request",requestId:"switch",engine:"codex",model:next.model}); await ui.settle();
+    expect(ui.received.some(message => message.type === "engine_switched")).toBe(true);
+    ui.touches.length = 0;
+    ui.send({type:"set_model",model:"gpt-5.4-mini"}); await ui.settle();
+    expect(touch).toHaveBeenCalledWith({model:"gpt-5.4-mini"});
+    expect(ui.touches).toEqual([]);
+    const count = settings(ui.received).length;
+    stale({model:"stale-model",activePresetId:"workspace"}); await ui.settle();
+    expect(settings(ui.received)).toHaveLength(count);
+    ui.send({type:"ui_ready"}); await ui.settle();
+    expect(ui.received.filter(message => message.type === "host_ready").at(-1)).toMatchObject({model:next.snapshot().model});
+  });
 });
 
 describe("— host_ready presentation", () => {
@@ -739,7 +800,7 @@ describe("deferred effort lifecycle", () => {
     await ui.settle();
     engine.finishTurn();
     await ui.settle();
-    ui.send({ type: "engine_switch_request", requestId: "switch", engine: "codex" });
+    ui.send({ type: "engine_switch_request", requestId: "switch", engine: "codex", model: "test-model" });
     await ui.settle();
     expect(ui.received).toContainEqual(expect.objectContaining({ type: "engine_switched", requestId: "switch" }));
     ui.send({ type: "user_message", requestId: "next", text: "replacement" });

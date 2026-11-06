@@ -1,4 +1,14 @@
-import { parseRecognizerEnv, recognizerEndpointFromFields, recognizerLiveWindow } from "./recognizer-env.js";
+import { resolveProfileRoles } from "../shared/role-profiles.js";
+import { codexAgentPermissionMode as codexChildAuthority } from "./engines/codex/dynamic-tool-bridge.js";
+import { createChildStatusStore } from "@anycode/core";
+import { bindRuntimeOrchestration } from "./runtime-orchestration.js";
+import { commitEngineSwitch, createEngineSwitchClient } from "./engine-switch-client.js";
+import { createRuntimeSessionHistory } from "./runtime-session-history.js";
+import type { EngineSwitchLaunch } from "../shared/engine-switch-control.js";
+import type { SwitchRuntime, SessionOptions } from "./session.js";
+import type { CodexEngine } from "./engines/codex/codex-engine.js";
+import type { ClaudeEngine } from "./engines/claude/claude-engine.js";
+import { parseRecognizerEnv, recognizerEndpointFromFields } from "./recognizer-env.js";
 import { resolveGoBootModel } from "./go-boot-model.js";
 import { logHookConfigFailure } from "./hook-config-diagnostics.js";
 import "./sdk-warnings.js";
@@ -15,7 +25,7 @@ import { readRoleSettings } from "./role-settings.js";
 import { SqliteCodexAgentCardLog } from "./engines/codex/agent-card-log.js";
 import { CodexDynamicToolBridge } from "./engines/codex/dynamic-tool-bridge.js";
 import { createEngineBrowserBridge } from "./engines/browser-bridge.js";
-import { assertChildModel, readAllowedChildModels } from "../shared/child-model.js";
+import { readAllowedChildModels } from "../shared/child-model.js";
 import { resolveModelClassifierBoot } from "./model-classifier-boot.js";
 import { recordHostBootFailure } from "./error-diagnostics.js";
 import { createDiagnosticsRing, noteWireMessage } from "../shared/diagnostics-ring.js";
@@ -211,17 +221,16 @@ import {
   createModelAskClassifier,
   parseRunAllowBash,
   RuleAwarePermissionEngine,
+  type SessionPermissionRules,
   RunAllowBashPermissionEngine,
   SafeCommandPermissionEngine,
   SqlitePersistenceAdapter,
   SwitchableModelPort,
   WriteBehindHistorySink,
+  RuntimeHistorySink,
   PREVIEW_BUILTIN_SKILLS,
   SUBAGENT_BUILTIN_SKILLS,
   WORKTREE_BUILTIN_SKILLS,
-  backgroundCapableBashTool,
-  bashKillTool,
-  bashOutputTool,
   buildSystemPrompt,
   buildEngineTelemetryTap,
   buildChildModelSettingsResolver,
@@ -231,18 +240,12 @@ import {
   createCommandHook,
   createDefaultTokenizer,
   createDefaultToolRegistry,
+  ToolRegistry,
   createListConnectionsTool,
-  createInspectImageTool,
   createMediaProjectionPort,
-  createSkillPort,
   createWebSearchTool,
   loadArchMapEnabled,
   discoverAgentProfiles,
-  AskCache,
-  browserOpenTool,
-  browserReadTool,
-  browserScreenshotTool,
-  createBrowserControlTools,
   diagnosticsEditTool,
   diagnosticsWriteTool,
   enterWorktreeTool,
@@ -254,7 +257,6 @@ import {
   formatChildTaskNotification,
   formatChildTurnBudgetNotice,
   formatSupervisorIdleReminder,
-  generateSessionTitle,
   loadEnvConfig,
   loadHookConfigs,
   loadLspServerSpecs,
@@ -288,8 +290,6 @@ import {
   REPO_MAP_MAX_TOKENS,
   REPO_MAP_MIN_TOKENS,
   REPO_MAP_WINDOW_FRACTION,
-  withSubagents,
-  withWorkflows,
   // §3.1/§3.6: role personas, their turn budgets, and the
   // role-route chain plumbing (host-side resolver below).
   PERSONAS,
@@ -297,11 +297,10 @@ import {
   isRoleRouteName,
   // the one ceiling-object builder (adaptive key absent when off).
   buildCeilingConfig,
-  type PersonaDefinition,
   type RoleRouteResolution,
 } from "@anycode/core";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
-import { pricingSnapshotWithKeyDefault, sessionUsageRow, subagentUsageRow } from "./usage-recording.js";
+import { pricingSnapshotWithKeyDefault, subagentUsageRow } from "./usage-recording.js";
 import { summarizeWithChildren } from "./usage-summary.js";
 import { claudeNativeChildrenFromHistory } from "./claude-usage.js";
 import { bindClaudeUsage, bindCodexUsage } from "./native-usage.js";
@@ -314,7 +313,6 @@ import type {
   CommandHookDeclaration,
   ExtensionsBootstrap,
   LspServerSpec,
-  MediaCapabilityPort,
   McpServerSpec,
   ModelPort,
   ModelRequest,
@@ -358,10 +356,10 @@ import { attachChildReportDurability, attachEngineChildReportDurability } from "
 import { createSpawnModeCell } from "./spawn-mode-cell.js";
 import { createRoutedChildComposition } from "./routed-child-composition.js";
 import { createForeignOrchestrationComposition, selectedCodexPreset } from "./foreign-orchestration-composition.js";
-import { RoleHealthCache, pickEntry, resolveRoleRouteChain, toCoreEntry } from "./role-route.js";
+import { RoleHealthCache, resolveRoleRouteChain } from "./role-route.js";
 import { parseSettings } from "../settings/schema.js";
 import { ENV_APP_VERSION, parseAppVersionEnv } from "../main/host-env.js";
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync, realpathSync, existsSync } from "node:fs";
 import type { HostToUiMessage, ShellCapabilitiesProjection, WireRepoMapStatus } from "../shared/protocol.js";
 import {
   CREDENTIAL_RESPONSE_TYPE,
@@ -373,8 +371,8 @@ import { TERMINAL_INIT_MESSAGE_TYPE } from "../shared/terminal.js";
 import { WORKSPACE_TRUST_PENDING_MESSAGE_TYPE } from "../shared/workspace-trust.js";
 import { applySessionToolEnv } from "../shared/session-env.js";
 import { establishHostWorkspaceTrust, type HostWorkspaceTrust } from "./workspace-trust.js";
-import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
-import { PROVIDER_QUOTA_EVENT_TYPE, type ProviderQuotaEvent } from "../shared/provider-quota.js";
+import { type ProviderHealthEvent } from "../shared/provider-health.js";
+import { type ProviderQuotaEvent } from "../shared/provider-quota.js";
 import { RECOGNIZER_CONFIG_CHANGED_TYPE, type RecognizerConfigChanged } from "../shared/recognizer.js";
 import { PREVIEW_ARTIFACTS_TYPE } from "../shared/preview.js";
 import type { PreviewEventMessage, PreviewRequestMessage, PreviewResponseMessage } from "../shared/preview.js";
@@ -462,10 +460,16 @@ function hostProfileHome(): string {
 import { buildCheckpointService } from "./checkpoints.js";
 import { GitBridge } from "./git-bridge.js";
 import { createConnectionModelSettings } from "./connection-model-settings.js";
-import { CoreEngine } from "./engines/core-engine.js";
+import { buildCoreRuntime, buildCodexRuntime, buildClaudeRuntime, persistedCoreMode } from "./engine-switch-runtime.js";
+import { createProductionCoreResolver } from "./core-switch-resolver.js";
+import { createCoreRuntimeComposition, loadCoreRuntimeExtensions, registerCoreBrowserTools, registerCoreTaskTools } from "./core-runtime-composition.js";
+import { createCoreRuntimeMedia, createCoreRuntimeServices } from "./core-runtime-services.js";
+import { createCoreRuntimeControls } from "./core-runtime-controls.js";
+import { buildCoreLaunchOptions, buildCodexLaunchOptions, buildClaudeLaunchOptions } from "./engine-launch-options.js";
+import { createSwitchEngineFactory, type SwitchEngineFactoryContext } from "./engine-switch-factory.js";
 import { beginEngineBootstrap, type EngineBootstrap } from "./engines/bootstrap.js";
 import { selectEnginePlugin, type EnginePlugin } from "./engines/registry.js";
-import { resumeCodexEngine, startCodexEngine } from "./engines/codex/codex-engine.js";
+import { resumeCodexEngine } from "./engines/codex/codex-engine.js";
 import {
   assertCodexProfileHome,
   ensureChildTempDir,
@@ -498,10 +502,10 @@ import { readHostProcessOwnership as readClaudeHostProcessOwnership } from "./en
 import { ClaudeSettingsSeam } from "./engines/claude/settings-seam.js";
 import { ClaudeShadowTranscriptEngine, SqliteClaudeShadowTranscript } from "./engines/claude/shadow-transcript.js";
 import { ClaudeSessionRowWriter } from "./engines/claude/session-row.js";
-import { createCodexSessionTitlePersistence, createCoreSessionTitlePersistence } from "./session-title-persistence.js";
-import { createCompactionRecordLog, type CompactionRecordSeam } from "./compaction-records.js";
-import { claudeAgentPermissionMode, claudeChildPresetId, codexChildAutoAcceptsWorkspacePatches, codexChildPosture } from "./engines/child-permission-map.js";
-import { checkClaudeBinaryTrustOnDisk, CLAUDE_AGENT_BRIDGE_PROMPT } from "./engines/claude/claude-client.js";
+import { createCodexSessionTitlePersistence } from "./session-title-persistence.js";
+import { type CompactionRecordSeam } from "./compaction-records.js";
+import { claudeAgentPermissionMode, claudeChildPresetId, codexChildPosture } from "./engines/child-permission-map.js";
+import { checkClaudeBinaryTrustOnDisk } from "./engines/claude/claude-client.js";
 import { createEngineChildRunner } from "./engine-children.js";
 // the host-side consent reader. Host never WRITES settings.json
 // (main is the sole writer, host/boot.ts:239-245) — this is the sanctioned
@@ -1247,6 +1251,188 @@ function buildChildSessionOptions(
   };
 }
 
+const engineSwitchEnabled = process.env.ANYCODE_ENGINE_SWITCH_ENABLED === "1";
+const switchHostGeneration = Number(process.env.ANYCODE_HOST_GENERATION);
+const switchClient = engineSwitchEnabled ? createEngineSwitchClient(switchHostGeneration, message => process.parentPort.postMessage(message)) : undefined;
+
+function hostSwitchCoordinator(sessionId: string, broker: IpcPermissionBroker, rules: SessionPermissionRules, secrets: McpSecretResolver): SessionOptions["engineSwitchCoordinator"] {
+  if (!switchClient) return undefined;
+  return {
+    generation: switchHostGeneration,
+    prepare: async request => {
+      const target = request.engine === "core"
+        ? { engine: request.engine, model: request.model, connectionId: request.connectionId ?? "" }
+        : request.engine === "codex" ? { engine: request.engine, model: request.model, ...(request.codexProfileId ? { codexProfileId: request.codexProfileId } : {}) }
+        : { engine: request.engine, model: request.model };
+      const result = await switchClient.request({ phase: "prepare", requestId: request.requestId, target });
+      if (!result.ok || !result.launch) throw new Error(result.reason ?? "Target is unavailable");
+      return hostSwitchFactory(sessionId, broker, rules, secrets, undefined, result.launch, request.requestId)!;
+    },
+    commit: (requestId, identity) => commitEngineSwitch(switchClient, requestId, identity, () => process.exit(1)),
+    abort: async requestId => { await switchClient.request({ phase: "abort", requestId }); },
+    retire: async requestId => { await switchClient.request({ phase: "retire", requestId }); },
+  };
+}
+
+/** The routing ledger is session-owned; ports, bridge callbacks and subscriptions belong to the candidate. */
+const childStatusStore = createChildStatusStore();
+
+async function candidateRouting(sessionId: string, broker: IpcPermissionBroker, env: NodeJS.ProcessEnv, home: string) {
+  let runtime: SwitchRuntime | undefined;
+  const subscriptions: (() => void)[] = [];
+  const settingsPath = env[ENV_SETTINGS_PATH] ?? defaultSettingsPath();
+  const readSettings = () => { try { const parsed = parseSettings(JSON.parse(readFileSync(settingsPath, "utf8"))); return parsed.status === "ok" ? parsed.settings : undefined; } catch { return undefined; } };
+  const profiles = async () => (await discoverAgentProfiles(new NodeFileSystemAdapter(), buildAgentProfileRoots(workspace, home, []))).profiles;
+  const routed = createRoutedChildComposition({
+    health: roleHealth, describeError, resolve: () => null, prepare: request => request, record: () => {},
+    report: (id, text, meta) => childReportQueue.add(id, text, meta), deliver: deliverDetachedChildReport,
+  });
+  const foreign = createForeignOrchestrationComposition({ settings: readSettings, profiles, projectRoot: workspace, health: roleHealth, routed, env,
+    preset: () => runtime?.engineSettings?.snapshot().activePresetId ?? "read-only",
+    permissionMode: preset => runtime?.engine.id === "claude" ? claudeAgentPermissionMode(preset) : codexChildAuthority(preset) });
+  const port = createChildSessionPort({
+    statusStore: childStatusStore,
+    canRun: () => runtime !== undefined && session?.ownsRuntime(runtime.engine) === true,
+    parentSessionId: sessionId, getPermissionMode: () => runtime?.engine.id === "core" ? session?.childSpawnMode() ?? runtime.engine.mode() : foreign.childMode(),
+    send: sendChildSessionMessage,
+    subscribe: listener => { const stop = subscribeChildRunEvents(listener); subscriptions.push(stop); return stop; },
+    onDetachedTerminal: routed.onTerminal, onDetachedStall: deliverDetachedChildStall,
+    onDetachedApproval: deliverDetachedChildApproval, onDetachedApprovalSettled: retractDetachedChildApprovalNotice,
+    onDetachedTurnBudget: deliverDetachedTurnBudgetNotice,
+    maxDetachedChildren: () => readChildSessionsPerParentMax(settingsPath, workspace),
+  });
+  routed.attach(port);
+  const browser = createEngineBrowserBridge({ preview: previewPort, fullAccess: () => browserAccess.get(), broker, cwd: workspace,
+    imageInputEnabled: () => runtime?.engine.id === "codex" ? (runtime.engine as CodexEngine).imageInputEnabled() : runtime !== undefined });
+  const catalog = await foreign.catalog().catch(error => { port.cancelAllBackgroundChildren(); subscriptions.splice(0).forEach(stop => stop()); throw error; });
+  const backgroundChildren = { list: () => port.listBackgroundChildren(), cancel: (id: string) => port.cancelBackgroundChild(id), cancelAll: () => port.cancelAllBackgroundChildren(), onChange: (listener: () => void) => port.onBackgroundChildrenChanged(listener) };
+  return {
+    port, browser, catalog, foreign, profiles,
+    configure(next: SwitchRuntime) { runtime = next;
+      next.callbacks = {
+        persistence: createCodexSessionTitlePersistence({adapter: () => persistence,sessionId,onError: error => console.error("[host] runtime settings write failed",error)}),
+        usageAudit: foreignUsageAudit(sessionId),
+        saveTurnError: record => persistence!.appendTurnError(sessionId,record),
+        saveContextUsage: snapshot => persistence!.saveContextUsage(sessionId,snapshot === null ? null : JSON.stringify(snapshot)),
+      };
+      next.presentation = { imageInputEnabled: () => next.engine.id === "codex" ? (next.engine as CodexEngine).imageInputEnabled() : next.engine.capabilities.supportsImages,
+        shell: { gitReadOnly: existsSync(join(workspace, ".git")), gitUserMutations: existsSync(join(workspace, ".git")), terminal: true },
+        modelSettingsConnectionId: null,
+      }; next.backgroundChildren = backgroundChildren;
+      bindRuntimeOrchestration(next.engine,{ownerSessionId:sessionId,port,baseMode:() => next.engine.id === "core" ? next.engine.mode() : foreign.childMode(),capture:foreign.captureMode,clear:foreign.clearBaseAuthority,cleanup:() => subscriptions.splice(0).forEach(stop => stop())});
+      next.onOrchestrateChanged = enabled => { if (!enabled) foreign.clearBaseAuthority(); };
+    },
+    cleanup() { port.cancelAllBackgroundChildren(); subscriptions.splice(0).forEach(stop => stop()); },
+  };
+}
+
+/** Capture trusted boot inputs once; foreign hosts need an explicit core resolver. */
+function hostSwitchFactory(
+  sessionId: string,
+  broker: IpcPermissionBroker,
+  rules: SessionPermissionRules,
+  mcpSecrets: McpSecretResolver,
+  resolveCore: SwitchEngineFactoryContext["resolveCore"] = async () => undefined,
+  launch?: EngineSwitchLaunch,
+  runtimeId?: string,
+) {
+  // One opt-in for all real-engine boots. Keep unavailable-host refusal by default.
+  if (!engineSwitchEnabled) return undefined;
+  const trustedEnv = launch?.env ?? process.env;
+  const sourceEnv: NodeJS.ProcessEnv = { ...trustedEnv, PATH: hostMcpLoginPath ?? trustedEnv.PATH };
+  const home = resolveExtensionsHomeOverride(sourceEnv) ?? homedir();
+  const settingsPath = sourceEnv[ENV_SETTINGS_PATH];
+  const platform = process.platform;
+  const argv = launch ? [
+    ...(launch.codexProfile?.id ? ["--codex-profile", launch.codexProfile.id] : []),
+    ...(launch.codexProfile?.home ? ["--codex-home", launch.codexProfile.home] : []),
+    ...(launch.codexProfile?.authLink ? ["--codex-auth-link", launch.codexProfile.authLink] : []),
+  ] : process.argv.slice(2);
+  const ownership = runtimeId ? readHostProcessOwnership(sourceEnv, process.pid, message => process.parentPort.postMessage({ ...message, runtimeId })) ?? undefined : undefined;
+  const database = persistence!;
+  const projectTrusted = hostWorkspaceTrust.projectTrusted;
+  const fs = new NodeFileSystemAdapter();
+  const classifier = parseAskClassifierEnvKind(sourceEnv[ENV_PERMISSION_CLASSIFIER]);
+  const engineBroker = decorateEngineBroker(broker, classifier?.kind === "command" ? classifier.boot : undefined, {
+    userContext: () => classifierSessionRef?.recentHumanUserTurns() ?? [],
+    isBound: () => classifierSessionRef !== null,
+    cwd: workspace,
+    emit: (event) => classifierSessionRef?.emitAgentEvent(event),
+  });
+  const forward = (engine: "codex" | "claude") => prepareEngineMcpForward({
+    fs, workspace, home, tmpDir: tmpdir(), pid: process.pid, engines: [engine],
+    loginPath: sourceEnv.PATH, projectTrusted, secrets: mcpSecrets,
+  });
+  return createSwitchEngineFactory({
+    engineSwitchEnabled: true, workspace, sessionId,
+    resolveCore: launch?.target.engine === "core" ? createProductionCoreResolver({
+      workspace,sessionId,runtimeId:runtimeId!,connectionId:launch.target.connectionId,sourceEnv,home,database,broker,rules,mcpSecrets,
+      projectTrusted,health:roleHealth,preview:previewPort,fullBrowserAccess:() => browserAccess.get(),
+      createRouting:() => candidateRouting(sessionId,broker,sourceEnv,home),
+      resolveApiKey:buildResolveApiKey({authMode:sourceEnv[ENV_AUTH_MODE],send:sendCredentialRequest,subscribe:subscribeCredentialResponses,fallbackApiKey:sourceEnv.ANYCODE_API_KEY}),
+      diagnosticSink:hostDiagnosticSink,ownsRuntime:engine => session?.ownsRuntime(engine) === true,
+      notifyModeChanged:mode => session?.notifyModeChanged(mode),refreshModelSettings:() => session?.refreshModelSettings(),
+      sendProviderEvent:event => process.parentPort.postMessage(event),
+    }) : resolveCore,
+    resolveCodex: async () => {
+      const binaryPath = sourceEnv[ENV_CODEX_BIN];
+      if (!binaryPath?.trim()) return undefined;
+      const profile = resolveCodexProfile(parseCodexProfileArgs(argv), resolveCodexProfilesHomeOverride(sourceEnv) ?? undefined);
+      if (profile !== null) {
+        const reason = assertCodexProfileHome(profile);
+        if (reason !== null) throw new Error(`Codex profile home rejected: ${reason}`);
+      }
+      const mcp = await forward("codex");
+      const routing = await candidateRouting(sessionId, broker, sourceEnv, home).catch(error => { mcp.cleanupFile(); throw error; });
+      let candidate: SwitchRuntime | undefined;
+      const agentBridge = new CodexDynamicToolBridge(routing.catalog, routing.port, new SqliteCodexAgentCardLog(database, sessionId), routing.foreign.catalog, routing.browser, routing.foreign.call);
+      return { options: {
+        ...buildCodexLaunchOptions({
+          workspace, binaryPath, sourceEnv, broker: engineBroker, fs, rules, agentBridge, processOwnership: ownership,
+          persistOrchestrationThreadId: async (oldId,newId) => {
+            if (!candidate?.identity || candidate.identity.externalSessionRef !== oldId) throw new Error("Candidate thread identity changed");
+            if (session?.ownsRuntime(candidate.engine)) {
+              const state = persistence!.ensureRuntimeSession(sessionId);
+              persistence!.setRuntimeNativeReference(sessionId,state.activeSegmentId,state.revision,newId);
+            }
+            candidate.identity.externalSessionRef = newId;
+          },
+          profile: profile === null ? null : { home: profile.home, homeTrust: () => assertCodexProfileHome(profile) },
+          binaryTrust: path => checkCodexBinaryTrustOnDisk(path, platform, readTrustedBinaryConsentsSync(settingsPath)),
+          shadowLog: new SqliteCodexShadowLog(database),
+          forwardOptions: { mcpForward: { ...(mcp.codexServers !== null ? { servers: mcp.codexServers } : {}), notices: mcp.notices } },
+        }),
+        selection: { presetId: "read-only", origin: "draft" },
+      }, configure: runtime => { candidate = runtime; routing.configure(runtime); bindCodexUsage(runtime.engine as CodexEngine, runtime.callbacks!.usageAudit!.sink, () => session?.ownsRuntime(runtime.engine) ? session : null); },
+      cleanup: () => { routing.cleanup(); mcp.cleanupFile(); } };
+    },
+    resolveClaude: async () => {
+      const binaryPath = sourceEnv[ENV_CLAUDE_BIN];
+      if (!binaryPath?.trim()) return undefined;
+      const mcp = await forward("claude");
+      const routing = await candidateRouting(sessionId, broker, sourceEnv, home).catch(error => { mcp.cleanupFile(); throw error; });
+      let raw: ClaudeEngine | undefined;
+      const stamp = createBridgePresentationStamp({ catalog: routing.catalog, resolveCallCatalog: routing.foreign.catalog, port: routing.port, browser: routing.browser, onEvent: event => raw?.pushBridgeEvent(event) });
+      const mcpBridge = new ClaudeMcpBridge({ serverName: "anycode", version: "1", listTools: stamp.listTools, callTool: stamp.callTool });
+      return { options: {
+        ...buildClaudeLaunchOptions({
+          workspace, binaryPath, sourceEnv, broker: engineBroker, projectTrusted,
+          profileDir: resolveClaudeConfigDir(), mcpConfigPath: mcp.claudeConfigPath,
+          bootNotices: mcp.notices, agentCatalogNonEmpty: routing.catalog.length > 0, mcpBridge, stamp, processOwnership: ownership,
+          browserToolNames: new Set(routing.browser.specs.map(spec => `mcp__anycode__${spec.claudeName}`)),
+          binaryTrust: path => checkClaudeBinaryTrustOnDisk(path, platform, readTrustedBinaryConsentsSync(settingsPath)),
+        }),
+        selection: { presetId: "read-only", origin: "draft" },
+      }, configure: runtime => {
+        raw = runtime.engine as ClaudeEngine;
+        routing.configure(runtime);
+        runtime.engine = new ClaudeShadowTranscriptEngine(raw, new SqliteClaudeShadowTranscript(database), runtime.identity!.externalSessionRef!, []);
+        bindClaudeUsage(raw, runtime.callbacks!.usageAudit!.sink, () => session?.ownsRuntime(runtime.engine) ? session : null, runtime.identity!.model);
+      }, cleanup: () => { routing.cleanup(); mcp.cleanupFile(); } };
+    },
+  });
+}
+
 /**
  * Native Codex branch. Keep this separate from `boot()` so a subscription-only
  * host never constructs the provider/core graph just to reach its session.
@@ -1456,6 +1642,7 @@ async function bootCodexSession(
     let port: ChildSessionPort | undefined;
     if (catalog.length) {
       port = createChildSessionPort({
+        statusStore: childStatusStore,
         parentSessionId: bridgeRowId,
         getPermissionMode: foreignComposition.childMode,
         send: sendChildSessionMessage, subscribe: subscribeChildRunEvents,
@@ -1507,79 +1694,25 @@ async function bootCodexSession(
     }
   }
 
-  const options = {
-    bootstrap,
-    // the bridges get the classifying decorator when a
-    // classifier is configured; Session keeps the raw broker.
-    broker: classifierBroker,
-    // the codex approval bridge auto-accepts a file change only
-    // when every change is an add/update, every target is realpath-provably
-    // inside the workspace, AND the session's policy already allows workspace
-    // writes — for a child, the inherited core mode (edit/auto/yolo,
-    // `codexChildAutoAcceptsWorkspacePatches`); a root session keeps `false`,
-    // so for it only a seeded Edit/Write always-allow rule can ever vouch for
-    // a patch. Delete-kind changes still ask (cross-review M1: edit-parity
-    // only — neither core's Write/Edit containment nor Claude's acceptEdits
-    // silently deletes).
-    patchAutoApproval: {
-      fs: new NodeFileSystemAdapter(),
-      workspaceWritesAllowed: args.child !== undefined && codexChildAutoAcceptsWorkspacePatches(args.child.initialMode),
-      rules,
-    },
-    binaryPath,
-    cwd: workspace,
-    workspace,
-    // a codex child has no native turn cap — the profile budget is
-    // surfaced once as a visible engine_notice warning on the first turn,
-    // never enforced and never sent as a protocol field.
-    ...(args.child?.maxTurns !== undefined
-      ? {
-          bootNotices: [
-            {
-              type: "engine_notice" as const,
-              level: "warning" as const,
-              message: `Profile maxTurns (${args.child.maxTurns}) is not enforced for the codex engine; the child is bounded only by its time/stall limits.`,
-            },
-          ],
-        }
-      : {}),
-    ...(codexAgentBridge ? { agentBridge: codexAgentBridge } : {}),
-    agentCardLog,
+  const options = { bootstrap, ...buildCodexLaunchOptions({
+    broker: classifierBroker, workspace, binaryPath, rules, fs: new NodeFileSystemAdapter(), child: args.child,
+    agentBridge: codexAgentBridge, agentCardLog, shadowLog, processOwnership, tempDir: codexChildTempDir,
+    sourceEnv: { ...process.env, PATH: hostMcpLoginPath ?? process.env.PATH },
+    binaryTrust: (path) => checkCodexBinaryTrustOnDisk(path, process.platform, readTrustedBinaryConsentsSync(hostSettingsPathOverride())),
+    profile: codexProfile === null ? null : { home: codexProfile.home, homeTrust: () => {
+      try { return assertCodexProfileHome(codexProfile); } catch (error) { return describeError(error); }
+    } },
+    forwardOptions: codexForwardOptions,
     ...(args.child === undefined ? { persistOrchestrationThreadId: async (oldId: string, newId: string) => {
       const row = await persistence!.getRootSession(bridgeRowId);
       if (!row || row.externalSessionRef !== oldId) throw new Error("Codex thread identity changed");
       await persistence!.touchSession(bridgeRowId, { externalSessionRef: newId });
     } } : {}),
-    onMcpNotification: (notification: import("./engines/codex/protocol.js").JsonRpcNotification) => {
+    onMcpNotification: (notification) => {
       const status = codexMcpStatus(notification, codexMcpForward.specs);
       if (status) { engineMcpStatuses = [...engineMcpStatuses.filter((item) => item.name !== status.name), status]; publishEngineMcpStatuses(); }
     },
-    sourceEnv: { ...process.env, PATH: hostMcpLoginPath ?? process.env.PATH },
-    shadowLog,
-    // per-call re-read so a consent granted or revoked mid-session
-    // is honored by the very next spawn gate (D-S4-4) — main is the sole
-    // writer, this closure just re-reads before each of assertTrusted's
-    // per-spawn calls.
-    binaryTrust: (path: string) => checkCodexBinaryTrustOnDisk(path, process.platform, readTrustedBinaryConsentsSync(hostSettingsPathOverride())),
-    ...(processOwnership !== undefined ? { processOwnership } : {}),
-    // rework: the private temp dir rides the SAME env builder
-    // the profile home does — assigned after the allowlist, so the ambient
-    // TMPDIR can never win. Absent for owner tabs (byte-identical env).
-    ...(codexChildTempDir !== undefined ? { tempDir: codexChildTempDir } : {}),
-    ...(codexProfile !== null
-      ? {
-          codexHome: codexProfile.home,
-          homeTrust: () => {
-            try {
-              return assertCodexProfileHome(codexProfile);
-            } catch (error) {
-              return describeError(error);
-            }
-          },
-        }
-      : {}),
-    ...codexForwardOptions,
-  };
+  }) };
 
   // the draft (pre-session) model/preset choice arrives as argv from
   // main. It is untrusted renderer input and is validated inside the engine —
@@ -1618,7 +1751,10 @@ async function bootCodexSession(
         // filters `parent_session_id IS NULL` and codex children never resume
         // (main reaps them on terminal; follow-ups are core-only), so a resume
         // is always an owner tab: no private temp dir, no exclusion.
-        const resumed = await resumeCodexEngine({
+        const state = persistence!.loadRuntimeSession(existing.id);
+        const active = state?.segments.find(segment => segment.id === state.activeSegmentId);
+        const fresh = active?.nativeState === "fresh" && !persistence!.runtimeInputRecoveryNeeded(existing.id,active.id);
+        const resumed = await (fresh ? buildCodexRuntime : resumeCodexEngine)({
           ...options,
           externalSessionRef: existing.externalSessionRef,
           // Posture survives the relaunch through the PERSISTED row, never
@@ -1629,10 +1765,13 @@ async function bootCodexSession(
           selection: {
             model: existing.model,
             presetId: existing.mode,
+            ...(active?.selected.effort !== undefined ? { effort: active.selected.effort } : {}),
             ...(existing.codexFast !== undefined ? { fast: existing.codexFast } : {}),
             origin: "persisted",
           },
         });
+        if (active) resumed.engine.restoreAppliedSettings(active.applied);
+        if (fresh) persistence!.setRuntimeNativeReference(existing.id,state!.activeSegmentId,state!.revision,resumed.threadId);
         // Persist whatever the resume actually settled on (the stored model may
         // have been removed from the catalog and fallen back) — only after the
         // native resume and read have both succeeded.
@@ -1651,7 +1790,7 @@ async function bootCodexSession(
         // (finding 5: the ternary lives in boot.ts's
         // `resolveEngineDraftPresetId` so the argv→preset seam is tested.)
         const childPresetId = resolveEngineDraftPresetId(args.child, draft.preset, codexChildPosture);
-        const created = await startCodexEngine({
+        const created = await buildCodexRuntime({
           ...options,
           selection: {
             ...(draft.model !== undefined ? { model: draft.model } : {}),
@@ -1700,6 +1839,10 @@ async function bootCodexSession(
           // pre-profiles build there.
           ...(codexProfileArgs.profileId !== undefined ? { codexProfileId: codexProfileArgs.profileId } : {}),
         });
+        if (engineSwitchEnabled && args.child === undefined) {
+          const state = persistence!.ensureRuntimeSession(sessionMeta.id);
+          persistence!.setRuntimeNativeReference(sessionMeta.id,state.activeSegmentId,state.revision,created.threadId);
+        }
         return { ...created, sessionMeta };
       })()).catch((error: unknown) => {
     // Cross-review F2 (review fix): the connect phase runs
@@ -1829,8 +1972,12 @@ async function bootCodexSession(
   if (args.resume && connected.engine.historyItems().length > 0 && (await persistence!.listProviderUsage(connected.sessionMeta.id)).length === 0) {
     codexUsageAudit.sink.record({ turnId: "legacy-unpriced", step: 1, finishReason: "history", transportRetries: 0 });
   }
-  bindCodexUsage(connected.engine, codexUsageAudit.sink, () => session);
+  if (codexChildPort) bindRuntimeOrchestration(booted.engine,{ownerSessionId:connected.sessionMeta.id,port:codexChildPort,baseMode:() => codexChildAuthority(selectedCodexPreset(connected.engine)),capture:mode => codexForeignComposition?.captureMode(mode),clear:() => codexForeignComposition?.clearBaseAuthority()});
+  bindCodexUsage(connected.engine, codexUsageAudit.sink, () => session?.ownsRuntime(booted.engine) ? session : null);
   session = new Session({
+    switchEngineFactory: hostSwitchFactory(connected.sessionMeta.id, broker, rules, mcpSecrets),
+    engineSwitchCoordinator: hostSwitchCoordinator(connected.sessionMeta.id, broker, rules, mcpSecrets),
+    runtimeHistory: createRuntimeSessionHistory(persistence!,connected.sessionMeta.id,engineSwitchEnabled,args.child !== undefined),
     workspaceTrustRequired: workspaceTrustRequiredMessage,
     outbound,
     engine: booted.engine,
@@ -2112,6 +2259,7 @@ async function bootClaudeSession(
     let childPort: ChildSessionPort | undefined;
     if (catalog.length > 0) {
       childPort = createChildSessionPort({
+        statusStore: childStatusStore,
         parentSessionId: rowId,
         // cross-review M1: this seam feeds
         // `ChildSpawnRequest.permissionMode` — the value that gates the
@@ -2232,63 +2380,14 @@ async function bootClaudeSession(
   const claudeBootNotices = mcpForward.notices;
   const claudeMcpConfigPath = mcpForward.claudeConfigPath;
 
-  const options = {
-    bootstrap,
-    // classifying decorator for the Claude approval bridge.
-    broker: claudeClassifierBroker,
-    binaryPath,
-    cwd: workspace,
-    // a claude child enforces the profile budget natively
-    // (--max-turns); absent = the CLI's own default.
-    ...(args.child?.maxTurns !== undefined ? { maxTurns: args.child.maxTurns } : {}),
-    // slash passthrough (allowlisted /compact) for ROOT sessions
-    // only. A child's prompt is model-authored, so its CLI keeps
-    // --disable-slash-commands — no model-driven slash injection.
-    enableSlashPassthrough: args.child === undefined,
-    // xfix D1: the trust gate rides the engine spawn itself —
-    // an untrusted folder's .claude/settings.json hooks must not load through
-    // Claude Code's own settings sources either (the engine runs with
-    // cwd = workspace). `hostWorkspaceTrust` is decided above, before any
-    // engine wiring, so the value here is the same gate every loader sees.
-    projectTrusted: hostWorkspaceTrust.projectTrusted,
-    // Ambient by default (owner pivot): no override here, so ClaudeClient
-    // sets no `CLAUDE_CONFIG_DIR` at all and the CLI resolves the SAME
-    // `~/.claude` main's doctor diagnosed before it let this tab spawn.
-    profileDir: resolveClaudeConfigDir(),
+  const options = { bootstrap, ...buildClaudeLaunchOptions({
+    broker: claudeClassifierBroker, workspace, binaryPath, child: args.child,
+    projectTrusted: hostWorkspaceTrust.projectTrusted, profileDir: resolveClaudeConfigDir(),
     sourceEnv: { ...process.env, PATH: hostMcpLoginPath ?? process.env.PATH },
-    // mirror of the codex closure above — same per-call re-read
-    // rationale (D-S4-4).
-    binaryTrust: (path: string) => checkClaudeBinaryTrustOnDisk(path, process.platform, readTrustedBinaryConsentsSync(hostSettingsPathOverride())),
-    ...(processOwnership !== undefined ? { processOwnership } : {}),
-    ...(claudeMcpConfigPath !== null ? { mcpConfigPath: claudeMcpConfigPath } : {}),
-    ...(claudeBootNotices.length > 0 ? { bootNotices: claudeBootNotices } : {}),
-    ...(mcpBridge !== undefined && stamp !== undefined
-      ? {
-          mcpBridge,
-          // cross-review M2: the same switch that announces the
-          // door teaches the CLI the delegation sentence — the prompt names
-          // `mcp__anycode__agent` ONLY in sessions where the tool exists (a
-          // bridge-less boot's argv stays byte-identical to pre-4056).
-          // the door now exists for every non-child boot (the
-          // browser tools ride it even with an empty catalog), but the
-          // PROMPT still names the agent tool — so it is gated on the
-          // catalog switch alone, not on the door's existence.
-          ...(agentCatalogNonEmpty
-            ? { agentBridgePrompt: CLAUDE_AGENT_BRIDGE_PROMPT }
-            : {}),
-          takePresentation: stamp.takePresentation,
-          // cross-review P1: the engine's turn-end sweep for
-          // presentations whose consuming tool_result never arrived (a
-          // cancelled/dying turn) — without this, one map entry per aborted
-          // bridge call would live for the process's lifetime.
-          dropPresentations: stamp.dropPresentations,
-          // the door's browser tool CLI names, so
-          // ClaudeApprovalBridge can auto-allow the name-only `can_use_tool`
-          // gate (the real input-aware gate runs in the door's callTool).
-          browserToolNames: claudeBrowserToolNames,
-        }
-      : {}),
-  };
+    binaryTrust: (path) => checkClaudeBinaryTrustOnDisk(path, process.platform, readTrustedBinaryConsentsSync(hostSettingsPathOverride())),
+    processOwnership, mcpConfigPath: claudeMcpConfigPath, bootNotices: claudeBootNotices,
+    mcpBridge, stamp, agentCatalogNonEmpty, browserToolNames: claudeBrowserToolNames,
+  }) };
 
   // the interval from materialization through boot completion. A
   // failure in connect releases the file HERE and rethrows; after a
@@ -2315,15 +2414,19 @@ async function bootClaudeSession(
         if (existing.engineId !== "claude" || typeof existing.externalSessionRef !== "string" || existing.externalSessionRef.length === 0) {
           throw new Error(`Claude session ${args.sessionId} has no resumable native session`);
         }
-        const resumed = await resumeClaudeEngine({
+        const state = persistence!.loadRuntimeSession(existing.id);
+        const active = state?.segments.find(segment => segment.id === state.activeSegmentId);
+        const fresh = active?.nativeState === "fresh" && !persistence!.runtimeInputRecoveryNeeded(existing.id,active.id);
+        const resumed = await (fresh ? buildClaudeRuntime : resumeClaudeEngine)({
           ...options,
           externalSessionRef: existing.externalSessionRef,
           // Posture survives the resume through the PERSISTED preset id (same
           // no-server-echo-to-trust discipline codex uses, cut §2(k).4): an
           // unrecognized id (era "build" mode row) silently
           // becomes the default preset rather than failing the resume.
-          selection: { model: existing.model, presetId: existing.mode, origin: "persisted" },
+          selection: { model: existing.model, presetId: existing.mode, ...(active?.selected.effort !== undefined ? {effort:active.selected.effort} : {}), origin: "persisted" },
         });
+        if (fresh) persistence!.setRuntimeNativeReference(existing.id,state!.activeSegmentId,state!.revision,resumed.sessionRef);
         return { ...resumed, sessionMeta: existing };
       })()
     : (async () => {
@@ -2333,7 +2436,7 @@ async function bootClaudeSession(
         // argv. A non-child boot keeps the byte-identical prior path.
         // (finding 5: same extracted seam as the codex boot.)
         const childPresetId = resolveEngineDraftPresetId(args.child, draft.preset, claudeChildPresetId);
-        const created = await startClaudeEngine({
+        const created = await buildClaudeRuntime({
           ...options,
           selection: {
             ...(draft.model !== undefined ? { model: draft.model } : {}),
@@ -2394,6 +2497,11 @@ async function bootClaudeSession(
   // (`getRootSession` looks up `WHERE id = ?`), and a fresh boot's
   // `sessionMeta` is `null` — so `rowId` already equals this expression for
   // both branches.
+  if (engineSwitchEnabled && args.child === undefined && connected.sessionMeta === null) {
+    connected.sessionMeta = await persistence!.createSession({id:rowId,...sessionRow,model:connected.model,mode:connected.presetId as PermissionMode});
+    const state = persistence!.ensureRuntimeSession(rowId);
+    persistence!.setRuntimeNativeReference(rowId,state.activeSegmentId,state.revision,connected.sessionRef);
+  }
   const rowWriter = new ClaudeSessionRowWriter({
     rowId,
     identity: sessionRow,
@@ -2625,8 +2733,12 @@ async function bootClaudeSession(
   // Older native-child identities can be recovered from the shadow history,
   // but their individual costs remain unknown. Existing markers dedupe in SQLite.
   for (const record of claudeNativeChildrenFromHistory(bootHistory)) claudeUsageAudit.sink.record(record);
-  bindClaudeUsage(claudeEngine, claudeUsageAudit.sink, () => session, connected.model);
+  if (claudeChildPort) bindRuntimeOrchestration(booted.engine,{ownerSessionId:rowId,port:claudeChildPort,baseMode:() => claudeAgentPermissionMode(claudeEngine.snapshot().activePresetId)});
+  bindClaudeUsage(claudeEngine, claudeUsageAudit.sink, () => session?.ownsRuntime(booted.engine) ? session : null, connected.model);
   session = new Session({
+    switchEngineFactory: hostSwitchFactory(rowId, broker, rules, mcpSecrets),
+    engineSwitchCoordinator: hostSwitchCoordinator(rowId, broker, rules, mcpSecrets),
+    runtimeHistory: createRuntimeSessionHistory(persistence!,rowId,engineSwitchEnabled,args.child !== undefined),
     workspaceTrustRequired: workspaceTrustRequiredMessage,
     usageAudit: claudeUsageAudit,
     saveTurnError: async (record, input) => {
@@ -2840,22 +2952,6 @@ async function boot(): Promise<void> {
     }
     const envConfig = loadEnvConfig(process.env);
     const args = parseHostArgs(process.argv.slice(2));
-
-    // срез C: the fork-boot snapshot half of the recognizer's config
-    // delivery (plan §1.2 step 1) — E1's ANYCODE_RECOGNIZER_* family, parsed
-    // once here. `liveRecognizerEndpoint` is a SINGLE mutable object identity
-    // kept for the life of this boot: InspectImage's own factory (below)
-    // destructures `endpoint` out of its options ONCE and never re-reads it,
-    // so a later live-push commit mutates THIS object's fields in place
-    // (never reassigns the reference) — the already-built tool then observes
-    // the current config despite having captured it only once.
-    // `recognizerConfigured` is the cheap boolean readback both
-    // `media.recognizerConfigured` and Session's `imageFallbackAvailable`
-    // consult on every call.
-    const bootRecognizerEndpoint = parseRecognizerEnv(process.env);
-    let recognizerConfigured = bootRecognizerEndpoint !== null;
-    const liveRecognizerEndpoint: RecognizerEndpoint =
-      bootRecognizerEndpoint ?? { transport: "anthropic-messages", baseUrl: "", model: "" };
 
     // Always-allow persistence (design §5, slice 2.2.3): read-only, fail-soft
     // (seedAlwaysAllowRules never throws — see host/boot.ts). Independent of
@@ -3374,21 +3470,7 @@ async function boot(): Promise<void> {
     // symmetry with the worktree gate and as a single flip point should a
     // future precondition emerge; today it is unconditionally true.
     const previewAvailable = true;
-    if (previewAvailable) {
-      registry.register(browserOpenTool);
-      registry.register(browserReadTool);
-      registry.register(browserScreenshotTool);
-      // browser control. Built from the factory so
-      // the "Full browser access" flag (Phase B) can drop the approval escalation.
-      const browserControl = createBrowserControlTools({ fullAccess: () => browserAccess.get() });
-      registry.register(browserControl.navigate);
-      registry.register(browserControl.snapshot);
-      registry.register(browserControl.click);
-      registry.register(browserControl.type);
-      registry.register(browserControl.waitFor);
-      registry.register(browserControl.console);
-      registry.register(browserControl.eval);
-    }
+    if (previewAvailable) registerCoreBrowserTools(registry,() => browserAccess.get());
     // Plan-exit contract (mirror of cli/main.ts): ONE call registers
     // ExitPlanMode AND produces the planExitMode/onModeChange pair spread into
     // AgentLoopConfig below — the halves are only safe together (plan-exit.ts).
@@ -3396,7 +3478,7 @@ async function boot(): Promise<void> {
     // reaches the system prompt. `session` is captured lazily: the loop only
     // calls onModeChange from inside a running turn, long after it is assigned.
     const planExit = wirePlanExit(registry, (changed) => {
-      session?.notifyModeChanged(changed);
+      if (session?.ownsRuntime(engine)) session.notifyModeChanged(changed);
     });
     // Main selects resume engine from durable metadata, and the host verifies
     // it again before constructing the core graph. A forged/mismatched fork
@@ -3443,7 +3525,9 @@ async function boot(): Promise<void> {
     // the dispatcher; swept by main at app start; removed on hard delete.
     const artifactStore = new NodeArtifactStore(artifactsRootFor(dbPath, hostProfileHome()));
 
-    historySink = new WriteBehindHistorySink(persistence, sessionMeta.id);
+    historySink = createRuntimeSessionHistory(persistence,sessionMeta.id,engineSwitchEnabled,isChildSessionBoot(args,sessionMeta))
+      ? new RuntimeHistorySink(persistence,sessionMeta.id,persistence.ensureRuntimeSession(sessionMeta.id).activeSegmentId)
+      : new WriteBehindHistorySink(persistence, sessionMeta.id);
     const tokenizer = await createDefaultTokenizer();
     const bootContextInfo = connectionModelSettings.contextFor(envConfig.model);
     const bootContextWindow: number | undefined = bootContextInfo.tokens;
@@ -3462,7 +3546,10 @@ async function boot(): Promise<void> {
     ));
     const isChildSession = isChildSessionBoot(args, sessionMeta);
     const resolveSessionEffort = isChildSession ? resolveChildReasoningEffort : resolveReasoningEffort;
-    const bootSelectedEffort = connectionModelSettings.effortFor(envConfig.model);
+    const runtimeState = persistence.loadRuntimeSession(sessionMeta.id);
+    const runtimeEffort = runtimeState?.segments.find(segment => segment.id === runtimeState.activeSegmentId)?.selected.effort;
+    const restoredEffort = (["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const).find(tier => tier === runtimeEffort);
+    const bootSelectedEffort = restoredEffort ?? connectionModelSettings.effortFor(envConfig.model);
     const priorEffort = process.env.ANYCODE_SWITCH_PRIOR_EFFORT;
     const switchFallback = (["off", "low", "medium", "high", "xhigh", "max"] as const).find((tier) => tier === priorEffort);
     const bootCandidate = bootSelectedEffort ?? resolveSessionEffort(envConfig.model, entryFor(envConfig.model), undefined, liveCapsFor(envConfig.model), effortLevelsFor(envConfig.model)) ?? switchFallback ?? "off";
@@ -3536,9 +3623,7 @@ async function boot(): Promise<void> {
     // BEFORE the toolNames snapshot below, so BashOutput/BashKill reach the
     // system prompt's tool-discipline section exactly as they do in the CLI.
     taskManager = new InProcessTaskManager(execAdapter);
-    registry.register(backgroundCapableBashTool, { silentDuplicateWarning: true });
-    registry.register(bashOutputTool);
-    registry.register(bashKillTool);
+    registerCoreTaskTools(registry);
 
     let lspServerSpecs: LspServerSpec[] = [];
     let lspIssues: string[] = [];
@@ -3648,19 +3733,7 @@ async function boot(): Promise<void> {
     // extensions — rather than aborting. discoverExtensions itself never
     // throws by contract; this try/catch is defense-in-depth kept symmetric
     // with its neighbors.
-    let ext: ExtensionsBootstrap = {
-      skills: createSkillPort(fsAdapter, []),
-      skillsPromptSection: "",
-      profiles: [],
-      profilesPromptSection: "",
-      rescanProfiles: async () => null,
-      pluginMcpServerSpecs: [],
-      workflows: [],
-      workflowsPromptSection: "",
-      memorySection: "",
-      repoMapFiles: [],
-      problems: [],
-    };
+    let ext: ExtensionsBootstrap;
     // Builtin skills: every capability-gated set plus the unconditional ones,
     // composed by buildHostBuiltinSkills (host/builtin-skills.ts) into ONE
     // array — discoverExtensions takes a single `builtinSkills` key, so two
@@ -3676,8 +3749,7 @@ async function boot(): Promise<void> {
     // xfix H1(a): the settings block is re-read here (not only at
     // module load) so a grandfathering write from this app run is visible.
     refreshPluginsSettings();
-    try {
-      ext = await discoverExtensions(fsAdapter, {
+    ext = await loadCoreRuntimeExtensions(fsAdapter, {
         workspace,
         home: hostProfileHome(),
         claimedMcpNames: new Set(mcpSpecs.map((spec) => spec.name)),
@@ -3700,9 +3772,6 @@ async function boot(): Promise<void> {
           builtinPersonaNames: Object.keys(PERSONAS),
         }),
       });
-    } catch (error) {
-      console.error(`[host] extensions discovery failed; continuing with zero skills/agent profiles/plugins: ${describeError(error)}`);
-    }
     mdClaimedProfileNames = new Set(ext.profiles.map((p) => p.name));
     for (const problem of ext.problems) {
       console.warn(`[host] extensions: ${problem}`);
@@ -3841,41 +3910,17 @@ async function boot(): Promise<void> {
     // byte-identical string from these, so components and prompt cannot drift.
     // renderRepoMap()'s repoMapStatus side effect fires HERE (once per compose),
     // before Session's envStatus seam reads it.
-    const composeSystemPromptComponents = (): NonNullable<AgentLoopConfig["systemPromptComponents"]> => [
-      { kind: "memory", text: ext.memorySection },
-      { kind: "skills", text: ext.skillsPromptSection },
-      { kind: "workflows", text: ext.workflowsPromptSection },
-      { kind: "profiles", text: ext.profilesPromptSection },
-      { kind: "mcp", text: mcpInstructionsSection },
-      { kind: "repoMap", text: renderRepoMap() },
-    ];
-
-    // System-prompt closure (design slice-P7.15-cut.md §2.1, mirror of
-    // cli/main.ts:932): the base identity/tool/env prompt followed by the section
-    // components in their fixed prompt order (memory -> skills -> workflows ->
-    // profiles -> repoMap). BYTE-identical to the pre-P7.17 inline `base + memory
-    // + skills + workflows + profiles + renderRepoMap()` expression (same strings,
-    // same order); the components now carry the repoMap render, so this no longer
-    // calls renderRepoMap() itself (single render per compose). The loop reads
-    // config.systemPrompt per-call, so the rebuilt prompt takes effect next turn.
-    // срез C (finding #6): `toolNames` is read LIVE off the registry
-    // on every composition (never a frozen boot snapshot), so a tool
-    // registered/unregistered after boot — InspectImage's own gate, plan
-    // §5/§9 — reaches the model the very next time this is called, without
-    // rebuilding this closure. `visionFallbackEnabled` mirrors that same
-    // live read: true exactly while InspectImage is CURRENTLY registered.
-    const composeSystemPrompt = (
-      components: NonNullable<AgentLoopConfig["systemPromptComponents"]>,
-    ): string =>
-      buildSystemPrompt({
-        toolNames: registry.list(),
-        env: systemPromptEnv,
-        visionFallbackEnabled: registry.has("InspectImage"),
-        // (mirror of cli/main.ts): the one-line LSP notice rides
-        // along exactly while the host carries a LspManager (>=1 configured
-        // server); null => [] => the section renders "" (byte-identity).
-        lspCoveredExtensions: lspManager !== null ? lspServerSpecs.flatMap((s) => s.extensions) : [],
-      }) + components.map((c) => c.text).join("");
+    const coreComposition = createCoreRuntimeComposition({
+      registry,extensions:() => ext,env:systemPromptEnv,sourceEnv:process.env,
+      bootModel:envConfig.model,providerId:envConfig.providerId,exploreModel:envConfig.exploreModel,modelPortFor:modelPortFactory,
+      settingsForChild,selectedEffort:() => selectedEffort,
+      roles:() => {refreshRolesSettings();return rolesSettings;},
+      mcpInstructions:() => mcpInstructionsSection,renderRepoMap,
+      lspCoveredExtensions:() => lspManager !== null ? lspServerSpecs.flatMap(server => server.extensions) : [],
+      ...(previewAvailable ? {preview:previewPort} : {}),
+    });
+    const composeSystemPromptComponents = coreComposition.components;
+    const composeSystemPrompt = coreComposition.prompt;
 
     // GitBridge wiring (slice 5.7, design slice-5.7-cut.md §2.3-C3): construction
     // is unconditional (zero I/O in the constructor), mirroring the CLI's
@@ -3890,69 +3935,21 @@ async function boot(): Promise<void> {
     const gitEnabled = systemPromptEnv.isGitRepo === true && typeof execAdapter.runBinary === "function";
     gitBridge = new GitBridge({ git: gitEnabled ? gitService : null, outbound });
 
-    const media: MediaCapabilityPort = {
-      // Resolve the current model on every call; explicit environment values win.
-      imageInputEnabled: () =>
-        resolveImageInput(
-          currentModel,
-          entryFor(currentModel),
-          envConfig.imageInput ?? (imageModelOverride?.model === currentModel ? imageModelOverride.override : undefined) ?? connectionModelSettings.imageInputFor(currentModel),
-          imageModalityLookup,
-        ),
-      // срез C: live verdict for the vision fallback — true whenever
-      // a recognizer endpoint is CURRENTLY configured, independent of the
-      // current model's own sightedness. Consulted by host/session.ts's
-      // turn-accept gate (ORed with imageInputEnabled) and by the InspectImage
-      // registration gate below (ANDed with !imageInputEnabled()).
-      recognizerConfigured: () => recognizerConfigured,
-    };
-
-    // срез C (plan §5): the InspectImage tool instance is built
-    // EXACTLY ONCE for the life of this host process — never rebuilt on a
-    // registration toggle or a live recognizer-config push. Its per-image
-    // question counter and Q/A transcript live in the factory's own closure
-    // (tools/inspect-image.ts, срез B2) — plan §5's "resume weakened to
-    // process lifetime" semantics: recreating the tool would silently reset
-    // a mid-session question budget and lose the "what's to the right of
-    // that button?" thread every time the gate flips (blind<->sighted, or a
-    // recognizer toggled off and back on). `liveRecognizerEndpoint` is
-    // captured ONCE by the factory (tools/inspect-image.ts destructures
-    // `endpoint` out of its options immediately); a later live-push commit
-    // mutates ITS FIELDS in place (never replaces the reference) precisely
-    // so this already-built instance keeps seeing the current config.
-    const visionAskCache = new AskCache();
-    let inspectImageTool: ReturnType<typeof createInspectImageTool> | undefined;
-    function ensureInspectImageTool(): ReturnType<typeof createInspectImageTool> {
-      if (inspectImageTool === undefined) {
-        inspectImageTool = createInspectImageTool({
-          recognizer: { endpoint: liveRecognizerEndpoint, cache: visionAskCache, portFactory: recognizerPortFactory },
-        });
-      }
-      return inspectImageTool;
-    }
-
-    /**
-     * (De)registers InspectImage against the CURRENT (recognizer configured
-     * ∧ blind model) verdict — the exact gate §1 step 5 and plan
-     * §5 specify — and reports whether registration actually flipped, so a
-     * caller knows whether the system prompt needs recomposing (finding #6:
-     * no recompose when nothing changed). Idempotent both ways
-     * (ToolRegistry.register/unregister already are).
-     */
-    function recomputeInspectImageRegistration(): boolean {
-      const shouldRegister = recognizerConfigured && media.imageInputEnabled() === false &&
-        (args.child?.restrictions === undefined || args.child.restrictions.tools.includes("InspectImage"));
-      const isRegistered = registry.has("InspectImage");
-      if (shouldRegister === isRegistered) {
-        return false;
-      }
-      if (shouldRegister) {
-        registry.register(ensureInspectImageTool());
-      } else {
-        registry.unregister("InspectImage");
-      }
-      return true;
-    }
+    const media = createCoreRuntimeMedia({
+      registry,
+      imageInputEnabled: () => resolveImageInput(currentModel,entryFor(currentModel),
+        envConfig.imageInput ?? (imageModelOverride?.model === currentModel ? imageModelOverride.override : undefined) ?? connectionModelSettings.imageInputFor(currentModel),imageModalityLookup),
+      endpoint:parseRecognizerEnv(process.env),env:process.env,
+      reserveRef:() => persistence!.reserveImageRef(sessionMeta.id),
+      portFactory:endpoint => recognizerPortFactory(endpoint),
+      allowInspectImage:args.child?.restrictions === undefined || args.child.restrictions.tools.includes("InspectImage"),
+      onRegistrationChanged:() => {
+        const components = composeSystemPromptComponents();
+        config.systemPrompt = composeSystemPrompt(components);
+        config.systemPromptComponents = components;
+      },
+    });
+    const recomputeInspectImageRegistration = media.recompute;
 
     // CUT-S2 §0.8/§2.6.3: a child-mode boot's broker wraps `emit`
     // with the permission-tap — an `attention` signal bracketing every
@@ -4099,19 +4096,7 @@ async function boot(): Promise<void> {
         todos: new InMemoryTodoStore(),
       },
       media,
-      // срез C (plan §1/§2/§3): wired UNCONDITIONALLY — `reserveRef`
-      // is called for EVERY image this loop appends regardless of `endpoint`'s
-      // presence (AgentLoopRecognizerConfig's own doc, срез B1), so a live
-      // recognizer/model switch mid-session never encounters an un-numbered
-      // image from earlier in this SAME session. `endpoint` tracks the live
-      // `recognizerConfigured` flag; `cache`/`portFactory` are shared with
-      // InspectImage's own factory above (ONE process-lifetime cache, plan §7).
-      recognizer: {
-        reserveRef: () => persistence!.reserveImageRef(sessionMeta.id),
-        endpoint: recognizerConfigured ? liveRecognizerEndpoint : undefined,
-        cache: visionAskCache,
-        portFactory: recognizerPortFactory,
-      },
+      recognizer: media.recognizer,
       ...(worktreeAvailable ? { worktrees: worktreeControl } : {}),
       ...(previewAvailable ? { preview: previewPort } : {}),
       cwd: workspace,
@@ -4204,34 +4189,6 @@ async function boot(): Promise<void> {
      * the model was already sighted, or already blind-without-fallback,
      * before and after this push).
      */
-    const recognizerWindowEnv = {
-      ANYCODE_RECOGNIZER_CONTEXT_WINDOW: process.env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW,
-      ANYCODE_RECOGNIZER_CONTEXT_WINDOW_MODEL: process.env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_MODEL,
-      ANYCODE_RECOGNIZER_CONTEXT_WINDOW_FROM_SETTINGS: process.env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_FROM_SETTINGS,
-    };
-    function applyRecognizerEndpoint(next: RecognizerEndpoint | null): void {
-      if (next === null) {
-        recognizerConfigured = false;
-      } else {
-        liveRecognizerEndpoint.transport = next.transport;
-        liveRecognizerEndpoint.baseUrl = next.baseUrl;
-        liveRecognizerEndpoint.model = next.model;
-        liveRecognizerEndpoint.apiKey = next.apiKey;
-        liveRecognizerEndpoint.providerName = next.providerName;
-        liveRecognizerEndpoint.contextWindowTokens = recognizerLiveWindow(recognizerWindowEnv, next);
-        liveRecognizerEndpoint.goModelPolicy = next.goModelPolicy;
-        liveRecognizerEndpoint.modelMetadata = next.modelMetadata;
-        liveRecognizerEndpoint.pricingRaw = next.pricingRaw;
-        recognizerConfigured = true;
-      }
-      config.recognizer!.endpoint = recognizerConfigured ? liveRecognizerEndpoint : undefined;
-      if (recomputeInspectImageRegistration()) {
-        const components = composeSystemPromptComponents();
-        config.systemPrompt = composeSystemPrompt(components);
-        config.systemPromptComponents = components;
-      }
-    }
-
     // CUT-S2 §2.6.1 (slice S2b B5): non-recursion lock #2. Mutates
     // `config` in place AFTER the object literal above (mirrors
     // `withSubagents`'s own mutate-in-place pattern just below) so
@@ -4281,6 +4238,7 @@ async function boot(): Promise<void> {
     const spawnModeCell = createSpawnModeCell(config, () => session);
     if (!isChildSessionBoot(args, sessionMeta)) {
       childSessionPortHandle = createChildSessionPort({
+        statusStore: childStatusStore,
         parentSessionId: sessionMeta.id,
         // A1: children inherit the mode the ORCHESTRATOR had BEFORE
         // orchestrate was enabled — never `plan` (an orchestrate parent sits
@@ -4393,9 +4351,8 @@ async function boot(): Promise<void> {
     // `ext.profiles` currently holds on every listAgentTypes()/run() call — a
     // profile authored into `.anycode/agents/` mid-session becomes a callable
     // agent_type without recreating this AgentLoop.
-    const loop = new AgentLoop(
-      isChildSessionBoot(args, sessionMeta) ? config : withWorkflows(
-        withSubagents(config, {
+    const loop = coreComposition.loop(config,{
+          readConnectionTargets,
           createUsageRecorder: (model) => {
             const subagentId = randomUUID();
             let step = 0;
@@ -4411,64 +4368,6 @@ async function boot(): Promise<void> {
               usageAuditWriteTail = (usageAuditWriteTail ?? Promise.resolve()).then(() => persistence!.recordProviderUsage(row)).catch((e) => console.error("[host] usage audit write failed", e));
             };
           },
-          // §3.6: settings-derived role personas. For each of
-          // planner/executor/reviewer NOT claimed by md-discovery, a derived
-          // PersonaDefinition is appended carrying the settings
-          // roles[role].primary fields (engine/connection/provider/model/
-          // effort) and ROLE_TURN_BUDGETS' turn budget. Precedence (§2.1):
-          // md-profile > settings-derived > built-in — md-discovery's own
-          // list stays FIRST and untouched; the derived entries trail it, and
-          // the runner's profile-wins resolution handles the rest. The
-          // origin tag keeps the runner's isMdProfile false for these entries:
-          // engine-restriction refusals point at Settings → Roles, never at a
-          // file that was never written.
-          profiles: () => {
-            refreshRolesSettings();
-            const claimed = new Set(ext.profiles.map((p) => p.name));
-            const derived: PersonaDefinition[] = [];
-            for (const role of ["planner", "executor", "reviewer"] as const) {
-              if (claimed.has(role)) continue;
-              const primary = rolesSettings?.[role]?.primary;
-              if (primary === undefined) continue;
-              const builtIn = PERSONAS[role];
-              derived.push({
-                name: role,
-                description: builtIn.description,
-                tools: builtIn.tools,
-                systemPrompt: builtIn.systemPrompt,
-                turnBudget: ROLE_TURN_BUDGETS[role],
-                origin: "settings",
-                ...(primary.model !== undefined ? { model: primary.model } : {}),
-                ...(primary.effort !== undefined ? { effort: primary.effort } : {}),
-                ...(primary.engine !== undefined ? { engine: primary.engine } : {}),
-                ...(primary.connection !== undefined ? { connection: primary.connection } : {}),
-                ...(primary.provider !== undefined ? { provider: primary.provider } : {}),
-              });
-            }
-            return derived.length > 0 ? [...ext.profiles, ...derived] : ext.profiles;
-          },
-          env: systemPromptEnv,
-          readConnectionTargets,
-          memorySection: ext.memorySection,
-          // cheap-model default for inline explore children
-          // (ANYCODE_EXPLORE_MODEL). Assigned directly (not conditional-spread):
-          // with the var unset this reads `undefined`, which the runner treats
-          // exactly like an absent option — explore inherits the parent's port.
-          exploreModel: envConfig.exploreModel,
-          resolveChildModelPort: (id: string) => {
-            assertChildModel(id, readAllowedChildModels(process.env.ANYCODE_CHILD_MODELS, envConfig.model, envConfig.providerId === "opencode" || envConfig.providerId === "opencode-openai"));
-            return modelPortFactory(id);
-          },
-          // (F6) + §0b adjudication: unconditional, exactly like the
-          // port factory above (the desktop always has both). The tier handed
-          // to the resolver is the host-owned `selectedEffort` cell read AT
-          // SPAWN TIME — the live USER-SELECTED tier, kept current by
-          // CoreEngine's onReasoningEffortSet callback and by switchModelImpl
-          // below. Never `config.reasoningEffort`, whose `undefined` after a
-          // switch to a non-reasoning parent would silently drop the child's
-          // effort even though the child's own model can honor the tier.
-          resolveChildModelSettings: (id: string, profileEffort?: ReasoningEffort) =>
-            settingsForChild(id, profileEffort ?? selectedEffort),
           // WebSearch parity for children (mirror of the CLI):
           // the SAME instance registered above when a backend resolved is
           // threaded into every persona child registry that lists "WebSearch".
@@ -4478,10 +4377,7 @@ async function boot(): Promise<void> {
           // roles + health cache are HOST state; the runner walks the
           // returned chain for ROLE personas (§3.2) and nothing else.
           resolveRoleRoute: resolveRoleRouteImpl,
-        }),
-        ext.workflows,
-      ),
-    );
+    },isChildSessionBoot(args,sessionMeta));
 
     // Live agent-profile rescan (subagent-model design): run at the start of
     // EVERY new user turn (CoreEngine's onBeforeTurn, never continueTurn) so a
@@ -4604,9 +4500,7 @@ async function boot(): Promise<void> {
           ...(availableEffortLevels !== undefined ? { availableEffortLevels } : {}),
         };
       };
-    const engine = new CoreEngine({
-      loop,
-      config,
+    const coreLaunchOptions = buildCoreLaunchOptions({ loop, config }, {
       switchModelImpl,
       resolveSelectedEffort: (effort) => resolveSessionEffort(currentModel, entryFor(currentModel), effort, liveCapsFor(currentModel), effortLevelsFor(currentModel)),
       onBeforeTurn: async () => {
@@ -4620,6 +4514,7 @@ async function boot(): Promise<void> {
         connectionModelSettings.remember(currentModel, selectedEffort);
       },
     });
+    const { engine } = buildCoreRuntime(coreLaunchOptions);
     const cleanupHandoff = sessionMeta.worktreeCleanup ?? parseCleanupIntent(process.env[WORKTREE_CLEANUP_ENV]);
     const coreHistoryMaxItems = resolveSessionHistoryMaxItems(process.env);
     const restoredLoopContext = loop.contextInfo();
@@ -4627,13 +4522,44 @@ async function boot(): Promise<void> {
       ? { estimatedTokens: restoredLoopContext.estimatedTokens, budgetTokens: restoredLoopContext.effectiveWindowTokens, source: "estimate" as const }
       : undefined;
     const restoredContext = await contextSnapshotOptions(persistence, sessionId, "core", currentModel, restoredLoopContext.effectiveWindowTokens, fallbackContext);
-    compactionRecordSeam = await createCompactionRecordLog(() => persistence, sessionId).catch((error: unknown) => {
-      // Fail-soft: a session with no remembered compaction rows is far better
-      // than a session that refuses to open.
-      console.error(`[host] compaction records unavailable: ${describeError(error)}`);
-      return undefined;
-    });
+    const coreServiceDependencies = {
+      adapter:() => persistence,sessionId,media,checkpoints:checkpointService ?? undefined,
+      flushHistory:() => historySink!.flushChecked(),
+      readOrchestrator:() => { refreshRolesSettings(); return rolesSettings?.orchestrator; },
+      health:() => roleHealth.snapshot(),
+      sendProviderEvent:(event:ProviderHealthEvent | ProviderQuotaEvent) => process.parentPort.postMessage(event),
+      pricing:() => ({catalogEntry,baseUrl:envConfig.baseUrl,pricingRaw:turnPricingRaw}),
+      usageTail:{read:() => usageAuditWriteTail ?? undefined,write:(tail:Promise<void>) => {usageAuditWriteTail=tail;}},
+    };
+    const coreServices = await createCoreRuntimeServices({...coreServiceDependencies,config});
+    compactionRecordSeam = coreServices.callbacks.compactionRecords;
+    if (childSessionPortHandle) bindRuntimeOrchestration(engine,{ownerSessionId:sessionId,port:childSessionPortHandle,baseMode:() => engine.mode()});
     session = new Session({
+      ...coreServices.callbacks,
+      engineSwitchCoordinator: hostSwitchCoordinator(sessionId, broker, rules, mcpSecrets),
+      runtimeHistory: createRuntimeSessionHistory(persistence!,sessionId,engineSwitchEnabled,isChildSession),
+      switchEngineFactory: hostSwitchFactory(sessionId, broker, rules, mcpSecrets, async ({ model }) => {
+        // This resolver owns the boot connection. Never infer one in a foreign host.
+        if (model !== currentModel && !entryFor(model)?.models.some(item => item.id === model)) return undefined;
+        const candidateRegistry = new ToolRegistry();
+        for (const tool of registry.all()) if (tool.metadata.name !== "InspectImage") candidateRegistry.register(tool);
+        const candidateConfig: AgentLoopConfig = {
+          ...config, registry:candidateRegistry, modelPort: modelPortFactory(model),
+          history: new ConversationHistory({ tokenizer }),
+          mode: persistedCoreMode(persistence!.loadRuntimeSession(sessionId)), orchestrate: false,
+        };
+        const candidateMedia = createCoreRuntimeMedia({registry:candidateRegistry,
+          imageInputEnabled:() => resolveImageInput(model,entryFor(model),envConfig.imageInput ?? connectionModelSettings.imageInputFor(model),imageModalityLookup),
+          endpoint:media.recognizer.endpoint ? {...media.recognizer.endpoint} : null,env:process.env,
+          reserveRef:() => persistence!.reserveImageRef(sessionId),portFactory:recognizerPortFactory,
+          onRegistrationChanged:() => {
+            candidateConfig.systemPrompt=buildSystemPrompt({toolNames:candidateRegistry.list(),env:{...systemPromptEnv,modelId:model},visionFallbackEnabled:candidateRegistry.has("InspectImage")})+composeSystemPromptComponents().map(component => component.text).join("");
+          }});
+        candidateConfig.media=candidateMedia;candidateConfig.recognizer=candidateMedia.recognizer;
+        candidateMedia.recompute();
+        return { model, options: buildCoreLaunchOptions({ config: candidateConfig, loop: new AgentLoop(candidateConfig) }),
+          services:{...coreServiceDependencies,media:candidateMedia,flushHistory:async () => {}} };
+      }),
       ...restoredContext,
       workspaceTrustRequired: workspaceTrustRequiredMessage,
       outbound,
@@ -4678,25 +4604,6 @@ async function boot(): Promise<void> {
           continuationPending: false,
           continuationMode: null,
         });
-      },
-      // W11: core-only (Codex owns its own account, outside the core
-      // provider catalog — its Session construction above never wires this).
-      // Main resolves the pinned connectionId per-proc (tabs.ts); the host stays
-      // connection-agnostic and only relays the loop's own classification.
-      reportProviderHealth: (event) => {
-        const message: ProviderHealthEvent =
-          event.kind === "success"
-            ? { type: PROVIDER_HEALTH_EVENT_TYPE, kind: "success" }
-            : { type: PROVIDER_HEALTH_EVENT_TYPE, kind: "failure", code: event.code };
-        process.parentPort.postMessage(message);
-      },
-      // follow-up: same parentPort side channel as health above
-      // — main (tabs.ts) resolves THIS proc's pinned connectionId and does the
-      // throttled `lastQuota` write (main/connection-quota.ts). Core-only for
-      // the same reason as health: an engine broker owns its own account.
-      reportProviderQuota: (quota, source) => {
-        const message: ProviderQuotaEvent = { type: PROVIDER_QUOTA_EVENT_TYPE, quota, source };
-        process.parentPort.postMessage(message);
       },
       onWorkspaceTransition: async (transition: WorkspaceTransition) => {
         const rollback = async (): Promise<void> => {
@@ -4819,12 +4726,6 @@ async function boot(): Promise<void> {
       // selectedReasoningEffort seed). set_reasoning_effort keeps it in sync.
       selectedEffort,
       sessionId,
-      saveTurnError: (record) => persistence!.appendTurnError(sessionId, record),
-      currentTurnErrorIds: async () => (await persistence!.loadTurnErrors(sessionId)).map((record) => record.id),
-      restoreHistoryAndTurnErrors: async (items, errorIds) => {
-        await historySink!.flushChecked();
-        return persistence!.restoreHistoryAndTurnErrors(sessionId, items, errorIds);
-      },
       bootHistory,
       bootTurnErrors: await loadTurnErrors(sessionId),
       // S4: dev/automation-ONLY replay-recording override, resolved
@@ -4916,43 +4817,6 @@ async function boot(): Promise<void> {
       onOrchestrateChanged: (enabled: boolean) => {
         spawnModeCell.onOrchestrateChanged(enabled);
       },
-      // §3.6: turn-start orchestrator-route check — the host
-      // owns the health cache. Returns a model and effort selection only
-      // for the tab's active connection, along with the notice to surface.
-      orchestratorRouteCheck: () => {
-        refreshRolesSettings();
-        const orchestrator = rolesSettings?.orchestrator;
-        if (orchestrator === undefined) return undefined;
-        const chain = [orchestrator.primary, ...(orchestrator.fallbacks ?? [])].map(toCoreEntry);
-        const picked = pickEntry(chain, roleHealth.snapshot(), Date.now(), "orchestrator");
-        if (picked === null || picked.index === 0) {
-          // Primary healthy (or nothing to switch to) — no notice.
-          return undefined;
-        }
-        // The primary was skipped for a health reason and a fallback exists.
-        // Only a fallback carrying a model on THIS connection can switch
-        // here (an engine/connection entry is a different connection —
-        // manual, surfaced as the reason line only when it has a model).
-        // F9 (cross-review): the switch itself requires a BARE model entry
-        // (no engine, no connection) — an entry like {engine: "codex",
-        // model: "gpt-…"} names a model on ANOTHER connection, and
-        // switchModelImpl on it would flip the active tab to a foreign id
-        // (§9-Q2: connection switching stays manual).
-        const reason = picked.skipped[0]?.reason ?? "unhealthy";
-        const switchModel = picked.entry.model;
-        const switchable =
-          switchModel !== undefined &&
-          picked.entry.engine === undefined &&
-          picked.entry.connection === undefined &&
-          picked.entry.provider === undefined;
-        if (!switchable || switchModel === undefined) {
-          return `Orchestrator: primary route unhealthy (${reason}); configure a model fallback to switch automatically.`;
-        }
-        const effort = picked.entry.effort === undefined || picked.entry.effort === "xhigh"
-          ? undefined
-          : picked.entry.effort;
-        return { notice: `Orchestrator: primary route unhealthy (${reason}), running on ${switchModel}.`, model: switchModel, ...(effort !== undefined ? { effort } : {}) };
-      },
       // Slice P7.8 (design slice-P7.8-cut.md §3.2, mirror of the `lsp` seam
       // above): telemetry reads live counters on every push; repo-map is
       // boot-frozen (computed once above, right after buildRepoMapPromptSection).
@@ -4967,67 +4831,6 @@ async function boot(): Promise<void> {
       // срез C: core-only wiring (codex/claude Sessions never pass
       // these two — "codex/claude НЕ задеты (замыкание не установлено)").
       imageFallbackAvailable: media.recognizerConfigured,
-      applyRecognizerConfig: applyRecognizerEndpoint,
-      // Narrow persistence callback (§4.2): Session persists title/mode patches
-      // without ever holding the whole port. Fire-and-forget for the turn
-      // paths, never blocks a turn; the strict `commitTitle` twin is the
-      // Sessions API ack (see session-title-persistence.ts).
-      persistence: createCoreSessionTitlePersistence({
-        adapter: () => persistence,
-        sessionId,
-        onError: (error) => console.error(`[host] touchSession failed: ${describeError(error)}`),
-      }),
-      // GitHub #36: the durable compaction rows. Loaded BEFORE Session exists so
-      // the very first handshake (a resume's session_history) already carries
-      // every compaction this session went through, not just the ones this
-      // process will produce.
-      ...(compactionRecordSeam !== undefined ? { compactionRecords: compactionRecordSeam } : {}),
-      // the persistent per-step provider-usage audit,
-      // CORE-ONLY wiring (codex/claude boots above pass nothing — their usage
-      // arrives as cumulative REPLACE snapshots, not per-step finishes).
-      // Write-behind: the sink swallows+logs its own failures, so audit I/O
-      // can never block or fail a turn.
-      usageAudit: {
-        sink: {
-          record: (r, finishedAt, endpointSnapshot) => {
-            // Only the exact catalog endpoint is eligible: a proxy or reseller
-            // may charge a different price even when it exposes the same model.
-            // On an endpoint that serves both a pay-as-you-go key and a
-            // subscription key, the catalog rate is withheld until the
-            // connection says which one it holds.
-            // One instant inside the row builder: the tariff band and
-            // `createdAt` can never disagree (see usage-recording.ts). For a
-            // step staged at finish and flushed after tool dispatch, that
-            // instant is the FINISH captured by the session — the flush can
-            // fall on the far side of a tariff boundary.
-            const row = sessionUsageRow(
-              r,
-              { catalogEntry, baseUrl: envConfig.baseUrl, pricingRaw: turnPricingRaw, model: r.model, endpointSnapshot, ...(finishedAt !== undefined ? { finishedAt } : {}), now: Date.now },
-              sessionId,
-            );
-            // Serialized (chained off the tail, never parallel) so flush()
-            // below is an honest drain of every queued write IN ORDER.
-            usageAuditWriteTail = (usageAuditWriteTail ?? Promise.resolve())
-              .then(() => persistence!.recordProviderUsage(row))
-              .catch((e) => console.error(`[host] usage audit write failed: ${e instanceof Error ? e.message : String(e)}`));
-          },
-          // Cross-review finding 4: shutdown drain — a serialized tail exactly
-          // like WriteBehindHistorySink's, so Session.shutdown() can await
-          // every queued audit write before the host closes the database (an
-          // unbounded late write would otherwise re-open the closed file and
-          // leak the handle). Fail-soft per write; flush() itself never rejects.
-          flush: () => usageAuditWriteTail ?? Promise.resolve(),
-        },
-        summary: {
-          summary: async () => { await (usageAuditWriteTail ?? Promise.resolve()); return summarizeWithChildren(persistence!, sessionId); },
-        },
-      },
-
-      // the real implementation, bound to THIS session's modelPort. Injected as
-      // a callback (not read off config.modelPort inside Session) so
-      // host/test-harness.ts's ScriptedModelPort-backed tests are unaffected
-      // unless they opt in via HarnessOptions.refineTitle.
-      refineTitle: (text) => generateSessionTitle({ modelPort: config.modelPort, text }),
       postPreviewArtifacts: sendPreviewArtifacts,
       // CUT-S2 §2.6.3 (slice S2b B4): present ONLY for a child-mode
       // boot. `flushHistory` is the SAME `historySink.flushChecked()` ordering
@@ -5183,6 +4986,7 @@ async function handleShutdown(): Promise<void> {
 }
 
 process.parentPort.on("message", (event) => {
+  if (switchClient?.handle(event.data)) return;
   const port = event.ports[0];
   if (port) {
     // Two channels carry a port: the term-channel is disambiguated by its init

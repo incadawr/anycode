@@ -509,102 +509,43 @@ describe("host subagent model-override wiring", () => {
     return readFile(new URL("./index.ts", import.meta.url), "utf8");
   }
 
-  it("passes resolveChildModelPort into withSubagents, or the runner rejects every Agent(model:) call", async () => {
+  it("uses the shared loop composition with model and child settings resolvers", async () => {
     const source = await readHostSource();
-
-    // Anchored on the profiles THUNK wired (`profiles: () => {`
-    // — the host now derives settings role personas inside the thunk, so a
-    // live rescan AND a settings change are both visible to the runner) so
-    // the doc comment near the top of index.ts — which also spells
-    // `withSubagents(config, {profiles})` — can never satisfy this
-    // assertion in place of the real call. Brace-aware: the options object
-    // contains NESTED braces (the thunk body, spreads), so the region is
-    // taken from the call site to the option list's closing `})` — matched
-    // by scanning braces, not a lazy regex.
-    const callStart = source.indexOf("withSubagents(config, {");
-    expect(callStart).toBeGreaterThan(-1);
-    // Skip every occurrence inside comments/doc-comments.
-    let idx = callStart;
-    while (idx > -1 && source.slice(0, idx).split("\n").at(-1)!.trimStart().startsWith("*")) {
-      idx = source.indexOf("withSubagents(config, {", idx + 1);
-    }
-    expect(idx).toBeGreaterThan(-1);
-    let depth = 0;
-    let regionEnd = -1;
-    for (let i = idx; i < source.length; i++) {
-      const ch = source[i]!;
-      if (ch === "{") depth += 1;
-      if (ch === "}") {
-        depth -= 1;
-        if (depth === 0) {
-          regionEnd = i;
-          break;
-        }
-      }
-    }
-    expect(regionEnd).toBeGreaterThan(idx);
-    const options = source.slice(idx, regionEnd);
-
-    expect(options).toContain("profiles: () => {");
-    expect(options).toContain("resolveChildModelPort");
+    const composition = await readFile(new URL("./core-runtime-composition.ts", import.meta.url), "utf8");
+    expect(source).toContain("const coreComposition = createCoreRuntimeComposition({");
+    expect(source).toContain("modelPortFor:modelPortFactory");
+    expect(source).toContain("settingsForChild,selectedEffort:() => selectedEffort");
+    expect(composition).toContain("withSubagents(config,{");
+    expect(composition).toContain("resolveChildModelPort:id => {");
+    expect(composition).toContain("return deps.modelPortFor(id)");
+    expect(composition).toContain("resolveChildModelSettings:(id,effort) => deps.settingsForChild(id,effort ?? deps.selectedEffort())");
   });
 
-  it("assigns config.sessionSubagents before the actual withWorkflows call", async () => {
+  it("assigns the session tier before the shared workflow composition", async () => {
     const source = await readHostSource();
-
-    // Anchored on the REAL call — /const loop = new AgentLoop(\s*withWorkflows\(/
-    // — not the first textual occurrence of "withWorkflows(" (comments well
-    // above the call also spell the name).
     const assignment = "config.sessionSubagents = childSessionPortHandle;";
-    const call = source.match(/const loop = new AgentLoop\(\s*isChildSessionBoot\(args, sessionMeta\) \? config : withWorkflows\(/);
-
-    expect(source.includes(assignment)).toBe(true);
-    expect(call).not.toBeNull();
-    // Both anchors exist and the assignment precedes the actual call, so
-    // withWorkflows sees the session tier for engine-profile workflow steps.
-    expect(source.indexOf(assignment)).toBeLessThan(
-      source.indexOf("const loop = new AgentLoop("),
-    );
+    const call = "const loop = coreComposition.loop(config,{";
+    expect(source).toContain(assignment);
+    expect(source).toContain(call);
+    expect(source.indexOf(assignment)).toBeLessThan(source.indexOf(call));
+    const composition = await readFile(new URL("./core-runtime-composition.ts", import.meta.url), "utf8");
+    expect(composition).toContain("withWorkflows(config,deps.extensions().workflows)");
   });
 
   it("resolves the child port through the same factory the mid-session model switch uses", async () => {
     const source = await readHostSource();
-
-    // A second, independent factory would drift from the live provider/key on
-    // the next `/model` switch; both sites must read one closure.
-    // срез C: the mid-session switch now calls `.setPort()` on
-    // `switchableModelPort` (the INNER SwitchableModelPort), not on
-    // `modelPort` (the OUTER media-projection decorator, which has no
-    // `setPort` method at all) — same `modelPortFactory` closure either way.
-    expect(source).toContain("assertChildModel(id, readAllowedChildModels(process.env.ANYCODE_CHILD_MODELS, envConfig.model, envConfig.providerId === \"opencode\" || envConfig.providerId === \"opencode-openai\"))");
-    expect(source).toContain("return modelPortFactory(id)");
+    const composition = await readFile(new URL("./core-runtime-composition.ts", import.meta.url), "utf8");
+    expect(source).toContain("modelPortFor:modelPortFactory");
+    expect(composition).toContain('assertChildModel(id,readAllowedChildModels(deps.sourceEnv.ANYCODE_CHILD_MODELS,deps.bootModel,deps.providerId === "opencode" || deps.providerId === "opencode-openai"))');
     expect(source).toContain("const nextPort = modelPortFactory(id)");
     expect(source).toContain("switchableModelPort.setPort(nextPort)");
   });
 
-  it("threads envConfig.exploreModel into withSubagents when set", async () => {
+  it("threads envConfig.exploreModel through the shared composition into withSubagents", async () => {
     const source = await readHostSource();
-    const callStart = source.indexOf("withSubagents(config, {");
-    let idx = callStart;
-    while (idx > -1 && source.slice(0, idx).split("\n").at(-1)!.trimStart().startsWith("*")) {
-      idx = source.indexOf("withSubagents(config, {", idx + 1);
-    }
-    expect(idx).toBeGreaterThan(-1);
-    let depth = 0;
-    let regionEnd = -1;
-    for (let i = idx; i < source.length; i++) {
-      const ch = source[i]!;
-      if (ch === "{") depth += 1;
-      if (ch === "}") {
-        depth -= 1;
-        if (depth === 0) {
-          regionEnd = i;
-          break;
-        }
-      }
-    }
-    const options = source.slice(idx, regionEnd);
-    expect(options).toContain("exploreModel: envConfig.exploreModel");
+    expect(source).toContain("exploreModel:envConfig.exploreModel");
+    const composition = await readFile(new URL("./core-runtime-composition.ts", import.meta.url), "utf8");
+    expect(composition).toContain("exploreModel:deps.exploreModel");
   });
 
   it("F1: the child port's getPermissionMode is self-contained (no Session bounce -> no infinite recursion)", async () => {
@@ -634,26 +575,10 @@ describe("host subagent model-override wiring", () => {
 
   it("F2: withSubagents threads the host's resolveRoleRouteImpl into the runner", async () => {
     const source = await readHostSource();
-    const callStart = source.indexOf("withSubagents(config, {");
-    let idx = callStart;
-    while (idx > -1 && source.slice(0, idx).split("\n").at(-1)!.trimStart().startsWith("*")) {
-      idx = source.indexOf("withSubagents(config, {", idx + 1);
-    }
-    let depth = 0;
-    let regionEnd = -1;
-    for (let i = idx; i < source.length; i++) {
-      const ch = source[i]!;
-      if (ch === "{") depth += 1;
-      if (ch === "}") {
-        depth -= 1;
-        if (depth === 0) {
-          regionEnd = i;
-          break;
-        }
-      }
-    }
-    const options = source.slice(idx, regionEnd);
-    expect(options).toContain("resolveRoleRoute: resolveRoleRouteImpl");
+    expect(source).toContain("const loop = coreComposition.loop(config,{");
+    expect(source).toContain("resolveRoleRoute: resolveRoleRouteImpl");
+    const composition = await readFile(new URL("./core-runtime-composition.ts", import.meta.url), "utf8");
+    expect(composition).toContain("withSubagents(config,{...options,");
     // The runner-side default must be the null fallback, never a live
     // resolver core could invent on its own.
     const runnerSource = await readFile(new URL("../../../../packages/core/src/subagents/runner.ts", import.meta.url), "utf8");
@@ -3141,8 +3066,8 @@ describe("host imageInputEnabled closure (live-modality rung, per-send honesty)"
     const source = await readIndexSource4088();
     // The real call: 4 arguments, last one imageModalityLookup, model read
     // from currentModel (a `let` the /model switch rewrites).
-    expect(source).toContain(
-      "envConfig.imageInput ?? (imageModelOverride?.model === currentModel ? imageModelOverride.override : undefined) ?? connectionModelSettings.imageInputFor(currentModel),\n          imageModalityLookup,",
+    expect(source.replace(/\s+/g," ")).toContain(
+      "envConfig.imageInput ?? (imageModelOverride?.model === currentModel ? imageModelOverride.override : undefined) ?? connectionModelSettings.imageInputFor(currentModel),imageModalityLookup)",
     );
     // 4088-on-4118: the lookup reads the caps map (liveCapsFor), NOT an env
     // list; the per-model override still travels through the fork env.
@@ -3320,11 +3245,6 @@ describe("host Claude MCP status wiring — one snapshot per system/init (GitHub
   });
 });
 
-
-it("passes a declared fallback-route effort to the session", async () => {
-  const source = await (await import("node:fs/promises")).readFile(new URL("./index.ts", import.meta.url), "utf8");
-  expect(source).toContain('model: switchModel, ...(effort !== undefined ? { effort } : {})');
-});
 
 // ── GitHub #18: the ring answer comes BEFORE the session-ready guard ─────
 //

@@ -12,6 +12,18 @@ export interface OrchestrationPolicy {
   apply(enabled: boolean, baseAuthority: unknown): Promise<OrchestrationSnapshot>;
 }
 
+/** Host routing attestation, separate from engine-owned policy confirmation.
+ * Native adapters supply their own preset-to-authority mapping. */
+export interface RuntimeOrchestrationComposition {
+  readonly ownerSessionId: string;
+  ready(): boolean;
+  baseMode(): PermissionMode;
+  hasRunningChildren(): boolean;
+  capture(mode: PermissionMode): void;
+  clear(): void;
+  cleanup(): void;
+}
+
 /** Raised only before the engine has changed any effective policy. */
 export class OrchestrationNotReadyError extends Error {}
 

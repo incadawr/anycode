@@ -336,3 +336,15 @@ Custom provider records have one shared API key: all connections referencing the
 Isolated CDP drivers request an OS-assigned debugging port and attach through the browser endpoint recorded in the disposable profile. They verify that the listener belongs to the Electron process descended from their launcher and check the owner of each established CDP or automation HTTP socket before sending commands or credentials. This ownership check currently supports macOS; it fails closed elsewhere. The roles smoke uses a separate temporary workspace so the profile remains fresh.
 
 The provider-connections driver also verifies launcher identity and pins each automation request, including quit, to the verified process.
+
+## Engine-switch fixture smoke
+
+Run `node apps/desktop/scripts/engine-switch-ui-smoke.mjs` from the repository.
+It uses the isolated launcher, a loopback provider and executable native doubles
+for all six directed engine pairs. No account or external provider is used.
+The opt-in `ANYCODE_ISOLATED_NATIVE_FIXTURES=1` startup mode admits only exact
+copies of the repository native fixture with a fixed interpreter and private
+log paths. Discovery sees those two binaries and their directory metadata only;
+all ordinary isolation, ownership, worktree and packaged-app refusals still apply.
+The feature remains off by default. Screenshots and failure logs stay in the
+per-run temporary profile printed by the script.

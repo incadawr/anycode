@@ -16,18 +16,21 @@ export function createForeignOrchestrationComposition(options: {
   settings(): AnycodeSettings | undefined;
   profiles(): Promise<readonly PersonaDefinition[]>;
   projectRoot: string;
+  env?: NodeJS.ProcessEnv;
   preset(): string;
+  permissionMode?(preset: string): import("@anycode/core").PermissionMode;
   health: RoleHealthCache;
   routed: ReturnType<typeof createRoutedChildComposition>;
 }) {
-  const authority = createForeignSpawnModeCell(() => codexAgentPermissionMode(options.preset()));
+  const permissionMode = options.permissionMode ?? codexAgentPermissionMode;
+  const authority = createForeignSpawnModeCell(() => permissionMode(options.preset()));
   let enabled = false;
   const facts = new WeakMap<AgentBridgeCatalogEntry, { settings: AnycodeSettings | undefined; claimed: boolean }>();
 
   async function catalog(): Promise<AgentBridgeCatalogEntry[]> {
     const [profiles, settings] = await Promise.all([options.profiles(), Promise.resolve(options.settings())]);
     const claimed = new Set(profiles.filter(p => !isReservedPersonaName(p.name)).map(p => p.name));
-    const env = process.env.ANYCODE_SUBAGENT_MAX_TURNS;
+    const env = (options.env ?? process.env).ANYCODE_SUBAGENT_MAX_TURNS;
     const configured = env !== undefined && env.trim() !== "" ? Number(env) : settings?.tools.subagentMaxTurns;
     if (configured !== undefined && !Number.isInteger(configured)) throw new Error("Invalid ANYCODE_SUBAGENT_MAX_TURNS: not an integer");
     const entries = roleCatalog(profiles, settings ? resolveProfileRoles(settings, options.projectRoot) : undefined).map(entry => {
@@ -119,7 +122,8 @@ export function createForeignOrchestrationComposition(options: {
   return {
     catalog, call,
     childMode: () => authority.read(),
-    captureBaseAuthority(preset: string) { authority.capture(codexAgentPermissionMode(preset)); enabled = true; },
+    captureMode(mode: import("@anycode/core").PermissionMode) { authority.capture(mode); enabled = true; },
+    captureBaseAuthority(preset: string) { authority.capture(permissionMode(preset)); enabled = true; },
     clearBaseAuthority() { authority.clear(); enabled = false; },
   };
 }

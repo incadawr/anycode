@@ -9,6 +9,7 @@ import type {
 import {
   compactRequestSchema,
   engineSwitchRequestSchema,
+  engineSwitchTargetSchema,
   gitCommandMessageSchema,
   lspStatusRequestSchema,
   lspRestartRequestSchema,
@@ -19,6 +20,20 @@ import {
 } from "./protocol.js";
 import type { GitCommandOutcome, HostToUiMessage, WireEnvStatus, WireGitStatus } from "./protocol.js";
 import { userMessageSchema as oldUserMessageSchema, setOrchestrateSchema as oldSetOrchestrateSchema, uiReadySchema as oldUiReadySchema } from "./protocol-legacy-4f1e.fixture.js";
+
+describe("engine switch target selection", () => {
+  it("accepts engine-specific identities and rejects renderer configuration", () => {
+    expect(engineSwitchTargetSchema.safeParse({ engine: "core", model: "m", connectionId: "c" }).success).toBe(true);
+    expect(engineSwitchTargetSchema.safeParse({ engine: "codex", model: "m", codexProfileId: "p" }).success).toBe(true);
+    expect(engineSwitchTargetSchema.safeParse({ engine: "claude", model: "m" }).success).toBe(true);
+    for (const target of [
+      { engine: "core", model: "m" },
+      { engine: "claude", model: "m", connectionId: "c" },
+      { engine: "codex", model: "m", env: { KEY: "secret" } },
+      { engine: "codex", model: "", codexProfileId: "p" },
+    ]) expect(engineSwitchTargetSchema.safeParse(target).success).toBe(false);
+  });
+});
 
 describe("set_model protocol (slice P7.15 · F14)", () => {
   it("accepts a non-empty model id and fails closed on junk", () => {
@@ -414,21 +429,27 @@ describe("срез 2 protocol additions", () => {
 // engine_switched/engine_switch_failed host->renderer acks are plain
 // structured-clone-safe data (no zod, model_changed precedent).
 describe("engine_switch_request protocol", () => {
+  it.each([undefined, "", "   ", "x".repeat(129), 42])("rejects a missing or invalid model: %s", model => {
+    const request = { type: "engine_switch_request", requestId: "r1", engine: "codex", model };
+    expect(engineSwitchRequestSchema.safeParse(request).success).toBe(false);
+    expect(uiToHostMessageSchema.safeParse(request).success).toBe(false);
+  });
+
   it("engineSwitchRequestSchema accepts a well-formed switch request", () => {
-    expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "claude" }).success).toBe(true);
+    expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "claude", model: "test-model" }).success).toBe(true);
     // and registers in the untrusted-union discriminator (fail-closed path)
-    expect(uiToHostMessageSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "claude" }).success).toBe(true);
+    expect(uiToHostMessageSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "claude", model: "test-model" }).success).toBe(true);
   });
 
   it("rejects an unknown engine id", () => {
-    expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "gpt" }).success).toBe(false);
-    expect(uiToHostMessageSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "gpt" }).success).toBe(false);
+    expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "gpt", model: "test-model" }).success).toBe(false);
+    expect(uiToHostMessageSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "gpt", model: "test-model" }).success).toBe(false);
   });
 
   it("rejects extra keys, a missing/empty requestId and a missing engine", () => {
-    expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "codex", factory: {} }).success).toBe(false);
-    expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", engine: "codex" }).success).toBe(false);
-    expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", requestId: "", engine: "codex" }).success).toBe(false);
+    expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "codex", model: "test-model", factory: {} }).success).toBe(false);
+    expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", engine: "codex", model: "test-model" }).success).toBe(false);
+    expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", requestId: "", engine: "codex", model: "test-model" }).success).toBe(false);
     expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", requestId: "r1" }).success).toBe(false);
   });
 

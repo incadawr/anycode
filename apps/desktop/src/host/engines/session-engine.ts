@@ -15,7 +15,7 @@ import type {
   PermissionMode,
   ReasoningEffort,
 } from "@anycode/core";
-import type { OrchestrationPolicy } from "../orchestration-policy.js";
+import type { OrchestrationPolicy, RuntimeOrchestrationComposition } from "../orchestration-policy.js";
 import type { EngineId } from "../../shared/engines.js";
 
 export type { EngineId } from "../../shared/engines.js";
@@ -76,6 +76,10 @@ export interface RunTurnOptions {
    * transcript uses it to correlate presentation records with the turn.
    */
   turnId?: string;
+  onInputDispatched?(): void;
+  onInputAccepted?(nativeTurnId?: string): void;
+  /** The transport proved that no input was written. */
+  onInputNotSent?(): void;
 }
 
 /**
@@ -84,12 +88,15 @@ export interface RunTurnOptions {
  * before waiting for its active turn during host shutdown.
  */
 export interface SessionEngine {
+  /** A complete native read may prove absence; a shadow mirror must never do so. */
+  verifyInputAbsent?(input: string): Promise<boolean>;
   readonly id: EngineId;
   readonly capabilities: EngineCapabilities;
   /** Optional engine-owned orchestration overlay; absent means unavailable. */
   readonly orchestrationPolicy?: OrchestrationPolicy;
   /** Factory attests that the target has its Agent and role routing wired. */
   readonly orchestrationCompositionReady?: boolean;
+  readonly orchestrationComposition?: RuntimeOrchestrationComposition;
   /** Apply and confirm the core loop's own orchestration flag. */
   setCoreOrchestrate?(enabled: boolean): boolean;
   mode(): PermissionMode;
@@ -114,6 +121,8 @@ export interface SessionEngine {
   readTranscript?(): Promise<readonly HistoryItem[]>;
   replaceHistory?(items: HistoryItem[], persist?: boolean): void;
   contextBreakdown?(): ContextBreakdown;
+  /** Conservative byte budget for imported text after the runtime's own context and output reserve. */
+  importBudgetBytes?(): number | undefined;
   /**
    * Manual conversation compaction on the existing host maintenance rail.
    * Unsupported engines omit this method; Session visibly refuses the request.

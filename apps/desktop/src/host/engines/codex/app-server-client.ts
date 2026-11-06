@@ -466,11 +466,12 @@ export class AppServerClient {
     this.assertTrusted();
     const child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), ...(this.options.configOverrides ?? []).flatMap((value) => ["-c", value]), "app-server", "--stdio"], this.spawnOptions(true));
     this.child = child;
+    this.reportOwnedProcess(child);
+    child.once("close", () => this.reportOwnedProcess(child, true));
     // Adopt immediately after spawn, before any JSON-RPC initialize/account/thread work.
     this.options.bootstrap?.adopt(() => this.close());
     this.bindChild(child);
     await this.awaitSpawn(child);
-    this.reportOwnedProcess(child);
   }
 
   request<T>(method: string, params?: unknown, opts?: { timeoutMs?: number }): Promise<T> {
@@ -645,6 +646,8 @@ export class AppServerClient {
     // `assertTrusted`.
     this.assertTrusted();
     const child = this.spawnImpl(this.options.binaryPath, [...(this.options.binaryArgs ?? []), "--version"], this.spawnOptions(true));
+    this.reportOwnedProcess(child);
+    child.once("close", () => this.reportOwnedProcess(child, true));
     const timeoutMs = this.options.versionTimeoutMs ?? CODEX_VERSION_PREFLIGHT_TIMEOUT_MS;
     const output = await new Promise<string>((resolve, reject) => {
       let stdout = "";
@@ -878,12 +881,13 @@ export class AppServerClient {
     }
   }
 
-  private reportOwnedProcess(child: ChildProcess): void {
+  private reportOwnedProcess(child: ChildProcess, exited = false): void {
     const ownership = this.options.processOwnership;
     const pid = child.pid;
     if (ownership === undefined || pid === undefined || process.platform === "win32") return;
     ownership.report({
       type: ENGINE_PROCESS_REGISTRATION_TYPE,
+      ...(exited ? { exited: true as const } : {}),
       hostPid: ownership.hostPid,
       generation: ownership.generation,
       enginePid: pid,

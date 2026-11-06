@@ -1,6 +1,6 @@
-import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 /** Strict startup gate for disposable development automation. Throws before profile use on any mismatch. */
 export function initializeIsolatedSmoke(app: {
@@ -19,6 +19,23 @@ export function initializeIsolatedSmoke(app: {
     if ((rootStat.mode & 0o077) !== 0 || (typeof process.getuid === "function" && rootStat.uid !== process.getuid())) throw new Error();
     const canonicalRoot = realpathSync(root);
     if (dirname(canonicalRoot) !== realpathSync(tmpdir())) throw new Error();
+    if (!env.ANYCODE_EXPECTED_DESKTOP_ROOT || realpathSync(app.getAppPath()) !== realpathSync(env.ANYCODE_EXPECTED_DESKTOP_ROOT) || !env.ANYCODE_SMOKE_IDENTITY) throw new Error();
+    const nativeFixtures = env.ANYCODE_ISOLATED_NATIVE_FIXTURES;
+    const orchestrationFixtures = env.ANYCODE_ISOLATED_ORCHESTRATION_FIXTURES;
+    if (orchestrationFixtures !== undefined && (orchestrationFixtures !== "1" || nativeFixtures !== "1")) throw new Error();
+    const binaries: Record<string, string> = {};
+    if (nativeFixtures !== undefined) {
+      if (nativeFixtures !== "1" || env.ANYCODE_ENGINE_SWITCH_ENABLED !== "1") throw new Error();
+      const node = env.ANYCODE_ISOLATED_FIXTURE_NODE;
+      if (!node || !isAbsolute(node) || basename(realpathSync(node)) !== "node" || /[\r\n]/.test(node) || !lstatSync(realpathSync(node)).isFile()) throw new Error();
+      const source = readFileSync(join(app.getAppPath(), "src/host/engine-switch-fixtures/native-double.mjs"), "utf8").replace(/^#![^\n]*\n/, "");
+      for (const engine of ["codex", "claude"]) {
+        const path = join(root, `${engine}-double`);
+        const prefix = `#!${realpathSync(node)}\nprocess.argv.push(${orchestrationFixtures === "1" ? '"--double-orchestration", ' : ""}${JSON.stringify(`--double-log=${join(root, `${engine}.jsonl`)}`)}${engine === "claude" ? ', "--double-claude"' : ""});\n`;
+        binaries[`${engine}-double`] = prefix + source;
+        if (readFileSync(path, "utf8") !== binaries[`${engine}-double`]) throw new Error();
+      }
+    }
     const expected: Record<string, string> = {
       ANYCODE_SUBAGENTS_HOME: root, ANYCODE_PROFILE_HOME: root, ANYCODE_CODEX_PROFILES_HOME: root,
       ANYCODE_MCP_IMPORT_HOME: root, ANYCODE_SKILLS_IMPORT_HOME: root,
@@ -26,13 +43,14 @@ export function initializeIsolatedSmoke(app: {
       ANYCODE_DB_PATH: join(root, "db.sqlite"), ANYCODE_AUTOMATION_INFO: join(root, "automation.json"),
       ANYCODE_SETTINGS_PATH: join(root, "settings.json"), ANYCODE_SECRETS_PATH: join(root, "secrets.json"),
       CODEX_HOME: join(root, "codex-home"), CLAUDE_CONFIG_DIR: join(root, "claude-home"),
-      ANYCODE_CODEX_BIN: join(root, "unavailable-engine"), ANYCODE_CLAUDE_BIN: join(root, "unavailable-engine"),
+      ANYCODE_CODEX_BIN: join(root, nativeFixtures ? "codex-double" : "unavailable-engine"), ANYCODE_CLAUDE_BIN: join(root, nativeFixtures ? "claude-double" : "unavailable-engine"),
     };
     for (const [key, value] of Object.entries(expected)) if (env[key] !== value) throw new Error();
-    // The harness may pre-seed settings and its inert executable only. Every
+    // The harness may seed settings, an inert binary, or exact copies of the
+    // reviewed native fixture in the explicit engine-switch mode. Every
     // other application path must be created inside this fresh private root.
     for (const leaf of readdirSync(root)) {
-      if (leaf !== "settings.json" && leaf !== "unavailable-engine") throw new Error();
+      if (leaf !== "settings.json" && leaf !== "unavailable-engine" && !(leaf in binaries)) throw new Error();
       const stat = lstatSync(join(root, leaf));
       if (!stat.isFile() || stat.nlink !== 1 || (typeof process.getuid === "function" && stat.uid !== process.getuid())) throw new Error();
     }
@@ -68,3 +86,19 @@ export const isolatedSmokeStorage = {
     return text.slice(8);
   },
 };
+
+/** Discovery in native-fixture mode can see only the reviewed binaries and their directory metadata. */
+export function isolatedNativeBinaryFs(root: string) {
+  const files = new Set([join(root, "codex-double"), join(root, "claude-double")].flatMap(path => [resolve(path), realpathSync(path)]));
+  const directories = new Set<string>();
+  for (const start of [resolve(root), realpathSync(root)]) {
+    let path = start;
+    while (true) { directories.add(path); const parent = dirname(path); if (parent === path) break; path = parent; }
+  }
+  function allowed(path: string) { if (!files.has(resolve(path)) && !directories.has(resolve(path))) throw new Error("Binary is outside the isolated fixture allowlist"); }
+  return {
+    stat(path: string) { allowed(path); return statSync(path); },
+    realpath(path: string) { allowed(path); return realpathSync(path); },
+    readdir: (_path: string): string[] => [],
+  };
+}

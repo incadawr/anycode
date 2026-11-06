@@ -47,6 +47,7 @@ export function planEngineSwitchImport(history: readonly HistoryItem[], maxItems
 
 /** Tool-result texts are capped at this many characters in the rendered prompt. */
 const TOOL_RESULT_MAX_CHARS = 500;
+const IMPORT_MAX_BYTES = 64 * 1024;
 
 /**
  * Renders ONE planned item as a `# role`-prefixed prompt chunk; malformed
@@ -95,16 +96,29 @@ function renderImportItem(item: HistoryItem): string {
  * Deterministic — no dates, no engine-specific formatting — so the same
  * conversation always yields the same prompt string.
  */
-export function renderImportPrompt(from: EngineId, to: EngineId, plan: EngineSwitchPlan, workspace: string): string {
+export function renderImportPrompt(from: EngineId, to: EngineId, plan: EngineSwitchPlan, workspace: string, maxBytes = IMPORT_MAX_BYTES): string {
   const lines: string[] = [
     `Session continued in this ${to} engine (previous engine: ${from}; workspace: ${workspace}).`,
     plan.truncated
-      ? `Imported the last ${plan.items.length} conversation items (older history was dropped).`
-      : `Imported the full conversation (${plan.items.length} items).`,
+      ? `Conversation excerpts from the last ${plan.items.length} items; older items and non-text content may be omitted.`
+      : `Conversation excerpts from ${plan.items.length} items; non-text content may be omitted.`,
   ];
   for (const item of plan.items) {
     const rendered = renderImportItem(item);
     if (rendered !== "") lines.push(rendered);
   }
-  return lines.join("\n");
+  return capImportPrompt(lines.join("\n"),maxBytes);
+}
+
+/** A conservative target budget may be smaller than the global import limit. */
+export function capImportPrompt(prompt: string, maxBytes = IMPORT_MAX_BYTES): string {
+  const limit = Math.min(IMPORT_MAX_BYTES,Math.floor(maxBytes));
+  const notice = "Conversation text excerpt; earlier content was omitted to fit the import limit.\n";
+  if (!Number.isFinite(limit) || limit < Buffer.byteLength(notice)) throw new Error("The selected model has too little input space for the conversation import.");
+  const bytes = Buffer.from(prompt, "utf8");
+  if (bytes.length <= limit) return prompt;
+  let start = bytes.length - (limit - Buffer.byteLength(notice));
+  // Skip continuation bytes so the excerpt begins at a complete UTF-8 scalar.
+  while ((bytes[start]! & 0xc0) === 0x80) start++;
+  return notice + bytes.subarray(start).toString("utf8");
 }

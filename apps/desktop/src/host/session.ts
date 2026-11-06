@@ -1,3 +1,5 @@
+import type { EngineSwitchIdentity } from "../shared/engine-switch-control.js";
+import type { RuntimeSessionHistory } from "./runtime-session-history.js";
 import { manualCompactionUnavailableReason } from "../shared/manual-compaction.js";
 import { PresentationJournal } from "./presentation-journal.js";
 import type { CompactionRecordSeam } from "./compaction-records.js";
@@ -220,6 +222,7 @@ export type EngineSettingsChange =
   | { ok: false; reason: string };
 
 export interface EngineSettingsSeam {
+  onSettingsRejected?(listener: (reason: string) => void): () => void;
   models(): EngineModelChoice[];
   presets(): EnginePermissionPreset[];
   /** The APPLIED settings — what a `turn/start` actually carried. Never a merely-chosen value (see `pendingSnapshot`). */
@@ -788,19 +791,31 @@ export function summarizeProviderUsage(steps: ProviderUsageRecord[]): {
   return { steps, totals: { input, output, total, stepsReported, stepsWithCache, ...(generationTokensPerSecond !== undefined ? { generationTokensPerSecond } : {}), ...costs, ...(steps.length > priced.length + subscriptionSteps ? { unpricedSteps: steps.length - priced.length - subscriptionSteps } : {}), ...(priced.length || subscriptionSteps ? { unknownSavingsSteps: steps.length - savings.length - subscriptionSteps } : {}), ...(subscriptionSteps ? { subscriptionSteps } : {}) } };
 }
 
+/** Runtime-owned services prepared together and installed only at commit. */
+export interface SwitchRuntime {
+  engine: SessionEngine;
+  engineSettings?: EngineSettingsSeam;
+  identity?: EngineSwitchIdentity;
+  presentation?: Pick<SessionOptions, "shell" | "imageInputEnabled" | "imageFallbackAvailable" | "contextWindowAssumed" | "modelSettingsConnectionId"> & { pinnedConnection?: { connectionId: string; providerId: string } | null };
+  backgroundChildren?: SessionOptions["backgroundChildren"];
+  onOrchestrateChanged?: SessionOptions["onOrchestrateChanged"];
+  callbacks?: Pick<SessionOptions, "persistence" | "usageAudit" | "effortResolution" | "saveTurnError" | "saveContextUsage" | "reportProviderHealth" | "reportProviderQuota" | "refineTitle" | "restoreHistoryAndTurnErrors" | "currentTurnErrorIds" | "compactionRecords" | "orchestratorRouteCheck" | "applyRecognizerConfig" | "checkpoints">;
+}
+
 export interface SessionOptions {
   outbound: Outbound;
   /** The host-selected agent runtime; Session never imports an external engine. */
   engine: SessionEngine;
-  /**
-   * (review 23.08 narrowing): builds the replacement
-   * engine for an `engine_switch_request`. Injected by the composition root;
-   * absent -> the message is refused with reason "engine switch is not
-   * available in this host". The production wiring (real startCodexEngine /
-   * bootClaude / CoreEngine construction inside a live host) is a follow-up —
-   * deliberately NOT wired in this cut (owner review pending, §7 Q1).
-   */
-  switchEngineFactory?: (engine: EngineId) => Promise<SessionEngine>;
+  /** Prepare a replacement without changing session-owned services. */
+  switchEngineFactory?: (engine: EngineId, model: string) => Promise<SessionEngine | SwitchRuntime>;
+  engineSwitchCoordinator?: {
+    generation: number;
+    prepare(request: Extract<UiToHostMessage, { type: "engine_switch_request" }>): Promise<NonNullable<SessionOptions["switchEngineFactory"]>>;
+    commit(requestId: string, identity: EngineSwitchIdentity): Promise<void>;
+    abort(requestId: string): Promise<void>;
+    retire(requestId: string): Promise<void>;
+  };
+  runtimeHistory?: RuntimeSessionHistory;
   /**
    * the engine's own model catalog + permission presets. Absent for
    * core (and for any engine without native controls) -> `set_engine_preset` is
@@ -874,7 +889,7 @@ export interface SessionOptions {
   /** Narrow persistence callback for title/mode patches (design §4.2). */
   persistence?: SessionPersistence;
   saveTurnError?: (record: TurnErrorRecord, input?: string) => Promise<void>;
-  restoreHistoryAndTurnErrors?: (history: readonly HistoryItem[], errorIds?: readonly string[]) => Promise<string[]>;
+  restoreHistoryAndTurnErrors?: (history: readonly HistoryItem[], errorIds?: readonly string[], runtimeBoundary?: import("@anycode/core").RuntimeCheckpointBoundary) => Promise<string[]>;
   currentTurnErrorIds?: () => Promise<string[]>;
   /**
    * GitHub #36: the durable presentation records of this session's compactions
@@ -1284,7 +1299,13 @@ export class Session {
    * Injected by the composition root; absent -> the message is refused with
    * reason "engine switch is not available in this host".
    */
-  private readonly switchEngineFactory: ((engine: EngineId) => Promise<SessionEngine>) | undefined;
+  private readonly engineSwitchCoordinator: SessionOptions["engineSwitchCoordinator"];
+  private readonly runtimeHistory: SessionOptions["runtimeHistory"];
+  private runtimeHydrationSequence = 0;
+  private runtimeHydration: Promise<void> | null = null;
+  private readonly runtimeHydrationInbound: {raw:unknown; generation:string | null}[] = [];
+  private readonly engineSwitchRequestIds = new Set<string>();
+  private readonly switchEngineFactory: ((engine: EngineId, model: string) => Promise<SessionEngine | SwitchRuntime>) | undefined;
   /**
    * engine-native model/preset controls; undefined -> the engine has
    * none. NOT readonly — a successful engine swap resets this to
@@ -1308,6 +1329,8 @@ export class Session {
    * OWN post-switch items, so the next switch prepends this instead of
    * re-reading (and losing) everything that came before.
    */
+  private readonly switchBoundaries: Extract<HostToUiMessage, { type: "agent_event" }>[] = [];
+  private switchedPin: { connectionId: string; providerId: string } | null = null;
   private switchCarriedHistory: readonly HistoryItem[] = [];
   private readonly broker: IpcPermissionBroker;
   private readonly fs: FileSystemPort;
@@ -1323,18 +1346,18 @@ export class Session {
   private readonly onWorkspaceTransition: SessionOptions["onWorkspaceTransition"];
   private readonly worktreeControl: SessionOptions["worktreeControl"];
   /** W11: undefined for Codex / every legacy test -> no-op. */
-  private readonly reportProviderHealth: SessionOptions["reportProviderHealth"];
-  private readonly reportProviderQuota: SessionOptions["reportProviderQuota"];
+  private reportProviderHealth: SessionOptions["reportProviderHealth"];
+  private reportProviderQuota: SessionOptions["reportProviderQuota"];
   // Slice P7.15 (F14): mutable — a mid-session set_model updates the live model.
   private model: string;
   private readonly sessionId: string;
-  private readonly persistence: SessionPersistence | undefined;
-  private readonly saveTurnError: SessionOptions["saveTurnError"];
+  private persistence: SessionPersistence | undefined;
+  private saveTurnError: SessionOptions["saveTurnError"];
   private bootTurnErrors: readonly TurnErrorRecord[];
-  private readonly restoreHistoryAndTurnErrors: SessionOptions["restoreHistoryAndTurnErrors"];
-  private readonly currentTurnErrorIds: SessionOptions["currentTurnErrorIds"];
+  private restoreHistoryAndTurnErrors: SessionOptions["restoreHistoryAndTurnErrors"];
+  private currentTurnErrorIds: SessionOptions["currentTurnErrorIds"];
   /** GitHub #36: durable compaction rows; see SessionOptions.compactionRecords. */
-  private readonly compactionRecords: CompactionRecordSeam | undefined;
+  private compactionRecords: CompactionRecordSeam | undefined;
   /**
    * The trigger of the compaction currently in flight, captured from its
    * `compaction_start` (the `compaction_end` event does not repeat it). Null
@@ -1342,20 +1365,20 @@ export class Session {
    */
   private compactionTrigger: "auto" | "manual" | null = null;
   /** see SessionOptions.usageAudit's own doc. */
-  private readonly usageAudit: SessionOptions["usageAudit"];
+  private usageAudit: SessionOptions["usageAudit"];
   private readonly rules: SessionPermissionRules;
   private readonly git: GitUiBridge | undefined;
   /** Design §2(f): shell capability projection; undefined -> every shell feature defaults to enabled. */
-  private readonly shell: ShellCapabilitiesProjection | undefined;
+  private shell: ShellCapabilitiesProjection | undefined;
   private readonly tasks: SessionOptions["tasks"];
   /** the renderer's own read cursor per background task (see pushTaskOutput). */
   private readonly uiTaskOutputCursors = new Map<string, number>();
   /** срез 3 §2/§3: see SessionOptions.backgroundChildren's own doc. */
-  private readonly backgroundChildren: SessionOptions["backgroundChildren"];
+  private backgroundChildren: SessionOptions["backgroundChildren"];
   /** §3.7: host callback on every orchestrate transition (loop-config copy). */
-  private readonly onOrchestrateChanged: SessionOptions["onOrchestrateChanged"];
+  private onOrchestrateChanged: SessionOptions["onOrchestrateChanged"];
   /** §3.6: turn-start orchestrator-route health check (host-owned health cache). */
-  private readonly orchestratorRouteCheck: SessionOptions["orchestratorRouteCheck"];  /** see SessionOptions.supervisorIdle's own doc. */
+  private orchestratorRouteCheck: SessionOptions["orchestratorRouteCheck"];  /** see SessionOptions.supervisorIdle's own doc. */
   private readonly supervisorIdle: SessionOptions["supervisorIdle"];
   /**
    * the latest turn's final assistant text, captured in
@@ -1368,14 +1391,14 @@ export class Session {
   private readonly workspaceTrustRequired: SessionOptions["workspaceTrustRequired"];
   private readonly envStatus: SessionOptions["envStatus"];
   /** Slice P7.26/R2: rewind/list seam (undefined -> checkpoints disabled, fail-closed). */
-  private readonly checkpoints: SessionOptions["checkpoints"];
-  private readonly imageInputEnabled: (() => boolean) | undefined;
+  private checkpoints: SessionOptions["checkpoints"];
+  private imageInputEnabled: (() => boolean) | undefined;
   /** срез C: see SessionOptions.imageFallbackAvailable's own doc. */
-  private readonly imageFallbackAvailable: (() => boolean) | undefined;
-  private readonly contextWindowAssumed: (() => boolean) | undefined;
-  private readonly modelSettingsConnectionId: string | null | undefined;
+  private imageFallbackAvailable: (() => boolean) | undefined;
+  private contextWindowAssumed: (() => boolean) | undefined;
+  private modelSettingsConnectionId: string | null | undefined;
   /** срез C: see SessionOptions.applyRecognizerConfig's own doc. */
-  private readonly applyRecognizerConfigImpl: ((endpoint: RecognizerEndpoint | null) => void) | undefined;
+  private applyRecognizerConfigImpl: ((endpoint: RecognizerEndpoint | null) => void) | undefined;
   /**
    * срез C (plan §1.3): the last recognizer-config push received
    * while `busy` — last-value-wins, applied at the very next busy->idle
@@ -1384,12 +1407,12 @@ export class Session {
    * null}` (an explicit disable) is distinguishable from "nothing pending".
    */
   private pendingRecognizerConfig: { endpoint: RecognizerEndpoint | null } | undefined;
-  private readonly refineTitle: ((text: string) => Promise<string | null>) | undefined;
+  private refineTitle: ((text: string) => Promise<string | null>) | undefined;
   // Slice P7.15 (F14): mutable — re-resolved per new model on a set_model switch.
   private reasoningSupported: boolean;
   private availableEffortLevels: ReasoningEffort[] | undefined;
   private bootEffortAdjustment: { from: ReasoningEffort; to: ReasoningEffort } | undefined;
-  private readonly effortResolution: SessionOptions["effortResolution"];
+  private effortResolution: SessionOptions["effortResolution"];
   /** Slice P7.15 (F14): the user-selected effort tier, persisted across a model switch. */
   private selectedEffort: ReasoningEffort;
   /**
@@ -1591,7 +1614,7 @@ export class Session {
    * reading (latest-wins scalar), captured at emission for the same reason
    * as checkpointSessionTokens above. Null until the first reading.
    */
-  private readonly saveContextUsage: SessionOptions["saveContextUsage"];
+  private saveContextUsage: SessionOptions["saveContextUsage"];
   private contextWriteTail: Promise<void> = Promise.resolve();
   private checkpointContextUsage: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" } | null = null;
   /**
@@ -1823,6 +1846,8 @@ export class Session {
     });
     this.engine = options.engine;
     this.switchEngineFactory = options.switchEngineFactory;
+    this.engineSwitchCoordinator = options.engineSwitchCoordinator;
+    this.runtimeHistory = options.runtimeHistory;
     this.engineSettings = options.engineSettings;
     this.broker = options.broker;
     this.broker.observeActivity(() => this.publishActivity());
@@ -1841,7 +1866,7 @@ export class Session {
     this.worktreeControl = options.worktreeControl;
     this.reportProviderHealth = options.reportProviderHealth;
     this.reportProviderQuota = options.reportProviderQuota;
-    this.model = options.model;
+    this.model = options.engineSettings?.snapshot().model ?? options.model;
     this.sessionId = options.sessionId;
     this.saveContextUsage = options.saveContextUsage;
     this.checkpointContextUsage = options.initialContextUsage ?? null;
@@ -1931,7 +1956,30 @@ export class Session {
     // the engine's turn/start, i.e. always while a turn is running and therefore
     // always after ui_ready; it is `emit` (buffered), not sendDirect, so the ack
     // survives a renderer reload via replay rather than racing it.
-    this.engineSettingsUnsubscribe = this.engineSettings?.onSettingsApplied((applied) => {
+    this.engineSettingsUnsubscribe = this.subscribeEngineSettings(this.engineSettings);
+  }
+
+  ownsRuntime(engine: SessionEngine): boolean { return !this.shuttingDown && this.engine === engine; }
+
+  private orchestrationRestore?: Promise<void>;
+
+  private persistRuntimeSettings(): void {
+    if (!this.runtimeHistory) return;
+    const applied = this.engineSettings?.snapshot();
+    const selected = this.engineSettings?.persistsOnApply ? applied : this.engineSettings?.pendingSnapshot?.() ?? applied;
+    const settings = (value: typeof applied) => value
+      ? {model:value.model,mode:value.activePresetId,...(value.effort !== undefined ? {effort:value.effort} : {}),...(value.fast !== undefined ? {fast:value.fast} : {})}
+      : {model:this.model,mode:this.engine.mode(),effort:this.selectedEffort};
+    const overlay = this.orchestrate ? {orchestration:{enabled:true as const,baseMode:this.preOrchestrateMode ?? "plan"}} : {};
+    try { this.runtimeHistory.settings({...settings(selected),...overlay},{...settings(applied),...overlay}); }
+    catch (error) { console.error("[host] runtime settings write failed",error); }
+  }
+
+  private subscribeEngineSettings(seam: EngineSettingsSeam | undefined, engine = this.engine, generation = this.settingsGeneration): (() => void) | undefined {
+    if (!seam) return;
+    const current = () => this.ownsRuntime(engine) && this.engineSettings === seam && this.settingsGeneration === generation;
+    const appliedSubscription = seam.onSettingsApplied((applied) => {
+      if (!current()) return;
       const clearContextUsage = this.model !== applied.model;
       if (clearContextUsage) this.updateContextUsage(null);
       this.model = applied.model;
@@ -1943,8 +1991,10 @@ export class Session {
       if (this.engineSettings?.persistsOnApply === true) {
         this.persistence?.touch({ model: applied.model, enginePreset: applied.activePresetId });
       }
+      this.persistRuntimeSettings();
       this.outbound.emit({
         type: "engine_settings_changed",
+        ...(this.imageInputEnabled ? {imageInput:this.imageInputEnabled()} : {}),...(this.imageFallbackAvailable ? {imageFallback:this.imageFallbackAvailable()} : {}),
         ...(clearContextUsage ? { clearContextUsage: true } : {}),
         model: applied.model,
         activePresetId: applied.activePresetId,
@@ -1955,6 +2005,13 @@ export class Session {
       });
       if (this.mergedEngineSettings() !== null) this.publishPendingEngineSettings();
     });
+    const rejectedSubscription = seam.onSettingsRejected?.(reason => {
+      if (!current()) return;
+      this.outbound.emit({type:"mode_change_rejected",reason});
+      this.outbound.emit({type:"engine_settings_changed",...seam.snapshot(),...(this.imageInputEnabled ? {imageInput:this.imageInputEnabled()} : {}),...(this.imageFallbackAvailable ? {imageFallback:this.imageFallbackAvailable()} : {}),state:"applied",appliesFrom:"next_turn"});
+      this.pushPendingEngineSettings();
+    });
+    return () => { appliedSubscription(); rejectedSubscription?.(); };
   }
 
   /** Attaches (or retargets) the UI wire: routes inbound messages, denies on close. */
@@ -2676,7 +2733,7 @@ export class Session {
     this.presentationJournal.clear();
   }
 
-  private route(raw: unknown): void {
+  private route(raw: unknown, canonicalHydrated = false): void {
     const parsed = uiToHostMessageSchema.safeParse(raw);
     if (!parsed.success) {
       // A valid bounded correlation ID lets the caller recover its whole draft.
@@ -2684,11 +2741,20 @@ export class Session {
       if (raw !== null && typeof raw === "object" && "type" in raw && raw.type === "user_message" && "requestId" in raw && typeof raw.requestId === "string" && raw.requestId.length > 0 && raw.requestId.length <= 128) {
         this.outbound.sendDirect({ type: "user_message_invalid", requestId: raw.requestId });
       }
+      if (raw !== null && typeof raw === "object" && "type" in raw && raw.type === "engine_switch_request" && "requestId" in raw && typeof raw.requestId === "string" && raw.requestId.length > 0 && raw.requestId.length <= 128) {
+        this.failEngineSwitch(raw.requestId,"Invalid engine switch selection.");
+      }
       // Fail-closed: garbage can never grant a permission or start a turn.
       console.warn("[host] dropped invalid UI message:", parsed.error.issues);
       return;
     }
     const message = parsed.data;
+    if (!this.shuttingDown && this.runtimeHydration && !canonicalHydrated && message.type !== "cancel_turn" && message.type !== "permission_response") {
+      // Preserve wire order while a checked native read is outstanding. A
+      // delayed snapshot must never replace a turn admitted after ui_ready.
+      this.runtimeHydrationInbound.push({raw,generation:this.boundGeneration});
+      return;
+    }
     // CUT-S2 §10.12.1: the SINGLE admission funnel for every wire
     // message once shutdown has begun — default-deny: new message types are
     // shutdown-safe by construction, not by a per-case audit (the class of
@@ -2699,6 +2765,9 @@ export class Session {
     // attached to a dying host — replies to informational requests are moot).
     if (this.shuttingDown) {
       switch (message.type) {
+        case "engine_switch_request":
+          this.failEngineSwitch(message.requestId,"The session is closing. Reconnect and try again.");
+          break;
         case "steer_message":
         // 4110 rework: core gets an honest re-queue reply — the dying host
         // can no longer inject; the renderer keeps the text in its prompt
@@ -2741,7 +2810,45 @@ export class Session {
       }
       return;
     }
+    if (message.type === "ui_ready" && this.runtimeHistory && !canonicalHydrated) {
+      const sequence = ++this.runtimeHydrationSequence;
+      const generation = this.boundGeneration;
+      const engine = this.engine;
+      const priorTurn = this.currentTurn;
+      const hydration = Promise.resolve(priorTurn).then(() => this.restoreRuntimeOrchestration()).then(() => this.runtimeHistory!.hydrate(engine)).then(state => {
+        if (this.shuttingDown || sequence !== this.runtimeHydrationSequence || generation !== this.boundGeneration) return;
+        if (engine !== this.engine) { this.route(raw); return; }
+        this.sessionHistory = buildSessionHistory(state.items,this.historyMaxItems,this.bootTurnErrors);
+        this.switchBoundaries.splice(0,this.switchBoundaries.length,...state.boundaries.map(boundary => ({
+          type:"agent_event" as const,turnId:ENGINE_SWITCH_TURN_ID,boundaryId:boundary.id,
+          ...(boundary.afterItemId ? {boundaryAfter:boundary.afterItemId} : {}),
+          event:{type:"engine_notice" as const,level:"info" as const,message:boundary.text},
+        })));
+        this.route(raw,true);
+        this.pushRuntimeInputRecovery();
+      }).catch(error => {
+        if (!this.shuttingDown && sequence === this.runtimeHydrationSequence && generation === this.boundGeneration) {
+          // A native read may be unavailable after Stop or transport close. Keep
+          // the durable conversation usable and expose the unresolved delivery.
+          const state = this.runtimeHistory!.state();
+          this.sessionHistory = buildSessionHistory(state.items,this.historyMaxItems,this.bootTurnErrors);
+          this.route(raw,true);
+          this.pushRuntimeInputRecovery();
+          this.outbound.sendDirect({type:"agent_event",turnId:ENGINE_SWITCH_TURN_ID,event:{type:"engine_notice",level:"warning",message:`Could not refresh native history: ${describeError(error)}`}});
+        }
+      }).finally(() => {
+        if (this.runtimeHydration !== hydration) return;
+        this.runtimeHydration = null;
+        const queued = this.runtimeHydrationInbound.splice(0);
+        for (const entry of queued) if (!this.shuttingDown && entry.generation === this.boundGeneration) this.route(entry.raw);
+      });
+      this.runtimeHydration = hydration;
+      return;
+    }
     switch (message.type) {
+      case "runtime_input_discard":
+        this.runtimeHistory?.discard(message.turnId);
+        return;
       case "ui_ready":
 
         // status pushes are safe from here on. Set BEFORE the snapshot cascade
@@ -2762,6 +2869,7 @@ export class Session {
         this.bootEffortAdjustment = undefined;
         this.outbound.sendDirect({
           type: "host_ready",
+          ...(this.engineSwitchCoordinator ? { engineSwitch: { enabled: true as const, generation: this.engineSwitchCoordinator.generation } } : {}),
           workspace: this.workspace,
           ...(this.projectRoot !== this.workspace ? { projectRoot: this.projectRoot } : {}),
           ...(this.worktree !== undefined ? { worktree: this.worktree } : {}),
@@ -2819,13 +2927,13 @@ export class Session {
         // history holds only post-switch turns — rebuilding from it would drop
         // the pre-switch transcript; keep the switch-time snapshot (the ring
         // carries everything newer, the native-engine discipline).
-        if (this.engine.id === "core" && !this.engineSwitched) {
+        if (!this.runtimeHistory && this.engine.id === "core" && !this.engineSwitched) {
           this.sessionHistory = buildSessionHistory([...this.engine.historyItems()], this.historyMaxItems, this.bootTurnErrors);
         }
         this.sendSessionHistory();
-        const historyTracksTurns = this.engine.id === "core" && !this.engineSwitched;
+        const historyTracksTurns = this.runtimeHistory !== undefined || (this.engine.id === "core" && !this.engineSwitched);
         const journalSnapshot = this.presentationJournal.snapshot(
-          historyTracksTurns ? this.engine.historyItems() : undefined,
+          historyTracksTurns ? (this.runtimeHistory ? this.runtimeHistory.state().items : this.engine.historyItems()) : undefined,
           this.turnId ?? undefined,
         );
         if (journalSnapshot.coveredTurnIds.length > 0) {
@@ -2887,6 +2995,7 @@ export class Session {
           .catch(() => {});
         this.pushSessionCheckpoint();
         if (journalSnapshot.coveredTurnIds.length > 0) this.outbound.sendDirect({ type: "presentation_replay_start" });
+        for (const boundary of this.switchBoundaries) this.outbound.sendDirect(boundary);
         this.outbound.replay();
         if (journalSnapshot.coveredTurnIds.length > 0) this.outbound.sendDirect({ type: "presentation_replay_end" });
         this.outbound.sendDirect(this.broker.approvalState());
@@ -3267,7 +3376,7 @@ export class Session {
         void this.onCompact();
         break;
       case "engine_switch_request":
-        if (this.postureBlocked()) { this.outbound.sendDirect({ type: "engine_switch_failed", requestId: message.requestId, reason: "Session posture unavailable" }); break; }
+        if (this.postureBlocked()) { this.failEngineSwitch(message.requestId,"Session posture unavailable"); break; }
         // async handler holds `busy` across the factory await —
         // the exact rewind pattern (route() itself never awaits). The handler
         // re-checks its own gates (messages route synchronously, but this
@@ -3418,6 +3527,7 @@ export class Session {
       ...(this.contextWindowAssumed !== undefined ? { contextWindowAssumed: this.contextWindowAssumed() } : {}),
     });
     this.pushTodoReminderSnapshot();
+    this.persistRuntimeSettings();
     return true;
   }
 
@@ -3441,6 +3551,7 @@ export class Session {
     this.selectedEffort = effort;
     if (this.engine.setSelectedReasoningEffort) this.engine.setSelectedReasoningEffort(effort);
     else this.engine.setReasoningEffort(effort === "off" ? undefined : effort);
+    this.persistRuntimeSettings();
     this.outbound.emit({
       type: "reasoning_effort_changed",
       ...(requestId !== undefined ? { requestId } : {}),
@@ -3613,7 +3724,9 @@ export class Session {
     this.checkpointContextUsage = usage ?? null;
     const snapshot = usage ? { ...usage, engine: this.engine.id, model: this.model } : null;
     if (this.saveContextUsage) {
-      this.contextWriteTail = this.contextWriteTail.then(() => this.saveContextUsage!(snapshot)).catch((error) => {
+      const save = this.saveContextUsage;
+      const generation = this.settingsGeneration;
+      this.contextWriteTail = this.contextWriteTail.then(() => generation === this.settingsGeneration ? save(snapshot) : undefined).catch((error) => {
         console.error(`[host] context usage write failed: ${describeError(error)}`);
       });
     }
@@ -4008,10 +4121,17 @@ export class Session {
         });
         return;
       }
-      const restoredHistory = res.historyItems;
+      let restoredHistory = res.historyItems;
       const conversationRestored = restoredHistory !== null;
       if (restoredHistory !== null) {
-        const removedErrors = new Set(await this.restoreHistoryAndTurnErrors?.(restoredHistory, res.turnErrorIds) ?? []);
+        const removedErrors = new Set(await this.restoreHistoryAndTurnErrors?.(restoredHistory, res.turnErrorIds, res.runtimeBoundary) ?? []);
+        if (this.runtimeHistory) {
+          const retained = this.runtimeHistory.state().items;
+          restoredHistory = restoredHistory.map(item => {
+            const canonical = retained.find(value => value.sourceItemId === (item.sourceItemId ?? item.id) && value.turnId === item.turnId && value.createdAt === item.createdAt);
+            return canonical ? {...item,segmentId:canonical.segmentId,sourceItemId:canonical.sourceItemId} : item;
+          });
+        }
         this.bootTurnErrors = this.bootTurnErrors.filter((record) => !removedErrors.has(record.id));
         if (this.latestPublicResult && (removedErrors.has(this.latestPublicResult.historyItemId ?? "") ||
           (this.latestPublicResult.source !== "history_recovery" && this.latestPublicResult.turnId !== null && !restoredHistory.some((item) => item.turnId === this.latestPublicResult!.turnId)))) {
@@ -4188,6 +4308,10 @@ export class Session {
     }
   }
 
+  private failEngineSwitch(requestId: string, reason: string): void {
+    this.outbound.sendDirect({type:"engine_switch_failed",requestId,reason,...(this.engineSwitchCoordinator ? {generation:this.engineSwitchCoordinator.generation} : {})});
+  }
+
   /**
    * (review 23.08 narrowing): swap the active
    * SessionEngine BETWEEN turns — in place, no session respawn, no N×N
@@ -4209,21 +4333,37 @@ export class Session {
    * finally — never between the factory await and the dispose.
    */
   private async onEngineSwitch(message: Extract<UiToHostMessage, { type: "engine_switch_request" }>): Promise<void> {
-    const fail = (reason: string) => {
-      this.outbound.sendDirect({ type: "engine_switch_failed", requestId: message.requestId, reason });
-    };
+    const fail = (reason: string) => this.failEngineSwitch(message.requestId,reason);
+    if (this.engineSwitchCoordinator && message.generation !== this.engineSwitchCoordinator.generation) return fail("stale host generation");
+    if (this.engineSwitchRequestIds.has(message.requestId)) return fail("duplicate engine switch request");
+    this.engineSwitchRequestIds.add(message.requestId);
+    if (this.engineSwitchRequestIds.size > 1024) {
+      const oldest = this.engineSwitchRequestIds.values().next().value;
+      if (oldest !== undefined) this.engineSwitchRequestIds.delete(oldest);
+    }
     if (this.busy || this.currentTurn !== null || this.relocating || this.broker.pendingCount > 0 || this.continuationPending) return fail("a turn is running");
     if (this.child !== undefined) return fail("a child session is attached");
-    if ((this.backgroundChildren?.list().length ?? 0) > 0) return fail("children are running");
+    if (this.runningChildren()) return fail("children are running");
     if (this.engine.id === message.engine) return fail(`already running the "${message.engine}" engine`);
     if (this.switchEngineFactory === undefined) return fail("engine switch is not available in this host");
     this.busy = true;
     let release!: () => void;
     const op = new Promise<void>((r) => (release = r));
     this.currentTurn = op;
+    let candidate: SessionEngine | undefined;
+    let candidateSettingsUnsubscribe: (() => void) | undefined;
+    let candidateChildrenUnsubscribe: (() => void) | undefined;
+    let committed = false;
+    let prepared = false;
+    let nextRuntime: SwitchRuntime | undefined;
+    const unsubscribe = (callback: (() => void) | undefined) => {
+      try { callback?.(); } catch (error) { console.error(`[host] engine switch subscription cleanup failed: ${describeError(error)}`); }
+    };
     try {
       const previousEngine = this.engine;
       const generation = this.boundGeneration;
+      if (this.shuttingDown || this.engine !== previousEngine || this.boundGeneration !== generation) throw new Error("session changed during engine switch");
+      this.persistRuntimeSettings();
       // Canonical transcript captured BEFORE anything else. A native engine's
       // `historyItems()` is only its BOOT snapshot (codex) or `[]` (claude);
       // codex can re-read the live thread, so prefer that when available —
@@ -4233,37 +4373,54 @@ export class Session {
       // transcript is the prefix (a double switch with no turn between would
       // otherwise import 0 items and blank the reload snapshot).
       let liveItems: HistoryItem[] = [...previousEngine.historyItems()];
-      if (previousEngine.readTranscript !== undefined) {
+      if (this.runtimeHistory || previousEngine.readTranscript !== undefined) {
         try {
-          liveItems = [...(await previousEngine.readTranscript())];
+          liveItems = [...(await (this.runtimeHistory ? this.runtimeHistory.readTranscript(previousEngine) : previousEngine.readTranscript!()))];
         } catch (error) {
-          console.error(`[host] engine switch: live transcript read failed, using boot history: ${describeError(error)}`);
+          fail(`could not read current transcript: ${describeError(error)}`);
+          return;
         }
       }
-      const canonical: HistoryItem[] = [...this.switchCarriedHistory, ...liveItems];
+      const durableSource = this.runtimeHistory?.snapshot(liveItems);
+      this.runtimeHistory?.assertSettled();
+      const canonical: HistoryItem[] = durableSource?.items ?? [...this.switchCarriedHistory, ...liveItems];
       let next: SessionEngine;
+      let nextSettings: EngineSettingsSeam | undefined;
       try {
-        next = await this.switchEngineFactory(message.engine);
+        prepared = this.engineSwitchCoordinator !== undefined;
+        const factory = this.engineSwitchCoordinator ? await this.engineSwitchCoordinator.prepare(message) : this.switchEngineFactory;
+        const runtime = await factory(message.engine, message.model);
+        nextRuntime = "engine" in runtime ? runtime : { engine: runtime };
+        next = "engine" in runtime ? runtime.engine : runtime;
+        nextSettings = "engine" in runtime ? runtime.engineSettings : undefined;
+        candidate = next;
       } catch (error) {
         // Old engine untouched — frame: a failed start leaves the
         // session exactly as it was, next turn still runs on the old engine.
         fail(error instanceof Error ? error.message : String(error));
         return;
       }
+      if (next.id !== message.engine) {
+        await next.dispose("session-close").catch(() => {});
+        candidate = undefined;
+        fail("prepared engine does not match the requested engine");
+        return;
+      }
       // Shutdown raced the factory await: shutdown() already disposed the OLD
       // engine and is waiting on `currentTurn`; the freshly started engine
       // would otherwise never be disposed (orphaned engine process).
-      const invalid = () => this.shuttingDown || this.relocating || this.boundGeneration !== generation || this.engine !== previousEngine || (this.backgroundChildren?.list().length ?? 0) > 0;
+      const invalid = () => this.shuttingDown || this.relocating || this.boundGeneration !== generation || this.engine !== previousEngine || this.runningChildren();
       if (invalid()) {
         await next.dispose(this.shuttingDown ? "host-shutdown" : "session-close").catch((error) =>
           console.error(`[host] switched-to engine dispose threw during shutdown: ${describeError(error)}`),
         );
+        candidate = undefined;
         fail("session changed during engine switch");
         return;
       }
       if (this.orchestrate) {
         try {
-          if (next.id === "claude" || !next.orchestrationCompositionReady) throw new Error("target orchestration composition unavailable");
+          if (!this.runtimeCompositionReady(next)) throw new Error("target orchestration composition unavailable");
           const base = this.preOrchestrateMode ?? "build";
           if (next.id === "core") {
             if (!next.capabilities.supportsCorePermissions || !next.setMode || !next.setCoreOrchestrate) throw new Error("target orchestration policy unavailable");
@@ -4276,9 +4433,11 @@ export class Session {
             const result = await policy.apply(true, authority);
             if (!result.enabled || result.baseAuthority !== authority) throw new Error("target orchestration policy unconfirmed");
           }
+          next.orchestrationComposition?.capture(base);
           if (invalid()) throw new Error("session changed during engine switch");
         } catch (error) {
           await next.dispose("session-close").catch(() => {});
+          candidate = undefined;
           fail(error instanceof Error ? error.message : String(error));
           return;
         }
@@ -4286,8 +4445,8 @@ export class Session {
       // The import prompt is rendered from `canonical` alone (the old
       // engine's items captured above) — nothing else feeds the render.
       const plan = planEngineSwitchImport(canonical);
-      this.engineSwitchImportPending = {
-        prompt: renderImportPrompt(previousEngine.id, next.id, plan, this.workspace),
+      const pendingImport = {
+        prompt: renderImportPrompt(previousEngine.id, next.id, plan, this.workspace,next.importBudgetBytes?.()),
       };
       // Permission posture survives the swap: when both engines run OUR
       // permission modes, the new one must not silently start in its default
@@ -4301,24 +4460,105 @@ export class Session {
       ) {
         next.setMode(previousEngine.mode());
       }
+      // Subscribe before committing so a broken settings seam leaves the source active.
+      await nextSettings?.waitForSettingsChanges?.();
+      if (invalid()) throw new Error("session changed during engine switch");
+      candidateSettingsUnsubscribe = this.subscribeEngineSettings(nextSettings,next,this.settingsGeneration + 1);
+      candidateChildrenUnsubscribe = nextRuntime?.backgroundChildren?.onChange?.(() => this.pushBackgroundChildren());
+      const nextHistory = buildSessionHistory(canonical, this.historyMaxItems);
+      const nextMode = next.mode();
+      const appliedSettings = nextSettings?.snapshot();
+      const selectedSettings = nextSettings?.persistsOnApply ? appliedSettings : nextSettings?.pendingSnapshot?.() ?? appliedSettings;
+      const runtimeSettings = (value: typeof appliedSettings) => ({...(value
+        ? {model:value.model,mode:value.activePresetId,...(value.effort !== undefined ? {effort:value.effort} : {}),...(value.fast !== undefined ? {fast:value.fast} : {})}
+        : {model:message.model,mode:nextMode,...(next.reasoningEffort() !== undefined ? {effort:next.reasoningEffort()} : {})}),...(this.orchestrate ? {orchestration:{enabled:true as const,baseMode:this.preOrchestrateMode ?? "plan"}} : {})});
+      const previousMode = previousEngine.mode();
+      const boundaryText = plan.items.length > 0
+        ? `Session switched from the "${previousEngine.id}" engine to the "${next.id}" engine. Native engine context was not transferred; the next turn receives a text import of this conversation.`
+        : `Session switched from the "${previousEngine.id}" engine to the "${next.id}" engine. Native engine context was not transferred and no conversation history could be imported; the new engine starts without prior context.`;
+      const preparedPresentation = nextRuntime?.presentation;
+      const projection = {
+        engine: enginePresentation(next, nextSettings) ?? null, shell: next.id === "core" ? null : preparedPresentation?.shell ?? null,
+        model: nextRuntime?.identity?.model ?? message.model, mode: nextMode, reasoningEffort: next.reasoningEffort() ?? "off",
+        availableEffortLevels: nextRuntime?.callbacks?.effortResolution?.levels(message.model),
+        imageInput: preparedPresentation?.imageInputEnabled?.() ?? next.capabilities.supportsImages,
+        imageFallback: preparedPresentation?.imageFallbackAvailable?.() ?? false,
+        contextWindowAssumed: preparedPresentation?.contextWindowAssumed?.() ?? false,
+        modelSettingsConnectionId: preparedPresentation?.modelSettingsConnectionId ?? null,
+        steering: next.id === "core" ? next.steeringStatus?.() ?? null : null,
+        orchestration: { enabled: this.orchestrate, available: this.runtimePolicyAvailable(next) },
+        pinnedConnection: preparedPresentation?.pinnedConnection ?? null,
+      };
+      if (invalid()) throw new Error("session changed during engine switch");
+      const preparedIdentity = nextRuntime?.identity ?? { model: message.model, mode: nextMode };
+      const identity = next.id === "core" ? { ...preparedIdentity, mode: nextMode } : preparedIdentity;
+      await this.engineSwitchCoordinator?.commit(message.requestId, { ...identity, ...(durableSource ? {runtime:{
+        expectedRevision:durableSource.revision,sourceSegmentId:durableSource.activeSegmentId,sourceItems:liveItems,
+        segment:{id:message.requestId,engine:next.id,accountScope:"",nativeState:"fresh",...(identity.externalSessionRef ? {nativeRef:identity.externalSessionRef} : {}),selected:runtimeSettings(selectedSettings),applied:runtimeSettings(appliedSettings),startedAt:Date.now(),coverage:"available_history"},
+        boundary:{id:message.requestId,segmentId:message.requestId,...(canonical.at(-1) ? {afterItemId:canonical.at(-1)!.id} : {}),text:boundaryText,createdAt:Date.now()},
+        handoff:{id:message.requestId,segmentId:message.requestId,sourceWatermark:canonical.at(-1)?.id ?? null,payload:pendingImport.prompt,digest:createHash("sha256").update(pendingImport.prompt).digest("hex"),state:"pending"},
+      }} : {}) });
+      committed = true;
+      candidate = undefined;
+      this.engine = next;
+      this.orchestrationRestore = Promise.resolve();
       this.pendingEngineEffort = undefined;
       this.inFlightEngineEffort = undefined;
       this.settingsGeneration++;
+      if (nextRuntime?.callbacks) {
+        this.persistence = nextRuntime.callbacks.persistence;
+        this.usageAudit = nextRuntime.callbacks.usageAudit;
+        this.effortResolution = nextRuntime.callbacks.effortResolution;
+        this.saveTurnError = nextRuntime.callbacks.saveTurnError;
+        this.saveContextUsage = nextRuntime.callbacks.saveContextUsage;
+        this.reportProviderHealth = nextRuntime.callbacks.reportProviderHealth;
+        this.reportProviderQuota = nextRuntime.callbacks.reportProviderQuota;
+        this.refineTitle = nextRuntime.callbacks.refineTitle;
+        this.restoreHistoryAndTurnErrors = nextRuntime.callbacks.restoreHistoryAndTurnErrors;
+        this.currentTurnErrorIds = nextRuntime.callbacks.currentTurnErrorIds;
+        this.checkpoints = nextRuntime.callbacks.checkpoints;
+        this.compactionRecords = nextRuntime.callbacks.compactionRecords;
+        this.orchestratorRouteCheck = nextRuntime.callbacks.orchestratorRouteCheck;
+        this.applyRecognizerConfigImpl = nextRuntime.callbacks.applyRecognizerConfig;
+        this.pendingRecognizerConfig = undefined;
+        this.onOrchestrateChanged = nextRuntime.onOrchestrateChanged;
+      }
+      this.selectedEffort = next.reasoningEffort() ?? "off";
+      this.reasoningSupported = next.capabilities.supportsReasoningEffort;
+      this.bootEffortAdjustment = undefined;
       this.settingsBarrier = Promise.resolve();
       this.settingsBarrierActive = false;
       this.updateContextUsage(null);
-      this.engine = next;
+      this.model = nextRuntime?.identity?.model ?? message.model;
+      this.availableEffortLevels = nextRuntime?.callbacks?.effortResolution?.levels(message.model);
+      if (next.id === "core") this.reasoningSupported = this.availableEffortLevels !== undefined;
+      const presentation = nextRuntime?.presentation;
+      this.shell = presentation?.shell;
+      this.imageInputEnabled = presentation?.imageInputEnabled ?? (() => next.capabilities.supportsImages);
+      this.imageFallbackAvailable = presentation?.imageFallbackAvailable ?? (() => false);
+      this.contextWindowAssumed = presentation?.contextWindowAssumed ?? (() => false);
+      this.modelSettingsConnectionId = presentation?.modelSettingsConnectionId ?? null;
+      this.switchedPin = presentation?.pinnedConnection ?? null;
+      unsubscribe(this.backgroundChildrenUnsubscribe);
+      if (nextRuntime?.backgroundChildren) {
+        this.backgroundChildren = nextRuntime.backgroundChildren;
+        this.backgroundChildrenUnsubscribe = candidateChildrenUnsubscribe;
+        candidateChildrenUnsubscribe = undefined;
+      } else if (this.engineSwitchCoordinator) { this.backgroundChildren = undefined; this.backgroundChildrenUnsubscribe = undefined; }
+      if (nextRuntime?.onOrchestrateChanged) this.onOrchestrateChanged = nextRuntime.onOrchestrateChanged;
+      this.engineSwitchImportPending = this.runtimeHistory ? null : pendingImport;
       this.orchestrationController?.invalidate();
       this.orchestrationController = undefined;
       this.orchestrationAdmission = undefined;
       this.lastNativeTurnId = null;
       this.checkpointContextUsage = null;
       this.outbound.clearContextUsage();
-      this.engineSwitched = true;
-      this.switchCarriedHistory = canonical;
-      this.engineSettings = undefined; // foreign seam re-wired by the composition root later (§7 Q2)
-      this.engineSettingsUnsubscribe?.();
-      this.engineSettingsUnsubscribe = undefined;
+      this.engineSwitched = !this.runtimeHistory;
+      this.switchCarriedHistory = this.runtimeHistory ? [] : canonical;
+      unsubscribe(this.engineSettingsUnsubscribe);
+      this.engineSettings = nextSettings;
+      this.engineSettingsUnsubscribe = candidateSettingsUnsubscribe;
+      candidateSettingsUnsubscribe = undefined;
       // Transcript continuity: the reload snapshot is rebuilt from the
       // canonical items. cross-review: when that snapshot carries
       // any transcript, the pre-switch turn events in the replay ring must
@@ -4330,38 +4570,61 @@ export class Session {
         this.presentationJournal.clear();
         this.outbound.clear();
       }
-      this.sessionHistory = buildSessionHistory(canonical, this.historyMaxItems);
-      this.outbound.emit({
+      this.sessionHistory = nextHistory;
+      const boundary: Extract<HostToUiMessage, { type: "agent_event" }> = {
         type: "agent_event",
+        boundaryId: message.requestId,
+        ...(canonical.at(-1) ? { boundaryAfter: canonical.at(-1)!.id } : {}),
         turnId: ENGINE_SWITCH_TURN_ID,
         event: {
           type: "engine_notice",
           level: "info",
-          message:
-            plan.items.length > 0
-              ? `Session switched from the "${previousEngine.id}" engine to the "${next.id}" engine. Native engine context was not transferred; the next turn receives an imported summary of this conversation.`
-              : `Session switched from the "${previousEngine.id}" engine to the "${next.id}" engine. Native engine context was not transferred and no conversation history could be imported; the new engine starts without prior context.`,
+          message: boundaryText,
         },
-      });
-      if (next.mode() !== previousEngine.mode()) {
-        this.outbound.emit({ type: "mode_changed", mode: next.mode() });
+      };
+      this.switchBoundaries.push(boundary);
+      this.outbound.emit(boundary);
+      if (nextMode !== previousMode) {
+        this.outbound.emit({ type: "mode_changed", mode: nextMode });
       }
       // Dispose ONLY after the new engine is live and the notice emitted.
-      await previousEngine.dispose("session-close").catch((error) =>
-        console.error(`[host] previous engine dispose threw: ${error instanceof Error ? error.message : String(error)}`),
-      );
-      this.outbound.sendDirect({ type: "engine_switched", requestId: message.requestId, engine: next.id, previousEngine: previousEngine.id });
+      try { await previousEngine.dispose("session-close"); }
+      catch (error) { console.error(`[host] previous engine dispose threw: ${describeError(error)}`); }
+      try { await this.engineSwitchCoordinator?.retire(message.requestId); }
+      catch (error) { console.error(`[host] engine retirement acknowledgement failed: ${describeError(error)}`); }
+      this.outbound.sendDirect({ type: "engine_switched", requestId: message.requestId, engine: next.id, previousEngine: previousEngine.id,
+        ...(this.engineSwitchCoordinator ? { generation: this.engineSwitchCoordinator.generation } : {}),
+        projection,
+      });
+    } catch (error) {
+      unsubscribe(candidateSettingsUnsubscribe);
+      unsubscribe(candidateChildrenUnsubscribe);
+      if (candidate !== undefined) {
+        await candidate.dispose("session-close").catch((disposeError) =>
+          console.error(`[host] candidate engine disposal failed: ${describeError(disposeError)}`),
+        );
+      }
+      if (!committed) fail(`engine switch failed: ${describeError(error)}`);
+      else console.error(`[host] committed engine switch cleanup failed: ${describeError(error)}`);
     } finally {
+      if (prepared && !committed) await this.engineSwitchCoordinator?.abort(message.requestId).catch(() => {});
+      if (committed && this.shuttingDown) await this.engine.dispose("host-shutdown").catch(() => {});
       release();
       if (this.currentTurn === op) this.currentTurn = null;
       // a pick queued during the switch was made against the
       // PREVIOUS engine, so it must not be replayed onto the new one.
       this.clearPendingModelSelection();
       this.busy = false;
+      this.drainAgentInbox();
     }
   }
 
   private onUserMessage(requestId: string, text: string, images?: ImageAttachment[], origin?: "system"): void {
+    if (this.runtimeHistory?.requiresRecovery()) {
+      this.outbound.sendDirect({type:"turn_rejected",requestId,reason:"not_ready"});
+      this.pushRuntimeInputRecovery();
+      return;
+    }
     if (this.child === undefined && this.presentationJournal.snapshot().turns.some(turn => turn.requestId === requestId)) {
       this.outbound.sendDirect({ type: "user_message_unavailable", requestId, reason: "posture_unavailable" });
       return;
@@ -4558,7 +4821,7 @@ export class Session {
     // The RAW text is recorded — title/notices/plan-reminder augmentation is
     // model-facing, never what the user typed.
     const turnId = randomUUID();
-    const pendingTurnIdHolder: { turnId: string } = { turnId };
+    const pendingTurnIdHolder: { turnId: string; originalText: string } = { turnId, originalText: text };
     if (this.engine.id === "core") {
       this.pendingPrompt = {
         turnId,
@@ -5359,7 +5622,7 @@ export class Session {
     attachments?: ImageAttachment[],
     carriesWorktreeExitNotice = false,
     origin?: "system",
-    pendingTurnIdHolder?: { turnId: string },
+    pendingTurnIdHolder?: { turnId: string; originalText: string },
   ): Promise<void> {
     // phase-1 defect 3: the outer turn UUID is minted by
     // `acceptUserMessage` at ADMISSION (captured there into pendingPrompt,
@@ -5444,7 +5707,13 @@ export class Session {
       // engine call; nothing else carries the user's message to the engine,
       // so replacing it would silently drop what the user just asked. Only on
       // the text branch (a continueTurn has no fresh user frame).
-      if (this.engineSwitchImportPending !== null && text !== undefined) {
+      let deliveryHooks: Pick<import("./engines/session-engine.js").RunTurnOptions,"onInputDispatched" | "onInputAccepted" | "onInputNotSent"> = {};
+      if (this.runtimeHistory && text !== undefined) {
+        const prepared = this.runtimeHistory.prepare(turnId,pendingTurnIdHolder?.originalText ?? text,text,origin !== "system",this.engine.importBudgetBytes?.());
+        text = prepared.text;
+        deliveryHooks = prepared.hooks;
+      }
+      if (this.engineSwitchImportPending !== null && text !== undefined && origin !== "system") {
         text = `${this.engineSwitchImportPending.prompt}\n\n# user (current message)\n${text}`;
         this.engineSwitchImportPending = null;
       }
@@ -5463,7 +5732,8 @@ export class Session {
         // AgentLoop so every HistoryItem this turn appends (user frame step 0,
         // assistant/tool items per inner step ordinal, cancelled stragglers
         // included) carries {turnId, step}. Foreign engines ignore it.
-        ...(this.engine.id === "core" || this.engine.id === "claude" ? { turnId } : {}),
+        turnId,
+        ...deliveryHooks,
       };
       const stream = text === undefined ? this.engine.continueTurn?.(options) : this.engine.runTurn(text, options);
       if (stream === undefined) {
@@ -5759,7 +6029,19 @@ export class Session {
       recordResult("error");
       await persistTurnError();
       this.outbound.emit({ type: "fatal", message: `turn failed: ${describeError(error)}` });
+    } finally {
+      if (this.runtimeHistory) {
+        try { await this.runtimeHistory.hydrate(this.engine); }
+        catch { /* An unavailable native mirror is unresolved delivery, not session death. */ }
+        this.pushRuntimeInputRecovery();
+      }
     }
+  }
+
+  private pushRuntimeInputRecovery(): void {
+    for (const input of this.runtimeHistory?.recoveries() ?? []) this.outbound.sendDirect({
+      type:"runtime_input_recovery",turnId:input.turnId,text:input.text,status:input.state === "pending" ? "pending" : "uncertain",
+    });
   }
 
   private async startContinuation(): Promise<void> {
@@ -6096,6 +6378,7 @@ export class Session {
     // (SLICE-CC §1.5) — writing it here would outlive a REJECTED change and
     // resume the session under a posture the engine never adopted.
     if (this.engineSettings?.persistsOnApply !== true) {
+      this.persistRuntimeSettings();
       if (intent.model !== undefined) {
         // `this.model` is the ACTIVE model echoed in host_ready — advancing it
         // here would present a merely-CHOSEN model as active on the next
@@ -6113,6 +6396,7 @@ export class Session {
     }
     this.outbound.emit({
       type: "engine_settings_changed",
+      ...(this.imageInputEnabled ? {imageInput:this.imageInputEnabled()} : {}),...(this.imageFallbackAvailable ? {imageFallback:this.imageFallbackAvailable()} : {}),
       model: result.model,
       activePresetId: result.activePresetId,
       ...(result.effort !== undefined ? { effort: result.effort } : {}),
@@ -6147,6 +6431,7 @@ export class Session {
       this.clearOrchestrateForLeavingPlan();
     }
     this.engine.setMode(mode);
+    this.persistRuntimeSettings();
     // Persist the mode so a resume restores it (design §4.2); fire-and-forget.
     this.persistence?.touch({ mode });
     this.outbound.emit({ type: "mode_changed", mode });
@@ -6195,11 +6480,71 @@ export class Session {
 
   private orchestrationAvailable(): boolean {
     if (this.child !== undefined || this.shuttingDown || this.relocating) return false;
-    if (this.engine.id === "core") return this.engine.capabilities.supportsCorePermissions && this.engine.setMode !== undefined;
-    return this.engine.id === "codex" && this.engine.orchestrationPolicy?.availability().supported === true;
+    return this.runtimePolicyAvailable(this.engine);
   }
 
   /** One controller owns all UI paths; the engine overlay is never bypassed. */
+  private runtimeCompositionReady(engine: SessionEngine): boolean {
+    const composition = engine.orchestrationComposition;
+    return composition ? composition.ownerSessionId === this.sessionId && composition.ready() : engine.orchestrationCompositionReady === true;
+  }
+
+  private runtimePolicyAvailable(engine: SessionEngine): boolean {
+    if (engine.orchestrationComposition && !this.runtimeCompositionReady(engine)) return false;
+    return engine.id === "core" ? engine.capabilities.supportsCorePermissions && engine.setMode !== undefined
+      : engine.orchestrationPolicy?.availability().supported === true;
+  }
+
+  private runningChildren(): boolean {
+    return (this.backgroundChildren?.list().length ?? 0) > 0 || this.engine.orchestrationComposition?.hasRunningChildren() === true;
+  }
+
+  private restoreRuntimeOrchestration(): Promise<void> {
+    if (this.orchestrationRestore) return this.orchestrationRestore;
+    const state = this.runtimeHistory!.state();
+    const saved = state.segments.find(segment => segment.id === state.activeSegmentId)?.applied.orchestration;
+    const engine = this.engine;
+    const composition = engine.orchestrationComposition;
+    let nativeAuthority: {mode:PermissionMode} | undefined;
+    this.orchestrationRestore = (async () => {
+      if (!saved?.enabled) return;
+      if (!composition || composition.ownerSessionId !== this.sessionId || !composition.ready() || !this.runtimePolicyAvailable(engine)) throw new Error("Saved orchestration requires a verified runtime policy and routing");
+      await this.engineSettings?.waitForSettingsChanges?.();
+      if (!this.ownsRuntime(engine) || engine.orchestrationComposition !== composition || !composition.ready()) throw new Error("Runtime changed during orchestration restore");
+      if (engine.id === "core") {
+        engine.setMode!("plan");
+        if (engine.mode() !== "plan" || !engine.setCoreOrchestrate?.(true)) throw new Error("Core orchestration restore was not confirmed");
+      } else {
+        const authority = nativeAuthority = {mode:saved.baseMode};
+        const result = await engine.orchestrationPolicy!.apply(true,authority);
+        if (!this.ownsRuntime(engine) || !result.enabled || result.baseAuthority !== authority) throw new Error("Orchestration restore was not confirmed");
+      }
+      if (!this.ownsRuntime(engine) || engine.orchestrationComposition !== composition || !composition.ready()) throw new Error("Runtime changed during orchestration restore");
+      composition.capture(saved.baseMode);
+      this.preOrchestrateMode = saved.baseMode;
+      this.orchestrate = true;
+      this.onOrchestrateChanged?.(true);
+    })().catch(async error => {
+      if (!this.ownsRuntime(engine)) return;
+      console.warn("[host] saved orchestration could not be restored",error);
+      // Restore is optional session setup. A stale overlay must never deny
+      // ordinary conversation admission or prevent the initial handshake.
+      this.orchestrate = false;
+      this.preOrchestrateMode = null;
+      this.orchestrationPosture = "stable";
+      try {
+        if (engine.id === "core") { engine.setCoreOrchestrate?.(false); engine.setMode?.(saved!.baseMode); }
+        else if (nativeAuthority) await engine.orchestrationPolicy?.apply(false,nativeAuthority);
+        engine.orchestrationComposition?.clear();
+        this.onOrchestrateChanged?.(false);
+      } catch (rollbackError) { console.warn("[host] orchestration restore cleanup failed",rollbackError); }
+      try { this.persistRuntimeSettings(); }
+      catch (writeError) { console.error("[host] could not clear saved orchestration",writeError); }
+      this.outbound.emit({type:"agent_event",turnId:ENGINE_SWITCH_TURN_ID,event:{type:"engine_notice",level:"warning",message:"Orchestration could not be restored and was turned off. You can continue this conversation."}});
+    });
+    return this.orchestrationRestore;
+  }
+
   private admission(): OrchestrationAdmission {
     if (this.orchestrationAdmission) return this.orchestrationAdmission;
     const engine = this.engine;
@@ -6223,28 +6568,31 @@ export class Session {
         const snapshot = await engine.orchestrationPolicy!.apply(enabled, baseAuthority);
         if (this.shuttingDown || this.engine !== engine || this.orchestrationController?.state.status !== "transitioning") throw new Error("Session changed during orchestration transition");
         if (snapshot.enabled !== enabled || !Object.is(snapshot.baseAuthority, baseAuthority)) throw new Error("Unconfirmed orchestration transition");
+        if (enabled) engine.orchestrationComposition?.capture(nativeAuthority.mode); else engine.orchestrationComposition?.clear();
         this.preOrchestrateMode = enabled ? nativeAuthority.mode : null;
         this.orchestrate = enabled;
         this.onOrchestrateChanged?.(enabled);
+        this.persistRuntimeSettings();
         this.outbound.emit({ type: "orchestrate_changed", enabled });
         return snapshot;
       },
     };
     this.orchestrationController = new OrchestrationController(policy);
-    if (this.orchestrate) this.orchestrationController.state = { status: "on", baseAuthority: engine.id === "codex" ? { mode: this.preOrchestrateMode ?? "build" } : this.preOrchestrateMode ?? "build" };
+    if (this.orchestrate) this.orchestrationController.state = { status: "on", baseAuthority: engine.id !== "core" ? { mode: this.preOrchestrateMode ?? "plan" } : this.preOrchestrateMode ?? "build" };
     this.orchestrationAdmission = new OrchestrationAdmission({
       controller: this.orchestrationController,
       connectionId: () => this.boundGeneration,
       busy: () => this.busy || this.currentTurn !== null || this.broker.pendingCount > 0 || this.shuttingDown || this.relocating || this.child !== undefined || this.continuationPending || this.orchestrationPosture !== "stable",
-      baseAuthority: () => this.engine.id === "codex" ? { mode: this.nativeChildBaseMode() } : this.engine.mode(),
+      baseAuthority: () => this.engine.id !== "core" ? { mode: this.nativeChildBaseMode() } : this.engine.mode(),
       timeoutMs: 120_000,
     });
     return this.orchestrationAdmission;
   }
 
   private nativeChildBaseMode(): PermissionMode {
+    if (this.engine.orchestrationComposition) return this.engine.orchestrationComposition.baseMode();
     const settings = this.engineSettings;
-    return settings === undefined ? "plan" : codexAgentPermissionMode((settings.pendingSnapshot?.() ?? settings.snapshot()).activePresetId);
+    return this.engine.id !== "codex" || settings === undefined ? "plan" : codexAgentPermissionMode((settings.pendingSnapshot?.() ?? settings.snapshot()).activePresetId);
   }
 
   private sendOrchestrationResult(requestId: string, connectionId: string, result: AdmissionResponse): void {
@@ -6324,7 +6672,9 @@ export class Session {
     }
     // §3.7: the host copies the flag onto the AgentLoopConfig (the dispatcher
     // threads it into every ToolContext — the Agent tool's default-detach).
+    if (this.orchestrate) this.engine.orchestrationComposition?.capture(this.preOrchestrateMode!); else this.engine.orchestrationComposition?.clear();
     this.onOrchestrateChanged?.(this.orchestrate);
+    this.persistRuntimeSettings();
     this.outbound.emit({ type: "orchestrate_changed", enabled: this.orchestrate });
   }
 

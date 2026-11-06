@@ -7,6 +7,7 @@
 
 import type { HistoryItem } from "../types/history.js";
 import type { PermissionMode } from "../types/permissions.js";
+export type { RuntimeSegmentStore, RuntimeSessionSnapshot, RuntimeSwitchCommit } from "./runtime-segments.js";
 
 export interface SessionWorktree {
   id: string;

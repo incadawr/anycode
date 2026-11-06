@@ -8,6 +8,8 @@
  * `claude` binary, mirrors claude-client.test.ts's framing-test fake spawn).
  */
 
+import { buildClaudeRuntime, prepareSwitchRuntime } from "../../engine-switch-runtime.js";
+import { createHarness, finishStep } from "../../test-harness.js";
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
 import { CLAUDE_NOT_SIGNED_IN, resumeClaudeEngine, startClaudeEngine } from "./claude-engine.js";
@@ -196,14 +198,36 @@ function baseOptions(spawnImpl: (command: string, args: readonly string[]) => un
 describe("resumeClaudeEngine vs startClaudeEngine (cut §1.5 D2)", () => {
   it("startClaudeEngine spawns --session-id with a fresh uuid", async () => {
     const { spawnImpl, capturedArgs } = fakeSpawn();
-    const connected = await startClaudeEngine(baseOptions(spawnImpl));
+    const connected = await buildClaudeRuntime(baseOptions(spawnImpl));
     try {
+      expect(connected.engineSettings.snapshot()).toEqual(expect.objectContaining({ model: connected.model }));
       const args = capturedArgs();
       expect(args).toContain("--session-id");
       expect(args).not.toContain("--resume");
       expect(connected.sessionRef).toEqual(expect.stringMatching(/^[0-9a-f-]{36}$/));
     } finally {
       await connected.engine.dispose("session-close");
+    }
+  });
+
+  it("switches a Session to a prepared Claude candidate and preserves the source on rejection", async () => {
+    const { spawnImpl } = fakeSpawn();
+    let model = "missing";
+    const h = createHarness({ steps: [finishStep()], switchEngineFactory: async () => prepareSwitchRuntime({ engine: "claude", model, options: baseOptions(spawnImpl) }) });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.some(m => m.type === "host_ready"));
+      h.send({ type: "engine_switch_request", requestId: "failed", engine: "claude", model: "test-model" });
+      await h.waitUntil(() => h.received.some(m => m.type === "engine_switch_failed" && m.requestId === "failed"), 5000);
+      expect(h.engine.id).toBe("core");
+      h.send({ type: "user_message", requestId: "still-usable", text: "continue" });
+      await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && m.event.type === "loop_end"), 5000);
+      model = "model-a";
+      h.send({ type: "engine_switch_request", requestId: "success", engine: "claude", model: "test-model" });
+      await h.waitUntil(() => h.received.some(m => m.type === "engine_switched" && m.requestId === "success"), 5000);
+    } finally {
+      await h.session.shutdown();
+      h.close();
     }
   });
 

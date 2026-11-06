@@ -197,6 +197,31 @@ describe("toastGlyph", () => {
 });
 
 describe("rewriteToastText", () => {
+  it.each([
+    ["stale host generation", "The session reconnected. Try switching again."],
+    ["duplicate engine switch request", "This switch was already requested. Choose an engine again."],
+    ["duplicate request", "This switch was already requested. Choose an engine again."],
+    ["session changed during engine switch", "The session changed. Try switching again."],
+    ["prepared engine does not match the requested engine", "The selected engine could not start. Try again."],
+    ["a turn is running", "Finish or stop the current turn before switching engines."],
+    ["children are running", "Wait for child sessions to finish before switching engines."],
+    ["a child session is attached", "Switch engines from the parent session."],
+    ["Session posture unavailable", "Session permissions are unavailable. Reconnect and try again."],
+    ['already running the "core" engine', "This engine is already selected."],
+    ["could not commit engine identity", "Could not save the engine change. Try again."],
+    ["Engine switch response timed out", "The engine took too long to respond. Try again."],
+    ["target orchestration policy unconfirmed", "Turn off orchestration before switching to this engine."],
+    ["could not read current transcript: SQLite read failed", "Could not read the conversation. Try again."],
+    ["engine switch failed: render failure", "Could not switch engines. Try again."],
+  ])("explains engine switch refusal %s without internal wording", (reason, message) => {
+    expect(rewriteToastText("engine_switch_failed", reason)).toBe(message);
+    expect(rewriteToastText("engine_notice", reason)).toBe(reason);
+  });
+
+  it("preserves actionable engine authentication errors", () => {
+    expect(rewriteToastText("engine_switch_failed", "codex not signed in")).toBe("codex not signed in");
+  });
+
   it("rewrites all four table rows exactly", () => {
     expect(rewriteToastText("mode_change_rejected", "cannot change mode during an active turn")).toBe(
       "Mode change rejected — finish the running turn first.",

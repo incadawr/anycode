@@ -17,6 +17,7 @@ export {
   NodeMcpTransportFactory,
   SqlitePersistenceAdapter,
   WriteBehindHistorySink,
+  RuntimeHistorySink,
 } from "./adapters/node/index.js";
 export { LspManager, loadLspServerSpecs } from "./lsp/index.js";
 export { loadWebSearchConfig } from "./websearch/index.js";
@@ -39,7 +40,7 @@ export type { ShadowGitCheckpointsOptions, RewindScope, RewindResult } from "./c
 // Checkpoint metadata contracts (design slice-4.7-cut.md §2.1): re-exported for
 // the desktop host's rewind seam (slice P7.26/R2), so Session references the SAME
 // CheckpointMeta the store returns rather than a hand-duplicated wire shape.
-export type { CheckpointMeta, CheckpointReason } from "./ports/checkpoints.js";
+export type { CheckpointMeta, CheckpointReason, RuntimeCheckpointBoundary } from "./ports/checkpoints.js";
 export type {
   EnterWorktreeRequest,
   ExitWorktreeRequest,
@@ -157,6 +158,8 @@ export * from "./repoMap/index.js";
 export { estimateTokensFromText } from "./context/tokens.js";
 export { ConversationHistory } from "./context/history.js";
 export type { HistorySink } from "./context/history.js";
+export type { RuntimeEngine, RuntimeSettings, RuntimeSegment, RuntimeBoundary, RuntimeHandoff, RuntimeSessionSnapshot, RuntimeSwitchCommit, RuntimeSegmentStore } from "./ports/runtime-segments.js";
+export { scopeRuntimeHistory, mergeRuntimeHistory } from "./context/runtime-history.js";
 // Persisted subagent card snapshot contract (slice S1, CUT-S1 §2.3):
 // re-exported directly (types/index.ts's curated list does not cover every
 // types/ file — see ports/index.ts's own ImageAttachment precedent) so the

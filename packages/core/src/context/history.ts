@@ -22,6 +22,7 @@ export interface HistorySink {
   replaceAll(items: readonly HistoryItem[]): void;
   /** For graceful shutdown / tests. */
   flush(): Promise<void>;
+  flushChecked?(): Promise<void>;
 }
 
 export class ConversationHistory {
@@ -37,6 +38,12 @@ export class ConversationHistory {
 
   get items(): readonly HistoryItem[] {
     return this.list;
+  }
+
+  /** Switching requires an acknowledged history write, not the fail-soft turn queue. */
+  async flushChecked(): Promise<void> {
+    if (this.sink?.flushChecked) await this.sink.flushChecked();
+    else await this.sink?.flush();
   }
 
   /**

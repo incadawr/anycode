@@ -999,9 +999,10 @@ export class ClaudeEngine implements SessionEngine {
     if (effort === undefined) {
       delete settings.effort;
     } else {
-      settings.effort = effort;
+      delete settings.effort;
       try {
         await this.client.controlRequest("apply_flag_settings", { effortLevel: effort });
+        settings.effort = effort;
       } catch {
         // Best-effort re-assertion of the remembered effort on the now-live
         // model. The memory itself is unaffected by this failing — it stays
@@ -1032,8 +1033,7 @@ export class ClaudeEngine implements SessionEngine {
   private rememberCurrentModelEffort(): void {
     const settings = this.settings;
     if (settings === undefined) return;
-    if (settings.effort === undefined) settings.effortsByModel.delete(settings.model);
-    else settings.effortsByModel.set(settings.model, settings.effort);
+    if (settings.effort !== undefined) settings.effortsByModel.set(settings.model, settings.effort);
   }
 
   /** Restores the target model's remembered effort, normalizing it through the catalog. */
@@ -1079,6 +1079,7 @@ export class ClaudeEngine implements SessionEngine {
   }
 
   async *runTurn(input: string, options: RunTurnOptions): AsyncIterable<AgentEvent> {
+    let inputDispatched = false;
     const turn = ++this.turnNumber;
     if (this.terminalError !== null || this.disposed) {
       yield* this.terminalEvents(turn, this.terminalError ?? new Error("Claude engine is closed"));
@@ -1329,6 +1330,8 @@ export class ClaudeEngine implements SessionEngine {
         // input — its line-start slashes are de-fanged so the root session's
         // slash interpretation (w0-17) cannot execute a model-authored
         // command. Human input goes out byte-identical.
+        options.onInputDispatched?.();
+        inputDispatched = true;
         this.client.sendUserMessage(
           userMessageContent(
             options.origin === "system" ? neutralizeSystemOriginSlashes(input) : input,
@@ -1439,6 +1442,9 @@ export class ClaudeEngine implements SessionEngine {
             }
           }
         }
+        const frame = raced.value.value;
+        const ownerSession = frame.session_id === undefined || frame.session_id === this.sessionRef;
+        if (inputDispatched && ownerSession && ((frame.type === "assistant" && frame.parent_tool_use_id == null) || (frame.type === "system" && frame.subtype === "init"))) options.onInputAccepted?.();
         for (const event of translator.onMessage(raced.value.value)) {
           if (event.type === "loop_end") terminal = true;
           yield event;
@@ -1495,6 +1501,7 @@ export class ClaudeEngine implements SessionEngine {
       yield* this.terminalEvents(turn, terminalError, false);
     } finally {
       this.turnActive = false;
+      if (!inputDispatched) options.onInputNotSent?.();
       cancelSettle();
       abort.dispose();
       // cross-review P1: a turn that terminalized without the
@@ -1760,6 +1767,11 @@ export class ClaudeEngine implements SessionEngine {
    * `null`; the caller decides whether that is silent (mid-turn) or logged
    * (final, fail-soft).
    */
+  private importContext: {model:string;available:number} | undefined;
+  importBudgetBytes(): number | undefined {
+    return this.importContext?.model === this.snapshot().model ? this.importContext.available : undefined;
+  }
+
   private mapContextUsageReading(usage: Record<string, unknown>, applyModel: boolean): AgentEvent | null {
     const totalTokens = usage.totalTokens;
     const maxTokens = usage.maxTokens;
@@ -1770,6 +1782,7 @@ export class ClaudeEngine implements SessionEngine {
     ) {
       return null;
     }
+    this.importContext = {model:this.snapshot().model,available:Math.max(0,maxTokens - totalTokens - 1024)};
     return { type: "context_usage", estimatedTokens: totalTokens, budgetTokens: maxTokens, source: "provider" };
   }
 

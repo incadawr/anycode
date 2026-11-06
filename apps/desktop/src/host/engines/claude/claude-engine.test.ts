@@ -889,6 +889,19 @@ describe("ClaudeEngine.selectModel — validate host-side, THEN set_model", () =
     expect(opus.snapshot().effort).toBe("high");
   });
 
+  it("does not publish an effort whose restore ACK failed, and retains the choice for retry", async () => {
+    const refuse: Record<string,string> = {};
+    const transport = new FakeTransport({refuse});
+    const engine = engineWith(transport,{model:"opus[1m]"});
+    await engine.selectEffort("high"); await engine.selectModel("sonnet");
+    refuse.apply_flag_settings = "fixture refusal";
+    expect(await engine.selectModel("opus[1m]")).toMatchObject({ok:true});
+    expect(engine.snapshot().effort).toBeUndefined();
+    delete refuse.apply_flag_settings;
+    await engine.selectModel("sonnet"); await engine.selectModel("opus[1m]");
+    expect(engine.snapshot().effort).toBe("high");
+  });
+
   it("re-resolves the effort for the switched-to model and restores the remembered value when switching back (shape)", async () => {
     const transport = new FakeTransport();
     const engine = engineWith(transport, { model: "opus[1m]" });

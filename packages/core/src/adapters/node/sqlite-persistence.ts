@@ -16,11 +16,13 @@
  * PersistencePort without ever blocking or throwing into the turn.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { HistorySink } from "../../context/history.js";
+import type { RuntimeSegment, RuntimeSessionSnapshot, RuntimeSegmentStore, RuntimeSwitchCommit } from "../../ports/runtime-segments.js";
+import { scopeRuntimeHistory } from "../../context/runtime-history.js";
 import type {
   CheckpointMeta,
   CheckpointReason,
@@ -463,6 +465,66 @@ const MIGRATIONS: readonly Migration[] = [
        )`,
     ],
   },
+  { version: 33, statements: [
+    "ALTER TABLE sessions ADD COLUMN active_runtime_segment TEXT",
+    "ALTER TABLE sessions ADD COLUMN runtime_revision INTEGER NOT NULL DEFAULT 0",
+    `CREATE TABLE runtime_segments (
+      session_id TEXT NOT NULL REFERENCES sessions(id), segment_id TEXT NOT NULL,
+      ordinal INTEGER NOT NULL, engine TEXT NOT NULL,
+      connection_id TEXT, profile_id TEXT, account_scope TEXT NOT NULL,
+      native_ref TEXT, native_state TEXT NOT NULL CHECK(native_state IN ('fresh','materialized')),
+      selected_json TEXT NOT NULL, applied_json TEXT NOT NULL,
+      started_at INTEGER NOT NULL, ended_at INTEGER, coverage TEXT NOT NULL,
+      PRIMARY KEY(session_id, segment_id), UNIQUE(session_id, ordinal))`,
+    `CREATE INDEX idx_runtime_native_owner ON runtime_segments(engine, account_scope, native_ref)`,
+    `CREATE TABLE runtime_transcript (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
+      segment_id TEXT NOT NULL, item_id TEXT NOT NULL, data TEXT NOT NULL,
+      FOREIGN KEY(session_id,segment_id) REFERENCES runtime_segments(session_id,segment_id),
+      UNIQUE(session_id, segment_id, item_id))`,
+    `CREATE INDEX idx_runtime_transcript_session ON runtime_transcript(session_id,seq)`,
+    `CREATE TABLE runtime_boundaries (
+      session_id TEXT NOT NULL, segment_id TEXT NOT NULL, boundary_id TEXT NOT NULL,
+      data TEXT NOT NULL, PRIMARY KEY(session_id,boundary_id),
+      FOREIGN KEY(session_id,segment_id) REFERENCES runtime_segments(session_id,segment_id))`,
+    `CREATE TABLE runtime_handoffs (
+      session_id TEXT NOT NULL, segment_id TEXT NOT NULL, handoff_id TEXT NOT NULL,
+      data TEXT NOT NULL, PRIMARY KEY(session_id,segment_id), UNIQUE(session_id,handoff_id),
+      FOREIGN KEY(session_id,segment_id) REFERENCES runtime_segments(session_id,segment_id))`,
+    `INSERT INTO runtime_segments SELECT id,'legacy',0,COALESCE(engine_id,'core'),connection_id,codex_profile_id,
+      COALESCE(codex_profile_id,''),external_session_ref,
+      CASE WHEN external_session_ref IS NULL THEN 'fresh' ELSE 'materialized' END,
+      json_object('model',model,'mode',mode),json_object('model',model,'mode',mode),created_at,NULL,'available_history' FROM sessions`,
+    "UPDATE sessions SET active_runtime_segment='legacy'",
+  ] },
+  { version: 34, statements: [
+    `CREATE TABLE runtime_inputs (
+      session_id TEXT NOT NULL, segment_id TEXT NOT NULL, turn_id TEXT NOT NULL,
+      native_turn_id TEXT, original_text TEXT NOT NULL, input_text TEXT NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('pending','dispatching','accepted','uncertain')),
+      PRIMARY KEY(session_id,segment_id,turn_id),
+      FOREIGN KEY(session_id,segment_id) REFERENCES runtime_segments(session_id,segment_id))`,
+  ] },
+  { version: 35, statements: [
+    `CREATE INDEX idx_runtime_transcript_turn ON runtime_transcript(session_id,segment_id,json_extract(data,'$.turnId'))`,
+    `CREATE INDEX idx_runtime_transcript_native_turn ON runtime_transcript(session_id,segment_id,json_extract(data,'$.nativeTurnId'))`,
+    // Remove only reproducible pre-switch copies from the eager backfill.
+    // Imported inputs, full compaction coverage and checkpoint watermarks remain owned.
+    `DELETE FROM runtime_transcript AS t WHERE segment_id='legacy'
+      AND EXISTS (SELECT 1 FROM sessions s WHERE s.id=t.session_id AND s.runtime_revision=0)
+      AND NOT EXISTS (SELECT 1 FROM runtime_inputs i WHERE i.session_id=t.session_id)
+      AND NOT EXISTS (SELECT 1 FROM runtime_boundaries b WHERE b.session_id=t.session_id)
+      AND NOT EXISTS (SELECT 1 FROM temp.runtime_backfill_checkpoint_owners c WHERE c.session_id=t.session_id)
+      AND NOT EXISTS (SELECT 1 FROM runtime_transcript x LEFT JOIN history_items h ON h.session_id=x.session_id AND h.item_id=x.item_id
+        WHERE x.session_id=t.session_id AND (x.segment_id!='legacy' OR h.data IS NULL OR x.data!=json_set(h.data,'$.id','segment:legacy:' || h.item_id,'$.segmentId','legacy','$.sourceItemId',h.item_id)))`,
+    `UPDATE sessions SET active_runtime_segment=NULL WHERE runtime_revision=0
+      AND NOT EXISTS (SELECT 1 FROM runtime_transcript t WHERE t.session_id=sessions.id)
+      AND NOT EXISTS (SELECT 1 FROM runtime_inputs i WHERE i.session_id=sessions.id)
+      AND NOT EXISTS (SELECT 1 FROM runtime_handoffs h WHERE h.session_id=sessions.id)
+      AND EXISTS (SELECT 1 FROM runtime_segments r WHERE r.session_id=sessions.id AND r.segment_id='legacy'
+        AND r.selected_json=json_object('model',sessions.model,'mode',sessions.mode) AND r.applied_json=r.selected_json)`,
+    `DELETE FROM runtime_segments WHERE segment_id='legacy' AND session_id IN (SELECT id FROM sessions WHERE runtime_revision=0 AND active_runtime_segment IS NULL)`,
+  ] },
 ];
 
 /**
@@ -528,6 +590,42 @@ function rollbackAndRethrow(db: DatabaseSync, original: unknown): never {
  * and runs each pending migration's statements inside its own BEGIN/COMMIT
  * (a failure rolls back that migration's DDL and rethrows).
  */
+/** Once the canonical user record owns normalization, retain no duplicate input text. */
+function pruneResolvedRuntimeInputs(db: DatabaseSync, sessionId?: string, segmentId?: string): void {
+  let cursor = 0;
+  for (;;) {
+    const inputs = db.prepare(`SELECT rowid AS cursor,* FROM runtime_inputs WHERE state='accepted' AND rowid>?
+      AND (? IS NULL OR session_id=?) AND (? IS NULL OR segment_id=?) ORDER BY rowid LIMIT 100`).all(cursor,sessionId ?? null,sessionId ?? null,segmentId ?? null,segmentId ?? null);
+    if (!inputs.length) return;
+    for (const input of inputs) {
+      cursor = input.cursor as number;
+      const session = input.session_id as string, segment = input.segment_id as string, turn = input.turn_id as string;
+      const rows = db.prepare("SELECT item_id,data FROM runtime_transcript WHERE session_id=? AND segment_id=? AND json_extract(data,'$.turnId')=?").all(session,segment,turn);
+      const user = rows.find(row => { const item = JSON.parse(row.data as string) as HistoryItem; return item.message.role === "user" && (item.message.content === input.original_text || item.message.content === input.input_text || item.step === 0); });
+      if (!user) continue; // Never prune an acceptance whose canonical user write has not committed.
+      for (const row of rows) {
+        const item = JSON.parse(row.data as string) as HistoryItem;
+        item.nativeTurnId = (input.native_turn_id ?? turn) as string;
+        if (row.item_id === user.item_id) {
+          const delivered = item.message.role === "user" && item.message.content !== input.original_text ? item.message.content : input.input_text as string;
+          item.runtimeInputDigest ??= createHash("sha256").update(delivered).digest("hex");
+          item.message = {...item.message,role:"user",content:input.original_text as string};
+        }
+        db.prepare("UPDATE runtime_transcript SET data=? WHERE session_id=? AND segment_id=? AND item_id=?").run(JSON.stringify(item),session,segment,row.item_id as string);
+      }
+      db.prepare("DELETE FROM runtime_inputs WHERE session_id=? AND segment_id=? AND turn_id=?").run(session,segment,turn);
+      const raw = db.prepare("SELECT data FROM runtime_handoffs WHERE session_id=? AND segment_id=?").get(session,segment);
+      if (raw) {
+        const handoff = JSON.parse(raw.data as string);
+        if (handoff.state === "accepted" && handoff.turnId === turn) {
+          delete handoff.originalText; delete handoff.injectedText;
+          db.prepare("UPDATE runtime_handoffs SET data=? WHERE session_id=? AND segment_id=?").run(JSON.stringify(handoff),session,segment);
+        }
+      }
+    }
+  }
+}
+
 function migrate(db: DatabaseSync, strictSessionSchema = false, outerTransaction = false): void {
   db.exec(
     `CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -550,8 +648,17 @@ function migrate(db: DatabaseSync, strictSessionSchema = false, outerTransaction
     }
     if (!outerTransaction) db.exec("BEGIN");
     try {
+      if (migration.version === 35) {
+        db.exec("CREATE TEMP TABLE runtime_backfill_checkpoint_owners (session_id TEXT PRIMARY KEY)");
+        // Some historical partial schemas legitimately contain no checkpoints.
+        if (db.prepare("SELECT 1 FROM sqlite_master WHERE name='checkpoints' AND type='table'").get()) db.exec("INSERT OR IGNORE INTO temp.runtime_backfill_checkpoint_owners SELECT session_id FROM checkpoints WHERE json_extract(history_json,'$.runtimeBoundary') IS NOT NULL");
+      }
       for (const statement of migration.statements) {
         db.exec(statement);
+      }
+      if (migration.version === 35) {
+        pruneResolvedRuntimeInputs(db);
+        db.exec("DROP TABLE temp.runtime_backfill_checkpoint_owners");
       }
       db.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(
         migration.version,
@@ -915,6 +1022,7 @@ function rowToClaudeTranscriptItem(row: ClaudeTranscriptItemRow): ClaudeTranscri
 // field exists. This intentionally requires an explicit admission update when
 // the session schema grows; older schemas are checked before migration too.
 const CLI_SUPPORTED_SESSION_COLUMNS = new Set([
+  "active_runtime_segment", "runtime_revision",
   "id", "workspace", "model", "mode", "created_at", "updated_at", "title",
   "engine_id", "external_session_ref", "project_root", "worktree_id", "worktree_path", "worktree_branch", "worktree_base_ref", "worktree_owned_by_anycode",
   "continuation_pending", "continuation_mode", "worktree_exit_notice_pending", "worktree_cleanup_path", "worktree_cleanup_mode", "worktree_cleanup_owned_by_anycode",
@@ -987,7 +1095,7 @@ function assertCliAdmission(db: DatabaseSync, admission: CliAdmission): void {
   }
 }
 
-export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStore {
+export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStore, RuntimeSegmentStore {
   private db: DatabaseSync | undefined;
   private quarantined = false;
 
@@ -1082,6 +1190,223 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
 
   async createSession(meta: Omit<SessionMeta, "createdAt" | "updatedAt">): Promise<SessionMeta> {
     return this.createSessionInDb(this.open(), meta);
+  }
+
+  ensureRuntimeSession(sessionId: string): RuntimeSessionSnapshot {
+    this.transaction(db => {
+      const row = db.prepare("SELECT * FROM sessions WHERE id=?").get(sessionId) as unknown as (SessionRow & {active_runtime_segment:string | null}) | undefined;
+      if (!row) throw new Error("Session is missing");
+      if (row.active_runtime_segment) return;
+      db.prepare(`INSERT OR IGNORE INTO runtime_segments VALUES (?,?,0,?,?,?,?,?,?,?,?,?,NULL,'available_history')`).run(
+        sessionId, "legacy", row.engine_id ?? "core", row.connection_id, row.codex_profile_id,
+        row.codex_profile_id ?? "", row.external_session_ref, row.external_session_ref ? "materialized" : "fresh",
+        JSON.stringify({ model: row.model, mode: row.mode }), JSON.stringify({ model: row.model, mode: row.mode }), row.created_at);
+      db.prepare("UPDATE sessions SET active_runtime_segment=COALESCE(active_runtime_segment,'legacy') WHERE id=?").run(sessionId);
+      // Opt in only when runtime history is actually requested. Flag-off
+      // sessions continue to own one model-history copy through migrations.
+      db.prepare(`INSERT INTO runtime_transcript(session_id,segment_id,item_id,data)
+        SELECT session_id,'legacy',item_id,json_set(data,'$.id','segment:legacy:' || item_id,'$.segmentId','legacy','$.sourceItemId',item_id)
+        FROM history_items WHERE session_id=? AND COALESCE(json_extract(data,'$.kind'),'')!='turn_error' ORDER BY seq`).run(sessionId);
+    }, "immediate");
+    return this.loadRuntimeSession(sessionId)!;
+  }
+
+  loadRuntimeSession(sessionId: string): RuntimeSessionSnapshot | null {
+    return this.transaction(db => {
+      const row = db.prepare("SELECT active_runtime_segment AS active, runtime_revision AS revision FROM sessions WHERE id=?").get(sessionId) as { active: string | null; revision: number } | undefined;
+      if (!row?.active) return null;
+      const segments = db.prepare("SELECT * FROM runtime_segments WHERE session_id=? ORDER BY ordinal").all(sessionId).map(raw => {
+        const value = raw as Record<string, string | number | null>;
+        return { sessionId, id: value.segment_id, ordinal: value.ordinal, engine: value.engine,
+          ...(value.connection_id ? { connectionId: value.connection_id } : {}), ...(value.profile_id ? { profileId: value.profile_id } : {}),
+          accountScope: value.account_scope, ...(value.native_ref ? { nativeRef: value.native_ref } : {}), nativeState: value.native_state,
+          selected: JSON.parse(value.selected_json as string), applied: JSON.parse(value.applied_json as string),
+          startedAt: value.started_at, ...(value.ended_at !== null ? { endedAt: value.ended_at } : {}), coverage: value.coverage } as RuntimeSegment;
+      });
+      const items = db.prepare("SELECT data FROM runtime_transcript WHERE session_id=? ORDER BY seq").all(sessionId).map(raw => JSON.parse(raw.data as string) as HistoryItem);
+      const boundaries = db.prepare("SELECT data FROM runtime_boundaries WHERE session_id=? ORDER BY rowid").all(sessionId).map(raw => JSON.parse(raw.data as string));
+      const handoff = db.prepare("SELECT data FROM runtime_handoffs WHERE session_id=? AND segment_id=?").get(sessionId,row.active);
+      return { revision: row.revision, activeSegmentId: row.active, segments, items, boundaries, handoff: handoff ? JSON.parse(handoff.data as string) : null };
+    });
+  }
+
+  /** Full replacements clear unsupported settings. Retired runtime writers are rejected. */
+  updateRuntimeSettings(sessionId: string, segmentId: string, selected: import("../../ports/runtime-segments.js").RuntimeSettings, applied: import("../../ports/runtime-segments.js").RuntimeSettings): void {
+    this.transaction(db => {
+      const row = db.prepare("SELECT active_runtime_segment FROM sessions WHERE id=?").get(sessionId);
+      if (row?.active_runtime_segment !== segmentId) throw new Error("Stale runtime settings writer");
+      db.prepare("UPDATE runtime_segments SET selected_json=?,applied_json=? WHERE session_id=? AND segment_id=?").run(JSON.stringify(selected),JSON.stringify(applied),sessionId,segmentId);
+      db.prepare("UPDATE sessions SET model=?,mode=?,codex_fast=?,updated_at=? WHERE id=?").run(selected.model,selected.mode,selected.fast === undefined ? null : selected.fast ? 1 : 0,Date.now(),sessionId);
+    },"immediate");
+  }
+
+  /** Allocate a fresh native artifact without changing the logical segment or its handoff. */
+  setRuntimeNativeReference(sessionId: string, segmentId: string, revision: number, nativeRef: string, materialized = false): void {
+    this.transaction(db => {
+      const row = db.prepare("SELECT active_runtime_segment,runtime_revision FROM sessions WHERE id=?").get(sessionId);
+      if (row?.active_runtime_segment !== segmentId || row.runtime_revision !== revision) throw new Error("Stale native runtime registration");
+      db.prepare("UPDATE runtime_segments SET native_ref=?,native_state=? WHERE session_id=? AND segment_id=?").run(nativeRef,materialized ? "materialized" : "fresh",sessionId,segmentId);
+      db.prepare("UPDATE sessions SET external_session_ref=? WHERE id=?").run(nativeRef,sessionId);
+    },"immediate");
+  }
+
+  runtimeInputRecoveryNeeded(sessionId: string, segmentId: string): boolean {
+    return !!this.open().prepare("SELECT 1 FROM runtime_inputs WHERE session_id=? AND segment_id=? AND state IN ('dispatching','uncertain')").get(sessionId,segmentId);
+  }
+
+  runtimeInputRecoveries(sessionId: string, segmentId: string): {turnId:string; text:string; input:string; state:string}[] {
+    return this.open().prepare("SELECT turn_id,original_text,input_text,state FROM runtime_inputs WHERE session_id=? AND segment_id=? AND state!='accepted'").all(sessionId,segmentId)
+      .map(row => ({turnId:row.turn_id as string,text:row.original_text as string,input:row.input_text as string,state:row.state as string}));
+  }
+
+  /** Only a checked native absence permits a resend. An unavailable mirror proves nothing. */
+  resetRuntimeInput(sessionId: string, segmentId: string, turnId: string, discard = false): void {
+    this.transaction(db => {
+      if (db.prepare("SELECT active_runtime_segment FROM sessions WHERE id=?").get(sessionId)?.active_runtime_segment !== segmentId) throw new Error("Stale runtime input recovery");
+      const input = db.prepare("SELECT state FROM runtime_inputs WHERE session_id=? AND segment_id=? AND turn_id=?").get(sessionId,segmentId,turnId);
+      if (!input || input.state === "accepted" || (discard && input.state !== "pending")) return;
+      if (discard) db.prepare("DELETE FROM runtime_inputs WHERE session_id=? AND segment_id=? AND turn_id=?").run(sessionId,segmentId,turnId);
+      else db.prepare("UPDATE runtime_inputs SET state='pending' WHERE session_id=? AND segment_id=? AND turn_id=?").run(sessionId,segmentId,turnId);
+      const raw = db.prepare("SELECT data FROM runtime_handoffs WHERE session_id=? AND segment_id=?").get(sessionId,segmentId);
+      if (raw) {
+        const handoff = JSON.parse(raw.data as string);
+        if (handoff.turnId === turnId) {
+          delete handoff.turnId; delete handoff.originalText; delete handoff.injectedText;
+          db.prepare("UPDATE runtime_handoffs SET data=? WHERE session_id=? AND segment_id=?").run(JSON.stringify({...handoff,state:"pending"}),sessionId,segmentId);
+        }
+      }
+    },"immediate");
+  }
+
+  prepareRuntimeInput(sessionId: string, turnId: string, originalText: string, input: string, importConversation: boolean, importPayload?: string): string {
+    return this.transaction(db => {
+      const row = db.prepare("SELECT active_runtime_segment FROM sessions WHERE id=?").get(sessionId);
+      if (!row?.active_runtime_segment) throw new Error("Runtime session is missing");
+      const raw = db.prepare("SELECT data FROM runtime_handoffs WHERE session_id=? AND segment_id=?").get(sessionId,row.active_runtime_segment);
+      const state = { activeSegmentId: row.active_runtime_segment as string, handoff: raw ? JSON.parse(raw.data as string) as import("../../ports/runtime-segments.js").RuntimeHandoff : null };
+      if (state.handoff?.state === "dispatching" || state.handoff?.state === "uncertain") throw new Error("Input acceptance is uncertain. Recovery is required before another turn.");
+      const handoff = state.handoff;
+      const inject = importConversation && handoff?.state === "pending";
+      if (inject && importPayload !== undefined) {
+        if (Buffer.byteLength(importPayload,"utf8") > 65536) throw new Error("Invalid handoff payload");
+        handoff.payload = importPayload;
+        handoff.digest = createHash("sha256").update(importPayload).digest("hex");
+      }
+      const text = inject ? `${handoff.payload}\n\n# user (current message)\n${input}` : input;
+      db.prepare("INSERT INTO runtime_inputs VALUES(?,?,?,NULL,?,?, 'pending')").run(sessionId,state.activeSegmentId,turnId,originalText,text);
+      if (inject) {
+        db.prepare("UPDATE runtime_handoffs SET data=? WHERE session_id=? AND segment_id=?").run(JSON.stringify({...handoff,turnId,originalText,injectedText:text}),sessionId,state.activeSegmentId);
+      }
+      return text;
+    },"immediate");
+  }
+
+  transitionRuntimeInput(sessionId: string, segmentId: string, turnId: string, next: "dispatching" | "accepted" | "uncertain", nativeTurnId?: string): void {
+    this.transaction(db => {
+      const row = db.prepare("SELECT active_runtime_segment FROM sessions WHERE id=?").get(sessionId);
+      if (row?.active_runtime_segment !== segmentId) throw new Error("Stale runtime input acknowledgement");
+      const input = db.prepare("SELECT state FROM runtime_inputs WHERE session_id=? AND segment_id=? AND turn_id=?").get(sessionId,segmentId,turnId);
+      if (!input || (next === "dispatching" && input.state !== "pending") || (next === "accepted" && input.state === "pending")) throw new Error("Invalid runtime input transition");
+      if (input.state === "accepted") return;
+      db.prepare("UPDATE runtime_inputs SET state=?,native_turn_id=COALESCE(?,native_turn_id) WHERE session_id=? AND segment_id=? AND turn_id=?").run(next,nativeTurnId ?? null,sessionId,segmentId,turnId);
+      const raw = db.prepare("SELECT data FROM runtime_handoffs WHERE session_id=? AND segment_id=?").get(sessionId,segmentId);
+      if (raw) {
+        const handoff = JSON.parse(raw.data as string);
+        if (handoff.turnId === turnId) db.prepare("UPDATE runtime_handoffs SET data=? WHERE session_id=? AND segment_id=?").run(JSON.stringify({...handoff,state:next}),sessionId,segmentId);
+      }
+      // A real native acknowledgement (or a reconciled checked mirror) proves materialization.
+      if (next === "accepted") db.prepare("UPDATE runtime_segments SET native_state='materialized' WHERE session_id=? AND segment_id=?").run(sessionId,segmentId);
+    },"immediate");
+  }
+
+  reconcileRuntimeInputs(sessionId: string, segmentId: string, live: readonly HistoryItem[]): void {
+    const inputs = this.open().prepare("SELECT * FROM runtime_inputs WHERE session_id=? AND segment_id=? AND state IN ('dispatching','uncertain')").all(sessionId,segmentId);
+    for (const input of inputs) {
+      const raw = this.open().prepare("SELECT data FROM runtime_handoffs WHERE session_id=? AND segment_id=?").get(sessionId,segmentId);
+      const handoff = raw ? JSON.parse(raw.data as string) : null;
+      const found = live.find(item => item.message.role === "user" && item.message.content === input.input_text &&
+        (item.turnId === input.turn_id || (typeof input.native_turn_id === "string" && (item.turnId === input.native_turn_id || item.id.startsWith(`${input.native_turn_id}:`))) || (handoff?.turnId === input.turn_id && handoff.injectedText === input.input_text)));
+      this.transitionRuntimeInput(sessionId,segmentId,input.turn_id as string,found ? "accepted" : "uncertain",found?.turnId);
+    }
+  }
+
+  private mergeRuntimeHistoryInDb(db: DatabaseSync, sessionId: string, segmentId: string, items: readonly HistoryItem[]): void {
+    const handoff = db.prepare("SELECT data FROM runtime_handoffs WHERE session_id=? AND segment_id=?").get(sessionId,segmentId);
+    const inputs = db.prepare("SELECT * FROM runtime_inputs WHERE session_id=? AND segment_id=? ORDER BY rowid").all(sessionId,segmentId);
+    const normalized = items.filter(item => {
+      if (!item.segmentId || item.segmentId === segmentId) return true;
+      // Rewind may restore model context captured by an earlier core runtime.
+      // Its surviving display rows keep their original segment identity.
+      const retained = db.prepare("SELECT data FROM runtime_transcript WHERE session_id=? AND segment_id=? AND item_id=?").get(sessionId,item.segmentId,item.sourceItemId ?? item.id);
+      if (!retained) throw new Error("Transcript item belongs to another runtime segment");
+      return false;
+    }).map(item => {
+      const input = inputs.find(value => item.turnId === value.turn_id || (typeof value.native_turn_id === "string" && (item.turnId === value.native_turn_id || item.id.startsWith(`${value.native_turn_id}:`))));
+      if (input) return {...item,turnId:input.turn_id as string,...(item.message.role === "user" && (item.message.content === input.input_text || item.step === 0) ? {
+        runtimeInputDigest:createHash("sha256").update(item.message.content).digest("hex"),message:{...item.message,content:input.original_text as string},
+      } : {})};
+      const previous = db.prepare("SELECT data FROM runtime_transcript WHERE session_id=? AND segment_id=? AND item_id=?").get(sessionId,segmentId,item.sourceItemId ?? item.id);
+      const receipt = previous ? JSON.parse(previous.data as string) as HistoryItem : undefined;
+      const turnReceipt = receipt ?? (item.turnId ? (() => {
+        const raw = db.prepare("SELECT data FROM runtime_transcript WHERE session_id=? AND segment_id=? AND json_extract(data,'$.nativeTurnId')=? LIMIT 1").get(sessionId,segmentId,item.turnId!);
+        return raw ? JSON.parse(raw.data as string) as HistoryItem : undefined;
+      })() : undefined);
+      const original = receipt?.message.role === "user" && item.message.role === "user" && receipt.runtimeInputDigest && createHash("sha256").update(item.message.content).digest("hex") === receipt.runtimeInputDigest;
+      return turnReceipt ? {...item,turnId:turnReceipt.turnId,nativeTurnId:turnReceipt.nativeTurnId,
+        ...(receipt?.runtimeInputDigest ? {runtimeInputDigest:receipt.runtimeInputDigest} : {}),
+        ...(original ? {message:receipt!.message} : {})} : item;
+    });
+    const scoped = scopeRuntimeHistory(segmentId,normalized,handoff ? JSON.parse(handoff.data as string) : null);
+    const insert = db.prepare(`INSERT INTO runtime_transcript(session_id,segment_id,item_id,data) VALUES(?,?,?,?)
+      ON CONFLICT(session_id,segment_id,item_id) DO UPDATE SET data=excluded.data`);
+    for (const item of scoped) insert.run(sessionId,segmentId,item.sourceItemId!,JSON.stringify(item));
+    pruneResolvedRuntimeInputs(db,sessionId,segmentId);
+    touchSessionActivity(db,sessionId,items);
+  }
+
+  mergeRuntimeTranscript(sessionId: string, segmentId: string, items: readonly HistoryItem[]): void {
+    this.transaction(db => {
+      const row = db.prepare("SELECT active_runtime_segment FROM sessions WHERE id=?").get(sessionId);
+      if (row?.active_runtime_segment !== segmentId) throw new Error("Stale runtime history writer");
+      this.mergeRuntimeHistoryInDb(db,sessionId,segmentId,items);
+    },"immediate");
+  }
+
+  /** Only the active core segment owns executable model history; display history is never replaced. */
+  writeRuntimeModelHistory(sessionId: string, segmentId: string, items: readonly HistoryItem[], replace: boolean): void {
+    this.transaction(db => {
+      const active = db.prepare(`SELECT r.engine FROM runtime_segments r JOIN sessions s ON s.id=r.session_id
+        WHERE s.id=? AND s.active_runtime_segment=r.segment_id AND r.segment_id=?`).get(sessionId,segmentId);
+      if (active?.engine !== "core") throw new Error("Stale core model history writer");
+      if (replace) db.prepare("DELETE FROM history_items WHERE session_id=? AND COALESCE(json_extract(data,'$.kind'),'')!='turn_error'").run(sessionId);
+      const insert = db.prepare("INSERT INTO history_items(session_id,item_id,data) VALUES(?,?,?)");
+      for (const item of items) insert.run(sessionId,item.id,JSON.stringify(item));
+      this.mergeRuntimeHistoryInDb(db,sessionId,segmentId,items);
+    },"immediate");
+  }
+
+  /** One durable boundary: source snapshot, archived ref, fresh target and handoff commit together. */
+  commitRuntimeSwitch(sessionId: string, expectedEngine: string, record: RuntimeSwitchCommit): void {
+    this.transaction(db => {
+      const source = db.prepare("SELECT * FROM sessions WHERE id=? AND parent_session_id IS NULL").get(sessionId) as unknown as (SessionRow & {active_runtime_segment:string;runtime_revision:number}) | undefined;
+      if (!source || source.active_runtime_segment !== record.sourceSegmentId || source.runtime_revision !== record.expectedRevision || (source.engine_id ?? "core") !== expectedEngine) throw new Error("Source runtime revision changed");
+      const next = record.segment;
+      if (next.id === record.sourceSegmentId || next.id !== record.boundary.segmentId || next.id !== record.handoff.segmentId || record.handoff.state !== "pending" || next.nativeState !== "fresh") throw new Error("Invalid runtime boundary");
+      if (Buffer.byteLength(record.handoff.payload,"utf8") > 65536 || createHash("sha256").update(record.handoff.payload).digest("hex") !== record.handoff.digest) throw new Error("Invalid handoff payload");
+      this.mergeRuntimeHistoryInDb(db,sessionId,record.sourceSegmentId,record.sourceItems);
+      db.prepare(`UPDATE runtime_segments SET ended_at=?,native_ref=COALESCE(?,native_ref)
+        WHERE session_id=? AND segment_id=?`).run(next.startedAt,source.external_session_ref,sessionId,record.sourceSegmentId);
+      const ordinal = (db.prepare("SELECT COALESCE(MAX(ordinal),-1)+1 AS ordinal FROM runtime_segments WHERE session_id=?").get(sessionId) as {ordinal:number}).ordinal;
+      db.prepare("INSERT INTO runtime_segments VALUES(?,?,?,?,?,?,?,?,?,?,?,?,NULL,?)").run(sessionId,next.id,ordinal,next.engine,next.connectionId ?? null,next.profileId ?? null,next.accountScope,next.nativeRef ?? null,next.nativeState,JSON.stringify(next.selected),JSON.stringify(next.applied),next.startedAt,next.coverage);
+      db.prepare("INSERT INTO runtime_boundaries VALUES(?,?,?,?)").run(sessionId,next.id,record.boundary.id,JSON.stringify(record.boundary));
+      db.prepare("INSERT INTO runtime_handoffs VALUES(?,?,?,?)").run(sessionId,next.id,record.handoff.id,JSON.stringify(record.handoff));
+      // Context belongs only to the new segment. The canonical display rows above remain intact.
+      db.prepare("DELETE FROM history_items WHERE session_id=? AND COALESCE(json_extract(data,'$.kind'),'')!='turn_error'").run(sessionId);
+      const changed = db.prepare(`UPDATE sessions SET engine_id=?,model=?,mode=?,external_session_ref=?,connection_id=COALESCE(?,connection_id),codex_profile_id=?,codex_fast=NULL,
+        active_runtime_segment=?,runtime_revision=runtime_revision+1,updated_at=? WHERE id=? AND runtime_revision=? AND active_runtime_segment=?`).run(
+        next.engine,next.selected.model,next.applied.mode,next.nativeRef ?? null,next.connectionId ?? null,next.profileId ?? null,next.id,next.startedAt,sessionId,record.expectedRevision,record.sourceSegmentId);
+      if (changed.changes !== 1) throw new Error("Source runtime revision changed");
+    },"immediate");
   }
 
   /** Atomically transfer a native reference only while its source still owns it.
@@ -1401,9 +1726,10 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     if (deletedSessionIds.length === 0) {
       return { deletedSessionIds, externalSessionRefs: [], counts };
     }
-    const externalSessionRefs = treeRows
-      .map((row) => row.external_session_ref)
-      .filter((ref): ref is string => typeof ref === "string" && ref.length > 0);
+    const archivedRefs = db.prepare(`SELECT session_id AS id,engine AS engine_id,native_ref AS external_session_ref
+      FROM runtime_segments WHERE session_id IN (${deletedSessionIds.map(() => "?").join(",")}) AND native_ref IS NOT NULL`).all(...deletedSessionIds) as unknown as typeof treeRows;
+    const ownedRefs = [...treeRows,...archivedRefs];
+    const externalSessionRefs = [...new Set(ownedRefs.map(row => row.external_session_ref).filter((ref): ref is string => typeof ref === "string" && ref.length > 0))];
 
     const idPlaceholders = deletedSessionIds.map(() => "?").join(", ");
     counts.historyItems = Number(db.prepare(`DELETE FROM history_items WHERE session_id IN (${idPlaceholders})`).run(...deletedSessionIds).changes);
@@ -1429,10 +1755,10 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     // touched by this cascade. A ref can also be shared by multiple sessions
     // of the same engine. Remove its rows only when no owner survives this
     // subtree; the owner check and deletion share the same transaction.
-    const codexRefs = treeRows
+    const codexRefs = ownedRefs
       .filter((row) => row.engine_id === "codex" && typeof row.external_session_ref === "string" && row.external_session_ref.length > 0)
       .map((row) => row.external_session_ref as string);
-    const claudeRefs = treeRows
+    const claudeRefs = ownedRefs
       .filter((row) => row.engine_id === "claude" && typeof row.external_session_ref === "string" && row.external_session_ref.length > 0)
       .map((row) => row.external_session_ref as string);
 
@@ -1443,7 +1769,8 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
           WHERE thread_id IN (${refPlaceholders})
             AND thread_id NOT IN (SELECT s.external_session_ref FROM sessions s
               WHERE s.engine_id = 'codex' AND s.external_session_ref IS NOT NULL
-                AND s.id NOT IN (${idPlaceholders}))`).run(...codexRefs, ...deletedSessionIds).changes,
+                AND s.id NOT IN (${idPlaceholders})
+              UNION SELECT r.native_ref FROM runtime_segments r WHERE r.engine='codex' AND r.native_ref IS NOT NULL AND r.session_id NOT IN (${idPlaceholders}))`).run(...codexRefs, ...deletedSessionIds, ...deletedSessionIds).changes,
       );
     }
     if (claudeRefs.length > 0) {
@@ -1453,13 +1780,41 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
           WHERE session_ref IN (${refPlaceholders})
             AND session_ref NOT IN (SELECT s.external_session_ref FROM sessions s
               WHERE s.engine_id = 'claude' AND s.external_session_ref IS NOT NULL
-                AND s.id NOT IN (${idPlaceholders}))`).run(...claudeRefs, ...deletedSessionIds).changes,
+                AND s.id NOT IN (${idPlaceholders})
+              UNION SELECT r.native_ref FROM runtime_segments r WHERE r.engine='claude' AND r.native_ref IS NOT NULL AND r.session_id NOT IN (${idPlaceholders}))`).run(...claudeRefs, ...deletedSessionIds, ...deletedSessionIds).changes,
       );
     }
 
+    // Legacy shadow tables have no account column: retain a shared literal ref
+    // conservatively even when its surviving owner uses another account.
+    for (const table of ["runtime_inputs","runtime_handoffs","runtime_boundaries","runtime_transcript","runtime_segments"]) {
+      db.prepare(`DELETE FROM ${table} WHERE session_id IN (${idPlaceholders})`).run(...deletedSessionIds);
+    }
     db.prepare(`DELETE FROM sessions WHERE id IN (${idPlaceholders})`).run(...deletedSessionIds);
 
     return { deletedSessionIds, externalSessionRefs, counts };
+  }
+
+  /** Commit the active identity without changing transcript, title or workspace ownership. */
+  commitEngineIdentity(id: string, expectedEngine: string, identity: {
+    engine: string; model: string; mode: string; externalSessionRef?: string;
+    connectionId?: string; codexProfileId?: string; workspace?: string;
+  }): void {
+    const db = this.open();
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      if (expectedEngine === "claude" && identity.workspace && !db.prepare("SELECT 1 FROM sessions WHERE id = ?").get(id)) {
+        this.createSessionInDb(db, { id, workspace: identity.workspace, model: identity.model, mode: "plan", engineId: "claude" });
+      }
+      const result = db.prepare(`UPDATE sessions SET engine_id = ?, model = ?, mode = ?,
+        external_session_ref = ?, connection_id = ?, codex_profile_id = ?, codex_fast = NULL, updated_at = ?
+        WHERE id = ? AND parent_session_id IS NULL AND COALESCE(engine_id, 'core') = ?`).run(
+          identity.engine, identity.model, identity.mode, identity.externalSessionRef ?? null,
+          identity.connectionId ?? null, identity.codexProfileId ?? null, Date.now(), id, expectedEngine,
+        );
+      if (Number(result.changes) !== 1) throw new Error("Source session identity changed or is unavailable");
+      db.exec("COMMIT");
+    } catch (error) { this.failTransaction(db, error); }
   }
 
   async touchSession(id: string, patch?: SessionMetaPatch): Promise<void> {
@@ -1690,8 +2045,38 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     return rows.map((row) => JSON.parse(row.data) as import("../../types/history.js").TurnErrorRecord);
   }
 
-  async restoreHistoryAndTurnErrors(sessionId: string, history: readonly HistoryItem[], turnErrorIds?: readonly string[]): Promise<string[]> {
+  async restoreHistoryAndTurnErrors(sessionId: string, history: readonly HistoryItem[], turnErrorIds?: readonly string[], runtimeBoundary?: import("../../ports/checkpoints.js").RuntimeCheckpointBoundary): Promise<string[]> {
     return this.transaction((db) => {
+      const active = db.prepare("SELECT active_runtime_segment FROM sessions WHERE id=?").get(sessionId)?.active_runtime_segment as string | null;
+      if (active) {
+        // Old checkpoints have no explicit watermark. Match their last retained
+        // item in the active segment; an empty snapshot means its start.
+        const last = history.at(-1);
+        const matched = last ? db.prepare("SELECT seq FROM runtime_transcript WHERE session_id=? AND segment_id=? AND item_id=?").get(sessionId,active,last.sourceItemId ?? last.id)?.seq as number | undefined : undefined;
+        const before = db.prepare("SELECT COALESCE(MAX(t.seq),0) AS seq FROM runtime_transcript t JOIN runtime_segments r ON r.session_id=t.session_id AND r.segment_id=t.segment_id WHERE t.session_id=? AND r.ordinal<(SELECT ordinal FROM runtime_segments WHERE session_id=? AND segment_id=?)").get(sessionId,sessionId,active)!.seq as number;
+        db.prepare("DELETE FROM runtime_transcript WHERE session_id=? AND seq>?").run(sessionId,runtimeBoundary?.transcriptSeq ?? matched ?? before);
+        const boundaryIds = runtimeBoundary?.boundaryIds ?? db.prepare("SELECT boundary_id FROM runtime_boundaries WHERE session_id=? AND segment_id IN (SELECT segment_id FROM runtime_segments WHERE session_id=? AND ordinal<=(SELECT ordinal FROM runtime_segments WHERE session_id=? AND segment_id=?))").all(sessionId,sessionId,sessionId,active).map(row => row.boundary_id as string);
+        const keepBoundaries = new Set(boundaryIds);
+        const activeBoundary = db.prepare("SELECT boundary_id FROM runtime_boundaries WHERE session_id=? AND segment_id=?").get(sessionId,active)?.boundary_id as string | undefined;
+        for (const row of db.prepare("SELECT boundary_id FROM runtime_boundaries WHERE session_id=?").all(sessionId)) if (!keepBoundaries.has(row.boundary_id as string)) db.prepare("DELETE FROM runtime_boundaries WHERE session_id=? AND boundary_id=?").run(sessionId,row.boundary_id as string);
+        if (!activeBoundary || !keepBoundaries.has(activeBoundary)) {
+          // This runtime began after the restored point: its imported tail is obsolete.
+          db.prepare("DELETE FROM runtime_handoffs WHERE session_id=? AND segment_id=?").run(sessionId,active);
+        } else {
+          const raw = db.prepare("SELECT data FROM runtime_handoffs WHERE session_id=? AND segment_id=?").get(sessionId,active);
+          if (raw) {
+            const handoff = JSON.parse(raw.data as string);
+            if (handoff.turnId && !db.prepare("SELECT 1 FROM runtime_transcript WHERE session_id=? AND segment_id=? AND json_extract(data,'$.turnId')=?").get(sessionId,active,handoff.turnId)) {
+              // Rewinding before the first imported turn restores the pending
+              // handoff, including a lazily captured checkpoint from that turn.
+              delete handoff.turnId; delete handoff.originalText; delete handoff.injectedText;
+              db.prepare("UPDATE runtime_handoffs SET data=? WHERE session_id=? AND segment_id=?").run(JSON.stringify({...handoff,state:"pending"}),sessionId,active);
+            }
+          }
+        }
+        const keptTurns = new Set(history.flatMap(item => item.turnId ? [item.turnId] : []));
+        for (const row of db.prepare("SELECT turn_id FROM runtime_inputs WHERE session_id=? AND segment_id=?").all(sessionId,active)) if (!keptTurns.has(row.turn_id as string)) db.prepare("DELETE FROM runtime_inputs WHERE session_id=? AND segment_id=? AND turn_id=?").run(sessionId,active,row.turn_id as string);
+      }
       const rows = db.prepare("SELECT data FROM history_items WHERE session_id = ? AND json_extract(data, '$.kind') = 'turn_error'").all(sessionId) as unknown as { data: string }[];
       const errors = rows.map((row) => JSON.parse(row.data) as import("../../types/history.js").TurnErrorRecord);
       const keep = turnErrorIds === undefined ? undefined : new Set(turnErrorIds);
@@ -1703,7 +2088,10 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       ));
       db.prepare("DELETE FROM history_items WHERE session_id = ? AND COALESCE(json_extract(data, '$.kind'), '') != 'turn_error'").run(sessionId);
       const insert = db.prepare("INSERT INTO history_items (session_id, item_id, data) VALUES (?, ?, ?)");
-      for (const item of history) insert.run(sessionId, item.id, JSON.stringify(item));
+      for (const item of history) {
+        const retained = active ? db.prepare("SELECT data FROM runtime_transcript WHERE session_id=? AND item_id=? ORDER BY seq DESC").all(sessionId,item.sourceItemId ?? item.id).map(row => JSON.parse(row.data as string) as HistoryItem).find(row => row.turnId === item.turnId && row.createdAt === item.createdAt) : undefined;
+        insert.run(sessionId,item.id,JSON.stringify(retained ? {...item,segmentId:retained.segmentId,sourceItemId:retained.sourceItemId} : item));
+      }
       const remove = db.prepare("DELETE FROM history_items WHERE session_id = ? AND item_id = ? AND json_extract(data, '$.kind') = 'turn_error'");
       for (const record of removed) remove.run(sessionId, record.id);
       touchSessionActivity(db, sessionId, history);
@@ -1871,6 +2259,17 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   async saveCheckpoint(record: CheckpointRecord, opts?: { keepPerSession?: number }): Promise<void> {
     const keep = opts?.keepPerSession ?? CHECKPOINTS_KEEP_PER_SESSION;
     this.transaction((db) => {
+      let historyJson = record.historyJson;
+      const active = db.prepare("SELECT active_runtime_segment FROM sessions WHERE id=?").get(record.sessionId)?.active_runtime_segment as string | null;
+      if (active) {
+        const snapshot = JSON.parse(historyJson) as HistoryItem[] | {items:HistoryItem[];turnErrorIds?:string[]};
+        const items = Array.isArray(snapshot) ? snapshot : snapshot.items;
+        const last = items.at(-1);
+        const seq = last ? db.prepare("SELECT seq FROM runtime_transcript WHERE session_id=? AND segment_id=? AND item_id=?").get(record.sessionId,active,last.sourceItemId ?? last.id)?.seq as number | undefined : undefined;
+        const before = db.prepare("SELECT COALESCE(MAX(t.seq),0) AS seq FROM runtime_transcript t JOIN runtime_segments r ON r.session_id=t.session_id AND r.segment_id=t.segment_id WHERE t.session_id=? AND r.ordinal<(SELECT ordinal FROM runtime_segments WHERE session_id=? AND segment_id=?)").get(record.sessionId,record.sessionId,active)!.seq as number;
+        const boundaryIds = db.prepare("SELECT boundary_id FROM runtime_boundaries WHERE session_id=?").all(record.sessionId).map(row => row.boundary_id as string);
+        historyJson = JSON.stringify({...(!Array.isArray(snapshot) ? snapshot : {}),items,runtimeBoundary:{transcriptSeq:seq ?? before,boundaryIds}});
+      }
       db.prepare(
         `INSERT INTO checkpoints (id, session_id, commit_hash, created_at, reason, label, history_json)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -1881,7 +2280,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
         record.createdAt,
         record.reason,
         record.label,
-        record.historyJson,
+        historyJson,
       );
       // GitHub #36: the compaction boundary this checkpoint captured at its
       // turn start (absent when the caller keeps no records).
@@ -2264,7 +2663,7 @@ export class WriteBehindHistorySink implements HistorySink {
   private readonly logger: HistorySinkLogger;
 
   constructor(
-    private readonly persistence: PersistencePort,
+    private readonly persistence: Pick<PersistencePort, "appendHistory" | "replaceHistory">,
     private readonly sessionId: string,
     opts?: { logger?: HistorySinkLogger },
   ) {
@@ -2325,5 +2724,12 @@ export class WriteBehindHistorySink implements HistorySink {
         // A broken logger must not poison the queue for subsequent writes.
       }
     });
+  }
+}
+
+export class RuntimeHistorySink extends WriteBehindHistorySink {
+  constructor(store: SqlitePersistenceAdapter, sessionId: string, segmentId: string, opts?: { logger?: HistorySinkLogger }) {
+    super({ appendHistory: async (_id,items) => store.writeRuntimeModelHistory(sessionId,segmentId,items,false),
+      replaceHistory: async (_id,items) => store.writeRuntimeModelHistory(sessionId,segmentId,items,true) },sessionId,opts);
   }
 }

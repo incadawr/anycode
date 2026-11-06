@@ -1,5 +1,6 @@
+import { buildCodexRuntime, prepareSwitchRuntime } from "../../engine-switch-runtime.js";
 import { bindCodexUsage } from "../../native-usage.js";
-import { createHarness, MemFs } from "../../test-harness.js";
+import { createHarness, finishStep, MemFs } from "../../test-harness.js";
 import { summarizeProviderUsage, Session, Outbound } from "../../session.js";
 import { readFileSync } from "node:fs";
 import * as fsp from "node:fs/promises";
@@ -592,6 +593,48 @@ describe("CodexEngine — subscription quota (cut §6)", () => {
 });
 
 describe("CodexEngine — Stop (blocker)", () => {
+  it("returns a rejected start to pending and serves the next turn on the same app-server", async () => {
+    const server = new FakeAppServer();
+    const request = server.request.bind(server);
+    let reject = true;
+    server.request = (method,params,options) => {
+      if (method === "turn/start" && reject) { reject = false; return Promise.reject(Object.assign(new Error("start refused"),{code:-32602})); }
+      return request(method,params,options);
+    };
+    const engine = new CodexEngine(server,THREAD);
+    const notSent = vi.fn(), accepted = vi.fn();
+    for await (const _event of engine.runTurn("refused",{signal:new AbortController().signal,onInputNotSent:notSent,onInputAccepted:accepted})) { /* drain */ }
+    expect(notSent).toHaveBeenCalledOnce(); expect(accepted).not.toHaveBeenCalled();
+    expect(server.closeCount).toBe(0);
+    const next = drive(engine,"next input",new AbortController().signal);
+    await tick(); server.completeTurn("completed"); await next.done;
+    expect(next.events.at(-1)).toMatchObject({type:"loop_end",reason:"completed"});
+    await engine.dispose("session-close");
+  });
+  it("settles Stop plus a rejected start RPC as cancelled without an engine error", async () => {
+    const server = new FakeAppServer();
+    const original = server.request.bind(server);
+    let rejectStart!: (error: Error) => void;
+    server.request = (method,params,options) => method === "turn/start" ? new Promise((_resolve,reject) => { rejectStart = reject; }) : original(method,params,options);
+    const engine = new CodexEngine(server,THREAD);
+    const controller = new AbortController();
+    const turn = drive(engine,"cancelled draft",controller.signal);
+    await tick(); controller.abort(); rejectStart(new Error("app-server closed"));
+    await turn.done;
+    expect(turn.events.at(-1)).toMatchObject({type:"loop_end",reason:"cancelled"});
+    expect(turn.events.some(event => event.type === "error")).toBe(false);
+  });
+
+  it("proves absence only from a complete uncapped native read", async () => {
+    const server = new FakeAppServer();
+    const engine = new CodexEngine(server,THREAD);
+    server.threadReadResult = {thread:{id:THREAD,turns:[{id:"old",items:[{id:"user",type:"userMessage",content:[{type:"text",text:"accepted"}]}]}]}};
+    expect(await engine.verifyInputAbsent("accepted")).toBe(false);
+    expect(await engine.verifyInputAbsent("rejected")).toBe(true);
+    server.threadReadResult = {thread:{id:THREAD,turns:[{id:"partial"}]}};
+    expect(await engine.verifyInputAbsent("rejected")).toBe(false);
+    await engine.dispose("session-close");
+  });
   it("interrupts EXACTLY ONCE when the abort lands on a parked iterator, with no notification before it", async () => {
     const server = new FakeAppServer();
     const engine = new CodexEngine(server, THREAD);
@@ -1613,6 +1656,21 @@ describe("— posture enforcement on every turn (cut §2(k).1)", () => {
     );
   });
 
+  it("restores a pending durable selection across restart without inventing its turn acknowledgement", async () => {
+    const server = new FakeAppServer();
+    const {engine} = await createNativeCodexSession(server,"/work",undefined,undefined,{model:"gpt-5.4-mini",presetId:"approve-for-me",effort:"medium",origin:"persisted"});
+    engine.restoreAppliedSettings({model:"gpt-native",mode:"ask"});
+    expect(engine.snapshot()).toEqual({model:"gpt-native",activePresetId:"ask"});
+    expect(engine.pendingSnapshot()).toMatchObject({model:"gpt-5.4-mini",activePresetId:"approve-for-me",effort:"medium"});
+    const applied = vi.fn(); engine.onSettingsApplied(applied);
+    expect(applied).not.toHaveBeenCalled();
+    await runTurn(server,engine);
+    expect(server.turnStartParams()[0]).toMatchObject({model:"gpt-5.4-mini",effort:"medium"});
+    expect(applied).toHaveBeenCalledTimes(1);
+    expect(engine.snapshot()).toMatchObject({model:"gpt-5.4-mini",activePresetId:"approve-for-me",effort:"medium"});
+    expect(engine.pendingSnapshot()).toBeNull();
+  });
+
   it("acks a change only once a turn/start has actually carried it", async () => {
     const server = new FakeAppServer();
     const { engine } = await createNativeCodexSession(server, "/work");
@@ -2146,8 +2204,8 @@ describe("CodexEngine — readTranscript() live flush-time re-read", () => {
     expect(created.engine.historyItems()).toEqual([]);
     const items = live.filter((item) => item.kind !== "compact_summary");
     expect(items).toEqual([
-      { id: "turn-a:u1", createdAt: 200000, message: { role: "user", content: "post-boot question" } },
-      { id: "turn-a:a1", createdAt: 200001, message: { role: "assistant", content: [{ type: "text", text: "post-boot answer" }] } },
+      { id: "turn-a:u1", turnId: "turn-a", createdAt: 200000, message: { role: "user", content: "post-boot question" } },
+      { id: "turn-a:a1", turnId: "turn-a", createdAt: 200001, message: { role: "assistant", content: [{ type: "text", text: "post-boot answer" }] } },
     ]);
   });
 
@@ -3290,9 +3348,49 @@ describe("startCodexEngine/resumeCodexEngine — bootNotices forwarding", () => 
     } finally { await connected.engine.dispose("session-close"); }
   });
 
-  it("startCodexEngine forwards bootNotices — the warning appears once on the first turn", async () => {
-    const connected = await startCodexEngine(wrapperOptions([BUDGET_NOTICE]));
+  it("prepares an independently owned native runtime and rejects a different applied model", async () => {
+    const options = wrapperOptions();
+    const runtime = await prepareSwitchRuntime({ engine: "codex", model: "gpt-test", options });
     try {
+      expect(runtime.engine.id).toBe("codex");
+      expect("engineSettings" in runtime && runtime.engineSettings).toBe(runtime.engine);
+      await expect(prepareSwitchRuntime({ engine: "codex", model: "unavailable", options }))
+        .rejects.toThrow("Requested model unavailable is unavailable");
+      expect(runtime.engine.historyItems()).toEqual([]);
+    } finally {
+      await runtime.engine.dispose("session-close");
+    }
+  });
+
+  it("switches a real Session to a prepared Codex runtime after a failed candidate", async () => {
+    const options = wrapperOptions();
+    let model = "unavailable";
+    const h = createHarness({
+      steps: [finishStep()],
+      switchEngineFactory: async () => prepareSwitchRuntime({ engine: "codex", model, options }),
+    });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.some(m => m.type === "host_ready"));
+      h.send({ type: "engine_switch_request", requestId: "failed", engine: "codex", model: "test-model" });
+      await h.waitUntil(() => h.received.some(m => m.type === "engine_switch_failed" && m.requestId === "failed"), 5000);
+      expect(h.engine.id).toBe("core");
+      h.send({ type: "user_message", requestId: "still-usable", text: "continue" });
+      await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && m.event.type === "loop_end"), 5000);
+      model = "gpt-test";
+      h.send({ type: "engine_switch_request", requestId: "success", engine: "codex", model: "test-model" });
+      await h.waitUntil(() => h.received.some(m => m.type === "engine_switched" && m.requestId === "success"), 5000);
+      expect(h.received).toContainEqual(expect.objectContaining({ type: "engine_switched", engine: "codex", previousEngine: "core" }));
+    } finally {
+      await h.session.shutdown();
+      h.close();
+    }
+  });
+
+  it("startCodexEngine forwards bootNotices — the warning appears once on the first turn", async () => {
+    const connected = await buildCodexRuntime(wrapperOptions([BUDGET_NOTICE]));
+    try {
+      expect(connected.engineSettings).toBe(connected.engine);
       const events = await firstTurnEvents(connected.engine);
       const notices = events.filter((event): event is Extract<AgentEvent, { type: "engine_notice" }> => event.type === "engine_notice" && event.message.includes("maxTurns (12)"));
       expect(notices).toHaveLength(1);

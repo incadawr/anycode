@@ -10,7 +10,7 @@ import { createOpenCodeGoQuotaService } from "./opencode-go-quota.js";
 import { createGlmQuotaService } from "./glm-quota.js";
 import { protectMainNavigation } from "./main-navigation.js";
 import { resolveCoreConnectionForModel } from "../shared/core-model-connection.js";
-import { initializeIsolatedSmoke, isolatedSmokeStorage } from "./isolated-smoke.js";
+import { initializeIsolatedSmoke, isolatedNativeBinaryFs, isolatedSmokeStorage } from "./isolated-smoke.js";
 import { closeSessionForAgent } from "./communication-close-session.js";
 import { TAB_CLOSED_ENVELOPE_TYPE } from "../shared/envelopes.js";
 import { applyInputFromBlock, createCommunicationController, type CommunicationController } from "./communication-controller.js";
@@ -267,6 +267,7 @@ import { TabHostManager, createPinReservations, workspaceMissing } from "./tabs.
 import { createChildConnectionPreparer } from "./child-connection-preparation.js";
 import { TokenBroker, resolveProviderSelection, type CatalogSelectionInfo } from "./token-broker.js";
 import { handleCreate, registerTabIpc, type ResolveCodexProfileResult, type TabIpcDeps } from "./tab-ipc.js";
+import { runtimeResumeIdentity } from "./runtime-resume.js";
 import { ENV_CODEX_BIN, ENV_ENGINE, ENV_HOST_GENERATION, type EngineId } from "../shared/engines.js";
 // SLICE-CC A1 (cut §1.2): new import line — ENV_CLAUDE_BIN mirrors ENV_CODEX_BIN above.
 import { ENV_CLAUDE_BIN } from "../shared/engines.js";
@@ -491,6 +492,7 @@ function resolveCodexProfilesHome(env: NodeJS.ProcessEnv, isPackaged: boolean): 
  * leaves every consumer on its real `homedir()` default.
  */
 const isolatedSmoke = initializeIsolatedSmoke(app, process.env);
+const nativeFixtureFs = isolatedSmoke && process.env.ANYCODE_ISOLATED_NATIVE_FIXTURES === "1" ? isolatedNativeBinaryFs(process.env.ANYCODE_ISOLATED_ROOT!) : undefined;
 if (isolatedSmoke && process.argv.includes("--self-check")) throw new Error("Incompatible automation modes");
 const selfCheckProfile = createSelfCheckProfile(process.argv);
 if (selfCheckProfile !== undefined) {
@@ -2078,8 +2080,8 @@ async function startInitialTab(opts: {
       );
       return;
     }
-    if (resumed.codexProfileId !== undefined) {
-      const resolvedProfile = await resolveCodexProfileForTab(resumed.codexProfileId);
+    if (resumed.engineId === "codex") {
+      const resolvedProfile = await resolveCodexProfileForTab(resumed.codexProfileId ?? SYSTEM_PROFILE_ID);
       if (!resolvedProfile.ok) {
         console.warn(
           `[main] session ${resumed.id} is pinned to a missing Codex profile (${resumed.codexProfileId}); not auto-resuming`,
@@ -2120,6 +2122,7 @@ async function startInitialTab(opts: {
       workspace,
       sessionId,
       resume,
+      ...(resumed !== null ? runtimeResumeIdentity(resumed) : {}),
       ...(connectionId !== undefined ? { connectionId } : {}),
       ...(codexProfileParam !== undefined ? { codexProfile: codexProfileParam } : {}),
     });
@@ -2668,6 +2671,18 @@ void app.whenReady().then(async () => {
   const createSessionForAgent = (request: CreateSessionRequest) =>
     createSessionForAgentImpl(request, createSessionDeps);
 
+  const validateChildModel = (model: string, connectionId: string | undefined): string | void => {
+      const current = currentSettings();
+      const connection = connectionId === undefined ? activeConnection(current) : connectionById(current, connectionId);
+      const custom = current.provider.custom?.find(entry => entry.id === connection?.providerId);
+      const catalog = getBuiltinCatalog().providers.find(entry => entry.id === connection?.providerId);
+      const models = connectionChildModels(connection, custom?.models ?? [], catalog?.models.map(item => item.id) ?? [], connection?.id === current.provider.activeConnectionId ? bootEnv.ANYCODE_MODEL : undefined, !!bootEnv.ANYCODE_BASE_URL?.trim() || !!bootEnv.ANYCODE_PROVIDER_TRANSPORT?.trim());
+      try { assertChildModel(model, models); }
+      catch {
+        const result = resolveCoreConnectionForModel({ provider: { ...current.provider, connections: connection ? [{ ...connection, models }] : [] } }, model);
+        return result.ok ? `Model ${JSON.stringify(model)} is unavailable on this connection.` : result.detail;
+      }
+    };
   manager = new TabHostManager({
     diagnosticsRing: mainDiagnosticsRing,
     agentTitleOf: (sessionId) => agentSessionTitles.get(sessionId),
@@ -2753,18 +2768,7 @@ void app.whenReady().then(async () => {
     // to the pure policy in shared/settings.ts. This dep was previously
     // ABSENT here, so every explicit cross-connection child spawn was
     // rejected with `not_ready` in the built app regardless of policy.
-    validateChildModel: (model, connectionId) => {
-      const current = currentSettings();
-      const connection = connectionId === undefined ? activeConnection(current) : connectionById(current, connectionId);
-      const custom = current.provider.custom?.find(entry => entry.id === connection?.providerId);
-      const catalog = getBuiltinCatalog().providers.find(entry => entry.id === connection?.providerId);
-      const models = connectionChildModels(connection, custom?.models ?? [], catalog?.models.map(item => item.id) ?? [], connection?.id === current.provider.activeConnectionId ? bootEnv.ANYCODE_MODEL : undefined, !!bootEnv.ANYCODE_BASE_URL?.trim() || !!bootEnv.ANYCODE_PROVIDER_TRANSPORT?.trim());
-      try { assertChildModel(model, models); }
-      catch {
-        const result = resolveCoreConnectionForModel({ provider: { ...current.provider, connections: connection ? [{ ...connection, models }] : [] } }, model);
-        return result.ok ? `Model ${JSON.stringify(model)} is unavailable on this connection.` : result.detail;
-      }
-    },
+    validateChildModel,
     resolveChildRoute: (value) => resolveCoreConnectionForModel(connectionRoutingSettings(currentSettings(), currentSettings().provider.activeConnectionId, bootEnv.ANYCODE_MODEL, !!bootEnv.ANYCODE_BASE_URL?.trim() || !!bootEnv.ANYCODE_PROVIDER_TRANSPORT?.trim()), value),
     resolveProviderConnection: (provider) =>
       settings === null ? undefined : resolveProviderConnection(settings, provider)?.id,
@@ -2812,6 +2816,59 @@ void app.whenReady().then(async () => {
     // tab goes through — instead of silently falling back to the ambient
     // `~/.codex` plan.
     resolveDefaultCodexProfile: () => resolveCodexProfileForTab(undefined),
+    engineSwitchEnabled: () => bootEnv.ANYCODE_ENGINE_SWITCH_ENABLED === "1",
+    refreshRuntimeIdentity: async (sessionId: string) => {
+      const row = await persistence?.getRootSession(sessionId);
+      const switched = (persistence?.loadRuntimeSession(sessionId)?.revision ?? 0) > 0;
+      if (!switched && bootEnv.ANYCODE_ENGINE_SWITCH_ENABLED !== "1") return undefined;
+      if (!row) throw new Error("Session is missing");
+      const identity = runtimeResumeIdentity(row);
+      const {engine} = identity;
+      const pin = await resolveResumePin(row);
+      if (!pin.ok) throw new Error("Session connection is unavailable");
+      try {
+        let codexProfile: {id?:string;home?:string;authLink?:string} | null = null;
+        if (engine === "codex") {
+          const resolved = await resolveCodexProfileForTab(row.codexProfileId ?? SYSTEM_PROFILE_ID);
+          if (!resolved.ok) throw new Error("Session profile is unavailable");
+          codexProfile = resolved.codexProfile ?? null;
+        }
+        return {identity:{...identity,connectionId:pin.connectionId,codexProfile},release:pin.release};
+      } catch (error) { pin.release?.(); throw error; }
+    },
+    prepareEngineSwitch: async (target, tab) => {
+      let release: (() => void) | undefined;
+      try {
+        let codexProfile: { id?: string; home?: string; authLink?: string } | undefined;
+        if (target.engine === "core") {
+          if (!connectionById(currentSettings(), target.connectionId)) throw new Error("Connection unavailable");
+          pinReservations.reserve(target.connectionId);
+          release = () => pinReservations.release(target.connectionId);
+          await ensurePinnedEnv(target.connectionId);
+          if (!connectionById(currentSettings(), target.connectionId)) throw new Error("Connection unavailable");
+          const reason = validateChildModel(target.model, target.connectionId);
+          if (reason) throw new Error(reason);
+        } else if (target.engine === "codex") {
+          const profileId = target.codexProfileId ?? settings?.codex?.activeProfileId ?? SYSTEM_PROFILE_ID;
+          const resolved = await resolveCodexProfileForTab(profileId);
+          if (!resolved.ok || !(codexOnboarding?.readyFor(profileId) ?? false) || !(await codexOnboarding?.verifySpawnFreshness(profileId))) throw new Error("Codex unavailable");
+          codexProfile = resolved.codexProfile;
+        } else if (!(claudeOnboarding?.readyFor() ?? false)) throw new Error("Claude unavailable");
+        const env = hostEnvForConnection(target.engine === "core" ? target.connectionId : tab.connectionId) ?? (target.engine !== "core" ? currentHostEnv : undefined);
+        if (!env) throw new Error("Connection environment unavailable");
+        return { launch: { target: target.engine === "codex" ? { ...target, codexProfileId: codexProfile?.id ?? SYSTEM_PROFILE_ID } : target, env: { ...env, ANYCODE_ENGINE: target.engine, ANYCODE_MODEL: target.model }, ...(codexProfile ? { codexProfile } : {}) }, release };
+      } catch (error) { release?.(); throw error; }
+    },
+    commitEngineSwitchIdentity: (sessionId, expectedEngine, target, identity, workspace) => {
+      if (!persistence) throw new Error("Persistence unavailable");
+      const runtime = identity.runtime;
+      if (!runtime || runtime.segment.engine !== target.engine || runtime.segment.selected.model !== identity.model || runtime.segment.nativeRef !== identity.externalSessionRef) throw new Error("Runtime transaction identity mismatch");
+      const profileId = target.engine === "codex" ? target.codexProfileId ?? SYSTEM_PROFILE_ID : undefined;
+      persistence.commitRuntimeSwitch(sessionId,expectedEngine,{...runtime,segment:{...runtime.segment,
+        connectionId:target.engine === "core" ? target.connectionId : undefined,
+        profileId,accountScope:profileId ?? "",
+      }});
+    },
     // Both validated binary paths ride EVERY host's env, regardless of which
     // engine this particular session runs on: a core/codex session's Agent
     // tool can spawn a Claude subagent (and a claude/core session a Codex
@@ -3448,7 +3505,7 @@ void app.whenReady().then(async () => {
   const codexRefusalRefresh = selfCheckProfile === undefined && !isolatedSmoke ? createCodexManifestRefusalRefresh({ cacheFile: codexManifestCacheFile }) : null;
   codexOnboarding = registerCodexIpc({
     bootEnv,
-    ...(selfCheckProfile !== undefined || isolatedSmoke ? { fs: selfCheckBinaryFs } : {}),
+    ...(selfCheckProfile !== undefined || isolatedSmoke ? { fs: nativeFixtureFs ?? selfCheckBinaryFs } : {}),
     onDeviceCode: (progress) => sendToMainWindow(win, CODEX_LOGIN_PROGRESS_CHANNEL, progress),
     // the doctor and `codex login` are children main spawns itself, so
     // they get the engine proxy through the same carrier the tab children use.
@@ -3541,7 +3598,7 @@ void app.whenReady().then(async () => {
   // scope for this track (profile CRUD, quotas, install/manifest — CC-E).
   claudeOnboarding = registerClaudeIpc({
     bootEnv,
-    ...(selfCheckProfile !== undefined || isolatedSmoke ? { fs: selfCheckBinaryFs } : {}),
+    ...(selfCheckProfile !== undefined || isolatedSmoke ? { fs: nativeFixtureFs ?? selfCheckBinaryFs } : {}),
     // mirror of the codex dep above. The claude doctor makes no network
     // call of its own, so this buys parity rather than function — but the doctor
     // env builder declares itself a mirror of the session child's builder, and

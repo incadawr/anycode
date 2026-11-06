@@ -1,3 +1,6 @@
+import { EngineSwitchCoordinator } from "./engine-switch-coordinator.js";
+import { ENGINE_SWITCH_CONTROL, type EngineSwitchIdentity, type EngineSwitchLaunch } from "../shared/engine-switch-control.js";
+import type { EngineSwitchTarget } from "../shared/protocol.js";
 import { hostFailure } from "./host-failure.js";
 import { noteWireMessage, type DiagnosticsRing } from "../shared/diagnostics-ring.js";
 import type { HostFailure } from "../shared/host-failure.js";
@@ -101,6 +104,7 @@ import {
  * `data.type` (load-bearing); it ignores the init `type` and reads only
  * `event.ports[0]`, so `init` is cosmetic to it but kept for parity.
  */
+const tabPreparedProfile = new WeakMap<TabHost, { id?: string; home?: string; authLink?: string }>();
 const HOST_INIT_MESSAGE_TYPE = "anycode:init";
 const HOST_SHUTDOWN_MESSAGE_TYPE = "shutdown";
 
@@ -468,6 +472,10 @@ export interface TabHost {
   hostGeneration: number;
   /** A future external-engine child group, accepted only for this exact host generation. */
   engineProcess: EngineProcessRegistration | null;
+  activeRuntimeId?: string;
+  candidateEngineProcesses?: Map<string, EngineProcessRegistration[]>;
+  retiringEngineProcesses?: EngineProcessRegistration[];
+  switchCoordinator?: EngineSwitchCoordinator;
   /** Wall-clock spawn time of the current host, for the per-tab breaker. */
   spawnedAt: number;
   /** Consecutive rapid (sub-healthy-uptime) crashes; reset by any healthy run. */
@@ -695,6 +703,7 @@ export function guardedHostForwarder(stream: NodeJS.WriteStream, usable: boolean
 }
 
 export interface TabHostManagerDeps {
+  refreshRuntimeIdentity?: (sessionId: string) => Promise<{identity: Pick<TabHost,"engine" | "engineModel" | "enginePreset" | "modelOverride" | "connectionId" | "codexProfile">;release?: () => void} | undefined>;
   hostOutputUsable?: (stream: NodeJS.WriteStream) => boolean;
   hostLogStream?: (stream: "stdout" | "stderr") => ((chunk: Buffer) => void) & { end(): void };
   /**
@@ -799,6 +808,9 @@ export interface TabHostManagerDeps {
     { ok: true; codexProfile?: { id?: string; home?: string; authLink?: string } } | { ok: false }
   >;
   /** Fresh, engine-specific host-env overlay. It must contain no credentials. */
+  engineSwitchEnabled?: () => boolean;
+  prepareEngineSwitch?: (target: EngineSwitchTarget, tab: TabHost) => Promise<{ launch: EngineSwitchLaunch; release?: () => void }>;
+  commitEngineSwitchIdentity?: (sessionId: string, expectedEngine: EngineId, target: EngineSwitchTarget, identity: EngineSwitchIdentity, workspace: string) => void;
   engineEnv?: (engine: EngineId, generation: number) => NodeJS.ProcessEnv;
   /**
    * Platform-specific group reaper. Not wired until W0 process-tree evidence
@@ -1162,7 +1174,7 @@ export class TabHostManager {
    * is the only legitimate cause of staleness there), but a root CAN carry an
    * `engineProcess`, so the T3 half applies to roots specifically.
    */
-  private readonly forceKilledExits = new Map<UtilityProcess, EngineProcessRegistration | null>();
+  private readonly forceKilledExits = new Map<UtilityProcess, EngineProcessRegistration[] | null>();
   private readonly limits: BreakerLimits;
   private readonly maxTabsReader?: () => number | undefined;
   private readonly childPerParentReader?: (workspace: string) => number | undefined;
@@ -1682,6 +1694,7 @@ export class TabHostManager {
     tab: TabHost,
     opts: {
       firstSpawn: boolean;
+      identityRefreshed?: boolean;
       priorEffort?: ReasoningEffort;
       onDeferredInitialSpawn?: () => void;
       onDeferredFinished?: () => void;
@@ -1710,6 +1723,14 @@ export class TabHostManager {
     // this very tab is creating has nothing to show a missing-folder error
     // against, so only it may be rolled back to keep the caller's draft.
     const newSession = !resume;
+    const refresh = resume && !opts.identityRefreshed && tab.childOf === undefined
+      ? this.deps.refreshRuntimeIdentity?.(tab.sessionId).then(result => {
+          if (!result) return;
+          try {
+            if (this.spawnAttempts.get(tab) !== attempt || this.quitting || this.tabs.get(tab.tabId) !== tab || tab.state !== "running" || tab.proc !== null) throw new Error("Stale runtime identity refresh");
+            Object.assign(tab,result.identity);
+          } finally { result.release?.(); }
+        }) : undefined;
     const args = resume ? ["--resume", tab.sessionId] : ["--session", tab.sessionId];
     // the draft choice rides argv only on the spawn that CREATES the
     // session. Every later spawn is a `--resume`, where the persisted session row
@@ -1764,8 +1785,8 @@ export class TabHostManager {
     // under this pin (the custody defect). Surface it as a host-exit so the
     // renderer's replacement flow (F1) can recover; never respawn a refused fork.
     const baseEnv = this.env(tab.connectionId);
-    if (baseEnv === undefined) {
-      const pending = this.deps.waitForHostEnv?.(tab.connectionId);
+    if (refresh || baseEnv === undefined) {
+      const pending = refresh ?? this.deps.waitForHostEnv?.(tab.connectionId);
       if (pending) {
         void pending.then(() => {
           if (this.spawnAttempts.get(tab) !== attempt || this.quitting || this.tabs.get(tab.tabId) !== tab || tab.state !== "running" || tab.proc !== null) {
@@ -1775,7 +1796,7 @@ export class TabHostManager {
             opts.onDeferredFinished?.();
             return;
           }
-          const result = this.spawnTabHost(tab, opts);
+          const result = this.spawnTabHost(tab, {...opts,identityRefreshed:opts.identityRefreshed || refresh !== undefined});
           if (result === false) {
             // A fork that cannot run at all leaves no tab to retry against (the
             // binding would answer `already_open`), resume included.
@@ -1866,7 +1887,12 @@ export class TabHostManager {
       return false;
     }
     tab.hostGeneration = nextGeneration;
+    tab.switchCoordinator?.close();
+    tab.switchCoordinator = undefined;
     tab.engineProcess = null;
+    tab.activeRuntimeId = "boot";
+    tab.candidateEngineProcesses = new Map();
+    tab.retiringEngineProcesses = [];
     const cleanup = tab.pendingWorktreeCleanup;
     delete tab.workspaceTrustPending;
     let child: UtilityProcess;
@@ -1982,6 +2008,58 @@ export class TabHostManager {
     }
     if (data.type === WORKTREE_TRANSITION_MESSAGE_TYPE) {
       await this.relocateTab(tab, child, message as WorktreeTransitionMessage);
+      return;
+    }
+    if (data.type === ENGINE_SWITCH_CONTROL) {
+      if (tab.proc !== child || !this.deps.engineSwitchEnabled?.()) return;
+      const generation = tab.hostGeneration;
+      tab.switchCoordinator ??= new EngineSwitchCoordinator({
+        generation,
+        current: () => tab.proc === child && tab.hostGeneration === generation && tab.state === "running",
+        admissible: () => !tab.childOf && !this.rebindings.has(tab.tabId) && !this.drainingParents.has(tab.tabId) && this.runningChildCount(tab.tabId) === 0,
+        prepare: async target => {
+          if (!this.deps.prepareEngineSwitch) throw new Error("Engine switching is unavailable");
+          const prepared = await this.deps.prepareEngineSwitch(target, tab);
+          prepared.launch.env = { ...prepared.launch.env, ...this.deps.engineEnv?.(target.engine, generation), ...sessionToolEnv(tab.sessionId, tab.workspace) };
+          return prepared;
+        },
+        commit: (target, identity, requestId) => {
+          if (!this.deps.commitEngineSwitchIdentity) throw new Error("Identity persistence is unavailable");
+          if (target.engine !== "core" && !(tab.candidateEngineProcesses?.get(requestId)?.length)) throw new Error("Candidate process is unregistered");
+          this.deps.commitEngineSwitchIdentity(tab.sessionId, tab.engine, target, identity, tab.workspace);
+          if (tab.engineProcess) (tab.retiringEngineProcesses ??= []).push(tab.engineProcess);
+          const candidates = tab.candidateEngineProcesses?.get(requestId) ?? [];
+          (tab.retiringEngineProcesses ??= []).push(...candidates.slice(0, -1));
+          tab.engineProcess = candidates.at(-1) ?? null;
+          tab.candidateEngineProcesses?.delete(requestId);
+          tab.activeRuntimeId = requestId;
+          tab.engine = target.engine;
+          tab.engineModel = identity.model;
+          tab.enginePreset = identity.mode;
+          tab.modelOverride = target.engine === "core" ? identity.model : undefined;
+          // Native engines keep the logical session pin for future core children.
+          // Mirror the durable identity transaction's COALESCE(connection_id).
+          if (target.engine === "core") tab.connectionId = target.connectionId;
+          tab.codexProfile = target.engine === "codex" ? tabPreparedProfile.get(tab) ?? null : null;
+          tab.initialResume = true;
+          tab.lastCommunicationStatus = {};
+        },
+        abort: requestId => {
+          for (const registration of tab.candidateEngineProcesses?.get(requestId) ?? []) this.deps.reapEngineProcess?.(registration);
+          tab.candidateEngineProcesses?.delete(requestId);
+          tabPreparedProfile.delete(tab);
+        },
+        retire: () => {
+          for (const registration of tab.retiringEngineProcesses ?? []) this.deps.reapEngineProcess?.(registration);
+          tab.retiringEngineProcesses = [];
+          tabPreparedProfile.delete(tab);
+        },
+        send: response => {
+          if (response.launch?.codexProfile) tabPreparedProfile.set(tab, response.launch.codexProfile);
+          if (tab.proc === child) child.postMessage(response);
+        },
+      });
+      await tab.switchCoordinator.handle(message);
       return;
     }
     if (data.type === ENGINE_PROCESS_REGISTRATION_TYPE) {
@@ -2180,7 +2258,7 @@ export class TabHostManager {
     // gate FINAL: while `rebindings` or `drainingParents` holds this tab, no
     // new reservation can reach `childrenByParentTab`. Same refusal a closing
     // parent gets — the tab is being torn down (and, for a rebind, re-created).
-    if (this.rebindings.has(parentTab.tabId) || this.drainingParents.has(parentTab.tabId)) {
+    if (parentTab.switchCoordinator?.pending || this.rebindings.has(parentTab.tabId) || this.drainingParents.has(parentTab.tabId)) {
       reject("closing", CHILD_CLOSING_MESSAGE);
       return;
     }
@@ -3558,7 +3636,7 @@ export class TabHostManager {
    */
   /** Acquire the per-tab rebind operation before asynchronous preparation. */
   acquireRebind(tabId: string): boolean {
-    if (this.rebindings.has(tabId)) return false;
+    if (this.tabs.get(tabId)?.switchCoordinator?.pending || this.rebindings.has(tabId)) return false;
     this.rebindings.add(tabId);
     return true;
   }
@@ -3643,6 +3721,7 @@ export class TabHostManager {
         cleanupShapeValid;
     const valid =
       current &&
+      !tab.switchCoordinator?.pending &&
       tab.state === "running" &&
       message.sessionId === tab.sessionId &&
       message.fromWorkspace === tab.workspace &&
@@ -3809,17 +3888,32 @@ export class TabHostManager {
       Number.isInteger(data.pgid) &&
       data.hostPid > 0 &&
       data.enginePid > 0 &&
-      data.pgid > 0;
+      data.pgid > 0 && data.pgid === data.enginePid && data.enginePid !== data.hostPid && (data.exited === undefined || data.exited === true);
     if (!valid || tab.proc !== child || child.pid !== data.hostPid || tab.hostGeneration !== data.generation) {
       this.logger.warn(`[main] rejected stale or malformed engine-process registration for tab ${tab.tabId}`);
       return;
     }
-    tab.engineProcess = {
-      hostPid: data.hostPid!,
-      generation: data.generation!,
-      enginePid: data.enginePid!,
-      pgid: data.pgid!,
-    };
+    if (data.runtimeId !== undefined && (typeof data.runtimeId !== "string" || !data.runtimeId || data.runtimeId.length > 128)) return;
+    const runtimeId = data.runtimeId ?? "boot";
+    if (data.exited) {
+      const matches = (item: EngineProcessRegistration) => item.runtimeId === runtimeId && item.enginePid === data.enginePid && item.pgid === data.pgid;
+      if (tab.engineProcess && matches(tab.engineProcess)) tab.engineProcess = null;
+      tab.retiringEngineProcesses = tab.retiringEngineProcesses?.filter(item => !matches(item));
+      const candidates = tab.candidateEngineProcesses?.get(runtimeId);
+      if (candidates) tab.candidateEngineProcesses!.set(runtimeId, candidates.filter(item => !matches(item)));
+      return;
+    }
+    const registration = { hostPid: data.hostPid!, generation: data.generation!, enginePid: data.enginePid!, pgid: data.pgid!, runtimeId };
+    if (runtimeId === (tab.activeRuntimeId ?? "boot")) {
+      if (tab.engineProcess && tab.engineProcess.enginePid !== registration.enginePid) (tab.retiringEngineProcesses ??= []).push(tab.engineProcess);
+      tab.engineProcess = registration;
+    } else if (tab.switchCoordinator?.acceptsCandidate(runtimeId)) {
+      const registrations = (tab.candidateEngineProcesses ??= new Map<string, EngineProcessRegistration[]>()).get(runtimeId) ?? [];
+      if (!registrations.some(item => item.enginePid === registration.enginePid)) registrations.push(registration);
+      tab.candidateEngineProcesses.set(runtimeId, registrations);
+    } else {
+      this.logger.warn(`[main] rejected stale engine runtime registration for tab ${tab.tabId}`);
+    }
   }
 
   /**
@@ -3838,34 +3932,28 @@ export class TabHostManager {
   private reapEngineProcess(
     tab: TabHost,
     child: UtilityProcess,
-    forceKilledRegistration?: EngineProcessRegistration | null,
+    forceKilledRegistration?: EngineProcessRegistration[] | null,
   ): void {
     if (forceKilledRegistration !== undefined) {
-      if (forceKilledRegistration === null) {
-        return; // nothing was registered for this tab when it was force-killed
-      }
-      try {
-        this.deps.reapEngineProcess?.(forceKilledRegistration);
-      } catch (error) {
-        this.logger.warn(`[main] failed to reap external engine for tab ${tab.tabId}`, error);
+      for (const registration of forceKilledRegistration ?? []) {
+        try { this.deps.reapEngineProcess?.(registration); } catch (error) { this.logger.warn("[main] engine reap failed", error); }
       }
       return;
     }
-    const registration = tab.engineProcess;
-    if (
-      registration === null ||
-      tab.proc !== child ||
-      child.pid !== registration.hostPid ||
-      tab.hostGeneration !== registration.generation
-    ) {
-      return;
-    }
+    if (tab.proc !== child) return;
+    const registrations = this.engineRegistrations(tab).filter(item => child.pid === item.hostPid && tab.hostGeneration === item.generation);
+    tab.switchCoordinator?.close(false);
     tab.engineProcess = null;
-    try {
-      this.deps.reapEngineProcess?.(registration);
-    } catch (error) {
-      this.logger.warn(`[main] failed to reap external engine for tab ${tab.tabId}`, error);
+    tab.candidateEngineProcesses?.clear();
+    tab.retiringEngineProcesses = [];
+    for (const registration of registrations) {
+      try { this.deps.reapEngineProcess?.(registration); } catch (error) { this.logger.warn("[main] engine reap failed", error); }
     }
+  }
+
+  private engineRegistrations(tab: TabHost): EngineProcessRegistration[] {
+    return [...(tab.engineProcess ? [tab.engineProcess] : []), ...(tab.retiringEngineProcesses ?? []), ...[...(tab.candidateEngineProcesses?.values() ?? [])].flat()]
+      .filter((item, index, all) => all.findIndex(other => other.enginePid === item.enginePid) === index);
   }
 
   private rollbackDeferredCreation(tab: TabHost): void {
@@ -4057,7 +4145,8 @@ export class TabHostManager {
         // carried AT THIS EXACT MOMENT (before any later respawn could reset
         // `tab.engineProcess` out from under it), so `reapEngineProcess` can
         // still reap it off that late exit instead of leaking it forever.
-        this.forceKilledExits.set(child, tab.engineProcess);
+        this.forceKilledExits.set(child, this.engineRegistrations(tab));
+        tab.switchCoordinator?.close(false);
         child.kill();
         // Luna review R2 MAJOR (N4): this null belongs ONLY to the call that
         // still recognizes `tab.proc` as ITS `child` — the exact same

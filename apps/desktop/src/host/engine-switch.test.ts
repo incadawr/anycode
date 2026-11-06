@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { HistoryItem } from "@anycode/core";
-import { planEngineSwitchImport, renderImportPrompt, ENGINE_SWITCH_TURN_ID } from "./engine-switch.js";
+import { capImportPrompt, planEngineSwitchImport, renderImportPrompt, ENGINE_SWITCH_TURN_ID } from "./engine-switch.js";
 
 function item(id: string, partial: Partial<HistoryItem> & Pick<HistoryItem, "message">): HistoryItem {
   return { id, createdAt: 0, ...partial };
@@ -63,6 +63,18 @@ describe("planEngineSwitchImport", () => {
 describe("renderImportPrompt", () => {
   const workspace = "/tmp/proj";
 
+  it("bounds UTF-8 imports and reports omitted text while retaining the newest content", () => {
+    const plan = planEngineSwitchImport([
+      item("old", { message: { role: "user", content: "старое".repeat(20000) } }),
+      item("new", { message: { role: "user", content: "latest message" } }),
+    ]);
+    const prompt = renderImportPrompt("core", "codex", plan, workspace);
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThanOrEqual(64 * 1024);
+    expect(prompt).toContain("earlier content was omitted");
+    expect(prompt).toContain("latest message");
+    expect(prompt).not.toContain("\uFFFD");
+  });
+
   it("renders a user item with the # user prefix, images skipped", () => {
     const plan = planEngineSwitchImport([
       item("u1", {
@@ -73,7 +85,7 @@ describe("renderImportPrompt", () => {
     expect(prompt).toBe(
       [
         `Session continued in this codex engine (previous engine: core; workspace: ${workspace}).`,
-        `Imported the full conversation (1 items).`,
+        `Conversation excerpts from 1 items; non-text content may be omitted.`,
         `# user hello`,
       ].join("\n"),
     );
@@ -135,7 +147,7 @@ describe("renderImportPrompt", () => {
       { items: [item("1", { message: { role: "user", content: "a" } })], truncated: false },
       workspace,
     );
-    expect(full).toContain(`Imported the full conversation (1 items).`);
+    expect(full).toContain(`Conversation excerpts from 1 items; non-text content may be omitted.`);
 
     const truncated = renderImportPrompt(
       "core",
@@ -149,7 +161,7 @@ describe("renderImportPrompt", () => {
       },
       workspace,
     );
-    expect(truncated).toContain(`Imported the last 2 conversation items (older history was dropped).`);
+    expect(truncated).toContain(`Conversation excerpts from the last 2 items; older items and non-text content may be omitted.`);
     expect(truncated).not.toContain(`Imported the full conversation`);
   });
 
@@ -169,7 +181,7 @@ describe("renderImportPrompt", () => {
     const plan = planEngineSwitchImport(history);
     const expected = [
       `Session continued in this codex engine (previous engine: core; workspace: /tmp/proj).`,
-      `Imported the full conversation (3 items).`,
+      `Conversation excerpts from 3 items; non-text content may be omitted.`,
       `# user fix the bug`,
       `# assistant looking`,
       `# tool Read file body`,
@@ -187,7 +199,24 @@ describe("renderImportPrompt", () => {
 });
 
 describe("ENGINE_SWITCH_TURN_ID", () => {
+  it("uses the target byte budget and keeps UTF-8 text valid while reporting omissions", () => {
+    const plan = planEngineSwitchImport([item("u",{message:{role:"user",content:"🌊".repeat(1000)}})]);
+    const prompt = renderImportPrompt("codex","core",plan,"/workspace",257);
+    expect(Buffer.byteLength(prompt,"utf8")).toBeLessThanOrEqual(257);
+    expect(prompt).toContain("earlier content was omitted");
+    expect(prompt).not.toContain("\uFFFD");
+    expect(() => renderImportPrompt("codex","core",plan,"/workspace",0)).toThrow("too little input space");
+  });
+
   it("is the sentinel turn id for the switch announcement event", () => {
     expect(ENGINE_SWITCH_TURN_ID).toBe("engine-switch");
   });
+});
+
+it("keeps every UTF-8 tail boundary valid", () => {
+  for (let limit = 128; limit < 144; limit++) {
+    const text = capImportPrompt("🌊".repeat(1000),limit);
+    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(limit);
+    expect(text).not.toContain("\uFFFD");
+  }
 });

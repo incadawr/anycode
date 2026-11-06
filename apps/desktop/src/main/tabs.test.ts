@@ -8685,3 +8685,154 @@ it("forwards redirected Windows output using the default handle check", () => {
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+describe("TabHostManager — engine switch process custody", () => {
+  it.each(["codex", "claude"] as const)("preserves the logical provider pin after switching to %s for a default core child", async engine => {
+    const { fork, hosts } = shutdownableForkRig();
+    const forkSpy = vi.fn(fork);
+    const activeConnectionId = "active-B";
+    const env = vi.fn((connectionId?: string) => ({
+      PATH: "/base",
+      ANYCODE_MODEL: connectionId === "pinned-A" ? "model-A" : "model-B",
+      ANYCODE_CONNECTION_ID: connectionId ?? activeConnectionId,
+    }));
+    const manager = childManager(forkSpy, windowRig().window, {
+      env, engineReady: () => true, engineSwitchEnabled: () => true,
+      prepareEngineSwitch: async target => ({ launch: { target, env: {} } }),
+      commitEngineSwitchIdentity: vi.fn(),
+    });
+    try {
+      const root = manager.createTab({ workspace: "/ws", sessionId: "pinned-session", resume: false, engine: "core", connectionId: "pinned-A" });
+      if (!root.ok) throw new Error("tab unavailable");
+      const host = hosts[0]!;
+      const target = { engine, model: "native-model", ...(engine === "codex" ? { codexProfileId: "account" } : {}) };
+      host.emit("message", { type: "anycode:engine-switch", generation: 1, requestId: "switch", phase: "prepare", target });
+      await vi.waitFor(() => expect(root.tab.switchCoordinator?.acceptsCandidate("switch")).toBe(true));
+      host.emit("message", { type: "anycode:engine-process", generation: 1, hostPid: host.pid, enginePid: 202, pgid: 202, runtimeId: "switch" });
+      host.emit("message", { type: "anycode:engine-switch", generation: 1, requestId: "switch", phase: "commit", identity: { model: "native-model", mode: "read-only", externalSessionRef: "native-ref" } });
+      await vi.waitFor(() => expect(root.tab.engine).toBe(engine));
+      host.emit("message", { type: "anycode:engine-switch", generation: 1, requestId: "switch", phase: "retire" });
+      await vi.waitFor(() => expect(root.tab.switchCoordinator?.pending).toBe(false));
+      host.emit("message", spawnRequest({ requestId: "default-core-child" }));
+      expect(childRunEvents(host).filter(event => event.kind === "rejected")).toEqual([]);
+      await vi.waitFor(() => expect(forkSpy).toHaveBeenCalledTimes(2));
+      expect(root.tab.connectionId).toBe("pinned-A");
+      expect(childRunEvents(host)).toContainEqual(expect.objectContaining({ requestId: "default-core-child", kind: "accepted" }));
+      expect(forkSpy.mock.calls[1]?.[2]?.env).toMatchObject({ ANYCODE_CONNECTION_ID: "pinned-A", ANYCODE_MODEL: "model-A" });
+      expect(env).toHaveBeenLastCalledWith("pinned-A");
+    } finally {
+      await manager.shutdownAllTabHosts();
+    }
+  });
+
+  function rig() {
+    const { fork, hosts } = liveForkRig();
+    const reaped: number[] = [];
+    const commit = vi.fn();
+    const manager = new TabHostManager({
+      fork, hostEntry: "/fake/host.js", createChannel: fakeChannel, getWindow: () => windowRig().window,
+      engineReady: () => true, engineEnv: (engine) => ({ ANYCODE_ENGINE: engine }),
+      engineSwitchEnabled: () => true,
+      prepareEngineSwitch: async target => ({ launch: { target, env: {} } }),
+      commitEngineSwitchIdentity: commit,
+      reapEngineProcess: registration => reaped.push(registration.enginePid), logger: silentLogger,
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId: "switch-session", resume: false, engine: "codex" });
+    if (!created.ok) throw new Error("tab unavailable");
+    const host = hosts[0]!;
+    const send = (phase: string, extra = {}) => host.emit("message", { type: "anycode:engine-switch", generation: 1, requestId: "switch", phase, ...extra });
+    const register = (enginePid: number, runtimeId?: string, extra = {}) => host.emit("message", { type: "anycode:engine-process", generation: 1, hostPid: host.pid, enginePid, pgid: enginePid, ...(runtimeId ? { runtimeId } : {}), ...extra });
+    return { manager, tab: created.tab, host, reaped, commit, send, register };
+  }
+
+  it("tracks source, candidate and retiring groups and rejects stale runtime registration", async () => {
+    const h = rig();
+    h.register(101);
+    h.register(999, "unprepared");
+    h.send("prepare", { target: { engine: "claude", model: "chosen" } });
+    await vi.waitFor(() => expect(h.tab.switchCoordinator?.acceptsCandidate("switch")).toBe(true));
+    h.register(202, "switch");
+    expect(h.tab.engineProcess?.enginePid).toBe(101);
+    expect(h.tab.candidateEngineProcesses?.get("switch")?.[0]?.enginePid).toBe(202);
+    h.send("commit", { identity: { model: "chosen", mode: "read-only", externalSessionRef: "native-ref" } });
+    await vi.waitFor(() => expect(h.tab.engine).toBe("claude"));
+    expect(h.commit).toHaveBeenCalledTimes(1);
+    expect(h.tab.engineProcess?.enginePid).toBe(202);
+    expect(h.tab.retiringEngineProcesses?.map(item => item.enginePid)).toEqual([101]);
+    h.register(998);
+    expect(h.tab.engineProcess?.enginePid).toBe(202);
+    h.host.emit("exit", 1);
+    expect(h.reaped.sort()).toEqual([101, 202]);
+  });
+
+  it("reaps the candidate and source if the host dies before commit", async () => {
+    const h = rig();
+    h.register(101);
+    h.send("prepare", { target: { engine: "claude", model: "chosen" } });
+    await vi.waitFor(() => expect(h.tab.switchCoordinator?.acceptsCandidate("switch")).toBe(true));
+    h.register(202, "switch");
+    h.host.emit("exit", 1);
+    expect(h.reaped.sort()).toEqual([101, 202]);
+    expect(h.commit).not.toHaveBeenCalled();
+    expect(h.tab.engine).toBe("codex");
+  });
+
+  it("reaps a candidate version preflight when its host dies during preparation", async () => {
+    const h = rig();
+    h.register(101);
+    h.send("prepare", { target: { engine: "claude", model: "chosen" } });
+    await vi.waitFor(() => expect(h.tab.switchCoordinator?.acceptsCandidate("switch")).toBe(true));
+    h.register(201, "switch");
+    h.host.emit("exit", 1);
+    expect(h.reaped.sort()).toEqual([101, 201]);
+    expect(h.commit).not.toHaveBeenCalled();
+  });
+
+  it("forgets exited preflight groups, ignores stale exit reports and refuses a dead candidate", async () => {
+    const h = rig();
+    h.register(100);
+    h.register(100, undefined, { exited: true });
+    expect(h.tab.engineProcess).toBeNull();
+    h.register(101);
+    h.register(101, undefined, { exited: true, generation: 2 });
+    expect(h.tab.engineProcess?.enginePid).toBe(101);
+    h.send("prepare", { target: { engine: "claude", model: "chosen" } });
+    await vi.waitFor(() => expect(h.tab.switchCoordinator?.acceptsCandidate("switch")).toBe(true));
+    h.register(201, "switch");
+    h.register(201, "switch", { exited: true });
+    h.send("commit", { identity: { model: "chosen", mode: "plan", externalSessionRef: "native-ref" } });
+    expect(h.commit).not.toHaveBeenCalled();
+    expect(h.tab.engine).toBe("codex");
+    h.register(202, "switch");
+    h.host.emit("exit", 1);
+    expect(h.reaped).toEqual([101]);
+  });
+});
+
+describe("authoritative runtime identity on respawn", () => {
+  it("refreshes the committed engine and profile before forking a resumed tab", async () => {
+    const rig = shutdownableForkRig();
+    let finish!: (value: Awaited<ReturnType<NonNullable<TabHostManagerDeps["refreshRuntimeIdentity"]>>>) => void;
+    const released = vi.fn();
+    const pending = new Promise<Awaited<ReturnType<NonNullable<TabHostManagerDeps["refreshRuntimeIdentity"]>>>>(resolve => { finish = resolve; });
+    const fork = vi.fn(rig.fork);
+    const manager = childManager(fork,windowRig().window,{refreshRuntimeIdentity:() => pending,engineEnv:engine => ({[ENV_ENGINE]:engine})});
+    const created = manager.createTab({workspace:"/ws",sessionId:"saved",resume:true});
+    if (!created.ok) throw new Error("create failed");
+    expect(fork).not.toHaveBeenCalled();
+    finish({identity:{engine:"codex",engineModel:"chosen",enginePreset:"read-only",modelOverride:undefined,connectionId:undefined,codexProfile:{id:"saved-account",home:"/private/account"}},release:released});
+    await waitForCi(() => expect(fork).toHaveBeenCalledTimes(1));
+    expect(created.tab).toMatchObject({engine:"codex",engineModel:"chosen",codexProfile:{id:"saved-account"}});
+    expect(fork.mock.calls[0]?.[1]).toContain("saved-account");
+    expect(released).toHaveBeenCalledOnce();
+    await manager.shutdownAllTabHosts();
+  });
+  it("refuses a missing persisted profile without forking into a default account", async () => {
+    const fork = vi.fn(shutdownableForkRig().fork);
+    const manager = childManager(fork,windowRig().window,{refreshRuntimeIdentity:async () => {throw new Error("Profile unavailable");}});
+    manager.createTab({workspace:"/ws",sessionId:"saved",resume:true});
+    await new Promise(resolve => setTimeout(resolve,10));
+    expect(fork).not.toHaveBeenCalled();
+    await manager.shutdownAllTabHosts();
+  });
+});

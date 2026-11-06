@@ -7,7 +7,7 @@
  * into them.
  */
 import type { KeyboardEvent } from "react";
-import { useTabStore, useTabStoreApi } from "../tab-context.js";
+import { useTabStore, useTabStoreApi, useTabSend } from "../tab-context.js";
 import { canDismissRejectedDelivery, systemRetrySafe, type QueuedPrompt } from "../store.js";
 import { X } from "./icons.js";
 
@@ -26,6 +26,11 @@ export function shouldShowPromptQueue(
 }
 
 export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, deliveryRequestId?: string) => boolean }) {
+  const send = useTabSend();
+  function remove(item: QueuedPrompt): void {
+    if (item.runtimeRecoveryTurnId) send({type:"runtime_input_discard",turnId:item.runtimeRecoveryTurnId});
+    tabStore.getState().deleteQueuedPrompt(item.id);
+  }
   const promptQueue = useTabStore((state) => state.promptQueue);
   const deliveries = useTabStore((state) => state.orchestrationDeliveries);
   const activeDeliveryId = useTabStore((state) => state.restoredComposerDraft?.deliveryRequestId);
@@ -121,7 +126,10 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, de
             <button
               type="button"
               className="prompt-queue-clear"
-              onClick={() => tabStore.getState().clearQueue()}
+              onClick={() => {
+                for (const item of tabStore.getState().promptQueue) if (item.runtimeRecoveryTurnId) send({type:"runtime_input_discard",turnId:item.runtimeRecoveryTurnId});
+                tabStore.getState().clearQueue();
+              }}
             >
               Clear
             </button>
@@ -174,7 +182,7 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, de
                     {badge !== null && <span className="prompt-queue-badge">{badge}</span>}
                     {(item.orchestrate === "enable" || item.requiresRestore === true) && (
                       <button type="button" className="prompt-queue-restore" onClick={() => {
-                        if (onRestore?.(item,item.recoverySourceId) === true) tabStore.getState().deleteQueuedPrompt(item.id);
+                        if (onRestore?.(item,item.recoverySourceId) === true) remove(item);
                       }}>Restore draft</button>
                     )}
                     {!item.retryOf && <button
@@ -191,7 +199,7 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, de
                       className="prompt-queue-delete"
                       aria-label={`Delete queued message ${ordinal}`}
                       title="Delete"
-                      onClick={() => tabStore.getState().deleteQueuedPrompt(item.id)}
+                      onClick={() => remove(item)}
                     >
                       <X />
                     </button>

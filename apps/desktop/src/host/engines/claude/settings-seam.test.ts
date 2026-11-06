@@ -120,7 +120,9 @@ describe("ClaudeSettingsSeam (cut §1.5 D3, hazard (д))", () => {
     const engine = buildEngine(transport);
     const seam = new ClaudeSettingsSeam(engine);
     const applied = vi.fn();
+    const rejected = vi.fn();
     seam.onSettingsApplied(applied);
+    const unsubscribe = seam.onSettingsRejected(rejected);
 
     seam.selectModel("model-b");
     transport.rejectControl("claude refused");
@@ -129,6 +131,12 @@ describe("ClaudeSettingsSeam (cut §1.5 D3, hazard (д))", () => {
     expect(seam.pendingSnapshot()).toBeNull();
     expect(applied).not.toHaveBeenCalled();
     expect(seam.snapshot().model).toBe("model-a");
+    expect(rejected).toHaveBeenCalledOnce();
+    unsubscribe();
+    seam.selectModel("model-b");
+    transport.rejectControl("another refusal");
+    await flushMicrotasks();
+    expect(rejected).toHaveBeenCalledOnce();
   });
 
   it("selectPreset follows the same immediate-apply semantics", async () => {
