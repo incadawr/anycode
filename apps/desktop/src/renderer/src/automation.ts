@@ -7204,8 +7204,9 @@ export function createAutomationFacade(
   ): readonly { id: string; name?: string }[] | undefined {
     const settingsSnapshot = settingsStore.getState().snapshot;
     const activeProviderId = settingsSnapshot ? activeProviderView(settingsSnapshot.settings).id : undefined;
-    const { providerId } = resolvePillTarget(pinnedConnection, activeProviderId, settingsSnapshot?.settings.provider.activeConnectionId);
-    return providerModelsFor(providerId, settingsSnapshot?.catalog, settingsSnapshot?.settings.provider.custom);
+    const { providerId, writeTargetConnectionId } = resolvePillTarget(pinnedConnection, activeProviderId, settingsSnapshot?.settings.provider.activeConnectionId);
+    const connection = settingsSnapshot?.settings.provider.connections.find(item => item.id === writeTargetConnectionId);
+    return providerModelsFor(providerId, settingsSnapshot?.catalog, settingsSnapshot?.settings.provider.custom, connection?.models, connection?.visibleModels, connection?.transport, connection, settingsSnapshot?.envOverrides);
   }
 
   // ── Replay (S2) ────────────────────────────────────────────────
