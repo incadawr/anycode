@@ -543,6 +543,7 @@ export type UiToHostMessage =
   // Payloadless manual conversation compaction, served between turns.
   // Session visibly refuses busy, child, and unsupported engine requests.
   | { type: "compact_request" }
+  | { type: "claude_restart_request" }
   // Renderer Panels sub-slice D: background-task list/output/kill controls.
   | { type: "task_list_request" }
   | { type: "task_output_request"; taskId: string }
@@ -718,7 +719,7 @@ export type HostToUiMessage =
   /** `startedAt` (epoch ms, host clock): when the turn really began — a re-asserted or replayed copy carries the original, so a footer's duration survives a reconnect. Absent from older hosts. */
   | { type: "turn_started"; requestId: string; turnId: string; startedAt?: number }
   | { type: "user_message_accepted"; requestId: string; turnId: string }
-  | { type: "turn_rejected"; requestId: string; reason: "busy" | "not_ready" | "unsupported_images" }
+  | { type: "turn_rejected"; requestId: string; reason: "busy" | "not_ready" | "unsupported_images" | "input_not_sent" }
   | { type: "runtime_input_recovery"; turnId: string; text: string; status: "pending" | "uncertain" }
   | { type: "user_message_invalid"; requestId: string }
   /** Diagnostic for this frame only; requestId may already name an accepted turn. */
@@ -1539,6 +1540,7 @@ export const uiToHostMessageSchema = z.discriminatedUnion("type", [
   contextBreakdownRequestSchema,
   usageAuditRequestSchema,
   compactRequestSchema,
+  z.object({ type: z.literal("claude_restart_request") }).strict(),
   taskListRequestSchema,
   taskOutputRequestSchema,
   taskKillRequestSchema,

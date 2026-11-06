@@ -3388,6 +3388,24 @@ export class Session {
       case "context_breakdown_request":
         if (this.engine.capabilities.supportsContextBreakdown) this.pushContextBreakdown();
         break;
+      case "claude_restart_request":
+        if (this.busy || this.turnId !== null || this.shuttingDown || this.postureBlocked() || this.engine.id !== "claude") break;
+        if (!this.engine.restartStopped) {
+          this.outbound.emit({ type: "agent_event", turnId: "claude-restart", event: {
+            type: "engine_notice", level: "warning",
+            message: "Claude cannot restart here. Close and reopen this session; your unsent message is saved.",
+          } });
+          break;
+        }
+        this.busy = true;
+        void this.engine.restartStopped().then(ok => {
+          if (ok) this.childEngineDead = false;
+          this.outbound.emit({ type: "agent_event", turnId: "claude-restart", event: {
+            type: "engine_notice", level: ok ? "info" : "warning",
+            message: ok ? "Claude restarted. Restore the saved message to send it." : "Claude could not restart. Close and reopen this session; your unsent message is saved.",
+          } });
+        }).finally(() => { this.busy = false; });
+        break;
       case "compact_request":
         if (this.postureBlocked()) { this.outbound.sendDirect({ type: "compact_rejected", reason: "Session posture unavailable" }); break; }
         // GitHub #14: NO silent early drop here. `onCompact` owns the full
@@ -5776,7 +5794,7 @@ export class Session {
         const notSent = deliveryHooks.onInputNotSent;
         deliveryHooks.onInputNotSent = () => {
           notSent?.();
-          this.outbound.emit({ type: "turn_rejected", requestId, reason: "not_ready" });
+          if (!this.runtimeHistory) this.outbound.emit({ type: "turn_rejected", requestId, reason: "input_not_sent" });
         };
         const accepted = deliveryHooks.onInputAccepted;
         let reported = false;

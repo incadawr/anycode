@@ -88,6 +88,8 @@ export interface RunTurnOptions {
  * before waiting for its active turn during host shutdown.
  */
 export interface SessionEngine {
+  /** Explicit retry of a stopped idle transport; never resends input. */
+  restartStopped?(): Promise<boolean>;
   /** A complete native read may prove absence; a shadow mirror must never do so. */
   verifyInputAbsent?(input: string): Promise<boolean>;
   readonly id: EngineId;

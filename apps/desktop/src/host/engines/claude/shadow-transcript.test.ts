@@ -304,6 +304,20 @@ describe("ClaudeShadowTranscriptEngine (cut §1.5 D1/D2)", () => {
   // request. These tests pin the delegation through a STRUCTURAL host
   // interface (`ClaudeShadowTranscriptHost`) — never `instanceof` — so the
   // wrapper stays a decorator over anything engine-shaped.
+  describe("restartStopped delegation", () => {
+    it("exposes the restart action of the wrapped engine and stays absent when the host has none", async () => {
+      const sink: ClaudeShadowTranscriptPort = { record: () => {}, list: async () => [] };
+      const engine = fakeEngine([], { model: null, permissionMode: null }) as SessionEngine;
+      expect(new ClaudeShadowTranscriptEngine(engine, sink, "session-ref-1", []).restartStopped).toBeUndefined();
+      let calls = 0;
+      engine.restartStopped = async function (this: unknown) { calls += 1; expect(this).toBe(engine); return true; };
+      const wrapped = new ClaudeShadowTranscriptEngine(engine, sink, "session-ref-1", []);
+      expect(wrapped.restartStopped).toBeDefined();
+      await expect(wrapped.restartStopped!()).resolves.toBe(true);
+      expect(calls).toBe(1);
+    });
+  });
+
   describe("compactNow delegation (cross-review F1)", () => {
     it("a wrapper over a compact-capable host EXPOSES compactNow — Session's engine gate sees the method through the composition", async () => {
       const engine = fakeEngine([], { model: null, permissionMode: null }) as SessionEngine & { compactNow?: unknown };

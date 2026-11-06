@@ -6409,6 +6409,17 @@ describe("desktop store — prompt queue (slice P7.14 · F15)", () => {
     expect(store.getState().turn).toMatchObject({ status: "running", turnId: "t1", requestId: "req-1" });
   });
 
+  it("unsent Claude input keeps its images and requires restoration before retry", () => {
+    const store = readyStore();
+    const image = { name: "shot.png", sizeBytes: 42, attachment: { mediaType: "image/png" as const, data: "AA==" } };
+    store.getState().enqueuePrompt({ text: "preserve me", images: [image] });
+    store.getState().takeQueueHead("req-unsent");
+    store.getState().applyHostMessage({ type: "turn_rejected", requestId: "req-unsent", reason: "input_not_sent" });
+    expect(store.getState().queueInFlight).toBeNull();
+    expect(store.getState().queuePaused).toBe(true);
+    expect(store.getState().promptQueue).toMatchObject([{ text: "preserve me", images: [image], requiresRestore: true }]);
+  });
+
   it("turn_rejected on the in-flight drain restores the item to the head and pauses (busy-race, §2.3)", () => {
     const store = readyStore();
     store.getState().enqueuePrompt({ text: "drained", images: [] });

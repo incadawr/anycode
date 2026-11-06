@@ -28,6 +28,7 @@ import type {
 import type { WireCheckpointMeta } from "../../../shared/protocol.js";
 import type { CodexAccountOption } from "../../../shared/codex-account.js";
 import type { CodexContinueController } from "../codex-continue.js";
+import { tabRegistry } from "../tab-registry.js";
 import { TabContext } from "../tab-context.js";
 import { isReplaySurface, replayStore } from "../replay.js";
 import { matchCheckpointsToTurns } from "./checkpoint-model.js";
@@ -51,6 +52,7 @@ import { PreviewConsoleRow } from "./PreviewConsoleRow.js";
 import { ToolCallCard } from "./ToolCallCard.js";
 import { ToolCallStack } from "./ToolCallStack.js";
 import { WorkingRow, formatElapsed } from "./WorkingRow.js";
+import { Button } from "../ui/index.js";
 import { formatBlockTime } from "../block-time.js";
 import { formatUsageLimitReset } from "../provider-notices.js";
 
@@ -1238,6 +1240,12 @@ export function MessageList({
                     {block.error.message ? `: ${block.error.message}` : ""}
                     {formatErrorRetrySuffix(block.retry)}
                   </div>
+                  {!readOnly && tabId && block.error.message?.startsWith("Claude exited while idle") && (
+                    <Button size="sm" className="claude-restart-button" disabled={running || connection !== "ready"}
+                      onClick={() => tabRegistry.sendToTab(tabId, { type: "claude_restart_request" })}>
+                      Restart Claude
+                    </Button>
+                  )}
                 </div>
               );
             case "usage_limit":

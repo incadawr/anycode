@@ -207,6 +207,8 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
    * in runTurn, keeping turn ids stable against the on-disk mirror.
    */
   compactNow?: (options: { signal: AbortSignal }) => AsyncIterable<AgentEvent>;
+  /** Same own-property delegation: the restart action must reach the real engine through this wrapper. */
+  restartStopped?: () => Promise<boolean>;
 
   constructor(
     private readonly engine: ClaudeShadowTranscriptHost,
@@ -220,6 +222,10 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
     const innerCompact = this.engine.compactNow;
     if (innerCompact !== undefined) {
       this.compactNow = (options) => innerCompact.call(this.engine, options);
+    }
+    const innerRestart = this.engine.restartStopped;
+    if (innerRestart !== undefined) {
+      this.restartStopped = () => innerRestart.call(this.engine);
     }
   }
 

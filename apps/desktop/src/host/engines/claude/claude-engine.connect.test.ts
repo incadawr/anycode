@@ -970,6 +970,60 @@ it.each(["complete", "return"] as const)("reserves transport before turn_start a
   }
 });
 
+it("respawns an idle exited child with resume and delivers through the real client", async () => {
+  const fake = fakeSpawn();
+  const children: EventEmitter[] = [];
+  const spawnImpl = (command: string, args: readonly string[]) => {
+    const child = fake.spawnImpl(command, args) as EventEmitter;
+    if (!args.includes("--version")) children.push(child);
+    return child;
+  };
+  const { engine, sessionRef } = await resumeClaudeEngine({ ...baseOptions(spawnImpl), externalSessionRef: "idle-session" });
+  try {
+    children[0]!.emit("close", 17, "SIGTERM");
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const events: import("@anycode/core").AgentEvent[] = [];
+    const turn = (async () => {
+      for await (const event of engine.runTurn("deliver after death", { signal: new AbortController().signal })) events.push(event);
+    })();
+    await vi.waitFor(() => expect(fake.userMessages).toHaveLength(1));
+    expect(children).toHaveLength(2);
+    expect(fake.capturedArgs()).toContain("--resume");
+    expect(fake.capturedArgs()).toContain(sessionRef);
+    fake.streams[1]!.emit("data", Buffer.from(JSON.stringify({ type: "result", subtype: "success", session_id: sessionRef, result: "done", is_error: false }) + "\n"));
+    await turn;
+    expect(events.some(event => event.type === "error")).toBe(false);
+  } finally { await engine.dispose("session-close"); }
+});
+
+it("routes the explicit restart action after an idle resume failure without replaying the draft", async () => {
+  const fake = fakeSpawn();
+  let child: EventEmitter | undefined;
+  let spawns = 0;
+  const spawnImpl = (command: string, args: readonly string[]) => {
+    if (!args.includes("--version") && ++spawns === 2) throw new Error("spawn refused");
+    const result = fake.spawnImpl(command, args);
+    if (!args.includes("--version")) child = result as EventEmitter;
+    return result;
+  };
+  const { engine } = await resumeClaudeEngine({ ...baseOptions(spawnImpl), externalSessionRef: "idle-session" });
+  const h = createHarness({ steps: [], engine });
+  try {
+    h.send({ type: "ui_ready" });
+    await h.waitFor(m => m.type === "host_ready");
+    child!.emit("close", 17, "SIGTERM");
+    h.send({ type: "user_message", requestId: "unsent", text: "keep the draft" });
+    await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && m.event.type === "error"));
+    await h.waitUntil(() => h.received.some(m => m.type === "turn_rejected" && m.reason === "input_not_sent"));
+    await h.flush();
+    expect(fake.userMessages).toEqual([]);
+    h.send({ type: "claude_restart_request" });
+    await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && m.event.type === "engine_notice" && m.event.message.startsWith("Claude restarted")));
+    expect(spawns).toBe(3);
+    expect(fake.userMessages).toEqual([]);
+  } finally { await h.session.shutdown(); h.close(); }
+});
+
 it("restores input submitted during replacement and serves a retried turn on the new transport", async () => {
   const fake = fakeSpawn();
   let release!: () => void;

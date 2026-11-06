@@ -5473,7 +5473,9 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               notice: {
                 kind: "turn_rejected",
                 text:
-                  message.reason === "busy"
+                  message.reason === "input_not_sent"
+                    ? "Message was not sent. Restore the saved message before sending again."
+                    : message.reason === "busy"
                     ? "Message rejected: the agent is still running the current turn."
                     : message.reason === "unsupported_images"
                       ? "Message rejected: the current model does not accept image attachments."
@@ -5481,6 +5483,10 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               },
               ...(restore ?? restoreDirect ?? {}),
               ...reconcileQueuedRetries((restore ?? restoreDirect)?.promptQueue ?? promptQueue,updatedDeliveries),
+              ...(message.reason === "input_not_sent" ? {
+                queuePaused: true, queuePauseReason: "rejected" as const,
+                promptQueue: ((restore ?? restoreDirect)?.promptQueue ?? promptQueue).map(item => (item.id === message.requestId || item.id === queueInFlight?.item.id) ? { ...item, requiresRestore: true } : item),
+              } : {}),
               // a rejected steer never becomes transcript text —
               // drop the matching pending entry, keep unrelated ones.
               ...(get().pendingSteers.some((entry) => entry.requestId === message.requestId)

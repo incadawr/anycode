@@ -634,6 +634,8 @@ export class ClaudeClient {
     );
   }
 
+  get terminalFailure(): Error | null { return this.terminalError; }
+
   get hasPendingRequests(): boolean { return this.pending.size > 0 || this.pendingInbound.size > 0; }
 
   get pid(): number | null {

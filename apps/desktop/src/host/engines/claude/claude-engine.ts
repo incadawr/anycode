@@ -148,6 +148,7 @@ export interface ClaudeTransport {
   interrupt(): Promise<{ stillQueued: string[] }>;
   sendUserMessage(content: string | unknown[]): void;
   readonly hasPendingRequests?: boolean;
+  readonly terminalFailure?: Error | null;
   notifications(): AsyncIterable<ClaudeStreamMessage>;
   close(): Promise<void>;
 }
@@ -434,7 +435,15 @@ function neutralizeSystemOriginSlashes(text: string): string {
  * it is emitted for every terminal claude error path, including a redacted
  * one, so a hostile failure can never disable the drain guard.
  */
+class ClaudeStoppedError extends Error {
+  constructor(readonly phase: "while idle" | "during a turn", cause?: Error, recoveryFailed = false) {
+    const details = cause instanceof ClaudeStoppedError ? "" : cause ? engineDeathSafe(cause).message : "";
+    super(`Claude exited ${phase}${details ? `: ${details}` : ""}.${recoveryFailed ? " Automatic resume failed." : ""} Close and reopen this session to restart Claude.`);
+  }
+}
+
 function engineDeathSafe(error: Error): { code: "engine_dead"; message: string } {
+  if (error instanceof ClaudeStoppedError) return { code: "engine_dead", message: error.message };
   // Two fixed host strings survive verbatim — they carry no provider text.
   if (error.message === "Claude exited during a turn" || error.message === "Claude engine is closed") {
     return { code: "engine_dead", message: error.message };
@@ -842,6 +851,8 @@ export class ClaudeEngine implements SessionEngine {
   private interruptSent = false;
   private turnActive = false;
   private terminalError: Error | null = null;
+  private idleFailure: Error | null = null;
+  private stoppedErrorReported = false;
   // ── single-owner notification stream ──────────────────────────
   /** The engine's ONE cached pending read of the notification stream. Shared
    *  by the idle reader and every owner turn; see takeFrame/frameConsumed. */
@@ -1119,6 +1130,7 @@ export class ClaudeEngine implements SessionEngine {
         if (!current()) throw transportAbortError(abort.signal);
         const next = await factory(spawn, current, abort.signal);
         if (!current()) { await next.close(); throw transportAbortError(abort.signal); }
+        this.idleFailure = null;
         this.client = next.client;
         this.approvals = next.approvals;
         this.closeTransport = next.close;
@@ -1339,6 +1351,36 @@ export class ClaudeEngine implements SessionEngine {
     return { ok: true, effort };
   }
 
+  async restartStopped(): Promise<boolean> {
+    if (!(this.terminalError instanceof ClaudeStoppedError) || this.terminalError.phase !== "while idle"
+      || this.disposed || this.turnActive || this.replacement || this.orchestrationState !== "off") return false;
+    this.idleFailure = this.terminalError;
+    this.terminalError = null;
+    this.stoppedErrorReported = false;
+    await this.resumeIdleTransport();
+    return this.terminalError === null;
+  }
+
+  private async resumeIdleTransport(): Promise<void> {
+    // Only an idle stream death qualifies. Never replay an in-flight prompt,
+    // foreign turn, orchestration transition, or protocol failure mid-turn.
+    if (!this.idleFailure || this.terminalError || this.disposed) return;
+    const failure = this.idleFailure;
+    this.idleFailure = null;
+    if (!this.transportFactory || this.foreignTurn || this.orchestrationState !== "off") {
+      this.terminalError = new ClaudeStoppedError(this.foreignTurn ? "during a turn" : "while idle", failure);
+      return;
+    }
+    try {
+      await this.replaceTransport({
+        ...(this.nativeMaterialized ? { resume: this.sessionRef } : { sessionId: this.sessionRef }),
+        ...(this.settings?.effort ? { effort: this.settings.effort } : {}),
+      });
+    } catch {
+      this.terminalError = new ClaudeStoppedError("while idle", failure, true);
+    }
+  }
+
   async *runTurn(input: string, options: RunTurnOptions): AsyncIterable<AgentEvent> {
     let inputDispatched = false;
     let notSentReported = false;
@@ -1348,7 +1390,15 @@ export class ClaudeEngine implements SessionEngine {
         options.onInputNotSent?.();
       }
     };
+    let resumeAttempted = this.idleFailure !== null || !!this.client.terminalFailure;
     const turn = ++this.turnNumber;
+    if ((this.client.terminalFailure || this.readyFrame?.done) && !this.turnActive && !this.terminalError && !this.replacement) {
+      this.idleFailure ??= this.client.terminalFailure ?? new Error("Claude exited while idle");
+    }
+    if (this.idleFailure && !options.signal.aborted && !this.replacement) {
+      resumeAttempted = true;
+      await this.resumeIdleTransport();
+    }
     if ((this.replacement !== null || this.orchestrationState === "transitioning") && this.terminalError === null && !this.disposed) {
       // No transport owns this input yet. Keep it recoverable without marking
       // the live engine dead or interfering with its replacement.
@@ -1369,7 +1419,10 @@ export class ClaudeEngine implements SessionEngine {
     }
     if (this.terminalError !== null || this.disposed) {
       reportNotSent();
-      yield* this.terminalEvents(turn, this.terminalError ?? new Error("Claude engine is closed"));
+      const error = this.terminalError ?? new Error("Claude engine is closed");
+      const suppress = error instanceof ClaudeStoppedError && this.stoppedErrorReported;
+      this.stoppedErrorReported = true;
+      yield* this.terminalEvents(turn, error, !suppress);
       return;
     }
     const abort = watchAbort(options.signal);
@@ -1457,7 +1510,16 @@ export class ClaudeEngine implements SessionEngine {
         }
         if (drained === "disposed") { sendCancelled = true; break barrier; }
         if (drained === "stream-end") {
-          throw this.terminalError ?? new Error("Claude exited during a turn");
+          if (!resumeAttempted && !this.foreignTurn && this.transportFactory) {
+            resumeAttempted = true;
+            this.idleFailure = this.client.terminalFailure ?? new Error("Claude exited while idle");
+            this.turnActive = false;
+            await this.resumeIdleTransport();
+            this.stopIdleReader();
+            this.turnActive = true;
+            if (!this.terminalError) continue barrier;
+          }
+          throw this.terminalError ?? new ClaudeStoppedError("while idle", this.client.terminalFailure ?? undefined);
         }
         // Notices — yielding one suspends this generator for an unbounded
         // time, so the whole barrier re-runs on resume (drain again, dispose
@@ -1781,13 +1843,15 @@ export class ClaudeEngine implements SessionEngine {
       }
     } catch (error) {
       const terminalError = this.terminalError ?? (error instanceof Error ? error : new Error(String(error)));
-      this.terminalError = terminalError;
+      this.terminalError = inputDispatched && this.client.terminalFailure
+        ? new ClaudeStoppedError("during a turn", this.client.terminalFailure) : terminalError;
       this.approvals?.denyAll("Claude transport failed", "turn_cancelled");
       // A turn that lost its transport releases the child.
       void this.client.close().catch(() => {});
-      yield { type: "error", error: terminalError, safe: engineDeathSafe(terminalError) };
+      yield { type: "error", error: this.terminalError, safe: engineDeathSafe(this.terminalError) };
       reportNotSent();
-      yield* this.terminalEvents(turn, terminalError, false);
+      this.stoppedErrorReported = this.terminalError instanceof ClaudeStoppedError;
+      yield* this.terminalEvents(turn, this.terminalError, false);
     } finally {
       this.turnActive = false;
       if (!inputDispatched) reportNotSent();
@@ -2590,8 +2654,7 @@ export class ClaudeEngine implements SessionEngine {
 
   /** the between-turns (and pre-first-turn) reader. Catches its own
    *  rejection; NEVER lets a transport error become an unhandled rejection —
-   *  idle errors are DROPPED and the slot is cleared; the next owner turn hits
-   *  the real terminal path on the closed stream. */
+   *  idle deaths are remembered for one bounded resume on the next send. */
   private runIdleReader(): void {
     if (this.idleReading || this.disposed || this.terminalError !== null || this.turnActive) return;
     this.idleReading = true;
@@ -2599,7 +2662,10 @@ export class ClaudeEngine implements SessionEngine {
       if (this.disposed || this.terminalError !== null || this.turnActive) { this.idleReading = false; return; }
       const epoch = ++this.idleEpoch;
       const wake = new Promise<null>((resolve) => { this.idleWake = () => resolve(null); });
-      void Promise.race([this.takeFrame().then((value) => value, () => null), wake])
+      void Promise.race([this.takeFrame().then((value) => value, (error: unknown) => {
+        if (epoch === this.idleEpoch) this.idleFailure = error instanceof Error ? error : new Error("Claude transport failed");
+        return null;
+      }), wake])
         .then((value) => {
           // An old epoch's callback returns BEFORE touching shared state: a
           // newer reader (owner turn or a restarted idle reader) owns it now.
@@ -2611,7 +2677,11 @@ export class ClaudeEngine implements SessionEngine {
             this.idleReading = false;
             return;
           }
-          if (value.done) { this.idleReading = false; return; } // stream closed; next turn sees terminal path
+          if (value.done) {
+            this.idleFailure = this.client.terminalFailure ?? new Error("Claude exited while idle");
+            this.idleReading = false;
+            return;
+          }
           this.frameConsumed();
           this.absorbIdleFrame(value.value);
           step();

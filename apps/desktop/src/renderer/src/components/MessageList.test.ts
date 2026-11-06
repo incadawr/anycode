@@ -1,3 +1,4 @@
+import { TabContext } from "../tab-context.js";
 import { describe, expect, it } from "vitest";
 import {
   aggregateStackStatus,
@@ -28,6 +29,18 @@ import { MessageList } from "./MessageList.js";
 import type { CodexContinueController } from "../codex-continue.js";
 import { createDesktopStore, type ErrorRetryMeta, type RetryOffer, type ToolCallBlock, type TranscriptBlock } from "../store.js";
 import { agentMessageText, type AgentEnvelope } from "../../../shared/communication.js";
+
+it("offers a distinct restart action for an idle Claude exit", () => {
+  const html = renderToStaticMarkup(createElement(TabContext.Provider, { value: { tabId: "stopped", store: createDesktopStore() } },
+    createElement(MessageList, {
+      blocks: [{ kind: "error", id: "idle-error", error: { name: "ProviderError", message: "Claude exited while idle. Automatic resume failed." } }],
+      turn: { status: "idle" } as never, workspace: null, connection: "ready", retry: null,
+      onTryAgain: () => undefined, continueOffer: null, onContinue: () => undefined, promptQueueLength: 1,
+    })));
+  expect(html).toContain(">Restart Claude</button>");
+  expect(html).toContain("claude-restart-button");
+  expect(html).not.toContain('class="retry-try-again-button"');
+});
 
 describe("agent deliveries in the minimap", () => {
   it("renders restored agent deliveries in history order with labeled ticks and jump anchors", () => {

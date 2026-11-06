@@ -1022,6 +1022,96 @@ describe("ClaudeEngine — cancellation and disposal", () => {
     expect(events.find((event) => event.type === "loop_end")).toEqual({ type: "loop_end", reason: "error", turns: 1 });
   });
 
+  it("resumes after idle death and delivers the next input exactly once", async () => {
+    const dead = new FakeTransport();
+    const resumed = new FakeTransport({ frames: ownerFrames("resumed") });
+    const factory = vi.fn(async (_spawn: unknown) => ({ client: resumed, approvals: undefined!, close: () => resumed.close() }));
+    const engine = new ClaudeEngine(dead, "session-ref-1", undefined, undefined, undefined, undefined, undefined, false, factory);
+    engine.nativeMaterialized = true;
+    await dead.close();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const events = await collect(engine.runTurn("keep this message", { signal: new AbortController().signal }));
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(factory.mock.calls[0]?.[0]).toMatchObject({ resume: "session-ref-1" });
+    expect(dead.sent).toEqual([]);
+    expect(resumed.sent).toEqual(["keep this message"]);
+    expect(events.some(event => event.type === "error")).toBe(false);
+    await engine.dispose("session-close");
+  });
+
+  it("reports idle exit details once if resume fails and preserves unsent input", async () => {
+    const dead = new FakeTransport({ rejectStreamOnce: new ClaudeClientError("claude exited unexpectedly (code=1, signal=SIGTERM)") });
+    const factory = vi.fn(async () => { throw new Error("private spawn details"); });
+    const engine = new ClaudeEngine(dead, "session-ref-1", undefined, undefined, undefined, undefined, undefined, false, factory);
+    engine.nativeMaterialized = true;
+    dead.releaseStreamReject();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const notSent = vi.fn();
+    const first = await collect(engine.runTurn("recover me", { signal: new AbortController().signal, onInputNotSent: notSent }));
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(notSent).toHaveBeenCalledOnce();
+    const error = first.find(event => event.type === "error");
+    expect(error).toMatchObject({ safe: { code: "engine_dead", message: expect.stringContaining("while idle") } });
+    if (error?.type === "error") {
+      expect(error.safe?.message).toContain("code=1, signal=SIGTERM");
+      expect(error.safe?.message).toContain("Close and reopen");
+      expect(error.safe?.message).not.toContain("private spawn details");
+    }
+    const next = await collect(engine.runTurn("still recoverable", { signal: new AbortController().signal, onInputNotSent: notSent }));
+    expect(next.some(event => event.type === "error")).toBe(false);
+    expect(notSent).toHaveBeenCalledTimes(2);
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(dead.sent).toEqual([]);
+    await engine.dispose("session-close");
+  });
+
+  it("does not resume or resend a prompt after a mid-turn death even with a factory", async () => {
+    const dead = new FakeTransport({ rejectStreamOnce: new ClaudeClientError("claude exited unexpectedly (code=1, signal=null)") });
+    const factory = vi.fn(async () => { throw new Error("must not respawn"); });
+    const engine = new ClaudeEngine(dead, "session-ref-1", undefined, undefined, undefined, undefined, undefined, false, factory);
+    const events: AgentEvent[] = [];
+    for await (const event of engine.runTurn("side effects", { signal: new AbortController().signal })) {
+      events.push(event);
+      if (event.type === "turn_start") setTimeout(() => dead.releaseStreamReject(), 0);
+    }
+    await collect(engine.runTurn("new input", { signal: new AbortController().signal }));
+    expect(factory).not.toHaveBeenCalled();
+    expect(dead.sent).toEqual(["side effects"]);
+    expect(events.some(event => event.type === "error")).toBe(true);
+    await engine.dispose("session-close");
+  });
+
+  it("allows an explicit restart after failed idle recovery without resending input", async () => {
+    const dead = new FakeTransport();
+    const resumed = new FakeTransport({ frames: ownerFrames("explicit") });
+    const factory = vi.fn(async (_spawn: unknown) => ({ client: resumed, approvals: undefined!, close: () => resumed.close() }))
+      .mockRejectedValueOnce(new Error("resume failed"));
+    const engine = new ClaudeEngine(dead, "session-ref-1", undefined, undefined, undefined, undefined, undefined, false, factory);
+    engine.nativeMaterialized = true;
+    await dead.close();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await collect(engine.runTurn("unsent", { signal: new AbortController().signal }));
+    expect(await engine.restartStopped()).toBe(true);
+    expect(resumed.sent).toEqual([]);
+    await collect(engine.runTurn("restored", { signal: new AbortController().signal }));
+    expect(resumed.sent).toEqual(["restored"]);
+    expect(factory).toHaveBeenCalledTimes(2);
+    await engine.dispose("session-close");
+  });
+
+  it("absorbs background-task output between turns without restarting or misattributing it", async () => {
+    const transport = new FakeTransport({ frames: ownerFrames("next") });
+    const engine = engineWith(transport);
+    transport.push(foreignAssistantFrame("background", "BACKGROUND TASK OUTPUT"));
+    transport.push(foreignResultFrame("background done"));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const events = await collect(engine.runTurn("next", { signal: new AbortController().signal }));
+    expect(transport.sent).toEqual(["next"]);
+    expect(events.some(event => event.type === "text_delta" && event.text.includes("BACKGROUND"))).toBe(false);
+    expect(events.some(event => event.type === "error")).toBe(false);
+    await engine.dispose("session-close");
+  });
+
   // ── trusted engine-death descriptor (safe.code "engine_dead") ─────
 
   it("a mid-turn transport death carries safe.code engine_dead and the fixed reason, and the latch survives into the next turn", async () => {
