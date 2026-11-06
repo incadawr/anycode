@@ -6503,12 +6503,13 @@ export class Session {
     const state = this.runtimeHistory!.state();
     const saved = state.segments.find(segment => segment.id === state.activeSegmentId)?.applied.orchestration;
     const engine = this.engine;
+    const composition = engine.orchestrationComposition;
     let nativeAuthority: {mode:PermissionMode} | undefined;
     this.orchestrationRestore = (async () => {
       if (!saved?.enabled) return;
-      if (!this.runtimeCompositionReady(engine) || !this.runtimePolicyAvailable(engine)) throw new Error("Saved orchestration requires a verified runtime policy and routing");
+      if (!composition || composition.ownerSessionId !== this.sessionId || !composition.ready() || !this.runtimePolicyAvailable(engine)) throw new Error("Saved orchestration requires a verified runtime policy and routing");
       await this.engineSettings?.waitForSettingsChanges?.();
-      if (!this.ownsRuntime(engine)) throw new Error("Runtime changed during orchestration restore");
+      if (!this.ownsRuntime(engine) || engine.orchestrationComposition !== composition || !composition.ready()) throw new Error("Runtime changed during orchestration restore");
       if (engine.id === "core") {
         engine.setMode!("plan");
         if (engine.mode() !== "plan" || !engine.setCoreOrchestrate?.(true)) throw new Error("Core orchestration restore was not confirmed");
@@ -6517,7 +6518,8 @@ export class Session {
         const result = await engine.orchestrationPolicy!.apply(true,authority);
         if (!this.ownsRuntime(engine) || !result.enabled || result.baseAuthority !== authority) throw new Error("Orchestration restore was not confirmed");
       }
-      engine.orchestrationComposition!.capture(saved.baseMode);
+      if (!this.ownsRuntime(engine) || engine.orchestrationComposition !== composition || !composition.ready()) throw new Error("Runtime changed during orchestration restore");
+      composition.capture(saved.baseMode);
       this.preOrchestrateMode = saved.baseMode;
       this.orchestrate = true;
       this.onOrchestrateChanged?.(true);

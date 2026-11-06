@@ -23,6 +23,25 @@ async function switchedStore() {
   return store;
 }
 describe("canonical reconnect hydration", () => {
+  it("rejects a legacy readiness flag without enabling orchestration during restore", async () => {
+    const store = await switchedStore();
+    const state = store.loadRuntimeSession("test-session")!;
+    const saved = {model:"scripted-model",mode:"plan",orchestration:{enabled:true as const,baseMode:"edit" as const}};
+    store.updateRuntimeSettings("test-session",state.activeSegmentId,saved,saved);
+    const h = createHarness({steps:[],runtimeHistory:new RuntimeSessionHistory(store,"test-session")});
+    Object.defineProperty(h.engine,"orchestrationCompositionReady",{value:true});
+    const apply = vi.spyOn(h.engine,"setCoreOrchestrate");
+    const log = vi.spyOn(console,"warn").mockImplementation(() => {});
+    try {
+      h.send({type:"ui_ready",orchestrationProtocol:1});
+      expect(await h.waitFor(m => m.type === "host_ready")).toMatchObject({orchestration:{enabled:false}});
+      expect(apply).not.toHaveBeenCalledWith(true);
+      expect(log).toHaveBeenCalledWith("[host] saved orchestration could not be restored",expect.objectContaining({message:"Saved orchestration requires a verified runtime policy and routing"}));
+      expect(store.loadRuntimeSession("test-session")!.segments.at(-1)!.applied.orchestration).toBeUndefined();
+      expect(h.received.some(m => m.type === "fatal")).toBe(false);
+    } finally {apply.mockRestore();log.mockRestore();await h.session.shutdown();h.close();await store.close();}
+  });
+
   it("turns a failed saved orchestration restore off, hydrates, and serves the next turn across restart", async () => {
     const store = await switchedStore();
     const state = store.loadRuntimeSession("test-session")!;
