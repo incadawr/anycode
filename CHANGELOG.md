@@ -7,6 +7,12 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.84] - 2026-11-06
+
+### Changed
+
+- Pending child reports survive session restarts and are retried after orchestration transitions.
+
 ## [0.0.83] - 2026-11-06
 
 ### Added
