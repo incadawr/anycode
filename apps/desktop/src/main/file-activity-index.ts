@@ -33,12 +33,22 @@ interface IndexOptions extends PathOptions {
 const TTL = 30 * 60_000;
 const MAX_PATH = 4096;
 
+function pathKey(value: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform !== 'win32') return value;
+  const normalized = path.win32.normalize(value).toLowerCase();
+  return normalized.length > path.win32.parse(normalized).root.length
+    ? normalized.replace(/\\$/, '') : normalized;
+}
+
 export function canonicalFile(workspace: string, input: string, options: PathOptions = {}): string | undefined {
   const windows = (options.platform ?? process.platform) === 'win32';
   const paths = windows ? path.win32 : path.posix;
-  const realpath = options.realpath ?? realpathSync;
+  // The JS realpath implementation resolves dot-dot lexically before traversing links.
+  const realpath = options.realpath ?? ((value: string) =>
+    value.split(windows ? /[\\/]/ : /\//).includes('..')
+      ? realpathSync.native(value) : realpathSync(value));
   const stat = options.stat ?? statSync;
-  const key = (value: string) => windows ? paths.normalize(value).toLowerCase() : value;
+  const key = (value: string) => pathKey(value, options.platform);
   const valid = (value: string) => typeof value === 'string' && value.length > 0
     && value.length <= MAX_PATH && !value.includes('\0');
   const git = (value: string) => value.split(windows ? /[\\/]/ : /\//)
@@ -62,8 +72,8 @@ export function canonicalFile(workspace: string, input: string, options: PathOpt
     const base = key(realpath(workspace));
     // Pin the exact main-known workspace; aliases/retargeting cannot silently rebind it.
     if (base !== key(workspace) || !stat(base).isDirectory()) return;
-    const resolved = paths.resolve(base, input);
-    if (!contained(base, resolved)) return;
+    // Keep dot-dot segments for the filesystem to traverse after symlinks.
+    const resolved = paths.isAbsolute(input) ? input : `${base}${paths.sep}${input}`;
     let canonical: string;
     try {
       canonical = key(realpath(resolved));
@@ -98,7 +108,7 @@ export class FileActivityIndex {
 
   private prune(at: number): void {
     for (const [key, row] of this.records) {
-      if (at - row.at >= TTL || !this.current(row)) this.records.delete(key);
+      if (at < row.at || at - row.at >= TTL || !this.current(row)) this.records.delete(key);
     }
   }
 
@@ -138,7 +148,8 @@ export class FileActivityIndex {
     if (!canonicalPath) return [];
     const result: FileActivity[] = [];
     for (const row of this.records.values()) {
-      if (row.workspaceKey === workspaceKey && row.canonicalPath === canonicalPath) {
+      if (pathKey(row.workspaceKey, this.options.platform) === pathKey(workspaceKey, this.options.platform)
+        && row.canonicalPath === canonicalPath) {
         result.push({ ...row });
         if (result.length === 20) break;
       }

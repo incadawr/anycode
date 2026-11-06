@@ -69,6 +69,46 @@ describe('reported file activity', () => {
     expect(index.lookup(path.join(root, 'workspace-alias'), '../file')).toEqual([]);
   });
 
+  it.each(['victim', 'file'])('refuses symlink dot-dot escape to %s on the real filesystem', leaf => {
+    const workspace = path.join(root, 'workspace');
+    const outside = path.join(root, 'outside');
+    mkdirSync(workspace);
+    mkdirSync(outside);
+    mkdirSync(path.join(outside, 'dir'));
+    writeFileSync(path.join(workspace, 'file'), '');
+    writeFileSync(path.join(outside, 'file'), '');
+    symlinkSync(path.join(outside, 'dir'), path.join(workspace, 'escape'));
+    const a = add(identity('a', workspace));
+    for (const input of [`escape/../${leaf}`, `${workspace}/escape/../${leaf}`]) {
+      expect(index.record(a, write(input)), input).toBe(false);
+      expect(index.lookup(workspace, input)).toEqual([]);
+      expect(index.lookup(workspace, leaf)).toEqual([]);
+    }
+  });
+
+  it('records dot-dot after a real directory with the canonical key', () => {
+    mkdirSync(path.join(root, 'sub'));
+    expect(index.record(add(identity('a')), write('sub/../file'))).toBe(true);
+    expect(index.lookup(root, 'file')[0]?.canonicalPath).toBe(path.join(root, 'file'));
+  });
+
+  it('does not fold POSIX workspace case even with identical canonical file facts', () => {
+    const a = add(identity('a', '/Repo'));
+    const posix = new FileActivityIndex({ current: id => live.get(id), platform: 'linux',
+      realpath: value => value.endsWith('/file') ? '/Repo/file' : value,
+      stat: () => ({ isFile: () => true, isDirectory: () => true }) });
+    expect(posix.record(a, write('file'))).toBe(true);
+    expect(posix.lookup('/repo', 'file')).toEqual([]);
+    expect(posix.lookup('/Repo', 'file')).toHaveLength(1);
+  });
+
+  it('expires records when the injected clock steps backwards', () => {
+    now = 1000;
+    expect(index.record(add(identity('a')), write('file'))).toBe(true);
+    now = -1000;
+    expect(index.lookup(root, 'file')).toEqual([]);
+  });
+
   it('refuses a pinned workspace that was replaced by a symlink', () => {
     const pinned = path.join(root, 'pinned');
     const moved = path.join(root, 'moved');
@@ -176,12 +216,28 @@ it('handles Windows drive, UNC, separators and case with injected filesystem fac
   }
 });
 
-it('uses Windows canonical file keys in the index while keeping exact workspace keys', () => {
+it('uses Windows canonical file and workspace keys in the index', () => {
   const current = identity('win', 'C:\\Repo');
   const win = new FileActivityIndex({ current: () => current, platform: 'win32',
     realpath: value => path.win32.normalize(value),
     stat: () => ({ isFile: () => true, isDirectory: () => true }) });
   expect(win.record(current, write('DIR/File'))).toBe(true);
   expect(win.lookup(current.workspaceKey, 'c:/repo/dir/file')).toHaveLength(1);
+  expect(win.lookup('c:/repo', 'dir/file')).toHaveLength(1);
+  expect(win.lookup(current.workspaceKey + path.win32.sep, 'dir/file')).toHaveLength(1);
   expect(win.lookup('C:\\Other', 'dir/file')).toEqual([]);
+});
+
+it('passes raw Windows dot-dot paths and missing parents to the injected filesystem', () => {
+  const seen: string[] = [];
+  const options = { platform: 'win32' as const, realpath: (value: string) => {
+    seen.push(value);
+    if (value.endsWith('victim')) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    return value.includes('escape') ? 'D:\\outside' : path.win32.normalize(value);
+  }, lstat: () => { throw Object.assign(new Error('missing'), { code: 'ENOENT' }); },
+  stat: () => ({ isFile: () => true, isDirectory: () => true }) };
+  expect(canonicalFile('C:\\Repo', 'escape\\..\\file', options)).toBeUndefined();
+  expect(seen).toContain('c:\\repo\\escape\\..\\file');
+  expect(canonicalFile('C:\\Repo', 'escape\\..\\victim', options)).toBeUndefined();
+  expect(seen).toContain('c:\\repo\\escape\\..');
 });
