@@ -3595,3 +3595,9 @@
   white-space: nowrap;
   pointer-events: none;
 }
+
+.go-quota { display: grid; gap: 2px; white-space: normal; text-align: left; }
+.go-quota-title { opacity: .75; }
+.go-quota-row { display: flex; flex-wrap: wrap; gap: 0 6px; }
+.go-quota-warning { color: var(--warning); }
+.go-quota-danger { color: var(--danger); }

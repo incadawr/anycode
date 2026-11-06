@@ -13,6 +13,7 @@ export function useProviderQuotaPoll(enabled: boolean, connectionId?: string): v
     const refresh = () => {
       if (document.visibilityState === "visible") {
         void window.anycode?.settings.refreshMiniMaxQuota?.(connectionId).catch(() => {});
+        void window.anycode?.settings.refreshOpenCodeGoQuota?.(connectionId).catch(() => {});
         void window.anycode?.settings.refreshGlmQuota?.(connectionId).catch(() => {});
       }
     };

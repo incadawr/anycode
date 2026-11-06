@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- OpenCode Go connections show 5-hour, weekly, and monthly subscription usage with reset times and high-usage warnings.
+
 ## [0.0.78] - 2026-11-06
 
 ### Added

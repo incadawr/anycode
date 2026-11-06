@@ -2512,3 +2512,15 @@ it("round trips a Go snapshot and drops malformed caches without losing connecti
   expect(parsed.provider.connections[1]?.modelRoutes).toBeUndefined();
   expect(parsed.provider.connections[1]?.id).toBe("b");
 });
+
+describe("OpenCode Go quota cache", () => {
+  it("round trips all windows and fails soft on a corrupt cache", () => {
+    const quota = { observedAt: "2026-01-01T00:00:00Z", windows: { rolling: { usedPercent: 0, resetsAt: 1767312000 }, weekly: { usedPercent: 50 }, monthly: { usedPercent: 100 } } };
+    const settings = { ...cloneDefaults(), provider: { connections: [{ id: "a", providerId: "opencode", lastGoQuota: quota }, { id: "b", providerId: "opencode" }, { id: "c", providerId: "opencode", lastGoQuota: { ...quota, windows: {} } }] } };
+    const connections = parseSettings(JSON.parse(JSON.stringify(settings))).settings.provider.connections;
+    expect(connections[0]?.lastGoQuota).toEqual(quota);
+    expect(connections[1]?.lastGoQuota).toBeUndefined();
+    expect(connections[2]?.lastGoQuota).toBeUndefined();
+    expect(connections[2]?.id).toBe("c");
+  });
+});

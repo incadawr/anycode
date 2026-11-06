@@ -6,6 +6,7 @@ import { startLocalCrashReporting } from "./crash-reporting.js";
 import { createDiagnosticLog, installConsoleLog } from "./diagnostic-log.js";
 import { providerProxyConfig } from "./provider-proxy-config.mjs";
 import { createMiniMaxQuotaService } from "./minimax-quota.js";
+import { createOpenCodeGoQuotaService } from "./opencode-go-quota.js";
 import { createGlmQuotaService } from "./glm-quota.js";
 import { protectMainNavigation } from "./main-navigation.js";
 import { resolveCoreConnectionForModel } from "../shared/core-model-connection.js";
@@ -3365,6 +3366,15 @@ void app.whenReady().then(async () => {
   guardedIpcHandle("anycode:glm-quota-refresh", (_event, id: unknown) => {
     if (id !== undefined && (typeof id !== "string" || id.length > 256)) return;
     void glmQuota.refresh(id);
+  });
+  const goQuota = createOpenCodeGoQuotaService({
+    settingsPath, vault, systemProxy: systemProxyDelegate,
+    fetch: route => fetchForProxyChain([], route),
+    onPersisted: () => sendToMainWindow(win, PROVIDER_QUOTA_CHANGED_CHANNEL),
+  });
+  guardedIpcHandle("anycode:opencode-go-quota-refresh", (_event, id: unknown) => {
+    if (id !== undefined && (typeof id !== "string" || id.length > 256)) return;
+    void goQuota.refresh(id);
   });
   registerProviderIpc({
     vault,

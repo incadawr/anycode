@@ -1,3 +1,4 @@
+import { OpenCodeGoQuota } from "./OpenCodeGoQuota.js";
 import { saveRecovery } from "../orchestration-recovery-storage.js";
 import { planComposerDrop } from "../composer-drop.js";
 import { modelSettingsTarget } from "../model-settings-target.js";
@@ -1044,6 +1045,17 @@ function CtxPopover({
   const shortcutTarget = contextWindowSettingsTarget(snapshot?.settings.provider.connections ?? [], model, modelSettingsConnectionId, pinnedConnection?.connectionId);
   const assumedHint = ctxWindowAssumedHint(contextUsage);
   const [open, setOpen] = useState(false);
+  const [quotaNow, setQuotaNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!open) return;
+    const update = () => setQuotaNow(Date.now());
+    update();
+    const timer = window.setInterval(update, 60_000);
+    const visible = () => { if (document.visibilityState === "visible") update(); };
+    document.addEventListener("visibilitychange", visible);
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", visible); };
+  }, [open]);
+  const goConnection = snapshot?.settings.provider.connections.find(item => item.id === pinnedConnection?.connectionId);
   const [anchor, setAnchor] = useState<{ left: number; bottom: number; maxHeight: number } | null>(null);
   const [timedOut, setTimedOut] = useState(false);
   /** Per-step list starts collapsed and returns to collapsed on every close. */
@@ -1291,6 +1303,7 @@ function CtxPopover({
             {usageAudit.list === null && usageAudit.totalSteps > 0 && (
               <div className="ctx-popover-session">Step history: {usageAudit.totalSteps} records — reopen to load</div>
             )}
+            <OpenCodeGoQuota connection={goConnection} now={quotaNow} />
             {quotaView !== null && (
               <>
                 {quotaView.primaryLine !== null && <div className="ctx-popover-session">{quotaView.primaryLine}</div>}

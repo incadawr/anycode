@@ -440,6 +440,7 @@ export interface ProviderConnection {
    * Absent = the provider never reported anything (rendered as no quota
    * block, never a fabricated 0%).
    */
+  lastGoQuota?: import("./opencode-go-quota.js").GoQuotaSnapshot;
   lastQuota?: {
     usedPercent: number;
     family?: string;

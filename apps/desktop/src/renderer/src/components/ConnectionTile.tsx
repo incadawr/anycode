@@ -12,6 +12,8 @@
  * tile's outer element is a plain `role="group"` container, mirroring
  * ModelPill's popover-trigger-as-sibling pattern.
  */
+import { OpenCodeGoQuota } from "./OpenCodeGoQuota.js";
+import { isOpenCodeGoConnection } from "../../../shared/opencode-go-quota.js";
 import { Button } from "../ui/index.js";
 import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
@@ -333,7 +335,9 @@ export function ConnectionTile({
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
-    return () => window.clearInterval(timer);
+    const visible = () => { if (document.visibilityState === "visible") setNow(Date.now()); };
+    document.addEventListener("visibilitychange", visible);
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", visible); };
   }, []);
 
   const healthStatus = connectionHealthStatus(
@@ -357,7 +361,7 @@ export function ConnectionTile({
   const replaceKeyLabel = authKind === "oauth" ? (credentialStatus?.set ? "Sign out" : "Sign in") : "Replace key";
   // the provider-reported quota line — rendered ONLY when the
   // provider actually reported something (null ⇒ no block, no "0%" placeholder).
-  const quotaLine = connectionQuotaLine(connection.lastQuota, now);
+  const quotaLine = isOpenCodeGoConnection(connection) ? null : connectionQuotaLine(connection.lastQuota, now);
   const quotaTitle =
     quotaLine != null && connection.lastQuota?.observedAt
       ? `Reported by provider · observed ${formatAge(Date.parse(connection.lastQuota.observedAt), now)}`
@@ -453,6 +457,7 @@ export function ConnectionTile({
           <span className="connection-tile-status-dot" aria-hidden="true" />
           <span>{presentation.text}</span>
         </div>
+        <OpenCodeGoQuota connection={connection} now={now} />
         {quotaLine != null && (
           <div className="connection-quota" title={fullQuotaTitle}>
             {quotaLine}
