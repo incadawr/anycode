@@ -34,12 +34,13 @@ function member<T extends string>(value: unknown, values: readonly T[]): T | und
 export function projectConnectionTargets(data: ConnectionTargets): ConnectionTargets {
   const source = data.current;
   const engine = member(source.engine, ["core", "claude", "codex"]);
-  const native = engine === "claude" || engine === "codex" || source.routeKind === "native_cli";
+  // A known engine determines the route kind; use the hint only without one.
+  const native = engine ? engine !== "core" : source.routeKind === "native_cli";
   const current: ConnectionTargets["current"] = {
     ...(native ? {} : { connectionId: displayText(source.connectionId) }),
     model: displayText(source.model),
     ...(engine ? { engine } : {}),
-    ...(native ? { routeKind: "native_cli" as const } : source.routeKind === "api_connection" ? { routeKind: "api_connection" as const } : {}),
+    ...(native ? { routeKind: "native_cli" as const } : (engine === "core" || source.routeKind === "api_connection") ? { routeKind: "api_connection" as const } : {}),
     ...(typeof source.effort === "string" ? { effort: displayText(source.effort, 32) } : {}),
     ...(source.provenance !== undefined ? { provenance: member(source.provenance, ["selected", "applied", "unknown"]) ?? "unknown" } : {}),
   };
@@ -57,7 +58,10 @@ export function projectConnectionTargets(data: ConnectionTargets): ConnectionTar
     const headerBytes = new TextEncoder().encode(JSON.stringify(connection)).length + 1;
     if (headerBytes > remaining) break;
     remaining -= headerBytes;
-    for (const m of c.models.slice(0, 256)) {
+    // Include the default first so neither the count nor byte cap drops it.
+    const defaultModel = c.models.find(m => m.default);
+    const models = defaultModel ? [defaultModel, ...c.models.filter(m => m !== defaultModel)] : c.models;
+    for (const m of models.slice(0, 256)) {
       const model: ConnectionTarget["models"][number] = {
         id: displayText(m.id) ?? "",
         imageInput: typeof m.imageInput === "boolean" ? m.imageInput : undefined,
@@ -70,6 +74,8 @@ export function projectConnectionTargets(data: ConnectionTargets): ConnectionTar
       remaining -= bytes;
       connection.models.push(model);
     }
+    // Do not publish a connection whose default could not fit in the budget.
+    if (defaultModel && !connection.models.some(m => m.default)) break;
     output.connections.push(connection);
   }
   return output;

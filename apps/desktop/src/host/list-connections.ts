@@ -5,11 +5,15 @@ import { migrateModelOverrides } from "../shared/model-overrides.js";
 import { createConnectionModelSettings } from "./connection-model-settings.js";
 import type { AnycodeSettings } from "../shared/settings.js";
 
-/** Project only routing information; never return connection records themselves. */
+/** Full in-process routing inventory; model-facing limits belong to the tool. */
 export function listConnectionTargets(settings: AnycodeSettings, connectionId?: string, model?: string, manualEnvironment = false, current?: ConnectionTargets["current"]): ConnectionTargets {
-  return projectConnectionTargets({
-    current: current?.engine === "claude" || current?.engine === "codex" || current?.routeKind === "native_cli"
-      ? current : { connectionId, model, ...current },
+  // Normalize current metadata without applying display caps to the inventory.
+  const native = current?.engine ? current.engine !== "core" : current?.routeKind === "native_cli";
+  const route = projectConnectionTargets({
+    current: native ? current! : { connectionId, model, ...current }, connections: [],
+  }).current;
+  return {
+    current: route,
     connections: connectionRoutingSettings(settings, connectionId, model, manualEnvironment).provider.connections.map(rawConnection => {
       const connection = migrateModelOverrides(rawConnection);
       const catalog = getBuiltinCatalog().providers.find(p => p.id === connection.providerId);
@@ -34,5 +38,5 @@ export function listConnectionTargets(settings: AnycodeSettings, connectionId?: 
         }),
       };
     }),
-  });
+  };
 }

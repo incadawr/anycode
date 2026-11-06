@@ -48,3 +48,23 @@ it("exports an idempotent projector with a total UTF-8 output budget", async () 
   const result = await createListConnectionsTool(() => data).handler({}, {} as ToolContext);
   expect(new TextEncoder().encode(JSON.stringify(result)).length).toBeLessThan(100000);
 });
+
+
+it.each([
+  ["core", "native_cli", "api_connection", "c"],
+  ["claude", "api_connection", "native_cli", undefined],
+  ["codex", "api_connection", "native_cli", undefined],
+  [undefined, "native_cli", "native_cli", undefined],
+] as const)("normalizes route kind for engine %s", (engine, routeKind, expectedKind, connectionId) => {
+  const projected = projectConnectionTargets({ current: { engine, routeKind, connectionId: "c" }, connections: [] });
+  expect(projected.current).toEqual({ engine, routeKind: expectedKind, connectionId });
+});
+
+it("retains the default model beyond the count and UTF-8 budgets", () => {
+  const models = Array.from({ length: 300 }, (_, i) => ({ id: `model-${i}-${"界".repeat(500)}`, default: i === 280 }));
+  const data = { current: {}, connections: [{ id: "c", providerId: "p", readiness: "unknown", models }] };
+  const projected = projectConnectionTargets(data);
+  expect(projected.connections[0]?.models.length).toBeLessThan(256);
+  expect(projected.connections[0]?.models.find(m => m.default)?.id).toBe(models[280]!.id.slice(0, 512));
+  expect(projectConnectionTargets(projected)).toEqual(projected);
+});
