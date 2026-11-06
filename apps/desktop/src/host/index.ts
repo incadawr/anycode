@@ -1,3 +1,4 @@
+import { mapProgressToEvent } from "@anycode/core";
 import { resolveProfileRoles } from "../shared/role-profiles.js";
 import { codexAgentPermissionMode as codexChildAuthority } from "./engines/codex/dynamic-tool-bridge.js";
 import { createChildStatusStore } from "@anycode/core";
@@ -1291,6 +1292,7 @@ async function candidateRouting(sessionId: string, broker: IpcPermissionBroker, 
     preset: () => runtime?.engineSettings?.snapshot().activePresetId ?? "read-only",
     permissionMode: preset => runtime?.engine.id === "claude" ? claudeAgentPermissionMode(preset) : codexChildAuthority(preset) });
   const port = createChildSessionPort({
+    onDetachedProgress: (progress, req) => session?.emitDetachedSubagentEvent(mapProgressToEvent(progress, req.spawnToolCallId)),
     statusStore: childStatusStore,
     canRun: () => runtime !== undefined && session?.ownsRuntime(runtime.engine) === true,
     parentSessionId: sessionId, getPermissionMode: () => runtime?.engine.id === "core" ? session?.childSpawnMode() ?? runtime.engine.mode() : foreign.childMode(),
@@ -1642,6 +1644,7 @@ async function bootCodexSession(
     let port: ChildSessionPort | undefined;
     if (catalog.length) {
       port = createChildSessionPort({
+        onDetachedProgress: (progress, req) => session?.emitDetachedSubagentEvent(mapProgressToEvent(progress, req.spawnToolCallId)),
         statusStore: childStatusStore,
         parentSessionId: bridgeRowId,
         getPermissionMode: foreignComposition.childMode,
@@ -2259,6 +2262,7 @@ async function bootClaudeSession(
     let childPort: ChildSessionPort | undefined;
     if (catalog.length > 0) {
       childPort = createChildSessionPort({
+        onDetachedProgress: (progress, req) => session?.emitDetachedSubagentEvent(mapProgressToEvent(progress, req.spawnToolCallId)),
         statusStore: childStatusStore,
         parentSessionId: rowId,
         // cross-review M1: this seam feeds
@@ -4238,6 +4242,7 @@ async function boot(): Promise<void> {
     const spawnModeCell = createSpawnModeCell(config, () => session);
     if (!isChildSessionBoot(args, sessionMeta)) {
       childSessionPortHandle = createChildSessionPort({
+        onDetachedProgress: (progress, req) => session?.emitDetachedSubagentEvent(mapProgressToEvent(progress, req.spawnToolCallId)),
         statusStore: childStatusStore,
         parentSessionId: sessionMeta.id,
         // A1: children inherit the mode the ORCHESTRATOR had BEFORE

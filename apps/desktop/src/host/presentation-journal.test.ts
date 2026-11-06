@@ -20,6 +20,19 @@ describe("presentation journal retention", () => {
     }
   });
 
+  it("retains terminal events with 501 handed-off starts", () => {
+    const journal = new PresentationJournal(1, 5000);
+    journal.start("t", "r", 1);
+    for (let i = 0; i < 501; i++) {
+      const toolCallId = `call-${i}`;
+      journal.record("t", { type: "subagent_start", toolCallId, agentType: "executor", description: "work" });
+      journal.recordDetachedTerminal({ type: "subagent_end", toolCallId, status: "completed", turns: 2, toolCalls: 3, durationMs: 10 });
+    }
+    const events = journal.snapshot().turns[0]!.events;
+    expect(events).toHaveLength(1002);
+    expect(events[1]!.event).toMatchObject({ type: "subagent_end", toolCallId: "call-0", status: "completed" });
+  });
+
   it("bounds events and prunes history as it advances", () => {
     const journal = new PresentationJournal(2, 3);
     const item = (i: number) => ({ id: `i${i}`, createdAt: i, tokenEstimate: 1, turnId: `t${i}`, step: 0, message: { role: "user" as const, content: `p${i}` } });

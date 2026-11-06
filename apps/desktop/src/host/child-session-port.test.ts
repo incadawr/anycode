@@ -2853,6 +2853,7 @@ describe("child-session-port — synchronous join budget handoff (GitHub #17 sli
     let listener: ((event: ChildRunEvent) => void) | undefined;
     let nextId = 0;
     const detachedTerminals: SessionSubagentOutcome[] = [];
+    const detachedProgress: SubagentProgress[] = [];
     const approvals: Array<{ toolName: string; subject: string }> = [];
     const settled: string[] = [];
     const stalls: string[] = [];
@@ -2866,6 +2867,7 @@ describe("child-session-port — synchronous join budget handoff (GitHub #17 sli
       },
       createRequestId: () => `req-${++nextId}`,
       onDetachedTerminal: (outcome) => detachedTerminals.push(outcome),
+      onDetachedProgress: (progress) => detachedProgress.push(progress),
       onDetachedApproval: (ask) => approvals.push(ask),
       onDetachedApprovalSettled: (_req, childSessionId) => settled.push(childSessionId),
       onDetachedStall: (_report, _req, childSessionId) => stalls.push(childSessionId),
@@ -2875,6 +2877,7 @@ describe("child-session-port — synchronous join budget handoff (GitHub #17 sli
       port,
       sent,
       detachedTerminals,
+      detachedProgress,
       approvals,
       settled,
       stalls,
@@ -2939,7 +2942,8 @@ describe("child-session-port — synchronous join budget handoff (GitHub #17 sli
     expect(CHILD_SYNC_JOIN_BUDGET_MS).toBe(120_000);
     const h = joinHarness();
     let settledOutcome: SessionSubagentOutcome | undefined;
-    const pending = h.port.run(JOIN_REQUEST(true), {}).then((outcome) => {
+    const joinedProgress: SubagentProgress[] = [];
+    const pending = h.port.run(JOIN_REQUEST(true), { onProgress: (event) => joinedProgress.push(event) }).then((outcome) => {
       settledOutcome = outcome;
       return outcome;
     });
@@ -2952,6 +2956,8 @@ describe("child-session-port — synchronous join budget handoff (GitHub #17 sli
     await vi.advanceTimersByTimeAsync(1);
     const outcome = await pending;
     expect(outcome.background).toEqual({ reason: "join_budget" });
+    expect(joinedProgress.filter((event) => event.kind === "start")).toHaveLength(1);
+    expect(h.detachedProgress.filter((event) => event.kind === "start")).toHaveLength(0);
     expect(outcome.status).toBe("completed");
     expect(outcome.childSessionId).toBe("child-join");
     expect(outcome.finalText).toContain("still running after 120 seconds");
@@ -3344,5 +3350,43 @@ describe("child status", () => {
     owner.emit(terminalEvent(requestId, { childSessionId: "child", turns: 4, toolCalls: 3 }));
     if (!detach) await run;
     expect(owner.port.getStatus!("child")).toMatchObject({ state: "completed", turns: 4, toolCalls: 3, tail: [{ kind: "tool", text: "Read: file" }, { kind: "result", text: "Read: success" }] });
+  });
+});
+
+describe("detached continuation card events", () => {
+  it("does not open a detached card when cancellation precedes admission", async () => {
+    let listener: (event: ChildRunEvent) => void = () => {};
+    const events: SubagentProgress[] = [];
+    const port = createChildSessionPort({ parentSessionId: PARENT_SESSION_ID, getPermissionMode: () => "build", send: () => {}, subscribe: cb => { listener = cb; return () => {}; }, createRequestId: () => "run", onDetachedProgress: progress => events.push(progress) });
+    const abort = new AbortController();
+    const pending = port.run({ agentType: "executor", description: "work", prompt: "work", spawnToolCallId: "call", detach: true }, { signal: abort.signal });
+    abort.abort();
+    listener({ type: CHILD_RUN_EVENT_TYPE, requestId: "run", kind: "accepted", childSessionId: "child", childTabId: "tab", model: "model" });
+    listener({ type: CHILD_RUN_EVENT_TYPE, requestId: "run", kind: "progress", turns: 2, toolCalls: 3 });
+    listener(terminalEvent("run", { childSessionId: "child", status: "cancelled" }));
+    expect((await pending).status).toBe("cancelled");
+    expect(events).toEqual([]);
+    expect(port.listBackgroundChildren()).toEqual([]);
+  });
+  it("routes each run's progress and terminal under its own call id", async () => {
+    let listener: (event: ChildRunEvent) => void = () => {};
+    let seq = 0;
+    const events: Array<{ id: string; progress: SubagentProgress }> = [];
+    const port = createChildSessionPort({
+      parentSessionId: PARENT_SESSION_ID, getPermissionMode: () => "build",
+      send: () => {}, subscribe: cb => { listener = cb; return () => {}; },
+      createRequestId: () => `run-${++seq}`,
+      onDetachedProgress: (progress, req) => events.push({ id: req.spawnToolCallId, progress }),
+    });
+    for (const [id, requestId] of [["call-a", "run-1"], ["call-b", "run-2"]]) {
+      const pending = port.run({ agentType: "executor", description: "work", prompt: "work", spawnToolCallId: id!, detach: true, ...(id === "call-b" ? { resumeChildSessionId: "child" } : {}) }, {});
+      listener({ type: CHILD_RUN_EVENT_TYPE, requestId: requestId!, kind: "accepted", childSessionId: "child", childTabId: "tab", model: "model" });
+      await pending;
+      listener({ type: CHILD_RUN_EVENT_TYPE, requestId: requestId!, kind: "attention", waiting: true, toolName: "Read" });
+      listener({ type: CHILD_RUN_EVENT_TYPE, requestId: requestId!, kind: "progress", turns: 2, toolCalls: 3, lastTool: "Bash" });
+      expect(events.at(-1)?.progress).toMatchObject({ kind: "progress", lastTool: "Read" });
+      listener(terminalEvent(requestId!, { childSessionId: "child", turns: 2, toolCalls: 3 }));
+    }
+    expect(events.map(e => [e.id, e.progress.kind])).toEqual([["call-a", "start"], ["call-a", "progress"], ["call-a", "end"], ["call-b", "start"], ["call-b", "progress"], ["call-b", "end"]]);
   });
 });

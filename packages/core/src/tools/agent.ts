@@ -754,9 +754,8 @@ async function runSessionTier(
   };
   // GitHub #17 slice D: an admitted/handed-off child is still
   // running — this result reports the DISPATCH. No terminal card is finalized
-  // (that would claim completed work), the transient live card is cleared by
-  // the renderer through the structured handoff marker, and the running child
-  // shows up in the existing background-agents strip instead.
+  // (that would claim completed work); the host continues to relay the
+  // running child’s lifecycle independently of this tool call.
   // a role-route notice (degraded or fallback spawn) rides the
   // model-visible text on a FRESH spawn only — a resume keeps its own history.
   const notice =

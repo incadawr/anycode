@@ -407,6 +407,8 @@ export interface CreateChildSessionPortOptions {
    * for a non-detached run, whose terminal still settles `run()` directly.
    */
   onDetachedTerminal?: (outcome: SessionSubagentOutcome, req: SessionSubagentRequest) => void;
+  /** Live card events outlive the Agent tool call that admitted the child. */
+  onDetachedProgress?: (progress: SubagentProgress, req: SessionSubagentRequest) => void;
   /**
    * slice 2: invoked when a DETACHED run's stall clock fires — the
    * ONE case slice 1 deliberately left uncovered (the parent is not blocked
@@ -852,6 +854,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
         if (handedOff || terminalSeen || cancelSent || opts.signal?.aborted) return;
         if (acceptedEvent === undefined) return;
         handedOff = true;
+        if (req.detach === true) options.onDetachedProgress?.({ kind: "start", agentType: req.agentType, description: req.description, model: acceptedEvent.model, ...(req.engine !== undefined ? { engine: req.engine } : {}) }, req);
         joiningAgents.delete(req.spawnToolCallId);
         mode = "background";
         clearJoinTimer();
@@ -916,15 +919,8 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
         onEvent: (event) => {
           switch (event.kind) {
             case "accepted": {
-              // срез 1: a detached run settles `run()` HERE, at
-              // admit — not at terminal. No `subagent_start` progress is
-              // emitted (file header: nothing downstream needs a live card
-              // for a call that already returned; agent.ts's own header
-              // comment explains why finalizeSubagentCard naturally produces
-              // no presentation for it). The waiter is deliberately left
-              // registered (no `finish()`/no `waiters.delete`) so the
-              // eventual `terminal` still reaches this `onEvent` and is
-              // routed to `onDetachedTerminal` below.
+              // Detached admission resolves the tool call while this waiter
+              // continues relaying lifecycle events until the child settles.
               //
               // срез 3: the abort listener IS removed here, though
               // (file header's срез-3 addendum) — a detach is an exit from
@@ -997,14 +993,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               return;
             }
             case "progress": {
-              // Sign of life (slice 1/2): silence is measured
-              // against the cadence of these coarse events, exactly like the
-              // inline tier's tool_result/turn_end boundary — no new wire
-              // message. Fed BEFORE the detach early-return below: a
-              // detached run's clock still needs to see this, even though
-              // (срез 1, unchanged) its own tool call already
-              // returned at admit, so no live card exists for opts.onProgress
-              // to update.
+              // Track silence and relay background counters independently of the tool call.
               stallClock.noteProgress(event.lastTool);
               const lastTool = approvalTool ?? event.lastTool;
               retainProgress({ turns: event.turns, toolCalls: event.toolCalls, lastTool });
@@ -1015,6 +1004,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                   toolCalls: event.toolCalls,
                   ...(lastTool !== undefined ? { lastTool } : {}),
                 });
+                if (admitResultDelivered) options.onDetachedProgress?.({ kind: "progress", turns: event.turns, toolCalls: event.toolCalls, ...(lastTool !== undefined ? { lastTool } : {}) }, req);
                 // a detached run's progress is the only place
                 // the parent can learn its child is about to hit its turn
                 // cap. Checked inside the detach branch (a sync-join parent
@@ -1184,8 +1174,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
               };
               // срез 1: this run's `run()` promise already settled
               // at admit (above) — this terminal can no longer resolve it.
-              // No `subagent_end` progress either (symmetry with the other
-              // three cases above: no live card exists to close out). Clean
+              // Relay the terminal independently of the settled tool call. Clean
               // up HERE instead — this is the true end of this waiter's
               // life, the one point a detached waiter still needs its own
               // teardown that `finish()` would otherwise have done.
@@ -1221,6 +1210,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
                 opts.signal?.removeEventListener("abort", onAbort);
                 backgroundChildren.delete(event.childSessionId);
                 notifyBackgroundChildrenChanged();
+                options.onDetachedProgress?.({ kind: "end", status: event.status, turns: event.turns, toolCalls: event.toolCalls, durationMs: event.durationMs, ...(event.activitySuppressed !== undefined ? { activitySuppressed: event.activitySuppressed } : {}), ...(event.finalTurnFinishReason !== undefined ? { finalTurnFinishReason: event.finalTurnFinishReason } : {}), ...(event.ceiling !== undefined ? { ceiling: event.ceiling } : {}), ...(event.model !== undefined ? { model: event.model } : {}), ...(event.responseModel !== undefined ? { responseModel: event.responseModel } : {}), ...(req.engine !== undefined ? { engine: req.engine } : {}) }, req);
                 options.onDetachedTerminal?.(outcome, backgroundRequest());
                 return;
               }

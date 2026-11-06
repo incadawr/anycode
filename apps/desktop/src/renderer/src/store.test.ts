@@ -2380,6 +2380,23 @@ describe("desktop store — subagent sub-status (task 3.1.4, design §3.3/§4.2)
   const findByToolCallId = (store: ReturnType<typeof createDesktopStore>, id: string) =>
     store.getState().transcript.find((b) => b.kind === "tool_call" && b.toolCallId === id);
 
+  it("applies detached continuation events after the parent turn without changing the earlier card", () => {
+    const { scheduler } = createManualScheduler();
+    const store = createDesktopStore(scheduler);
+    beginAgentToolCall(store, "turn-1", "call-a");
+    const send = (event: any) => store.getState().applyHostMessage({ type: "agent_event", turnId: "detached-subagent", event });
+    send({ type: "subagent_start", toolCallId: "call-a", agentType: "executor", description: "first" });
+    send({ type: "subagent_end", toolCallId: "call-a", status: "completed", turns: 1, toolCalls: 1, durationMs: 10 });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "turn-1", event: { type: "tool_call", toolCall: { id: "call-b", name: "Agent", input: { continue_session: "child" } } } });
+    send({ type: "subagent_start", toolCallId: "call-b", agentType: "executor", description: "follow" });
+    store.getState().applyHostMessage({ type: "agent_event", turnId: "turn-1", event: { type: "tool_result", outcome: { toolCallId: "call-b", toolName: "Agent", status: "success", modelText: "started", durationMs: 1, result: { ok: true, output: {}, presentation: { subagentHandoff: { target: { kind: "session", childSessionId: "child", parentSessionId: "s1", spawnToolCallId: "call-b" }, reason: "requested" } } } } } });
+    send({ type: "subagent_progress", toolCallId: "call-b", turns: 2, toolCalls: 3, lastTool: "Bash" });
+    expect(findByToolCallId(store, "call-b")).toMatchObject({ subagent: { turns: 2, toolCalls: 3, final: null } });
+    send({ type: "subagent_end", toolCallId: "call-b", status: "cancelled", turns: 2, toolCalls: 3, durationMs: 20 });
+    expect(findByToolCallId(store, "call-b")).toMatchObject({ subagent: { turns: 2, toolCalls: 3, final: { status: "cancelled", durationMs: 20 } } });
+    expect(findByToolCallId(store, "call-a")).toMatchObject({ subagent: { turns: 1, toolCalls: 1, final: { status: "completed", durationMs: 10 } } });
+  });
+
   it("start seeds the sub-status (spinner state, final null), progress×N refreshes counters, end fills the terminal status — keyed by toolCallId", () => {
     const { scheduler } = createManualScheduler();
     const store = createDesktopStore(scheduler);
@@ -9309,9 +9326,8 @@ describe("compact_rejected (GitHub #14)", () => {
 /**
  * GitHub #17 slice D: an Agent tool_result whose child was
  * DISPATCHED (explicit detach or a join-budget handoff) carries a
- * `subagentHandoff` marker instead of a terminal card. The block must lose its
- * transient live spinner, keep its generic dispatch text, and never claim the
- * child finished — live and after a reload.
+ * `subagentHandoff` marker instead of a terminal card. A live card remains
+ * available for background progress, while reload keeps the dispatch text.
  */
 describe("desktop store — Agent background handoff (GitHub #17 slice D)", () => {
   const HANDOFF_TARGET = {
@@ -9340,7 +9356,7 @@ describe("desktop store — Agent background handoff (GitHub #17 slice D)", () =
     return { store, send };
   }
 
-  it("a valid handoff clears the live spinner and keeps the generic dispatch result", () => {
+  it("a valid handoff retains the live card and keeps the generic dispatch result", () => {
     const { store, send } = agentStore();
     expect(findBlock(store.getState().transcript, "tool_call")?.subagent).not.toBeNull();
 
@@ -9358,29 +9374,8 @@ describe("desktop store — Agent background handoff (GitHub #17 slice D)", () =
 
     const block = findBlock(store.getState().transcript, "tool_call");
     expect(block?.status).toBe("success");
-    expect(block?.subagent).toBeNull();
+    expect(block?.subagent).toMatchObject({ agentType: "executor", final: null });
     expect(block?.modelText).toContain("still running");
-  });
-
-  it("a malformed or foreign handoff leaves the existing live state untouched", () => {
-    for (const presentation of [
-      { subagentHandoff: { target: { ...HANDOFF_TARGET, spawnToolCallId: "call-other" }, reason: "requested" } },
-      { subagentHandoff: { target: HANDOFF_TARGET, reason: "finished" } },
-    ]) {
-      const { store, send } = agentStore();
-      send({
-        type: "tool_result",
-        outcome: {
-          toolCallId: "call-17",
-          toolName: "Agent",
-          status: "success",
-          modelText: "some text",
-          durationMs: 1,
-          result: { ok: true, output: {}, presentation },
-        },
-      });
-      expect(findBlock(store.getState().transcript, "tool_call")?.subagent).not.toBeNull();
-    }
   });
 
   it("a reloaded transcript renders the dispatched Agent card as generic, not completed and not spinning", () => {

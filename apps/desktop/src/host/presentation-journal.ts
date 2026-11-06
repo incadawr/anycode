@@ -55,6 +55,20 @@ export class PresentationJournal {
     this.trimEvents(turn);
   }
 
+  /** Keep a handed-off child's terminal alongside its retained start. */
+  recordDetachedTerminal(event: Extract<WireAgentEvent, { type: "subagent_end" }>): void {
+    for (const turn of this.turns) {
+      const index = turn.events.findIndex((entry) => entry.event.type === "subagent_start" && entry.event.toolCallId === event.toolCallId);
+      if (index < 0) continue;
+      const start = turn.events[index]!;
+      const next = turn.events[index + 1];
+      if (next?.event.type === "subagent_end" && next.event.toolCallId === event.toolCallId) next.event = { ...event };
+      else turn.events.splice(index + 1, 0, { ...start, event: { ...event } });
+      this.trimEvents(turn);
+      return;
+    }
+  }
+
   private trimEvents(turn: PresentationTurn): void {
     while (turn.events.length > this.replayLimit) {
       // Remove the oldest event, together with its paired stream event if any.

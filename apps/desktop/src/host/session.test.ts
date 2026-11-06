@@ -4323,7 +4323,9 @@ function createChildHarness(opts: {
   imageInputEnabled?: () => boolean;
   /** optional wrap-up rescue callback forwarded into child options. */
   wrapUpRescue?: () => Promise<string>;
-}): ChildHarness {
+}
+
+): ChildHarness {
   const channel = new MessageChannel();
   const uiPort = channel.port1;
   const hostPort = channel.port2;
@@ -10385,4 +10387,67 @@ it("keeps the desktop model and effort when route resolution refuses a switch", 
     expect(state.model).toBe(before.model);
     expect(state.selectedEffort).toBe("high");
   } finally { h.close(); }
+});
+
+describe("detached subagent wire events", () => {
+  it("restores a journal handoff terminal after cache eviction and replay overflow", async () => {
+    const h = createHarness({ steps: [] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      const state = h.session as unknown as {
+        presentationJournal: import("./presentation-journal.js").PresentationJournal;
+        detachedCardStates: Map<string, unknown>;
+      };
+      const journal = state.presentationJournal;
+      journal.start("turn-1", "request-1", Date.now(), "work");
+      journal.record("turn-1", { type: "tool_call", toolCall: { id: "call-0", name: "Agent", input: { description: "work", prompt: "work" } } });
+      journal.record("turn-1", { type: "subagent_start", toolCallId: "call-0", agentType: "executor", description: "work" });
+      journal.record("turn-1", { type: "tool_result", outcome: { toolCallId: "call-0", toolName: "Agent", status: "success", modelText: "started", durationMs: 1, result: { ok: true, output: {}, presentation: { subagentHandoff: { target: { kind: "session", childSessionId: "child", parentSessionId: "parent", spawnToolCallId: "call-0" }, reason: "requested" } } } } });
+      const end = (toolCallId: string) => ({ type: "subagent_end" as const, toolCallId, status: "completed" as const, turns: 2, toolCalls: 3, durationMs: 10 });
+      h.session.emitDetachedSubagentEvent(end("call-0"));
+      for (let i = 1; i <= 500; i++) {
+        const toolCallId = `call-${i}`;
+        h.session.emitDetachedSubagentEvent({ type: "subagent_start", toolCallId, agentType: "executor", description: "work" });
+        h.session.emitDetachedSubagentEvent(end(toolCallId));
+      }
+      expect(state.detachedCardStates.has("call-0")).toBe(false);
+      for (let i = 0; i <= REPLAY_BUFFER_CAP; i++) h.outbound.emit({ type: "title_changed", title: `flood-${i}` });
+      await h.waitUntil(() => h.received.some(m => m.type === "title_changed" && m.title === `flood-${REPLAY_BUFFER_CAP}`));
+      await h.flush();
+      const before = h.received.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.slice(before).some(isHostReady));
+      await h.flush();
+      const store = createDesktopStore({ schedule: () => {} });
+      for (const message of h.received.slice(before)) store.getState().applyHostMessage(message);
+      expect(store.getState().transcript.find(b => b.kind === "tool_call" && b.toolCallId === "call-0"))
+        .toMatchObject({ subagent: { final: { status: "completed" } } });
+    } finally { h.close(); }
+  });
+  it("reasserts the terminal after replay overflow", async () => {
+    const h = createHarness({ steps: [] });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      const end = { type: "subagent_end" as const, toolCallId: "call-1", status: "completed" as const, turns: 2, toolCalls: 3, durationMs: 10 };
+      h.session.emitDetachedSubagentEvent(end);
+      for (let i = 0; i <= REPLAY_BUFFER_CAP; i++) h.outbound.emit({ type: "title_changed", title: `flood-${i}` });
+      await h.waitUntil(() => h.received.some(m => m.type === "title_changed" && m.title === `flood-${REPLAY_BUFFER_CAP}`));
+      await h.flush();
+      const before = h.received.length;
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.slice(before).some(m => m.type === "agent_event" && m.turnId === "detached-subagent" && m.event.type === "subagent_end"));
+      expect(h.received.slice(before)).toContainEqual({ type: "agent_event", turnId: "detached-subagent", event: end });
+    } finally { h.close(); }
+  });
+  it("emits an agent event with the detached sentinel", async () => {
+    const h = createChildHarness({ steps: [] });
+    try {
+      const event = { type: "subagent_start" as const, toolCallId: "call-1", agentType: "executor", description: "work" };
+      h.session.emitDetachedSubagentEvent(event);
+      const message = await h.waitFor((m): m is Extract<HostToUiMessage, { type: "agent_event" }> => m.type === "agent_event" && m.turnId === "detached-subagent");
+      expect(message).toMatchObject({ type: "agent_event", turnId: "detached-subagent", event });
+    } finally { h.close(); }
+  });
 });

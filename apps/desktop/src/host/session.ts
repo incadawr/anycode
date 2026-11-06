@@ -1286,6 +1286,7 @@ const answerApprovalSchema = z.object({
 
 export class Session {
   private readonly presentationJournal: PresentationJournal;
+  private readonly detachedCardStates = new Map<string, { start?: WireAgentEvent; latest?: WireAgentEvent; finished: boolean }>();
   private readonly outbound: Outbound;
   /**
    * NOT readonly — the engine_swap_request handler re-assigns
@@ -2731,6 +2732,7 @@ export class Session {
     }
     this.outbound.observeEmissions(undefined);
     this.presentationJournal.clear();
+    this.detachedCardStates.clear();
   }
 
   private route(raw: unknown, canonicalHydrated = false): void {
@@ -2998,6 +3000,11 @@ export class Session {
         for (const boundary of this.switchBoundaries) this.outbound.sendDirect(boundary);
         this.outbound.replay();
         if (journalSnapshot.coveredTurnIds.length > 0) this.outbound.sendDirect({ type: "presentation_replay_end" });
+        for (const state of this.detachedCardStates.values()) {
+          for (const event of [state.start, state.latest]) {
+            if (event) this.outbound.sendDirect({ type: "agent_event", turnId: "detached-subagent", event });
+          }
+        }
         this.outbound.sendDirect(this.broker.approvalState());
         this.outbound.sendDirect({ type: "context_usage_checkpoint", contextUsage: this.checkpointContextUsage });
         // GitHub #19: re-assert the authoritative title on every ui_ready, as
@@ -4673,6 +4680,25 @@ export class Session {
    */
   private imagesAccepted(): boolean {
     return this.imageInputEnabled?.() === true || this.imageFallbackAvailable?.() === true;
+  }
+
+  /** Detached events intentionally bypass presentationJournal and durable history; they have no turn, step, or attempt. */
+  emitDetachedSubagentEvent(event: AgentEvent): void {
+    const wire = sanitizeAgentEvent(event, this.engine.id);
+    if (wire.type === "subagent_start" || wire.type === "subagent_progress" || wire.type === "subagent_end") {
+      const state = this.detachedCardStates.get(wire.toolCallId) ?? { finished: false };
+      if (wire.type === "subagent_start") state.start = wire;
+      else if (!state.finished) state.latest = wire;
+      if (wire.type === "subagent_end") {
+        state.finished = true;
+        this.presentationJournal.recordDetachedTerminal(wire);
+      }
+      this.detachedCardStates.delete(wire.toolCallId);
+      this.detachedCardStates.set(wire.toolCallId, state);
+      const finished = [...this.detachedCardStates].filter(([, value]) => value.finished);
+      if (finished.length > 500) this.detachedCardStates.delete(finished[0]![0]);
+    }
+    this.outbound.emit({ type: "agent_event", turnId: "detached-subagent", event: wire });
   }
 
   /**
