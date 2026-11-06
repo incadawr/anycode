@@ -210,6 +210,8 @@ const promptCacheSchema = z
   })
   .strict();
 
+const goQuotaWindow = z.object({ usedPercent: z.number().finite().min(0).max(100), resetsAt: z.number().finite().optional() });
+
 /**
  * One `ProviderConnection` (settings v2). `id`/`providerId` are required;
  * every default is optional (a connection may exist with only a credential, or
@@ -355,6 +357,14 @@ const connectionSchema = z.object({
   // by a runtime observer (connection-quota.ts), not a user form, and a
   // hand-edited/corrupt value must read back as ABSENT — never fail the whole
   // document and reset every other section to defaults over one bad field.
+  lastGoQuota: z.object({
+    observedAt: z.string().refine((value) => Number.isFinite(Date.parse(value))),
+    windows: z.object({
+      rolling: goQuotaWindow.optional(),
+      weekly: goQuotaWindow.optional(),
+      monthly: goQuotaWindow.optional(),
+    }).refine((windows) => Boolean(windows.rolling || windows.weekly || windows.monthly)),
+  }).optional().catch(undefined),
   lastQuota: z
     .object({
       usedPercent: z.number().min(0).max(100),
