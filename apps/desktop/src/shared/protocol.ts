@@ -585,12 +585,30 @@ export interface WorktreeProjection {
   ownedByAnyCode: boolean;
 }
 
+/** Atomic replacement of every engine-dependent composer projection. */
+export interface EngineSwitchProjection {
+  engine: EnginePresentation | null;
+  shell: ShellCapabilitiesProjection | null;
+  model: string;
+  mode: PermissionMode;
+  reasoningEffort: ReasoningEffort;
+  availableEffortLevels?: ReasoningEffort[];
+  imageInput: boolean;
+  imageFallback: boolean;
+  contextWindowAssumed: boolean;
+  modelSettingsConnectionId: string | null;
+  steering: { supported: boolean; ready: boolean } | null;
+  orchestration: { enabled: boolean; available: boolean };
+  pinnedConnection: { connectionId: string; providerId: string } | null;
+}
+
 export type HostToUiMessage =
   | { type: "todo_reminder_snapshot"; state: { count: number; threshold: number } | null }
   // Phase-2 §3.3: `sessionId` added (host knows it at boot); renderer binds the
   // tab to its session (badge, picker annotation). Additive on the wire.
   | {
       type: "host_ready";
+      engineSwitch?: { enabled: true; generation: number };
       workspace: string;
       /** Stable project identity; differs from workspace while a worktree is active. */
       projectRoot?: string;
@@ -713,7 +731,7 @@ export type HostToUiMessage =
    * items share one key space: `${turnId}:${step}`. Core also stamps the
    * attempt within each step, starting at zero and advancing on retry.
    */
-  | { type: "agent_event"; turnId: string; step?: number; attempt?: number; event: WireAgentEvent; /** Host completion time for a loop_end. */ at?: number }
+  | { type: "agent_event"; turnId: string; boundaryId?: string; boundaryAfter?: string; step?: number; attempt?: number; event: WireAgentEvent; /** Host completion time for a loop_end. */ at?: number }
   /**
    * the host's authoritative pending-prompt push (sendDirect,
    * regenerated on every ui_ready — never ring-buffered). Present iff an
@@ -1019,12 +1037,12 @@ export type HostToUiMessage =
   // engine is live and the old one disposed, so receiving it means every later
   // message flows through the replacement engine.
   | { type: "context_usage_checkpoint"; contextUsage: { estimatedTokens: number; budgetTokens: number; source: "provider" | "estimate" } | null }
-  | { type: "engine_switched"; requestId: string; engine: EngineId; previousEngine: EngineId }
+  | { type: "engine_switched"; requestId: string; engine: EngineId; previousEngine: EngineId; generation?: number; projection?: EngineSwitchProjection }
   // non-silent refusal for engine_switch_request — mirror of
   // rewind_result's failure shape (the UI must be able to show WHY the switch
   // did not happen: turn running, child attached, same engine, factory absent
   // or the factory's own error e.g. "codex not signed in").
-  | { type: "engine_switch_failed"; requestId: string; reason: string }
+  | { type: "engine_switch_failed"; requestId: string; reason: string; generation?: number }
   // Phase 4 slice 4.4-T (design feature-session-titles.md §4): emitted once
   // the heuristic derives a title from the first user message, and again if
   // the async tier-2 LLM refinement upgrades it. Like `mode_changed` above,

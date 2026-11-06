@@ -9,7 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Engine-switch requests carry the selected model and reject unavailable models; host preparation remains disabled by default.
+- An opt-in engine picker imports conversation text when changing engines and keeps the active selection until the change succeeds. Engine switching remains disabled by default.
 
 ## [0.0.78] - 2026-11-06
 

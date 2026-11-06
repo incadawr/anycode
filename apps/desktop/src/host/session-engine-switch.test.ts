@@ -353,7 +353,7 @@ describe("Session — engine switch", () => {
       if (notice !== undefined && notice.event.type === "engine_notice") {
         expect(notice.event.level).toBe("info");
         expect(notice.event.message).toContain('from the "core" engine to the "codex" engine');
-        expect(notice.event.message).toContain("imported summary");
+        expect(notice.event.message).toContain("text import");
       }
 
       // Transcript continuity: a fresh ui_ready's session_history still carries

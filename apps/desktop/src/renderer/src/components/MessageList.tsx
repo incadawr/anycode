@@ -1281,6 +1281,8 @@ export function MessageList({
             // cut-2 §D5: the provider switch reads as what it is — a
             // session boundary (the host really was respawned), so it borrows
             // the loop-end divider's register rather than an error tint.
+            case "engine_boundary":
+              return <div key={block.id} data-block-id={block.id} className={`message message-loop-end${enterClass(block.id)}`}>{block.text}</div>;
             case "connection_changed":
               return (
                 <div

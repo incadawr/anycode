@@ -367,7 +367,7 @@ import { createForeignOrchestrationComposition, selectedCodexPreset } from "./fo
 import { RoleHealthCache, pickEntry, resolveRoleRouteChain, toCoreEntry } from "./role-route.js";
 import { parseSettings } from "../settings/schema.js";
 import { ENV_APP_VERSION, parseAppVersionEnv } from "../main/host-env.js";
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync, realpathSync, existsSync } from "node:fs";
 import type { HostToUiMessage, ShellCapabilitiesProjection, WireRepoMapStatus } from "../shared/protocol.js";
 import {
   CREDENTIAL_RESPONSE_TYPE,
@@ -1319,7 +1319,11 @@ async function candidateRouting(sessionId: string, broker: IpcPermissionBroker, 
   const backgroundChildren = { list: () => port.listBackgroundChildren(), cancel: (id: string) => port.cancelBackgroundChild(id), cancelAll: () => port.cancelAllBackgroundChildren(), onChange: (listener: () => void) => port.onBackgroundChildrenChanged(listener) };
   return {
     port, browser, catalog, foreign, profiles,
-    configure(next: SwitchRuntime) { runtime = next; next.backgroundChildren = backgroundChildren; next.onOrchestrateChanged = enabled => { if (enabled) foreign.captureBaseAuthority(next.engineSettings?.snapshot().activePresetId ?? "read-only"); else foreign.clearBaseAuthority(); }; },
+    configure(next: SwitchRuntime) { runtime = next;
+      next.presentation = { imageInputEnabled: () => next.engine.id === "codex" ? (next.engine as CodexEngine).imageInputEnabled() : next.engine.capabilities.supportsImages,
+        shell: { gitReadOnly: existsSync(join(workspace, ".git")), gitUserMutations: existsSync(join(workspace, ".git")), terminal: true },
+        modelSettingsConnectionId: null,
+      }; next.backgroundChildren = backgroundChildren; next.onOrchestrateChanged = enabled => { if (enabled) foreign.captureBaseAuthority(next.engineSettings?.snapshot().activePresetId ?? "read-only"); else foreign.clearBaseAuthority(); }; },
     cleanup() { port.cancelAllBackgroundChildren(); subscriptions.splice(0).forEach(stop => stop()); },
   };
 }
@@ -1387,7 +1391,11 @@ function hostSwitchFactory(
         }, { profiles: await routing.profiles() });
         const loop = new AgentLoop(config);
         return { model, options: buildCoreLaunchOptions({ config, loop }),
-          configure: routing.configure, cleanup: async () => { routing.cleanup(); await manager.dispose(); } };
+          configure: runtime => { routing.configure(runtime); runtime.presentation = { ...runtime.presentation,
+            pinnedConnection: { connectionId: launch.target.engine === "core" ? launch.target.connectionId : "", providerId: envConfig.providerId ?? "custom" },
+            modelSettingsConnectionId: launch.target.engine === "core" ? launch.target.connectionId : null,
+            imageInputEnabled: () => resolveImageInput(model, entry, envConfig.imageInput),
+          }; }, cleanup: async () => { routing.cleanup(); await manager.dispose(); } };
       } catch (error) { routing.cleanup(); await manager.dispose(); throw error; }
     } : resolveCore,
     resolveCodex: async () => {

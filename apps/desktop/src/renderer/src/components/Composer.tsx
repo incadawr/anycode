@@ -44,6 +44,7 @@ import { ModeMenu, modeChangeDisabled } from "./ModeMenu.js";
 import { useOverlayFlag } from "../preview/overlay-flag.js";
 import { useComposerClearance } from "../composer-clearance.js";
 const ContextWindowSettings = lazy(() => import("./ContextWindowSettings.js"));
+import { EngineSwitchPicker } from "./EngineSwitchPicker.js";
 import { ModelPill, modelPickDisabled } from "./ModelPill.js";
 import { EngineModelMenu, EnginePresetMenu, engineControlDisabled, engineEffortDisabled, nativeEffortControl } from "./EngineControls.js";
 import { EnvironmentMenu } from "./EnvironmentMenu.js";
@@ -1529,7 +1530,8 @@ export function Composer() {
   // message…" placeholder and the queue-on-Enter hint all apply verbatim,
   // because a prompt sent now would be busy-rejected by the host.
   const running = isSessionBusy(turn.status);
-  const ready = connection === "ready";
+  const switchPending = useTabStore(state => state.pendingEngineSwitch !== null);
+  const ready = connection === "ready" && !switchPending;
   // Running no longer blocks send (F15 prompt queue): a send while running
   // enqueues instead of dispatching directly (handleSend below).
   const loadingImages = (pendingImages?.length ?? 0) > 0 || (completedImages?.length ?? 0) > 0;
@@ -2037,6 +2039,7 @@ export function Composer() {
   }
 
   function handleSend(): void {
+    if (tabStore.getState().pendingEngineSwitch) return;
     if (policyUnavailable()) return;
     if (imagesStillLoading()) return;
     const recoverySourceId = tabStore.getState().restoredComposerDraft?.deliveryRequestId ?? restoredDeliveryId;
@@ -2639,6 +2642,7 @@ export function Composer() {
           {/* item 4: Codex's model catalog comes from the engine
               projection (doctor/app-server), never AnyCode's provider
               catalog — ModelPill (settings-store-backed) is core-only. */}
+          <EngineSwitchPicker />
           {supportsModelSelection &&
             (engine?.model ? (
               <EngineModelMenu model={engine.model} fast={engine.model.available.find((model) => model.id === engine.model?.current)?.supportsFast ? engine.fast : false} pendingModel={pendingEngineChange?.model} disabled={engineEffortDisabled(turn.status, queueInFlight, ready, engine.capabilities.supportsDeferredEffortChange === true && nativeEffort !== undefined)} modelDisabled={engineControlDisabled(turn.status, queueInFlight, ready)} onPick={handleEngineModelPick} {...(nativeEffort !== undefined ? { effort: nativeEffort } : {})} />
