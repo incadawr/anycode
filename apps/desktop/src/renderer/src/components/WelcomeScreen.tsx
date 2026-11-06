@@ -229,9 +229,35 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
         )}
 
         <div className={`welcome-paths${activePath ? " welcome-paths-compact" : ""}`} role="group" aria-label="Choose how to connect">
+          {WELCOME_SUBSCRIPTIONS.slice(0, 3).map((sub) => (
+            <button key={sub.id} type="button" className="welcome-path welcome-subscription" aria-pressed={subscription === sub.id} onClick={() => {
+              setPath("api");
+              setSubscription(sub.id);
+              setPick((n) => n + 1);
+              // A fresh seed: the remounted form's select shows the new
+              // template again, whatever the previous form had been switched to.
+              setFormProviderId(null);
+              setViewOverride({ mode: "add" });
+              onSelectEngine?.("core");
+            }}>
+              <strong className="welcome-path-title"><ProviderIcon id={sub.id} />{sub.title}</strong><span>{sub.description}</span>
+            </button>
+          ))}
+          {WELCOME_SUBSCRIPTIONS.slice(3).map((sub) => (
+            <button key={sub.id} type="button" className="welcome-path welcome-subscription" aria-pressed={subscription === sub.id} onClick={() => {
+              setPath("api");
+              setSubscription(sub.id);
+              setPick((n) => n + 1);
+              // A fresh seed: the remounted form's select shows the new
+              // template again, whatever the previous form had been switched to.
+              setFormProviderId(null);
+              setViewOverride({ mode: "add" });
+              onSelectEngine?.("core");
+            }}>
+              <strong className="welcome-path-title"><ProviderIcon id={sub.id} />{sub.title}</strong><span>{sub.description}</span>
+            </button>
+          ))}
           {([
-            ["codex", "ChatGPT / Codex", "Use your ChatGPT account"],
-            ["claude", "Claude Code", "Use your Claude account"],
             ["api", "API key or local model", "Connect any provider or your own server"],
           ] as const).map(([id, title, description]) => (
             <button key={id} type="button" className="welcome-path" aria-pressed={activePath === id && !(id === "api" && subscription !== null)} onClick={() => {
@@ -245,23 +271,19 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
               <strong className="welcome-path-title"><ProviderIcon id={id === "codex" ? "openai" : id === "claude" ? "anthropic" : "custom"} />{title}</strong><span>{description}</span>
             </button>
           ))}
-        </div>
-
-        {/* Coding-subscription shortcuts: each opens the API form with its
-            template preselected — a key paste, not an OAuth flow. */}
-        <div className="welcome-subscriptions" role="group" aria-label="Connect a coding subscription">
-          {WELCOME_SUBSCRIPTIONS.map((sub) => (
-            <button key={sub.id} type="button" className="welcome-path welcome-subscription" aria-pressed={subscription === sub.id} onClick={() => {
-              setPath("api");
-              setSubscription(sub.id);
-              setPick((n) => n + 1);
-              // A fresh seed: the remounted form's select shows the new
-              // template again, whatever the previous form had been switched to.
-              setFormProviderId(null);
-              setViewOverride({ mode: "add" });
-              onSelectEngine?.("core");
+          {([
+            ["codex", "ChatGPT / Codex", "Use your ChatGPT account"],
+            ["claude", "Claude Code", "Use your Claude account"],
+          ] as const).map(([id, title, description]) => (
+            <button key={id} type="button" className="welcome-path" aria-pressed={activePath === id && !(id === "api" && subscription !== null)} onClick={() => {
+              setPath(id);
+              // Re-clicking the already-active path must stay inert — clearing
+              // the pick here would remount the form and silently discard a
+              // half-typed key, model and label.
+              if (path !== id || subscription !== null) setSubscription(null);
+              onSelectEngine?.(id === "api" ? "core" : id);
             }}>
-              <strong className="welcome-path-title"><ProviderIcon id={sub.id} />{sub.title}</strong><span>{sub.description}</span>
+              <strong className="welcome-path-title"><ProviderIcon id={id === "codex" ? "openai" : id === "claude" ? "anthropic" : "custom"} />{title}</strong><span>{description}</span>
             </button>
           ))}
         </div>
