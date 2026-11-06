@@ -11,6 +11,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Messages sent as Claude finishes a reply stay pending and run automatically in the next turn, without duplicate message bubbles.
 - Claude sessions resume automatically after an idle process exit; failed recovery preserves unsent messages and explains how to restart.
+- Compaction shows animated dots while running, with a static ellipsis when reduced motion is preferred.
+- Successful proxy connection checks show a success notice; bypassed checks stay neutral, and target HTTP responses no longer look like connection failures.
 
 ## [0.0.84] - 2026-11-06
 

@@ -184,6 +184,10 @@ describe("maskProxyCredentials", () => {
 });
 
 describe("describeClassification", () => {
+  it.each([200, 401, 404, 500])("describes target HTTP %s as connectivity, without an error-looking status", (status) => {
+    expect(describeClassification({ kind: "http_response", status })).toBe("target reached (HTTP response received)");
+  });
+
   it("never lets a password reach the description", () => {
     const text = describeClassification(
       { kind: "unknown", message: "handshake with http://bob:s3cr3t@proxy:3128 failed; token s3cr3t" },

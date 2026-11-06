@@ -144,7 +144,7 @@ describe("CompactionCard — the row is a disclosure (GitHub #36)", () => {
   it("a RUNNING compaction is not a disclosure — there is nothing to show yet", () => {
     const html = render(card({ status: "running", trigger: "auto" }));
 
-    expect(html).toContain("Context window full — compacting conversation…");
+    expect(html).toContain("Context window full — compacting conversation");
     expect(html).not.toContain("<button");
     expect(html).not.toContain("compaction-detail");
   });
@@ -182,4 +182,20 @@ describe("compactionRowText — GitHub #36 additions", () => {
     expect(text).toBe("Conversation compacted earlier — summary available");
     expect(text).not.toContain("?");
   });
+});
+
+describe("compaction activity dots", () => {
+  it.each(["auto", "manual"] as const)("shows three hidden dots only while %s compaction runs", (trigger) => {
+    const html = render(card({ status: "running", trigger }));
+    expect(html).toContain('<span class="compaction-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>');
+    expect(html).toContain(trigger === "auto" ? "Context window full — compacting conversation" : "Compacting conversation");
+  });
+
+  it.each(["done", "failed"] as const)("keeps the %s label static", (status) => {
+    const block = card({ status, preTokens: 1000, postTokens: 100, error: "model unreachable" });
+    const html = render(block);
+    expect(html).not.toContain("compaction-dots");
+    expect(html).toContain(compactionRowText(block));
+  });
+
 });

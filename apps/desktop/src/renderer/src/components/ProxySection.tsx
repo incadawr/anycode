@@ -527,6 +527,12 @@ export function ProxySection({
   }
 
   const manual = draft.mode === "manual";
+  const checkFailed = outcome !== null && (
+    outcome.verdict === "proxy_unreachable" || outcome.verdict === "proxy_auth" ||
+    outcome.verdict === "tls" || outcome.verdict === "target_unreachable"
+  );
+  const checkClass = checkFailed ? "settings-notice"
+    : outcome?.verdict === "ok" ? "settings-notice-ok" : "settings-notice-neutral";
 
   return (
     <section className="settings-section">
@@ -680,7 +686,11 @@ export function ProxySection({
         {draft.id === undefined && <span className="settings-field-hint">Save the profile first.</span>}
       </div>
 
-      {outcome !== null && <p className="settings-notice">{proxyCheckVerdictText(outcome)}</p>}
+      {outcome !== null && (
+        <p className={checkClass} role={checkFailed ? "alert" : "status"}>
+          {proxyCheckVerdictText(outcome)}
+        </p>
+      )}
 
       {error !== null && (
         <p className="settings-notice" role="alert">

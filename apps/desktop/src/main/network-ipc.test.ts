@@ -332,7 +332,7 @@ describe("handleProxyCheck — the spawn path", () => {
       targetUrl: DEFAULT_PROXY_CHECK_TARGET,
       proxyUsed: true,
       shellOverride: false,
-      detail: "via http://proxy.corp:3128/: target answered HTTP 401",
+      detail: "via http://proxy.corp:3128/: target reached (HTTP response received)",
     });
     expect(envs).toEqual([{ url: "http://proxy.corp:3128/" }]);
     expect(spawns).toHaveLength(1);
@@ -458,7 +458,7 @@ describe("handleProxyCheck — shell-wins parity with the real env materialisati
     expect(env.NODE_USE_ENV_PROXY).toBe("1");
     expect(env.NO_PROXY).toContain("127.0.0.1");
     const detail = result.ok ? (result.detail ?? "") : "";
-    expect(detail).toBe("via http://proxy.corp:3128/: target answered HTTP 401");
+    expect(detail).toBe("via http://proxy.corp:3128/: target reached (HTTP response received)");
     expect(detail).not.toContain(SHELL_OVERRIDE_NOTE);
   });
 

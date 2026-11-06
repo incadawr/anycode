@@ -384,7 +384,7 @@ export function describeClassification(classification: ProbeClassification, secr
   const mask = (text: string): string => maskProxyCredentials(text, secrets);
   switch (classification.kind) {
     case "http_response":
-      return `target answered HTTP ${String(classification.status)}`;
+      return "target reached (HTTP response received)";
     case "proxy_auth":
       return `proxy refused the tunnel with ${String(classification.status)} Proxy Authentication Required`;
     case "proxy_tunnel_rejected":

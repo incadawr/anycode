@@ -150,7 +150,12 @@ export function CompactionCard({ block, enter = false }: { block: CompactionBloc
             <span className="compaction-caret" aria-hidden="true">
               <Chevron />
             </span>
-            {compactionRowText(block)}
+            <span className="compaction-running-label">
+              {compactionRowText(block).slice(0, -1)}
+              <span className="compaction-dots" aria-hidden="true">
+                <span>.</span><span>.</span><span>.</span>
+              </span>
+            </span>
           </span>
         ) : (
           <button

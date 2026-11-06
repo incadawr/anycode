@@ -1753,6 +1753,15 @@
   white-space: pre-wrap;
 }
 
+.settings-notice-neutral {
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-sm);
+  background: var(--bg-inset);
+  border-left: 2px solid var(--text-ghost);
+  color: var(--text-1);
+  font-size: var(--fs-sm);
+}
+
 /* ── R16 About pane (R21 upgrades .settings-about-name to the wordmark) ── */
 
 .settings-about-identity {
