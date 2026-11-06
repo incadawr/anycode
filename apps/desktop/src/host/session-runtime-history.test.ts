@@ -23,6 +23,27 @@ async function switchedStore() {
   return store;
 }
 describe("canonical reconnect hydration", () => {
+  it("serializes an inbound turn behind a delayed reconnect history read", async () => {
+    const store = await switchedStore();
+    const source = createHarness({steps:[finishStep()]});
+    let release!: (items:readonly import("@anycode/core").HistoryItem[]) => void;
+    let started = false;
+    source.engine.readTranscript = () => { started = true; return new Promise(resolve => { release = resolve; }); };
+    const h = createHarness({steps:[],engine:source.engine,runtimeHistory:new RuntimeSessionHistory(store,"test-session")});
+    try {
+      h.send({type:"ui_ready"}); await h.flush();
+      expect(started).toBe(true);
+      h.send({type:"user_message",requestId:"during-read",text:"newer input"}); await h.flush();
+      expect(h.received.some(message => message.type === "turn_started")).toBe(false);
+      source.engine.readTranscript = async () => source.engine.historyItems();
+      release([]);
+      await h.waitUntil(() => h.received.some(message => message.type === "agent_event" && message.event.type === "loop_end"));
+      await h.flush();
+      expect(store.loadRuntimeSession("test-session")!.items.filter(item => item.message.content === "newer input")).toHaveLength(1);
+      const readyIndex = h.received.findIndex(message => message.type === "host_ready");
+      expect(h.received.findIndex(message => message.type === "turn_started")).toBeGreaterThan(readyIndex);
+    } finally { release?.([]); await h.session.shutdown(); h.close(); source.close(); await store.close(); }
+  });
   it("does not resurrect a rewound canonical turn after renderer reload or host restart", async () => {
     const store = await switchedStore();
     const history = new RuntimeSessionHistory(store,"test-session");

@@ -1302,6 +1302,8 @@ export class Session {
   private readonly engineSwitchCoordinator: SessionOptions["engineSwitchCoordinator"];
   private readonly runtimeHistory: SessionOptions["runtimeHistory"];
   private runtimeHydrationSequence = 0;
+  private runtimeHydration: Promise<void> | null = null;
+  private readonly runtimeHydrationInbound: {raw:unknown; generation:string | null}[] = [];
   private readonly engineSwitchRequestIds = new Set<string>();
   private readonly switchEngineFactory: ((engine: EngineId, model: string) => Promise<SessionEngine | SwitchRuntime>) | undefined;
   /**
@@ -2746,6 +2748,12 @@ export class Session {
       return;
     }
     const message = parsed.data;
+    if (!this.shuttingDown && this.runtimeHydration && !canonicalHydrated && message.type !== "cancel_turn" && message.type !== "permission_response") {
+      // Preserve wire order while a checked native read is outstanding. A
+      // delayed snapshot must never replace a turn admitted after ui_ready.
+      this.runtimeHydrationInbound.push({raw,generation:this.boundGeneration});
+      return;
+    }
     // CUT-S2 §10.12.1: the SINGLE admission funnel for every wire
     // message once shutdown has begun — default-deny: new message types are
     // shutdown-safe by construction, not by a per-case audit (the class of
@@ -2805,7 +2813,8 @@ export class Session {
       const sequence = ++this.runtimeHydrationSequence;
       const generation = this.boundGeneration;
       const engine = this.engine;
-      void this.restoreRuntimeOrchestration().then(() => this.runtimeHistory!.hydrate(engine)).then(state => {
+      const priorTurn = this.currentTurn;
+      const hydration = Promise.resolve(priorTurn).then(() => this.restoreRuntimeOrchestration()).then(() => this.runtimeHistory!.hydrate(engine)).then(state => {
         if (this.shuttingDown || sequence !== this.runtimeHydrationSequence || generation !== this.boundGeneration) return;
         if (engine !== this.engine) { this.route(raw); return; }
         this.sessionHistory = buildSessionHistory(state.items,this.historyMaxItems,this.bootTurnErrors);
@@ -2826,7 +2835,13 @@ export class Session {
           this.pushRuntimeInputRecovery();
           this.outbound.sendDirect({type:"agent_event",turnId:ENGINE_SWITCH_TURN_ID,event:{type:"engine_notice",level:"warning",message:`Could not refresh native history: ${describeError(error)}`}});
         }
+      }).finally(() => {
+        if (this.runtimeHydration !== hydration) return;
+        this.runtimeHydration = null;
+        const queued = this.runtimeHydrationInbound.splice(0);
+        for (const entry of queued) if (!this.shuttingDown && entry.generation === this.boundGeneration) this.route(entry.raw);
       });
+      this.runtimeHydration = hydration;
       return;
     }
     switch (message.type) {
