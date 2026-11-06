@@ -3696,7 +3696,7 @@ describe("handleConnectionCheck — probe (W11)", () => {
     }
   });
 
-  it.each(["endpoint", "key", "rotation"])("drops late Go health after %s changes during the request", async change => {
+  it.each(["endpoint", "model", "transport", "proxyUrl", "proxyRef", "promptCache", "provider", "key", "rotation", "label", "quota"])("guards late Go health after %s changes during the request", async change => {
     const { createConnectionProbe } = await import("./connection-probe.js");
     const deps = makeDeps({ catalogIds: ["opencode"] });
     await handleConnectionCreate(deps, { providerId: "opencode" });
@@ -3712,14 +3712,27 @@ describe("handleConnectionCheck — probe (W11)", () => {
     const pending = handleConnectionCheck(deps, { id: "conn-1" });
     await inFlight;
     if (change === "endpoint") await handleConnectionUpdate(deps, { id: "conn-1", baseUrl: "https://example.test/v1" });
-    else await handleSetSecret(deps, { key, value: "replacement-key" });
+    else if (change === "label") await handleConnectionUpdate(deps, { id: "conn-1", label: "Renamed" });
+    else if (change === "key" || change === "rotation") await handleSetSecret(deps, { key, value: "replacement-key" });
+    else {
+      const settings = (await loadSettings(settingsPath)).settings;
+      const connection = settings.provider.connections[0]!;
+      if (change === "quota") connection.lastGoQuota = { observedAt: "2026-01-01T00:00:00Z", windows: { monthly: { usedPercent: 7 } } };
+      if (change === "provider") connection.providerId = "opencode-openai";
+      if (change === "model") connection.model = "other";
+      if (change === "transport") connection.transport = "openai-responses";
+      if (change === "proxyUrl") connection.proxyUrl = "http://localhost:7777";
+      if (change === "proxyRef") connection.proxyRef = "direct";
+      if (change === "promptCache") connection.promptCache = { mode: "implicit", ttl: "30m" };
+      await saveSettings(settingsPath, settings);
+    }
     if (change === "rotation") {
       const fresh = makeDeps({ catalogIds: ["opencode"], probeConnection: async () => ({ ok: true }) });
       await handleConnectionCheck(fresh, { id: "conn-1" });
     }
-    finish(change === "endpoint" ? new Response('{"usage":{"rolling":{"percent":0}}}') : new Response(null, { status: 401 }));
+    finish(["endpoint", "label", "quota"].includes(change) ? new Response('{"usage":{"rolling":{"percent":0}}}') : new Response(null, { status: 401 }));
     await pending;
-    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.lastHealth?.status).toBe(change === "rotation" ? "ready" : "unchecked");
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.lastHealth?.status).toBe(["rotation", "label", "quota"].includes(change) ? "ready" : "unchecked");
   });
 
   it("an unsupported probe leaves existing health untouched", async () => {

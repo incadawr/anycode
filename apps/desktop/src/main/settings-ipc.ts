@@ -1775,7 +1775,12 @@ export async function applyConnectionHealthEvent(
       // Check again under the write lock: an in-flight probe belongs to the
       // endpoint and credential it actually used, never their replacements.
       const current = connectionById(loaded.settings, connectionId);
-      if (current === undefined || JSON.stringify(current) !== JSON.stringify(expectedProbe.connection)) return false;
+      const identity = (connection: ProviderConnection) => [
+        connection.providerId, connection.model, connection.transport, connection.baseUrl,
+        connection.proxyUrl, connection.proxyRef ?? null,
+        connection.promptCache?.mode, connection.promptCache?.ttl,
+      ];
+      if (current === undefined || JSON.stringify(identity(current)) !== JSON.stringify(identity(expectedProbe.connection))) return false;
       const kind = current.providerId === "" ? "api_key" : deps.authKindFor?.(current.providerId) ?? "api_key";
       const credential = await deps.vault.getSecretValue(connectionSecretKey(connectionId, kind));
       if (credential !== expectedProbe.credential) return false;
