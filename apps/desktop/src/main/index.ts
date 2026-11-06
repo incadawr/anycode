@@ -1,4 +1,5 @@
 import { createSessionPeerReplies } from "./session-peer-replies.js";
+import { createFileActivityIngress } from "./file-activity-ingress.js";
 import { createSessionPeersHandler } from "./session-peers.js";
 import { createSessionPeerAccess } from "./session-peer-access.js";
 import { createSessionPeerPolicyStore } from "./session-peer-policy.js";
@@ -2717,7 +2718,9 @@ void app.whenReady().then(async () => {
       policy: createSessionPeerPolicyStore({ file: join(app.getPath("userData"), "session-peer-access.json") }),
       isTrusted: key => peerTrust.folders[key]?.decision === "trusted", realpathSync, statSync }),
   }) : undefined;
+  const fileActivity = createFileActivityIngress(peerEnabled, tabId => manager?.peerHost(tabId));
   manager = new TabHostManager({
+    onFileActivity: fileActivity?.accept,
     onSessionPeerRequest: peerHandler,
     diagnosticsRing: mainDiagnosticsRing,
     agentTitleOf: (sessionId) => agentSessionTitles.get(sessionId),

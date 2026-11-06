@@ -1255,6 +1255,7 @@ export interface SessionOptions {
    * `new Session({...})` call sites.
    */
   eventTap?: (event: AgentEvent) => void;
+  observeFileActivity?: (event: AgentEvent) => void;
 }
 
 /**
@@ -1729,6 +1730,7 @@ export class Session {
   private lspUnsubscribe: (() => void) | undefined;
   /** срез 2: host's pending-report queue seam; undefined for a child-mode host/legacy test (doc on SessionOptions.pendingChildReports). */
   private readonly pendingChildReports: PendingChildReportsOptions | undefined;
+  private readonly observeFileActivity: SessionOptions["observeFileActivity"];
   /** see SessionOptions.eventTap's own doc — undefined for core (byte-identical to pre-159). */
   private readonly eventTap: SessionOptions["eventTap"];
   /** срез 3 §2: unsubscribes the background-children live-push listener on shutdown (mirror of lspUnsubscribe). */
@@ -1912,6 +1914,7 @@ export class Session {
     this.child = options.child;
     this.pendingChildReports = options.pendingChildReports;
     this.eventTap = options.eventTap;
+    this.observeFileActivity = options.observeFileActivity;
     this.now = options.child?.now ?? Date.now;
     const initialTitle = typeof options.initialTitle === "string" ? options.initialTitle.trim() : "";
     this.currentTitle = initialTitle.length > 0 ? options.initialTitle : undefined;
@@ -5856,6 +5859,7 @@ export class Session {
           recordResult(event.reason);
           if (event.reason === "error") await persistTurnError();
         }
+        try { this.observeFileActivity?.(event); } catch { /* isolated observer */ }
         // the foreign-engine telemetry seam — see SessionOptions.
         // eventTap's own doc/invariant comment. Fires for every event this
         // loop observes (covers continueTurn too, since it drives the same

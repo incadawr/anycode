@@ -8928,3 +8928,25 @@ it("peer control plane authenticates the process and suppresses late replies", a
   tab.proc = null;
   await manager.shutdownAllTabHosts();
 });
+
+it("file metadata ingress receives only the live host process", async () => {
+  const { fork, hosts } = liveForkRig();
+  const onFileActivity = vi.fn(() => true);
+  const manager = childManager(fork, windowRig().window, { onFileActivity });
+  const created = manager.createTab({ workspace: "/ws", sessionId: "writer", resume: false });
+  expect(created.ok).toBe(true);
+  if (!created.ok) return;
+  await flush();
+  const wire = { type: "file_activity", generation: 1, report: { filePath: "a", toolCallId: "c", toolName: "Write" } };
+  hosts[0]!.emit("message", wire);
+  await flush();
+  expect(onFileActivity).toHaveBeenCalledWith(created.tab.tabId, hosts[0], wire);
+  onFileActivity.mockClear();
+  const tab = manager.getTab(created.tab.tabId)!;
+  tab.proc = new FakeHost() as unknown as UtilityProcess;
+  hosts[0]!.emit("message", wire);
+  await flush();
+  expect(onFileActivity).not.toHaveBeenCalled();
+  tab.proc = null;
+  await manager.shutdownAllTabHosts();
+});

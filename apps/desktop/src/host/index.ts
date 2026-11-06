@@ -1,3 +1,4 @@
+import { createFileActivityTaps } from "./file-activity.js";
 import { createSessionPeersPort } from "./session-peers-port.js";
 import { takeNativeSessionsCarrier } from "../shared/session-peers.js";
 import { mapProgressToEvent } from "@anycode/core";
@@ -1268,6 +1269,7 @@ if (sessionPeersPort) {
 
 const engineSwitchEnabled = process.env.ANYCODE_ENGINE_SWITCH_ENABLED === "1";
 const switchHostGeneration = Number(process.env.ANYCODE_HOST_GENERATION);
+const fileActivity = createFileActivityTaps(nativeSessionsEnabled, switchHostGeneration, message => process.parentPort.postMessage(message));
 const switchClient = engineSwitchEnabled ? createEngineSwitchClient(switchHostGeneration, message => process.parentPort.postMessage(message)) : undefined;
 
 function hostSwitchCoordinator(sessionId: string, broker: IpcPermissionBroker, rules: SessionPermissionRules, secrets: McpSecretResolver): SessionOptions["engineSwitchCoordinator"] {
@@ -1994,6 +1996,7 @@ async function bootCodexSession(
   if (codexChildPort) bindRuntimeOrchestration(booted.engine,{ownerSessionId:connected.sessionMeta.id,port:codexChildPort,baseMode:() => codexChildAuthority(selectedCodexPreset(connected.engine)),capture:mode => codexForeignComposition?.captureMode(mode),clear:() => codexForeignComposition?.clearBaseAuthority()});
   bindCodexUsage(connected.engine, codexUsageAudit.sink, () => session?.ownsRuntime(booted.engine) ? session : null);
   session = new Session({
+    ...(fileActivity ? { observeFileActivity: fileActivity.observe } : {}),
     switchEngineFactory: hostSwitchFactory(connected.sessionMeta.id, broker, rules, mcpSecrets),
     engineSwitchCoordinator: hostSwitchCoordinator(connected.sessionMeta.id, broker, rules, mcpSecrets),
     runtimeHistory: createRuntimeSessionHistory(persistence!,connected.sessionMeta.id,engineSwitchEnabled,args.child !== undefined),
@@ -2774,6 +2777,7 @@ async function bootClaudeSession(
   if (claudeChildPort) bindRuntimeOrchestration(booted.engine,{ownerSessionId:rowId,port:claudeChildPort,baseMode:() => claudeAgentPermissionMode(claudeEngine.snapshot().activePresetId), capture: mode => claudeForeign?.captureMode(mode), clear: () => claudeForeign?.clearBaseAuthority(), ...(claudeCompositionEnabled ? { cleanup: () => { claudeRoutingDisposed = true; claudeRoutingSubscriptions.splice(0).forEach(stop => stop()); } } : {})});
   bindClaudeUsage(claudeEngine, claudeUsageAudit.sink, () => session?.ownsRuntime(booted.engine) ? session : null, connected.model);
   session = new Session({
+    ...(fileActivity ? { observeFileActivity: fileActivity.observe } : {}),
     switchEngineFactory: hostSwitchFactory(rowId, broker, rules, mcpSecrets),
     engineSwitchCoordinator: hostSwitchCoordinator(rowId, broker, rules, mcpSecrets),
     runtimeHistory: createRuntimeSessionHistory(persistence!,rowId,engineSwitchEnabled || claudeCompositionEnabled,args.child !== undefined),
@@ -4207,10 +4211,12 @@ async function boot(): Promise<void> {
       // does not carry a `let`-narrowing (module-level `telemetry`) across a
       // closure boundary. The loop never calls this itself; only
       // subagents/runner.ts's buildChildConfig reads it, once per spawn.
-      ...(subagentTelemetry !== null
+      ...(subagentTelemetry !== null || fileActivity
         ? {
-            subagentEventTap: (spawn: { agentType: string; model?: string }) =>
-              buildSubagentTelemetryTap(subagentTelemetry.port, subagentTelemetry.session, spawn),
+            subagentEventTap: (spawn: { agentType: string; model?: string }) => {
+              const tap = subagentTelemetry ? buildSubagentTelemetryTap(subagentTelemetry.port, subagentTelemetry.session, spawn) : undefined;
+              return fileActivity ? fileActivity.inline(tap) : tap!;
+            },
           }
         : {}),
       // Context window (design §2.5 + slice 6.4): resolved above — mirrors cli/main.ts.
@@ -4582,6 +4588,7 @@ async function boot(): Promise<void> {
     }
     if (childSessionPortHandle) bindRuntimeOrchestration(engine,{ownerSessionId:sessionId,port:childSessionPortHandle,baseMode:() => engine.mode()});
     session = new Session({
+      ...(fileActivity ? { observeFileActivity: fileActivity.observe } : {}),
       ...coreServices.callbacks,
       engineSwitchCoordinator: hostSwitchCoordinator(sessionId, broker, rules, mcpSecrets),
       runtimeHistory: createRuntimeSessionHistory(persistence!,sessionId,engineSwitchEnabled,isChildSession),

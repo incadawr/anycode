@@ -889,6 +889,7 @@ export interface TabHostManagerDeps {
     Promise<{ ok: true; release: () => void } | { ok: false }>;
   /** Reject a core model override before creating a child or sending a request. */
   validateChildModel?: (model: string, connectionId: string | undefined) => string | void;
+  onFileActivity?: (tabId: string, proc: UtilityProcess, message: unknown) => boolean;
   onSessionPeerRequest?: (tabId: string, proc: UtilityProcess, request: unknown) => Promise<SessionPeerResponse | null>;
   /**
    * Preview control-plane delegate (night-track wave-1 cut §2.3/§2.5,
@@ -1741,7 +1742,7 @@ export class TabHostManager {
       tab.proc = null;
       return;
     }
-    if (this.deps.onSessionPeerRequest) {
+    if (this.deps.onSessionPeerRequest || this.deps.onFileActivity) {
       try { tab.peerWorkspaceKey = normalizePeerWorkspaceKey(realpathSync(tab.workspace)) ?? ""; }
       catch { tab.peerWorkspaceKey = ""; }
     }
@@ -2024,6 +2025,10 @@ export class TabHostManager {
     // GitHub #18: record the wire SHAPE (type/kind only) for the diagnostics
     // export. Never the payload — noteWireMessage reads those two fields.
     noteWireMessage(this.deps.diagnosticsRing, "in", message);
+    if (data.type === "file_activity") {
+      if (tab.proc === child) this.deps.onFileActivity?.(tab.tabId, child, message);
+      return;
+    }
     if (data.type === "session_peers_request") {
       if (tab.proc !== child || !this.deps.onSessionPeerRequest) return;
       const generation = tab.hostGeneration;
