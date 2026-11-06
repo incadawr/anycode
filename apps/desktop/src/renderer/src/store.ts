@@ -5425,7 +5425,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               } : {}),
               notice:{kind:"turn_rejected",text:message.status === "pending"
                 ? "Message was not accepted. Restore the draft to send again, or delete it."
-                : "Message delivery is unconfirmed. Reconnect to check native history before sending again."},
+                : `Delivery is unconfirmed for: ${message.text.slice(0,500)}. Reconnect to check native history before resending this message.`},
             });
             return;
           }

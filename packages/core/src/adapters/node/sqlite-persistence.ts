@@ -1283,7 +1283,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       if (!row?.active_runtime_segment) throw new Error("Runtime session is missing");
       const raw = db.prepare("SELECT data FROM runtime_handoffs WHERE session_id=? AND segment_id=?").get(sessionId,row.active_runtime_segment);
       const state = { activeSegmentId: row.active_runtime_segment as string, handoff: raw ? JSON.parse(raw.data as string) as import("../../ports/runtime-segments.js").RuntimeHandoff : null };
-      if (db.prepare("SELECT 1 FROM runtime_inputs WHERE session_id=? AND segment_id=? AND state IN ('dispatching','uncertain')").get(sessionId,state.activeSegmentId)) throw new Error("Input acceptance is uncertain. Recovery is required before another turn.");
+      if (state.handoff?.state === "dispatching" || state.handoff?.state === "uncertain") throw new Error("Input acceptance is uncertain. Recovery is required before another turn.");
       const handoff = state.handoff;
       const inject = importConversation && handoff?.state === "pending";
       if (inject && importPayload !== undefined) {

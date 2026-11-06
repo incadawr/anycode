@@ -2846,7 +2846,7 @@ export class Session {
     }
     switch (message.type) {
       case "runtime_input_discard":
-        if (!this.busy) this.runtimeHistory?.discard(message.turnId);
+        this.runtimeHistory?.discard(message.turnId);
         return;
       case "ui_ready":
 
@@ -4617,9 +4617,9 @@ export class Session {
   }
 
   private onUserMessage(requestId: string, text: string, images?: ImageAttachment[], origin?: "system"): void {
-    if (this.runtimeHistory?.recoveries().some(input => input.state !== "pending")) {
-      this.pushRuntimeInputRecovery();
+    if (this.runtimeHistory?.requiresRecovery()) {
       this.outbound.sendDirect({type:"turn_rejected",requestId,reason:"not_ready"});
+      this.pushRuntimeInputRecovery();
       return;
     }
     if (this.child === undefined && this.presentationJournal.snapshot().turns.some(turn => turn.requestId === requestId)) {

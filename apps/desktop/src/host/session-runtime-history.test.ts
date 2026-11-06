@@ -23,6 +23,43 @@ async function switchedStore() {
   return store;
 }
 describe("canonical reconnect hydration", () => {
+  it("does not fence the next ordinary turn behind an unrelated uncertain delivery", async () => {
+    const store = await switchedStore();
+    const history = new RuntimeSessionHistory(store,"test-session");
+    const first = history.prepare("imported","imported","imported",true);
+    first.hooks.onInputDispatched!(); first.hooks.onInputAccepted!("imported");
+    history.snapshot([{id:"imported",turnId:"imported",createdAt:10,message:{role:"user",content:first.text}}]);
+    history.prepare("lost-ordinary","unconfirmed original","unconfirmed original",true).hooks.onInputDispatched!();
+    const h = createHarness({steps:[finishStep()],runtimeHistory:history});
+    try {
+      h.send({type:"ui_ready"}); await h.waitFor(m => m.type === "host_ready");
+      expect(history.requiresRecovery()).toBe(false);
+      h.send({type:"user_message",requestId:"next-ordinary",text:"continue serving"});
+      await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && m.event.type === "loop_end"));
+      await h.flush();
+      expect(history.recoveries()).toMatchObject([{turnId:"lost-ordinary",text:"unconfirmed original",state:"uncertain"}]);
+      expect(history.state().items.some(item => item.message.content === "continue serving")).toBe(true);
+      expect(h.received.some(m => m.type === "fatal")).toBe(false);
+    } finally { await h.session.shutdown(); h.close(); await store.close(); }
+  });
+  it("returns a core input cancelled before append to pending and acknowledges an actual append", async () => {
+    const store = await switchedStore();
+    const history = new RuntimeSessionHistory(store,"test-session");
+    const h = createHarness({steps:[finishStep()]});
+    try {
+      const cancelled = history.prepare("before-append","draft","draft",true);
+      const stop = new AbortController(); stop.abort();
+      for await (const _event of h.engine.runTurn(cancelled.text,{signal:stop.signal,turnId:"before-append",...cancelled.hooks})) { /* drain */ }
+      expect(history.state().handoff?.state).toBe("pending");
+      expect(history.recoveries()).toMatchObject([{turnId:"before-append",state:"pending"}]);
+      history.discard("before-append");
+      const next = history.prepare("appended","new draft","new draft",true);
+      for await (const _event of h.engine.runTurn(next.text,{signal:new AbortController().signal,turnId:"appended",...next.hooks})) { /* drain */ }
+      expect(history.state().handoff?.state).toBe("accepted");
+      await history.hydrate(h.engine);
+      expect(history.recoveries()).toEqual([]);
+    } finally { await h.session.shutdown(); h.close(); await store.close(); }
+  });
   it("serializes an inbound turn behind a delayed reconnect history read", async () => {
     const store = await switchedStore();
     const source = createHarness({steps:[finishStep()]});

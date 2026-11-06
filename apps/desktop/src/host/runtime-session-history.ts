@@ -52,9 +52,9 @@ export class RuntimeSessionHistory {
   }
   recoveries() { const state = this.state(); return this.store.runtimeInputRecoveries(this.sessionId,state.activeSegmentId); }
   discard(turnId: string): void { const state = this.state(); this.store.resetRuntimeInput(this.sessionId,state.activeSegmentId,turnId,true); }
+  requiresRecovery(): boolean { const handoff = this.state().handoff; return handoff?.state === "dispatching" || handoff?.state === "uncertain"; }
   assertSettled(): void {
-    const state = this.state();
-    if (this.store.runtimeInputRecoveryNeeded(this.sessionId,state.activeSegmentId)) throw new Error("Conversation import acceptance is uncertain. Recovery is required.");
+    if (this.requiresRecovery()) throw new Error("Conversation import acceptance is uncertain. Recovery is required.");
   }
 }
 

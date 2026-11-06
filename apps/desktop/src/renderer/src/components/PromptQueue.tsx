@@ -126,7 +126,10 @@ export function PromptQueue({ onRestore }: { onRestore?: (item: QueuedPrompt, de
             <button
               type="button"
               className="prompt-queue-clear"
-              onClick={() => tabStore.getState().clearQueue()}
+              onClick={() => {
+                for (const item of tabStore.getState().promptQueue) if (item.runtimeRecoveryTurnId) send({type:"runtime_input_discard",turnId:item.runtimeRecoveryTurnId});
+                tabStore.getState().clearQueue();
+              }}
             >
               Clear
             </button>

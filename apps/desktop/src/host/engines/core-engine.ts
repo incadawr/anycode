@@ -113,10 +113,22 @@ export class CoreEngine implements SessionEngine {
         );
       }
     }
+    let accepted = false;
+    const acknowledge = () => {
+      if (!accepted && options.turnId && this.historyItems().some(item => item.turnId === options.turnId && item.message.role === "user")) {
+        accepted = true;
+        options.onInputAccepted?.(options.turnId);
+      }
+    };
     try {
       options.onInputDispatched?.();
-      yield* this.options.loop.runTurn(input, options);
+      for await (const event of this.options.loop.runTurn(input, options)) {
+        acknowledge();
+        yield event;
+      }
     } finally {
+      acknowledge();
+      if (!accepted && options.turnId) options.onInputNotSent?.();
       this.failUndeliveredSteers();
     }
   }

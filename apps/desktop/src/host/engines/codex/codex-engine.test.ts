@@ -593,6 +593,24 @@ describe("CodexEngine — subscription quota (cut §6)", () => {
 });
 
 describe("CodexEngine — Stop (blocker)", () => {
+  it("returns a rejected start to pending and serves the next turn on the same app-server", async () => {
+    const server = new FakeAppServer();
+    const request = server.request.bind(server);
+    let reject = true;
+    server.request = (method,params,options) => {
+      if (method === "turn/start" && reject) { reject = false; return Promise.reject(Object.assign(new Error("start refused"),{code:-32602})); }
+      return request(method,params,options);
+    };
+    const engine = new CodexEngine(server,THREAD);
+    const notSent = vi.fn(), accepted = vi.fn();
+    for await (const _event of engine.runTurn("refused",{signal:new AbortController().signal,onInputNotSent:notSent,onInputAccepted:accepted})) { /* drain */ }
+    expect(notSent).toHaveBeenCalledOnce(); expect(accepted).not.toHaveBeenCalled();
+    expect(server.closeCount).toBe(0);
+    const next = drive(engine,"next input",new AbortController().signal);
+    await tick(); server.completeTurn("completed"); await next.done;
+    expect(next.events.at(-1)).toMatchObject({type:"loop_end",reason:"completed"});
+    await engine.dispose("session-close");
+  });
   it("settles Stop plus a rejected start RPC as cancelled without an engine error", async () => {
     const server = new FakeAppServer();
     const original = server.request.bind(server);

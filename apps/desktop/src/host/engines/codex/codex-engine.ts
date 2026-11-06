@@ -1702,6 +1702,14 @@ export class CodexEngine implements SessionEngine {
       // intercepted it) and released from the finally, after the cancelled
       // children's real outcomes have been joined and flushed.
     } catch (error) {
+      if (this.activeTurn === null && this.terminalError === null && typeof (error as {code?:unknown})?.code === "number") {
+        // A server rejection is a negative acknowledgement, not a transport
+        // failure. The same runtime can serve the user's next attempt.
+        options.onInputNotSent?.();
+        const failure = error instanceof Error ? error : new Error(String(error));
+        heldTerminal = options.signal.aborted ? [...this.cancelledEvents(turn)] : [{type:"error",error:failure},...this.terminalEvents(turn,failure,false)];
+        return;
+      }
       if (options.signal.aborted && this.activeTurn === null) {
         heldTerminal = [...this.cancelledEvents(turn)];
         return;
