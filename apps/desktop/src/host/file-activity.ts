@@ -9,7 +9,20 @@ export function createFileActivityTaps(enabled: boolean, generation: number, sen
     const prefix = `${namespace++}:`;
     const pending = new Map<string, ReportedWrite>();
     const seen = new Set<string>();
+    const shells = new Set<string>();
+    const shell = (id: string, phase: 'start' | 'end') => {
+      try { send({ type: 'shell_activity', generation, phase, toolCallId: prefix + id }); }
+      catch { /* metadata transport must not interrupt the shell */ }
+    };
     return event => {
+      if (event.type === 'tool_execution_start' && event.toolName === 'Bash') {
+        const id = event.toolCallId;
+        if (!id || (prefix + id).length > 256 || id.includes('\0') || shells.has(id)) return;
+        if (shells.size >= 256) { const oldest = shells.values().next().value!; shells.delete(oldest); shell(oldest, 'end'); }
+        shells.add(id); shell(id, 'start');
+      }
+      if (event.type === 'tool_result' && shells.delete(event.outcome.toolCallId)) shell(event.outcome.toolCallId, 'end');
+      if (event.type === 'loop_end') { for (const id of shells) shell(id, 'end'); shells.clear(); }
       if (event.type === 'loop_end') { pending.clear(); return; }
       if (event.type === 'tool_call') {
         const { id, name, input } = event.toolCall;

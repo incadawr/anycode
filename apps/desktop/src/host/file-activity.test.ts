@@ -92,3 +92,22 @@ it('observes real Session events and isolates observer failures', async () => {
     expect(f.send.mock.calls[0]![0].report.filePath).toBe('/workspace/a.txt');
   } finally { h.close(); }
 });
+
+it('emits bounded shell lifecycle metadata for execution including failed outcomes', () => {
+  const f = fixture();
+  const start = { type: 'tool_execution_start', toolName: 'Bash', toolCallId: 'shell', input: { command: 'SECRET' } } as AgentEvent;
+  f.taps.observe(call('shell', 'Bash')); // proposed tool input is not execution
+  expect(f.send).not.toHaveBeenCalled();
+  f.taps.observe(start); f.taps.observe(start);
+  f.taps.observe(result('shell', 'error', 'Bash'));
+  expect(f.send.mock.calls.map(([message]) => message)).toEqual([
+    { type: 'shell_activity', generation: 3, phase: 'start', toolCallId: '0:shell' },
+    { type: 'shell_activity', generation: 3, phase: 'end', toolCallId: '0:shell' },
+  ]);
+  expect(JSON.stringify(f.send.mock.calls)).not.toContain('SECRET');
+  f.taps.observe(start);
+  f.taps.observe({ type: 'loop_end', reason: 'cancelled' } as AgentEvent);
+  expect(f.send.mock.calls.at(-1)![0].phase).toBe('end');
+  const broken = createFileActivityTaps(true, 1, () => { throw new Error('transport'); })!;
+  expect(() => broken.observe(start)).not.toThrow();
+});

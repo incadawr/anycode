@@ -8932,7 +8932,8 @@ it("peer control plane authenticates the process and suppresses late replies", a
 it("file metadata ingress receives only the live host process", async () => {
   const { fork, hosts } = liveForkRig();
   const onFileActivity = vi.fn(() => true);
-  const manager = childManager(fork, windowRig().window, { onFileActivity });
+  const onFileActivityLifecycle = vi.fn();
+  const manager = childManager(fork, windowRig().window, { onFileActivity, onFileActivityLifecycle });
   const created = manager.createTab({ workspace: "/ws", sessionId: "writer", resume: false });
   expect(created.ok).toBe(true);
   if (!created.ok) return;
@@ -8941,14 +8942,22 @@ it("file metadata ingress receives only the live host process", async () => {
   hosts[0]!.emit("message", wire);
   await flush();
   expect(onFileActivity).toHaveBeenCalledWith(created.tab.tabId, hosts[0], wire);
+  expect(onFileActivityLifecycle).toHaveBeenCalledWith(created.tab.tabId);
+  const shell = { type: "shell_activity", generation: 1, phase: "start", toolCallId: "shell" };
+  hosts[0]!.emit("message", shell);
+  await flush();
+  expect(onFileActivity).toHaveBeenCalledWith(created.tab.tabId, hosts[0], shell);
   onFileActivity.mockClear();
   const tab = manager.getTab(created.tab.tabId)!;
   tab.proc = new FakeHost() as unknown as UtilityProcess;
   hosts[0]!.emit("message", wire);
+  hosts[0]!.emit("message", shell);
   await flush();
   expect(onFileActivity).not.toHaveBeenCalled();
   tab.proc = null;
+  onFileActivityLifecycle.mockClear();
   await manager.shutdownAllTabHosts();
+  expect(onFileActivityLifecycle).toHaveBeenCalledWith(created.tab.tabId);
 });
 
 it.each([false, true])("pins peer context and publishes one terminal only when enabled=%s", async enabled => {

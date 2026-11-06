@@ -890,6 +890,7 @@ export interface TabHostManagerDeps {
     Promise<{ ok: true; release: () => void } | { ok: false }>;
   /** Reject a core model override before creating a child or sending a request. */
   validateChildModel?: (model: string, connectionId: string | undefined) => string | void;
+  onFileActivityLifecycle?: (tabId: string) => void;
   onFileActivity?: (tabId: string, proc: UtilityProcess, message: unknown) => boolean;
   registerPeerDrain?: (envelope: AgentDelivery["envelope"], recipient: PeerHost) => boolean;
   onSessionPeerDrain?: (proc: UtilityProcess, request: unknown) => Promise<unknown>;
@@ -1756,6 +1757,7 @@ export class TabHostManager {
       delete tab.hostFailure;
       tab.state = "crash_looped";
       tab.proc = null;
+      this.deps.onFileActivityLifecycle?.(tab.tabId);
       return;
     }
     if (this.deps.onSessionPeerRequest || this.deps.onFileActivity) {
@@ -1908,6 +1910,7 @@ export class TabHostManager {
       // (the 0.0.45 crash_looped tab left only an inherited-stdio log line).
       this.deps.recordHostFailure?.(tab.sessionId, "connection_env_unavailable");
       tab.proc = null;
+      this.deps.onFileActivityLifecycle?.(tab.tabId);
       tab.state = "crash_looped";
       tab.hostFailure = hostFailure("spawn_refused");
       this.notifyHostExited(tab.tabId);
@@ -1931,6 +1934,7 @@ export class TabHostManager {
         `[main] tab ${tab.tabId} engine ${tab.engine} but the composed fork env omits/mismatches ANYCODE_ENGINE; refusing to spawn`,
       );
       tab.proc = null;
+      this.deps.onFileActivityLifecycle?.(tab.tabId);
       tab.state = "crash_looped";
       tab.hostFailure = hostFailure("spawn_refused");
       this.notifyHostExited(tab.tabId);
@@ -1985,6 +1989,7 @@ export class TabHostManager {
       });
     } catch (error) {
       tab.proc = null;
+      this.deps.onFileActivityLifecycle?.(tab.tabId);
       tab.state = "crash_looped";
       tab.hostFailure = hostFailure("spawn_refused");
       this.logger.error(`[main] tab ${tab.tabId} host spawn failed`, error);
@@ -2010,6 +2015,7 @@ export class TabHostManager {
     delete tab.hostFailure;
     tab.spawnedAt = this.now();
     tab.state = "running";
+    this.deps.onFileActivityLifecycle?.(tab.tabId);
     delete tab.pendingWorktreeCleanup;
     this.stormForks += 1;
 
@@ -2041,7 +2047,7 @@ export class TabHostManager {
     // GitHub #18: record the wire SHAPE (type/kind only) for the diagnostics
     // export. Never the payload — noteWireMessage reads those two fields.
     noteWireMessage(this.deps.diagnosticsRing, "in", message);
-    if (data.type === "file_activity") {
+    if (data.type === "file_activity" || data.type === "shell_activity") {
       if (tab.proc === child) this.deps.onFileActivity?.(tab.tabId, child, message);
       return;
     }
@@ -3664,6 +3670,7 @@ export class TabHostManager {
     }
     const wasClosing = tab.state === "closing";
     tab.proc = null;
+    this.deps.onFileActivityLifecycle?.(tab.tabId);
     tab.state = "closing";
     const requestId = tab.childOf?.requestId;
     if (requestId === undefined) {
@@ -3881,6 +3888,7 @@ export class TabHostManager {
       return;
     }
     tab.proc = null;
+    this.deps.onFileActivityLifecycle?.(tab.tabId);
     tab.activityState = "idle";
 
     if (this.unpublishedTabs.has(tab.tabId)) {
@@ -4189,6 +4197,7 @@ export class TabHostManager {
   async shutdownTabHost(tab: TabHost): Promise<void> {
     const child = tab.proc;
     tab.state = "closing";
+    this.deps.onFileActivityLifecycle?.(tab.tabId);
     if (child === null) {
       return;
     }
@@ -4241,6 +4250,7 @@ export class TabHostManager {
         // that a respawn/relocate already installed while this call was
         // still waiting on its own, now-irrelevant deadline.
         tab.proc = null;
+        this.deps.onFileActivityLifecycle?.(tab.tabId);
       }
     } else {
       this.logger.log(`[main] tab ${tab.tabId} host exited gracefully within deadline`);
@@ -4248,6 +4258,7 @@ export class TabHostManager {
       // own `child` is still the tab's CURRENT process may clear it.
       if (tab.proc === child) {
         tab.proc = null;
+        this.deps.onFileActivityLifecycle?.(tab.tabId);
       }
     }
     if (tab.proc === null) tab.activityState = "idle";

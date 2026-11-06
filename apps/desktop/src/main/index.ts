@@ -2771,6 +2771,7 @@ void app.whenReady().then(async () => {
   }) : undefined;
   manager = new TabHostManager({
     onFileActivity: fileActivity?.accept,
+    onFileActivityLifecycle: fileActivity?.sync,
     onSessionPeerRequest: peerHandler,
     registerPeerDrain: peerEnabled ? (envelope, recipient) => {
       const record = peerBroker?.ledger.messages.get(envelope.messageId);
@@ -2785,7 +2786,7 @@ void app.whenReady().then(async () => {
     agentTitleOf: (sessionId) => agentSessionTitles.get(sessionId),
     // Every spawn, respawn and resume delivers a fresh port: that is the moment a
     // title push that lost its host gets another chance.
-    onTabPortDelivered: (tab) => agentTitlePushes.retry(tab.sessionId),
+    onTabPortDelivered: (tab) => { fileActivity?.sync(tab.tabId); agentTitlePushes.retry(tab.sessionId); },
     isAgentOpenedSession: (sessionId) => agentOpenedSessions.has(sessionId),
     onSessionRegistered: (info) => {
       const sessionsAdded = communicationSessions?.register(info);

@@ -10,4 +10,8 @@ export const fileActivitySchema = z.object({
   report: reportedWriteSchema,
 }).strict();
 export type ReportedWrite = z.infer<typeof reportedWriteSchema>;
-export type FileActivityMessage = z.infer<typeof fileActivitySchema>;
+export const shellActivitySchema = z.object({
+  type: z.literal('shell_activity'), generation: z.number().int().nonnegative(),
+  phase: z.enum(['start', 'end']), toolCallId: bounded(256),
+}).strict();
+export type FileActivityMessage = z.infer<typeof fileActivitySchema> | z.infer<typeof shellActivitySchema>;
