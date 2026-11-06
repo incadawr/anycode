@@ -4270,8 +4270,12 @@ export class Session {
   private async onEngineSwitch(message: Extract<UiToHostMessage, { type: "engine_switch_request" }>): Promise<void> {
     const fail = (reason: string) => this.failEngineSwitch(message.requestId,reason);
     if (this.engineSwitchCoordinator && message.generation !== this.engineSwitchCoordinator.generation) return fail("stale host generation");
-    if (this.engineSwitchRequestIds.has(message.requestId) || this.engineSwitchRequestIds.size >= 1024) return fail("duplicate engine switch request");
+    if (this.engineSwitchRequestIds.has(message.requestId)) return fail("duplicate engine switch request");
     this.engineSwitchRequestIds.add(message.requestId);
+    if (this.engineSwitchRequestIds.size > 1024) {
+      const oldest = this.engineSwitchRequestIds.values().next().value;
+      if (oldest !== undefined) this.engineSwitchRequestIds.delete(oldest);
+    }
     if (this.busy || this.currentTurn !== null || this.relocating || this.broker.pendingCount > 0 || this.continuationPending) return fail("a turn is running");
     if (this.child !== undefined) return fail("a child session is attached");
     if ((this.backgroundChildren?.list().length ?? 0) > 0) return fail("children are running");

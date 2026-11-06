@@ -162,6 +162,32 @@ function seededHistory(): HistoryItem[] {
 }
 
 describe("Session — engine switch", () => {
+  it("keeps a bounded duplicate window without refusing all requests after 1024 attempts", async () => {
+    const old = new SwitchableFakeEngine([]);
+    const next = new NextFakeEngine();
+    const h = createHarness({ steps: [], engine: old, switchEngineFactory: async () => next });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      for (let index = 0; index < 1025; index++) {
+        h.send({ type: "engine_switch_request", requestId: `same-${index}`, engine: "core", model: "test-model" });
+      }
+      await h.waitUntil(() => h.received.some(m => isEngineSwitchFailed(m) && m.requestId === "same-1024"), 5000);
+      expect(h.received.filter(isEngineSwitchFailed)).toHaveLength(1025);
+      expect(h.received.filter(isEngineSwitchFailed).every(m => m.reason === 'already running the "core" engine')).toBe(true);
+      h.send({ type: "engine_switch_request", requestId: "same-1024", engine: "codex", model: "test-model" });
+      await h.waitUntil(() => h.received.filter(isEngineSwitchFailed).length === 1026);
+      expect(h.received.filter(isEngineSwitchFailed).at(-1)?.reason).toBe("duplicate engine switch request");
+      h.send({ type: "engine_switch_request", requestId: "same-0", engine: "core", model: "test-model" });
+      await h.waitUntil(() => h.received.filter(isEngineSwitchFailed).length === 1027);
+      expect(h.received.filter(isEngineSwitchFailed).at(-1)?.reason).toBe('already running the "core" engine');
+      h.send({ type: "engine_switch_request", requestId: "new-request", engine: "codex", model: "test-model" });
+      await h.waitFor(isEngineSwitched);
+      expect(old.disposeReasons).toEqual(["session-close"]);
+      expect(next.disposeReasons).toEqual([]);
+    } finally { h.close(); }
+  });
+
   it("refuses a switch with live children without cancelling them", async () => {
     const old = new SwitchableFakeEngine([]); const next = new NextFakeEngine();
     let cancelled = false; let created = false;

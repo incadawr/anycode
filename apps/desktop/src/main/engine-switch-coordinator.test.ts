@@ -17,6 +17,29 @@ function harness() {
 }
 
 describe("main-owned engine switch transaction", () => {
+  it("bounds duplicate history while retaining the active lease and admitting later requests", async () => {
+    const h = harness();
+    await h.coordinator.handle(message("prepare", "active"));
+    for (let index = 0; index < 1025; index++) {
+      await h.coordinator.handle(message("prepare", `busy-${index}`));
+      expect(h.responses.at(-1)).toMatchObject({ ok: false, reason: "session is busy or children are running" });
+    }
+    await h.coordinator.handle(message("prepare", "active"));
+    expect(h.responses.at(-1)).toMatchObject({ ok: false, reason: "duplicate request" });
+    expect(h.deps.prepare).toHaveBeenCalledTimes(1);
+    await h.coordinator.handle(message("commit", "active"));
+    await h.coordinator.handle(message("retire", "active"));
+    await h.coordinator.handle(message("prepare", "busy-1024"));
+    expect(h.responses.at(-1)).toMatchObject({ ok: false, reason: "duplicate request" });
+    await h.coordinator.handle(message("prepare", "busy-0"));
+    expect(h.responses.at(-1)).toMatchObject({ phase: "prepare", ok: true });
+    await h.coordinator.handle(message("abort", "busy-0"));
+    await h.coordinator.handle(message("prepare", "new-request"));
+    expect(h.responses.at(-1)).toMatchObject({ phase: "prepare", ok: true });
+    expect(h.deps.prepare).toHaveBeenCalledTimes(3);
+    h.coordinator.close();
+  });
+
   it("holds admission through commit and retirement, committing once", async () => {
     const h = harness();
     await h.coordinator.handle(message("prepare"));

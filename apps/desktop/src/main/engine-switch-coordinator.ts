@@ -41,8 +41,12 @@ export class EngineSwitchCoordinator {
     };
     if (message.generation !== this.deps.generation) return reply(false, "stale host generation");
     if (message.phase === "prepare") {
-      if (this.seen.has(message.requestId) || this.seen.size >= 1024) return reply(false, "duplicate request");
+      if (this.lease?.requestId === message.requestId || this.seen.has(message.requestId)) return reply(false, "duplicate request");
       this.seen.add(message.requestId);
+      if (this.seen.size > 1024) {
+        const oldest = this.seen.values().next().value;
+        if (oldest !== undefined) this.seen.delete(oldest);
+      }
       if (this.lease || !this.deps.admissible()) return reply(false, "session is busy or children are running");
       const lease: Lease = { requestId: message.requestId, target: message.target, state: "preparing" };
       this.lease = lease;
