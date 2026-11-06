@@ -1,5 +1,7 @@
 import { lstatSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
+import type { ChangeInterval } from './shell-correlation.js';
+import type { WorkspaceFileSample } from './workspace-file-observer.js';
 
 export interface FileIdentity {
   sessionId: string;
@@ -15,11 +17,13 @@ interface FileActivity extends FileIdentity {
   canonicalPath: string;
   relativePath: string;
   toolCallId: string;
-  toolName: 'Edit' | 'Write' | 'NotebookEdit';
+  toolName: 'Edit' | 'Write' | 'NotebookEdit' | 'Bash';
   at: number;
-  evidence: 'reported_write';
+  evidence: 'reported_write' | 'observed_during_shell';
+  confidence?: 'candidate';
+  interval?: ChangeInterval;
 }
-interface PathOptions {
+export interface PathOptions {
   platform?: NodeJS.Platform;
   realpath?: (value: string) => string;
   lstat?: (value: string) => unknown;
@@ -29,6 +33,7 @@ interface IndexOptions extends PathOptions {
   // Supplied by main from the current tab/process, never from reported metadata.
   current: (sessionId: string) => FileIdentity | undefined;
   now?: () => number;
+  observation?: (workspace: string) => { sample?: WorkspaceFileSample; freshness: 'stale' | 'fresh' } | undefined;
 }
 const TTL = 30 * 60_000;
 const MAX_PATH = 4096;
@@ -104,11 +109,19 @@ export class FileActivityIndex {
     this.startsAt = (options.now ?? Date.now)();
   }
 
+  canonical(workspace: string, input: string) { return canonicalFile(workspace, input, this.options); }
+
+  sampler(workspace: string) {
+    const value = this.options.observation?.(workspace);
+    return { coverage: value?.sample?.coverage ?? 'unknown', baselineCoverage: value?.sample?.baselineCoverage ?? 'unknown',
+      freshness: value?.freshness ?? 'stale' };
+  }
+
   recent(workspaceKey: string, sessionId: string): string[] {
     this.prune((this.options.now ?? Date.now)());
     return [...this.records.values()].reverse()
       .filter(row => row.workspaceKey === workspaceKey && row.sessionId === sessionId)
-      .slice(0, 5).map(row => row.relativePath);
+      .map(row => row.relativePath).filter((value, i, all) => all.indexOf(value) === i).slice(0, 5);
   }
 
   private current(identity: FileIdentity): boolean {
@@ -122,16 +135,25 @@ export class FileActivityIndex {
     }
   }
 
+  candidate(identity: FileIdentity, filePath: string, interval: ChangeInterval): boolean {
+    if (!Number.isFinite(interval.start) || !Number.isFinite(interval.end) || interval.start > interval.end) return false;
+    return this.insert(identity, { filePath, toolName: 'Bash', toolCallId: 'observation' }, interval);
+  }
+
   record(identity: FileIdentity, report: ReportedWrite): boolean {
+    return this.insert(identity, report);
+  }
+
+  private insert(identity: FileIdentity, report: ReportedWrite, interval?: ChangeInterval): boolean {
     const at = (this.options.now ?? Date.now)();
     this.prune(at);
-    if (!this.current(identity) || !['Edit', 'Write', 'NotebookEdit'].includes(report.toolName)
+    if (!this.current(identity) || !(interval ? report.toolName === 'Bash' : ['Edit', 'Write', 'NotebookEdit'].includes(report.toolName))
       || typeof report.toolCallId !== 'string' || !report.toolCallId.length
       || report.toolCallId.length > 256 || report.toolCallId.includes('\0')) return false;
     const canonicalPath = canonicalFile(identity.workspaceKey, report.filePath, this.options);
     if (!canonicalPath) return false;
     const paths = (this.options.platform ?? process.platform) === 'win32' ? path.win32 : path.posix;
-    const key = JSON.stringify([identity.workspaceKey, canonicalPath, identity.sessionId]);
+    const key = JSON.stringify([identity.workspaceKey, canonicalPath, identity.sessionId, interval ? 'candidate' : 'reported']);
     this.records.delete(key);
     let count = 0;
     let oldest: string | undefined;
@@ -147,7 +169,8 @@ export class FileActivityIndex {
       sessionId: identity.sessionId, workspaceKey: identity.workspaceKey, generation: identity.generation,
       canonicalPath, relativePath: paths.relative(identity.workspaceKey, canonicalPath),
       toolCallId: report.toolCallId, toolName: report.toolName as FileActivity['toolName'],
-      at, evidence: 'reported_write',
+      at, evidence: interval ? 'observed_during_shell' : 'reported_write',
+      ...(interval ? { confidence: 'candidate' as const, interval: { ...interval } } : {}),
     });
     return true;
   }

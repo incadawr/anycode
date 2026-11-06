@@ -63,8 +63,16 @@ const fileEvidence = z.strictObject({
   sessionId: id, evidence: z.literal("reported_write"),
   toolName: z.enum(["Edit", "Write", "NotebookEdit"]), at: z.number().finite(),
 });
+const shellCandidate = z.strictObject({
+  sessionId: id, evidence: z.literal("observed_during_shell"), confidence: z.literal("candidate"),
+  toolName: z.literal("Bash"), at: z.number().finite(),
+  interval: z.strictObject({ start: z.number().finite(), end: z.number().finite() }),
+});
+const sampler = z.strictObject({ coverage: z.enum(["complete", "partial", "unknown"]),
+  baselineCoverage: z.enum(["complete", "partial", "unknown"]), freshness: z.enum(["fresh", "stale"]) });
 const responseSchema = z.discriminatedUnion("status", [
   z.strictObject({ status: z.literal("file_activity"), path: z.string().min(1).max(4096),
+    candidates: z.array(shellCandidate).max(20).optional(), sampler: sampler.optional(),
     records: z.array(fileEvidence).max(20), coverage: z.literal("partial"),
     startsAt: z.number().finite(), limitations: z.string().min(1).max(2000),
   }),

@@ -33,6 +33,8 @@ describe('reported file activity', () => {
     expect(index.lookup(root, 'alias').map(r => r.sessionId)).toEqual(['a', 'b']);
     expect(index.lookup(other.workspaceKey, 'file').map(r => r.sessionId)).toEqual(['other']);
     expect(index.lookup(root, 'other/file')).toEqual([]);
+    expect(index.recent(other.workspaceKey, 'a')).toEqual([]);
+    expect(index.recent(root, 'a')).toEqual(['file']);
     expect(index.record(a, write('alias', 'new-call'))).toBe(true);
     expect(index.lookup(root, 'file')).toHaveLength(2);
   });
@@ -240,4 +242,13 @@ it('passes raw Windows dot-dot paths and missing parents to the injected filesys
   expect(seen).toContain('c:\\repo\\escape\\..\\file');
   expect(canonicalFile('C:\\Repo', 'escape\\..\\victim', options)).toBeUndefined();
   expect(seen).toContain('c:\\repo\\escape\\..');
+});
+
+it('refuses outside candidate paths and keeps candidate confidence separate from reports', () => {
+  const a = add(identity('a'));
+  expect(index.candidate(a, '../outside', { start: 0, end: 1 })).toBe(false);
+  expect(index.record(a, { ...write('file'), toolName: 'Bash' })).toBe(false);
+  expect(index.candidate(a, 'file', { start: 2, end: 1 })).toBe(false);
+  expect(index.candidate(a, 'file', { start: 0, end: 1 })).toBe(true);
+  expect(index.lookup(root, 'file')).toMatchObject([{ evidence: 'observed_during_shell', confidence: 'candidate' }]);
 });

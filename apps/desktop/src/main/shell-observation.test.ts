@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { createFileActivityIngress } from './file-activity-ingress.js';
-import type { PeerHost } from './session-peers.js';
+import { createSessionPeersHandler, type PeerHost } from './session-peers.js';
 
 it('samples activation and real nonzero shell writes without waiting on observation', async () => {
   const workspace = realpathSync(mkdtempSync(join(tmpdir(), 'shell-observation-')));
@@ -28,7 +28,16 @@ it('samples activation and real nonzero shell writes without waiting on observat
     try { execFileSync('/bin/sh', ['-c', 'printf data > "$1"; exit 7', 'sh', join(workspace, 'binary')]); } catch { /* writer exits nonzero */ }
     expect(ingress.accept('t', proc, wire('end'))).toBe(true);
     await vi.waitFor(() => expect(ingress.observation(workspace)?.sample?.changes).toContainEqual({ path: 'binary', kind: 'created' }));
-    expect(ingress.index.lookup(workspace, 'binary')).toEqual([]); // observation never proves authorship
+    expect(ingress.index.lookup(workspace, 'binary')).toMatchObject([
+      { sessionId: 's', evidence: 'observed_during_shell', confidence: 'candidate', interval: expect.any(Object) },
+    ]);
+    const handler = createSessionPeersHandler({ current: () => host, targets: () => [host!],
+      access: { canAccess: () => true }, prepare: async () => {}, files: ingress.index });
+    expect(await handler('t', proc, { requestId: 'q', operation: 'who_edits', input: { path: 'binary' } }))
+      .toMatchObject({ records: [], candidates: [{ sessionId: 's', confidence: 'candidate' }],
+        sampler: { coverage: 'complete', baselineCoverage: 'complete', freshness: 'fresh' } });
+    expect(await handler('t', proc, { requestId: 'l', operation: 'list', input: {} }))
+      .toMatchObject({ sessions: [{ recentPaths: ['binary'] }] });
     host = { ...host!, generation: 2 };
     ingress.sync('t');
     expect(ingress.accept('t', proc, wire('start'))).toBe(false);
@@ -47,7 +56,8 @@ it('shares one observer, coalesces refreshes, and drops late results on generati
   const dispose = vi.fn();
   const observer = vi.fn(() => ({ refresh, dispose }));
   let at = 0;
-  const observation = createShellObservation({ observer, now: () => at });
+  const record = vi.fn();
+  const observation = createShellObservation({ observer, record, now: () => at });
   const identity = { sessionId: 's', generation: 1, workspaceKey: '/workspace' };
   observation.sync('a', identity);
   observation.sync('b', { ...identity, sessionId: 'other' });
@@ -66,8 +76,9 @@ it('shares one observer, coalesces refreshes, and drops late results on generati
   expect(dispose).not.toHaveBeenCalled();
   observation.sync('b');
   expect(dispose).toHaveBeenCalledTimes(1);
-  resolve(sample);
+  resolve({ ...sample, baseline: false, changes: [{ path: 'late', kind: 'modified' }] } as unknown as typeof sample);
   await Promise.resolve();
+  expect(record).not.toHaveBeenCalled();
   expect(observation.observation('/workspace')).toBeUndefined();
   observation.sync('a', { ...identity, generation: 2 });
   expect(observer).toHaveBeenCalledTimes(2);

@@ -1,6 +1,6 @@
 import { parseSessionPeerRequest, parseSessionPeerResponse, type SessionPeerRequest, type SessionPeerResponse } from "../shared/session-peers.js";
 import path from "node:path";
-import { canonicalFile, type FileActivityIndex } from "./file-activity-index.js";
+import { type FileActivityIndex } from "./file-activity-index.js";
 import type { PeerSessionFacts } from "./session-peer-access.js";
 
 export interface PeerHost extends PeerSessionFacts {
@@ -63,16 +63,21 @@ export function createSessionPeersHandler(deps: {
         }
       }
       if (request.operation === "who_edits" && deps.files) {
-        const canonical = canonicalFile(now.workspaceKey!, request.input.path);
+        const canonical = deps.files.canonical(now.workspaceKey!, request.input.path);
         if (!canonical) return { status: "refused" };
-        const records = deps.files.lookup(now.workspaceKey!, request.input.path).map(row => ({
+        const rows = deps.files.lookup(now.workspaceKey!, request.input.path);
+        const records = rows.filter(row => row.evidence === "reported_write").map(row => ({
           sessionId: row.sessionId, evidence: row.evidence, toolName: row.toolName, at: row.at,
         }));
         return parseSessionPeerResponse({ status: "file_activity",
           path: path.relative(now.workspaceKey!, canonical), records,
+          candidates: rows.filter(row => row.evidence === "observed_during_shell").map(row => ({
+            sessionId: row.sessionId, evidence: row.evidence, toolName: row.toolName, at: row.at,
+            confidence: row.confidence, interval: row.interval,
+          })), sampler: deps.files.sampler(now.workspaceKey!),
           coverage: "partial", startsAt: deps.files.startsAt,
           limitations: "An empty result does not mean nobody wrote this file. Only successful Edit/Write/NotebookEdit reports are indexed; MultiEdit is not indexed. " +
-            "shell observation is unavailable: stale/partial baseline, non-zero writers, binary/unknown changes and background processes are not covered. " +
+            "Approximate shell candidates include non-zero writers but never prove authorship. Stale/partial or late baseline can miss writes; binary/unknown changes and background processes cannot be attributed. " +
             "Bounded pending pairs and dedup can omit reports, including reused ids after failed results or interrupted turns. " +
             "Records expire after 30 minutes and may be evicted by capacity limits. No ownership or syscall attribution is proven.",
         });
@@ -88,8 +93,8 @@ export function createSessionPeersHandler(deps: {
         .slice(0, request.input.limit ?? 20).map(target => ({
           sessionId: target.sessionId, tabId: target.tabId, workspace: target.workspace,
           title: target.title?.slice(0, 200), model: target.model?.slice(0, 200), effort: target.effort?.slice(0, 200),
-          ...(deps.files ? { recentPaths: target.workspaceKey === now.workspaceKey
-            ? deps.files.recent(now.workspaceKey!, target.sessionId) : [] } : {}),
+          ...(deps.files && target.workspaceKey === now.workspaceKey
+            ? { recentPaths: deps.files.recent(now.workspaceKey!, target.sessionId) } : {}),
           engine: target.engine, activity: target.activity, addressable: target.live && target.root && !target.restricted,
         }));
       return parseSessionPeerResponse({ status: "ok", sessions });

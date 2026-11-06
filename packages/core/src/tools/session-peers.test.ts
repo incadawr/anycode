@@ -79,3 +79,15 @@ it("preserves file evidence and bounded recent paths but rejects invented confid
   expect(parseSessionPeerResponse({ status: "ok", sessions: [{ ...session, recentPaths: Array(6).fill("file") }] }))
     .toEqual({ status: "unknown" });
 });
+
+it('accepts only candidate shell evidence in the candidate projection', () => {
+  const candidate = { sessionId: 'a', toolName: 'Bash', at: 2, evidence: 'observed_during_shell',
+    confidence: 'candidate', interval: { start: 0, end: 2 } };
+  const answer = { status: 'file_activity', path: 'file', records: [], candidates: [candidate],
+    coverage: 'partial', startsAt: 0, limitations: 'Metadata never proves authorship.',
+    sampler: { coverage: 'partial', baselineCoverage: 'unknown', freshness: 'stale' } };
+  expect(parseSessionPeerResponse(answer)).toEqual(answer);
+  for (const spoof of [{ confidence: 'proven' }, { evidence: 'reported_write' }, { command: 'private' }]) {
+    expect(parseSessionPeerResponse({ ...answer, candidates: [{ ...candidate, ...spoof }] })).toEqual({ status: 'unknown' });
+  }
+});

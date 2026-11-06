@@ -1,9 +1,11 @@
+import { createShellCorrelation, type ChangeInterval } from './shell-correlation.js';
 import { createWorkspaceFileObserver, type WorkspaceFileSample } from './workspace-file-observer.js';
 import type { FileIdentity } from './file-activity-index.js';
 
 type Observer = ReturnType<typeof createWorkspaceFileObserver>;
 interface Workspace {
   observer: Observer;
+  correlation: ReturnType<typeof createShellCorrelation>;
   members: Map<string, FileIdentity>;
   shells: Map<string, number>;
   sample?: WorkspaceFileSample;
@@ -13,6 +15,7 @@ interface Workspace {
 /** Main-owned metadata sampling only. Windows are approximate, never authorship evidence. */
 export function createShellObservation(deps: {
   now?: () => number;
+  record?: (identity: FileIdentity, path: string, interval: ChangeInterval) => void;
   observer?: typeof createWorkspaceFileObserver;
 } = {}) {
   const now = deps.now ?? Date.now;
@@ -26,8 +29,12 @@ export function createShellObservation(deps: {
       try {
         while (state.requested && workspaces.get(workspace) === state) {
           state.requested = false;
+          const scanStart = now();
           const sample = await state.observer.refresh();
-          if (workspaces.get(workspace) === state) state.sample = sample;
+          if (workspaces.get(workspace) === state) {
+            state.correlation.consume(sample, scanStart);
+            state.sample = sample;
+          }
         }
       } catch { state.sample = undefined; }
       finally { state.running = false; }
@@ -40,6 +47,7 @@ export function createShellObservation(deps: {
     const state = workspaces.get(old.workspaceKey);
     if (!state) return;
     state.members.delete(tabId);
+    state.correlation.forget(old.sessionId);
     for (const key of state.shells.keys()) if (JSON.parse(key)[0] === tabId) state.shells.delete(key);
     if (!state.members.size) { workspaces.delete(old.workspaceKey); state.observer.dispose(); }
   };
@@ -55,6 +63,7 @@ export function createShellObservation(deps: {
         if (workspaces.size >= 128) return;
         state = { observer: (deps.observer ?? createWorkspaceFileObserver)({ workspace: identity.workspaceKey,
           enabled: () => workspaces.has(identity.workspaceKey), now }),
+          correlation: createShellCorrelation(now, deps.record ?? (() => {})),
           members: new Map(), shells: new Map(), requested: false, running: false };
         workspaces.set(identity.workspaceKey, state);
         request(identity.workspaceKey, state);
@@ -71,9 +80,16 @@ export function createShellObservation(deps: {
       const key = JSON.stringify([tabId, id]);
       if (phase === 'start') {
         if (state.shells.has(key)) return false;
-        if (state.shells.size >= 256) state.shells.delete(state.shells.keys().next().value!);
+        if (state.shells.size >= 256) {
+          const oldest = state.shells.keys().next().value!;
+          state.correlation.end(oldest); state.shells.delete(oldest);
+        }
         state.shells.set(key, at);
-      } else if (!state.shells.delete(key)) return false;
+        state.correlation.start(key, identity);
+      } else {
+        if (!state.shells.delete(key)) return false;
+        state.correlation.end(key);
+      }
       request(identity.workspaceKey, state);
       return true;
     },
