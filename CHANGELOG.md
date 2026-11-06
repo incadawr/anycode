@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.82] - 2026-11-06
+
 ### Fixed
 
 - Update downloads show a progress bar with a whole-number percentage and downloaded size.
