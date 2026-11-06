@@ -6,7 +6,9 @@ import type { AgentDelivery } from "../shared/communication.js";
 
 const namespace = (principal: CommunicationPrincipal) => principal.kind === "external" ? "external" : JSON.stringify([principal.sessionId, principal.tabId]);
 
-export type CommunicationRecord = AgentDelivery & { idempotencyKey?: string; principal?: CommunicationPrincipal; workspace?: string; hostPid?: number | null };
+export interface PeerMessageBudget { chainId: string; startedAt: number; hop: number; acceptedAt: number; senderWorkspace: string }
+
+export type CommunicationRecord = AgentDelivery & { peer?: PeerMessageBudget; idempotencyKey?: string; principal?: CommunicationPrincipal; workspace?: string; hostPid?: number | null };
 
 /** Atomic private write (mode 0600, temp file + rename); the default ledger and discovery writer. */
 export async function writePrivateFile(path: string, text: string): Promise<void> {
@@ -42,9 +44,13 @@ export async function createCommunicationLedger(
   await mkdir(dirname(ledgerFile), { recursive: true, mode: 0o700 });
   let writes = Promise.resolve();
   const persist = () => {
-    const snapshot = JSON.stringify([...messages.values()]);
+    const snapshot = [...messages.values()].map(record => ({
+      id: record.envelope.messageId, peer: !!record.peer, text: JSON.stringify(record),
+    }));
     writes = writes.catch(() => {}).then(async () => {
-      await writeLedger(ledgerFile, snapshot);
+      // Preserve snapshot ordering; omit peer reservations whose acceptance failed.
+      const retained = snapshot.filter(entry => !entry.peer || messages.has(entry.id));
+      await writeLedger(ledgerFile, `[${retained.map(entry => entry.text).join(",")}]`);
     });
     return writes;
   };

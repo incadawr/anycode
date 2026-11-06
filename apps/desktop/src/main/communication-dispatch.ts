@@ -39,7 +39,7 @@ export function createCommunicationDispatch(options: {
     timer.unref(); expiryTimers.set(messageId, timer);
   };
   const checkAbort = (signal?: AbortSignal) => { if (signal?.aborted) throw new Error("Send aborted"); };
-  const send = async (principal: CommunicationPrincipal, input: CommunicationSendInput, signal?: AbortSignal, authorize = options.authorize): Promise<CommunicationRecord> => {
+  const send = async (principal: CommunicationPrincipal, input: CommunicationSendInput, signal?: AbortSignal, authorize = options.authorize, admit?: (record: CommunicationRecord) => void): Promise<CommunicationRecord> => {
     checkAbort(signal);
     const recipient = await authorize(input.sessionId);
     const workspace = await options.resolvePath(recipient.workspace);
@@ -60,11 +60,19 @@ export function createCommunicationDispatch(options: {
     const envelope: AgentEnvelope = { messageId: randomUUID(), sender, recipientSessionId: input.sessionId, payload: input.payload, mode: input.mode, kind: input.kind, correlationId: input.correlationId, replyTo: input.replyTo, createdAt: new Date().toISOString() };
     const record: CommunicationRecord = { envelope, state: "unknown", detail: "Dispatch pending", idempotencyKey: input.idempotencyKey, workspace, hostPid: recipient.pid };
     if (principal.kind === "session") record.principal = { ...principal };
+    admit?.(record); // Synchronous reservation shares the dedup boundary.
     messages.set(envelope.messageId, record);
     inFlight.add(envelope.messageId); scheduleExpiry(record);
     const delivery = (async () => {
       try {
-        await persist(); // Durable acceptance BEFORE any delivery side effect.
+        try { await persist(); } // Durable acceptance BEFORE any delivery side effect.
+        catch (error) {
+          if (record.peer) {
+            messages.delete(envelope.messageId);
+            clearTimeout(expiryTimers.get(envelope.messageId)); expiryTimers.delete(envelope.messageId);
+          }
+          throw error;
+        }
         // The shared outcome belongs to the durable message; each caller
         // checks its own cancellation independently after joining it.
         if (signal?.aborted) return record;

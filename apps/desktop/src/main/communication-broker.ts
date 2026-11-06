@@ -110,13 +110,13 @@ export async function createCommunicationBroker(options: {
   timer.unref();
   let disposal: Promise<void> | undefined;
   return { ledger, markLostGeneration, observe, reconcile,
-    send(principal: CommunicationPrincipal, input: CommunicationSendInput, authorize: Access["requireSession"], signal?: AbortSignal) {
+    send(principal: CommunicationPrincipal, input: CommunicationSendInput, authorize: Access["requireSession"], signal?: AbortSignal, admit?: (record: CommunicationRecord) => void) {
       if (closed) return Promise.reject(new Error("Communication broker closed"));
       const task = dispatch.send(principal, input, signal, async (id) => {
         const tab = await authorize(id);
         if (closed) throw new Error("Communication broker closed");
         return tab;
-      });
+      }, admit);
       pending.add(task); void task.then(() => pending.delete(task), () => pending.delete(task));
       return task;
     },

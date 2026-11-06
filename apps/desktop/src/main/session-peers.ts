@@ -1,4 +1,4 @@
-import { parseSessionPeerRequest, parseSessionPeerResponse, type SessionPeerResponse } from "../shared/session-peers.js";
+import { parseSessionPeerRequest, parseSessionPeerResponse, type SessionPeerRequest, type SessionPeerResponse } from "../shared/session-peers.js";
 import type { PeerSessionFacts, createSessionPeerAccess } from "./session-peer-access.js";
 
 export interface PeerHost extends PeerSessionFacts {
@@ -13,6 +13,7 @@ export function createSessionPeersHandler(deps: {
   targets(): PeerHost[];
   access: Pick<ReturnType<typeof createSessionPeerAccess>, "canAccess">;
   prepare(): Promise<void>;
+  send?(caller: PeerHost, input: Extract<SessionPeerRequest, { operation: "send" }>["input"], authorize: (id: string) => PeerHost): Promise<{ envelope: { messageId: string }; state: "queued" | "acknowledged" | "rejected" | "unknown" }>;
 }) {
   const pending = new Map<object, Set<string>>();
   return async (tabId: string, proc: object, raw: unknown): Promise<SessionPeerResponse | null> => {
@@ -36,7 +37,24 @@ export function createSessionPeersHandler(deps: {
       if (!now) return null;
       if (now.workspace !== caller.workspace || now.workspaceKey !== caller.workspaceKey ||
           !deps.access.canAccess(now, now, request.operation)) return { status: "refused" };
-      // Mutations and file queries acquire their dedicated admission in later handlers.
+      if (request.operation === "send" && deps.send) {
+        if (request.input.reply === "on_turn_end" || request.input.mode === "steer") return { status: "unavailable" };
+        const authorize = (id: string) => {
+          const sender = current();
+          const target = deps.targets().find(t => t.sessionId === id);
+          if (!sender || sender.workspace !== caller.workspace || sender.workspaceKey !== caller.workspaceKey ||
+              !target || !deps.access.canAccess(sender, target, "send")) throw new Error("Peer access refused");
+          return target;
+        };
+        try {
+          const delivery = await deps.send(now, request.input, authorize);
+          return current() ? parseSessionPeerResponse({ status: "sent", messageId: delivery.envelope.messageId, state: delivery.state }) : null;
+        } catch (error) {
+          return current() ? (error instanceof Error && error.message === "loop_limited"
+            ? { status: "refused", reason: "loop_limited" } : { status: "refused" }) : null;
+        }
+      }
+      // Other mutations and file queries retain their dedicated admission boundary.
       if (request.operation !== "list" || request.input.cursor || request.input.ownMessageId) return { status: "unavailable" };
       const sessions = deps.targets().filter(target =>
         (request.input.scope === "granted" || target.workspaceKey === now.workspaceKey) &&

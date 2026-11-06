@@ -1,3 +1,4 @@
+import { createSessionPeerReplies } from "./session-peer-replies.js";
 import { createSessionPeersHandler } from "./session-peers.js";
 import { createSessionPeerAccess } from "./session-peer-access.js";
 import { createSessionPeerPolicyStore } from "./session-peer-policy.js";
@@ -2696,6 +2697,15 @@ void app.whenReady().then(async () => {
   const peerEnabled = nativeSessionsEnabledForBoot(bootEnv, app.isPackaged);
   let peerTrust: Awaited<ReturnType<typeof readTrustStore>> = { version: 1, folders: {} };
   const peerHandler = peerEnabled ? createSessionPeersHandler({
+    send: async (caller, input, authorize) => {
+      const broker = await communicationController!.broker();
+      return createSessionPeerReplies(broker).send(caller, input, async id => {
+        const host = authorize(id);
+        const tab = manager?.listTabs().find(t => t.sessionId === id && t.tabId === host.tabId);
+        if (!tab) throw new Error("Peer unavailable");
+        return tab;
+      }, authorize);
+    },
     current: tabId => manager?.peerHost(tabId),
     targets: () => (manager?.listTabs() ?? []).flatMap(tab => {
       const host = manager?.peerHost(tab.tabId); return host ? [host] : [];
