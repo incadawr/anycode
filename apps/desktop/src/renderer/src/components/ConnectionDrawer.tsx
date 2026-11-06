@@ -1846,9 +1846,16 @@ export function ConnectionDrawerFields({
   // the env rung currently silences this field, and what number a blank field
   // actually resolves to. Both read only state already in hand — the drawer's
   // own proxySnapshot and the projected catalog/snapshot.
+  const goHintEntry = (id: string) => {
+    if (!automaticGo || !selectedEntry) return selectedEntry;
+    const route = resolveOpenCodeGoEndpointPolicy(providerId, id, targetConnection?.modelRoutes);
+    if (route.kind !== "route") return { ...selectedEntry, models: [] };
+    const policy = route.route.policy;
+    return { ...selectedEntry, models: [{ id, contextWindow: policy.limits?.context, maxOutputTokens: policy.limits?.output, imageInput: policy.modalities?.input?.some(m => m.startsWith("image/")) === true }] };
+  };
   const motEnvHint = proxySnapshot === null ? null : maxOutputTokensEnvHint(proxySnapshot.envOverrides);
   let motDefaultHint = maxOutputTokensEffectiveHint(
-    selectedEntry,
+    goHintEntry(model.trim()),
     model.trim(),
     proxySnapshot?.defaultMaxOutputTokens,
     maxOutputTokens,
@@ -1867,7 +1874,7 @@ export function ConnectionDrawerFields({
       ? modelAfterCatalogPrefill(model, modelSuggestions)
       : model;
   let cwDefaultHint = contextWindowEffectiveHint(
-    selectedEntry,
+    goHintEntry(effectiveFormModel.trim()),
     effectiveFormModel.trim(),
     proxySnapshot,
     contextWindow.raw,
@@ -1876,7 +1883,7 @@ export function ConnectionDrawerFields({
   // the model this form will save (catalog mark, else the connection's live
   // image-modality list), and whether the live feed rides the env right now.
   let imageInputHint = imageInputEffectiveHint(
-    selectedEntry,
+    goHintEntry(effectiveFormModel.trim()),
     effectiveFormModel.trim(),
     targetConnection,
     imageInput,
@@ -1890,7 +1897,7 @@ export function ConnectionDrawerFields({
     applyModelReasoningOverride(targetConnection?.modelCapabilities?.[effectiveFormModel.trim()], reasoningSupported),
   );
   const dictionaryActive = !catalogMatchDisabled ? dictionaryMatch : undefined;
-  if (dictionaryActive) {
+  if (dictionaryActive && !automaticGo) {
     if (!maxOutputTokens.trim() && dictionaryActive.maxOutputTokens !== undefined) motDefaultHint = `catalog: ${dictionaryActive.maxOutputTokens}`;
     if (!contextWindow.raw.trim()) cwDefaultHint = `catalog: ${Math.min(dictionaryActive.contextWindow, dictionaryActive.usableContextWindow ?? dictionaryActive.contextWindow)}`;
     if (dictionaryActive.imageInput && imageInput === "auto") imageInputHint = "catalog: vision";
@@ -2560,10 +2567,10 @@ export function ConnectionDrawerFields({
                 const goPrice = goRoute?.kind === "route" ? goRoute.route.metadata.pricing as typeof catalogPrice : undefined;
                 const livePrice = !automaticGo && pricingMode !== "rates" && pricingMode !== "subscription" ? targetConnection?.modelCapabilities?.[id]?.pricing : undefined;
                 const fallback = pricingMode === "rates" ? pricingPayload() : undefined;
-                const inherited = livePrice ?? (fallback && fallback.mode === "rates" ? fallback : undefined) ?? goPrice ?? catalogPrice;
+                const inherited = livePrice ?? (fallback && fallback.mode === "rates" ? fallback : undefined) ?? (automaticGo ? goPrice : catalogPrice);
                 const inheritedDraft = inherited ? { input: String(inherited.input), cachedInput: inherited.cachedInput === undefined ? "" : String(inherited.cachedInput), output: String(inherited.output), cacheWrite: inherited.cacheWrite === undefined ? "" : String(inherited.cacheWrite) } : empty;
                 const draft = ownRateDraft(modelRates, id) ?? inheritedDraft;
-                const source = pricingMode === "subscription" ? "Subscription" : livePrice ? "Provider price" : fallback && fallback.mode === "rates" ? "Connection fallback" : goPrice ? (goPrice.tariff || goPrice.tiers?.length ? "Go reference price · conditional rates" : "Go reference price") : catalogPrice?.tariff ? `Catalog peak: ${catalogPrice.tariff.peakUtcDays.map(day => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day]).join(", ")} ${catalogPrice.tariff.peakUtcHours.map(([start, end]) => `${String(start).padStart(2, "0")}–${String(end).padStart(2, "0")}`).join(", ")} UTC; other times ×${catalogPrice.tariff.offPeakMultiplier}` : catalogPrice ? "Catalog price" : "Unknown";
+                const source = pricingMode === "subscription" ? "Subscription" : livePrice ? "Provider price" : fallback && fallback.mode === "rates" ? "Connection fallback" : goPrice ? (goPrice.tariff || goPrice.tiers?.length ? "Go reference price · conditional rates" : "Go reference price") : !automaticGo && catalogPrice?.tariff ? `Catalog peak: ${catalogPrice.tariff.peakUtcDays.map(day => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day]).join(", ")} ${catalogPrice.tariff.peakUtcHours.map(([start, end]) => `${String(start).padStart(2, "0")}–${String(end).padStart(2, "0")}`).join(", ")} UTC; other times ×${catalogPrice.tariff.offPeakMultiplier}` : !automaticGo && catalogPrice ? "Catalog price" : "Unknown";
                 return <tr key={id}><th scope="row">{id}<small>{pricingMode === "subscription" ? (custom ? "Subscription · custom rate inactive" : "Subscription") : custom ? "Custom" : source}</small><button type="button" className="settings-button connection-drawer-rate-mode" disabled={readOnly || saving || pricingMode === "subscription"} aria-label={`${id} ${custom ? "use inherited price" : "set custom price"}`} onClick={() => { setModelRates(previous => { const next = { ...previous }; if (custom) delete next[id]; else next[id] = { ...inheritedDraft }; return next; }); setDirtyRates(previous => new Set(previous).add(id)); }}>{custom ? "Use inherited" : "Customize"}</button></th>
                   {([ ["input", "Input"], ["cachedInput", "Cached input"], ["output", "Output"], ["cacheWrite", "Cache write (optional)"] ] as const).map(([key, label]) => <td key={key}><input aria-label={`${id} ${label}`} className="settings-field-input" type="number" min="0" step="any" placeholder={key === "cacheWrite" ? "Not set" : "—"} value={pricingMode === "subscription" ? "" : draft[key]} disabled={readOnly || saving || pricingMode === "subscription" || !custom} onChange={(e) => { const value = e.target.value; setModelRates((previous) => ({ ...previous, [id]: { ...draft, [key]: value } })); setDirtyRates((previous) => new Set(previous).add(id)); }} /></td>)}
                 </tr>;
