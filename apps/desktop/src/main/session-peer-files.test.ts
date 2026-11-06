@@ -7,7 +7,10 @@ import { FileActivityIndex } from './file-activity-index.js';
 import { createFileActivityIngress } from './file-activity-ingress.js';
 import { createSessionPeersHandler, type PeerHost } from './session-peers.js';
 import { createFileActivityTaps } from '../host/file-activity.js';
+import type { FileActivityMessage } from '../shared/file-activity.js';
 import type { AgentEvent } from '@anycode/core';
+import { ClaudeTurnTranslator } from '../host/engines/claude/event-translator.js';
+import { TurnTranslator } from '../host/engines/codex/event-translator.js';
 
 const cleanups: (() => void)[] = [];
 afterEach(() => cleanups.splice(0).reverse().forEach(clean => clean()));
@@ -51,10 +54,51 @@ it('empty answers explicitly explain unknown coverage and unsupported writers', 
   const answer = await f.query();
   expect(answer).toMatchObject({ status: 'file_activity', records: [], coverage: 'partial', startsAt: expect.any(Number) });
   const text = JSON.stringify(answer);
-  for (const term of ['MultiEdit', 'shell', 'binary', 'background', 'unknown', 'baseline', 'dedup', 'pending', 'claude/codex peers emit no shell windows or reported writes', 'core host only']) {
+  for (const term of ['MultiEdit', 'shell', 'binary', 'background', 'unknown', 'baseline', 'dedup', 'pending', 'All engines depend on observed tool events', 'shell windows require Bash execution starts', 'file reports require a supported tool name and path']) {
     expect(text).toContain(term);
   }
   expect(text).toContain('does not mean nobody');
+});
+it.each(['claude', 'codex'] as const)('observes %s translated writes and Bash windows', async engine => {
+  const f = fixture();
+  f.hosts[1]!.engine = engine;
+  const messages: FileActivityMessage[] = [];
+  const taps = createFileActivityTaps(true, 1, wire => {
+    messages.push(wire); f.ingress!.accept('b', f.hosts[1]!.proc!, wire);
+  })!;
+  const feed = (events: AgentEvent[]) => events.forEach(taps.observe);
+  if (engine === 'claude') {
+    const translator = new ClaudeTurnTranslator({ turn: 1 });
+    const frame = (raw: unknown) => feed(translator.onMessage(raw as Parameters<typeof translator.onMessage>[0]));
+    for (const name of ['Write', 'Edit', 'NotebookEdit', 'MultiEdit', 'Bash']) {
+      frame({ type: 'assistant', message: { content: [{ type: 'tool_use', id: name, name,
+        input: name === 'Bash' ? { command: 'echo ok' } : { file_path: name, notebook_path: name } }] } });
+      frame({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: name, content: 'ok' }] } });
+    }
+  } else {
+    const translator = new TurnTranslator({ threadId: 'thread', turnId: 'turn', turn: 1 });
+    for (const item of [
+      { type: 'fileChange', id: 'patch', changes: [{ path: 'Write' }, { path: 'other' }] },
+      { type: 'commandExecution', id: 'Bash', command: 'echo ok' },
+      { type: 'fileChange', id: 'missing-path', changes: [] },
+    ]) {
+      for (const phase of ['started', 'completed']) feed(translator.onNotification({ method: `item/${phase}`,
+        params: { threadId: 'thread', turnId: 'turn', item: { ...item, status: 'completed' } } }));
+    }
+  }
+  const paths = engine === 'claude' ? ['Write', 'Edit', 'NotebookEdit'] : ['Write', 'other'];
+  expect(messages.filter((wire) => wire.type === 'file_activity')).toEqual(paths.map(filePath => ({
+    type: 'file_activity', generation: 1, report: { filePath,
+      toolName: engine === 'claude' ? filePath : 'Write', toolCallId: expect.any(String) },
+  })));
+  expect(messages.filter((wire) => wire.type === 'shell_activity')).toEqual([
+    { type: 'shell_activity', generation: 1, phase: 'start', toolCallId: '0:Bash' },
+    { type: 'shell_activity', generation: 1, phase: 'end', toolCallId: '0:Bash' },
+  ]);
+  for (const path of paths) expect(await f.query(path)).toMatchObject({
+    records: [{ sessionId: 'b', evidence: 'reported_write', toolName: engine === 'claude' ? path : 'Write' }],
+  });
+  expect(await f.query('MultiEdit')).toMatchObject({ records: [] });
 });
 it('lists only five recent paths and drops closed and previous generation records', async () => {
   const f = fixture();
