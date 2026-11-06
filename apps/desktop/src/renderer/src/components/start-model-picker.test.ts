@@ -531,3 +531,13 @@ it("does not mutate live capabilities when applying off and honors a manual deni
   expect(live.thinkingAlwaysOn).toBe(true);
   expect(modelCapabilitiesFor({ ...connection, modelOverrides: { "vendor/glm-5.3-fp8": { reasoningSupported: false } } }, "vendor/glm-5.3-fp8")?.reasoning).toBe(false);
 });
+
+it("preserves live capabilities for manual Go connections and environment overrides", async () => {
+  const { modelCapabilitiesFor } = await import("../../../shared/model-overrides.js");
+  const connection = { providerId: "opencode-openai", modelCapabilities: { "grok-4.7": { reasoning: false as const } } };
+  expect(modelCapabilitiesFor({ ...connection, baseUrl: "https://proxy.test" }, "grok-4.7")?.reasoning).toBe(false);
+  expect(modelCapabilitiesFor({ ...connection, transport: "openai-responses" }, "grok-4.7")?.reasoning).toBe(false);
+  expect(modelCapabilitiesFor(connection, "grok-4.7", ["ANYCODE_BASE_URL"])?.reasoning).toBe(false);
+  expect(modelCapabilitiesFor(connection, "grok-4.7")?.reasoning).toBe(true);
+  expect(modelCapabilitiesFor({ ...connection, baseUrl: "https://proxy.test", modelCapabilities: { removed: { imageInput: true as const } } }, "removed")?.imageInput).toBe(true);
+});

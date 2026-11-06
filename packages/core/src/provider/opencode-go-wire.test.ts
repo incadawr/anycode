@@ -54,3 +54,38 @@ it("leaves an OpenAI endpoint with the same model id on its existing wire path",
   expect(body.reasoning_effort).toBe("high");
   expect(body.temperature).toBe(0.3);
 });
+
+it("completes mocked streams when switching between the three Go protocols", async () => {
+  const seen: string[] = [];
+  const messages = [
+    { type: "message_start", message: { id: "m", model: "minimax-m3", role: "assistant", usage: { input_tokens: 5 } } },
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+    { type: "content_block_stop", index: 0 }, { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } }, { type: "message_stop" },
+  ];
+  const responses = [
+    { type: "response.created", response: { id: "r", created_at: 1700000000, model: "gpt-6-luna" } },
+    { type: "response.output_item.added", output_index: 0, item: { type: "message", id: "m" } },
+    { type: "response.output_text.delta", item_id: "m", delta: "ok" },
+    { type: "response.output_item.done", output_index: 0, item: { type: "message", id: "m" } },
+    { type: "response.completed", response: { usage: { input_tokens: 1, input_tokens_details: { cached_tokens: 0 }, output_tokens: 1, output_tokens_details: { reasoning_tokens: 0 } } } },
+  ];
+  vi.stubGlobal("fetch", async (url: unknown) => {
+    const path = String(url); seen.push(path);
+    const chunks = path.endsWith("/messages") ? messages : path.endsWith("/responses") ? responses : [
+      { id: "c", object: "chat.completion.chunk", created: 1, model: "hy4", choices: [{ index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: null }] },
+      { id: "c", object: "chat.completion.chunk", created: 1, model: "hy4", choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+    ];
+    return new Response(chunks.map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } });
+  });
+  for (const id of ["minimax-m3", "hy4", "gpt-6-luna", "minimax-m3"]) {
+    const route = resolveOpenCodeGoEndpointPolicy("opencode", id);
+    if (route.kind !== "route") throw new Error("missing route");
+    const port = new AiSdkModelPort({ ...route.route, goModelPolicy: route.route.policy, model: id, apiKey: "test", includeUsage: false, retry: { maxRetries: 0, stallTimeoutMs: 0 } });
+    const events = [];
+    for await (const event of port.streamText({ messages: [{ role: "user", content: "hi" }], tools: [] })) events.push(event);
+    expect(events.some(event => event.type === "text_delta" && event.text === "ok")).toBe(true);
+    expect(events.some(event => event.type === "finish")).toBe(true);
+  }
+  expect(seen.map(url => new URL(url).pathname)).toEqual(["/inference/go/anthropic/v1/messages", "/inference/go/openai/v1/chat/completions", "/inference/go/openai/v1/responses", "/inference/go/anthropic/v1/messages"]);
+});

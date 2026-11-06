@@ -1,3 +1,4 @@
+import { GoInputLimitError } from "./go-input-limit-error.js";
 /**
  * Shared model-output and replay-safety classification plus safe provider errors.
  * Model output remains observable for manual retry decisions; reasoning alone
@@ -89,6 +90,7 @@ export type ProviderFailureCode =
   | "forbidden"
   | "server"
   | "quota"
+  | "input_limit"
   | "unknown";
 
 /** Redacted, serializable failure descriptor — NEVER the raw response body/headers. */
@@ -126,6 +128,7 @@ const SAFE_MESSAGES: Record<ProviderFailureCode, string> = {
   forbidden: "forbidden",
   server: "server error",
   quota: "quota exhausted",
+  input_limit: "The estimated prompt exceeds the provider input limit. Reduce the prompt or compact the conversation.",
   unknown: "request failed",
 };
 
@@ -207,6 +210,7 @@ function isNetworkFailure(error: unknown, message: string): boolean {
  * These divergences are pinned in failure.test.ts (double-assert pins).
  */
 export function classifyProviderFailure(error: unknown): ProviderFailureClassification {
+  if (error instanceof GoInputLimitError) return { code: "input_limit", retryable: false, safe: { code: "input_limit", message: SAFE_MESSAGES.input_limit } };
   if (error instanceof MiniMaxBalanceFailure) {
     const result = classifyProviderFailure(error.original);
     return { ...result, safe: { ...result.safe, message: `${result.safe.message}. This is a pay-as-you-go key; for the M Plan subscription use a key starting with sk-cp-.` } };

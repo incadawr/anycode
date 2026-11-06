@@ -113,3 +113,32 @@ it("projects exact model metadata without inventing effort levels or an output c
   expect(hy.effortLevels).toEqual(["off", "high"]);
   expect(openCodeGoCatalogEntry(entry, "muse-spark-1.2-contributor").models[0]!.effortLevels?.[0]).toBe("minimal");
 });
+
+it("catalog projects the supported fixture with the stable default and prices", async () => {
+  const { getBuiltinCatalog } = await import("./catalog-data.js");
+  const entry = getBuiltinCatalog().providers.find(provider => provider.id === "opencode")!;
+  expect(entry.models[0]?.id).toBe("minimax-m3");
+  expect(entry.models).toHaveLength(28);
+  expect(entry.models.find(model => model.id === "grok-4.7")?.pricing?.tiers?.[0]?.gt).toBe(200000);
+  expect(entry.models.find(model => model.id === "deepseek-v4-pro")?.pricing?.tariff).toBeDefined();
+  expect(entry.models.some(model => model.id === "gemini-4-argon")).toBe(false);
+});
+
+it("projects every fixture name and complete reference price to both Go catalogs", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { getBuiltinCatalog } = await import("./catalog-data.js");
+  const fixture = JSON.parse(await readFile(new URL("./__fixtures__/opencode-go-models.json", import.meta.url), "utf8"));
+  for (const provider of ["opencode", "opencode-openai"]) {
+    const models = getBuiltinCatalog().providers.find(p => p.id === provider)!.models;
+    for (const row of fixture.data.filter((r: any) => r.id !== "gemini-4-argon")) {
+      const model = models.find(m => m.id === row.id)!;
+      expect(model.name, row.id).toBe(row.name);
+      const input = row.cost.text.input, output = row.cost.text.output;
+      const factor = row.cost.multipliers ? 2 : 1;
+      const rates = (i: any, o: any) => ({ input: i.price * factor, ...(i.cache?.read !== undefined ? { cachedInput: i.cache.read * factor } : {}), ...(i.cache?.write !== undefined ? { cacheWrite: i.cache.write * factor } : {}), output: o.price * factor });
+      const thresholds = [...new Set<number>([...(input.overrides ?? []), ...(output.overrides ?? [])].map((v: any) => v.when.context.gt))].sort((a, b) => a - b);
+      const tiers = thresholds.map(gt => ({ gt, ...rates((input.overrides ?? []).find((v: any) => v.when.context.gt === gt) ?? input, (output.overrides ?? []).find((v: any) => v.when.context.gt === gt) ?? output) }));
+      expect(model.pricing, row.id).toEqual({ basisId: `${row.id}-opencode-go-2026-11-05`, ...rates(input, output), ...(tiers.length ? { tiers } : {}), ...(row.cost.multipliers ? { tariff: { peakUtcDays: [1, 2, 3, 4, 5], peakUtcHours: [[1, 4], [6, 10]], offPeakMultiplier: 0.5 } } : {}) });
+    }
+  }
+});

@@ -129,8 +129,9 @@ it("uses the same automatic Go window for the panel, probe, recognizer boot and 
     expect(connectionContextWindow(connection, model, catalog, 32000).tokens).toBe(32000);
     expect(connectionContextWindow({ ...connection, modelOverrides: { [model]: { contextWindowTokens: 64000 } } }, model, catalog).tokens).toBe(64000);
     expect(createConnectionModelSettings({ connection, catalogEntry: catalog, catalogEntryFor: id => openCodeGoCatalogEntry(catalog, id, snapshot), liveCapabilitiesFor: () => undefined, envContextWindow: 32000 }).contextFor(model).tokens).toBe(32000);
-    expect(connectionContextWindow({ ...connection, baseUrl: "https://manual.example" }, model, catalog).tokens).not.toBe(expected);
-    expect(connectionContextWindow({ ...connection, transport: "openai-responses" }, model, catalog).tokens).not.toBe(expected);
+    const staticWindow = catalog.models.find(item => item.id === model)?.contextWindow;
+    expect(connectionContextWindow({ ...connection, baseUrl: "https://manual.example" }, model, catalog).tokens).toBe(staticWindow);
+    expect(connectionContextWindow({ ...connection, transport: "openai-responses" }, model, catalog).tokens).toBe(staticWindow);
   }
 });
 

@@ -14,7 +14,7 @@ export function normalizeModelId(id: string): string {
 export function findKnownModel(id: string): CatalogModel | undefined {
   const key = normalizeModelId(id);
   if (!key) return undefined;
-  const matches = getBuiltinCatalog().providers.flatMap((provider) => provider.models)
+  const matches = getBuiltinCatalog().providers.filter(provider => provider.id !== "opencode" && provider.id !== "opencode-openai").flatMap((provider) => provider.models)
     .filter((model) => normalizeModelId(model.id) === key);
   if (!matches.length) return undefined;
   // Multiple providers can publish the same model with different rates or limits.

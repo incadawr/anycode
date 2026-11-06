@@ -46,3 +46,9 @@ it("offers the complete automatic Go inventory and respects manual overrides", (
   const manualConnection = { ...automaticConnection, transport: "anthropic-messages" as const };
   expect(providerModelsFor("opencode", undefined, undefined, ["manual"], undefined, manualConnection.transport, manualConnection)).toEqual([{ id: "manual" }]);
 });
+
+it("filters manual Go catalog suggestions by the selected transport", () => {
+  const catalog = [{ id: "opencode", defaultTransport: "anthropic-messages", models: [{ id: "minimax-m3" }, { id: "hy4" }, { id: "gpt-6-luna" }] }] as unknown as import("./settings.js").CatalogSummary;
+  const connection = { id: "c", providerId: "opencode", baseUrl: "https://example.test", transport: "anthropic-messages" as const };
+  expect(providerModelsFor("opencode", catalog, undefined, undefined, undefined, connection.transport, connection)).toEqual([{ id: "minimax-m3" }]);
+});

@@ -81,7 +81,7 @@ export function VisionPane({ store = useSettingsStore }: VisionPaneProps) {
   const fallback = visionFallbackState(settings, authKindFor);
   const selectedOption = options.find((option) => option.id === connectionId);
   const selectedConnection = settings.provider.connections.find((c) => c.id === connectionId);
-  const modelHints = visionModelHints(selectedConnection, catalog);
+  const modelHints = visionModelHints(selectedConnection, catalog, snapshot.envOverrides);
   const draftKey = visionDraftKey(connectionId, modelId);
   const savedContext = modelOverrideFor(selectedConnection, modelId)?.contextWindowTokens;
   const contextDirty = Object.hasOwn(contextDrafts, draftKey);

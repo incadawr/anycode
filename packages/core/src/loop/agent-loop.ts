@@ -54,7 +54,6 @@ import type { PreviewPort } from "../ports/preview.js";
 import type { ArtifactContext } from "../ports/artifacts.js";
 import type { CheckpointCapturer, CheckpointCaptureResult } from "../ports/checkpoints.js";
 import type { ToolRegistry } from "../tools/registry.js";
-import { goRequestOutputBudget } from "./go-output-budget.js";
 import { ConversationHistory } from "../context/history.js";
 import {
   ASK_CLASSIFIER_USER_TURNS,
@@ -1440,7 +1439,7 @@ export class AgentLoop {
               reasoningEffort: this.config.reasoningEffort,
               abortSignal: turnAbort.signal,
             };
-            const stream = this.config.modelPort.streamText({ ...modelRequest, maxOutputTokens: goRequestOutputBudget(modelRequest, this.config.modelPort, this.tokenizer, this.context.getBudgetConfig().contextWindowTokens) });
+            const stream = this.config.modelPort.streamText({ ...modelRequest, contextWindowTokens: this.context.getBudgetConfig().contextWindowTokens });
             for await (const event of stream) {
               if (event.type === "reasoning_replay_metadata") {
                 reasoningCapture.observe(event);

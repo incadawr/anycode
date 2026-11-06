@@ -2457,6 +2457,10 @@ describe("mapProviderFailureCodeToHealthStatus — classification table (401 ≠
     expect(status).not.toBe("auth_invalid");
   });
 
+  it("does not classify an input limit as a broken connection", () => {
+    expect(mapProviderFailureCodeToHealthStatus("input_limit")).toBe("ready");
+  });
+
   it("defaults an unrecognised future code to unreachable, never a credential-is-bad bucket", () => {
     const status = mapProviderFailureCodeToHealthStatus("some_future_code");
     expect(status).toBe("unreachable");
@@ -2466,7 +2470,7 @@ describe("mapProviderFailureCodeToHealthStatus — classification table (401 ≠
 });
 
 describe("sanitizeProviderFailureCode — untrusted host->main boundary (W11-FIX H1)", () => {
-  it.each(["auth", "forbidden", "rate_limited", "quota", "connect_timeout", "network", "server", "unknown"])(
+  it.each(["auth", "forbidden", "rate_limited", "quota", "connect_timeout", "network", "server", "input_limit", "unknown"])(
     "passes the legitimate code %s through unchanged",
     (code) => {
       expect(sanitizeProviderFailureCode(code)).toBe(code);
@@ -2561,6 +2565,15 @@ describe("applyConnectionHealthEvent — advisory persist round-trip + \"Last kn
       at: "2026-07-15T00:00:00.000Z",
       safeCode: "auth",
     });
+  });
+
+  it("leaves prior health unchanged for a locally rejected prompt", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    await handleConnectionCreate(deps, { providerId: "z-ai" });
+    await applyConnectionHealthEvent(deps, "conn-1", { kind: "failure", code: "auth" });
+    const before = (await loadSettings(settingsPath)).settings.provider.connections[0]?.lastHealth;
+    await expect(applyConnectionHealthEvent(deps, "conn-1", { kind: "failure", code: "input_limit" })).resolves.toBe(false);
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.lastHealth).toEqual(before);
   });
 
   it("persists {status: ready} with no safeCode for a success event, resolving true (a write actually landed)", async () => {

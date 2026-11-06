@@ -35,6 +35,8 @@ import {
   type TariffWindow,
 } from "./catalog.js";
 
+import { openCodeGoCatalogModels } from "./opencode-go-policy.js";
+
 /** Sentinel id for the user-supplied endpoint whose baseUrl lives in settings. */
 export const CUSTOM_PROVIDER_ID = "custom";
 
@@ -96,39 +98,6 @@ const MINIMAX_MODELS: CatalogProviderEntry["models"] = [
   // `resolveMaxOutputTokens`'s default stub, observable via `onStubFallback`
   // rather than silently.
   { id: "MiniMax-M3", name: "MiniMax M3", contextWindow: 1_000_000, imageInput: true, reasoning: false },
-];
-
-// Kimi rows as served through the OpenCode Go subscription, served through the Chat Completions door. Specs are the endpoint's own declaration
-// (public https://opencode.ai/inference/go/v1/models, fetched without a
-// key, 2026-11-04): kimi-k3 / kimi-k3.1-pro declare the full 1,048,576-
-// token window there, not the smaller hint these rows carried before the
-// list was fetched. Capability flags (image input, reasoning) stay
-// unpinned until verified through this app's own request mapping.
-const OPENCODE_KIMI_MODELS: CatalogProviderEntry["models"] = [
-  { id: "kimi-k3", name: "Kimi K3", contextWindow: 1_048_576, maxOutputTokens: 131_072 },
-  { id: "kimi-k3.1-pro", name: "Kimi K3.1 Pro", contextWindow: 1_048_576, maxOutputTokens: 131_072 },
-  // The endpoint declares output = the whole 262,144 window; sending that as max_tokens would leave no room for the prompt, so the output cap is left unset (like the kimi.com row).
-  { id: "kimi-k2.7-code", name: "Kimi K2.7 Code", contextWindow: 262_144 },
-];
-
-const OPENCODE_MODELS: CatalogProviderEntry["models"] = [...OPENCODE_KIMI_MODELS];
-
-// The Anthropic door serves /anthropic/v1/messages, and the endpoint's own
-// models list names exactly five models that speak Messages natively there
-// (checked 2026-11-04) — Kimi is not one of them, a Kimi id sent to this
-// door only works through the endpoint's own translation, which is not
-// verified. Rows lead with the native models so the suggested default is
-// one of them; the context/output limits are that list's declaration.
-// claude-haiku-5-5 is included on the same evidence (1M context, 128K
-// output). Capability flags stay unpinned: the list declares image input
-// and reasoning support, but how they behave through this app's Messages
-// transport is not verified.
-const OPENCODE_ANTHROPIC_MODELS: CatalogProviderEntry["models"] = [
-  { id: "minimax-m3", name: "MiniMax M3", contextWindow: 1_000_000, maxOutputTokens: 131_072 },
-  { id: "qwen3.8-max", name: "Qwen3.8 Max", contextWindow: 1_000_000, maxOutputTokens: 131_072 },
-  { id: "qwen3.8-flash", name: "Qwen3.8 Flash", contextWindow: 1_000_000, maxOutputTokens: 131_072 },
-  { id: "qwen3.7-plus", name: "Qwen3.7 Plus", contextWindow: 1_000_000, maxOutputTokens: 65_536 },
-  { id: "claude-haiku-5-5", name: "Claude Haiku 5.5", contextWindow: 1_000_000, maxOutputTokens: 128_000 },
 ];
 
 // DeepSeek bills by time of day (api-docs.deepseek.com/quick_start/pricing/,
@@ -622,7 +591,7 @@ const ENTRIES: CatalogProviderEntry[] = [
     supportedTransports: ["anthropic-messages"],
     auth: { kind: "api_key" },
     headers: { "user-agent": "Anycode/{version}", "x-opencode-session": "{sessionId}" },
-    models: OPENCODE_ANTHROPIC_MODELS,
+    models: [],
   },
   {
     id: "opencode-openai",
@@ -637,7 +606,7 @@ const ENTRIES: CatalogProviderEntry[] = [
     supportedTransports: ["openai-chat-completions", "openai-responses"],
     auth: { kind: "api_key" },
     headers: { "user-agent": "Anycode/{version}", "x-opencode-session": "{sessionId}" },
-    models: OPENCODE_MODELS,
+    models: [],
   },
   {
     id: "openai",
@@ -735,6 +704,10 @@ for (const entry of ENTRIES) {
   assertTransportContract(entry);
 }
 assertBrandContract(ENTRIES);
+
+for (const entry of ENTRIES) {
+  if (entry.id === "opencode" || entry.id === "opencode-openai") entry.models = openCodeGoCatalogModels(entry);
+}
 
 const CATALOG: ProviderCatalog = {
   schemaVersion: "anycode.model-providers.v1",

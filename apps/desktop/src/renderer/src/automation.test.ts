@@ -9409,6 +9409,24 @@ describe("automation facade — modelPillState catalog parity (W4-F0, findings S
     ]);
   });
 
+  it("uses the automatic Go inventory and honors environment overrides", () => {
+    const snapshot: SettingsSnapshot = {
+      settings: { version: 2, provider: { activeConnectionId: "go", connections: [{ id: "go", providerId: "opencode" }] }, tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "system" }, security: { allowWeakSecretStorage: false } },
+      secrets: [], providerReady: true, envOverrides: [], readOnly: false,
+      catalog: [{ id: "opencode", name: "Go", authKind: "api_key", defaultTransport: "anthropic-messages", models: [{ id: "minimax-m3" }, { id: "hy4" }] }],
+    };
+    const { registry, tabsStore, port, tabId } = setupReadyTab();
+    tabsStore.getState().setActiveTab(tabId);
+    port.emit({ type: "model_changed", model: "minimax-m3", reasoningEffort: "off", availableEffortLevels: undefined });
+    const store = settingsStoreWith(snapshot);
+    const facade = createAutomationFacade(registry, tabsStore, stubBridge(), noTranscriptDom, noTodoPanelDom, noStartScreenDom, pillDom(), store);
+    const automatic = facade.modelPillState(tabId);
+    expect(automatic.ok && automatic.modelItems.some(item => item.id === "gpt-6-luna")).toBe(true);
+    store.setState({ snapshot: { ...snapshot, envOverrides: ["ANYCODE_BASE_URL"] } });
+    const manual = facade.modelPillState(tabId);
+    expect(manual.ok && manual.modelItems.map(item => item.id)).toEqual(["minimax-m3"]);
+  });
+
   it("resolves a PINNED tab's catalog from the pin's provider, not the active one — resolvePillTarget parity with ModelPill.tsx", () => {
     // Second S5-1 axis: a pinned tab's popover renders the PIN's provider
     // catalog (W10-FIX F2); the pre-fix probe always computed from

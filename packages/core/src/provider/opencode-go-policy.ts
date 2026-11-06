@@ -110,6 +110,8 @@ export function openCodeGoCatalogEntry(
   const defaultEffort = reasoning?.default?.value === "none" ? "off" : reasoning?.default?.value;
   return { ...entry, models: [{
     id: model,
+    ...(typeof resolved.route.metadata.name === "string" ? { name: resolved.route.metadata.name } : {}),
+    ...(resolved.route.metadata.pricing ? { pricing: resolved.route.metadata.pricing as import("./catalog.js").ModelPricing } : {}),
     contextWindow: policy.limits?.context ?? 8192,
     ...(policy.limits?.output !== undefined ? { maxOutputTokens: policy.limits.output } : {}),
     reasoning: reasoning?.supported === true,
@@ -118,4 +120,11 @@ export function openCodeGoCatalogEntry(
     ...(defaultEffort !== undefined ? { defaultEffort } : {}),
     imageInput: policy.modalities?.input?.some(m => m.startsWith("image/")) === true,
   }], retiredModels: [] };
+}
+
+/** Project the built-in inventory, with the stable default first. */
+export function openCodeGoCatalogModels(entry: import("./catalog.js").CatalogProviderEntry): import("./catalog.js").CatalogModel[] {
+  const ids = openCodeGoModelIds(entry.id);
+  ids.sort((a, b) => a === "minimax-m3" ? -1 : b === "minimax-m3" ? 1 : 0);
+  return ids.map(id => openCodeGoCatalogEntry(entry, id).models[0]!);
 }
