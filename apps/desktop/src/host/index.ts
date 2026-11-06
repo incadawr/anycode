@@ -1,3 +1,4 @@
+import { createFileActivityTaps } from "./file-activity.js";
 import { createSessionPeerBridge } from "./engines/session-peer-bridge.js";
 import { createSessionPeersPort } from "./session-peers-port.js";
 import { takeNativeSessionsCarrier } from "../shared/session-peers.js";
