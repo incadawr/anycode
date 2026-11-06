@@ -58,11 +58,12 @@ export function claudeOrchestrationSpawnOptions(snapshot: ClaudeOrchestrationSpa
 export function assertClaudeOrchestrationReadback(init: {
   claude_code_version?: string; permissionMode?: string; tools?: readonly string[];
   skills?: readonly unknown[]; slash_commands?: readonly unknown[]; mcp_servers?: readonly { name: string }[];
-}, snapshot: ClaudeOrchestrationSpawnSnapshot): void {
+}, snapshot: ClaudeOrchestrationSpawnSnapshot, peerToolNames: ReadonlySet<string> = new Set()): void {
+  const allowed = [...CLAUDE_ORCHESTRATION_TOOLS, ...peerToolNames];
   const tools = init.tools;
   if (init.claude_code_version !== snapshot.version || init.permissionMode !== "default"
-    || !tools || tools.length !== CLAUDE_ORCHESTRATION_TOOLS.length || new Set(tools).size !== tools.length
-    || tools.some(tool => !CLAUDE_ORCHESTRATION_TOOLS.includes(tool))
+    || !tools || tools.length !== allowed.length || new Set(tools).size !== tools.length
+    || tools.some(tool => !allowed.includes(tool))
     || init.skills?.length !== 0 || init.slash_commands?.length !== 0
     || init.mcp_servers?.length !== 1 || init.mcp_servers[0]?.name !== "anycode")
     throw new Error("Claude orchestration posture drift");

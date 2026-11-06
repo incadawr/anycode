@@ -94,12 +94,13 @@ export interface ClaudeLaunchContext extends CommonLaunchContext {
   stamp?: ReturnType<typeof createBridgePresentationStamp>;
   agentCatalogNonEmpty: boolean;
   browserToolNames?: ReadonlySet<string>;
+  peerToolNames?: ReadonlySet<string>;
 }
 
 export function buildClaudeLaunchOptions(ctx: ClaudeLaunchContext): ClaudeLaunchOptions {
   const { workspace, binaryPath, sourceEnv, binaryTrust, processOwnership, child, broker,
     projectTrusted, profileDir, mcpConfigPath, resolveMcpForward, bootNotices, mcpBridge, stamp,
-    agentCatalogNonEmpty, browserToolNames } = ctx;
+    agentCatalogNonEmpty, browserToolNames, peerToolNames } = ctx;
   return {
     broker,
     binaryPath,
@@ -124,7 +125,7 @@ export function buildClaudeLaunchOptions(ctx: ClaudeLaunchContext): ClaudeLaunch
             : {}),
           takePresentation: stamp.takePresentation,
           dropPresentations: stamp.dropPresentations,
-          browserToolNames,
+          browserToolNames, peerToolNames,
         }
       : {}),
   };

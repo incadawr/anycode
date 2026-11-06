@@ -32,6 +32,7 @@ import type {
   ToolResultPresentation,
 } from "@anycode/core";
 import { buildAgentBridgeToolDecl, decodeAgentBridgeCallInput, runAgentBridgeCall, agentStatusBridgeDecl, runAgentStatusBridge } from "@anycode/core";
+import type { createSessionPeerBridge } from "../session-peer-bridge.js";
 import type { EngineBrowserBridge } from "../browser-bridge.js";
 
 export interface BridgePresentationStampDeps {
@@ -58,6 +59,7 @@ export interface BridgePresentationStampDeps {
    * the bridge through the same IpcPermissionBroker the native tab uses).
    */
   browser?: EngineBrowserBridge;
+  peers?: ReturnType<typeof createSessionPeerBridge>;
 }
 
 /** Builds the door's `listTools`/`callTool` pair over one shared presentation map. */
@@ -65,7 +67,13 @@ export function createBridgePresentationStamp(deps: BridgePresentationStampDeps)
   const bridgePresentations = new Map<string, ToolResultPresentation>();
   const declaredNames = new Set(deps.catalog.map((entry) => entry.name));
   const callAgent = deps.callAgent ?? runAgentBridgeCall;
+  const peerDecls = (deps.peers?.tools ?? []).map((tool, index) => ({
+    name: ["sessions_list", "session_open", "session_send", "who_edits"][index]!,
+    description: tool.metadata.description,
+    inputSchema: tool.rawInputJsonSchema!,
+  }));
   return {
+    peerToolNames: new Set(peerDecls.map(tool => `mcp__anycode__${tool.name}`)),
     listTools: () => {
       // the agent decl rides first (only when a catalog AND a
       // child port exist, exactly as before), then the browser decls.
@@ -76,7 +84,7 @@ export function createBridgePresentationStamp(deps: BridgePresentationStampDeps)
         description: spec.description,
         inputSchema: spec.inputSchema,
       }));
-      return [...agentDecls, ...browserDecls];
+      return [...agentDecls, ...browserDecls, ...peerDecls];
     },
     callTool: async (
       name: string,
@@ -85,6 +93,13 @@ export function createBridgePresentationStamp(deps: BridgePresentationStampDeps)
       meta: { toolUseId?: string },
     ): Promise<McpToolCallResult> => {
       const isAborted = () => signal.aborted;
+      const peerIndex = peerDecls.findIndex(tool => tool.name === name);
+      if (peerIndex >= 0 && deps.peers) {
+        if (!meta.toolUseId || isAborted()) return { text: "Peer call requires an active tool_use id.", isError: true };
+        const result = await deps.peers.call(deps.peers.tools[peerIndex]!.metadata.name, callArgs, signal, meta.toolUseId);
+        if (isAborted()) return { text: "Peer operation outcome unknown after cancellation.", isError: true };
+        return result.ok ? { text: JSON.stringify(result.output), isError: false } : { text: result.error ?? "Peer operation failed.", isError: true };
+      }
       // browser tools route to the shared engine browser bridge.
       // The REAL approval gate lives there (input-aware, through the same
       // IpcPermissionBroker the native tab uses); the CLI's `can_use_tool`

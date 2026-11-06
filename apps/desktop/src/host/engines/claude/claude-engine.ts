@@ -549,6 +549,7 @@ export interface ClaudeEngineCreateOptions extends Omit<ClaudeClientOptions, "bo
    * `callTool` through the same broker — one prompt, canonical title).
    */
   browserToolNames?: ReadonlySet<string>;
+  peerToolNames?: ReadonlySet<string>;
   /**
    * cross-review M2: `CLAUDE_AGENT_BRIDGE_PROMPT`, re-declared
    * here only to carry the engine-level contract — the host supplies it
@@ -635,6 +636,7 @@ async function connectClaudeEngine(
     // the workspace root the approval bridge's fact minting anchors against.
     workspace: options.cwd,
     ...(bridge !== undefined ? { bridge } : {}),
+    ...(options.peerToolNames !== undefined ? { peerToolNames: options.peerToolNames } : {}),
     ...(options.browserToolNames !== undefined ? { browserToolNames: options.browserToolNames } : {}),
   });
   // The catalog is not known until after the handshake, so a draft model cannot
@@ -713,7 +715,7 @@ async function connectClaudeEngine(
     };
     const onAbort = () => { void close(); };
     try {
-      bridge = firstTransport ? options.mcpBridge : options.mcpBridge?.fork(next.orchestrationSpawn ? new Set(["agent", "agent_status"]) : undefined);
+      bridge = firstTransport ? options.mcpBridge : options.mcpBridge?.fork(next.orchestrationSpawn ? new Set(["agent", "agent_status", ...[...(options.peerToolNames ?? [])].map(name => name.replace("mcp__anycode__", ""))]) : undefined);
       if (firstTransport) initialForward = forward;
       firstTransport = false;
       const approvals = createApprovals(bridge);
@@ -1075,7 +1077,7 @@ export class ClaudeEngine implements SessionEngine {
           const verify = async (client: ClaudeTransport) => {
             const init = await evidence.readPosture(client);
             if (init.session_id !== this.sessionRef || !this.settings!.catalog.readBackMatches(saved.model, init.model)) throw new Error("Claude identity or model drift");
-            if (snapshot) assertClaudeOrchestrationReadback({ ...init, mcp_servers: init.mcp_servers as { name: string }[] }, snapshot);
+            if (snapshot) assertClaudeOrchestrationReadback({ ...init, mcp_servers: init.mcp_servers as { name: string }[] }, snapshot, options.peerToolNames);
             else if (init.permissionMode !== saved.mode || JSON.stringify([...init.tools].sort()) !== JSON.stringify(saved.tools) || JSON.stringify((init.mcp_servers ?? []).map(s => (s as { name: string }).name).sort())
               !== JSON.stringify([...(forward?.claudeNames ?? []), ...(options.mcpBridge ? ["anycode"] : [])].sort())) throw new Error("Claude OFF posture drift");
           };

@@ -1,5 +1,4 @@
 import { createSessionPeerBridge } from "./engines/session-peer-bridge.js";
-import { createFileActivityTaps } from "./file-activity.js";
 import { createSessionPeersPort } from "./session-peers-port.js";
 import { takeNativeSessionsCarrier } from "../shared/session-peers.js";
 import { mapProgressToEvent } from "@anycode/core";
@@ -1434,7 +1433,11 @@ function hostSwitchFactory(
       if (!binaryPath?.trim()) return undefined;
       const routing = await candidateRouting(sessionId, broker, sourceEnv, home);
       let raw: ClaudeEngine | undefined;
-      const stamp = createBridgePresentationStamp({ catalog: routing.catalog, resolveCallCatalog: routing.foreign.catalog, ...(launch?.claudeOrchestrateEnabled === true ? { callAgent: routing.foreign.call, restricted: routing.foreign.isEnabled } : {}), port: routing.port, browser: routing.browser, onEvent: event => raw?.pushBridgeEvent(event) });
+      const stamp = createBridgePresentationStamp({ catalog: routing.catalog, resolveCallCatalog: routing.foreign.catalog, ...(launch?.claudeOrchestrateEnabled === true ? { callAgent: routing.foreign.call, restricted: routing.foreign.isEnabled } : {}), port: routing.port, browser: routing.browser,
+        ...(sessionPeersPort ? { peers: createSessionPeerBridge({ port: sessionPeersPort, broker, cwd: workspace,
+          authority: () => ({ root: raw !== undefined && session?.ownsRuntime(raw) === true,
+            mode: claudeAgentPermissionMode(raw?.snapshot().activePresetId ?? "read-only"), orchestrate: routing.foreign.isEnabled() }) }) } : {}),
+        onEvent: event => raw?.pushBridgeEvent(event) });
       const mcpBridge = new ClaudeMcpBridge({ serverName: "anycode", version: "1", listTools: stamp.listTools, callTool: stamp.callTool });
       return { options: {
         ...buildClaudeLaunchOptions({
@@ -1442,6 +1445,7 @@ function hostSwitchFactory(
           orchestrationFeatureEnabled: launch?.claudeOrchestrateEnabled === true,
           profileDir: resolveClaudeConfigDir(), resolveMcpForward: () => forward("claude"),
           bootNotices: [], agentCatalogNonEmpty: routing.catalog.length > 0, mcpBridge, stamp, processOwnership: ownership,
+          peerToolNames: stamp.peerToolNames,
           browserToolNames: new Set(routing.browser.specs.map(spec => `mcp__anycode__${spec.claudeName}`)),
           binaryTrust: path => checkClaudeBinaryTrustOnDisk(path, platform, readTrustedBinaryConsentsSync(settingsPath)),
         }),
@@ -2263,6 +2267,7 @@ async function bootClaudeSession(
   // hoisted (same cell shape as `stamp`) — set by the non-child
   // boot block below, read by the `options` wiring further down.
   let claudeBrowserToolNames: Set<string> | undefined;
+  let claudePeerToolNames: ReadonlySet<string> | undefined;
   let agentCatalogNonEmpty = false;
   const claudeCompositionEnabled = args.child === undefined && claudeOrchestrationBootEnabled(process.argv.slice(2));
   let claudeForeign: ReturnType<typeof createForeignOrchestrationComposition> | undefined;
@@ -2376,8 +2381,13 @@ async function bootClaudeSession(
       ...(claudeForeign ? { callAgent: claudeForeign.call, restricted: claudeForeign.isEnabled } : {}),
       ...(childPort !== undefined ? { port: childPort } : {}),
       browser: engineBrowserBridge,
+      ...(sessionPeersPort ? { peers: createSessionPeerBridge({ port: sessionPeersPort, broker, cwd: workspace,
+        authority: () => ({ root: claudeParentEngine !== undefined && session?.ownsRuntime(booted.engine) === true,
+          mode: claudeAgentPermissionMode(claudeParentEngine?.snapshot().activePresetId ?? "read-only"),
+          orchestrate: claudeForeign?.isEnabled() === true }) }) } : {}),
       onEvent: (event) => pushBridgeEvent?.(event),
     });
+      claudePeerToolNames = door.peerToolNames;
       stamp = door;
       mcpBridge = new ClaudeMcpBridge({
         serverName: "anycode",
@@ -2438,7 +2448,7 @@ async function bootClaudeSession(
     sourceEnv: { ...process.env, PATH: hostMcpLoginPath ?? process.env.PATH },
     binaryTrust: (path) => checkClaudeBinaryTrustOnDisk(path, process.platform, readTrustedBinaryConsentsSync(hostSettingsPathOverride())),
     processOwnership, resolveMcpForward, bootNotices: [],
-    mcpBridge, stamp, agentCatalogNonEmpty, browserToolNames: claudeBrowserToolNames,
+    mcpBridge, stamp, agentCatalogNonEmpty, browserToolNames: claudeBrowserToolNames, peerToolNames: claudePeerToolNames,
   }) };
 
   // The factory cleans failures before client adoption; bootstrap disposal

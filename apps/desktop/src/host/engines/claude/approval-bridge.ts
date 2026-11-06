@@ -172,6 +172,8 @@ export interface ClaudeApprovalBridgeOptions {
    * Any other `mcp__anycode__*` name keeps the generic ask path below.
    */
   browserToolNames?: ReadonlySet<string>;
+  /** Owned peer names delegate every call to the input-aware host gate. */
+  peerToolNames?: ReadonlySet<string>;
 }
 
 export class ClaudeApprovalBridge {
@@ -217,6 +219,10 @@ export class ClaudeApprovalBridge {
     const approval = decodeCanUseTool(request.request);
     if (approval === null) {
       responder.error("Malformed can_use_tool request");
+      return;
+    }
+    if (this.options.bridge !== undefined && this.options.peerToolNames?.has(approval.toolName)) {
+      responder.success(allowResponse(approval));
       return;
     }
     if (claudeOrchestrationDeniesTool(this.options.orchestrationRestricted?.() === true, approval.toolName, this.options.bridge !== undefined)) {
