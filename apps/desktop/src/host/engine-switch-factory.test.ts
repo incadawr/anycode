@@ -70,7 +70,7 @@ describe("host switch engine factory", () => {
       configurations.push(config);
       return {model,options:buildCoreLaunchOptions({config,loop:new AgentLoop(config)}),
         services:{adapter:() => database,sessionId:ctx.sessionId,media,flushHistory:async () => {},
-          checkpoints:{list:async () => [],rewind},readOrchestrator:() => ({primary:{model:"primary"},fallbacks:[{model:"model-chosen"}]}),
+          checkpoints:{list:async () => [],rewind},readOrchestrator:() => ({primary:{model:"primary"},fallbacks:[{model:"model-chosen",effort:"low"}]}),
           health:() => health.snapshot(),sendProviderEvent:event => providerEvents.push(event),pricing:() => ({pricingRaw:undefined})}};
     };
     const productionFactory = createSwitchEngineFactory(ctx)!;
@@ -90,7 +90,7 @@ describe("host switch engine factory", () => {
         await h.waitUntil(() => h.received.some(m => m.type === "engine_switched" && m.requestId === `to-${engine}`));
       }
       const services = core!.callbacks!;
-      expect(services.orchestratorRouteCheck!()).toMatchObject({model:"model-chosen",notice:expect.stringContaining("quota")});
+      expect(services.orchestratorRouteCheck!()).toMatchObject({model:"model-chosen",effort:"low",notice:expect.stringContaining("quota")});
       h.session.applyRecognizerConfig({transport:"openai-chat-completions",baseUrl:"http://local",model:"vision",apiKey:"first"});
       expect(configurations.at(-1)!.registry.has("InspectImage")).toBe(true);
       expect(configurations.at(-1)!.recognizer!.endpoint).toMatchObject({model:"vision",apiKey:"first"});

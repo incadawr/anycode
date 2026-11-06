@@ -152,17 +152,18 @@ describe("provider-usage recording (host writers)", () => {
 
 describe("host/index.ts — usage-recording wiring", () => {
   const indexSource = readFileSync(resolve(here, "index.ts"), "utf8");
+  const coreServicesSource = readFileSync(resolve(here, "core-runtime-services.ts"), "utf8");
 
   it("routes both writers through the row builders", () => {
     // The main sink, inline subagent recorder, and recognizer recorder.
-    const sessionCalls = indexSource.split("sessionUsageRow(").slice(1);
+    const sessionCalls = coreServicesSource.split("sessionUsageRow(").slice(1);
     const subagentCalls = indexSource.split("subagentUsageRow(").slice(1);
     expect(sessionCalls).toHaveLength(1);
     expect(subagentCalls).toHaveLength(2);
     // Both hand the host clock over explicitly; the session sink additionally
     // forwards the finish instant the session captured, so a write delayed by
     // tool dispatch cannot move the step's tariff band.
-    expect(sessionCalls[0]!.slice(0, 400)).toContain("now: Date.now");
+    expect(sessionCalls[0]!.slice(0, 400)).toMatch(/now:\s*Date.now/);
     expect(sessionCalls[0]!.slice(0, 400)).toContain("finishedAt");
     expect(subagentCalls.some(call => call.slice(0, 200).includes("now: Date.now"))).toBe(true);
     expect(subagentCalls.every(call => call.slice(0, 300).includes("endpointSnapshot"))).toBe(true);
@@ -173,6 +174,7 @@ describe("host/index.ts — usage-recording wiring", () => {
     // would re-open the two-clock hazard this module exists to close, so the
     // host must not even import the pricer any more.
     expect(indexSource).not.toContain("calculateUsageCost(");
+    expect(coreServicesSource).not.toContain("calculateUsageCost(");
     expect(indexSource).not.toContain("resolveUsagePrice(");
     expect(indexSource).not.toContain('from "./usage-cost.js"');
   });
