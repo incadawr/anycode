@@ -3656,3 +3656,26 @@
   background: var(--accent);
 }
 .settings-update-progress-placeholder { visibility: hidden; }
+
+/* Selected coding subscription in the first-run form. */
+.welcome-paths[hidden], .welcome-setup[hidden] { display: none; }
+.welcome-selected-subscription { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); padding: var(--sp-3); border: 1px solid var(--accent); border-radius: var(--r-md); }
+.welcome-selected-subscription small { display: block; margin-top: 2px; color: var(--text-2); font-size: var(--fs-xs); }
+.welcome-selected-subscription a { color: var(--accent); }
+.welcome-selected-subscription button { flex: none; }
+
+.welcome-key-link { color: var(--accent); font-weight: normal; }
+.connection-drawer-key-label, .connection-drawer-model-line { display: flex; justify-content: space-between; align-items: baseline; gap: var(--sp-2); }
+.connection-drawer-model-line input { min-width: 0; flex: 1; }
+.connection-drawer-model-line button { flex: none; white-space: nowrap; align-self: stretch; }
+.connection-drawer-subscription { padding: 0; gap: var(--sp-3); }
+.connection-drawer-subscription .connection-drawer-actions { justify-content: space-between; align-items: center; }
+.connection-drawer-subscription .connection-drawer-actions .settings-field-hint { margin: 0; }
+.connection-drawer-subscription .connection-drawer-pricing { padding: 0; border: 0; }
+.connection-drawer-subscription .connection-drawer-pricing::before { display: none; }
+
+.connection-drawer-price-card { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-inset); font-size: var(--fs-sm); }
+.connection-drawer-price-card small { display: block; color: var(--text-3); }
+.connection-drawer-price-edit { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-2); margin-top: var(--sp-2); }
+.connection-drawer-price-list { display: flex; flex-direction: column; max-height: 220px; overflow-y: auto; }
+.connection-drawer-price-list button { text-align: left; flex: none; }

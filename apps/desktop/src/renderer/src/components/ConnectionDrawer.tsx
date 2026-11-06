@@ -27,8 +27,8 @@ import { goModelMatchesTransport, isAutomaticGo } from "../../../shared/provider
  * consent retries); shared custom-record keys go through customProvider.update
  * and stay in the field on refusal so the user can retry.
  */
-import { Button, IconButton } from "../ui/index.js";
-import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
+import { Button, IconButton, Input } from "../ui/index.js";
+import { useEffect, useId, useReducer, useRef, useState, type ReactNode } from "react";
 import { useStore } from "zustand";
 import { findKnownModel, isGatewayProvider } from "@anycode/core/model-dictionary";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
@@ -1436,6 +1436,8 @@ export interface ConnectionDrawerFieldsProps {
    * when the pick changes, so the value is never re-read after mount.
    */
   initialProviderId?: string;
+  /** Key console for a selected welcome subscription. */
+  subscriptionKeyUrl?: string;
   /**
    * Fired when the add-mode Provider select changes (the select is editable
    * only before create — `templateLocked`). WelcomeScreen's embedded form
@@ -1471,9 +1473,13 @@ export function ConnectionDrawerFields({
   interactionBlocked = false,
   simplified = false,
   initialProviderId,
+  subscriptionKeyUrl,
   onProviderIdChange,
   onConnectionCreated,
 }: ConnectionDrawerFieldsProps) {
+  const fieldsRef = useRef<HTMLDivElement>(null);
+  const modelInputId = useId();
+  const keyInputId = useId();
   const labelInputRef = useRef<HTMLInputElement>(null);
   const maxOutputTokensInputRef = useRef<HTMLInputElement>(null);
   const contextWindowTokensInputRef = useRef<HTMLInputElement>(null);
@@ -1544,6 +1550,13 @@ export function ConnectionDrawerFields({
     return { mode: "rates" as const, input: values[0]!, cachedInput: values[1]!, output: values[2]!, ...(priceWrite.trim() ? { cacheWrite: write } : {}) };
   };
   type RateDraft = { input: string; cachedInput: string; output: string; cacheWrite: string };
+  const rateLabels = { input: "Input", cachedInput: "Cached input", output: "Output", cacheWrite: "Cache write (optional)" } as const;
+  function invalidRateField(draft: RateDraft): keyof RateDraft | undefined {
+    return (Object.keys(rateLabels) as (keyof RateDraft)[]).find(key => {
+      const value = draft[key].trim();
+      return (key !== "cacheWrite" && value === "") || (value !== "" && (!Number.isFinite(Number(value)) || Number(value) < 0));
+    });
+  }
   const [modelRates, setModelRates] = useState<Record<string, RateDraft>>(() => Object.fromEntries(
     Object.entries(editConnection?.modelOverrides ?? {}).filter(([, value]) => value.pricing !== undefined).map(([id, value]) => {
       const rate = value.pricing!;
@@ -1558,7 +1571,7 @@ export function ConnectionDrawerFields({
       if (draft === undefined) { entries.push([id, ""]); continue; }
       const raw = [draft.input, draft.cachedInput, draft.output];
       const values = raw.map(Number), write = Number(draft.cacheWrite);
-      if (normalizeModelId(id) !== id || raw.some((v) => !v.trim()) || values.some((v) => !Number.isFinite(v) || v < 0) || (draft.cacheWrite.trim() !== "" && (!Number.isFinite(write) || write < 0))) return null;
+      if (normalizeModelId(id) !== id || invalidRateField(draft) !== undefined) return null;
       entries.push([id, { input: values[0]!, cachedInput: values[1]!, output: values[2]!, ...(draft.cacheWrite.trim() ? { cacheWrite: write } : {}) }]);
     }
     return Object.fromEntries(entries);
@@ -1631,6 +1644,13 @@ export function ConnectionDrawerFields({
     replay: replaySelection,
     ...(simplified ? { label } : {}),
   }));
+  const [pricingFocus, setPricingFocus] = useState<string | null>(null);
+  useEffect(() => {
+    if (!advancedOpen || pricingFocus === null) return;
+    const input = [...(fieldsRef.current?.querySelectorAll<HTMLInputElement>("input[aria-label]") ?? [])]
+      .find(field => field.getAttribute("aria-label") === pricingFocus);
+    if (input) { input.focus(); setPricingFocus(null); }
+  }, [advancedOpen, pricingFocus]);
   const [secretValue, dispatchSecret] = useReducer(secretFieldReducer, "");
   // New-custom-endpoint (the builtin `custom` sentinel) record fields.
   const [customName, setCustomName] = useState(initialCustom?.name ?? "");
@@ -1917,6 +1937,28 @@ export function ConnectionDrawerFields({
     setModel(next);
   }
 
+  function revealPricingError(): void {
+    if (!compactSubscription) { setError("Enter non-negative prices per million tokens."); return; }
+    setAdvancedOpen(true);
+    if (pricingPayload() === null) {
+      const key = invalidRateField({ input: priceInput, cachedInput: priceCached, output: priceOutput, cacheWrite: priceWrite }) ?? "input";
+      setPricingFocus(`Connection fallback ${rateLabels[key]}`);
+      setError(`Connection fallback: enter non-negative prices per million tokens (${rateLabels[key]}).`);
+      return;
+    }
+    for (const id of dirtyRates) {
+      const draft = ownRateDraft(modelRates, id);
+      if (!draft) continue;
+      const key = invalidRateField(draft);
+      if (key === undefined && normalizeModelId(id) === id) continue;
+      if (compactSubscription) changeModel(id, id, undefined);
+      const label = rateLabels[key ?? "input"];
+      setPricingFocus(`${id} ${label}`);
+      setError(`${id}: enter non-negative prices per million tokens (${label}).`);
+      return;
+    }
+  }
+
   async function reloadSnapshot(): Promise<void> {
     await store.getState().load();
   }
@@ -1932,7 +1974,7 @@ export function ConnectionDrawerFields({
     }
     const pricing = pricingPayload();
     const modelPricing = modelPricingPayload();
-    if (pricing === null || modelPricing === null) { setError("Enter non-negative prices per million tokens."); return; }
+    if (pricing === null || modelPricing === null) { revealPricingError(); return; }
     const createModel = preflight.kind === "id" ? preflight.id : undefined;
     const window = contextWindowTokensField(contextWindow.raw);
     if (!window.ok || (window.value !== "" && createModel === undefined)) {
@@ -2059,7 +2101,7 @@ export function ConnectionDrawerFields({
     // connection whose ceiling the user believes they set.
     const pricing = pricingPayload();
     const modelPricing = modelPricingPayload();
-    if (pricing === null || modelPricing === null) { setError("Enter non-negative prices per million tokens."); return; }
+    if (pricing === null || modelPricing === null) { revealPricingError(); return; }
     const mot = maxOutputTokensField(maxOutputTokens);
     if (!mot.ok) {
       // A refused Advanced field must not stay hidden behind a closed disclosure.
@@ -2243,7 +2285,7 @@ export function ConnectionDrawerFields({
     // `modelSaveBlocked` guard just above).
     const pricing = pricingPayload();
     const modelPricing = modelPricingPayload();
-    if (pricing === null || modelPricing === null) { setError("Enter non-negative prices per million tokens."); return; }
+    if (pricing === null || modelPricing === null) { revealPricingError(); return; }
     const mot = maxOutputTokensField(maxOutputTokens);
     if (!mot.ok) {
       // A refused Advanced field must not stay hidden behind a closed disclosure.
@@ -2491,6 +2533,8 @@ export function ConnectionDrawerFields({
     }
   }
 
+  const compactSubscription = simplified && !!initialProviderId && providerId === initialProviderId && createdConnectionId === null;
+  const refreshModelsButton = <Button type="button" disabled={readOnly || fetchingModels || !secretValue.trim()} onClick={() => void doFetchModels()}>{fetchingModels ? "Fetching…" : compactSubscription ? "↻ Refresh" : "Fetch models"}</Button>;
   const labelField = (
     <label className="settings-field">
       <span className="settings-field-label">Label (optional)</span>
@@ -2512,8 +2556,71 @@ export function ConnectionDrawerFields({
 
   const maxOutputInputShown = maxOutputSegmentSelection(maxOutputTokens, maxOutputCustom) === "custom";
 
+  const createKeyField = showKeyInCreate ? (
+  <div className="settings-field">
+    <div className={compactSubscription ? "connection-drawer-key-label" : undefined}>
+      <label className="settings-field-label" htmlFor={keyInputId}>
+      {isNewCustomEndpoint && noAuth ? "API key (not needed)" : "API key"}</label>
+      {compactSubscription && subscriptionKeyUrl && <a className="welcome-key-link" href={subscriptionKeyUrl} target="_blank" rel="noreferrer">Get your key ↗</a>}
+    </div>
+    <input
+      id={keyInputId}
+      ref={secretInputRef}
+      className="settings-field-input connection-drawer-create-key"
+      type="password"
+      autoComplete="off"
+      value={secretValue}
+      disabled={keyFieldDisabled}
+      placeholder="sk-…"
+      onChange={(e) => dispatchSecret({ type: "change", value: e.target.value })}
+    />
+  </div>
+  ) : null;
+
+  const [showAllPrices, setShowAllPrices] = useState(false);
+  const pricingModelIds = mergeModelIds(pendingVisibleModels ?? targetConnection?.visibleModels ?? modelSuggestions.map((item) => item.id), mergeModelIds(Object.keys(modelRates), normalizeModelId(model) ? [normalizeModelId(model)!] : []));
+  const currentPricingModel = modelAfterCatalogPrefill(model, modelSuggestions).trim();
+  const modelPriceRows = pricingModelIds.filter(id => !compactSubscription || id === currentPricingModel).map((id) => {
+    const custom = Object.hasOwn(modelRates, id);
+    const empty = { input: "", cachedInput: "", output: "", cacheWrite: "" };
+    const provider = getBuiltinCatalog().providers.find(entry => entry.id === effectiveProviderId);
+    const normalizeUrl = (url: string) => url.trim().replace(/\/+$/, "").replace(/\/v1$/, "");
+    const actualUrl = baseUrl.trim() || provider?.baseUrl || "";
+    const catalogPrice = proxySnapshot !== null && !proxySnapshot.envOverrides.includes("ANYCODE_BASE_URL") && provider && actualUrl && normalizeUrl(actualUrl) === normalizeUrl(provider.baseUrl) && (pricingMode === "catalog" || (pricingMode === "unset" && !sharedBillingEndpoint)) ? provider.models.find(item => item.id === id)?.pricing : undefined;
+    const goRoute = automaticGo ? resolveOpenCodeGoEndpointPolicy(providerId, id, targetConnection?.modelRoutes) : undefined;
+    const goPrice = goRoute?.kind === "route" ? goRoute.route.metadata.pricing as typeof catalogPrice : undefined;
+    const livePrice = !automaticGo && pricingMode !== "rates" && pricingMode !== "subscription" ? targetConnection?.modelCapabilities?.[id]?.pricing : undefined;
+    const fallback = pricingMode === "rates" ? pricingPayload() : undefined;
+    const inherited = livePrice ?? (fallback && fallback.mode === "rates" ? fallback : undefined) ?? (automaticGo ? goPrice : catalogPrice);
+    const inheritedDraft = inherited ? { input: String(inherited.input), cachedInput: inherited.cachedInput === undefined ? "" : String(inherited.cachedInput), output: String(inherited.output), cacheWrite: inherited.cacheWrite === undefined ? "" : String(inherited.cacheWrite) } : empty;
+    const draft = ownRateDraft(modelRates, id) ?? inheritedDraft;
+    const source = pricingMode === "subscription" ? "Subscription" : livePrice ? "Provider price" : fallback && fallback.mode === "rates" ? "Connection fallback" : goPrice ? (goPrice.tariff || goPrice.tiers?.length ? "Go reference price · conditional rates" : "Go reference price") : !automaticGo && catalogPrice?.tariff ? `Catalog peak: ${catalogPrice.tariff.peakUtcDays.map(day => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day]).join(", ")} ${catalogPrice.tariff.peakUtcHours.map(([start, end]) => `${String(start).padStart(2, "0")}–${String(end).padStart(2, "0")}`).join(", ")} UTC; other times ×${catalogPrice.tariff.offPeakMultiplier}` : !automaticGo && catalogPrice ? "Catalog price" : "Unknown";
+    if (compactSubscription) {
+      const known = provider?.models.some(item => item.id === id) === true || goRoute?.kind === "route";
+      const bySubscription = pricingMode === "subscription" || known;
+      const hasPrice = pricingMode !== "subscription" && (custom || inherited !== undefined);
+      const money = (value: string) => value === "" ? "—" : `$${value}`;
+      return <div key={id}>
+        <div className="connection-drawer-price-card">
+          <div><strong>{id}</strong><small>{hasPrice ? custom ? "Custom" : source : bySubscription ? "By subscription" : "Price unknown"}</small>
+            <div>{hasPrice ? `${money(draft.input)} input · ${money(draft.cachedInput)} cached · ${money(draft.output)} output` : bySubscription ? "No per-token price" : "Price unknown"}</div></div>
+          <Button type="button" disabled={readOnly || saving} onClick={() => {
+            if (pricingMode === "subscription") setPricingMode("unset");
+            setModelRates(previous => { const next = { ...previous }; if (custom) delete next[id]; else next[id] = { ...inheritedDraft }; return next; });
+            setDirtyRates(previous => new Set(previous).add(id));
+          }}>{custom ? "Use inherited" : hasPrice ? "Edit" : "Set price"}</Button>
+        </div>
+        {custom && pricingMode !== "subscription" && <div className="connection-drawer-price-edit">
+          {([["input", "Input"], ["cachedInput", "Cached input"], ["output", "Output"], ["cacheWrite", "Cache write (optional)"]] as const).map(([key, label]) => <Input key={key} label={label} aria-label={`${id} ${label}`} className="settings-field-input" type="number" min="0" step="any" value={draft[key]} disabled={readOnly || saving} onChange={e => { const value = e.target.value; setModelRates(previous => ({ ...previous, [id]: { ...draft, [key]: value } })); setDirtyRates(previous => new Set(previous).add(id)); }} />)}
+        </div>}
+      </div>;
+    }
+    return <tr key={id}><th scope="row">{id}<small>{pricingMode === "subscription" ? (custom ? "Subscription · custom rate inactive" : "Subscription") : custom ? "Custom" : source}</small><button type="button" className="settings-button connection-drawer-rate-mode" disabled={readOnly || saving || pricingMode === "subscription"} aria-label={`${id} ${custom ? "use inherited price" : "set custom price"}`} onClick={() => { setModelRates(previous => { const next = { ...previous }; if (custom) delete next[id]; else next[id] = { ...inheritedDraft }; return next; }); setDirtyRates(previous => new Set(previous).add(id)); }}>{custom ? "Use inherited" : "Customize"}</button></th>
+      {([ ["input", "Input"], ["cachedInput", "Cached input"], ["output", "Output"], ["cacheWrite", "Cache write (optional)"] ] as const).map(([key, label]) => <td key={key}><input aria-label={`${id} ${label}`} className="settings-field-input" type="number" min="0" step="any" placeholder={key === "cacheWrite" ? "Not set" : "—"} value={pricingMode === "subscription" ? "" : draft[key]} disabled={readOnly || saving || pricingMode === "subscription" || !custom} onChange={(e) => { const value = e.target.value; setModelRates((previous) => ({ ...previous, [id]: { ...draft, [key]: value } })); setDirtyRates((previous) => new Set(previous).add(id)); }} /></td>)}
+    </tr>;
+  });
   const pricingBlock = (
-      <section className="connection-drawer-pricing connection-drawer-band" data-section="04 · Money" aria-label="Pricing">
+      <section className={`connection-drawer-pricing${compactSubscription ? "" : " connection-drawer-band"}`} data-section={compactSubscription ? undefined : "04 · Money"} aria-label="Pricing">
         <div className="connection-drawer-pricing-heading">
           <span className="settings-field-label">Pricing · USD / 1M tokens <FieldHelp text={sharedBillingEndpoint ? SHARED_BILLING_ONELINER : PRICING_ONELINER} /></span>
           <select aria-label="Billing mode" className="settings-field-select" value={pricingMode} disabled={readOnly} onChange={(e) => setPricingMode(e.target.value as "unset" | "catalog" | "subscription" | "rates")}>
@@ -2522,35 +2629,27 @@ export function ConnectionDrawerFields({
             <option value="subscription">By subscription</option><option value="rates">Custom rates</option>
           </select>
         </div>
-        <div className="connection-drawer-pricing-scroll">
-          <table className="connection-drawer-pricing-table">
+        <div className={compactSubscription ? "connection-drawer-current-price" : "connection-drawer-pricing-scroll"}>
+          {!compactSubscription && <table className="connection-drawer-pricing-table">
             <thead><tr><th scope="col">Model</th>{["Input", "Cached input", "Output", "Cache write (optional)"].map(label => <th scope="col" key={label}>{label}</th>)}</tr></thead>
             <tbody>
               <tr><th scope="row">Connection fallback <small>{pricingMode === "rates" ? "Custom" : pricingMode === "subscription" ? "Subscription" : "Catalog or unknown"}</small></th>
                 {([["Input", priceInput, setPriceInput], ["Cached input", priceCached, setPriceCached], ["Output", priceOutput, setPriceOutput], ["Cache write (optional)", priceWrite, setPriceWrite]] as const).map(([label, value, set]) => <td key={label}><input aria-label={`Connection fallback ${label}`} className="settings-field-input" type="number" min="0" step="any" value={value} placeholder={label.startsWith("Cache write") ? "Not set" : "—"} disabled={readOnly || pricingMode !== "rates"} onChange={(e) => set(e.target.value)} /></td>)}
               </tr>
-              {mergeModelIds(pendingVisibleModels ?? targetConnection?.visibleModels ?? modelSuggestions.map((item) => item.id), mergeModelIds(Object.keys(modelRates), normalizeModelId(model) ? [normalizeModelId(model)!] : [])).map((id) => {
-                const custom = Object.hasOwn(modelRates, id);
-                const empty = { input: "", cachedInput: "", output: "", cacheWrite: "" };
-                const provider = getBuiltinCatalog().providers.find(entry => entry.id === effectiveProviderId);
-                const normalizeUrl = (url: string) => url.trim().replace(/\/+$/, "").replace(/\/v1$/, "");
-                const actualUrl = baseUrl.trim() || provider?.baseUrl || "";
-                const catalogPrice = proxySnapshot !== null && !proxySnapshot.envOverrides.includes("ANYCODE_BASE_URL") && provider && actualUrl && normalizeUrl(actualUrl) === normalizeUrl(provider.baseUrl) && (pricingMode === "catalog" || (pricingMode === "unset" && !sharedBillingEndpoint)) ? provider.models.find(item => item.id === id)?.pricing : undefined;
-                const goRoute = automaticGo ? resolveOpenCodeGoEndpointPolicy(providerId, id, targetConnection?.modelRoutes) : undefined;
-                const goPrice = goRoute?.kind === "route" ? goRoute.route.metadata.pricing as typeof catalogPrice : undefined;
-                const livePrice = !automaticGo && pricingMode !== "rates" && pricingMode !== "subscription" ? targetConnection?.modelCapabilities?.[id]?.pricing : undefined;
-                const fallback = pricingMode === "rates" ? pricingPayload() : undefined;
-                const inherited = livePrice ?? (fallback && fallback.mode === "rates" ? fallback : undefined) ?? (automaticGo ? goPrice : catalogPrice);
-                const inheritedDraft = inherited ? { input: String(inherited.input), cachedInput: inherited.cachedInput === undefined ? "" : String(inherited.cachedInput), output: String(inherited.output), cacheWrite: inherited.cacheWrite === undefined ? "" : String(inherited.cacheWrite) } : empty;
-                const draft = ownRateDraft(modelRates, id) ?? inheritedDraft;
-                const source = pricingMode === "subscription" ? "Subscription" : livePrice ? "Provider price" : fallback && fallback.mode === "rates" ? "Connection fallback" : goPrice ? (goPrice.tariff || goPrice.tiers?.length ? "Go reference price · conditional rates" : "Go reference price") : !automaticGo && catalogPrice?.tariff ? `Catalog peak: ${catalogPrice.tariff.peakUtcDays.map(day => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day]).join(", ")} ${catalogPrice.tariff.peakUtcHours.map(([start, end]) => `${String(start).padStart(2, "0")}–${String(end).padStart(2, "0")}`).join(", ")} UTC; other times ×${catalogPrice.tariff.offPeakMultiplier}` : !automaticGo && catalogPrice ? "Catalog price" : "Unknown";
-                return <tr key={id}><th scope="row">{id}<small>{pricingMode === "subscription" ? (custom ? "Subscription · custom rate inactive" : "Subscription") : custom ? "Custom" : source}</small><button type="button" className="settings-button connection-drawer-rate-mode" disabled={readOnly || saving || pricingMode === "subscription"} aria-label={`${id} ${custom ? "use inherited price" : "set custom price"}`} onClick={() => { setModelRates(previous => { const next = { ...previous }; if (custom) delete next[id]; else next[id] = { ...inheritedDraft }; return next; }); setDirtyRates(previous => new Set(previous).add(id)); }}>{custom ? "Use inherited" : "Customize"}</button></th>
-                  {([ ["input", "Input"], ["cachedInput", "Cached input"], ["output", "Output"], ["cacheWrite", "Cache write (optional)"] ] as const).map(([key, label]) => <td key={key}><input aria-label={`${id} ${label}`} className="settings-field-input" type="number" min="0" step="any" placeholder={key === "cacheWrite" ? "Not set" : "—"} value={pricingMode === "subscription" ? "" : draft[key]} disabled={readOnly || saving || pricingMode === "subscription" || !custom} onChange={(e) => { const value = e.target.value; setModelRates((previous) => ({ ...previous, [id]: { ...draft, [key]: value } })); setDirtyRates((previous) => new Set(previous).add(id)); }} /></td>)}
-                </tr>;
-              })}
+              {modelPriceRows}
             </tbody>
-          </table>
+          </table>}
+          {compactSubscription && modelPriceRows}
+
         </div>
+        {compactSubscription && pricingMode === "rates" && <div className="connection-drawer-price-edit">
+          {([["Input", priceInput, setPriceInput], ["Cached input", priceCached, setPriceCached], ["Output", priceOutput, setPriceOutput], ["Cache write (optional)", priceWrite, setPriceWrite]] as const).map(([label, value, set]) => <Input key={label} label={`Fallback ${label}`} aria-label={`Connection fallback ${label}`} className="settings-field-input" type="number" min="0" step="any" value={value} disabled={readOnly} onChange={e => set(e.target.value)} />)}
+        </div>}
+        {compactSubscription && pricingModelIds.some(id => id !== currentPricingModel) && <>
+          <Button type="button" aria-expanded={showAllPrices} onClick={() => setShowAllPrices(value => !value)}>{showAllPrices ? "Hide other models ▴" : `Show all models (${pricingModelIds.filter(id => id !== currentPricingModel).length} more) ▾`}</Button>
+          {showAllPrices && <div className="connection-drawer-price-list" aria-label="All models">{pricingModelIds.map(id => <Button type="button" className="settings-button" key={id} aria-pressed={id === currentPricingModel} disabled={readOnly} onClick={() => changeModel(id, id, undefined)}>{id}</Button>)}</div>}
+        </>}
+
       </section>
 
   );
@@ -2559,12 +2658,12 @@ export function ConnectionDrawerFields({
   // before the primary button in both branches (pre-create and created).
   const advancedBlock = (
     <details
-      data-section="05 · Tune"
-      className="connection-drawer-advanced connection-drawer-band"
+      data-section={compactSubscription ? undefined : "05 · Tune"}
+      className={`connection-drawer-advanced${compactSubscription ? "" : " connection-drawer-band"}`}
       open={advancedOpen}
       onToggle={(e) => setAdvancedOpen(e.currentTarget.open)}
     >
-      <summary>{simplified ? "Advanced settings (optional)" : "Advanced"}</summary>
+      <summary>{compactSubscription ? "Advanced: label, context, reasoning, pricing" : simplified ? "Advanced settings (optional)" : "Advanced"}</summary>
       {/* The disclosure's fields live in their own column container: a
           `<details>` no longer lays its slotted children out as direct grid
           items (Chromium wraps them in `::details-content`), so the grid that
@@ -2838,13 +2937,15 @@ export function ConnectionDrawerFields({
           setProxyRef(value);
         }}
       />
+      {compactSubscription && pricingBlock}
       </div>
     </details>
   );
 
   return (
-    <div className="connection-drawer-body">
-      <section className="connection-drawer-band connection-drawer-identity" data-section="01 · Who">
+    <div ref={fieldsRef} className={`connection-drawer-body${compactSubscription ? " connection-drawer-subscription" : ""}`}>
+      {compactSubscription && createKeyField}
+      {!compactSubscription && <section className="connection-drawer-band connection-drawer-identity" data-section="01 · Who">
       <h3>Identity</h3>
       <label className="settings-field">
         <span className="settings-field-label">Provider</span>
@@ -2939,12 +3040,13 @@ export function ConnectionDrawerFields({
         </label>
       )}
 
-      </section>
-      {createdConnectionId === null && (selectedEntry || isNewCustomEndpoint) && <section className="connection-drawer-band" data-section="02 · What"><h3>Model</h3>
+      </section>}
+      {createdConnectionId === null && (selectedEntry || isNewCustomEndpoint) && <section className={compactSubscription ? "connection-drawer-compact-model" : "connection-drawer-band"} data-section={compactSubscription ? undefined : "02 · What"}>{!compactSubscription && <h3>Model</h3>}
       {createdConnectionId === null && selectedEntry && (
-        <label className="settings-field">
-          <span className="settings-field-label">Model</span>
-          <input className="settings-field-input" type="text" list="welcome-model-suggestions"
+        <div className="settings-field">
+          <label className="settings-field-label" htmlFor={modelInputId}>Model</label>
+          <div className={compactSubscription ? "connection-drawer-model-line" : undefined}>
+          <input id={modelInputId} className="settings-field-input" type="text" list="welcome-model-suggestions"
             value={modelAfterCatalogPrefill(model, modelSuggestions)} disabled={readOnly}
             placeholder="Enter a model ID"
             onChange={(e) =>
@@ -2957,10 +3059,12 @@ export function ConnectionDrawerFields({
                 undefined,
               )
             } />
+          {compactSubscription && refreshModelsButton}
+          </div>
           <datalist id="welcome-model-suggestions">
             {modelSuggestions.map((m) => <option key={m.id} value={m.id}>{m.name ?? m.id}</option>)}
           </datalist>
-        </label>
+        </div>
       )}
 
       {/* a brand-new custom endpoint gets the same pre-create free-text
@@ -3014,30 +3118,16 @@ export function ConnectionDrawerFields({
           {/* API key IN the create form (item 3): so a single "Create" mints the
               connection/record AND stores the key. Absent for a saved custom
               record (it already owns its key) and for oauth providers. */}
-          {showKeyInCreate && (
-            <label className="settings-field">
-              <span className="settings-field-label">
-                {isNewCustomEndpoint && noAuth ? "API key (not needed)" : "API key"}
-              </span>
-              <input
-                ref={secretInputRef}
-                className="settings-field-input connection-drawer-create-key"
-                type="password"
-                autoComplete="off"
-                value={secretValue}
-                disabled={keyFieldDisabled}
-                placeholder="sk-…"
-                onChange={(e) => dispatchSecret({ type: "change", value: e.target.value })}
-              />
-            </label>
-          )}
-          {showKeyInCreate && !noAuth && <div className="connection-drawer-fetch-models">
-            <Button type="button" disabled={readOnly || fetchingModels || !secretValue.trim()} onClick={() => void doFetchModels()}>{fetchingModels ? "Fetching…" : "Fetch models"}</Button>
+          {!compactSubscription && createKeyField}
+          {showKeyInCreate && !noAuth && !compactSubscription && <div className="connection-drawer-fetch-models">
+            {refreshModelsButton}
             {createFetchNotice !== null && <p className="settings-field-hint" role="status">{createFetchNotice}</p>}
           </div>}
-          {pricingBlock}
+          {compactSubscription && createFetchNotice !== null && <p className="settings-field-hint" role="status">{createFetchNotice}</p>}
+          {!compactSubscription && pricingBlock}
           {advancedBlock}
           <div className="settings-field-row connection-drawer-actions">
+            {compactSubscription && <span className="settings-field-hint">{setupMissingKey ? "Enter your API key to continue." : setupMissingModel ? "Enter a model ID to continue." : "Ready to connect."}</span>}
             {cancelAction}
             <Button variant="primary"
               type="button"
@@ -3048,8 +3138,8 @@ export function ConnectionDrawerFields({
               {creating ? "Connecting…" : simplified && mode === "add" ? "Connect" : mode === "add" ? "Create connection" : "Save"}
             </Button>
           </div>
-          {providerId === "" ? <p className="settings-field-hint">Choose a provider to continue.</p> : setupMissingModel && <p className="settings-field-hint">Enter a model ID to continue.</p>}
-          {setupMissingKey && <p className="settings-field-hint">Enter your API key to continue.</p>}
+          {providerId === "" ? <p className="settings-field-hint">Choose a provider to continue.</p> : !compactSubscription && setupMissingModel && <p className="settings-field-hint">Enter a model ID to continue.</p>}
+          {!compactSubscription && setupMissingKey && <p className="settings-field-hint">Enter your API key to continue.</p>}
         </>
       ) : (
         <>

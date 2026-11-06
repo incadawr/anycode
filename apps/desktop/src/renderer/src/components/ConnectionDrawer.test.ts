@@ -115,7 +115,7 @@ function conn(id: string, providerId = "z-ai"): ProviderConnection {
   return { id, providerId };
 }
 
-function okResult(connections: ProviderConnection[], createdConnectionId?: string): SettingsMutationResult {
+function okResult(connections: ProviderConnection[], createdConnectionId?: string): Extract<SettingsMutationResult, { ok: true }> {
   return {
     ok: true,
     snapshot: {
@@ -2268,7 +2268,7 @@ describe("ConnectionDrawer layout wiring", () => {
   const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
 
   it("the disclosure is a controlled <details> in BOTH modes, closed unless a value is set", () => {
-    expect(source).toMatch(/className="connection-drawer-advanced connection-drawer-band"/);
+    expect(source).toContain('className={`connection-drawer-advanced${compactSubscription ? "" : " connection-drawer-band"}`}');
     expect(source).toMatch(/open=\{advancedOpen\}/);
     expect(source).toMatch(/onToggle=\{\(e\) => setAdvancedOpen\(e\.currentTarget\.open\)\}/);
     expect(source).toMatch(/useState\(\(\) => initialFocus === "context" \|\| reasoningSupported \|\| effortLevels.length > 0 \|\| modelEffort !== "" \|\| advancedHasValues\(/);
@@ -2276,7 +2276,7 @@ describe("ConnectionDrawer layout wiring", () => {
   });
 
   it("only the first-run flow keeps the 'Advanced settings (optional)' summary; the dialog says 'Advanced'", () => {
-    expect(source).toMatch(/\{simplified \? "Advanced settings \(optional\)" : "Advanced"\}/);
+    expect(source).toMatch(/simplified \? "Advanced settings \(optional\)" : "Advanced"/);
   });
 
   it("both {ok:false} validation paths reopen Advanced in createConnection AND save", () => {
@@ -2589,4 +2589,46 @@ it("labels the unsaved selected model and endpoint, and clears the label on expl
   for (const [model, baseUrl, selection] of [["a", "https://fixture.invalid", "auto"], ["b", "https://changed.invalid", "auto"], ["b", "https://fixture.invalid", "on"]] as const) {
     expect(reasoningReplayAutoLabel(connection, model, baseUrl, selection)).toBe("Automatic (provider default)");
   }
+});
+
+describe("compact welcome subscription form", () => {
+  async function render(simplified: boolean, provider = "opencode") {
+    const { ConnectionDrawerFields } = await import("./ConnectionDrawer.js");
+    const { createSettingsStore } = await import("../settings-store.js");
+    const store = createSettingsStore();
+    store.setState({ snapshot: okResult([]).snapshot });
+    return renderToStaticMarkup(createElement(ConnectionDrawerFields, {
+      mode: "add", catalog: projectCatalogSummary(getBuiltinCatalog().providers), connections: [], secrets: [],
+      readOnly: false, store, simplified, initialProviderId: provider, subscriptionKeyUrl: "https://opencode.ai/console",
+    }));
+  }
+  it("puts key before model, removes Provider and places pricing inside Advanced", async () => {
+    const html = await render(true);
+    expect(html).not.toContain('>Provider</span>');
+    expect(html).not.toContain('data-section="01');
+    expect(html.indexOf('type="password"')).toBeLessThan(html.indexOf('list="welcome-model-suggestions"'));
+    expect(html).toContain('Get your key ↗');
+    expect(html).toContain('↻ Refresh');
+    expect(html.indexOf('aria-label="Pricing"')).toBeGreaterThan(html.indexOf('<details'));
+    expect(html.indexOf('aria-label="Pricing"')).toBeLessThan(html.indexOf('</details>'));
+  });
+  it("shows one current price card and keeps the catalog list collapsed", async () => {
+    const html = await render(true);
+    expect(html).not.toContain('<table');
+    expect(html).toContain('Go reference price');
+    expect(html).toContain('Show all models (');
+    expect(html).not.toContain('aria-label="All models"');
+    expect((html.match(/class="connection-drawer-price-card"/g) ?? []).length).toBe(1);
+    const kimi = await render(true, "kimi");
+    expect(kimi).toContain('By subscription');
+    expect(kimi).toContain('No per-token price');
+    expect(kimi).toContain('Set price');
+  });
+  it("keeps the settings form provider, numbering and Fetch models action", async () => {
+    const html = await render(false);
+    expect(html).toContain('>Provider</span>');
+    expect(html).toContain('data-section="01');
+    expect(html).toContain('Fetch models');
+    expect(html).not.toContain('Get your key ↗');
+  });
 });

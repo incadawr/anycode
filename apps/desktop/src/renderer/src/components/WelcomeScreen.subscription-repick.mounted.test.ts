@@ -3,17 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 // @vitest-environment jsdom
-/**
- * Mounted regression gate for the subscription key link (jsdom — see
- * WelcomeScreen.test.ts's docstring for why this lives in its own file):
- * pick GLM, manually move the form's Provider select to OpenAI, then click
- * the GLM tile again. The re-pick is a fresh seed — the form must come back
- * ON the GLM template, not keep showing OpenAI while the "Get a GLM Coding
- * Plan key" link revives above it. The bare subscription state no-ops on an
- * identical re-pick, so the form's mount key carries a pick nonce: without it
- * the reset pick bookkeeping describes a form that was never remounted and
- * the link and the form disagree (exactly what this test pins).
- */
+/** Mounted first-run navigation, draft retention and focus regression checks. */
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -83,20 +73,19 @@ function glmTile(): HTMLButtonElement {
   )!;
 }
 
-/** The embedded form's Provider select (first select in the setup area). */
-function providerSelect(): HTMLSelectElement {
-  return container.querySelector<HTMLSelectElement>(".welcome-setup select")!;
+function keyInput(): HTMLInputElement {
+  return container.querySelector<HTMLInputElement>(".connection-drawer-create-key")!;
 }
-
-function keyLink(): HTMLElement | null {
-  return container.querySelector(".welcome-subscription-key");
+async function click(button: HTMLButtonElement): Promise<void> {
+  await act(async () => button.click());
 }
-
-async function pickProvider(value: string): Promise<void> {
-  const select = providerSelect();
+async function change(): Promise<void> {
+  await click([...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "← Change")!);
+}
+async function typeKey(value: string): Promise<void> {
   await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(select, value);
-    select.dispatchEvent(new Event("change", { bubbles: true }));
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(keyInput(), value);
+    keyInput().dispatchEvent(new Event("input", { bubbles: true }));
   });
 }
 
@@ -105,41 +94,137 @@ it("focuses the Codex path on first launch", async () => {
   expect(document.activeElement).toBe(container.querySelector('[data-welcome-path="codex"]'));
 });
 
-describe("subscription re-pick keeps the key link and the form on the same provider", () => {
-  it("opens a single Go form with the Kimi default and no automatic transport selector", async () => {
+describe("compact subscription navigation", () => {
+  it("opens the Go summary and default model with a separately labelled Refresh action", async () => {
     await mount();
     const go = [...container.querySelectorAll<HTMLButtonElement>(".welcome-subscription")].filter(tile => tile.textContent?.includes("OpenCode Go"));
     expect(go).toHaveLength(1);
-    await act(async () => go[0]!.click());
-    expect(providerSelect().value).toBe("opencode");
-    expect(container.querySelector<HTMLInputElement>("input[list=welcome-model-suggestions]")?.value).toBe("kimi-k3");
-    expect(providerSelect().querySelector("option[value=opencode-openai]")).toBeNull();
+    await click(go[0]!);
+    expect(container.querySelector(".welcome-selected-subscription strong")?.textContent).toBe("OpenCode Go");
+    expect(container.querySelector<HTMLAnchorElement>(".welcome-key-link")?.href).toBe("https://opencode.ai/console");
+    const model = container.querySelector<HTMLInputElement>("input[list=welcome-model-suggestions]")!;
+    expect(model.value).toBe("kimi-k3");
+    expect([...model.labels!].map(label => label.textContent).join()).toBe("Model");
+    expect(container.querySelector(".connection-drawer-model-line button")?.closest("label")).toBeNull();
+    expect(container.querySelector(".connection-drawer-identity")).toBeNull();
     expect(container.querySelector(".connection-drawer-advanced")?.textContent).not.toContain("Transport");
-    await pickProvider("openai");
-    expect(keyLink()).toBeNull();
-    await act(async () => go[0]!.click());
-    expect(providerSelect().value).toBe("opencode");
-    expect(keyLink()?.textContent).toContain("OpenCode Go");
   });
-  it("re-seeds the form to the picked template instead of reviving the link over another provider", async () => {
+
+  it("labels the API key without including the key-console link", async () => {
     await mount();
-
-    // Pick GLM: the form opens seeded with the GLM template and its key link.
-    await act(async () => glmTile().click());
-    expect(keyLink()?.textContent).toContain("Get a GLM Coding Plan key");
-    expect(providerSelect().value).toBe("z-ai");
-
-    // Manually move the form to OpenAI: the link must follow it off.
-    await pickProvider("openai");
-    expect(providerSelect().value).toBe("openai");
-    expect(keyLink()).toBeNull();
-
-    // Click GLM again: a fresh seed — the form must come back on GLM, with
-    // the link describing the form actually shown (never link-over-OpenAI).
-    await act(async () => glmTile().click());
-    expect(keyLink()?.textContent).toContain("Get a GLM Coding Plan key");
-    expect(providerSelect().value).toBe("z-ai");
+    await click(glmTile());
+    expect([...keyInput().labels!].map(label => label.textContent).join()).toBe("API key");
+    expect(container.querySelector(".welcome-key-link")?.closest("label")).toBeNull();
   });
+
+  it("keeps a same-subscription draft and clears it when picking another subscription", async () => {
+    await mount();
+    await click(glmTile());
+    expect(document.activeElement).toBe(keyInput());
+    await typeKey("draft-key-only");
+    const originalInput = keyInput();
+    await change();
+    expect(document.activeElement).toBe(glmTile());
+    await click(glmTile());
+    expect(keyInput()).toBe(originalInput);
+    expect(keyInput().value).toBe("draft-key-only");
+    await change();
+    await click([...container.querySelectorAll<HTMLButtonElement>(".welcome-subscription")].find(tile => tile.textContent?.includes("MiniMax M Plan"))!);
+    expect(keyInput()).not.toBe(originalInput);
+    expect(keyInput().value).toBe("");
+    expect(container.querySelector(".welcome-selected-subscription strong")?.textContent).toBe("MiniMax M Plan");
+  });
+
+  for (const action of ["saved connection", "add provider"] as const) {
+    it(`shows the ${action} form after leaving subscription selection`, async () => {
+      const state = snapshot();
+      state.settings.provider.connections = [{ id: "work-glm", providerId: "z-ai", label: "Work GLM", model: "glm-5.3" }];
+      useSettingsStore.setState({ snapshot: state });
+      await mount();
+      await click(glmTile());
+      await change();
+      await click(container.querySelector<HTMLButtonElement>(action === "saved connection" ? ".welcome-connection-row" : ".welcome-connections-add")!);
+      expect(container.querySelector<HTMLElement>(".welcome-setup")?.hidden).toBe(false);
+      expect(container.querySelector(".welcome-selected-subscription")).toBeNull();
+      if (action === "saved connection") {
+        expect(container.querySelector<HTMLInputElement>('.welcome-setup input[placeholder="e.g. Work, Personal"]')?.value).toBe("Work GLM");
+      } else {
+        expect(container.querySelector<HTMLSelectElement>(".welcome-setup select")?.value).toBe("");
+      }
+    });
+  }
+});
+
+
+async function buttonNamed(name: string): Promise<void> {
+  await click([...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent?.trim() === name)!);
+}
+async function typeModel(value: string): Promise<void> {
+  const model = container.querySelector<HTMLInputElement>("input[list=welcome-model-suggestions]")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(model, value);
+    model.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+async function toggleAdvanced(): Promise<void> {
+  await act(async () => container.querySelector<HTMLElement>(".connection-drawer-advanced summary")!.click());
+}
+async function pickKimi(): Promise<void> {
+  await mount();
+  await click([...container.querySelectorAll<HTMLButtonElement>(".welcome-subscription")].find(tile => tile.textContent?.includes("Kimi (kimi.com)"))!);
+}
+
+it.each(["current model", "another model", "fallback", "output field"] as const)("reveals and focuses invalid pricing from closed Advanced: %s", async scope => {
+  const create = vi.fn<typeof originalSettingsState.connectionCreate>().mockRejectedValue(new Error("Unexpected create"));
+  useSettingsStore.setState({ connectionCreate: create });
+  await pickKimi();
+  await toggleAdvanced();
+  if (scope === "fallback") {
+    const billing = container.querySelector<HTMLSelectElement>('select[aria-label="Billing mode"]')!;
+    await act(async () => { billing.value = "rates"; billing.dispatchEvent(new Event("change", { bubbles: true })); });
+  } else {
+    await buttonNamed("Set price");
+    if (scope === "another model") await typeModel("k3");
+    if (scope === "output field") {
+      for (const [field, value] of [["Input", "1"], ["Cached input", "0"]]) {
+        const input = container.querySelector<HTMLInputElement>(`input[aria-label="k3.1-pro ${field}"]`)!;
+        await act(async () => {
+          Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+      }
+    }
+  }
+  await toggleAdvanced();
+  expect(container.querySelector<HTMLDetailsElement>(".connection-drawer-advanced")?.open).toBe(false);
+  await typeKey("sk-local-validation-only");
+  await buttonNamed("Connect");
+  expect(create).not.toHaveBeenCalled();
+  expect(container.querySelector<HTMLDetailsElement>(".connection-drawer-advanced")?.open).toBe(true);
+  const owner = scope === "fallback" ? "Connection fallback" : "k3.1-pro";
+  if (scope !== "fallback") {
+    expect(container.querySelector<HTMLInputElement>("input[list=welcome-model-suggestions]")?.value).toBe(owner);
+    expect(container.querySelector(".connection-drawer-price-card strong")?.textContent).toBe(owner);
+  }
+  const field = scope === "output field" ? "Output" : "Input";
+  const invalid = container.querySelector<HTMLInputElement>(`input[aria-label="${owner} ${field}"]`)!;
+  expect(invalid).not.toBeNull();
+  expect(document.activeElement).toBe(invalid);
+  expect(container.querySelector(".settings-error")?.textContent ?? container.textContent).toContain(owner);
+});
+
+it("does not infer subscription billing from a model returned by Refresh", async () => {
+  await pickKimi();
+  const remoteId = "new-remote-fixture-model";
+  const fetchModels = vi.fn().mockResolvedValue({ ok: true, models: [{ id: remoteId }] });
+  window.anycode.customProvider.fetchModels = fetchModels;
+  await typeKey("sk-local-refresh-only");
+  await buttonNamed("↻ Refresh");
+  expect(fetchModels).toHaveBeenCalledOnce();
+  await typeModel(remoteId);
+  await toggleAdvanced();
+  expect(container.querySelector(".connection-drawer-price-card")?.textContent).toContain("Price unknown");
+  expect(container.querySelector(".connection-drawer-price-card")?.textContent).not.toContain("By subscription");
 });
 
 

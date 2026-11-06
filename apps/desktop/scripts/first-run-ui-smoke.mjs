@@ -115,40 +115,91 @@ try {
   // the key link is absent.
   assert.equal(await evaluate("document.querySelector('.welcome-setup select').value"), "");
   assert.equal(await evaluate("document.querySelector('.welcome-subscription-key') === null"), true);
-  // Subscription shortcuts: each seeds the Provider template at mount and
-  // links the provider's own key page; switching picks remounts the form.
+  await call("Emulation.setDeviceMetricsOverride", { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+  const shot = async name => writeFileSync(join(profile, name), Buffer.from((await call("Page.captureScreenshot", { format: "png" })).data, "base64"));
+  const shotFull = async name => {
+    const height = await evaluate("document.querySelector('.welcome-screen').scrollHeight + 80");
+    await call("Emulation.setDeviceMetricsOverride", { width: 1280, height, deviceScaleFactor: 1, mobile: false });
+    await sleep(200); await shot(name);
+    await call("Emulation.setDeviceMetricsOverride", { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+  };
+  const type = async (selector, value) => evaluate(`(() => { const input = document.querySelector(${JSON.stringify(selector)}); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify(value)}); input.dispatchEvent(new Event('input', {bubbles:true})); })()`);
+  const choices = [
+    ["GLM Coding Plan", "Use your Z.AI coding plan key", "https://z.ai/subscribe", "https://z.ai/manage-apikey/apikey-list"],
+    ["MiniMax M Plan", "Use your MiniMax M Plan key", "https://www.minimax.io/m-plan", "https://platform.minimax.io/console/plan"],
+    ["Kimi (kimi.com)", "Use your Kimi for Coding key", "https://www.kimi.com/code", "https://www.kimi.com/code/console"],
+    ["OpenCode Go", "Use your OpenCode Go key", "https://opencode.ai/go", "https://opencode.ai/console"],
+  ];
+  for (const [title, description, planUrl, keyUrl] of choices) {
+    await click(title + description);
+    await poll(() => evaluate("!!document.querySelector('.welcome-selected-subscription')"));
+    assert.equal(await evaluate("document.querySelector('.welcome-selected-subscription strong').textContent"), title);
+    assert.equal(await evaluate("document.querySelector('.welcome-selected-subscription a').href"), planUrl);
+    assert.equal(await evaluate("document.querySelector('.welcome-key-link').href"), keyUrl);
+    assert(await evaluate("document.querySelector('.welcome-paths').hidden"));
+    assert(await evaluate("document.activeElement.matches('.connection-drawer-create-key')"));
+    assert(await evaluate("!document.querySelector('.welcome-setup .connection-drawer-identity') && !document.querySelector('.welcome-setup [data-section]')"));
+    assert(await evaluate("document.querySelector('.welcome-setup input').type === 'password'"));
+    assert(await evaluate("document.querySelector('.connection-drawer-model-line button').textContent === '↻ Refresh'"));
+    assert(await evaluate("document.querySelector('.connection-drawer-model-line button').disabled"));
+    assert(await evaluate("document.querySelector('.connection-drawer-advanced').open === false && !!document.querySelector('.connection-drawer-advanced [aria-label=Pricing]')"));
+    assert(await evaluate("!document.querySelector('.welcome-setup table')"));
+    await type('.connection-drawer-create-key', 'sk-draft-smoke-only');
+    await click('← Change');
+    assert(await evaluate("!document.querySelector('.welcome-paths').hidden && document.querySelector('.welcome-setup').hidden"));
+    await click(title + description);
+    assert.equal(await evaluate("document.querySelector('.connection-drawer-create-key').value"), 'sk-draft-smoke-only');
+    await type('.connection-drawer-create-key', '');
+    await evaluate("document.querySelector('.connection-drawer-advanced summary').click()");
+    await poll(() => evaluate("document.querySelector('.connection-drawer-advanced').open"));
+    assert(await evaluate("!!document.querySelector('.connection-drawer-price-card')"));
+    if (title.startsWith('Kimi')) assert(await evaluate("document.querySelector('.connection-drawer-price-card').textContent.includes('No per-token price')"));
+    if (title.startsWith('Kimi')) {
+      await click('Set price');
+      await type('input[list=welcome-model-suggestions]', 'k3');
+      await evaluate("document.querySelector('.connection-drawer-advanced summary').click()");
+      await type('.connection-drawer-create-key', 'sk-local-validation-only');
+      await click('Connect');
+      await poll(() => evaluate("document.querySelector('.connection-drawer-advanced').open"));
+      assert.equal(await evaluate("document.querySelector('.connection-drawer-price-card strong').textContent"), 'k3.1-pro');
+      assert.equal(await evaluate("document.activeElement.getAttribute('aria-label')"), 'k3.1-pro Input');
+      assert(await evaluate("document.querySelector('.welcome-setup').textContent.includes('k3.1-pro: enter non-negative prices')"));
+      await shotFull('pricing-validation.png');
+      await click('Use inherited');
+      await type('.connection-drawer-create-key', '');
+    }
+    if (title === 'OpenCode Go') {
+      assert(await evaluate("document.querySelector('.connection-drawer-price-card').textContent.includes('Go reference price')"));
+      await shotFull('pricing.png');
+      await click('Edit');
+      assert.equal(await evaluate("document.querySelectorAll('.connection-drawer-price-edit input').length"), 4);
+      await shotFull('pricing-edit.png');
+      await click('Use inherited');
+      await evaluate("[...document.querySelectorAll('.welcome-setup button')].find(b => b.textContent.startsWith('Show all models')).click()");
+      assert(await evaluate("document.querySelectorAll('.connection-drawer-price-list button').length > 1"));
+      await shotFull('all-models.png');
+      await evaluate("document.querySelectorAll('.connection-drawer-price-list button')[1].click()");
+      assert.equal(await evaluate("document.querySelector('input[list=welcome-model-suggestions]').value"), await evaluate("document.querySelector('.connection-drawer-price-card strong').textContent"));
+      await type('input[list=welcome-model-suggestions]', 'unknown-smoke-model');
+      assert(await evaluate("document.querySelector('.connection-drawer-price-card').textContent.includes('Price unknown')"));
+      await click('Set price');
+      assert(await evaluate("!!document.querySelector('.connection-drawer-price-edit input')"));
+      await click('Use inherited');
+    }
+    await evaluate("document.querySelector('.connection-drawer-advanced summary').click()");
+    await click('← Change');
+  }
   await click("GLM Coding PlanUse your Z.AI coding plan key");
-  await poll(() => evaluate("document.querySelector('.welcome-setup select')?.value === 'z-ai'"));
-  assert(await evaluate("document.querySelector('input[list=welcome-model-suggestions]').value.length > 0"));
-  assert.equal(await evaluate("document.querySelector('.welcome-subscription-key a')?.href ?? null"), "https://z.ai/manage-apikey/apikey-list");
-  assert.equal(await evaluate("document.querySelector('.connection-drawer-advanced').open"), false);
-  await click("MiniMax M PlanUse your MiniMax M Plan key");
-  await poll(() => evaluate("document.querySelector('.welcome-setup select')?.value === 'minimax'"));
-  assert.equal(await evaluate("document.querySelector('.welcome-subscription-key a')?.href ?? null"), "https://platform.minimax.io/console/plan");
-  await click("Kimi (kimi.com)Use your Kimi for Coding key");
-  await poll(() => evaluate("document.querySelector('.welcome-setup select')?.value === 'kimi'"));
-  assert.equal(await evaluate("document.querySelector('.welcome-subscription-key a')?.href ?? null"), "https://www.kimi.com/code/console");
+  await type('.connection-drawer-create-key', 'sk-reset-smoke-only');
+  await click('← Change');
   await click("OpenCode GoUse your OpenCode Go key");
-  await poll(() => evaluate("document.querySelector('.welcome-setup select')?.value === 'opencode'"));
+  assert.equal(await evaluate("document.querySelector('.connection-drawer-create-key').value"), '');
   assert.equal(await evaluate("document.querySelector('input[list=welcome-model-suggestions]').value"), "kimi-k3");
-  assert.equal(await evaluate("document.querySelector('.welcome-subscription-key a')?.href"), "https://opencode.ai/console");
-  assert.equal(await evaluate("document.querySelectorAll('.welcome-subscription').length"), 4);
-  assert.equal(await evaluate("document.querySelectorAll('.welcome-setup option[value=opencode-openai]').length"), 0);
-  assert.equal(await evaluate("[...document.querySelectorAll('.connection-drawer-advanced .settings-field-label')].some(e => e.textContent === 'Transport')"), false);
-  assert.equal(await evaluate("[...document.querySelectorAll('.welcome-subscription')].filter(b => b.getAttribute('aria-pressed') === 'true').map(b => b.querySelector('strong').textContent).join()"), "OpenCode Go");
-  assert.equal(await evaluate("[...document.querySelectorAll('.welcome-paths button')].some(b => b.getAttribute('aria-pressed') === 'true')"), false);
-  const goPng = await call("Page.captureScreenshot", { format: "png" });
-  writeFileSync(join(profile, "opencode-go.png"), Buffer.from(goPng.data, "base64"));
-  await click("GLM Coding PlanUse your Z.AI coding plan key");
-  await poll(() => evaluate("document.querySelector('.welcome-setup select')?.value === 'z-ai'"));
-  assert.equal(await evaluate("document.querySelector('.welcome-subscription-key a')?.href ?? null"), "https://z.ai/manage-apikey/apikey-list");
-  await click("OpenCode GoUse your OpenCode Go key");
-  await poll(() => evaluate("document.querySelector('.welcome-setup select')?.value === 'opencode'"));
-  assert(await evaluate("document.querySelector('.welcome-setup .ak-btn--primary').disabled"), "Missing API key must block Connect");
+  assert(await evaluate("document.querySelector('.welcome-setup .ak-btn--primary').disabled"));
   await sleep(400);
-  const setupPng = await call("Page.captureScreenshot", { format: "png" });
-  writeFileSync(join(profile, "api-setup.png"), Buffer.from(setupPng.data, "base64"));
-  await evaluate(`(() => { const input = document.querySelector('.connection-drawer-create-key'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'sk-first-run-smoke-only'); input.dispatchEvent(new Event('input', {bubbles: true})); })()`);
+  assert(await evaluate("(() => { const b = document.querySelector('.welcome-setup .ak-btn--primary').getBoundingClientRect(); return b.top > 0 && b.bottom <= 800; })()"), 'Connect must fit on one screen');
+  await shot('api-setup.png');
+  await type('.connection-drawer-create-key', 'sk-first-run-smoke-only');
   await click("Connect");
   await poll(() => evaluate("!document.querySelector('.welcome-screen') || !!document.querySelector('.consent-dialog')"));
   if (await evaluate("!!document.querySelector('.consent-dialog')")) {

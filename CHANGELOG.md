@@ -7,6 +7,14 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Auto reasoning replay retries once without input reasoning when the provider rejects it, with a transcript notice. Connection settings restore remembered reasoning replay rejections for the matching endpoint and model, show the Auto-off state, and clear it when On is saved.
+- Reasoning replay is now on by default for Anthropic Messages and Chat Completions connections, including custom endpoints and OpenCode Go, and for original encrypted reasoning on Responses. Responses text-only reasoning has no documented replay form.
+- Reasoning replay can be enabled or disabled separately for each model, including catalog connections.
+- Refined compaction indicators and kept proxy checks neutral when a shell override bypasses the proxy.
+- First-run subscription setup keeps the key, model and Connect action together, with pricing and tuning under Advanced.
+
 ### Fixed
 
 - Responses gateway streams preserve initial answer and reasoning segments carried in content parts and no longer create empty answer bubbles.
@@ -14,13 +22,6 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Claude sessions correctly apply reasoning effort when opened through the Sessions API or changed in a tab.
 - OpenCode Go checks verify keys without generating tokens, explain unexpected responses, and discard stale results after connection changes; other providers explain unavailable checks, and settings errors hide internal details.
 - Plugin account sources no longer cause plugin grants and update preferences to be lost when settings are opened and saved by 0.0.77.
-
-### Changed
-
-- Auto reasoning replay retries once without input reasoning when the provider rejects it, with a transcript notice. Connection settings restore remembered reasoning replay rejections for the matching endpoint and model, show the Auto-off state, and clear it when On is saved.
-- Reasoning replay is now on by default for Anthropic Messages and Chat Completions connections, including custom endpoints and OpenCode Go, and for original encrypted reasoning on Responses. Responses text-only reasoning has no documented replay form.
-- Reasoning replay can be enabled or disabled separately for each model, including catalog connections.
-- Refined compaction indicators and kept proxy checks neutral when a shell override bypasses the proxy.
 
 ## [0.0.85] - 2026-11-06
 

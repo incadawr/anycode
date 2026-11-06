@@ -81,7 +81,7 @@ describe("welcomeFormKey", () => {
     expect(welcomeFormKey("add", "z-ai", 0)).not.toBe(welcomeFormKey("add", "minimax", 0));
   });
 
-  it("re-picking the SAME template yields a NEW key (a fresh seed must actually remount the form, not just reset the pick bookkeeping)", () => {
+  it("an explicit reset nonce yields a new key for the same template", () => {
     expect(welcomeFormKey("add", "z-ai", 0)).not.toBe(welcomeFormKey("add", "z-ai", 1));
   });
 
@@ -118,7 +118,7 @@ describe("welcomeKeyLinkVisible", () => {
 
 describe("WELCOME_SUBSCRIPTIONS", () => {
   it("offers one OpenCode Go shortcut", () => {
-    expect(WELCOME_SUBSCRIPTIONS.filter(sub => sub.id.startsWith("opencode"))).toEqual([{ id: "opencode", title: "OpenCode Go", description: "Use your OpenCode Go key", keyUrl: "https://opencode.ai/console" }]);
+    expect(WELCOME_SUBSCRIPTIONS.filter(sub => sub.id.startsWith("opencode"))).toEqual([{ id: "opencode", title: "OpenCode Go", description: "Use your OpenCode Go key", keyUrl: "https://opencode.ai/console", planUrl: "https://opencode.ai/go" }]);
   });
   it("every pick is a builtin catalog template a key-paste connection can use", () => {
     const catalog = getBuiltinCatalog();
@@ -142,4 +142,12 @@ it("renders icons on connection choices", async () => {
   for (const name of ["openai", "anthropic", "fallback", "zai", "minimax", "kimi", "opencode"]) {
     expect(html).toContain(`data-provider-icon="${name}"`);
   }
+});
+
+it("offers a subscription page separately from the key console", () => {
+  expect(WELCOME_SUBSCRIPTIONS.map(sub => sub.planUrl)).toEqual([
+    "https://z.ai/subscribe", "https://www.minimax.io/m-plan",
+    "https://www.kimi.com/code", "https://opencode.ai/go",
+  ]);
+  for (const sub of WELCOME_SUBSCRIPTIONS) expect(sub.planUrl).not.toBe(sub.keyUrl);
 });
