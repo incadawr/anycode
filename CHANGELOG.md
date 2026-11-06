@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Provider icons in connection settings and the welcome screen.
+
 ## [0.0.78] - 2026-11-06
 
 ### Added
