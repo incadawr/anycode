@@ -272,7 +272,7 @@ async function main() {
       if (event.method !== "Runtime.exceptionThrown") return;
       const detail = event.params.exceptionDetails;
       const description = detail.exception?.description ?? "";
-      results.rendererFailure = description.includes("onPluginsChanged") ? "Missing plugins.onPluginsChanged API" : ["Maximum update depth", "Cannot read properties", "not a function", "ReferenceError"].find(label => description.includes(label)) ?? "Unclassified exception";
+      results.rendererFailure = (description.includes("plugins.") && description.includes("onChanged")) ? "Missing plugins.onChanged API" : ["Maximum update depth", "Cannot read properties", "not a function", "ReferenceError"].find(label => description.includes(label)) ?? "Unclassified exception";
       results.rendererLocation = detail.stackTrace?.callFrames?.slice(0, 2).map(frame => ({ line: frame.lineNumber, column: frame.columnNumber }));
     };
     await cdp.call("Runtime.enable");

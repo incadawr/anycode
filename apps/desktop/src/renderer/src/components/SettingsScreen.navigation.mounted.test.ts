@@ -252,3 +252,22 @@ it("offers a neutral Plugins state after origin closure and reloads without the 
   await click("Reload plugins");
   expect(output()).toBe("plugins:default");
 });
+
+
+it.each(["rejected", "failed", "missing"])("keeps the Plugins origin unknown when the scope snapshot is %s", async mode => {
+  if (mode === "rejected") list.mockRejectedValue(new Error("unavailable"));
+  if (mode === "failed") list.mockResolvedValue({ ok: false, reason: "failed" });
+  await mount(mode === "missing" ? { scopeBridge: undefined } : {});
+  await navigate({ ...request, pane: "plugins" });
+  expect(consume).toHaveBeenCalledWith(1);
+  expect(output()).toBe("plugins:b");
+  expect(container.textContent).not.toContain("Reload plugins");
+});
+
+it("keeps a new tab's origin unknown after a failed refresh of an older snapshot", async () => {
+  await mount();
+  list.mockRejectedValue(new Error("unavailable"));
+  await act(async () => useTabsStore.setState({ tabs: [...useTabsStore.getState().tabs, { tabId: "c", workspace: "/c" }] as typeof originalTabs.tabs }));
+  await navigate({ ...request, pane: "plugins", tabId: "c" });
+  expect(output()).toBe("plugins:c");
+});

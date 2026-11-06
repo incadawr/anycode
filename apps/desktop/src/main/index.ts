@@ -3785,6 +3785,12 @@ void app.whenReady().then(async () => {
   registerPathRootsIpc();
 
   registerMcpConfigIpc({
+    isWorkspaceTrusted: (workspace) => isWorkspaceTrustedFor(
+      new NodePluginsFs(),
+      (selfCheckProfile ?? resolveSkillsProfileHome(process.env, app.isPackaged) ?? resolveMcpImportHome(process.env, app.isPackaged)) ?? homedir(),
+      workspace,
+      workspaceTrustOnceFor(workspaceTrustOnceApprovals, workspace, realpathSync),
+    ),
     openPath: (path) => shell.openPath(path),
     reveal: (path) => shell.showItemInFolder(path),
     home: () => (selfCheckProfile ?? resolveMcpImportHome(process.env, app.isPackaged)) ?? homedir(),

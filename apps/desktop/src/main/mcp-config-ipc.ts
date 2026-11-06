@@ -141,6 +141,8 @@ export interface McpConfigIpcDeps {
   home(): string;
   /** User home for plugin discovery, when different from the MCP config home. */
   pluginHome?(): string;
+  /** Same workspace trust decision as host boot, including once approvals. */
+  isWorkspaceTrusted?(workspace: string): Promise<boolean>;
   /** Scope reference resolver: a tab id (legacy) or a workspace id `ws_<16 hex>`, resolved main-side — never a renderer-supplied path. */
   workspaceForTab(tabId: string): string | undefined;
   fs: McpConfigFs;
@@ -419,17 +421,20 @@ async function collectPluginServers(
         : {}),
     });
     problems.push(...discovery.problems);
-    const candidates = [...discovery.pluginInfo.entries()].map(([name, info]) => ({ name, root: info.root }));
+    const projectTrusted = workspace !== undefined && deps.isWorkspaceTrusted !== undefined
+      ? await deps.isWorkspaceTrusted(workspace).catch(() => false) : false;
+    const candidates = [...discovery.pluginInfo.entries()].map(([name, info]) => ({ name, root: info.root, tier: info.tier }));
     for (const skipped of discovery.skipped) {
       if (skipped.reason === "disabled" && skipped.name && !candidates.some(candidate => candidate.name === skipped.name))
-        candidates.push({ name: skipped.name, root: skipped.dir });
+        candidates.push({ name: skipped.name, root: skipped.dir, tier: skipped.tier });
     }
     const rows: McpPluginServerView[] = [];
     for (const plugin of candidates) {
       try {
         const manifest = pluginManifestSchema.parse(JSON.parse(await deps.fs.readFile(`${plugin.root}/.anycode-plugin/plugin.json`)));
         if (manifest.name !== plugin.name) continue;
-        const consentGranted = hasMcpConsent(consent, plugin.name, serversHash(manifest.mcpServers ?? {}));
+        const consentGranted = (plugin.tier === "project" && projectTrusted)
+          || hasMcpConsent(consent, plugin.name, serversHash(manifest.mcpServers ?? {}));
         for (const [server, entry] of Object.entries(manifest.mcpServers ?? {})) {
           // Invalid transport declarations cannot form a configured server row.
           if (Boolean(entry.command) === Boolean(entry.url)) continue;
@@ -439,7 +444,8 @@ async function collectPluginServers(
             consentGranted, shadowed: configClaimedNames.has(name), pluginRoot: entry.url ? "" : plugin.root });
         }
       } catch {
-        problems.push("A plugin's configured MCP entries could not be loaded.");
+        const problem = "A plugin's configured MCP entries could not be loaded.";
+        if (!problems.includes(problem)) problems.push(problem);
       }
     }
     return rows;

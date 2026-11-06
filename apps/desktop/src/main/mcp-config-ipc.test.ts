@@ -624,6 +624,23 @@ describe("handleMcpConfigGet pluginServers (S1-C)", () => {
     expect(snapshot.pluginServers?.[0]?.consentGranted).toBe(current);
   });
 
+  it.each([
+    ["project", true, false, true],
+    ["project", false, false, false],
+    ["project", true, true, true],
+    ["user", true, false, false],
+  ] as const)("projects workspace trust for tier=%s trusted=%s disabled=%s", async (tier, trusted, disabled, approved) => {
+    const root = tier === "project" ? `${WORKSPACE}/.anycode/plugins` : USER_PLUGINS_ROOT;
+    const { deps } = makeDeps({
+      [`${root}/acme-tools/.anycode-plugin/plugin.json`]: pluginManifestJson({ api: { command: "node" } }),
+      ...(disabled ? { [`${USER_PLUGINS_ROOT}/state.json`]: JSON.stringify({ version: 1, plugins: {}, disabled: ["acme-tools"] }) } : {}),
+    }, undefined, { [root]: ["acme-tools"], [`${root}/acme-tools`]: [".anycode-plugin"] });
+    deps.readMcpConsent = async () => [];
+    deps.isWorkspaceTrusted = async workspace => { expect(workspace).toBe(WORKSPACE); return trusted; };
+    const snapshot = await handleMcpConfigGet(deps, { tabId: TAB_ID });
+    expect(snapshot.pluginServers).toEqual([expect.objectContaining({ name: "plugin_acme-tools_api", consentGranted: approved })]);
+  });
+
   it("projects an http server's url as its command line", async () => {
     const { deps } = pluginWorld(pluginManifestJson({ web: { url: "https://example.com/mcp" } }));
     const snapshot = await handleMcpConfigGet(deps, {});
@@ -653,6 +670,41 @@ describe("handleMcpConfigGet pluginServers (S1-C)", () => {
     const snapshot = await handleMcpConfigGet(deps, {});
     expect(snapshot.pluginServers).toEqual([]);
     expect(snapshot.problems).toEqual([]);
+  });
+
+  it("reports one configured-entry read problem for multiple unreadable candidates", async () => {
+    const names = ["first", "second"];
+    const { deps } = makeDeps(Object.fromEntries(names.map(name => [
+      `${USER_PLUGINS_ROOT}/${name}/.anycode-plugin/plugin.json`,
+      JSON.stringify({ name, version: "1.0.0", mcpServers: { api: { command: "node" } } }),
+    ])), undefined, {
+      [USER_PLUGINS_ROOT]: names,
+      ...Object.fromEntries(names.map(name => [`${USER_PLUGINS_ROOT}/${name}`, [".anycode-plugin"]])),
+    });
+    const readFile = deps.fs.readFile;
+    const reads = new Set<string>();
+    deps.fs.readFile = async path => {
+      if (path.endsWith("/plugin.json")) {
+        if (reads.has(path)) throw new Error("unreadable");
+        reads.add(path);
+      }
+      return readFile(path);
+    };
+    const snapshot = await handleMcpConfigGet(deps, {});
+    expect(reads.size).toBe(2);
+    expect(snapshot.pluginServers).toEqual([]);
+    expect(snapshot.problems).toEqual(["A plugin's configured MCP entries could not be loaded."]);
+  });
+
+  it("keeps precise discovery errors without adding a generic duplicate", async () => {
+    const names = ["first", "second"];
+    const { deps } = makeDeps(Object.fromEntries(names.map(name => [
+      `${USER_PLUGINS_ROOT}/${name}/.anycode-plugin/plugin.json`, "{ invalid",
+    ])), undefined, { [USER_PLUGINS_ROOT]: names });
+    const snapshot = await handleMcpConfigGet(deps, {});
+    expect(snapshot.problems).toHaveLength(2);
+    for (const name of names) expect(snapshot.problems.filter(problem => problem.includes(`${name}/.anycode-plugin/plugin.json`))).toHaveLength(1);
+    expect(snapshot.problems.every(problem => problem.startsWith("Invalid JSON in plugin manifest"))).toBe(true);
   });
 
   it("collects discovery problems fail-soft instead of failing the snapshot", async () => {

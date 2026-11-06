@@ -1541,7 +1541,7 @@ export function SettingsScreen({
   const [scopeReadTabsKey, setScopeReadTabsKey] = useState<string | null>(null);
   const scopeLoadGeneration = useRef(0);
   const [scopeTabsKey, setScopeTabsKey] = useState("");
-  const [scopeTabWorkspaces, setScopeTabWorkspaces] = useState<Record<string, string>>({});
+  const [scopeTabWorkspaces, setScopeTabWorkspaces] = useState<Record<string, string> | null>(null);
   const handledPaneToken = useRef<number | undefined>(undefined);
   const [navigationContext, setNavigationContext] = useState<SettingsPaneRequest>();
   const latestNavigation = useRef({ paneRequest, scopeEntries, scopeTabsKey, tabs: useTabsStore.getState().tabs });
@@ -1678,7 +1678,11 @@ export function SettingsScreen({
   const mcpLive = mcpStatusActive(scopeEntry, activeTabId);
   const originTabId = navigationContext?.tabId;
   const originPresent = originTabId !== undefined && tabs.some((tab) => tab.tabId === originTabId
-    && tab.workspace === scopeTabWorkspaces[originTabId]);
+    && tab.workspace === scopeTabWorkspaces?.[originTabId]);
+  // A failed scope read supplies no evidence that an open origin has closed.
+  const originUnavailable = originTabId !== undefined && scopeTabWorkspaces !== null
+    && (!tabs.some(tab => tab.tabId === originTabId)
+      || (scopeTabWorkspaces[originTabId] !== undefined && !originPresent));
   const originAvailable = originPresent
     && scopeEntry?.tabIds.includes(originTabId);
   const mcpRuntimeTabId = navigationContext
@@ -2164,7 +2168,7 @@ export function SettingsScreen({
           {activePane === "roles" && (scopeRef && !rolesScopeRoot ? <p className="settings-field-hint">{rolesScope?.ref === scopeRef ? "Project unavailable." : "Loading project…"}</p> : <RolesPane tabId={scopeRef ?? activeTabId ?? undefined} projectRoot={rolesScopeRoot} registerGuard={registerRoleGuard} />)}
           {/* Catalog reads follow the navigation origin; plugin mutations remain global. */}
           {activePane === "plugins" && <PluginsPane key={navigationContext?.tabId ?? "default"} catalogTabId={navigationContext?.tabId}
-            catalogOriginUnavailable={!!navigationContext && !originPresent} onCatalogReset={() => setNavigationContext(undefined)} />}
+            catalogOriginUnavailable={!!navigationContext && originUnavailable} onCatalogReset={() => setNavigationContext(undefined)} />}
           {activePane === "sessions-api" && <SessionsApiPane />}
 
           {activePane === "environment" && (
