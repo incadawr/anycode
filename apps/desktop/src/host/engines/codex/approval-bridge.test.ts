@@ -434,15 +434,15 @@ describe("CodexApprovalBridge — workspace facts on file changes", () => {
     });
     const { bridge, broker, emitted } = ruledRig([{ toolName: "CodexApplyPatch" }], items);
     const response = responder();
-    bridge.handle(file({ itemId: "item-file" }), response);
-    await settle();
+    const handling = bridge.handle(file({ itemId: "item-file" }), response);
+    await vi.waitFor(() => expect(emitted.some((message) => message.type === "permission_request")).toBe(true));
 
     // The rule did NOT answer — a permission_request reached the UI and the
     // human (test) denies it. (The wire message carries no workspace field by
     // design; the confinement is observable purely as rule-vs-modal behavior.)
     const presented = ask(emitted);
     broker.handleResponse(presented.requestId, "deny");
-    await settle();
+    await handling;
     expect(response.result).toHaveBeenCalledWith({ decision: "decline" });
   });
 
@@ -457,12 +457,12 @@ describe("CodexApprovalBridge — workspace facts on file changes", () => {
     });
     const { bridge, broker, emitted } = ruledRig([{ toolName: "CodexApplyPatch" }], items);
     const response = responder();
-    bridge.handle(file({ itemId: "item-file" }), response);
-    await settle();
+    const handling = bridge.handle(file({ itemId: "item-file" }), response);
+    await vi.waitFor(() => expect(emitted.some((message) => message.type === "permission_request")).toBe(true));
 
     const presented = ask(emitted);
     broker.handleResponse(presented.requestId, "deny");
-    await settle();
+    await handling;
     expect(response.result).toHaveBeenCalledWith({ decision: "decline" });
   });
 
