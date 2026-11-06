@@ -41,19 +41,30 @@ describe("isolated automation startup", () => {
     expect(() => initializeIsolatedSmoke(app, env)).toThrow("startup aborted");
     if (["gate", "keychain", "port", "packaged", "path", "worktree", "symlink"].includes(fault)) expect(app.setPath).not.toHaveBeenCalled();
   });
-  function nativeFixture() {
+  function nativeFixture(orchestration = false) {
     const h = fixture();
     const node = realpathSync(process.execPath);
     Object.assign(h.env, { ANYCODE_ENGINE_SWITCH_ENABLED: "1", ANYCODE_ISOLATED_NATIVE_FIXTURES: "1", ANYCODE_ISOLATED_FIXTURE_NODE: node });
+    if (orchestration) h.env.ANYCODE_ISOLATED_ORCHESTRATION_FIXTURES = "1";
     const source = readFileSync(join(h.app.getAppPath(), "src/host/engine-switch-fixtures/native-double.mjs"), "utf8").replace(/^#![^\n]*\n/, "");
     for (const engine of ["codex", "claude"]) {
       const binary = join(h.root, `${engine}-double`);
-      const prefix = `#!${node}\nprocess.argv.push(${JSON.stringify(`--double-log=${join(h.root, `${engine}.jsonl`)}`)}${engine === "claude" ? ', "--double-claude"' : ""});\n`;
+      const prefix = `#!${node}\nprocess.argv.push(${orchestration ? '"--double-orchestration", ' : ""}${JSON.stringify(`--double-log=${join(h.root, `${engine}.jsonl`)}`)}${engine === "claude" ? ', "--double-claude"' : ""});\n`;
       writeFileSync(binary, prefix + source, { mode: 0o700 });
       h.env[engine === "codex" ? "ANYCODE_CODEX_BIN" : "ANYCODE_CLAUDE_BIN"] = binary;
     }
     return h;
   }
+  it("admits the exact orchestration fixture variant and rejects mismatched flags", () => {
+    const accepted = nativeFixture(true);
+    expect(initializeIsolatedSmoke(accepted.app,accepted.env)).toBe(true);
+    const mismatched = nativeFixture();
+    mismatched.env.ANYCODE_ISOLATED_ORCHESTRATION_FIXTURES = "1";
+    expect(() => initializeIsolatedSmoke(mismatched.app,mismatched.env)).toThrow("startup aborted");
+    const unsupported = nativeFixture(true);
+    unsupported.env.ANYCODE_ISOLATED_ORCHESTRATION_FIXTURES = "2";
+    expect(() => initializeIsolatedSmoke(unsupported.app,unsupported.env)).toThrow("startup aborted");
+  });
   it("admits only exact native fixture copies in the explicit development mode", () => {
     const { app, env, root } = nativeFixture();
     expect(initializeIsolatedSmoke(app, env)).toBe(true);

@@ -21,6 +21,8 @@ export function initializeIsolatedSmoke(app: {
     if (dirname(canonicalRoot) !== realpathSync(tmpdir())) throw new Error();
     if (!env.ANYCODE_EXPECTED_DESKTOP_ROOT || realpathSync(app.getAppPath()) !== realpathSync(env.ANYCODE_EXPECTED_DESKTOP_ROOT) || !env.ANYCODE_SMOKE_IDENTITY) throw new Error();
     const nativeFixtures = env.ANYCODE_ISOLATED_NATIVE_FIXTURES;
+    const orchestrationFixtures = env.ANYCODE_ISOLATED_ORCHESTRATION_FIXTURES;
+    if (orchestrationFixtures !== undefined && (orchestrationFixtures !== "1" || nativeFixtures !== "1")) throw new Error();
     const binaries: Record<string, string> = {};
     if (nativeFixtures !== undefined) {
       if (nativeFixtures !== "1" || env.ANYCODE_ENGINE_SWITCH_ENABLED !== "1") throw new Error();
@@ -29,7 +31,7 @@ export function initializeIsolatedSmoke(app: {
       const source = readFileSync(join(app.getAppPath(), "src/host/engine-switch-fixtures/native-double.mjs"), "utf8").replace(/^#![^\n]*\n/, "");
       for (const engine of ["codex", "claude"]) {
         const path = join(root, `${engine}-double`);
-        const prefix = `#!${realpathSync(node)}\nprocess.argv.push(${JSON.stringify(`--double-log=${join(root, `${engine}.jsonl`)}`)}${engine === "claude" ? ', "--double-claude"' : ""});\n`;
+        const prefix = `#!${realpathSync(node)}\nprocess.argv.push(${orchestrationFixtures === "1" ? '"--double-orchestration", ' : ""}${JSON.stringify(`--double-log=${join(root, `${engine}.jsonl`)}`)}${engine === "claude" ? ', "--double-claude"' : ""});\n`;
         binaries[`${engine}-double`] = prefix + source;
         if (readFileSync(path, "utf8") !== binaries[`${engine}-double`]) throw new Error();
       }

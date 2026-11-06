@@ -18,7 +18,7 @@ const consents = [];
 for (const engine of ["codex", "claude"]) {
   const binary = join(profile, `${engine}-double`);
   const source = readFileSync(fixturePath, "utf8").replace(/^#![^\n]*\n/, "");
-  const prefix = `#!${realpathSync(process.execPath)}\nprocess.argv.push(${JSON.stringify(`--double-log=${join(profile, `${engine}.jsonl`)}`)}${engine === "claude" ? ', "--double-claude"' : ""});\n`;
+  const prefix = `#!${realpathSync(process.execPath)}\nprocess.argv.push("--double-orchestration", ${JSON.stringify(`--double-log=${join(profile, `${engine}.jsonl`)}`)}${engine === "claude" ? ', "--double-claude"' : ""});\n`;
   writeFileSync(binary, prefix + source, { mode: 0o700 });
   const stat = statSync(binary);
   consents.push({ path: realpathSync(binary), fingerprint: { mode: stat.mode, uid: stat.uid, gid: stat.gid, size: stat.size, mtimeMs: stat.mtimeMs }, grantedAt: new Date().toISOString() });
@@ -32,7 +32,7 @@ const fixture = createServer((request, response) => {
   request.on("end", () => {
     if (request.method === "GET") { response.writeHead(200, { "Content-Type": "application/json" }); response.end(JSON.stringify({ data: [{ id: "core-model" }] })); return; }
     const input = JSON.parse(body);
-    assert.equal(input.model, "core-model");
+    assert(["core-model","core-other"].includes(input.model));
     providerCalls++;
     providerInputs.push(input.messages);
     response.writeHead(200, { "Content-Type": "text/event-stream" });
@@ -45,11 +45,12 @@ const fixture = createServer((request, response) => {
 await new Promise(resolve => fixture.listen(0, "127.0.0.1", resolve));
 const baseUrl = `http://127.0.0.1:${fixture.address().port}/v1`;
 writeFileSync(join(profile, "settings.json"), JSON.stringify({ version: 2,
-  provider: { activeConnectionId: "local", custom: [{ id: "custom:local", name: "Local fixture", baseUrl, kind: "openai-compatible", models: ["core-model"] }], connections: [{ id: "local", providerId: "custom:local", model: "core-model", models: ["core-model"], transport: "openai-chat-completions", baseUrl, authOptional: true }] },
+  provider: { activeConnectionId: "local", custom: [{ id: "custom:local", name: "Local fixture", baseUrl, kind: "openai-compatible", models: ["core-model","core-other"] }], connections: [{ id: "local", providerId: "custom:local", model: "core-model", models: ["core-model","core-other"], transport: "openai-chat-completions", baseUrl, authOptional: true, modelOverrides:{"core-model":{contextWindowTokens:128000,imageInput:"on",reasoningSupported:true,effortLevels:["low","high"]},"core-other":{contextWindowTokens:64000,imageInput:"off",reasoningSupported:false}} }] },
+  roles:{executor:{primary:{connection:"local",model:"core-model"}}},
   tools: {}, permissions: { alwaysAllow: [] }, ui: { theme: "dark" }, security: { allowWeakSecretStorage: false, trustedBinaries: consents },
 }));
 writeFileSync(join(profile, "unavailable-engine"), "#!/bin/sh\nexit 1\n", { mode: 0o700 });
-const env = { ...buildSmokeEnv(process.env, profile, 0, binaries.codex), ANYCODE_CLAUDE_BIN: binaries.claude, ANYCODE_ENGINE_SWITCH_ENABLED: "1", ANYCODE_ISOLATED_NATIVE_FIXTURES: "1", ANYCODE_ISOLATED_FIXTURE_NODE: realpathSync(process.execPath) };
+const env = { ...buildSmokeEnv(process.env, profile, 0, binaries.codex), ANYCODE_CLAUDE_BIN: binaries.claude, ANYCODE_ENGINE_SWITCH_ENABLED: "1", ANYCODE_ISOLATED_NATIVE_FIXTURES: "1", ANYCODE_ISOLATED_ORCHESTRATION_FIXTURES: "1", ANYCODE_ISOLATED_FIXTURE_NODE: realpathSync(process.execPath) };
 const app = launchSmokeElectron(spawn, { env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
 let launchLog = "";
 app.stdout.on("data", chunk => { launchLog += chunk; });
@@ -93,7 +94,7 @@ try {
     const db = new DatabaseSync(join(profile,"db.sqlite"),{readOnly:true});
     try {
       const row = db.prepare("SELECT id,engine_id,model,codex_profile_id,active_runtime_segment FROM sessions WHERE id=?").get(logicalSessionId);
-      return {row,segment:db.prepare("SELECT native_state FROM runtime_segments WHERE session_id=? AND segment_id=?").get(row.id,row.active_runtime_segment),handoff:JSON.parse(db.prepare("SELECT data FROM runtime_handoffs WHERE session_id=? AND segment_id=?").get(row.id,row.active_runtime_segment)?.data ?? "null"),items:db.prepare("SELECT data FROM runtime_transcript WHERE session_id=? ORDER BY seq").all(row.id).map(item => JSON.parse(item.data)),boundaries:db.prepare("SELECT data FROM runtime_boundaries WHERE session_id=?").all(row.id)};
+      return {row,segment:db.prepare("SELECT native_state,selected_json,applied_json FROM runtime_segments WHERE session_id=? AND segment_id=?").get(row.id,row.active_runtime_segment),handoff:JSON.parse(db.prepare("SELECT data FROM runtime_handoffs WHERE session_id=? AND segment_id=?").get(row.id,row.active_runtime_segment)?.data ?? "null"),items:db.prepare("SELECT data FROM runtime_transcript WHERE session_id=? ORDER BY seq").all(row.id).map(item => JSON.parse(item.data)),boundaries:db.prepare("SELECT data FROM runtime_boundaries WHERE session_id=?").all(row.id)};
     } finally { db.close(); }
   };
   async function verify(engine,boundaries) {
@@ -124,6 +125,47 @@ try {
     await evaluate(`window.anycode.selectTab(${JSON.stringify(tab.tabId)})`);
     await reload(engine,boundaries);
   }
+  const state = async () => (await api(`/state/${tab.tabId}`)).snapshot.states[tab.tabId];
+  async function pick(kind,value) {
+    const result = await api(`/tabs/${tab.tabId}/model-pill/pick`,"POST",{kind,value});
+    assert.equal(result.ok,true,JSON.stringify({kind,value,result}));
+  }
+  async function controls(engine) {
+    console.log(JSON.stringify({stage:"controls",engine}));
+    const original = engine === "core" ? "core-model" : engine === "codex" ? "model-first" : "default";
+    const alternate = engine === "core" ? "core-other" : engine === "codex" ? "model-chosen" : "haiku";
+    await pick("model",alternate);
+    await poll(() => JSON.parse(readRuntime().segment.selected_json).model === alternate);
+    if (engine !== "claude") assert.equal(await evaluate("document.querySelector('button[aria-label=\"Attach image\"]')?.disabled"),true,`${engine} text-only gate`);
+    await pick("model",original);
+    await poll(() => JSON.parse(readRuntime().segment.selected_json).model === original);
+    await pick("effort","high");
+    await poll(() => JSON.parse(readRuntime().segment.selected_json).effort === "high");
+    assert.equal(await evaluate("document.querySelector('button[aria-label=\"Attach image\"]')?.disabled"),false,`${engine} image gate`);
+    if (engine === "core") {
+      await api(`/tabs/${tab.tabId}/mode`,"POST",{mode:"edit"});
+      await poll(async () => (await state()).mode === "edit");
+      await api(`/tabs/${tab.tabId}/mode`,"POST",{mode:"plan"});
+      await poll(async () => (await state()).mode === "plan");
+    } else {
+      await evaluate("document.querySelector('button[aria-label=\"Codex permission preset\"]').click()");
+      await poll(() => evaluate("!![...document.querySelectorAll('[role=menuitemradio]')].find(button => button.querySelector('.model-pill-item-name')?.textContent === 'Ask for approval' || button.querySelector('.model-pill-item-name')?.textContent === 'Ask')"));
+      await evaluate("[...document.querySelectorAll('[role=menuitemradio]')].find(button => button.querySelector('.model-pill-item-name')?.textContent === 'Ask for approval' || button.querySelector('.model-pill-item-name')?.textContent === 'Ask').click()");
+      await poll(() => JSON.parse(readRuntime().segment.selected_json).mode === "ask");
+      if (engine === "codex") {
+        assert.equal(JSON.parse(readRuntime().segment.applied_json).mode,"read-only");
+        await evaluate("document.querySelector('button[aria-label=\"Codex speed\"]').click()");
+        await poll(() => JSON.parse(readRuntime().segment.selected_json).fast === true);
+      }
+    }
+  }
+  async function switchTo(engine) {
+    await evaluate("document.querySelector('button[aria-label=\"Switch engine\"]').click()");
+    const label = engine === "core" ? "Core ·" : engine === "codex" ? "Codex ·" : "Claude ·";
+    await poll(() => evaluate(`!![...document.querySelectorAll('select[aria-label="Target engine and model"] option')].find(option => option.textContent.startsWith(${JSON.stringify(label)}))`));
+    await evaluate(`(() => {const select = document.querySelector('select[aria-label="Target engine and model"]'); select.value = [...select.options].find(option => option.textContent.startsWith(${JSON.stringify(label)})).value; select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await evaluate("[...document.querySelectorAll('[role=dialog] button')].find(button => button.textContent === 'Switch engine').click()");
+  }
   let boundaries = 0;
   // Covers every directed engine pair with fresh host boots around each target turn.
   for (const engine of ["codex", "claude", "core", "claude", "codex", "core"]) {
@@ -145,8 +187,11 @@ try {
       assert.equal(identity.engine_id, engine);
       assert.equal(identity.model, engine === "core" ? "core-model" : engine === "codex" ? "model-first" : "default");
     } finally { db.close(); }
+    assert.equal((await state()).contextUsage,null,`${engine} context reset`);
+    await controls(engine);
     await reload(engine,boundaries);
     await restartHost(engine,boundaries);
+    assert.equal(JSON.parse(readRuntime().segment.selected_json).effort,"high");
     assert.equal(readRuntime().segment.native_state,"fresh");
     assert.equal(readRuntime().handoff.state,"pending");
     const text = `turn after switch ${boundaries}`;
@@ -154,6 +199,7 @@ try {
     originalTexts.push(text);
     await poll(() => readRuntime().handoff.state === "accepted");
     assert.equal(readRuntime().segment.native_state,"materialized");
+    await poll(() => JSON.parse(readRuntime().segment.applied_json).effort === "high");
     await reload(engine,boundaries);
     await restartHost(engine,boundaries);
     await verify(engine,boundaries);
@@ -186,11 +232,40 @@ try {
     }
   } finally { db.close(); }
   assert.equal(await evaluate("document.querySelectorAll('[data-block-id^=\"engine-boundary:\"]').length"), 6);
+  await api(`/tabs/${tab.tabId}/orchestrate`,"POST",{enabled:true});
+  await poll(async () => (await state()).orchestrateActive);
+  for (const engine of ["codex","core"]) {
+    await switchTo(engine); boundaries++;
+    await verify(engine,boundaries);
+    assert.equal((await state()).orchestrateActive,true);
+    await restartHost(engine,boundaries);
+    assert.equal((await state()).orchestrateActive,true,`${engine} overlay restored`);
+    const text = `orchestrated target ${engine}`;
+    await turn(text); originalTexts.push(text);
+    await reload(engine,boundaries);
+    await restartHost(engine,boundaries);
+    assert.equal((await state()).orchestrateActive,true,`${engine} overlay resumed after target turn`);
+  }
+  await switchTo("claude");
+  await poll(() => evaluate("!document.querySelector('[role=dialog][aria-label=\"Switch engine and model\"]')"));
+  await poll(() => evaluate("!!document.querySelector('.toast') || document.body.textContent.includes('orchestration')"));
+  assert.equal(readRuntime().row.engine_id,"core");
+  assert.equal(readRuntime().boundaries.length,boundaries);
+  assert.equal((await state()).orchestrateActive,true);
+  await turn("source survives Claude orchestration refusal");
+  originalTexts.push("source survives Claude orchestration refusal");
+  await verify("core",boundaries);
+  const policyFrames = messages("codex");
+  assert(policyFrames.some(frame => frame.fixtureBoot?.args.includes("features.multi_agent=false")),"process policy overlay was configured");
+  assert(policyFrames.some(frame => frame.method === "thread/resume" && frame.params.approvalPolicy === "never"),"native policy was applied");
+  await api(`/tabs/${tab.tabId}/orchestrate`,"POST",{enabled:false});
+  await poll(async () => !(await state()).orchestrateActive);
   const shot = await cdp.call("Page.captureScreenshot", { format: "png" });
   writeFileSync(join(profile, "all-pairs.png"), Buffer.from(shot.data, "base64"));
-  console.log(JSON.stringify({ ok: true, enginePairs: 6, boundaries: 6, rendererReloads:24, hostRestarts:12, canonicalOriginals:originalTexts.length, profile }));
+  console.log(JSON.stringify({ ok: true, enginePairs: 6, boundaries, rendererReloads:30, hostRestarts:16, settingsChecks:6, orchestrationSwitches:2, claudeOrchestrationRefusals:1, canonicalOriginals:originalTexts.length, profile }));
 } catch (error) {
   writeFileSync(join(profile, "launcher.log"), launchLog);
+  if (cdp) { try { writeFileSync(join(profile,"failure-page.txt"),await evaluate("document.body.innerText")); } catch {} }
   console.error(`Isolated artifacts: ${profile}`);
   throw error;
 } finally {
