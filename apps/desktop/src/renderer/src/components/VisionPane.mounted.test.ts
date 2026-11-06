@@ -19,7 +19,7 @@ it("shows the automatic Go window from static policy and refreshed snapshot", as
   fixture.data.find((row: { id: string }) => row.id === "gpt-6-luna").limit.context = 222000;
   const parsed = parseOpenCodeGoSnapshot(fixture, "2026-11-05T00:00:00Z");
   if (!parsed.ok) throw new Error("invalid Go fixture");
-  for (const [model, snapshot, expected] of [["grok-4.7", undefined, "500,000"], ["gpt-6-luna", undefined, "1,050,000"], ["gpt-6-luna", parsed.snapshot, "222,000"]] as const) {
+  for (const [model, snapshot, expected] of [["grok-4.7", undefined, 500000], ["gpt-6-luna", undefined, 1050000], ["gpt-6-luna", parsed.snapshot, 222000]] as const) {
     const settings = cloneDefaults();
     settings.provider.connections = [{ id: "go", providerId: "opencode", models: [model], modelRoutes: snapshot, modelCapabilities: { [model]: { contextWindow: 12345 } } }];
     settings.recognizer = { connectionId: "go", modelId: model };
@@ -28,7 +28,7 @@ it("shows the automatic Go window from static policy and refreshed snapshot", as
     const root = createRoot(container);
     try {
       await act(async () => root.render(createElement(VisionPane, { store })));
-      expect(container.textContent).toContain(`${expected} tokens (catalog)`);
+      expect(container.textContent).toContain(`${expected.toLocaleString()} tokens (catalog)`);
     } finally { await act(async () => root.unmount()); container.remove(); }
   }
 });
@@ -45,7 +45,7 @@ it("shows a saved window in read-only mode while allowing a probe", async () => 
     const input = container.querySelector<HTMLInputElement>('input[inputmode="numeric"]')!;
     expect(input.value).toBe("32000");
     expect(input.disabled).toBe(true);
-    expect(container.textContent).toContain("32,000 tokens (override)");
+    expect(container.textContent).toContain(`${(32000).toLocaleString()} tokens (override)`);
     expect(container.querySelector<HTMLButtonElement>(".vision-pane-save-button")?.disabled).toBe(true);
     expect(container.querySelector<HTMLButtonElement>(".vision-pane-probe-button")?.disabled).toBe(false);
   } finally { await act(async () => root.unmount()); container.remove(); }
