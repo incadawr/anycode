@@ -1971,7 +1971,8 @@ export class Session {
       ? {model:value.model,mode:value.activePresetId,...(value.effort !== undefined ? {effort:value.effort} : {}),...(value.fast !== undefined ? {fast:value.fast} : {})}
       : {model:this.model,mode:this.engine.mode(),effort:this.selectedEffort};
     const overlay = this.orchestrate ? {orchestration:{enabled:true as const,baseMode:this.preOrchestrateMode ?? "plan"}} : {};
-    this.runtimeHistory.settings({...settings(selected),...overlay},{...settings(applied),...overlay});
+    try { this.runtimeHistory.settings({...settings(selected),...overlay},{...settings(applied),...overlay}); }
+    catch (error) { console.error("[host] runtime settings write failed",error); }
   }
 
   private subscribeEngineSettings(seam: EngineSettingsSeam | undefined, engine = this.engine, generation = this.settingsGeneration): (() => void) | undefined {

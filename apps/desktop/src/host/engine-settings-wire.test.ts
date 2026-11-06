@@ -12,12 +12,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MessageChannel, type MessagePort as NodeMessagePort } from "node:worker_threads";
 import type { AgentEvent, PermissionMode } from "@anycode/core";
-import { SessionPermissionRules } from "@anycode/core";
+import { SessionPermissionRules, SqlitePersistenceAdapter } from "@anycode/core";
 import type { HostToUiMessage, UiToHostMessage } from "../shared/protocol.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
 import { Outbound, Session, type EngineSettingsChange, type EngineSettingsSeam, type SessionPersistence, type SwitchRuntime } from "./session.js";
 import type { EngineCapabilities, RunTurnOptions, SessionEngine } from "./engines/session-engine.js";
 import { MemFs, nodeWirePort } from "./test-harness.js";
+import { RuntimeSessionHistory } from "./runtime-session-history.js";
 
 const CODEX_CAPABILITIES: EngineCapabilities = {
   supportsCorePermissions: false,
@@ -169,7 +170,7 @@ function fixture(): Fixture {
  * tab's picker turns a `child-ask` boot into `full-access`), so the route is
  * gated on `child === undefined` the same way `compact_request` already is.
  */
-function fixtureWith(opts: { child?: boolean; engine?: FakeEngine; nextEngine?: SessionEngine | SwitchRuntime; replayCapacity?: number }): Fixture {
+function fixtureWith(opts: { child?: boolean; engine?: FakeEngine; nextEngine?: SessionEngine | SwitchRuntime; replayCapacity?: number; runtimeHistory?: RuntimeSessionHistory }): Fixture {
   const channel = new MessageChannel();
   const received: HostToUiMessage[] = [];
   channel.port1.on("message", (value: unknown) => received.push(value as HostToUiMessage));
@@ -187,6 +188,7 @@ function fixtureWith(opts: { child?: boolean; engine?: FakeEngine; nextEngine?: 
     workspace: "/work",
     model: engine.model,
     sessionId: "codex-session",
+    runtimeHistory:opts.runtimeHistory,
     rules: new SessionPermissionRules(),
     ...(opts.nextEngine ? { switchEngineFactory: async () => opts.nextEngine! } : {}),
     persistence: { touch: (patch) => { touches.push(patch); } },
@@ -235,6 +237,27 @@ afterEach(() => {
 });
 
 describe("committed runtime settings ownership", () => {
+  it("publishes pending and applied settings even when durable settings writes fail", async () => {
+    const database = new SqlitePersistenceAdapter(":memory:");
+    await database.createSession({id:"codex-session",workspace:"/work",engineId:"codex",model:"gpt-5.6-sol",mode:"ask" as PermissionMode});
+    database.ensureRuntimeSession("codex-session");
+    const ui = fixtureWith({runtimeHistory:new RuntimeSessionHistory(database,"codex-session")});
+    const log = vi.spyOn(console,"error").mockImplementation(() => {});
+    try {
+      ui.send({type:"ui_ready"}); await ui.settle();
+      const write = vi.spyOn(database,"updateRuntimeSettings").mockImplementation(() => {throw new Error("SQLITE_BUSY");});
+      ui.send({type:"set_model",model:"gpt-5.4-mini"}); await ui.settle();
+      expect(settings(ui.received).at(-1)).toMatchObject({state:"pending",model:"gpt-5.4-mini"});
+      ui.send({type:"user_message",requestId:"apply-settings",text:"continue"}); await ui.settle();
+      expect(settings(ui.received).at(-1)).toMatchObject({state:"applied",model:"gpt-5.4-mini"});
+      expect(log).toHaveBeenCalledWith("[host] runtime settings write failed",expect.objectContaining({message:"SQLITE_BUSY"}));
+      expect(write).toHaveBeenCalledTimes(2);
+      ui.engine.finishTurn(); await ui.settle();
+      expect(ui.received.some(message => message.type === "agent_event" && message.event.type === "loop_end")).toBe(true);
+      expect(ui.received.some(message => message.type === "fatal")).toBe(false);
+    } finally {ui.engine.finishTurn();await ui.session.shutdown();ui.close();log.mockRestore();await database.close();}
+  });
+
   it("publishes the selected target's image gate before the native turn applies its model", async () => {
     const source = new FakeEngine(); Object.defineProperty(source,"id",{value:"claude"});
     const next = new FakeEngine();
