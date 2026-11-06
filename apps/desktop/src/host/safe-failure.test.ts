@@ -16,3 +16,8 @@ describe("engine error custody", () => {
     expect(wire.type === "error" && wire.error.code).toBe(code);
   });
 });
+
+it("preserves the native safe explanation on the wire without a sign-in hint", () => {
+  const wire = sanitizeAgentEvent({ type: "error", error: new Error("Bearer raw-secret"), safe: { code: "auth", statusCode: 401, message: "authentication failed: This API key has expired. Signing in again will not renew this key." } });
+  expect(wire.type === "error" && wire.error.message).toBe("authentication failed (HTTP 401): This API key has expired. Signing in again will not renew this key.");
+});

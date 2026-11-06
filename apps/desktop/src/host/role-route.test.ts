@@ -120,6 +120,7 @@ describe("classifyInfraFailure (F3: anchored to the exact provider/resolver sent
 
   it("redacted safe messages -> auth/quota/unreachable (failure.ts SAFE_MESSAGES, not raw bodies)", () => {
     expect(classifyInfraFailure("authentication failed (HTTP 401)")).toBe("auth");
+    expect(classifyInfraFailure("authentication failed (HTTP 401): This API key has expired.")).toBe("auth");
     expect(classifyInfraFailure("forbidden (HTTP 403)")).toBe("auth");
     expect(classifyInfraFailure("Proxy authentication failed (407). Check the username and password in the connection proxy settings.")).toBe("auth");
     expect(classifyInfraFailure("rate limited (HTTP 429)")).toBe("quota");
@@ -130,6 +131,15 @@ describe("classifyInfraFailure (F3: anchored to the exact provider/resolver sent
     expect(classifyInfraFailure("Proxy unavailable. Check the connection proxy address and that the proxy is running, then try again.")).toBe("unreachable");
     expect(classifyInfraFailure("TLS certificate is not trusted. For a corporate proxy, configure NODE_EXTRA_CA_CERTS with your trusted CA certificate and restart AnyCode.")).toBe("unreachable");
     expect(classifyInfraFailure("server error (HTTP 500)")).toBe("unreachable");
+  });
+
+  it.each(["quota exhausted", "rate limited", "balance limit reached", "This model is not available on the selected connection"])("routes by the category before the explanation: %s", explanation => {
+    for (const category of ["authentication failed (HTTP 401)", "forbidden (HTTP 403)"]) {
+      expect(classifyInfraFailure(`${category}: ${explanation}`)).toBe("auth");
+    }
+    expect(classifyInfraFailure(`quota exhausted: ${explanation}`)).toBe("quota");
+    expect(classifyInfraFailure(`rate limited (HTTP 429): ${explanation}`)).toBe("quota");
+    expect(classifyInfraFailure(`request failed (HTTP 400): ${explanation}`)).toBe("none");
   });
 
   it("FREE MODEL TEXT never classifies: an executor's own report discussing auth/lines/imports/code is a task report, not infra", () => {

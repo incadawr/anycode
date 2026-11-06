@@ -25,10 +25,23 @@ export function captureProviderMessage(error: unknown, apiKey: string | undefine
     if (!body || typeof body !== "object" || Array.isArray(body)) return;
     const root = body as Record<string, unknown>;
     const nested = root.error && typeof root.error === "object" && !Array.isArray(root.error) ? root.error as Record<string, unknown> : undefined;
-    const value = nested?.message ?? nested?.type ?? nested?.code ?? root.message;
+    const value = [nested?.message, root.message, root.detail].find(value => typeof value === "string" && value.trim());
     if (typeof value !== "string" || !value.trim()) return;
-    const withoutKey = apiKey ? value.split(apiKey).join("***") : value;
-    providerMessages.set(error, scrubFailureText(withoutKey).replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").slice(0, 300));
+    // Normalize invisible separators before matching the connection's actual key.
+    // Allow whitespace between every key character, including across lines.
+    const visible = value.replace(/[\u061c\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "");
+    const keyPattern = apiKey ? [...apiKey.replace(/[\s\u200b-\u200d\ufeff]/g, "")]
+      .map(char => char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s*") : "";
+    const withoutKey = keyPattern ? visible.replace(new RegExp(keyPattern, "gi"), "***") : visible;
+    const oneLine = withoutKey
+      .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ");
+    const normalizedPrefixes = oneLine
+      .replace(/\bo\s*c\s*_\s*s\s*k\s*_\s*(?=[A-Za-z0-9_-])/gi, "oc_sk_")
+      .replace(/\bs\s*k\s*-\s*(?=[A-Za-z0-9_-])/gi, "sk-");
+    const safe = scrubFailureText(normalizedPrefixes)
+      .replace(/\boc_sk_[A-Za-z0-9_-]+/gi, "[redacted]")
+      .replace(/\s+/g, " ").trim().slice(0, 300).trim();
+    if (safe) providerMessages.set(error, safe);
   } catch { /* Non-JSON responses have no displayable provider message. */ }
 }
 
@@ -213,6 +226,8 @@ export function classifyProviderFailure(error: unknown): ProviderFailureClassifi
   if (error instanceof GoInputLimitError) return { code: "input_limit", retryable: false, safe: { code: "input_limit", message: SAFE_MESSAGES.input_limit } };
   if (error instanceof MiniMaxBalanceFailure) {
     const result = classifyProviderFailure(error.original);
+    // A balance explanation does not identify the required subscription key.
+    // Keep this local guidance for both HTTP-body and streaming errors.
     return { ...result, safe: { ...result.safe, message: `${result.safe.message}. This is a pay-as-you-go key; for the M Plan subscription use a key starting with sk-cp-.` } };
   }
   const statusCode = extractStatusCode(error);
@@ -223,7 +238,7 @@ export function classifyProviderFailure(error: unknown): ProviderFailureClassifi
   const build = (code: ProviderFailureCode, retryable: boolean): ProviderFailureClassification => ({
     code,
     retryable,
-    safe: { code, message: providerMessage ?? SAFE_MESSAGES[code], ...(statusCode !== undefined ? { statusCode } : {}) },
+    safe: { code, message: providerMessage ? `${SAFE_MESSAGES[code]}: ${providerMessage}` : SAFE_MESSAGES[code], ...(statusCode !== undefined ? { statusCode } : {}) },
   });
 
   const networkConfiguration = classifyNetworkConfigurationFailure(error);

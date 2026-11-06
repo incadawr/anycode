@@ -9,7 +9,7 @@
 import { APICallError } from "ai";
 import { describe, expect, it } from "vitest";
 import type { ModelStreamEvent } from "../types/events.js";
-import { classifyProviderFailure, extractStatusCode, MiniMaxBalanceFailure, isModelOutputEvent } from "./failure.js";
+import { captureProviderMessage, classifyProviderFailure, extractStatusCode, MiniMaxBalanceFailure, isModelOutputEvent } from "./failure.js";
 import { isQuotaExhaustion, isRetryableStreamError } from "./retry.js";
 
 const MODEL_OUTPUT: ModelStreamEvent[] = [
@@ -313,5 +313,66 @@ describe("MiniMax balance failure", () => {
       expect(result).toMatchObject({ code: original.code, retryable: original.retryable, safe: original.safe.statusCode === undefined ? {} : { statusCode: original.safe.statusCode } });
       expect(result.safe.message).toContain("M Plan");
     }
+  });
+});
+
+
+describe("provider explanations", () => {
+  const expired = "This API key has expired. Create a new API key in OpenCode Console and replace it in your client or secret store. Signing in again will not renew this key.";
+  function captured(body: unknown, statusCode = 401, key?: string) {
+    const error = new APICallError({ message: "request failed", url: "https://fixture.invalid", requestBodyValues: {}, statusCode,
+      responseBody: JSON.stringify(body), responseHeaders: { authorization: "Bearer header-secret" } });
+    captureProviderMessage(error, key);
+    return { error, result: classifyProviderFailure(error) };
+  }
+  it("keeps the auth category beside the OpenCode expired-key explanation", () => {
+    const { result } = captured({ error: { type: "authentication_error", code: "api_key_expired", message: expired } });
+    expect(result.safe).toEqual({ code: "auth", statusCode: 401, message: `authentication failed: ${expired}` });
+  });
+  it.each([{ error: { code: "invalid_api_key", type: "authentication_error" } }, {}, { error: { message: " " } }])("keeps the old text without a message: %j", body => {
+    expect(captured(body).result.safe.message).toBe("authentication failed");
+  });
+  it.each([{ error: { message: "Model unavailable", code: "invalid_request" } }, { type: "error", error: { type: "invalid_request_error", message: "Model unavailable" } }, { message: "Model unavailable" }, { detail: "Model unavailable" }])("accepts a message from %j", body => {
+    expect(captured(body, 400).result.safe.message).toBe("request failed: Model unavailable");
+  });
+  it("redacts keys before truncation and removes control and bidi characters", () => {
+    const secrets = ["own.$key", "sk-short", "oc_sk_short", "private-token", "x".repeat(64), "a.b~".repeat(20)];
+    const { result } = captured({ error: { message: `Expired\n\u202e\u2066\u200f\u001b ${secrets[0]} ${secrets[1]} ${secrets[2]} Bearer ${secrets[3]} ${secrets[4]} ${secrets[5]}` } }, 401, secrets[0]);
+    const text = JSON.stringify(result.safe);
+    for (const secret of [...secrets, "header-secret"]) expect(text).not.toContain(secret);
+    expect(result.safe.message).toContain("Expired");
+    expect(result.safe.message).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u200e-\u200f\u202a-\u202e\u2066-\u2069]/);
+  });
+  it.each([
+    "https://platform.openai.com/docs/guides/error-codes/api-errors",
+    "https://opencode.ai/workspace/keys/new-after-expiry-today",
+    "/workspace/provider/documentation/renewing-api-credentials.md",
+    "docs/provider/documentation/renewing-api-credentials.md",
+  ])("keeps documentation URLs and paths readable: %s", location => {
+    expect(captured({ message: `See ${location} for details` }).result.safe.message).toBe(`authentication failed: See ${location} for details`);
+  });
+  it.each([" ", "\n", "\u200b", "\u200c", "\u200d", "\ufeff", "\u202e"])("redacts the connection key with inserted separators: %j", separator => {
+    const key = "own.Key-1234567890ABCDEF9876543210";
+    const split = key.match(/.{1,10}/g)!.join(separator);
+    expect(captured({ message: `Expired ${split} today` }, 401, key).result.safe.message).toBe("authentication failed: Expired *** today");
+  });
+  it.each(["s k - abc123secret", "o c _ s k _ abc123secret"])("redacts a spaced key prefix: %s", key => {
+    expect(captured({ message: `Expired ${key} today` }).result.safe.message).toBe("authentication failed: Expired [redacted] today");
+  });
+  it("bounds long messages while preserving the category", () => {
+    const text = captured({ message: "Long message ".repeat(1000) }).result.safe.message;
+    expect(text).toContain("authentication failed: Long message");
+    expect(text.length).toBeLessThanOrEqual(323);
+  });
+  it("keeps actionable billing guidance beside provider explanations", () => {
+    const explained = captured({ error: { message: "insufficient balance" } }, 403);
+    const unexplained = captured({ error: { code: "insufficient_balance_error" } }, 403);
+    expect(classifyProviderFailure(new MiniMaxBalanceFailure(explained.error)).safe.message).toBe("forbidden: insufficient balance. This is a pay-as-you-go key; for the M Plan subscription use a key starting with sk-cp-.");
+    expect(classifyProviderFailure(new MiniMaxBalanceFailure(unexplained.error)).safe.message).toBe("forbidden. This is a pay-as-you-go key; for the M Plan subscription use a key starting with sk-cp-.");
+  });
+  it("keeps explanations and raw bodies out of telemetry", async () => {
+    const { telemetryRecordFor } = await import("../telemetry/records.js");
+    const { error, result } = captured({ error: { message: expired } });
+    expect(telemetryRecordFor({ type: "error", error, safe: result.safe })).toEqual({ t: "error" });
   });
 });

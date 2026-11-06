@@ -62,3 +62,13 @@ export function classifyHostStderr(stderr: string): { kind?: string; systemCode?
   const systemCode = line?.match(/\b(EACCES|ENOENT|EPERM|EISDIR|ENOTDIR|EMFILE|ENFILE|ENOSPC|EROFS|ELOOP)\b/)?.[1];
   return { ...(kind ? { kind } : {}), ...(systemCode ? { systemCode } : {}) };
 }
+
+/** Native descriptors may carry a sanitized explanation after their category. */
+export function formatProviderFailureMessage(safe: { message: string; statusCode?: number }): string {
+  if (safe.statusCode === undefined) return safe.message;
+  const status = ` (HTTP ${safe.statusCode})`;
+  if (safe.statusCode >= 400 && safe.statusCode < 500 && /^(?:authentication failed|forbidden|request failed|rate limited|quota exhausted): /.test(safe.message)) {
+    return safe.message.replace(": ", `${status}: `);
+  }
+  return `${safe.message}${status}`;
+}

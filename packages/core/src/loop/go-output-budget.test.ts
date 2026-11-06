@@ -21,3 +21,16 @@ it("clamps an explicit output to the Go ceiling as well as available context", (
   expect(goRequestOutputBudget(request("abc"), go, tokenizer)).toBe(128_000);
   expect(goRequestOutputBudget(request("abc"), go, tokenizer, 50_000)).toBe(48_974);
 });
+
+it.each([
+  [0, 100, 10000, 1], [1, 100, 10000, 1], [-1, 100, 10000, 1],
+  [100, 0, 10000, 1], [100, 1, 10000, 1],
+  [100, 100, 1027, 1], [100, 100, 1026, 1], [100, 100, 1, 1],
+  [100, 100, 1126, 100], [0, 100, 0, 1],
+])("floors Go output (request %i, ceiling %i, context %i) at one", (requested, output, context, expected) => {
+  expect(goRequestOutputBudget({ ...request("abc"), maxOutputTokens: requested }, port({ context, output }), tokenizer)).toBe(expected);
+});
+
+it("floors Go output even before context limits are known", () => {
+  expect(goRequestOutputBudget({ ...request("abc"), maxOutputTokens: 0 }, port({ output: 100 }), tokenizer)).toBe(1);
+});

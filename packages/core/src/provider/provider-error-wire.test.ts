@@ -21,17 +21,17 @@ describe("provider HTTP errors", () => {
       }
     } catch (error) { failure = error; }
     expect(failure).toBeDefined();
-    expect(classifyProviderFailure(failure).safe.message).toBe("Model unavailable for ***");
+    expect(classifyProviderFailure(failure).safe.message).toBe("request failed: Model unavailable for ***");
   });
 
   it.each([
-    [JSON.stringify({ message: `Invalid model ${key}` }), "Invalid model ***"],
-    [JSON.stringify({ error: { message: "bad model ".repeat(50) } }), "bad model ".repeat(30)],
-    [JSON.stringify({ error: { type: "invalid_request_error" } }), "invalid_request_error"],
-    [JSON.stringify({ error: { code: "invalid_request" } }), "invalid_request"],
-    [JSON.stringify({ error: { message: "\u001b[2Jspoofed\nsecond line" } }), " [2Jspoofed second line"],
+    [JSON.stringify({ message: `Invalid model ${key}` }), "request failed: Invalid model ***"],
+    [JSON.stringify({ error: { message: "bad model ".repeat(50) } }), "request failed: " + "bad model ".repeat(30).trim()],
+    [JSON.stringify({ error: { type: "invalid_request_error" } }), "request failed"],
+    [JSON.stringify({ error: { code: "invalid_request" } }), "request failed"],
+    [JSON.stringify({ error: { message: "\u001b[2Jspoofed\nsecond line" } }), "request failed: [2Jspoofed second line"],
     ["not JSON, contains " + key, "request failed"],
-    [JSON.stringify({ error: { message: "Bearer private-token" } }), "[redacted]"],
+    [JSON.stringify({ error: { message: "Bearer private-token" } }), "request failed: [redacted]"],
   ])("limits and redacts message from fixture", async (body, expected) => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(body, { status: 400, headers: { "content-type": "application/json" } })));
     const port = new AiSdkModelPort({ transport: "openai-chat-completions" as ProviderTransport, baseUrl: "https://fixture.invalid/v1", apiKey: key, model: "fixture", includeUsage: false, retry: { maxRetries: 0 } });

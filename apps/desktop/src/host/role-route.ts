@@ -135,13 +135,13 @@ export function classifyableErrorText(finalText: string, errorDescriptor?: strin
 }
 
 export function classifyInfraFailure(text: string): InfraFailureKind {
-  // The exact error terminal texts (host/session.ts finalizeChildTerminal
-  // prefixes a redacted safe descriptor: "<message> (HTTP <status>)"):
-  // failure.ts's SAFE_MESSAGES carry "rate limited" (429), "authentication
-  // failed" (401), "forbidden" (403), "quota exhausted", "network error",
-  // "connect timeout", "proxy unavailable...", "TLS certificate is not
-  // trusted..." — never raw provider bodies. Model-resolver refusals come
-  // from child-model.ts / tabs.ts / runner.ts's fixed sentences.
+  // Native descriptors lead with a stable category. Provider explanations can
+  // mention other failure kinds and must never override that category.
+  if (/^(?:authentication failed|forbidden|Proxy authentication failed)\b/.test(text)) return "auth";
+  if (/^(?:rate limited|quota exhausted|rate limit reached|rate_limit)\b/.test(text)) return "quota";
+  if (/^(?:network error|connect timeout|Proxy unavailable|TLS certificate is not trusted|server error)\b/.test(text)) return "unreachable";
+  if (/^request failed\b/.test(text)) return "none";
+  // Model-resolver refusals retain their fixed sentences and wrapper prefixes.
   if (
     text.includes("This model is not available on the selected connection") ||
     text.includes("this model is not available on the selected connection") ||
@@ -149,26 +149,6 @@ export function classifyInfraFailure(text: string): InfraFailureKind {
     text.includes("could not be resolved in this host")
   ) {
     return "model_not_found";
-  }
-  if (
-    text.includes("rate limited") ||
-    text.includes("quota exhausted") ||
-    text.includes("rate limit reached") ||
-    text.includes("rate_limit")
-  ) {
-    return "quota";
-  }
-  if (text.includes("authentication failed") || text.includes("forbidden") || text.includes("Proxy authentication failed")) {
-    return "auth";
-  }
-  if (
-    text.includes("network error") ||
-    text.includes("connect timeout") ||
-    text.includes("Proxy unavailable") ||
-    text.includes("TLS certificate is not trusted") ||
-    text.includes("server error")
-  ) {
-    return "unreachable";
   }
   return "none";
 }
