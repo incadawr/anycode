@@ -1691,6 +1691,7 @@ const FAILURE_CODE_TO_HEALTH: Record<string, ProviderHealthStatus> = Object.assi
   proxy_auth: "unreachable",
   tls: "unreachable",
   server: "unreachable",
+  input_limit: "ready",
   unknown: "misconfigured",
 });
 
@@ -1758,6 +1759,8 @@ export async function applyConnectionHealthEvent(
   connectionId: string,
   event: { kind: "success" } | { kind: "failure"; code: string },
 ): Promise<boolean> {
+  // A local admission failure says nothing about the connection health.
+  if (event.kind === "failure" && event.code === "input_limit") return false;
   const status: ProviderHealthStatus =
     event.kind === "success" ? "ready" : mapProviderFailureCodeToHealthStatus(event.code);
   const lastHealth = {
