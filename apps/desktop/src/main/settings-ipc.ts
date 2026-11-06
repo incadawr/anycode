@@ -1752,20 +1752,31 @@ export async function applyConnectionHealthEvent(
   deps: SettingsIpcDeps,
   connectionId: string,
   event: { kind: "success" } | { kind: "failure"; code: string },
+  expectedProbe?: { connection: ProviderConnection; credential: string },
 ): Promise<boolean> {
   // A local admission failure says nothing about the connection health.
   if (event.kind === "failure" && event.code === "input_limit") return false;
+  const safeCode = event.kind === "failure" ? sanitizeProviderFailureCode(event.code) : undefined;
   const status: ProviderHealthStatus =
-    event.kind === "success" ? "ready" : mapProviderFailureCodeToHealthStatus(event.code);
+    event.kind === "success" ? "ready" : mapProviderFailureCodeToHealthStatus(safeCode ?? "unknown");
   const lastHealth = {
     status,
     at: (deps.now ?? defaultNowIso)(),
-    ...(event.kind === "failure" ? { safeCode: event.code } : {}),
+    ...(safeCode !== undefined ? { safeCode } : {}),
   };
   return withSettingsFileLock(deps.settingsPath, async () => {
     const loaded = await loadSettings(deps.settingsPath, deps.logger);
     if (loaded.readOnly) {
       return false;
+    }
+    if (expectedProbe !== undefined) {
+      // Check again under the write lock: an in-flight probe belongs to the
+      // endpoint and credential it actually used, never their replacements.
+      const current = connectionById(loaded.settings, connectionId);
+      if (current === undefined || JSON.stringify(current) !== JSON.stringify(expectedProbe.connection)) return false;
+      const kind = current.providerId === "" ? "api_key" : deps.authKindFor?.(current.providerId) ?? "api_key";
+      const credential = await deps.vault.getSecretValue(connectionSecretKey(connectionId, kind));
+      if (credential !== expectedProbe.credential) return false;
     }
     const updated = withConnectionHealth(loaded.settings, connectionId, lastHealth);
     if (updated === undefined) {
@@ -2396,11 +2407,13 @@ export async function handleConnectionCheck(deps: SettingsIpcDeps, raw: unknown)
     const kind = connection.providerId === "" ? "api_key" : deps.authKindFor?.(connection.providerId) ?? "api_key";
     const credential = await deps.vault.getSecretValue(connectionSecretKey(connection.id, kind));
     if (credential !== undefined && credential !== "") {
+      const expectedConnection = structuredClone(connection);
       const outcome = await deps.probeConnection(connection, credential);
       await applyConnectionHealthEvent(
         deps,
         connection.id,
         outcome.ok ? { kind: "success" } : { kind: "failure", code: outcome.code },
+        { connection: expectedConnection, credential },
       );
     }
   }
@@ -2858,31 +2871,42 @@ export async function handleRecognizerSet(deps: SettingsIpcDeps, raw: unknown): 
  * channels (slice 2.5) are additive.
  */
 export function registerSettingsIpc(deps: Omit<SettingsIpcDeps, "vault"> & { vault: Vault }): void {
-  guardedIpcHandle(SETTINGS_GET_CHANNEL, () => handleGet(deps));
-  guardedIpcHandle(SETTINGS_SET_CHANNEL, (_event, raw: unknown) => handleSet(deps, raw));
-  guardedIpcHandle(SECRET_SET_CHANNEL, (_event, raw: unknown) => handleSetSecret(deps, raw));
-  guardedIpcHandle(SECRET_CLEAR_CHANNEL, (_event, raw: unknown) => handleClearSecret(deps, raw));
-  guardedIpcHandle("anycode:home-directory", () => homedir());
-  guardedIpcHandle(PERMISSION_RULE_ADD_CHANNEL, (_event, raw: unknown) => handleAddRule(deps, raw));
-  guardedIpcHandle(BINARY_TRUST_GRANT_CHANNEL, (_event, raw: unknown) => handleBinaryTrustGrant(deps, raw));
-  guardedIpcHandle(BINARY_TRUST_REVOKE_CHANNEL, (_event, raw: unknown) => handleBinaryTrustRevoke(deps, raw));
-  guardedIpcHandle(OAUTH_START_CHANNEL, (_event, raw: unknown) => handleOAuthStart(deps, raw));
-  guardedIpcHandle(OAUTH_CANCEL_CHANNEL, (_event, raw: unknown) => handleOAuthCancel(deps, raw));
+  // Dependency errors may contain credentials or request values. Keep the
+  // original exception inside main; never serialize it through Electron IPC.
+  const handle: typeof guardedIpcHandle = (channel, handler) => {
+    guardedIpcHandle(channel, async (event, ...args) => {
+      try {
+        return await handler(event, ...args);
+      } catch {
+        throw new Error("Settings request failed");
+      }
+    });
+  };
+  handle(SETTINGS_GET_CHANNEL, () => handleGet(deps));
+  handle(SETTINGS_SET_CHANNEL, (_event, raw: unknown) => handleSet(deps, raw));
+  handle(SECRET_SET_CHANNEL, (_event, raw: unknown) => handleSetSecret(deps, raw));
+  handle(SECRET_CLEAR_CHANNEL, (_event, raw: unknown) => handleClearSecret(deps, raw));
+  handle("anycode:home-directory", () => homedir());
+  handle(PERMISSION_RULE_ADD_CHANNEL, (_event, raw: unknown) => handleAddRule(deps, raw));
+  handle(BINARY_TRUST_GRANT_CHANNEL, (_event, raw: unknown) => handleBinaryTrustGrant(deps, raw));
+  handle(BINARY_TRUST_REVOKE_CHANNEL, (_event, raw: unknown) => handleBinaryTrustRevoke(deps, raw));
+  handle(OAUTH_START_CHANNEL, (_event, raw: unknown) => handleOAuthStart(deps, raw));
+  handle(OAUTH_CANCEL_CHANNEL, (_event, raw: unknown) => handleOAuthCancel(deps, raw));
   // Connection CRUD (W9): main-authoritative, additive channels.
-  guardedIpcHandle(CONNECTION_CREATE_CHANNEL, (_event, raw: unknown) => handleConnectionCreate(deps, raw));
-  guardedIpcHandle(CONNECTION_UPDATE_CHANNEL, (_event, raw: unknown) => handleConnectionUpdate(deps, raw));
-  guardedIpcHandle(CONNECTION_SET_ACTIVE_CHANNEL, (_event, raw: unknown) => handleConnectionSetActive(deps, raw));
-  guardedIpcHandle(CONNECTION_DELETE_CHANNEL, (_event, raw: unknown) => handleConnectionDelete(deps, raw));
-  guardedIpcHandle(CONNECTION_CHECK_CHANNEL, (_event, raw: unknown) => handleConnectionCheck(deps, raw));
+  handle(CONNECTION_CREATE_CHANNEL, (_event, raw: unknown) => handleConnectionCreate(deps, raw));
+  handle(CONNECTION_UPDATE_CHANNEL, (_event, raw: unknown) => handleConnectionUpdate(deps, raw));
+  handle(CONNECTION_SET_ACTIVE_CHANNEL, (_event, raw: unknown) => handleConnectionSetActive(deps, raw));
+  handle(CONNECTION_DELETE_CHANNEL, (_event, raw: unknown) => handleConnectionDelete(deps, raw));
+  handle(CONNECTION_CHECK_CHANNEL, (_event, raw: unknown) => handleConnectionCheck(deps, raw));
   // Engine-level proxy: main-authoritative, additive — the only write
   // path the engine panes' proxy field may use.
   // Proxy registry: the profile CRUD + the scope-ref write. The
   // CHECK channel is not here — it spawns a probe child and lives in
   // main/network-ipc.ts, which has no business inside the settings lock.
-  guardedIpcHandle(PROXY_PROFILE_UPSERT_CHANNEL, (_event, raw: unknown) => handleProxyProfileUpsert(deps, raw));
-  guardedIpcHandle(PROXY_PROFILE_DELETE_CHANNEL, (_event, raw: unknown) => handleProxyProfileDelete(deps, raw));
-  guardedIpcHandle(PROXY_REF_SET_CHANNEL, (_event, raw: unknown) => handleProxyRefSet(deps, raw));
+  handle(PROXY_PROFILE_UPSERT_CHANNEL, (_event, raw: unknown) => handleProxyProfileUpsert(deps, raw));
+  handle(PROXY_PROFILE_DELETE_CHANNEL, (_event, raw: unknown) => handleProxyProfileDelete(deps, raw));
+  handle(PROXY_REF_SET_CHANNEL, (_event, raw: unknown) => handleProxyRefSet(deps, raw));
   // the vision-fallback recognizer's dedicated write channel — the
   // only path that can DELETE `settings.recognizer` (see handleRecognizerSet).
-  guardedIpcHandle(RECOGNIZER_SET_CHANNEL, (_event, raw: unknown) => handleRecognizerSet(deps, raw));
+  handle(RECOGNIZER_SET_CHANNEL, (_event, raw: unknown) => handleRecognizerSet(deps, raw));
 }
