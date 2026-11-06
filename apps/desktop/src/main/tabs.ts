@@ -890,7 +890,9 @@ export interface TabHostManagerDeps {
     Promise<{ ok: true; release: () => void } | { ok: false }>;
   /** Reject a core model override before creating a child or sending a request. */
   validateChildModel?: (model: string, connectionId: string | undefined) => string | void;
-  onFileActivity?: (tabId: string, proc: UtilityProcess, message: unknown) => boolean;
+  registerPeerDrain?: (envelope: AgentDelivery["envelope"], recipient: PeerHost) => boolean;
+  onSessionPeerDrain?: (proc: UtilityProcess, request: unknown) => Promise<unknown>;
+  releasePeerDrain?: (proc: UtilityProcess, request: unknown) => void;
   onSessionPeerRequest?: (tabId: string, proc: UtilityProcess, request: unknown) => Promise<SessionPeerResponse | null>;
   /**
    * Preview control-plane delegate (night-track wave-1 cut §2.3/§2.5,
@@ -1284,6 +1286,7 @@ export class TabHostManager {
       const envelope = payload as AgentDelivery["envelope"];
       if (envelope?.recipientSessionId === sessionId && typeof envelope.messageId === "string") this.peerTurns.expectMessage(proc, envelope.messageId);
     }
+    const peerDrainRegistered = operation === "send_message" && this.deps.registerPeerDrain?.(payload as AgentDelivery["envelope"], this.peerHost(tab.tabId)!) === true;
     const requestId = randomUUID();
     const timeoutMs = requestOptions?.timeoutMs !== undefined ? Math.max(1, requestOptions.timeoutMs) : 20000;
     return new Promise((resolve, reject) => {
@@ -1309,7 +1312,7 @@ export class TabHostManager {
       };
       proc.on("message", onMessage);
       proc.once("exit", onExit);
-      try { proc.postMessage({ type: "communication_request", requestId, operation, payload }); }
+      try { proc.postMessage({ type: "communication_request", requestId, operation, payload, ...(peerDrainRegistered ? { peerDrainRegistered: true } : {}) }); }
       catch (error) { finish(error instanceof Error ? error : new Error("Host unavailable")); }
     });
   }
@@ -2046,6 +2049,19 @@ export class TabHostManager {
       const event = this.peerTurns.accept({ proc: tab.proc, generation: tab.hostGeneration }, child, message);
       if (event?.type === "session_peer_terminal") for (const listener of this.peerTerminalListeners) {
         try { listener(tab.sessionId, event); } catch { /* independent observers */ }
+      }
+      return;
+    }
+    if (data.type === "session_peer_drain_release") {
+      if (tab.proc === child) this.deps.releasePeerDrain?.(child, message);
+      return;
+    }
+    if (data.type === "session_peer_drain_request") {
+      if (tab.proc !== child || !this.deps.onSessionPeerDrain) return;
+      const generation = tab.hostGeneration, workspace = tab.workspace;
+      const permit = await this.deps.onSessionPeerDrain(child, message);
+      if (permit && tab.proc === child && tab.hostGeneration === generation && tab.workspace === workspace) {
+        try { child.postMessage(permit); } catch { /* disconnected origin */ }
       }
       return;
     }

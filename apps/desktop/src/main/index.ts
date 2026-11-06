@@ -1,3 +1,4 @@
+import { createSessionPeerDrain } from "./session-peer-drain.js";
 import { createSessionPeerReplies } from "./session-peer-replies.js";
 import { createFileActivityIngress } from "./file-activity-ingress.js";
 import { createSessionPeersHandler } from "./session-peers.js";
@@ -2697,35 +2698,54 @@ void app.whenReady().then(async () => {
       }
     };
   const peerEnabled = nativeSessionsEnabledForBoot(bootEnv, app.isPackaged);
-  const peerPolicy = createSessionPeerPolicyStore({ file: join(app.getPath("userData"), "session-peer-policy.json") });
-  const peerTrusted = async (workspace: string) => (await resolveWorkspaceTrust(new NodeLspConfigFs(), {
-    workspace, home: selfCheckProfile ?? resolveSkillsProfileHome(process.env, app.isPackaged) ?? homedir(),
-    storePath: defaultTrustStorePath(selfCheckProfile ?? resolveSkillsProfileHome(process.env, app.isPackaged) ?? homedir()),
-    realpathSync, onceHash: workspaceTrustOnceFor(workspaceTrustOnceApprovals, workspace, realpathSync),
-  })).projectTrusted;
+  let peerTrust: Awaited<ReturnType<typeof readTrustStore>> = { version: 1, folders: {} };
+  const preparePeerTrust = async () => {
+    peerTrust = await readTrustStore(nodeTrustStoreFs, defaultTrustStorePath(selfCheckProfile ?? resolveSkillsProfileHome(process.env, app.isPackaged) ?? homedir()));
+  };
+  const peerAccess = peerEnabled ? createSessionPeerAccess({ enabled: () => peerEnabled,
+    policy: createSessionPeerPolicyStore({ file: join(app.getPath("userData"), "session-peer-access.json") }),
+    isTrusted: key => peerTrust.folders[key]?.decision === "trusted", realpathSync, statSync }) : undefined;
+  const currentPeer = (id: string) => {
+    const tab = manager?.listTabs().find(t => t.sessionId === id);
+    return tab ? manager?.peerHost(tab.tabId) : undefined;
+  };
+  const peerSnapshots = new WeakMap<object, { sender: import("./session-peers.js").PeerHost; recipient: import("./session-peers.js").PeerHost }>();
+  let peerDrain: ReturnType<typeof createSessionPeerDrain> | undefined;
+  let peerBroker: Awaited<ReturnType<CommunicationController["broker"]>> | undefined;
+  if (peerEnabled) app.once("before-quit", () => peerDrain?.dispose());
   const peerHandler = peerEnabled ? createSessionPeersHandler({
     send: async (caller, input, authorize) => {
       const broker = await communicationController!.broker();
+      peerBroker = broker;
+      peerDrain ??= createSessionPeerDrain({ lookup: id => broker.ledger.messages.get(id), current: currentPeer,
+        prepare: preparePeerTrust, access: peerAccess! });
       return createSessionPeerReplies(broker).send(caller, input, async id => {
         const host = await authorize(id);
         const tab = manager?.listTabs().find(t => t.sessionId === id && t.tabId === host.tabId);
         if (!tab) throw new Error("Peer unavailable");
         return tab;
-      });
+      }, authorize, record => { peerSnapshots.set(record, { sender: { ...caller }, recipient: { ...authorize(record.envelope.recipientSessionId) } }); });
     },
     current: tabId => manager?.peerHost(tabId),
     targets: () => (manager?.listTabs() ?? []).flatMap(tab => {
       const host = manager?.peerHost(tab.tabId); return host ? [host] : [];
     }),
-    prepare: async () => {},
-    access: createSessionPeerAccess({ enabled: () => peerEnabled,
-      policy: peerPolicy,
-      isTrusted: peerTrusted, realpathSync, statSync }),
+    prepare: preparePeerTrust,
+    access: peerAccess!,
   }) : undefined;
   const fileActivity = createFileActivityIngress(peerEnabled, tabId => manager?.peerHost(tabId));
   manager = new TabHostManager({
     onFileActivity: fileActivity?.accept,
     onSessionPeerRequest: peerHandler,
+    registerPeerDrain: peerEnabled ? (envelope, recipient) => {
+      const record = peerBroker?.ledger.messages.get(envelope.messageId);
+      const pinned = record && peerSnapshots.get(record);
+      if (!record?.peer) return false;
+      if (record.envelope !== envelope || !pinned || !recipient || pinned.recipient.proc !== recipient.proc || !peerDrain?.register(record, pinned.sender, pinned.recipient)) throw new Error("Peer drain registration refused");
+      return true;
+    } : undefined,
+    onSessionPeerDrain: peerEnabled ? async (proc, raw) => peerDrain?.request(proc, raw) : undefined,
+    releasePeerDrain: peerEnabled ? (proc, raw) => { peerDrain?.release(proc, raw); } : undefined,
     diagnosticsRing: mainDiagnosticsRing,
     agentTitleOf: (sessionId) => agentSessionTitles.get(sessionId),
     // Every spawn, respawn and resume delivers a fresh port: that is the moment a

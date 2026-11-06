@@ -8982,3 +8982,56 @@ it.each([false, true])("pins peer context and publishes one terminal only when e
   tab.proc = null;
   await manager.shutdownAllTabHosts();
 });
+
+it.each(["none", "off", "unregistered", "registered"] as const)("peer drain wire marker: %s", async mode => {
+  const { fork, hosts } = liveForkRig();
+  const registerPeerDrain = vi.fn(() => mode === "registered");
+  const manager = childManager(fork, windowRig().window, mode === "none" ? {} : {
+    ...(mode === "off" ? {} : { onSessionPeerRequest: async () => null, registerPeerDrain }),
+  });
+  const created = manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false });
+  if (!created.ok) throw new Error("create failed");
+  await flush();
+  const envelope = { messageId: "m", recipientSessionId: "s1", sender: "session:sender", payload: "question" };
+  const pending = manager.communicationRequest("s1", "send_message", envelope);
+  const packet = hosts[0]!.postMessage.mock.calls.at(-1)![0] as { requestId: string };
+  // Compare serialized wire, normalizing only the randomly generated RPC id.
+  expect(JSON.stringify({ ...packet, requestId: "rpc" })).toBe(JSON.stringify({
+    type: "communication_request", requestId: "rpc", operation: "send_message", payload: envelope,
+    ...(mode === "registered" ? { peerDrainRegistered: true } : {}),
+  }));
+  expect(registerPeerDrain).toHaveBeenCalledTimes(mode === "registered" || mode === "unregistered" ? 1 : 0);
+  hosts[0]!.emit("message", { type: "communication_response", requestId: packet.requestId, result: {} });
+  await pending;
+  manager.getTab(created.tab.tabId)!.proc = null; await manager.shutdownAllTabHosts();
+});
+
+it.each(["current", "process", "workspace", "generation"] as const)("peer drain answers only the originating current host after await: %s", async change => {
+  const { fork, hosts } = liveForkRig();
+  let answer!: (value: object) => void;
+  const onSessionPeerDrain = vi.fn(() => new Promise<object>(r => { answer = r; }));
+  const releasePeerDrain = vi.fn();
+  const manager = childManager(fork, windowRig().window, { onSessionPeerDrain, releasePeerDrain });
+  const created = manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false });
+  if (!created.ok) throw new Error("create failed");
+  await flush();
+  const tab = manager.getTab(created.tab.tabId)!;
+  const host = hosts[0]!;
+  const request = { type: "session_peer_drain_request", messageId: "m" };
+  host.emit("message", request); await flush();
+  expect(onSessionPeerDrain).toHaveBeenCalledWith(host, request);
+  host.postMessage.mockClear();
+  if (change === "process") tab.proc = new FakeHost() as unknown as UtilityProcess;
+  if (change === "workspace") tab.workspace = "/elsewhere";
+  if (change === "generation") tab.hostGeneration++;
+  const permit = { type: "session_peer_drain_permit" };
+  answer(permit); await flush();
+  expect(host.postMessage).toHaveBeenCalledTimes(change === "current" ? 1 : 0);
+  if (change === "current") expect(host.postMessage).toHaveBeenCalledWith(permit);
+  tab.proc = new FakeHost() as unknown as UtilityProcess;
+  onSessionPeerDrain.mockClear();
+  host.emit("message", request);
+  host.emit("message", { type: "session_peer_drain_release" }); await flush();
+  expect(onSessionPeerDrain).not.toHaveBeenCalled(); expect(releasePeerDrain).not.toHaveBeenCalled();
+  tab.proc = null; await manager.shutdownAllTabHosts();
+});

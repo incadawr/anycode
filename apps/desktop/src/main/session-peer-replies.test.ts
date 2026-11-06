@@ -168,3 +168,34 @@ it("keeps the admitted turn context when that turn settles during broker prepara
   expect(await f.call("b", { sessionId: "c", payload: "follow-up" })).toMatchObject({ status: "sent" });
   expect([...f.broker.ledger.messages.values()].at(-1)?.peer).toMatchObject({ chainId: first.messageId, hop: 1 });
 });
+
+it("pins admission snapshots before durable write and posts the exact accepted record", async () => {
+  const f = await fixture();
+  const accepted = vi.fn((record: import("./communication-ledger.js").CommunicationRecord) => {
+    expect(record.peer).toBeDefined();
+    expect(f.broker.ledger.messages.has(record.envelope.messageId)).toBe(false);
+    expect(f.post).not.toHaveBeenCalled();
+  });
+  const result = await f.replies.send(f.hosts[0]!, { sessionId: "b", payload: "pin", mode: "next_turn", reply: "explicit" },
+    async () => f.tabs[1]!, undefined, accepted);
+  expect(accepted).toHaveBeenCalledTimes(1);
+  expect(accepted.mock.calls[0]![0]).toBe(result);
+  expect(f.post).toHaveBeenCalledWith("b", "send_message", result.envelope, f.tabs[1]!.workspace);
+});
+
+it("authorizes live durable acceptance while dispatch is still unknown/pending", async () => {
+  const { createSessionPeerDrain } = await import("./session-peer-drain.js");
+  const f = await fixture();
+  const registry = createSessionPeerDrain({ lookup: id => f.broker.ledger.messages.get(id),
+    current: id => f.hosts.find(h => h.sessionId === id), prepare: f.prepare, access: f.access });
+  f.post.mockImplementationOnce(async () => {
+    const record = [...f.broker.ledger.messages.values()][0]!;
+    expect(record).toMatchObject({ state: "unknown", detail: "Dispatch pending" });
+    expect(registry.register(record, f.hosts[0]!, f.hosts[1]!)).toBe(true);
+    expect(await registry.request(f.hosts[1]!.proc!, { type: "session_peer_drain_request", messageId: record.envelope.messageId,
+      nonce: "live", recipientSessionId: "b", generation: f.hosts[1]!.generation })).toMatchObject({ type: "session_peer_drain_permit" });
+    return { state: "acknowledged" };
+  });
+  expect(await f.call("a", { sessionId: "b", payload: "live" })).toMatchObject({ status: "sent" });
+  registry.dispose();
+});

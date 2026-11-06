@@ -1107,3 +1107,103 @@ it("peer terminals exclude tool output and pre-tool commentary even on a quiet c
     expect(JSON.stringify(events)).not.toMatch(/PRIVATE_COMMENTARY|PRIVATE_TOOL_OUTPUT/);
   } finally { h.close(); }
 });
+
+
+describe("registered peer drain admission", () => {
+  function pending(f: ReturnType<typeof fixture>) {
+    let resolve!: (value: import("../shared/session-peer-drain.js").SessionPeerDrainPermit | null) => void;
+    const request = vi.fn((_messageId: string) => new Promise<import("../shared/session-peer-drain.js").SessionPeerDrainPermit | null>(r => { resolve = r; }));
+    const port = { request, consume: vi.fn(() => true), discard: vi.fn(() => true) };
+    f.h.session.configurePeerDrain(port);
+    const permit = { type: "session_peer_drain_permit" as const, messageId: "peer", nonce: "n", recipientSessionId: f.make("peer").recipientSessionId, generation: 1 };
+    return { port, finish: (allow = true) => resolve(allow ? { ...permit, messageId: request.mock.calls.at(-1)![0] } : null) };
+  }
+  it("rechecks a busy queued delivery after revoke without a new engine run", async () => {
+    const f = fixture(), p = pending(f);
+    try {
+      await f.h.session.receiveAgentMessage(f.make("human"));
+      await f.h.session.receiveAgentMessage(f.make("peer"), true);
+      expect(p.port.request).not.toHaveBeenCalled();
+      f.finishes.shift()!(); await f.h.waitUntil(() => p.port.request.mock.calls.length === 1);
+      p.finish(false); await f.h.flush();
+      expect(f.inputs).toHaveLength(1);
+      expect(f.h.session.agentMessageStatus("peer")?.state).toBe("rejected");
+    } finally { f.h.close(); }
+  });
+  it("single flights competing drains and consumes once immediately before admission", async () => {
+    const f = fixture(), p = pending(f);
+    try {
+      await f.h.session.receiveAgentMessage(f.make("peer"), true);
+      await f.h.session.receiveAgentMessage(f.make("peer"), true);
+      expect(f.inputs).toHaveLength(0); expect(p.port.request).toHaveBeenCalledTimes(1);
+      p.finish(); await f.h.waitUntil(() => f.inputs.length === 1);
+      expect(p.port.consume).toHaveBeenCalledTimes(1);
+      f.finishes.shift()!(); await f.h.flush(); expect(f.inputs).toHaveLength(1);
+    } finally { f.h.close(); }
+  });
+  it.each(["busy", "currentTurn", "shuttingDown", "relocating", "childTerminalFinalized", "posture"] as const)("discards authorization if %s changes during await", async state => {
+    const f = fixture(), p = pending(f);
+    try {
+      await f.h.session.receiveAgentMessage(f.make("peer"), true);
+      const internals = f.h.session as unknown as Record<string, unknown>;
+      const prior = internals[state];
+      const posture = state === "posture" ? vi.spyOn(f.h.session as unknown as { postureBlocked(): boolean }, "postureBlocked").mockReturnValue(true) : undefined;
+      if (!posture) internals[state] = true;
+      p.finish(); await f.h.flush();
+      expect(f.inputs).toHaveLength(0); expect(p.port.consume).not.toHaveBeenCalled();
+      expect(p.port.discard).toHaveBeenCalledTimes(1);
+      posture?.mockRestore();
+      if (!posture) internals[state] = prior;
+      if (state === "busy") {
+        const drain = f.h.session as unknown as { drainAgentInbox(): boolean };
+        drain.drainAgentInbox(); expect(p.port.request).toHaveBeenCalledTimes(2);
+        p.finish(false); await f.h.flush();
+      }
+    } finally { f.h.close(); }
+  });
+});
+
+it("exhaustion publishes one unknown/null terminal and releases main context before hydrate", async () => {
+  const { createSessionPeerTurns } = await import("../main/session-peer-turns.js");
+  const f = fixture(), turns = createSessionPeerTurns(), proc = {};
+  const events: import("../shared/session-peers.js").SessionPeerTurnPublication[] = [];
+  let release!: () => void;
+  const hydrate = vi.fn(() => new Promise<void>(r => { release = r; }));
+  vi.spyOn(f.engine, "runTurn").mockImplementation(async function* () {
+    yield { type: "text_start", id: "x" }; yield { type: "text_delta", id: "x", text: "UNFINISHED" };
+    yield { type: "text_end", id: "x" };
+    yield { type: "reasoning_delta", id: "r", text: "PRIVATE_REASONING" };
+    yield { type: "tool_execution_start", toolCallId: "call", toolName: "Read", input: { file_path: "/workspace/a" } };
+    yield { type: "tool_result", outcome: { toolCallId: "call", toolName: "Read", status: "success", modelText: "PRIVATE_TOOL", durationMs: 1 } };
+  (f.h.session as unknown as { runtimeHistory: unknown }).runtimeHistory = { hydrate, recoveries: () => [] };
+  });
+  turns.expectMessage(proc, "exhausted");
+  f.h.session.observePeerTurns(event => {
+    events.push(event); turns.accept({ proc, generation: 1 }, proc, { ...event, generation: 1 });
+  });
+  try {
+    await f.h.session.receiveAgentMessage(f.make("exhausted"));
+    await f.h.waitUntil(() => hydrate.mock.calls.length > 0);
+    expect(events.filter(e => e.type === "session_peer_terminal")).toHaveLength(1);
+    expect(events.at(-1)).toMatchObject({ result: { terminalReason: "unknown", publicAnswer: null } });
+    expect(turns.active(proc)).toBeUndefined(); expect(JSON.stringify(events)).not.toMatch(/UNFINISHED|PRIVATE_REASONING|PRIVATE_TOOL/);
+    release(); await f.h.flush();
+  } finally { release?.(); f.h.close(); }
+});
+
+it("terminal drain refusal releases the inbox head and admits the following peer", async () => {
+  const f = fixture();
+  let answer!: (value: import("../shared/session-peer-drain.js").SessionPeerDrainPermit | null) => void;
+  const request = vi.fn((_id: string) => new Promise<import("../shared/session-peer-drain.js").SessionPeerDrainPermit | null>(r => { answer = r; }));
+  f.h.session.configurePeerDrain({ request, consume: () => true, discard: () => true });
+  try {
+    await f.h.session.receiveAgentMessage(f.make("refused"), true);
+    await f.h.session.receiveAgentMessage(f.make("allowed"), true);
+    answer(null); await f.h.waitUntil(() => request.mock.calls.length === 2);
+    expect(f.h.session.agentMessageStatus("refused")?.state).toBe("rejected");
+    answer({ type: "session_peer_drain_permit", messageId: "allowed", nonce: "n", recipientSessionId: f.make("allowed").recipientSessionId, generation: 1 });
+    await f.h.waitUntil(() => f.inputs.length === 1);
+    expect(f.h.session.agentMessageStatus("allowed")?.state).toBe("acknowledged");
+    f.finishes.shift()!(); await f.h.flush();
+  } finally { f.h.close(); }
+});

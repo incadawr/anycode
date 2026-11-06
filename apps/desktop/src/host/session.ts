@@ -2472,6 +2472,10 @@ export class Session {
     return this.broker.respondExternal(input.approvalId, input.decision);
   }
 
+  private peerDrain?: Pick<ReturnType<typeof import("./session-peer-drain.js").createSessionPeerDrainTransport>, "request" | "consume" | "discard">;
+  private readonly registeredPeerMessages = new Set<string>();
+  private peerDrainPending = false;
+  configurePeerDrain(port: NonNullable<Session["peerDrain"]>): void { this.peerDrain = port; }
   private peerTurnSequence = 0;
   private peerTurnObserver?: (event: SessionPeerTurnPublication) => void;
   observePeerTurns(observer: (event: SessionPeerTurnPublication) => void): void { this.peerTurnObserver = observer; }
@@ -2483,6 +2487,7 @@ export class Session {
   observeAgentDeliveries(observer: (delivery: AgentDelivery) => void): void { this.agentDeliveryObserver = observer; }
 
   private publishAgentDelivery(delivery: AgentDelivery): void {
+    if (delivery.state === "rejected") this.registeredPeerMessages.delete(delivery.envelope.messageId);
     this.agentDeliveries.set(delivery.envelope.messageId, { ...delivery });
     this.outbound.emit({ type: "agent_message", delivery: { ...delivery } });
     try { this.agentDeliveryObserver?.({ ...delivery }); } catch { /* persistence observation cannot affect delivery */ }
@@ -2556,7 +2561,7 @@ export class Session {
       });
   }
 
-  async receiveAgentMessage(envelope: AgentEnvelope): Promise<AgentDelivery> {
+  async receiveAgentMessage(envelope: AgentEnvelope, mainRegistered = false): Promise<AgentDelivery> {
     const existing = this.agentDeliveries.get(envelope.messageId);
     if (existing) return existing;
     if (this.postureBlocked(false)) {
@@ -2599,6 +2604,7 @@ export class Session {
       delivery.detail = "Inbox full";
       this.publishAgentDelivery(delivery);
     } else {
+      if (mainRegistered) this.registeredPeerMessages.add(envelope.messageId);
       this.agentInbox.push(envelope);
       this.drainAgentInbox();
     }
@@ -2618,6 +2624,34 @@ export class Session {
   private drainAgentInbox(settledChild = false): boolean {
     if (this.postureBlocked()) return false;
     if ((!settledChild && (this.busy || this.currentTurn !== null)) || this.shuttingDown || this.relocating || this.childTerminalFinalized) return false;
+    if (this.peerDrainPending) return false;
+    const head = this.agentInbox[0];
+    if (head && this.registeredPeerMessages.has(head.messageId)) {
+      // Child settlement keeps its synchronous boolean contract; authorization
+      // resumes only at a later idle boundary, after the child's teardown.
+      if (settledChild) return false;
+      this.peerDrainPending = true;
+      const port = this.peerDrain;
+      void (async () => {
+        const permit = await port?.request(head.messageId).catch(() => null);
+        this.peerDrainPending = false;
+        const retained = this.agentInbox[0] === head;
+        if (!retained || this.busy || this.currentTurn !== null || this.shuttingDown || this.relocating || this.childTerminalFinalized || this.postureBlocked()) {
+          if (permit) port?.discard(permit);
+          if (retained && !this.busy && this.currentTurn === null) {
+            this.agentInbox.shift(); this.registeredPeerMessages.delete(head.messageId);
+            this.publishAgentDelivery({ envelope: head, state: "rejected", detail: "Session unavailable before peer drain" });
+          }
+          return;
+        }
+        this.agentInbox.shift(); this.registeredPeerMessages.delete(head.messageId);
+        const started = !!permit && !!port?.consume(permit) && this.acceptUserMessage(head.messageId, agentMessageText(head), undefined, "system");
+        if (started) this.messageTurns.set(head.messageId, { hostTurnId: this.turnId });
+        this.publishAgentDelivery({ envelope: head, state: started ? "acknowledged" : "rejected", detail: started ? "Host started a next turn; model application unverified" : "Peer drain authorization refused" });
+        if (!started) this.drainAgentInbox();
+      })();
+      return false;
+    }
     const envelope = this.agentInbox.shift();
     if (!envelope) return false;
     if (settledChild) this.busy = false;
@@ -5758,12 +5792,16 @@ export class Session {
       const record: TurnErrorRecord = { kind: "turn_error", id: randomUUID(), createdAt: Date.now(), turnId, engine: this.engine.id, model: redact(this.model), ...(afterItemId ? { afterItemId } : {}), ...(nativeTurnId ? { nativeTurnId } : {}), ...(afterNativeTurnId ? { afterNativeTurnId } : {}), error: { name: error.name, message: redact(error.message), ...(error.code && /^[a-z_0-9]{1,80}$/.test(error.code) && !/^sk-/i.test(error.code) ? { code: error.code } : {}) } };
       try { await this.saveTurnError(record, text); } catch (error) { console.error(`[host] turn error persistence failed: ${describeError(error)}`); }
     };
+    let peerTerminalPublished = false;
     const recordResult = (terminalReason: SessionPublicResult["terminalReason"]) => {
       this.latestPublicResult = { source: "live_turn", turnId, requestId, nativeTurnId, terminalReason, publicAnswer: lastCompletedText?.text ?? ((this.engine.id === "codex" || this.engine.id === "core") && terminalReason === "error" ? turnErrorText : null), truncated: lastCompletedText?.truncated ?? false, completedAt: Date.now() };
       this.rememberTurnResult(turnId, this.latestPublicResult);
-      if (this.peerTurnObserver) this.publishPeerTurn({ type: "session_peer_terminal", sequence: peerSequence, turnId, requestId,
+      if (this.peerTurnObserver && !peerTerminalPublished) {
+        peerTerminalPublished = true;
+        this.publishPeerTurn({ type: "session_peer_terminal", sequence: peerSequence, turnId, requestId,
         deliveredMessageIds: peerDeliveredMessageIds,
         result: { ...this.latestPublicResult, publicAnswer: peerTextIsFinal ? this.latestPublicResult.publicAnswer : null, source: "live_turn", turnId, requestId, completedAt: this.latestPublicResult.completedAt! } });
+      }
       // thread this turn's final assistant text OUT of runTurn
       // for the supervisor idle-watchdog's noteTurnSettled call — the accept
       // -UserMessage teardown (outside this method) reads the private field.
@@ -6146,6 +6184,10 @@ export class Session {
       await persistTurnError();
       this.outbound.emit({ type: "fatal", message: `turn failed: ${describeError(error)}` });
     } finally {
+      if (this.peerTurnObserver && !peerTerminalPublished) {
+        lastCompletedText = null; peerTextIsFinal = false;
+        recordResult("unknown");
+      }
       if (this.runtimeHistory) {
         try { await this.runtimeHistory.hydrate(this.engine); }
         catch { /* An unavailable native mirror is unresolved delivery, not session death. */ }

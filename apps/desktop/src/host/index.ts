@@ -1,5 +1,4 @@
-import { createFileActivityTaps } from "./file-activity.js";
-import { createSessionPeerBridge } from "./engines/session-peer-bridge.js";
+import { createSessionPeerDrainTransport } from "./session-peer-drain.js";
 import { createSessionPeersPort } from "./session-peers-port.js";
 import { takeNativeSessionsCarrier } from "../shared/session-peers.js";
 import { mapProgressToEvent } from "@anycode/core";
@@ -1269,6 +1268,7 @@ if (sessionPeersPort) {
 }
 
 const engineSwitchEnabled = process.env.ANYCODE_ENGINE_SWITCH_ENABLED === "1";
+// Main stamps this on EVERY engine fork, independently of the engine-switch flag.
 const switchHostGeneration = Number(process.env.ANYCODE_HOST_GENERATION);
 const fileActivity = createFileActivityTaps(nativeSessionsEnabled, switchHostGeneration, message => process.parentPort.postMessage(message));
 const switchClient = engineSwitchEnabled ? createEngineSwitchClient(switchHostGeneration, message => process.parentPort.postMessage(message)) : undefined;
@@ -4983,13 +4983,24 @@ async function boot(): Promise<void> {
 const ready = startHostWithActivity(boot, () => session, (message) => process.parentPort.postMessage(message));
 void ready.then(() => session?.observeAgentDeliveries((delivery) => { process.parentPort.postMessage({ type: "communication_delivery", delivery }); }));
 
-if (nativeSessionsEnabled) void ready.then(() => session?.observePeerTurns(event => {
-  process.parentPort.postMessage({ ...event, generation: switchHostGeneration });
-}));
+let peerDrainTransport: ReturnType<typeof createSessionPeerDrainTransport> | undefined;
+if (nativeSessionsEnabled) void ready.then(() => {
+  if (!session) return;
+  peerDrainTransport = createSessionPeerDrainTransport(message => process.parentPort.postMessage(message), {
+    recipientSessionId: session.communicationStatus().sessionId, generation: switchHostGeneration,
+  });
+  session.configurePeerDrain(peerDrainTransport);
+  session.observePeerTurns(event => process.parentPort.postMessage({ ...event, generation: switchHostGeneration }));
+});
+if (nativeSessionsEnabled) {
+  process.once("disconnect", () => peerDrainTransport?.disconnect());
+  process.once("exit", () => peerDrainTransport?.dispose());
+}
 
 async function handleShutdown(): Promise<void> {
   sessionPeersPort?.dispose();
   await ready;
+  peerDrainTransport?.dispose();
 
   // CUT-S2 §10.14.3 BLOCKER-1: arm the admission funnel before any
   // teardown step below runs — the whole teardown window was previously
@@ -5069,6 +5080,7 @@ async function handleShutdown(): Promise<void> {
 }
 
 process.parentPort.on("message", (event) => {
+  if (peerDrainTransport?.handle(event.data)) return;
   if (sessionPeersPort?.handle(event.data)) return;
   if (switchClient?.handle(event.data)) return;
   const port = event.ports[0];
@@ -5131,7 +5143,7 @@ process.parentPort.on("message", (event) => {
     return;
   }
 
-  const communication = event.data as { type?: string; requestId?: string; operation?: string; payload?: unknown } | undefined;
+  const communication = event.data as { type?: string; requestId?: string; operation?: string; payload?: unknown; peerDrainRegistered?: boolean } | undefined;
   if (communication?.type === "communication_request") {
     void ready.then(async () => {
       try {
@@ -5170,7 +5182,7 @@ process.parentPort.on("message", (event) => {
           // published. An id this account does not offer is a structured
           // `invalid_model` result, so the code survives the IPC boundary.
           case "set_session_model": result = await session.communicationSetModel(communication.payload); break;
-          case "send_message": result = await session.receiveAgentMessage(communication.payload as import("../shared/communication.js").AgentEnvelope); break;
+          case "send_message": result = await session.receiveAgentMessage(communication.payload as import("../shared/communication.js").AgentEnvelope, nativeSessionsEnabled && communication.peerDrainRegistered === true); break;
           case "restore_agent_messages": session.restoreAgentMessages(communication.payload as import("../shared/communication.js").AgentDelivery[]); result = {}; break;
           case "get_message_status": result = session.agentMessageStatus(String(communication.payload)); break;
           case "get_message_result": result = session.communicationMessageResult(String(communication.payload)); break;

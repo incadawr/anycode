@@ -16,7 +16,7 @@ export function createSessionPeerReplies(broker: CommunicationBroker, clock = Da
     return source;
   };
   return {
-    send(caller: PeerHost, input: Input, authorize: Authorize, revalidate?: (id: string) => void) {
+    send(caller: PeerHost, input: Input, authorize: Authorize, revalidate?: (id: string) => void, accepted?: (record: CommunicationRecord) => void) {
       if (!caller.live || !caller.root || caller.restricted || caller.readOnly) throw new Error("Peer send refused");
       if (input.reply === "on_turn_end" || input.mode === "steer") throw new Error("Reply mode unavailable");
       const source = sourceFor(caller, input);
@@ -46,6 +46,7 @@ export function createSessionPeerReplies(broker: CommunicationBroker, clock = Da
         if (recent.filter(r => r.principal?.kind === "session" && r.principal.sessionId === caller.sessionId).length >= 20 ||
             recent.filter(r => r.peer?.senderWorkspace === caller.workspaceKey).length >= 60) throw new Error("Peer rate limited");
         record.peer = peer;
+        accepted?.(record);
       });
     },
   };
