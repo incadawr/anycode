@@ -104,3 +104,10 @@ it('rejects missing candidate or sampler fields rather than silently claiming em
   }
   expect(parseSessionPeerResponse({ ...answer, sampler: { ...answer.sampler, forged: true } })).toEqual({ status: 'unknown' });
 });
+
+it("accepts minimal opened receipts and rejects private creator data", () => {
+  const result = { status: "opened", sessionId: "s", tabId: "t", label: "peer" };
+  expect(parseSessionPeerResponse(result)).toEqual(result);
+  expect(parseSessionPeerResponse({ ...result, workspace: "/private" })).toEqual({ status: "unknown" });
+  expect(parseSessionPeerResponse({ ...result, delivery: { state: "rejected" } })).toEqual({ ...result, delivery: { state: "rejected" } });
+});

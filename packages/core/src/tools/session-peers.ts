@@ -70,16 +70,19 @@ const shellCandidate = z.strictObject({
 });
 const sampler = z.strictObject({ coverage: z.enum(["complete", "partial", "unknown"]),
   baselineCoverage: z.enum(["complete", "partial", "unknown"]), freshness: z.enum(["fresh", "stale"]) });
+const deliveryReceipt = z.strictObject({ state: z.enum(["queued", "acknowledged", "rejected", "unknown"]), messageId: id.optional() });
 const responseSchema = z.discriminatedUnion("status", [
   z.strictObject({ status: z.literal("file_activity"), path: z.string().min(1).max(4096),
     candidates: z.array(shellCandidate).max(20), sampler,
     records: z.array(fileEvidence).max(20), coverage: z.literal("partial"),
     startsAt: z.number().finite(), limitations: z.string().min(1).max(2000),
   }),
+  z.strictObject({ status: z.literal("opened"), sessionId: id, tabId: id, label: id.optional(), delivery: deliveryReceipt.optional() }),
   z.strictObject({ status: z.literal("sent"), messageId: id, state: z.enum(["queued", "acknowledged", "rejected", "unknown"]) }),
   z.strictObject({ status: z.literal("ok"), sessions: z.array(peerSummary).max(50) }),
   z.strictObject({ status: z.literal("refused"), reason: z.literal("loop_limited").optional() }),
-  z.strictObject({ status: z.enum(["unavailable", "unknown"]) }),
+  z.strictObject({ status: z.literal("unavailable") }),
+  z.strictObject({ status: z.literal("unknown"), sessionId: id.optional(), tabId: id.optional() }),
 ]);
 export type SessionPeerResponse = z.infer<typeof responseSchema>;
 export type SessionPeerCall = SessionPeerRequest extends infer R

@@ -1,6 +1,7 @@
 import { parseSessionPeerRequest, parseSessionPeerResponse, type SessionPeerRequest, type SessionPeerResponse } from "../shared/session-peers.js";
 import path from "node:path";
 import { type FileActivityIndex } from "./file-activity-index.js";
+import type { createSessionPeerOpener } from "./session-peer-open.js";
 import type { PeerSessionFacts } from "./session-peer-access.js";
 
 export interface PeerHost extends PeerSessionFacts {
@@ -14,13 +15,15 @@ export interface PeerHost extends PeerSessionFacts {
 export function createSessionPeersHandler(deps: {
   current(tabId: string): PeerHost | undefined;
   targets(): PeerHost[];
-  access: { canAccess(caller: PeerHost, target: PeerHost, operation: SessionPeerRequest["operation"]): boolean | Promise<boolean> };
+  access: { canAccess(caller: PeerHost, target: PeerHost, operation: SessionPeerRequest["operation"]): boolean | Promise<boolean>;
+    canAccessWorkspace?(caller: PeerHost, workspace: string, key: string, operation: "open", allowsOpen: boolean): Promise<boolean> };
+  open?: ReturnType<typeof createSessionPeerOpener>;
   prepare(): Promise<void>;
   files?: FileActivityIndex;
   send?(caller: PeerHost, input: Extract<SessionPeerRequest, { operation: "send" }>["input"], authorize: (id: string) => Promise<PeerHost>): Promise<{ envelope: { messageId: string }; state: "queued" | "acknowledged" | "rejected" | "unknown" }>;
 }) {
   const pending = new Map<object, Set<string>>();
-  return async (tabId: string, proc: object, raw: unknown): Promise<SessionPeerResponse | null> => {
+  const handle = async (tabId: string, proc: object, raw: unknown): Promise<SessionPeerResponse | null> => {
     const request = parseSessionPeerRequest(raw);
     const host = deps.current(tabId);
     if (!request || !host || host.proc !== proc || !host.live) return null;
@@ -42,6 +45,29 @@ export function createSessionPeersHandler(deps: {
       if (now.workspace !== caller.workspace || now.workspaceKey !== caller.workspaceKey ||
           !await deps.access.canAccess(now, now, request.operation)) return { status: "refused" };
       if (!current()) return null;
+      if (request.operation === "open" && deps.open && deps.access.canAccessWorkspace) {
+        const authorize = async (workspace: string, key: string, allowsOpen: boolean) => {
+          const sender = current();
+          if (!sender || sender.workspace !== caller.workspace || sender.workspaceKey !== caller.workspaceKey) return false;
+          const allowed = await deps.access.canAccessWorkspace!(sender, workspace, key, "open", allowsOpen);
+          const latest = current();
+          return allowed && !!latest?.root && !latest.restricted && !latest.readOnly &&
+            latest.workspace === caller.workspace && latest.workspaceKey === caller.workspaceKey;
+        };
+        const result = await deps.open({ ...request.input, workspace: request.input.workspace ?? caller.workspace,
+          engine: request.input.engine ?? caller.engine }, { kind: "native", openerSessionId: caller.sessionId, authorize,
+          deliverFirstMessage: async (sessionId, payload) => {
+            const response = await handle(tabId, proc, { requestId: `${request.requestId}:first`, operation: "send",
+              input: { sessionId, payload, reply: request.input.reply } });
+            return response?.status === "sent" ? { state: response.state, messageId: response.messageId }
+              : { state: response?.status === "refused" ? "rejected" : "unknown" };
+          },
+        });
+        if (!result.ok) return result.sessionId && result.tabId
+          ? { status: "unknown", sessionId: result.sessionId, tabId: result.tabId } : { status: "refused" };
+        return parseSessionPeerResponse({ status: "opened", sessionId: result.sessionId, tabId: result.tabId,
+          ...(result.handle ? { label: result.handle } : {}), ...(result.delivery ? { delivery: result.delivery } : {}) });
+      }
       if (request.operation === "send" && deps.send) {
         if (request.input.mode === "steer") return { status: "unavailable" };
         const authorize = async (id: string) => {
@@ -106,4 +132,5 @@ export function createSessionPeersHandler(deps: {
       if (!active.size) pending.delete(proc);
     }
   };
+  return handle;
 }

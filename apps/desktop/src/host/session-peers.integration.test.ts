@@ -16,6 +16,9 @@ import { createSessionPeersPort } from "./session-peers-port.js";
 import { createSessionPeerDrainTransport } from "./session-peer-drain.js";
 import { createCommunicationBroker } from "../main/communication-broker.js";
 import { createSessionPeersHandler, type PeerHost } from "../main/session-peers.js";
+import { createSessionPeerOpener } from "../main/session-peer-open.js";
+import { createSessionAccessStore } from "../main/communication-sessions.js";
+import type { CreateSessionByAgentDeps } from "../main/create-session-by-agent.js";
 import { createSessionPeerAccess } from "../main/session-peer-access.js";
 import { createSessionPeerPolicyStore } from "../main/session-peer-policy.js";
 import { createSessionPeerReplies } from "../main/session-peer-replies.js";
@@ -120,7 +123,24 @@ async function fixture(a: PeerHost["engine"] = "core", b: PeerHost["engine"] = "
     sendAuto: (caller, source, payload) => replies.auto(caller, source, payload, authorize(caller)) });
   const replies = createSessionPeerReplies(broker, Date.now, coordinator);
   const prepare = vi.fn(async () => {});
-  const handler = createSessionPeersHandler({ current, targets: () => hosts, access, prepare, send: (caller, input, authorizePeer) => replies.send(caller, input, async id => { const host = await authorizePeer(id); return { ...host, pid: host.generation, state: "running" }; }) });
+  const openers = new Map<string, string>();
+  const fork = vi.fn(async (input: any) => {
+    const host = { ...hosts[0]!, ...input, tabId: input.sessionId, proc: {}, generation: 1 };
+    hosts.push(host);
+    return { ok: true, tab: host };
+  });
+  const manager = { atCapacity: () => false, createTabAwaitingInitialSpawn: fork,
+    deliverTabPort: vi.fn(), publishPreparedTab: () => true,
+    communicationRequest: vi.fn(async () => ({ ok: true })) };
+  const creator = { projects: { isAllowed: () => false }, manager: () => manager,
+    sessions: () => createSessionAccessStore({ file: join(dir, "sessions"), defaultOn: () => false }), realpathSync,
+    readTrustStore: async () => ({ folders: { [dir]: { decision: "trusted" }, [other]: { decision: "trusted" } } }),
+    mcpSecretPrime: async () => {}, currentSettings: () => ({ provider: { connections: [] } }),
+    primeNewSessionPin: async () => ({ ok: true, release: () => {} }),
+    randomUUID: () => `opened-${hosts.length}`, agentOpenedSessions: new Set<string>(),
+    agentSessionOpeners: openers, agentSessionTitles: new Map(), listTabs: tabs,
+  } as unknown as CreateSessionByAgentDeps;
+  const handler = createSessionPeersHandler({ open: createSessionPeerOpener(creator), current, targets: () => hosts, access, prepare, send: (caller, input, authorizePeer) => replies.send(caller, input, async id => { const host = await authorizePeer(id); return { ...host, pid: host.generation, state: "running" }; }) });
   const doors = hosts.map((host, i) => {
     const port = createSessionPeersPort((message: any) => {
       void handler(host.tabId, host.proc!, message.request).then(result => port.handle({ type: "session_peers_response", requestId: message.request.requestId, result }));
@@ -143,7 +163,7 @@ async function fixture(a: PeerHost["engine"] = "core", b: PeerHost["engine"] = "
     const bridge = createSessionPeerBridge({ port, cwd: host.workspace, broker: permission, authority: () => authority });
     return { call: (name: string, input: unknown) => bridge.call(name, input, new AbortController().signal, "call"), authority, permission, port };
   });
-  return { dir, other, hosts, ends, broker, drain, policy, doors, post, prepare, options };
+  return { dir, other, hosts, ends, broker, drain, policy, doors, post, prepare, options, openers, fork, manager, creator };
 }
 
 it.each(pairs)("%s → %s automatic public result reaches the next native request, idle and busy", async (a, b) => {
@@ -247,8 +267,27 @@ it.each([false, true])("new broker reads the saved journal without replay, auto 
   await restarted.reconcile(); expect(f.post.mock.calls.slice(count).every(call => call[1] !== "send_message")).toBe(true);
 });
 
-it.fails("root SessionOpen reaches the creator instead of returning unavailable", async () => {
-  // The main handler has no creator branch; retain the missing capability visibly.
+it("root SessionOpen reaches the admitted creator with caller defaults and opener identity", async () => {
+  const f = await fixture("codex");
+  expect(await f.doors[0]!.call("SessionOpen", {})).toEqual({ ok: true, output: { status: "opened", sessionId: "opened-2", tabId: "opened-2" } });
+  expect(f.fork).toHaveBeenCalledWith(expect.objectContaining({ workspace: f.dir, engine: "codex", resume: false }));
+  expect(f.openers.get("opened-2")).toBe("a");
+  expect(await f.doors[0]!.call("SessionOpen", { engine: "claude", model: "offered", effort: "high" })).toMatchObject({ output: { status: "opened" } });
+  expect(f.manager.communicationRequest.mock.calls).toEqual(expect.arrayContaining([
+    expect.arrayContaining(["set_session_model", { model: "offered" }]),
+    expect.arrayContaining(["set_session_effort", { effort: "high" }]),
+  ]));
+  for (let i = 0; i < 3; i++) expect(await f.doors[0]!.call("SessionOpen", {})).toMatchObject({ output: { status: "opened" } });
+  expect(await f.doors[0]!.call("SessionOpen", {})).toMatchObject({ output: { status: "refused" } });
+  expect(f.fork).toHaveBeenCalledTimes(5);
+});
+it("open refuses cross workspace without target opt-in and caller posture escapes", async () => {
   const f = await fixture();
-  expect(await f.doors[0]!.call("SessionOpen", {})).not.toMatchObject({ output: { status: "unavailable" } });
+  expect(await f.doors[0]!.call("SessionOpen", { workspace: f.other })).toMatchObject({ output: { status: "refused" } });
+  for (const patch of [{ readOnly: true }, { root: false }, { restricted: true }]) {
+    Object.assign(f.hosts[0]!, patch);
+    expect(await f.doors[0]!.call("SessionOpen", {})).toMatchObject({ output: { status: "refused" } });
+    Object.assign(f.hosts[0]!, { readOnly: false, root: true, restricted: false });
+  }
+  expect(f.fork).not.toHaveBeenCalled();
 });

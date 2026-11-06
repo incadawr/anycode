@@ -143,6 +143,7 @@ import {
 // CONNECTION (the core engine has no engine-model argv), never a silent fallback.
 import { primeNewSessionPin } from "./session-pin.js";
 import { forgetClosedAgentOpeners } from "./communication-creation-admission.js";
+import { createSessionPeerOpener } from "./session-peer-open.js";
 import { createSessionForAgent as createSessionForAgentImpl, type CreateSessionByAgentDeps } from "./create-session-by-agent.js";
 import { createAgentTitlePushes, createAgentTitleRecoveryDeps, recoverAgentSessionTitleOnRegister, type AgentTitlePushes, type AgentTitleRecoveryDeps } from "./agent-session-title.js";
 import type { CreateSessionRequest } from "./communication-server.js";
@@ -2721,6 +2722,7 @@ void app.whenReady().then(async () => {
   const fileActivity = createFileActivityIngress(peerEnabled, tabId => manager?.peerHost(tabId));
   if (fileActivity) app.on("before-quit", () => fileActivity.dispose());
   const peerHandler = peerEnabled ? createSessionPeersHandler({
+    open: createSessionPeerOpener(createSessionDeps),
     files: fileActivity?.index,
     send: async (caller, input, authorize) => {
       const broker = await communicationController!.broker();

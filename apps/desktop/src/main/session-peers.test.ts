@@ -51,3 +51,22 @@ it("bounds duplicate and concurrent requests and releases deadline reservations"
     expect(await f.handler("a", f.proc, request)).toMatchObject({ status: "ok" });
   } finally { vi.useRealTimers(); }
 });
+
+it("keeps the created ids when first-message admission refuses and forwards reply mode", async () => {
+  const caller: PeerHost = { tabId: "a", sessionId: "a", proc: {}, generation: 1, workspace: "/a", workspaceKey: "/a",
+    live: true, root: true, restricted: false, readOnly: false, engine: "claude", activity: "idle" };
+  const target = { ...caller, sessionId: "new", tabId: "new" };
+  const send = vi.fn(async () => { throw new Error("private refusal"); });
+  type Open = NonNullable<Parameters<typeof createSessionPeersHandler>[0]["open"]>;
+  const open = vi.fn(async (request: Parameters<Open>[0], policy: Parameters<Open>[1]) => {
+    expect(request).toMatchObject({ workspace: "/a", engine: "claude", firstMessage: "hello" });
+    expect(await policy.authorize("/a", "/a", false)).toBe(true);
+    return { ok: true as const, sessionId: "new", tabId: "new", handle: "peer",
+      delivery: await policy.deliverFirstMessage!("new", request.firstMessage!) };
+  });
+  const handler = createSessionPeersHandler({ current: () => caller, targets: () => [target], open, send,
+    prepare: async () => {}, access: { canAccess: () => true, canAccessWorkspace: async () => true } });
+  expect(await handler("a", caller.proc!, { requestId: "r", operation: "open", input: { firstMessage: "hello", reply: "on_turn_end" } }))
+    .toEqual({ status: "opened", sessionId: "new", tabId: "new", label: "peer", delivery: { state: "rejected" } });
+  expect(send).toHaveBeenCalledWith(expect.anything(), { sessionId: "new", payload: "hello", reply: "on_turn_end" }, expect.any(Function));
+});

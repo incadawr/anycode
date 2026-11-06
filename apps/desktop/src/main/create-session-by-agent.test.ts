@@ -1420,3 +1420,24 @@ it("HTTP and native entries share one creation budget", async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+it("peer handler uses main's admitted creator adapter and primes the selected connection before root fork", async () => {
+  const { createSessionPeerOpener } = await import("./session-peer-open.js");
+  const { createSessionPeersHandler } = await import("./session-peers.js");
+  const source = await readFile(new URL("./index.ts", import.meta.url), "utf8");
+  expect(source).toContain("open: createSessionPeerOpener(createSessionDeps)");
+  const r = rig(), openers = new Map<string, string>();
+  const caller = { sessionId: "opener", tabId: "opener", proc: {}, generation: 1, workspace: "/ws", workspaceKey: "/ws",
+    live: true, root: true, restricted: false, readOnly: false, engine: "core" as const, activity: "idle" as const };
+  const access = createSessionPeerAccess({ enabled: () => true, policy: {
+    isNativeEnabled: () => true, hasPairGrant: () => false, projectKeys: () => [],
+    setNativeEnabled: () => false, setPairGrant: () => false,
+  }, isTrusted: () => true, realpathSync: p => p, statSync: () => ({ isDirectory: () => true }) });
+  const handler = createSessionPeersHandler({ current: () => caller, targets: () => [], access, prepare: async () => {},
+    open: createSessionPeerOpener(r.deps({ projects: { isAllowed: () => false }, agentSessionOpeners: openers })) });
+  expect(await handler(caller.tabId, caller.proc, { requestId: "open", operation: "open", input: { model: "glm-5.3" } }))
+    .toMatchObject({ status: "opened", sessionId: "sess-0" });
+  expect(r.forkEnvs[0]).toMatchObject({ ANYCODE_CONNECTION_ID: "conn-glm", ANYCODE_API_KEY: "conn-glm-key" });
+  expect(openers.get("sess-0")).toBe("opener");
+  expect(r.exposed.get("sess-0")).not.toBe(true);
+});
