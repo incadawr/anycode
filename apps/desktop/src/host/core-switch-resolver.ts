@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { release } from "node:os";
-import { AiSdkModelPort, ConversationHistory, InMemoryHookRunner, InMemoryTodoStore, McpManager, NodeExecutionAdapter, NodeFileSystemAdapter,
+import { applyAutomaticModelRoute, AiSdkModelPort, ConversationHistory, InMemoryHookRunner, InMemoryTodoStore, McpManager, NodeExecutionAdapter, NodeFileSystemAdapter,
   NodeHttpAdapter, NodeGitReadAdapter, NodeMcpTransportFactory, RuleAwarePermissionEngine, SafeCommandPermissionEngine, ModePermissionEngine,
   PERSONAS, RuntimeHistorySink, createCommandHook, createDefaultToolRegistry, loadEnvConfig, loadHookConfigs, loadMcpServerSpecs, matchCatalogEntryByBaseUrl,
   resolveImageInput, buildSystemPrompt, buildChildModelSettingsResolver, createDefaultTokenizer,
@@ -11,6 +11,7 @@ import { AiSdkModelPort, ConversationHistory, InMemoryHookRunner, InMemoryTodoSt
   type AgentLoopConfig, type ModelPort, type McpSecretResolver, type SqlitePersistenceAdapter, type SessionPermissionRules,
 } from "@anycode/core";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
+import { modelReplayPolicy } from "../shared/model-overrides.js";
 import { parseSettings } from "../settings/schema.js";
 import { defaultSettingsPath } from "../settings/files.js";
 import { resolveProfileRoles } from "../shared/role-profiles.js";
@@ -93,7 +94,14 @@ export function createProductionCoreResolver(ctx:ProductionCoreResolverContext):
         const portFor = (id: string) => {
           const connection = readConnection();
           if (id !== model && !connection?.models?.includes(id) && !modelSettings.entryFor(id)?.models.some(row => row.id === id)) throw new Error("The selected model is unavailable on this connection");
-          return makePort({ transport: envConfig.providerTransport ?? entry?.defaultTransport ?? "anthropic-messages", baseUrl: envConfig.baseUrl, apiKey: envConfig.apiKey, model:id, providerId: envConfig.providerId, ...(resolveApiKey ? { resolveApiKey } : {}) });
+          const endpointFor = (targetModel: string) => {
+            const latest = readConnection();
+            const endpoint = applyAutomaticModelRoute({ transport: envConfig.providerTransport ?? entry?.defaultTransport ?? "anthropic-messages", baseUrl: envConfig.baseUrl, apiKey: envConfig.apiKey, model:targetModel, providerId: envConfig.providerId, automaticModelRouting:envConfig.automaticModelRouting,
+            providerName:entry?.name,
+            reasoningHistory:envConfig.reasoningHistory, reasoningCompactorModel:envConfig.reasoningCompactorModel, ...(resolveApiKey ? { resolveApiKey } : {}) }, latest?.modelRoutes);
+            return { ...endpoint, ...modelReplayPolicy(latest ?? undefined,targetModel,endpoint.baseUrl,sourceEnv.ANYCODE_PRESERVE_REASONING_FROM_SETTINGS === "1" ? undefined : envConfig.preserveReasoning) };
+          };
+          return makePort({ ...endpointFor(id), resolveEndpointForModel:endpointFor });
         };
         const modelPort = portFor(model);
         const candidateHistorySink = new RuntimeHistorySink(database,sessionId,runtimeId!);

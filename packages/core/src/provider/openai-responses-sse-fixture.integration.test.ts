@@ -216,11 +216,11 @@ describe("AiSdkModelPort over a real @ai-sdk/openai Responses SSE stream (W3)", 
     expect(captured!.body.reasoning).toMatchObject({ effort: "none" });
   });
 
-  it("keeps the compatible endpoint system-role wire shape", async () => {
+  it.each([undefined, false])("keeps the compatible endpoint system-role wire shape (replay=%s)", async preserveReasoning => {
     responseChunks = [created(), completed({ input: 5, output: 2 })];
-    await collect(portFor({ model: "custom-model", providerName: "custom" }).streamText({ system: "be concise", messages: [{ role: "user", content: "hi" }], tools: [], reasoningEffort: "high" }));
+    await collect(portFor({ model: "custom-model", providerName: "custom", preserveReasoning }).streamText({ system: "be concise", messages: [{ role: "user", content: "hi" }], tools: [], reasoningEffort: "high" }));
     expect(captured!.body.input).toEqual(expect.arrayContaining([expect.objectContaining({ role: "system" })]));
-    expect(captured!.body.include).toBeUndefined();
+    expect(captured!.body.include).toEqual(preserveReasoning === false ? undefined : ["reasoning.encrypted_content"]);
     expect(captured!.body.reasoning).toBeUndefined();
   });
 

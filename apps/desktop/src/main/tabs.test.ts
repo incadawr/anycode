@@ -8896,3 +8896,58 @@ describe("Claude orchestration boot carrier", () => {
     }
   });
 });
+
+describe("TabHostManager — replay rejection binding", () => {
+  function rejectionManager(seen: Array<{ connectionId: string; message: unknown }>) {
+    const rig = liveForkRig();
+    const manager = new TabHostManager({
+      fork: rig.fork,
+      hostEntry: "/fake/host.js",
+      createChannel: fakeChannel,
+      getWindow: () => windowRig().window,
+      env: () => ({}),
+      logger: silentLogger,
+      onReasoningReplayRejection: (connectionId, message) => {
+        seen.push({ connectionId, message });
+      },
+    });
+    return { manager, hosts: rig.hosts };
+  }
+  const rejection = { type: "reasoning_replay_rejected", reason: "provider-rejected", baseUrl: "https://fixture.invalid/v1", model: "test-model" };
+
+  it("routes each tab's rejection to its OWN pinned connectionId — never a sibling tab's", async () => {
+    const seen: Array<{ connectionId: string; message: unknown }> = [];
+    const { manager, hosts } = rejectionManager(seen);
+    manager.createTab({ workspace: "/a", sessionId: "sa", resume: false, connectionId: "conn-a" });
+    manager.createTab({ workspace: "/b", sessionId: "sb", resume: false, connectionId: "conn-b" });
+    await flush();
+    hosts[1]!.emit("message", rejection);
+    await flush();
+    expect(seen).toEqual([{ connectionId: "conn-b", message: rejection }]);
+  });
+
+  it("drops a rejection event from an unpinned (legacy) tab — no connection to persist onto", async () => {
+    const seen: Array<{ connectionId: string; message: unknown }> = [];
+    const { manager, hosts } = rejectionManager(seen);
+    manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false });
+    await flush();
+    hosts[0]!.emit("message", rejection);
+    await flush();
+    expect(seen).toEqual([]);
+  });
+
+  it("drops a retired process message after restart", async () => {
+    const seen: Array<{ connectionId: string; message: unknown }> = [];
+    const { manager, hosts } = rejectionManager(seen);
+    const created = manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false, connectionId: "conn-a" });
+    if (!created.ok) throw new Error("tab creation failed");
+    await flush();
+    const retired = hosts[0]!;
+    const restarting = manager.restartTabHost(created.tab.tabId);
+    retired.emit("exit", 0);
+    await restarting;
+    retired.emit("message", rejection);
+    hosts[1]!.emit("message", rejection);
+    expect(seen).toEqual([{ connectionId: "conn-a", message: rejection }]);
+  });
+});

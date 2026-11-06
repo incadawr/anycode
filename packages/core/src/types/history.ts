@@ -33,6 +33,8 @@ export interface ReasoningSource {
   replayFactual?: boolean;
   /** The route accepts unsigned Anthropic thinking blocks. */
   replayUnsigned?: boolean;
+  /** Compatibility for endpoints declaring reasoning_content on tool messages. */
+  requireReasoningContent?: boolean;
   /** Catalog entry name; absent for a custom endpoint. */
   provider?: string;
   baseUrl: string;

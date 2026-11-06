@@ -1,3 +1,4 @@
+import { REASONING_REPLAY_REJECTED } from "../shared/reasoning-replay.js";
 import { CLAUDE_ORCHESTRATE_ARG } from "../shared/claude-orchestration-feature.js";
 import { EngineSwitchCoordinator } from "./engine-switch-coordinator.js";
 import { ENGINE_SWITCH_CONTROL, type EngineSwitchIdentity, type EngineSwitchLaunch } from "../shared/engine-switch-control.js";
@@ -851,6 +852,9 @@ export interface TabHostManagerDeps {
    * settings.json). Absent = quota persistence off (legacy tests unaffected).
    */
   onProviderQuotaEvent?: (connectionId: string, message: unknown) => void;
+  /** Replay rejection from the live host, bound to its pinned connection.
+   * Main validates the narrow observation before persisting it. */
+  onReasoningReplayRejection?: (connectionId: string, message: unknown) => void;
   /**
    * Resolves the immutable providerId of a pinned connection for the tab-port
    * envelope (W10-FIX F2): main injects `(id) => connectionById(...)?.providerId`.
@@ -2091,6 +2095,11 @@ export class TabHostManager {
       if (tab.connectionId !== undefined) {
         this.deps.onProviderHealthEvent?.(tab.connectionId, message as ProviderHealthEvent);
       }
+      return;
+    }
+    if (data.type === REASONING_REPLAY_REJECTED) {
+      // Only the live host can report for this pinned tab; drop retired processes.
+      if (tab.proc === child && tab.connectionId !== undefined) this.deps.onReasoningReplayRejection?.(tab.connectionId, message);
       return;
     }
     if (data.type === PROVIDER_QUOTA_EVENT_TYPE) {

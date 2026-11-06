@@ -6021,3 +6021,18 @@ it("keeps baseline history and later requests when unset mode is cancelled after
     { role: "user", content: "first" }, { role: "user", content: "second" },
   ]);
 });
+
+// Empty model output may finish a step without creating a visible text part.
+describe("assistant text history", () => {
+  it.each(["", " \n\t", " \nAnswer"])("persists only visible text, preserving its whitespace: %j", async text => {
+    const loop = makeLoop({modelPort: new MockModelPort([[
+      {type:"start"}, {type:"text_start",id:"t"}, {type:"text_delta",id:"t",text},
+      {type:"text_end",id:"t"}, {type:"finish",finishReason:"stop",usage:{}},
+    ]])});
+    const events = await collect(loop.runTurn("hi"));
+    expect(events.find(event => event.type === "loop_end")).toMatchObject({ reason: "completed" });
+    expect(loop.history.items.filter(item => item.message.role === "assistant")).toHaveLength(text.trim() ? 1 : 0);
+    const parts = loop.history.items.flatMap(item => item.message.role === "assistant" ? item.message.content : []);
+    expect(parts.filter(part => part.type === "text")).toEqual(text.trim() ? [{type:"text",text}] : []);
+  });
+});

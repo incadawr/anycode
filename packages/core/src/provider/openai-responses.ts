@@ -97,7 +97,21 @@ export function createOpenAIResponsesLanguageModel(config: EndpointConfig, onRes
       : shouldStripAmbientAuthorization
         ? stripAuthorizationFetch
         : undefined;
-  const baseFetch = fetchChain ?? ((input, init) => globalThis.fetch(input, init));
+  const upstreamFetch = fetchChain ?? ((input, init) => globalThis.fetch(input, init));
+  const replayEnabled = config.preserveReasoning !== false && config.reasoningHistory !== "none" && !config.reasoningHistory?.startsWith("factual_");
+  const baseFetch: typeof fetch = (input, init) => {
+    // The SDK automatically requests encrypted reasoning for known reasoning
+    // models with store:false. Remove that request when replay is disabled.
+    if (!replayEnabled && typeof init?.body === "string") {
+      const body = JSON.parse(init.body);
+      if (Array.isArray(body.include)) {
+        body.include = body.include.filter((value: unknown) => value !== "reasoning.encrypted_content");
+        if (body.include.length === 0) delete body.include;
+        init = { ...init, body: JSON.stringify(body) };
+      }
+    }
+    return upstreamFetch(input, init);
+  };
   const transportFetch = wrapResponsesReasoningFetch(onResponseActivity !== undefined
     ? wrapFetchWithActivity(baseFetch, onResponseActivity)
     : baseFetch);
@@ -122,6 +136,11 @@ export function createOpenAIResponsesLanguageModel(config: EndpointConfig, onRes
       wrapStream: async ({ doStream }) => {
         const result = await doStream();
         const recovery = new ResponsesReasoningTextRecovery();
+        // Delay empty starts and leading whitespace until this block has visible text.
+        type StreamPart = typeof result.stream extends ReadableStream<infer Part> ? Part : never;
+        const textStarts = new Map<string, Extract<StreamPart, { type: "text-start" }>>();
+        const pendingText = new Map<string, string>();
+        const visibleText = new Set<string>();
         let hasOutput = false;
         let suppressFailure = false;
         return {
@@ -140,12 +159,32 @@ export function createOpenAIResponsesLanguageModel(config: EndpointConfig, onRes
               for (const event of recovery.observe(part)) {
                 if (event.type === "reasoning_delta") hasOutput = true;
                 if (event.type === "reasoning_start") controller.enqueue({ type: "reasoning-start", id: event.id });
-                else if (event.type === "reasoning_delta") controller.enqueue({ type: "reasoning-delta", id: event.id, delta: event.text });
+                else if (event.type === "reasoning_delta") controller.enqueue({ type: "reasoning-delta", id: event.id, delta: event.text, providerMetadata: { openai: { reasoningTextOrigin: "content" } } });
                 else controller.enqueue({ type: "reasoning-end", id: event.id });
               }
               if (part.type === "text-delta" || part.type === "reasoning-delta" || part.type === "tool-call" || part.type === "tool-input-delta") hasOutput = true;
               // These raw frames were handled here; do not recover them again downstream.
               if (part.type === "raw" && isRecoveryFrame(part.rawValue)) return;
+              if (part.type === "text-start") {
+                textStarts.set(part.id, part);
+                if (!visibleText.has(part.id)) pendingText.set(part.id, pendingText.get(part.id) ?? "");
+                return;
+              }
+              if (part.type === "text-delta" && !visibleText.has(part.id)) {
+                const delta = (pendingText.get(part.id) ?? "") + part.delta;
+                if (!delta.trim()) { pendingText.set(part.id, delta); return; }
+                pendingText.delete(part.id);
+                visibleText.add(part.id);
+                controller.enqueue(textStarts.get(part.id) ?? { type: "text-start", id: part.id });
+                textStarts.delete(part.id);
+                controller.enqueue({ ...part, delta });
+                return;
+              }
+              if (part.type === "text-end") {
+                textStarts.delete(part.id);
+                pendingText.delete(part.id);
+                if (!visibleText.delete(part.id)) return;
+              }
               controller.enqueue(part);
             },
           })),

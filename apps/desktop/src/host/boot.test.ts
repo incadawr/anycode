@@ -42,6 +42,7 @@ import {
   createMainCredentialProvider,
   createPreviewRpcClient,
   hostDiagnosticSink,
+  createReplayDiagnosticSink,
   childRetryPolicy,
   isChildSessionBoot,
   parseHostArgs,
@@ -1309,4 +1310,13 @@ it("reads child linkage when restrictions are malformed during failure reporting
   const args = ["--session", "s", "--child-parent", "p", "--child-spawn-call", "c", "--child-mode", "build", "--child-restrictions", "{"];
   expect(() => parseHostArgs(args)).toThrow();
   expect(parseHostArgsForFailure(args)).toMatchObject({ sessionId: "s", child: { parentSessionId: "p" } });
+});
+
+
+it("forwards a narrow replay observation with a notice valid for include-only rejection", () => {
+  const send = vi.fn(); const emit = vi.fn();
+  const sink = createReplayDiagnosticSink(send, emit);
+  sink({ kind: "reasoning_replay_rejected", reason: "provider-rejected", baseUrl: "https://fixture.invalid", model: "test" });
+  expect(send.mock.calls).toEqual([[{ type: "reasoning_replay_rejected", reason: "provider-rejected", baseUrl: "https://fixture.invalid", model: "test" }]]);
+  expect(emit.mock.calls).toEqual([[{ type: "engine_notice", level: "warning", message: "Reasoning replay disabled: provider rejected reasoning replay options. Retrying without replay." }]]);
 });

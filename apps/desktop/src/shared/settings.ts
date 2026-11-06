@@ -251,6 +251,9 @@ export type ConnectionPricing =
   | ({ mode: "rates" } & TokenRates);
 
 export interface ModelOverrides {
+  preserveReasoning?: boolean;
+  /** Reserved for an endpoint rejection; no rejection detector runs yet. */
+  reasoningReplayRejection?: { reason: "provider-rejected"; baseUrl: string };
   imageInput?: "on" | "off";
   catalogMatchDisabled?: true;
   effortLevels?: ReasoningEffort[];
@@ -366,18 +369,7 @@ export interface ProviderConnection {
    */
   includeUsage?: boolean;
   /**
-   * Per-connection reasoning-replay override for endpoints the catalog has no
-   * policy for (custom/vLLM connections resolve `providerName` undefined, so
-   * core's replay gate falls through to this value). Absent = the catalog
-   * default (Off for an unknown endpoint), `true` = replay the endpoint's
-   * thinking blocks, `false` = an explicit opt-out. Materialised as
-   * `ANYCODE_PRESERVE_REASONING` on the fork env, so a launching shell's own
-   * value always wins — the same env > settings ladder as `includeUsage`.
-   * Note the override is genuine in BOTH directions: on a catalog entry whose
-   * own flag is on, an explicit `false` turns replay OFF.
-   *
-   * `false` is a MEANING, not an absence: the key is persisted verbatim and
-   * every truthiness check on the read path must compare against `undefined`.
+   * Legacy replay preference, migrated to this connection's selected model.
    */
   preserveReasoning?: boolean;
   /**
@@ -1175,16 +1167,7 @@ export interface CatalogSummaryEntry {
    * choices off this, never off `needsBaseUrl`.
    */
   isCustom?: boolean;
-  /**
-   * True when the entry's own catalog flag enables reasoning replay
-   * (`preserveReasoning: true`), projected only when declared (same
-   * conditional-spread rule as `isCustom`) — absence means the entry has no
-   * flag, exactly the reading core's `catalogPreservesReasoning` applies. The
-   * drawer matches a `custom:<id>` record's base URL against it: a matched
-   * entry without the flag makes the connection-level replay override inert
-   * (core's gate resolves the provider by base URL and returns undefined
-   * before consulting the override), so the drawer hides the select there.
-   */
+  /** Explicit catalog replay policy, projected when declared. Model overrides take precedence. */
   preserveReasoning?: boolean;
   /** Transport this endpoint uses when neither env nor settings pick one (W5). */
   defaultTransport?: ProviderTransportId;
@@ -1382,7 +1365,7 @@ export interface ConnectionCreateRequest {
    * `""` sentinel on create, because omission already means Automatic.
    */
   includeUsage?: boolean;
-  /** Reasoning-replay opt-in (see `ProviderConnection.preserveReasoning`); omitted = the catalog default — no `""` sentinel on create, because omission already means Automatic. */
+  /** Selected model's reasoning-replay override (see `ModelOverrides.preserveReasoning`); omitted = the catalog default — no `""` sentinel on create, because omission already means Automatic. */
   preserveReasoning?: boolean;
   /** Output-token ceiling (see `ProviderConnection.maxOutputTokens`); omitted = catalog/default. */
   maxOutputTokens?: number;
@@ -1708,7 +1691,7 @@ export function activeProviderView(settings: AnycodeSettings): ActiveProviderVie
     ...(connection.includeUsage !== undefined ? { includeUsage: connection.includeUsage } : {}),
     // Same conditional-spread discipline: `false` is a MEANING here too —
     // an explicit opt-out that must reach the host-env emission unharmed.
-    ...(connection.preserveReasoning !== undefined ? { preserveReasoning: connection.preserveReasoning } : {}),
+    ...((override?.preserveReasoning ?? connection.preserveReasoning) !== undefined ? { preserveReasoning: override?.preserveReasoning ?? connection.preserveReasoning } : {}),
     maxOutputTokens: connection.maxOutputTokens,
     contextWindowTokens: override?.contextWindowTokens ?? connection.contextWindowTokens,
     contextWindowModel: override?.contextWindowTokens !== undefined ? model : connection.contextWindowModel,

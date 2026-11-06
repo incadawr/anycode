@@ -12,7 +12,7 @@ import { RoleHealthCache } from "./role-route.js";
 import { ScriptedModelPort,textStep } from "./test-harness.js";
 
 describe("production core switch resolver",() => {
-  it("loads workspace instructions and extensions, browser tools and model-specific inline children",async () => {
+  it.each([undefined, false, true])("loads workspace instructions, model-specific children and replay overrides (shell=%s)",async shellReplay => {
     const dir=await mkdtemp(join(tmpdir(),"core-resolver-"));
     const workspace=join(dir,"workspace"),home=join(dir,"home"),settingsPath=join(dir,"settings.json");
     const database=new SqlitePersistenceAdapter(":memory:");
@@ -21,6 +21,7 @@ describe("production core switch resolver",() => {
     const cleanup=vi.fn();
     const preview:PreviewPort={open:vi.fn(async () => ({ok:false as const,error:"unused"})),screenshot:vi.fn(async () => ({ok:false as const,error:"unused"})),
       read:vi.fn(async () => ({ok:true as const,value:{previewId:"preview",url:"http://localhost",text:"browser from candidate"}}))};
+    const endpoints=new Map<string,{providerName?:string;preserveReasoning?:boolean}>();
     const ports=new Map<string,ScriptedModelPort>();
     let config:AgentLoopConfig | undefined;
     let runtime:import("./session.js").SwitchRuntime | import("./engines/session-engine.js").SessionEngine | undefined;
@@ -35,17 +36,18 @@ describe("production core switch resolver",() => {
       await writeFile(join(workspace,".anycode","agents","workspace-reader.md"),"---\nname: workspace-reader\ndescription: Read project details\ntools: [Read]\n---\nRead the lighthouse instructions.\n");
       await writeFile(join(workspace,".anycode","workflows","project-flow.json"),JSON.stringify({name:"project-flow",description:"Project workflow",steps:[{id:"read",agentType:"general-purpose",promptTemplate:"Read ${input}"}]}));
       await writeFile(settingsPath,JSON.stringify({version:2,provider:{activeConnectionId:"pinned",connections:[{id:"pinned",providerId:"",model:"parent-model",models:["parent-model","child-model"],
-        modelOverrides:{"parent-model":{contextWindowTokens:64000},"child-model":{contextWindowTokens:32000,reasoningSupported:true,effortLevels:["low","high"]}}}]},
+        modelOverrides:{"parent-model":{contextWindowTokens:64000,preserveReasoning:false},"child-model":{contextWindowTokens:32000,reasoningReplayRejection:{reason:"provider-rejected",baseUrl:"https://api.anthropic.com"},reasoningSupported:true,effortLevels:["low","high"]}}}]},
         tools:{},permissions:{alwaysAllow:[]},ui:{theme:"system"},security:{allowWeakSecretStorage:false}}));
       await database.createSession({id:"logical",workspace,model:"parent-model",mode:"plan"});
       const runtimeId=database.ensureRuntimeSession("logical").activeSegmentId;
       const resolver=createProductionCoreResolver({workspace,home,sessionId:"logical",runtimeId,connectionId:"pinned",database,broker,rules:new SessionPermissionRules(),
-        sourceEnv:{ANYCODE_MODEL:"parent-model",ANYCODE_API_KEY:"fixture-key",ANYCODE_BASE_URL:"http://fixture",ANYCODE_SETTINGS_PATH:settingsPath,
+        sourceEnv:{ANYCODE_MODEL:"parent-model",ANYCODE_API_KEY:"fixture-key",ANYCODE_BASE_URL:"https://api.anthropic.com",ANYCODE_SETTINGS_PATH:settingsPath,
+          ANYCODE_REASONING_HISTORY:"none", ANYCODE_PRESERVE_REASONING:String(shellReplay ?? false), ...(shellReplay === undefined ? {ANYCODE_PRESERVE_REASONING_FROM_SETTINGS:"1"} : {}),
           ANYCODE_CHILD_MODELS:JSON.stringify(["parent-model","child-model"]),ANYCODE_REASONING_EFFORT:"high"},
         projectTrusted:true,health:new RoleHealthCache(),preview,fullBrowserAccess:() => false,mcpSecrets:() => undefined,
         createRouting:async () => ({port:routing,cleanup,configure:next => {bindRuntimeOrchestration(next.engine,{ownerSessionId:"logical",port:routing,baseMode:() => next.engine.mode()});}}),
         ownsRuntime:() => true,notifyModeChanged:() => {},refreshModelSettings:() => {},sendProviderEvent:() => {},
-        createModelPort:endpoint => {const port=new ScriptedModelPort([textStep("candidate answer"),textStep("workflow answer"),textStep("other answer")]);ports.set(endpoint.model,port);return port;},
+        createModelPort:endpoint => {endpoints.set(endpoint.model,endpoint);const port=new ScriptedModelPort([textStep("candidate answer"),textStep("workflow answer"),textStep("other answer")]);ports.set(endpoint.model,port);return port;},
       });
       const factory=createSwitchEngineFactory({engineSwitchEnabled:true,workspace,sessionId:"logical",resolveCore:async request => {
         const resolved=await resolver(request);config=resolved?.options.config;return resolved;
@@ -68,6 +70,8 @@ describe("production core switch resolver",() => {
       const childRequest=ports.get("child-model")!.requests[0]!;
       expect(childRequest.system).toContain("lighthouse marker");
       expect(childRequest.reasoningEffort).toBe("high");
+      expect(endpoints.get("parent-model")).toMatchObject({providerName:"Anthropic",reasoningHistory:"none",preserveReasoning:shellReplay ?? false});
+      expect(endpoints.get("child-model")).toMatchObject({providerName:"Anthropic",reasoningHistory:"none",preserveReasoning:shellReplay,reasoningReplayRejected:true});
       expect(config.registry.list()).toEqual(expect.arrayContaining(["BrowserOpen","BrowserRead","BrowserScreenshot","BrowserClick","BrowserEval","Skill","Workflow","ListConnections"]));
       await expect(config.subagents!.run({agentType:"general-purpose",description:"Unknown child model",prompt:"read",model:"foreign-model"},{})).resolves.toMatchObject({status:"error"});
     } finally {

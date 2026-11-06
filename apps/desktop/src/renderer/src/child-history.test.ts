@@ -102,3 +102,10 @@ describe("projectChildHistoryResult", () => {
     expect(second.blocks).toHaveLength(3);
   });
 });
+
+it("omits blank assistant history plates and preserves leading whitespace", () => {
+  const state = projectChildHistoryResult({ok:true,items:[{id:"a",createdAt:1,message:{role:"assistant",content:[
+    {type:"text",text:""},{type:"text",text:" \n"},{type:"text",text:"  Answer"},
+  ]}}]});
+  expect(state.kind === "blocks" ? state.blocks : []).toEqual([{kind:"assistant_text",id:"a:2",text:"  Answer"}]);
+});

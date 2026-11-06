@@ -110,10 +110,11 @@ export interface EndpointConfig {
    */
   declaredEffortLevels?: readonly ReasoningEffort[];
   /**
-   * Global reasoning replay override. Applies to enabled catalog providers and
-   * custom endpoints; other catalog providers remain off.
+   * Reasoning replay override for any endpoint. Absent uses the transport/catalog policy.
    */
   preserveReasoning?: boolean;
+  /** Endpoint-matching rejection affects Auto only; explicit choices remain senior. */
+  reasoningReplayRejected?: boolean;
   reasoningHistory?: "none" | "full" | `factual_${number}`;
   reasoningCompactorModel?: string;
   /**

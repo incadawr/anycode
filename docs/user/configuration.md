@@ -193,9 +193,10 @@ metadata. An invalid value is ignored with a warning.
 
 `ANYCODE_REASONING_HISTORY` selects reasoning replay for new responses:
 
-- Unset: use the existing catalog policy and `ANYCODE_PRESERVE_REASONING` override.
+- Unset: replay returned reasoning unless the provider has an explicit exception.
+  Per-model settings and `ANYCODE_PRESERVE_REASONING` can override this default.
 - `none`: omit reasoning from provider requests.
-- `full`: replay the original reasoning under the existing provider policy.
+- `full`: replay the original reasoning under the same default and overrides.
 - `factual_N`: generate one factual summary per response at low effort, then replay
   that fixed summary. `N` must be a positive integer, for example `factual_500`.
 
@@ -204,19 +205,22 @@ per-provider support table (wire fields, documentation citations, and measured
 results) lives in the developer docs at
 [reasoning-history.md](../development/reasoning-history.md).
 
-For a custom endpoint or a vLLM connection, replay is off by default and can be
-turned on per connection: in the connection drawer's advanced settings, set
-**Reasoning replay** to On (Automatic uses the provider's own policy, which for
-these endpoints is off; Off also stops replay on a provider that normally
-replays). It applies to new sessions and is overridden by
-`ANYCODE_PRESERVE_REASONING` in the launch environment.
+Reasoning replay applies to each model separately, including catalog, custom
+and vLLM connections. In the connection drawer's model settings, **Reasoning
+replay** offers Automatic, On and Off. Automatic replays returned reasoning
+unless the provider has an explicit exception. On or Off overrides that policy
+for the selected model; select a model before changing this setting. It applies
+to new sessions and is overridden by `ANYCODE_PRESERVE_REASONING` in the launch
+environment. Responses replays only original encrypted reasoning; text-only
+reasoning and factual summaries are not sent back.
 
 The compactor uses the current endpoint and model. Set
 `ANYCODE_REASONING_COMPACTOR_MODEL` to select another model on that endpoint.
 Original reasoning and metadata remain in history for audit; modified text is
 sent without the original signature. Provider and route gates still apply;
-Responses reasoning replay remains disabled. Endpoint compatibility with changed
-thinking must be established separately before running an experiment.
+Responses replays only original encrypted reasoning, excluding modified text
+and factual summaries. Endpoint compatibility with changed thinking must be
+established separately before running an experiment.
 
 The summary includes goal, verified facts, decision and constraints, unverified
 hypotheses, and next intended action. Its length is conservatively limited to

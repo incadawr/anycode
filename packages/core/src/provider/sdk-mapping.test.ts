@@ -290,7 +290,7 @@ describe("toSdkMessages: reasoning replay (GitHub #41)", () => {
   });
 
   it("chat-completions with replay on: a tool-call message without reasoning gets reasoning_content \"\"", () => {
-    const chat: ReasoningSource = { transport: "openai-chat-completions", baseUrl: "http://gw/v1", model: "deepseek" };
+    const chat: ReasoningSource = { transport: "openai-chat-completions", baseUrl: "http://gw/v1", model: "deepseek", provider: "DeepSeek" };
     const [toolTurn] = toSdkMessages([assistant(call)], "openai-chat-completions", chat);
     expect(toolTurn).toMatchObject({ providerOptions: { openaiCompatible: { reasoning_content: "" } } });
     // Text-only turns, routes with replay off and anthropic are untouched.
@@ -307,4 +307,26 @@ describe("toSdkMessages: reasoning replay (GitHub #41)", () => {
     expect(sameReasoningSource(zai, { ...zai, model: "x" })).toBe(false);
     expect(sameReasoningSource(zai, { ...zai, baseUrl: zai.baseUrl + "///" })).toBe(true);
   });
+});
+
+it("fills empty tool reasoning only after the same custom route produced reasoning", () => {
+  const route: ReasoningSource = { transport:"openai-chat-completions", baseUrl:"https://fixture.invalid", model:"plain" };
+  const messages: ChatMessage[] = [
+    { role:"assistant", content:[{type:"reasoning",text:"observed thought",source:route}] },
+    { role:"assistant", content:[{type:"tool_call",toolCallId:"c",toolName:"Read",input:{}}] },
+  ];
+  expect(toSdkMessages(messages, route.transport as "openai-chat-completions", route)[1]).toHaveProperty("providerOptions.openaiCompatible.reasoning_content", "");
+  for (const changed of [{model:"other"}, {baseUrl:"https://other.invalid"}]) {
+    expect(toSdkMessages(messages, "openai-chat-completions", {...route,...changed})[1]).not.toHaveProperty("providerOptions");
+  }
+  expect(toSdkMessages(messages.slice(1), "openai-chat-completions", {...route,requireReasoningContent:true})[0]).toHaveProperty("providerOptions.openaiCompatible.reasoning_content", "");
+});
+
+it("omits empty assistant content loaded from old history", async () => {
+  const { ConversationHistory } = await import("../context/history.js");
+  const history = new ConversationHistory({ initial: [
+    { id: "old", createdAt: 1, kind: "normal", message: { role: "assistant", content: [] } },
+  ] });
+  history.append({ role: "user", content: "next" });
+  expect(toSdkMessages(history.toMessages(), "openai-responses")).toEqual([{ role: "user", content: "next" }]);
 });

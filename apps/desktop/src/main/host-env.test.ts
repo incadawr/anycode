@@ -3261,3 +3261,16 @@ it("resolves a recognizer using its own Go model and snapshot", async () => {
   configured.recognizer.modelId = "gemini-4-argon";
   expect(await resolveRecognizerConfig(configured, vaultSecret("test"))).toBeUndefined();
 });
+
+it("projects the effective model's replay choice while the shell override stays strongest", async () => {
+  const connection = { ...connectionFixture({ connectionId: "c", id: "z-ai", model: "a" }), modelOverrides: { a: { preserveReasoning: false }, b: { preserveReasoning: true } } };
+  const configured = { ...settings(), provider: providerV2Multi("c", [connection]) };
+  for (const [model, expected] of [["a", "false"], ["b", "true"], ["other", undefined]] as const) {
+    const env = await buildHostEnv({ bootEnv: { ANYCODE_MODEL: model }, settings: configured, getSecret: noSecret });
+    expect(env.ANYCODE_PRESERVE_REASONING).toBe(expected);
+    expect(env.ANYCODE_PRESERVE_REASONING_FROM_SETTINGS).toBe(expected === undefined ? undefined : "1");
+    const shell = await buildHostEnv({ bootEnv: { ANYCODE_MODEL: model, ANYCODE_PRESERVE_REASONING: "0" }, settings: configured, getSecret: noSecret });
+    expect(shell.ANYCODE_PRESERVE_REASONING).toBe("0");
+    expect(shell.ANYCODE_PRESERVE_REASONING_FROM_SETTINGS).toBeUndefined();
+  }
+});

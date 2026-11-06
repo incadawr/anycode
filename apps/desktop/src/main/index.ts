@@ -1,3 +1,4 @@
+import { recordReasoningReplayRejection } from "./reasoning-replay.js";
 import { claudeOrchestrationEnabled } from "./claude-orchestration-feature.js";
 import { connectionContextWindow } from "../shared/connection-context-window.js";
 import type { RecognizerCatalogInfo } from "./host-env.js";
@@ -2979,6 +2980,11 @@ void app.whenReady().then(async () => {
     // throttle-gates to one write per 30 s per connection, sparse-merges
     // `lastQuota` under the settings lock and never fires `onMutation` — the
     // push below is the renderer's only signal, exactly like health above.
+    onReasoningReplayRejection: (connectionId, message) => {
+      void recordReasoningReplayRejection({ settingsPath, logger: fileLogger }, connectionId, message)
+        .then(persisted => { if (persisted) sendToMainWindow(win, PROVIDER_QUOTA_CHANGED_CHANNEL); })
+        .catch(error => fileLogger.warn?.("[main] failed to record replay rejection", error));
+    },
     onProviderQuotaEvent: (connectionId, message) => {
       handleProviderQuotaMessage(
         { settingsPath, logger: fileLogger },

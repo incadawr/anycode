@@ -48,7 +48,7 @@ import type {
   SettingsMutationResult,
   TokenRates,
 } from "../../../shared/settings.js";
-import { applyModelReasoningOverride, contextWindowTokensField, modelCapabilitiesFor, modelOverrideFor } from "../../../shared/model-overrides.js";
+import { applyModelReasoningOverride, contextWindowTokensField, modelCapabilitiesFor, modelReasoningReplay, modelReplayPolicy, modelOverrideFor } from "../../../shared/model-overrides.js";
 import { mergeModelIds, normalizeModelId } from "../../../shared/settings.js";
 import type { CustomProviderMutationReason, CustomProviderMutationResult, CustomProviderUpdateRequest, FetchModelsOutcome } from "../anycode-window.js";
 import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
@@ -453,6 +453,11 @@ export function usageSelectionInitialValue(connection: ProviderConnection | unde
   return "auto";
 }
 
+export function reasoningReplayAutoLabel(connection: ProviderConnection | undefined, model: string, baseUrl: string, selection: ReasoningReplaySelection): string {
+  return selection === "auto" && modelReplayPolicy(connection, model, baseUrl).reasoningReplayRejected
+    ? "Auto (off: provider rejected)" : "Automatic (provider default)";
+}
+
 /**
  * Wire value for an UPDATE: Automatic is the channel's `""` clear sentinel
  * (delete the key back to the transport default), On/Off are real booleans.
@@ -501,9 +506,9 @@ export function usageEnvHint(envOverrides: readonly string[]): string | null {
 // ── GitHub #41: the per-connection reasoning-replay opt-in ──
 
 /** Visible one-liner under the reasoning-replay select (full copy in the tooltip). */
-export const REASONING_REPLAY_ONELINER = "Applies to custom endpoints and vLLM.";
+export const REASONING_REPLAY_ONELINER = "Applies to this model only.";
 export const REASONING_REPLAY_HELP =
-  "Replay the model's reasoning (thinking) blocks back to the endpoint on each turn, the way tool-calling models expect. Automatic uses the provider's own policy — for a custom endpoint or vLLM that means Off. On or Off here overrides the provider policy: Off also stops replay on a provider that normally replays. Applies to new sessions.";
+  "Replay the model's reasoning (thinking) blocks back to the endpoint on each turn, the way tool-calling models expect. Automatic replays returned reasoning unless the provider has an explicit exception. This choice is saved separately for each model. On or Off here overrides the provider policy: Off also stops replay on a provider that normally replays. Applies to new sessions. Responses replays only original encrypted reasoning; text-only reasoning and factual summaries are not sent back.";
 
 /**
  * The drawer's three-state select for reasoning replay, mirroring
@@ -516,8 +521,9 @@ export type ReasoningReplaySelection = "auto" | "on" | "off";
 
 /** The select value a saved connection opens with: an explicit boolean wins, absence is Automatic. */
 export function reasoningReplayInitialValue(connection: ProviderConnection | undefined): ReasoningReplaySelection {
-  if (connection?.preserveReasoning === true) return "on";
-  if (connection?.preserveReasoning === false) return "off";
+  const value = modelOverrideFor(connection, connection?.model?.trim() ?? "")?.preserveReasoning ?? connection?.preserveReasoning;
+  if (value === true) return "on";
+  if (value === false) return "off";
   return "auto";
 }
 
@@ -537,33 +543,18 @@ export function reasoningReplayCreateValue(selection: ReasoningReplaySelection):
   return selection === "auto" ? undefined : selection === "on";
 }
 
-/**
- * Whether the control belongs on screen: core's replay gate consults this
- * override only where the catalog has no policy of its own — the builtin
- * `custom` sentinel, a saved `custom:<id>` record, and `vllm` (all resolve
- * `providerName` undefined at the host). A catalog entry's own
- * `preserveReasoning` flag governs, so offering the switch there would invite
- * an override nobody needs. Exported for direct testing (no jsdom).
- */
+/** Every connection can override replay for a model on a supported transport. */
 export function reasoningReplayVisible(providerId: string | undefined): boolean {
-  return providerId === "custom" || providerId === "vllm" || isCustomRecordProviderId(providerId ?? "");
+  return providerId !== undefined;
 }
 
-/**
- * Whether the control belongs on screen for the RESOLVED transport: core's
- * replay gate (`model-port.ts` `reasoningReplaySource`) replays reasoning
- * only on the two message transports — openai-responses is out of scope
- * (with `store: false` its reasoning items would need encrypted content) —
- * so there the select would be inert no matter what it saves. Resolved
- * exactly like `promptCacheVisible`/`usageVisible` (an empty local transport
- * means the provider's default). Exported for direct testing (no jsdom).
- */
+/** Store the model's preference for every transport; Responses replays original encrypted reasoning only. */
 export function reasoningReplayTransportVisible(
   transport: ProviderTransportId | "",
   defaultTransport: ProviderTransportId | undefined,
 ): boolean {
   const resolved = transport !== "" ? transport : (defaultTransport ?? "anthropic-messages");
-  return resolved === "anthropic-messages" || resolved === "openai-chat-completions";
+  return resolved === "anthropic-messages" || resolved === "openai-chat-completions" || resolved === "openai-responses";
 }
 
 /**
@@ -715,14 +706,8 @@ export function buildConnectionUpdatePayload(params: {
     // control is hidden for a non-Chat-Completions transport, so switching
     // away and back never silently drops a saved choice.
     includeUsage: usageSelectionUpdateValue(params.usage),
-    // Sent unconditionally (GitHub #41), same rationale: Automatic is the
-    // channel's `""` clear sentinel, On/Off persist a real boolean (`false`
-    // is a MEANING — an explicit opt-out). Also sent while the control is
-    // hidden for a catalog provider, so a provider switch never silently
-    // drops a saved custom-endpoint choice. The one exception is a transport
-    // that cannot replay at all (`replayHidden`): there the value is omitted
-    // — nothing the user cannot see gets written, nothing gets deleted.
-    ...(params.replayHidden === true ? {} : { preserveReasoning: reasoningReplayUpdateValue(params.replay) }),
+    // Without a model, omit this preference so unrelated edits can still save.
+    ...(params.replayHidden === true || params.model.trim() === "" ? {} : { preserveReasoning: reasoningReplayUpdateValue(params.replay) }),
   };
 }
 
@@ -1772,27 +1757,11 @@ export function ConnectionDrawerFields({
     transport,
     isNewCustomEndpoint ? CUSTOM_KIND_DEFAULT_TRANSPORT[customKind] : selectedEntry?.defaultTransport,
   );
-  // GitHub #41: the reasoning-replay select is shown only where the catalog has
-  // no own policy — the custom sentinel, a custom:<id> record, and vllm.
-  const replayCatalogMatch = reasoningReplayBaseUrlMatch(catalog, selectedEntry?.catalogBaseUrl);
   const replayTransportShown = reasoningReplayTransportVisible(
     transport,
     isNewCustomEndpoint ? CUSTOM_KIND_DEFAULT_TRANSPORT[customKind] : selectedEntry?.defaultTransport,
   );
-  const replayShown =
-    reasoningReplayVisible(effectiveProviderId) &&
-    // A transport core's replay gate cannot serve (openai-responses) would
-    // keep the select inert however it is saved — hide it there too.
-    replayTransportShown &&
-    // GitHub #41 review: a custom:<id> record whose base URL normalises onto a
-    // BUILTIN catalog entry is governed by that entry's own flag — the host
-    // resolves `providerName` by base URL (`matchCatalogEntryByBaseUrl`) and
-    // core's replay gate (`model-port.ts` `reasoningReplaySource`) returns
-    // undefined for a catalog entry without the flag BEFORE it ever consults
-    // the connection override, so On (and Off) would be silently inert. Hide
-    // the select there; a matched entry WITH the flag keeps it — the override's
-    // explicit opt-out (`false` disables replay) still bites in that direction.
-    (replayCatalogMatch === undefined || replayCatalogMatch.preserveReasoning === true);
+  const replayShown = reasoningReplayVisible(effectiveProviderId) && replayTransportShown;
   const authKind = selectedEntry?.authKind ?? "api_key";
   // A custom:<id> connection's credential lives on the custom provider's OWN
   // shared vault key (exactly what main reads for it); everything else uses its
@@ -1902,6 +1871,8 @@ export function ConnectionDrawerFields({
     if (!contextWindow.raw.trim()) cwDefaultHint = `catalog: ${Math.min(dictionaryActive.contextWindow, dictionaryActive.usableContextWindow ?? dictionaryActive.contextWindow)}`;
     if (dictionaryActive.imageInput && imageInput === "auto") imageInputHint = "catalog: vision";
   }
+  const replayRoute = automaticGo ? resolveOpenCodeGoEndpointPolicy(effectiveProviderId, effectiveFormModel.trim(), targetConnection?.modelRoutes) : undefined;
+  const replayBaseUrl = replayRoute?.kind === "route" ? replayRoute.route.baseUrl : baseUrl.trim() || selectedEntry?.catalogBaseUrl || "";
   const liveReasoning = targetConnection?.modelCapabilities?.[effectiveFormModel.trim()];
   const effectiveReasoningLevels = reasoningSupported === false ? undefined : effortLevels.length ? effortLevels : (reasoningLevels ?? (liveReasoning?.reasoning !== undefined ? undefined : !automaticGo && !catalogMatchDisabled && dictionaryMatch?.reasoning ? (dictionaryMatch.effortLevels ?? ["off", "low", "medium", "high"]) : undefined));
   const imageInputFeedHint = proxySnapshot === null ? null : imageInputEnvHint(proxySnapshot.envOverrides);
@@ -1932,6 +1903,8 @@ export function ConnectionDrawerFields({
       setCatalogMatchDisabled(target?.catalogMatchDisabled === true);
       setCatalogMatchDirty(false);
       setReasoningSupported(target?.reasoningSupported);
+      const replay = force ? undefined : modelReasoningReplay(saved ?? targetConnection, effective.trim());
+      setReplaySelection(replay === undefined ? "auto" : replay ? "on" : "off");
       setModelEffort(target?.reasoningEffort ?? "");
       setEffortLevels(target?.effortLevels ?? []);
       setEffortLevelsDirty(false);
@@ -1976,7 +1949,7 @@ export function ConnectionDrawerFields({
     const usageCreateValue = usageSelectionCreateValue(usageSelection);
     // GitHub #41: same create discipline for the reasoning-replay override;
     // a transport that cannot replay never carries the hidden select's value.
-    const replayCreateValue = replayTransportShown ? reasoningReplayCreateValue(replaySelection) : undefined;
+    const replayCreateValue = replayTransportShown && model.trim() !== "" ? reasoningReplayCreateValue(replaySelection) : undefined;
     const req = buildCustomProviderCreateRequest({
       name: customName,
       baseUrl: customBaseUrl,
@@ -2135,7 +2108,7 @@ export function ConnectionDrawerFields({
     // GitHub #41: same create discipline for the reasoning-replay override
     // (visible here only for the vllm template); a transport that cannot
     // replay never carries the hidden select's value.
-    const replayCreateValue = replayTransportShown ? reasoningReplayCreateValue(replaySelection) : undefined;
+    const replayCreateValue = replayTransportShown && createModel.trim() !== "" ? reasoningReplayCreateValue(replaySelection) : undefined;
     const commitVersion = onCommitBegin?.() ?? 0;
     onBusyChange?.(true);
     setCreating(true);
@@ -2684,37 +2657,6 @@ export function ConnectionDrawerFields({
         </>
       )}
 
-      {/* GitHub #41: per-connection reasoning-replay override, shown only for
-          custom endpoints and vLLM — the connections core's replay gate has no
-          catalog policy for. A hidden control keeps its state, so switching the
-          provider back restores the selection and a saved choice is never
-          dropped by a provider edit. */}
-      {replayShown && (
-        <>
-          <label className="settings-field">
-            <span className="settings-field-label">
-              Reasoning replay <FieldHelp text={REASONING_REPLAY_HELP} />
-            </span>
-            <select
-              className="settings-field-select"
-              value={replaySelection}
-              disabled={readOnly}
-              onChange={(e) => setReplaySelection(e.target.value as ReasoningReplaySelection)}
-            >
-              <option value="auto">Automatic (provider default)</option>
-              <option value="on">On</option>
-              <option value="off">Off</option>
-            </select>
-            <span className="settings-field-hint">{REASONING_REPLAY_ONELINER}</span>
-          </label>
-          {replayEnvHintText !== null && (
-            <div className="settings-field-hint" role="note">
-              {replayEnvHintText}
-            </div>
-          )}
-        </>
-      )}
-
       {/* one segmented control. Default writes "" (the
           provider default), the presets write the same values the chips did,
           Custom reveals the number input. `step={1}` on the input on purpose:
@@ -2764,6 +2706,33 @@ export function ConnectionDrawerFields({
           tokens" above (whole number in [1024, 1000000], blank = catalog/
           assumed window); a Model edit loads that model's own saved window. */}
       <div className="connection-drawer-scope" title={MODEL_ONLY_BADGE_TITLE}>The following settings apply to this model only</div>
+      {/* This replay preference belongs to the selected model. */}
+      {replayShown && (
+        <>
+          <label className="settings-field">
+            <span className="settings-field-label">
+              Reasoning replay <FieldHelp text={REASONING_REPLAY_HELP} />
+            </span>
+            <select
+              className="settings-field-select"
+              value={replaySelection}
+              disabled={readOnly || effectiveFormModel.trim() === ""}
+              onChange={(e) => setReplaySelection(e.target.value as ReasoningReplaySelection)}
+            >
+              <option value="auto">{reasoningReplayAutoLabel(targetConnection, effectiveFormModel.trim(), replayBaseUrl, replaySelection)}</option>
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+            <span className="settings-field-hint">{REASONING_REPLAY_ONELINER}</span>
+          </label>
+          {replayEnvHintText !== null && (
+            <div className="settings-field-hint" role="note">
+              {replayEnvHintText}
+            </div>
+          )}
+        </>
+      )}
+
       <label className="settings-field">
         <span className="settings-field-label">
           Context window (tokens) <FieldHelp text={CONTEXT_WINDOW_HELP} />

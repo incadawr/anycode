@@ -687,6 +687,18 @@ export const hostDiagnosticSink: DiagnosticSink = (event) => {
   }
 };
 
+/** Route the fixed notice through the session journal and the narrow observation to main. */
+export function createReplayDiagnosticSink(
+  send: (observation: import("../shared/reasoning-replay.js").ReasoningReplayRejection) => void,
+  emit: (event: Extract<import("@anycode/core").AgentEvent, { type: "engine_notice" }>) => void,
+): DiagnosticSink {
+  return event => {
+    if (event.kind !== "reasoning_replay_rejected") return hostDiagnosticSink(event);
+    send({ type: "reasoning_replay_rejected", reason: event.reason, baseUrl: event.baseUrl, model: event.model });
+    emit({ type: "engine_notice", level: "warning", message: "Reasoning replay disabled: provider rejected reasoning replay options. Retrying without replay." });
+  };
+}
+
 // ── MainCredentialProvider: host-side resolveApiKey for oauth mode (design §3.3) ──
 
 /** Per-request timeout before falling back to the fork's static env key. */

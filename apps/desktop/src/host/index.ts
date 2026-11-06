@@ -1,3 +1,4 @@
+import { modelReplayPolicy } from "../shared/model-overrides.js";
 import { mapProgressToEvent } from "@anycode/core";
 import { savedNativeRecovery } from "./native-base.js";
 import { claudeOrchestrationBootEnabled } from "../shared/claude-orchestration-feature.js";
@@ -392,7 +393,7 @@ import {
   buildResolveApiKey,
   childRetryPolicy,
   createPreviewRpcClient,
-  hostDiagnosticSink,
+  createReplayDiagnosticSink,
   isChildSessionBoot,
   parseHostArgs,
   parseHostArgsForFailure,
@@ -1032,6 +1033,10 @@ function translatePreviewEvent(message: PreviewEventMessage): PreviewConsoleAgen
 const PREVIEW_CONSOLE_TURN_ID = "preview-console";
 
 let session: Session | null = null;
+const hostDiagnosticSink = createReplayDiagnosticSink(
+  message => process.parentPort.postMessage(message),
+  event => session?.emitAgentEvent(event),
+);
 let prepareChildPrompt = (prompt: string): string => prompt;
 /**
  * late-bound Session reference for the ENGINE-SESSION classifier
@@ -3119,7 +3124,6 @@ async function boot(): Promise<void> {
           // budgets and no field it never advertised. Conditional, so an
           // undeclared connection keeps today's request bytes.
           ...(envConfig.effortLevels !== undefined ? { declaredEffortLevels: envConfig.effortLevels } : {}),
-          ...(envConfig.preserveReasoning !== undefined ? { preserveReasoning: envConfig.preserveReasoning } : {}),
           ...(resolveApiKey !== undefined ? { resolveApiKey } : {}),
           ...(includeUsage ? { includeUsage: true } : {}),
           ...(sessionHeaders !== undefined ? { headers: sessionHeaders } : {}),
@@ -3138,6 +3142,7 @@ async function boot(): Promise<void> {
           onQuotaHeaders: () => {},
           networkWaiter: desktopNetworkWaiter,
         }, routeSnapshot);
+      Object.assign(endpoint, modelReplayPolicy(current ?? undefined, m, endpoint.baseUrl, process.env.ANYCODE_PRESERVE_REASONING_FROM_SETTINGS === "1" ? undefined : envConfig.preserveReasoning));
       if (endpoint.automaticModelRouting) {
         endpoint.includeUsage = resolveIncludeUsage(endpoint.transport, envConfig.includeUsage);
         endpoint.resolveEndpointForModel = modelId => {
@@ -3145,6 +3150,7 @@ async function boot(): Promise<void> {
           if (latest) routeSnapshot = latest.modelRoutes;
           const target = applyAutomaticModelRoute({ ...endpoint, model: modelId }, routeSnapshot);
           target.includeUsage = resolveIncludeUsage(target.transport, envConfig.includeUsage);
+          Object.assign(target, modelReplayPolicy(latest ?? undefined, modelId, target.baseUrl, process.env.ANYCODE_PRESERVE_REASONING_FROM_SETTINGS === "1" ? undefined : envConfig.preserveReasoning));
           return target;
         };
       }

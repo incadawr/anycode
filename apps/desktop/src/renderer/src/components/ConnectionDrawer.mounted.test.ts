@@ -240,20 +240,17 @@ it("shows the reasoning-replay select on a custom-record connection and persists
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
 
-it("hides the reasoning-replay select for a catalog provider and clears with Automatic", async () => {
+it("shows the reasoning-replay select for a catalog provider", async () => {
   const connection = { id:"c1", providerId:"glm", model:"glm-5.3" };
   const rig = catalogRig(connection);
   const { container, root } = await mountEdit(connection, rig);
   try {
-    // Catalog entries keep their own policy — the override has nothing to do.
-    expect(replayField(container)).toBeUndefined();
+    // Catalog models accept explicit replay preferences.
+    expect(replayField(container)).toBeDefined();
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
 
-it("hides the reasoning-replay select on a custom record whose base URL lands on a flagless catalog entry", async () => {
-  // The record's endpoint IS api.openai.com — the host resolves providerName
-  // "OpenAI" by base URL and core's replay gate returns undefined BEFORE it
-  // reads the connection override, so On would be silently inert: no select.
+it("shows replay on a custom record matching a catalog entry without a flag", async () => {
   const connection = { id:"c2", providerId:"custom:fixture", model:"gpt-x" };
   const rig = catalogRig(connection);
   const { container, root } = await mountEdit(connection, rig, [
@@ -261,13 +258,11 @@ it("hides the reasoning-replay select on a custom record whose base URL lands on
     { id:"custom:fixture", name:"OpenAI mirror", authKind:"api_key", models:[], catalogBaseUrl:"https://api.openai.com/v1/" },
   ]);
   try {
-    expect(replayField(container)).toBeUndefined();
+    expect(replayField(container)).toBeDefined();
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
 
 it("keeps the reasoning-replay select when the base-URL-matched catalog entry carries the flag", async () => {
-  // A matched entry WITH preserveReasoning keeps the override meaningful in
-  // the opt-out direction (explicit false disables replay), so it stays shown.
   const connection = { id:"c3", providerId:"custom:fixture", model:"glm-5.3" };
   const rig = catalogRig(connection);
   const { container, root } = await mountEdit(connection, rig, [
@@ -300,7 +295,7 @@ it.each(["on", "off", "auto"] as const)("persists reasoning replay %s through th
       // Automatic is the ABSENT key, never false (create has no "" sentinel).
       await act(async () => { await vi.waitFor(async () => expect("preserveReasoning" in ((await loadSettings(rig.path)).settings.provider.connections[0] ?? {})).toBe(false)); });
     } else {
-      await act(async () => { await vi.waitFor(async () => expect((await loadSettings(rig.path)).settings.provider.connections[0]?.preserveReasoning).toBe(setting === "on")); });
+      await act(async () => { await vi.waitFor(async () => expect((await loadSettings(rig.path)).settings.provider.connections[0]?.modelOverrides?.m1?.preserveReasoning).toBe(setting === "on")); });
     }
   } finally { await act(async () => root.unmount()); container.remove(); rig.cleanup(); }
 });
@@ -869,4 +864,32 @@ it("previews saved Go route reasoning when a model override is reset to Auto", a
     const effort = container.querySelector<HTMLSelectElement>('select[aria-label="Reasoning effort"]')!;
     expect([...effort.options].map(option => option.value).filter(Boolean)).toEqual(["low", "medium", "high", "xhigh"]);
   } finally { await act(async () => root.unmount()); container.remove(); }
+});
+
+it("loads each model's replay preference on switching and reopening", async () => {
+  const connection = { id:"c", providerId:"custom:test", model:"a", models:["a", "b"], modelOverrides:{ a:{preserveReasoning:false}, b:{preserveReasoning:true} } };
+  const rig = catalogRig(connection);
+  const { container, root } = await mountEdit(connection, rig);
+  try {
+    expect(replayField(container)?.value).toBe("off");
+    const choose = async (model: string) => {
+      await act(async () => container.querySelector<HTMLButtonElement>(".connection-drawer-model-open")!.click());
+      await act(async () => container.querySelector<HTMLButtonElement>(`button[aria-label="Set ${model} as default"]`)!.click());
+      await act(async () => container.querySelector<HTMLButtonElement>(".connection-drawer-model-done")!.click());
+    };
+    await choose("b");
+    expect(replayField(container)?.value).toBe("on");
+    await choose("a");
+    expect(replayField(container)?.value).toBe("off");
+  } finally { await act(async () => root.unmount()); container.remove(); }
+  const reopened = await mountEdit({ ...connection, model:"b" }, rig);
+  try { expect(replayField(reopened.container)?.value).toBe("on"); }
+  finally { await act(async () => reopened.root.unmount()); reopened.container.remove(); }
+});
+
+it("disables reasoning replay until a model is selected", async () => {
+  const connection = { id:"c", providerId:"custom:test", model:"" };
+  const { container, root } = await mountEdit(connection, catalogRig(connection));
+  try { expect(replayField(container)?.disabled).toBe(true); }
+  finally { await act(async () => root.unmount()); container.remove(); }
 });

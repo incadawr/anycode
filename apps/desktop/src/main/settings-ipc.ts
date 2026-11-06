@@ -717,14 +717,7 @@ export function projectCatalogSummary(providers: readonly CatalogEntryShape[]): 
     })),
     ...(entry.baseUrl === "" ? { needsBaseUrl: true } : { catalogBaseUrl: entry.baseUrl }),
     ...(entry.isCustom === true ? { isCustom: true } : {}),
-    // GitHub #41 review: the entry's own reasoning-replay flag, projected only
-    // when declared (same conditional-spread precedent) so a legacy fixture
-    // stays byte-identical and absence reads exactly like core's
-    // `catalogPreservesReasoning` (flag === true). The drawer matches a
-    // `custom:<id>` record's base URL against it — for a matched entry without
-    // the flag, core's replay gate makes the override inert, so the select must
-    // not offer On.
-    ...(entry.preserveReasoning === true ? { preserveReasoning: true } : {}),
+    // Replay defaults on; explicit catalog exceptions are evaluated by core.
     // only when declared, same conditional-spread
     // precedent as above — legacy fixtures stay byte-identical.
     ...(entry.brand !== undefined ? { brand: entry.brand } : {}),
@@ -1907,12 +1900,11 @@ export async function handleConnectionCreate(deps: SettingsIpcDeps, raw: unknown
       // Streaming token-usage policy (GitHub #1): `false` is an opt-out and
       // must ride the create — conditional on `!== undefined`, never truthy.
       ...(req.includeUsage !== undefined ? { includeUsage: req.includeUsage } : {}),
-      // Reasoning-replay override: same conditional spread, `false` included.
-      ...(req.preserveReasoning !== undefined ? { preserveReasoning: req.preserveReasoning } : {}),
     };
-    if (req.catalogMatchDisabled !== undefined || req.contextWindowTokens !== undefined || req.reasoningEffort !== undefined || req.reasoningSupported !== undefined || req.effortLevels !== undefined) {
+    if (req.preserveReasoning !== undefined || req.catalogMatchDisabled !== undefined || req.contextWindowTokens !== undefined || req.reasoningEffort !== undefined || req.reasoningSupported !== undefined || req.effortLevels !== undefined) {
       if (!createContextWindowModel) return { ok: false, reason: "invalid" };
       patchModelOverride(connection, createContextWindowModel, {
+        ...(req.preserveReasoning !== undefined ? { preserveReasoning: req.preserveReasoning } : {}),
         ...(req.contextWindowTokens !== undefined ? { contextWindowTokens: req.contextWindowTokens } : {}),
         ...(req.reasoningEffort !== undefined ? { reasoningEffort: req.reasoningEffort } : {}),
         ...(req.catalogMatchDisabled !== undefined ? { catalogMatchDisabled: req.catalogMatchDisabled } : {}),
@@ -2142,23 +2134,15 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
         updatedConnection.includeUsage = req.includeUsage;
       }
     }
-    // Reasoning-replay override — identical shape to the includeUsage branch:
-    // `""` deletes the key (the catalog default is absence), a boolean sets it
-    // (`false` is a MEANING — an explicit opt-out that must reach disk).
-    if (req.preserveReasoning !== undefined) {
-      if (req.preserveReasoning === "") {
-        delete updatedConnection.preserveReasoning;
-      } else {
-        updatedConnection.preserveReasoning = req.preserveReasoning;
-      }
-    }
     // GitHub #26: patch only the requested model, preserving every sibling.
-    if (req.catalogMatchDisabled !== undefined || req.contextWindowTokens !== undefined || req.reasoningEffort !== undefined || req.reasoningSupported !== undefined || req.effortLevels !== undefined) {
+    if (req.preserveReasoning !== undefined || req.catalogMatchDisabled !== undefined || req.contextWindowTokens !== undefined || req.reasoningEffort !== undefined || req.reasoningSupported !== undefined || req.effortLevels !== undefined) {
       const effectiveModel = (req.modelOverrideModel ?? (req.model !== undefined ? req.model : existing.model))?.trim();
-      if (!effectiveModel && [req.catalogMatchDisabled, req.contextWindowTokens, req.reasoningEffort, req.reasoningSupported, req.effortLevels].some((value) => value !== undefined && value !== "")) {
+      if (!effectiveModel && [req.preserveReasoning, req.catalogMatchDisabled, req.contextWindowTokens, req.reasoningEffort, req.reasoningSupported, req.effortLevels].some((value) => value !== undefined && value !== "")) {
         return { ok: false, reason: "invalid" };
       }
       if (effectiveModel) patchModelOverride(updatedConnection, effectiveModel, {
+        ...(req.preserveReasoning !== undefined ? { preserveReasoning: req.preserveReasoning === "" ? undefined : req.preserveReasoning } : {}),
+        ...(req.preserveReasoning === true ? { reasoningReplayRejection: undefined } : {}),
         ...(req.contextWindowTokens !== undefined ? { contextWindowTokens: req.contextWindowTokens === "" ? undefined : req.contextWindowTokens } : {}),
         ...(req.reasoningEffort !== undefined ? { reasoningEffort: req.reasoningEffort === "" ? undefined : req.reasoningEffort } : {}),
         ...(req.catalogMatchDisabled !== undefined ? { catalogMatchDisabled: req.catalogMatchDisabled === "" ? undefined : req.catalogMatchDisabled } : {}),

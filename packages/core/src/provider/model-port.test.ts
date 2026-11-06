@@ -2441,3 +2441,208 @@ describe("AiSdkModelPort — review: replay gates", () => {
     });
   });
 });
+
+
+describe("reasoning replay correction", () => {
+  const config = { ...baseConfig({ maxRetries: 1 }), includeUsage: false };
+  const source = { transport: config.transport, baseUrl: config.baseUrl, model: config.model };
+  const request: ModelRequest = { ...baseRequest, temperature: 0.4, maxOutputTokens: 123,
+    messages: [{ role: "assistant", content: [
+      { type: "reasoning", text: "original thinking", source, providerMetadata: { anthropic: { signature: "signed-original" } } },
+      { type: "text", text: "answer" },
+      { type: "tool_call", toolCallId: "call", toolName: "Read", input: {} },
+    ] }, { role: "tool", content: [{ type: "tool_result", toolCallId: "call", toolName: "Read", text: "contents", status: "success" }] }, ...baseRequest.messages] };
+  const rejection = (message = "Invalid input messages: thinking block is unsupported", statusCode = 400, responseBody?: string) =>
+    new APICallError({ message, statusCode, responseBody, url: config.baseUrl, requestBodyValues: {}, isRetryable: false });
+  const fail = (error: unknown, thrown = false) => mockStreamText.mockImplementationOnce(() => fakeResult([thrown ? throwsWith(error) : part({ type: "error", error })]));
+  const ok = () => mockStreamText.mockImplementationOnce(() => fakeResult([part(finishPart)]));
+  const input = (n: number) => mockStreamText.mock.calls[n]![0];
+  const hasReplay = (n: number) => JSON.stringify(input(n).messages).includes("original thinking");
+
+  it.each([false, true])("corrects once, remembers immediately and preserves generation options (thrown=%s)", async thrown => {
+    fail(rejection(), thrown); ok(); ok();
+    const diagnostics: DiagnosticEvent[] = [];
+    const port = new AiSdkModelPort(config, event => diagnostics.push(event));
+    await collect(port.streamText(request));
+    expect(mockStreamText).toHaveBeenCalledTimes(2);
+    expect(hasReplay(0)).toBe(true); expect(hasReplay(1)).toBe(false);
+    expect(JSON.stringify(input(0).messages[0])).toBe(JSON.stringify({ role: "assistant", content: [
+      { type: "reasoning", text: "original thinking", providerOptions: { anthropic: { signature: "signed-original" } } },
+      { type: "text", text: "answer" },
+      { type: "tool-call", toolCallId: "call", toolName: "Read", input: {} },
+    ] }));
+    expect(input(1).messages.slice(1)).toEqual(input(0).messages.slice(1));
+    for (const key of ["temperature", "maxOutputTokens", "tools", "instructions", "providerOptions"]) expect(input(1)[key]).toEqual(input(0)[key]);
+    await collect(port.streamText(request));
+    expect(hasReplay(2)).toBe(false);
+    expect(diagnostics).toEqual([{ kind: "reasoning_replay_rejected", reason: "provider-rejected", baseUrl: config.baseUrl, model: config.model }]);
+  });
+
+  it("corrects an empty first replay 400 but never a later empty 400", async () => {
+    fail(rejection("")); ok();
+    await collect(new AiSdkModelPort(config, () => {}).streamText(request));
+    expect(mockStreamText).toHaveBeenCalledTimes(2);
+    mockStreamText.mockReset(); ok(); fail(rejection(""));
+    const port = new AiSdkModelPort(config, () => {});
+    await collect(port.streamText(request));
+    const events = await collect(port.streamText(request));
+    expect(events.at(-1)?.type).toBe("error");
+    expect(mockStreamText).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    [401, "input thinking unauthorized"], [403, "input reasoning permission denied"],
+    [400, "input thinking insufficient_balance"], [429, "input reasoning rate limit"],
+    [404, "input thinking model not found"], [400, "input reasoning context_length_exceeded"],
+    [400, "input reasoning invalid_api_key"], [400, "input thinking credits exhausted"],
+    [400, "input thinking model is unavailable"], [400, "Unknown model: input reasoning"], [400, "input reasoning prompt too long"],
+    [400, "thinking budget_tokens must be positive"], [400, "thinking blocks require budget_tokens"], [400, "unrelated validation failure"],
+  ])("does not classify unrelated failure %s %s", async (status, message) => {
+    fail(rejection(message, status));
+    await collect(new AiSdkModelPort({ ...config, retry: { maxRetries: 0 } }, () => {}).streamText(request));
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["Invalid request: model does not support reasoning_content", "The model `x` does not support reasoning"])("corrects model reasoning rejection: %s", async message => {
+    fail(rejection(message)); ok();
+    await collect(new AiSdkModelPort(config, () => {}).streamText(request));
+    expect(mockStreamText).toHaveBeenCalledTimes(2);
+    expect(hasReplay(1)).toBe(false);
+  });
+
+  it("does not arm correction for a synthesized empty tool reasoning field", async () => {
+    fail(rejection(""));
+    const req: ModelRequest = { ...request, messages: request.messages.map(message => message.role === "assistant"
+      ? { ...message, content: message.content.filter(part => part.type !== "reasoning") } : message) };
+    await collect(new AiSdkModelPort({ ...config, transport: "openai-chat-completions", providerName: "DeepSeek" }, () => {}).streamText(req));
+    expect(input(0).messages[0].providerOptions).toEqual({ openaiCompatible: { reasoning_content: "" } });
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([true, false])("does not correct explicit replay=%s (including resolved shell choices)", async preserveReasoning => {
+    fail(rejection());
+    await collect(new AiSdkModelPort({ ...config, preserveReasoning }, () => {}).streamText(request));
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["none", "foreign", "responses"])("requires serialized input replay: %s", async mode => {
+    fail(rejection());
+    const req = mode === "none" ? baseRequest : mode === "foreign" ? { ...request, messages: [{ role: "assistant" as const, content: [{ type: "reasoning" as const, text: "foreign", source: { ...source, model: "other" } }] }] } : request;
+    await collect(new AiSdkModelPort({ ...config, ...(mode === "responses" ? { transport: "openai-responses" as const } : {}) }, () => {}).streamText(req));
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])("surfaces the second failure without a usage probe (thrown=%s)", async thrown => {
+    const second = rejection("second failure"); fail(rejection(), thrown); fail(second, thrown);
+    const port = new AiSdkModelPort({ ...config, transport: "openai-chat-completions", includeUsage: true }, () => {});
+    const req = { ...request, messages: [{ role: "assistant" as const, content: [{ type: "reasoning" as const, text: "original thinking", source: { ...source, transport: "openai-chat-completions" as const } }] }] };
+    if (thrown) await expect(collect(port.streamText(req))).rejects.toBe(second);
+    else expect((await collect(port.streamText(req))).at(-1)).toEqual({ type: "error", error: second });
+    expect(mockStreamText).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["usage-first", "reasoning-first", "empty"])("bounds interaction with include_usage: %s", async order => {
+    const usage = rejection("Unrecognized request argument: stream_options");
+    fail(order === "usage-first" ? usage : rejection(order === "empty" ? "" : undefined));
+    fail(order === "usage-first" ? rejection() : usage); ok();
+    const diagnostics: DiagnosticEvent[] = [];
+    const port = new AiSdkModelPort({ ...config, transport: "openai-chat-completions", includeUsage: true }, e => diagnostics.push(e));
+    const req = { ...request, messages: [{ role: "assistant" as const, content: [{ type: "reasoning" as const, text: "original thinking", source: { ...source, transport: "openai-chat-completions" as const } }] }] };
+    const events = await collect(port.streamText(req));
+    expect(mockStreamText).toHaveBeenCalledTimes(order === "usage-first" ? 3 : 2);
+    expect(mockCreateLanguageModel.mock.calls.map(c => c[0].includeUsage)).toEqual(order === "usage-first" ? [true, false, true] : [true, true]);
+    expect(diagnostics.map(d => d.kind)).toEqual(["reasoning_replay_rejected"]);
+    expect(events.some(e => e.type === "stream_retry")).toBe(false);
+  });
+
+  it("does not rearm the empty-body exception after a transient retry", async () => {
+    fail(retryableError()); fail(rejection(""));
+    const events = await collect(new AiSdkModelPort(config, () => {}).streamText(request));
+    expect(mockStreamText).toHaveBeenCalledTimes(2);
+    expect(events.at(-1)?.type).toBe("error");
+  });
+
+  it("keeps the transient budget independent of correction", async () => {
+    fail(rejection()); fail(retryableError()); ok();
+    const events = await collect(new AiSdkModelPort(config, () => {}).streamText(request));
+    expect(mockStreamText).toHaveBeenCalledTimes(3);
+    expect(events.filter(e => e.type === "stream_retry")).toHaveLength(1);
+  });
+
+  it.each(["output", "abort"])("does not correct after %s", async boundary => {
+    const controller = new AbortController();
+    mockStreamText.mockImplementationOnce(() => ({ fullStream: (async function* () {
+      if (boundary === "output") yield { type: "text-delta", id: "t", text: "answer" };
+      else controller.abort();
+      yield { type: "error", error: rejection() };
+    })() }));
+    const diagnostics: DiagnosticEvent[] = [];
+    const result = collect(new AiSdkModelPort(config, e => diagnostics.push(e)).streamText({ ...request, abortSignal: controller.signal }));
+    if (boundary === "abort") await expect(result).rejects.toMatchObject({ name: "AbortError" });
+    else await result;
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+    expect(diagnostics).toEqual([]);
+  });
+
+  it.each([400, 409, 422])("classifies structured rejection %s and gives structured quota errors precedence", async status => {
+    fail(rejection("Bad Request", status, JSON.stringify({ error: { param: "messages[0].reasoning_content", code: "unsupported_field" } }))); ok();
+    await collect(new AiSdkModelPort(config, () => {}).streamText(request));
+    expect(mockStreamText).toHaveBeenCalledTimes(2);
+    expect(hasReplay(1)).toBe(false);
+    mockStreamText.mockReset();
+    fail(rejection("input thinking rejected", 400, JSON.stringify({ error: { code: "insufficient_quota" } })));
+    await collect(new AiSdkModelPort(config, () => {}).streamText(request));
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["true", "false"])("does not correct the actual shell override %s", async value => {
+    const { loadEnvConfig } = await import("./env.js");
+    const shell = loadEnvConfig({ ANYCODE_API_KEY: "fake", ANYCODE_MODEL: config.model, ANYCODE_PRESERVE_REASONING: value });
+    fail(rejection());
+    await collect(new AiSdkModelPort({ ...config, preserveReasoning: shell.preserveReasoning }, () => {}).streamText(request));
+    expect(mockStreamText).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["output", "abort", "second-failure", "env-true", "env-false"])("bounds Responses include correction: %s", async boundary => {
+    const controller = new AbortController();
+    const error = rejection("Unrecognized request argument supplied: include");
+    mockStreamText.mockImplementationOnce(() => ({ fullStream: (async function* () {
+      if (boundary === "output") yield { type: "text-delta", id: "t", text: "answer" };
+      if (boundary === "abort") controller.abort();
+      yield { type: "error", error };
+    })() }));
+    if (boundary === "second-failure") fail(error);
+    const { loadEnvConfig } = await import("./env.js");
+    const shell: { preserveReasoning?: boolean } = boundary.startsWith("env-") ? loadEnvConfig({ ANYCODE_API_KEY: "fake", ANYCODE_MODEL: config.model, ANYCODE_PRESERVE_REASONING: boundary.slice(4) }) : {};
+    const diagnostics: DiagnosticEvent[] = [];
+    const port = new AiSdkModelPort({ ...config, transport: "openai-responses", preserveReasoning: shell.preserveReasoning, includeUsage: true }, event => diagnostics.push(event));
+    const result = collect(port.streamText({ ...baseRequest, abortSignal: controller.signal }));
+    if (boundary === "abort") await expect(result).rejects.toMatchObject({ name: "AbortError" });
+    else expect((await result).at(-1)).toEqual({ type: "error", error });
+    expect(mockStreamText).toHaveBeenCalledTimes(boundary === "second-failure" ? 2 : 1);
+    expect(diagnostics.map(event => event.kind)).toEqual(boundary === "second-failure" ? ["reasoning_replay_rejected"] : []);
+    // Responses never enters the Chat Completions include_usage probe.
+    expect(mockCreateLanguageModel.mock.calls.every(call => call[0].includeUsage === true)).toBe(true);
+  });
+
+  it("does not treat an empty 400 on a pending usage probe as the first replay", async () => {
+    const first = rejection("Unrecognized request argument: stream_options");
+    fail(first); fail(rejection(""));
+    const diagnostics: DiagnosticEvent[] = [];
+    const port = new AiSdkModelPort({ ...config, transport: "openai-chat-completions", includeUsage: true }, e => diagnostics.push(e));
+    const req = { ...request, messages: [{ role: "assistant" as const, content: [{ type: "reasoning" as const, text: "original thinking", source: { ...source, transport: "openai-chat-completions" as const } }] }] };
+    expect((await collect(port.streamText(req))).at(-1)).toEqual({ type: "error", error: first });
+    expect(mockStreamText).toHaveBeenCalledTimes(2);
+    expect(diagnostics).toEqual([]);
+  });
+
+  it("detects serialized OpenRouter reasoning details without a reasoning part", async () => {
+    fail(rejection("unsupported reasoning_details")); ok();
+    const port = new AiSdkModelPort({ ...config, transport: "openai-chat-completions", providerName: "OpenRouter" }, () => {});
+    await collect(port.streamText({ ...request, messages: [{ role: "assistant", content: [{ type: "reasoning", text: "", source: { ...source, provider: "OpenRouter", transport: "openai-chat-completions" }, providerMetadata: { openrouter: { reasoningDetails: [{ type: "reasoning.encrypted", data: "opaque" }] } } }] }] }));
+    expect(mockStreamText).toHaveBeenCalledTimes(2);
+    expect(input(0).messages[0].providerOptions.openaiCompatible.reasoning_details).toEqual([{ type: "reasoning.encrypted", data: "opaque" }]);
+    expect(input(1).messages[0].providerOptions).toBeUndefined();
+  });
+
+});

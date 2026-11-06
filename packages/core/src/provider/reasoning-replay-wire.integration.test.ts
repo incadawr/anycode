@@ -350,6 +350,7 @@ describe("reasoning replay over the real SDK wire (GitHub #41)", () => {
       apiKey: "test-key",
       model: "claude-sonnet-5-5",
       providerName: "Anthropic",
+      preserveReasoning: false,
       retry: { maxRetries: 0, stallTimeoutMs: 0 },
     }));
 
@@ -385,7 +386,7 @@ describe("reasoning replay over the real SDK wire (GitHub #41)", () => {
     ]);
   });
 
-  it("custom anthropic-compatible endpoints default to off", async () => {
+  it("custom anthropic-compatible endpoints default to replaying returned reasoning", async () => {
     const fixture = await startServer([anthropicSse(ANTHROPIC_THINK_THEN_TOOL), anthropicSse(ANTHROPIC_THINK_THEN_TEXT)]);
     const loop = makeLoop(new AiSdkModelPort({
       transport: "anthropic-messages",
@@ -398,7 +399,7 @@ describe("reasoning replay over the real SDK wire (GitHub #41)", () => {
     await run(loop, "read a.txt");
 
     const [assistant] = assistantMessages(fixture.bodies[1]!);
-    expect(assistant!.content).toEqual([{ type: "tool_use", id: "toolu_1", name: "Read", input: {} }]);
+    expect(assistant!.content).toEqual([{ type: "thinking", thinking: "Need to read the file first.", signature: "sig-abc" }, { type: "tool_use", id: "toolu_1", name: "Read", input: {} }]);
   });
 
   it("the connection override turns replay off for a catalog provider", async () => {
@@ -437,10 +438,10 @@ describe("reasoning replay over the real SDK wire (GitHub #41)", () => {
     });
   });
 
-  it("openai-chat-completions with replay on: a tool-call turn with no reasoning still sends reasoning_content \"\"", async () => {
+  it("DeepSeek tool-call messages without reasoning still require reasoning_content \"\"", async () => {
     const noReasoningTool: Chunk[] = OPENAI_THINK_THEN_TOOL.slice(1);
     const fixture = await startServer([openAiSse(noReasoningTool), openAiSse(OPENAI_TEXT)]);
-    const loop = makeLoop(chatPort(fixture.baseUrl, true));
+    const loop = makeLoop(new AiSdkModelPort({ transport:"openai-chat-completions", baseUrl:fixture.baseUrl, apiKey:"test-key", model:"deepseek", providerName:"DeepSeek", retry:{maxRetries:0,stallTimeoutMs:0} }));
 
     await run(loop, "read a.txt");
 
@@ -448,7 +449,7 @@ describe("reasoning replay over the real SDK wire (GitHub #41)", () => {
     expect(assistant).toMatchObject({ role: "assistant", reasoning_content: "", tool_calls: [{ id: "call_1" }] });
   });
 
-  it("openai-chat-completions with replay on: reasoning from another model becomes reasoning_content \"\"", async () => {
+  it("openai-chat-completions with replay on: reasoning from another model does not enable empty fields", async () => {
     const fixture = await startServer([openAiSse(OPENAI_THINK_THEN_TOOL), openAiSse(OPENAI_TEXT)]);
     const port = new SwitchableModelPort(chatPort(fixture.baseUrl, true));
     const loop = makeLoop(port);
@@ -465,16 +466,23 @@ describe("reasoning replay over the real SDK wire (GitHub #41)", () => {
     await run(loop, "again");
 
     const [assistant] = assistantMessages(fixture.bodies.at(-1)!);
-    expect(assistant).toMatchObject({ role: "assistant", reasoning_content: "", tool_calls: [{ id: "call_1" }] });
+    expect(assistant).not.toHaveProperty("reasoning_content");
   });
 
-  it("openai-chat-completions on a custom endpoint (default off): no reasoning_content", async () => {
+  it("openai-chat-completions on a custom endpoint defaults to replaying returned reasoning", async () => {
     const fixture = await startServer([openAiSse(OPENAI_THINK_THEN_TOOL), openAiSse(OPENAI_TEXT)]);
     const loop = makeLoop(chatPort(fixture.baseUrl));
 
     await run(loop, "read a.txt");
 
     const [assistant] = assistantMessages(fixture.bodies[1]!);
-    expect(assistant).not.toHaveProperty("reasoning_content");
+    expect(assistant).toHaveProperty("reasoning_content", "Need to read the file first.");
   });
+});
+
+it.each([undefined, "OpenAI", "vLLM"])("omits empty reasoning on a plain tool loop (%s)", async providerName => {
+  const fixture = await startServer([openAiSse(OPENAI_THINK_THEN_TOOL.slice(1)), openAiSse(OPENAI_TEXT)]);
+  const loop = makeLoop(new AiSdkModelPort({ transport:"openai-chat-completions", baseUrl:fixture.baseUrl, apiKey:"test-key", model:"plain", providerName, retry:{maxRetries:0,stallTimeoutMs:0} }));
+  await run(loop, "read a.txt");
+  expect(assistantMessages(fixture.bodies[1]!)[0]).not.toHaveProperty("reasoning_content");
 });

@@ -28,8 +28,8 @@ it("preserves baseline bytes when unset or full, and none omits reasoning", () =
 });
 it("retains provider gates in every mode", () => {
   for (const mode of ["full", "factual_500"] as const) {
-    expect(reasoningReplaySource({ ...config, providerName: "Anthropic", reasoningHistory: mode })).toBeUndefined();
-    expect(reasoningReplaySource({ ...config, transport: "openai-responses", reasoningHistory: mode })).toBeUndefined();
+    expect(reasoningReplaySource({ ...config, providerName: "Anthropic", preserveReasoning: false, reasoningHistory: mode })).toBeUndefined();
+    expect(reasoningReplaySource({ ...config, transport: "openai-responses", reasoningHistory: mode }) !== undefined).toBe(mode === "full");
   }
 });
 it("summarizes once, keeps the audit original, bounds bytes and records separate usage", async () => {

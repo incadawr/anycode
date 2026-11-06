@@ -36,7 +36,7 @@ import { generateText, stepCountIs, streamText } from "ai";
 import type { LanguageModel, TextStreamPart, ToolSet } from "ai";
 import { compactReasoningParts } from "./reasoning-compactor.js";
 import type { AssistantPart, ReasoningSource } from "../types/history.js";
-import { catalogPreservesReasoning, isCatalogProviderName } from "./catalog-data.js";
+import { catalogPreservesReasoning } from "./catalog-data.js";
 import type { ModelPort, ModelRequest } from "../ports/model.js";
 import { consoleDiagnosticSink, type DiagnosticSink } from "../types/diagnostics.js";
 import type { ModelStreamEvent } from "../types/events.js";
@@ -126,7 +126,7 @@ interface OpenAICompatibleReasoningOptions {
  */
 interface OpenAIResponsesReasoningOptions {
   maxOutputTokens?: number;
-  providerOptions: { openai: { store: false; reasoningEffort?: string; forceReasoning?: true; promptCacheOptions?: ImplicitPromptCache } };
+  providerOptions: { openai: { store: false; include?: string[]; reasoningEffort?: string; forceReasoning?: true; promptCacheOptions?: ImplicitPromptCache } };
 }
 
 type ReasoningOptions = AnthropicReasoningOptions | OpenAICompatibleReasoningOptions | OpenAIResponsesReasoningOptions;
@@ -573,6 +573,34 @@ function includeUsageProbeEligible(
   );
 }
 
+/** Input rejection only: output thinking configuration errors are unrelated. */
+function rejectsInputReasoning(error: unknown, firstReplay: boolean, includeRequested = false, includeOnly = false): boolean {
+  const status = extractStatusCode(error);
+  if (status === undefined || status < 400 || status >= 500 ||
+      [401, 402, 403, 404, 408, 413, 429].includes(status)) return false;
+  const e = error as { message?: unknown; responseBody?: unknown; data?: unknown } | null;
+  const body = typeof e?.responseBody === "string" ? e.responseBody.trim() : "";
+  const message = typeof e?.message === "string" ? e.message.trim() : "";
+  let data = "";
+  try { data = e?.data ? JSON.stringify(e.data) : ""; } catch { return false; }
+  const text = `${message} ${body} ${data}`;
+  const unrelated = [
+    /auth|permission|forbidden|api.?key|credential|access.?denied/i,
+    /quota|balance|billing|payment|credits?|resource.?exhausted|rate.?limit|too many|insufficient/i,
+    /model.{0,30}(not.?found|unknown|missing|unavailable|does not exist)|(?:unknown|missing|unavailable).{0,15}model/i,
+    /context.{0,25}(length|limit|window)|token.{0,15}(limit|maximum)|prompt.{0,25}(long|large|limit)/i,
+  ];
+  if (unrelated.some(pattern => pattern.test(text))) return false;
+  // Match parameter/value rejection syntax, never the ordinary verb "include".
+  if (includeRequested && /(?:unrecognized|unsupported|invalid|unknown)\s+(?:(?:request|supplied)\s+)*(?:argument|parameter|value)s?\s*(?:supplied\s*)?[:=]?\s*["'`]*(?:include|reasoning\.encrypted_content)\b|(?:unrecognized|unsupported|invalid|unknown)\s+include\s+(?:argument|parameter|value)|(?:argument|parameter|value)\s*["'`]*(?:include|reasoning\.encrypted_content)\b.{0,30}(?:unrecognized|unsupported|invalid|unknown)/i.test(text)) return true;
+  if (includeOnly) return false;
+  if (status === 400 && firstReplay && !body && !e?.data && /^(?:|bad request|400(?: bad request)?)$/i.test(message)) return true;
+  // A thinking budget/type error can mention blocks without rejecting history.
+  if (/budget_tokens|output_config|thinking[.\s]+type|reasoning[._]effort/i.test(text) &&
+      !/messages?|input|history|assistant/i.test(text)) return false;
+  return /encrypted_content|model.{0,40}does not support (?:reasoning|thinking)|reasoning_content|reasoning_details|(?:messages?|input|history|assistant|blocks?)[\s\S]{0,100}(?:reasoning|thinking)|(?:reasoning|thinking)[\s\S]{0,100}(?:messages?|input|history|blocks?|signature)/i.test(text);
+}
+
 function resolveRetryPolicy(override: Partial<RetryPolicy> | undefined): RetryPolicy {
   return { ...DEFAULT_RETRY_POLICY, ...override };
 }
@@ -785,22 +813,14 @@ function rawResponseModelOf(part: unknown): string | undefined {
   return typeof model === "string" && model !== "" ? model : undefined;
 }
 
-/**
- * The route identity used for reasoning replay, or undefined when this route
- * does not replay reasoning. openai-responses is out of scope: with
- * `store: false` its reasoning items would need encrypted content.
- */
+/** The route identity for replay; Responses requires original encrypted content. */
 export function reasoningReplaySource(config: EndpointConfig): ReasoningSource | undefined {
   if (config.reasoningHistory === "none") return undefined;
-  if (config.transport !== "anthropic-messages" && config.transport !== "openai-chat-completions") return undefined;
-  const goReplay = config.goModelPolicy?.compatibility?.reasoning_field === "reasoning_content" && config.transport === "openai-chat-completions";
-  if (config.goModelPolicy && !goReplay) return undefined;
-  if (goReplay) return { transport: config.transport, ...(config.providerName !== undefined ? { provider: config.providerName } : {}), baseUrl: config.baseUrl, model: config.model };
-  const catalogEnabled = catalogPreservesReasoning(config.providerName);
-  if (isCatalogProviderName(config.providerName) && !catalogEnabled) return undefined;
-  if (!(config.preserveReasoning ?? catalogEnabled)) return undefined;
+  if (config.transport === "openai-responses" && config.reasoningHistory?.startsWith("factual_")) return undefined;
+  if (!(config.preserveReasoning ?? (!config.reasoningReplayRejected && catalogPreservesReasoning(config.providerName)))) return undefined;
   return {
     transport: config.transport,
+    ...(config.goModelPolicy?.compatibility?.reasoning_field === "reasoning_content" ? { requireReasoningContent: true } : {}),
     ...(config.reasoningHistory?.startsWith("factual_") ? { replayFactual: true } : {}),
     ...(config.transport === "anthropic-messages" ? { replayUnsigned: true } : {}),
     ...(config.providerName !== undefined ? { provider: config.providerName } : {}),
@@ -887,6 +907,8 @@ export class AiSdkModelPort implements ModelPort {
    * own port and its own honest first probe.
    */
   #includeUsageDisabledForEndpoint = false;
+  #replayRequestSeen = false;
+  #replayRejected = false;
 
   /**
    * This port's route identity when it replays reasoning (GitHub #41), else
@@ -920,7 +942,7 @@ export class AiSdkModelPort implements ModelPort {
   reasoningReplaySource(effort?: ModelRequest["reasoningEffort"]): ReasoningSource | undefined {
     const options = reasoningRequestOptions({ messages: [], tools: [], reasoningEffort: effort }, this.config.providerName, this.config.transport, this.config.promptCache, this.config.model, this.config.declaredEffortLevels, this.config.goModelPolicy);
     const thinking = (options.providerOptions as { anthropic?: { thinking?: { type?: string } } } | undefined)?.anthropic?.thinking;
-    return thinking?.type === "disabled" ? undefined : this.#reasoningSource;
+    return thinking?.type === "disabled" || this.#replayRejected ? undefined : this.#reasoningSource;
   }
 
   constructor(
@@ -991,8 +1013,11 @@ export class AiSdkModelPort implements ModelPort {
    * `includeUsage: undefined` key the shape never carried.
    */
   // The factory receives exactly one argument when the activity hook is absent.
-  private async buildAttemptModel(includeUsage: boolean | undefined, onResponseActivity?: () => void, onKey?: (key: string | undefined) => void, goDisableThinking?: boolean): Promise<LanguageModel> {
-    const create = (cfg: EndpointConfig): LanguageModel => onResponseActivity === undefined ? createLanguageModel(cfg) : createLanguageModel(cfg, onResponseActivity);
+  private async buildAttemptModel(includeUsage: boolean | undefined, onResponseActivity?: () => void, onKey?: (key: string | undefined) => void, goDisableThinking?: boolean, responsesReplay?: boolean): Promise<LanguageModel> {
+    const create = (cfg: EndpointConfig): LanguageModel => {
+      if (cfg.transport === "openai-responses" && responsesReplay !== undefined) cfg = { ...cfg, preserveReasoning: responsesReplay };
+      return onResponseActivity === undefined ? createLanguageModel(cfg) : createLanguageModel(cfg, onResponseActivity);
+    };
     const { resolveApiKey } = this.config;
     const usageOverridden = includeUsage !== this.config.includeUsage;
     if (resolveApiKey === undefined) {
@@ -1126,6 +1151,7 @@ export class AiSdkModelPort implements ModelPort {
     // from that attempt to the very next one (the probe retry) — see
     // `ProbeFailure`'s docstring.
     let includeUsageProbe: ProbeFailure | undefined;
+    let reasoningCorrected = false;
 
     for (;;) {
       if (request.abortSignal?.aborted) throw abortReason(request.abortSignal);
@@ -1156,6 +1182,28 @@ export class AiSdkModelPort implements ModelPort {
       const reasoningTextRecovery = this.config.transport === "openai-responses" ? new ResponsesReasoningTextRecovery() : undefined;
       // Per-attempt, so an abandoned attempt never lends metadata to a replay (GitHub #41).
       const reasoningSource = this.reasoningReplaySource(request.reasoningEffort);
+      const messages = toSdkMessages(request.messages, this.config.transport, reasoningSource);
+      const hasInputReasoning = messages.some(message => message.role === "assistant" && (
+        (Array.isArray(message.content) && message.content.some(part => part.type === "reasoning")) ||
+        (Array.isArray(message.providerOptions?.openaiCompatible?.reasoning_details) && message.providerOptions.openaiCompatible.reasoning_details.length > 0)
+      ));
+      const firstReplay = hasInputReasoning && !this.#replayRequestSeen;
+      if (hasInputReasoning) this.#replayRequestSeen = true;
+      const includeRequested = this.config.transport === "openai-responses" && reasoningSource !== undefined;
+      const correctReasoning = (error: unknown): boolean => {
+        if (reasoningCorrected || this.config.preserveReasoning !== undefined || (!hasInputReasoning && !includeRequested) ||
+            hadModelOutput || completedFinish || request.abortSignal?.aborted || !rejectsInputReasoning(error, firstReplay, includeRequested, !hasInputReasoning)) return false;
+        // A pending usage probe is speculative: restore its original request option.
+        if (includeUsageProbe !== undefined) {
+          this.#includeUsageDisabledForEndpoint = false;
+          includeUsageProbe = undefined;
+        }
+        reasoningCorrected = true;
+        this.#replayRejected = true;
+        this.onDiagnostic({ kind: "reasoning_replay_rejected", reason: "provider-rejected", baseUrl: this.config.baseUrl, model: this.config.model });
+        return true;
+      };
+      let reasoningRetryNeeded = false;
       const reasoningMetadata = new Map<string, Record<string, Record<string, unknown>>>();
       const openRouterDetails: Record<string, unknown>[] = [];
       let openRouterDetailsPresent = false;
@@ -1184,7 +1232,7 @@ export class AiSdkModelPort implements ModelPort {
 
       let attemptKey: string | undefined;
       try {
-        const model = await this.buildAttemptModel(attemptIncludeUsage, onResponseActivity, (key) => { attemptKey = key; }, this.config.goModelPolicy?.capabilities?.reasoning?.toggle === true && (request.reasoningEffort === undefined || request.reasoningEffort === "off"));
+        const model = await this.buildAttemptModel(attemptIncludeUsage, onResponseActivity, (key) => { attemptKey = key; }, this.config.goModelPolicy?.capabilities?.reasoning?.toggle === true && (request.reasoningEffort === undefined || request.reasoningEffort === "off"), reasoningSource !== undefined);
         const requestStartedAt = performance.now();
         // Generation speed is measured from the FIRST OUTPUT TOKEN — text,
         // reasoning or tool content — never from the first stream event. A
@@ -1192,12 +1240,17 @@ export class AiSdkModelPort implements ModelPort {
         // seconds before the model produces anything; counting that wait as
         // generation would understate t/s and shrink time-to-first-token.
         let firstOutputAt: number | undefined;
+        const requestOptions = reasoningRequestOptions(request, this.config.providerName, this.config.transport, this.config.promptCache, this.config.model, this.config.declaredEffortLevels, this.config.goModelPolicy);
+        if (this.config.transport === "openai-responses" && reasoningSource !== undefined &&
+            requestOptions.providerOptions && "openai" in requestOptions.providerOptions) {
+          requestOptions.providerOptions.openai.include = ["reasoning.encrypted_content"];
+        }
         const result = streamText({
           model,
           // System prompt goes out-of-band: ai@7 rejects system-role messages
           // inside `messages`, and its `system` option is deprecated for `instructions`.
           instructions: request.system,
-          messages: toSdkMessages(request.messages, this.config.transport, reasoningSource),
+          messages,
           tools: toSdkTools(this.config.goModelPolicy && this.config.goModelPolicy.capabilities?.tools?.supported !== true ? [] : request.tools),
           // One SDK step per ModelPort call; the multi-turn loop lives in AgentLoop.
           stopWhen: stepCountIs(1),
@@ -1209,7 +1262,7 @@ export class AiSdkModelPort implements ModelPort {
           abortSignal: attemptController.signal,
           // Raw chunks carry provenance for Anthropic and reasoning text for Responses.
           includeRawChunks: true,
-          ...reasoningRequestOptions(request, this.config.providerName, this.config.transport, this.config.promptCache, this.config.model, this.config.declaredEffortLevels, this.config.goModelPolicy),
+          ...requestOptions,
           temperature: this.config.goModelPolicy && this.config.goModelPolicy.capabilities?.temperature !== true ? undefined : request.temperature,
         });
 
@@ -1337,6 +1390,11 @@ export class AiSdkModelPort implements ModelPort {
             captureProviderMessage(event.error, attemptKey);
             event = { ...event, error: contextualizeNetworkFailure(contextualizeMiniMaxBalance(event.error, this.config.providerName, attemptKey), this.config.baseUrl) };
           }
+          if (event.type === "error" && correctReasoning(event.error)) {
+            attemptController.abort(event.error);
+            reasoningRetryNeeded = true;
+            break;
+          }
           // this pass IS a probe retry (started by a previous
           // pass) — defer this failure's fate to the resolution block after
           // the try/catch instead of classifying it here, regardless of
@@ -1353,7 +1411,7 @@ export class AiSdkModelPort implements ModelPort {
           // start a probe when this pre-content 400 is the FIRST
           // sign the flag might be the cause.
           if (
-            event.type === "error" &&
+            event.type === "error" && !reasoningCorrected &&
             includeUsageProbeEligible(
               this.config.transport,
               attemptIncludeUsage,
@@ -1412,10 +1470,12 @@ export class AiSdkModelPort implements ModelPort {
         // surfaced as a THROWN exception (e.g. a synchronous validation
         // error, or a rejection from `fullStream` iteration before any part
         // was read) instead of a stream part.
-        if (includeUsageProbe !== undefined) {
+        if (correctReasoning(error)) {
+          reasoningRetryNeeded = true;
+        } else if (includeUsageProbe !== undefined) {
           pendingProbeFailure = { error, kind: "thrown" };
         } else if (
-          includeUsageProbeEligible(
+          !reasoningCorrected && includeUsageProbeEligible(
             this.config.transport,
             attemptIncludeUsage,
             error,
@@ -1445,6 +1505,8 @@ export class AiSdkModelPort implements ModelPort {
 
       for (const id of openRouterOpen) yield { type: "reasoning_end", id, ...replaySource };
       openRouterOpen.clear();
+
+      if (reasoningRetryNeeded) continue;
 
       // resolve a deferred probe-retry failure OUTSIDE the
       // try/catch above — deliberately, so a rollback's `throw` propagates

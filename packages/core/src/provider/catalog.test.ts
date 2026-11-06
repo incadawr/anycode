@@ -914,41 +914,11 @@ describe("current model lineups (checked 2026-10-27)", () => {
   });
 });
 
-describe("preserveReasoning (GitHub #41)", () => {
-  it("is on only for providers that document reasoning replay", () => {
-    const on = getBuiltinCatalog().providers.filter((entry) => entry.preserveReasoning === true).map((entry) => entry.id);
-    expect(on.sort()).toEqual([
-      "deepseek",
-      "minimax",
-      "minimax-cn",
-      "openrouter",
-      "xiaomi-mimo-ams",
-      "xiaomi-mimo-api",
-      "xiaomi-mimo-cn",
-      "xiaomi-mimo-sgp",
-      "z-ai",
-    ]);
-  });
-
-  // The measured set has direct-API matrix evidence (2026-11-02); the off set
-  // is pinned NEGATIVELY on purpose: Anthropic/Moonshot/Kimi have doc
-  // citations but no matrix (no key), OpenAI's transport is out of scope, and
-  // vllm/custom have no catalog policy at all — none of them may drift into
-  // the enabled set without a measurement.
-  it("keeps the doc-cited-but-unmeasured and out-of-scope providers OFF", () => {
-    const off = ["anthropic", "moonshot", "kimi", "openai", "vllm", "custom"];
-    for (const id of off) {
-      expect(getBuiltinCatalog().providers.find((entry) => entry.id === id)?.preserveReasoning).toBeUndefined();
-      expect(getBuiltinCatalog().providers.filter((entry) => entry.preserveReasoning === true).map((entry) => entry.id)).not.toContain(id);
+describe("catalog reasoning replay defaults", () => {
+  it("has no confirmed exceptions; unknown routes default on", () => {
+    expect(getBuiltinCatalog().providers.every(entry => entry.preserveReasoning === undefined)).toBe(true);
+    for (const name of ["Z.AI (GLM)", "MiniMax (China)", "DeepSeek", "Anthropic", "Some Gateway", undefined]) {
+      expect(catalogPreservesReasoning(name)).toBe(true);
     }
-  });
-
-  it("is looked up by entry name; unknown and custom endpoints are off", () => {
-    expect(catalogPreservesReasoning("Z.AI (GLM)")).toBe(true);
-    expect(catalogPreservesReasoning("MiniMax (China)")).toBe(true);
-    expect(catalogPreservesReasoning("DeepSeek")).toBe(true);
-    expect(catalogPreservesReasoning("Anthropic")).toBe(false);
-    expect(catalogPreservesReasoning("Some Gateway")).toBe(false);
-    expect(catalogPreservesReasoning(undefined)).toBe(false);
   });
 });

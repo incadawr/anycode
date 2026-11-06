@@ -2136,7 +2136,7 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
     message.content.forEach((part: AssistantPart, partIdx: number) => {
       const id = `${item.id}:${partIdx}`;
       if (part.type === "text") {
-        blocks.push({ kind: "assistant_text", id, text: part.text });
+        if (part.text.trim()) blocks.push({ kind: "assistant_text", id, text: part.text });
         return;
       }
       if (part.type === "reasoning") {

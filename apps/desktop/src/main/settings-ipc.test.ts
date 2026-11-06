@@ -1,3 +1,4 @@
+import { recordReasoningReplayRejection } from "./reasoning-replay.js";
 /**
  * Unit tests for the settings/secret IPC handler logic (design §3, ruling §4),
  * exercised as the exported handle* functions off a FAKE vault + scratch
@@ -617,8 +618,8 @@ describe("handleConnectionCreate/Update — preserveReasoning override", () => {
     expect((await handleConnectionCreate(deps, { providerId: "z-ai", model: "m" })).ok).toBe(true); // conn-3
     let loaded = await loadSettings(settingsPath);
     // Create persists the booleans verbatim (Automatic is the ABSENT key, never false).
-    expect(loaded.settings.provider.connections[0]?.preserveReasoning).toBe(true);
-    expect(loaded.settings.provider.connections[1]?.preserveReasoning).toBe(false);
+    expect(loaded.settings.provider.connections[0]?.modelOverrides?.m?.preserveReasoning).toBe(true);
+    expect(loaded.settings.provider.connections[1]?.modelOverrides?.m?.preserveReasoning).toBe(false);
     expect("preserveReasoning" in (loaded.settings.provider.connections[2] ?? {})).toBe(false);
 
     // Update to a boolean, clear with "", keep on an unrelated edit — and
@@ -628,7 +629,7 @@ describe("handleConnectionCreate/Update — preserveReasoning override", () => {
     expect((await handleConnectionUpdate(deps, { id: "conn-2", label: "Work" })).ok).toBe(true);
     loaded = await loadSettings(settingsPath);
     expect("preserveReasoning" in (loaded.settings.provider.connections[0] ?? {})).toBe(false);
-    expect(loaded.settings.provider.connections[1]?.preserveReasoning).toBe(false);
+    expect(loaded.settings.provider.connections[1]?.modelOverrides?.m?.preserveReasoning).toBe(false);
     expect(loaded.settings.provider.connections[1]?.label).toBe("Work");
     expect("preserveReasoning" in (loaded.settings.provider.connections[2] ?? {})).toBe(false);
   });
@@ -5410,4 +5411,41 @@ it("persists and clears catalog matching per exact model", async () => {
   const saved = (await loadSettings(settingsPath)).settings.provider.connections[0];
   expect(saved?.modelOverrides?.a).toBeUndefined();
   expect(saved?.modelOverrides?.b?.catalogMatchDisabled).toBe(true);
+});
+
+it("isolates replay preferences per model, clears only the target, and migrates legacy false", async () => {
+  const deps = makeDeps({ catalogIds: CATALOG_IDS });
+  await handleConnectionCreate(deps, { providerId: "z-ai", model: "a", preserveReasoning: false });
+  await handleConnectionUpdate(deps, { id: "conn-1", modelOverrideModel: "b", preserveReasoning: true });
+  let loaded = (await loadSettings(settingsPath)).settings;
+  expect(loaded.provider.connections[0]?.modelOverrides).toMatchObject({ a: { preserveReasoning: false }, b: { preserveReasoning: true } });
+  expect(loaded.provider.connections[0]?.preserveReasoning).toBeUndefined();
+  await handleConnectionUpdate(deps, { id: "conn-1", modelOverrideModel: "a", preserveReasoning: "" });
+  loaded = (await loadSettings(settingsPath)).settings;
+  expect(loaded.provider.connections[0]?.modelOverrides?.a?.preserveReasoning).toBeUndefined();
+  expect(loaded.provider.connections[0]?.modelOverrides?.b?.preserveReasoning).toBe(true);
+  const raw = { ...cloneDefaults(), provider: { connections: [{ id: "legacy", providerId: "z-ai", model: "a", preserveReasoning: false, modelOverrides: { b: { preserveReasoning: true, reasoningReplayRejection: { reason: "provider-rejected", baseUrl: "https://fixture.invalid" } }, bad: { preserveReasoning: "off", reasoningReplayRejection: "typo" } } }] } };
+  await writeFile(settingsPath, JSON.stringify(raw));
+  loaded = (await loadSettings(settingsPath)).settings;
+  expect(loaded.provider.connections[0]?.modelOverrides).toMatchObject({ a: { preserveReasoning: false }, b: { preserveReasoning: true } });
+  expect(loaded.provider.connections[0]?.modelOverrides?.bad?.preserveReasoning).toBeUndefined();
+  expect(loaded.provider.connections[0]?.modelOverrides?.bad?.reasoningReplayRejection).toBeUndefined();
+  expect(loaded.provider.connections[0]?.modelOverrides?.b?.reasoningReplayRejection?.reason).toBe("provider-rejected");
+  await handleConnectionUpdate(deps, { id: "legacy", modelOverrideModel: "b", preserveReasoning: true });
+  loaded = (await loadSettings(settingsPath)).settings;
+  expect(loaded.provider.connections[0]?.modelOverrides?.b?.reasoningReplayRejection).toBeUndefined();
+});
+
+it("user On clears a recorded rejection and beats a concurrent observation", async () => {
+  const deps = makeDeps({ catalogIds: CATALOG_IDS });
+  await handleConnectionCreate(deps, { providerId: "z-ai", model: "a", baseUrl: "https://fixture.invalid" });
+  const event = { type: "reasoning_replay_rejected", reason: "provider-rejected", baseUrl: "https://fixture.invalid", model: "a" };
+  expect(await recordReasoningReplayRejection({ settingsPath }, "conn-1", event)).toBe(true);
+  await Promise.all([
+    handleConnectionUpdate(deps, { id: "conn-1", modelOverrideModel: "a", preserveReasoning: true }),
+    recordReasoningReplayRejection({ settingsPath }, "conn-1", event),
+  ]);
+  const override = (await loadSettings(settingsPath)).settings.provider.connections[0]?.modelOverrides?.a;
+  expect(override?.preserveReasoning).toBe(true);
+  expect(override?.reasoningReplayRejection).toBeUndefined();
 });

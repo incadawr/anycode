@@ -1621,7 +1621,7 @@ export class AgentLoop {
             reasoningCompactorUsage = [error.usage];
           }
         }
-        this.history.append(
+        if (assistantParts.length > 0) this.history.append(
           {
             role: "assistant",
             // A degenerate step's reasoning is a loop, not worth replaying.
@@ -2316,7 +2316,7 @@ export class AgentLoop {
  */
 function buildAssistantParts(text: string, toolCalls: ProposedToolCall[]): AssistantPart[] {
   const parts: AssistantPart[] = [];
-  if (text.length > 0 || toolCalls.length === 0) {
+  if (text.trim().length > 0) {
     parts.push({ type: "text", text });
   }
   for (const call of toolCalls) {

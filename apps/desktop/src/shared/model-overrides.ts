@@ -15,7 +15,7 @@ export function modelOverrideFor(connection: ConnectionOverrides | undefined, mo
 
 /** Read-time migration; the next write persists only the map, without rebinding the old pair. */
 export function migrateModelOverrides(connection: ProviderConnection): ProviderConnection {
-  if (connection.contextWindowTokens === undefined && connection.contextWindowModel === undefined && connection.imageInputOverride === undefined && connection.imageInputModel === undefined) return connection;
+  if (connection.contextWindowTokens === undefined && connection.contextWindowModel === undefined && connection.imageInputOverride === undefined && connection.imageInputModel === undefined && connection.preserveReasoning === undefined) return connection;
   const migrated = { ...connection };
   const model = connection.contextWindowModel?.trim();
   if (model && connection.contextWindowTokens !== undefined) {
@@ -25,6 +25,11 @@ export function migrateModelOverrides(connection: ProviderConnection): ProviderC
   if (imageModel && connection.imageInputOverride !== undefined && modelOverrideFor(migrated, imageModel)?.imageInput === undefined) {
     patchModelOverride(migrated, imageModel, { imageInput: connection.imageInputOverride });
   }
+  const replayModel = connection.model?.trim();
+  if (replayModel && connection.preserveReasoning !== undefined && modelOverrideFor(migrated, replayModel)?.preserveReasoning === undefined) {
+    patchModelOverride(migrated, replayModel, { preserveReasoning: connection.preserveReasoning });
+  }
+  delete migrated.preserveReasoning;
   delete migrated.imageInputOverride;
   delete migrated.imageInputModel;
   delete migrated.contextWindowTokens;
@@ -105,4 +110,16 @@ export function contextWindowTokensField(raw: string): { ok: true; value: number
     return { ok: false };
   }
   return { ok: true, value: n };
+}
+
+/** Shell choice wins; settings are resolved again for each model, including hot swaps. */
+export function modelReasoningReplay(connection: Pick<ProviderConnection, "modelOverrides" | "model" | "preserveReasoning"> | undefined, model: string, shellOverride?: boolean): boolean | undefined {
+  const saved = modelOverrideFor(connection, model)?.preserveReasoning;
+  return shellOverride ?? saved ?? (connection?.model?.trim() === model ? connection?.preserveReasoning : undefined);
+}
+
+/** Remembered Auto policy is separate from explicit preference and endpoint scoped. */
+export function modelReplayPolicy(connection: Parameters<typeof modelReasoningReplay>[0], model: string, baseUrl: string, shellOverride?: boolean): { preserveReasoning: boolean | undefined; reasoningReplayRejected: boolean } {
+  const rejection = modelOverrideFor(connection, model)?.reasoningReplayRejection;
+  return { preserveReasoning: modelReasoningReplay(connection, model, shellOverride), reasoningReplayRejected: rejection?.reason === "provider-rejected" && rejection.baseUrl === baseUrl };
 }

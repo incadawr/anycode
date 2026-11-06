@@ -149,7 +149,7 @@ it("replays MiMo's signed thinking before tool_use on the next request, on every
 
   for (const mode of ["api", "sgp", "cn", "ams"]) {
     const entry = findCatalogEntry(`xiaomi-mimo-${mode}`)!;
-    expect(entry.preserveReasoning, entry.id).toBe(true);
+    expect(entry.preserveReasoning, entry.id).toBeUndefined();
     const bodies: Record<string, unknown>[] = [];
     vi.stubGlobal("fetch", async (_input: unknown, init?: RequestInit) => {
       bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
@@ -224,10 +224,10 @@ it("replay off produces the complete pre-replay request body unchanged", async (
   expect(bodies[1]).toBe(bodies[0]);
 });
 
-it("limits the global override to enabled catalog providers and custom endpoints", () => {
+it("honors the global override for catalog providers and custom endpoints", () => {
   for (const [providerName, override, enabled] of [
-    ["OpenAI", true, false], ["Anthropic", true, false], ["Z.AI (GLM)", true, true],
-    ["Z.AI (GLM)", false, false], [undefined, true, true], ["Custom gateway", true, true], [undefined, undefined, false],
+    ["OpenAI", true, true], ["Anthropic", true, true], ["Z.AI (GLM)", true, true],
+    ["Z.AI (GLM)", false, false], [undefined, true, true], ["Custom gateway", true, true], [undefined, undefined, true],
   ] as const) {
     const port = new AiSdkModelPort({ transport: "anthropic-messages", baseUrl: "http://127.0.0.1:9", apiKey: "test", model: "model", providerName, preserveReasoning: override });
     expect(port.reasoningReplaySource("high") !== undefined, String(providerName)).toBe(enabled);

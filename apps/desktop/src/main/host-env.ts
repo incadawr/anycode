@@ -39,7 +39,7 @@ import {
   resolveProxyLadder,
 } from "../shared/proxy.js";
 import type { AnycodeSettings, CustomProviderRecord, ProviderTransportId, SecretEnvKey, SecretKey } from "../shared/settings.js";
-import { modelOverrideFor } from "../shared/model-overrides.js";
+import { modelReasoningReplay, modelOverrideFor } from "../shared/model-overrides.js";
 import { activeConnection, activeProviderView, connectionById, isProxyUrl, SECRET_ENV_KEYS } from "../shared/settings.js";
 import { isMcpSecretKey } from "../shared/mcp-secrets.js";
 import type { RecognizerWireConfig } from "../shared/recognizer.js";
@@ -1320,17 +1320,13 @@ export async function buildHostEnv(params: HostEnvParams): Promise<NodeJS.Proces
     ENV_INCLUDE_USAGE,
     view.includeUsage === undefined ? undefined : String(view.includeUsage),
   );
-  // Reasoning-replay override (custom/vLLM opt-in): the same env rung as the
-  // usage policy above, so a launching shell's own ANYCODE_PRESERVE_REASONING
-  // always wins. `false` is a MEANING (an explicit opt-out that also disables
-  // replay on a catalog entry whose own flag is on), hence `!== undefined`
-  // rather than truthiness: an absent setting emits NOTHING and lets core's
-  // catalog gate decide.
-  fillFromSettings(
-    env,
-    ENV_PRESERVE_REASONING,
-    view.preserveReasoning === undefined ? undefined : String(view.preserveReasoning),
-  );
+  // Mark settings-derived values so model hot swaps can resolve their own choice.
+  delete env.ANYCODE_PRESERVE_REASONING_FROM_SETTINGS;
+  if (!envPresent(env, ENV_PRESERVE_REASONING)) {
+    const replay = modelReasoningReplay(activeConnection(settings), effectiveConnectionModel);
+    fillFromSettings(env, ENV_PRESERVE_REASONING, replay === undefined ? undefined : String(replay));
+    if (replay !== undefined) env.ANYCODE_PRESERVE_REASONING_FROM_SETTINGS = "1";
+  }
   // Per-model context window: the value and its binding travel as a
   // PAIR and are written from ONE source — never two independent
   // `fillFromSettings` calls, which could pair a settings value with a stale env

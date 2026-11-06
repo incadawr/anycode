@@ -2115,18 +2115,18 @@ describe("reasoning replay helpers (GitHub #41)", () => {
 
   it('update sends a real boolean for On/Off and the "" clear sentinel for Automatic', () => {
     expect(buildConnectionUpdatePayload({
-      connectionId: "conn-1", label: "", model: "", transport: "", baseUrl: "", showBaseUrl: false,
+      connectionId: "conn-1", label: "", model: "m", transport: "", baseUrl: "", showBaseUrl: false,
       proxyRef: "", authOptional: false, maxOutputTokens: "", imageInput: "auto",
       promptCacheEnabled: false, usage: "auto", replay: "on",
     }).preserveReasoning).toBe(true);
     // `false` must survive the payload builder, not be dropped as falsy.
     expect(buildConnectionUpdatePayload({
-      connectionId: "conn-1", label: "", model: "", transport: "", baseUrl: "", showBaseUrl: false,
+      connectionId: "conn-1", label: "", model: "m", transport: "", baseUrl: "", showBaseUrl: false,
       proxyRef: "", authOptional: false, maxOutputTokens: "", imageInput: "auto",
       promptCacheEnabled: false, usage: "auto", replay: "off",
     }).preserveReasoning).toBe(false);
     const automatic = buildConnectionUpdatePayload({
-      connectionId: "conn-1", label: "", model: "", transport: "", baseUrl: "", showBaseUrl: false,
+      connectionId: "conn-1", label: "", model: "m", transport: "", baseUrl: "", showBaseUrl: false,
       proxyRef: "", authOptional: false, maxOutputTokens: "", imageInput: "auto",
       promptCacheEnabled: false, usage: "auto", replay: "auto",
     });
@@ -2141,13 +2141,13 @@ describe("reasoning replay helpers (GitHub #41)", () => {
     expect(reasoningReplayCreateValue("off")).toBe(false);
   });
 
-  it("is visible only for custom endpoints and vLLM — catalog entries keep their own policy", () => {
+  it("is visible for catalog and custom connections", () => {
     expect(reasoningReplayVisible("custom")).toBe(true);
     expect(reasoningReplayVisible("custom:test")).toBe(true);
     expect(reasoningReplayVisible("vllm")).toBe(true);
-    expect(reasoningReplayVisible("z-ai")).toBe(false);
-    expect(reasoningReplayVisible("anthropic")).toBe(false);
-    expect(reasoningReplayVisible("openrouter")).toBe(false);
+    expect(reasoningReplayVisible("z-ai")).toBe(true);
+    expect(reasoningReplayVisible("anthropic")).toBe(true);
+    expect(reasoningReplayVisible("openrouter")).toBe(true);
     expect(reasoningReplayVisible(undefined)).toBe(false);
 
     const tuning = {
@@ -2164,13 +2164,13 @@ describe("reasoning replay helpers (GitHub #41)", () => {
     expect(advancedHasValues({ ...tuning, replay: "off" })).toBe(true);
   });
 
-  it("is transport-gated: hidden for openai-responses (core's replay gate never serves it), shown for the two message transports", () => {
-    expect(reasoningReplayTransportVisible("openai-responses", undefined)).toBe(false);
+  it("stores a preference for every transport", () => {
+    expect(reasoningReplayTransportVisible("openai-responses", undefined)).toBe(true);
     expect(reasoningReplayTransportVisible("openai-chat-completions", undefined)).toBe(true);
     expect(reasoningReplayTransportVisible("anthropic-messages", undefined)).toBe(true);
     // An empty local transport resolves through the provider's default,
     // exactly like `promptCacheVisible`/`usageVisible`.
-    expect(reasoningReplayTransportVisible("", "openai-responses")).toBe(false);
+    expect(reasoningReplayTransportVisible("", "openai-responses")).toBe(true);
     expect(reasoningReplayTransportVisible("", "openai-chat-completions")).toBe(true);
     expect(reasoningReplayTransportVisible("", undefined)).toBe(true);
   });
@@ -2187,10 +2187,10 @@ describe("reasoning replay helpers (GitHub #41)", () => {
     expect("preserveReasoning" in hidden).toBe(false);
   });
 
-  it("the rendered replayShown resolves the transport before showing: a custom openai-kind endpoint (default openai-responses) hides it", async () => {
+  it("the rendered replayShown resolves the transport before showing: a custom openai-kind endpoint stores the preference too", async () => {
     const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
     const from = source.indexOf("const replayTransportShown");
-    const marker = "(replayCatalogMatch === undefined || replayCatalogMatch.preserveReasoning === true);";
+    const marker = "const replayShown = reasoningReplayVisible(effectiveProviderId) && replayTransportShown;";
     const block = source.slice(from, source.indexOf(marker, from) + marker.length);
     expect(block).toContain("replayTransportShown");
     const { CUSTOM_KIND_DEFAULT_TRANSPORT } = await import("./SettingsScreen.js");
@@ -2201,14 +2201,13 @@ describe("reasoning replay helpers (GitHub #41)", () => {
     );
     const run = (customKind: string, transport = "") =>
       evaluate(reasoningReplayVisible, reasoningReplayTransportVisible, transport, true, CUSTOM_KIND_DEFAULT_TRANSPORT, customKind, { defaultTransport: "anthropic-messages" }, "custom", undefined);
-    // The reported repro: new custom endpoint of kind `openai` — its default
-    // transport is openai-responses, where replay can never be served.
-    expect(run("openai").transportShown).toBe(false);
-    expect(run("openai").shown).toBe(false);
+    // Responses stores the per-model replay choice.
+    expect(run("openai").transportShown).toBe(true);
+    expect(run("openai").shown).toBe(true);
     expect(run("openai-compatible").shown).toBe(true);
     // An explicit transport choice wins over the kind's default.
     expect(run("openai", "openai-chat-completions").shown).toBe(true);
-    expect(run("openai-compatible", "openai-responses").shown).toBe(false);
+    expect(run("openai-compatible", "openai-responses").shown).toBe(true);
   });
 
   it("matches a custom record's base URL onto the builtin entry the host would resolve", () => {
@@ -2232,8 +2231,9 @@ describe("reasoning replay helpers (GitHub #41)", () => {
   it("pins the env hint and the agreed copy", () => {
     expect(reasoningReplayEnvHint([])).toBeNull();
     expect(reasoningReplayEnvHint(["ANYCODE_PRESERVE_REASONING"])).toContain("ANYCODE_PRESERVE_REASONING");
-    expect(REASONING_REPLAY_ONELINER).toBe("Applies to custom endpoints and vLLM.");
+    expect(REASONING_REPLAY_ONELINER).toBe("Applies to this model only.");
     expect(REASONING_REPLAY_HELP).toContain("Off also stops replay on a provider that normally replays");
+    expect(REASONING_REPLAY_HELP).toContain("Responses replays only original encrypted reasoning; text-only reasoning and factual summaries are not sent back.");
   });
 });
 
@@ -2441,14 +2441,13 @@ describe("custom endpoint cache creation", () => {
     },
   );
 
-  // The replay select is hidden for a transport core's replay gate cannot
-  // serve, so its (stale) value must not ride that create either.
+  // Store the selected model preference for both transports.
   it.each([
     ["openai-chat-completions", "on", true],
     ["openai-chat-completions", "off", false],
-    ["openai-responses", "on", undefined],
+    ["openai-responses", "on", true],
   ] as const)(
-    "on transport %s sends replay %s through the custom endpoint create path only when the transport can replay",
+    "on transport %s sends replay %s through the custom endpoint create path",
     async (transport, replaySelection, expected) => {
       const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
       const body = source.slice(source.indexOf("  async function createNewCustomEndpoint()"), source.indexOf("  /** ADD: single primary action"));
@@ -2563,4 +2562,31 @@ it("allows the account-source drawer to create a model-free endpoint while prese
   expect(preflightModelId("").kind).toBe("blank");
   expect(createModelMissing("", [], true, true)).toBe(true);
   expect(createModelMissing("", [], false, false)).toBe(true);
+});
+
+it("omits a replay override when an update has no model to bind it to", () => {
+  for (const replay of ["auto", "on", "off"] as const) {
+    const payload = buildConnectionUpdatePayload({ connectionId:"empty", label:"Renamed", model:"  ", transport:"", baseUrl:"", showBaseUrl:false, proxyRef:"", authOptional:false, maxOutputTokens:"", imageInput:"auto", imageInputChanged:false, promptCacheEnabled:false, usage:"auto", replay });
+    expect(payload).not.toHaveProperty("preserveReasoning");
+  }
+});
+
+it("omits replay on both model-free create paths", () => {
+  const source = readFileSync(new URL("./ConnectionDrawer.tsx", import.meta.url), "utf8");
+  const expressions = [...source.matchAll(/const replayCreateValue = ([^;]+);/g)].map(match => match[1]);
+  expect(expressions).toHaveLength(2);
+  for (const expression of expressions) {
+    const evaluate = new Function("replayTransportShown", "reasoningReplayCreateValue", "replaySelection", "model", "createModel", `return ${expression};`);
+    for (const selection of ["on", "off"]) expect(evaluate(true, reasoningReplayCreateValue, selection, "  ", "")).toBeUndefined();
+    expect(evaluate(true, reasoningReplayCreateValue, "on", "m", "m")).toBe(true);
+  }
+});
+
+it("labels the unsaved selected model and endpoint, and clears the label on explicit On", async () => {
+  const { reasoningReplayAutoLabel } = await import("./ConnectionDrawer.js");
+  const connection = { id: "c", providerId: "custom", model: "a", modelOverrides: { b: { reasoningReplayRejection: { reason: "provider-rejected" as const, baseUrl: "https://fixture.invalid" } } } };
+  expect(reasoningReplayAutoLabel(connection, "b", "https://fixture.invalid", "auto")).toBe("Auto (off: provider rejected)");
+  for (const [model, baseUrl, selection] of [["a", "https://fixture.invalid", "auto"], ["b", "https://changed.invalid", "auto"], ["b", "https://fixture.invalid", "on"]] as const) {
+    expect(reasoningReplayAutoLabel(connection, model, baseUrl, selection)).toBe("Automatic (provider default)");
+  }
 });

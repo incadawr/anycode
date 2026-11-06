@@ -6,6 +6,7 @@
  */
 
 export type DiagnosticEvent =
+  | { kind: "reasoning_replay_rejected"; reason: "provider-rejected"; baseUrl: string; model: string }
   | { kind: "provider_stream_artifact"; signature: string }
   /**
    * the model port confirmed, via a one-shot retry, that a strict
@@ -22,6 +23,9 @@ export type DiagnosticSink = (event: DiagnosticEvent) => void;
 /** Default sink: reproduces the pre-5.6 console.warn bytes verbatim (behavior-preserving). */
 export const consoleDiagnosticSink: DiagnosticSink = (event) => {
   switch (event.kind) {
+    case "reasoning_replay_rejected":
+      console.warn("[anycode] reasoning replay disabled: provider rejected input reasoning");
+      return;
     case "provider_stream_artifact":
       console.warn(`[anycode] dropping unparsable provider stream artifact: ${event.signature}`);
       return;

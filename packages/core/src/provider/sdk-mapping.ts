@@ -42,7 +42,16 @@ export function toSdkMessages(
   transport: ProviderTransport,
   reasoningReplay?: ReasoningSource,
 ): ModelMessage[] {
-  return messages.map((message): ModelMessage => {
+  // Keep the historical empty-field compatibility for these providers. This
+  // controls only empty tool-message fields, never whether reasoning replays.
+  const legacyEmptyField = new Set(["Z.AI (GLM)", "DeepSeek", "MiniMax", "MiniMax (China)", "OpenRouter",
+    "Xiaomi MiMo API", "Xiaomi MiMo Token Plan (SGP)", "Xiaomi MiMo Token Plan (CN)", "Xiaomi MiMo Token Plan (AMS)"]);
+  const producedReasoning = reasoningReplay !== undefined && messages.some(message => message.role === "assistant" && message.content.some(part =>
+    part.type === "reasoning" && part.source !== undefined && sameReasoningSource(part.source, reasoningReplay) &&
+    (part.text.length > 0 || (Array.isArray(part.providerMetadata?.openrouter?.reasoningDetails) && part.providerMetadata.openrouter.reasoningDetails.length > 0))));
+  const needsEmptyField = reasoningReplay !== undefined && (reasoningReplay.requireReasoningContent === true ||
+    legacyEmptyField.has(reasoningReplay.provider ?? "") || producedReasoning);
+  return messages.filter(message => message.role !== "assistant" || message.content.length > 0).map((message): ModelMessage => {
     switch (message.role) {
       case "user": {
         // Image-free user messages keep the exact pre-slice shape (bare string
@@ -90,7 +99,7 @@ export function toSdkMessages(
         // are spread onto the wire message, so send "" there.
         if (
           transport === "openai-chat-completions" &&
-          reasoningReplay !== undefined &&
+          needsEmptyField &&
           content.some((part) => part.type === "tool-call") &&
           !content.some((part) => part.type === "reasoning")
         ) {
@@ -148,7 +157,8 @@ function toSdkAssistantContent(
           : metadata;
         out.push({
           type: "reasoning" as const,
-          text: summary?.text ?? part.text,
+          // Recovered content is display text, not a provider summary.
+          text: transport === "openai-responses" && metadata?.openai?.reasoningTextOrigin === "content" ? "" : summary?.text ?? part.text,
           ...(providerOptions !== undefined ? { providerOptions: providerOptions as ProviderMetadata } : {}),
         });
       }
@@ -167,6 +177,12 @@ export function shouldReplayReasoning(
   if (current === undefined || part.source === undefined) return false;
   if (current.replayFactual && !part.factualSummary?.text.trim()) return false;
   if (!sameReasoningSource(part.source, current)) return false;
+  if (transport === "openai-responses") {
+    // No accepted stateless plain-text reasoning form is known or verified. Factual
+    // summaries cannot replace the original encrypted reasoning either.
+    const encrypted = part.providerMetadata?.openai?.reasoningEncryptedContent;
+    return !current.replayFactual && typeof encrypted === "string" && encrypted.length > 0;
+  }
   if (transport === "anthropic-messages") {
     const anthropic = part.providerMetadata?.anthropic;
     return current.replayUnsigned === true || typeof anthropic?.signature === "string" || typeof anthropic?.redactedData === "string";
