@@ -657,6 +657,7 @@ declare global {
       // the Sessions API (local MCP for external agents). No path
       // and no token cross this bridge; copyConfig returns JSON the renderer
       // writes to the clipboard and never persists.
+      agentMessageLinks: import("../../shared/agent-message-links.js").AgentMessageLinksBridge;
       sessionPeers: import("../../shared/session-peer-view.js").SessionPeerBridge;
       communication: {
         get(): Promise<CommunicationGetResult>;

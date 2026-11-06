@@ -1,3 +1,4 @@
+import { AGENT_MESSAGE_LOOKUP_CHANNEL, AGENT_MESSAGE_FOCUS_CHANNEL, type AgentMessageLinksBridge } from "../shared/agent-message-links.js";
 /**
 
  * concerns:
@@ -1207,6 +1208,10 @@ contextBridge.exposeInMainWorld("anycode", {
     customUpsert: (req: LspCustomUpsertRequest): Promise<LspMutationResult> =>
       ipcRenderer.invoke(LSP_CUSTOM_UPSERT_CHANNEL, req) as Promise<LspMutationResult>,
   },
+  agentMessageLinks: {
+    lookup: request => ipcRenderer.invoke(AGENT_MESSAGE_LOOKUP_CHANNEL, request),
+    focus: request => ipcRenderer.invoke(AGENT_MESSAGE_FOCUS_CHANNEL, request),
+  } satisfies AgentMessageLinksBridge,
   sessionPeers: {
     get: (tabId) => ipcRenderer.invoke(SESSION_PEER_VIEW_CHANNEL, { tabId }),
     set: (change) => ipcRenderer.invoke(SESSION_PEER_SET_CHANNEL, change),

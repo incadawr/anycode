@@ -3916,6 +3916,13 @@ void app.whenReady().then(async () => {
     },
   });
 
+  registerAgentMessageLinks({
+    enabled: () => peerEnabled,
+    record: async messageId => (await communicationController?.broker())?.ledger.messages.get(messageId),
+    tabs: () => manager?.listTabs() ?? [],
+    title: async sessionId => agentSessionTitles.get(sessionId) ?? (await persistence?.getRootSession(sessionId))?.title,
+  });
+
   registerSessionPeerIpc({
     policy: peerPolicy,
     enabled: () => nativeSessionsEnabledForBoot(bootEnv, app.isPackaged),
