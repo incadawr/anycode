@@ -631,6 +631,7 @@ export function ModelPill() {
     page: drillPage,
     currentEffort: reasoningEffort,
     availableEffortLevels,
+    envOverrides: snapshot?.envOverrides,
   });
   const openGroup =
     drillPage.kind === "group"

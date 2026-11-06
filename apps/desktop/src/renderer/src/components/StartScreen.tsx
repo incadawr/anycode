@@ -785,7 +785,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
     effortProviderId,
     modelChip.modelId,
     snapshot?.catalog,
-    modelCapabilitiesFor(chipConnection, modelChip.modelId),
+    modelCapabilitiesFor(chipConnection, modelChip.modelId, snapshot?.envOverrides),
     modelOverrideFor(chipConnection, modelChip.modelId)?.effortLevels,
   );
   // the provider's documented default tier for that model —
@@ -794,7 +794,7 @@ export function StartScreen({ onToast }: StartScreenProps) {
     effortProviderId,
     modelChip.modelId,
     snapshot?.catalog,
-    modelCapabilitiesFor(chipConnection, modelChip.modelId),
+    modelCapabilitiesFor(chipConnection, modelChip.modelId, snapshot?.envOverrides),
     modelOverrideFor(chipConnection, modelChip.modelId)?.effortLevels,
   );
   // Show only a draft, saved, or documented default that will actually apply.

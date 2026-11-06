@@ -76,6 +76,7 @@ export interface SessionDrillArgs {
   /** The tab's live reasoning effort (`state.reasoningEffort`), if any. */
   currentEffort?: string;
   availableEffortLevels?: readonly string[];
+  envOverrides?: readonly string[];
 }
 
 /** What `buildSessionDrillRows` hands the component (rows) and its caller (the pieces the rows were built from). */
@@ -117,16 +118,16 @@ export function buildSessionDrillRows(args: SessionDrillArgs): SessionDrillRows 
     currentConnection?.providerId,
     args.currentModelId,
     args.catalog,
-    modelCapabilitiesFor(currentConnection, args.currentModelId),
+    modelCapabilitiesFor(currentConnection, args.currentModelId, args.envOverrides),
     modelOverrideFor(currentConnection, args.currentModelId)?.effortLevels,
   );
   // The host's effective effort is authoritative, even when it is outside the vocabulary.
   const candidate = args.currentEffort ??
     modelOverrideFor(currentConnection, args.currentModelId)?.reasoningEffort ??
     currentConnection?.reasoningEffort ??
-    startModelDefaultEffort(currentConnection?.providerId, args.currentModelId, args.catalog, modelCapabilitiesFor(currentConnection, args.currentModelId), modelOverrideFor(currentConnection, args.currentModelId)?.effortLevels);
+    startModelDefaultEffort(currentConnection?.providerId, args.currentModelId, args.catalog, modelCapabilitiesFor(currentConnection, args.currentModelId, args.envOverrides), modelOverrideFor(currentConnection, args.currentModelId)?.effortLevels);
   const effort = candidate !== undefined && efforts?.includes(candidate) ? candidate :
-    startModelDefaultEffort(currentConnection?.providerId, args.currentModelId, args.catalog, modelCapabilitiesFor(currentConnection, args.currentModelId), modelOverrideFor(currentConnection, args.currentModelId)?.effortLevels);
+    startModelDefaultEffort(currentConnection?.providerId, args.currentModelId, args.catalog, modelCapabilitiesFor(currentConnection, args.currentModelId, args.envOverrides), modelOverrideFor(currentConnection, args.currentModelId)?.effortLevels);
 
   let rows: ModelDrillRow[];
   if (page.kind === "group") {

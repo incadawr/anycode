@@ -217,7 +217,7 @@ export function visionConnectionOptions(
 /** Model candidates are scoped to the selected connection. */
 export interface VisionModelHint { id: string; label: string }
 
-export function visionModelHints(connection: ProviderConnection | undefined, catalog: CatalogSummary | undefined): VisionModelHint[] {
+export function visionModelHints(connection: ProviderConnection | undefined, catalog: CatalogSummary | undefined, envOverrides?: readonly string[]): VisionModelHint[] {
   if (!connection) return [];
   const catalogModels = catalog?.find((entry) => entry.id === connection.providerId)?.models ?? [];
   const labels = new Map(catalogModels.map((model) => [model.id, model.name ?? model.id]));
@@ -231,7 +231,7 @@ export function visionModelHints(connection: ProviderConnection | undefined, cat
   for (const id of candidates) {
     const override = modelOverrideFor(connection, id)?.imageInput;
     const catalogImage = catalogModels.some((model) => model.id === id && model.imageInput === true);
-    const capable = override === "on" || (override !== "off" && (modelCapabilitiesFor(connection, id)?.imageInput === true || catalogImage));
+    const capable = override === "on" || (override !== "off" && (modelCapabilitiesFor(connection, id, envOverrides)?.imageInput === true || catalogImage));
     const hint = { id, label: labels.get(id) ?? id };
     if (capable) image.push(hint);
 
