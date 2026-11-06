@@ -48,7 +48,7 @@ import type {
   SettingsMutationResult,
   TokenRates,
 } from "../../../shared/settings.js";
-import { applyModelReasoningOverride, contextWindowTokensField, modelOverrideFor } from "../../../shared/model-overrides.js";
+import { applyModelReasoningOverride, contextWindowTokensField, modelCapabilitiesFor, modelOverrideFor } from "../../../shared/model-overrides.js";
 import { mergeModelIds, normalizeModelId } from "../../../shared/settings.js";
 import type { CustomProviderMutationReason, CustomProviderMutationResult, CustomProviderUpdateRequest, FetchModelsOutcome } from "../anycode-window.js";
 import { useSettingsStore, type SettingsStoreApi } from "../settings-store.js";
@@ -1885,7 +1885,7 @@ export function ConnectionDrawerFields({
   let imageInputHint = imageInputEffectiveHint(
     goHintEntry(effectiveFormModel.trim()),
     effectiveFormModel.trim(),
-    targetConnection,
+    automaticGo ? undefined : targetConnection,
     imageInput,
   );
   const dictionaryEligible = isNewCustomEndpoint || isCustomRecordConnection || isGatewayProvider(effectiveProviderId);
@@ -1894,7 +1894,7 @@ export function ConnectionDrawerFields({
     catalog.find((entry) => entry.id === effectiveProviderId)?.models.some((entry) => entry.id === effectiveFormModel.trim()) === true;
   const reasoningLevels = startModelEffortLevels(
     effectiveProviderId, effectiveFormModel.trim(), catalog.filter((entry) => !entry.id.startsWith("custom:")),
-    applyModelReasoningOverride(targetConnection?.modelCapabilities?.[effectiveFormModel.trim()], reasoningSupported),
+    applyModelReasoningOverride(automaticGo ? modelCapabilitiesFor({ ...targetConnection, providerId, baseUrl, transport: transport || undefined }, effectiveFormModel.trim(), proxySnapshot?.envOverrides) : targetConnection?.modelCapabilities?.[effectiveFormModel.trim()], reasoningSupported),
   );
   const dictionaryActive = !catalogMatchDisabled ? dictionaryMatch : undefined;
   if (dictionaryActive && !automaticGo) {
@@ -1903,7 +1903,7 @@ export function ConnectionDrawerFields({
     if (dictionaryActive.imageInput && imageInput === "auto") imageInputHint = "catalog: vision";
   }
   const liveReasoning = targetConnection?.modelCapabilities?.[effectiveFormModel.trim()];
-  const effectiveReasoningLevels = reasoningSupported === false ? undefined : effortLevels.length ? effortLevels : (reasoningLevels ?? (liveReasoning?.reasoning !== undefined ? undefined : !catalogMatchDisabled && dictionaryMatch?.reasoning ? (dictionaryMatch.effortLevels ?? ["off", "low", "medium", "high"]) : undefined));
+  const effectiveReasoningLevels = reasoningSupported === false ? undefined : effortLevels.length ? effortLevels : (reasoningLevels ?? (liveReasoning?.reasoning !== undefined ? undefined : !automaticGo && !catalogMatchDisabled && dictionaryMatch?.reasoning ? (dictionaryMatch.effortLevels ?? ["off", "low", "medium", "high"]) : undefined));
   const imageInputFeedHint = proxySnapshot === null ? null : imageInputEnvHint(proxySnapshot.envOverrides);
   // GitHub #1: shown only while ANYCODE_INCLUDE_USAGE overrides the rung.
   const usageEnvHintText = proxySnapshot === null ? null : usageEnvHint(proxySnapshot.envOverrides);
