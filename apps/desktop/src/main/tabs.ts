@@ -703,6 +703,7 @@ export function guardedHostForwarder(stream: NodeJS.WriteStream, usable: boolean
 }
 
 export interface TabHostManagerDeps {
+  shouldRefreshRuntimeIdentity?: (sessionId: string) => boolean;
   refreshRuntimeIdentity?: (sessionId: string) => Promise<{identity: Pick<TabHost,"engine" | "engineModel" | "enginePreset" | "modelOverride" | "connectionId" | "codexProfile">;release?: () => void} | undefined>;
   hostOutputUsable?: (stream: NodeJS.WriteStream) => boolean;
   hostLogStream?: (stream: "stdout" | "stderr") => ((chunk: Buffer) => void) & { end(): void };
@@ -1723,7 +1724,7 @@ export class TabHostManager {
     // this very tab is creating has nothing to show a missing-folder error
     // against, so only it may be rolled back to keep the caller's draft.
     const newSession = !resume;
-    const refresh = resume && !opts.identityRefreshed && tab.childOf === undefined
+    const refresh = resume && !opts.identityRefreshed && tab.childOf === undefined && this.deps.shouldRefreshRuntimeIdentity?.(tab.sessionId) !== false
       ? this.deps.refreshRuntimeIdentity?.(tab.sessionId).then(result => {
           if (!result) return;
           try {

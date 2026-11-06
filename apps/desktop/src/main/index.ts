@@ -2817,10 +2817,10 @@ void app.whenReady().then(async () => {
     // `~/.codex` plan.
     resolveDefaultCodexProfile: () => resolveCodexProfileForTab(undefined),
     engineSwitchEnabled: () => bootEnv.ANYCODE_ENGINE_SWITCH_ENABLED === "1",
+    shouldRefreshRuntimeIdentity: (sessionId: string) =>
+      bootEnv.ANYCODE_ENGINE_SWITCH_ENABLED === "1" || (persistence?.loadRuntimeSession(sessionId)?.revision ?? 0) > 0,
     refreshRuntimeIdentity: async (sessionId: string) => {
       const row = await persistence?.getRootSession(sessionId);
-      const switched = (persistence?.loadRuntimeSession(sessionId)?.revision ?? 0) > 0;
-      if (!switched && bootEnv.ANYCODE_ENGINE_SWITCH_ENABLED !== "1") return undefined;
       if (!row) throw new Error("Session is missing");
       const identity = runtimeResumeIdentity(row);
       const {engine} = identity;

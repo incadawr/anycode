@@ -8810,13 +8810,25 @@ describe("TabHostManager — engine switch process custody", () => {
 });
 
 describe("authoritative runtime identity on respawn", () => {
+  it("forks synchronously without refreshing when the session does not need it", async () => {
+    const fork = vi.fn(shutdownableForkRig().fork);
+    const refresh = vi.fn(async () => undefined);
+    const shouldRefresh = vi.fn(() => false);
+    const manager = childManager(fork, windowRig().window, { shouldRefreshRuntimeIdentity: shouldRefresh, refreshRuntimeIdentity: refresh });
+    const result = manager.createTab({ workspace: "/ws", sessionId: "saved", resume: true });
+    expect(result.ok).toBe(true);
+    expect(shouldRefresh).toHaveBeenCalledWith("saved");
+    expect(refresh).not.toHaveBeenCalled();
+    expect(fork).toHaveBeenCalledTimes(1);
+    await manager.shutdownAllTabHosts();
+  });
   it("refreshes the committed engine and profile before forking a resumed tab", async () => {
     const rig = shutdownableForkRig();
     let finish!: (value: Awaited<ReturnType<NonNullable<TabHostManagerDeps["refreshRuntimeIdentity"]>>>) => void;
     const released = vi.fn();
     const pending = new Promise<Awaited<ReturnType<NonNullable<TabHostManagerDeps["refreshRuntimeIdentity"]>>>>(resolve => { finish = resolve; });
     const fork = vi.fn(rig.fork);
-    const manager = childManager(fork,windowRig().window,{refreshRuntimeIdentity:() => pending,engineEnv:engine => ({[ENV_ENGINE]:engine})});
+    const manager = childManager(fork,windowRig().window,{shouldRefreshRuntimeIdentity: () => true,refreshRuntimeIdentity:() => pending,engineEnv:engine => ({[ENV_ENGINE]:engine})});
     const created = manager.createTab({workspace:"/ws",sessionId:"saved",resume:true});
     if (!created.ok) throw new Error("create failed");
     expect(fork).not.toHaveBeenCalled();
