@@ -77,6 +77,8 @@ export function createSessionPeersHandler(deps: {
           })), sampler: deps.files.sampler(now.workspaceKey!),
           coverage: "partial", startsAt: deps.files.startsAt,
           limitations: "An empty result does not mean nobody wrote this file. Only successful Edit/Write/NotebookEdit reports are indexed; MultiEdit is not indexed. " +
+            "The tap lives in the core host only; claude/codex peers emit no shell windows or reported writes, so absence of candidates for them is not evidence. " +
+            "Sampling batches are bounded to 512 candidates and 4096 window comparisons; excess changes may be omitted. " +
             "Approximate shell candidates include non-zero writers but never prove authorship. Stale/partial or late baseline can miss writes; binary/unknown changes and background processes cannot be attributed. " +
             "Bounded pending pairs and dedup can omit reports, including reused ids after failed results or interrupted turns. " +
             "Records expire after 30 minutes and may be evicted by capacity limits. No ownership or syscall attribution is proven.",

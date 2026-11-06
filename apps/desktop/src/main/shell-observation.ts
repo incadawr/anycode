@@ -15,6 +15,7 @@ interface Workspace {
 /** Main-owned metadata sampling only. Windows are approximate, never authorship evidence. */
 export function createShellObservation(deps: {
   now?: () => number;
+  batch?: (action: () => void) => void;
   record?: (identity: FileIdentity, path: string, interval: ChangeInterval) => void;
   observer?: typeof createWorkspaceFileObserver;
 } = {}) {
@@ -63,7 +64,7 @@ export function createShellObservation(deps: {
         if (workspaces.size >= 128) return;
         state = { observer: (deps.observer ?? createWorkspaceFileObserver)({ workspace: identity.workspaceKey,
           enabled: () => workspaces.has(identity.workspaceKey), now }),
-          correlation: createShellCorrelation(now, deps.record ?? (() => {})),
+          correlation: createShellCorrelation(now, deps.record ?? (() => {}), deps.batch),
           members: new Map(), shells: new Map(), requested: false, running: false };
         workspaces.set(identity.workspaceKey, state);
         request(identity.workspaceKey, state);

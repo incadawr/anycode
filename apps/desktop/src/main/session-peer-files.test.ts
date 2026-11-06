@@ -51,7 +51,7 @@ it('empty answers explicitly explain unknown coverage and unsupported writers', 
   const answer = await f.query();
   expect(answer).toMatchObject({ status: 'file_activity', records: [], coverage: 'partial', startsAt: expect.any(Number) });
   const text = JSON.stringify(answer);
-  for (const term of ['MultiEdit', 'shell', 'binary', 'background', 'unknown', 'baseline', 'dedup', 'pending']) {
+  for (const term of ['MultiEdit', 'shell', 'binary', 'background', 'unknown', 'baseline', 'dedup', 'pending', 'claude/codex peers emit no shell windows or reported writes', 'core host only']) {
     expect(text).toContain(term);
   }
   expect(text).toContain('does not mean nobody');
@@ -81,11 +81,10 @@ it('flag off has no index, queries remain unavailable and list shape stays uncha
   expect(await f.query()).toEqual({ status: 'unavailable' });
   const list = await f.handler('a', f.hosts[0]!.proc!, { requestId: 'list', operation: 'list', input: {} });
   expect(JSON.stringify(list)).not.toContain('recentPaths');
-  const original = createSessionPeersHandler({ current: id => f.hosts.find(h => h.tabId === id),
-    targets: () => f.hosts, access: { canAccess: () => true }, prepare: async () => {} });
-  expect(JSON.stringify(list)).toBe(JSON.stringify(await original('a', f.hosts[0]!.proc!, {
-    requestId: 'original', operation: 'list', input: {},
-  })));
+  expect(f.ingress).toBeUndefined();
+  expect(list).toEqual({ status: 'ok', sessions: ['a', 'b'].map(id => ({
+    sessionId: id, tabId: id, workspace: f.workspace, engine: 'core', activity: 'idle', addressable: true,
+  })) });
 });
 it('collector losses and unsupported MultiEdit cannot become an assertion of no writers', async () => {
   const f = fixture();
@@ -107,6 +106,7 @@ it('collector losses and unsupported MultiEdit cannot become an assertion of no 
 
 it('projects both overlapping nonzero shell candidates and keeps reported evidence separate', async () => {
   const f = fixture();
+  const batches = vi.spyOn(f.files!, 'batch');
   const wire = (id: string, phase: string) => f.ingress!.accept(id, f.hosts.find(h => h.tabId === id)!.proc!, {
     type: 'shell_activity', generation: 1, phase, toolCallId: 'shell',
   });
@@ -117,6 +117,7 @@ it('projects both overlapping nonzero shell candidates and keeps reported eviden
   try { execFileSync('/bin/sh', ['-c', 'printf data > "$1"; exit 7', 'sh', join(f.workspace, 'file')]); } catch { /* nonzero writer */ }
   wire('a', 'end'); wire('b', 'end');
   await vi.waitFor(() => expect(f.files!.lookup(f.workspace, 'file')).toHaveLength(2));
+  expect(batches).toHaveBeenCalled();
   f.record('a');
   expect(await f.query()).toMatchObject({ records: [{ sessionId: 'a', evidence: 'reported_write' }],
     candidates: [{ sessionId: 'a', evidence: 'observed_during_shell', confidence: 'candidate' },

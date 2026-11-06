@@ -66,3 +66,26 @@ it('retains finished intervals when a shell id is reused before sampling', () =>
   value.consume(sample(2), 1);
   expect(rows).toHaveLength(2);
 });
+
+it('never emits a new candidate from frozen or stale complete samples', () => {
+  let at = 0;
+  const rows: unknown[] = [];
+  const value = createShellCorrelation(() => at, (...args) => rows.push(args));
+  value.start('live', identity);
+  value.consume(sample(0, { baseline: true, changes: [] }), 0);
+  const complete = sample(1);
+  at = 1; value.consume(complete, 1);
+  expect(rows).toEqual([[identity, 'file', { start: 0, end: 1 }]]);
+  at = 2; value.consume(complete, 2);
+  expect(rows).toHaveLength(1); // identical frozen metadata is no new observation
+  at = 3002; value.consume(sample(2), 2);
+  expect(rows).toHaveLength(1); // complete coverage does not make stale data evidence
+});
+it('bounds a build burst even with hundreds of overlapping shell windows', () => {
+  let count = 0;
+  const value = createShellCorrelation(() => 0, () => count++);
+  for (let i = 0; i < 512; i++) value.start(String(i), identity);
+  value.consume(sample(0, { changes: Array.from({ length: 4800 }, (_, i) => ({ path: `file${i}`, kind: 'modified' as const })) }), 0);
+  expect(count).toBeGreaterThan(0);
+  expect(count).toBeLessThanOrEqual(512);
+});

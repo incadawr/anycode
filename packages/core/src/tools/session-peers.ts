@@ -72,7 +72,7 @@ const sampler = z.strictObject({ coverage: z.enum(["complete", "partial", "unkno
   baselineCoverage: z.enum(["complete", "partial", "unknown"]), freshness: z.enum(["fresh", "stale"]) });
 const responseSchema = z.discriminatedUnion("status", [
   z.strictObject({ status: z.literal("file_activity"), path: z.string().min(1).max(4096),
-    candidates: z.array(shellCandidate).max(20).optional(), sampler: sampler.optional(),
+    candidates: z.array(shellCandidate).max(20), sampler,
     records: z.array(fileEvidence).max(20), coverage: z.literal("partial"),
     startsAt: z.number().finite(), limitations: z.string().min(1).max(2000),
   }),

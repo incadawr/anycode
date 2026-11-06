@@ -4,7 +4,8 @@ import type { WorkspaceFileSample } from './workspace-file-observer.js';
 export interface ChangeInterval { start: number; end: number }
 /** Conservative metadata intervals include both walks, not just their completion times. */
 export function createShellCorrelation(now: () => number,
-  record: (identity: FileIdentity, path: string, interval: ChangeInterval) => void) {
+  record: (identity: FileIdentity, path: string, interval: ChangeInterval) => void,
+  batch: (action: () => void) => void = action => action()) {
   const windows = new Map<string, { identity: FileIdentity; start: number; end?: number }>();
   const active = new Map<string, string>();
   let serial = 0;
@@ -43,11 +44,16 @@ export function createShellCorrelation(now: () => number,
       if (sample.coverage === 'complete') priorStart = scanStart;
       else priorStart ??= scanStart;
       if (sample.baseline || interval.end < interval.start || now() < sample.at || now() - sample.at > 2000) return;
-      for (const change of sample.changes) for (const window of windows.values()) {
-        if (window.start <= interval.end && (window.end ?? now()) >= interval.start) {
-          record(window.identity, change.path, interval);
+      batch(() => {
+        let remaining = 4096, emitted = 0;
+        for (const change of sample.changes.slice(0, 4096)) for (const window of windows.values()) {
+          if (--remaining < 0 || emitted >= 512) return;
+          if (window.start <= interval.end && (window.end ?? now()) >= interval.start) {
+            record(window.identity, change.path, interval);
+            emitted++;
+          }
         }
-      }
+      });
     },
   };
 }

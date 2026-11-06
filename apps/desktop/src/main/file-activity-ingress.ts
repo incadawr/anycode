@@ -7,7 +7,7 @@ import type { PeerHost } from './session-peers.js';
 
 export function createFileActivityIngress(enabled: boolean, current: (tabId: string) => PeerHost | undefined) {
   if (!enabled) return undefined;
-  const observation = createShellObservation({ record: (identity, path, interval) => index.candidate(identity, path, interval) });
+  const observation = createShellObservation({ batch: action => index.batch(action), record: (identity, path, interval) => index.candidate(identity, path, interval) });
   const tabs = new Map<string, string>();
   const identity = (host: PeerHost | undefined) => {
     if (!host?.live || !host.proc || !host.workspaceKey) return undefined;

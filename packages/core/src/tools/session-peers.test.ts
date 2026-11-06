@@ -65,6 +65,7 @@ it("preserves reply receipts and loop refusal through the shared response parser
 
 it("preserves file evidence and bounded recent paths but rejects invented confidence", () => {
   const answer = { status: "file_activity", path: "file", coverage: "partial", startsAt: 1,
+    candidates: [], sampler: { coverage: "unknown", baselineCoverage: "unknown", freshness: "stale" },
     limitations: "Incomplete observation", records: [
       { sessionId: "a", toolName: "Write", at: 2, evidence: "reported_write" },
     ] };
@@ -90,4 +91,16 @@ it('accepts only candidate shell evidence in the candidate projection', () => {
   for (const spoof of [{ confidence: 'proven' }, { evidence: 'reported_write' }, { command: 'private' }]) {
     expect(parseSessionPeerResponse({ ...answer, candidates: [{ ...candidate, ...spoof }] })).toEqual({ status: 'unknown' });
   }
+});
+
+it('rejects missing candidate or sampler fields rather than silently claiming empty evidence', () => {
+  const answer = { status: 'file_activity', path: 'file', records: [], candidates: [],
+    coverage: 'partial', startsAt: 0, limitations: 'Incomplete',
+    sampler: { coverage: 'unknown', baselineCoverage: 'unknown', freshness: 'stale' } };
+  expect(parseSessionPeerResponse(answer)).toEqual(answer);
+  for (const field of ['candidates', 'sampler']) {
+    const missing: Record<string, unknown> = { ...answer }; delete missing[field];
+    expect(parseSessionPeerResponse(missing)).toEqual({ status: 'unknown' });
+  }
+  expect(parseSessionPeerResponse({ ...answer, sampler: { ...answer.sampler, forged: true } })).toEqual({ status: 'unknown' });
 });

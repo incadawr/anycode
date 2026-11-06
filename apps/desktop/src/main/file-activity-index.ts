@@ -104,9 +104,18 @@ export function canonicalFile(workspace: string, input: string, options: PathOpt
 
 export class FileActivityIndex {
   private readonly records = new Map<string, FileActivity>();
+  private batchState?: { remaining: number; live: Map<string, FileIdentity | undefined>; paths: Map<string, string | undefined> };
   readonly startsAt: number;
   constructor(private readonly options: IndexOptions) {
     this.startsAt = (options.now ?? Date.now)();
+  }
+
+  /** Synchronous observation transaction: caches never survive a sample or a lifecycle change. */
+  batch(action: () => void): void {
+    if (this.batchState) { action(); return; }
+    this.batchState = { remaining: 512, live: new Map(), paths: new Map() };
+    try { this.prune((this.options.now ?? Date.now)(), false); action(); }
+    finally { this.batchState = undefined; }
   }
 
   canonical(workspace: string, input: string) { return canonicalFile(workspace, input, this.options); }
@@ -125,13 +134,19 @@ export class FileActivityIndex {
   }
 
   private current(identity: FileIdentity): boolean {
-    const live = this.options.current(identity.sessionId);
+    const cache = this.batchState?.live;
+    if (cache && !cache.has(identity.sessionId)) cache.set(identity.sessionId, this.options.current(identity.sessionId));
+    const live = cache ? cache.get(identity.sessionId) : this.options.current(identity.sessionId);
     return live?.workspaceKey === identity.workspaceKey && live.generation === identity.generation;
   }
 
-  private prune(at: number): void {
+  private prune(at: number, validate = true): void {
+    const live = new Map<string, FileIdentity | undefined>();
     for (const [key, row] of this.records) {
-      if (at < row.at || at - row.at >= TTL || !this.current(row)) this.records.delete(key);
+      if (validate && !live.has(row.sessionId)) live.set(row.sessionId, this.options.current(row.sessionId));
+      const current = live.get(row.sessionId);
+      if (at < row.at || at - row.at >= TTL || (validate &&
+        (current?.workspaceKey !== row.workspaceKey || current.generation !== row.generation))) this.records.delete(key);
     }
   }
 
@@ -146,11 +161,16 @@ export class FileActivityIndex {
 
   private insert(identity: FileIdentity, report: ReportedWrite, interval?: ChangeInterval): boolean {
     const at = (this.options.now ?? Date.now)();
-    this.prune(at);
+    if (this.batchState) {
+      if (this.batchState.remaining-- <= 0) return false;
+    } else this.prune(at, false);
     if (!this.current(identity) || !(interval ? report.toolName === 'Bash' : ['Edit', 'Write', 'NotebookEdit'].includes(report.toolName))
       || typeof report.toolCallId !== 'string' || !report.toolCallId.length
       || report.toolCallId.length > 256 || report.toolCallId.includes('\0')) return false;
-    const canonicalPath = canonicalFile(identity.workspaceKey, report.filePath, this.options);
+    const cache = this.batchState?.paths;
+    const pathKey = JSON.stringify([identity.workspaceKey, report.filePath]);
+    if (cache && !cache.has(pathKey)) cache.set(pathKey, canonicalFile(identity.workspaceKey, report.filePath, this.options));
+    const canonicalPath = cache ? cache.get(pathKey) : canonicalFile(identity.workspaceKey, report.filePath, this.options);
     if (!canonicalPath) return false;
     const paths = (this.options.platform ?? process.platform) === 'win32' ? path.win32 : path.posix;
     const key = JSON.stringify([identity.workspaceKey, canonicalPath, identity.sessionId, interval ? 'candidate' : 'reported']);

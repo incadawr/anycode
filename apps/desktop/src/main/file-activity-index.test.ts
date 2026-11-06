@@ -252,3 +252,25 @@ it('refuses outside candidate paths and keeps candidate confidence separate from
   expect(index.candidate(a, 'file', { start: 0, end: 1 })).toBe(true);
   expect(index.lookup(root, 'file')).toMatchObject([{ evidence: 'observed_during_shell', confidence: 'candidate' }]);
 });
+
+it('bounds validation calls per batch independently of retained rows and overlapping inserts', () => {
+  const a = add(identity('a'));
+  let calls = 0, paths = 0;
+  const value = new FileActivityIndex({ current: id => { calls++; return live.get(id); },
+    realpath: value => { paths++; return value; },
+    stat: () => ({ isFile: () => true, isDirectory: () => true }) });
+  for (let i = 0; i < 150; i++) value.record(a, write(`old${i}`));
+  calls = paths = 0;
+  // On the old implementation this fallback exposes the inserts x rows regression.
+  const batch = (fn: () => void) => 'batch' in value ? (value as FileActivityIndex & { batch(fn: () => void): void }).batch(fn) : fn();
+  batch(() => { for (let i = 0; i < 300; i++) value.candidate(a, `file${i % 30}`, { start: 0, end: 1 }); });
+  expect(calls).toBeLessThanOrEqual(1);
+  expect(paths).toBeLessThanOrEqual(60);
+  calls = paths = 0;
+  batch(() => { for (let i = 0; i < 4800; i++) value.candidate(a, `burst${i}`, { start: 0, end: 1 }); });
+  expect(calls).toBeLessThanOrEqual(1);
+  expect(paths).toBeLessThanOrEqual(1024);
+  live.delete('a');
+  batch(() => expect(value.candidate(a, 'file', { start: 0, end: 1 })).toBe(false));
+  expect(value.lookup(root, 'file')).toEqual([]);
+});
