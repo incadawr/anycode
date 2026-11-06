@@ -308,3 +308,16 @@ describe("visionSubmitDisabled (mirrors handleRecognizerSet's refusal, main/sett
     expect(visionSubmitDisabled("c1", "  glm-5.3-flash  ")).toBe(false);
   });
 });
+
+it("does not offer a saved text-only Go route as an image candidate", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { parseOpenCodeGoSnapshot } = await import("@anycode/core/model-route");
+  const { getBuiltinCatalog } = await import("@anycode/core/catalog");
+  const fixture = JSON.parse(await readFile(new URL("../../../../../../packages/core/src/provider/__fixtures__/opencode-go-models.json", import.meta.url), "utf8"));
+  fixture.data.find((row: { id: string }) => row.id === "grok-4.7").modalities.input = ["text"];
+  const parsed = parseOpenCodeGoSnapshot(fixture, "2026-11-05T00:00:00Z");
+  if (!parsed.ok) throw new Error("invalid fixture");
+  const catalog = getBuiltinCatalog().providers as unknown as CatalogSummary;
+  const conn = connection({ id: "go", providerId: "opencode", modelRoutes: parsed.snapshot });
+  expect(visionModelHints(conn, catalog).map(hint => hint.id)).not.toContain("grok-4.7");
+});
