@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Environment controls for native session access and explicit folder-pair communication grants, available behind the native sessions feature flag.
+
 ### Fixed
 
 - Sessions API reports the created session and tab ids when first-message delivery is interrupted.

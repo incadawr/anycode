@@ -2,6 +2,7 @@ import { createSessionPeerReplies } from "./session-peer-replies.js";
 import { createFileActivityIngress } from "./file-activity-ingress.js";
 import { createSessionPeersHandler } from "./session-peers.js";
 import { createSessionPeerAccess } from "./session-peer-access.js";
+import { registerSessionPeerIpc } from "./session-peer-ipc.js";
 import { createSessionPeerPolicyStore } from "./session-peer-policy.js";
 import { nativeSessionsEnabledForBoot } from "./host-env.js";
 import { claudeOrchestrationEnabled } from "./claude-orchestration-feature.js";
@@ -3851,6 +3852,17 @@ void app.whenReady().then(async () => {
       await mcpSecretCache.refreshAll();
       reconcileServices();
     },
+  });
+
+  registerSessionPeerIpc({
+    policy: createSessionPeerPolicyStore({ file: join(app.getPath("userData"), "session-peer-policy.json") }),
+    enabled: () => nativeSessionsEnabledForBoot(bootEnv, app.isPackaged),
+    tabs: () => manager?.listTabs() ?? [],
+    realpath: realpathSync,
+    isDirectory: path => statSync(path).isDirectory(),
+    isTrusted: workspace => isWorkspaceTrustedFor(new NodeLspConfigFs(),
+      selfCheckProfile ?? resolveSkillsProfileHome(process.env, app.isPackaged) ?? homedir(), workspace,
+      workspaceTrustOnceFor(workspaceTrustOnceApprovals, workspace, realpathSync)),
   });
 
   // Language-server config management control plane: same

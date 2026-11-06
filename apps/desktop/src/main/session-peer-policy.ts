@@ -26,6 +26,7 @@ const schema = z.strictObject({
 });
 type Policy = z.infer<typeof schema>;
 export interface SessionPeerPolicyStore {
+  projectKeys(): string[];
   isNativeEnabled(key: string): boolean;
   hasPairGrant(a: string, b: string): boolean;
   /** Main/UI only: never pass a model request to these mutators. */
@@ -62,6 +63,7 @@ export function createSessionPeerPolicyStore(deps: { file: string; platform?: No
     finally { try { rmSync(temporary, { force: true }); } catch { /* no authority from cleanup */ } }
   };
   return {
+    projectKeys: () => [...new Set([...state.off, ...state.grants.flat()])],
     isNativeEnabled: key => healthy && validKey(key) && !state.off.includes(key),
     hasPairGrant: (a, b) => healthy && validKey(a) && validKey(b) && has(a, b),
     setNativeEnabled(key, enabled) {
