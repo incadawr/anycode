@@ -799,7 +799,7 @@ export interface SwitchRuntime {
   presentation?: Pick<SessionOptions, "shell" | "imageInputEnabled" | "imageFallbackAvailable" | "contextWindowAssumed" | "modelSettingsConnectionId"> & { pinnedConnection?: { connectionId: string; providerId: string } | null };
   backgroundChildren?: SessionOptions["backgroundChildren"];
   onOrchestrateChanged?: SessionOptions["onOrchestrateChanged"];
-  callbacks?: Pick<SessionOptions, "persistence" | "usageAudit" | "effortResolution" | "saveTurnError" | "saveContextUsage" | "reportProviderHealth" | "reportProviderQuota" | "refineTitle" | "restoreHistoryAndTurnErrors" | "currentTurnErrorIds" | "compactionRecords" | "orchestratorRouteCheck" | "applyRecognizerConfig">;
+  callbacks?: Pick<SessionOptions, "persistence" | "usageAudit" | "effortResolution" | "saveTurnError" | "saveContextUsage" | "reportProviderHealth" | "reportProviderQuota" | "refineTitle" | "restoreHistoryAndTurnErrors" | "currentTurnErrorIds" | "compactionRecords" | "orchestratorRouteCheck" | "applyRecognizerConfig" | "checkpoints">;
 }
 
 export interface SessionOptions {
@@ -1391,7 +1391,7 @@ export class Session {
   private readonly workspaceTrustRequired: SessionOptions["workspaceTrustRequired"];
   private readonly envStatus: SessionOptions["envStatus"];
   /** Slice P7.26/R2: rewind/list seam (undefined -> checkpoints disabled, fail-closed). */
-  private readonly checkpoints: SessionOptions["checkpoints"];
+  private checkpoints: SessionOptions["checkpoints"];
   private imageInputEnabled: (() => boolean) | undefined;
   /** срез C: see SessionOptions.imageFallbackAvailable's own doc. */
   private imageFallbackAvailable: (() => boolean) | undefined;
@@ -4515,6 +4515,7 @@ export class Session {
         this.refineTitle = nextRuntime.callbacks.refineTitle;
         this.restoreHistoryAndTurnErrors = nextRuntime.callbacks.restoreHistoryAndTurnErrors;
         this.currentTurnErrorIds = nextRuntime.callbacks.currentTurnErrorIds;
+        this.checkpoints = nextRuntime.callbacks.checkpoints;
         this.compactionRecords = nextRuntime.callbacks.compactionRecords;
         this.orchestratorRouteCheck = nextRuntime.callbacks.orchestratorRouteCheck;
         this.applyRecognizerConfigImpl = nextRuntime.callbacks.applyRecognizerConfig;

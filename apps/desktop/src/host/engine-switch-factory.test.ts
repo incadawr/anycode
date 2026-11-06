@@ -3,13 +3,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AgentLoop, ConversationHistory, SessionPermissionRules } from "@anycode/core";
+import { AgentLoop, ConversationHistory, SessionPermissionRules, SqlitePersistenceAdapter, type HistoryItem } from "@anycode/core";
 import { createSwitchEngineFactory, type SwitchEngineFactoryContext } from "./engine-switch-factory.js";
 import { buildClaudeLaunchOptions, buildCodexLaunchOptions, buildCoreLaunchOptions } from "./engine-launch-options.js";
 import type { EngineProcessRegistrationMessage } from "../shared/engines.js";
 import { readHostProcessOwnership } from "./engines/codex/process-ownership.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
-import { createHarness, finishStep, MemFs, ScriptedModelPort } from "./test-harness.js";
+import { createHarness, finishStep, textStep, MemFs, ScriptedModelPort } from "./test-harness.js";
+import { createCoreRuntimeMedia } from "./core-runtime-services.js";
+import { RoleHealthCache, entryKey } from "./role-route.js";
+import type { SwitchRuntime } from "./session.js";
 
 const executable = fileURLToPath(new URL("./engine-switch-fixtures/native-double.mjs", import.meta.url));
 const directories: string[] = [];
@@ -44,6 +47,82 @@ function context() {
 }
 
 describe("host switch engine factory", () => {
+  it("restores core services through the real factory on a core → codex → core round trip", async () => {
+    const {ctx} = context();
+    const database = new SqlitePersistenceAdapter(":memory:");
+    await database.createSession({id:ctx.sessionId,workspace:ctx.workspace,model:"model-chosen",mode:"build"});
+    const base = createHarness({steps:[]});
+    const health = new RoleHealthCache();
+    health.markFailure(entryKey("orchestrator",{model:"primary"}),"quota",Date.now());
+    const providerEvents: unknown[] = [];
+    const configurations: typeof base.config[] = [];
+    const ports: ScriptedModelPort[] = [];
+    const kept: HistoryItem = {id:"kept",turnId:"kept-turn",createdAt:1,message:{role:"user",content:"retained"}};
+    const rewind = vi.fn(async () => ({ok:true as const,safetyCheckpointId:"safety",restoredPaths:0,historyItems:[kept],turnErrorIds:["kept-error"],compactionSeq:0}));
+    ctx.resolveCore = async ({model}) => {
+      const modelPort = new ScriptedModelPort([finishStep(),textStep("A restored title")]);
+      ports.push(modelPort);
+      const config = {...base.config,modelPort,history:new ConversationHistory()};
+      const media = createCoreRuntimeMedia({registry:config.registry,imageInputEnabled:() => false,endpoint:null,env:{},
+        reserveRef:() => database.reserveImageRef(ctx.sessionId),portFactory:() => modelPort,
+        onRegistrationChanged:() => {config.systemPrompt=config.registry.list().join(",");}});
+      config.media=media; config.recognizer=media.recognizer;
+      configurations.push(config);
+      return {model,options:buildCoreLaunchOptions({config,loop:new AgentLoop(config)}),
+        services:{adapter:() => database,sessionId:ctx.sessionId,media,flushHistory:async () => {},
+          checkpoints:{list:async () => [],rewind},readOrchestrator:() => ({primary:{model:"primary"},fallbacks:[{model:"model-chosen"}]}),
+          health:() => health.snapshot(),sendProviderEvent:event => providerEvents.push(event),pricing:() => ({pricingRaw:undefined})}};
+    };
+    const productionFactory = createSwitchEngineFactory(ctx)!;
+    let core: SwitchRuntime | undefined;
+    const factory: typeof productionFactory = async (...args) => {
+      const runtime = await productionFactory(...args);
+      if ("engine" in runtime && runtime.engine.id === "core") core=runtime;
+      return runtime;
+    };
+    const source = await factory("core","model-chosen");
+    if (!("engine" in source)) throw new Error("missing runtime");
+    const h = createHarness({steps:[],engine:source.engine,switchEngineFactory:factory});
+    try {
+      h.send({type:"ui_ready"}); await h.waitFor(m => m.type === "host_ready");
+      for (const engine of ["codex","core"] as const) {
+        h.send({type:"engine_switch_request",requestId:`to-${engine}`,engine,model:"model-chosen"});
+        await h.waitUntil(() => h.received.some(m => m.type === "engine_switched" && m.requestId === `to-${engine}`));
+      }
+      const services = core!.callbacks!;
+      expect(services.orchestratorRouteCheck!()).toMatchObject({model:"model-chosen",notice:expect.stringContaining("quota")});
+      h.session.applyRecognizerConfig({transport:"openai-chat-completions",baseUrl:"http://local",model:"vision",apiKey:"first"});
+      expect(configurations.at(-1)!.registry.has("InspectImage")).toBe(true);
+      expect(configurations.at(-1)!.recognizer!.endpoint).toMatchObject({model:"vision",apiKey:"first"});
+      h.session.applyRecognizerConfig({transport:"openai-chat-completions",baseUrl:"http://local",model:"other"});
+      expect(configurations.at(-1)!.recognizer!.endpoint!.apiKey).toBeUndefined();
+      h.send({type:"user_message",requestId:"after-round-trip",text:"continue"});
+      await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && m.event.type === "loop_end"));
+      await (h.session as unknown as {currentTurn:Promise<void> | null}).currentTurn;
+      expect(providerEvents).toContainEqual({type:"anycode:provider-health",kind:"success"});
+      await vi.waitFor(() => expect(ports.at(-1)!.requests.some(request => request.maxOutputTokens === 32)).toBe(true));
+      await services.persistence!.commitTitle!("Restored core title");
+      expect((await database.getRootSession(ctx.sessionId))!.title).toBe("Restored core title");
+      services.reportProviderQuota!({usedPercent:50},"fixture");
+      expect(providerEvents).toContainEqual({type:"anycode:provider-quota",quota:{usedPercent:50},source:"fixture"});
+      const error = (id:string,turnId:string) => ({kind:"turn_error" as const,id,turnId,createdAt:4,engine:"core",model:"model-chosen",error:{name:"Error",message:id}});
+      await services.saveTurnError!(error("kept-error","kept-turn"));
+      await services.saveTurnError!(error("discarded-error","discarded-turn"));
+      services.compactionRecords!.record({id:"discarded-compaction",createdAt:4,ok:true});
+      await services.compactionRecords!.flush();
+      expect(await database.listCompactionRecords(ctx.sessionId)).toHaveLength(1);
+      h.send({type:"rewind_request",requestId:"after-round-trip-rewind",checkpointId:"checkpoint",scope:"conversation"});
+      await h.waitUntil(() => h.received.some(m => m.type === "rewind_result" && m.ok));
+      await services.compactionRecords!.flush();
+      expect(rewind).toHaveBeenCalledWith("checkpoint",expect.objectContaining({compactionSeq:1,turnErrorIds:["kept-error","discarded-error"]}));
+      expect((await database.loadTurnErrors(ctx.sessionId)).map(record => record.id)).toEqual(["kept-error"]);
+      expect(await database.listCompactionRecords(ctx.sessionId)).toEqual([]);
+      expect(core!.engine.historyItems()).toEqual([kept]);
+      h.session.applyRecognizerConfig(null);
+      expect(configurations.at(-1)!.registry.has("InspectImage")).toBe(false);
+    } finally {await h.session.shutdown();h.close();base.close();await database.close();}
+  });
+
   it.each(["codex", "claude"] as const)("starts %s through the real transport with the selected model", async engine => {
     const { ctx, dir, cleanup } = context();
     const factory = createSwitchEngineFactory(ctx)!;

@@ -10,6 +10,7 @@ export function createCoreRuntimeControls(deps: {
   settings: ReturnType<typeof createConnectionModelSettings>;
   modelPortFor(model: string): ModelPort;
   imageInputFor(model: string): boolean;
+  imageFallbackAvailable?(): boolean;
   systemPromptFor(model: string): string;
   initialEffort?: ReasoningEffort;
   maxOutputTokens?: number;
@@ -54,6 +55,6 @@ export function createCoreRuntimeControls(deps: {
   return {
     options,
     callbacks: {effortResolution:{levels,effective}} satisfies SwitchRuntime["callbacks"],
-    presentation: {imageInputEnabled:() => deps.imageInputFor(model),imageFallbackAvailable:() => false,contextWindowAssumed:() => settings.contextFor(model).source === "assumed"} satisfies SwitchRuntime["presentation"],
+    presentation: {imageInputEnabled:() => deps.imageInputFor(model),imageFallbackAvailable:deps.imageFallbackAvailable ?? (() => false),contextWindowAssumed:() => settings.contextFor(model).source === "assumed"} satisfies SwitchRuntime["presentation"],
   };
 }

@@ -3,6 +3,7 @@ import type { SessionOptions, SwitchRuntime } from "./session.js";
 import type { CoreEngineOptions } from "./engines/core-engine.js";
 import type { CodexLaunchOptions, ClaudeLaunchOptions } from "./engine-launch-options.js";
 import { prepareSwitchRuntime, type SwitchRuntimeConfig } from "./engine-switch-runtime.js";
+import { createCoreRuntimeServices, type CoreRuntimeServicesDependencies } from "./core-runtime-services.js";
 
 export interface SwitchEngineRequestContext {
   workspace: string;
@@ -15,7 +16,7 @@ export interface SwitchEngineFactoryContext {
   engineSwitchEnabled?: boolean;
   workspace: string;
   sessionId: string;
-  resolveCore(request: SwitchEngineRequestContext): Promise<{ model: string; options: CoreEngineOptions; cleanup?: () => void | Promise<void>; configure?: (runtime: SwitchRuntime) => void } | undefined>;
+  resolveCore(request: SwitchEngineRequestContext): Promise<{ model: string; options: CoreEngineOptions; services?: Omit<CoreRuntimeServicesDependencies,"config">; cleanup?: () => void | Promise<void>; configure?: (runtime: SwitchRuntime) => void } | undefined>;
   resolveCodex(request: SwitchEngineRequestContext): Promise<{ options: CodexLaunchOptions; cleanup?: () => void | Promise<void>; configure?: (runtime: SwitchRuntime) => void } | undefined>;
   resolveClaude(request: SwitchEngineRequestContext): Promise<{ options: ClaudeLaunchOptions; cleanup?: () => void | Promise<void>; configure?: (runtime: SwitchRuntime) => void } | undefined>;
 }
@@ -31,7 +32,14 @@ export function createSwitchEngineFactory(ctx: SwitchEngineFactoryContext): Sess
       case "core": {
         const resolved = await ctx.resolveCore(request);
         if (!resolved || resolved.model !== request.model) throw new Error(`Requested model ${request.model} is unavailable for core`);
-        config = { engine, options: resolved.options, cleanup: resolved.cleanup, configure: resolved.configure };
+        const services = resolved.services ? await createCoreRuntimeServices({...resolved.services,config:resolved.options.config}) : undefined;
+        config = { engine, options: resolved.options, cleanup: resolved.cleanup, configure: runtime => {
+          resolved.configure?.(runtime);
+          if (services) {
+            runtime.callbacks = {...runtime.callbacks,...services.callbacks};
+            runtime.presentation = {...runtime.presentation,...services.presentation};
+          }
+        } };
         break;
       }
       case "codex": {

@@ -111,12 +111,16 @@ try {
     }
     assert(!runtime.items.some(item => item.message.role === "user" && typeof item.message.content === "string" && item.message.content.includes("# user (current message)")));
   }
+  let rendererReloads = 0;
+  let hostRestarts = 0;
   async function reload(engine,boundaries) {
+    rendererReloads++;
     await cdp.call("Page.reload");
     await poll(() => evaluate("typeof window.anycode?.createTab === 'function'"));
     await verify(engine,boundaries);
   }
   async function restartHost(engine,boundaries) {
+    hostRestarts++;
     const sessionId = readRuntime().row.id;
     const closed = await evaluate(`window.anycode.closeTab(${JSON.stringify(tab.tabId)})`);
     assert(closed.ok,JSON.stringify(closed));
@@ -238,8 +242,11 @@ try {
     await switchTo(engine); boundaries++;
     await verify(engine,boundaries);
     assert.equal((await state()).orchestrateActive,true);
-    await restartHost(engine,boundaries);
-    assert.equal((await state()).orchestrateActive,true,`${engine} overlay restored`);
+    // Exercise the committed core candidate before a host boot can rebuild its services.
+    if (engine !== "core") {
+      await restartHost(engine,boundaries);
+      assert.equal((await state()).orchestrateActive,true,`${engine} overlay restored`);
+    }
     const text = `orchestrated target ${engine}`;
     await turn(text); originalTexts.push(text);
     await reload(engine,boundaries);
@@ -260,9 +267,30 @@ try {
   assert(policyFrames.some(frame => frame.method === "thread/resume" && frame.params.approvalPolicy === "never"),"native policy was applied");
   await api(`/tabs/${tab.tabId}/orchestrate`,"POST",{enabled:false});
   await poll(async () => !(await state()).orchestrateActive);
+  // Direct core → codex → core, with no restart between commit and compaction.
+  for (const engine of ["codex","core"]) {
+    await switchTo(engine); boundaries++;
+    await verify(engine,boundaries);
+  }
+  await turn("core services after round trip");
+  originalTexts.push("core services after round trip");
+  await evaluate("document.querySelector('.composer-textarea').focus()");
+  await cdp.call("Input.insertText",{text:"/compact"});
+  await cdp.call("Input.dispatchKeyEvent",{type:"keyDown",key:"Enter",code:"Enter",windowsVirtualKeyCode:13});
+  await cdp.call("Input.dispatchKeyEvent",{type:"keyUp",key:"Enter",code:"Enter",windowsVirtualKeyCode:13});
+  const compactionCount = () => {
+    const db = new DatabaseSync(join(profile,"db.sqlite"),{readOnly:true});
+    try {return db.prepare("SELECT count(*) AS n FROM compaction_records WHERE session_id=?").get(logicalSessionId).n;}
+    finally {db.close();}
+  };
+  await poll(() => compactionCount() > 0);
+  await poll(async () => (await state()).turn.status === "idle");
+  await reload("core",boundaries);
+  await restartHost("core",boundaries);
+  assert(compactionCount() > 0,"round-trip compaction survives restart");
   const shot = await cdp.call("Page.captureScreenshot", { format: "png" });
   writeFileSync(join(profile, "all-pairs.png"), Buffer.from(shot.data, "base64"));
-  console.log(JSON.stringify({ ok: true, enginePairs: 6, boundaries, rendererReloads:30, hostRestarts:16, settingsChecks:6, orchestrationSwitches:2, claudeOrchestrationRefusals:1, canonicalOriginals:originalTexts.length, profile }));
+  console.log(JSON.stringify({ ok: true, enginePairs: 6, boundaries, rendererReloads, hostRestarts, settingsChecks:6, orchestrationSwitches:2, coreServiceRoundTrips:1, durableCompactionChecks:1, claudeOrchestrationRefusals:1, canonicalOriginals:originalTexts.length, profile }));
 } catch (error) {
   writeFileSync(join(profile, "launcher.log"), launchLog);
   if (cdp) { try { writeFileSync(join(profile,"failure-page.txt"),await evaluate("document.body.innerText")); } catch {} }

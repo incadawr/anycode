@@ -8,7 +8,7 @@ import type { EngineSwitchLaunch } from "../shared/engine-switch-control.js";
 import type { SwitchRuntime, SessionOptions } from "./session.js";
 import type { CodexEngine } from "./engines/codex/codex-engine.js";
 import type { ClaudeEngine } from "./engines/claude/claude-engine.js";
-import { parseRecognizerEnv, recognizerEndpointFromFields, recognizerLiveWindow } from "./recognizer-env.js";
+import { parseRecognizerEnv, recognizerEndpointFromFields } from "./recognizer-env.js";
 import { resolveGoBootModel } from "./go-boot-model.js";
 import { logHookConfigFailure } from "./hook-config-diagnostics.js";
 import "./sdk-warnings.js";
@@ -243,14 +243,13 @@ import {
   createCommandHook,
   createDefaultTokenizer,
   createDefaultToolRegistry,
+  ToolRegistry,
   createListConnectionsTool,
-  createInspectImageTool,
   createMediaProjectionPort,
   createSkillPort,
   createWebSearchTool,
   loadArchMapEnabled,
   discoverAgentProfiles,
-  AskCache,
   browserOpenTool,
   browserReadTool,
   browserScreenshotTool,
@@ -266,7 +265,6 @@ import {
   formatChildTaskNotification,
   formatChildTurnBudgetNotice,
   formatSupervisorIdleReminder,
-  generateSessionTitle,
   loadEnvConfig,
   loadHookConfigs,
   loadLspServerSpecs,
@@ -313,7 +311,7 @@ import {
   type RoleRouteResolution,
 } from "@anycode/core";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
-import { pricingSnapshotWithKeyDefault, sessionUsageRow, subagentUsageRow } from "./usage-recording.js";
+import { pricingSnapshotWithKeyDefault, subagentUsageRow } from "./usage-recording.js";
 import { summarizeWithChildren } from "./usage-summary.js";
 import { claudeNativeChildrenFromHistory } from "./claude-usage.js";
 import { bindClaudeUsage, bindCodexUsage } from "./native-usage.js";
@@ -326,7 +324,6 @@ import type {
   CommandHookDeclaration,
   ExtensionsBootstrap,
   LspServerSpec,
-  MediaCapabilityPort,
   McpServerSpec,
   ModelPort,
   ModelRequest,
@@ -370,7 +367,7 @@ import { attachChildReportDurability, attachEngineChildReportDurability } from "
 import { createSpawnModeCell } from "./spawn-mode-cell.js";
 import { createRoutedChildComposition } from "./routed-child-composition.js";
 import { createForeignOrchestrationComposition, selectedCodexPreset } from "./foreign-orchestration-composition.js";
-import { RoleHealthCache, pickEntry, resolveRoleRouteChain, toCoreEntry } from "./role-route.js";
+import { RoleHealthCache, resolveRoleRouteChain } from "./role-route.js";
 import { parseSettings } from "../settings/schema.js";
 import { ENV_APP_VERSION, parseAppVersionEnv } from "../main/host-env.js";
 import { readFileSync, realpathSync, existsSync } from "node:fs";
@@ -385,8 +382,8 @@ import { TERMINAL_INIT_MESSAGE_TYPE } from "../shared/terminal.js";
 import { WORKSPACE_TRUST_PENDING_MESSAGE_TYPE } from "../shared/workspace-trust.js";
 import { applySessionToolEnv } from "../shared/session-env.js";
 import { establishHostWorkspaceTrust, type HostWorkspaceTrust } from "./workspace-trust.js";
-import { PROVIDER_HEALTH_EVENT_TYPE, type ProviderHealthEvent } from "../shared/provider-health.js";
-import { PROVIDER_QUOTA_EVENT_TYPE, type ProviderQuotaEvent } from "../shared/provider-quota.js";
+import { type ProviderHealthEvent } from "../shared/provider-health.js";
+import { type ProviderQuotaEvent } from "../shared/provider-quota.js";
 import { RECOGNIZER_CONFIG_CHANGED_TYPE, type RecognizerConfigChanged } from "../shared/recognizer.js";
 import { PREVIEW_ARTIFACTS_TYPE } from "../shared/preview.js";
 import type { PreviewEventMessage, PreviewRequestMessage, PreviewResponseMessage } from "../shared/preview.js";
@@ -475,6 +472,7 @@ import { buildCheckpointService } from "./checkpoints.js";
 import { GitBridge } from "./git-bridge.js";
 import { createConnectionModelSettings } from "./connection-model-settings.js";
 import { buildCoreRuntime, buildCodexRuntime, buildClaudeRuntime, persistedCoreMode } from "./engine-switch-runtime.js";
+import { createCoreRuntimeMedia, createCoreRuntimeServices } from "./core-runtime-services.js";
 import { createCoreRuntimeControls } from "./core-runtime-controls.js";
 import { buildCoreLaunchOptions, buildCodexLaunchOptions, buildClaudeLaunchOptions } from "./engine-launch-options.js";
 import { createSwitchEngineFactory, type SwitchEngineFactoryContext } from "./engine-switch-factory.js";
@@ -513,8 +511,8 @@ import { readHostProcessOwnership as readClaudeHostProcessOwnership } from "./en
 import { ClaudeSettingsSeam } from "./engines/claude/settings-seam.js";
 import { ClaudeShadowTranscriptEngine, SqliteClaudeShadowTranscript } from "./engines/claude/shadow-transcript.js";
 import { ClaudeSessionRowWriter } from "./engines/claude/session-row.js";
-import { createCodexSessionTitlePersistence, createCoreSessionTitlePersistence } from "./session-title-persistence.js";
-import { createCompactionRecordLog, type CompactionRecordSeam } from "./compaction-records.js";
+import { createCodexSessionTitlePersistence } from "./session-title-persistence.js";
+import { type CompactionRecordSeam } from "./compaction-records.js";
 import { claudeAgentPermissionMode, claudeChildPresetId, codexChildPosture } from "./engines/child-permission-map.js";
 import { checkClaudeBinaryTrustOnDisk } from "./engines/claude/claude-client.js";
 import { createEngineChildRunner } from "./engine-children.js";
@@ -1406,10 +1404,15 @@ function hostSwitchFactory(
           return new AiSdkModelPort({ transport: envConfig.providerTransport ?? entry?.defaultTransport ?? "anthropic-messages", baseUrl: envConfig.baseUrl, apiKey: envConfig.apiKey, model:id, providerId: envConfig.providerId, ...(resolveApiKey ? { resolveApiKey } : {}) }, hostDiagnosticSink);
         };
         const modelPort = portFor(model);
+        const candidateHistorySink = new RuntimeHistorySink(database,sessionId,runtimeId!);
+        const candidateDbPath = envConfig.dbPath ?? join(home,".anycode","anycode.sqlite");
+        const candidateCheckpoints = buildCheckpointService({exec,fs,store:database,workspace,sessionId,
+          checkpointsRoot:candidateDbPath === ":memory:" ? join(home,".anycode","checkpoints") : join(dirname(candidateDbPath),"checkpoints")});
         const config: AgentLoopConfig = withSubagents({ modelPort, registry, hooks,
           permissionEngine: new RuleAwarePermissionEngine(new SafeCommandPermissionEngine(new ModePermissionEngine()), rules), permissionBroker: broker,
           ...planExit, mode: persistedCoreMode(database.loadRuntimeSession(sessionId)), cwd: workspace, ports: { fs, exec, http: new NodeHttpAdapter(), todos: new InMemoryTodoStore() },
-          sessionSubagents: routing.port, history: new ConversationHistory({ sink: new RuntimeHistorySink(database,sessionId,runtimeId!) }),
+          sessionSubagents: routing.port, history: new ConversationHistory({ sink: candidateHistorySink }),
+          ...(candidateCheckpoints ? {checkpoints:candidateCheckpoints} : {}),
           systemPrompt: buildSystemPrompt({ toolNames: registry.list(), env: { workingDirectory: workspace, platform, date: new Date().toISOString().slice(0, 10), modelId: model } }),
           ...(envConfig.maxOutputTokens ? { maxOutputTokens: envConfig.maxOutputTokens } : {}),
         }, { profiles: await routing.profiles(), resolveRoleRoute: role => {
@@ -1417,12 +1420,26 @@ function hostSwitchFactory(
           const selected = settings && isRoleRouteName(role) ? resolveProfileRoles(settings,workspace)?.[role] : undefined;
           return selected ? resolveRoleRouteChain({role,config:selected,claimedByMdProfile:false,health:roleHealth.snapshot(),now:Date.now()}) : null;
         } });
+        let candidateModel = model;
+        const imageInputFor = (id:string) => resolveImageInput(id,modelSettings.entryFor(id),envConfig.imageInput ?? modelSettings.imageInputFor(id));
+        const promptFor = (id:string) => buildSystemPrompt({toolNames:registry.list(),visionFallbackEnabled:registry.has("InspectImage"),env:{workingDirectory:workspace,platform,date:new Date().toISOString().slice(0,10),modelId:id}});
+        const media = createCoreRuntimeMedia({registry,imageInputEnabled:() => imageInputFor(candidateModel),
+          endpoint:parseRecognizerEnv(sourceEnv),env:sourceEnv,reserveRef:() => database.reserveImageRef(sessionId),
+          portFactory:endpoint => new AiSdkModelPort(endpoint,hostDiagnosticSink),
+          onRegistrationChanged:() => {config.systemPrompt=promptFor(candidateModel);}});
+        config.media = media;
+        config.recognizer = media.recognizer;
+        media.recompute();
         const controls = createCoreRuntimeControls({config,model,settings:modelSettings,modelPortFor:portFor,maxOutputTokens:envConfig.maxOutputTokens,
-          imageInputFor: id => resolveImageInput(id,modelSettings.entryFor(id),modelSettings.imageInputFor(id) ?? envConfig.imageInput),
-          systemPromptFor: id => buildSystemPrompt({toolNames:registry.list(),env:{workingDirectory:workspace,platform,date:new Date().toISOString().slice(0,10),modelId:id}}),
+          imageInputFor,imageFallbackAvailable:media.recognizerConfigured,
+          systemPromptFor:id => {candidateModel=id;media.recompute();return promptFor(id);},
           onRefresh: () => { if (candidate && session?.ownsRuntime(candidate.engine)) session.refreshModelSettings(); },
         });
         return { model, options: buildCoreLaunchOptions(controls.options),
+          services:{adapter:() => database,sessionId,media,checkpoints:candidateCheckpoints ?? undefined,flushHistory:() => candidateHistorySink.flushChecked(),
+            readOrchestrator:() => {try {const parsed=parseSettings(JSON.parse(readFileSync(settingsPath ?? defaultSettingsPath(),"utf8")));return parsed.status === "ok" ? resolveProfileRoles(parsed.settings,workspace)?.orchestrator : undefined;}catch{return undefined;}},
+            health:() => roleHealth.snapshot(),sendProviderEvent:event => process.parentPort.postMessage(event),
+            pricing:() => ({catalogEntry:entry,baseUrl:envConfig.baseUrl,pricingRaw:pricingSnapshotWithKeyDefault(JSON.stringify(modelSettings.pricingSnapshot()),entry,envConfig.apiKey)})},
           configure: runtime => { routing.configure(runtime); runtime.presentation = { ...runtime.presentation,
             pinnedConnection: { connectionId: launch.target.engine === "core" ? launch.target.connectionId : "", providerId: envConfig.providerId ?? "custom" },
             modelSettingsConnectionId: launch.target.engine === "core" ? launch.target.connectionId : null,
@@ -3009,22 +3026,6 @@ async function boot(): Promise<void> {
     const envConfig = loadEnvConfig(process.env);
     const args = parseHostArgs(process.argv.slice(2));
 
-    // срез C: the fork-boot snapshot half of the recognizer's config
-    // delivery (plan §1.2 step 1) — E1's ANYCODE_RECOGNIZER_* family, parsed
-    // once here. `liveRecognizerEndpoint` is a SINGLE mutable object identity
-    // kept for the life of this boot: InspectImage's own factory (below)
-    // destructures `endpoint` out of its options ONCE and never re-reads it,
-    // so a later live-push commit mutates THIS object's fields in place
-    // (never reassigns the reference) — the already-built tool then observes
-    // the current config despite having captured it only once.
-    // `recognizerConfigured` is the cheap boolean readback both
-    // `media.recognizerConfigured` and Session's `imageFallbackAvailable`
-    // consult on every call.
-    const bootRecognizerEndpoint = parseRecognizerEnv(process.env);
-    let recognizerConfigured = bootRecognizerEndpoint !== null;
-    const liveRecognizerEndpoint: RecognizerEndpoint =
-      bootRecognizerEndpoint ?? { transport: "anthropic-messages", baseUrl: "", model: "" };
-
     // Always-allow persistence (design §5, slice 2.2.3): read-only, fail-soft
     // (seedAlwaysAllowRules never throws — see host/boot.ts). Independent of
     // everything else booted below; done early so the same `rules` instance is
@@ -4063,69 +4064,21 @@ async function boot(): Promise<void> {
     const gitEnabled = systemPromptEnv.isGitRepo === true && typeof execAdapter.runBinary === "function";
     gitBridge = new GitBridge({ git: gitEnabled ? gitService : null, outbound });
 
-    const media: MediaCapabilityPort = {
-      // Resolve the current model on every call; explicit environment values win.
-      imageInputEnabled: () =>
-        resolveImageInput(
-          currentModel,
-          entryFor(currentModel),
-          envConfig.imageInput ?? (imageModelOverride?.model === currentModel ? imageModelOverride.override : undefined) ?? connectionModelSettings.imageInputFor(currentModel),
-          imageModalityLookup,
-        ),
-      // срез C: live verdict for the vision fallback — true whenever
-      // a recognizer endpoint is CURRENTLY configured, independent of the
-      // current model's own sightedness. Consulted by host/session.ts's
-      // turn-accept gate (ORed with imageInputEnabled) and by the InspectImage
-      // registration gate below (ANDed with !imageInputEnabled()).
-      recognizerConfigured: () => recognizerConfigured,
-    };
-
-    // срез C (plan §5): the InspectImage tool instance is built
-    // EXACTLY ONCE for the life of this host process — never rebuilt on a
-    // registration toggle or a live recognizer-config push. Its per-image
-    // question counter and Q/A transcript live in the factory's own closure
-    // (tools/inspect-image.ts, срез B2) — plan §5's "resume weakened to
-    // process lifetime" semantics: recreating the tool would silently reset
-    // a mid-session question budget and lose the "what's to the right of
-    // that button?" thread every time the gate flips (blind<->sighted, or a
-    // recognizer toggled off and back on). `liveRecognizerEndpoint` is
-    // captured ONCE by the factory (tools/inspect-image.ts destructures
-    // `endpoint` out of its options immediately); a later live-push commit
-    // mutates ITS FIELDS in place (never replaces the reference) precisely
-    // so this already-built instance keeps seeing the current config.
-    const visionAskCache = new AskCache();
-    let inspectImageTool: ReturnType<typeof createInspectImageTool> | undefined;
-    function ensureInspectImageTool(): ReturnType<typeof createInspectImageTool> {
-      if (inspectImageTool === undefined) {
-        inspectImageTool = createInspectImageTool({
-          recognizer: { endpoint: liveRecognizerEndpoint, cache: visionAskCache, portFactory: recognizerPortFactory },
-        });
-      }
-      return inspectImageTool;
-    }
-
-    /**
-     * (De)registers InspectImage against the CURRENT (recognizer configured
-     * ∧ blind model) verdict — the exact gate §1 step 5 and plan
-     * §5 specify — and reports whether registration actually flipped, so a
-     * caller knows whether the system prompt needs recomposing (finding #6:
-     * no recompose when nothing changed). Idempotent both ways
-     * (ToolRegistry.register/unregister already are).
-     */
-    function recomputeInspectImageRegistration(): boolean {
-      const shouldRegister = recognizerConfigured && media.imageInputEnabled() === false &&
-        (args.child?.restrictions === undefined || args.child.restrictions.tools.includes("InspectImage"));
-      const isRegistered = registry.has("InspectImage");
-      if (shouldRegister === isRegistered) {
-        return false;
-      }
-      if (shouldRegister) {
-        registry.register(ensureInspectImageTool());
-      } else {
-        registry.unregister("InspectImage");
-      }
-      return true;
-    }
+    const media = createCoreRuntimeMedia({
+      registry,
+      imageInputEnabled: () => resolveImageInput(currentModel,entryFor(currentModel),
+        envConfig.imageInput ?? (imageModelOverride?.model === currentModel ? imageModelOverride.override : undefined) ?? connectionModelSettings.imageInputFor(currentModel),imageModalityLookup),
+      endpoint:parseRecognizerEnv(process.env),env:process.env,
+      reserveRef:() => persistence!.reserveImageRef(sessionMeta.id),
+      portFactory:endpoint => recognizerPortFactory(endpoint),
+      allowInspectImage:args.child?.restrictions === undefined || args.child.restrictions.tools.includes("InspectImage"),
+      onRegistrationChanged:() => {
+        const components = composeSystemPromptComponents();
+        config.systemPrompt = composeSystemPrompt(components);
+        config.systemPromptComponents = components;
+      },
+    });
+    const recomputeInspectImageRegistration = media.recompute;
 
     // CUT-S2 §0.8/§2.6.3: a child-mode boot's broker wraps `emit`
     // with the permission-tap — an `attention` signal bracketing every
@@ -4272,19 +4225,7 @@ async function boot(): Promise<void> {
         todos: new InMemoryTodoStore(),
       },
       media,
-      // срез C (plan §1/§2/§3): wired UNCONDITIONALLY — `reserveRef`
-      // is called for EVERY image this loop appends regardless of `endpoint`'s
-      // presence (AgentLoopRecognizerConfig's own doc, срез B1), so a live
-      // recognizer/model switch mid-session never encounters an un-numbered
-      // image from earlier in this SAME session. `endpoint` tracks the live
-      // `recognizerConfigured` flag; `cache`/`portFactory` are shared with
-      // InspectImage's own factory above (ONE process-lifetime cache, plan §7).
-      recognizer: {
-        reserveRef: () => persistence!.reserveImageRef(sessionMeta.id),
-        endpoint: recognizerConfigured ? liveRecognizerEndpoint : undefined,
-        cache: visionAskCache,
-        portFactory: recognizerPortFactory,
-      },
+      recognizer: media.recognizer,
       ...(worktreeAvailable ? { worktrees: worktreeControl } : {}),
       ...(previewAvailable ? { preview: previewPort } : {}),
       cwd: workspace,
@@ -4377,34 +4318,6 @@ async function boot(): Promise<void> {
      * the model was already sighted, or already blind-without-fallback,
      * before and after this push).
      */
-    const recognizerWindowEnv = {
-      ANYCODE_RECOGNIZER_CONTEXT_WINDOW: process.env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW,
-      ANYCODE_RECOGNIZER_CONTEXT_WINDOW_MODEL: process.env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_MODEL,
-      ANYCODE_RECOGNIZER_CONTEXT_WINDOW_FROM_SETTINGS: process.env.ANYCODE_RECOGNIZER_CONTEXT_WINDOW_FROM_SETTINGS,
-    };
-    function applyRecognizerEndpoint(next: RecognizerEndpoint | null): void {
-      if (next === null) {
-        recognizerConfigured = false;
-      } else {
-        liveRecognizerEndpoint.transport = next.transport;
-        liveRecognizerEndpoint.baseUrl = next.baseUrl;
-        liveRecognizerEndpoint.model = next.model;
-        liveRecognizerEndpoint.apiKey = next.apiKey;
-        liveRecognizerEndpoint.providerName = next.providerName;
-        liveRecognizerEndpoint.contextWindowTokens = recognizerLiveWindow(recognizerWindowEnv, next);
-        liveRecognizerEndpoint.goModelPolicy = next.goModelPolicy;
-        liveRecognizerEndpoint.modelMetadata = next.modelMetadata;
-        liveRecognizerEndpoint.pricingRaw = next.pricingRaw;
-        recognizerConfigured = true;
-      }
-      config.recognizer!.endpoint = recognizerConfigured ? liveRecognizerEndpoint : undefined;
-      if (recomputeInspectImageRegistration()) {
-        const components = composeSystemPromptComponents();
-        config.systemPrompt = composeSystemPrompt(components);
-        config.systemPromptComponents = components;
-      }
-    }
-
     // CUT-S2 §2.6.1 (slice S2b B5): non-recursion lock #2. Mutates
     // `config` in place AFTER the object literal above (mirrors
     // `withSubagents`'s own mutate-in-place pattern just below) so
@@ -4800,25 +4713,43 @@ async function boot(): Promise<void> {
       ? { estimatedTokens: restoredLoopContext.estimatedTokens, budgetTokens: restoredLoopContext.effectiveWindowTokens, source: "estimate" as const }
       : undefined;
     const restoredContext = await contextSnapshotOptions(persistence, sessionId, "core", currentModel, restoredLoopContext.effectiveWindowTokens, fallbackContext);
-    compactionRecordSeam = await createCompactionRecordLog(() => persistence, sessionId).catch((error: unknown) => {
-      // Fail-soft: a session with no remembered compaction rows is far better
-      // than a session that refuses to open.
-      console.error(`[host] compaction records unavailable: ${describeError(error)}`);
-      return undefined;
-    });
+    const coreServiceDependencies = {
+      adapter:() => persistence,sessionId,media,checkpoints:checkpointService ?? undefined,
+      flushHistory:() => historySink!.flushChecked(),
+      readOrchestrator:() => { refreshRolesSettings(); return rolesSettings?.orchestrator; },
+      health:() => roleHealth.snapshot(),
+      sendProviderEvent:(event:ProviderHealthEvent | ProviderQuotaEvent) => process.parentPort.postMessage(event),
+      pricing:() => ({catalogEntry,baseUrl:envConfig.baseUrl,pricingRaw:turnPricingRaw}),
+      usageTail:{read:() => usageAuditWriteTail ?? undefined,write:(tail:Promise<void>) => {usageAuditWriteTail=tail;}},
+    };
+    const coreServices = await createCoreRuntimeServices({...coreServiceDependencies,config});
+    compactionRecordSeam = coreServices.callbacks.compactionRecords;
     if (childSessionPortHandle) bindRuntimeOrchestration(engine,{ownerSessionId:sessionId,port:childSessionPortHandle,baseMode:() => engine.mode()});
     session = new Session({
+      ...coreServices.callbacks,
       engineSwitchCoordinator: hostSwitchCoordinator(sessionId, broker, rules, mcpSecrets),
       runtimeHistory: createRuntimeSessionHistory(persistence!,sessionId,engineSwitchEnabled,isChildSession),
       switchEngineFactory: hostSwitchFactory(sessionId, broker, rules, mcpSecrets, async ({ model }) => {
         // This resolver owns the boot connection. Never infer one in a foreign host.
         if (model !== currentModel && !entryFor(model)?.models.some(item => item.id === model)) return undefined;
+        const candidateRegistry = new ToolRegistry();
+        for (const tool of registry.all()) if (tool.metadata.name !== "InspectImage") candidateRegistry.register(tool);
         const candidateConfig: AgentLoopConfig = {
-          ...config, modelPort: modelPortFactory(model),
+          ...config, registry:candidateRegistry, modelPort: modelPortFactory(model),
           history: new ConversationHistory({ tokenizer }),
           mode: persistedCoreMode(persistence!.loadRuntimeSession(sessionId)), orchestrate: false,
         };
-        return { model, options: buildCoreLaunchOptions({ config: candidateConfig, loop: new AgentLoop(candidateConfig) }) };
+        const candidateMedia = createCoreRuntimeMedia({registry:candidateRegistry,
+          imageInputEnabled:() => resolveImageInput(model,entryFor(model),envConfig.imageInput ?? connectionModelSettings.imageInputFor(model),imageModalityLookup),
+          endpoint:media.recognizer.endpoint ? {...media.recognizer.endpoint} : null,env:process.env,
+          reserveRef:() => persistence!.reserveImageRef(sessionId),portFactory:recognizerPortFactory,
+          onRegistrationChanged:() => {
+            candidateConfig.systemPrompt=buildSystemPrompt({toolNames:candidateRegistry.list(),env:{...systemPromptEnv,modelId:model},visionFallbackEnabled:candidateRegistry.has("InspectImage")})+composeSystemPromptComponents().map(component => component.text).join("");
+          }});
+        candidateConfig.media=candidateMedia;candidateConfig.recognizer=candidateMedia.recognizer;
+        candidateMedia.recompute();
+        return { model, options: buildCoreLaunchOptions({ config: candidateConfig, loop: new AgentLoop(candidateConfig) }),
+          services:{...coreServiceDependencies,media:candidateMedia,flushHistory:async () => {}} };
       }),
       ...restoredContext,
       workspaceTrustRequired: workspaceTrustRequiredMessage,
@@ -4864,25 +4795,6 @@ async function boot(): Promise<void> {
           continuationPending: false,
           continuationMode: null,
         });
-      },
-      // W11: core-only (Codex owns its own account, outside the core
-      // provider catalog — its Session construction above never wires this).
-      // Main resolves the pinned connectionId per-proc (tabs.ts); the host stays
-      // connection-agnostic and only relays the loop's own classification.
-      reportProviderHealth: (event) => {
-        const message: ProviderHealthEvent =
-          event.kind === "success"
-            ? { type: PROVIDER_HEALTH_EVENT_TYPE, kind: "success" }
-            : { type: PROVIDER_HEALTH_EVENT_TYPE, kind: "failure", code: event.code };
-        process.parentPort.postMessage(message);
-      },
-      // follow-up: same parentPort side channel as health above
-      // — main (tabs.ts) resolves THIS proc's pinned connectionId and does the
-      // throttled `lastQuota` write (main/connection-quota.ts). Core-only for
-      // the same reason as health: an engine broker owns its own account.
-      reportProviderQuota: (quota, source) => {
-        const message: ProviderQuotaEvent = { type: PROVIDER_QUOTA_EVENT_TYPE, quota, source };
-        process.parentPort.postMessage(message);
       },
       onWorkspaceTransition: async (transition: WorkspaceTransition) => {
         const rollback = async (): Promise<void> => {
@@ -5005,12 +4917,6 @@ async function boot(): Promise<void> {
       // selectedReasoningEffort seed). set_reasoning_effort keeps it in sync.
       selectedEffort,
       sessionId,
-      saveTurnError: (record) => persistence!.appendTurnError(sessionId, record),
-      currentTurnErrorIds: async () => (await persistence!.loadTurnErrors(sessionId)).map((record) => record.id),
-      restoreHistoryAndTurnErrors: async (items, errorIds, runtimeBoundary) => {
-        await historySink!.flushChecked();
-        return persistence!.restoreHistoryAndTurnErrors(sessionId, items, errorIds, runtimeBoundary);
-      },
       bootHistory,
       bootTurnErrors: await loadTurnErrors(sessionId),
       // S4: dev/automation-ONLY replay-recording override, resolved
@@ -5102,43 +5008,6 @@ async function boot(): Promise<void> {
       onOrchestrateChanged: (enabled: boolean) => {
         spawnModeCell.onOrchestrateChanged(enabled);
       },
-      // §3.6: turn-start orchestrator-route check — the host
-      // owns the health cache. Returns a model and effort selection only
-      // for the tab's active connection, along with the notice to surface.
-      orchestratorRouteCheck: () => {
-        refreshRolesSettings();
-        const orchestrator = rolesSettings?.orchestrator;
-        if (orchestrator === undefined) return undefined;
-        const chain = [orchestrator.primary, ...(orchestrator.fallbacks ?? [])].map(toCoreEntry);
-        const picked = pickEntry(chain, roleHealth.snapshot(), Date.now(), "orchestrator");
-        if (picked === null || picked.index === 0) {
-          // Primary healthy (or nothing to switch to) — no notice.
-          return undefined;
-        }
-        // The primary was skipped for a health reason and a fallback exists.
-        // Only a fallback carrying a model on THIS connection can switch
-        // here (an engine/connection entry is a different connection —
-        // manual, surfaced as the reason line only when it has a model).
-        // F9 (cross-review): the switch itself requires a BARE model entry
-        // (no engine, no connection) — an entry like {engine: "codex",
-        // model: "gpt-…"} names a model on ANOTHER connection, and
-        // switchModelImpl on it would flip the active tab to a foreign id
-        // (§9-Q2: connection switching stays manual).
-        const reason = picked.skipped[0]?.reason ?? "unhealthy";
-        const switchModel = picked.entry.model;
-        const switchable =
-          switchModel !== undefined &&
-          picked.entry.engine === undefined &&
-          picked.entry.connection === undefined &&
-          picked.entry.provider === undefined;
-        if (!switchable || switchModel === undefined) {
-          return `Orchestrator: primary route unhealthy (${reason}); configure a model fallback to switch automatically.`;
-        }
-        const effort = picked.entry.effort === undefined || picked.entry.effort === "xhigh"
-          ? undefined
-          : picked.entry.effort;
-        return { notice: `Orchestrator: primary route unhealthy (${reason}), running on ${switchModel}.`, model: switchModel, ...(effort !== undefined ? { effort } : {}) };
-      },
       // Slice P7.8 (design slice-P7.8-cut.md §3.2, mirror of the `lsp` seam
       // above): telemetry reads live counters on every push; repo-map is
       // boot-frozen (computed once above, right after buildRepoMapPromptSection).
@@ -5153,67 +5022,6 @@ async function boot(): Promise<void> {
       // срез C: core-only wiring (codex/claude Sessions never pass
       // these two — "codex/claude НЕ задеты (замыкание не установлено)").
       imageFallbackAvailable: media.recognizerConfigured,
-      applyRecognizerConfig: applyRecognizerEndpoint,
-      // Narrow persistence callback (§4.2): Session persists title/mode patches
-      // without ever holding the whole port. Fire-and-forget for the turn
-      // paths, never blocks a turn; the strict `commitTitle` twin is the
-      // Sessions API ack (see session-title-persistence.ts).
-      persistence: createCoreSessionTitlePersistence({
-        adapter: () => persistence,
-        sessionId,
-        onError: (error) => console.error(`[host] touchSession failed: ${describeError(error)}`),
-      }),
-      // GitHub #36: the durable compaction rows. Loaded BEFORE Session exists so
-      // the very first handshake (a resume's session_history) already carries
-      // every compaction this session went through, not just the ones this
-      // process will produce.
-      ...(compactionRecordSeam !== undefined ? { compactionRecords: compactionRecordSeam } : {}),
-      // the persistent per-step provider-usage audit,
-      // CORE-ONLY wiring (codex/claude boots above pass nothing — their usage
-      // arrives as cumulative REPLACE snapshots, not per-step finishes).
-      // Write-behind: the sink swallows+logs its own failures, so audit I/O
-      // can never block or fail a turn.
-      usageAudit: {
-        sink: {
-          record: (r, finishedAt, endpointSnapshot) => {
-            // Only the exact catalog endpoint is eligible: a proxy or reseller
-            // may charge a different price even when it exposes the same model.
-            // On an endpoint that serves both a pay-as-you-go key and a
-            // subscription key, the catalog rate is withheld until the
-            // connection says which one it holds.
-            // One instant inside the row builder: the tariff band and
-            // `createdAt` can never disagree (see usage-recording.ts). For a
-            // step staged at finish and flushed after tool dispatch, that
-            // instant is the FINISH captured by the session — the flush can
-            // fall on the far side of a tariff boundary.
-            const row = sessionUsageRow(
-              r,
-              { catalogEntry, baseUrl: envConfig.baseUrl, pricingRaw: turnPricingRaw, model: r.model, endpointSnapshot, ...(finishedAt !== undefined ? { finishedAt } : {}), now: Date.now },
-              sessionId,
-            );
-            // Serialized (chained off the tail, never parallel) so flush()
-            // below is an honest drain of every queued write IN ORDER.
-            usageAuditWriteTail = (usageAuditWriteTail ?? Promise.resolve())
-              .then(() => persistence!.recordProviderUsage(row))
-              .catch((e) => console.error(`[host] usage audit write failed: ${e instanceof Error ? e.message : String(e)}`));
-          },
-          // Cross-review finding 4: shutdown drain — a serialized tail exactly
-          // like WriteBehindHistorySink's, so Session.shutdown() can await
-          // every queued audit write before the host closes the database (an
-          // unbounded late write would otherwise re-open the closed file and
-          // leak the handle). Fail-soft per write; flush() itself never rejects.
-          flush: () => usageAuditWriteTail ?? Promise.resolve(),
-        },
-        summary: {
-          summary: async () => { await (usageAuditWriteTail ?? Promise.resolve()); return summarizeWithChildren(persistence!, sessionId); },
-        },
-      },
-
-      // the real implementation, bound to THIS session's modelPort. Injected as
-      // a callback (not read off config.modelPort inside Session) so
-      // host/test-harness.ts's ScriptedModelPort-backed tests are unaffected
-      // unless they opt in via HarnessOptions.refineTitle.
-      refineTitle: (text) => generateSessionTitle({ modelPort: config.modelPort, text }),
       postPreviewArtifacts: sendPreviewArtifacts,
       // CUT-S2 §2.6.3 (slice S2b B4): present ONLY for a child-mode
       // boot. `flushHistory` is the SAME `historySink.flushChecked()` ordering
