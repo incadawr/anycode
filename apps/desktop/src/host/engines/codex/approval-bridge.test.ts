@@ -61,11 +61,6 @@ async function flush(): Promise<void> {
   await Promise.resolve();
 }
 
-/** suite: fact minting does REAL fs I/O (realpath/lstat), which settles on macrotasks. */
-async function settle(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 25));
-}
-
 function rig(timeoutMs?: number, active: ActiveCodexTurn = ACTIVE) {
   const emitted: HostToUiMessage[] = [];
   const broker = new IpcPermissionBroker((message) => emitted.push(message), timeoutMs);
@@ -413,7 +408,7 @@ describe("CodexApprovalBridge — workspace facts on file changes", () => {
     const { bridge, emitted } = ruledRig([{ toolName: "CodexApplyPatch" }], items);
     const response = responder();
     bridge.handle(file({ itemId: "item-file" }), response);
-    await settle();
+    await vi.waitFor(() => expect(response.result).toHaveBeenCalled());
 
     // The rule answered: nothing was presented to a human, the codex answer is accept.
     expect(emitted.filter((m) => m.type === "permission_request")).toHaveLength(0);
@@ -478,7 +473,7 @@ describe("CodexApprovalBridge — workspace facts on file changes", () => {
     const { bridge, emitted } = ruledRig([{ toolName: "CodexApplyPatch" }], items);
     const response = responder();
     bridge.handle(file({ itemId: "item-file" }), response);
-    await settle();
+    await vi.waitFor(() => expect(response.result).toHaveBeenCalled());
 
     expect(emitted.filter((m) => m.type === "permission_request")).toHaveLength(0);
     expect(response.result).toHaveBeenCalledWith({ decision: "accept" });
@@ -496,11 +491,11 @@ describe("CodexApprovalBridge — workspace facts on file changes", () => {
     const { bridge, broker, emitted } = ruledRig([{ toolName: "CodexApplyPatch" }], items);
     const response = responder();
     bridge.handle(file({ itemId: "item-file", grantRoot: "/" }), response);
-    await settle();
+    await vi.waitFor(() => expect(emitted.some(message => message.type === "permission_request")).toBe(true));
 
     const presented = ask(emitted);
     broker.handleResponse(presented.requestId, "deny");
-    await settle();
+    await vi.waitFor(() => expect(response.result).toHaveBeenCalled());
     expect(response.result).toHaveBeenCalledWith({ decision: "decline" });
   });
 
@@ -508,13 +503,13 @@ describe("CodexApprovalBridge — workspace facts on file changes", () => {
     const { bridge, broker, emitted } = ruledRig([{ toolName: "CodexApplyPatch" }]);
     const response = responder();
     bridge.handle(file({ itemId: "item-file" }), response);
-    await settle();
+    await vi.waitFor(() => expect(emitted.some(message => message.type === "permission_request")).toBe(true));
 
     // Degraded (no indexed paths) but still fail-closed on the rule: the ask
     // is presented and the human (test) denies it.
     const presented = ask(emitted);
     broker.handleResponse(presented.requestId, "deny");
-    await settle();
+    await vi.waitFor(() => expect(response.result).toHaveBeenCalled());
     expect(response.result).toHaveBeenCalledWith({ decision: "decline" });
   });
 
@@ -534,12 +529,12 @@ describe("CodexApprovalBridge — workspace facts on file changes", () => {
     const bridge = new CodexApprovalBridge({ broker, activeTurn: () => ({ ...ACTIVE, items }) });
     const response = responder();
     bridge.handle(file({ itemId: "item-file" }), response);
-    await settle();
+    await vi.waitFor(() => expect(emitted.some(message => message.type === "permission_request")).toBe(true));
 
     expect(emitted.filter((m) => m.type === "permission_request")).toHaveLength(1);
     const presented = ask(emitted);
     broker.handleResponse(presented.requestId, "deny");
-    await settle();
+    await vi.waitFor(() => expect(response.result).toHaveBeenCalled());
     expect(response.result).toHaveBeenCalledWith({ decision: "decline" });
   });
 
