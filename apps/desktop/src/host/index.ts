@@ -25,7 +25,7 @@ import { readRoleSettings } from "./role-settings.js";
 import { SqliteCodexAgentCardLog } from "./engines/codex/agent-card-log.js";
 import { CodexDynamicToolBridge } from "./engines/codex/dynamic-tool-bridge.js";
 import { createEngineBrowserBridge } from "./engines/browser-bridge.js";
-import { assertChildModel, readAllowedChildModels } from "../shared/child-model.js";
+import { readAllowedChildModels } from "../shared/child-model.js";
 import { resolveModelClassifierBoot } from "./model-classifier-boot.js";
 import { recordHostBootFailure } from "./error-diagnostics.js";
 import { createDiagnosticsRing, noteWireMessage } from "../shared/diagnostics-ring.js";
@@ -231,9 +231,6 @@ import {
   PREVIEW_BUILTIN_SKILLS,
   SUBAGENT_BUILTIN_SKILLS,
   WORKTREE_BUILTIN_SKILLS,
-  backgroundCapableBashTool,
-  bashKillTool,
-  bashOutputTool,
   buildSystemPrompt,
   buildEngineTelemetryTap,
   buildChildModelSettingsResolver,
@@ -246,14 +243,9 @@ import {
   ToolRegistry,
   createListConnectionsTool,
   createMediaProjectionPort,
-  createSkillPort,
   createWebSearchTool,
   loadArchMapEnabled,
   discoverAgentProfiles,
-  browserOpenTool,
-  browserReadTool,
-  browserScreenshotTool,
-  createBrowserControlTools,
   diagnosticsEditTool,
   diagnosticsWriteTool,
   enterWorktreeTool,
@@ -298,8 +290,6 @@ import {
   REPO_MAP_MAX_TOKENS,
   REPO_MAP_MIN_TOKENS,
   REPO_MAP_WINDOW_FRACTION,
-  withSubagents,
-  withWorkflows,
   // §3.1/§3.6: role personas, their turn budgets, and the
   // role-route chain plumbing (host-side resolver below).
   PERSONAS,
@@ -307,7 +297,6 @@ import {
   isRoleRouteName,
   // the one ceiling-object builder (adaptive key absent when off).
   buildCeilingConfig,
-  type PersonaDefinition,
   type RoleRouteResolution,
 } from "@anycode/core";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
@@ -472,6 +461,8 @@ import { buildCheckpointService } from "./checkpoints.js";
 import { GitBridge } from "./git-bridge.js";
 import { createConnectionModelSettings } from "./connection-model-settings.js";
 import { buildCoreRuntime, buildCodexRuntime, buildClaudeRuntime, persistedCoreMode } from "./engine-switch-runtime.js";
+import { createProductionCoreResolver } from "./core-switch-resolver.js";
+import { createCoreRuntimeComposition, loadCoreRuntimeExtensions, registerCoreBrowserTools, registerCoreTaskTools } from "./core-runtime-composition.js";
 import { createCoreRuntimeMedia, createCoreRuntimeServices } from "./core-runtime-services.js";
 import { createCoreRuntimeControls } from "./core-runtime-controls.js";
 import { buildCoreLaunchOptions, buildCodexLaunchOptions, buildClaudeLaunchOptions } from "./engine-launch-options.js";
@@ -1374,79 +1365,15 @@ function hostSwitchFactory(
   });
   return createSwitchEngineFactory({
     engineSwitchEnabled: true, workspace, sessionId,
-    resolveCore: launch?.target.engine === "core" ? async ({ model }) => {
-      const envConfig = loadEnvConfig(sourceEnv);
-      if (envConfig.model !== model) return undefined;
-      const routing = await candidateRouting(sessionId, broker, sourceEnv, home);
-      const exec = new NodeExecutionAdapter();
-      const registry = createDefaultToolRegistry({ agent: { sessionTier: true } });
-      let candidate: SwitchRuntime | undefined;
-      const planExit = wirePlanExit(registry,mode => { if (candidate && session?.ownsRuntime(candidate.engine)) session.notifyModeChanged(mode); });
-      const hooks = new InMemoryHookRunner();
-      for (const declaration of await loadHookConfigs(fs, workspace, home, { projectTrusted }).catch(() => [])) hooks.register(createCommandHook(exec, declaration, workspace));
-      const loaded = await loadMcpServerSpecs(fs, workspace, home, { projectTrusted, loginPath: sourceEnv.PATH, secrets: mcpSecrets });
-      const manager = new McpManager({ registry, transports: new NodeMcpTransportFactory() });
-      try {
-        await manager.start(loaded.specs);
-        const entry = getBuiltinCatalog().providers.find(item => item.id === envConfig.providerId) ?? matchCatalogEntryByBaseUrl(getBuiltinCatalog(), envConfig.baseUrl);
-        const resolveApiKey = buildResolveApiKey({ authMode: sourceEnv[ENV_AUTH_MODE], send: sendCredentialRequest, subscribe: subscribeCredentialResponses, fallbackApiKey: envConfig.apiKey });
-        const connectionId = launch.target.engine === "core" ? launch.target.connectionId : "";
-        const readConnection = () => {
-          try { const parsed = parseSettings(JSON.parse(readFileSync(settingsPath ?? defaultSettingsPath(),"utf8"))); return parsed.status === "ok" ? parsed.settings.provider.connections.find(connection => connection.id === connectionId) : null; }
-          catch { return null; }
-        };
-        const modelSettings = createConnectionModelSettings({connection:readConnection() ?? undefined,readConnection,catalogEntry:entry,
-          envReasoningEffort:envConfig.reasoningEffort,envReasoningEffortModel:sourceEnv.ANYCODE_REASONING_EFFORT_MODEL,envReasoningEffortFromSettings:!!sourceEnv.ANYCODE_REASONING_EFFORT_MODEL,
-          envContextWindow:envConfig.contextWindowTokens,envContextWindowModel:envConfig.contextWindowModel,envContextWindowFromSettings:sourceEnv.ANYCODE_CONTEXT_WINDOW_FROM_SETTINGS === "1",liveCapabilitiesFor:() => undefined});
-        const portFor = (id: string) => {
-          const connection = readConnection();
-          if (id !== model && !connection?.models?.includes(id) && !modelSettings.entryFor(id)?.models.some(row => row.id === id)) throw new Error("The selected model is unavailable on this connection");
-          return new AiSdkModelPort({ transport: envConfig.providerTransport ?? entry?.defaultTransport ?? "anthropic-messages", baseUrl: envConfig.baseUrl, apiKey: envConfig.apiKey, model:id, providerId: envConfig.providerId, ...(resolveApiKey ? { resolveApiKey } : {}) }, hostDiagnosticSink);
-        };
-        const modelPort = portFor(model);
-        const candidateHistorySink = new RuntimeHistorySink(database,sessionId,runtimeId!);
-        const candidateDbPath = envConfig.dbPath ?? join(home,".anycode","anycode.sqlite");
-        const candidateCheckpoints = buildCheckpointService({exec,fs,store:database,workspace,sessionId,
-          checkpointsRoot:candidateDbPath === ":memory:" ? join(home,".anycode","checkpoints") : join(dirname(candidateDbPath),"checkpoints")});
-        const config: AgentLoopConfig = withSubagents({ modelPort, registry, hooks,
-          permissionEngine: new RuleAwarePermissionEngine(new SafeCommandPermissionEngine(new ModePermissionEngine()), rules), permissionBroker: broker,
-          ...planExit, mode: persistedCoreMode(database.loadRuntimeSession(sessionId)), cwd: workspace, ports: { fs, exec, http: new NodeHttpAdapter(), todos: new InMemoryTodoStore() },
-          sessionSubagents: routing.port, history: new ConversationHistory({ sink: candidateHistorySink }),
-          ...(candidateCheckpoints ? {checkpoints:candidateCheckpoints} : {}),
-          systemPrompt: buildSystemPrompt({ toolNames: registry.list(), env: { workingDirectory: workspace, platform, date: new Date().toISOString().slice(0, 10), modelId: model } }),
-          ...(envConfig.maxOutputTokens ? { maxOutputTokens: envConfig.maxOutputTokens } : {}),
-        }, { profiles: await routing.profiles(), resolveRoleRoute: role => {
-          const settings = (() => { try { const parsed = parseSettings(JSON.parse(readFileSync(settingsPath ?? defaultSettingsPath(),"utf8"))); return parsed.status === "ok" ? parsed.settings : undefined; } catch { return undefined; } })();
-          const selected = settings && isRoleRouteName(role) ? resolveProfileRoles(settings,workspace)?.[role] : undefined;
-          return selected ? resolveRoleRouteChain({role,config:selected,claimedByMdProfile:false,health:roleHealth.snapshot(),now:Date.now()}) : null;
-        } });
-        let candidateModel = model;
-        const imageInputFor = (id:string) => resolveImageInput(id,modelSettings.entryFor(id),envConfig.imageInput ?? modelSettings.imageInputFor(id));
-        const promptFor = (id:string) => buildSystemPrompt({toolNames:registry.list(),visionFallbackEnabled:registry.has("InspectImage"),env:{workingDirectory:workspace,platform,date:new Date().toISOString().slice(0,10),modelId:id}});
-        const media = createCoreRuntimeMedia({registry,imageInputEnabled:() => imageInputFor(candidateModel),
-          endpoint:parseRecognizerEnv(sourceEnv),env:sourceEnv,reserveRef:() => database.reserveImageRef(sessionId),
-          portFactory:endpoint => new AiSdkModelPort(endpoint,hostDiagnosticSink),
-          onRegistrationChanged:() => {config.systemPrompt=promptFor(candidateModel);}});
-        config.media = media;
-        config.recognizer = media.recognizer;
-        media.recompute();
-        const controls = createCoreRuntimeControls({config,model,settings:modelSettings,modelPortFor:portFor,maxOutputTokens:envConfig.maxOutputTokens,
-          imageInputFor,imageFallbackAvailable:media.recognizerConfigured,
-          systemPromptFor:id => {candidateModel=id;media.recompute();return promptFor(id);},
-          onRefresh: () => { if (candidate && session?.ownsRuntime(candidate.engine)) session.refreshModelSettings(); },
-        });
-        return { model, options: buildCoreLaunchOptions(controls.options),
-          services:{adapter:() => database,sessionId,media,checkpoints:candidateCheckpoints ?? undefined,flushHistory:() => candidateHistorySink.flushChecked(),
-            readOrchestrator:() => {try {const parsed=parseSettings(JSON.parse(readFileSync(settingsPath ?? defaultSettingsPath(),"utf8")));return parsed.status === "ok" ? resolveProfileRoles(parsed.settings,workspace)?.orchestrator : undefined;}catch{return undefined;}},
-            health:() => roleHealth.snapshot(),sendProviderEvent:event => process.parentPort.postMessage(event),
-            pricing:() => ({catalogEntry:entry,baseUrl:envConfig.baseUrl,pricingRaw:pricingSnapshotWithKeyDefault(JSON.stringify(modelSettings.pricingSnapshot()),entry,envConfig.apiKey)})},
-          configure: runtime => { routing.configure(runtime); runtime.presentation = { ...runtime.presentation,
-            pinnedConnection: { connectionId: launch.target.engine === "core" ? launch.target.connectionId : "", providerId: envConfig.providerId ?? "custom" },
-            modelSettingsConnectionId: launch.target.engine === "core" ? launch.target.connectionId : null,
-            ...controls.presentation,
-          }; runtime.callbacks = {...runtime.callbacks,...controls.callbacks}; candidate = runtime; }, cleanup: async () => { routing.cleanup(); await manager.dispose(); } };
-      } catch (error) { routing.cleanup(); await manager.dispose(); throw error; }
-    } : resolveCore,
+    resolveCore: launch?.target.engine === "core" ? createProductionCoreResolver({
+      workspace,sessionId,runtimeId:runtimeId!,connectionId:launch.target.connectionId,sourceEnv,home,database,broker,rules,mcpSecrets,
+      projectTrusted,health:roleHealth,preview:previewPort,fullBrowserAccess:() => browserAccess.get(),
+      createRouting:() => candidateRouting(sessionId,broker,sourceEnv,home),
+      resolveApiKey:buildResolveApiKey({authMode:sourceEnv[ENV_AUTH_MODE],send:sendCredentialRequest,subscribe:subscribeCredentialResponses,fallbackApiKey:sourceEnv.ANYCODE_API_KEY}),
+      diagnosticSink:hostDiagnosticSink,ownsRuntime:engine => session?.ownsRuntime(engine) === true,
+      notifyModeChanged:mode => session?.notifyModeChanged(mode),refreshModelSettings:() => session?.refreshModelSettings(),
+      sendProviderEvent:event => process.parentPort.postMessage(event),
+    }) : resolveCore,
     resolveCodex: async () => {
       const binaryPath = sourceEnv[ENV_CODEX_BIN];
       if (!binaryPath?.trim()) return undefined;
@@ -3543,21 +3470,7 @@ async function boot(): Promise<void> {
     // symmetry with the worktree gate and as a single flip point should a
     // future precondition emerge; today it is unconditionally true.
     const previewAvailable = true;
-    if (previewAvailable) {
-      registry.register(browserOpenTool);
-      registry.register(browserReadTool);
-      registry.register(browserScreenshotTool);
-      // browser control. Built from the factory so
-      // the "Full browser access" flag (Phase B) can drop the approval escalation.
-      const browserControl = createBrowserControlTools({ fullAccess: () => browserAccess.get() });
-      registry.register(browserControl.navigate);
-      registry.register(browserControl.snapshot);
-      registry.register(browserControl.click);
-      registry.register(browserControl.type);
-      registry.register(browserControl.waitFor);
-      registry.register(browserControl.console);
-      registry.register(browserControl.eval);
-    }
+    if (previewAvailable) registerCoreBrowserTools(registry,() => browserAccess.get());
     // Plan-exit contract (mirror of cli/main.ts): ONE call registers
     // ExitPlanMode AND produces the planExitMode/onModeChange pair spread into
     // AgentLoopConfig below — the halves are only safe together (plan-exit.ts).
@@ -3710,9 +3623,7 @@ async function boot(): Promise<void> {
     // BEFORE the toolNames snapshot below, so BashOutput/BashKill reach the
     // system prompt's tool-discipline section exactly as they do in the CLI.
     taskManager = new InProcessTaskManager(execAdapter);
-    registry.register(backgroundCapableBashTool, { silentDuplicateWarning: true });
-    registry.register(bashOutputTool);
-    registry.register(bashKillTool);
+    registerCoreTaskTools(registry);
 
     let lspServerSpecs: LspServerSpec[] = [];
     let lspIssues: string[] = [];
@@ -3822,19 +3733,7 @@ async function boot(): Promise<void> {
     // extensions — rather than aborting. discoverExtensions itself never
     // throws by contract; this try/catch is defense-in-depth kept symmetric
     // with its neighbors.
-    let ext: ExtensionsBootstrap = {
-      skills: createSkillPort(fsAdapter, []),
-      skillsPromptSection: "",
-      profiles: [],
-      profilesPromptSection: "",
-      rescanProfiles: async () => null,
-      pluginMcpServerSpecs: [],
-      workflows: [],
-      workflowsPromptSection: "",
-      memorySection: "",
-      repoMapFiles: [],
-      problems: [],
-    };
+    let ext: ExtensionsBootstrap;
     // Builtin skills: every capability-gated set plus the unconditional ones,
     // composed by buildHostBuiltinSkills (host/builtin-skills.ts) into ONE
     // array — discoverExtensions takes a single `builtinSkills` key, so two
@@ -3850,8 +3749,7 @@ async function boot(): Promise<void> {
     // xfix H1(a): the settings block is re-read here (not only at
     // module load) so a grandfathering write from this app run is visible.
     refreshPluginsSettings();
-    try {
-      ext = await discoverExtensions(fsAdapter, {
+    ext = await loadCoreRuntimeExtensions(fsAdapter, {
         workspace,
         home: hostProfileHome(),
         claimedMcpNames: new Set(mcpSpecs.map((spec) => spec.name)),
@@ -3874,9 +3772,6 @@ async function boot(): Promise<void> {
           builtinPersonaNames: Object.keys(PERSONAS),
         }),
       });
-    } catch (error) {
-      console.error(`[host] extensions discovery failed; continuing with zero skills/agent profiles/plugins: ${describeError(error)}`);
-    }
     mdClaimedProfileNames = new Set(ext.profiles.map((p) => p.name));
     for (const problem of ext.problems) {
       console.warn(`[host] extensions: ${problem}`);
@@ -4015,41 +3910,17 @@ async function boot(): Promise<void> {
     // byte-identical string from these, so components and prompt cannot drift.
     // renderRepoMap()'s repoMapStatus side effect fires HERE (once per compose),
     // before Session's envStatus seam reads it.
-    const composeSystemPromptComponents = (): NonNullable<AgentLoopConfig["systemPromptComponents"]> => [
-      { kind: "memory", text: ext.memorySection },
-      { kind: "skills", text: ext.skillsPromptSection },
-      { kind: "workflows", text: ext.workflowsPromptSection },
-      { kind: "profiles", text: ext.profilesPromptSection },
-      { kind: "mcp", text: mcpInstructionsSection },
-      { kind: "repoMap", text: renderRepoMap() },
-    ];
-
-    // System-prompt closure (design slice-P7.15-cut.md §2.1, mirror of
-    // cli/main.ts:932): the base identity/tool/env prompt followed by the section
-    // components in their fixed prompt order (memory -> skills -> workflows ->
-    // profiles -> repoMap). BYTE-identical to the pre-P7.17 inline `base + memory
-    // + skills + workflows + profiles + renderRepoMap()` expression (same strings,
-    // same order); the components now carry the repoMap render, so this no longer
-    // calls renderRepoMap() itself (single render per compose). The loop reads
-    // config.systemPrompt per-call, so the rebuilt prompt takes effect next turn.
-    // срез C (finding #6): `toolNames` is read LIVE off the registry
-    // on every composition (never a frozen boot snapshot), so a tool
-    // registered/unregistered after boot — InspectImage's own gate, plan
-    // §5/§9 — reaches the model the very next time this is called, without
-    // rebuilding this closure. `visionFallbackEnabled` mirrors that same
-    // live read: true exactly while InspectImage is CURRENTLY registered.
-    const composeSystemPrompt = (
-      components: NonNullable<AgentLoopConfig["systemPromptComponents"]>,
-    ): string =>
-      buildSystemPrompt({
-        toolNames: registry.list(),
-        env: systemPromptEnv,
-        visionFallbackEnabled: registry.has("InspectImage"),
-        // (mirror of cli/main.ts): the one-line LSP notice rides
-        // along exactly while the host carries a LspManager (>=1 configured
-        // server); null => [] => the section renders "" (byte-identity).
-        lspCoveredExtensions: lspManager !== null ? lspServerSpecs.flatMap((s) => s.extensions) : [],
-      }) + components.map((c) => c.text).join("");
+    const coreComposition = createCoreRuntimeComposition({
+      registry,extensions:() => ext,env:systemPromptEnv,sourceEnv:process.env,
+      bootModel:envConfig.model,providerId:envConfig.providerId,exploreModel:envConfig.exploreModel,modelPortFor:modelPortFactory,
+      settingsForChild,selectedEffort:() => selectedEffort,
+      roles:() => {refreshRolesSettings();return rolesSettings;},
+      mcpInstructions:() => mcpInstructionsSection,renderRepoMap,
+      lspCoveredExtensions:() => lspManager !== null ? lspServerSpecs.flatMap(server => server.extensions) : [],
+      ...(previewAvailable ? {preview:previewPort} : {}),
+    });
+    const composeSystemPromptComponents = coreComposition.components;
+    const composeSystemPrompt = coreComposition.prompt;
 
     // GitBridge wiring (slice 5.7, design slice-5.7-cut.md §2.3-C3): construction
     // is unconditional (zero I/O in the constructor), mirroring the CLI's
@@ -4480,9 +4351,8 @@ async function boot(): Promise<void> {
     // `ext.profiles` currently holds on every listAgentTypes()/run() call — a
     // profile authored into `.anycode/agents/` mid-session becomes a callable
     // agent_type without recreating this AgentLoop.
-    const loop = new AgentLoop(
-      isChildSessionBoot(args, sessionMeta) ? config : withWorkflows(
-        withSubagents(config, {
+    const loop = coreComposition.loop(config,{
+          readConnectionTargets,
           createUsageRecorder: (model) => {
             const subagentId = randomUUID();
             let step = 0;
@@ -4498,64 +4368,6 @@ async function boot(): Promise<void> {
               usageAuditWriteTail = (usageAuditWriteTail ?? Promise.resolve()).then(() => persistence!.recordProviderUsage(row)).catch((e) => console.error("[host] usage audit write failed", e));
             };
           },
-          // §3.6: settings-derived role personas. For each of
-          // planner/executor/reviewer NOT claimed by md-discovery, a derived
-          // PersonaDefinition is appended carrying the settings
-          // roles[role].primary fields (engine/connection/provider/model/
-          // effort) and ROLE_TURN_BUDGETS' turn budget. Precedence (§2.1):
-          // md-profile > settings-derived > built-in — md-discovery's own
-          // list stays FIRST and untouched; the derived entries trail it, and
-          // the runner's profile-wins resolution handles the rest. The
-          // origin tag keeps the runner's isMdProfile false for these entries:
-          // engine-restriction refusals point at Settings → Roles, never at a
-          // file that was never written.
-          profiles: () => {
-            refreshRolesSettings();
-            const claimed = new Set(ext.profiles.map((p) => p.name));
-            const derived: PersonaDefinition[] = [];
-            for (const role of ["planner", "executor", "reviewer"] as const) {
-              if (claimed.has(role)) continue;
-              const primary = rolesSettings?.[role]?.primary;
-              if (primary === undefined) continue;
-              const builtIn = PERSONAS[role];
-              derived.push({
-                name: role,
-                description: builtIn.description,
-                tools: builtIn.tools,
-                systemPrompt: builtIn.systemPrompt,
-                turnBudget: ROLE_TURN_BUDGETS[role],
-                origin: "settings",
-                ...(primary.model !== undefined ? { model: primary.model } : {}),
-                ...(primary.effort !== undefined ? { effort: primary.effort } : {}),
-                ...(primary.engine !== undefined ? { engine: primary.engine } : {}),
-                ...(primary.connection !== undefined ? { connection: primary.connection } : {}),
-                ...(primary.provider !== undefined ? { provider: primary.provider } : {}),
-              });
-            }
-            return derived.length > 0 ? [...ext.profiles, ...derived] : ext.profiles;
-          },
-          env: systemPromptEnv,
-          readConnectionTargets,
-          memorySection: ext.memorySection,
-          // cheap-model default for inline explore children
-          // (ANYCODE_EXPLORE_MODEL). Assigned directly (not conditional-spread):
-          // with the var unset this reads `undefined`, which the runner treats
-          // exactly like an absent option — explore inherits the parent's port.
-          exploreModel: envConfig.exploreModel,
-          resolveChildModelPort: (id: string) => {
-            assertChildModel(id, readAllowedChildModels(process.env.ANYCODE_CHILD_MODELS, envConfig.model, envConfig.providerId === "opencode" || envConfig.providerId === "opencode-openai"));
-            return modelPortFactory(id);
-          },
-          // (F6) + §0b adjudication: unconditional, exactly like the
-          // port factory above (the desktop always has both). The tier handed
-          // to the resolver is the host-owned `selectedEffort` cell read AT
-          // SPAWN TIME — the live USER-SELECTED tier, kept current by
-          // CoreEngine's onReasoningEffortSet callback and by switchModelImpl
-          // below. Never `config.reasoningEffort`, whose `undefined` after a
-          // switch to a non-reasoning parent would silently drop the child's
-          // effort even though the child's own model can honor the tier.
-          resolveChildModelSettings: (id: string, profileEffort?: ReasoningEffort) =>
-            settingsForChild(id, profileEffort ?? selectedEffort),
           // WebSearch parity for children (mirror of the CLI):
           // the SAME instance registered above when a backend resolved is
           // threaded into every persona child registry that lists "WebSearch".
@@ -4565,10 +4377,7 @@ async function boot(): Promise<void> {
           // roles + health cache are HOST state; the runner walks the
           // returned chain for ROLE personas (§3.2) and nothing else.
           resolveRoleRoute: resolveRoleRouteImpl,
-        }),
-        ext.workflows,
-      ),
-    );
+    },isChildSessionBoot(args,sessionMeta));
 
     // Live agent-profile rescan (subagent-model design): run at the start of
     // EVERY new user turn (CoreEngine's onBeforeTurn, never continueTurn) so a

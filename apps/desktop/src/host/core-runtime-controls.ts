@@ -15,6 +15,7 @@ export function createCoreRuntimeControls(deps: {
   initialEffort?: ReasoningEffort;
   maxOutputTokens?: number;
   onRefresh?(): void;
+  createLoop?(config:AgentLoopConfig):AgentLoop;
 }) {
   const { config, settings } = deps;
   let model = deps.model;
@@ -30,7 +31,7 @@ export function createCoreRuntimeControls(deps: {
     config.systemPrompt = deps.systemPromptFor(model);
   };
   budget();
-  const loop = new AgentLoop(config);
+  const loop = deps.createLoop?.(config) ?? new AgentLoop(config);
   const options: CoreEngineOptions = {
     config,loop,
     resolveSelectedEffort: effort => effective(model,effort),
@@ -53,6 +54,7 @@ export function createCoreRuntimeControls(deps: {
     },
   };
   return {
+    selectedEffort:() => selected,
     options,
     callbacks: {effortResolution:{levels,effective}} satisfies SwitchRuntime["callbacks"],
     presentation: {imageInputEnabled:() => deps.imageInputFor(model),imageFallbackAvailable:deps.imageFallbackAvailable ?? (() => false),contextWindowAssumed:() => settings.contextFor(model).source === "assumed"} satisfies SwitchRuntime["presentation"],
