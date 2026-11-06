@@ -3296,3 +3296,16 @@ it("bounds and sanitizes detached failure reasons without losing diagnostic text
   expect(run({ finalText: reason }, scrubFailureText, scrubApprovalText)).toBe(reason);
   expect(run({ finalText: "x".repeat(100_000) }, scrubFailureText, scrubApprovalText).length).toBeLessThanOrEqual(2000);
 });
+
+
+it("peer drain transport takes the current main host generation", async () => {
+  const source = await readFile(new URL("./index.ts", import.meta.url), "utf8");
+  const setup = source.match(/peerDrainTransport = createSessionPeerDrainTransport\([\s\S]*?\n  \}\);/)?.[0];
+  expect(setup).toBeDefined();
+  for (const generation of [7, 42]) {
+    const create = vi.fn();
+    new Function("createSessionPeerDrainTransport", "session", "switchHostGeneration", `let peerDrainTransport; ${setup}`)(
+      create, { communicationStatus: () => ({ sessionId: "recipient" }) }, generation);
+    expect(create.mock.calls[0]?.[1]).toEqual({ recipientSessionId: "recipient", generation });
+  }
+});

@@ -1207,3 +1207,38 @@ it("terminal drain refusal releases the inbox head and admits the following peer
     f.finishes.shift()!(); await f.h.flush();
   } finally { f.h.close(); }
 });
+
+
+it.each([false, true])("settled real child rejects registered peers before latching its terminal (pending: %s)", async inFlight => {
+  const f = fixture(), terminal = vi.fn();
+  const child = new Session({ outbound: new Outbound(), engine: f.engine,
+    broker: new IpcPermissionBroker(() => {}), fs: new MemFs(), workspace: "/workspace",
+    projectRoot: "/workspace", model: "fixture", sessionId: "child-drain",
+    bootHistory: [], rules: new SessionPermissionRules(),
+    child: { onReady: () => {}, onProgress: () => {}, flushHistory: async () => {}, onTerminal: terminal },
+  });
+  let resolve!: (permit: import("../shared/session-peer-drain.js").SessionPeerDrainPermit) => void;
+  const port = { request: vi.fn(() => new Promise<import("../shared/session-peer-drain.js").SessionPeerDrainPermit>(r => { resolve = r; })),
+    consume: vi.fn(() => false), discard: vi.fn(() => true) };
+  child.configurePeerDrain(port);
+  try {
+    if (inFlight) await child.receiveAgentMessage({ ...envelope("pending-peer"), recipientSessionId: "child-drain" }, true);
+    expect(child.startProgrammaticTurn("initial")).toEqual({ ok: true });
+    await f.h.waitUntil(() => f.inputs.length === 1);
+    for (const id of ["first-peer", "second-peer"]) {
+      expect((await child.receiveAgentMessage({ ...envelope(id), recipientSessionId: "child-drain" }, true)).state).toBe("queued");
+    }
+    f.finishes.shift()!();
+    await vi.waitFor(() => expect(terminal).toHaveBeenCalledTimes(1));
+    for (const id of ["first-peer", "second-peer"]) expect(child.agentMessageStatus(id)?.state).toBe("rejected");
+    expect((child as unknown as { childTerminalFinalized: boolean }).childTerminalFinalized).toBe(true);
+    expect(f.inputs).toHaveLength(1);
+    expect(port.request).toHaveBeenCalledTimes(inFlight ? 1 : 0); expect(port.consume).not.toHaveBeenCalled();
+    if (inFlight) {
+      expect(child.agentMessageStatus("pending-peer")?.state).toBe("rejected");
+      resolve({ type: "session_peer_drain_permit", messageId: "pending-peer", nonce: "late", recipientSessionId: "child-drain", generation: 1 });
+      await vi.waitFor(() => expect(port.discard).toHaveBeenCalledTimes(1));
+      expect(f.inputs).toHaveLength(1);
+    }
+  } finally { await child.shutdown(); f.h.close(); }
+});

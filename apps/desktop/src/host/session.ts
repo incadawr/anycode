@@ -2624,12 +2624,16 @@ export class Session {
   private drainAgentInbox(settledChild = false): boolean {
     if (this.postureBlocked()) return false;
     if ((!settledChild && (this.busy || this.currentTurn !== null)) || this.shuttingDown || this.relocating || this.childTerminalFinalized) return false;
-    if (this.peerDrainPending) return false;
+    // Settlement must finish synchronously before the child terminal is latched.
+    // Refuse marked heads rather than leave work awaiting a future idle boundary.
+    while (settledChild && this.agentInbox[0] && this.registeredPeerMessages.has(this.agentInbox[0].messageId)) {
+      const envelope = this.agentInbox.shift()!;
+      this.registeredPeerMessages.delete(envelope.messageId);
+      this.publishAgentDelivery({ envelope, state: "rejected", detail: "Session unavailable before peer drain" });
+    }
+    if (this.peerDrainPending && !settledChild) return false;
     const head = this.agentInbox[0];
     if (head && this.registeredPeerMessages.has(head.messageId)) {
-      // Child settlement keeps its synchronous boolean contract; authorization
-      // resumes only at a later idle boundary, after the child's teardown.
-      if (settledChild) return false;
       this.peerDrainPending = true;
       const port = this.peerDrain;
       void (async () => {

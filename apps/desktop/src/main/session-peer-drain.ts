@@ -22,11 +22,19 @@ export function createSessionPeerDrain(deps: {
   return {
     register(record: CommunicationRecord, sender: PeerHost, recipient: PeerHost): boolean {
       const id = record.envelope.messageId;
-      if (disposed || entries.has(id) || entries.size >= 10000 || deps.lookup(id) !== record || !record.peer ||
+      if (disposed || entries.has(id) || deps.lookup(id) !== record || !record.peer ||
           record.principal?.kind !== "session" || record.principal.sessionId !== sender.sessionId || record.principal.tabId !== sender.tabId ||
           record.envelope.sender !== `session:${sender.sessionId}` || record.envelope.recipientSessionId !== recipient.sessionId ||
           record.envelope.mode !== "next_turn" || record.peer.senderWorkspace !== sender.workspaceKey || record.workspace !== recipient.workspaceKey ||
           !current(sender) || !current(recipient)) return false;
+      if (entries.size >= 10000) {
+        // A pending authorization and queued/dispatch-pending deliveries stay pinned.
+        const terminal = [...entries].filter(([, entry]) => entry.state !== "pending" &&
+          entry.record.state !== "queued" && entry.record.detail !== "Dispatch pending")
+          .sort((a, b) => a[1].record.peer!.acceptedAt - b[1].record.peer!.acceptedAt);
+        if (!terminal.length) return false;
+        entries.delete(terminal[0]![0]);
+      }
       entries.set(id, { record, sender: { ...sender }, recipient: { ...recipient }, identity: identity(record), nonces: new Set(), state: "ready" });
       return true;
     },
@@ -45,6 +53,7 @@ export function createSessionPeerDrain(deps: {
         if (entries.get(request.messageId) !== entry || !sender || !recipient || deps.lookup(request.messageId) !== entry.record ||
             identity(entry.record) !== entry.identity || entry.record.state === "rejected" ||
             (entry.record.state === "unknown" && entry.record.detail !== "Dispatch pending") ||
+            Date.now() - entry.record.peer!.startedAt >= 30 * 60_000 ||
             !deps.access.canAccess(sender, recipient, "send")) return null;
         entry.state = "issued";
         return { ...request, type: "session_peer_drain_permit" };
