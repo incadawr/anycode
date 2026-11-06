@@ -68,6 +68,7 @@ export type RewindResult =
        */
       compactionSeq?: number;
       turnErrorIds?: string[];
+      runtimeBoundary?: import("../ports/checkpoints.js").RuntimeCheckpointBoundary;
     }
   | { ok: false; reason: string };
 
@@ -347,10 +348,12 @@ export class ShadowGitCheckpoints implements CheckpointCapturer {
 
     let historyItems: HistoryItem[] | null = null;
     let turnErrorIds: string[] | undefined;
+    let runtimeBoundary: import("../ports/checkpoints.js").RuntimeCheckpointBoundary | undefined;
     if (wantsConversation) {
-      const snapshot = JSON.parse(record.historyJson) as HistoryItem[] | { items: HistoryItem[]; turnErrorIds: string[] };
+      const snapshot = JSON.parse(record.historyJson) as HistoryItem[] | { items: HistoryItem[]; turnErrorIds?: string[]; runtimeBoundary?: import("../ports/checkpoints.js").RuntimeCheckpointBoundary };
       historyItems = Array.isArray(snapshot) ? snapshot : snapshot.items;
       turnErrorIds = Array.isArray(snapshot) ? undefined : snapshot.turnErrorIds;
+      runtimeBoundary = Array.isArray(snapshot) ? undefined : snapshot.runtimeBoundary;
     }
 
     return {
@@ -359,6 +362,7 @@ export class ShadowGitCheckpoints implements CheckpointCapturer {
       restoredPaths,
       historyItems,
       ...(turnErrorIds !== undefined ? { turnErrorIds } : {}),
+      ...(runtimeBoundary !== undefined ? { runtimeBoundary } : {}),
       ...(record.compactionSeq !== undefined ? { compactionSeq: record.compactionSeq } : {}),
     };
   }

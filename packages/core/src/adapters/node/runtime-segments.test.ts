@@ -104,6 +104,32 @@ describe("runtime segment schema", () => {
 });
 
 describe("segment model history custody", () => {
+  it("atomically rewinds canonical rows and boundaries and never restores them on reopen", async () => {
+    const path = await legacyDatabase();
+    const store = new SqlitePersistenceAdapter(path);
+    const initial = store.ensureRuntimeSession("s");
+    const kept = (await store.loadHistory("s"))[0]!;
+    await store.saveCheckpoint({id:"cp",sessionId:"s",commitHash:"hash",createdAt:2,reason:"auto",label:"before switch",historyJson:JSON.stringify([kept])});
+    const snapshot = JSON.parse((await store.getCheckpoint("cp"))!.historyJson) as {runtimeBoundary:import("../../ports/checkpoints.js").RuntimeCheckpointBoundary};
+    store.commitRuntimeSwitch("s","codex",switchRecord());
+    store.mergeRuntimeTranscript("s","next",[{id:"discarded",createdAt:4,message:{role:"user",content:"discard"}}]);
+    const before = store.loadRuntimeSession("s");
+    const raw = new DatabaseSync(path);
+    raw.exec("CREATE TRIGGER rewind_fault BEFORE DELETE ON runtime_boundaries BEGIN SELECT RAISE(ABORT,'rewind fault'); END");
+    await expect(store.restoreHistoryAndTurnErrors("s",[kept],undefined,snapshot.runtimeBoundary)).rejects.toThrow("rewind fault");
+    expect(store.loadRuntimeSession("s")).toEqual(before);
+    expect(await store.loadHistory("s")).toEqual([]);
+    raw.exec("DROP TRIGGER rewind_fault"); raw.close();
+    await store.restoreHistoryAndTurnErrors("s",[kept],undefined,snapshot.runtimeBoundary);
+    expect(store.loadRuntimeSession("s")!.items).toEqual(initial.items);
+    expect(store.loadRuntimeSession("s")!.boundaries).toEqual([]);
+    store.mergeRuntimeTranscript("s","next",await store.loadHistory("s"));
+    await store.close();
+    const reopened = new SqlitePersistenceAdapter(path);
+    expect(reopened.loadRuntimeSession("s")!.items).toEqual(initial.items);
+    expect(reopened.loadRuntimeSession("s")!.boundaries).toEqual([]);
+    await reopened.close();
+  });
   it("retains complete display coverage when core compaction replaces model context", async () => {
     const store = new SqlitePersistenceAdapter(":memory:");
     await store.createSession({id:"s",workspace:"/w",model:"m",mode:"plan"});

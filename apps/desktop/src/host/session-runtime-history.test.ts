@@ -23,6 +23,34 @@ async function switchedStore() {
   return store;
 }
 describe("canonical reconnect hydration", () => {
+  it("does not resurrect a rewound canonical turn after renderer reload or host restart", async () => {
+    const store = await switchedStore();
+    const history = new RuntimeSessionHistory(store,"test-session");
+    const kept = {id:"kept",turnId:"kept-turn",createdAt:10,message:{role:"user" as const,content:"kept text"}};
+    const removed = {id:"removed",turnId:"removed-turn",createdAt:11,message:{role:"user" as const,content:"removed text"}};
+    history.snapshot([kept]);
+    await store.saveCheckpoint({id:"cp",sessionId:"test-session",commitHash:"hash",createdAt:12,reason:"auto",label:"rewind",historyJson:JSON.stringify([kept])});
+    const checkpoint = JSON.parse((await store.getCheckpoint("cp"))!.historyJson) as {runtimeBoundary:import("@anycode/core").RuntimeCheckpointBoundary};
+    history.snapshot([kept,removed]);
+    const h = createHarness({steps:[],bootHistory:[kept,removed],runtimeHistory:history,
+      restoreHistoryAndTurnErrors:(items,errors,boundary) => store.restoreHistoryAndTurnErrors("test-session",items,errors,boundary),
+      checkpointsSeam:{list:async () => [],rewind:async () => ({ok:true,safetyCheckpointId:"safety",restoredPaths:0,historyItems:[kept],runtimeBoundary:checkpoint.runtimeBoundary})},
+    });
+    try {
+      h.send({type:"ui_ready"}); await h.waitFor(m => m.type === "host_ready");
+      h.send({type:"rewind_request",requestId:"rewind",checkpointId:"cp",scope:"conversation"});
+      await h.waitUntil(() => h.received.some(m => m.type === "rewind_result" && m.ok));
+      h.send({type:"ui_ready"}); await h.flush();
+      expect(history.state().items.some(item => item.sourceItemId === "removed")).toBe(false);
+    } finally { await h.session.shutdown(); h.close(); }
+    const reopened = createHarness({steps:[],bootHistory:await store.loadHistory("test-session"),runtimeHistory:new RuntimeSessionHistory(store,"test-session")});
+    try {
+      reopened.send({type:"ui_ready"}); await reopened.waitFor(m => m.type === "host_ready");
+      await reopened.flush();
+      expect(history.state().items.filter(item => item.sourceItemId === "kept")).toHaveLength(1);
+      expect(reopened.received.some(m => m.type === "session_history" && m.items.some(item => item.message.content === "removed text"))).toBe(false);
+    } finally { await reopened.session.shutdown(); reopened.close(); await store.close(); }
+  });
   it("recovers a lost acceptance signal after a checked absence and serves the next turn", async () => {
     const store = await switchedStore();
     const history = new RuntimeSessionHistory(store,"test-session");

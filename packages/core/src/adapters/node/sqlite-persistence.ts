@@ -1265,7 +1265,14 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   private mergeRuntimeHistoryInDb(db: DatabaseSync, sessionId: string, segmentId: string, items: readonly HistoryItem[]): void {
     const handoff = db.prepare("SELECT data FROM runtime_handoffs WHERE session_id=? AND segment_id=?").get(sessionId,segmentId);
     const inputs = db.prepare("SELECT * FROM runtime_inputs WHERE session_id=? AND segment_id=? ORDER BY rowid").all(sessionId,segmentId);
-    const normalized = items.map(item => {
+    const normalized = items.filter(item => {
+      if (!item.segmentId || item.segmentId === segmentId) return true;
+      // Rewind may restore model context captured by an earlier core runtime.
+      // Its surviving display rows keep their original segment identity.
+      const retained = db.prepare("SELECT data FROM runtime_transcript WHERE session_id=? AND segment_id=? AND item_id=?").get(sessionId,item.segmentId,item.sourceItemId ?? item.id);
+      if (!retained) throw new Error("Transcript item belongs to another runtime segment");
+      return false;
+    }).map(item => {
       const input = inputs.find(value => item.turnId === value.turn_id || (typeof value.native_turn_id === "string" && (item.turnId === value.native_turn_id || item.id.startsWith(`${value.native_turn_id}:`))));
       return input ? {...item,turnId:input.turn_id as string,...(item.message.role === "user" && item.message.content === input.input_text ? {message:{...item.message,content:input.original_text as string}} : {})} : item;
     });
@@ -1971,8 +1978,24 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     return rows.map((row) => JSON.parse(row.data) as import("../../types/history.js").TurnErrorRecord);
   }
 
-  async restoreHistoryAndTurnErrors(sessionId: string, history: readonly HistoryItem[], turnErrorIds?: readonly string[]): Promise<string[]> {
+  async restoreHistoryAndTurnErrors(sessionId: string, history: readonly HistoryItem[], turnErrorIds?: readonly string[], runtimeBoundary?: import("../../ports/checkpoints.js").RuntimeCheckpointBoundary): Promise<string[]> {
     return this.transaction((db) => {
+      const active = db.prepare("SELECT active_runtime_segment FROM sessions WHERE id=?").get(sessionId)?.active_runtime_segment as string | null;
+      if (active) {
+        // Old checkpoints have no explicit watermark. Match their last retained
+        // item in the active segment; an empty snapshot means its start.
+        const last = history.at(-1);
+        const matched = last ? db.prepare("SELECT seq FROM runtime_transcript WHERE session_id=? AND segment_id=? AND item_id=?").get(sessionId,active,last.sourceItemId ?? last.id)?.seq as number | undefined : undefined;
+        const before = db.prepare("SELECT COALESCE(MAX(t.seq),0) AS seq FROM runtime_transcript t JOIN runtime_segments r ON r.session_id=t.session_id AND r.segment_id=t.segment_id WHERE t.session_id=? AND r.ordinal<(SELECT ordinal FROM runtime_segments WHERE session_id=? AND segment_id=?)").get(sessionId,sessionId,active)!.seq as number;
+        db.prepare("DELETE FROM runtime_transcript WHERE session_id=? AND seq>?").run(sessionId,runtimeBoundary?.transcriptSeq ?? matched ?? before);
+        const boundaryIds = runtimeBoundary?.boundaryIds ?? db.prepare("SELECT boundary_id FROM runtime_boundaries WHERE session_id=? AND segment_id IN (SELECT segment_id FROM runtime_segments WHERE session_id=? AND ordinal<=(SELECT ordinal FROM runtime_segments WHERE session_id=? AND segment_id=?))").all(sessionId,sessionId,sessionId,active).map(row => row.boundary_id as string);
+        const keepBoundaries = new Set(boundaryIds);
+        for (const row of db.prepare("SELECT boundary_id FROM runtime_boundaries WHERE session_id=?").all(sessionId)) if (!keepBoundaries.has(row.boundary_id as string)) db.prepare("DELETE FROM runtime_boundaries WHERE session_id=? AND boundary_id=?").run(sessionId,row.boundary_id as string);
+        // Never import a transcript tail that the user just rewound away.
+        db.prepare("DELETE FROM runtime_handoffs WHERE session_id=? AND segment_id=?").run(sessionId,active);
+        const keptTurns = new Set(history.flatMap(item => item.turnId ? [item.turnId] : []));
+        for (const row of db.prepare("SELECT turn_id FROM runtime_inputs WHERE session_id=? AND segment_id=?").all(sessionId,active)) if (!keptTurns.has(row.turn_id as string)) db.prepare("DELETE FROM runtime_inputs WHERE session_id=? AND segment_id=? AND turn_id=?").run(sessionId,active,row.turn_id as string);
+      }
       const rows = db.prepare("SELECT data FROM history_items WHERE session_id = ? AND json_extract(data, '$.kind') = 'turn_error'").all(sessionId) as unknown as { data: string }[];
       const errors = rows.map((row) => JSON.parse(row.data) as import("../../types/history.js").TurnErrorRecord);
       const keep = turnErrorIds === undefined ? undefined : new Set(turnErrorIds);
@@ -1984,7 +2007,10 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       ));
       db.prepare("DELETE FROM history_items WHERE session_id = ? AND COALESCE(json_extract(data, '$.kind'), '') != 'turn_error'").run(sessionId);
       const insert = db.prepare("INSERT INTO history_items (session_id, item_id, data) VALUES (?, ?, ?)");
-      for (const item of history) insert.run(sessionId, item.id, JSON.stringify(item));
+      for (const item of history) {
+        const retained = active ? db.prepare("SELECT data FROM runtime_transcript WHERE session_id=? AND item_id=? ORDER BY seq DESC").all(sessionId,item.sourceItemId ?? item.id).map(row => JSON.parse(row.data as string) as HistoryItem).find(row => row.turnId === item.turnId && row.createdAt === item.createdAt) : undefined;
+        insert.run(sessionId,item.id,JSON.stringify(retained ? {...item,segmentId:retained.segmentId,sourceItemId:retained.sourceItemId} : item));
+      }
       const remove = db.prepare("DELETE FROM history_items WHERE session_id = ? AND item_id = ? AND json_extract(data, '$.kind') = 'turn_error'");
       for (const record of removed) remove.run(sessionId, record.id);
       touchSessionActivity(db, sessionId, history);
@@ -2152,6 +2178,17 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
   async saveCheckpoint(record: CheckpointRecord, opts?: { keepPerSession?: number }): Promise<void> {
     const keep = opts?.keepPerSession ?? CHECKPOINTS_KEEP_PER_SESSION;
     this.transaction((db) => {
+      let historyJson = record.historyJson;
+      const active = db.prepare("SELECT active_runtime_segment FROM sessions WHERE id=?").get(record.sessionId)?.active_runtime_segment as string | null;
+      if (active) {
+        const snapshot = JSON.parse(historyJson) as HistoryItem[] | {items:HistoryItem[];turnErrorIds?:string[]};
+        const items = Array.isArray(snapshot) ? snapshot : snapshot.items;
+        const last = items.at(-1);
+        const seq = last ? db.prepare("SELECT seq FROM runtime_transcript WHERE session_id=? AND segment_id=? AND item_id=?").get(record.sessionId,active,last.sourceItemId ?? last.id)?.seq as number | undefined : undefined;
+        const before = db.prepare("SELECT COALESCE(MAX(t.seq),0) AS seq FROM runtime_transcript t JOIN runtime_segments r ON r.session_id=t.session_id AND r.segment_id=t.segment_id WHERE t.session_id=? AND r.ordinal<(SELECT ordinal FROM runtime_segments WHERE session_id=? AND segment_id=?)").get(record.sessionId,record.sessionId,active)!.seq as number;
+        const boundaryIds = db.prepare("SELECT boundary_id FROM runtime_boundaries WHERE session_id=?").all(record.sessionId).map(row => row.boundary_id as string);
+        historyJson = JSON.stringify({...(!Array.isArray(snapshot) ? snapshot : {}),items,runtimeBoundary:{transcriptSeq:seq ?? before,boundaryIds}});
+      }
       db.prepare(
         `INSERT INTO checkpoints (id, session_id, commit_hash, created_at, reason, label, history_json)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -2162,7 +2199,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
         record.createdAt,
         record.reason,
         record.label,
-        record.historyJson,
+        historyJson,
       );
       // GitHub #36: the compaction boundary this checkpoint captured at its
       // turn start (absent when the caller keeps no records).

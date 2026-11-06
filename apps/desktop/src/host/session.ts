@@ -889,7 +889,7 @@ export interface SessionOptions {
   /** Narrow persistence callback for title/mode patches (design §4.2). */
   persistence?: SessionPersistence;
   saveTurnError?: (record: TurnErrorRecord, input?: string) => Promise<void>;
-  restoreHistoryAndTurnErrors?: (history: readonly HistoryItem[], errorIds?: readonly string[]) => Promise<string[]>;
+  restoreHistoryAndTurnErrors?: (history: readonly HistoryItem[], errorIds?: readonly string[], runtimeBoundary?: import("@anycode/core").RuntimeCheckpointBoundary) => Promise<string[]>;
   currentTurnErrorIds?: () => Promise<string[]>;
   /**
    * GitHub #36: the durable presentation records of this session's compactions
@@ -4105,10 +4105,17 @@ export class Session {
         });
         return;
       }
-      const restoredHistory = res.historyItems;
+      let restoredHistory = res.historyItems;
       const conversationRestored = restoredHistory !== null;
       if (restoredHistory !== null) {
-        const removedErrors = new Set(await this.restoreHistoryAndTurnErrors?.(restoredHistory, res.turnErrorIds) ?? []);
+        const removedErrors = new Set(await this.restoreHistoryAndTurnErrors?.(restoredHistory, res.turnErrorIds, res.runtimeBoundary) ?? []);
+        if (this.runtimeHistory) {
+          const retained = this.runtimeHistory.state().items;
+          restoredHistory = restoredHistory.map(item => {
+            const canonical = retained.find(value => value.sourceItemId === (item.sourceItemId ?? item.id) && value.turnId === item.turnId && value.createdAt === item.createdAt);
+            return canonical ? {...item,segmentId:canonical.segmentId,sourceItemId:canonical.sourceItemId} : item;
+          });
+        }
         this.bootTurnErrors = this.bootTurnErrors.filter((record) => !removedErrors.has(record.id));
         if (this.latestPublicResult && (removedErrors.has(this.latestPublicResult.historyItemId ?? "") ||
           (this.latestPublicResult.source !== "history_recovery" && this.latestPublicResult.turnId !== null && !restoredHistory.some((item) => item.turnId === this.latestPublicResult!.turnId)))) {

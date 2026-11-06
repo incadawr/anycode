@@ -40,7 +40,7 @@ export type { ShadowGitCheckpointsOptions, RewindScope, RewindResult } from "./c
 // Checkpoint metadata contracts (design slice-4.7-cut.md §2.1): re-exported for
 // the desktop host's rewind seam (slice P7.26/R2), so Session references the SAME
 // CheckpointMeta the store returns rather than a hand-duplicated wire shape.
-export type { CheckpointMeta, CheckpointReason } from "./ports/checkpoints.js";
+export type { CheckpointMeta, CheckpointReason, RuntimeCheckpointBoundary } from "./ports/checkpoints.js";
 export type {
   EnterWorktreeRequest,
   ExitWorktreeRequest,

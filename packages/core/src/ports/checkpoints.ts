@@ -10,6 +10,8 @@
 
 import type { HistoryItem } from "../types/history.js";
 
+export interface RuntimeCheckpointBoundary { transcriptSeq: number; boundaryIds: string[] }
+
 export type CheckpointReason = "auto" | "pre-rewind";
 
 /* */

@@ -5007,9 +5007,9 @@ async function boot(): Promise<void> {
       sessionId,
       saveTurnError: (record) => persistence!.appendTurnError(sessionId, record),
       currentTurnErrorIds: async () => (await persistence!.loadTurnErrors(sessionId)).map((record) => record.id),
-      restoreHistoryAndTurnErrors: async (items, errorIds) => {
+      restoreHistoryAndTurnErrors: async (items, errorIds, runtimeBoundary) => {
         await historySink!.flushChecked();
-        return persistence!.restoreHistoryAndTurnErrors(sessionId, items, errorIds);
+        return persistence!.restoreHistoryAndTurnErrors(sessionId, items, errorIds, runtimeBoundary);
       },
       bootHistory,
       bootTurnErrors: await loadTurnErrors(sessionId),

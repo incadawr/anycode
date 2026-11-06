@@ -2379,7 +2379,7 @@ describe("SqlitePersistenceAdapter", () => {
       expect((await adapter.getRootSession("s1"))?.id).toBe("s1");
       await adapter.saveCheckpoint(makeCheckpoint({ id: "c1", sessionId: "s1", commitHash: "abc", createdAt: 5 }));
       expect(await adapter.getCheckpoint("c1")).toEqual(
-        makeCheckpoint({ id: "c1", sessionId: "s1", commitHash: "abc", createdAt: 5 }),
+        makeCheckpoint({ id: "c1", sessionId: "s1", commitHash: "abc", createdAt: 5, historyJson: JSON.stringify({items:[],runtimeBoundary:{transcriptSeq:0,boundaryIds:[]}}) }),
       );
       await adapter.close();
     });
