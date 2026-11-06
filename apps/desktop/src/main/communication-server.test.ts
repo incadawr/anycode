@@ -1846,7 +1846,8 @@ describe("Sessions API create_session", () => {
         queueMicrotask(() => host.emit("message", { type: "communication_response", requestId: message.requestId, result: undefined }));
       }
     };
-    const manager = { tabs: new Map([["tab-1", { sessionId: "agent-1", workspace: f.dir, state: "running", proc: host }]]) } as unknown as TabHostManager;
+    // Prototype calls still need the dependency bag when peer hooks are disabled.
+    const manager = { deps: {}, tabs: new Map([["tab-1", { sessionId: "agent-1", workspace: f.dir, state: "running", proc: host }]]) } as unknown as TabHostManager;
     let hostOutcome: Promise<unknown> | undefined;
     f.request.mockImplementation((session, op, payload) => {
       const request = TabHostManager.prototype.communicationRequest.call(manager, session, op, payload, f.dir);
