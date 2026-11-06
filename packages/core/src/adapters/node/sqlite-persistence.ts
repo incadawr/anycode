@@ -1186,7 +1186,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     return !!this.open().prepare("SELECT 1 FROM runtime_inputs WHERE session_id=? AND segment_id=? AND state IN ('dispatching','uncertain')").get(sessionId,segmentId);
   }
 
-  prepareRuntimeInput(sessionId: string, turnId: string, originalText: string, input: string, importConversation: boolean): string {
+  prepareRuntimeInput(sessionId: string, turnId: string, originalText: string, input: string, importConversation: boolean, importPayload?: string): string {
     return this.transaction(db => {
       const row = db.prepare("SELECT active_runtime_segment FROM sessions WHERE id=?").get(sessionId);
       if (!row?.active_runtime_segment) throw new Error("Runtime session is missing");
@@ -1195,6 +1195,11 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       if (db.prepare("SELECT 1 FROM runtime_inputs WHERE session_id=? AND segment_id=? AND state IN ('dispatching','uncertain')").get(sessionId,state.activeSegmentId)) throw new Error("Input acceptance is uncertain. Recovery is required before another turn.");
       const handoff = state.handoff;
       const inject = importConversation && handoff?.state === "pending";
+      if (inject && importPayload !== undefined) {
+        if (Buffer.byteLength(importPayload,"utf8") > 65536) throw new Error("Invalid handoff payload");
+        handoff.payload = importPayload;
+        handoff.digest = createHash("sha256").update(importPayload).digest("hex");
+      }
       const text = inject ? `${handoff.payload}\n\n# user (current message)\n${input}` : input;
       db.prepare("INSERT INTO runtime_inputs VALUES(?,?,?,NULL,?,?, 'pending')").run(sessionId,state.activeSegmentId,turnId,originalText,text);
       if (inject) {

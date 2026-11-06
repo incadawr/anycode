@@ -235,6 +235,8 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
     return this.engine.reasoningEffort();
   }
 
+  importBudgetBytes(): number | undefined { return this.engine.importBudgetBytes?.(); }
+
   setReasoningEffort(effort: ReasoningEffort | undefined): void {
     this.engine.setReasoningEffort(effort);
   }

@@ -116,6 +116,8 @@ export interface SessionEngine {
   readTranscript?(): Promise<readonly HistoryItem[]>;
   replaceHistory?(items: HistoryItem[], persist?: boolean): void;
   contextBreakdown?(): ContextBreakdown;
+  /** Conservative byte budget for imported text after the runtime's own context and output reserve. */
+  importBudgetBytes?(): number | undefined;
   /**
    * Manual conversation compaction on the existing host maintenance rail.
    * Unsupported engines omit this method; Session visibly refuses the request.

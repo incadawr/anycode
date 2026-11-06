@@ -199,6 +199,15 @@ describe("renderImportPrompt", () => {
 });
 
 describe("ENGINE_SWITCH_TURN_ID", () => {
+  it("uses the target byte budget and keeps UTF-8 text valid while reporting omissions", () => {
+    const plan = planEngineSwitchImport([item("u",{message:{role:"user",content:"🌊".repeat(1000)}})]);
+    const prompt = renderImportPrompt("codex","core",plan,"/workspace",257);
+    expect(Buffer.byteLength(prompt,"utf8")).toBeLessThanOrEqual(257);
+    expect(prompt).toContain("earlier content was omitted");
+    expect(prompt).not.toContain("\uFFFD");
+    expect(() => renderImportPrompt("codex","core",plan,"/workspace",0)).toThrow("too little input space");
+  });
+
   it("is the sentinel turn id for the switch announcement event", () => {
     expect(ENGINE_SWITCH_TURN_ID).toBe("engine-switch");
   });

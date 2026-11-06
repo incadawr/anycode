@@ -1766,6 +1766,11 @@ export class ClaudeEngine implements SessionEngine {
    * `null`; the caller decides whether that is silent (mid-turn) or logged
    * (final, fail-soft).
    */
+  private importContext: {model:string;available:number} | undefined;
+  importBudgetBytes(): number | undefined {
+    return this.importContext?.model === this.snapshot().model ? this.importContext.available : undefined;
+  }
+
   private mapContextUsageReading(usage: Record<string, unknown>, applyModel: boolean): AgentEvent | null {
     const totalTokens = usage.totalTokens;
     const maxTokens = usage.maxTokens;
@@ -1776,6 +1781,7 @@ export class ClaudeEngine implements SessionEngine {
     ) {
       return null;
     }
+    this.importContext = {model:this.snapshot().model,available:Math.max(0,maxTokens - totalTokens - 1024)};
     return { type: "context_usage", estimatedTokens: totalTokens, budgetTokens: maxTokens, source: "provider" };
   }
 

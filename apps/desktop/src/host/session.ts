@@ -4408,7 +4408,7 @@ export class Session {
       // engine's items captured above) — nothing else feeds the render.
       const plan = planEngineSwitchImport(canonical);
       const pendingImport = {
-        prompt: renderImportPrompt(previousEngine.id, next.id, plan, this.workspace),
+        prompt: renderImportPrompt(previousEngine.id, next.id, plan, this.workspace,next.importBudgetBytes?.()),
       };
       // Permission posture survives the swap: when both engines run OUR
       // permission modes, the new one must not silently start in its default
@@ -4442,6 +4442,7 @@ export class Session {
       const projection = {
         engine: enginePresentation(next, nextSettings) ?? null, shell: next.id === "core" ? null : preparedPresentation?.shell ?? null,
         model: nextRuntime?.identity?.model ?? message.model, mode: nextMode, reasoningEffort: next.reasoningEffort() ?? "off",
+        availableEffortLevels: nextRuntime?.callbacks?.effortResolution?.levels(message.model),
         imageInput: preparedPresentation?.imageInputEnabled?.() ?? next.capabilities.supportsImages,
         imageFallback: preparedPresentation?.imageFallbackAvailable?.() ?? false,
         contextWindowAssumed: preparedPresentation?.contextWindowAssumed?.() ?? false,
@@ -4489,7 +4490,8 @@ export class Session {
       this.settingsBarrierActive = false;
       this.updateContextUsage(null);
       this.model = nextRuntime?.identity?.model ?? message.model;
-      this.availableEffortLevels = undefined;
+      this.availableEffortLevels = nextRuntime?.callbacks?.effortResolution?.levels(message.model);
+      if (next.id === "core") this.reasoningSupported = this.availableEffortLevels !== undefined;
       const presentation = nextRuntime?.presentation;
       this.shell = presentation?.shell;
       this.imageInputEnabled = presentation?.imageInputEnabled ?? (() => next.capabilities.supportsImages);
@@ -5661,7 +5663,7 @@ export class Session {
       // the text branch (a continueTurn has no fresh user frame).
       let deliveryHooks: Pick<import("./engines/session-engine.js").RunTurnOptions,"onInputDispatched" | "onInputAccepted"> = {};
       if (this.runtimeHistory && text !== undefined) {
-        const prepared = this.runtimeHistory.prepare(turnId,pendingTurnIdHolder?.originalText ?? text,text,origin !== "system");
+        const prepared = this.runtimeHistory.prepare(turnId,pendingTurnIdHolder?.originalText ?? text,text,origin !== "system",this.engine.importBudgetBytes?.());
         text = prepared.text;
         deliveryHooks = prepared.hooks;
       }

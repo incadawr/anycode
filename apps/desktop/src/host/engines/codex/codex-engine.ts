@@ -856,6 +856,11 @@ export async function resumeCodexEngine(options: CodexEngineCreateOptions & { ex
 }
 
 export class CodexEngine implements SessionEngine {
+  importBudgetBytes(): number | undefined {
+    if (this.pendingSettings && this.pendingSettings.model !== this.applied.model) return undefined;
+    const usage = this.latestContextUsage;
+    return usage ? Math.max(0,usage.budgetTokens - usage.estimatedTokens - 1024) : undefined;
+  }
   orchestrationPolicy?: OrchestrationPolicy;
   private orchestrationVerified = false;
   private orchestrationState: "off" | "on" | "transitioning" | "quarantined" = "off";

@@ -471,6 +471,7 @@ import { buildCheckpointService } from "./checkpoints.js";
 import { GitBridge } from "./git-bridge.js";
 import { createConnectionModelSettings } from "./connection-model-settings.js";
 import { buildCoreRuntime, buildCodexRuntime, buildClaudeRuntime } from "./engine-switch-runtime.js";
+import { createCoreRuntimeControls } from "./core-runtime-controls.js";
 import { buildCoreLaunchOptions, buildCodexLaunchOptions, buildClaudeLaunchOptions } from "./engine-launch-options.js";
 import { createSwitchEngineFactory, type SwitchEngineFactoryContext } from "./engine-switch-factory.js";
 import { beginEngineBootstrap, type EngineBootstrap } from "./engines/bootstrap.js";
@@ -1377,7 +1378,20 @@ function hostSwitchFactory(
         await manager.start(loaded.specs);
         const entry = getBuiltinCatalog().providers.find(item => item.id === envConfig.providerId) ?? matchCatalogEntryByBaseUrl(getBuiltinCatalog(), envConfig.baseUrl);
         const resolveApiKey = buildResolveApiKey({ authMode: sourceEnv[ENV_AUTH_MODE], send: sendCredentialRequest, subscribe: subscribeCredentialResponses, fallbackApiKey: envConfig.apiKey });
-        const modelPort = new AiSdkModelPort({ transport: envConfig.providerTransport ?? entry?.defaultTransport ?? "anthropic-messages", baseUrl: envConfig.baseUrl, apiKey: envConfig.apiKey, model, providerId: envConfig.providerId, ...(resolveApiKey ? { resolveApiKey } : {}) }, hostDiagnosticSink);
+        const connectionId = launch.target.engine === "core" ? launch.target.connectionId : "";
+        const readConnection = () => {
+          try { const parsed = parseSettings(JSON.parse(readFileSync(settingsPath ?? defaultSettingsPath(),"utf8"))); return parsed.status === "ok" ? parsed.settings.provider.connections.find(connection => connection.id === connectionId) : null; }
+          catch { return null; }
+        };
+        const modelSettings = createConnectionModelSettings({connection:readConnection() ?? undefined,readConnection,catalogEntry:entry,
+          envReasoningEffort:envConfig.reasoningEffort,envReasoningEffortModel:sourceEnv.ANYCODE_REASONING_EFFORT_MODEL,envReasoningEffortFromSettings:!!sourceEnv.ANYCODE_REASONING_EFFORT_MODEL,
+          envContextWindow:envConfig.contextWindowTokens,envContextWindowModel:envConfig.contextWindowModel,envContextWindowFromSettings:sourceEnv.ANYCODE_CONTEXT_WINDOW_FROM_SETTINGS === "1",liveCapabilitiesFor:() => undefined});
+        const portFor = (id: string) => {
+          const connection = readConnection();
+          if (id !== model && !connection?.models?.includes(id) && !modelSettings.entryFor(id)?.models.some(row => row.id === id)) throw new Error("The selected model is unavailable on this connection");
+          return new AiSdkModelPort({ transport: envConfig.providerTransport ?? entry?.defaultTransport ?? "anthropic-messages", baseUrl: envConfig.baseUrl, apiKey: envConfig.apiKey, model:id, providerId: envConfig.providerId, ...(resolveApiKey ? { resolveApiKey } : {}) }, hostDiagnosticSink);
+        };
+        const modelPort = portFor(model);
         const config: AgentLoopConfig = withSubagents({ modelPort, registry, hooks,
           permissionEngine: new RuleAwarePermissionEngine(new SafeCommandPermissionEngine(new ModePermissionEngine()), rules), permissionBroker: broker,
           mode: "plan", cwd: workspace, ports: { fs, exec, http: new NodeHttpAdapter(), todos: new InMemoryTodoStore() },
@@ -1385,13 +1399,18 @@ function hostSwitchFactory(
           systemPrompt: buildSystemPrompt({ toolNames: registry.list(), env: { workingDirectory: workspace, platform, date: new Date().toISOString().slice(0, 10), modelId: model } }),
           ...(envConfig.maxOutputTokens ? { maxOutputTokens: envConfig.maxOutputTokens } : {}),
         }, { profiles: await routing.profiles() });
-        const loop = new AgentLoop(config);
-        return { model, options: buildCoreLaunchOptions({ config, loop }),
+        let candidate: SwitchRuntime | undefined;
+        const controls = createCoreRuntimeControls({config,model,settings:modelSettings,modelPortFor:portFor,maxOutputTokens:envConfig.maxOutputTokens,
+          imageInputFor: id => resolveImageInput(id,modelSettings.entryFor(id),modelSettings.imageInputFor(id) ?? envConfig.imageInput),
+          systemPromptFor: id => buildSystemPrompt({toolNames:registry.list(),env:{workingDirectory:workspace,platform,date:new Date().toISOString().slice(0,10),modelId:id}}),
+          onRefresh: () => { if (candidate && session?.ownsRuntime(candidate.engine)) session.refreshModelSettings(); },
+        });
+        return { model, options: buildCoreLaunchOptions(controls.options),
           configure: runtime => { routing.configure(runtime); runtime.presentation = { ...runtime.presentation,
             pinnedConnection: { connectionId: launch.target.engine === "core" ? launch.target.connectionId : "", providerId: envConfig.providerId ?? "custom" },
             modelSettingsConnectionId: launch.target.engine === "core" ? launch.target.connectionId : null,
-            imageInputEnabled: () => resolveImageInput(model, entry, envConfig.imageInput),
-          }; }, cleanup: async () => { routing.cleanup(); await manager.dispose(); } };
+            ...controls.presentation,
+          }; runtime.callbacks = {...runtime.callbacks,...controls.callbacks}; candidate = runtime; }, cleanup: async () => { routing.cleanup(); await manager.dispose(); } };
       } catch (error) { routing.cleanup(); await manager.dispose(); throw error; }
     } : resolveCore,
     resolveCodex: async () => {

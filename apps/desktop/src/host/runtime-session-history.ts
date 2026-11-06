@@ -1,5 +1,6 @@
 import { type HistoryItem, type RuntimeSettings, type RuntimeSessionSnapshot, type SqlitePersistenceAdapter } from "@anycode/core";
 import type { SessionEngine, RunTurnOptions } from "./engines/session-engine.js";
+import { capImportPrompt } from "./engine-switch.js";
 
 /** Session-owned canonical history; every checked native read belongs to one current segment. */
 export class RuntimeSessionHistory {
@@ -31,9 +32,11 @@ export class RuntimeSessionHistory {
       throw error;
     }
   }
-  prepare(turnId: string, original: string, input: string, genuineUser: boolean): { text: string; hooks: Pick<RunTurnOptions,"onInputDispatched" | "onInputAccepted"> } {
+  prepare(turnId: string, original: string, input: string, genuineUser: boolean, budgetBytes?: number): { text: string; hooks: Pick<RunTurnOptions,"onInputDispatched" | "onInputAccepted"> } {
     const state = this.state();
-    const text = this.store.prepareRuntimeInput(this.sessionId,turnId,original,input,genuineUser);
+    const payload = genuineUser && state.handoff?.state === "pending" && budgetBytes !== undefined
+      ? capImportPrompt(state.handoff.payload,budgetBytes - Buffer.byteLength(input,"utf8") - 32) : undefined;
+    const text = this.store.prepareRuntimeInput(this.sessionId,turnId,original,input,genuineUser,payload);
     return { text, hooks: {
       onInputDispatched: () => this.store.transitionRuntimeInput(this.sessionId,state.activeSegmentId,turnId,"dispatching"),
       onInputAccepted: nativeId => this.store.transitionRuntimeInput(this.sessionId,state.activeSegmentId,turnId,"accepted",nativeId),

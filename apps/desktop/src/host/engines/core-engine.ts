@@ -81,6 +81,12 @@ export class CoreEngine implements SessionEngine {
     return this.options.config.reasoningEffort;
   }
 
+  importBudgetBytes(): number {
+    const context = this.options.loop.contextInfo();
+    // At most one token per UTF-8 byte; reserve space for the next user message.
+    return Math.max(0,context.effectiveWindowTokens - context.estimatedTokens - 1024);
+  }
+
   setReasoningEffort(effort: ReasoningEffort | undefined): void {
     this.options.config.reasoningEffort = effort;
     this.options.onReasoningEffortSet?.(effort);

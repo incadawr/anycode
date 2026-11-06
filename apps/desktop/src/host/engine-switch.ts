@@ -96,7 +96,7 @@ function renderImportItem(item: HistoryItem): string {
  * Deterministic — no dates, no engine-specific formatting — so the same
  * conversation always yields the same prompt string.
  */
-export function renderImportPrompt(from: EngineId, to: EngineId, plan: EngineSwitchPlan, workspace: string): string {
+export function renderImportPrompt(from: EngineId, to: EngineId, plan: EngineSwitchPlan, workspace: string, maxBytes = IMPORT_MAX_BYTES): string {
   const lines: string[] = [
     `Session continued in this ${to} engine (previous engine: ${from}; workspace: ${workspace}).`,
     plan.truncated
@@ -107,11 +107,17 @@ export function renderImportPrompt(from: EngineId, to: EngineId, plan: EngineSwi
     const rendered = renderImportItem(item);
     if (rendered !== "") lines.push(rendered);
   }
-  const prompt = lines.join("\n");
-  const bytes = Buffer.from(prompt, "utf8");
-  if (bytes.length <= IMPORT_MAX_BYTES) return prompt;
+  return capImportPrompt(lines.join("\n"),maxBytes);
+}
+
+/** A conservative target budget may be smaller than the global import limit. */
+export function capImportPrompt(prompt: string, maxBytes = IMPORT_MAX_BYTES): string {
+  const limit = Math.min(IMPORT_MAX_BYTES,Math.floor(maxBytes));
   const notice = "Conversation text excerpt; earlier content was omitted to fit the import limit.\n";
-  const tail = bytes.subarray(bytes.length - (IMPORT_MAX_BYTES - Buffer.byteLength(notice)));
+  if (!Number.isFinite(limit) || limit < Buffer.byteLength(notice)) throw new Error("The selected model has too little input space for the conversation import.");
+  const bytes = Buffer.from(prompt, "utf8");
+  if (bytes.length <= limit) return prompt;
+  const tail = bytes.subarray(bytes.length - (limit - Buffer.byteLength(notice)));
   // A byte boundary may fall inside a multi-byte character. Drop its partial
   // prefix instead of emitting a replacement character or exceeding the cap.
   return notice + tail.toString("utf8").replace(/^\uFFFD/, "");

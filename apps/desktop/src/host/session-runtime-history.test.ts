@@ -22,6 +22,28 @@ async function switchedStore() {
   return store;
 }
 describe("canonical reconnect hydration", () => {
+  it("re-budgets a pending handoff durably before dispatch and preserves it when the input cannot fit", async () => {
+    const store = await switchedStore();
+    const state = store.loadRuntimeSession("test-session")!;
+    const record: RuntimeSwitchCommit = {expectedRevision:state.revision,sourceSegmentId:state.activeSegmentId,sourceItems:[],
+      segment:{id:"budgeted",engine:"core",accountScope:"",nativeState:"fresh",selected:{model:"small",mode:"plan"},applied:{model:"small",mode:"plan"},startedAt:5,coverage:"available_history"},
+      boundary:{id:"budgeted",segmentId:"budgeted",text:"Switched",createdAt:5},
+      handoff:{id:"budgeted",segmentId:"budgeted",sourceWatermark:null,payload:"large excerpt "+"🌊".repeat(1000),digest:"",state:"pending"}};
+    record.handoff.digest = createHash("sha256").update(record.handoff.payload).digest("hex");
+    store.commitRuntimeSwitch("test-session","core",record);
+    const history = new RuntimeSessionHistory(store,"test-session");
+    expect(() => history.prepare("no-space","original","too large",true,0)).toThrow("too little input space");
+    expect(history.state().handoff?.payload).toBe(record.handoff.payload);
+    const input = history.prepare("bounded","original","original",true,512);
+    expect(Buffer.byteLength(input.text)).toBeLessThanOrEqual(512);
+    const handoff = history.state().handoff!;
+    expect(handoff.state).toBe("pending");
+    expect(handoff.payload).toContain("earlier content was omitted");
+    expect(handoff.digest).toBe(createHash("sha256").update(handoff.payload).digest("hex"));
+    expect(handoff.injectedText).toBe(input.text);
+    await store.close();
+  });
+
   it("rebuilds every committed segment and marker after replay loss and another host boot", async () => {
     const store = await switchedStore();
     for (let boot=0;boot<2;boot++) {
