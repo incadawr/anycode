@@ -7,6 +7,12 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.80] - 2026-11-06
+
+### Fixed
+
+- Windows update checks now find the installer (the update feed and the release file use the same name).
+
 ## [0.0.79] - 2026-11-06
 
 ### Added
