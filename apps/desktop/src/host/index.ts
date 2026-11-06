@@ -1,3 +1,4 @@
+import { createSessionPeersPort } from "./session-peers-port.js";
 import { takeNativeSessionsCarrier } from "../shared/session-peers.js";
 import { mapProgressToEvent } from "@anycode/core";
 import { savedNativeRecovery } from "./native-base.js";
@@ -1257,6 +1258,12 @@ function buildChildSessionOptions(
 
 /** Boot capability only; peer tools are registered by a separate adapter. */
 export const nativeSessionsEnabled = takeNativeSessionsCarrier(process.env);
+export const sessionPeersPort = nativeSessionsEnabled
+  ? createSessionPeersPort(message => process.parentPort.postMessage(message)) : undefined;
+if (sessionPeersPort) {
+  process.once("disconnect", () => sessionPeersPort.dispose());
+  process.once("exit", () => sessionPeersPort.dispose());
+}
 
 const engineSwitchEnabled = process.env.ANYCODE_ENGINE_SWITCH_ENABLED === "1";
 const switchHostGeneration = Number(process.env.ANYCODE_HOST_GENERATION);
@@ -4937,6 +4944,7 @@ const ready = startHostWithActivity(boot, () => session, (message) => process.pa
 void ready.then(() => session?.observeAgentDeliveries((delivery) => { process.parentPort.postMessage({ type: "communication_delivery", delivery }); }));
 
 async function handleShutdown(): Promise<void> {
+  sessionPeersPort?.dispose();
   await ready;
 
   // CUT-S2 §10.14.3 BLOCKER-1: arm the admission funnel before any
@@ -5017,6 +5025,7 @@ async function handleShutdown(): Promise<void> {
 }
 
 process.parentPort.on("message", (event) => {
+  if (sessionPeersPort?.handle(event.data)) return;
   if (switchClient?.handle(event.data)) return;
   const port = event.ports[0];
   if (port) {

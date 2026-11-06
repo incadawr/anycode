@@ -1,3 +1,6 @@
+import type { PeerHost } from "./session-peers.js";
+import type { SessionPeerResponse } from "../shared/session-peers.js";
+import { normalizePeerWorkspaceKey } from "./session-peer-policy.js";
 import { CLAUDE_ORCHESTRATE_ARG } from "../shared/claude-orchestration-feature.js";
 import { EngineSwitchCoordinator } from "./engine-switch-coordinator.js";
 import { ENGINE_SWITCH_CONTROL, type EngineSwitchIdentity, type EngineSwitchLaunch } from "../shared/engine-switch-control.js";
@@ -394,6 +397,7 @@ export interface TabHost {
   tabId: string;
   /** = host cwd, known before fork. */
   workspace: string;
+  peerWorkspaceKey?: string;
   /**
    * GitHub #6: the workspace folder was gone when a host spawn was attempted,
    * so no host was forked. Sticky until a later spawn actually reaches a fork;
@@ -885,6 +889,7 @@ export interface TabHostManagerDeps {
     Promise<{ ok: true; release: () => void } | { ok: false }>;
   /** Reject a core model override before creating a child or sending a request. */
   validateChildModel?: (model: string, connectionId: string | undefined) => string | void;
+  onSessionPeerRequest?: (tabId: string, proc: UtilityProcess, request: unknown) => Promise<SessionPeerResponse | null>;
   /**
    * Preview control-plane delegate (night-track wave-1 cut §2.3/§2.5,
    * 96-A): main routes a host's `PREVIEW_REQUEST_TYPE`/`PREVIEW_ARTIFACTS_TYPE`
@@ -1307,6 +1312,20 @@ export class TabHostManager {
       ...(effort != null ? { effort } : {}), ...tab.lastCommunicationStatus };
   }
 
+  peerHost(tabId: string): PeerHost | undefined {
+    const tab = this.tabs.get(tabId);
+    if (!tab || this.unpublishedTabs.has(tabId)) return undefined;
+    return { tabId, sessionId: tab.sessionId, proc: tab.proc, generation: tab.hostGeneration,
+      workspace: tab.workspace, workspaceKey: tab.peerWorkspaceKey ?? "",
+      live: tab.state === "running" && tab.proc !== null, root: !tab.childOf,
+      // Mutations stay closed until the host permission authority is wired.
+      restricted: !!tab.childOf, readOnly: true,
+      title: this.deps.agentTitleOf?.(tab.sessionId),
+      model: tab.modelOverride ?? (!tab.initialResume ? tab.engineModel : undefined) ?? undefined,
+      effort: tab.effortOverride ?? (!tab.initialResume ? tab.engineEffort : undefined) ?? undefined,
+      engine: tab.engine, activity: tab.activityState ?? "idle" };
+  }
+
   listTabs(): ReadonlyArray<TabSummary> {
     return [...this.tabs.values()]
       // A prepared (unpublished) tab is not a session anyone may see yet: the
@@ -1722,6 +1741,10 @@ export class TabHostManager {
       tab.proc = null;
       return;
     }
+    if (this.deps.onSessionPeerRequest) {
+      try { tab.peerWorkspaceKey = normalizePeerWorkspaceKey(realpathSync(tab.workspace)) ?? ""; }
+      catch { tab.peerWorkspaceKey = ""; }
+    }
     delete tab.missingWorkspace;
     const attempt = (this.spawnAttempts.get(tab) ?? 0) + 1;
     this.spawnAttempts.set(tab, attempt);
@@ -2001,6 +2024,17 @@ export class TabHostManager {
     // GitHub #18: record the wire SHAPE (type/kind only) for the diagnostics
     // export. Never the payload — noteWireMessage reads those two fields.
     noteWireMessage(this.deps.diagnosticsRing, "in", message);
+    if (data.type === "session_peers_request") {
+      if (tab.proc !== child || !this.deps.onSessionPeerRequest) return;
+      const generation = tab.hostGeneration;
+      const request = (message as { request?: unknown }).request;
+      const result = await this.deps.onSessionPeerRequest(tab.tabId, child, request);
+      if (result && tab.proc === child && tab.hostGeneration === generation) {
+        try { child.postMessage({ type: "session_peers_response", requestId: (request as { requestId: string }).requestId, result }); }
+        catch { /* disconnected host */ }
+      }
+      return;
+    }
     if (data.type === "session_activity") {
       const state = (message as { state?: unknown }).state;
       if (tab.proc === child && (state === "idle" || state === "running" || state === "waiting_approval" || state === "closing")) tab.activityState = state;

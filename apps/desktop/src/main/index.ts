@@ -1,3 +1,6 @@
+import { createSessionPeersHandler } from "./session-peers.js";
+import { createSessionPeerAccess } from "./session-peer-access.js";
+import { createSessionPeerPolicyStore } from "./session-peer-policy.js";
 import { nativeSessionsEnabledForBoot } from "./host-env.js";
 import { claudeOrchestrationEnabled } from "./claude-orchestration-feature.js";
 import { connectionContextWindow } from "../shared/connection-context-window.js";
@@ -2686,7 +2689,22 @@ void app.whenReady().then(async () => {
         return result.ok ? `Model ${JSON.stringify(model)} is unavailable on this connection.` : result.detail;
       }
     };
+  const peerEnabled = nativeSessionsEnabledForBoot(bootEnv, app.isPackaged);
+  let peerTrust: Awaited<ReturnType<typeof readTrustStore>> = { version: 1, folders: {} };
+  const peerHandler = peerEnabled ? createSessionPeersHandler({
+    current: tabId => manager?.peerHost(tabId),
+    targets: () => (manager?.listTabs() ?? []).flatMap(tab => {
+      const host = manager?.peerHost(tab.tabId); return host ? [host] : [];
+    }),
+    prepare: async () => {
+      peerTrust = await readTrustStore(nodeTrustStoreFs, defaultTrustStorePath(selfCheckProfile ?? resolveSkillsProfileHome(process.env, app.isPackaged) ?? homedir()));
+    },
+    access: createSessionPeerAccess({ enabled: () => peerEnabled,
+      policy: createSessionPeerPolicyStore({ file: join(app.getPath("userData"), "session-peer-access.json") }),
+      isTrusted: key => peerTrust.folders[key]?.decision === "trusted", realpathSync, statSync }),
+  }) : undefined;
   manager = new TabHostManager({
+    onSessionPeerRequest: peerHandler,
     diagnosticsRing: mainDiagnosticsRing,
     agentTitleOf: (sessionId) => agentSessionTitles.get(sessionId),
     // Every spawn, respawn and resume delivers a fresh port: that is the moment a

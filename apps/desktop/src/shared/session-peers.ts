@@ -57,3 +57,22 @@ export function parseSessionPeerRequest(value: unknown): SessionPeerRequest | nu
   const parsed = requestSchema.safeParse(value);
   return parsed.success ? parsed.data : null;
 }
+
+const peerSummary = z.strictObject({
+  sessionId: id, tabId: id, workspace: z.string().max(4096),
+  engine: z.enum(["core", "claude", "codex"]),
+  activity: z.enum(["idle", "running", "waiting_approval", "closing"]),
+  addressable: z.boolean(), title: z.string().max(200).optional(),
+  model: z.string().max(200).optional(), effort: z.string().max(200).optional(),
+});
+const responseSchema = z.discriminatedUnion("status", [
+  z.strictObject({ status: z.literal("ok"), sessions: z.array(peerSummary).max(50) }),
+  z.strictObject({ status: z.enum(["refused", "unavailable", "unknown"]) }),
+]);
+export type SessionPeerResponse = z.infer<typeof responseSchema>;
+export type SessionPeerCall = SessionPeerRequest extends infer R
+  ? R extends SessionPeerRequest ? Omit<R, "requestId"> : never : never;
+export function parseSessionPeerResponse(value: unknown): SessionPeerResponse {
+  const parsed = responseSchema.safeParse(value);
+  return parsed.success ? parsed.data : { status: "unknown" };
+}

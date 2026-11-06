@@ -8896,3 +8896,35 @@ describe("Claude orchestration boot carrier", () => {
     }
   });
 });
+
+it("peer control plane authenticates the process and suppresses late replies", async () => {
+  const { fork, hosts } = liveForkRig();
+  let answer: (value: { status: "unknown" }) => void = () => {};
+  const onSessionPeerRequest = vi.fn(() => new Promise<{ status: "unknown" }>(resolve => { answer = resolve; }));
+  const manager = childManager(fork, windowRig().window, { onSessionPeerRequest });
+  const created = manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false });
+  expect(created.ok).toBe(true);
+  if (!created.ok) return;
+  await flush();
+  const request = { requestId: "r", operation: "list", input: {} };
+  hosts[0]!.emit("message", { type: "session_peers_request", request });
+  await flush();
+  expect(onSessionPeerRequest).toHaveBeenCalledWith(created.tab.tabId, hosts[0], request);
+  answer({ status: "unknown" });
+  await flush();
+  expect(hosts[0]!.postMessage).toHaveBeenCalledWith({ type: "session_peers_response", requestId: "r", result: { status: "unknown" } });
+  hosts[0]!.postMessage.mockClear();
+  hosts[0]!.emit("message", { type: "session_peers_request", request });
+  await flush();
+  const tab = manager.getTab(created.tab.tabId)!;
+  tab.proc = new FakeHost() as unknown as UtilityProcess;
+  answer({ status: "unknown" });
+  await flush();
+  expect(hosts[0]!.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "session_peers_response" }));
+  onSessionPeerRequest.mockClear();
+  hosts[0]!.emit("message", { type: "session_peers_request", request });
+  await flush();
+  expect(onSessionPeerRequest).not.toHaveBeenCalled();
+  tab.proc = null;
+  await manager.shutdownAllTabHosts();
+});
