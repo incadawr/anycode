@@ -28,7 +28,7 @@ export function NativeSessionAccess({ tabId, bridge = window.anycode.sessionPeer
       control={<input type="checkbox" aria-label={text.title} checked={!!view?.available && view.project.enabled}
         disabled={busy || !view?.available || (!view.project.trusted && !view.project.enabled)} onChange={e => void save({ enabled: e.target.checked })} />} />
     {view?.available && view.peers.map(peer => <EnvironmentMenuRow key={peer.key} icon={<Robot />}
-      title={`${view.project.key} ↔ ${peer.key}`} ariaLabel={`${view.project.key} ↔ ${peer.key}`} detail={`${view.project.key} ↔ ${peer.key}`}
+      title={`${view.project.name} ↔ ${peer.name}`} ariaLabel={`${view.project.key} ↔ ${peer.key}`} detail={`${view.project.key} ↔ ${peer.key}`}
       control={<button type="button" disabled={busy || (!peer.granted && (!peer.trusted || !view.project.trusted || !peer.enabled || !view.project.enabled))}
         onClick={() => void save({ peerKey: peer.key, enabled: !peer.granted })}>{peer.granted ? text.revoke : text.grant}</button>} />)}
     {error && <div role="alert" className="environment-menu-note">{error}</div>}

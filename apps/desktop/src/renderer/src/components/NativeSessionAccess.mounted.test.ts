@@ -23,7 +23,7 @@ it("mounted clicks write main policy; failed revoke keeps the grant and shows an
   const externalApproval = vi.fn();
   try {
     await act(async () => root.render(createElement("div", null, createElement(NativeSessionAccess, { tabId: "a", bridge }), createElement(SessionApprovalsField, { approvals: false, onChange: externalApproval }))));
-    expect(host.textContent).toContain("Recommended default: On"); expect(host.textContent).toContain("/alpha ↔ /beta");
+    expect(host.textContent).toContain("Recommended default: On"); expect(host.textContent).toContain("alpha ↔ beta"); expect(host.textContent).toContain("/alpha ↔ /beta");
     const external = Array.from(host.querySelectorAll("input")).find(input => input.getAttribute("aria-label") === SESSION_APPROVALS_ARIA_LABEL)!;
     await act(async () => external.click()); expect(externalApproval).toHaveBeenCalledWith(true);
     expect(policy.hasPairGrant("/alpha", "/beta")).toBe(false);
@@ -51,7 +51,9 @@ it.each(["invalid", "unavailable", "io_error"] as const)("shows an actionable %s
     const rows = host.querySelectorAll('[role="group"]');
     for (const [index, peer] of view.peers.entries()) {
       expect(rows[index + 1]?.getAttribute("aria-label")).toBe(`${project.key} ↔ ${peer.key}`);
-      expect(rows[index + 1]?.querySelector(".environment-menu-row-title")?.textContent).toBe(`${project.key} ↔ ${peer.key}`);
+      expect(rows[index + 1]?.querySelector(".environment-menu-row-title")?.textContent).toBe(`${project.name} ↔ ${peer.name}`);
+      expect(rows[index + 1]?.querySelector(".environment-menu-row-detail-prose")?.textContent).toBe(`${project.key} ↔ ${peer.key}`);
+      expect(rows[index + 1]?.textContent?.split(`${project.key} ↔ ${peer.key}`)).toHaveLength(2);
     }
     await act(async () => host.querySelector("button")!.click());
     expect(host.querySelector('[role="alert"]')?.textContent).toBe(messages[reason]);
