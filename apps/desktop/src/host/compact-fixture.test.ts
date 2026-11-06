@@ -59,7 +59,7 @@ describe("Codex compact protocol fixture", () => {
     if (unsupported) writeFileSync(join(home, "codex-compact-mode"), "unsupported");
     const fixture = fileURLToPath(new URL("../../scripts/compact-fixtures/codex.mjs", import.meta.url));
     const launches: Array<{ args: readonly string[]; pid: number | undefined }> = [];
-    const registrations: Array<{ enginePid: number; pgid: number }> = [];
+    const registrations: Array<{ enginePid: number; pgid: number; exited?: true }> = [];
     const client = new AppServerClient({ binaryPath: fixture, cwd: home, sourceEnv: { HOME: home, PATH: process.env.PATH, CODEX_HOME: home },
       spawnImpl: (command, args, options) => {
         const child = spawn(command, args, options);
@@ -82,7 +82,14 @@ describe("Codex compact protocol fixture", () => {
     const f = await setup();
     try {
       expect(f.launches.map(launch => launch.args)).toEqual([["--version"], ["app-server", "--stdio"]]);
-      if (process.platform !== "win32") expect(f.registrations).toEqual([expect.objectContaining({ enginePid: f.launches[1]?.pid, pgid: f.launches[1]?.pid })]);
+      if (process.platform !== "win32") {
+        expect(f.registrations).toEqual([
+          expect.objectContaining({enginePid:f.launches[0]?.pid,pgid:f.launches[0]?.pid}),
+          expect.objectContaining({enginePid:f.launches[0]?.pid,exited:true}),
+          expect.objectContaining({enginePid:f.launches[1]?.pid,pgid:f.launches[1]?.pid}),
+        ]);
+        expect(f.registrations[2]?.exited).toBeUndefined();
+      }
       await f.chat(); const initialTurns = f.rpcs().filter(r => r.method === "turn/start").length;
       f.h.send({ type: "compact_request" });
       await f.h.waitFor((m): m is Extract<HostToUiMessage, { type: "agent_event" }> => m.type === "agent_event" && m.event.type === "compaction_start");

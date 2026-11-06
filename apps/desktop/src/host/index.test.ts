@@ -563,7 +563,7 @@ describe("host subagent model-override wiring", () => {
     // Both anchors exist and the assignment precedes the actual call, so
     // withWorkflows sees the session tier for engine-profile workflow steps.
     expect(source.indexOf(assignment)).toBeLessThan(
-      source.indexOf("const loop = new AgentLoop("),
+      call!.index!,
     );
   });
 

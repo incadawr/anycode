@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { Button, Select } from "../ui/index.js";
 import type { EngineId } from "../../../shared/engines.js";
 import type { EngineModelChoice, EngineSwitchTarget } from "../../../shared/protocol.js";
 import type { SettingsSnapshot } from "../../../shared/settings.js";
@@ -32,7 +33,7 @@ export function engineSwitchChoices(current: EngineId, ready: readonly EngineId[
 
 /** Shared across all running engines; the active chip changes only on correlated success. */
 export function EngineSwitchPicker() {
-  const enabled = useTabStore(state => state.engineSwitch !== null);
+  const enabled = useTabStore(state => state.engineSwitch?.enabled === true);
   const current = useTabStore(state => state.engine?.id ?? "core");
   const pending = useTabStore(state => state.pendingEngineSwitch);
   const idle = useTabStore(state => state.connection === "ready" && state.turn.status === "idle" && !state.queueInFlight && !state.permission && !state.childSurface && state.backgroundChildren.length === 0);
@@ -43,7 +44,7 @@ export function EngineSwitchPicker() {
   const [ready, setReady] = useState<EngineId[]>([]);
   const [models, setModels] = useState<readonly EngineModelChoice[]>([]);
   const [selection, setSelection] = useState("");
-  const trigger = useRef<HTMLButtonElement>(null);
+  const trigger = useRef<HTMLSpanElement>(null);
   useEffect(() => {
     if (!enabled) return;
     let live = true;
@@ -61,7 +62,7 @@ export function EngineSwitchPicker() {
   useEffect(() => { setOpen(false); setSelection(""); }, [current]);
   useEffect(() => {
     if (!open) return;
-    const close = (event: KeyboardEvent) => { if (event.key === "Escape") { setOpen(false); trigger.current?.focus(); } };
+    const close = (event: KeyboardEvent) => { if (event.key === "Escape") { setOpen(false); trigger.current?.querySelector("button")?.focus(); } };
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
   }, [open]);
@@ -69,15 +70,15 @@ export function EngineSwitchPicker() {
   const choices = engineSwitchChoices(current, ready, snapshot, models);
   const rect = trigger.current?.getBoundingClientRect();
   return <>
-    <button ref={trigger} type="button" className="model-pill-chip" aria-label="Switch engine" aria-expanded={open} disabled={!idle || pending !== null} onClick={() => setOpen(value => !value)}>{current}{pending ? " · switching…" : " ▾"}</button>
+    <span ref={trigger}><Button type="button" variant="ghost" size="sm" className="model-pill-chip" aria-label="Switch engine" aria-expanded={open} disabled={!idle || pending !== null} onClick={() => setOpen(value => !value)}>{current}{pending ? " · switching…" : " ▾"}</Button></span>
     {open && createPortal(<div className="model-pill-popover" role="dialog" aria-label="Switch engine and model" style={{ position: "fixed", left: Math.max(8, Math.min(rect?.left ?? 8, window.innerWidth - 360)), bottom: window.innerHeight - (rect?.top ?? 40) + 8, width: 340, maxHeight: "70vh", overflowY: "auto", padding: 12, zIndex: 1000 }}>
       <p>{ENGINE_SWITCH_CONSEQUENCE}</p>
-      <select aria-label="Target engine and model" value={selection} onChange={event => setSelection(event.target.value)} style={{ width: "100%" }}>
-        <option value="">Choose engine and model</option>
-        {choices.map((choice, index) => <option key={index} value={String(index)}>{choice.label}</option>)}
-      </select>
+      <Select label="Target engine and model" aria-label="Target engine and model" value={selection} onChange={event => setSelection(event.target.value)} options={[
+        {value:"",label:"Choose engine and model"},
+        ...choices.map((choice,index) => ({value:String(index),label:choice.label})),
+      ]} />
       {choices.length === 0 && <p>No other ready engines with models.</p>}
-      <button type="button" disabled={!idle || pending !== null || !choices[Number(selection)] || selection === ""} onClick={() => {
+      <Button type="button" disabled={!idle || pending !== null || !choices[Number(selection)] || selection === ""} onClick={() => {
         const target = choices[Number(selection)]?.target;
         if (!target) return;
         const requestId = crypto.randomUUID();
@@ -85,8 +86,8 @@ export function EngineSwitchPicker() {
         if (generation === null) return;
         setOpen(false);
         send({ type: "engine_switch_request", requestId, generation, ...target });
-      }}>Switch engine</button>
-      <button type="button" onClick={() => { setOpen(false); trigger.current?.focus(); }}>Cancel</button>
+      }}>Switch engine</Button>
+      <Button type="button" onClick={() => { setOpen(false); trigger.current?.querySelector("button")?.focus(); }}>Cancel</Button>
     </div>, document.body)}
   </>;
 }

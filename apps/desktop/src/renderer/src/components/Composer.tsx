@@ -1530,7 +1530,7 @@ export function Composer() {
   // message…" placeholder and the queue-on-Enter hint all apply verbatim,
   // because a prompt sent now would be busy-rejected by the host.
   const running = isSessionBusy(turn.status);
-  const switchPending = useTabStore(state => state.pendingEngineSwitch !== null);
+  const switchPending = useTabStore(state => Boolean(state.pendingEngineSwitch));
   const ready = connection === "ready" && !switchPending;
   // Running no longer blocks send (F15 prompt queue): a send while running
   // enqueues instead of dispatching directly (handleSend below).
