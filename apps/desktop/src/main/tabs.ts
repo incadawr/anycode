@@ -890,6 +890,7 @@ export interface TabHostManagerDeps {
     Promise<{ ok: true; release: () => void } | { ok: false }>;
   /** Reject a core model override before creating a child or sending a request. */
   validateChildModel?: (model: string, connectionId: string | undefined) => string | void;
+  onFileActivity?: (tabId: string, proc: UtilityProcess, message: unknown) => boolean;
   registerPeerDrain?: (envelope: AgentDelivery["envelope"], recipient: PeerHost) => boolean;
   onSessionPeerDrain?: (proc: UtilityProcess, request: unknown) => Promise<unknown>;
   releasePeerDrain?: (proc: UtilityProcess, request: unknown) => void;

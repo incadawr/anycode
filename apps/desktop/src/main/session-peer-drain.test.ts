@@ -12,7 +12,7 @@ function fixture(startedAt = Date.now(), acceptedAt = startedAt) {
     kind: "agent_message", mode: "next_turn", createdAt: new Date().toISOString() }, state: "queued", workspace: "/b",
     principal: { kind: "session", sessionId: "a", tabId: "a" }, peer: { chainId: "m", startedAt, hop: 0, acceptedAt, senderWorkspace: "/a" } };
   const authority = { grant: true, trust: true };
-  const policy = { isNativeEnabled: () => true, hasPairGrant: () => authority.grant, setNativeEnabled: () => false, setPairGrant: () => false };
+  const policy = { projectKeys: () => [], isNativeEnabled: () => true, hasPairGrant: () => authority.grant, setNativeEnabled: () => false, setPairGrant: () => false };
   const actual = createSessionPeerAccess({ enabled: () => true, policy, isTrusted: () => authority.trust,
     realpathSync: path => path, statSync: () => ({ isDirectory: () => true }), platform: "linux" });
   const lookup = vi.fn((_id: string) => record), prepare = vi.fn(async () => {}), access = { canAccess: vi.fn(actual.canAccess) };
@@ -119,3 +119,16 @@ it("rechecks chain expiry after fresh prepare at the permit boundary", async () 
     expect(await f.run()).toBeNull();
   } finally { vi.useRealTimers(); }
 });
+
+ it("awaits live access and refuses revoke or process replacement during the check", async () => {
+   for (const allowed of [false, true]) {
+     const f = fixture();
+     let release!: (allowed: boolean) => void;
+     f.access.canAccess.mockImplementationOnce(() => new Promise<boolean>(r => { release = r; }));
+     const pending = f.run();
+     await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+     if (allowed) f.b.proc = {};
+     release(allowed);
+     expect(await pending).toBeNull();
+   }
+ });

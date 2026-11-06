@@ -41,7 +41,7 @@ export function createSessionPeersHandler(deps: {
       if (!current()) return null;
       if (request.operation === "send" && deps.send) {
         if (request.input.mode === "steer") return { status: "unavailable" };
-        const authorize = (id: string) => {
+        const authorize = async (id: string) => {
           const sender = current();
           const target = deps.targets().find(t => t.sessionId === id);
           if (!sender || sender.workspace !== caller.workspace || sender.workspaceKey !== caller.workspaceKey ||

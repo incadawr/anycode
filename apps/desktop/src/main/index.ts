@@ -2699,13 +2699,14 @@ void app.whenReady().then(async () => {
       }
     };
   const peerEnabled = nativeSessionsEnabledForBoot(bootEnv, app.isPackaged);
-  let peerTrust: Awaited<ReturnType<typeof readTrustStore>> = { version: 1, folders: {} };
-  const preparePeerTrust = async () => {
-    peerTrust = await readTrustStore(nodeTrustStoreFs, defaultTrustStorePath(selfCheckProfile ?? resolveSkillsProfileHome(process.env, app.isPackaged) ?? homedir()));
-  };
-  const peerAccess = peerEnabled ? createSessionPeerAccess({ enabled: () => peerEnabled,
-    policy: createSessionPeerPolicyStore({ file: join(app.getPath("userData"), "session-peer-access.json") }),
-    isTrusted: key => peerTrust.folders[key]?.decision === "trusted", realpathSync, statSync }) : undefined;
+  const peerPolicy = createSessionPeerPolicyStore({ file: join(app.getPath("userData"), "session-peer-policy.json") });
+  const peerTrusted = async (workspace: string) => (await resolveWorkspaceTrust(new NodeLspConfigFs(), {
+    workspace, home: selfCheckProfile ?? resolveSkillsProfileHome(process.env, app.isPackaged) ?? homedir(),
+    storePath: defaultTrustStorePath(selfCheckProfile ?? resolveSkillsProfileHome(process.env, app.isPackaged) ?? homedir()),
+    realpathSync, onceHash: workspaceTrustOnceFor(workspaceTrustOnceApprovals, workspace, realpathSync),
+  })).projectTrusted;
+  const preparePeerTrust = async () => {};
+  const peerAccess = peerEnabled ? createSessionPeerAccess({ enabled: () => peerEnabled, policy: peerPolicy, isTrusted: peerTrusted, realpathSync, statSync }) : undefined;
   const currentPeer = (id: string) => {
     const tab = manager?.listTabs().find(t => t.sessionId === id);
     return tab ? manager?.peerHost(tab.tabId) : undefined;
@@ -2722,32 +2723,43 @@ void app.whenReady().then(async () => {
       peerDrain ??= createSessionPeerDrain({ lookup: id => broker.ledger.messages.get(id), current: currentPeer,
         prepare: preparePeerTrust, access: peerAccess! });
       const pin = (record: import("./communication-ledger.js").CommunicationRecord, sender: import("./session-peers.js").PeerHost, recipient: import("./session-peers.js").PeerHost) => {
+        for (const pinned of [sender, recipient]) {
+          const live = currentPeer(pinned.sessionId);
+          if (!live?.live || !live.root || live.restricted || (pinned === sender && live.readOnly) ||
+              live.proc !== pinned.proc || live.generation !== pinned.generation || live.tabId !== pinned.tabId ||
+              live.workspace !== pinned.workspace || live.workspaceKey !== pinned.workspaceKey) throw new Error("Peer generation changed");
+        }
         peerSnapshots.set(record, { sender: { ...sender }, recipient: { ...recipient } });
       };
       if (!peerReplies) {
         const coordinator = createSessionPeerReplyCoordinator(broker, { current: currentPeer, sendAuto: async (sender, source, payload) => {
           await preparePeerTrust();
-          const authorizeAuto = (id: string) => {
+          let autoRecipient: import("./session-peers.js").PeerHost | undefined;
+          const authorizeAuto = async (id: string) => {
             const now = currentPeer(sender.sessionId), target = currentPeer(id);
             if (!now || now.proc !== sender.proc || now.generation !== sender.generation || now.workspace !== sender.workspace ||
-                now.workspaceKey !== sender.workspaceKey || !target || !peerAccess!.canAccess(now, target, "send")) throw new Error("Peer access refused");
+                now.workspaceKey !== sender.workspaceKey || !target || !await peerAccess!.canAccess(now, target, "send")) throw new Error("Peer access refused");
+            if (currentPeer(sender.sessionId)?.proc !== sender.proc || currentPeer(id)?.proc !== target.proc) throw new Error("Peer generation changed");
+            autoRecipient = target;
             return target;
           };
           return peerReplies!.auto(sender, source, payload, async id => {
-            const host = authorizeAuto(id);
+            const host = await authorizeAuto(id);
             const tab = manager?.listTabs().find(t => t.sessionId === id && t.tabId === host.tabId);
             if (!tab) throw new Error("Peer unavailable");
             return tab;
-          }, authorizeAuto, record => pin(record, sender, authorizeAuto(record.envelope.recipientSessionId)));
+          }, undefined, record => pin(record, sender, autoRecipient!));
         } });
         peerReplies = createSessionPeerReplies(broker, Date.now, coordinator);
       }
+      let recipient: import("./session-peers.js").PeerHost | undefined;
       return peerReplies.send(caller, input, async id => {
-        const host = authorize(id);
+        const host = await authorize(id);
+        recipient = host;
         const tab = manager?.listTabs().find(t => t.sessionId === id && t.tabId === host.tabId);
         if (!tab) throw new Error("Peer unavailable");
         return tab;
-      }, authorize, record => pin(record, caller, authorize(record.envelope.recipientSessionId)));
+      }, undefined, record => pin(record, caller, recipient!));
     },
     current: tabId => manager?.peerHost(tabId),
     targets: () => (manager?.listTabs() ?? []).flatMap(tab => {

@@ -1,14 +1,13 @@
 import { parseSessionPeerDrainRelease, parseSessionPeerDrainRequest, type SessionPeerDrainPermit } from "../shared/session-peer-drain.js";
 import type { CommunicationRecord } from "./communication-ledger.js";
 import type { PeerHost } from "./session-peers.js";
-import type { createSessionPeerAccess } from "./session-peer-access.js";
 
 /** Registration belongs to the durable broker post boundary, before host delivery. */
 export function createSessionPeerDrain(deps: {
   lookup(messageId: string): CommunicationRecord | undefined;
   current(sessionId: string): PeerHost | undefined;
   prepare(): Promise<void>;
-  access: Pick<ReturnType<typeof createSessionPeerAccess>, "canAccess">;
+  access: { canAccess(caller: PeerHost, target: PeerHost, operation: "send"): boolean | Promise<boolean> };
 }) {
   type Entry = { record: CommunicationRecord; sender: PeerHost; recipient: PeerHost; identity: string; nonces: Set<string>; nonce?: string; state: "ready" | "pending" | "issued" };
   let disposed = false;
@@ -46,15 +45,17 @@ export function createSessionPeerDrain(deps: {
       entry.state = "pending"; entry.nonce = request.nonce; entry.nonces.add(request.nonce);
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        await Promise.race([deps.prepare(), new Promise<never>((_, reject) => {
+        const deadline = new Promise<never>((_, reject) => {
           timer = setTimeout(() => reject(new Error("Drain deadline")), 20_000); timer.unref();
-        })]);
+        });
+        await Promise.race([deps.prepare(), deadline]);
         const sender = current(entry.sender), recipient = current(entry.recipient);
         if (entries.get(request.messageId) !== entry || !sender || !recipient || deps.lookup(request.messageId) !== entry.record ||
             identity(entry.record) !== entry.identity || entry.record.state === "rejected" ||
             (entry.record.state === "unknown" && entry.record.detail !== "Dispatch pending") ||
             Date.now() - entry.record.peer!.startedAt >= 30 * 60_000 ||
-            !deps.access.canAccess(sender, recipient, "send")) return null;
+            !await Promise.race([Promise.resolve(deps.access.canAccess(sender, recipient, "send")), deadline])) return null;
+        if (!current(entry.sender) || !current(entry.recipient) || entries.get(request.messageId) !== entry) return null;
         entry.state = "issued";
         return { ...request, type: "session_peer_drain_permit" };
       } catch { return null; }
