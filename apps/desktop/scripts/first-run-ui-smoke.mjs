@@ -81,14 +81,14 @@ try {
     pending.delete(response.id); clearTimeout(item.timer);
     if (response.error) item.reject(new Error(JSON.stringify(response.error))); else item.resolve(response.result);
   };
-  await poll(() => evaluate("document.querySelectorAll('.welcome-paths .welcome-path').length === 3"));
+  await poll(() => evaluate("[\"codex\", \"claude\", \"api\"].every(id => document.querySelector(`[data-welcome-path=\"${id}\"]`))"));
   assert.equal(await evaluate("document.querySelectorAll('.welcome-subscription').length === 4"), true);
   assert.equal(await evaluate("document.querySelector('.connection-drawer-body') === null"), true);
-  assert.equal(await evaluate("document.activeElement?.classList.contains('welcome-path')"), true);
+  assert.equal(await evaluate("document.activeElement?.matches('[data-welcome-path=\"codex\"]')"), true);
   await sleep(500);
   const png = await call("Page.captureScreenshot", { format: "png" });
   writeFileSync(join(profile, "welcome.png"), Buffer.from(png.data, "base64"));
-  await click("ChatGPT / CodexUse your ChatGPT account");
+  await evaluate("document.querySelector('[data-welcome-path=\"codex\"]').click()");
   await poll(() => evaluate("document.querySelector('.welcome-setup')?.textContent.includes('Codex')"));
   if (signedOutEngines) {
     await poll(() => evaluate("[...document.querySelectorAll('.welcome-setup button')].some(b => b.textContent === 'Sign in with a code')"));
@@ -96,7 +96,7 @@ try {
     const shot = await call("Page.captureScreenshot", { format: "png" });
     writeFileSync(join(profile, "codex-signed-out.png"), Buffer.from(shot.data, "base64"));
   }
-  await click("Claude CodeUse your Claude account");
+  await evaluate("document.querySelector('[data-welcome-path=\"claude\"]').click()");
   await poll(() => evaluate("document.querySelector('.welcome-setup')?.textContent.includes('Claude')"));
   if (signedOutEngines) {
     await poll(() => evaluate("[...document.querySelectorAll('.welcome-setup button')].some(b => b.textContent === 'Sign in with Claude')"));
@@ -108,7 +108,7 @@ try {
   await poll(() => evaluate("document.querySelector('.settings-dialog')?.open"));
   await evaluate("document.querySelector('.settings-dialog').dispatchEvent(new Event('cancel', {cancelable:true}))");
   await poll(() => evaluate("!document.querySelector('.settings-dialog')?.open"));
-  await click("API key or local modelConnect any provider or your own server");
+  await evaluate("document.querySelector('[data-welcome-path=\"api\"]').click()");
   await poll(() => evaluate("!!document.querySelector('.connection-drawer-body')"));
   assert.equal(await evaluate("document.querySelector('.connection-drawer-advanced').open"), false);
   // No template picked yet: the Provider select sits on its empty option and
