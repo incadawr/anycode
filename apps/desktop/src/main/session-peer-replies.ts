@@ -20,6 +20,10 @@ export function createSessionPeerReplies(broker: CommunicationBroker, clock = Da
       if (!caller.live || !caller.root || caller.restricted || caller.readOnly) throw new Error("Peer send refused");
       if (input.reply === "on_turn_end" || input.mode === "steer") throw new Error("Reply mode unavailable");
       const source = sourceFor(caller, input);
+      const inherited = caller.turnContext?.deliveredMessageIds.map(id => broker.ledger.messages.get(id))
+        .find(record => record?.peer && record.principal?.kind === "session" && record.envelope.recipientSessionId === caller.sessionId);
+      // The active turn's causal authority takes precedence over tool correlation.
+      const causalSource = inherited ?? source;
       const target = source?.principal?.kind === "session" ? source.principal.sessionId : input.sessionId;
       if (!target || target === caller.sessionId || (input.sessionId && input.sessionId !== target)) throw new Error("Peer target refused");
       if (source && input.correlationId && input.correlationId !== source.envelope.correlationId) throw new Error("Reply correlation refused");
@@ -30,7 +34,8 @@ export function createSessionPeerReplies(broker: CommunicationBroker, clock = Da
       }, authorize, undefined, record => {
         revalidate?.(target);
         const at = clock();
-        const prior = sourceFor(caller, input)?.peer;
+        sourceFor(caller, input);
+        const prior = causalSource?.peer;
         const peer: PeerMessageBudget = { chainId: prior?.chainId ?? record.envelope.messageId,
           startedAt: prior?.startedAt ?? at, hop: prior ? prior.hop + 1 : 0,
           acceptedAt: at, senderWorkspace: caller.workspaceKey };

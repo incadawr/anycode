@@ -2,6 +2,7 @@ import { parseSessionPeerRequest, parseSessionPeerResponse, type SessionPeerRequ
 import type { PeerSessionFacts } from "./session-peer-access.js";
 
 export interface PeerHost extends PeerSessionFacts {
+  turnContext?: import("../shared/session-peers.js").SessionPeerTurnContext;
   title?: string; model?: string; effort?: string;
   tabId: string; sessionId: string; proc: object | null; generation: number;
   engine: "core" | "claude" | "codex";
@@ -51,7 +52,7 @@ export function createSessionPeersHandler(deps: {
           return target;
         };
         try {
-          const delivery = await deps.send(now, request.input, authorize);
+          const delivery = await deps.send({ ...now, turnContext: caller.turnContext }, request.input, authorize);
           return current() ? parseSessionPeerResponse({ status: "sent", messageId: delivery.envelope.messageId, state: delivery.state }) : null;
         } catch (error) {
           return current() ? (error instanceof Error && error.message === "loop_limited"

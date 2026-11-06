@@ -8929,24 +8929,35 @@ it("peer control plane authenticates the process and suppresses late replies", a
   await manager.shutdownAllTabHosts();
 });
 
-it("file metadata ingress receives only the live host process", async () => {
+
+it.each([false, true])("pins peer context and publishes one terminal only when enabled=%s", async enabled => {
   const { fork, hosts } = liveForkRig();
-  const onFileActivity = vi.fn(() => true);
-  const manager = childManager(fork, windowRig().window, { onFileActivity });
-  const created = manager.createTab({ workspace: "/ws", sessionId: "writer", resume: false });
-  expect(created.ok).toBe(true);
-  if (!created.ok) return;
+  const manager = childManager(fork, windowRig().window, enabled ? { onSessionPeerRequest: async () => null } : {});
+  const created = manager.createTab({ workspace: "/ws", sessionId: "s1", resume: false });
+  if (!created.ok) throw new Error("create failed");
   await flush();
-  const wire = { type: "file_activity", generation: 1, report: { filePath: "a", toolCallId: "c", toolName: "Write" } };
-  hosts[0]!.emit("message", wire);
-  await flush();
-  expect(onFileActivity).toHaveBeenCalledWith(created.tab.tabId, hosts[0], wire);
-  onFileActivity.mockClear();
   const tab = manager.getTab(created.tab.tabId)!;
+  const host = hosts[0]!;
+  const listener = vi.fn();
+  manager.onSessionPeerTerminal(listener);
+  const envelope = { messageId: "m", recipientSessionId: "s1", sender: "session:sender", payload: "question" };
+  const pending = manager.communicationRequest("s1", "send_message", envelope);
+  const packet = host.postMessage.mock.calls.at(-1)![0] as { requestId: string };
+  const context = { type: "session_peer_turn", generation: tab.hostGeneration, sequence: 1, turnId: "t", requestId: "m", deliveredMessageIds: ["m"] };
+  host.emit("message", context);
+  expect(manager.peerHost(tab.tabId)?.turnContext).toEqual(enabled ? { sequence: 1, turnId: "t", requestId: "m", deliveredMessageIds: ["m"] } : undefined);
+  expect(manager.peerHost(tab.tabId)?.readOnly).toBe(true);
+  host.emit("message", { type: "communication_response", requestId: packet.requestId, result: { state: "acknowledged" } });
+  await pending;
+  const terminal = { ...context, type: "session_peer_terminal", result: { source: "live_turn", turnId: "t", requestId: "m", nativeTurnId: null, terminalReason: "completed", publicAnswer: "answer", truncated: false, completedAt: 1 } };
+  host.emit("message", { ...terminal, turnId: "unknown" });
+  host.emit("message", terminal);
+  host.emit("message", terminal);
+  expect(listener).toHaveBeenCalledTimes(enabled ? 1 : 0);
+  expect(manager.peerHost(tab.tabId)?.turnContext).toBeUndefined();
   tab.proc = new FakeHost() as unknown as UtilityProcess;
-  hosts[0]!.emit("message", wire);
-  await flush();
-  expect(onFileActivity).not.toHaveBeenCalled();
+  host.emit("message", { ...context, turnId: "stale" });
+  expect(manager.peerHost(tab.tabId)?.turnContext).toBeUndefined();
   tab.proc = null;
   await manager.shutdownAllTabHosts();
 });

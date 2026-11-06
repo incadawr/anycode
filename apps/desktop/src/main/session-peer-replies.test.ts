@@ -22,14 +22,15 @@ async function fixture() {
   let time = Date.now();
   const replies = createSessionPeerReplies(broker, () => time);
   const access = { canAccess: vi.fn(() => true) };
+  const prepare = vi.fn(async () => {});
   const handler = createSessionPeersHandler({ current: id => hosts.find(h => h.tabId === id), targets: () => hosts,
-    access, prepare: async () => {}, send: (caller, input, authorize) => replies.send(caller, input, async id => {
-      await authorize(id); return tabs.find(t => t.sessionId === id)!;
-    }) });
+    access, prepare, send: (caller, input, authorize) => replies.send(caller, input, async id => {
+      authorize(id); return tabs.find(t => t.sessionId === id)!;
+    }, authorize) });
   const call = (id: string, input: Record<string, unknown>) => handler(id, hosts.find(h => h.sessionId === id)!.proc!, {
     requestId: crypto.randomUUID(), operation: "send", input,
   });
-  return { realpath, writer, broker, replies, call, post, hosts, tabs, access, options, tick: (ms: number) => { time += ms; } };
+  return { prepare, realpath, writer, broker, replies, call, post, hosts, tabs, access, options, tick: (ms: number) => { time += ms; } };
 }
 it("derives reply destination and correlation, coalesces retries into one inbox post", async () => {
   const f = await fixture();
@@ -141,4 +142,29 @@ it("revalidates caller workspace and grants after asynchronous path resolution",
   f.realpath.mockImplementationOnce(async path => { f.access.canAccess.mockReturnValue(false); return path; });
   expect(await f.call("a", { sessionId: "b", payload: "no" })).toEqual({ status: "refused" });
   expect(f.post).not.toHaveBeenCalled();
+});
+
+
+it("inherits a reply-wake chain even with omitted replyTo and a new correlation", async () => {
+  const f = await fixture();
+  const first = await f.call("a", { sessionId: "b", payload: "question", correlationId: "original" });
+  if (first?.status !== "sent") throw new Error("send failed");
+  f.hosts[1]!.turnContext = { sequence: 1, turnId: "turn", requestId: first.messageId, deliveredMessageIds: [first.messageId] };
+  for (const correlationId of [undefined, "new-thread"]) {
+    expect(await f.call("b", { sessionId: "c", payload: "follow-up", correlationId })).toMatchObject({ status: "sent" });
+    expect([...f.broker.ledger.messages.values()].at(-1)?.peer).toMatchObject({ chainId: first.messageId, hop: 1 });
+  }
+  f.broker.ledger.messages.get(first.messageId)!.peer!.hop = 8;
+  expect(await f.call("b", { sessionId: "c", payload: "over" })).toEqual({ status: "refused", reason: "loop_limited" });
+});
+
+
+it("keeps the admitted turn context when that turn settles during broker preparation", async () => {
+  const f = await fixture();
+  const first = await f.call("a", { sessionId: "b", payload: "seed" });
+  if (first?.status !== "sent") throw new Error("send failed");
+  f.hosts[1]!.turnContext = { sequence: 1, turnId: "turn", requestId: first.messageId, deliveredMessageIds: [first.messageId] };
+  f.prepare.mockImplementationOnce(async () => { f.hosts[1]!.turnContext = undefined; });
+  expect(await f.call("b", { sessionId: "c", payload: "follow-up" })).toMatchObject({ status: "sent" });
+  expect([...f.broker.ledger.messages.values()].at(-1)?.peer).toMatchObject({ chainId: first.messageId, hop: 1 });
 });

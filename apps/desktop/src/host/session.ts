@@ -5,6 +5,7 @@ import type { RuntimeSessionHistory } from "./runtime-session-history.js";
 import { manualCompactionUnavailableReason } from "../shared/manual-compaction.js";
 import { PresentationJournal } from "./presentation-journal.js";
 import type { CompactionRecordSeam } from "./compaction-records.js";
+import type { SessionPeerTurnPublication } from "../shared/session-peers.js";
 import { agentMessageText, type AgentEnvelope, type AgentDelivery, type SessionPublicResult, type SessionStatus, type SessionActivityState, type SetSessionEffortOutcome, type SetSessionFastOutcome, type SetSessionModelOutcome } from "../shared/communication.js";
 import { normalizeEffortLevels, validateSessionEffort } from "../shared/session-effort.js";
 import { safeFailureMessage } from "./safe-failure.js";
@@ -2469,6 +2470,13 @@ export class Session {
     const tool = this.broker.pendingToolName(input.approvalId);
     if (tool !== undefined && !isAnswerableApproval(tool)) return { result: "not_answerable" };
     return this.broker.respondExternal(input.approvalId, input.decision);
+  }
+
+  private peerTurnSequence = 0;
+  private peerTurnObserver?: (event: SessionPeerTurnPublication) => void;
+  observePeerTurns(observer: (event: SessionPeerTurnPublication) => void): void { this.peerTurnObserver = observer; }
+  private publishPeerTurn(event: SessionPeerTurnPublication): void {
+    try { this.peerTurnObserver?.(event); } catch { /* observation cannot interrupt the turn */ }
   }
 
   private agentDeliveryObserver?: (delivery: AgentDelivery) => void;
@@ -4966,6 +4974,7 @@ export class Session {
         turnInput = withBackgroundTaskNotices(turnInput, notices);
       }
     }
+    if (this.peerTurnObserver && this.agentDeliveries.has(requestId)) this.messageTurns.set(requestId, { hostTurnId: turnId });
     this.busy = true;
     const turn: Promise<void> = this.runTurn(requestId, turnInput, attachments, carriesWorktreeExitNotice, origin, pendingTurnIdHolder).finally(
       async () => {
@@ -5730,8 +5739,13 @@ export class Session {
     // turn_started re-assertion (see ui_ready) — the ring copy alone is not
     // survivable past REPLAY_BUFFER_CAP overflow.
     this.lastTurnRequest = { requestId, turnId };
+    const peerSequence = this.peerTurnObserver ? ++this.peerTurnSequence : 0;
+    const peerDeliveredMessageIds = this.peerTurnObserver
+      ? [...this.messageTurns].filter(([, identity]) => identity.hostTurnId === turnId).map(([id]) => id) : [];
+    if (this.peerTurnObserver) this.publishPeerTurn({ type: "session_peer_turn", sequence: peerSequence, turnId, requestId, deliveredMessageIds: peerDeliveredMessageIds });
     const publicText = new Map<string, { text: string; truncated: boolean }>();
     let lastCompletedText: { text: string; truncated: boolean } | null = null;
+    let peerTextIsFinal = true;
     let nativeTurnId: string | null = null;
     let turnErrorText: string | null = null;
     let turnError: { name: string; message: string; code?: string } | undefined;
@@ -5747,6 +5761,9 @@ export class Session {
     const recordResult = (terminalReason: SessionPublicResult["terminalReason"]) => {
       this.latestPublicResult = { source: "live_turn", turnId, requestId, nativeTurnId, terminalReason, publicAnswer: lastCompletedText?.text ?? ((this.engine.id === "codex" || this.engine.id === "core") && terminalReason === "error" ? turnErrorText : null), truncated: lastCompletedText?.truncated ?? false, completedAt: Date.now() };
       this.rememberTurnResult(turnId, this.latestPublicResult);
+      if (this.peerTurnObserver) this.publishPeerTurn({ type: "session_peer_terminal", sequence: peerSequence, turnId, requestId,
+        deliveredMessageIds: peerDeliveredMessageIds,
+        result: { ...this.latestPublicResult, publicAnswer: peerTextIsFinal ? this.latestPublicResult.publicAnswer : null, source: "live_turn", turnId, requestId, completedAt: this.latestPublicResult.completedAt! } });
       // thread this turn's final assistant text OUT of runTurn
       // for the supervisor idle-watchdog's noteTurnSettled call — the accept
       // -UserMessage teardown (outside this method) reads the private field.
@@ -5766,7 +5783,10 @@ export class Session {
         });
       }
       // This turn already owns admission; only policy state can block it here.
-      if (this.postureBlocked(false)) return;
+      if (this.postureBlocked(false)) {
+        if (this.peerTurnObserver) recordResult("cancelled");
+        return;
+      }
       if (controller.signal.aborted || this.shuttingDown) {
         recordResult("cancelled");
         if (!this.shuttingDown) {
@@ -5834,6 +5854,10 @@ export class Session {
       for await (const event of stream) {
         nativeTurnId ??= this.engine.steeringStatus?.().nativeTurnId ?? null;
         if (this.engine.id === "codex" && nativeTurnId !== null) this.lastNativeTurnId = nativeTurnId;
+        if (this.peerTurnObserver) {
+          if (event.type === "tool_execution_start") peerTextIsFinal = false;
+          if (event.type === "text_end" || (event.type === "finish" && publicText.size > 0)) peerTextIsFinal = true;
+        }
         if (event.type === "text_start") publicText.set(event.id, { text: "", truncated: false });
         if (event.type === "text_delta") {
           const current = publicText.get(event.id) ?? { text: "", truncated: false };

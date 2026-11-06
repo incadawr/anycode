@@ -1,3 +1,4 @@
+import { createSessionPeerTurns } from "./session-peer-turns.js";
 import type { PeerHost } from "./session-peers.js";
 import type { SessionPeerResponse } from "../shared/session-peers.js";
 import { normalizePeerWorkspaceKey } from "./session-peer-policy.js";
@@ -1248,6 +1249,12 @@ export class TabHostManager {
    * (S2d, not this slice) needs to see children too, tagged via `childOf`, to
    * project the child-run ledger next to the renderer's (child-blind) store.
    */
+  private readonly peerTurns = createSessionPeerTurns();
+  private readonly peerTerminalListeners = new Set<(sessionId: string, event: import("../shared/session-peers.js").SessionPeerTurnEvent) => void>();
+  onSessionPeerTerminal(listener: (sessionId: string, event: import("../shared/session-peers.js").SessionPeerTurnEvent) => void): () => void {
+    this.peerTerminalListeners.add(listener);
+    return () => { this.peerTerminalListeners.delete(listener); };
+  }
   private readonly communicationListeners = new Set<(sessionId: string, delivery: AgentDelivery) => void>();
   onCommunicationDelivery(listener: (sessionId: string, delivery: AgentDelivery) => void): () => void {
     this.communicationListeners.add(listener);
@@ -1273,6 +1280,10 @@ export class TabHostManager {
     const stateOk = tab !== undefined && (requestOptions?.allowNonRunning === true || tab.state === "running");
     if (!tab?.proc || !stateOk || (expectedWorkspace !== undefined && tab.workspace !== expectedWorkspace)) return Promise.reject(new Error("Session host unavailable"));
     const proc = tab.proc;
+    if (this.deps.onSessionPeerRequest && operation === "send_message") {
+      const envelope = payload as AgentDelivery["envelope"];
+      if (envelope?.recipientSessionId === sessionId && typeof envelope.messageId === "string") this.peerTurns.expectMessage(proc, envelope.messageId);
+    }
     const requestId = randomUUID();
     const timeoutMs = requestOptions?.timeoutMs !== undefined ? Math.max(1, requestOptions.timeoutMs) : 20000;
     return new Promise((resolve, reject) => {
@@ -1317,6 +1328,7 @@ export class TabHostManager {
     const tab = this.tabs.get(tabId);
     if (!tab || this.unpublishedTabs.has(tabId)) return undefined;
     return { tabId, sessionId: tab.sessionId, proc: tab.proc, generation: tab.hostGeneration,
+      turnContext: tab.proc ? this.peerTurns.active(tab.proc) : undefined,
       workspace: tab.workspace, workspaceKey: tab.peerWorkspaceKey ?? "",
       live: tab.state === "running" && tab.proc !== null, root: !tab.childOf,
       // Mutations stay closed until the host permission authority is wired.
@@ -2025,8 +2037,12 @@ export class TabHostManager {
     // GitHub #18: record the wire SHAPE (type/kind only) for the diagnostics
     // export. Never the payload — noteWireMessage reads those two fields.
     noteWireMessage(this.deps.diagnosticsRing, "in", message);
-    if (data.type === "file_activity") {
-      if (tab.proc === child) this.deps.onFileActivity?.(tab.tabId, child, message);
+    if (data.type === "session_peer_turn" || data.type === "session_peer_terminal") {
+      if (!this.deps.onSessionPeerRequest) return;
+      const event = this.peerTurns.accept({ proc: tab.proc, generation: tab.hostGeneration }, child, message);
+      if (event?.type === "session_peer_terminal") for (const listener of this.peerTerminalListeners) {
+        try { listener(tab.sessionId, event); } catch { /* independent observers */ }
+      }
       return;
     }
     if (data.type === "session_peers_request") {

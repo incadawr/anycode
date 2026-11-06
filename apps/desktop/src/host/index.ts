@@ -4983,6 +4983,10 @@ async function boot(): Promise<void> {
 const ready = startHostWithActivity(boot, () => session, (message) => process.parentPort.postMessage(message));
 void ready.then(() => session?.observeAgentDeliveries((delivery) => { process.parentPort.postMessage({ type: "communication_delivery", delivery }); }));
 
+if (nativeSessionsEnabled) void ready.then(() => session?.observePeerTurns(event => {
+  process.parentPort.postMessage({ ...event, generation: switchHostGeneration });
+}));
+
 async function handleShutdown(): Promise<void> {
   sessionPeersPort?.dispose();
   await ready;

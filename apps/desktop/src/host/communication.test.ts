@@ -1057,3 +1057,53 @@ function coreEffortResolution(entry: CatalogProviderEntry): NonNullable<SessionO
     effective: (id, tier) => resolveReasoningEffort(id, entry, tier),
   };
 }
+
+
+describe("peer turn publication", () => {
+  it("publishes context before engine dispatch and pins public terminal to the consumed message", async () => {
+    const events: import("../shared/session-peers.js").SessionPeerTurnPublication[] = [];
+    const h = createHarness({ steps: [[
+      { type: "reasoning_start", id: "secret" }, { type: "reasoning_delta", id: "secret", text: "PRIVATE_REASONING" }, { type: "reasoning_end", id: "secret" },
+      ...textStep("PUBLIC_ANSWER"),
+    ], textStep("LATER_ANSWER")] });
+    const run = h.engine.runTurn.bind(h.engine);
+    vi.spyOn(h.engine, "runTurn").mockImplementation((...args) => {
+      expect(events.at(-1)?.type).toBe("session_peer_turn");
+      return run(...args);
+    });
+    try {
+      h.session.observePeerTurns(event => events.push(event));
+      await h.session.receiveAgentMessage({ ...envelope("message"), recipientSessionId: h.session.communicationStatus().sessionId });
+      await h.waitUntil(() => events.some(e => e.type === "session_peer_terminal"));
+      const terminal = structuredClone(events.find(e => e.type === "session_peer_terminal"));
+      expect(terminal).toMatchObject({ deliveredMessageIds: ["message"], result: { publicAnswer: "PUBLIC_ANSWER", requestId: "message", source: "live_turn" } });
+      expect(events[0]).toMatchObject({ requestId: "message", turnId: terminal!.turnId, deliveredMessageIds: ["message"] });
+      await h.waitUntil(() => !h.session.communicationResult().activeTurnId);
+      h.send({ type: "user_message", requestId: "later", text: "next" });
+      await h.waitUntil(() => events.filter(e => e.type === "session_peer_terminal").length === 2);
+      expect(events.find(e => e.type === "session_peer_terminal")).toEqual(terminal);
+      expect(JSON.stringify(events)).not.toContain("PRIVATE_REASONING");
+    } finally { h.close(); }
+  });
+});
+
+
+it("peer terminals exclude tool output and pre-tool commentary even on a quiet cancel", async () => {
+  const { h, engine, make } = fixture();
+  const events: import("../shared/session-peers.js").SessionPeerTurnPublication[] = [];
+  vi.spyOn(engine, "runTurn").mockImplementation(async function* () {
+    yield { type: "text_start", id: "comment" };
+    yield { type: "text_delta", id: "comment", text: "PRIVATE_COMMENTARY" };
+    yield { type: "text_end", id: "comment" };
+    yield { type: "tool_execution_start", toolCallId: "call", toolName: "Read", input: { file_path: "/workspace/a" } };
+    yield { type: "tool_result", outcome: { toolCallId: "call", toolName: "Read", status: "success", modelText: "PRIVATE_TOOL_OUTPUT", durationMs: 1 } };
+    yield { type: "loop_end", reason: "cancelled", turns: 1 };
+  });
+  try {
+    h.session.observePeerTurns(event => events.push(event));
+    await h.session.receiveAgentMessage(make("quiet"));
+    await h.waitUntil(() => events.some(e => e.type === "session_peer_terminal"));
+    expect(events.at(-1)).toMatchObject({ result: { terminalReason: "cancelled", publicAnswer: null } });
+    expect(JSON.stringify(events)).not.toMatch(/PRIVATE_COMMENTARY|PRIVATE_TOOL_OUTPUT/);
+  } finally { h.close(); }
+});
