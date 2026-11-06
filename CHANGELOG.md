@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.83] - 2026-11-06
+
 ### Added
 
 - A session Extensions menu in the header shows MCP servers, plugins, skills and language servers for the current session, lets you switch MCP servers, skills and plugins on or off, and opens the matching Settings pane or config file.
