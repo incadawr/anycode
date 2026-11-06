@@ -87,7 +87,7 @@ export const CONNECTION_UPDATE_CHANNEL = "anycode:connection-update";
 export const CONNECTION_SET_ACTIVE_CHANNEL = "anycode:connection-set-active";
 /** invoke channel: delete a connection ({id}) — secrets cleared before metadata. */
 export const CONNECTION_DELETE_CHANNEL = "anycode:connection-delete";
-/** invoke channel: re-check a connection's health ({id}) — scaffold (W11 wires the probe). */
+/** invoke channel: re-check connection health ({id}) using a configured free probe. */
 export const CONNECTION_CHECK_CHANNEL = "anycode:connection-check";
 
 // ── settings schema (design §2; mirrored 1:1 by the zod schema in settings/schema.ts) ──

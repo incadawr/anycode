@@ -517,3 +517,19 @@ it("renders the connection provider icon in the tile header", async () => {
   expect(html).toContain('data-provider-icon="zai"');
   expect(html).toContain('connection-tile-provider-label');
 });
+
+it("manual Check explains unsupported providers and enables only Go", async () => {
+  const { connectionCheckHint } = await import("./ConnectionTile.js");
+  expect(connectionCheckHint({ providerId: "opencode" }, false)).toBeUndefined();
+  expect(connectionCheckHint({ providerId: "opencode-openai" }, false)).toBeUndefined();
+  for (const providerId of ["anthropic", "z-ai", "openai", "vllm", "custom:local", ""]) {
+    expect(connectionCheckHint({ providerId }, false)).toContain("No free credential check");
+  }
+  expect(connectionCheckHint({ providerId: "opencode", baseUrl: "https://example.test/v1" }, false)).toBeTruthy();
+  expect(connectionCheckHint({ providerId: "opencode" }, true)).toBeTruthy();
+});
+
+it("labels an unexpected response without blaming the key or network", () => {
+  const observation = observeLastHealth({ status: "misconfigured", at: new Date().toISOString(), safeCode: "unexpected_response" }, Date.now());
+  expect(tileStatusPresentation("misconfigured", observation, false, "unexpected_response").text).toContain("Unexpected response");
+});

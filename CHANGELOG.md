@@ -12,7 +12,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Responses gateway streams preserve initial answer and reasoning segments carried in content parts and no longer create empty answer bubbles.
 - Native provider errors show sanitized provider explanations, and OpenCode Go output limits stay above zero.
 - Claude sessions correctly apply reasoning effort when opened through the Sessions API or changed in a tab.
-- Settings requests hide internal error details, and connection checks discard results after the endpoint or credential changes.
+- OpenCode Go checks verify keys without generating tokens, explain unexpected responses, and discard stale results after connection changes; other providers explain unavailable checks, and settings errors hide internal details.
 
 ### Changed
 

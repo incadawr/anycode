@@ -249,11 +249,13 @@ export function tileStatusPresentation(
   healthStatus: ProviderHealthStatus,
   observation: LastHealthObservation | undefined,
   checking: boolean,
+  safeCode?: string,
 ): TileStatusPresentation {
   if (checking) {
     return { text: "Checking…", title: undefined, tone: describeConnectionHealth(healthStatus).tone };
   }
   const described = describeConnectionHealth(healthStatus);
+  if (healthStatus === "misconfigured" && safeCode === "unexpected_response") described.text = "Unexpected response";
   // Credential override: the tile names the current blocker; the previous
   // observation (status, age, stale mark) stays in the title — never dropped,
   // never presented as current.
@@ -306,6 +308,11 @@ export function connectionTileSelectHint(selected: boolean): string {
     : "Make this the default connection for new sessions";
 }
 
+export function connectionCheckHint(connection: { providerId: string; baseUrl?: string }, isCustom: boolean): string | undefined {
+  return !isCustom && isOpenCodeGoConnection(connection) ? undefined
+    : "No free credential check is configured for this provider. Status updates after a real request.";
+}
+
 export function ConnectionTile({
   connection,
   catalogEntry,
@@ -354,10 +361,12 @@ export function ConnectionTile({
     healthStatus,
     checking ? undefined : observeLastHealth(connection.lastHealth, now),
     checking,
+    connection.lastHealth?.safeCode,
   );
   // one brand = one card — the label the tile header
   // actually renders (pure helper, tested directly).
   const providerLabel = connectionTileProviderLabel(catalogEntry);
+  const checkHint = connectionCheckHint(connection, catalogEntry?.isCustom === true);
   const authKind = catalogEntry?.authKind ?? "api_key";
   const replaceKeyLabel = authKind === "oauth" ? (credentialStatus?.set ? "Sign out" : "Sign in") : "Replace key";
   // the provider-reported quota line — rendered ONLY when the
@@ -508,7 +517,8 @@ export function ConnectionTile({
               type="button"
               role="menuitem"
               className="connection-tile-menu-item"
-              disabled={checking || !credentialStatus?.set}
+              disabled={checking || !credentialStatus?.set || checkHint !== undefined}
+              title={checkHint ?? "Verify the key using the free Go usage endpoint"}
               onClick={() => {
                 closeMenu(false);
                 onCheck();
@@ -516,6 +526,7 @@ export function ConnectionTile({
             >
               Check
             </button>
+            {checkHint && <p className="connection-tile-check-hint connection-tile-confirm-text">{checkHint}</p>}
             <button
               type="button"
               role="menuitem"

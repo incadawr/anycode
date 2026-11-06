@@ -1,4 +1,5 @@
 import { recordReasoningReplayRejection } from "./reasoning-replay.js";
+import { registerSettingsIpcWithProbe } from "./connection-probe.js";
 import { claudeOrchestrationEnabled } from "./claude-orchestration-feature.js";
 import { connectionContextWindow } from "../shared/connection-context-window.js";
 import type { RecognizerCatalogInfo } from "./host-env.js";
@@ -260,7 +261,6 @@ import {
   handleSet,
   handleSwapCodexBinaryPath,
   projectCatalogSummary,
-  registerSettingsIpc,
   sanitizeProviderFailureCode,
   type SettingsIpcDeps,
 } from "./settings-ipc.js";
@@ -3311,7 +3311,11 @@ void app.whenReady().then(async () => {
       }
     },
   };
-  registerSettingsIpc(settingsIpcDeps);
+  registerSettingsIpcWithProbe(settingsIpcDeps, {
+    settings: async () => (await loadSettings(settingsPath)).settings,
+    vault, systemProxy: systemProxyDelegate,
+    fetch: route => fetchForProxyChain([], route),
+  });
   registerSetupIpc(settingsIpcDeps);
   // the per-tab workspace-trust answer. Main resolves folder + hash
   // from the tab's own record; the renderer sends a tab id and a decision only.

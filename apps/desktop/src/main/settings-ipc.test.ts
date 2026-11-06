@@ -3675,6 +3675,62 @@ describe('handleConnectionUpdate — ""-sentinel clears transport (W12-FIX §3)'
 });
 
 describe("handleConnectionCheck — probe (W11)", () => {
+  it("Go network checks transition unchecked → ready → auth_invalid → unreachable without leaking the key", async () => {
+    const { createConnectionProbe } = await import("./connection-probe.js");
+    const bootstrap = makeDeps({ catalogIds: ["opencode"] });
+    await handleConnectionCreate(bootstrap, { providerId: "opencode" });
+    await handleSetSecret(bootstrap, { key: "provider.connection.conn-1.apiKey", value: SECRET_VALUE });
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response('{"usage":{"rolling":{"percent":0}}}'))
+      .mockResolvedValueOnce(new Response(SECRET_VALUE, { status: 401 }))
+      .mockRejectedValueOnce(new Error(SECRET_VALUE));
+    const probeConnection = createConnectionProbe({
+      settings: async () => (await loadSettings(settingsPath)).settings,
+      vault: bootstrap.vault, fetch: () => fetcher,
+    });
+    const deps = makeDeps({ catalogIds: ["opencode"], probeConnection });
+    for (const status of ["ready", "auth_invalid", "unreachable"]) {
+      const result = await handleConnectionCheck(deps, { id: "conn-1" });
+      expect(JSON.stringify(result)).not.toContain(SECRET_VALUE);
+      expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.lastHealth?.status).toBe(status);
+    }
+  });
+
+  it.each(["endpoint", "key", "rotation"])("drops late Go health after %s changes during the request", async change => {
+    const { createConnectionProbe } = await import("./connection-probe.js");
+    const deps = makeDeps({ catalogIds: ["opencode"] });
+    await handleConnectionCreate(deps, { providerId: "opencode" });
+    const key = "provider.connection.conn-1.apiKey";
+    await handleSetSecret(deps, { key, value: SECRET_VALUE });
+    let finish!: (response: Response) => void;
+    let started!: () => void;
+    const inFlight = new Promise<void>(resolve => { started = resolve; });
+    deps.probeConnection = createConnectionProbe({
+      settings: async () => (await loadSettings(settingsPath)).settings, vault: deps.vault,
+      fetch: () => async () => { started(); return new Promise<Response>(resolve => { finish = resolve; }); },
+    });
+    const pending = handleConnectionCheck(deps, { id: "conn-1" });
+    await inFlight;
+    if (change === "endpoint") await handleConnectionUpdate(deps, { id: "conn-1", baseUrl: "https://example.test/v1" });
+    else await handleSetSecret(deps, { key, value: "replacement-key" });
+    if (change === "rotation") {
+      const fresh = makeDeps({ catalogIds: ["opencode"], probeConnection: async () => ({ ok: true }) });
+      await handleConnectionCheck(fresh, { id: "conn-1" });
+    }
+    finish(change === "endpoint" ? new Response('{"usage":{"rolling":{"percent":0}}}') : new Response(null, { status: 401 }));
+    await pending;
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.lastHealth?.status).toBe(change === "rotation" ? "ready" : "unchecked");
+  });
+
+  it("an unsupported probe leaves existing health untouched", async () => {
+    const deps = makeDeps({ catalogIds: CATALOG_IDS, probeConnection: async () => undefined });
+    await handleConnectionCreate(deps, { providerId: "z-ai" });
+    await handleSetSecret(deps, { key: "provider.connection.conn-1.apiKey", value: SECRET_VALUE });
+    await applyConnectionHealthEvent(deps, "conn-1", { kind: "failure", code: "auth" });
+    await handleConnectionCheck(deps, { id: "conn-1" });
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.lastHealth?.status).toBe("auth_invalid");
+  });
+
   it("with NO probe wired (default), behaves byte-identically to the W9 scaffold: no network call, health untouched", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai" }); // conn-1
     const deps = makeDeps({ catalogIds: CATALOG_IDS });

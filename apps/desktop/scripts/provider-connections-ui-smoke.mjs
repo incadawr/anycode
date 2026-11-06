@@ -796,25 +796,19 @@ async function step11CheckConnectionA(ctx) {
   const rowABefore = before.rows.find((r) => r.connectionId === ctx.connAId);
 
   const checkResult = await apiOk(ctx, 11, "POST", "/settings/provider/menu", { connectionId: ctx.connAId, action: "check" });
-  assert(11, checkResult.ok === true, `menu check rejected: ${JSON.stringify(checkResult)}`);
+  assert(11, checkResult.ok === false && checkResult.reason === "menu_item_not_present", `unsupported Check must be disabled: ${JSON.stringify(checkResult)}`);
 
   const after = await apiOk(ctx, 11, "GET", "/settings/provider");
   const rowAAfter = after.rows.find((r) => r.connectionId === ctx.connAId);
-  // `probeConnection` is not wired in main/index.ts today (W9 scaffold,
-  // confirmed by grep — zero production references outside test fixtures),
-  // so `connection-check` is presently a network-free no-op that re-confirms
-  // the id and returns the current snapshot: the wiring works end-to-end
-  // (route -> facade -> IPC -> fresh snapshot) but health genuinely does not
-  // change yet. Asserting byte-identical status here is itself the honest
-  // discriminator — a WIRED probe that silently mutated status on a bad read
-  // would fail this exact assertion.
+  // This fixture uses Z.AI, whose manual check is disabled with an explanation.
+  // Only Go currently has a configured free credential probe.
   assert(
     11,
     rowAAfter.statusText === rowABefore.statusText && rowAAfter.statusTone === rowABefore.statusTone,
-    `expected connection A's status unchanged by an unwired connection-check probe, got ${rowABefore.statusText}/${rowABefore.statusTone} -> ${rowAAfter.statusText}/${rowAAfter.statusTone}`,
+    `expected connection A's status unchanged by a disabled manual check, got ${rowABefore.statusText}/${rowABefore.statusTone} -> ${rowAAfter.statusText}/${rowAAfter.statusTone}`,
   );
 
-  pass(11, `"Check" menu action round-trips cleanly (ok:true, no crash); status genuinely unchanged — probeConnection is not yet wired (pre-existing W9/W11 residual, not a W12 regression)`);
+  pass(11, `Unsupported manual check leaves health unchanged; Go checks use the free usage endpoint`);
 }
 
 async function step12CreateCustomConnection(ctx) {

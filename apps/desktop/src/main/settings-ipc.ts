@@ -217,8 +217,9 @@ export interface SettingsIpcDeps {
    * falls back to a billable generation request. Absent = the W9 scaffold
    * behaviour — `connection-check` validates the id and returns the current
    * snapshot untouched (byte-compatible; no network call, no health write).
+   * An undefined result means no safe check is configured for this connection.
    */
-  probeConnection?: (connection: ProviderConnection, credential: string) => Promise<ConnectionProbeOutcome>;
+  probeConnection?: (connection: ProviderConnection, credential: string) => Promise<ConnectionProbeOutcome | undefined>;
   /** Injectable ISO-timestamp clock for `lastHealth.at` (tests only; defaults to `new Date().toISOString()`). */
   now?: () => string;
   /**
@@ -1686,6 +1687,7 @@ const FAILURE_CODE_TO_HEALTH: Record<string, ProviderHealthStatus> = Object.assi
   tls: "unreachable",
   server: "unreachable",
   input_limit: "ready",
+  unexpected_response: "misconfigured",
   unknown: "misconfigured",
 });
 
@@ -2409,7 +2411,7 @@ export async function handleConnectionCheck(deps: SettingsIpcDeps, raw: unknown)
     if (credential !== undefined && credential !== "") {
       const expectedConnection = structuredClone(connection);
       const outcome = await deps.probeConnection(connection, credential);
-      await applyConnectionHealthEvent(
+      if (outcome !== undefined) await applyConnectionHealthEvent(
         deps,
         connection.id,
         outcome.ok ? { kind: "success" } : { kind: "failure", code: outcome.code },
@@ -2873,14 +2875,18 @@ export async function handleRecognizerSet(deps: SettingsIpcDeps, raw: unknown): 
 export function registerSettingsIpc(deps: Omit<SettingsIpcDeps, "vault"> & { vault: Vault }): void {
   // Dependency errors may contain credentials or request values. Keep the
   // original exception inside main; never serialize it through Electron IPC.
-  const handle: typeof guardedIpcHandle = (channel, handler) => {
+  const handle: typeof guardedIpcHandle = (channel, handler, options) => {
     guardedIpcHandle(channel, async (event, ...args) => {
       try {
         return await handler(event, ...args);
-      } catch {
+      } catch (cause) {
+        // Only known OS failure codes: messages, paths and payloads may contain secrets.
+        const code = typeof cause === "object" && cause !== null && "code" in cause ? cause.code : undefined;
+        const safeCause = typeof code === "string" && /^(EACCES|EPERM|ENOSPC|EROFS|EIO|ENOENT)$/.test(code) ? code : "dependency_failure";
+        deps.logger?.warn(`settings IPC ${channel} failed (${safeCause})`);
         throw new Error("Settings request failed");
       }
-    });
+    }, options);
   };
   handle(SETTINGS_GET_CHANNEL, () => handleGet(deps));
   handle(SETTINGS_SET_CHANNEL, (_event, raw: unknown) => handleSet(deps, raw));

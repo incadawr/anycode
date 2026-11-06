@@ -113,3 +113,31 @@ it.each(["endpoint", "credential"])("discards a probe result after its %s change
   await invoke("connection-check", { id: "conn-existing" });
   expect(await readFile(deps.settingsPath, "utf8")).not.toContain('"ready"');
 });
+
+it("registers a working Go probe through the production composition", async () => {
+  const { registerSettingsIpcWithProbe } = await import("./connection-probe.js");
+  const settings = cloneDefaults();
+  settings.provider.connections = [{ id: "conn-existing", providerId: "opencode" }];
+  await saveSettings(deps.settingsPath, settings);
+  const fetcher = vi.fn().mockResolvedValue(new Response('{"usage":{"rolling":{"percent":0}}}'));
+  registerSettingsIpcWithProbe({ ...deps, vault: vault as Vault }, {
+    settings: async () => settings, vault, fetch: () => fetcher,
+  });
+  expect(await invoke("connection-check", { id: "conn-existing" })).toMatchObject({ ok: true });
+  expect(fetcher).toHaveBeenCalledOnce();
+  expect(await readFile(deps.settingsPath, "utf8")).toContain('"ready"');
+  fetcher.mockResolvedValue(new Response(null, { status: 404 }));
+  await invoke("connection-check", { id: "conn-existing" });
+  const { loadSettings } = await import("../settings/files.js");
+  expect((await loadSettings(deps.settingsPath)).settings.provider.connections[0]?.lastHealth).toMatchObject({ status: "misconfigured", safeCode: "unexpected_response" });
+});
+
+it("logs a safe dependency cause without error messages or payloads", async () => {
+  const warn = vi.fn();
+  deps.logger = { warn };
+  vi.mocked(vault.setSecret).mockRejectedValue(Object.assign(new Error(secret), { code: "ENOSPC" }));
+  registerSettingsIpc({ ...deps, vault: vault as Vault });
+  await expect(invoke("secret-set", { key: "provider.connection.conn-existing.apiKey", value: secret })).rejects.toThrow(/^Settings request failed$/);
+  expect(warn).toHaveBeenCalledWith("settings IPC anycode:secret-set failed (ENOSPC)");
+  expect(JSON.stringify(warn.mock.calls)).not.toContain(secret);
+});
