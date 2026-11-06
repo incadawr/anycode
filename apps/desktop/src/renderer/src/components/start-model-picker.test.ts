@@ -585,3 +585,15 @@ it("matches host effort vocabulary for all automatic Go routes and missing reaso
   expect(startModelEffortLevels("opencode", "grok-4.7", catalog, caps)).toBeUndefined();
   expect(resolveEffortLevels("grok-4.7", openCodeGoCatalogEntry(entry, "grok-4.7", parsed.snapshot))).toBeUndefined();
 });
+
+it("retains native catalog thinking policy for explicit levels and clipped default", async () => {
+  const { getBuiltinCatalog } = await import("@anycode/core/catalog");
+  const { modelCapabilitiesFor } = await import("../../../shared/model-overrides.js");
+  const catalog = getBuiltinCatalog().providers as unknown as CatalogSummary;
+  const id = "MiniMax-M3.1-Flash";
+  const base = { providerId: "minimax", modelCapabilities: { [id]: { reasoning: true } } };
+  const caps = modelCapabilitiesFor({ ...base, modelOverrides: { [id]: { effortLevels: ["off", "low", "high"] as ("off" | "low" | "high")[] } } }, id);
+  expect(startModelEffortLevels("minimax", id, catalog, caps, ["off", "low", "high"])).toEqual(["low", "high"]);
+  const offCaps = modelCapabilitiesFor({ ...base, reasoningEffort: "off" }, id);
+  expect(startModelDefaultEffort("minimax", id, catalog, offCaps, ["low", "high"])).toBe("high");
+});

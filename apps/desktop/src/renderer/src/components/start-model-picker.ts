@@ -357,7 +357,7 @@ export function startModelEffortLevels(
   const matched = catalog
     ?.find((entry) => entry.id === providerId)
     ?.models.find((model) => model.id === modelId);
-  if (manualLevels !== undefined) return (liveCaps?.thinkingAlwaysOn ?? matched?.thinkingAlwaysOn) ? manualLevels.filter((level) => level !== "off") : manualLevels;
+  if (manualLevels !== undefined) return (liveCaps?.goRoutePolicy ? liveCaps.thinkingAlwaysOn : matched?.thinkingAlwaysOn ?? liveCaps?.thinkingAlwaysOn) ? manualLevels.filter((level) => level !== "off") : manualLevels;
   if (liveCaps?.goRoutePolicy) return liveCaps.reasoning === true ? liveCaps.effortLevels ?? [] : undefined;
   if (((providerId === "opencode" || providerId === "opencode-openai") && liveCaps?.reasoning !== undefined) || matched === undefined) {
     // The connection policy takes precedence over the catalog.
@@ -422,7 +422,7 @@ export function startModelDefaultEffort(
   const efforts = startModelEffortLevels(providerId, modelId, catalog, liveCaps, overrideLevels);
   if (efforts === undefined) return undefined;
   if (efforts.includes(recorded)) return recorded;
-  if ((liveCaps?.thinkingAlwaysOn ?? matched?.thinkingAlwaysOn) !== true) return undefined;
+  if ((liveCaps?.goRoutePolicy ? liveCaps.thinkingAlwaysOn : matched?.thinkingAlwaysOn ?? liveCaps?.thinkingAlwaysOn) !== true) return undefined;
   // The recorded default is outside the offered vocabulary ⇒ the highest
   // offered level takes its place (never `off`: an explicit "no reasoning" is
   // a choice, not a fallback).
