@@ -12,6 +12,7 @@
  * quietly running the engine's default.
  */
 
+import { creationAdmissionFor, type CreatorAdmissionPolicy } from "./communication-creation-admission.js";
 import type { WorkspaceTrustStore } from "@anycode/core/workspace-trust";
 import { canonicalWorkspaceKey } from "@anycode/core/workspace-trust";
 import type { CreateSessionOutcome, CreateSessionRequest } from "./communication-server.js";
@@ -75,6 +76,7 @@ export interface CreateSessionByAgentDeps {
   listCodexAccounts?(): Promise<CodexAccountOption[]>;
   randomUUID(): string;
   agentOpenedSessions: Set<string>;
+  agentSessionOpeners?: Map<string, string>;
   agentSessionTitles: Map<string, string>;
   /**
    * Retains the accepted handle as the tab's durable title: pushes it to the
@@ -125,13 +127,27 @@ function remaining(deadline: number): number {
 export async function createSessionForAgent(
   request: CreateSessionRequest,
   deps: CreateSessionByAgentDeps,
+  policy: CreatorAdmissionPolicy = { kind: "external" },
 ): Promise<CreateSessionOutcome> {
+  return creationAdmissionFor(deps.agentOpenedSessions, deps.listTabs).run(() => createAdmittedSession(request, deps, policy));
+}
+
+async function createAdmittedSession(request: CreateSessionRequest, deps: CreateSessionByAgentDeps,
+  policy: CreatorAdmissionPolicy): Promise<CreateSessionOutcome> {
   const projects = deps.projects;
   const tabs = deps.manager();
   const sessions = deps.sessions();
   if (projects === null || tabs === null || sessions === null) return { ok: false, reason: "not_ready" };
-  const key = canonicalWorkspaceKey(request.workspace, deps.realpathSync);
-  if (!projects.isAllowed(key)) return { ok: false, reason: "not_allowed" };
+  let key: string;
+  try {
+    key = policy.kind === "native" ? deps.realpathSync(request.workspace) : canonicalWorkspaceKey(request.workspace, deps.realpathSync);
+  } catch { return { ok: false, reason: "folder_not_found" }; }
+  const authorized = () => {
+    try {
+      return policy.kind === "native" ? policy.authorize(request.workspace, key, projects.isAllowed(key)) : projects.isAllowed(key);
+    } catch { return false; }
+  };
+  if (!authorized()) return { ok: false, reason: "not_allowed" };
   const trust = await deps.readTrustStore();
   if (trust.folders[key]?.decision !== "trusted") return { ok: false, reason: "not_trusted" };
   if (tabs.atCapacity()) return { ok: false, reason: "too_many" };
@@ -220,6 +236,10 @@ export async function createSessionForAgent(
       : { ok: false, reason: "not_ready", detail: pin.detail };
   }
   const releasePin = pin.release;
+  if (!authorized()) {
+    releasePin();
+    return { ok: false, reason: "not_allowed" };
+  }
   const sessionId = deps.randomUUID();
   let handle: string | undefined;
   /**
@@ -234,8 +254,9 @@ export async function createSessionForAgent(
    */
   const registerAttribution = (): void => {
     deps.agentOpenedSessions.add(sessionId);
-    // Registered synchronously by createTab (onSessionRegistered); "shared immediately".
-    sessions.set(sessionId, true);
+    // Native creation preserves the access default registered by createTab.
+    if (policy.kind === "external") sessions.set(sessionId, true);
+    else deps.agentSessionOpeners?.set(sessionId, policy.openerSessionId);
     if (request.handle === undefined) return;
     const normalized = normalizeHandle(request.handle);
     if (!normalized.ok || normalized.handle === null) return;
@@ -320,7 +341,7 @@ export async function createSessionForAgent(
       }
     };
     await tabs.abortPreparedTab(tab.tabId, deleteRow);
-    return { ok: false, reason, ...(detail !== undefined ? { detail } : {}) };
+    return { ok: false, reason, ...(policy.kind === "native" ? { sessionId, tabId: tab.tabId } : {}), ...(detail !== undefined ? { detail } : {}) };
   };
 
   if (wantsPreparation) {
@@ -420,5 +441,12 @@ export async function createSessionForAgent(
     registerAttribution();
     tabs.deliverTabPort(tab);
   }
-  return { ok: true, sessionId, tabId: tab.tabId, ...(handle !== undefined ? { handle } : {}) };
+  let delivery: { state: string; messageId?: string } | undefined;
+  if (policy.kind === "native" && request.firstMessage !== undefined) {
+    try {
+      delivery = authorized() && policy.deliverFirstMessage
+        ? await policy.deliverFirstMessage(sessionId, request.firstMessage) : { state: "rejected" };
+    } catch { delivery = { state: "unknown" }; }
+  }
+  return { ok: true, sessionId, tabId: tab.tabId, ...(handle !== undefined ? { handle } : {}), ...(delivery ? { delivery } : {}) };
 }

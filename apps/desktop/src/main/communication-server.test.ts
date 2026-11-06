@@ -1602,6 +1602,7 @@ describe("Sessions API create_session", () => {
       manager,
       userData: dir,
       config: { workspaces: [dir], discoveryFile },
+      creatorOwnsAdmission: true,
       createSessionByAgent: (request) => createSessionForAgent(request, deps),
       isSessionExposed: (sessionId) => sessions.isExposed(sessionId),
       agentOpenedSessions,

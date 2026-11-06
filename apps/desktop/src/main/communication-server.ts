@@ -1,3 +1,5 @@
+import { creationAdmissionFor, CREATE_SESSION_RATE_LIMIT, CREATE_SESSION_RATE_WINDOW_MS, MAX_AGENT_OPENED_TABS } from "./communication-creation-admission.js";
+export { CREATE_SESSION_RATE_LIMIT, CREATE_SESSION_RATE_WINDOW_MS, MAX_AGENT_OPENED_TABS } from "./communication-creation-admission.js";
 /** Production, opt-in, local-only MCP. Independent of automation and CDP. */
 import { createServer } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
@@ -72,11 +74,6 @@ const waitSchema = z.object({
 }).strict().refine((v) => (v.messageId !== undefined) !== (v.correlationId !== undefined), { message: "Provide messageId or correlationId" });
 /** Concurrent wait_for_result calls across all clients; the 33rd is refused. */
 const MAX_WAITERS = 32;
-/** at most this many `create_session` calls per window (per server instance; a restart resets it). */
-export const CREATE_SESSION_RATE_LIMIT = 5;
-export const CREATE_SESSION_RATE_WINDOW_MS = 60_000;
-/** most agent-opened tabs alive at once. */
-export const MAX_AGENT_OPENED_TABS = 8;
 /** stable refusal codes for agent-owned tab closing. */
 export type CloseSessionRefusal = "not_allowed" | "not_found" | "not_agent_opened" | "busy" | "last_tab";
 export type CloseSessionOutcome = { ok: true } | { ok: false; reason: CloseSessionRefusal };
@@ -100,13 +97,14 @@ export type CreateSessionRequest = {
   effort?: unknown;
   fast?: boolean;
   handle?: string;
+  firstMessage?: string;
 };
 /**
  * a refusal MAY carry a `detail` sentence that main already made
  * human-readable (the `invalid_model` candidate list). It is appended after the
  * fixed code text, never in place of it.
  */
-export type CreateSessionOutcome = { ok: true; sessionId: string; tabId: string; handle?: string } | { ok: false; reason: Exclude<CreateSessionRefusal, "rate_limited">; detail?: string };
+export type CreateSessionOutcome = { ok: true; sessionId: string; tabId: string; handle?: string; delivery?: { state: string; messageId?: string } } | { ok: false; reason: CreateSessionRefusal; detail?: string; sessionId?: string; tabId?: string };
 const CREATE_REFUSAL_TEXT: { [K in CreateSessionRefusal]: string } = {
   not_allowed: "the project does not allow agents to open tasks (sidebar project menu, off by default)",
   not_trusted: "the folder is not trusted in AnyCode; use the project sidebar menu to turn on Allow agents to open tasks here and trust the folder, or open the folder and approve its project settings",
@@ -175,6 +173,8 @@ export interface CommunicationServerOptions {
   listAgentProjects?: () => string[];
   /** Main-owned bookkeeping shared by admission, the alive cap and close_session. */
   agentOpenedSessions?: Set<string>;
+  /** Production creator owns the shared admission; embedders use the adapter fallback. */
+  creatorOwnsAdmission?: boolean;
   closeSessionByAgent?: (sessionId: string) => Promise<CloseSessionOutcome>;
   /** Clock for the creation rate window (tests inject it). */
   now?: () => number;
@@ -361,27 +361,8 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     });
     return { items, truncated: hostItems.length > limit };
   };
-  const now = options.now ?? Date.now;
-  const creationTimes: number[] = [];
   const agentOpenedSessions = options.agentOpenedSessions ?? new Set<string>();
-  /**
-   * (review F4): one in-flight create_session at a time. The rate check, the
-   * alive-cap check and the creator hook run as one critical section, so two concurrent
-   * calls cannot both pass `aliveAgentOpened() >= MAX_AGENT_OPENED_TABS` and overshoot the
-   * cap (a plain per-request handler has no such serialization). The firstMessage readiness
-   * wait is deliberately OUTSIDE: it can last 10 s and must not block other creations.
-   */
-  let creating: Promise<unknown> = Promise.resolve();
-  const inCreationSection = <T>(task: () => Promise<T>): Promise<T> => {
-    const result = creating.then(task);
-    creating = result.catch(() => undefined);
-    return result;
-  };
-  const aliveAgentOpened = (): number => {
-    const live = new Set(options.manager.listTabs().map((t) => t.sessionId));
-    for (const id of agentOpenedSessions) if (!live.has(id)) agentOpenedSessions.delete(id);
-    return agentOpenedSessions.size;
-  };
+  const admission = creationAdmissionFor(agentOpenedSessions, () => options.manager.listTabs(), options.now);
   const parseOr = <T>(schema: z.ZodType<T>, raw: unknown, hint: string): T => {
     try { return schema.parse(raw); } catch (error) { if (error instanceof z.ZodError) throw new Error(hint); throw error; }
   };
@@ -557,23 +538,15 @@ export async function startCommunicationServer(options: CommunicationServerOptio
         let resolved: string;
         try { resolved = await resolvePath(input.workspace); } catch { throw createRefusal("folder_not_found"); }
         if (restricted && !(await isAllowed(resolved))) throw createRefusal("not_allowed");
-        const outcome = await inCreationSection(async () => {
-          const at = now();
-          while (creationTimes.length > 0 && creationTimes[0]! <= at - CREATE_SESSION_RATE_WINDOW_MS) creationTimes.shift();
-          if (creationTimes.length >= CREATE_SESSION_RATE_LIMIT) throw createRefusal("rate_limited");
-          if (aliveAgentOpened() >= MAX_AGENT_OPENED_TABS) throw createRefusal("too_many");
+        const create = async () => {
           let created: CreateSessionOutcome;
           try {
             created = await createByAgent({ workspace: resolved, ...(input.engine ? { engine: input.engine } : {}), ...(input.model ? { model: input.model } : {}), ...(input.effort !== undefined ? { effort: input.effort } : {}), ...(input.fast !== undefined ? { fast: input.fast } : {}), ...(input.account !== undefined ? { account: input.account } : {}), ...(input.handle !== undefined ? { handle: input.handle } : {}) });
           } catch { throw createRefusal("not_ready"); }
-          if (!created.ok) throw createRefusal(created.reason, created.detail);
-          // (review F2): only a successful creation consumes the rate budget — refused
-          // attempts (not_trusted, too_many, not_ready, a throwing hook) never count. Still inside
-          // the section, together with the cap bookkeeping (review F4).
-          creationTimes.push(at);
-          agentOpenedSessions.add(created.sessionId);
           return created;
-        });
+        };
+        const outcome = await (options.creatorOwnsAdmission ? create() : admission.run(create));
+        if (!outcome.ok) throw createRefusal(outcome.reason, outcome.detail);
         let messageId: string | undefined;
         if (input.firstMessage !== undefined) {
           // (review F1): the new tab must be INSIDE the folders list for firstMessage
@@ -592,7 +565,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
           const deadline = Date.now() + (options.readyTimeoutMs ?? 10_000);
           const step = options.readyPollMs ?? 250;
           for (;;) {
-            if (closing || signal.aborted) throw new Error("create_session firstMessage delivery aborted");
+            if (closing || signal.aborted) throw new Error(`create_session firstMessage delivery aborted; sessionId ${outcome.sessionId}, tabId ${outcome.tabId}`);
             let ready = false;
             try { await options.manager.communicationRequest(outcome.sessionId, "get_session_status", undefined, resolved); ready = true; }
             catch { /* host still booting */ }

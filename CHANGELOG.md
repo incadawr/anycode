@@ -9,6 +9,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Sessions API reports the created session and tab ids when first-message delivery is interrupted.
+
 - Sessions API shows an unknown delivery status when a session cannot confirm receipt, keeping unexpected internal data out of the response.
 
 ## [0.0.85] - 2026-11-06

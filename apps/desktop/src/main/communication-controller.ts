@@ -43,6 +43,7 @@ export interface CommunicationControllerDeps {
   /** canonical keys with the per-project agent switch on, for `list_agent_projects`. Settings mode only; the env-file mode never gets it. */
   listAgentProjects?(): string[];
   agentOpenedSessions?: Set<string>;
+  creatorOwnsAdmission?: boolean;
   closeSessionByAgent?(sessionId: string): Promise<CloseSessionOutcome>;
   /** Number of sessions currently switched on, for the status line. */
   countExposed?(): number;
@@ -123,6 +124,7 @@ export function createCommunicationController(deps: CommunicationControllerDeps)
         ...(warn ? { warn } : {}),
         isSessionExposed: (sessionId) => deps.isSessionExposed(sessionId),
         handleOf: deps.handleOf ? (sessionId) => deps.handleOf?.(sessionId) : undefined,
+        creatorOwnsAdmission: deps.creatorOwnsAdmission,
         ...(deps.agentOpenedSessions ? { agentOpenedSessions: deps.agentOpenedSessions } : {}),
         ...(deps.closeSessionByAgent ? { closeSessionByAgent: (sessionId: string) => deps.closeSessionByAgent!(sessionId) } : {}),
         ...(deps.createSessionByAgent ? { createSessionByAgent: (request: CreateSessionRequest) => deps.createSessionByAgent!(request) } : {}),

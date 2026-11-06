@@ -28,6 +28,7 @@ import { Client, StreamableHTTPClientTransport } from "@anycode/core/communicati
 import { startCommunicationServer } from "./communication-server.js";
 import { SqlitePersistenceAdapter } from "@anycode/core";
 import { AGENT_MESSAGE_HEADER_PREFIX } from "../shared/communication.js";
+import { createSessionPeerAccess } from "./session-peer-access.js";
 import { createSessionForAgent, type CreateSessionByAgentDeps } from "./create-session-by-agent.js";
 import { offerEmptyFolderTrust } from "./workspace-trust-ipc.js";
 import { resolveSkillsProfileHome } from "./dev-profile.js";
@@ -526,6 +527,7 @@ describe("Sessions API create_session — the deferred first fork (GitHub #6)", 
         manager: { listTabs: () => r.manager.listTabs(), communicationRequest: async () => ({ engine: "core", state: "idle" }) },
         userData: dir,
         config: { workspaces: [], discoveryFile },
+        creatorOwnsAdmission: true,
         createSessionByAgent: (request) => createSessionForAgent(request, deps),
         readyTimeoutMs: 50,
         readyPollMs: 5,
@@ -1256,4 +1258,121 @@ describe("create_session speed", () => {
     expect(r.operations).toEqual(["get_session_status", "set_session_fast"]);
     expect(sequence.indexOf("speed")).toBeLessThan(sequence.indexOf("registered"));
   });
+});
+
+describe("shared creation admission", () => {
+  const native = (allowed = true) => ({
+    kind: "native" as const, openerSessionId: "opener",
+    authorize: vi.fn(() => allowed),
+  });
+  it("native same-workspace opening preserves private sharing and opener identity", async () => {
+    const r = rig();
+    const openers = new Map<string, string>();
+    const deps = r.deps({ projects: { isAllowed: () => false }, agentSessionOpeners: openers });
+    const outcome = await createSessionForAgent({ workspace: "/ws", model: "glm-5.3" }, deps, native());
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(r.exposed.get(outcome.sessionId)).not.toBe(true);
+    expect(openers.get(outcome.sessionId)).toBe("opener");
+    expect(r.forkEnvs[0]?.ANYCODE_CONNECTION_ID).toBe("conn-glm");
+    expect(await createSessionForAgent({ workspace: "/ws" }, deps)).toMatchObject({ ok: false, reason: "not_allowed" });
+  });
+  it("refuses native policy denial before forking", async () => {
+    const r = rig();
+    expect(await createSessionForAgent({ workspace: "/ws" }, r.deps(), native(false))).toMatchObject({ ok: false, reason: "not_allowed" });
+    expect(r.forkEnvs).toHaveLength(0);
+  });
+  it("serializes external and native calls through the same rate budget", async () => {
+    const r = rig();
+    const deps = r.deps();
+    const outcomes = await Promise.all(Array.from({ length: 9 }, (_, i) =>
+      createSessionForAgent({ workspace: "/ws" }, deps, i % 2 ? native() : undefined)));
+    expect(outcomes.filter(o => o.ok)).toHaveLength(5);
+    expect(r.forkEnvs).toHaveLength(5);
+    expect(outcomes.filter(o => !o.ok && o.reason === "rate_limited")).toHaveLength(4);
+  });
+  it("returns actual ids when native first message cannot be delivered", async () => {
+    const r = rig();
+    const outcome = await createSessionForAgent({ workspace: "/ws", firstMessage: "hello" }, r.deps(), {
+      ...native(), deliverFirstMessage: async () => { throw new Error("lost response"); },
+    });
+    expect(outcome).toMatchObject({ ok: true, sessionId: "sess-0", tabId: r.manager.listTabs()[0]?.tabId, delivery: { state: "unknown" } });
+    expect(r.forkEnvs).toHaveLength(1);
+    expect(r.exposed.get("sess-0")).not.toBe(true);
+  });
+});
+
+it("cross-workspace native creation needs both pair grant and target opt-in", async () => {
+  const r = rig();
+  let grant = false;
+  let optIn = false;
+  const access = createSessionPeerAccess({
+    enabled: () => true, isTrusted: () => true, realpathSync: p => p,
+    statSync: () => ({ isDirectory: () => true }),
+    policy: { isNativeEnabled: () => true, hasPairGrant: () => grant,
+      setNativeEnabled: () => false, setPairGrant: () => false },
+  });
+  const caller = { workspace: "/source", workspaceKey: "/source", live: true, root: true, restricted: false, readOnly: false };
+  const policy = { kind: "native" as const, openerSessionId: "opener",
+    authorize: (path: string, key: string, allowed: boolean) => access.canAccessWorkspace(caller, path, key, "open", allowed) };
+  const deps = r.deps({ projects: { isAllowed: () => optIn } });
+  for (const [hasGrant, allowed] of [[false, false], [false, true], [true, false]]) {
+    grant = hasGrant!; optIn = allowed!;
+    expect(await createSessionForAgent({ workspace: "/ws" }, deps, policy)).toMatchObject({ reason: "not_allowed" });
+  }
+  expect(r.forkEnvs).toHaveLength(0);
+  grant = optIn = true;
+  expect((await createSessionForAgent({ workspace: "/ws" }, deps, policy)).ok).toBe(true);
+  expect(r.exposed.get("sess-0")).not.toBe(true);
+});
+
+it("native failed effort preparation reports the allocated ids without exposing the session", async () => {
+  const r = rig({ respond: operation => ({ result: operation === "set_session_effort"
+    ? { ok: false, reason: "invalid_effort", detail: "unsupported effort" } : {} }) });
+  const outcome = await createSessionForAgent({ workspace: "/ws", effort: "invalid" }, r.deps(), {
+    kind: "native", openerSessionId: "opener", authorize: () => true,
+  });
+  expect(outcome).toMatchObject({ ok: false, reason: "invalid_effort", sessionId: "sess-0", tabId: expect.any(String) });
+  expect(r.forkEnvs).toHaveLength(1);
+  expect(r.exposed.get("sess-0")).not.toBe(true);
+});
+
+it("rechecks native authorization after asynchronous pin preparation and releases the pin", async () => {
+  const r = rig();
+  let allowed = true;
+  const release = vi.fn();
+  const outcome = await createSessionForAgent({ workspace: "/ws" }, r.deps({
+    primeNewSessionPin: async () => { allowed = false; return { ok: true, release }; },
+  }), { kind: "native", openerSessionId: "opener", authorize: () => allowed });
+  expect(outcome).toMatchObject({ ok: false, reason: "not_allowed" });
+  expect(release).toHaveBeenCalledOnce();
+  expect(r.forkEnvs).toHaveLength(0);
+});
+
+it("HTTP and native entries share one creation budget", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "anycode-shared-create-"));
+  const r = rig();
+  const deps = r.deps();
+  const discoveryFile = join(dir, "communication.json");
+  const service = await startCommunicationServer({
+    manager: { listTabs: () => r.manager.listTabs(), communicationRequest: async () => ({ engine: "core", state: "idle" }) },
+    userData: dir, config: { workspaces: [], discoveryFile }, realpath: async p => p,
+    agentOpenedSessions: r.agentOpenedSessions, creatorOwnsAdmission: true,
+    createSessionByAgent: request => createSessionForAgent(request, deps),
+  });
+  const client = new Client({ name: "shared-creation", version: "1" });
+  try {
+    const discovery = JSON.parse(await readFile(discoveryFile, "utf8")) as { url: string; token: string };
+    await client.connect(new StreamableHTTPClientTransport(new URL(discovery.url), { requestInit: { headers: { Authorization: `Bearer ${discovery.token}` } } }));
+    const native = { kind: "native" as const, openerSessionId: "opener", authorize: () => true };
+    const outcomes = await Promise.all(Array.from({ length: 8 }, (_, i) => i % 2
+      ? createSessionForAgent({ workspace: "/ws" }, deps, native).then(result => result.ok)
+      : client.callTool({ name: "create_session", arguments: { workspace: "/ws" } }).then(result => !result.isError)));
+    expect(outcomes.filter(Boolean)).toHaveLength(5);
+    expect(r.forkEnvs).toHaveLength(5);
+  } finally {
+    await client.close();
+    await service.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

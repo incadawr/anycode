@@ -589,6 +589,7 @@ let communicationApprovals: SessionAccessStore | null = null;
 /** per-project "Allow agents to open tasks here" switch (default OFF everywhere) and the sessions an agent opened (drives the "agent" marker). */
 let communicationAgentProjects: AgentProjectsStore | null = null;
 const agentOpenedSessions = new Set<string>();
+const agentSessionOpeners = new Map<string, string>();
 /**
  * The handle a session's tab is titled with. Kept for the tab's lifetime (the
  * sidebar reads it), and mirrored into the session row by `agentTitlePushes`
@@ -2628,6 +2629,7 @@ void app.whenReady().then(async () => {
     handleOf: (sessionId) => communicationSessions?.getHandle(sessionId),
     countExposed: () => communicationSessions?.exposedCount() ?? 0,
     isExternalApprovalEnabled: (sessionId) => communicationApprovals?.isExposed(sessionId) ?? false,
+    creatorOwnsAdmission: true,
     createSessionByAgent: (request) => createSessionForAgent(request),
     listAgentProjects: () => communicationAgentProjects?.allowedKeys() ?? [],
     agentOpenedSessions,
@@ -2662,6 +2664,7 @@ void app.whenReady().then(async () => {
     randomUUID,
     agentOpenedSessions,
     agentSessionTitles,
+    agentSessionOpeners,
     pushAgentTitle: (sessionId) => agentTitlePushes.retain(sessionId),
     listTabs: () => manager?.listTabs() ?? [],
     // A prepared creation that fails after the host forked drops the row it
@@ -3027,6 +3030,7 @@ void app.whenReady().then(async () => {
       for (const id of agentOpenedSessions) {
         if (!liveSessions.has(id)) {
           agentOpenedSessions.delete(id);
+          agentSessionOpeners.delete(id);
           agentSessionTitles.delete(id);
           agentTitlePushes.forget(id);
         }
