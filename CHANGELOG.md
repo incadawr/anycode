@@ -21,7 +21,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Responses gateway streams preserve initial answer and reasoning segments carried in content parts and no longer create empty answer bubbles.
 - Native provider errors show sanitized provider explanations, and OpenCode Go output limits stay above zero.
-- Claude sessions correctly apply reasoning effort when opened through the Sessions API or changed in a tab.
+- Claude sessions correctly apply reasoning effort when opened through the Sessions API or changed in a tab, and cost no longer breaks when cached-input usage is missing.
 - OpenCode Go checks verify keys without generating tokens, explain unexpected responses, and discard stale results after connection changes; other providers explain unavailable checks, and settings errors hide internal details.
 - Plugin account sources no longer cause plugin grants and update preferences to be lost when settings are opened and saved by 0.0.77.
 - Claude restart recovery keeps unsent messages unique and durable across restarts, and Responses stream diagnostics keep startup details.

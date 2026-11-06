@@ -54,7 +54,7 @@ export function registerSettingsIpcWithProbe(
   deps: Parameters<typeof registerSettingsIpc>[0],
   probeDeps: Parameters<typeof createConnectionProbe>[0],
 ): void {
-  // Boot mutates the shared deps object after registration (catalog ids, vault), so keep the same object.
+  // Boot mutates the shared deps object after registration (catalog ids), so keep the same object.
   deps.probeConnection = createConnectionProbe(probeDeps);
   registerSettingsIpc(deps);
 }

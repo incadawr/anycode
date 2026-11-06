@@ -252,7 +252,7 @@ export type ConnectionPricing =
 
 export interface ModelOverrides {
   preserveReasoning?: boolean;
-  /** Reserved for an endpoint rejection; no rejection detector runs yet. */
+  /** Written by main when a provider rejects replayed reasoning for this model and endpoint. */
   reasoningReplayRejection?: { reason: "provider-rejected"; baseUrl: string };
   imageInput?: "on" | "off";
   catalogMatchDisabled?: true;
