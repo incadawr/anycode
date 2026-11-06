@@ -1,3 +1,5 @@
+import { openCodeGoModelIds } from "@anycode/core/opencode-go";
+import { isAutomaticGo } from "../../../shared/provider-models.js";
 /**
  * срез E2a — pure decision logic for the Vision settings panel: which
  * connection may act as the fallback recognizer, what its proxy path actually
@@ -221,7 +223,10 @@ export function visionModelHints(connection: ProviderConnection | undefined, cat
   if (!connection) return [];
   const catalogModels = catalog?.find((entry) => entry.id === connection.providerId)?.models ?? [];
   const labels = new Map(catalogModels.map((model) => [model.id, model.name ?? model.id]));
+  const automaticGo = isAutomaticGo(connection.providerId, connection.baseUrl, connection.transport, envOverrides);
+  const available = automaticGo ? new Set(openCodeGoModelIds(connection.providerId!, connection.modelRoutes)) : undefined;
   const candidates = new Set<string>();
+  if (available) for (const id of available) candidates.add(id);
   for (const model of catalogModels) if (model.imageInput === true) candidates.add(model.id);
   for (const [id, caps] of Object.entries(connection.modelCapabilities ?? {})) if (caps.imageInput === true) candidates.add(id);
   for (const [id, override] of Object.entries(connection.modelOverrides ?? {})) if (override.imageInput === "on") candidates.add(id);
@@ -229,16 +234,17 @@ export function visionModelHints(connection: ProviderConnection | undefined, cat
   const image: VisionModelHint[] = [];
   const other: VisionModelHint[] = [];
   for (const id of candidates) {
+    if (available && !available.has(id)) continue;
     const override = modelOverrideFor(connection, id)?.imageInput;
     const catalogImage = catalogModels.some((model) => model.id === id && model.imageInput === true);
-    const capable = override === "on" || (override !== "off" && (modelCapabilitiesFor(connection, id, envOverrides)?.imageInput === true || catalogImage));
+    const capable = override === "on" || (override !== "off" && (modelCapabilitiesFor(connection, id, envOverrides)?.imageInput === true || (!automaticGo && catalogImage)));
     const hint = { id, label: labels.get(id) ?? id };
     if (capable) image.push(hint);
 
   }
   const imageIds = new Set(image.map((hint) => hint.id));
   for (const id of connection.models ?? []) {
-    if (!imageIds.has(id) && !other.some((hint) => hint.id === id)) other.push({ id, label: labels.get(id) ?? id });
+    if ((!available || available.has(id)) && !imageIds.has(id) && !other.some((hint) => hint.id === id)) other.push({ id, label: labels.get(id) ?? id });
   }
   return [...image, ...other];
 }
