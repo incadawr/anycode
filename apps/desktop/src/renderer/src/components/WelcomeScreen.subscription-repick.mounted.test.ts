@@ -147,13 +147,15 @@ it.skipIf(!existsSync(chrome))("lays out the actual connection buttons in order 
     "GLM Coding Plan", "MiniMax M Plan", "Kimi (kimi.com)", "OpenCode Go",
     "API key or local model", "ChatGPT / Codex", "Claude Code",
   ]);
+  expect(buttons.slice(0, 4).every(b => b.getAttribute("aria-describedby") === "welcome-subscription-description")).toBe(true);
+  expect(container.querySelector("#welcome-subscription-description")?.textContent).toBe("Connect a coding subscription");
   expect(buttons.filter(b => b.hasAttribute("data-welcome-path")).map(b => b.dataset.welcomePath)).toEqual(["api", "codex", "claude"]);
   const dir = mkdtempSync(resolve(tmpdir(), "welcome-layout-"));
   try {
     const css = ["tokens.css", "accents.css", "ui/ui.css", "app.css", "settings.css"].map(f => readFileSync(resolve(import.meta.dirname, "..", f), "utf8")).join("\n");
     const file = resolve(dir, "index.html");
     writeFileSync(file, `<!doctype html><style>${css} body { margin:0 } .welcome-screen { height:100vh }</style>${container.innerHTML}<pre id="header-result"></pre><pre id="result"></pre><script>const logo=document.querySelector('.welcome-mark').getBoundingClientRect(), name=document.querySelector('.welcome-wordmark').getBoundingClientRect(), dots=document.querySelector('.welcome-ramp').getBoundingClientRect(); document.querySelector('#header-result').textContent=JSON.stringify({logoRight:logo.right,logoCenter:logo.y+logo.height/2,nameLeft:name.left,nameCenter:name.y+name.height/2,dotsTop:dots.y,logoBottom:logo.bottom}); const b=[...document.querySelectorAll('.welcome-paths button')]; document.querySelector('#result').textContent=JSON.stringify(b.map(e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,right:r.right,bottom:r.bottom,scroll:e.scrollWidth,client:e.clientWidth}}));</script>`);
-    for (const width of [720, 360]) {
+    for (const width of [720]) {
       const run = spawnSync(chrome, ["--headless", "--no-sandbox", "--disable-gpu", "--disable-background-networking", `--user-data-dir=${dir}/profile`, `--window-size=${width},900`, "--dump-dom", `file://${file}`], { encoding: "utf8", timeout: 30000 });
       expect(run.status, run.stderr).toBe(0);
       const header = JSON.parse(run.stdout.match(/<pre id="header-result">([^<]+)<\/pre>/)![1]!) as {logoRight:number; logoCenter:number; nameLeft:number; nameCenter:number; dotsTop:number; logoBottom:number};

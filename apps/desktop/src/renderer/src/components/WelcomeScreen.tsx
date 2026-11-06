@@ -230,9 +230,10 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
           </div>
         )}
 
+        <span id="welcome-subscription-description" className="visually-hidden">Connect a coding subscription</span>
         <div className={`welcome-paths${activePath ? " welcome-paths-compact" : ""}`} role="group" aria-label="Choose how to connect">
           {WELCOME_SUBSCRIPTIONS.map((sub) => (
-            <button key={sub.id} type="button" className="welcome-path welcome-subscription" aria-pressed={subscription === sub.id} onClick={() => {
+            <button key={sub.id} type="button" className="welcome-path welcome-subscription" aria-describedby="welcome-subscription-description" aria-pressed={subscription === sub.id} onClick={() => {
               setPath("api");
               setSubscription(sub.id);
               setPick((n) => n + 1);
