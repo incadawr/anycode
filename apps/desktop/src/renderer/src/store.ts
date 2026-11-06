@@ -1,4 +1,4 @@
-import { agentMessageText } from "../../shared/communication.js";
+import { type AgentDisplayCard, agentMessageText } from "../../shared/communication.js";
 import type { AgentDelivery } from "../../shared/communication.js";
 /**
  * Renderer zustand store. FROZEN shape (design/phase-mvp.md §5) — MVP.1
@@ -475,6 +475,7 @@ export type TranscriptBlock =
       agentMessage?: true;
       /** Original payload for the minimap preview, without envelope metadata or delivery status. */
       agentMessagePayload?: string;
+      agentMessageCard?: AgentDisplayCard;
       /**
        * GitHub #19: the delivery's terminal state, kept as a STRUCTURED field
        * (not only as prose inside `text`) so a renderer reload, a state update
@@ -2844,6 +2845,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
      * on a transcript block that's about to be cleared anyway.
      */
     function performReset(): void {
+      displayCards = []; displayMessages.clear(); displayWrappers.clear();
       drainPendingDeltas();
       turnStartedAt.clear();
       // the transcript is being discarded — the hydration
@@ -3588,6 +3590,34 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       }));
     }
 
+    let displayCards: AgentDisplayCard[] = [];
+    let displayMessages = new Set<string>();
+    let displayWrappers = new Set<string>();
+    function projectDisplayCards(transcript: TranscriptBlock[]): TranscriptBlock[] {
+      if (!displayMessages.size) return transcript;
+      const remaining = new Map(displayCards.map(card => [card.envelope.messageId, card]));
+      const wrappers = new Map(displayCards.map(card => [agentMessageText(card.envelope), card.envelope.messageId]));
+      const result: TranscriptBlock[] = [];
+      const toBlock = (card: AgentDisplayCard): TranscriptBlock => ({
+        kind: "user_text", id: `agent-message:${card.envelope.messageId}`, origin: "system", agentMessage: true,
+        text: agentMessageText(card.envelope), agentMessagePayload: card.envelope.payload,
+        agentMessageState: card.state, agentMessageDetail: card.detail, agentMessageCard: card,
+      });
+      for (const block of transcript) {
+        const messageId = block.kind === "user_text" ? block.agentMessageCard?.envelope.messageId ??
+          (block.id.startsWith("agent-message:") && displayMessages.has(block.id.slice(14)) ? block.id.slice(14) : undefined) ??
+          wrappers.get(block.text) : undefined;
+        if (messageId === undefined) {
+          if (block.kind !== "user_text" || !displayWrappers.has(block.text)) result.push(block);
+        }
+        else if (remaining.has(messageId)) {
+          result.push(toBlock(remaining.get(messageId)!)); remaining.delete(messageId);
+        }
+      }
+      for (const card of remaining.values()) result.push(toBlock(card));
+      return result;
+    }
+
     /**
      * Applies one `session_history` message (design §3.3, task 2.1.5):
      * projects `items` via `projectHistoryToBlocks` and merges the result
@@ -3644,7 +3674,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         );
       });
       if (newBlocks.length > 0) {
-        set((state) => ({ transcript: [...state.transcript, ...newBlocks] }));
+        set((state) => ({ transcript: projectDisplayCards([...state.transcript, ...newBlocks]) }));
       }
       // the hydrated boundary has arrived — record the tail
       // anchor and hydration order, then flush any provider-switch markers
@@ -5539,9 +5569,19 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             }
             return;
           }
-          case "agent_message_display": return; // Display snapshot consumption is added with the card UI.
+          case "agent_message_display": {
+            // Main sends a replacement snapshot; stable block ids preserve disclosure state.
+            displayMessages = new Set(message.cards.map(card => card.envelope.messageId));
+            displayWrappers = new Set(message.cards.map(card => agentMessageText(card.envelope)));
+            displayCards = [...new Map(message.cards.map(card => [card.envelope.messageId, card])).values()].slice(-200);
+            const ids = new Set(displayCards.map(card => card.envelope.messageId));
+            set(state => ({ transcript: projectDisplayCards(state.transcript.filter(block =>
+              block.kind !== "user_text" || !block.agentMessageCard || ids.has(block.agentMessageCard.envelope.messageId))) }));
+            return;
+          }
           case "agent_message": {
             const d = message.delivery;
+            if (displayMessages.has(d.envelope.messageId)) return;
             const id = `agent-message:${d.envelope.messageId}`;
             // GitHub #19: keep the delivery state/detail as STRUCTURED fields
             // alongside the legacy prose suffix. A rerendered (or reloaded)

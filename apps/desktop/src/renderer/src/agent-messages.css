@@ -75,3 +75,17 @@
   display: block;
   padding-left: var(--sp-2);
 }
+
+/* Preserve the existing disclosure geometry when using the shared Button. */
+.child-report-toggle.ak-btn,
+.agent-message-stack-toggle.ak-btn {
+  height: auto;
+  justify-content: normal;
+  border-radius: 0;
+  white-space: normal;
+  transition: none;
+}
+.child-report-toggle.ak-btn:hover:not(:disabled),
+.agent-message-stack-toggle.ak-btn:hover:not(:disabled) {
+  background: none;
+}

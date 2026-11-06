@@ -29,7 +29,8 @@ import { useId, useState } from "react";
 import type { AgentMessageBlock } from "./MessageList.js";
 import { Chevron } from "./icons.js";
 import { ChildReportBlock } from "./ChildReportBlock.js";
-import { agentMessagePreview } from "../agent-message-format.js";
+import { Button } from "../ui/index.js";
+import { agentMessageDirection, agentMessagePreview } from "../agent-message-format.js";
 
 /** Header count text — the group's only label, e.g. `12 agent messages`. */
 export function agentMessageStackLabel(count: number): string {
@@ -69,7 +70,7 @@ export function AgentMessageStack({
       className={`agent-message-stack${expanded ? "" : " minimap-turn"}${enter ? " message-enter" : ""}`}
       data-block-id={blockIds.rootId}
     >
-      <button
+      <Button variant="ghost"
         type="button"
         className="agent-message-stack-toggle"
         aria-expanded={expanded}
@@ -80,10 +81,10 @@ export function AgentMessageStack({
           <Chevron />
         </span>
         <span className="agent-message-stack-name">{agentMessageStackLabel(blocks.length)}</span>
-      </button>
+      </Button>
       {/* The newest member's one-line payload — outside the expanded body, so
           the collapsed group still says what the run is about. */}
-      <div className="agent-message-preview">{agentMessagePreview(newest)}</div>
+      <div className="agent-message-preview">{agentMessageDirection(newest) && `${agentMessageDirection(newest)} · `}{agentMessagePreview(newest)}</div>
       {/* Collapsed: keep one `data-block-id` (and one minimap mark) per
           original message. Zero-height, in-flow, inert. */}
       {!expanded &&
