@@ -2840,7 +2840,7 @@ describe("CodexEngine — AnyCode dynamic tool integration", () => {
     const bridge = new CodexDynamicToolBridge(catalog, { run: vi.fn().mockResolvedValue(completed), send: async () => ({ ok: false as const, reason: "unavailable" as const, message: "fake port: send is not exercised by this test" }) });
     const server = new FakeAppServer();
     await createNativeCodexSession(server, "/work", undefined, undefined, undefined, undefined, bridge);
-    expect(server.calls.find((c) => c.method === "initialize")?.params).toMatchObject({ capabilities: { experimentalApi: true } });
+    expect(server.calls.find((c) => c.method === "initialize")?.params).toEqual({ clientInfo: { name: "anycode", title: "AnyCode", version: "0.0.0" }, capabilities: { experimentalApi: true } });
     expect(server.threadStartParams).toMatchObject({ dynamicTools: [expect.objectContaining({ name: ANYCODE_AGENT_TOOL }), expect.objectContaining({ name: ANYCODE_AGENT_STATUS_TOOL })] });
     server.calls.length = 0;
     await resumeNativeCodexSession(server, "/work", "persisted-thread", undefined, undefined, undefined, undefined, bridge);
@@ -3823,7 +3823,7 @@ describe("CodexEngine — browser dynamicTools", () => {
     const bridge = browserOnlyBridge();
     const server = new FakeAppServer();
     await createNativeCodexSession(server, "/work", undefined, undefined, undefined, undefined, bridge);
-    expect(server.calls.find((c) => c.method === "initialize")?.params).toMatchObject({ capabilities: { experimentalApi: true } });
+    expect(server.calls.find((c) => c.method === "initialize")?.params).toEqual({ clientInfo: { name: "anycode", title: "AnyCode", version: "0.0.0" }, capabilities: { experimentalApi: true } });
     const start = server.calls.find((c) => c.method === "thread/start")?.params as { dynamicTools?: Array<{ name: string }> } | undefined;
     expect(start?.dynamicTools).toHaveLength(10);
     expect(start?.dynamicTools?.map((d) => d.name)).toEqual([

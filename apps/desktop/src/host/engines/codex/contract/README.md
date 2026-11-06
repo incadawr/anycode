@@ -36,10 +36,10 @@ protocol AnyCode's Codex adapter is built against (design
 
 ## Supported version ceiling
 
-`<0.167.0` (mirrors `SUPPORTED_CODEX_VERSION` in
+`<0.168.0` (mirrors `SUPPORTED_CODEX_VERSION` in
 `host/engines/codex/protocol.ts`). (owner decision, 2026-08-29)
 dropped the floor this used to pair with: support is a single ceiling, not a
-closed range, so any codex-cli build below 0.167.0 is accepted by version
+closed range, so any codex-cli build below 0.168.0 is accepted by version
 number alone, however old. A build genuinely too old to speak the CONSUMED
 wire shapes fails on its own later, at whichever call first needs a shape it
 lacks, instead of being preemptively refused here. The Codex CLI's TypeScript
@@ -147,6 +147,17 @@ changes add optional `Account.chatgpt.workspaceName`, `ThreadItem` lifecycle
 non-null accounts, ignores extra item fields, and translates errors by message
 independently of the code. Regression tests cover these behaviors. Layer 2
 passes against the real 0.166.0 binary. The live GUI smoke is pending.
+
+## 0.167.0 verification (2026-11-06)
+
+The 0.166.0 and 0.167.0 extracts have identical consumed methods and
+approval decision enums. `CommandExecutionApprovalKind` adds `humanCommand`,
+which requires the `requiredHumanApproval` initialize capability that AnyCode
+does not request, including when experimental API is enabled. The capability
+itself is optional. Audio input now accepts `url` or `fileId`; AnyCode sends
+text and image inputs, not audio. No consumed field or variant was removed.
+Layer 2 passes against the real 0.167.0 binary. Live GUI smoke is pending:
+the isolated profile has no authorization.
 
 ## Raising the ceiling / updating the pin
 
