@@ -75,11 +75,14 @@ export function modelCapabilitiesFor(
   const go = isAutomaticGo(provider, connection?.baseUrl, connection?.transport, envOverrides) ? resolveOpenCodeGoEndpointPolicy(provider!, model, connection?.modelRoutes) : undefined;
   const policy = go?.kind === "route" ? go.route.policy : undefined;
   const reasoning = policy?.capabilities?.reasoning;
-  const goCaps: ModelCapabilitiesDto | undefined = policy ? {
-    reasoning: reasoning?.supported,
-    effortLevels: reasoning?.effort?.map(level => level === "none" ? "off" : level),
+  const goLevels = (reasoning?.effort ?? []).map(level => level === "none" ? "off" : level);
+  if (reasoning?.toggle && go?.kind === "route" && go.route.transport === "anthropic-messages" && !goLevels.includes("off")) goLevels.unshift("off");
+  const goCaps: ModelCapabilitiesDto | undefined = go ? {
+    goRoutePolicy: true,
+    reasoning: reasoning?.supported === true,
+    effortLevels: goLevels,
     defaultEffort: reasoning?.default?.value === "none" ? "off" : reasoning?.default?.value,
-    ...(policy.modalities?.input?.some(m => m.startsWith("image/")) ? { imageInput: true as const } : {}),
+    ...(policy?.modalities?.input?.some(m => m.startsWith("image/")) ? { imageInput: true as const } : {}),
   } : undefined;
   const effective = go ? goCaps : defaults || live ? { ...defaults, ...live } : undefined;
   if (effective && ((override?.reasoningEffort ?? connection?.reasoningEffort) === "off" || override?.effortLevels?.includes("off"))) effective.thinkingAlwaysOn = false;

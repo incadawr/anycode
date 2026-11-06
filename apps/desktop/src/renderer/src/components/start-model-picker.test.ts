@@ -561,3 +561,27 @@ it("uses saved Go effort vocabulary and defaults, and manual Responses denial", 
   const manual = { providerId: "opencode-openai", transport: "openai-responses" as const, modelCapabilities: { "grok-4.7": { reasoning: false } } };
   expect(startModelEffortLevels(manual.providerId, "grok-4.7", catalog, modelCapabilitiesFor(manual, "grok-4.7"))).toBeUndefined();
 });
+
+it("matches host effort vocabulary for all automatic Go routes and missing reasoning", async () => {
+  const { getBuiltinCatalog } = await import("@anycode/core/catalog");
+  const { openCodeGoCatalogEntry, openCodeGoModelIds } = await import("@anycode/core/opencode-go");
+  const { resolveEffortLevels } = await import("@anycode/core/capabilities");
+  const { modelCapabilitiesFor } = await import("../../../shared/model-overrides.js");
+  const { readFile } = await import("node:fs/promises");
+  const { parseOpenCodeGoSnapshot } = await import("@anycode/core/model-route");
+  const entry = getBuiltinCatalog().providers.find(p => p.id === "opencode")!;
+  const catalog = getBuiltinCatalog().providers as unknown as CatalogSummary;
+  const ids = openCodeGoModelIds("opencode");
+  expect(ids).toHaveLength(28);
+  for (const id of ids) {
+    expect(startModelEffortLevels("opencode", id, catalog, modelCapabilitiesFor({ providerId: "opencode" }, id)), id)
+      .toEqual(resolveEffortLevels(id, openCodeGoCatalogEntry(entry, id)));
+  }
+  const fixture = JSON.parse(await readFile(new URL("../../../../../../packages/core/src/provider/__fixtures__/opencode-go-models.json", import.meta.url), "utf8"));
+  delete fixture.data.find((row: { id: string }) => row.id === "grok-4.7").capabilities.reasoning;
+  const parsed = parseOpenCodeGoSnapshot(fixture, "2026-11-05T00:00:00Z");
+  if (!parsed.ok) throw new Error("invalid fixture");
+  const caps = modelCapabilitiesFor({ providerId: "opencode", modelRoutes: parsed.snapshot }, "grok-4.7");
+  expect(startModelEffortLevels("opencode", "grok-4.7", catalog, caps)).toBeUndefined();
+  expect(resolveEffortLevels("grok-4.7", openCodeGoCatalogEntry(entry, "grok-4.7", parsed.snapshot))).toBeUndefined();
+});

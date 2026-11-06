@@ -199,6 +199,8 @@ export type ReasoningEffort = "off" | "minimal" | "low" | "medium" | "high" | "x
  * the closed enum happens fail-closed at resolution, never at parse time.
  */
 export interface ModelCapabilitiesDto {
+  /** Read-time marker for an authoritative automatic Go route projection. */
+  goRoutePolicy?: true;
   contextWindow?: number;
   maxOutputTokens?: number;
   pricing?: TokenRates;

@@ -358,6 +358,7 @@ export function startModelEffortLevels(
     ?.find((entry) => entry.id === providerId)
     ?.models.find((model) => model.id === modelId);
   if (manualLevels !== undefined) return (liveCaps?.thinkingAlwaysOn ?? matched?.thinkingAlwaysOn) ? manualLevels.filter((level) => level !== "off") : manualLevels;
+  if (liveCaps?.goRoutePolicy) return liveCaps.reasoning === true ? liveCaps.effortLevels ?? [] : undefined;
   if (((providerId === "opencode" || providerId === "opencode-openai") && liveCaps?.reasoning !== undefined) || matched === undefined) {
     // The connection policy takes precedence over the catalog.
     if (liveCaps?.reasoning !== true) {
@@ -410,7 +411,7 @@ export function startModelDefaultEffort(
   const matched = catalog
     ?.find((entry) => entry.id === providerId)
     ?.models.find((model) => model.id === modelId);
-  const policyFirst = (providerId === "opencode" || providerId === "opencode-openai") && liveCaps?.reasoning !== undefined;
+  const policyFirst = liveCaps?.goRoutePolicy === true || ((providerId === "opencode" || providerId === "opencode-openai") && liveCaps?.reasoning !== undefined);
   const recorded = policyFirst ? liveCaps?.defaultEffort : matched?.defaultEffort ?? liveCaps?.defaultEffort;
   if (recorded === undefined) {
     return undefined;
