@@ -8770,3 +8770,31 @@ describe("TabHostManager — engine switch process custody", () => {
     expect(h.reaped).toEqual([101]);
   });
 });
+
+describe("authoritative runtime identity on respawn", () => {
+  it("refreshes the committed engine and profile before forking a resumed tab", async () => {
+    const rig = shutdownableForkRig();
+    let finish!: (value: Awaited<ReturnType<NonNullable<TabHostManagerDeps["refreshRuntimeIdentity"]>>>) => void;
+    const released = vi.fn();
+    const pending = new Promise<Awaited<ReturnType<NonNullable<TabHostManagerDeps["refreshRuntimeIdentity"]>>>>(resolve => { finish = resolve; });
+    const fork = vi.fn(rig.fork);
+    const manager = childManager(fork,windowRig().window,{refreshRuntimeIdentity:() => pending,engineEnv:engine => ({[ENV_ENGINE]:engine})});
+    const created = manager.createTab({workspace:"/ws",sessionId:"saved",resume:true});
+    if (!created.ok) throw new Error("create failed");
+    expect(fork).not.toHaveBeenCalled();
+    finish({identity:{engine:"codex",engineModel:"chosen",enginePreset:"read-only",modelOverride:undefined,connectionId:undefined,codexProfile:{id:"saved-account",home:"/private/account"}},release:released});
+    await waitForCi(() => expect(fork).toHaveBeenCalledTimes(1));
+    expect(created.tab).toMatchObject({engine:"codex",engineModel:"chosen",codexProfile:{id:"saved-account"}});
+    expect(fork.mock.calls[0]?.[1]).toContain("saved-account");
+    expect(released).toHaveBeenCalledOnce();
+    await manager.shutdownAllTabHosts();
+  });
+  it("refuses a missing persisted profile without forking into a default account", async () => {
+    const fork = vi.fn(shutdownableForkRig().fork);
+    const manager = childManager(fork,windowRig().window,{refreshRuntimeIdentity:async () => {throw new Error("Profile unavailable");}});
+    manager.createTab({workspace:"/ws",sessionId:"saved",resume:true});
+    await new Promise(resolve => setTimeout(resolve,10));
+    expect(fork).not.toHaveBeenCalled();
+    await manager.shutdownAllTabHosts();
+  });
+});

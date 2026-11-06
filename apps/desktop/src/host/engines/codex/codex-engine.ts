@@ -1127,6 +1127,7 @@ export class CodexEngine implements SessionEngine {
     const threadRead = asThreadRead(rawRead, this.threadId);
     const shadow = this.shadowLog !== undefined ? await this.shadowLog.list(this.threadId) : [];
     return projectCodexHistory(threadRead, shadow, {
+      nativeTurnIds: true,
       maxItems: CODEX_HISTORY_MAX_ITEMS,
       ...(this.agentCardLog ? { agentPresentations: await this.agentCardLog.list() } : {}),
       // Same degradation rule the boot projection uses (cut §2(e)): a thread
@@ -1457,6 +1458,8 @@ export class CodexEngine implements SessionEngine {
       { type: "text" as const, text: input },
       ...(options.attachments ?? []).map((attachment) => codexImageInput(attachment)),
     ];
+    try {
+    options.onInputDispatched?.();
     const request = this.client.request<TurnResult>("turn/start", {
       threadId: this.threadId,
       input: inputItems,
@@ -1467,8 +1470,6 @@ export class CodexEngine implements SessionEngine {
       } : {}),
     }, { timeoutMs: this.bounds.turnStartMs });
     const buffered: JsonRpcNotification[] = [];
-
-    try {
       // Phase A — wait for the native turn id. An abort here cannot interrupt
       // anything yet, so it only latches the intent; the response itself is
       // bounded, so a wedged server cannot park Session as busy forever.
@@ -1510,6 +1511,7 @@ export class CodexEngine implements SessionEngine {
 
       const turnId = result.turn?.id;
       if (typeof turnId !== "string" || turnId.length === 0) throw new Error("Codex turn/start returned no turn id");
+      options.onInputAccepted?.(turnId);
       // Only an accepted native turn advances the next shadow-history ordinal.
       const turnOrdinal = this.nextNativeTurnOrdinal++;
       // Phase 2 of the ack (cut §2(k).3): the server ACCEPTED a turn/start that

@@ -4281,6 +4281,7 @@ export class Session {
         }
       }
       const durableSource = this.runtimeHistory?.snapshot(liveItems);
+      this.runtimeHistory?.assertSettled();
       const canonical: HistoryItem[] = durableSource?.items ?? [...this.switchCarriedHistory, ...liveItems];
       let next: SessionEngine;
       let nextSettings: EngineSettingsSeam | undefined;
@@ -4411,7 +4412,7 @@ export class Session {
         candidateChildrenUnsubscribe = undefined;
       } else if (this.engineSwitchCoordinator) { this.backgroundChildren = undefined; this.backgroundChildrenUnsubscribe = undefined; }
       if (nextRuntime?.onOrchestrateChanged) this.onOrchestrateChanged = nextRuntime.onOrchestrateChanged;
-      this.engineSwitchImportPending = pendingImport;
+      this.engineSwitchImportPending = this.runtimeHistory ? null : pendingImport;
       this.orchestrationController?.invalidate();
       this.orchestrationController = undefined;
       this.orchestrationAdmission = undefined;
@@ -4680,7 +4681,7 @@ export class Session {
     // The RAW text is recorded — title/notices/plan-reminder augmentation is
     // model-facing, never what the user typed.
     const turnId = randomUUID();
-    const pendingTurnIdHolder: { turnId: string } = { turnId };
+    const pendingTurnIdHolder: { turnId: string; originalText: string } = { turnId, originalText: text };
     if (this.engine.id === "core") {
       this.pendingPrompt = {
         turnId,
@@ -5481,7 +5482,7 @@ export class Session {
     attachments?: ImageAttachment[],
     carriesWorktreeExitNotice = false,
     origin?: "system",
-    pendingTurnIdHolder?: { turnId: string },
+    pendingTurnIdHolder?: { turnId: string; originalText: string },
   ): Promise<void> {
     // phase-1 defect 3: the outer turn UUID is minted by
     // `acceptUserMessage` at ADMISSION (captured there into pendingPrompt,
@@ -5566,7 +5567,13 @@ export class Session {
       // engine call; nothing else carries the user's message to the engine,
       // so replacing it would silently drop what the user just asked. Only on
       // the text branch (a continueTurn has no fresh user frame).
-      if (this.engineSwitchImportPending !== null && text !== undefined) {
+      let deliveryHooks: Pick<import("./engines/session-engine.js").RunTurnOptions,"onInputDispatched" | "onInputAccepted"> = {};
+      if (this.runtimeHistory && text !== undefined) {
+        const prepared = this.runtimeHistory.prepare(turnId,pendingTurnIdHolder?.originalText ?? text,text,origin !== "system");
+        text = prepared.text;
+        deliveryHooks = prepared.hooks;
+      }
+      if (this.engineSwitchImportPending !== null && text !== undefined && origin !== "system") {
         text = `${this.engineSwitchImportPending.prompt}\n\n# user (current message)\n${text}`;
         this.engineSwitchImportPending = null;
       }
@@ -5585,7 +5592,8 @@ export class Session {
         // AgentLoop so every HistoryItem this turn appends (user frame step 0,
         // assistant/tool items per inner step ordinal, cancelled stragglers
         // included) carries {turnId, step}. Foreign engines ignore it.
-        ...(this.engine.id === "core" || this.engine.id === "claude" ? { turnId } : {}),
+        turnId,
+        ...deliveryHooks,
       };
       const stream = text === undefined ? this.engine.continueTurn?.(options) : this.engine.runTurn(text, options);
       if (stream === undefined) {
@@ -5881,6 +5889,11 @@ export class Session {
       recordResult("error");
       await persistTurnError();
       this.outbound.emit({ type: "fatal", message: `turn failed: ${describeError(error)}` });
+    } finally {
+      if (this.runtimeHistory) {
+        try { await this.runtimeHistory.hydrate(this.engine); this.runtimeHistory.assertSettled(); }
+        catch (error) { this.outbound.emit({type:"fatal",message:`Conversation recovery required: ${describeError(error)}`}); }
+      }
     }
   }
 

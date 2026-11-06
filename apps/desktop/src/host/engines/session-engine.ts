@@ -76,6 +76,8 @@ export interface RunTurnOptions {
    * transcript uses it to correlate presentation records with the turn.
    */
   turnId?: string;
+  onInputDispatched?(): void;
+  onInputAccepted?(nativeTurnId?: string): void;
 }
 
 /**

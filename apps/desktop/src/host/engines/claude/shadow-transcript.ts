@@ -252,8 +252,9 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
   async *runTurn(input: string, options: RunTurnOptions): AsyncIterable<AgentEvent> {
     const turn = this.nextTurnOrdinal++;
     const events: AgentEvent[] = [];
+    let accepted = options.onInputDispatched === undefined;
     try {
-      for await (const event of this.engine.runTurn(input, options)) {
+      for await (const event of this.engine.runTurn(input, { ...options, onInputAccepted: (nativeId) => { options.onInputAccepted?.(nativeId); accepted = true; } })) {
         events.push(event);
         yield event;
       }
@@ -264,6 +265,7 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
       // of the turn that carried it — and reads the engine's reconciled
       // snapshot rather than raw wire values.
       try {
+        if (!accepted) return;
         const projected = projectClaudeTurn(input, events, this.now, turn).map((item) => options.turnId ? { ...item, turnId: options.turnId } : item);
         this.sink.record(
           this.sessionRef,

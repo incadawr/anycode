@@ -2814,6 +2814,23 @@ void app.whenReady().then(async () => {
     // `~/.codex` plan.
     resolveDefaultCodexProfile: () => resolveCodexProfileForTab(undefined),
     engineSwitchEnabled: () => bootEnv.ANYCODE_ENGINE_SWITCH_ENABLED === "1",
+    ...(bootEnv.ANYCODE_ENGINE_SWITCH_ENABLED === "1" ? {refreshRuntimeIdentity: async (sessionId: string) => {
+      const row = await persistence?.getRootSession(sessionId);
+      if (!row) throw new Error("Session is missing");
+      const engine = row.engineId ?? "core";
+      if (engine !== "core" && engine !== "codex" && engine !== "claude") throw new Error("Unsupported session engine");
+      const pin = await resolveResumePin(row);
+      if (!pin.ok) throw new Error("Session connection is unavailable");
+      try {
+        let codexProfile: {id?:string;home?:string;authLink?:string} | null = null;
+        if (engine === "codex") {
+          const resolved = await resolveCodexProfileForTab(row.codexProfileId ?? SYSTEM_PROFILE_ID);
+          if (!resolved.ok) throw new Error("Session profile is unavailable");
+          codexProfile = resolved.codexProfile ?? null;
+        }
+        return {identity:{engine,engineModel:row.model,enginePreset:row.mode,modelOverride:engine === "core" ? row.model : undefined,connectionId:pin.connectionId,codexProfile},release:pin.release};
+      } catch (error) { pin.release?.(); throw error; }
+    }} : {}),
     prepareEngineSwitch: async (target, tab) => {
       let release: (() => void) | undefined;
       try {

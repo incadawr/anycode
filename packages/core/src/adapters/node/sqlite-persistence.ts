@@ -500,6 +500,14 @@ const MIGRATIONS: readonly Migration[] = [
       FROM history_items WHERE COALESCE(json_extract(data,'$.kind'),'') != 'turn_error' ORDER BY seq`,
     "UPDATE sessions SET active_runtime_segment='legacy'",
   ] },
+  { version: 34, statements: [
+    `CREATE TABLE runtime_inputs (
+      session_id TEXT NOT NULL, segment_id TEXT NOT NULL, turn_id TEXT NOT NULL,
+      native_turn_id TEXT, original_text TEXT NOT NULL, input_text TEXT NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('pending','dispatching','accepted','uncertain')),
+      PRIMARY KEY(session_id,segment_id,turn_id),
+      FOREIGN KEY(session_id,segment_id) REFERENCES runtime_segments(session_id,segment_id))`,
+  ] },
 ];
 
 /**
@@ -1154,9 +1162,71 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     });
   }
 
+  /** Allocate a fresh native artifact without changing the logical segment or its handoff. */
+  setRuntimeNativeReference(sessionId: string, segmentId: string, revision: number, nativeRef: string, materialized = false): void {
+    this.transaction(db => {
+      const row = db.prepare("SELECT active_runtime_segment,runtime_revision FROM sessions WHERE id=?").get(sessionId);
+      if (row?.active_runtime_segment !== segmentId || row.runtime_revision !== revision) throw new Error("Stale native runtime registration");
+      db.prepare("UPDATE runtime_segments SET native_ref=?,native_state=? WHERE session_id=? AND segment_id=?").run(nativeRef,materialized ? "materialized" : "fresh",sessionId,segmentId);
+      db.prepare("UPDATE sessions SET external_session_ref=? WHERE id=?").run(nativeRef,sessionId);
+    },"immediate");
+  }
+
+  prepareRuntimeInput(sessionId: string, turnId: string, originalText: string, input: string, importConversation: boolean): string {
+    return this.transaction(db => {
+      const row = db.prepare("SELECT active_runtime_segment FROM sessions WHERE id=?").get(sessionId);
+      if (!row?.active_runtime_segment) throw new Error("Runtime session is missing");
+      const raw = db.prepare("SELECT data FROM runtime_handoffs WHERE session_id=? AND segment_id=?").get(sessionId,row.active_runtime_segment);
+      const state = { activeSegmentId: row.active_runtime_segment as string, handoff: raw ? JSON.parse(raw.data as string) as import("../../ports/runtime-segments.js").RuntimeHandoff : null };
+      if (db.prepare("SELECT 1 FROM runtime_inputs WHERE session_id=? AND segment_id=? AND state IN ('dispatching','uncertain')").get(sessionId,state.activeSegmentId)) throw new Error("Input acceptance is uncertain. Recovery is required before another turn.");
+      const handoff = state.handoff;
+      const inject = importConversation && handoff?.state === "pending";
+      const text = inject ? `${handoff.payload}\n\n# user (current message)\n${input}` : input;
+      db.prepare("INSERT INTO runtime_inputs VALUES(?,?,?,NULL,?,?, 'pending')").run(sessionId,state.activeSegmentId,turnId,originalText,text);
+      if (inject) {
+        db.prepare("UPDATE runtime_handoffs SET data=? WHERE session_id=? AND segment_id=?").run(JSON.stringify({...handoff,turnId,originalText,injectedText:text}),sessionId,state.activeSegmentId);
+      }
+      return text;
+    },"immediate");
+  }
+
+  transitionRuntimeInput(sessionId: string, segmentId: string, turnId: string, next: "dispatching" | "accepted" | "uncertain", nativeTurnId?: string): void {
+    this.transaction(db => {
+      const row = db.prepare("SELECT active_runtime_segment FROM sessions WHERE id=?").get(sessionId);
+      if (row?.active_runtime_segment !== segmentId) throw new Error("Stale runtime input acknowledgement");
+      const input = db.prepare("SELECT state FROM runtime_inputs WHERE session_id=? AND segment_id=? AND turn_id=?").get(sessionId,segmentId,turnId);
+      if (!input || (next === "dispatching" && input.state !== "pending") || (next === "accepted" && input.state === "pending")) throw new Error("Invalid runtime input transition");
+      if (input.state === "accepted") return;
+      db.prepare("UPDATE runtime_inputs SET state=?,native_turn_id=COALESCE(?,native_turn_id) WHERE session_id=? AND segment_id=? AND turn_id=?").run(next,nativeTurnId ?? null,sessionId,segmentId,turnId);
+      const raw = db.prepare("SELECT data FROM runtime_handoffs WHERE session_id=? AND segment_id=?").get(sessionId,segmentId);
+      if (raw) {
+        const handoff = JSON.parse(raw.data as string);
+        if (handoff.turnId === turnId) db.prepare("UPDATE runtime_handoffs SET data=? WHERE session_id=? AND segment_id=?").run(JSON.stringify({...handoff,state:next}),sessionId,segmentId);
+      }
+      // A real native acknowledgement (or a reconciled checked mirror) proves materialization.
+      if (next === "accepted") db.prepare("UPDATE runtime_segments SET native_state='materialized' WHERE session_id=? AND segment_id=?").run(sessionId,segmentId);
+    },"immediate");
+  }
+
+  reconcileRuntimeInputs(sessionId: string, segmentId: string, live: readonly HistoryItem[]): void {
+    const inputs = this.open().prepare("SELECT * FROM runtime_inputs WHERE session_id=? AND segment_id=? AND state IN ('dispatching','uncertain')").all(sessionId,segmentId);
+    for (const input of inputs) {
+      const raw = this.open().prepare("SELECT data FROM runtime_handoffs WHERE session_id=? AND segment_id=?").get(sessionId,segmentId);
+      const handoff = raw ? JSON.parse(raw.data as string) : null;
+      const found = live.find(item => item.message.role === "user" && item.message.content === input.input_text &&
+        (item.turnId === input.turn_id || (typeof input.native_turn_id === "string" && (item.turnId === input.native_turn_id || item.id.startsWith(`${input.native_turn_id}:`))) || (handoff?.turnId === input.turn_id && handoff.injectedText === input.input_text)));
+      this.transitionRuntimeInput(sessionId,segmentId,input.turn_id as string,found ? "accepted" : "uncertain",found?.turnId);
+    }
+  }
+
   private mergeRuntimeHistoryInDb(db: DatabaseSync, sessionId: string, segmentId: string, items: readonly HistoryItem[]): void {
     const handoff = db.prepare("SELECT data FROM runtime_handoffs WHERE session_id=? AND segment_id=?").get(sessionId,segmentId);
-    const scoped = scopeRuntimeHistory(segmentId,items,handoff ? JSON.parse(handoff.data as string) : null);
+    const inputs = db.prepare("SELECT * FROM runtime_inputs WHERE session_id=? AND segment_id=? ORDER BY rowid").all(sessionId,segmentId);
+    const normalized = items.map(item => {
+      const input = inputs.find(value => item.turnId === value.turn_id || (typeof value.native_turn_id === "string" && (item.turnId === value.native_turn_id || item.id.startsWith(`${value.native_turn_id}:`))));
+      return input ? {...item,turnId:input.turn_id as string,...(item.message.role === "user" && item.message.content === input.input_text ? {message:{...item.message,content:input.original_text as string}} : {})} : item;
+    });
+    const scoped = scopeRuntimeHistory(segmentId,normalized,handoff ? JSON.parse(handoff.data as string) : null);
     const insert = db.prepare(`INSERT INTO runtime_transcript(session_id,segment_id,item_id,data) VALUES(?,?,?,?)
       ON CONFLICT(session_id,segment_id,item_id) DO UPDATE SET data=excluded.data`);
     for (const item of scoped) insert.run(sessionId,segmentId,item.sourceItemId!,JSON.stringify(item));

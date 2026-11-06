@@ -23,7 +23,7 @@ async function legacyDatabase() {
   await store.appendHistory("s",[{id:"original",createdAt:1,message:{role:"user",content:"available text"},turnId:"stable-turn"}]);
   await store.close();
   const db = new DatabaseSync(path);
-  db.exec("DROP TABLE runtime_handoffs; DROP TABLE runtime_boundaries; DROP TABLE runtime_transcript; DROP TABLE runtime_segments; ALTER TABLE sessions DROP COLUMN active_runtime_segment; ALTER TABLE sessions DROP COLUMN runtime_revision; DELETE FROM schema_migrations WHERE version=33");
+  db.exec("DROP TABLE runtime_inputs; DROP TABLE runtime_handoffs; DROP TABLE runtime_boundaries; DROP TABLE runtime_transcript; DROP TABLE runtime_segments; ALTER TABLE sessions DROP COLUMN active_runtime_segment; ALTER TABLE sessions DROP COLUMN runtime_revision; DELETE FROM schema_migrations WHERE version>=33");
   db.close();
   return path;
 }
@@ -54,7 +54,7 @@ describe("runtime segment schema", () => {
     expect(() => failed.ensureRuntimeSession("s")).toThrow("migration fault");
     spy.mockRestore();
     const db = new DatabaseSync(path);
-    expect(db.prepare("SELECT version FROM schema_migrations WHERE version=33").get()).toBeUndefined();
+    expect(db.prepare("SELECT version FROM schema_migrations WHERE version>=33").get()).toBeUndefined();
     expect(db.prepare("SELECT name FROM sqlite_master WHERE name='runtime_segments'").get()).toBeUndefined();
     expect((db.prepare("SELECT data FROM history_items").get() as {data:string}).data).toContain("available text");
     db.close();
@@ -155,6 +155,59 @@ describe("atomic runtime switch transaction", () => {
     expect(state.items.map(item=>item.sourceItemId)).toEqual(["original","live"]);
     expect(state.segments).toHaveLength(3);expect(state.boundaries).toHaveLength(2);
     expect(state.handoff?.id).toBe("back");expect(await store.loadHistory("s")).toEqual([]);
+    await store.close();
+  });
+});
+
+describe("durable input delivery", () => {
+  async function target() {
+    const root = mkdtempSync(join(tmpdir(),"runtime-delivery-")); roots.push(root);
+    const path = join(root,"db.sqlite");
+    const store = new SqlitePersistenceAdapter(path);
+    await store.createSession({id:"s",workspace:"/w",model:"m",mode:"plan"});
+    store.ensureRuntimeSession("s"); store.commitRuntimeSwitch("s","core",switchRecord());
+    return {store,path};
+  }
+  it("retries a pre-dispatch failure after reopening and normalizes the exact delivered input once", async () => {
+    const {store,path} = await target();
+    store.prepareRuntimeInput("s","failed","original","original",true);
+    expect(store.loadRuntimeSession("s")?.handoff?.state).toBe("pending");
+    await store.close();
+    const resumed = new SqlitePersistenceAdapter(path);
+    const injected = resumed.prepareRuntimeInput("s","retry","original","original",true);
+    expect(injected).toContain("bounded excerpt");
+    resumed.transitionRuntimeInput("s","next","retry","dispatching");
+    resumed.reconcileRuntimeInputs("s","next",[{id:"native:user",turnId:"native",createdAt:4,message:{role:"user",content:injected}}]);
+    resumed.mergeRuntimeTranscript("s","next",[{id:"native:user",turnId:"native",createdAt:4,message:{role:"user",content:injected}},{id:"native:answer",turnId:"native",createdAt:5,message:{role:"assistant",content:[{type:"text",text:"answer"}]}}]);
+    expect(resumed.loadRuntimeSession("s")?.handoff?.state).toBe("accepted");
+    expect(resumed.loadRuntimeSession("s")?.items.slice(-2)).toMatchObject([{turnId:"retry",message:{content:"original"}},{turnId:"retry"}]);
+    expect(resumed.prepareRuntimeInput("s","second","clean","clean",true)).toBe("clean");
+    await resumed.close();
+  });
+  it("stops rather than silently resending when acceptance cannot be reconciled", async () => {
+    const {store,path} = await target();
+    store.prepareRuntimeInput("s","turn","typed","typed",true);
+    store.transitionRuntimeInput("s","next","turn","dispatching");
+    await store.close();
+    const resumed = new SqlitePersistenceAdapter(path);
+    resumed.reconcileRuntimeInputs("s","next",[]);
+    expect(resumed.loadRuntimeSession("s")?.handoff?.state).toBe("uncertain");
+    expect(() => resumed.prepareRuntimeInput("s","another","typed","typed",true)).toThrow("uncertain");
+    await resumed.close();
+  });
+  it("does not consume the import on a system turn and fences stale native acknowledgements", async () => {
+    const {store} = await target();
+    expect(store.prepareRuntimeInput("s","report","report","report",false)).toBe("report");
+    store.transitionRuntimeInput("s","next","report","dispatching");
+    store.transitionRuntimeInput("s","next","report","accepted");
+    expect(store.loadRuntimeSession("s")?.handoff?.state).toBe("pending");
+    store.setRuntimeNativeReference("s","next",1,"fresh-ref");
+    expect(store.loadRuntimeSession("s")?.segments.at(-1)).toMatchObject({nativeRef:"fresh-ref",nativeState:"fresh"});
+    expect(() => store.setRuntimeNativeReference("s","legacy",0,"wrong")).toThrow("Stale");
+    store.prepareRuntimeInput("s","user","typed","typed",true);
+    store.transitionRuntimeInput("s","next","user","dispatching");
+    store.transitionRuntimeInput("s","next","user","accepted","native-turn");
+    expect(store.loadRuntimeSession("s")?.segments.at(-1)?.nativeState).toBe("materialized");
     await store.close();
   });
 });

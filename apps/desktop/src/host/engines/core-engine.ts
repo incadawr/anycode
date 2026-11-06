@@ -108,6 +108,7 @@ export class CoreEngine implements SessionEngine {
       }
     }
     try {
+      options.onInputDispatched?.();
       yield* this.options.loop.runTurn(input, options);
     } finally {
       this.failUndeliveredSteers();

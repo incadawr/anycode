@@ -1755,7 +1755,10 @@ async function bootCodexSession(
         // filters `parent_session_id IS NULL` and codex children never resume
         // (main reaps them on terminal; follow-ups are core-only), so a resume
         // is always an owner tab: no private temp dir, no exclusion.
-        const resumed = await resumeCodexEngine({
+        const state = persistence!.loadRuntimeSession(existing.id);
+        const active = state?.segments.find(segment => segment.id === state.activeSegmentId);
+        const fresh = active?.nativeState === "fresh";
+        const resumed = await (fresh ? buildCodexRuntime : resumeCodexEngine)({
           ...options,
           externalSessionRef: existing.externalSessionRef,
           // Posture survives the relaunch through the PERSISTED row, never
@@ -1770,6 +1773,7 @@ async function bootCodexSession(
             origin: "persisted",
           },
         });
+        if (fresh) persistence!.setRuntimeNativeReference(existing.id,state!.activeSegmentId,state!.revision,resumed.threadId);
         // Persist whatever the resume actually settled on (the stored model may
         // have been removed from the catalog and fallen back) — only after the
         // native resume and read have both succeeded.
@@ -1837,6 +1841,10 @@ async function bootCodexSession(
           // pre-profiles build there.
           ...(codexProfileArgs.profileId !== undefined ? { codexProfileId: codexProfileArgs.profileId } : {}),
         });
+        if (engineSwitchEnabled && args.child === undefined) {
+          const state = persistence!.ensureRuntimeSession(sessionMeta.id);
+          persistence!.setRuntimeNativeReference(sessionMeta.id,state.activeSegmentId,state.revision,created.threadId);
+        }
         return { ...created, sessionMeta };
       })()).catch((error: unknown) => {
     // Cross-review F2 (review fix): the connect phase runs
@@ -2406,7 +2414,10 @@ async function bootClaudeSession(
         if (existing.engineId !== "claude" || typeof existing.externalSessionRef !== "string" || existing.externalSessionRef.length === 0) {
           throw new Error(`Claude session ${args.sessionId} has no resumable native session`);
         }
-        const resumed = await resumeClaudeEngine({
+        const state = persistence!.loadRuntimeSession(existing.id);
+        const active = state?.segments.find(segment => segment.id === state.activeSegmentId);
+        const fresh = active?.nativeState === "fresh";
+        const resumed = await (fresh ? buildClaudeRuntime : resumeClaudeEngine)({
           ...options,
           externalSessionRef: existing.externalSessionRef,
           // Posture survives the resume through the PERSISTED preset id (same
@@ -2415,6 +2426,7 @@ async function bootClaudeSession(
           // becomes the default preset rather than failing the resume.
           selection: { model: existing.model, presetId: existing.mode, origin: "persisted" },
         });
+        if (fresh) persistence!.setRuntimeNativeReference(existing.id,state!.activeSegmentId,state!.revision,resumed.sessionRef);
         return { ...resumed, sessionMeta: existing };
       })()
     : (async () => {
@@ -2485,6 +2497,11 @@ async function bootClaudeSession(
   // (`getRootSession` looks up `WHERE id = ?`), and a fresh boot's
   // `sessionMeta` is `null` — so `rowId` already equals this expression for
   // both branches.
+  if (engineSwitchEnabled && args.child === undefined && connected.sessionMeta === null) {
+    connected.sessionMeta = await persistence!.createSession({id:rowId,...sessionRow,model:connected.model,mode:connected.presetId as PermissionMode});
+    const state = persistence!.ensureRuntimeSession(rowId);
+    persistence!.setRuntimeNativeReference(rowId,state.activeSegmentId,state.revision,connected.sessionRef);
+  }
   const rowWriter = new ClaudeSessionRowWriter({
     rowId,
     identity: sessionRow,

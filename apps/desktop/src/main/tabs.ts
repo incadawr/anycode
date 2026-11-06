@@ -703,6 +703,7 @@ export function guardedHostForwarder(stream: NodeJS.WriteStream, usable: boolean
 }
 
 export interface TabHostManagerDeps {
+  refreshRuntimeIdentity?: (sessionId: string) => Promise<{identity: Pick<TabHost,"engine" | "engineModel" | "enginePreset" | "modelOverride" | "connectionId" | "codexProfile">;release?: () => void}>;
   hostOutputUsable?: (stream: NodeJS.WriteStream) => boolean;
   hostLogStream?: (stream: "stdout" | "stderr") => ((chunk: Buffer) => void) & { end(): void };
   /**
@@ -1693,6 +1694,7 @@ export class TabHostManager {
     tab: TabHost,
     opts: {
       firstSpawn: boolean;
+      identityRefreshed?: boolean;
       priorEffort?: ReasoningEffort;
       onDeferredInitialSpawn?: () => void;
       onDeferredFinished?: () => void;
@@ -1721,6 +1723,13 @@ export class TabHostManager {
     // this very tab is creating has nothing to show a missing-folder error
     // against, so only it may be rolled back to keep the caller's draft.
     const newSession = !resume;
+    const refresh = resume && !opts.identityRefreshed && tab.childOf === undefined
+      ? this.deps.refreshRuntimeIdentity?.(tab.sessionId).then(result => {
+          try {
+            if (this.spawnAttempts.get(tab) !== attempt || this.quitting || this.tabs.get(tab.tabId) !== tab || tab.state !== "running" || tab.proc !== null) throw new Error("Stale runtime identity refresh");
+            Object.assign(tab,result.identity);
+          } finally { result.release?.(); }
+        }) : undefined;
     const args = resume ? ["--resume", tab.sessionId] : ["--session", tab.sessionId];
     // the draft choice rides argv only on the spawn that CREATES the
     // session. Every later spawn is a `--resume`, where the persisted session row
@@ -1775,8 +1784,8 @@ export class TabHostManager {
     // under this pin (the custody defect). Surface it as a host-exit so the
     // renderer's replacement flow (F1) can recover; never respawn a refused fork.
     const baseEnv = this.env(tab.connectionId);
-    if (baseEnv === undefined) {
-      const pending = this.deps.waitForHostEnv?.(tab.connectionId);
+    if (refresh || baseEnv === undefined) {
+      const pending = refresh ?? this.deps.waitForHostEnv?.(tab.connectionId);
       if (pending) {
         void pending.then(() => {
           if (this.spawnAttempts.get(tab) !== attempt || this.quitting || this.tabs.get(tab.tabId) !== tab || tab.state !== "running" || tab.proc !== null) {
@@ -1786,7 +1795,7 @@ export class TabHostManager {
             opts.onDeferredFinished?.();
             return;
           }
-          const result = this.spawnTabHost(tab, opts);
+          const result = this.spawnTabHost(tab, {...opts,identityRefreshed:opts.identityRefreshed || refresh !== undefined});
           if (result === false) {
             // A fork that cannot run at all leaves no tab to retry against (the
             // binding would answer `already_open`), resume included.

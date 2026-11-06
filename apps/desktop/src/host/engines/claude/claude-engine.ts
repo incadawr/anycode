@@ -1079,6 +1079,7 @@ export class ClaudeEngine implements SessionEngine {
   }
 
   async *runTurn(input: string, options: RunTurnOptions): AsyncIterable<AgentEvent> {
+    let inputDispatched = false;
     const turn = ++this.turnNumber;
     if (this.terminalError !== null || this.disposed) {
       yield* this.terminalEvents(turn, this.terminalError ?? new Error("Claude engine is closed"));
@@ -1329,6 +1330,8 @@ export class ClaudeEngine implements SessionEngine {
         // input — its line-start slashes are de-fanged so the root session's
         // slash interpretation (w0-17) cannot execute a model-authored
         // command. Human input goes out byte-identical.
+        options.onInputDispatched?.();
+        inputDispatched = true;
         this.client.sendUserMessage(
           userMessageContent(
             options.origin === "system" ? neutralizeSystemOriginSlashes(input) : input,
@@ -1439,6 +1442,7 @@ export class ClaudeEngine implements SessionEngine {
             }
           }
         }
+        if (inputDispatched && (raced.value.value.type === "assistant" || (raced.value.value.type === "system" && raced.value.value.subtype === "init"))) options.onInputAccepted?.();
         for (const event of translator.onMessage(raced.value.value)) {
           if (event.type === "loop_end") terminal = true;
           yield event;
