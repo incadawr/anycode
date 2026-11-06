@@ -22,6 +22,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Claude sessions correctly apply reasoning effort when opened through the Sessions API or changed in a tab.
 - OpenCode Go checks verify keys without generating tokens, explain unexpected responses, and discard stale results after connection changes; other providers explain unavailable checks, and settings errors hide internal details.
 - Plugin account sources no longer cause plugin grants and update preferences to be lost when settings are opened and saved by 0.0.77.
+- Claude restart recovery keeps unsent messages unique and durable across restarts, and Responses stream diagnostics keep startup details.
+- Plugin and MCP panels show accurate trust labels, unreadable-scope origins and no duplicate diagnostics.
 
 ## [0.0.85] - 2026-11-06
 
