@@ -21,3 +21,8 @@ it("classifies input admission errors with safe actionable guidance", async () =
     expect(classifyProviderFailure(error)).toMatchObject({ code: "input_limit", retryable: false, safe: { message: expect.stringMatching(/Reduce the prompt or compact/) } });
   }
 });
+
+it("bounds a large context override by the provider context", () => {
+  const large = { ...request, system: "x".repeat(1_400_000), maxOutputTokens: 2000000, contextWindowTokens: 2000000 };
+  expect(applyGoRequestLimits(large, port({ context: 500000 })).maxOutputTokens).toBeLessThan(100000);
+});
