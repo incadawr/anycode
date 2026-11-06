@@ -13,6 +13,8 @@ It intentionally differs from local `working-docs/`:
 ## Documents
 
 - [Crash diagnostics](crash-diagnostics.md) — local dump and log locations and privacy.
+- [Responses stream capture](responses-stream-capture.md) — an optional local proxy
+  for diagnosing missing reasoning or answer text from gateways.
 - [Automation smoke](automation-smoke.md) — dev-only loopback automation,
   GUI smoke execution, and release-boundary verification.
 - [Codex onboarding](codex-onboarding.md) — how a user enables the Codex
