@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createDesktopStore } from "./store.js";
 import { engineSwitchChoices, ENGINE_SWITCH_CONSEQUENCE } from "./components/EngineSwitchPicker.js";
 import type { EngineSwitchProjection } from "../../shared/protocol.js";
+import { rewriteToastText } from "./toasts.js";
 
 const projection: EngineSwitchProjection = { engine: null, shell: null, model: "chosen", mode: "plan", reasoningEffort: "off", imageInput: false, imageFallback: false, contextWindowAssumed: false, modelSettingsConnectionId: "connection", steering: null, orchestration: { enabled: false, available: false }, pinnedConnection: { connectionId: "connection", providerId: "custom" } };
 function ready() {
@@ -11,6 +12,18 @@ function ready() {
 }
 
 describe("correlated engine selection", () => {
+  it("retains the original refusal for diagnostics and presents a readable toast after releasing pending", () => {
+    const store = ready();
+    store.getState().beginEngineSwitch("pick", {engine:"codex",model:"chosen"});
+    store.getState().applyHostMessage({type:"engine_switch_failed",requestId:"pick",generation:4,reason:"stale host generation"});
+    expect(store.getState().pendingEngineSwitch).toBeNull();
+    expect(store.getState().model).toBe("old");
+    const notice = store.getState().notice!;
+    expect(notice).toEqual({kind:"engine_switch_failed",text:"stale host generation"});
+    expect(rewriteToastText(notice.kind,notice.text)).toBe("The session reconnected. Try switching again.");
+    expect(store.getState().beginEngineSwitch("retry", {engine:"codex",model:"chosen"})).toBe(4);
+  });
+
   it.each(["setHostExited","setAwaitingPort","setPortClosed","setAwaitingHostReady"] as const)("releases pending selection on %s and permits a retry after reconnect", transition => {
     const store = ready();
     const target = {engine:"codex" as const,model:"chosen"};

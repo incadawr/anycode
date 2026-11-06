@@ -116,13 +116,9 @@ export function toastGlyph(kind: ToastKind): ToastGlyph {
 
 /**
  * Copy enrichment (ui-roadmap §4-R8(b): "errors name the fix") — display-side
- * ONLY, exact-full-string match, passthrough on any miss. This keeps every
- * store SET site and the wire byte-untouched: the three rewritable inputs are
- * (1) the host's single mode_change_rejected reason (host/session.ts:400 —
- * its only emit site) and (2,3) store.ts's two turn_rejected constants. Any
- * other text — including future/unknown host reasons — renders verbatim
- * (wire truth wins over polish). permission_settled/compaction/microcompact
- * copy already names outcome+cause: kept.
+ * ONLY: known internal reasons get short, actionable sentences. The store
+ * and wire retain the original diagnostics. Engine-switch error wrappers
+ * also hide implementation details; other unknown reasons pass through.
  */
 const TOAST_REWRITES: ReadonlyArray<{ kind: ToastKind; match: string; text: string }> = [
   {
@@ -147,7 +143,38 @@ const TOAST_REWRITES: ReadonlyArray<{ kind: ToastKind; match: string; text: stri
   },
 ];
 
+const ENGINE_SWITCH_REWRITES = new Map<string, string>([
+  ["stale host generation", "The session reconnected. Try switching again."],
+  ["stale switch request", "The session changed. Try switching again."],
+  ["session changed during engine switch", "The session changed. Try switching again."],
+  ["duplicate engine switch request", "This switch was already requested. Choose an engine again."],
+  ["duplicate engine switch RPC", "This switch was already requested. Choose an engine again."],
+  ["duplicate request", "This switch was already requested. Choose an engine again."],
+  ["prepared engine does not match the requested engine", "The selected engine could not start. Try again."],
+  ["invalid target identity", "The selected engine could not start. Try again."],
+  ["invalid runtime transaction", "The selected engine could not start. Try again."],
+  ["a turn is running", "Finish or stop the current turn before switching engines."],
+  ["a child session is attached", "Switch engines from the parent session."],
+  ["children are running", "Wait for child sessions to finish before switching engines."],
+  ["session is busy or children are running", "Finish the current work before switching engines."],
+  ["engine switch is not available in this host", "Engine switching is unavailable in this session."],
+  ["Session posture unavailable", "Session permissions are unavailable. Reconnect and try again."],
+  ["switch is not prepared", "The session changed. Try switching again."],
+  ["switch is not committed", "The session changed. Try switching again."],
+  ["could not commit engine identity", "Could not save the engine change. Try again."],
+  ["Engine identity commit failed", "Could not save the engine change. Try again."],
+  ["Engine switch response timed out", "The engine took too long to respond. Try again."],
+]);
+
 export function rewriteToastText(kind: ToastKind, text: string): string {
+  if (kind === "engine_switch_failed") {
+    const message = ENGINE_SWITCH_REWRITES.get(text);
+    if (message) return message;
+    if (/^already running the "(?:core|codex|claude)" engine$/.test(text)) return "This engine is already selected.";
+    if (text.startsWith("target orchestration ")) return "Turn off orchestration before switching to this engine.";
+    if (text.startsWith("could not read current transcript:")) return "Could not read the conversation. Try again.";
+    if (text.startsWith("engine switch failed:")) return "Could not switch engines. Try again.";
+  }
   const hit = TOAST_REWRITES.find((r) => r.kind === kind && r.match === text);
   return hit ? hit.text : text;
 }
