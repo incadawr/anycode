@@ -1,3 +1,4 @@
+import { nativeSessionsEnabledForBoot } from "./host-env.js";
 import { claudeOrchestrationEnabled } from "./claude-orchestration-feature.js";
 import { connectionContextWindow } from "../shared/connection-context-window.js";
 import type { RecognizerCatalogInfo } from "./host-env.js";
@@ -1729,6 +1730,7 @@ async function buildHostEnvFor(current: AnycodeSettings): Promise<NodeJS.Process
       getAccessToken: getAccessTokenFor,
     });
   const env = await buildHostEnv({
+    nativeSessionsEnabled: nativeSessionsEnabledForBoot(bootEnv, app.isPackaged),
     bootEnv,
     settings: current,
     getSecret,

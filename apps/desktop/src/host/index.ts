@@ -1,3 +1,4 @@
+import { takeNativeSessionsCarrier } from "../shared/session-peers.js";
 import { mapProgressToEvent } from "@anycode/core";
 import { savedNativeRecovery } from "./native-base.js";
 import { claudeOrchestrationBootEnabled } from "../shared/claude-orchestration-feature.js";
@@ -1253,6 +1254,9 @@ function buildChildSessionOptions(
     },
   };
 }
+
+/** Boot capability only; peer tools are registered by a separate adapter. */
+export const nativeSessionsEnabled = takeNativeSessionsCarrier(process.env);
 
 const engineSwitchEnabled = process.env.ANYCODE_ENGINE_SWITCH_ENABLED === "1";
 const switchHostGeneration = Number(process.env.ANYCODE_HOST_GENERATION);
