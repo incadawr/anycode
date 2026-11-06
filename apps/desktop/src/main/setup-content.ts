@@ -234,7 +234,7 @@ export function applySetupImport(plan: SetupPlan, choices: { connections: Record
     const { name: localName, provider: _provider, proxy: _proxy, ...fields } = entry;
     const id = previous?.id ?? `conn-${randomUUID()}`;
     const label = previous ? localName : uniqueName(localName, settings.provider.connections.map((c) => c.label?.trim() || settings.provider.custom?.find((p) => p.id === c.providerId)?.name || getBuiltinCatalog().providers.find((p) => p.id === c.providerId)?.name || ""));
-    const { baseUrl: _baseUrl, authOptional: _authOptional, model: _model, transport: _transport, reasoningEffort: _effort, modelOverrides: _overrides, modelCapabilities: _capabilities, proxyRef: _proxyRef, proxyUrl: _proxyUrl, lastHealth: _health, lastQuota: _quota, modelsFetchedAt: _fetched, ...rest } = previous ?? {} as ProviderConnection;
+    const { baseUrl: _baseUrl, authOptional: _authOptional, model: _model, transport: _transport, reasoningEffort: _effort, modelOverrides: _overrides, modelCapabilities: _capabilities, proxyRef: _proxyRef, proxyUrl: _proxyUrl, lastHealth: _health, lastQuota: _quota, lastGoQuota: _goQuota, modelsFetchedAt: _fetched, ...rest } = previous ?? {} as ProviderConnection;
     const connection: ProviderConnection = { ...rest, ...fields, id, providerId, label, ...(entry.provider.catalogId && !entry.provider.catalogBaseUrlOnly ? { baseUrl: entry.provider.baseUrl } : {}), ...(proxyRef ? { proxyRef } : {}) };
     if (previous) settings.provider.connections[settings.provider.connections.indexOf(previous)] = connection; else settings.provider.connections.push(connection);
     remap.set(entry.name, id);

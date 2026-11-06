@@ -2834,6 +2834,18 @@ describe("handleConnectionUpdate — re-point clears lastQuota (follow-up)", () 
     resetConnectionQuotaThrottles();
   }
 
+  it.each(["key", "remove", "endpoint", "label"])("handles a Go-only cache on %s", async action => {
+    await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "m" });
+    const settings = (await loadSettings(settingsPath)).settings;
+    settings.provider.connections[0]!.lastGoQuota = { observedAt: "2026-01-01T00:00:00Z", windows: { monthly: { usedPercent: 7 } } };
+    await saveSettings(settingsPath, settings);
+    const deps = makeDeps({ catalogIds: CATALOG_IDS });
+    if (action === "key") await handleSetSecret(deps, { key: "provider.connection.conn-1.apiKey", value: SECRET_VALUE });
+    else if (action === "remove") await handleClearSecret(deps, { key: "provider.connection.conn-1.apiKey" });
+    else await handleConnectionUpdate(deps, action === "label" ? { id: "conn-1", label: "Work" } : { id: "conn-1", baseUrl: "https://api.kimi.com/v1" });
+    expect((await loadSettings(settingsPath)).settings.provider.connections[0]?.lastGoQuota !== undefined).toBe(action === "label");
+  });
+
   it("changing baseUrl clears lastQuota (a quota observed at the OLD endpoint must not linger)", async () => {
     await handleConnectionCreate(makeDeps({ catalogIds: CATALOG_IDS }), { providerId: "z-ai", model: "m" }); // conn-1
     await seedLastQuota(80);

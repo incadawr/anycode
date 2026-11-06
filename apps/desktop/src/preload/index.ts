@@ -1029,6 +1029,8 @@ contextBridge.exposeInMainWorld("anycode", {
     setupApply: (choices: unknown) => ipcRenderer.invoke("anycode:setup-apply", choices),
     refreshMiniMaxQuota: (connectionId?: string): Promise<void> =>
       ipcRenderer.invoke("anycode:minimax-quota-refresh", connectionId) as Promise<void>,
+    refreshOpenCodeGoQuota: (connectionId?: string): Promise<void> =>
+      ipcRenderer.invoke("anycode:opencode-go-quota-refresh", connectionId) as Promise<void>,
     refreshGlmQuota: (connectionId?: string): Promise<void> =>
       ipcRenderer.invoke("anycode:glm-quota-refresh", connectionId) as Promise<void>,
     get: (): Promise<SettingsSnapshot> =>

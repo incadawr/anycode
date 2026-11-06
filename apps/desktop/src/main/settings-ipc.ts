@@ -1319,11 +1319,12 @@ function withoutConnectionQuota(settings: AnycodeSettings, connectionId: string)
     provider: {
       ...settings.provider,
       connections: settings.provider.connections.map((connection) => {
-        if (connection.id !== connectionId || connection.lastQuota === undefined) {
+        if (connection.id !== connectionId || (connection.lastQuota === undefined && connection.lastGoQuota === undefined)) {
           return connection;
         }
         const cleared = { ...connection };
         delete cleared.lastQuota;
+        delete cleared.lastGoQuota;
         return cleared;
       }),
     },
@@ -2076,6 +2077,7 @@ export async function handleConnectionUpdate(deps: SettingsIpcDeps, raw: unknown
     // baseUrl change below applies to a stale `models` list.
     if (endpointChanged) {
       delete updatedConnection.lastQuota;
+      delete updatedConnection.lastGoQuota;
       // A coalesced observation from the OLD endpoint must not be written back
       // by the throttle's trailing timer or the quit flush.
       discardPendingConnectionQuota(existing.id);
