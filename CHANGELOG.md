@@ -7,6 +7,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.81] - 2026-11-06
+
 ### Fixed
 
 - A continued background subagent no longer stays stuck on "turn 0 · 0 tool calls" in the Subagents pane.
