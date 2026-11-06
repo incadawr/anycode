@@ -792,3 +792,28 @@ it("selects and clears only filtered models and requires a selection", async () 
     expect(container.querySelector<HTMLButtonElement>(".connection-drawer-model-done")!.disabled).toBe(true);
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
+
+it("shows saved Go context and leaves absent snapshot pricing unknown", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { parseOpenCodeGoSnapshot } = await import("@anycode/core/model-route");
+  const { getBuiltinCatalog } = await import("@anycode/core/catalog");
+  const fixture = JSON.parse(await readFile(new URL("../../../../../../packages/core/src/provider/__fixtures__/opencode-go-models.json", import.meta.url), "utf8"));
+  const grok = fixture.data.find((row: { id: string }) => row.id === "grok-4.7");
+  grok.limit.context = 222000;
+  delete grok.cost;
+  const parsed = parseOpenCodeGoSnapshot(fixture, "2026-11-05T00:00:00Z");
+  if (!parsed.ok) throw new Error("invalid fixture");
+  const provider = getBuiltinCatalog().providers.find(p => p.id === "opencode")!;
+  const catalog = [{ ...provider, authKind: "api_key" as const, catalogBaseUrl: provider.baseUrl }];
+  const connection = { id: "go", providerId: "opencode", model: "grok-4.7", modelRoutes: parsed.snapshot };
+  const snapshot = { settings: cloneDefaults(), readOnly: false, secrets: [], envOverrides: [], providerReady: true, catalog };
+  const store = createStore(() => ({ snapshot, oauthPendingProviderId: null, load: vi.fn() })) as unknown as SettingsStoreApi;
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(ConnectionDrawerFields, { mode: "edit", editConnection: connection, catalog, connections: [connection], secrets: [], readOnly: false, store })));
+    const context = [...container.querySelectorAll("label")].find(label => label.textContent?.includes("Context window (tokens)"))?.querySelector("input");
+    expect(context?.placeholder.replace(/\D/g, "")).toBe("222000");
+    expect(container.querySelector<HTMLInputElement>('input[aria-label="grok-4.7 Input"]')?.value).toBe("");
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});
