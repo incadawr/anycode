@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ConnectionTargets } from "@anycode/core";
+import { createSessionPeerTools, type ConnectionTargets } from "@anycode/core";
 import { CodexDynamicToolBridge } from "./codex/dynamic-tool-bridge.js";
 import { createBridgePresentationStamp } from "./claude/bridge-presentation-stamp.js";
 
@@ -14,7 +14,7 @@ async function bridge(engine: "codex" | "claude") {
 describe("native connection catalog", () => {
   it("Codex declares and calls the catalog without profiles, browser or child port", async () => {
     const { read, connections } = await bridge("codex");
-    const door = new CodexDynamicToolBridge([], undefined, undefined, undefined, undefined, undefined, connections);
+    const door = new CodexDynamicToolBridge([], undefined, undefined, undefined, undefined, undefined, undefined, connections);
     expect(door.declarations()).toEqual([expect.objectContaining({ name: "anycode_list_connections" })]);
     const respond = { result: vi.fn(), error: vi.fn() };
     const active = { threadId: "t", turnId: "u" };
@@ -51,7 +51,7 @@ describe("native connection catalog", () => {
 
   it("Codex Stop refuses a read that settles after cancellation", async () => {
     const { connections } = await bridge("codex");
-    const door = new CodexDynamicToolBridge([], undefined, undefined, undefined, undefined, undefined, connections);
+    const door = new CodexDynamicToolBridge([], undefined, undefined, undefined, undefined, undefined, undefined, connections);
     const respond = { result: vi.fn(), error: vi.fn() };
     const active = { threadId: "t", turnId: "u" };
     const pending = door.handle({ id: 1, method: "item/tool/call", params: { ...active, callId: "c", tool: "anycode_list_connections", arguments: {} } }, respond, active, () => {});
@@ -59,6 +59,37 @@ describe("native connection catalog", () => {
     await pending;
     expect(respond.result.mock.lastCall![0]).toMatchObject({ success: false });
     expect(JSON.stringify(respond.result.mock.calls)).not.toContain("codex-own-model");
+  });
+
+  it.each(["codex", "claude"] as const)("%s keeps peer dispatch separate from catalog reads", async engine => {
+    const { connections, read } = await bridge(engine);
+    const peers = {
+      tools: createSessionPeerTools(() => ({ mode: "build" })),
+      call: vi.fn(async (_name: string, _raw: unknown, _signal: AbortSignal, _id: string) => ({ ok: false as const, error: "Peer access refused" })),
+    };
+    const signal = new AbortController().signal;
+    if (engine === "codex") {
+      const door = new CodexDynamicToolBridge([], undefined, undefined, undefined, undefined, undefined, peers, connections);
+      expect(door.declarations().map(d => d.name)).toEqual([
+        "anycode_sessions_list", "anycode_session_open", "anycode_session_send", "anycode_who_edits", "anycode_list_connections",
+      ]);
+      const active = { threadId: "t", turnId: "u" };
+      const respond = { result: vi.fn(), error: vi.fn() };
+      for (const [callId, tool] of [["read", "anycode_list_connections"], ["peer", "anycode_session_send"]]) {
+        await door.handle({ id: 1, method: "item/tool/call", params: { ...active, callId, tool, arguments: {} } }, respond, active, () => {});
+      }
+      expect(respond.result.mock.calls.map(([r]) => r.success)).toEqual([true, false]);
+    } else {
+      const door = createBridgePresentationStamp({ catalog: [], resolveCallCatalog: async () => [], onEvent: () => {}, peers, connections });
+      expect(door.listTools().map(d => d.name)).toEqual([
+        "sessions_list", "session_open", "session_send", "who_edits", "list_connections",
+      ]);
+      expect((await door.callTool("list_connections", {}, signal, { toolUseId: "read" })).isError).toBe(false);
+      expect((await door.callTool("session_send", {}, signal, { toolUseId: "peer" })).isError).toBe(true);
+    }
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(peers.call).toHaveBeenCalledTimes(1);
+    expect(peers.call.mock.calls[0]?.[0]).toBe("SessionSend");
   });
 
   it("bounds output, sanitizes failures and refuses aborted or malformed reads", async () => {
