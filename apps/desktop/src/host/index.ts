@@ -211,6 +211,7 @@ import {
   createModelAskClassifier,
   parseRunAllowBash,
   RuleAwarePermissionEngine,
+  type SessionPermissionRules,
   RunAllowBashPermissionEngine,
   SafeCommandPermissionEngine,
   SqlitePersistenceAdapter,
@@ -463,6 +464,8 @@ import { buildCheckpointService } from "./checkpoints.js";
 import { GitBridge } from "./git-bridge.js";
 import { createConnectionModelSettings } from "./connection-model-settings.js";
 import { buildCoreRuntime, buildCodexRuntime, buildClaudeRuntime } from "./engine-switch-runtime.js";
+import { buildCoreLaunchOptions, buildCodexLaunchOptions, buildClaudeLaunchOptions } from "./engine-launch-options.js";
+import { createSwitchEngineFactory, type SwitchEngineFactoryContext } from "./engine-switch-factory.js";
 import { beginEngineBootstrap, type EngineBootstrap } from "./engines/bootstrap.js";
 import { selectEnginePlugin, type EnginePlugin } from "./engines/registry.js";
 import { resumeCodexEngine } from "./engines/codex/codex-engine.js";
@@ -500,8 +503,8 @@ import { ClaudeShadowTranscriptEngine, SqliteClaudeShadowTranscript } from "./en
 import { ClaudeSessionRowWriter } from "./engines/claude/session-row.js";
 import { createCodexSessionTitlePersistence, createCoreSessionTitlePersistence } from "./session-title-persistence.js";
 import { createCompactionRecordLog, type CompactionRecordSeam } from "./compaction-records.js";
-import { claudeAgentPermissionMode, claudeChildPresetId, codexChildAutoAcceptsWorkspacePatches, codexChildPosture } from "./engines/child-permission-map.js";
-import { checkClaudeBinaryTrustOnDisk, CLAUDE_AGENT_BRIDGE_PROMPT } from "./engines/claude/claude-client.js";
+import { claudeAgentPermissionMode, claudeChildPresetId, codexChildPosture } from "./engines/child-permission-map.js";
+import { checkClaudeBinaryTrustOnDisk } from "./engines/claude/claude-client.js";
 import { createEngineChildRunner } from "./engine-children.js";
 // the host-side consent reader. Host never WRITES settings.json
 // (main is the sole writer, host/boot.ts:239-245) — this is the sanctioned
@@ -1247,6 +1250,73 @@ function buildChildSessionOptions(
   };
 }
 
+/** Capture trusted boot inputs once; foreign hosts need an explicit core resolver. */
+function hostSwitchFactory(
+  sessionId: string,
+  broker: IpcPermissionBroker,
+  rules: SessionPermissionRules,
+  mcpSecrets: McpSecretResolver,
+  resolveCore: SwitchEngineFactoryContext["resolveCore"] = async () => undefined,
+) {
+  // One opt-in for all real-engine boots. Keep unavailable-host refusal by default.
+  if (process.env.ANYCODE_ENGINE_SWITCH_ENABLED !== "1") return undefined;
+  const sourceEnv: NodeJS.ProcessEnv = { ...process.env, PATH: hostMcpLoginPath ?? process.env.PATH };
+  const home = hostProfileHome();
+  const settingsPath = hostSettingsPathOverride();
+  const platform = process.platform;
+  const argv = process.argv.slice(2);
+  const projectTrusted = hostWorkspaceTrust.projectTrusted;
+  const fs = new NodeFileSystemAdapter();
+  const classifier = parseAskClassifierEnvKind(sourceEnv[ENV_PERMISSION_CLASSIFIER]);
+  const engineBroker = decorateEngineBroker(broker, classifier?.kind === "command" ? classifier.boot : undefined, {
+    userContext: () => classifierSessionRef?.recentHumanUserTurns() ?? [],
+    isBound: () => classifierSessionRef !== null,
+    cwd: workspace,
+    emit: (event) => classifierSessionRef?.emitAgentEvent(event),
+  });
+  const forward = (engine: "codex" | "claude") => prepareEngineMcpForward({
+    fs, workspace, home, tmpDir: tmpdir(), pid: process.pid, engines: [engine],
+    loginPath: sourceEnv.PATH, projectTrusted, secrets: mcpSecrets,
+  });
+  return createSwitchEngineFactory({
+    engineSwitchEnabled: true, workspace, sessionId, resolveCore,
+    resolveCodex: async () => {
+      const binaryPath = sourceEnv[ENV_CODEX_BIN];
+      if (!binaryPath?.trim()) return undefined;
+      const profile = resolveCodexProfile(parseCodexProfileArgs(argv), resolveCodexProfilesHomeOverride(sourceEnv) ?? undefined);
+      if (profile !== null) {
+        const reason = assertCodexProfileHome(profile);
+        if (reason !== null) throw new Error(`Codex profile home rejected: ${reason}`);
+      }
+      const mcp = await forward("codex");
+      return { options: {
+        ...buildCodexLaunchOptions({
+          workspace, binaryPath, sourceEnv, broker: engineBroker, fs, rules,
+          profile: profile === null ? null : { home: profile.home, homeTrust: () => assertCodexProfileHome(profile) },
+          binaryTrust: path => checkCodexBinaryTrustOnDisk(path, platform, readTrustedBinaryConsentsSync(settingsPath)),
+          shadowLog: new SqliteCodexShadowLog(persistence!),
+          forwardOptions: { mcpForward: { ...(mcp.codexServers !== null ? { servers: mcp.codexServers } : {}), notices: mcp.notices } },
+        }),
+        selection: { presetId: "read-only", origin: "draft" },
+      }, cleanup: mcp.cleanupFile };
+    },
+    resolveClaude: async () => {
+      const binaryPath = sourceEnv[ENV_CLAUDE_BIN];
+      if (!binaryPath?.trim()) return undefined;
+      const mcp = await forward("claude");
+      return { options: {
+        ...buildClaudeLaunchOptions({
+          workspace, binaryPath, sourceEnv, broker: engineBroker, projectTrusted,
+          profileDir: resolveClaudeConfigDir(), mcpConfigPath: mcp.claudeConfigPath,
+          bootNotices: mcp.notices, agentCatalogNonEmpty: false,
+          binaryTrust: path => checkClaudeBinaryTrustOnDisk(path, platform, readTrustedBinaryConsentsSync(settingsPath)),
+        }),
+        selection: { presetId: "read-only", origin: "draft" },
+      }, cleanup: mcp.cleanupFile };
+    },
+  });
+}
+
 /**
  * Native Codex branch. Keep this separate from `boot()` so a subscription-only
  * host never constructs the provider/core graph just to reach its session.
@@ -1507,79 +1577,25 @@ async function bootCodexSession(
     }
   }
 
-  const options = {
-    bootstrap,
-    // the bridges get the classifying decorator when a
-    // classifier is configured; Session keeps the raw broker.
-    broker: classifierBroker,
-    // the codex approval bridge auto-accepts a file change only
-    // when every change is an add/update, every target is realpath-provably
-    // inside the workspace, AND the session's policy already allows workspace
-    // writes — for a child, the inherited core mode (edit/auto/yolo,
-    // `codexChildAutoAcceptsWorkspacePatches`); a root session keeps `false`,
-    // so for it only a seeded Edit/Write always-allow rule can ever vouch for
-    // a patch. Delete-kind changes still ask (cross-review M1: edit-parity
-    // only — neither core's Write/Edit containment nor Claude's acceptEdits
-    // silently deletes).
-    patchAutoApproval: {
-      fs: new NodeFileSystemAdapter(),
-      workspaceWritesAllowed: args.child !== undefined && codexChildAutoAcceptsWorkspacePatches(args.child.initialMode),
-      rules,
-    },
-    binaryPath,
-    cwd: workspace,
-    workspace,
-    // a codex child has no native turn cap — the profile budget is
-    // surfaced once as a visible engine_notice warning on the first turn,
-    // never enforced and never sent as a protocol field.
-    ...(args.child?.maxTurns !== undefined
-      ? {
-          bootNotices: [
-            {
-              type: "engine_notice" as const,
-              level: "warning" as const,
-              message: `Profile maxTurns (${args.child.maxTurns}) is not enforced for the codex engine; the child is bounded only by its time/stall limits.`,
-            },
-          ],
-        }
-      : {}),
-    ...(codexAgentBridge ? { agentBridge: codexAgentBridge } : {}),
-    agentCardLog,
+  const options = { bootstrap, ...buildCodexLaunchOptions({
+    broker: classifierBroker, workspace, binaryPath, rules, fs: new NodeFileSystemAdapter(), child: args.child,
+    agentBridge: codexAgentBridge, agentCardLog, shadowLog, processOwnership, tempDir: codexChildTempDir,
+    sourceEnv: { ...process.env, PATH: hostMcpLoginPath ?? process.env.PATH },
+    binaryTrust: (path) => checkCodexBinaryTrustOnDisk(path, process.platform, readTrustedBinaryConsentsSync(hostSettingsPathOverride())),
+    profile: codexProfile === null ? null : { home: codexProfile.home, homeTrust: () => {
+      try { return assertCodexProfileHome(codexProfile); } catch (error) { return describeError(error); }
+    } },
+    forwardOptions: codexForwardOptions,
     ...(args.child === undefined ? { persistOrchestrationThreadId: async (oldId: string, newId: string) => {
       const row = await persistence!.getRootSession(bridgeRowId);
       if (!row || row.externalSessionRef !== oldId) throw new Error("Codex thread identity changed");
       await persistence!.touchSession(bridgeRowId, { externalSessionRef: newId });
     } } : {}),
-    onMcpNotification: (notification: import("./engines/codex/protocol.js").JsonRpcNotification) => {
+    onMcpNotification: (notification) => {
       const status = codexMcpStatus(notification, codexMcpForward.specs);
       if (status) { engineMcpStatuses = [...engineMcpStatuses.filter((item) => item.name !== status.name), status]; publishEngineMcpStatuses(); }
     },
-    sourceEnv: { ...process.env, PATH: hostMcpLoginPath ?? process.env.PATH },
-    shadowLog,
-    // per-call re-read so a consent granted or revoked mid-session
-    // is honored by the very next spawn gate (D-S4-4) — main is the sole
-    // writer, this closure just re-reads before each of assertTrusted's
-    // per-spawn calls.
-    binaryTrust: (path: string) => checkCodexBinaryTrustOnDisk(path, process.platform, readTrustedBinaryConsentsSync(hostSettingsPathOverride())),
-    ...(processOwnership !== undefined ? { processOwnership } : {}),
-    // rework: the private temp dir rides the SAME env builder
-    // the profile home does — assigned after the allowlist, so the ambient
-    // TMPDIR can never win. Absent for owner tabs (byte-identical env).
-    ...(codexChildTempDir !== undefined ? { tempDir: codexChildTempDir } : {}),
-    ...(codexProfile !== null
-      ? {
-          codexHome: codexProfile.home,
-          homeTrust: () => {
-            try {
-              return assertCodexProfileHome(codexProfile);
-            } catch (error) {
-              return describeError(error);
-            }
-          },
-        }
-      : {}),
-    ...codexForwardOptions,
-  };
+  }) };
 
   // the draft (pre-session) model/preset choice arrives as argv from
   // main. It is untrusted renderer input and is validated inside the engine —
@@ -1831,6 +1847,7 @@ async function bootCodexSession(
   }
   bindCodexUsage(connected.engine, codexUsageAudit.sink, () => session);
   session = new Session({
+    switchEngineFactory: hostSwitchFactory(connected.sessionMeta.id, broker, rules, mcpSecrets),
     workspaceTrustRequired: workspaceTrustRequiredMessage,
     outbound,
     engine: booted.engine,
@@ -2232,63 +2249,14 @@ async function bootClaudeSession(
   const claudeBootNotices = mcpForward.notices;
   const claudeMcpConfigPath = mcpForward.claudeConfigPath;
 
-  const options = {
-    bootstrap,
-    // classifying decorator for the Claude approval bridge.
-    broker: claudeClassifierBroker,
-    binaryPath,
-    cwd: workspace,
-    // a claude child enforces the profile budget natively
-    // (--max-turns); absent = the CLI's own default.
-    ...(args.child?.maxTurns !== undefined ? { maxTurns: args.child.maxTurns } : {}),
-    // slash passthrough (allowlisted /compact) for ROOT sessions
-    // only. A child's prompt is model-authored, so its CLI keeps
-    // --disable-slash-commands — no model-driven slash injection.
-    enableSlashPassthrough: args.child === undefined,
-    // xfix D1: the trust gate rides the engine spawn itself —
-    // an untrusted folder's .claude/settings.json hooks must not load through
-    // Claude Code's own settings sources either (the engine runs with
-    // cwd = workspace). `hostWorkspaceTrust` is decided above, before any
-    // engine wiring, so the value here is the same gate every loader sees.
-    projectTrusted: hostWorkspaceTrust.projectTrusted,
-    // Ambient by default (owner pivot): no override here, so ClaudeClient
-    // sets no `CLAUDE_CONFIG_DIR` at all and the CLI resolves the SAME
-    // `~/.claude` main's doctor diagnosed before it let this tab spawn.
-    profileDir: resolveClaudeConfigDir(),
+  const options = { bootstrap, ...buildClaudeLaunchOptions({
+    broker: claudeClassifierBroker, workspace, binaryPath, child: args.child,
+    projectTrusted: hostWorkspaceTrust.projectTrusted, profileDir: resolveClaudeConfigDir(),
     sourceEnv: { ...process.env, PATH: hostMcpLoginPath ?? process.env.PATH },
-    // mirror of the codex closure above — same per-call re-read
-    // rationale (D-S4-4).
-    binaryTrust: (path: string) => checkClaudeBinaryTrustOnDisk(path, process.platform, readTrustedBinaryConsentsSync(hostSettingsPathOverride())),
-    ...(processOwnership !== undefined ? { processOwnership } : {}),
-    ...(claudeMcpConfigPath !== null ? { mcpConfigPath: claudeMcpConfigPath } : {}),
-    ...(claudeBootNotices.length > 0 ? { bootNotices: claudeBootNotices } : {}),
-    ...(mcpBridge !== undefined && stamp !== undefined
-      ? {
-          mcpBridge,
-          // cross-review M2: the same switch that announces the
-          // door teaches the CLI the delegation sentence — the prompt names
-          // `mcp__anycode__agent` ONLY in sessions where the tool exists (a
-          // bridge-less boot's argv stays byte-identical to pre-4056).
-          // the door now exists for every non-child boot (the
-          // browser tools ride it even with an empty catalog), but the
-          // PROMPT still names the agent tool — so it is gated on the
-          // catalog switch alone, not on the door's existence.
-          ...(agentCatalogNonEmpty
-            ? { agentBridgePrompt: CLAUDE_AGENT_BRIDGE_PROMPT }
-            : {}),
-          takePresentation: stamp.takePresentation,
-          // cross-review P1: the engine's turn-end sweep for
-          // presentations whose consuming tool_result never arrived (a
-          // cancelled/dying turn) — without this, one map entry per aborted
-          // bridge call would live for the process's lifetime.
-          dropPresentations: stamp.dropPresentations,
-          // the door's browser tool CLI names, so
-          // ClaudeApprovalBridge can auto-allow the name-only `can_use_tool`
-          // gate (the real input-aware gate runs in the door's callTool).
-          browserToolNames: claudeBrowserToolNames,
-        }
-      : {}),
-  };
+    binaryTrust: (path) => checkClaudeBinaryTrustOnDisk(path, process.platform, readTrustedBinaryConsentsSync(hostSettingsPathOverride())),
+    processOwnership, mcpConfigPath: claudeMcpConfigPath, bootNotices: claudeBootNotices,
+    mcpBridge, stamp, agentCatalogNonEmpty, browserToolNames: claudeBrowserToolNames,
+  }) };
 
   // the interval from materialization through boot completion. A
   // failure in connect releases the file HERE and rethrows; after a
@@ -2627,6 +2595,7 @@ async function bootClaudeSession(
   for (const record of claudeNativeChildrenFromHistory(bootHistory)) claudeUsageAudit.sink.record(record);
   bindClaudeUsage(claudeEngine, claudeUsageAudit.sink, () => session, connected.model);
   session = new Session({
+    switchEngineFactory: hostSwitchFactory(rowId, broker, rules, mcpSecrets),
     workspaceTrustRequired: workspaceTrustRequiredMessage,
     usageAudit: claudeUsageAudit,
     saveTurnError: async (record, input) => {
@@ -4604,9 +4573,7 @@ async function boot(): Promise<void> {
           ...(availableEffortLevels !== undefined ? { availableEffortLevels } : {}),
         };
       };
-    const { engine } = buildCoreRuntime({
-      loop,
-      config,
+    const coreLaunchOptions = buildCoreLaunchOptions({ loop, config }, {
       switchModelImpl,
       resolveSelectedEffort: (effort) => resolveSessionEffort(currentModel, entryFor(currentModel), effort, liveCapsFor(currentModel), effortLevelsFor(currentModel)),
       onBeforeTurn: async () => {
@@ -4620,6 +4587,7 @@ async function boot(): Promise<void> {
         connectionModelSettings.remember(currentModel, selectedEffort);
       },
     });
+    const { engine } = buildCoreRuntime(coreLaunchOptions);
     const cleanupHandoff = sessionMeta.worktreeCleanup ?? parseCleanupIntent(process.env[WORKTREE_CLEANUP_ENV]);
     const coreHistoryMaxItems = resolveSessionHistoryMaxItems(process.env);
     const restoredLoopContext = loop.contextInfo();
@@ -4634,6 +4602,16 @@ async function boot(): Promise<void> {
       return undefined;
     });
     session = new Session({
+      switchEngineFactory: hostSwitchFactory(sessionId, broker, rules, mcpSecrets, async ({ model }) => {
+        // This resolver owns the boot connection. Never infer one in a foreign host.
+        if (model !== currentModel && !entryFor(model)?.models.some(item => item.id === model)) return undefined;
+        const candidateConfig: AgentLoopConfig = {
+          ...config, modelPort: modelPortFactory(model),
+          history: new ConversationHistory({ tokenizer }),
+          mode: "plan", orchestrate: false,
+        };
+        return { model, options: buildCoreLaunchOptions({ config: candidateConfig, loop: new AgentLoop(candidateConfig) }) };
+      }),
       ...restoredContext,
       workspaceTrustRequired: workspaceTrustRequiredMessage,
       outbound,

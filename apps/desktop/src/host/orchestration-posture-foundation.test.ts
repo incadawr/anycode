@@ -140,7 +140,7 @@ describe("dormant orchestration posture admission foundation", () => {
       const before = h.engine.mode();
       h.send({ type: "set_mode", mode: "plan" });
       h.send({ type: "compact_request" });
-      h.send({ type: "engine_switch_request", requestId: "engine", engine: "codex" });
+      h.send({ type: "engine_switch_request", requestId: "engine", engine: "codex", model: "test-model" });
       h.send({ type: "rewind_request", requestId: "rewind", checkpointId: "synthetic", scope: "both" });
       expect((await h.waitFor((m): m is Extract<HostToUiMessage, {type:"mode_change_rejected"}> => m.type === "mode_change_rejected")).reason).toBe("Session posture unavailable");
       expect((await h.waitFor((m): m is Extract<HostToUiMessage, {type:"compact_rejected"}> => m.type === "compact_rejected")).reason).toBe("Session posture unavailable");

@@ -429,21 +429,27 @@ describe("срез 2 protocol additions", () => {
 // engine_switched/engine_switch_failed host->renderer acks are plain
 // structured-clone-safe data (no zod, model_changed precedent).
 describe("engine_switch_request protocol", () => {
+  it.each([undefined, "", "   ", "x".repeat(129), 42])("rejects a missing or invalid model: %s", model => {
+    const request = { type: "engine_switch_request", requestId: "r1", engine: "codex", model };
+    expect(engineSwitchRequestSchema.safeParse(request).success).toBe(false);
+    expect(uiToHostMessageSchema.safeParse(request).success).toBe(false);
+  });
+
   it("engineSwitchRequestSchema accepts a well-formed switch request", () => {
-    expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "claude" }).success).toBe(true);
+    expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "claude", model: "test-model" }).success).toBe(true);
     // and registers in the untrusted-union discriminator (fail-closed path)
-    expect(uiToHostMessageSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "claude" }).success).toBe(true);
+    expect(uiToHostMessageSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "claude", model: "test-model" }).success).toBe(true);
   });
 
   it("rejects an unknown engine id", () => {
-    expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "gpt" }).success).toBe(false);
-    expect(uiToHostMessageSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "gpt" }).success).toBe(false);
+    expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "gpt", model: "test-model" }).success).toBe(false);
+    expect(uiToHostMessageSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "gpt", model: "test-model" }).success).toBe(false);
   });
 
   it("rejects extra keys, a missing/empty requestId and a missing engine", () => {
-    expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "codex", factory: {} }).success).toBe(false);
-    expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", engine: "codex" }).success).toBe(false);
-    expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", requestId: "", engine: "codex" }).success).toBe(false);
+    expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", requestId: "r1", engine: "codex", model: "test-model", factory: {} }).success).toBe(false);
+    expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", engine: "codex", model: "test-model" }).success).toBe(false);
+    expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", requestId: "", engine: "codex", model: "test-model" }).success).toBe(false);
     expect(engineSwitchRequestSchema.safeParse({ type: "engine_switch_request", requestId: "r1" }).success).toBe(false);
   });
 

@@ -799,7 +799,7 @@ export interface SessionOptions {
   /** The host-selected agent runtime; Session never imports an external engine. */
   engine: SessionEngine;
   /** Prepare a replacement without changing session-owned services. */
-  switchEngineFactory?: (engine: EngineId) => Promise<SessionEngine | SwitchRuntime>;
+  switchEngineFactory?: (engine: EngineId, model: string) => Promise<SessionEngine | SwitchRuntime>;
   /**
    * the engine's own model catalog + permission presets. Absent for
    * core (and for any engine without native controls) -> `set_engine_preset` is
@@ -1283,7 +1283,7 @@ export class Session {
    * Injected by the composition root; absent -> the message is refused with
    * reason "engine switch is not available in this host".
    */
-  private readonly switchEngineFactory: ((engine: EngineId) => Promise<SessionEngine | SwitchRuntime>) | undefined;
+  private readonly switchEngineFactory: ((engine: EngineId, model: string) => Promise<SessionEngine | SwitchRuntime>) | undefined;
   /**
    * engine-native model/preset controls; undefined -> the engine has
    * none. NOT readonly — a successful engine swap resets this to
@@ -4252,7 +4252,7 @@ export class Session {
       let next: SessionEngine;
       let nextSettings: EngineSettingsSeam | undefined;
       try {
-        const runtime = await this.switchEngineFactory(message.engine);
+        const runtime = await this.switchEngineFactory(message.engine, message.model);
         next = "engine" in runtime ? runtime.engine : runtime;
         nextSettings = "engine" in runtime ? runtime.engineSettings : undefined;
         candidate = next;

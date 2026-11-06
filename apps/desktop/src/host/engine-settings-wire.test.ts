@@ -739,7 +739,7 @@ describe("deferred effort lifecycle", () => {
     await ui.settle();
     engine.finishTurn();
     await ui.settle();
-    ui.send({ type: "engine_switch_request", requestId: "switch", engine: "codex" });
+    ui.send({ type: "engine_switch_request", requestId: "switch", engine: "codex", model: "test-model" });
     await ui.settle();
     expect(ui.received).toContainEqual(expect.objectContaining({ type: "engine_switched", requestId: "switch" }));
     ui.send({ type: "user_message", requestId: "next", text: "replacement" });

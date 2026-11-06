@@ -21,10 +21,11 @@ export async function buildClaudeRuntime(options: ClaudeEngineCreateOptions) {
 }
 
 /** Trusted host composition, never decoded from renderer messages. */
-export type SwitchRuntimeConfig =
+export type SwitchRuntimeConfig = (
   | { engine: "core"; options: CoreEngineOptions }
   | { engine: "codex"; model: string; options: Omit<CodexEngineCreateOptions, "bootstrap" | "selection"> & { selection?: CodexEngineCreateOptions["selection"] } }
-  | { engine: "claude"; model: string; options: Omit<ClaudeEngineCreateOptions, "bootstrap" | "selection"> & { selection?: ClaudeEngineCreateOptions["selection"] } };
+  | { engine: "claude"; model: string; options: Omit<ClaudeEngineCreateOptions, "bootstrap" | "selection"> & { selection?: ClaudeEngineCreateOptions["selection"] } }
+) & { cleanup?: () => void };
 
 /**
  * Own the candidate's bootstrap separately from the active runtime. The caller
@@ -33,8 +34,9 @@ export type SwitchRuntimeConfig =
 export async function prepareSwitchRuntime(config: SwitchRuntimeConfig) {
   if (config.engine === "core") return buildCoreRuntime(config.options);
   const plugin = getEnginePlugin(config.engine)!;
-  const bootstrap = await beginEngineBootstrap(plugin);
+  let bootstrap: Awaited<ReturnType<typeof beginEngineBootstrap>> | undefined;
   try {
+    bootstrap = await beginEngineBootstrap(plugin);
     const selection = { ...config.options.selection, model: config.model, origin: "draft" as const };
     const runtime = config.engine === "codex"
       ? await buildCodexRuntime({ ...config.options, bootstrap, selection })
@@ -43,9 +45,19 @@ export async function prepareSwitchRuntime(config: SwitchRuntimeConfig) {
       await runtime.engine.dispose("session-close");
       throw new Error(`Requested model ${config.model} is unavailable`);
     }
+    // Include resolver-owned files in the same candidate lifecycle as its process.
+    const dispose = runtime.engine.dispose.bind(runtime.engine);
+    let cleaned = false;
+    runtime.engine.dispose = async (reason) => {
+      try { await dispose(reason); }
+      finally {
+        if (!cleaned) { cleaned = true; config.cleanup?.(); }
+      }
+    };
     return runtime;
   } catch (error) {
-    await bootstrap.dispose();
+    await bootstrap?.dispose();
+    config.cleanup?.();
     throw error;
   }
 }

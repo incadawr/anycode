@@ -217,13 +217,13 @@ describe("resumeClaudeEngine vs startClaudeEngine (cut §1.5 D2)", () => {
     try {
       h.send({ type: "ui_ready" });
       await h.waitUntil(() => h.received.some(m => m.type === "host_ready"));
-      h.send({ type: "engine_switch_request", requestId: "failed", engine: "claude" });
+      h.send({ type: "engine_switch_request", requestId: "failed", engine: "claude", model: "test-model" });
       await h.waitUntil(() => h.received.some(m => m.type === "engine_switch_failed" && m.requestId === "failed"), 5000);
       expect(h.engine.id).toBe("core");
       h.send({ type: "user_message", requestId: "still-usable", text: "continue" });
       await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && m.event.type === "loop_end"), 5000);
       model = "model-a";
-      h.send({ type: "engine_switch_request", requestId: "success", engine: "claude" });
+      h.send({ type: "engine_switch_request", requestId: "success", engine: "claude", model: "test-model" });
       await h.waitUntil(() => h.received.some(m => m.type === "engine_switched" && m.requestId === "success"), 5000);
     } finally {
       await h.session.shutdown();

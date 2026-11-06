@@ -171,7 +171,7 @@ describe("Session — engine switch", () => {
     } });
     try {
       h.send({ type: "ui_ready" }); await h.waitFor(isHostReady);
-      h.send({ type: "engine_switch_request", requestId: "sw", engine: "codex" });
+      h.send({ type: "engine_switch_request", requestId: "sw", engine: "codex", model: "test-model" });
       expect((await h.waitFor(isEngineSwitchFailed)).reason).toContain("children");
       expect(created).toBe(false); expect(cancelled).toBe(false); expect(old.disposeReasons).toEqual([]);
     } finally { h.close(); }
@@ -186,7 +186,7 @@ describe("Session — engine switch", () => {
     } });
     try {
       h.send({ type: "ui_ready" }); await h.waitFor(isHostReady);
-      h.send({ type: "engine_switch_request", requestId: "sw", engine: "codex" });
+      h.send({ type: "engine_switch_request", requestId: "sw", engine: "codex", model: "test-model" });
       await factoryEntered; live = true; release();
       await h.waitFor(isEngineSwitchFailed);
       expect(old.disposeReasons).toEqual([]); expect(next.disposeReasons).toEqual(["session-close"]);
@@ -206,7 +206,7 @@ describe("Session — engine switch", () => {
       h.send({ type: "ui_ready" }); await h.waitFor(isHostReady);
       h.send({ type: "set_orchestrate", enabled: true });
       await h.waitUntil(() => h.received.some(m => m.type === "orchestrate_changed" && m.enabled));
-      h.send({ type: "engine_switch_request", requestId: "sw", engine: target });
+      h.send({ type: "engine_switch_request", requestId: "sw", engine: target, model: "test-model" });
       await h.waitFor(isEngineSwitchFailed);
       expect(core.mode()).toBe("plan"); expect(core.disposeReasons).toEqual([]);
       expect(next.disposeReasons).toEqual(["session-close"]);
@@ -231,7 +231,7 @@ describe("Session — engine switch", () => {
       h.send({ type: "ui_ready" }); await h.waitFor(isHostReady);
       h.send({ type: "set_orchestrate", enabled: true });
       await h.waitUntil(() => h.received.some(m => m.type === "orchestrate_changed" && m.enabled));
-      h.send({ type: "engine_switch_request", requestId: "sw", engine: "codex" });
+      h.send({ type: "engine_switch_request", requestId: "sw", engine: "codex", model: "test-model" });
       await h.waitFor(isEngineSwitched); expect(target.calls).toEqual([true]);
       expect(core.disposeReasons).toEqual(["session-close"]); expect(target.inputs).toEqual([]);
       h.send({ type: "set_orchestrate", enabled: false });
@@ -246,7 +246,7 @@ describe("Session — engine switch", () => {
     const h = createHarness({ steps: [], engine: source, switchEngineFactory: async () => prepareSwitchRuntime({ engine: "core", options: { loop: new AgentLoop(config), config } }) });
     try {
       h.send({ type: "ui_ready" }); await h.waitFor(isHostReady);
-      h.send({ type: "engine_switch_request", requestId: "core", engine: "core" });
+      h.send({ type: "engine_switch_request", requestId: "core", engine: "core", model: "test-model" });
       await h.waitFor(isEngineSwitched);
       expect(source.disposeReasons).toEqual(["session-close"]);
       h.send({ type: "user_message", requestId: "first", text: "go" });
@@ -261,7 +261,7 @@ describe("Session — engine switch", () => {
     const h = createHarness({ steps: [], engine: old, switchEngineFactory: async () => ({ engine: wrong }) });
     try {
       h.send({ type: "ui_ready" }); await h.waitFor(isHostReady);
-      h.send({ type: "engine_switch_request", requestId: "wrong", engine: "codex" });
+      h.send({ type: "engine_switch_request", requestId: "wrong", engine: "codex", model: "test-model" });
       expect((await h.waitFor(isEngineSwitchFailed)).reason).toContain("does not match");
       expect(wrong.disposeReasons).toEqual(["session-close"]);
       expect(old.disposeReasons).toEqual([]);
@@ -281,7 +281,7 @@ describe("Session — engine switch", () => {
       h.send({ type: "ui_ready" }); await h.waitFor(isHostReady);
       h.send({ type: "set_orchestrate", enabled: true });
       await h.waitUntil(() => h.received.some(m => m.type === "orchestrate_changed" && m.enabled));
-      h.send({ type: "engine_switch_request", requestId: "sw", engine: "core" });
+      h.send({ type: "engine_switch_request", requestId: "sw", engine: "core", model: "test-model" });
       await h.waitFor(isEngineSwitched); expect(target.mode()).toBe("plan");
       expect(config.orchestrate).toBe(true); expect(source.disposeReasons).toEqual(["session-close"]);
       h.send({ type: "user_message", requestId: "first", text: "go" });
@@ -312,7 +312,7 @@ describe("Session — engine switch", () => {
       h.send({ type: "ui_ready" }); await h.waitFor(isHostReady);
       h.send({ type: "set_orchestrate", enabled: true });
       await h.waitUntil(() => h.received.some(m => m.type === "orchestrate_changed" && m.enabled));
-      h.send({ type: "engine_switch_request", requestId: "sw", engine: "core" });
+      h.send({ type: "engine_switch_request", requestId: "sw", engine: "core", model: "test-model" });
       expect((await h.waitFor(isEngineSwitchFailed)).reason).toContain("unconfirmed");
       expect(source.disposeReasons).toEqual([]);
       expect((h.session as unknown as { engine: SessionEngine }).engine).toBe(source);
@@ -337,7 +337,7 @@ describe("Session — engine switch", () => {
       h.send({ type: "ui_ready" });
       await h.waitFor(isHostReady);
 
-      h.send({ type: "engine_switch_request", requestId: "sw1", engine: "codex" });
+      h.send({ type: "engine_switch_request", requestId: "sw1", engine: "codex", model: "test-model" });
       const switched = await h.waitFor(isEngineSwitched);
       expect(switched).toMatchObject({ requestId: "sw1", engine: "codex", previousEngine: "core" });
 
@@ -378,7 +378,7 @@ describe("Session — engine switch", () => {
       h.send({ type: "user_message", requestId: "usage", text: "hello" });
       await h.waitFor(agentEventOf("context_usage"));
       await h.waitUntil(() => !(h.session as unknown as { busy: boolean }).busy);
-      h.send({ type: "engine_switch_request", requestId: "switch", engine: "codex" });
+      h.send({ type: "engine_switch_request", requestId: "switch", engine: "codex", model: "test-model" });
       await h.waitFor(isEngineSwitched);
       const before = h.received.length;
       h.send({ type: "ui_ready" });
@@ -407,7 +407,7 @@ describe("Session — engine switch", () => {
       h.send({ type: "user_message", requestId: "r1", text: "hold this turn open" });
       await h.waitUntil(() => oldEngine.inputs.length === 1);
 
-      h.send({ type: "engine_switch_request", requestId: "sw2", engine: "codex" });
+      h.send({ type: "engine_switch_request", requestId: "sw2", engine: "codex", model: "test-model" });
       const failed = await h.waitFor(isEngineSwitchFailed);
       expect(failed).toMatchObject({ requestId: "sw2", reason: "a turn is running" });
 
@@ -436,7 +436,7 @@ describe("Session — engine switch", () => {
       h.send({ type: "ui_ready" });
       await h.waitFor(isHostReady);
 
-      h.send({ type: "engine_switch_request", requestId: "sw3", engine: "core" });
+      h.send({ type: "engine_switch_request", requestId: "sw3", engine: "core", model: "test-model" });
       const failed = await h.waitFor(isEngineSwitchFailed);
       expect(failed.reason).toBe('already running the "core" engine');
       expect((h.session as unknown as { engine: SessionEngine }).engine.id).toBe("core");
@@ -459,7 +459,7 @@ describe("Session — engine switch", () => {
       h.send({ type: "ui_ready" });
       await h.waitFor(isHostReady);
 
-      h.send({ type: "engine_switch_request", requestId: "sw4", engine: "codex" });
+      h.send({ type: "engine_switch_request", requestId: "sw4", engine: "codex", model: "test-model" });
       const failed = await h.waitFor(isEngineSwitchFailed);
       expect(failed).toMatchObject({ requestId: "sw4", reason: "codex not signed in" });
 
@@ -484,7 +484,7 @@ describe("Session — engine switch", () => {
     try {
       h.send({ type: "ui_ready" });
       await h.waitFor(isHostReady);
-      h.send({ type: "engine_switch_request", requestId: "render-failure", engine: "codex" });
+      h.send({ type: "engine_switch_request", requestId: "render-failure", engine: "codex", model: "test-model" });
       expect(await h.waitFor(isEngineSwitchFailed)).toMatchObject({ requestId: "render-failure", reason: expect.stringContaining("render failure") });
       expect(next.disposeReasons).toEqual(["session-close"]);
       expect(oldEngine.disposeReasons).toEqual([]);
@@ -502,7 +502,7 @@ describe("Session — engine switch", () => {
     try {
       h.send({ type: "ui_ready" });
       await h.waitFor(isHostReady);
-      h.send({ type: "engine_switch_request", requestId: "settings-failure", engine: "codex" });
+      h.send({ type: "engine_switch_request", requestId: "settings-failure", engine: "codex", model: "test-model" });
       expect(await h.waitFor(isEngineSwitchFailed)).toMatchObject({ reason: expect.stringContaining("settings unavailable") });
       expect(next.disposeReasons).toEqual(["session-close"]);
       expect(oldEngine.disposeReasons).toEqual([]);
@@ -519,7 +519,7 @@ describe("Session — engine switch", () => {
       h.send({ type: "ui_ready" });
       await h.waitFor(isHostReady);
 
-      h.send({ type: "engine_switch_request", requestId: "sw5", engine: "codex" });
+      h.send({ type: "engine_switch_request", requestId: "sw5", engine: "codex", model: "test-model" });
       const failed = await h.waitFor(isEngineSwitchFailed);
       expect(failed.reason).toBe("engine switch is not available in this host");
       expect(oldEngine.disposeReasons).toEqual([]);
@@ -540,7 +540,7 @@ describe("Session — engine switch", () => {
       h.send({ type: "ui_ready" });
       await h.waitFor(isHostReady);
 
-      h.send({ type: "engine_switch_request", requestId: "sw6", engine: "codex" });
+      h.send({ type: "engine_switch_request", requestId: "sw6", engine: "codex", model: "test-model" });
       await h.waitFor(isEngineSwitched);
 
       h.send({ type: "user_message", requestId: "r1", text: "my typed message" });
@@ -578,9 +578,9 @@ describe("Session — engine switch", () => {
 
       const before = h.received.length;
       // Malformed on purpose: missing requestId -> zod fail-closed drop, no reply.
-      h.send({ type: "engine_switch_request", engine: "codex" } as unknown as UiToHostMessage);
-      h.send({ type: "engine_switch_request", requestId: "", engine: "codex" } as unknown as UiToHostMessage);
-      h.send({ type: "engine_switch_request", requestId: "r", engine: "gpt" } as unknown as UiToHostMessage);
+      h.send({ type: "engine_switch_request", engine: "codex", model: "test-model" } as unknown as UiToHostMessage);
+      h.send({ type: "engine_switch_request", requestId: "", engine: "codex", model: "test-model" } as unknown as UiToHostMessage);
+      h.send({ type: "engine_switch_request", requestId: "r", engine: "gpt", model: "test-model" } as unknown as UiToHostMessage);
 
       // Inversion of the usual waitUntil: nothing may arrive within a short window.
       await new Promise<void>((resolve) => setTimeout(resolve, 150));
@@ -608,7 +608,7 @@ describe("Session — engine switch", () => {
     try {
       h.send({ type: "ui_ready" });
       await h.waitFor(isHostReady);
-      h.send({ type: "engine_switch_request", requestId: "sw7", engine: "codex" });
+      h.send({ type: "engine_switch_request", requestId: "sw7", engine: "codex", model: "test-model" });
       for (let i = 0; i < 100 && !factoryCalled; i++) await new Promise((r) => setTimeout(r, 5));
       expect(factoryCalled).toBe(true);
       const shutdown = h.session.shutdown();
@@ -641,7 +641,7 @@ describe("Session — engine switch", () => {
     try {
       h.send({ type: "ui_ready" });
       await h.waitFor(isHostReady);
-      h.send({ type: "engine_switch_request", requestId: "sw8", engine: "codex" });
+      h.send({ type: "engine_switch_request", requestId: "sw8", engine: "codex", model: "test-model" });
       await h.waitFor(isEngineSwitched);
       expect(next.current).toBe("plan");
     } finally {
@@ -657,7 +657,7 @@ describe("Session — engine switch", () => {
     try {
       h.send({ type: "ui_ready" });
       await h.waitFor(isHostReady);
-      h.send({ type: "engine_switch_request", requestId: "sw9", engine: "codex" });
+      h.send({ type: "engine_switch_request", requestId: "sw9", engine: "codex", model: "test-model" });
       await h.waitFor(isEngineSwitched);
       h.send({ type: "user_message", requestId: "r1", text: "go" });
       await h.waitFor(agentEventOf("loop_end"));
@@ -675,7 +675,7 @@ describe("Session — engine switch", () => {
     try {
       h.send({ type: "ui_ready" });
       await h.waitFor(isHostReady);
-      h.send({ type: "engine_switch_request", requestId: "read-failure", engine: "codex" });
+      h.send({ type: "engine_switch_request", requestId: "read-failure", engine: "codex", model: "test-model" });
       expect(await h.waitFor(isEngineSwitchFailed)).toMatchObject({ requestId: "read-failure", reason: expect.stringContaining("read failed") });
       expect(factoryCalled).toBe(false);
       expect(oldEngine.disposeReasons).toEqual([]);
@@ -694,7 +694,7 @@ describe("Session — engine switch", () => {
     try {
       h.send({ type: "ui_ready" });
       await h.waitFor(isHostReady);
-      h.send({ type: "engine_switch_request", requestId: "sw10", engine: "codex" });
+      h.send({ type: "engine_switch_request", requestId: "sw10", engine: "codex", model: "test-model" });
       await h.waitFor(isEngineSwitched);
       const notice = engineNoticeEvents(h.received)[0];
       expect(notice?.event.type === "engine_notice" ? notice.event.message : "").toContain("no conversation history could be imported");
@@ -720,9 +720,9 @@ describe("Session — engine switch", () => {
       h.send({ type: "ui_ready" });
       await h.waitFor(isHostReady);
 
-      h.send({ type: "engine_switch_request", requestId: "dsw1", engine: "codex" });
+      h.send({ type: "engine_switch_request", requestId: "dsw1", engine: "codex", model: "test-model" });
       await h.waitFor(isEngineSwitched);
-      h.send({ type: "engine_switch_request", requestId: "dsw2", engine: "claude" });
+      h.send({ type: "engine_switch_request", requestId: "dsw2", engine: "claude", model: "test-model" });
       await h.waitFor((m): m is Of<"engine_switched"> => isEngineSwitched(m) && m.requestId === "dsw2");
 
       h.send({ type: "user_message", requestId: "r1", text: "go" });
@@ -760,7 +760,7 @@ describe("Session — engine switch", () => {
       );
       expect(preSwitchTurnIds.size).toBeGreaterThan(0);
 
-      h.send({ type: "engine_switch_request", requestId: "rl1", engine: "codex" });
+      h.send({ type: "engine_switch_request", requestId: "rl1", engine: "codex", model: "test-model" });
       await h.waitFor(isEngineSwitched);
 
       const before = h.received.length;

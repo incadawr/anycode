@@ -520,7 +520,7 @@ export type UiToHostMessage =
   // honored only between turns (busy/child-attached refusals get an
   // `engine_switch_failed` reply — the switch surface is non-silent, mirror of
   // rewind_request's discipline).
-  | { type: "engine_switch_request"; requestId: string; engine: EngineId }
+  | { type: "engine_switch_request"; requestId: string; engine: EngineId; model: string }
   // Slice 5.7 (design slice-5.7-cut.md §2.1): one user-initiated git command.
   // Untrusted -> validated by `gitCommandMessageSchema` below (fail-closed). NO
 
@@ -1305,6 +1305,7 @@ export const engineSwitchRequestSchema = z
     type: z.literal("engine_switch_request"),
     requestId: z.string().min(1).max(128),
     engine: z.enum(ENGINE_IDS),
+    model: z.string().min(1).max(128).refine(value => value.trim().length > 0),
   })
   .strict();
 

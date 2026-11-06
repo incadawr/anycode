@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Engine-switch requests carry the selected model and reject unavailable models; host preparation remains disabled by default.
+
 ## [0.0.78] - 2026-11-06
 
 ### Added
