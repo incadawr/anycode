@@ -99,7 +99,17 @@ export function canonicalFile(workspace: string, input: string, options: PathOpt
 
 export class FileActivityIndex {
   private readonly records = new Map<string, FileActivity>();
-  constructor(private readonly options: IndexOptions) {}
+  readonly startsAt: number;
+  constructor(private readonly options: IndexOptions) {
+    this.startsAt = (options.now ?? Date.now)();
+  }
+
+  recent(workspaceKey: string, sessionId: string): string[] {
+    this.prune((this.options.now ?? Date.now)());
+    return [...this.records.values()].reverse()
+      .filter(row => row.workspaceKey === workspaceKey && row.sessionId === sessionId)
+      .slice(0, 5).map(row => row.relativePath);
+  }
 
   private current(identity: FileIdentity): boolean {
     const live = this.options.current(identity.sessionId);

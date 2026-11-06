@@ -56,9 +56,18 @@ const peerSummary = z.strictObject({
   engine: z.enum(["core", "claude", "codex"]),
   activity: z.enum(["idle", "running", "waiting_approval", "closing"]),
   addressable: z.boolean(), title: z.string().max(200).optional(),
+  recentPaths: z.array(z.string().min(1).max(4096)).max(5).optional(),
   model: z.string().max(200).optional(), effort: z.string().max(200).optional(),
 });
+const fileEvidence = z.strictObject({
+  sessionId: id, evidence: z.literal("reported_write"),
+  toolName: z.enum(["Edit", "Write", "NotebookEdit"]), at: z.number().finite(),
+});
 const responseSchema = z.discriminatedUnion("status", [
+  z.strictObject({ status: z.literal("file_activity"), path: z.string().min(1).max(4096),
+    records: z.array(fileEvidence).max(20), coverage: z.literal("partial"),
+    startsAt: z.number().finite(), limitations: z.string().min(1).max(2000),
+  }),
   z.strictObject({ status: z.literal("sent"), messageId: id, state: z.enum(["queued", "acknowledged", "rejected", "unknown"]) }),
   z.strictObject({ status: z.literal("ok"), sessions: z.array(peerSummary).max(50) }),
   z.strictObject({ status: z.literal("refused"), reason: z.literal("loop_limited").optional() }),
@@ -80,7 +89,7 @@ export function createSessionPeerTools(authority: () => SessionPeerAuthority): A
     const readOnly = index === 0 || index === 3;
     const metadata = {
       name: names[index]!, description: ["List accessible peer sessions.", "Open a peer root session.",
-        "Send a peer message without waiting for its answer.", "Look up recent file activity; unavailable until observation is supported."][index]!,
+        "Send a peer message without waiting for its answer.", "Look up exact workspace file activity with evidence and coverage limits. Empty records do not prove no writers."][index]!,
       readOnly, destructive: false, concurrentSafe: readOnly, riskLevel: readOnly ? "low" as const : "high" as const,
       sideEffectScope: readOnly ? "none" as const : "network" as const,
       needsApproval: !readOnly, timeoutMs: 20_000, maxOutputBytes: 100000,

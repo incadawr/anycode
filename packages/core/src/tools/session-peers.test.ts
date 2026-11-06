@@ -61,3 +61,21 @@ it("preserves reply receipts and loop refusal through the shared response parser
   expect(parseSessionPeerResponse({ status: "refused", reason: "loop_limited" })).toEqual({ status: "refused", reason: "loop_limited" });
   expect(parseSessionPeerResponse({ status: "sent", messageId: "message", state: "forged" })).toEqual({ status: "unknown" });
 });
+
+
+it("preserves file evidence and bounded recent paths but rejects invented confidence", () => {
+  const answer = { status: "file_activity", path: "file", coverage: "partial", startsAt: 1,
+    limitations: "Incomplete observation", records: [
+      { sessionId: "a", toolName: "Write", at: 2, evidence: "reported_write" },
+    ] };
+  expect(parseSessionPeerResponse(answer)).toEqual(answer);
+  expect(parseSessionPeerResponse({ ...answer, coverage: "complete" })).toEqual({ status: "unknown" });
+  expect(parseSessionPeerResponse({ ...answer, records: [{ ...answer.records[0], evidence: "proven_author" }] }))
+    .toEqual({ status: "unknown" });
+  const session = { sessionId: "a", tabId: "a", workspace: "/work", engine: "core",
+    activity: "idle", addressable: true, recentPaths: ["file"] };
+  expect(parseSessionPeerResponse({ status: "ok", sessions: [session] }))
+    .toEqual({ status: "ok", sessions: [session] });
+  expect(parseSessionPeerResponse({ status: "ok", sessions: [{ ...session, recentPaths: Array(6).fill("file") }] }))
+    .toEqual({ status: "unknown" });
+});
