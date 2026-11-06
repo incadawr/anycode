@@ -81,19 +81,70 @@ it("expires pending dispatch to unknown while keeping it excluded from restore u
   const f = await fixture(); const hold = deferred(); const entered = deferred();
   f.post.mockImplementationOnce(async () => { entered.resolve(); await hold.promise; throw new Error("lost response"); });
   vi.useFakeTimers(); const sending = f.send(external, input); await entered.promise;
+  const retryBeforeExpiry = f.send(external, input);
   try {
     await vi.advanceTimersByTimeAsync(21);
     expect([...f.ledger.messages.values()][0]).toMatchObject({ state: "unknown", detail: "Host response unavailable; do not blindly resend" });
     expect(f.inFlight.size).toBe(1);
+    const retryWhileHanging = f.send(external, input);
+    await Promise.resolve();
+    expect(f.post).toHaveBeenCalledTimes(1);
+    hold.resolve();
+    expect((await retryWhileHanging).envelope.messageId).toBe((await sending).envelope.messageId);
+    expect((await retryBeforeExpiry).envelope.messageId).toBe((await sending).envelope.messageId);
   } finally { hold.resolve(); }
-  expect((await sending).state).toBe("unknown"); expect(f.inFlight.size).toBe(0);
+  const settled = await sending;
+  expect(settled.state).toBe("unknown"); expect(f.inFlight.size).toBe(0);
+  expect((await f.send(external, input)).envelope.messageId).toBe(settled.envelope.messageId);
+  expect(f.post).toHaveBeenCalledTimes(1);
 });
 it("aborts before authorization or after the durability barrier without posting", async () => {
   const f = await fixture(); const controller = new AbortController(); controller.abort();
   await expect(f.send(external, input, controller.signal)).rejects.toThrow("Send aborted");
   expect(f.authorize).not.toHaveBeenCalled();
+  vi.useFakeTimers();
   const later = new AbortController();
   f.writer.mockImplementationOnce(async (path, text) => { await writePrivateFile(path, text); later.abort(); });
   await expect(f.send(external, input, later.signal)).rejects.toThrow("Send aborted");
   expect(f.post).not.toHaveBeenCalled();
+  const saved = JSON.parse(await readFile(f.path, "utf8"));
+  expect(saved).toHaveLength(1);
+  expect(saved[0]).toMatchObject({ state: "unknown", detail: "Dispatch pending", idempotencyKey: input.idempotencyKey });
+  expect(await f.send(external, input)).toEqual(saved[0]);
+  expect(f.ledger.messages.size).toBe(1); expect(f.post).not.toHaveBeenCalled();
+});
+
+it("keeps a joining retry independent of the first caller aborting during acceptance", async () => {
+  const f = await fixture(); const hold = deferred(); const entered = deferred();
+  const firstCaller = new AbortController();
+  f.writer.mockImplementationOnce(async (path, text) => { entered.resolve(); await hold.promise; await writePrivateFile(path, text); });
+  const first = f.send(external, input, firstCaller.signal); await entered.promise;
+  const retry = f.send(external, input, new AbortController().signal);
+  const outcomes = Promise.allSettled([first, retry]);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(f.authorize).toHaveBeenCalledTimes(2);
+  firstCaller.abort(); hold.resolve();
+  const [a, b] = await outcomes;
+  expect(a).toMatchObject({ status: "rejected", reason: new Error("Send aborted") });
+  expect(b.status).toBe("fulfilled");
+  const saved = JSON.parse(await readFile(f.path, "utf8"));
+  expect(saved).toHaveLength(1);
+  if (b.status === "fulfilled") expect(b.value.envelope.messageId).toBe(saved[0].envelope.messageId);
+  expect((await f.send(external, input)).envelope.messageId).toBe(saved[0].envelope.messageId);
+  expect(f.post).not.toHaveBeenCalled();
+});
+it("checks a joining caller's own abort after the shared dispatch settles", async () => {
+  const f = await fixture(); const hold = deferred(); const entered = deferred();
+  const joining = new AbortController();
+  f.post.mockImplementationOnce(async () => { entered.resolve(); await hold.promise; return { state: "acknowledged" }; });
+  const first = f.send(external, input); await entered.promise;
+  const retry = f.send(external, input, joining.signal);
+  const outcomes = Promise.allSettled([first, retry]);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(f.authorize).toHaveBeenCalledTimes(2);
+  joining.abort(); hold.resolve();
+  const [a, b] = await outcomes;
+  expect(a.status).toBe("fulfilled");
+  expect(b).toMatchObject({ status: "rejected", reason: new Error("Send aborted") });
+  expect(f.post).toHaveBeenCalledTimes(1);
 });

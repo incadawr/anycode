@@ -4,6 +4,8 @@ import { dirname } from "node:path";
 import type { CommunicationPrincipal } from "./communication-dispatch.js";
 import type { AgentDelivery } from "../shared/communication.js";
 
+const namespace = (principal: CommunicationPrincipal) => principal.kind === "external" ? "external" : JSON.stringify([principal.sessionId, principal.tabId]);
+
 export type CommunicationRecord = AgentDelivery & { idempotencyKey?: string; principal?: CommunicationPrincipal; workspace?: string; hostPid?: number | null };
 
 /** Atomic private write (mode 0600, temp file + rename); the default ledger and discovery writer. */
@@ -51,7 +53,7 @@ export async function createCommunicationLedger(
     messages,
     persist,
     flush: () => writes,
-    findByIdempotencyKey: (key: string) => [...messages.values()].find((record) => record.idempotencyKey === key),
+    findByIdempotencyKey: (key: string, principal: CommunicationPrincipal) => [...messages.values()].find((record) => record.idempotencyKey === key && namespace(record.principal ?? { kind: "external" }) === namespace(principal)),
     isFull: () => messages.size >= 10000,
   };
 }

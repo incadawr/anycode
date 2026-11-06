@@ -79,8 +79,8 @@ describe("communication ledger", () => {
     await writeFile(path, text);
     const ledger = await createCommunicationLedger(path);
     expect(await readFile(path, "utf8")).toBe(text);
-    expect(ledger.findByIdempotencyKey("key-ack")).toEqual(records[0]);
-    expect(ledger.findByIdempotencyKey("missing")).toBeUndefined();
+    expect(ledger.findByIdempotencyKey("key-ack", { kind: "external" })).toEqual(records[0]);
+    expect(ledger.findByIdempotencyKey("missing", { kind: "external" })).toBeUndefined();
     ledger.messages.set("pending", { ...record("pending"), detail: "Dispatch pending" });
     await ledger.persist();
     const reopened = await createCommunicationLedger(path);
@@ -96,4 +96,17 @@ describe("communication ledger", () => {
     expect(ledger.isFull()).toBe(true);
     expect(ledger.messages.get("0")).toEqual(record("0"));
   });
+});
+
+it("looks up idempotency keys only within the authenticated principal namespace", async () => {
+  const ledger = await createCommunicationLedger(await fixture());
+  const a = { kind: "session" as const, sessionId: "a:b", tabId: "c" };
+  const b = { kind: "session" as const, sessionId: "a", tabId: "b:c" };
+  const legacy = record("legacy");
+  const first = { ...record("first"), idempotencyKey: legacy.idempotencyKey, principal: a };
+  const second = { ...record("second"), idempotencyKey: legacy.idempotencyKey, principal: b };
+  for (const value of [legacy, first, second]) ledger.messages.set(value.envelope.messageId, value);
+  expect(ledger.findByIdempotencyKey(legacy.idempotencyKey!, a)).toBe(first);
+  expect(ledger.findByIdempotencyKey(legacy.idempotencyKey!, b)).toBe(second);
+  expect(ledger.findByIdempotencyKey(legacy.idempotencyKey!, { kind: "external" })).toBe(legacy);
 });

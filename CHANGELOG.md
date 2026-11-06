@@ -9,7 +9,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- Sessions API reports malformed host delivery responses as unknown without exposing unexpected response data.
+- Sessions API shows an unknown delivery status when a session cannot confirm receipt, keeping unexpected internal data out of the response.
 
 ## [0.0.85] - 2026-11-06
 

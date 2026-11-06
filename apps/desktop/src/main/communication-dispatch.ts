@@ -5,7 +5,6 @@ import type { createCommunicationLedger, CommunicationRecord } from "./communica
 /** Main-owned identity, never decoded from tool arguments. */
 export type CommunicationPrincipal = { kind: "external" } | { kind: "session"; sessionId: string; tabId: string };
 export type CommunicationSendInput = Pick<AgentEnvelope, "payload" | "mode" | "kind" | "correlationId" | "replyTo"> & { sessionId: string; idempotencyKey?: string };
-const namespace = (principal: CommunicationPrincipal) => principal.kind === "external" ? "external" : JSON.stringify([principal.sessionId, principal.tabId]);
 const unavailable = "Host response unavailable; do not blindly resend";
 function projectResponse(raw: unknown): Pick<AgentDelivery, "state" | "detail"> {
   if (!raw || typeof raw !== "object") return { state: "unknown", detail: unavailable };
@@ -48,11 +47,12 @@ export function createCommunicationDispatch(options: {
     // Reservation is synchronous after authorization: a second caller sees the
     // first record before any disk or host await can open a duplicate dispatch.
     if (input.idempotencyKey) {
-      const existing = [...messages.values()].find((record) => record.idempotencyKey === input.idempotencyKey && namespace(record.principal ?? { kind: "external" }) === namespace(principal));
+      const existing = options.ledger.findByIdempotencyKey(input.idempotencyKey, principal);
       if (existing) {
         const e = existing.envelope;
         if (e.recipientSessionId !== input.sessionId || e.payload !== input.payload || e.mode !== input.mode || e.kind !== input.kind || e.correlationId !== input.correlationId || e.replyTo !== input.replyTo) throw new Error("Idempotency key reused with different input");
-        return pending.get(e.messageId) ?? existing;
+        const record = await (pending.get(e.messageId) ?? existing);
+        checkAbort(signal); return record;
       }
     }
     if (options.ledger.isFull()) throw new Error("Message ledger full; restart with a new discovery file after archiving ledger");
@@ -65,7 +65,9 @@ export function createCommunicationDispatch(options: {
     const delivery = (async () => {
       try {
         await persist(); // Durable acceptance BEFORE any delivery side effect.
-        checkAbort(signal);
+        // The shared outcome belongs to the durable message; each caller
+        // checks its own cancellation independently after joining it.
+        if (signal?.aborted) return record;
         try {
           const response = projectResponse(await options.post(input.sessionId, envelope, recipient.workspace));
           record.state = response.state; record.detail = response.detail;
@@ -75,7 +77,7 @@ export function createCommunicationDispatch(options: {
       await persist(); return record;
     })();
     pending.set(envelope.messageId, delivery);
-    try { return await delivery; } finally { pending.delete(envelope.messageId); }
+    try { const result = await delivery; checkAbort(signal); return result; } finally { pending.delete(envelope.messageId); }
   };
   return { send, inFlight, dispose() { for (const timer of expiryTimers.values()) clearTimeout(timer); expiryTimers.clear(); } };
 }
