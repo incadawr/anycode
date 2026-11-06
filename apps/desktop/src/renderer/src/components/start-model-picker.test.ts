@@ -74,10 +74,10 @@ describe("orderModelsByCatalog (D4 — catalog order, not the provider's alphabe
 
 describe("connectionOfferedModels (D4)", () => {
   it("keeps manual ids and excludes chat hints for a Responses connection", () => {
-    const conn = connection({ id: "responses", providerId: "opencode-openai", transport: "openai-responses", model: "gpt-6-luna", models: ["gpt-6-luna"] });
+    const conn = connection({ id: "responses", providerId: "opencode-openai", transport: "openai-responses", model: "gpt-6-luna", models: ["gpt-6-luna", "manual-unknown"] });
     const catalog: CatalogSummary = [{ id: "opencode-openai", name: "OpenCode Go", authKind: "api_key", models: [{ id: "kimi-k3" }] }];
-    expect(connectionOfferedModels(conn, catalog, undefined)?.map(m => m.id)).toEqual(["gpt-6-luna"]);
-    expect(buildStartModelGroups([conn], catalog, undefined, { connectionId: conn.id, modelId: conn.model! })[0]?.items.map(m => m.id)).toEqual(["gpt-6-luna"]);
+    expect(connectionOfferedModels(conn, catalog, undefined)?.map(m => m.id)).toEqual(["gpt-6-luna", "manual-unknown"]);
+    expect(buildStartModelGroups([conn], catalog, undefined, { connectionId: conn.id, modelId: conn.model! })[0]?.items.map(m => m.id)).toEqual(["gpt-6-luna", "manual-unknown"]);
   });
   it("resolves via providerModelsFor (connection ids UNIONED with catalog hints) and orders catalog-first", () => {
     const conn = connection({ id: "c1", providerId: "z-ai", models: ["glm-4.7", "glm-5.3"] });

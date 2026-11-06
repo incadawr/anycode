@@ -36,8 +36,6 @@ export function providerModelsFor(
   const effectiveTransport = transport ?? connection?.transport ?? catalogEntry?.defaultTransport;
   const eligible = (id: string) => !goProvider || goModelMatchesTransport(providerId, id, effectiveTransport, connection?.modelRoutes);
   const catalogHit = catalogEntry?.models.filter(model => eligible(model.id));
-  connectionModels = connectionModels?.filter(eligible);
-  visibleModels = visibleModels?.filter(eligible);
   const customHit = custom?.find((entry) => entry.id === providerId);
   const baseHints: readonly { id: string; name?: string }[] | undefined =
     catalogHit ?? (customHit !== undefined ? customHit.models.map((id) => ({ id })) : undefined);
@@ -57,7 +55,6 @@ export function providerModelsFor(
       return hint?.name !== undefined ? { id, name: hint.name } : { id };
     });
   }
-  if (goProvider && connectionModels !== undefined) return [];
   if (catalogHit !== undefined) {
     return catalogHit;
   }
