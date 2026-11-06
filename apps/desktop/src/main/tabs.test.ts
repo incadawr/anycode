@@ -8687,6 +8687,44 @@ it("forwards redirected Windows output using the default handle check", () => {
 });
 
 describe("TabHostManager — engine switch process custody", () => {
+  it.each(["codex", "claude"] as const)("preserves the logical provider pin after switching to %s for a default core child", async engine => {
+    const { fork, hosts } = shutdownableForkRig();
+    const forkSpy = vi.fn(fork);
+    const activeConnectionId = "active-B";
+    const env = vi.fn((connectionId?: string) => ({
+      PATH: "/base",
+      ANYCODE_MODEL: connectionId === "pinned-A" ? "model-A" : "model-B",
+      ANYCODE_CONNECTION_ID: connectionId ?? activeConnectionId,
+    }));
+    const manager = childManager(forkSpy, windowRig().window, {
+      env, engineReady: () => true, engineSwitchEnabled: () => true,
+      prepareEngineSwitch: async target => ({ launch: { target, env: {} } }),
+      commitEngineSwitchIdentity: vi.fn(),
+    });
+    try {
+      const root = manager.createTab({ workspace: "/ws", sessionId: "pinned-session", resume: false, engine: "core", connectionId: "pinned-A" });
+      if (!root.ok) throw new Error("tab unavailable");
+      const host = hosts[0]!;
+      const target = { engine, model: "native-model", ...(engine === "codex" ? { codexProfileId: "account" } : {}) };
+      host.emit("message", { type: "anycode:engine-switch", generation: 1, requestId: "switch", phase: "prepare", target });
+      await vi.waitFor(() => expect(root.tab.switchCoordinator?.acceptsCandidate("switch")).toBe(true));
+      host.emit("message", { type: "anycode:engine-process", generation: 1, hostPid: host.pid, enginePid: 202, pgid: 202, runtimeId: "switch" });
+      host.emit("message", { type: "anycode:engine-switch", generation: 1, requestId: "switch", phase: "commit", identity: { model: "native-model", mode: "read-only", externalSessionRef: "native-ref" } });
+      await vi.waitFor(() => expect(root.tab.engine).toBe(engine));
+      host.emit("message", { type: "anycode:engine-switch", generation: 1, requestId: "switch", phase: "retire" });
+      await vi.waitFor(() => expect(root.tab.switchCoordinator?.pending).toBe(false));
+      host.emit("message", spawnRequest({ requestId: "default-core-child" }));
+      expect(childRunEvents(host).filter(event => event.kind === "rejected")).toEqual([]);
+      await vi.waitFor(() => expect(forkSpy).toHaveBeenCalledTimes(2));
+      expect(root.tab.connectionId).toBe("pinned-A");
+      expect(childRunEvents(host)).toContainEqual(expect.objectContaining({ requestId: "default-core-child", kind: "accepted" }));
+      expect(forkSpy.mock.calls[1]?.[2]?.env).toMatchObject({ ANYCODE_CONNECTION_ID: "pinned-A", ANYCODE_MODEL: "model-A" });
+      expect(env).toHaveBeenLastCalledWith("pinned-A");
+    } finally {
+      await manager.shutdownAllTabHosts();
+    }
+  });
+
   function rig() {
     const { fork, hosts } = liveForkRig();
     const reaped: number[] = [];

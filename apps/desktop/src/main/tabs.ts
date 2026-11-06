@@ -2037,7 +2037,9 @@ export class TabHostManager {
           tab.engineModel = identity.model;
           tab.enginePreset = identity.mode;
           tab.modelOverride = target.engine === "core" ? identity.model : undefined;
-          tab.connectionId = target.engine === "core" ? target.connectionId : undefined;
+          // Native engines keep the logical session pin for future core children.
+          // Mirror the durable identity transaction's COALESCE(connection_id).
+          if (target.engine === "core") tab.connectionId = target.connectionId;
           tab.codexProfile = target.engine === "codex" ? tabPreparedProfile.get(tab) ?? null : null;
           tab.initialResume = true;
           tab.lastCommunicationStatus = {};
