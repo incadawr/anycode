@@ -495,9 +495,6 @@ const MIGRATIONS: readonly Migration[] = [
       COALESCE(codex_profile_id,''),external_session_ref,
       CASE WHEN external_session_ref IS NULL THEN 'fresh' ELSE 'materialized' END,
       json_object('model',model,'mode',mode),json_object('model',model,'mode',mode),created_at,NULL,'available_history' FROM sessions`,
-    `INSERT INTO runtime_transcript(session_id,segment_id,item_id,data)
-      SELECT session_id,'legacy',item_id,json_set(data,'$.id','segment:legacy:' || item_id,'$.segmentId','legacy','$.sourceItemId',item_id)
-      FROM history_items WHERE COALESCE(json_extract(data,'$.kind'),'') != 'turn_error' ORDER BY seq`,
     "UPDATE sessions SET active_runtime_segment='legacy'",
   ] },
   { version: 34, statements: [
@@ -507,6 +504,26 @@ const MIGRATIONS: readonly Migration[] = [
       state TEXT NOT NULL CHECK(state IN ('pending','dispatching','accepted','uncertain')),
       PRIMARY KEY(session_id,segment_id,turn_id),
       FOREIGN KEY(session_id,segment_id) REFERENCES runtime_segments(session_id,segment_id))`,
+  ] },
+  { version: 35, statements: [
+    `CREATE INDEX idx_runtime_transcript_turn ON runtime_transcript(session_id,segment_id,json_extract(data,'$.turnId'))`,
+    `CREATE INDEX idx_runtime_transcript_native_turn ON runtime_transcript(session_id,segment_id,json_extract(data,'$.nativeTurnId'))`,
+    // Remove only reproducible pre-switch copies from the eager backfill.
+    // Imported inputs, full compaction coverage and checkpoint watermarks remain owned.
+    `DELETE FROM runtime_transcript AS t WHERE segment_id='legacy'
+      AND EXISTS (SELECT 1 FROM sessions s WHERE s.id=t.session_id AND s.runtime_revision=0)
+      AND NOT EXISTS (SELECT 1 FROM runtime_inputs i WHERE i.session_id=t.session_id)
+      AND NOT EXISTS (SELECT 1 FROM runtime_boundaries b WHERE b.session_id=t.session_id)
+      AND NOT EXISTS (SELECT 1 FROM temp.runtime_backfill_checkpoint_owners c WHERE c.session_id=t.session_id)
+      AND NOT EXISTS (SELECT 1 FROM runtime_transcript x LEFT JOIN history_items h ON h.session_id=x.session_id AND h.item_id=x.item_id
+        WHERE x.session_id=t.session_id AND (x.segment_id!='legacy' OR h.data IS NULL OR x.data!=json_set(h.data,'$.id','segment:legacy:' || h.item_id,'$.segmentId','legacy','$.sourceItemId',h.item_id)))`,
+    `UPDATE sessions SET active_runtime_segment=NULL WHERE runtime_revision=0
+      AND NOT EXISTS (SELECT 1 FROM runtime_transcript t WHERE t.session_id=sessions.id)
+      AND NOT EXISTS (SELECT 1 FROM runtime_inputs i WHERE i.session_id=sessions.id)
+      AND NOT EXISTS (SELECT 1 FROM runtime_handoffs h WHERE h.session_id=sessions.id)
+      AND EXISTS (SELECT 1 FROM runtime_segments r WHERE r.session_id=sessions.id AND r.segment_id='legacy'
+        AND r.selected_json=json_object('model',sessions.model,'mode',sessions.mode) AND r.applied_json=r.selected_json)`,
+    `DELETE FROM runtime_segments WHERE segment_id='legacy' AND session_id IN (SELECT id FROM sessions WHERE runtime_revision=0 AND active_runtime_segment IS NULL)`,
   ] },
 ];
 
@@ -573,6 +590,41 @@ function rollbackAndRethrow(db: DatabaseSync, original: unknown): never {
  * and runs each pending migration's statements inside its own BEGIN/COMMIT
  * (a failure rolls back that migration's DDL and rethrows).
  */
+/** Once the canonical user record owns normalization, retain no duplicate input text. */
+function pruneResolvedRuntimeInputs(db: DatabaseSync, sessionId?: string, segmentId?: string): void {
+  let cursor = 0;
+  for (;;) {
+    const inputs = db.prepare(`SELECT rowid AS cursor,* FROM runtime_inputs WHERE state='accepted' AND rowid>?
+      AND (? IS NULL OR session_id=?) AND (? IS NULL OR segment_id=?) ORDER BY rowid LIMIT 100`).all(cursor,sessionId ?? null,sessionId ?? null,segmentId ?? null,segmentId ?? null);
+    if (!inputs.length) return;
+    for (const input of inputs) {
+      cursor = input.cursor as number;
+      const session = input.session_id as string, segment = input.segment_id as string, turn = input.turn_id as string;
+      const rows = db.prepare("SELECT item_id,data FROM runtime_transcript WHERE session_id=? AND segment_id=? AND json_extract(data,'$.turnId')=?").all(session,segment,turn);
+      const user = rows.find(row => { const item = JSON.parse(row.data as string) as HistoryItem; return item.message.role === "user" && (item.message.content === input.original_text || item.message.content === input.input_text); });
+      if (!user) continue; // Never prune an acceptance whose canonical user write has not committed.
+      for (const row of rows) {
+        const item = JSON.parse(row.data as string) as HistoryItem;
+        item.nativeTurnId = (input.native_turn_id ?? turn) as string;
+        if (row.item_id === user.item_id) {
+          item.message = {...item.message,role:"user",content:input.original_text as string};
+          item.runtimeInputDigest = createHash("sha256").update(input.input_text as string).digest("hex");
+        }
+        db.prepare("UPDATE runtime_transcript SET data=? WHERE session_id=? AND segment_id=? AND item_id=?").run(JSON.stringify(item),session,segment,row.item_id as string);
+      }
+      db.prepare("DELETE FROM runtime_inputs WHERE session_id=? AND segment_id=? AND turn_id=?").run(session,segment,turn);
+      const raw = db.prepare("SELECT data FROM runtime_handoffs WHERE session_id=? AND segment_id=?").get(session,segment);
+      if (raw) {
+        const handoff = JSON.parse(raw.data as string);
+        if (handoff.state === "accepted" && handoff.turnId === turn) {
+          delete handoff.originalText; delete handoff.injectedText;
+          db.prepare("UPDATE runtime_handoffs SET data=? WHERE session_id=? AND segment_id=?").run(JSON.stringify(handoff),session,segment);
+        }
+      }
+    }
+  }
+}
+
 function migrate(db: DatabaseSync, strictSessionSchema = false, outerTransaction = false): void {
   db.exec(
     `CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -595,8 +647,17 @@ function migrate(db: DatabaseSync, strictSessionSchema = false, outerTransaction
     }
     if (!outerTransaction) db.exec("BEGIN");
     try {
+      if (migration.version === 35) {
+        db.exec("CREATE TEMP TABLE runtime_backfill_checkpoint_owners (session_id TEXT PRIMARY KEY)");
+        // Some historical partial schemas legitimately contain no checkpoints.
+        if (db.prepare("SELECT 1 FROM sqlite_master WHERE name='checkpoints' AND type='table'").get()) db.exec("INSERT OR IGNORE INTO temp.runtime_backfill_checkpoint_owners SELECT session_id FROM checkpoints WHERE json_extract(history_json,'$.runtimeBoundary') IS NOT NULL");
+      }
       for (const statement of migration.statements) {
         db.exec(statement);
+      }
+      if (migration.version === 35) {
+        pruneResolvedRuntimeInputs(db);
+        db.exec("DROP TABLE temp.runtime_backfill_checkpoint_owners");
       }
       db.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)").run(
         migration.version,
@@ -1132,13 +1193,19 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
 
   ensureRuntimeSession(sessionId: string): RuntimeSessionSnapshot {
     this.transaction(db => {
-      const row = db.prepare("SELECT * FROM sessions WHERE id=?").get(sessionId) as unknown as SessionRow | undefined;
+      const row = db.prepare("SELECT * FROM sessions WHERE id=?").get(sessionId) as unknown as (SessionRow & {active_runtime_segment:string | null}) | undefined;
       if (!row) throw new Error("Session is missing");
+      if (row.active_runtime_segment) return;
       db.prepare(`INSERT OR IGNORE INTO runtime_segments VALUES (?,?,0,?,?,?,?,?,?,?,?,?,NULL,'available_history')`).run(
         sessionId, "legacy", row.engine_id ?? "core", row.connection_id, row.codex_profile_id,
         row.codex_profile_id ?? "", row.external_session_ref, row.external_session_ref ? "materialized" : "fresh",
         JSON.stringify({ model: row.model, mode: row.mode }), JSON.stringify({ model: row.model, mode: row.mode }), row.created_at);
       db.prepare("UPDATE sessions SET active_runtime_segment=COALESCE(active_runtime_segment,'legacy') WHERE id=?").run(sessionId);
+      // Opt in only when runtime history is actually requested. Flag-off
+      // sessions continue to own one model-history copy through migrations.
+      db.prepare(`INSERT INTO runtime_transcript(session_id,segment_id,item_id,data)
+        SELECT session_id,'legacy',item_id,json_set(data,'$.id','segment:legacy:' || item_id,'$.segmentId','legacy','$.sourceItemId',item_id)
+        FROM history_items WHERE session_id=? AND COALESCE(json_extract(data,'$.kind'),'')!='turn_error' ORDER BY seq`).run(sessionId);
     }, "immediate");
     return this.loadRuntimeSession(sessionId)!;
   }
@@ -1274,12 +1341,23 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       return false;
     }).map(item => {
       const input = inputs.find(value => item.turnId === value.turn_id || (typeof value.native_turn_id === "string" && (item.turnId === value.native_turn_id || item.id.startsWith(`${value.native_turn_id}:`))));
-      return input ? {...item,turnId:input.turn_id as string,...(item.message.role === "user" && item.message.content === input.input_text ? {message:{...item.message,content:input.original_text as string}} : {})} : item;
+      if (input) return {...item,turnId:input.turn_id as string,...(item.message.role === "user" && item.message.content === input.input_text ? {message:{...item.message,content:input.original_text as string}} : {})};
+      const previous = db.prepare("SELECT data FROM runtime_transcript WHERE session_id=? AND segment_id=? AND item_id=?").get(sessionId,segmentId,item.sourceItemId ?? item.id);
+      const receipt = previous ? JSON.parse(previous.data as string) as HistoryItem : undefined;
+      const turnReceipt = receipt ?? (item.turnId ? (() => {
+        const raw = db.prepare("SELECT data FROM runtime_transcript WHERE session_id=? AND segment_id=? AND json_extract(data,'$.nativeTurnId')=? LIMIT 1").get(sessionId,segmentId,item.turnId!);
+        return raw ? JSON.parse(raw.data as string) as HistoryItem : undefined;
+      })() : undefined);
+      const original = receipt?.message.role === "user" && item.message.role === "user" && receipt.runtimeInputDigest && createHash("sha256").update(item.message.content).digest("hex") === receipt.runtimeInputDigest;
+      return turnReceipt ? {...item,turnId:turnReceipt.turnId,nativeTurnId:turnReceipt.nativeTurnId,
+        ...(receipt?.runtimeInputDigest ? {runtimeInputDigest:receipt.runtimeInputDigest} : {}),
+        ...(original ? {message:receipt!.message} : {})} : item;
     });
     const scoped = scopeRuntimeHistory(segmentId,normalized,handoff ? JSON.parse(handoff.data as string) : null);
     const insert = db.prepare(`INSERT INTO runtime_transcript(session_id,segment_id,item_id,data) VALUES(?,?,?,?)
       ON CONFLICT(session_id,segment_id,item_id) DO UPDATE SET data=excluded.data`);
     for (const item of scoped) insert.run(sessionId,segmentId,item.sourceItemId!,JSON.stringify(item));
+    pruneResolvedRuntimeInputs(db,sessionId,segmentId);
     touchSessionActivity(db,sessionId,items);
   }
 

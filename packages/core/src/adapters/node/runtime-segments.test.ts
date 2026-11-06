@@ -28,6 +28,64 @@ async function legacyDatabase() {
   return path;
 }
 describe("runtime segment schema", () => {
+  it("leaves flag-off history un-copied on migration and backfills only on explicit runtime access", async () => {
+    const path = await legacyDatabase();
+    const store = new SqlitePersistenceAdapter(path);
+    await store.getRootSession("s");
+    const raw = new DatabaseSync(path);
+    expect(raw.prepare("SELECT count(*) AS n FROM runtime_transcript").get()!.n).toBe(0);
+    expect(store.loadRuntimeSession("s")).toBeNull();
+    expect((await store.loadHistory("s"))).toHaveLength(1);
+    expect(store.ensureRuntimeSession("s").items).toHaveLength(1);
+    expect(store.ensureRuntimeSession("s").items).toHaveLength(1);
+    raw.close(); await store.close();
+  });
+
+  it("reaps reproducible eager copies on upgrade but preserves canonical compaction coverage", async () => {
+    const path = await legacyDatabase();
+    const store = new SqlitePersistenceAdapter(path);
+    store.ensureRuntimeSession("s");
+    await store.createSession({id:"covered",workspace:"/w",model:"m",mode:"build"});
+    store.ensureRuntimeSession("covered");
+    const sink = new RuntimeHistorySink(store,"covered","legacy");
+    sink.append([{id:"full",createdAt:1,message:{role:"user",content:"full text"}}]);
+    sink.replaceAll([{id:"summary",createdAt:2,kind:"compact_summary",message:{role:"user",content:"summary"}}]);
+    await sink.flushChecked();
+    await store.createSession({id:"checkpoint-owned",workspace:"/w",model:"m",mode:"build"});
+    await store.appendHistory("checkpoint-owned",[{id:"kept",createdAt:1,message:{role:"user",content:"kept"}}]);
+    store.ensureRuntimeSession("checkpoint-owned");
+    await store.saveCheckpoint({id:"owned",sessionId:"checkpoint-owned",commitHash:"hash",createdAt:1,reason:"auto",label:"owned watermark",historyJson:JSON.stringify(await store.loadHistory("checkpoint-owned"))});
+    await store.close();
+    const raw = new DatabaseSync(path);
+    raw.exec("DELETE FROM schema_migrations WHERE version=35; DROP INDEX idx_runtime_transcript_turn; DROP INDEX idx_runtime_transcript_native_turn");
+    raw.close();
+    const upgraded = new SqlitePersistenceAdapter(path);
+    await upgraded.getRootSession("s");
+    expect(upgraded.loadRuntimeSession("s")).toBeNull();
+    expect(upgraded.loadRuntimeSession("covered")!.items.map(item => item.sourceItemId)).toEqual(["full","summary"]);
+    expect(upgraded.loadRuntimeSession("checkpoint-owned")!.items).toHaveLength(1);
+    expect(upgraded.ensureRuntimeSession("s").items).toHaveLength(1);
+    await upgraded.close();
+  });
+
+  it("rolls back the backfill cleanup and version marker if upgrade deletion fails", async () => {
+    const path = await legacyDatabase();
+    const store = new SqlitePersistenceAdapter(path);
+    store.ensureRuntimeSession("s"); await store.close();
+    const raw = new DatabaseSync(path);
+    raw.exec("DELETE FROM schema_migrations WHERE version=35; DROP INDEX idx_runtime_transcript_turn; DROP INDEX idx_runtime_transcript_native_turn; CREATE TRIGGER upgrade_fault BEFORE DELETE ON runtime_transcript BEGIN SELECT RAISE(ABORT,'upgrade fault'); END");
+    const failed = new SqlitePersistenceAdapter(path);
+    await expect(failed.getRootSession("s")).rejects.toThrow("upgrade fault");
+    expect(raw.prepare("SELECT 1 FROM schema_migrations WHERE version=35").get()).toBeUndefined();
+    expect(raw.prepare("SELECT count(*) AS n FROM runtime_transcript").get()!.n).toBe(1);
+    expect(raw.prepare("SELECT name FROM sqlite_master WHERE name='idx_runtime_transcript_turn'").get()).toBeUndefined();
+    raw.exec("DROP TRIGGER upgrade_fault"); raw.close();
+    const recovered = new SqlitePersistenceAdapter(path);
+    await recovered.getRootSession("s");
+    expect(recovered.loadRuntimeSession("s")).toBeNull();
+    expect(recovered.ensureRuntimeSession("s").items).toHaveLength(1);
+    await recovered.close();
+  });
   it("keeps the provider connection pin through native switches and changes it only on an explicit core target", async () => {
     const store = new SqlitePersistenceAdapter(":memory:");
     await store.createSession({id:"s",workspace:"/w",model:"m",mode:"build",connectionId:"pinned"});
@@ -232,6 +290,50 @@ describe("atomic runtime switch transaction", () => {
 });
 
 describe("durable input delivery", () => {
+  it("prunes resolved input text after canonical custody and retains replay normalization across restart", async () => {
+    const {store,path} = await target();
+    const live:import("../../types/history.js").HistoryItem[] = [];
+    for (let turn=0;turn<128;turn++) {
+      const original = `typed ${turn}`;
+      const input = store.prepareRuntimeInput("s",`logical-${turn}`,original,`${original}\n<host reminder>`,true);
+      store.transitionRuntimeInput("s","next",`logical-${turn}`,"dispatching");
+      store.transitionRuntimeInput("s","next",`logical-${turn}`,"accepted",`native-${turn}`);
+      const user = {id:`native-${turn}:user`,turnId:`native-${turn}`,createdAt:turn+4,message:{role:"user" as const,content:input}};
+      live.push(user);
+      store.mergeRuntimeTranscript("s","next",[user]);
+    }
+    const raw = new DatabaseSync(path);
+    expect(raw.prepare("SELECT count(*) AS n FROM runtime_inputs").get()!.n).toBe(0);
+    expect(store.loadRuntimeSession("s")!.handoff?.injectedText).toBeUndefined();
+    const unresolved = store.prepareRuntimeInput("s","unresolved","keep","keep",true);
+    store.transitionRuntimeInput("s","next","unresolved","dispatching");
+    expect(unresolved).toBe("keep");
+    raw.close(); await store.close();
+    const reopened = new SqlitePersistenceAdapter(path);
+    reopened.mergeRuntimeTranscript("s","next",[...live,{id:"native-0:late",turnId:"native-0",createdAt:200,message:{role:"assistant",content:[{type:"text",text:"late native record"}]}}]);
+    const items = reopened.loadRuntimeSession("s")!.items;
+    expect(items.filter(item => item.message.role === "user").slice(1).map(item => item.message.content)).toEqual(Array.from({length:128},(_,i) => `typed ${i}`));
+    expect(items.at(-1)?.turnId).toBe("logical-0");
+    expect(reopened.runtimeInputRecoveries("s","next")).toMatchObject([{turnId:"unresolved"}]);
+    await reopened.close();
+  });
+
+  it("rolls back canonical writes if pruning the resolved journal fails", async () => {
+    const {store,path} = await target();
+    const input = store.prepareRuntimeInput("s","logical","typed","typed",true);
+    store.transitionRuntimeInput("s","next","logical","dispatching");
+    store.transitionRuntimeInput("s","next","logical","accepted","native");
+    const before = store.loadRuntimeSession("s");
+    const raw = new DatabaseSync(path);
+    raw.exec("CREATE TRIGGER prune_fault BEFORE DELETE ON runtime_inputs BEGIN SELECT RAISE(ABORT,'prune fault'); END");
+    const user = {id:"native:user",turnId:"native",createdAt:4,message:{role:"user" as const,content:input}};
+    expect(() => store.mergeRuntimeTranscript("s","next",[user])).toThrow("prune fault");
+    expect(store.loadRuntimeSession("s")).toEqual(before);
+    raw.exec("DROP TRIGGER prune_fault"); raw.close();
+    store.mergeRuntimeTranscript("s","next",[user]);
+    expect(store.loadRuntimeSession("s")!.items.at(-1)?.message.content).toBe("typed");
+    await store.close();
+  });
   it("persists verified absence as pending and fences discard of an unknown delivery", async () => {
     const {store,path} = await target();
     store.prepareRuntimeInput("s","lost","draft","draft",true);

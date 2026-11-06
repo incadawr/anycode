@@ -1422,7 +1422,7 @@ describe("CLI sessions/resume UX (design slice-4.4-cut.md §7)", () => {
     expect(await runCli({argv:["--resume","fixture","-p","hello"],env:makeTitleTestEnv(dbPath,home),home,cwd:workspace,input:new PassThrough(),output:new PassThrough(),errorOutput:new PassThrough(),modelPort:model})).toBe(0);
     expect(model.calls).toBe(1);
     const db = new DatabaseSync(dbPath,{readOnly:true});
-    try { expect(db.prepare("SELECT MAX(version) AS v FROM schema_migrations").get()).toMatchObject({v:34}); }
+    try { expect(db.prepare("SELECT MAX(version) AS v FROM schema_migrations").get()).toMatchObject({v:35}); }
     finally { db.close(); }
   });
 
