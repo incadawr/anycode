@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@anycode/core";
-import { parseClaudeInitMcpServerNames, parseClaudeInitMcpServerStatuses, mcpServerFailureNotices } from "./claude-engine.js";
+import { claudeRestrictedForkToolNames, parseClaudeInitMcpServerNames, parseClaudeInitMcpServerStatuses, mcpServerFailureNotices } from "./claude-engine.js";
 
 describe("parseClaudeInitMcpServerNames", () => {
   it("parses {name,status,source} objects", () => {
@@ -154,4 +154,16 @@ describe("mcpServerFailureNotices", () => {
       expect((notice as { level: string }).level).toBe("warning");
     }
   });
+});
+
+describe("claudeRestrictedForkToolNames", () => {
+  it.each([undefined, new Set(["mcp__anycode__sessions_list", "mcp__anycode__session_open",
+    "mcp__anycode__session_send", "mcp__anycode__who_edits"])])(
+    "preserves delegation, catalog and every peer tool in restricted forks (%s)", peerToolNames => {
+      const expectedPeers = peerToolNames === undefined ? [] : ["sessions_list", "session_open", "session_send", "who_edits"];
+      expect(claudeRestrictedForkToolNames(peerToolNames)).toEqual(
+        new Set(["agent", "agent_status", "list_connections", ...expectedPeers]),
+      );
+    },
+  );
 });

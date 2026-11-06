@@ -502,6 +502,11 @@ function deadline(ms: number): SettleDeadline {
   };
 }
 
+export function claudeRestrictedForkToolNames(peerToolNames: ReadonlySet<string> = new Set()): Set<string> {
+  return new Set(["agent", "agent_status", "list_connections",
+    ...[...peerToolNames].map(name => name.replace("mcp__anycode__", ""))]);
+}
+
 type TransportSpawn = Pick<ClaudeSpawnArgsOptions, "sessionId" | "resume" | "model" | "effort" | "permissionModeFlag" | "orchestrationSpawn"> & { forward?: ClaudeForward; verify?: (client: ClaudeTransport) => Promise<void> };
 type ClaudeForward = Pick<import("../mcp-forward-boot.js").PreparedEngineMcpForward, "claudeConfigPath" | "notices" | "cleanupFile"> & Partial<Pick<import("../mcp-forward-boot.js").PreparedEngineMcpForward, "claudeJson" | "claudeNames" | "loaderProblems" | "forwardProblems">>;
 interface TransportBinding { client: ClaudeTransport; approvals: ClaudeApprovalBridge; close(): Promise<void> }
@@ -715,7 +720,7 @@ async function connectClaudeEngine(
     };
     const onAbort = () => { void close(); };
     try {
-      bridge = firstTransport ? options.mcpBridge : options.mcpBridge?.fork(next.orchestrationSpawn ? new Set(["agent", "agent_status", "list_connections", ...[...(options.peerToolNames ?? [])].map(name => name.replace("mcp__anycode__", ""))]) : undefined);
+      bridge = firstTransport ? options.mcpBridge : options.mcpBridge?.fork(next.orchestrationSpawn ? claudeRestrictedForkToolNames(options.peerToolNames) : undefined);
       if (firstTransport) initialForward = forward;
       firstTransport = false;
       const approvals = createApprovals(bridge);
