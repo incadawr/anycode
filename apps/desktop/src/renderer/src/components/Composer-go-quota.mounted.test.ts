@@ -29,3 +29,38 @@ it("shows only the pinned connection and follows settings updates", async () => 
     await act(async () => useSettingsStore.setState({ snapshot: { ...snapshot, settings: updated } })); expect(element.querySelector(".go-quota")).toBeNull();
   } finally { await act(async () => root.unmount()); element.remove(); send.mockRestore(); useSettingsStore.setState({ snapshot: original }); }
 });
+
+it("expires an open popover and cleans up its clock when closed", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-11-06T06:00:00Z"));
+  Object.defineProperty(window, "anycode", { configurable: true, value: { listSessions: async () => [] } });
+  const settings = cloneDefaults();
+  settings.provider.connections = [{ id: "a", providerId: "opencode", lastGoQuota: { observedAt: new Date().toISOString(), windows: { monthly: { usedPercent: 16 } } } }];
+  const original = useSettingsStore.getState().snapshot;
+  useSettingsStore.setState({ snapshot: { settings, readOnly: false, secrets: [], envOverrides: [], providerReady: true, catalog: [] } });
+  const store = createDesktopStore(); store.getState().setPinnedConnection({ connectionId: "a", providerId: "opencode" });
+  store.getState().applyHostMessage({ type: "host_ready", workspace: "/w", mode: "build", model: "m", sessionId: "s", contextUsage: { estimatedTokens: 25, budgetTokens: 100, source: "provider" } });
+  const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+  const interval = vi.spyOn(window, "setInterval"); const clear = vi.spyOn(window, "clearInterval");
+  const add = vi.spyOn(document, "addEventListener"); const remove = vi.spyOn(document, "removeEventListener");
+  const element = document.createElement("div"); document.body.append(element); const root = createRoot(element);
+  try {
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab", store } }, createElement(Composer))));
+    const trigger = element.querySelector<HTMLButtonElement>('[aria-label="Context window usage"]')!;
+    await act(async () => trigger.click());
+    expect(element.querySelector(".go-quota")?.textContent).toContain("Monthly · 16% used");
+    const clockIndex = interval.mock.calls.findIndex(call => call[1] === 60_000);
+    expect(clockIndex).toBeGreaterThanOrEqual(0);
+    const clock = interval.mock.results[clockIndex]!.value;
+    const listener = add.mock.calls.find(call => call[0] === "visibilitychange")?.[1];
+    expect(listener).toBeDefined();
+    await act(async () => vi.advanceTimersByTime(300_000));
+    expect(element.querySelector(".go-quota")).toBeNull();
+    await act(async () => trigger.click());
+    expect(clear).toHaveBeenCalledWith(clock);
+    expect(remove).toHaveBeenCalledWith("visibilitychange", listener);
+  } finally {
+    await act(async () => root.unmount()); element.remove(); send.mockRestore(); interval.mockRestore(); clear.mockRestore(); add.mockRestore(); remove.mockRestore();
+    useSettingsStore.setState({ snapshot: original }); vi.useRealTimers();
+  }
+});

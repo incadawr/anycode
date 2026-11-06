@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -58,15 +58,19 @@ describe("Go quota persistence", () => {
     key = "new-key"; release(success ? response() : new Response("failed", { status: 500 })); await pending;
     expect((await loadSettings(path)).settings.provider.connections[0]?.lastGoQuota).toBeUndefined(); expect(ping).not.toHaveBeenCalled();
   });
-  it.each(["base", "proxy", "deleted", "readonly"])("ignores delayed responses after %s changes", async change => {
+  it.each(["base", "proxy", "deleted", "readonly"].flatMap(change => [true, false].flatMap(success => [true, false].map(hasQuota => ({ change, success, hasQuota })))))("ignores delayed $success result after $change changes (cache $hasQuota)", async ({ change, success, hasQuota }) => {
     let release!: (r: Response) => void; const fetch = vi.fn(() => new Promise<Response>(resolve => { release = resolve; })); const ping = vi.fn();
     const service = createOpenCodeGoQuotaService({ settingsPath: path, vault: { getSecretValue: async () => key }, fetch: () => fetch, onPersisted: ping });
     const pending = service.refresh("a"); await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
+    const lastGoQuota = hasQuota ? { observedAt: "2026-01-01T00:00:00Z", windows: { monthly: { usedPercent: 73 } } } : undefined;
+    const connection = { id: "a", providerId: "opencode", ...(lastGoQuota ? { lastGoQuota } : {}) };
     if (change === "deleted") await write([]);
-    else if (change === "readonly") await writeFile(path, JSON.stringify({ ...cloneDefaults(), version: 999, provider: { connections: [{ id: "a", providerId: "opencode" }] } }));
-    else if (change === "base") await write([{ id: "a", providerId: "opencode", baseUrl: "https://opencode.ai/inference/go/anthropic/v1" }]);
-    else await write([{ id: "a", providerId: "opencode", proxyRef: "missing" }]);
-    release(response()); await pending; expect(ping).not.toHaveBeenCalled();
+    else if (change === "readonly") await writeFile(path, JSON.stringify({ ...cloneDefaults(), version: 999, provider: { connections: [connection] } }));
+    else if (change === "base") await write([{ ...connection, baseUrl: "https://opencode.ai/inference/go/anthropic/v1" }]);
+    else await write([{ ...connection, proxyRef: "missing" }]);
+    const before = await readFile(path, "utf8");
+    release(success ? response() : new Response("failed", { status: 500 })); await pending;
+    expect(await readFile(path, "utf8")).toBe(before); expect(ping).not.toHaveBeenCalled();
   });
 
 });
