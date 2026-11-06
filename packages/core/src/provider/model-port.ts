@@ -1,3 +1,4 @@
+import { applyGoRequestLimits } from "./go-request-limits.js";
 import { contextualizeNetworkFailure } from "./network-failure.js";
 /**
  * ModelPort adapter over the AI SDK. Per call:
@@ -1090,6 +1091,7 @@ export class AiSdkModelPort implements ModelPort {
   }
 
   async *streamText(request: ModelRequest): AsyncIterable<ModelStreamEvent> {
+    request = applyGoRequestLimits(request, this);
     const policy = resolveRetryPolicy(this.config.retry);
     let attempt = 0;
     // Time of this step's first retryable failure; anchors networkRetryBudgetMs.

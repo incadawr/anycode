@@ -24,6 +24,8 @@ export interface ModelRequest {
   /** Provider-agnostic declarations (no execute bodies — the model only proposes calls). */
   tools: ToolDeclaration[];
   maxOutputTokens?: number;
+  /** Context budget selected by the caller, bounded by the provider limit. */
+  contextWindowTokens?: number;
   reasoningEffort?: ReasoningEffort;
   temperature?: number;
   abortSignal?: AbortSignal;
