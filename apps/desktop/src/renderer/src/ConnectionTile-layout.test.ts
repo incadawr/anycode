@@ -13,14 +13,15 @@ describe("connection tile layout", () => {
     const directory = mkdtempSync(resolve(tmpdir(), "anycode-tile-layout-"));
     try {
       const file = resolve(directory, "tile.html");
-      writeFileSync(file, `<!doctype html><style>${css}</style>${tile(false)}${tile(true)}<pre id="result"></pre><script>document.querySelector('#result').textContent=JSON.stringify([...document.querySelectorAll('.connection-tile')].map(t=>{const h=t.querySelector('.connection-tile-header'), p=t.querySelector('.connection-tile-provider'), q=t.querySelector('.connection-quota'), s=getComputedStyle(p), qs=getComputedStyle(q); return {height:h.getBoundingClientRect().height, white:s.whiteSpace, ellipsis:s.textOverflow, labelHeight:p.getBoundingClientRect().height, line:parseFloat(s.lineHeight), quotaHeight:q.getBoundingClientRect().height, quotaLine:parseFloat(qs.lineHeight), client:q.clientWidth, scroll:q.scrollWidth};}));</script>`);
+      writeFileSync(file, `<!doctype html><style>${css}</style><div class="connection-grid"><div role="listitem">${tile(false)}</div><div role="listitem">${tile(true)}</div><div role="listitem"><div class="connection-tile"><button class="connection-tile-select"><div class="connection-tile-header"><span class="connection-tile-provider">No quota</span></div><div class="connection-quota"></div></button></div></div></div><pre id="result"></pre><script>document.querySelector('#result').textContent=JSON.stringify([...document.querySelectorAll('.connection-tile')].map(t=>{const h=t.querySelector('.connection-tile-header'), p=t.querySelector('.connection-tile-provider'), q=t.querySelector('.connection-quota'), s=getComputedStyle(p), qs=getComputedStyle(q); return {tileHeight:t.getBoundingClientRect().height,height:h.getBoundingClientRect().height, white:s.whiteSpace, ellipsis:s.textOverflow, labelHeight:p.getBoundingClientRect().height, line:parseFloat(s.lineHeight), quotaHeight:q.getBoundingClientRect().height, quotaLine:parseFloat(qs.lineHeight), client:q.clientWidth, scroll:q.scrollWidth};}));</script>`);
       const run = spawnSync(chrome, ["--headless", "--no-sandbox", "--disable-gpu", "--disable-background-networking", `--user-data-dir=${directory}/profile`, "--dump-dom", `file://${file}`], { encoding: "utf8", timeout: 30000 });
       expect(run.status, run.stderr).toBe(0);
       const match = run.stdout.match(/<pre id="result">([^<]+)<\/pre>/);
       expect(match).not.toBeNull();
-      const rows = JSON.parse(match![1]!) as Array<{height:number; white:string; ellipsis:string; quotaHeight:number; quotaLine:number; client:number; scroll:number}>;
+      const rows = JSON.parse(match![1]!) as Array<{tileHeight:number; height:number; white:string; ellipsis:string; quotaHeight:number; quotaLine:number; client:number; scroll:number}>;
       expect(rows[0]!.height).toBeCloseTo(rows[1]!.height, 1);
-      for (const row of rows) {
+      expect(rows[2]!.tileHeight).toBeCloseTo(rows[0]!.tileHeight, 1);
+      for (const row of rows.slice(0, 2)) {
         expect(row.white).toBe("nowrap");
         expect(row.ellipsis).toBe("ellipsis");
         expect(row.quotaHeight).toBeGreaterThanOrEqual(row.quotaLine * 1.9);
