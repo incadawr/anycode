@@ -145,6 +145,7 @@ it("lays out the actual connection buttons in order without clipping", async () 
     "GLM Coding Plan", "MiniMax M Plan", "Kimi (kimi.com)", "OpenCode Go",
     "API key or local model", "ChatGPT / Codex", "Claude Code",
   ]);
+  expect(buttons.filter(b => b.hasAttribute("data-welcome-path")).map(b => b.dataset.welcomePath)).toEqual(["api", "codex", "claude"]);
   const chrome = process.env.CHROME_BIN ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
   if (!existsSync(chrome)) throw new Error("Chrome is required for welcome layout verification");
   const dir = mkdtempSync(resolve(tmpdir(), "welcome-layout-"));

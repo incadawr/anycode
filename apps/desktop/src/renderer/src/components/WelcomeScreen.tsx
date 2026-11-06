@@ -250,7 +250,7 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
             ["codex", "ChatGPT / Codex", "Use your ChatGPT account"],
             ["claude", "Claude Code", "Use your Claude account"],
           ] as const).map(([id, title, description]) => (
-            <button key={id} type="button" className="welcome-path" aria-pressed={activePath === id && !(id === "api" && subscription !== null)} onClick={() => {
+            <button key={id} type="button" data-welcome-path={id} className="welcome-path" aria-pressed={activePath === id && !(id === "api" && subscription !== null)} onClick={() => {
               setPath(id);
               // Re-clicking the already-active path must stay inert — clearing
               // the pick here would remount the form and silently discard a
