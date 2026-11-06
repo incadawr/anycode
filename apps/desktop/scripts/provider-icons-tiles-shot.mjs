@@ -9,7 +9,7 @@ import { connectIsolatedCdp } from "./isolated-cdp.mjs";
 import { launchSmokeElectron } from "./smoke-electron-launch.mjs";
 
 const desktop = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const output = resolve(process.argv[2] ?? join(desktop, "out/provider-icons-tiles"));
+const output = resolve(process.argv[2] ?? join(desktop, "out/provider-icons-tiles-smoke"));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const providers = ["anthropic", "openai", "deepseek", "z-ai", "minimax", "opencode", "openrouter", "vllm", "custom"];
 

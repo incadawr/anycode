@@ -41,12 +41,12 @@ const aliases: Record<string, string> = { "z-ai": "zai", "minimax-cn": "minimax"
 
 export function providerIconName(id: string): string {
   const name = Object.hasOwn(aliases, id) ? (aliases[id] ?? id) : id;
-  return Object.hasOwn(paths, name) ? name : "fallback";
+  return Object.hasOwn(paths, name) && (paths[name]?.length ?? 0) > 0 ? name : "fallback";
 }
 
 export function ProviderIcon({ id }: { id: string }) {
   const name = providerIconName(id);
-  return <svg aria-hidden="true" focusable="false" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" fillRule="evenodd" style={{ flex: "none" }} data-provider-icon={name}>
+  return <svg aria-hidden="true" focusable="false" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" fillRule="evenodd" style={{ flex: "none" }} data-provider-icon={name}>
     {name === "fallback" ? <path d="M7 3h2v5h6V3h2v5h2v3a7 7 0 0 1-6 6.93V22h-2v-4.07A7 7 0 0 1 5 11V8h2V3zm0 7v1a5 5 0 0 0 10 0v-1H7z" /> : (paths[name] ?? []).map((d, i) => <path key={i} d={d} />)}
   </svg>;
 }
