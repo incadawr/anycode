@@ -5,8 +5,7 @@ import type { RuntimeSessionHistory } from "./runtime-session-history.js";
 import { manualCompactionUnavailableReason } from "../shared/manual-compaction.js";
 import { PresentationJournal } from "./presentation-journal.js";
 import type { CompactionRecordSeam } from "./compaction-records.js";
-import type { SessionPeerTurnPublication } from "../shared/session-peers.js";
-import { agentMessageText, type AgentEnvelope, type AgentDelivery, type SessionPublicResult, type SessionStatus, type SessionActivityState, type SetSessionEffortOutcome, type SetSessionFastOutcome, type SetSessionModelOutcome } from "../shared/communication.js";
+import { agentMessageText, type AgentEnvelope, type AgentDelivery, type AgentDisplayCard, type SessionPublicResult, type SessionStatus, type SessionActivityState, type SetSessionEffortOutcome, type SetSessionFastOutcome, type SetSessionModelOutcome } from "../shared/communication.js";
 import { normalizeEffortLevels, validateSessionEffort } from "../shared/session-effort.js";
 import { safeFailureMessage } from "./safe-failure.js";
 import { claudeNativeChildRecord } from "./claude-usage.js";
@@ -2611,6 +2610,13 @@ export class Session {
     return this.agentDeliveries.get(envelope.messageId)!;
   }
 
+  private agentDisplayCards: AgentDisplayCard[] = [];
+
+  restoreAgentDisplay(cards: AgentDisplayCard[]): void {
+    this.agentDisplayCards = cards;
+    this.outbound.sendDirect({ type: "agent_message_display", cards });
+  }
+
   restoreAgentMessages(deliveries: AgentDelivery[]): void {
     for (const delivery of deliveries) {
       if (delivery.envelope.recipientSessionId === this.sessionId && !this.agentDeliveries.has(delivery.envelope.messageId)) this.publishAgentDelivery(delivery);
@@ -3081,6 +3087,7 @@ export class Session {
         }
         this.pushTodoReminderSnapshot();
         for (const delivery of this.agentDeliveries.values()) this.outbound.sendDirect({ type: "agent_message", delivery });
+        if (this.agentDisplayCards.length) this.outbound.sendDirect({ type: "agent_message_display", cards: this.agentDisplayCards });
         // срез 2: re-post every still-unacknowledged detached-child
         // report to the just-(re)attached renderer — covers the race the
         // outer `sendDirect` at delivery time cannot: a renderer that was

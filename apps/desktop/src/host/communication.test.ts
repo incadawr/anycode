@@ -34,6 +34,28 @@ function fixture(saveTurnError?: SessionOptions["saveTurnError"]) {
   return { h, engine, inputs, signals, finishes, make };
 }
 describe("authenticated session inbox", () => {
+  it("replays display snapshots without delivery feedback, inbox entries or model history", async () => {
+    const { h, inputs, make } = fixture();
+    const observe = vi.fn();
+    h.session.observeAgentDeliveries(observe);
+    const card = { envelope: { ...make("display"), recipientSessionId: "other" }, state: "queued" as const, direction: "outgoing" as const };
+    const displays = () => h.received.filter(m => m.type === "agent_message_display");
+    try {
+      h.session.restoreAgentDisplay([card]);
+      h.session.restoreAgentDisplay([{ ...card, state: "acknowledged" }]);
+      await h.waitUntil(() => displays().length === 2);
+      for (let i = 0; i < 2; i++) {
+        const before = displays().length;
+        h.send({ type: "ui_ready" });
+        await h.waitUntil(() => displays().length > before);
+        expect(displays().at(-1)).toEqual({ type: "agent_message_display", cards: [{ ...card, state: "acknowledged" }] });
+      }
+      expect(h.session.agentMessageStatus("display")).toBeUndefined();
+      expect(observe).not.toHaveBeenCalled();
+      expect(inputs).toEqual([]);
+      expect(JSON.stringify(h.received.filter(m => m.type === "session_history"))).not.toContain("Follow this clarification");
+    } finally { h.close(); }
+  });
   it("starts idle next-turn exactly once and drains a busy queue only after settlement", async () => {
     const { h, inputs, finishes, make } = fixture();
     try {

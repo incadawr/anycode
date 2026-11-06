@@ -2627,6 +2627,7 @@ void app.whenReady().then(async () => {
     console.warn("[main] network hint forwarders not attached", error);
   }
   communicationController = createCommunicationController({
+    nativeSessionsEnabled: nativeSessionsEnabledForBoot(bootEnv, app.isPackaged),
     manager: () => manager,
     userData: app.getPath("userData"),
     logger: { warn: (message) => console.warn(message), error: (message) => console.error(message) },

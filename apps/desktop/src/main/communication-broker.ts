@@ -2,7 +2,7 @@ import { realpath } from "node:fs/promises";
 import { createCommunicationLedger, type CommunicationRecord } from "./communication-ledger.js";
 import { createCommunicationDispatch, type CommunicationPrincipal, type CommunicationSendInput } from "./communication-dispatch.js";
 import type { CommunicationManager } from "./communication-server.js";
-import type { AgentDelivery } from "../shared/communication.js";
+import type { AgentDelivery, AgentDisplayCard, AgentEnvelope } from "../shared/communication.js";
 type Tab = ReturnType<CommunicationManager["listTabs"]>[number];
 type Access = { tabs(retryMissing: boolean): Promise<ReadonlyArray<Tab>>; requireSession(sessionId: string): Promise<Tab> };
 
@@ -10,6 +10,7 @@ type Access = { tabs(retryMissing: boolean): Promise<ReadonlyArray<Tab>>; requir
 export async function createCommunicationBroker(options: {
   manager: CommunicationManager; ledgerFile: string;
   writeLedger?: (path: string, text: string) => Promise<void>;
+  nativeSessionsEnabled?: boolean;
   dispatchTimeoutMs?: number; realpath?: (path: string) => Promise<string>;
 }) {
   const { manager } = options;
@@ -35,7 +36,7 @@ export async function createCommunicationBroker(options: {
       return resolved;
     }, markLostGeneration,
     authorize: async () => { throw new Error("Access policy required"); },
-    dispatchTimeoutMs: options.dispatchTimeoutMs,
+    dispatchTimeoutMs: options.dispatchTimeoutMs, nativeSessionsEnabled: options.nativeSessionsEnabled,
     post: (id, envelope, workspace) => manager.communicationRequest(id, "send_message", envelope, workspace),
   });
   const observe = ({ tabs, requireSession }: Access) => {
@@ -61,7 +62,7 @@ export async function createCommunicationBroker(options: {
     const settled = (record: CommunicationRecord) => record.detail !== "Dispatch pending" && !dispatch.inFlight.has(record.envelope.messageId);
     let reconciling = false;
     const reconcile = async () => {
-      if (closed || stopped || reconciling) return;
+      if (options.nativeSessionsEnabled || closed || stopped || reconciling) return;
       reconciling = true;
       try {
         for (const record of messages.values()) await markLostGeneration(record);
@@ -103,8 +104,60 @@ export async function createCommunicationBroker(options: {
     observers.add(observer);
     return observer.stop;
   };
+  // Display recovery is app-owned even when the external endpoint is off.
+  const displaySnapshots = new Map<string, string>();
+  let projecting = false;
+  const reconcileDisplay = async () => {
+    if (!options.nativeSessionsEnabled || closed || projecting) return;
+    projecting = true;
+    try {
+      const tabs = manager.listTabs();
+      const live = new Set(tabs.map(tab => `${tab.sessionId}:${tab.pid}`));
+      for (const key of displaySnapshots.keys()) if (!live.has(key)) displaySnapshots.delete(key);
+      for (const record of messages.values()) {
+        await markLostGeneration(record);
+        const tab = tabs.find(tab => tab.sessionId === record.envelope.recipientSessionId);
+        if (record.state !== "queued" || !tab || dispatch.inFlight.has(record.envelope.messageId)) continue;
+        try {
+          const current = await manager.communicationRequest(tab.sessionId, "get_message_status", record.envelope.messageId, tab.workspace) as AgentDelivery | undefined;
+          if (current && record.state === "queued" && (current.state !== record.state || current.detail !== record.detail)) {
+            record.state = current.state; record.detail = current.detail; await persist();
+          }
+        } catch { /* closing host; display remains recoverable */ }
+      }
+      for (const tab of tabs) {
+        const cards: AgentDisplayCard[] = [];
+        for (const record of messages.values()) {
+          const e = record.envelope, p = record.principal;
+          const principal = p?.kind === "session" && typeof p.sessionId === "string" && typeof p.tabId === "string"
+            ? { kind: "session" as const, sessionId: p.sessionId, tabId: p.tabId } : undefined;
+          const incoming = e.recipientSessionId === tab.sessionId;
+          if (!incoming && principal?.sessionId !== tab.sessionId) continue;
+          if (dispatch.inFlight.has(e.messageId) || record.detail === "Dispatch pending") continue;
+          const envelope: AgentEnvelope = { messageId: e.messageId, sender: e.sender, recipientSessionId: e.recipientSessionId,
+            payload: e.payload, mode: e.mode, kind: e.kind, createdAt: e.createdAt };
+          if (e.correlationId !== undefined) envelope.correlationId = e.correlationId;
+          if (e.replyTo !== undefined) envelope.replyTo = e.replyTo;
+          if (principal) envelope.principal = principal;
+          cards.push({ envelope, state: record.state, ...(record.detail !== undefined ? { detail: record.detail } : {}), direction: incoming ? "incoming" : "outgoing" });
+        }
+        const key = `${tab.sessionId}:${tab.pid}`, snapshot = JSON.stringify(cards);
+        if (!cards.length || displaySnapshots.get(key) === snapshot || closed) continue;
+        try {
+          await manager.communicationRequest(tab.sessionId, "restore_agent_display", cards, tab.workspace);
+          displaySnapshots.set(key, snapshot);
+        } catch { /* retry on the next reconcile */ }
+      }
+    } catch { /* persistence unavailable; retry without replay */ }
+    finally { projecting = false; }
+  };
+  if (options.nativeSessionsEnabled) observe({ tabs: async () => manager.listTabs(), requireSession: async id => {
+    const tab = manager.listTabs().find(tab => tab.sessionId === id);
+    if (!tab) throw new Error("Host unavailable");
+    return tab;
+  } });
   const reconcile = () => {
-    const task = Promise.all([...[...messages.values()].map(markLostGeneration), ...[...lifecycles, ...observers].map(observer => observer.reconcile())]).then(() => {}, () => {});
+    const task = Promise.all([...observers].map((observer) => observer.reconcile())).then(reconcileDisplay);
     pending.add(task); void task.finally(() => pending.delete(task)); return task;
   };
   const timer = setInterval(() => { void reconcile(); }, 1000);

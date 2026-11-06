@@ -1,5 +1,7 @@
 /** No client-supplied role or identity: main stamps the authenticated principal. */
+export interface SessionMessagePrincipal { kind: "session"; sessionId: string; tabId: string }
 export interface AgentEnvelope {
+  principal?: SessionMessagePrincipal;
   messageId: string;
   sender: string;
   recipientSessionId: string;
@@ -14,6 +16,10 @@ export interface AgentDelivery {
   envelope: AgentEnvelope;
   state: "queued" | "acknowledged" | "rejected" | "unknown";
   detail?: string;
+}
+/** Ledger projection for display only; never an inbox or model input. */
+export interface AgentDisplayCard extends AgentDelivery {
+  direction: "incoming" | "outgoing";
 }
 /**
  * The delivery wrapper's first line prefix: the only title text that is never

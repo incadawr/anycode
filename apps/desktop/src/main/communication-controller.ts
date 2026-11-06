@@ -26,6 +26,7 @@ type StartFn = (options: CommunicationServerOptions & ({ configFile: string } | 
 export interface CommunicationControllerDeps {
   /** The live tab manager, or null before boot wires it. */
   manager(): CommunicationManager | null;
+  nativeSessionsEnabled?: boolean;
   userData: string;
   logger: { error(message: string): void; warn?(message: string): void };
   /** Injected for tests; defaults to the real server. */
@@ -81,7 +82,7 @@ export function createCommunicationController(deps: CommunicationControllerDeps)
       const manager = deps.manager();
       if (!manager) throw new Error("Host not ready");
       const file = await communicationDiscoveryFile(deps.userData, bootEnv);
-      return createCommunicationBroker({ manager, ledgerFile: `${file}.messages` });
+      return createCommunicationBroker({ manager, ledgerFile: `${file}.messages`, nativeSessionsEnabled: deps.nativeSessionsEnabled });
     })().catch((error) => { shared = undefined; throw error; });
     return shared;
   };

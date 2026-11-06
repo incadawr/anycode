@@ -20,6 +20,7 @@ export function createCommunicationDispatch(options: {
   post: (sessionId: string, envelope: AgentEnvelope, workspace: string) => Promise<unknown>;
   markLostGeneration: (record: CommunicationRecord) => Promise<unknown>;
   dispatchTimeoutMs?: number;
+  nativeSessionsEnabled?: boolean;
 }) {
   const { messages, persist } = options.ledger;
   // Exclude these records from display restoration until the real post settles,
@@ -59,6 +60,7 @@ export function createCommunicationDispatch(options: {
     if (options.ledger.isFull()) throw new Error("Message ledger full; restart with a new discovery file after archiving ledger");
     const sender = principal.kind === "external" ? "authenticated-local-supervisor" : `session:${principal.sessionId}`;
     const envelope: AgentEnvelope = { messageId: randomUUID(), sender, recipientSessionId: input.sessionId, payload: input.payload, mode: input.mode, kind: input.kind, correlationId: input.correlationId, replyTo: input.replyTo, createdAt: new Date().toISOString() };
+    if (options.nativeSessionsEnabled && principal.kind === "session") envelope.principal = { ...principal };
     const record: CommunicationRecord = { envelope, state: "unknown", detail: "Dispatch pending", idempotencyKey: input.idempotencyKey, workspace, hostPid: recipient.pid };
     if (principal.kind === "session") record.principal = { ...principal };
     admit?.(record); // Synchronous reservation shares the dedup boundary.

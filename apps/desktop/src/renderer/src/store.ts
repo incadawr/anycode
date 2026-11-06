@@ -5539,6 +5539,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             }
             return;
           }
+          case "agent_message_display": return; // Display snapshot consumption is added with the card UI.
           case "agent_message": {
             const d = message.delivery;
             const id = `agent-message:${d.envelope.messageId}`;

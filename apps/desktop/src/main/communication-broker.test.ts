@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createCommunicationController } from "./communication-controller.js";
 import { createCommunicationBroker } from "./communication-broker.js";
-import type { AgentDelivery } from "../shared/communication.js";
+import type { AgentDelivery, AgentDisplayCard } from "../shared/communication.js";
 const cleanup: Array<() => Promise<unknown>> = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
 it("keeps native delivery and display recovery alive without HTTP, sharing one custom ledger across rebinds", async () => {
@@ -108,4 +108,67 @@ it("disposal rejects a send still awaiting authorization and removes every obser
   await Promise.all([rejected, disposal]);
   expect(unsubscribe).toHaveBeenCalledTimes(2);
   expect(post).not.toHaveBeenCalled();
+});
+
+it("projects both ledger sides, refreshes settled and new cards, and recovers without send replay", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "display-ledger-"));
+  cleanup.push(() => rm(dir, { recursive: true, force: true }));
+  const tabs = ["a", "b"].map(sessionId => ({ sessionId, workspace: dir, state: "running", pid: 1 }));
+  const request = vi.fn(async (_id: string, op: string, _payload?: unknown) => op === "send_message" ? { state: "queued" } : undefined);
+  const manager = { listTabs: () => tabs, communicationRequest: request };
+  const options = { manager, ledgerFile: join(dir, "ledger"), nativeSessionsEnabled: true };
+  let broker = await createCommunicationBroker(options);
+  cleanup.push(() => broker.dispose());
+  const principal = { kind: "session" as const, sessionId: "a", tabId: "tab-a" };
+  const input = { sessionId: "b", payload: "private body", mode: "next_turn" as const, kind: "agent_message" as const, correlationId: "chain" };
+  const record = await broker.send(principal, input, async () => tabs[1]!);
+  expect(record.envelope).toHaveProperty("principal", principal);
+  // Old records have identity only at the ledger level; prose is never authority.
+  delete record.envelope.principal;
+  Object.assign(record, { secret: "sentinel" });
+  const cards = (id: string) => request.mock.calls.filter(([target, op]) => target === id && op === "restore_agent_display");
+  await broker.reconcile();
+  for (const [id, direction] of [["a", "outgoing"], ["b", "incoming"]]) {
+    const wire = cards(id!).at(-1)![2] as AgentDisplayCard[];
+    expect(wire).toEqual([{ envelope: { ...record.envelope, principal }, state: "queued", direction }]);
+    expect(JSON.stringify(wire)).not.toMatch(/sentinel|hostPid|workspace|idempotencyKey/);
+  }
+  request.mockImplementation(async (_id, op) => op === "get_message_status" ? { state: "acknowledged" } : op === "send_message" ? { state: "queued" } : undefined);
+  await broker.reconcile();
+  expect((cards("a").at(-1)![2] as AgentDisplayCard[])[0]!.state).toBe("acknowledged");
+  await broker.send(principal, { ...input, payload: "second" }, async () => tabs[1]!);
+  await broker.reconcile();
+  expect((cards("a").at(-1)![2] as AgentDisplayCard[])).toHaveLength(2);
+  const before = cards("a").length;
+  tabs[0]!.pid = 2;
+  await broker.reconcile();
+  expect(cards("a")).toHaveLength(before + 1);
+  await broker.dispose();
+  broker = await createCommunicationBroker(options);
+  await broker.reconcile();
+  expect((cards("b").at(-1)![2] as AgentDisplayCard[])).toHaveLength(2);
+  expect(request.mock.calls.filter(([, op]) => op === "send_message")).toHaveLength(2);
+  const fake = await broker.send({ kind: "external" }, input, async () => tabs[1]!);
+  fake.envelope.sender = "session:a";
+  fake.envelope.principal = principal;
+  await broker.reconcile();
+  expect((cards("a").at(-1)![2] as AgentDisplayCard[])).toHaveLength(2);
+  expect((cards("b").at(-1)![2] as AgentDisplayCard[]).at(-1)!.envelope.principal).toBeUndefined();
+  // Disabled transport retains legacy bytes, including the restoration request.
+  {
+    const dir = await mkdtemp(join(tmpdir(), "display-off-"));
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    const tab = { sessionId: "b", workspace: dir, state: "running", pid: 1 };
+    const request = vi.fn(async (_id: string, _op: string, _payload?: unknown) => ({ state: "acknowledged" }));
+    const broker = await createCommunicationBroker({ manager: { listTabs: () => [tab], communicationRequest: request }, ledgerFile: join(dir, "ledger"), nativeSessionsEnabled: false });
+    cleanup.push(() => broker.dispose());
+    broker.observe({ tabs: async () => [tab], requireSession: async () => tab });
+    const record = await broker.send({ kind: "session", sessionId: "a", tabId: "tab-a" }, { sessionId: "b", payload: "body", mode: "next_turn", kind: "agent_message" }, async () => tab);
+    const legacy = { messageId: record.envelope.messageId, sender: "session:a", recipientSessionId: "b", payload: "body", mode: "next_turn", kind: "agent_message", createdAt: record.envelope.createdAt };
+    expect(JSON.stringify(record.envelope)).toBe(JSON.stringify(legacy));
+    await broker.reconcile();
+    const restore = request.mock.calls;
+    expect(JSON.stringify(restore.find(([, op]) => op === "restore_agent_messages")?.[2])).toBe(JSON.stringify([record]));
+    expect(restore.some(([, op]) => op === "restore_agent_display")).toBe(false);
+  }
 });
