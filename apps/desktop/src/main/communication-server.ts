@@ -173,7 +173,7 @@ export interface CommunicationServerOptions {
   listAgentProjects?: () => string[];
   /** Main-owned bookkeeping shared by admission, the alive cap and close_session. */
   agentOpenedSessions?: Set<string>;
-  /** Production creator owns the shared admission; embedders use the adapter fallback. */
+  /** Creator owns admission by default; false opts standalone embedders into the adapter. */
   creatorOwnsAdmission?: boolean;
   closeSessionByAgent?: (sessionId: string) => Promise<CloseSessionOutcome>;
   /** Clock for the creation rate window (tests inject it). */
@@ -545,7 +545,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
           } catch { throw createRefusal("not_ready"); }
           return created;
         };
-        const outcome = await (options.creatorOwnsAdmission ? create() : admission.run(create));
+        const outcome = await (options.creatorOwnsAdmission !== false ? create() : admission.run(create));
         if (!outcome.ok) throw createRefusal(outcome.reason, outcome.detail);
         let messageId: string | undefined;
         if (input.firstMessage !== undefined) {

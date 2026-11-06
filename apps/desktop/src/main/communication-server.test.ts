@@ -1141,6 +1141,7 @@ describe("Sessions API create_session", () => {
     const manager = { listTabs: () => tabs, communicationRequest: request };
     const service = await startCommunicationServer({
       manager, userData: dir, config: { workspaces: options.workspaces ?? [], discoveryFile },
+      creatorOwnsAdmission: false,
       createSessionByAgent: (input) => creator(input, tabs),
       ...(options.projects ? { listAgentProjects: () => options.projects! } : {}),
       ...(options.opened ? { agentOpenedSessions: options.opened } : {}),

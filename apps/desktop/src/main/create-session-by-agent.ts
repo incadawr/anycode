@@ -13,6 +13,7 @@
  */
 
 import { creationAdmissionFor, type CreatorAdmissionPolicy } from "./communication-creation-admission.js";
+import { normalizePeerWorkspaceKey } from "./session-peer-policy.js";
 import type { WorkspaceTrustStore } from "@anycode/core/workspace-trust";
 import { canonicalWorkspaceKey } from "@anycode/core/workspace-trust";
 import type { CreateSessionOutcome, CreateSessionRequest } from "./communication-server.js";
@@ -46,6 +47,7 @@ export interface CreateSessionByAgentDeps {
   sessions(): SessionAccessStore | null;
   /** Node realpath used to canonicalise the workspace trust key. */
   realpathSync(path: string): string;
+  platform?: NodeJS.Platform;
   /** Reads the workspace trust store (fail-soft on the caller's side). */
   readTrustStore(): Promise<WorkspaceTrustStore>;
   /** Primes the MCP secret fork cache for a canonical workspace key. */
@@ -129,11 +131,14 @@ export async function createSessionForAgent(
   deps: CreateSessionByAgentDeps,
   policy: CreatorAdmissionPolicy = { kind: "external" },
 ): Promise<CreateSessionOutcome> {
-  return creationAdmissionFor(deps.agentOpenedSessions, deps.listTabs).run(() => createAdmittedSession(request, deps, policy));
+  let deliver: (() => Promise<{ state: string; messageId?: string }>) | undefined;
+  const outcome = await creationAdmissionFor(deps.agentOpenedSessions, deps.listTabs).run(() =>
+    createAdmittedSession(request, deps, policy, callback => { deliver = callback; }));
+  return outcome.ok && deliver ? { ...outcome, delivery: await deliver() } : outcome;
 }
 
 async function createAdmittedSession(request: CreateSessionRequest, deps: CreateSessionByAgentDeps,
-  policy: CreatorAdmissionPolicy): Promise<CreateSessionOutcome> {
+  policy: CreatorAdmissionPolicy, afterCreation: (deliver: () => Promise<{ state: string; messageId?: string }>) => void): Promise<CreateSessionOutcome> {
   const projects = deps.projects;
   const tabs = deps.manager();
   const sessions = deps.sessions();
@@ -142,9 +147,10 @@ async function createAdmittedSession(request: CreateSessionRequest, deps: Create
   try {
     key = policy.kind === "native" ? deps.realpathSync(request.workspace) : canonicalWorkspaceKey(request.workspace, deps.realpathSync);
   } catch { return { ok: false, reason: "folder_not_found" }; }
+  const peerKey = normalizePeerWorkspaceKey(key, deps.platform);
   const authorized = () => {
     try {
-      return policy.kind === "native" ? policy.authorize(request.workspace, key, projects.isAllowed(key)) : projects.isAllowed(key);
+      return policy.kind === "native" ? peerKey !== null && policy.authorize(request.workspace, peerKey, projects.isAllowed(key)) : projects.isAllowed(key);
     } catch { return false; }
   };
   if (!authorized()) return { ok: false, reason: "not_allowed" };
@@ -441,12 +447,15 @@ async function createAdmittedSession(request: CreateSessionRequest, deps: Create
     registerAttribution();
     tabs.deliverTabPort(tab);
   }
-  let delivery: { state: string; messageId?: string } | undefined;
   if (policy.kind === "native" && request.firstMessage !== undefined) {
-    try {
-      delivery = authorized() && policy.deliverFirstMessage
-        ? await policy.deliverFirstMessage(sessionId, request.firstMessage) : { state: "rejected" };
-    } catch { delivery = { state: "unknown" }; }
+    const payload = request.firstMessage;
+    // Delivery may wait on a host indefinitely; it must not retain the creation slot.
+    afterCreation(async () => {
+      try {
+        return authorized() && policy.deliverFirstMessage
+          ? await policy.deliverFirstMessage(sessionId, payload) : { state: "rejected" };
+      } catch { return { state: "unknown" }; }
+    });
   }
-  return { ok: true, sessionId, tabId: tab.tabId, ...(handle !== undefined ? { handle } : {}), ...(delivery ? { delivery } : {}) };
+  return { ok: true, sessionId, tabId: tab.tabId, ...(handle !== undefined ? { handle } : {}) };
 }

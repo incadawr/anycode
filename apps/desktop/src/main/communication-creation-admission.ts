@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { CreateSessionOutcome } from "./communication-server.js";
 
 export const CREATE_SESSION_RATE_LIMIT = 5;
@@ -17,17 +18,22 @@ export function creationAdmissionFor(owned: Set<string>, listTabs: () => Readonl
 }
 
 function createCreationAdmission(owned: Set<string>, listTabs: () => ReadonlyArray<{ sessionId: string }>, now: () => number) {
+  const context = new AsyncLocalStorage<{ active: boolean }>();
   let tail: Promise<unknown> = Promise.resolve();
   const times: number[] = [];
   return {
     run(task: () => Promise<CreateSessionOutcome>): Promise<CreateSessionOutcome> {
+      if (context.getStore()?.active) return Promise.reject(new Error("Nested creation admission"));
       const result = tail.then(async (): Promise<CreateSessionOutcome> => {
         const at = now();
         while (times.length && times[0]! <= at - CREATE_SESSION_RATE_WINDOW_MS) times.shift();
         if (times.length >= CREATE_SESSION_RATE_LIMIT) return { ok: false, reason: "rate_limited" };
         const live = new Set(listTabs().map(t => t.sessionId));
         if ([...owned].filter(id => live.has(id)).length >= MAX_AGENT_OPENED_TABS) return { ok: false, reason: "too_many" };
-        const outcome = await task();
+        const scope = { active: true };
+        let outcome: CreateSessionOutcome;
+        try { outcome = await context.run(scope, task); }
+        finally { scope.active = false; }
         if (outcome.ok) {
           times.push(now());
           owned.add(outcome.sessionId);
@@ -49,3 +55,8 @@ export type CreatorAdmissionPolicy = { kind: "external" } | {
   /** Uses the shared broker's session principal and message admission. */
   deliverFirstMessage?(sessionId: string, payload: string): Promise<{ state: string; messageId?: string }>;
 };
+
+/** Called on real tab close; opener identity lasts only as long as its tab. */
+export function forgetClosedAgentOpeners(openers: Map<string, string>, live: Set<string>): void {
+  for (const id of openers.keys()) if (!live.has(id)) openers.delete(id);
+}

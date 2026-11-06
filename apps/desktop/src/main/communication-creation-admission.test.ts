@@ -29,6 +29,15 @@ describe("creation reservation", () => {
     await next;
     expect(forks).toBe(1);
   });
+  it("refuses nested admission explicitly and still accepts later calls", async () => {
+    const admission = creationAdmissionFor(new Set(), () => []);
+    await admission.run(async () => {
+      await Promise.resolve();
+      await expect(admission.run(async () => ({ ok: false, reason: "not_ready" }))).rejects.toThrow("Nested creation admission");
+      return { ok: true, sessionId: "one", tabId: "tab-one" };
+    });
+    expect(await admission.run(async () => ({ ok: true, sessionId: "two", tabId: "tab-two" }))).toMatchObject({ ok: true });
+  });
   it("enforces eight live sessions across rate windows and frees closed slots", async () => {
     const owned = new Set<string>();
     const tabs: { sessionId: string }[] = [];

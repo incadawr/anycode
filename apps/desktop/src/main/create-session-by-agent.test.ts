@@ -29,6 +29,7 @@ import { startCommunicationServer } from "./communication-server.js";
 import { SqlitePersistenceAdapter } from "@anycode/core";
 import { AGENT_MESSAGE_HEADER_PREFIX } from "../shared/communication.js";
 import { createSessionPeerAccess } from "./session-peer-access.js";
+import { forgetClosedAgentOpeners } from "./communication-creation-admission.js";
 import { createSessionForAgent, type CreateSessionByAgentDeps } from "./create-session-by-agent.js";
 import { offerEmptyFolderTrust } from "./workspace-trust-ipc.js";
 import { resolveSkillsProfileHome } from "./dev-profile.js";
@@ -94,6 +95,7 @@ function rig(options: {
   sessions?: SessionAccessStore;
   /** The session id `create_session` assigns (deterministic when a row is pre-seeded). */
   sessionId?: string;
+  onTabClosed?: () => void;
   /**
    * Replaces the registration callback main uses. The title test needs main's
    * REAL callback (store registration + resume-time recovery), so it passes one
@@ -197,6 +199,7 @@ function rig(options: {
   };
   const manager = new TabHostManager({
     fork,
+    onTabClosed: options.onTabClosed,
     onSessionRegistered: options.onSessionRegistered ?? (({ sessionId }) => {
       options.sequence?.push("registered");
       const added = options.sessions?.register({ sessionId });
@@ -1277,6 +1280,47 @@ describe("shared creation admission", () => {
     expect(r.forkEnvs[0]?.ANYCODE_CONNECTION_ID).toBe("conn-glm");
     expect(await createSessionForAgent({ workspace: "/ws" }, deps)).toMatchObject({ ok: false, reason: "not_allowed" });
   });
+  it("normalizes Windows policy keys while preserving workspace casing", async () => {
+    const r = rig();
+    const workspace = "C:/Work/Repo";
+    const key = "c:\\work\\repo";
+    const access = createSessionPeerAccess({ platform: "win32", enabled: () => true,
+      isTrusted: candidate => candidate === key, realpathSync: p => p,
+      statSync: () => ({ isDirectory: () => true }),
+      policy: { isNativeEnabled: () => true, hasPairGrant: () => false,
+        setNativeEnabled: () => false, setPairGrant: () => false } });
+    const caller = { workspace, workspaceKey: key, live: true, root: true, restricted: false, readOnly: false };
+    const outcome = await createSessionForAgent({ workspace }, r.deps({ platform: "win32",
+      readTrustStore: async () => ({ version: 1, folders: { [workspace]: { decision: "trusted", hash: "h", decidedAt: "now" } } }),
+    }), { kind: "native", openerSessionId: "opener",
+      authorize: (path, pinned, allowed) => access.canAccessWorkspace(caller, path, pinned, "open", allowed) });
+    expect(outcome.ok).toBe(true);
+    expect(r.manager.listTabs()[0]?.workspace).toBe(workspace);
+  });
+  it("releases creation admission before a hung native first-message delivery", async () => {
+    const r = rig();
+    let entered!: () => void;
+    const delivering = new Promise<void>(resolve => { entered = resolve; });
+    let settle!: (value: { state: string }) => void;
+    const first = createSessionForAgent({ workspace: "/ws", firstMessage: "hello" }, r.deps(), {
+      ...native(), deliverFirstMessage: () => { entered(); return new Promise(resolve => { settle = resolve; }); },
+    });
+    await delivering;
+    try {
+      expect(await createSessionForAgent({ workspace: "/ws" }, r.deps(), native())).toMatchObject({ ok: true, sessionId: "sess-1" });
+      expect(r.forkEnvs).toHaveLength(2);
+    } finally { settle({ state: "queued" }); }
+    expect(await first).toMatchObject({ sessionId: "sess-0", delivery: { state: "queued" } });
+  });
+  it("forgets opener metadata only for closed tabs", async () => {
+    const openers = new Map<string, string>();
+    const r = rig({ onTabClosed: () => forgetClosedAgentOpeners(openers, new Set(r.manager.listTabs().map(t => t.sessionId))) });
+    const deps = r.deps({ agentSessionOpeners: openers });
+    await createSessionForAgent({ workspace: "/ws" }, deps, native());
+    await createSessionForAgent({ workspace: "/ws" }, deps, native());
+    await r.manager.closeTab(r.manager.listTabs()[0]!.tabId);
+    expect([...openers]).toEqual([["sess-1", "opener"]]);
+  });
   it("refuses native policy denial before forking", async () => {
     const r = rig();
     expect(await createSessionForAgent({ workspace: "/ws" }, r.deps(), native(false))).toMatchObject({ ok: false, reason: "not_allowed" });
@@ -1357,7 +1401,7 @@ it("HTTP and native entries share one creation budget", async () => {
   const service = await startCommunicationServer({
     manager: { listTabs: () => r.manager.listTabs(), communicationRequest: async () => ({ engine: "core", state: "idle" }) },
     userData: dir, config: { workspaces: [], discoveryFile }, realpath: async p => p,
-    agentOpenedSessions: r.agentOpenedSessions, creatorOwnsAdmission: true,
+    agentOpenedSessions: r.agentOpenedSessions,
     createSessionByAgent: request => createSessionForAgent(request, deps),
   });
   const client = new Client({ name: "shared-creation", version: "1" });

@@ -136,6 +136,7 @@ import {
 // `create_session {engine:"core", model}` resolves to a provider
 // CONNECTION (the core engine has no engine-model argv), never a silent fallback.
 import { primeNewSessionPin } from "./session-pin.js";
+import { forgetClosedAgentOpeners } from "./communication-creation-admission.js";
 import { createSessionForAgent as createSessionForAgentImpl, type CreateSessionByAgentDeps } from "./create-session-by-agent.js";
 import { createAgentTitlePushes, createAgentTitleRecoveryDeps, recoverAgentSessionTitleOnRegister, type AgentTitlePushes, type AgentTitleRecoveryDeps } from "./agent-session-title.js";
 import type { CreateSessionRequest } from "./communication-server.js";
@@ -3027,10 +3028,10 @@ void app.whenReady().then(async () => {
     // and neither do the tab's artifact consent grants.
     onTabClosed: (tabId) => {
       const liveSessions = new Set(manager?.listTabs().map((tab) => tab.sessionId));
+      forgetClosedAgentOpeners(agentSessionOpeners, liveSessions);
       for (const id of agentOpenedSessions) {
         if (!liveSessions.has(id)) {
           agentOpenedSessions.delete(id);
-          agentSessionOpeners.delete(id);
           agentSessionTitles.delete(id);
           agentTitlePushes.forget(id);
         }
