@@ -1864,7 +1864,7 @@ export class Session {
     this.worktreeControl = options.worktreeControl;
     this.reportProviderHealth = options.reportProviderHealth;
     this.reportProviderQuota = options.reportProviderQuota;
-    this.model = options.model;
+    this.model = options.engineSettings?.snapshot().model ?? options.model;
     this.sessionId = options.sessionId;
     this.saveContextUsage = options.saveContextUsage;
     this.checkpointContextUsage = options.initialContextUsage ?? null;
@@ -1991,6 +1991,7 @@ export class Session {
       this.persistRuntimeSettings();
       this.outbound.emit({
         type: "engine_settings_changed",
+        ...(this.imageInputEnabled ? {imageInput:this.imageInputEnabled()} : {}),...(this.imageFallbackAvailable ? {imageFallback:this.imageFallbackAvailable()} : {}),
         ...(clearContextUsage ? { clearContextUsage: true } : {}),
         model: applied.model,
         activePresetId: applied.activePresetId,
@@ -2004,7 +2005,7 @@ export class Session {
     const rejectedSubscription = seam.onSettingsRejected?.(reason => {
       if (!current()) return;
       this.outbound.emit({type:"mode_change_rejected",reason});
-      this.outbound.emit({type:"engine_settings_changed",...seam.snapshot(),state:"applied",appliesFrom:"next_turn"});
+      this.outbound.emit({type:"engine_settings_changed",...seam.snapshot(),...(this.imageInputEnabled ? {imageInput:this.imageInputEnabled()} : {}),...(this.imageFallbackAvailable ? {imageFallback:this.imageFallbackAvailable()} : {}),state:"applied",appliesFrom:"next_turn"});
       this.pushPendingEngineSettings();
     });
     return () => { appliedSubscription(); rejectedSubscription?.(); };
@@ -6348,6 +6349,7 @@ export class Session {
     }
     this.outbound.emit({
       type: "engine_settings_changed",
+      ...(this.imageInputEnabled ? {imageInput:this.imageInputEnabled()} : {}),...(this.imageFallbackAvailable ? {imageFallback:this.imageFallbackAvailable()} : {}),
       model: result.model,
       activePresetId: result.activePresetId,
       ...(result.effort !== undefined ? { effort: result.effort } : {}),

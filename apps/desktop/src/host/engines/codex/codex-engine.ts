@@ -1197,6 +1197,13 @@ export class CodexEngine implements SessionEngine {
    * after it was evicted — or that folds it away because it compares equal to a
    * wrongly-advanced "current" — would otherwise show the change as active.
    */
+  /** Restore the durable last accepted posture; a relaunch does not acknowledge a pending turn. */
+  restoreAppliedSettings(previous: import("@anycode/core").RuntimeSettings): void {
+    if (this.disposed || this.operation !== null) throw new Error("Cannot restore settings during an engine operation");
+    this.applied = {model:previous.model,activePresetId:previous.mode,...(previous.effort !== undefined ? {effort:previous.effort} : {}),...(previous.fast !== undefined ? {fast:previous.fast} : {})};
+    this.markPending();
+  }
+
   pendingSnapshot(): { model: string; activePresetId: string; effort?: string; fast?: boolean } | null {
     return this.pendingSettings === null ? null : { ...this.pendingSettings };
   }

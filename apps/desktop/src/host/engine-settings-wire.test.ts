@@ -235,6 +235,19 @@ afterEach(() => {
 });
 
 describe("committed runtime settings ownership", () => {
+  it("publishes the selected target's image gate before the native turn applies its model", async () => {
+    const source = new FakeEngine(); Object.defineProperty(source,"id",{value:"claude"});
+    const next = new FakeEngine();
+    const ui = fixtureWith({engine:source,nextEngine:{engine:next,engineSettings:next,presentation:{imageInputEnabled:() => next.model === "gpt-5.6-sol",imageFallbackAvailable:() => false}}});
+    ui.send({type:"ui_ready"}); await ui.settle();
+    ui.send({type:"engine_switch_request",requestId:"media",engine:"codex",model:next.model}); await ui.settle();
+    ui.send({type:"set_model",model:"gpt-5.4-mini"}); await ui.settle();
+    expect(settings(ui.received).at(-1)).toMatchObject({state:"pending",model:"gpt-5.4-mini",imageInput:false,imageFallback:false});
+    expect(next.snapshot().model).toBe("gpt-5.6-sol");
+    ui.send({type:"set_model",model:"gpt-5.6-sol"}); await ui.settle();
+    expect(settings(ui.received).at(-1)).toMatchObject({imageInput:true});
+  });
+
   it("uses the replacement persistence and ignores the predecessor's late acknowledgement", async () => {
     const source = new FakeEngine();
     Object.defineProperty(source,"id",{value:"claude"});

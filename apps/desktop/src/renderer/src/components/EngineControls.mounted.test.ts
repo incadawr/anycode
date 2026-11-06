@@ -1,3 +1,4 @@
+import { realModelPillDom } from "../automation.js";
 /**
  * RENDERED-component regression for the native model/effort menu (mounted in
  * jsdom, unlike EngineControls.test.ts's pure-logic coverage). A fake DOM tree
@@ -217,4 +218,17 @@ describe("busy native effort menu", () => {
       expect(onPick).not.toHaveBeenCalled();
     } finally { await act(async () => root.unmount()); }
   });
+});
+
+it("drives the model control when a permission preset appears before it", async () => {
+  const preset = document.createElement("div"); preset.className = "model-pill";
+  const button = document.createElement("button"); button.className = "model-pill-chip";
+  const clicked = vi.fn(); button.onclick = clicked; preset.append(button); document.body.append(preset);
+  const native = await mount({model:{current:"gpt-6.1-terra",available:terraModels},pendingModel:undefined,disabled:false,onPick:() => {}});
+  try {
+    const dom = realModelPillDom();
+    await act(async () => dom.clickChip());
+    expect(clicked).not.toHaveBeenCalled();
+    expect(dom.native?.page()).toBe("root");
+  } finally { await act(async () => native.root.unmount()); }
 });

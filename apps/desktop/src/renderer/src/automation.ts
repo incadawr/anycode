@@ -3705,7 +3705,7 @@ function realStartScreenDom(): StartScreenDom {
  */
 export function realModelPillDom(): ModelPillDom {
   function root(): HTMLDivElement | null {
-    return document.querySelector<HTMLDivElement>(".model-pill");
+    return document.querySelector<HTMLDivElement>(".engine-model-menu") ?? document.querySelector<HTMLDivElement>(".model-pill");
   }
   function popover(): HTMLDivElement | null {
     return root()?.querySelector<HTMLDivElement>(".model-pill-popover") ?? null;

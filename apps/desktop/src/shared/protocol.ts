@@ -1022,6 +1022,8 @@ export type HostToUiMessage =
   // immediately) stays valid without it.
   | {
       type: "engine_settings_changed";
+      imageInput?: boolean;
+      imageFallback?: boolean;
       clearContextUsage?: boolean;
       model?: string;
       activePresetId?: string;

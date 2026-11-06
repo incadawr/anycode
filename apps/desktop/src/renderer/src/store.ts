@@ -6050,6 +6050,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               if (state.engine === null) {
                 return {};
               }
+              const media = {...(message.imageInput !== undefined ? {imageInput:message.imageInput} : {}),...(message.imageFallback !== undefined ? {imageFallback:message.imageFallback} : {})};
               if (message.state === "pending") {
                 const nextPending: PendingEngineChange = { ...state.pendingEngineChange };
                 let touched = false;
@@ -6099,7 +6100,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                   return {};
                 }
                 const hasPending = nextPending.model !== undefined || nextPending.activePresetId !== undefined || nextPending.effort !== undefined || nextPending.fast !== undefined;
-                return { pendingEngineChange: hasPending ? nextPending : null };
+                return { ...media, pendingEngineChange: hasPending ? nextPending : null };
               }
               // "applied" or absent — actually active now. Clear whichever
               // fields this message confirms out of any stale pending entry
@@ -6128,6 +6129,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
               if (message.fast !== undefined) nextEngine.fast = message.fast;
               else if (message.model !== undefined) delete nextEngine.fast;
               return {
+                ...media,
                 ...(message.clearContextUsage ? { contextUsage: null } : {}),
                 engine: {
                   ...nextEngine,

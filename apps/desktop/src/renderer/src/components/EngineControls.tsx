@@ -495,7 +495,7 @@ export function EngineModelMenu({ model, pendingModel, disabled, modelDisabled =
   }
 
   return (
-    <div className="model-pill" ref={menu.rootRef}>
+    <div className="model-pill engine-model-menu" ref={menu.rootRef}>
       <EngineMenuChip
         label={chipLabel}
         tooltip={chipLabel}

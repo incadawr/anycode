@@ -1614,6 +1614,21 @@ describe("— posture enforcement on every turn (cut §2(k).1)", () => {
     );
   });
 
+  it("restores a pending durable selection across restart without inventing its turn acknowledgement", async () => {
+    const server = new FakeAppServer();
+    const {engine} = await createNativeCodexSession(server,"/work",undefined,undefined,{model:"gpt-5.4-mini",presetId:"approve-for-me",effort:"medium",origin:"persisted"});
+    engine.restoreAppliedSettings({model:"gpt-native",mode:"ask"});
+    expect(engine.snapshot()).toEqual({model:"gpt-native",activePresetId:"ask"});
+    expect(engine.pendingSnapshot()).toMatchObject({model:"gpt-5.4-mini",activePresetId:"approve-for-me",effort:"medium"});
+    const applied = vi.fn(); engine.onSettingsApplied(applied);
+    expect(applied).not.toHaveBeenCalled();
+    await runTurn(server,engine);
+    expect(server.turnStartParams()[0]).toMatchObject({model:"gpt-5.4-mini",effort:"medium"});
+    expect(applied).toHaveBeenCalledTimes(1);
+    expect(engine.snapshot()).toMatchObject({model:"gpt-5.4-mini",activePresetId:"approve-for-me",effort:"medium"});
+    expect(engine.pendingSnapshot()).toBeNull();
+  });
+
   it("acks a change only once a turn/start has actually carried it", async () => {
     const server = new FakeAppServer();
     const { engine } = await createNativeCodexSession(server, "/work");

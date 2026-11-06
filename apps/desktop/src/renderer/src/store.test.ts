@@ -6933,6 +6933,17 @@ describe("desktop store — engine_settings_changed / pendingEngineChange (Codex
     };
   }
 
+  it("updates pending attachment gating while retaining the applied native model", () => {
+    const store = createDesktopStore(); const ready = codexHostReady();
+    if (ready.type !== "host_ready") throw new Error("Expected host ready");
+    store.getState().applyHostMessage({...ready,imageInput:true});
+    store.getState().applyHostMessage({type:"engine_settings_changed",state:"pending",model:"gpt-5.6-mini",imageInput:false,imageFallback:false,appliesFrom:"next_turn"});
+    expect(store.getState().imageInput).toBe(false);
+    expect(store.getState().engine?.model?.current).toBe("gpt-5.6-terra");
+    store.getState().applyHostMessage({type:"engine_settings_changed",state:"applied",model:"gpt-5.6-mini",imageInput:true,appliesFrom:"next_turn"});
+    expect(store.getState().imageInput).toBe(true);
+  });
+
   it("keeps the server-reported speed until the next turn applies the choice", () => {
     const store = createDesktopStore();
     const ready = codexHostReady();

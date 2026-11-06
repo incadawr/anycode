@@ -1826,6 +1826,7 @@ async function bootCodexSession(
             origin: "persisted",
           },
         });
+        if (active) resumed.engine.restoreAppliedSettings(active.applied);
         if (fresh) persistence!.setRuntimeNativeReference(existing.id,state!.activeSegmentId,state!.revision,resumed.threadId);
         // Persist whatever the resume actually settled on (the stored model may
         // have been removed from the catalog and fallen back) — only after the
