@@ -247,6 +247,7 @@ import {
   createDefaultToolRegistry,
   ToolRegistry,
   createListConnectionsTool,
+  createSessionPeerTools,
   createMediaProjectionPort,
   createWebSearchTool,
   loadArchMapEnabled,
@@ -3582,6 +3583,10 @@ async function boot(): Promise<void> {
         console.warn(`[host] ${modelId} max output tokens: no ceiling declared for this model in the provider catalog, using default ${applied}`),
     ));
     const isChildSession = isChildSessionBoot(args, sessionMeta);
+    let peerAuthority: () => import("@anycode/core").SessionPeerAuthority = () => ({ mode: "plan" });
+    if (sessionPeersPort && !isChildSession) {
+      for (const tool of createSessionPeerTools(() => peerAuthority())) registry.register(tool);
+    }
     const resolveSessionEffort = isChildSession ? resolveChildReasoningEffort : resolveReasoningEffort;
     const runtimeState = persistence.loadRuntimeSession(sessionMeta.id);
     const runtimeEffort = runtimeState?.segments.find(segment => segment.id === runtimeState.activeSegmentId)?.selected.effort;
@@ -4571,6 +4576,10 @@ async function boot(): Promise<void> {
     };
     const coreServices = await createCoreRuntimeServices({...coreServiceDependencies,config});
     compactionRecordSeam = coreServices.callbacks.compactionRecords;
+    if (sessionPeersPort && !isChildSessionBoot(args, sessionMeta)) {
+      config.sessionPeers = sessionPeersPort;
+      peerAuthority = () => ({ mode: config.mode, orchestrate: config.orchestrate });
+    }
     if (childSessionPortHandle) bindRuntimeOrchestration(engine,{ownerSessionId:sessionId,port:childSessionPortHandle,baseMode:() => engine.mode()});
     session = new Session({
       ...coreServices.callbacks,
@@ -4593,6 +4602,10 @@ async function boot(): Promise<void> {
           onRegistrationChanged:() => {
             candidateConfig.systemPrompt=buildSystemPrompt({toolNames:candidateRegistry.list(),env:{...systemPromptEnv,modelId:model},visionFallbackEnabled:candidateRegistry.has("InspectImage")})+composeSystemPromptComponents().map(component => component.text).join("");
           }});
+        if (candidateConfig.sessionPeers) {
+          for (const tool of createSessionPeerTools(() => ({ mode: candidateConfig.mode, orchestrate: candidateConfig.orchestrate })))
+            candidateRegistry.register(tool, { silentDuplicateWarning: true });
+        }
         candidateConfig.media=candidateMedia;candidateConfig.recognizer=candidateMedia.recognizer;
         candidateMedia.recompute();
         return { model, options: buildCoreLaunchOptions({ config: candidateConfig, loop: new AgentLoop(candidateConfig) }),

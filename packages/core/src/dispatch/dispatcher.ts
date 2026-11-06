@@ -94,6 +94,8 @@ export interface DispatchContext {
    * non-recursion locks — CUT-S2 §0.2).
    */
   sessionSubagents?: SessionSubagentPort;
+  /** Root-only peer capability; omitted from inline child configs. */
+  sessionPeers?: import("../ports/session-peers.js").SessionPeersPort;
   /**
    * Discovered-skills entry (design §2.2), threaded into every ToolContext.
    * Optional: absent => the Skill tool fails closed as "unavailable" (a child
@@ -408,6 +410,7 @@ export async function executeToolCall(
         cwd: ctx.cwd,
         ports: ctx.ports,
         subagents: ctx.subagents,
+        sessionPeers: ctx.sessionPeers,
         sessionSubagents: ctx.sessionSubagents,
         skills: ctx.skills,
         workflows: ctx.workflows,

@@ -133,3 +133,4 @@ export interface CorePorts {
   /** In-process session todo state (InMemoryTodoStore). */
   todos: TodoStore;
 }
+export type { SessionPeersPort } from "./session-peers.js";
