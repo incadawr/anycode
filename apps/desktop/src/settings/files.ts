@@ -314,7 +314,15 @@ export async function loadSettings(path: string, logger?: FileIoLogger): Promise
 
 /** Atomically persist settings.json (0644). Caller is responsible for the read-only guard. */
 export async function saveSettings(path: string, settings: AnycodeSettings): Promise<void> {
-  const data = `${JSON.stringify(dropUnsupportedGoInventory(migrateConnectionOverrides(settings)), null, 2)}\n`;
+  const migrated = dropUnsupportedGoInventory(migrateConnectionOverrides(settings));
+  const disk: Record<string, unknown> = { ...migrated };
+  if (migrated.plugins?.accountSources !== undefined) {
+    // Older readers reject unknown keys inside plugins, but preserve root keys.
+    const { accountSources, ...plugins } = migrated.plugins;
+    disk.plugins = plugins;
+    disk.pluginAccountSources = { version: 1, bindings: accountSources };
+  }
+  const data = `${JSON.stringify(disk, null, 2)}\n`;
   // …see `settingsWriteEpoch`: bracket the write so a concurrent reader can
   // tell its bytes may predate it.
   bumpSettingsWriteEpoch(path);

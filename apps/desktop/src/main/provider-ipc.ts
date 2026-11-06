@@ -62,7 +62,7 @@ import { findCatalogEntry } from "@anycode/core/catalog";
 import type { FileIoLogger } from "../settings/files.js";
 import { loadSettings, normalizeActiveConnection, saveSettings, settingsWriteEpoch, withSettingsFileLock } from "../settings/files.js";
 import { markOverride } from "./account-sources/sync.js";
-import { isHttpsOrLocalhostUrl, isLoopbackUrl, settingsSchema } from "../settings/schema.js";
+import { isHttpsOrLocalhostUrl, isLoopbackUrl, parseSettings, settingsSchema } from "../settings/schema.js";
 import type { AnycodeSettings, CustomProviderRecord, ProviderConnection, SecretKey } from "../shared/settings.js";
 import { mergeModelIds, normalizeModelId } from "../shared/settings.js";
 import { discardPendingConnectionQuota } from "./connection-quota.js";
@@ -1167,7 +1167,7 @@ export function settingsWatchEventMatchesTarget(filename: string | Buffer | null
  *  - events are debounced ~150 ms and the ENTIRE read/parse/dispatch operation
  *    is serialized on one promise chain, so a slow read can never reorder
  *    changes;
- *  - only `JSON.parse` + `settingsSchema.safeParse`-valid content is dispatched
+ *  - only `JSON.parse` + `parseSettings`-valid, writable content is dispatched
  *    (`normalizeActiveConnection` repairs the active<->non-empty invariant the
  *    normal loader repairs); invalid JSON/schema is logged and ignored, never
  *    defaulted or written back;
@@ -1248,13 +1248,13 @@ export function startSettingsFileWatcher(
       logger?.warn(`settings watcher: corrupt JSON at ${settingsPath}; ignoring`, err);
       return;
     }
-    const parsed = settingsSchema.safeParse(json);
-    if (!parsed.success) {
+    const parsed = parseSettings(json);
+    if (parsed.status !== "ok") {
       logger?.warn(`settings watcher: schema-invalid at ${settingsPath}; ignoring`);
       return;
     }
     try {
-      await onExternalChange(normalizeActiveConnection(parsed.data));
+      await onExternalChange(normalizeActiveConnection(parsed.settings));
     } catch (err) {
       logger?.warn(`settings watcher: change handler failed for ${settingsPath}`, err);
     }

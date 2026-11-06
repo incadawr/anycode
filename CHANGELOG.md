@@ -13,6 +13,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 - Native provider errors show sanitized provider explanations, and OpenCode Go output limits stay above zero.
 - Claude sessions correctly apply reasoning effort when opened through the Sessions API or changed in a tab.
 - OpenCode Go checks verify keys without generating tokens, explain unexpected responses, and discard stale results after connection changes; other providers explain unavailable checks, and settings errors hide internal details.
+- Plugin account sources no longer cause plugin grants and update preferences to be lost when settings are opened and saved by 0.0.77.
 
 ### Changed
 

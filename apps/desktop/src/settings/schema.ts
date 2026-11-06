@@ -572,7 +572,7 @@ const accountSourceBindingSchema = z.object({
     pricingOverride: z.literal(true).optional(),
     contextWindowTokensOverride: z.literal(true).optional(),
   })),
-});
+}).passthrough();
 
 // The `plugins` settings block. `autoUpdateOfficial` absent = false (the
 // scheduler never auto-installs without it); `officialIndexUrl` is a
@@ -1082,7 +1082,18 @@ export function parseSettings(raw: unknown): SettingsParseResult {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     return { status: "corrupt", settings: cloneDefaults(), readOnly: false };
   }
-  const obj = raw as Record<string, unknown>;
+  const obj = { ...raw } as Record<string, unknown>;
+  // Keep the disk extension outside the legacy strict plugins boundary. Both
+  // main and host use this parser; the ordinary plugin validator still owns
+  // validation of bindings. Nested values from existing files take precedence.
+  const sources = obj.pluginAccountSources;
+  if (isPlainObject(sources) && sources.version === 1) {
+    if (obj.plugins === undefined || isPlainObject(obj.plugins)) {
+      const plugins = obj.plugins ?? {};
+      obj.plugins = { ...plugins, accountSources: plugins.accountSources ?? sources.bindings };
+      delete obj.pluginAccountSources;
+    }
+  }
   const fileVersion = typeof obj.version === "number" ? obj.version : CURRENT_SETTINGS_VERSION;
 
   if (fileVersion > CURRENT_SETTINGS_VERSION) {

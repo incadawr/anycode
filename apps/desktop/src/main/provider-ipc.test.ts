@@ -2609,6 +2609,18 @@ describe("startSettingsFileWatcher — external settings edits (real temp dir, p
     ]);
   }
 
+  it("hydrates root account bindings on external edits", async () => {
+    await writeSettingsFixture({ connections: [] });
+    const seen: AnycodeSettings[] = [];
+    watch(undefined, (settings) => { seen.push(settings); });
+    const binding = { plugin: "example", source: "accounts", descriptorHash: "a".repeat(64),
+      connectionId: "example", accountId: "local", ownership: {} };
+    await writeFile(settingsPath, JSON.stringify({ ...v2Settings({ connections: [] }),
+      pluginAccountSources: { version: 1, bindings: [binding] } }));
+    await waitUntil(() => seen.length === 1);
+    expect(seen[0]?.plugins?.accountSources).toEqual([binding]);
+  });
+
   it("delivers two sequential external replacements as two serialized callbacks", async () => {
     await writeSettingsFixture({ connections: [{ id: "c1", providerId: "kimi", models: ["a"] }] });
     const seen: string[] = [];
