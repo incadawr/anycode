@@ -2054,9 +2054,23 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
         db.prepare("DELETE FROM runtime_transcript WHERE session_id=? AND seq>?").run(sessionId,runtimeBoundary?.transcriptSeq ?? matched ?? before);
         const boundaryIds = runtimeBoundary?.boundaryIds ?? db.prepare("SELECT boundary_id FROM runtime_boundaries WHERE session_id=? AND segment_id IN (SELECT segment_id FROM runtime_segments WHERE session_id=? AND ordinal<=(SELECT ordinal FROM runtime_segments WHERE session_id=? AND segment_id=?))").all(sessionId,sessionId,sessionId,active).map(row => row.boundary_id as string);
         const keepBoundaries = new Set(boundaryIds);
+        const activeBoundary = db.prepare("SELECT boundary_id FROM runtime_boundaries WHERE session_id=? AND segment_id=?").get(sessionId,active)?.boundary_id as string | undefined;
         for (const row of db.prepare("SELECT boundary_id FROM runtime_boundaries WHERE session_id=?").all(sessionId)) if (!keepBoundaries.has(row.boundary_id as string)) db.prepare("DELETE FROM runtime_boundaries WHERE session_id=? AND boundary_id=?").run(sessionId,row.boundary_id as string);
-        // Never import a transcript tail that the user just rewound away.
-        db.prepare("DELETE FROM runtime_handoffs WHERE session_id=? AND segment_id=?").run(sessionId,active);
+        if (!activeBoundary || !keepBoundaries.has(activeBoundary)) {
+          // This runtime began after the restored point: its imported tail is obsolete.
+          db.prepare("DELETE FROM runtime_handoffs WHERE session_id=? AND segment_id=?").run(sessionId,active);
+        } else {
+          const raw = db.prepare("SELECT data FROM runtime_handoffs WHERE session_id=? AND segment_id=?").get(sessionId,active);
+          if (raw) {
+            const handoff = JSON.parse(raw.data as string);
+            if (handoff.turnId && !db.prepare("SELECT 1 FROM runtime_transcript WHERE session_id=? AND segment_id=? AND json_extract(data,'$.turnId')=?").get(sessionId,active,handoff.turnId)) {
+              // Rewinding before the first imported turn restores the pending
+              // handoff, including a lazily captured checkpoint from that turn.
+              delete handoff.turnId; delete handoff.originalText; delete handoff.injectedText;
+              db.prepare("UPDATE runtime_handoffs SET data=? WHERE session_id=? AND segment_id=?").run(JSON.stringify({...handoff,state:"pending"}),sessionId,active);
+            }
+          }
+        }
         const keptTurns = new Set(history.flatMap(item => item.turnId ? [item.turnId] : []));
         for (const row of db.prepare("SELECT turn_id FROM runtime_inputs WHERE session_id=? AND segment_id=?").all(sessionId,active)) if (!keptTurns.has(row.turn_id as string)) db.prepare("DELETE FROM runtime_inputs WHERE session_id=? AND segment_id=? AND turn_id=?").run(sessionId,active,row.turn_id as string);
       }

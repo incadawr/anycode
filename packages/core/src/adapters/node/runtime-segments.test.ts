@@ -178,6 +178,26 @@ describe("runtime segment schema", () => {
 });
 
 describe("segment model history custody", () => {
+  it("restores a pending handoff when a lazy checkpoint rewinds before its first imported turn", async () => {
+    const store = new SqlitePersistenceAdapter(":memory:");
+    await store.createSession({id:"s",workspace:"/w",model:"m",mode:"build"});
+    store.ensureRuntimeSession("s");
+    const record = switchRecord(); record.segment.engine = "core";
+    store.commitRuntimeSwitch("s","core",record);
+    const input = store.prepareRuntimeInput("s","first","typed","typed",true);
+    store.transitionRuntimeInput("s","next","first","dispatching");
+    store.transitionRuntimeInput("s","next","first","accepted","first");
+    store.mergeRuntimeTranscript("s","next",[{id:"first",turnId:"first",createdAt:4,message:{role:"user",content:input}}]);
+    // Capture is lazy, but its model snapshot belongs to the turn's start.
+    await store.saveCheckpoint({id:"cp",sessionId:"s",commitHash:"hash",createdAt:5,reason:"auto",label:"before first turn",historyJson:"[]"});
+    const checkpoint = JSON.parse((await store.getCheckpoint("cp"))!.historyJson) as {runtimeBoundary:import("../../ports/checkpoints.js").RuntimeCheckpointBoundary};
+    await store.restoreHistoryAndTurnErrors("s",[],undefined,checkpoint.runtimeBoundary);
+    expect(store.loadRuntimeSession("s")!.handoff).toMatchObject({state:"pending",payload:"bounded excerpt"});
+    expect(store.loadRuntimeSession("s")!.boundaries).toHaveLength(1);
+    expect(store.loadRuntimeSession("s")!.items.some(item => item.turnId === "first")).toBe(false);
+    expect(store.prepareRuntimeInput("s","retry","retry","retry",true)).toContain("bounded excerpt");
+    await store.close();
+  });
   it("atomically rewinds canonical rows and boundaries and never restores them on reopen", async () => {
     const path = await legacyDatabase();
     const store = new SqlitePersistenceAdapter(path);
