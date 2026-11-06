@@ -72,6 +72,33 @@ describe("foreign orchestration composition", () => {
     expect(spawned).toHaveLength(3);
   });
 
+  it.each([
+    { executor: { primary: {} } },
+    { orchestrator: { primary: {} }, planner: { primary: {} }, executor: { primary: {} }, reviewer: { primary: {} }, explore: { primary: {} } },
+  ])("passes a selector through persisted blank roles without a default model: %j", async roles => {
+    const s = setup();
+    s.settings.roles = roles;
+    for (const role of ["executor", "planner", "reviewer", "explore"]) {
+      expect((await s.invoke(role, { provider: "other" })).isError).toBe(false);
+      const req = s.run.mock.calls.at(-1)![0];
+      expect(req).toMatchObject({ provider: "other" });
+      for (const field of ["connectionId", "model", "routeStamped"]) expect(req).not.toHaveProperty(field);
+    }
+    expect(s.snapshot).not.toHaveBeenCalled();
+  });
+
+  it("names the real fallback when a blank primary still pins a role", async () => {
+    const s = setup();
+    s.settings.roles = { executor: { primary: {}, fallbacks: [{ connection: "api", model: "api-model" }] } };
+    Object.assign(s.settings.roles.executor!.fallbacks![0]!, { apiKey: "SECRET_SENTINEL", baseUrl: "PRIVATE_ENDPOINT" });
+    const result = await s.invoke("executor", { provider: "other" });
+    expect(result).toMatchObject({ isError: true, errorKind: "invalid_input" });
+    expect(result.text).toContain('connection "api"');
+    expect(result.text).toContain("Settings");
+    expect(result.text).not.toMatch(/SECRET_SENTINEL|PRIVATE_ENDPOINT/);
+    expect(s.run).not.toHaveBeenCalled();
+  });
+
   it("names Settings routing when refusing a provider override, including an engine route", async () => {
     const s = setup();
     for (const primary of [{ connection: "api" }, { engine: "codex" as const }]) {
@@ -79,6 +106,7 @@ describe("foreign orchestration composition", () => {
       const result = await s.invoke("executor", { provider: "other" });
       expect(result).toMatchObject({ isError: true, errorKind: "invalid_input" });
       expect(result.text).toContain("configured route");
+      expect(result.text).toContain("engine" in primary ? 'engine "codex"' : 'connection "api"');
       expect(result.text).toContain("Settings");
       expect(result.text).not.toContain("profile selects");
     }

@@ -187,8 +187,8 @@ way you read what comes back.
 \`provider\`, \`detach\`, \`continue_session\` and \`send_to\` are
 session-tier-only fields; on any other tier the call fails fast.
 
-Use \`ListConnections\` (native bridges: \`list_connections\`) to discover safe
-connection/model targets; do not read settings or credentials for discovery.
+Use \`ListConnections\` (Core), \`anycode_list_connections\` (Codex), or
+\`mcp__anycode__list_connections\` (Claude) to discover safe connection/model targets; do not read settings or credentials for discovery.
 \`provider\` accepts an exact connection id, label, provider id, offered model
 id, or \`providerId/model\`. Unknown or ambiguous selectors return candidates;
 choose one explicitly. A separate \`model\` must belong to that connection.

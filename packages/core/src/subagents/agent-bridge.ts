@@ -38,7 +38,7 @@ import {
 } from "./card-snapshot.js";
 import { linkAbortSignal } from "../util/abort.js";
 import type { AgentProfileEffort } from "./personas.js";
-import { buildRoleRouteRequestFields, isRoleRouteName, type RoleRouteName, type RoleRouteResolution } from "./role-route.js";
+import { buildRoleRouteRequestFields, isRoleRouteName, type RoleRouteEntry, type RoleRouteName, type RoleRouteResolution } from "./role-route.js";
 
 // ---------------------------------------------------------------------------
 // §3.1 — the model-visible tool declaration.
@@ -150,7 +150,7 @@ export function buildAgentBridgeToolDecl(
     description: z.string().min(1).describe("Short 3-5 word description of the subagent task"),
     prompt: z.string().min(1).describe("The task the subagent should carry out"),
     agent_type: z.enum(names).describe("AnyCode subagent profile to run"),
-    provider: z.string().min(1).regex(/\S/).optional().describe("Use ListConnections first. Exact connection id, label, provider id, offered model id or provider/model for a new unpinned core child. Unknown or ambiguous selectors return candidates. Cannot override profile/role routes or combine with continue_session."),
+    provider: z.string().min(1).regex(/\S/).optional().describe("Discover targets with ListConnections (Core), anycode_list_connections (Codex), or mcp__anycode__list_connections (Claude). Exact connection id, label, provider id, offered model id or provider/model for a new unpinned core child. Unknown or ambiguous selectors return candidates. Cannot override profile/role routes or combine with continue_session."),
     model: z
       .string()
       .min(1)
@@ -591,7 +591,7 @@ export interface AgentBridgeCallDeps {
   policy?: {
     defaultDetach?: boolean;
     /** Roles pinned by Settings, excluding routes synthesized from session defaults. */
-    configuredRoles?: ReadonlySet<string>;
+    configuredRoleRoutes?: ReadonlyMap<string, readonly RoleRouteEntry[]>;
     resolveRoleRoute?: (role: RoleRouteName) => RoleRouteResolution | undefined | Promise<RoleRouteResolution | undefined>;
   };
 }
@@ -607,6 +607,15 @@ export function engineRestrictionRefusal(role: string, engine: string, mdClaimed
     ? `Remove the engine line from the "${role}" profile file; it overrides role settings.`
     : "Give the role an available API connection in Settings → Roles, or remove the engine entry.";
   return `Agent: role "${role}" cannot run on engine ${engine} — native engine children cannot enforce this profile’s tool or permission restrictions. ${fix}`;
+}
+
+function providerRouteRefusal(role: string, entries: readonly RoleRouteEntry[]): string {
+  const targets = entries.slice(0, 6).map(entry => {
+    const fields = (["engine", "connection", "provider", "model"] as const).flatMap(key =>
+      entry[key] === undefined ? [] : [`${key} ${JSON.stringify(sanitizeAndCap(entry[key], 120))}`]);
+    return fields.join(" / ");
+  }).filter(Boolean).join("; ");
+  return `Agent: "provider" cannot override the configured route for role ${JSON.stringify(sanitizeAndCap(role, 120))}${targets ? ` (${targets})` : ""}; omit "provider" or choose an unpinned core profile. Change the role route in Settings → Roles.`;
 }
 
 export interface AgentBridgeCallResult {
@@ -657,8 +666,9 @@ export async function runAgentBridgeCall(
     if (continueSession !== undefined) {
       return refuse('Agent: "continue_session" cannot be combined with "provider" — the resumed child keeps the connection it was started on. Start a new call instead.');
     }
-    if (deps.policy?.configuredRoles?.has(entry.name)) {
-      return refuse(`Agent: "provider" cannot override the configured route for role "${entry.name}"; omit "provider" or choose an unpinned core profile. Change the role route in Settings → Roles.`);
+    const configured = deps.policy?.configuredRoleRoutes?.get(entry.name);
+    if (configured?.length) {
+      return refuse(providerRouteRefusal(entry.name, configured));
     }
     if (entry.engine !== undefined) {
       return refuse('Agent: "provider" is not valid for an engine-profile agent — the child runs on its own CLI account; omit "provider" or choose an unpinned core profile.');
@@ -681,7 +691,7 @@ export async function runAgentBridgeCall(
   if (input.provider !== undefined && route !== undefined && [...route.entries, ...route.skipped.map(skip => skip.entry)]
     .some(target => target.connection !== undefined || target.provider !== undefined || target.engine !== undefined || target.model !== undefined)) {
     return {
-      text: `Agent: "provider" cannot override the configured route for role "${entry.name}"; omit "provider" or choose an unpinned core profile. Change the role route in Settings → Roles.`,
+      text: providerRouteRefusal(entry.name, [...route.entries, ...route.skipped.map(skip => skip.entry)]),
       isError: true, errorKind: "invalid_input",
     };
   }
