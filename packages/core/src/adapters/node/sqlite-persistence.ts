@@ -601,14 +601,15 @@ function pruneResolvedRuntimeInputs(db: DatabaseSync, sessionId?: string, segmen
       cursor = input.cursor as number;
       const session = input.session_id as string, segment = input.segment_id as string, turn = input.turn_id as string;
       const rows = db.prepare("SELECT item_id,data FROM runtime_transcript WHERE session_id=? AND segment_id=? AND json_extract(data,'$.turnId')=?").all(session,segment,turn);
-      const user = rows.find(row => { const item = JSON.parse(row.data as string) as HistoryItem; return item.message.role === "user" && (item.message.content === input.original_text || item.message.content === input.input_text); });
+      const user = rows.find(row => { const item = JSON.parse(row.data as string) as HistoryItem; return item.message.role === "user" && (item.message.content === input.original_text || item.message.content === input.input_text || item.step === 0); });
       if (!user) continue; // Never prune an acceptance whose canonical user write has not committed.
       for (const row of rows) {
         const item = JSON.parse(row.data as string) as HistoryItem;
         item.nativeTurnId = (input.native_turn_id ?? turn) as string;
         if (row.item_id === user.item_id) {
+          const delivered = item.message.role === "user" && item.message.content !== input.original_text ? item.message.content : input.input_text as string;
+          item.runtimeInputDigest ??= createHash("sha256").update(delivered).digest("hex");
           item.message = {...item.message,role:"user",content:input.original_text as string};
-          item.runtimeInputDigest = createHash("sha256").update(input.input_text as string).digest("hex");
         }
         db.prepare("UPDATE runtime_transcript SET data=? WHERE session_id=? AND segment_id=? AND item_id=?").run(JSON.stringify(item),session,segment,row.item_id as string);
       }
@@ -1341,7 +1342,9 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       return false;
     }).map(item => {
       const input = inputs.find(value => item.turnId === value.turn_id || (typeof value.native_turn_id === "string" && (item.turnId === value.native_turn_id || item.id.startsWith(`${value.native_turn_id}:`))));
-      if (input) return {...item,turnId:input.turn_id as string,...(item.message.role === "user" && item.message.content === input.input_text ? {message:{...item.message,content:input.original_text as string}} : {})};
+      if (input) return {...item,turnId:input.turn_id as string,...(item.message.role === "user" && (item.message.content === input.input_text || item.step === 0) ? {
+        runtimeInputDigest:createHash("sha256").update(item.message.content).digest("hex"),message:{...item.message,content:input.original_text as string},
+      } : {})};
       const previous = db.prepare("SELECT data FROM runtime_transcript WHERE session_id=? AND segment_id=? AND item_id=?").get(sessionId,segmentId,item.sourceItemId ?? item.id);
       const receipt = previous ? JSON.parse(previous.data as string) as HistoryItem : undefined;
       const turnReceipt = receipt ?? (item.turnId ? (() => {

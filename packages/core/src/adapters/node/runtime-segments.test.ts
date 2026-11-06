@@ -310,6 +310,21 @@ describe("atomic runtime switch transaction", () => {
 });
 
 describe("durable input delivery", () => {
+  it("prunes core inputs augmented by prompt hooks without restoring hook text into the user's display", async () => {
+    const {store,path} = await target("core");
+    const text = store.prepareRuntimeInput("s","hooked","original","original",true);
+    store.transitionRuntimeInput("s","next","hooked","dispatching");
+    store.transitionRuntimeInput("s","next","hooked","accepted","hooked");
+    const user = {id:"hooked-user",turnId:"hooked",step:0,createdAt:4,message:{role:"user" as const,content:`${text}\n<hook-context>private host context</hook-context>`}};
+    store.mergeRuntimeTranscript("s","next",[user]);
+    const raw = new DatabaseSync(path);
+    expect(raw.prepare("SELECT count(*) AS n FROM runtime_inputs").get()!.n).toBe(0);
+    raw.close(); await store.close();
+    const reopened = new SqlitePersistenceAdapter(path);
+    reopened.mergeRuntimeTranscript("s","next",[user]);
+    expect(reopened.loadRuntimeSession("s")!.items.at(-1)?.message.content).toBe("original");
+    await reopened.close();
+  });
   it("prunes resolved input text after canonical custody and retains replay normalization across restart", async () => {
     const {store,path} = await target();
     const live:import("../../types/history.js").HistoryItem[] = [];
@@ -370,12 +385,13 @@ describe("durable input delivery", () => {
     expect(reopened.prepareRuntimeInput("s","next","new text","new text",true)).toContain("bounded excerpt");
     await reopened.close();
   });
-  async function target() {
+  async function target(engine: "core" | "claude" = "claude") {
     const root = mkdtempSync(join(tmpdir(),"runtime-delivery-")); roots.push(root);
     const path = join(root,"db.sqlite");
     const store = new SqlitePersistenceAdapter(path);
     await store.createSession({id:"s",workspace:"/w",model:"m",mode:"plan"});
-    store.ensureRuntimeSession("s"); store.commitRuntimeSwitch("s","core",switchRecord());
+    const record = switchRecord(); record.segment.engine = engine;
+    store.ensureRuntimeSession("s"); store.commitRuntimeSwitch("s","core",record);
     return {store,path};
   }
   it("retries a pre-dispatch failure after reopening and normalizes the exact delivered input once", async () => {
