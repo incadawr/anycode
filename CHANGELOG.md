@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Connection listings limit oversized display text and filter unexpected nested data from tool responses.
+
 ### Fixed
 
 - Sessions API reports the created session and tab ids when first-message delivery is interrupted.

@@ -52,3 +52,19 @@ it("reports each routable Go model's own declared context and levels", () => {
   expect(models.find(model => model.id === "hy4")?.effortLevels).toEqual(["off", "high"]);
   expect(models.some(model => model.id === "gemini-4-argon")).toBe(false);
 });
+
+
+it("projects native current independently of the active API route before tool output", () => {
+  const connection = Object.assign(connectionFixture({ id: "custom:fixture", connectionId: "api", model: "api-model" }), { label: "x".repeat(20000), apiKey: "host-secret" });
+  const settings = { version: 2, provider: providerV2Multi("api", [connection]) } as AnycodeSettings;
+  for (const engine of ["codex", "claude"] as const) {
+    const targets = listConnectionTargets(settings, "api", "api-model", false, { engine, model: "native-model", effort: "high", provenance: "unknown" });
+    expect(targets.current).toEqual({ engine, routeKind: "native_cli", model: "native-model", effort: "high", provenance: "unknown" });
+    expect(targets.connections[0]?.id).toBe("api");
+    expect(targets.connections[0]?.label?.length).toBeLessThanOrEqual(256);
+    expect(JSON.stringify(targets)).not.toContain("host-secret");
+    const unknown = listConnectionTargets(settings, "api", "api-model", false, { engine, provenance: "unknown" });
+    expect(unknown.current.connectionId).toBeUndefined();
+    expect(unknown.current.model).toBeUndefined();
+  }
+});
