@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { writeTool } from "@anycode/core";
-import type { AgentEvent, HistoryItem } from "@anycode/core";
+import { SqlitePersistenceAdapter, writeTool } from "@anycode/core";
+import { RuntimeSessionHistory } from "./runtime-session-history.js";
+import type { EngineSwitchIdentity } from "../shared/engine-switch-control.js";
+import type { EngineSwitchTarget } from "../shared/protocol.js";
+import type { AgentEvent, HistoryItem, PermissionMode } from "@anycode/core";
 import type { EngineId } from "../shared/engines.js";
 import { ENGINE_SWITCH_CONTROL, type EngineSwitchControl } from "../shared/engine-switch-control.js";
 import { EngineSwitchCoordinator } from "../main/engine-switch-coordinator.js";
@@ -18,7 +21,7 @@ class Runtime implements SessionEngine {
   readonly dispose = vi.fn(async () => {});
   park?: Promise<void>;
   constructor(readonly id: EngineId) {}
-  mode() { return "plan" as const; }
+  mode(): PermissionMode { return "plan"; }
   reasoningEffort() { return undefined; }
   setReasoningEffort() {}
   historyItems(): readonly HistoryItem[] { return [{ id: "old-text", createdAt: 1, message: { role: "user", content: "original conversation" } }]; }
@@ -30,9 +33,12 @@ class Runtime implements SessionEngine {
   }
 }
 
-function transaction(source: EngineId, target: EngineId, stage?: "resolve" | "factory" | "commit" | "projection" | "children" | "cleanup", admission?: "busy" | "approval" | "child") {
+function transaction(source: EngineId, target: EngineId, stage?: "resolve" | "factory" | "commit" | "projection" | "children" | "cleanup", admission?: "busy" | "approval" | "child", history?: RuntimeSessionHistory) {
   const old = new Runtime(source), next = new Runtime(target);
-  const durableCommit = vi.fn(() => { if (stage === "commit") throw new Error("disk full"); });
+  const durableCommit = vi.fn((_target: EngineSwitchTarget, identity: EngineSwitchIdentity) => {
+    if (stage === "commit") throw new Error("disk full");
+    if (history) history.store.commitRuntimeSwitch(history.sessionId,source,identity.runtime!);
+  });
   let factory: NonNullable<SessionOptions["switchEngineFactory"]> = async () => {
     if (stage === "factory") throw new Error("native initialization failed");
     const runtime: SwitchRuntime = { engine: next, identity: { model: "chosen", mode: "plan", ...(target !== "core" ? { externalSessionRef: "native-id" } : {}) } };
@@ -59,11 +65,40 @@ function transaction(source: EngineId, target: EngineId, stage?: "resolve" | "fa
     retire: async requestId => { await client.request({ phase: "retire", requestId }); },
   };
   let childLive = admission === "child";
-  const h = createHarness({ steps: [], backgroundChildren: { list: () => childLive ? [{ childSessionId: "child", agentType: "executor", description: "work", startedAt: 1 }] : [], cancel: () => false, cancelAll: () => {}, onChange: () => () => { if (stage === "cleanup") throw new Error("old listener cleanup failed"); } }, engine: old, switchEngineFactory: (...args) => factory(...args), engineSwitchCoordinator: coordinator });
+  const h = createHarness({ steps: [], runtimeHistory: history, backgroundChildren: { list: () => childLive ? [{ childSessionId: "child", agentType: "executor", description: "work", startedAt: 1 }] : [], cancel: () => false, cancelAll: () => {}, onChange: () => () => { if (stage === "cleanup") throw new Error("old listener cleanup failed"); } }, engine: old, switchEngineFactory: (...args) => factory(...args), engineSwitchCoordinator: coordinator });
   return { ...h, old, next, controls, durableCommit, main, client, clearChildren() { childLive = false; }, setFactory(value: typeof factory) { factory = value; } };
 }
 
 describe("engine-switch refusal and rollback acceptance", () => {
+  it("commits the mode applied to the core loop after preserving a different source mode", async () => {
+    const store = new SqlitePersistenceAdapter(":memory:");
+    await store.createSession({id:"test-session",workspace:"/workspace",engineId:"codex",externalSessionRef:"source-thread",model:"old",mode:"auto"});
+    const h = transaction("codex","core",undefined,undefined,new RuntimeSessionHistory(store,"test-session"));
+    const core = createHarness({steps:[],mode:"plan"});
+    Object.defineProperty(h.old,"capabilities",{value:{...h.old.capabilities,supportsCorePermissions:true}});
+    h.old.mode = () => "auto";
+    h.setFactory(async () => ({engine:core.engine,identity:{model:"chosen",mode:"plan"}}));
+    try {
+      h.send({type:"engine_switch_request",requestId:"preserve-mode",generation:7,engine:"core",model:"chosen",connectionId:"connection"});
+      await h.waitUntil(() => h.received.some(message => message.type === "engine_switched"));
+      expect(core.engine.mode()).toBe("auto");
+      expect(h.durableCommit.mock.calls[0]?.[1].mode).toBe("auto");
+      expect((await store.getRootSession("test-session"))?.mode).toBe("auto");
+      expect(store.loadRuntimeSession("test-session")?.segments.at(-1)).toMatchObject({selected:{mode:"auto"},applied:{mode:"auto"}});
+      expect(h.received.find(message => message.type === "engine_switched")).toMatchObject({projection:{mode:"auto"}});
+    } finally { await h.session.shutdown(); h.client.close(); h.close(); await core.session.shutdown(); core.close(); await store.close(); }
+  });
+
+  it.each(["codex","claude"] as const)("keeps the native %s preset id in the commit identity", async target => {
+    const h = transaction("core",target);
+    h.setFactory(async () => ({engine:h.next,identity:{model:"chosen",mode:"read-only",externalSessionRef:"native-id"}}));
+    try {
+      h.send({type:"engine_switch_request",requestId:"native-preset",generation:7,engine:target,model:"chosen"});
+      await h.waitUntil(() => h.received.some(message => message.type === "engine_switched"));
+      expect(h.durableCommit.mock.calls[0]?.[1].mode).toBe("read-only");
+    } finally { await h.session.shutdown(); h.client.close(); h.close(); }
+  });
+
   it.each(pairs)("$source → $target commits once and imports text for only the first turn", async ({ source, target }) => {
     const h = transaction(source, target);
     try {

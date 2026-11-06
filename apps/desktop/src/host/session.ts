@@ -4402,7 +4402,8 @@ export class Session {
         pinnedConnection: preparedPresentation?.pinnedConnection ?? null,
       };
       if (invalid()) throw new Error("session changed during engine switch");
-      const identity = nextRuntime?.identity ?? { model: message.model, mode: nextMode };
+      const preparedIdentity = nextRuntime?.identity ?? { model: message.model, mode: nextMode };
+      const identity = next.id === "core" ? { ...preparedIdentity, mode: nextMode } : preparedIdentity;
       await this.engineSwitchCoordinator?.commit(message.requestId, { ...identity, ...(durableSource ? {runtime:{
         expectedRevision:durableSource.revision,sourceSegmentId:durableSource.activeSegmentId,sourceItems:liveItems,
         segment:{id:message.requestId,engine:next.id,accountScope:"",nativeState:"fresh",...(identity.externalSessionRef ? {nativeRef:identity.externalSessionRef} : {}),selected:{model:identity.model,mode:identity.mode},applied:{model:identity.model,mode:identity.mode},startedAt:Date.now(),coverage:"available_history"},
