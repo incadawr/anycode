@@ -1,7 +1,7 @@
 import type { HistoryItem } from "../types/history.js";
 
 export type RuntimeEngine = "core" | "codex" | "claude";
-export interface RuntimeSettings { model: string; mode: string; effort?: string; fast?: boolean }
+export interface RuntimeSettings { model: string; mode: string; effort?: string; fast?: boolean; orchestration?: { enabled: true; baseMode: import("../types/permissions.js").PermissionMode } }
 export interface RuntimeSegment {
   sessionId: string;
   id: string;

@@ -5,7 +5,7 @@ import { engineSwitchTargetSchema, type EngineSwitchTarget } from "./protocol.js
 export const ENGINE_SWITCH_CONTROL = "anycode:engine-switch";
 export const ENGINE_SWITCH_RESPONSE = "anycode:engine-switch-response";
 const correlation = { requestId: z.string().min(1).max(128), generation: z.number().int().positive() };
-const settings = z.object({model:z.string().min(1).max(128),mode:z.string().min(1).max(128),effort:z.string().optional(),fast:z.boolean().optional()}).strict();
+const settings = z.object({model:z.string().min(1).max(128),mode:z.string().min(1).max(128),effort:z.string().optional(),fast:z.boolean().optional(),orchestration:z.object({enabled:z.literal(true),baseMode:z.enum(["plan","build","edit","auto","yolo"])}).strict().optional()}).strict();
 export const runtimeSwitchCommitSchema: z.ZodType<RuntimeSwitchCommit> = z.object({
   expectedRevision:z.number().int().nonnegative(),sourceSegmentId:z.string().min(1).max(128),
   segment:z.object({id:z.string().min(1).max(128),engine:z.enum(["core","codex","claude"]),connectionId:z.string().optional(),profileId:z.string().optional(),accountScope:z.string(),nativeRef:z.string().optional(),nativeState:z.enum(["fresh","materialized"]),selected:settings,applied:settings,startedAt:z.number(),coverage:z.literal("available_history")}).strict(),

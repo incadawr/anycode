@@ -1,3 +1,7 @@
+import { resolveProfileRoles } from "../shared/role-profiles.js";
+import { codexAgentPermissionMode as codexChildAuthority } from "./engines/codex/dynamic-tool-bridge.js";
+import { createChildStatusStore } from "@anycode/core";
+import { bindRuntimeOrchestration } from "./runtime-orchestration.js";
 import { commitEngineSwitch, createEngineSwitchClient } from "./engine-switch-client.js";
 import { createRuntimeSessionHistory } from "./runtime-session-history.js";
 import type { EngineSwitchLaunch } from "../shared/engine-switch-control.js";
@@ -1282,6 +1286,8 @@ function hostSwitchCoordinator(sessionId: string, broker: IpcPermissionBroker, r
 }
 
 /** The routing ledger is session-owned; ports, bridge callbacks and subscriptions belong to the candidate. */
+const childStatusStore = createChildStatusStore();
+
 async function candidateRouting(sessionId: string, broker: IpcPermissionBroker, env: NodeJS.ProcessEnv, home: string) {
   let runtime: SwitchRuntime | undefined;
   const subscriptions: (() => void)[] = [];
@@ -1293,9 +1299,12 @@ async function candidateRouting(sessionId: string, broker: IpcPermissionBroker, 
     report: (id, text, meta) => childReportQueue.add(id, text, meta), deliver: deliverDetachedChildReport,
   });
   const foreign = createForeignOrchestrationComposition({ settings: readSettings, profiles, projectRoot: workspace, health: roleHealth, routed, env,
-    preset: () => runtime?.engineSettings?.snapshot().activePresetId ?? "read-only" });
+    preset: () => runtime?.engineSettings?.snapshot().activePresetId ?? "read-only",
+    permissionMode: preset => runtime?.engine.id === "claude" ? claudeAgentPermissionMode(preset) : codexChildAuthority(preset) });
   const port = createChildSessionPort({
-    parentSessionId: sessionId, getPermissionMode: foreign.childMode,
+    statusStore: childStatusStore,
+    canRun: () => runtime !== undefined && session?.ownsRuntime(runtime.engine) === true,
+    parentSessionId: sessionId, getPermissionMode: () => runtime?.engine.id === "core" ? session?.childSpawnMode() ?? runtime.engine.mode() : foreign.childMode(),
     send: sendChildSessionMessage,
     subscribe: listener => { const stop = subscribeChildRunEvents(listener); subscriptions.push(stop); return stop; },
     onDetachedTerminal: routed.onTerminal, onDetachedStall: deliverDetachedChildStall,
@@ -1320,7 +1329,10 @@ async function candidateRouting(sessionId: string, broker: IpcPermissionBroker, 
       next.presentation = { imageInputEnabled: () => next.engine.id === "codex" ? (next.engine as CodexEngine).imageInputEnabled() : next.engine.capabilities.supportsImages,
         shell: { gitReadOnly: existsSync(join(workspace, ".git")), gitUserMutations: existsSync(join(workspace, ".git")), terminal: true },
         modelSettingsConnectionId: null,
-      }; next.backgroundChildren = backgroundChildren; next.onOrchestrateChanged = enabled => { if (enabled) foreign.captureBaseAuthority(next.engineSettings?.snapshot().activePresetId ?? "read-only"); else foreign.clearBaseAuthority(); }; },
+      }; next.backgroundChildren = backgroundChildren;
+      bindRuntimeOrchestration(next.engine,{ownerSessionId:sessionId,port,baseMode:() => next.engine.id === "core" ? next.engine.mode() : foreign.childMode(),capture:foreign.captureMode,clear:foreign.clearBaseAuthority,cleanup:() => subscriptions.splice(0).forEach(stop => stop())});
+      next.onOrchestrateChanged = enabled => { if (!enabled) foreign.clearBaseAuthority(); };
+    },
     cleanup() { port.cancelAllBackgroundChildren(); subscriptions.splice(0).forEach(stop => stop()); },
   };
 }
@@ -1370,6 +1382,8 @@ function hostSwitchFactory(
       const routing = await candidateRouting(sessionId, broker, sourceEnv, home);
       const exec = new NodeExecutionAdapter();
       const registry = createDefaultToolRegistry({ agent: { sessionTier: true } });
+      let candidate: SwitchRuntime | undefined;
+      const planExit = wirePlanExit(registry,mode => { if (candidate && session?.ownsRuntime(candidate.engine)) session.notifyModeChanged(mode); });
       const hooks = new InMemoryHookRunner();
       for (const declaration of await loadHookConfigs(fs, workspace, home, { projectTrusted }).catch(() => [])) hooks.register(createCommandHook(exec, declaration, workspace));
       const loaded = await loadMcpServerSpecs(fs, workspace, home, { projectTrusted, loginPath: sourceEnv.PATH, secrets: mcpSecrets });
@@ -1394,12 +1408,15 @@ function hostSwitchFactory(
         const modelPort = portFor(model);
         const config: AgentLoopConfig = withSubagents({ modelPort, registry, hooks,
           permissionEngine: new RuleAwarePermissionEngine(new SafeCommandPermissionEngine(new ModePermissionEngine()), rules), permissionBroker: broker,
-          mode: "plan", cwd: workspace, ports: { fs, exec, http: new NodeHttpAdapter(), todos: new InMemoryTodoStore() },
+          ...planExit, mode: "plan", cwd: workspace, ports: { fs, exec, http: new NodeHttpAdapter(), todos: new InMemoryTodoStore() },
           sessionSubagents: routing.port, history: new ConversationHistory({ sink: new RuntimeHistorySink(database,sessionId,runtimeId!) }),
           systemPrompt: buildSystemPrompt({ toolNames: registry.list(), env: { workingDirectory: workspace, platform, date: new Date().toISOString().slice(0, 10), modelId: model } }),
           ...(envConfig.maxOutputTokens ? { maxOutputTokens: envConfig.maxOutputTokens } : {}),
-        }, { profiles: await routing.profiles() });
-        let candidate: SwitchRuntime | undefined;
+        }, { profiles: await routing.profiles(), resolveRoleRoute: role => {
+          const settings = (() => { try { const parsed = parseSettings(JSON.parse(readFileSync(settingsPath ?? defaultSettingsPath(),"utf8"))); return parsed.status === "ok" ? parsed.settings : undefined; } catch { return undefined; } })();
+          const selected = settings && isRoleRouteName(role) ? resolveProfileRoles(settings,workspace)?.[role] : undefined;
+          return selected ? resolveRoleRouteChain({role,config:selected,claimedByMdProfile:false,health:roleHealth.snapshot(),now:Date.now()}) : null;
+        } });
         const controls = createCoreRuntimeControls({config,model,settings:modelSettings,modelPortFor:portFor,maxOutputTokens:envConfig.maxOutputTokens,
           imageInputFor: id => resolveImageInput(id,modelSettings.entryFor(id),modelSettings.imageInputFor(id) ?? envConfig.imageInput),
           systemPromptFor: id => buildSystemPrompt({toolNames:registry.list(),env:{workingDirectory:workspace,platform,date:new Date().toISOString().slice(0,10),modelId:id}}),
@@ -1423,17 +1440,26 @@ function hostSwitchFactory(
       }
       const mcp = await forward("codex");
       const routing = await candidateRouting(sessionId, broker, sourceEnv, home).catch(error => { mcp.cleanupFile(); throw error; });
+      let candidate: SwitchRuntime | undefined;
       const agentBridge = new CodexDynamicToolBridge(routing.catalog, routing.port, new SqliteCodexAgentCardLog(database, sessionId), routing.foreign.catalog, routing.browser, routing.foreign.call);
       return { options: {
         ...buildCodexLaunchOptions({
           workspace, binaryPath, sourceEnv, broker: engineBroker, fs, rules, agentBridge, processOwnership: ownership,
+          persistOrchestrationThreadId: async (oldId,newId) => {
+            if (!candidate?.identity || candidate.identity.externalSessionRef !== oldId) throw new Error("Candidate thread identity changed");
+            if (session?.ownsRuntime(candidate.engine)) {
+              const state = persistence!.ensureRuntimeSession(sessionId);
+              persistence!.setRuntimeNativeReference(sessionId,state.activeSegmentId,state.revision,newId);
+            }
+            candidate.identity.externalSessionRef = newId;
+          },
           profile: profile === null ? null : { home: profile.home, homeTrust: () => assertCodexProfileHome(profile) },
           binaryTrust: path => checkCodexBinaryTrustOnDisk(path, platform, readTrustedBinaryConsentsSync(settingsPath)),
           shadowLog: new SqliteCodexShadowLog(database),
           forwardOptions: { mcpForward: { ...(mcp.codexServers !== null ? { servers: mcp.codexServers } : {}), notices: mcp.notices } },
         }),
         selection: { presetId: "read-only", origin: "draft" },
-      }, configure: runtime => { routing.configure(runtime); bindCodexUsage(runtime.engine as CodexEngine, runtime.callbacks!.usageAudit!.sink, () => session?.ownsRuntime(runtime.engine) ? session : null); },
+      }, configure: runtime => { candidate = runtime; routing.configure(runtime); bindCodexUsage(runtime.engine as CodexEngine, runtime.callbacks!.usageAudit!.sink, () => session?.ownsRuntime(runtime.engine) ? session : null); },
       cleanup: () => { routing.cleanup(); mcp.cleanupFile(); } };
     },
     resolveClaude: async () => {
@@ -1672,6 +1698,7 @@ async function bootCodexSession(
     let port: ChildSessionPort | undefined;
     if (catalog.length) {
       port = createChildSessionPort({
+        statusStore: childStatusStore,
         parentSessionId: bridgeRowId,
         getPermissionMode: foreignComposition.childMode,
         send: sendChildSessionMessage, subscribe: subscribeChildRunEvents,
@@ -2000,7 +2027,8 @@ async function bootCodexSession(
   if (args.resume && connected.engine.historyItems().length > 0 && (await persistence!.listProviderUsage(connected.sessionMeta.id)).length === 0) {
     codexUsageAudit.sink.record({ turnId: "legacy-unpriced", step: 1, finishReason: "history", transportRetries: 0 });
   }
-  bindCodexUsage(connected.engine, codexUsageAudit.sink, () => session);
+  if (codexChildPort) bindRuntimeOrchestration(booted.engine,{ownerSessionId:connected.sessionMeta.id,port:codexChildPort,baseMode:() => codexChildAuthority(selectedCodexPreset(connected.engine)),capture:mode => codexForeignComposition?.captureMode(mode),clear:() => codexForeignComposition?.clearBaseAuthority()});
+  bindCodexUsage(connected.engine, codexUsageAudit.sink, () => session?.ownsRuntime(booted.engine) ? session : null);
   session = new Session({
     switchEngineFactory: hostSwitchFactory(connected.sessionMeta.id, broker, rules, mcpSecrets),
     engineSwitchCoordinator: hostSwitchCoordinator(connected.sessionMeta.id, broker, rules, mcpSecrets),
@@ -2286,6 +2314,7 @@ async function bootClaudeSession(
     let childPort: ChildSessionPort | undefined;
     if (catalog.length > 0) {
       childPort = createChildSessionPort({
+        statusStore: childStatusStore,
         parentSessionId: rowId,
         // cross-review M1: this seam feeds
         // `ChildSpawnRequest.permissionMode` — the value that gates the
@@ -2759,7 +2788,8 @@ async function bootClaudeSession(
   // Older native-child identities can be recovered from the shadow history,
   // but their individual costs remain unknown. Existing markers dedupe in SQLite.
   for (const record of claudeNativeChildrenFromHistory(bootHistory)) claudeUsageAudit.sink.record(record);
-  bindClaudeUsage(claudeEngine, claudeUsageAudit.sink, () => session, connected.model);
+  if (claudeChildPort) bindRuntimeOrchestration(booted.engine,{ownerSessionId:rowId,port:claudeChildPort,baseMode:() => claudeAgentPermissionMode(claudeEngine.snapshot().activePresetId)});
+  bindClaudeUsage(claudeEngine, claudeUsageAudit.sink, () => session?.ownsRuntime(booted.engine) ? session : null, connected.model);
   session = new Session({
     switchEngineFactory: hostSwitchFactory(rowId, broker, rules, mcpSecrets),
     engineSwitchCoordinator: hostSwitchCoordinator(rowId, broker, rules, mcpSecrets),
@@ -3533,7 +3563,7 @@ async function boot(): Promise<void> {
     // reaches the system prompt. `session` is captured lazily: the loop only
     // calls onModeChange from inside a running turn, long after it is assigned.
     const planExit = wirePlanExit(registry, (changed) => {
-      session?.notifyModeChanged(changed);
+      if (session?.ownsRuntime(engine)) session.notifyModeChanged(changed);
     });
     // Main selects resume engine from durable metadata, and the host verifies
     // it again before constructing the core graph. A forged/mismatched fork
@@ -4423,6 +4453,7 @@ async function boot(): Promise<void> {
     const spawnModeCell = createSpawnModeCell(config, () => session);
     if (!isChildSessionBoot(args, sessionMeta)) {
       childSessionPortHandle = createChildSessionPort({
+        statusStore: childStatusStore,
         parentSessionId: sessionMeta.id,
         // A1: children inherit the mode the ORCHESTRATOR had BEFORE
         // orchestrate was enabled — never `plan` (an orchestrate parent sits
@@ -4774,6 +4805,7 @@ async function boot(): Promise<void> {
       console.error(`[host] compaction records unavailable: ${describeError(error)}`);
       return undefined;
     });
+    if (childSessionPortHandle) bindRuntimeOrchestration(engine,{ownerSessionId:sessionId,port:childSessionPortHandle,baseMode:() => engine.mode()});
     session = new Session({
       engineSwitchCoordinator: hostSwitchCoordinator(sessionId, broker, rules, mcpSecrets),
       runtimeHistory: createRuntimeSessionHistory(persistence!,sessionId,engineSwitchEnabled,isChildSession),

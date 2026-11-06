@@ -1,3 +1,4 @@
+import { bindRuntimeOrchestration } from "./runtime-orchestration.js";
 import { describe,expect,it } from "vitest";
 import { createHash } from "node:crypto";
 import { SqlitePersistenceAdapter,type RuntimeSwitchCommit } from "@anycode/core";
@@ -22,6 +23,25 @@ async function switchedStore() {
   return store;
 }
 describe("canonical reconnect hydration", () => {
+  it("restores only a verified orchestration overlay with its captured base authority", async () => {
+    const store = await switchedStore();
+    const state = store.loadRuntimeSession("test-session")!;
+    store.updateRuntimeSettings("test-session",state.activeSegmentId,{model:"scripted-model",mode:"plan",orchestration:{enabled:true,baseMode:"edit"}},{model:"scripted-model",mode:"plan",orchestration:{enabled:true,baseMode:"edit"}});
+    const h = createHarness({steps:[finishStep()],runtimeHistory:new RuntimeSessionHistory(store,"test-session")});
+    bindRuntimeOrchestration(h.engine,{ownerSessionId:"test-session",port:{hasRunningChildren:() => false,cancelAllBackgroundChildren:() => {}},baseMode:() => h.engine.mode()});
+    try {
+      h.send({type:"ui_ready",orchestrationProtocol:1});
+      const ready = await h.waitFor(m => m.type === "host_ready");
+      expect(ready).toMatchObject({orchestration:{enabled:true,available:true}});
+      expect(h.config.orchestrate).toBe(true); expect(h.engine.mode()).toBe("plan");
+      expect(h.session.childSpawnMode()).toBe("edit");
+      h.send({type:"set_orchestrate",enabled:false});
+      await h.waitUntil(() => h.received.some(m => m.type === "orchestrate_changed" && !m.enabled));
+      expect(h.engine.mode()).toBe("edit");
+      expect(store.loadRuntimeSession("test-session")!.segments.at(-1)!.applied.orchestration).toBeUndefined();
+    } finally { h.close(); await store.close(); }
+  });
+
   it("re-budgets a pending handoff durably before dispatch and preserves it when the input cannot fit", async () => {
     const store = await switchedStore();
     const state = store.loadRuntimeSession("test-session")!;

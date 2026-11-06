@@ -18,10 +18,12 @@ export function createForeignOrchestrationComposition(options: {
   projectRoot: string;
   env?: NodeJS.ProcessEnv;
   preset(): string;
+  permissionMode?(preset: string): import("@anycode/core").PermissionMode;
   health: RoleHealthCache;
   routed: ReturnType<typeof createRoutedChildComposition>;
 }) {
-  const authority = createForeignSpawnModeCell(() => codexAgentPermissionMode(options.preset()));
+  const permissionMode = options.permissionMode ?? codexAgentPermissionMode;
+  const authority = createForeignSpawnModeCell(() => permissionMode(options.preset()));
   let enabled = false;
   const facts = new WeakMap<AgentBridgeCatalogEntry, { settings: AnycodeSettings | undefined; claimed: boolean }>();
 
@@ -120,7 +122,8 @@ export function createForeignOrchestrationComposition(options: {
   return {
     catalog, call,
     childMode: () => authority.read(),
-    captureBaseAuthority(preset: string) { authority.capture(codexAgentPermissionMode(preset)); enabled = true; },
+    captureMode(mode: import("@anycode/core").PermissionMode) { authority.capture(mode); enabled = true; },
+    captureBaseAuthority(preset: string) { authority.capture(permissionMode(preset)); enabled = true; },
     clearBaseAuthority() { authority.clear(); enabled = false; },
   };
 }

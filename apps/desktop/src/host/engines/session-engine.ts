@@ -15,7 +15,7 @@ import type {
   PermissionMode,
   ReasoningEffort,
 } from "@anycode/core";
-import type { OrchestrationPolicy } from "../orchestration-policy.js";
+import type { OrchestrationPolicy, RuntimeOrchestrationComposition } from "../orchestration-policy.js";
 import type { EngineId } from "../../shared/engines.js";
 
 export type { EngineId } from "../../shared/engines.js";
@@ -92,6 +92,7 @@ export interface SessionEngine {
   readonly orchestrationPolicy?: OrchestrationPolicy;
   /** Factory attests that the target has its Agent and role routing wired. */
   readonly orchestrationCompositionReady?: boolean;
+  readonly orchestrationComposition?: RuntimeOrchestrationComposition;
   /** Apply and confirm the core loop's own orchestration flag. */
   setCoreOrchestrate?(enabled: boolean): boolean;
   mode(): PermissionMode;

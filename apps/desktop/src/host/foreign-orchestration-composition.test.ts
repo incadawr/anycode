@@ -27,6 +27,15 @@ function setup() {
 }
 
 describe("foreign orchestration composition", () => {
+  it("uses an explicit native authority adapter and captures an already verified mode", () => {
+    const routed = createRoutedChildComposition({health:new RoleHealthCache(),describeError:String,resolve:() => null,prepare:r => r,record:() => {},deliver:() => {},report:() => {}});
+    const mapping = vi.fn(() => "plan" as const);
+    const composition = createForeignOrchestrationComposition({settings:() => undefined,profiles:async () => [],projectRoot:"/project",preset:() => "workspace",permissionMode:mapping,health:new RoleHealthCache(),routed});
+    expect(composition.childMode()).toBe("plan"); expect(mapping).toHaveBeenCalledWith("workspace");
+    composition.captureMode("edit"); expect(composition.childMode()).toBe("edit");
+    composition.clearBaseAuthority(); expect(composition.childMode()).toBe("plan");
+  });
+
   it.each([undefined, 0, -5, 200, 300])("stamps role budgets for setting %s", async budget => {
     const s = setup();
     s.settings.tools.subagentMaxTurns = budget;

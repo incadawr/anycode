@@ -1,3 +1,4 @@
+import { bindRuntimeOrchestration } from "./runtime-orchestration.js";
 /**
  * (review 23.08 narrowing) — Session-level wire tests
  * for the in-session engine swap: the host-side Session can replace its
@@ -236,6 +237,61 @@ describe("Session — engine switch", () => {
       await h.waitFor(isEngineSwitchFailed);
       expect(core.mode()).toBe("plan"); expect(core.disposeReasons).toEqual([]);
       expect(next.disposeReasons).toEqual(["session-close"]);
+    } finally { h.close(); }
+  });
+
+  it("rejects a target owned by another session before applying its policy", async () => {
+    const target = new NextFakeEngine();
+    let applied = false;
+    Object.assign(target,{orchestrationPolicy:{availability:() => ({supported:true}),apply:async (enabled: boolean,baseAuthority:unknown) => { applied = true; return {enabled,baseAuthority}; }}});
+    bindRuntimeOrchestration(target,{ownerSessionId:"another-session",port:{hasRunningChildren:() => false,cancelAllBackgroundChildren:() => {}},baseMode:() => "plan"});
+    class Core extends SwitchableFakeEngine {
+      override readonly capabilities = {...NO_CORE_CAPS,supportsCorePermissions:true};
+      private current: PermissionMode = "edit";
+      override mode() { return this.current; }
+      setMode(mode: PermissionMode) { this.current = mode; }
+    }
+    const core = new Core([]);
+    const h = createHarness({steps:[],engine:core,switchEngineFactory:async () => target});
+    try {
+      h.send({type:"ui_ready"}); await h.waitFor(isHostReady);
+      h.send({type:"set_orchestrate",enabled:true});
+      await h.waitUntil(() => h.received.some(m => m.type === "orchestrate_changed" && m.enabled));
+      h.send({type:"engine_switch_request",requestId:"wrong-owner",engine:"codex",model:"test-model"});
+      expect((await h.waitFor(isEngineSwitchFailed)).reason).toContain("composition");
+      expect(applied).toBe(false); expect(core.disposeReasons).toEqual([]);
+      h.send({type:"user_message",requestId:"source-next",text:"continue"});
+      await h.waitFor(agentEventOf("loop_end")); expect(core.inputs).toHaveLength(1);
+    } finally { h.close(); }
+  });
+
+  it("refuses a switch while a foreground or pending inline child owns the source", async () => {
+    const source = new SwitchableFakeEngine([]); const target = new NextFakeEngine();
+    let children = true;
+    bindRuntimeOrchestration(source,{ownerSessionId:"test-session",port:{hasRunningChildren:() => children,cancelAllBackgroundChildren:() => {}},baseMode:() => "build"});
+    const h = createHarness({steps:[],engine:source,switchEngineFactory:async () => target});
+    try {
+      h.send({type:"ui_ready"}); await h.waitFor(isHostReady);
+      h.send({type:"engine_switch_request",requestId:"child",engine:"codex",model:"test-model"});
+      expect((await h.waitFor(isEngineSwitchFailed)).reason).toContain("children");
+      expect(target.disposeReasons).toEqual([]);
+      children = false;
+      h.send({type:"engine_switch_request",requestId:"after-child",engine:"codex",model:"test-model"});
+      await h.waitFor(isEngineSwitched);
+    } finally { h.close(); }
+  });
+
+  it("rolls back a failed candidate settings acknowledgement and serves the next source turn", async () => {
+    const source = new SwitchableFakeEngine([]); const target = new NextFakeEngine();
+    const seam = {waitForSettingsChanges:async () => { throw new Error("Preset acknowledgement failed"); }} as unknown as EngineSettingsSeam;
+    const h = createHarness({steps:[],engine:source,switchEngineFactory:async () => ({engine:target,engineSettings:seam})});
+    try {
+      h.send({type:"ui_ready"}); await h.waitFor(isHostReady);
+      h.send({type:"engine_switch_request",requestId:"ack-failed",engine:"codex",model:"test-model"});
+      expect((await h.waitFor(isEngineSwitchFailed)).reason).toContain("acknowledgement");
+      expect(source.disposeReasons).toEqual([]); expect(target.disposeReasons).toEqual(["session-close"]);
+      h.send({type:"user_message",requestId:"source-next",text:"continue"});
+      await h.waitFor(agentEventOf("loop_end")); expect(source.inputs).toHaveLength(1);
     } finally { h.close(); }
   });
 

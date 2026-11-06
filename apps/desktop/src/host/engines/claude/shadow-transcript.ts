@@ -223,6 +223,10 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
     }
   }
 
+  get orchestrationPolicy() { return this.engine.orchestrationPolicy; }
+  get orchestrationComposition() { return this.engine.orchestrationComposition; }
+  get orchestrationCompositionReady() { return this.engine.orchestrationCompositionReady; }
+
   get capabilities(): EngineCapabilities {
     return this.engine.capabilities;
   }

@@ -1959,6 +1959,8 @@ export class Session {
 
   ownsRuntime(engine: SessionEngine): boolean { return !this.shuttingDown && this.engine === engine; }
 
+  private orchestrationRestore?: Promise<void>;
+
   private persistRuntimeSettings(): void {
     if (!this.runtimeHistory) return;
     const applied = this.engineSettings?.snapshot();
@@ -1966,7 +1968,8 @@ export class Session {
     const settings = (value: typeof applied) => value
       ? {model:value.model,mode:value.activePresetId,...(value.effort !== undefined ? {effort:value.effort} : {}),...(value.fast !== undefined ? {fast:value.fast} : {})}
       : {model:this.model,mode:this.engine.mode(),effort:this.selectedEffort};
-    this.runtimeHistory.settings(settings(selected),settings(applied));
+    const overlay = this.orchestrate ? {orchestration:{enabled:true as const,baseMode:this.preOrchestrateMode ?? "plan"}} : {};
+    this.runtimeHistory.settings({...settings(selected),...overlay},{...settings(applied),...overlay});
   }
 
   private subscribeEngineSettings(seam: EngineSettingsSeam | undefined, engine = this.engine, generation = this.settingsGeneration): (() => void) | undefined {
@@ -2801,7 +2804,7 @@ export class Session {
       const sequence = ++this.runtimeHydrationSequence;
       const generation = this.boundGeneration;
       const engine = this.engine;
-      void this.runtimeHistory.hydrate(engine).then(state => {
+      void this.restoreRuntimeOrchestration().then(() => this.runtimeHistory!.hydrate(engine)).then(state => {
         if (this.shuttingDown || sequence !== this.runtimeHydrationSequence || generation !== this.boundGeneration) return;
         if (engine !== this.engine) { this.route(raw); return; }
         this.sessionHistory = buildSessionHistory(state.items,this.historyMaxItems,this.bootTurnErrors);
@@ -4306,7 +4309,7 @@ export class Session {
     }
     if (this.busy || this.currentTurn !== null || this.relocating || this.broker.pendingCount > 0 || this.continuationPending) return fail("a turn is running");
     if (this.child !== undefined) return fail("a child session is attached");
-    if ((this.backgroundChildren?.list().length ?? 0) > 0) return fail("children are running");
+    if (this.runningChildren()) return fail("children are running");
     if (this.engine.id === message.engine) return fail(`already running the "${message.engine}" engine`);
     if (this.switchEngineFactory === undefined) return fail("engine switch is not available in this host");
     this.busy = true;
@@ -4372,7 +4375,7 @@ export class Session {
       // Shutdown raced the factory await: shutdown() already disposed the OLD
       // engine and is waiting on `currentTurn`; the freshly started engine
       // would otherwise never be disposed (orphaned engine process).
-      const invalid = () => this.shuttingDown || this.relocating || this.boundGeneration !== generation || this.engine !== previousEngine || (this.backgroundChildren?.list().length ?? 0) > 0;
+      const invalid = () => this.shuttingDown || this.relocating || this.boundGeneration !== generation || this.engine !== previousEngine || this.runningChildren();
       if (invalid()) {
         await next.dispose(this.shuttingDown ? "host-shutdown" : "session-close").catch((error) =>
           console.error(`[host] switched-to engine dispose threw during shutdown: ${describeError(error)}`),
@@ -4383,7 +4386,7 @@ export class Session {
       }
       if (this.orchestrate) {
         try {
-          if (next.id === "claude" || !next.orchestrationCompositionReady) throw new Error("target orchestration composition unavailable");
+          if (!this.runtimeCompositionReady(next)) throw new Error("target orchestration composition unavailable");
           const base = this.preOrchestrateMode ?? "build";
           if (next.id === "core") {
             if (!next.capabilities.supportsCorePermissions || !next.setMode || !next.setCoreOrchestrate) throw new Error("target orchestration policy unavailable");
@@ -4396,6 +4399,7 @@ export class Session {
             const result = await policy.apply(true, authority);
             if (!result.enabled || result.baseAuthority !== authority) throw new Error("target orchestration policy unconfirmed");
           }
+          next.orchestrationComposition?.capture(base);
           if (invalid()) throw new Error("session changed during engine switch");
         } catch (error) {
           await next.dispose("session-close").catch(() => {});
@@ -4431,9 +4435,9 @@ export class Session {
       const nextMode = next.mode();
       const appliedSettings = nextSettings?.snapshot();
       const selectedSettings = nextSettings?.persistsOnApply ? appliedSettings : nextSettings?.pendingSnapshot?.() ?? appliedSettings;
-      const runtimeSettings = (value: typeof appliedSettings) => value
+      const runtimeSettings = (value: typeof appliedSettings) => ({...(value
         ? {model:value.model,mode:value.activePresetId,...(value.effort !== undefined ? {effort:value.effort} : {}),...(value.fast !== undefined ? {fast:value.fast} : {})}
-        : {model:message.model,mode:nextMode,...(next.reasoningEffort() !== undefined ? {effort:next.reasoningEffort()} : {})};
+        : {model:message.model,mode:nextMode,...(next.reasoningEffort() !== undefined ? {effort:next.reasoningEffort()} : {})}),...(this.orchestrate ? {orchestration:{enabled:true as const,baseMode:this.preOrchestrateMode ?? "plan"}} : {})});
       const previousMode = previousEngine.mode();
       const boundaryText = plan.items.length > 0
         ? `Session switched from the "${previousEngine.id}" engine to the "${next.id}" engine. Native engine context was not transferred; the next turn receives a text import of this conversation.`
@@ -4448,7 +4452,7 @@ export class Session {
         contextWindowAssumed: preparedPresentation?.contextWindowAssumed?.() ?? false,
         modelSettingsConnectionId: preparedPresentation?.modelSettingsConnectionId ?? null,
         steering: next.id === "core" ? next.steeringStatus?.() ?? null : null,
-        orchestration: { enabled: this.orchestrate, available: next.id !== "claude" && next.orchestrationCompositionReady === true },
+        orchestration: { enabled: this.orchestrate, available: this.runtimePolicyAvailable(next) },
         pinnedConnection: preparedPresentation?.pinnedConnection ?? null,
       };
       if (invalid()) throw new Error("session changed during engine switch");
@@ -4456,13 +4460,14 @@ export class Session {
       const identity = next.id === "core" ? { ...preparedIdentity, mode: nextMode } : preparedIdentity;
       await this.engineSwitchCoordinator?.commit(message.requestId, { ...identity, ...(durableSource ? {runtime:{
         expectedRevision:durableSource.revision,sourceSegmentId:durableSource.activeSegmentId,sourceItems:liveItems,
-        segment:{id:message.requestId,engine:next.id,accountScope:"",nativeState:"fresh",...(identity.externalSessionRef ? {nativeRef:identity.externalSessionRef} : {}),selected:nextSettings ? runtimeSettings(selectedSettings) : {model:identity.model,mode:identity.mode},applied:nextSettings ? runtimeSettings(appliedSettings) : {model:identity.model,mode:identity.mode},startedAt:Date.now(),coverage:"available_history"},
+        segment:{id:message.requestId,engine:next.id,accountScope:"",nativeState:"fresh",...(identity.externalSessionRef ? {nativeRef:identity.externalSessionRef} : {}),selected:runtimeSettings(selectedSettings),applied:runtimeSettings(appliedSettings),startedAt:Date.now(),coverage:"available_history"},
         boundary:{id:message.requestId,segmentId:message.requestId,...(canonical.at(-1) ? {afterItemId:canonical.at(-1)!.id} : {}),text:boundaryText,createdAt:Date.now()},
         handoff:{id:message.requestId,segmentId:message.requestId,sourceWatermark:canonical.at(-1)?.id ?? null,payload:pendingImport.prompt,digest:createHash("sha256").update(pendingImport.prompt).digest("hex"),state:"pending"},
       }} : {}) });
       committed = true;
       candidate = undefined;
       this.engine = next;
+      this.orchestrationRestore = Promise.resolve();
       this.pendingEngineEffort = undefined;
       this.inFlightEngineEffort = undefined;
       this.settingsGeneration++;
@@ -6426,11 +6431,51 @@ export class Session {
 
   private orchestrationAvailable(): boolean {
     if (this.child !== undefined || this.shuttingDown || this.relocating) return false;
-    if (this.engine.id === "core") return this.engine.capabilities.supportsCorePermissions && this.engine.setMode !== undefined;
-    return this.engine.id === "codex" && this.engine.orchestrationPolicy?.availability().supported === true;
+    return this.runtimePolicyAvailable(this.engine);
   }
 
   /** One controller owns all UI paths; the engine overlay is never bypassed. */
+  private runtimeCompositionReady(engine: SessionEngine): boolean {
+    const composition = engine.orchestrationComposition;
+    return composition ? composition.ownerSessionId === this.sessionId && composition.ready() : engine.orchestrationCompositionReady === true;
+  }
+
+  private runtimePolicyAvailable(engine: SessionEngine): boolean {
+    if (engine.orchestrationComposition && !this.runtimeCompositionReady(engine)) return false;
+    return engine.id === "core" ? engine.capabilities.supportsCorePermissions && engine.setMode !== undefined
+      : engine.orchestrationPolicy?.availability().supported === true;
+  }
+
+  private runningChildren(): boolean {
+    return (this.backgroundChildren?.list().length ?? 0) > 0 || this.engine.orchestrationComposition?.hasRunningChildren() === true;
+  }
+
+  private restoreRuntimeOrchestration(): Promise<void> {
+    if (this.orchestrationRestore) return this.orchestrationRestore;
+    const state = this.runtimeHistory!.state();
+    const saved = state.segments.find(segment => segment.id === state.activeSegmentId)?.applied.orchestration;
+    this.orchestrationRestore = (async () => {
+      if (!saved?.enabled) return;
+      const engine = this.engine;
+      if (!this.runtimeCompositionReady(engine) || !this.runtimePolicyAvailable(engine)) throw new Error("Saved orchestration requires a verified runtime policy and routing");
+      await this.engineSettings?.waitForSettingsChanges?.();
+      if (!this.ownsRuntime(engine)) throw new Error("Runtime changed during orchestration restore");
+      if (engine.id === "core") {
+        engine.setMode!("plan");
+        if (engine.mode() !== "plan" || !engine.setCoreOrchestrate?.(true)) throw new Error("Core orchestration restore was not confirmed");
+      } else {
+        const authority = {mode:saved.baseMode};
+        const result = await engine.orchestrationPolicy!.apply(true,authority);
+        if (!this.ownsRuntime(engine) || !result.enabled || result.baseAuthority !== authority) throw new Error("Orchestration restore was not confirmed");
+      }
+      engine.orchestrationComposition!.capture(saved.baseMode);
+      this.preOrchestrateMode = saved.baseMode;
+      this.orchestrate = true;
+      this.onOrchestrateChanged?.(true);
+    })().catch(error => { this.orchestrationPosture = "quarantined"; throw error; });
+    return this.orchestrationRestore;
+  }
+
   private admission(): OrchestrationAdmission {
     if (this.orchestrationAdmission) return this.orchestrationAdmission;
     const engine = this.engine;
@@ -6454,28 +6499,31 @@ export class Session {
         const snapshot = await engine.orchestrationPolicy!.apply(enabled, baseAuthority);
         if (this.shuttingDown || this.engine !== engine || this.orchestrationController?.state.status !== "transitioning") throw new Error("Session changed during orchestration transition");
         if (snapshot.enabled !== enabled || !Object.is(snapshot.baseAuthority, baseAuthority)) throw new Error("Unconfirmed orchestration transition");
+        if (enabled) engine.orchestrationComposition?.capture(nativeAuthority.mode); else engine.orchestrationComposition?.clear();
         this.preOrchestrateMode = enabled ? nativeAuthority.mode : null;
         this.orchestrate = enabled;
         this.onOrchestrateChanged?.(enabled);
+        this.persistRuntimeSettings();
         this.outbound.emit({ type: "orchestrate_changed", enabled });
         return snapshot;
       },
     };
     this.orchestrationController = new OrchestrationController(policy);
-    if (this.orchestrate) this.orchestrationController.state = { status: "on", baseAuthority: engine.id === "codex" ? { mode: this.preOrchestrateMode ?? "build" } : this.preOrchestrateMode ?? "build" };
+    if (this.orchestrate) this.orchestrationController.state = { status: "on", baseAuthority: engine.id !== "core" ? { mode: this.preOrchestrateMode ?? "plan" } : this.preOrchestrateMode ?? "build" };
     this.orchestrationAdmission = new OrchestrationAdmission({
       controller: this.orchestrationController,
       connectionId: () => this.boundGeneration,
       busy: () => this.busy || this.currentTurn !== null || this.broker.pendingCount > 0 || this.shuttingDown || this.relocating || this.child !== undefined || this.continuationPending || this.orchestrationPosture !== "stable",
-      baseAuthority: () => this.engine.id === "codex" ? { mode: this.nativeChildBaseMode() } : this.engine.mode(),
+      baseAuthority: () => this.engine.id !== "core" ? { mode: this.nativeChildBaseMode() } : this.engine.mode(),
       timeoutMs: 120_000,
     });
     return this.orchestrationAdmission;
   }
 
   private nativeChildBaseMode(): PermissionMode {
+    if (this.engine.orchestrationComposition) return this.engine.orchestrationComposition.baseMode();
     const settings = this.engineSettings;
-    return settings === undefined ? "plan" : codexAgentPermissionMode((settings.pendingSnapshot?.() ?? settings.snapshot()).activePresetId);
+    return this.engine.id !== "codex" || settings === undefined ? "plan" : codexAgentPermissionMode((settings.pendingSnapshot?.() ?? settings.snapshot()).activePresetId);
   }
 
   private sendOrchestrationResult(requestId: string, connectionId: string, result: AdmissionResponse): void {
@@ -6555,7 +6603,9 @@ export class Session {
     }
     // §3.7: the host copies the flag onto the AgentLoopConfig (the dispatcher
     // threads it into every ToolContext — the Agent tool's default-detach).
+    if (this.orchestrate) this.engine.orchestrationComposition?.capture(this.preOrchestrateMode!); else this.engine.orchestrationComposition?.clear();
     this.onOrchestrateChanged?.(this.orchestrate);
+    this.persistRuntimeSettings();
     this.outbound.emit({ type: "orchestrate_changed", enabled: this.orchestrate });
   }
 

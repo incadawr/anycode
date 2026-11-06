@@ -393,6 +393,8 @@ export interface CreateChildSessionPortOptions {
   subscribe: (listener: (event: ChildRunEvent) => void) => () => void;
   /** Injectable request-id generator (tests only); defaults to randomUUID. */
   createRequestId?: () => string;
+  statusStore?: ReturnType<typeof createChildStatusStore>;
+  canRun?(): boolean;
   /**
    * срез 1: invoked when a DETACHED run's `terminal` ChildRunEvent
    * arrives — strictly AFTER this same run's `run()` promise already
@@ -496,6 +498,7 @@ export interface CreateChildSessionPortOptions {
  * so `session.ts`'s `backgroundChildren` seam can read it.
  */
 export interface ChildSessionPort extends SessionSubagentPort {
+  hasRunningChildren(): boolean;
   /** Move an eligible joining Agent call to the background. */
   backgroundAgent(spawnToolCallId: string): boolean;
   /** Every currently-live detached child this port has admitted and not yet seen a terminal for. */
@@ -560,7 +563,7 @@ interface BackgroundChildEntry {
  * — the exact shape `tools/agent.ts`'s session-tier branch (S2b B1) awaits.
  */
 export function createChildSessionPort(options: CreateChildSessionPortOptions): ChildSessionPort {
-  const statusStore = createChildStatusStore();
+  const statusStore = options.statusStore ?? createChildStatusStore();
   const createRequestId = options.createRequestId ?? randomUUID;
   const stallTimeoutMs = options.stallTimeoutMs ?? SUBAGENT_STALL_TIMEOUT_MS;
   const waiters = new Map<string, Waiter>();
@@ -627,7 +630,7 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
     // being sent and silently dropped by main's fail-closed
     // `parseChildSpawnRequest` — that path would leave this call's promise
     // pending until the dispatcher's Agent-tool timeout with no explanation.
-    const shapeError = findSpawnRequestShapeError(req);
+    const shapeError = options.canRun?.() === false ? "Agent routing is unavailable for this runtime." : findSpawnRequestShapeError(req);
     if (shapeError !== null) {
       return Promise.resolve({
         status: "error",
@@ -1412,5 +1415,5 @@ export function createChildSessionPort(options: CreateChildSessionPortOptions): 
     };
   }
 
-  return { run, send, backgroundAgent: (id) => { const move = joiningAgents.get(id); if (!move) return false; move(); return true; }, listStatus: statusStore.list, getStatus: statusStore.get, statusDiscarded: statusStore.discarded, listBackgroundChildren, cancelBackgroundChild, cancelAllBackgroundChildren, onBackgroundChildrenChanged };
+  return { run, send, hasRunningChildren: () => waiters.size > 0 || pendingDetachedAdmits.size > 0 || backgroundChildren.size > 0, backgroundAgent: (id) => { const move = joiningAgents.get(id); if (!move) return false; move(); return true; }, listStatus: statusStore.list, getStatus: statusStore.get, statusDiscarded: statusStore.discarded, listBackgroundChildren, cancelBackgroundChild, cancelAllBackgroundChildren, onBackgroundChildrenChanged };
 }
