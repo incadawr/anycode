@@ -2609,6 +2609,23 @@ describe("startSettingsFileWatcher — external settings edits (real temp dir, p
     ]);
   }
 
+  it("delivers migrated v1 edits and skips newer read-only versions", async () => {
+    await writeSettingsFixture({ connections: [] });
+    const logger = { warn: vi.fn() };
+    const seen: AnycodeSettings[] = [];
+    watch(logger, settings => { seen.push(settings); });
+    await writeFile(settingsPath, JSON.stringify({ ...v2Settings({ connections: [] }),
+      version: 1, provider: { id: "deepseek", model: "deepseek-chat" } }));
+    await waitUntil(() => seen.length === 1);
+    expect(seen[0]?.version).toBe(2);
+    expect(seen[0]?.provider.connections).toEqual([]);
+    const future = JSON.stringify({ ...v2Settings({ connections: [] }), version: 999 });
+    await writeFile(settingsPath, future);
+    await waitUntil(() => logger.warn.mock.calls.length > 0);
+    expect(seen).toHaveLength(1);
+    expect(await readFile(settingsPath, "utf8")).toBe(future);
+  });
+
   it("hydrates root account bindings on external edits", async () => {
     await writeSettingsFixture({ connections: [] });
     const seen: AnycodeSettings[] = [];

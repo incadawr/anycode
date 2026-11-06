@@ -141,3 +141,23 @@ it.each([77, 78, 79, 80, 81, 82, 83, 84, 85])("records the released 0.0.%i bindi
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+
+it.each([
+  [undefined, { version: 1, bindings: [] }],
+  [{ version: 1, bindings: ["old"] }, { version: 1, bindings: [] }],
+  [{ version: 2, bindings: ["future"], extra: { keep: true } }, undefined],
+  [{ version: "malformed", extra: true }, undefined],
+  [null, undefined],
+])("preserves unknown account envelopes on save: %j", async (envelope, replacement) => {
+  const dir = await mkdtemp(join(tmpdir(), "anycode-envelope-"));
+  try {
+    const path = join(dir, "settings.json");
+    const settings = { ...cloneDefaults(), plugins: { accountSources: [] },
+      ...(envelope !== undefined ? { pluginAccountSources: envelope } : {}) };
+    await saveSettings(path, settings);
+    expect(JSON.parse(await readFile(path, "utf8")).pluginAccountSources).toEqual(replacement ?? envelope);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

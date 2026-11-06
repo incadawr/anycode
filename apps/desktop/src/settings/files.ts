@@ -320,7 +320,10 @@ export async function saveSettings(path: string, settings: AnycodeSettings): Pro
     // Older readers reject unknown keys inside plugins, but preserve root keys.
     const { accountSources, ...plugins } = migrated.plugins;
     disk.plugins = plugins;
-    disk.pluginAccountSources = { version: 1, bindings: accountSources };
+    const envelope = disk.pluginAccountSources;
+    if (envelope === undefined || (envelope !== null && typeof envelope === "object" && "version" in envelope && envelope.version === 1)) {
+      disk.pluginAccountSources = { version: 1, bindings: accountSources };
+    }
   }
   const data = `${JSON.stringify(disk, null, 2)}\n`;
   // …see `settingsWriteEpoch`: bracket the write so a concurrent reader can
