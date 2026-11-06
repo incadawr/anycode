@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Complete OpenCode Go catalog hints, reference prices, and request limits for supported models.
+
 ## [0.0.78] - 2026-11-06
 
 ### Added
