@@ -157,6 +157,7 @@ export * from "./repoMap/index.js";
 export { estimateTokensFromText } from "./context/tokens.js";
 export { ConversationHistory } from "./context/history.js";
 export type { HistorySink } from "./context/history.js";
+export type { RuntimeEngine, RuntimeSettings, RuntimeSegment, RuntimeBoundary, RuntimeHandoff, RuntimeSessionSnapshot, RuntimeSwitchCommit, RuntimeSegmentStore } from "./ports/runtime-segments.js";
 // Persisted subagent card snapshot contract (slice S1, CUT-S1 §2.3):
 // re-exported directly (types/index.ts's curated list does not cover every
 // types/ file — see ports/index.ts's own ImageAttachment precedent) so the

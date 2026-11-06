@@ -21,6 +21,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { HistorySink } from "../../context/history.js";
+import type { RuntimeSegment, RuntimeSessionSnapshot, RuntimeSegmentStore } from "../../ports/runtime-segments.js";
 import type {
   CheckpointMeta,
   CheckpointReason,
@@ -463,6 +464,41 @@ const MIGRATIONS: readonly Migration[] = [
        )`,
     ],
   },
+  { version: 33, statements: [
+    "ALTER TABLE sessions ADD COLUMN active_runtime_segment TEXT",
+    "ALTER TABLE sessions ADD COLUMN runtime_revision INTEGER NOT NULL DEFAULT 0",
+    `CREATE TABLE runtime_segments (
+      session_id TEXT NOT NULL REFERENCES sessions(id), segment_id TEXT NOT NULL,
+      ordinal INTEGER NOT NULL, engine TEXT NOT NULL,
+      connection_id TEXT, profile_id TEXT, account_scope TEXT NOT NULL,
+      native_ref TEXT, native_state TEXT NOT NULL CHECK(native_state IN ('fresh','materialized')),
+      selected_json TEXT NOT NULL, applied_json TEXT NOT NULL,
+      started_at INTEGER NOT NULL, ended_at INTEGER, coverage TEXT NOT NULL,
+      PRIMARY KEY(session_id, segment_id), UNIQUE(session_id, ordinal))`,
+    `CREATE INDEX idx_runtime_native_owner ON runtime_segments(engine, account_scope, native_ref)`,
+    `CREATE TABLE runtime_transcript (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
+      segment_id TEXT NOT NULL, item_id TEXT NOT NULL, data TEXT NOT NULL,
+      FOREIGN KEY(session_id,segment_id) REFERENCES runtime_segments(session_id,segment_id),
+      UNIQUE(session_id, segment_id, item_id))`,
+    `CREATE INDEX idx_runtime_transcript_session ON runtime_transcript(session_id,seq)`,
+    `CREATE TABLE runtime_boundaries (
+      session_id TEXT NOT NULL, segment_id TEXT NOT NULL, boundary_id TEXT NOT NULL,
+      data TEXT NOT NULL, PRIMARY KEY(session_id,boundary_id),
+      FOREIGN KEY(session_id,segment_id) REFERENCES runtime_segments(session_id,segment_id))`,
+    `CREATE TABLE runtime_handoffs (
+      session_id TEXT NOT NULL, segment_id TEXT NOT NULL, handoff_id TEXT NOT NULL,
+      data TEXT NOT NULL, PRIMARY KEY(session_id,segment_id), UNIQUE(session_id,handoff_id),
+      FOREIGN KEY(session_id,segment_id) REFERENCES runtime_segments(session_id,segment_id))`,
+    `INSERT INTO runtime_segments SELECT id,'legacy',0,COALESCE(engine_id,'core'),connection_id,codex_profile_id,
+      COALESCE(codex_profile_id,''),external_session_ref,
+      CASE WHEN external_session_ref IS NULL THEN 'fresh' ELSE 'materialized' END,
+      json_object('model',model,'mode',mode),json_object('model',model,'mode',mode),created_at,NULL,'available_history' FROM sessions`,
+    `INSERT INTO runtime_transcript(session_id,segment_id,item_id,data)
+      SELECT session_id,'legacy',item_id,json_set(data,'$.id','segment:legacy:' || item_id,'$.segmentId','legacy','$.sourceItemId',item_id)
+      FROM history_items WHERE COALESCE(json_extract(data,'$.kind'),'') != 'turn_error' ORDER BY seq`,
+    "UPDATE sessions SET active_runtime_segment='legacy'",
+  ] },
 ];
 
 /**
@@ -915,6 +951,7 @@ function rowToClaudeTranscriptItem(row: ClaudeTranscriptItemRow): ClaudeTranscri
 // field exists. This intentionally requires an explicit admission update when
 // the session schema grows; older schemas are checked before migration too.
 const CLI_SUPPORTED_SESSION_COLUMNS = new Set([
+  "active_runtime_segment", "runtime_revision",
   "id", "workspace", "model", "mode", "created_at", "updated_at", "title",
   "engine_id", "external_session_ref", "project_root", "worktree_id", "worktree_path", "worktree_branch", "worktree_base_ref", "worktree_owned_by_anycode",
   "continuation_pending", "continuation_mode", "worktree_exit_notice_pending", "worktree_cleanup_path", "worktree_cleanup_mode", "worktree_cleanup_owned_by_anycode",
@@ -987,7 +1024,7 @@ function assertCliAdmission(db: DatabaseSync, admission: CliAdmission): void {
   }
 }
 
-export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStore {
+export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStore, RuntimeSegmentStore {
   private db: DatabaseSync | undefined;
   private quarantined = false;
 
@@ -1082,6 +1119,38 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
 
   async createSession(meta: Omit<SessionMeta, "createdAt" | "updatedAt">): Promise<SessionMeta> {
     return this.createSessionInDb(this.open(), meta);
+  }
+
+  ensureRuntimeSession(sessionId: string): RuntimeSessionSnapshot {
+    this.transaction(db => {
+      const row = db.prepare("SELECT * FROM sessions WHERE id=?").get(sessionId) as unknown as SessionRow | undefined;
+      if (!row) throw new Error("Session is missing");
+      db.prepare(`INSERT OR IGNORE INTO runtime_segments VALUES (?,?,0,?,?,?,?,?,?,?,?,?,NULL,'available_history')`).run(
+        sessionId, "legacy", row.engine_id ?? "core", row.connection_id, row.codex_profile_id,
+        row.codex_profile_id ?? "", row.external_session_ref, row.external_session_ref ? "materialized" : "fresh",
+        JSON.stringify({ model: row.model, mode: row.mode }), JSON.stringify({ model: row.model, mode: row.mode }), row.created_at);
+      db.prepare("UPDATE sessions SET active_runtime_segment=COALESCE(active_runtime_segment,'legacy') WHERE id=?").run(sessionId);
+    }, "immediate");
+    return this.loadRuntimeSession(sessionId)!;
+  }
+
+  loadRuntimeSession(sessionId: string): RuntimeSessionSnapshot | null {
+    return this.transaction(db => {
+      const row = db.prepare("SELECT active_runtime_segment AS active, runtime_revision AS revision FROM sessions WHERE id=?").get(sessionId) as { active: string | null; revision: number } | undefined;
+      if (!row?.active) return null;
+      const segments = db.prepare("SELECT * FROM runtime_segments WHERE session_id=? ORDER BY ordinal").all(sessionId).map(raw => {
+        const value = raw as Record<string, string | number | null>;
+        return { sessionId, id: value.segment_id, ordinal: value.ordinal, engine: value.engine,
+          ...(value.connection_id ? { connectionId: value.connection_id } : {}), ...(value.profile_id ? { profileId: value.profile_id } : {}),
+          accountScope: value.account_scope, ...(value.native_ref ? { nativeRef: value.native_ref } : {}), nativeState: value.native_state,
+          selected: JSON.parse(value.selected_json as string), applied: JSON.parse(value.applied_json as string),
+          startedAt: value.started_at, ...(value.ended_at !== null ? { endedAt: value.ended_at } : {}), coverage: value.coverage } as RuntimeSegment;
+      });
+      const items = db.prepare("SELECT data FROM runtime_transcript WHERE session_id=? ORDER BY seq").all(sessionId).map(raw => JSON.parse(raw.data as string) as HistoryItem);
+      const boundaries = db.prepare("SELECT data FROM runtime_boundaries WHERE session_id=? ORDER BY rowid").all(sessionId).map(raw => JSON.parse(raw.data as string));
+      const handoff = db.prepare("SELECT data FROM runtime_handoffs WHERE session_id=? AND segment_id=?").get(sessionId,row.active);
+      return { revision: row.revision, activeSegmentId: row.active, segments, items, boundaries, handoff: handoff ? JSON.parse(handoff.data as string) : null };
+    });
   }
 
   /** Atomically transfer a native reference only while its source still owns it.
