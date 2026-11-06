@@ -1497,7 +1497,7 @@ export function Composer() {
   // `/orchestrate` submit path below.
   const orchestrateActive = useTabStore((state) => state.orchestrateActive);
   const orchestration = useTabStore((state) => state.orchestration);
-  const supportsOrchestration = (engine?.id ?? "core") !== "claude" && orchestration.available;
+  const supportsOrchestration = orchestration.available;
 
   // Core keeps its exact legacy presentation when `engine` is null. External
   // engines declare only the controls their adapter can honour.
@@ -2063,7 +2063,7 @@ export function Composer() {
       setText(""); setPasteBlocks([]); setAttachedImages([]); setRestoredOrchestrate(false); setRestoredPicks(undefined);
       return;
     }
-    const orchestrationTask = (engine?.id ?? "core") !== "claude" ? /^\s*\/orchestrate\s+([\s\S]*\S)\s*$/.exec(outgoing)?.[1] : undefined;
+    const orchestrationTask = /^\s*\/orchestrate\s+([\s\S]*\S)\s*$/.exec(outgoing)?.[1];
     if (orchestrationTask !== undefined && !supportsOrchestration) {
       tabStore.getState().setNotice({ kind: "slash_command_rejected", text: "Orchestration is unavailable in this session. Your draft has been kept." });
       return;
@@ -2584,7 +2584,7 @@ export function Composer() {
               vocabulary is never used for it (`supportsCorePermissions`
               stays false for Codex, so the two are mutually exclusive). */}
           {supportsCorePermissions && <ModeMenu mode={mode ?? "plan"} disabled={modeChangeDisabled(turn.status, ready)} onChange={handleModeChange} {...(supportsOrchestration ? { orchestrateActive, onToggleOrchestrate: handleToggleOrchestrate } : {})} />}
-          {engine?.id === "codex" && supportsOrchestration && (
+          {!supportsCorePermissions && supportsOrchestration && (
             // Icon-only toggle (the start-screen draft toggle's footprint):
             // the text chip wrapped to two lines and inflated the chip row.
             // State reads off aria-pressed; the label rides title/aria-label.

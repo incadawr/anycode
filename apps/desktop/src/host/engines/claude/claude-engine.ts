@@ -999,9 +999,10 @@ export class ClaudeEngine implements SessionEngine {
     if (effort === undefined) {
       delete settings.effort;
     } else {
-      settings.effort = effort;
+      delete settings.effort;
       try {
         await this.client.controlRequest("apply_flag_settings", { effortLevel: effort });
+        settings.effort = effort;
       } catch {
         // Best-effort re-assertion of the remembered effort on the now-live
         // model. The memory itself is unaffected by this failing — it stays
@@ -1032,8 +1033,7 @@ export class ClaudeEngine implements SessionEngine {
   private rememberCurrentModelEffort(): void {
     const settings = this.settings;
     if (settings === undefined) return;
-    if (settings.effort === undefined) settings.effortsByModel.delete(settings.model);
-    else settings.effortsByModel.set(settings.model, settings.effort);
+    if (settings.effort !== undefined) settings.effortsByModel.set(settings.model, settings.effort);
   }
 
   /** Restores the target model's remembered effort, normalizing it through the catalog. */

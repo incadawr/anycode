@@ -117,8 +117,8 @@ export function capImportPrompt(prompt: string, maxBytes = IMPORT_MAX_BYTES): st
   if (!Number.isFinite(limit) || limit < Buffer.byteLength(notice)) throw new Error("The selected model has too little input space for the conversation import.");
   const bytes = Buffer.from(prompt, "utf8");
   if (bytes.length <= limit) return prompt;
-  const tail = bytes.subarray(bytes.length - (limit - Buffer.byteLength(notice)));
-  // A byte boundary may fall inside a multi-byte character. Drop its partial
-  // prefix instead of emitting a replacement character or exceeding the cap.
-  return notice + tail.toString("utf8").replace(/^\uFFFD/, "");
+  let start = bytes.length - (limit - Buffer.byteLength(notice));
+  // Skip continuation bytes so the excerpt begins at a complete UTF-8 scalar.
+  while ((bytes[start]! & 0xc0) === 0x80) start++;
+  return notice + bytes.subarray(start).toString("utf8");
 }

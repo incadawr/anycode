@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { HistoryItem } from "@anycode/core";
-import { planEngineSwitchImport, renderImportPrompt, ENGINE_SWITCH_TURN_ID } from "./engine-switch.js";
+import { capImportPrompt, planEngineSwitchImport, renderImportPrompt, ENGINE_SWITCH_TURN_ID } from "./engine-switch.js";
 
 function item(id: string, partial: Partial<HistoryItem> & Pick<HistoryItem, "message">): HistoryItem {
   return { id, createdAt: 0, ...partial };
@@ -211,4 +211,12 @@ describe("ENGINE_SWITCH_TURN_ID", () => {
   it("is the sentinel turn id for the switch announcement event", () => {
     expect(ENGINE_SWITCH_TURN_ID).toBe("engine-switch");
   });
+});
+
+it("keeps every UTF-8 tail boundary valid", () => {
+  for (let limit = 128; limit < 144; limit++) {
+    const text = capImportPrompt("🌊".repeat(1000),limit);
+    expect(Buffer.byteLength(text)).toBeLessThanOrEqual(limit);
+    expect(text).not.toContain("\uFFFD");
+  }
 });

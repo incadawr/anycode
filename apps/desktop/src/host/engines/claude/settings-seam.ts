@@ -115,7 +115,7 @@ export class ClaudeSettingsSeam implements EngineSettingsSeam {
       return { ok: false, reason: `Claude model "${id}" is not available for this account.` };
     }
     const current = this.engine.snapshot();
-    const next: SettingsSnapshot = { model: resolved, activePresetId: current.activePresetId, ...(current.effort !== undefined ? { effort: current.effort } : {}) };
+    const next: SettingsSnapshot = { model: resolved, activePresetId: current.activePresetId };
     const change = this.beginPending(next, () => this.engine.selectModel(resolved));
     this.modelChanges.add(change);
     void change.finally(() => this.modelChanges.delete(change));
@@ -140,7 +140,7 @@ export class ClaudeSettingsSeam implements EngineSettingsSeam {
       return { ok: false, reason: `Claude model "${id}" is not available for this account.` };
     }
     const current = this.engine.snapshot();
-    const next: SettingsSnapshot = { model: resolved, activePresetId: current.activePresetId, ...(current.effort !== undefined ? { effort: current.effort } : {}) };
+    const next: SettingsSnapshot = { model: resolved, activePresetId: current.activePresetId };
     return this.beginPending(next, () => this.engine.selectModel(resolved));
   }
 
