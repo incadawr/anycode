@@ -26,15 +26,26 @@ configuration (MCP servers, skills, profiles) is read when a **session starts**.
 
 ## Scenario 2: "How do I configure orchestrator roles?"
 
-1. Read [orchestration.md](orchestration.md) for the pattern.
-2. A role is a **markdown profile**, not a config key: one file per role in
-   `<project>/.anycode/agents/<name>.md`. The format, the hard frontmatter rules,
-   and examples are in [subagents.md](subagents.md).
-3. Open **Settings → Subagents**. A profile that failed to load is missing from
-   the list, and the pane shows a strip ("N profile(s) failed to load"). Expand it
-   for the reason. Common causes: a missing `description`, `tools:` combined with
-   `engine:`, or `connection:` combined with `provider:`.
-4. Start a new session after you add or rename a profile. Native tabs pick up a
+1. Read [orchestration.md](orchestration.md) for Orchestrate mode and the
+   manual pattern.
+2. **Settings → Roles** routes five roles: `orchestrator` for the parent tab
+   and `planner`, `executor`, `reviewer`, `explore` for child sessions. Child roles
+   have an ordered fallback chain of engine, connection, model and effort.
+   In Native tabs only, the `orchestrator` route is checked at turn start and
+   can switch only model and effort, keeping the parent's engine and connection.
+   In Codex Orchestrate, choose the parent model and effort on the tab; this role
+   provides no automatic parent fallback. `planner`, `reviewer`
+   and `explore` must stay on the Native engine; a refusal names the role and the fix.
+3. To replace a role or add your own, write a markdown profile in
+   `<project>/.anycode/agents/<name>.md`; a same-named profile replaces
+   `planner`, `executor` or `reviewer` and its Settings → Roles route.
+   `explore` and `general-purpose` are reserved. The format is in
+   [subagents.md](subagents.md).
+4. Open **Settings → Subagents**. A profile that failed to load is missing from
+   the list, and the pane shows a strip ("N profile(s) failed to load"). Common
+   causes: a missing `description`, `tools:` combined with `engine:`, or
+   `connection:` combined with `provider:`.
+5. Start a new session after you add or rename a profile. Native tabs pick up a
    new profile on the next turn; Codex and Claude tabs need the new session.
 
 ## Scenario 3: "Why is my skill not visible?"
@@ -65,9 +76,17 @@ Reference: [skills.md](skills.md).
 
 - **In the panes.** Settings → Skills, Settings → Subagents and Settings → MCP
   show a strip for each file or entry that failed to load. Check these first.
-- **In the app's console output.** Startup messages with the `[host]` prefix go to
-  the console of the app process. Start AnyCode from a terminal to see them.
-  AnyCode does not keep a log file.
+- **In the log file.** AnyCode writes `logs/anycode.log` (one rotated copy,
+  `anycode.log.1`) in its app data folder: `%APPDATA%\AnyCode` on Windows,
+  `~/Library/Application Support/AnyCode` on macOS,
+  `~/.config/AnyCode` on Linux (or `$XDG_CONFIG_HOME/AnyCode` if set). Native
+  crash dumps go to `crash-dumps` in the same folder. Nothing is uploaded; review before sharing, since logs and dumps
+  can contain paths, prompts or secrets. Details:
+  [crash diagnostics](../development/crash-diagnostics.md).
+- **A diagnostics bundle for one session.** The session's Environment menu
+  exports an anonymised bundle (telemetry, tool-call shapes and the wire log)
+  for that session and its subagents, with a preview before saving. Attach it
+  to a bug report.
 - **In Settings → Environment.** Telemetry and repo-map status for the workspace.
 
 ## Still stuck?

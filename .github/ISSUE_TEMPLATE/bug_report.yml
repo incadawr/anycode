@@ -27,9 +27,25 @@ body:
     id: version
     attributes:
       label: AnyCode version or commit
-      placeholder: v0.0.1 or a commit SHA
+      placeholder: v0.0.85 or a commit SHA
     validations:
       required: true
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Engine
+      options:
+        - Native
+        - Codex
+        - Claude Code
+        - Not engine-specific
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Provider and model (Native tabs)
+      placeholder: "Provider name and exact model ID"
   - type: textarea
     id: environment
     attributes:
@@ -39,4 +55,7 @@ body:
     id: logs
     attributes:
       label: Logs or screenshots
-      description: Remove API keys, tokens, paths, and private content before attaching anything.
+      description: >-
+        A session diagnostics bundle (session Environment menu) or logs/anycode.log
+        from the app data folder helps most. Remove API keys, tokens, paths,
+        and private content before attaching anything.

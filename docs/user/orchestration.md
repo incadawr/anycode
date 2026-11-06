@@ -1,12 +1,46 @@
 # Orchestration
 
-Orchestration is a pattern, not a separate mode. One session, the **supervisor**,
-hands work to subagent profiles, checks what comes back, and accepts or returns
-it. AnyCode provides the pieces: profiles (see [subagents.md](subagents.md)),
-the delegation tool in each engine, and the engine tabs (see
-[engines.md](engines.md)). This version has no Orchestration settings pane.
+Orchestration means one session, the **supervisor**, hands work to child
+sessions, checks what comes back, and accepts or returns it. AnyCode offers it
+two ways:
 
-## The roles
+- **Orchestrate mode**: a tab-level switch in Native and Codex tabs. The parent
+  stays read-only and delegates to built-in roles routed in Settings → Roles.
+- **The manual pattern**: any tab dispatches to your own subagent profiles
+  (see [subagents.md](subagents.md)) with the delegation tool of its engine
+  (see [engines.md](engines.md)).
+
+## Orchestrate mode
+
+Turn it on from the Orchestrate row in the permission-mode menu, the
+Orchestrate toggle in a Codex composer, or `/orchestrate <task>`. The tab plans
+read-only and hands work to background child sessions; their reports arrive as
+new turns. Children run in the permission mode you had before Orchestrate
+(never plan mode). Leaving plan mode, including approving a plan, turns
+Orchestrate off; in a Codex tab, turning it off restores the previous Codex
+permissions. Codex Orchestrate is available when the runtime policy can be
+verified.
+
+Settings → Roles exposes five roles: `orchestrator` for the parent tab's
+own turns, plus `planner`, `executor`, `reviewer` and `explore` for child
+sessions. `planner`, `executor` and `reviewer` have role-specific turn budgets;
+`explore` uses the default subagent turn limit. A same-named profile in
+`.anycode/agents/` replaces `planner`, `executor` or `reviewer`;
+`explore` and `general-purpose` are reserved. Settings → Roles (`/roles`) sets
+an ordered fallback chain of engine, connection, model and effort for child roles:
+when an entry fails on quota, auth, an unreachable endpoint or an unknown model,
+it cools down and the next one is used. `planner`, `reviewer` and `explore` must
+run on the Native engine, so they can stay read-only. In Native tabs only,
+the `orchestrator` route is checked at turn start and can switch only model
+and effort, keeping the parent's engine and connection. In Codex Orchestrate,
+choose the parent model and effort on the tab; this role provides no automatic
+parent fallback. The first Orchestrate run
+without configured roles offers presets built from your ready engines and
+connections.
+
+## Manual delegation
+
+### The roles
 
 | Role | Typical setup | Does |
 |---|---|---|
@@ -49,7 +83,7 @@ Both engine tools appear only when at least one profile exists.
 
    ```markdown
    ---
-   name: reviewer
+   name: code-review
    description: Reviews a change on the Codex engine and reports defects with file:line.
    engine: codex
    effort: high
@@ -57,7 +91,7 @@ Both engine tools appear only when at least one profile exists.
    Verify each finding against the sources before you report it.
    ```
 
-3. Start a new session in the supervisor tab. Dispatch to `lead` or `reviewer` by
+3. Start a new session in the supervisor tab. Dispatch to `lead` or `code-review` by
    name. Start a new session after you add profiles, so a Codex or Claude
    supervisor sees them.
 4. Each child run appears as a card in the parent session, with its progress and
@@ -84,10 +118,10 @@ waits for a slot.
 For a longer worked example, the source repository has `docs/orchestration.md`.
 It is not shipped inside the app.
 
-## Orchestrate mode and recovery
+## Claude Code tabs and recovery
 
-Ordinary child delegation works independently of Orchestrate mode. Claude
-Orchestrate is disabled by default and currently unavailable: enabling its
+Ordinary child delegation works in every engine tab. Orchestrate mode for
+Claude Code tabs is [not available yet](https://github.com/incadawr/anycode/issues/35): enabling its
 development flag does not qualify a native CLI version. The tab explains an
 unavailable capability and keeps ordinary conversation available.
 

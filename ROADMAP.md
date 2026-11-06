@@ -20,7 +20,7 @@ mode switching are shared across engines.
 |---|---|---|
 | **Native** | AnyCode's built-in multi-provider agent loop | available now |
 | **Codex** | OpenAI Codex as an engine through its `app-server` protocol | available now |
-| **Claude Code** | Claude Code as an engine through its CLI headless stream | available now (early) |
+| **Claude Code** | Claude Code as an engine through its CLI headless stream | available now (Orchestrate mode not yet) |
 
 **Profile principles:**
 
@@ -39,6 +39,22 @@ mode switching are shared across engines.
 
 ---
 
+## Shipped recently
+
+- First-run tiles for coding subscriptions: GLM Coding Plan, MiniMax M Plan,
+  Kimi (kimi.com) and OpenCode Go, next to ChatGPT / Codex, Claude Code and any
+  API key or local model.
+- Subscription quota windows on connection cards (GLM Coding Plan, MiniMax
+  M Plan, OpenCode Go), Codex plan limits in Settings → Codex, and per-step
+  cost estimates.
+- Orchestrate mode with role routing, in Native and Codex tabs.
+- Sessions API for external agents, plus a Telegram remote-control example
+  plugin.
+- Plugins: install from URL, file or folder, background services, and model
+  catalogs supplied by plugins.
+- Language-server diagnostics in Edit/Write results, and a Vision fallback model.
+- In-app updates on Windows and Linux.
+
 ## 💡 Ideas (incubator)
 
 _Ideas and announcements collect here. Once an idea is ready for work, create a
@@ -46,13 +62,14 @@ separate task or research item._
 
 ### Extensibility
 
-- **anyPlugin.** _Mostly available now:_ the documented manifest spec, a signed
-  official index, two-phase install from file / URL / folder (git ahead), and
+- **anyPlugin.** _Mostly available now:_ the documented manifest spec,
+  two-phase install from file / URL / folder (git ahead), and
   the Settings → Plugins management UI (list / enable / disable / update /
   rollback / pin / diagnose), with MCP-server consent gates at install and
   after any command change. Importing skills and MCP servers from Claude Code,
   Codex and zcode configurations is available now. Still ahead: git install
-  sources and more contribution types such as slash commands and hooks.
+  sources and more contribution types such as slash commands and hooks. The
+  official channel stays disabled until production signing keys ship.
 - **MCP, first-class.** _Mostly available now:_ per-server connection status
   and tool counts, enable/disable toggles, and remote (streamable HTTP)
   servers. Still ahead: remote-server OAuth and on-demand tool loading so
@@ -68,11 +85,19 @@ separate task or research item._
 - **Harness switching (session transplant).** Move a live session between
   engines at a turn boundary, with the AnyCode transcript as the interchange
   format: lossless import/export where an engine's session format allows it,
-  an explicit handoff summary where it doesn't.
-- **Multi-agent orchestration.** _Available now._ A supervisor session that
-  plans work, spawns role-scoped agent sessions, and reviews their results —
-  including declarative workflows (see `docs/orchestration.md`) — the
-  substrate for everything below.
+  an explicit handoff summary where it doesn't. Tracked in
+  [#34](https://github.com/incadawr/anycode/issues/34).
+- **Multi-agent orchestration.** _Available now in Native and Codex tabs._
+  Orchestrate keeps the parent read-only and routes built-in child roles through
+  Settings → Roles; see [the guide](docs/user/orchestration.md).
+  Still ahead: Claude Code Orchestrate
+  ([#35](https://github.com/incadawr/anycode/issues/35)) and worktree isolation
+  for session-tier children ([#7](https://github.com/incadawr/anycode/issues/7)).
+- **Native inter-session communication.** The [Sessions API](docs/user/sessions-api.md)
+  serves external clients today; communication between engine sessions is tracked
+  in [#39](https://github.com/incadawr/anycode/issues/39).
+- **Skills in engine tabs.** Forward AnyCode skills into Claude Code and Codex
+  tabs ([#12](https://github.com/incadawr/anycode/issues/12)).
 - **Deep research mode.** Multi-step research sessions (web search and fetch,
   source tracking, a final report with citations) built as an orchestration
   preset rather than a separate agent.

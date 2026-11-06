@@ -17,7 +17,7 @@ the full suite. It considers committed, staged, unstaged, and untracked changes
 independently. The scope is a starting point; add tests for affected behavior
 when a dependency is not represented by an import.
 
-Before landing on `next`, run `pnpm run typecheck`, the full `pnpm vitest run`
+Before landing on `master`, run `pnpm run typecheck`, the full `pnpm vitest run`
 suite, and the desktop production build. A targeted run helps the development
 loop but does not replace this gate. Coordinate full-suite runs with other local
 sessions to avoid contention and misleading timeout failures.

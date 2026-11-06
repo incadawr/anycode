@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or setup help
+    url: https://github.com/incadawr/anycode/discussions/categories/q-a
+    about: Ask how to connect a provider, engine or plugin.
+  - name: Security vulnerability
+    url: https://github.com/incadawr/anycode/security/advisories/new
+    about: Report privately, not in a public issue.

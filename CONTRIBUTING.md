@@ -5,6 +5,7 @@ well-scoped improvements and reports from real use are especially valuable.
 
 ## Before you start
 
+- Questions and setup help belong in [Discussions](https://github.com/incadawr/anycode/discussions).
 - Search existing issues and pull requests before opening a new one.
 - For a substantial feature or change to user-facing behaviour, open an issue
   first so we can agree on the direction.
@@ -26,7 +27,8 @@ and release guidance.
 
 ## Making a change
 
-1. Fork the repository and create a branch from `master`.
+1. Fork the repository and create a branch from `master`, where current
+   development and releases land (see the [release policy](docs/development/release.md)).
 2. Use a short descriptive branch name, such as `feature/session-export`,
    `fix/mcp-timeout`, or `docs/setup-guide`.
 3. Keep the change focused. Include tests when behaviour changes.

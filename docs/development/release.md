@@ -14,19 +14,17 @@ ships together (`@anycode/desktop`, `@anycode/core`, `@anycode/cli`).
 
 ## Where work lands
 
-From 0.0.3 on, `master` holds only released state. Feature work accumulates on
-the integration branch **`next`**, and `next` is merged into `master` when the
-maintainer decides the set of changes is worth a release — not when the last
-task happens to be finished. The version number is chosen at that moment, so a
-task landing on `next` does not commit anyone to shipping it next.
+Current development and releases land on **`master`**. Create feature branches
+from `master` and target external pull requests at `master`. The older `next`
+branch is currently unused.
 
-This keeps the tag honest: every commit reachable from `master` is either
-released or about to be, and a half-finished task on `next` can never reach a
-user by accident.
+The maintainer chooses the release contents and version after review and
+verification. A merged change does not itself publish a release; the tag and
+draft-release review below remain the release boundary.
 
 ## Releasing a change
 
-1. Merge `next` into `master`.
+1. Merge the reviewed changes into `master`.
 2. Choose the next SemVer number and update package manifests together.
 3. Add a concise user-facing entry to [`CHANGELOG.md`](../../CHANGELOG.md):
    `Added`, `Changed`, `Fixed`, `Removed`, or `Security`.
@@ -103,8 +101,8 @@ touches no release.
 
 ## When a release run fails
 
-A version tagged but never published is not burned. Fix the cause on `next`
-with normal review and land the fix on `master`. Delete the tag on the remote
+A version tagged but never published is not burned. Fix the cause on a branch from `master`
+with normal review and merge the fix into `master`. Delete the tag on the remote
 and locally (`git push origin :refs/tags/v<version>`, `git tag -d v<version>`),
 along with any draft release for it. Then create the annotated tag `v<version>`
 again on the fixed commit and push it. The manifests already carry the version,

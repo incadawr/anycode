@@ -5,7 +5,9 @@ Portable example setup for running a multi-model workflow inside AnyCode:
 Flash** handles narrow, fully-resolved execution; a **GPT (Codex CLI)
 supervisor** independently verifies, returns defects, and accepts.
 
-Requires **AnyCode 0.0.30 or newer**.
+This page describes the manual supervisor pattern with your own profiles. For
+the built-in Orchestrate mode and Settings → Roles, start with
+[docs/user/orchestration.md](user/orchestration.md).
 
 ## The three roles
 
@@ -44,7 +46,7 @@ account** links an existing `~/.codex/auth.json`. Details:
 
 ### 2. Z.AI connection (GLM models)
 
-In **Settings → Connections**, add a connection for the built-in **Z.AI (GLM)**
+In **Settings → Provider**, add a connection for the built-in **Z.AI (GLM)**
 provider (`https://api.z.ai/api/anthropic`) with your Z.AI API key and select
 `glm-5.3` as its model. Only an **unrouted** profile inherits the parent
 session's active connection, so if every profile you dispatch declares its own
@@ -58,7 +60,7 @@ session can drive, say, `glm-planner` on a GLM connection and `ds-executor` on
 a DeepSeek one:
 
 - `connection: <connection-id>` — an **exact** connection id as shown in
-  Settings → Connections. Use this to pin a specific account.
+  Settings → Provider. Use this to pin a specific account.
 - `provider: <catalog-provider-id>` — a provider id such as `z-ai` or
   `deepseek`. The host picks a configured connection for that provider: the
   active connection if its provider matches, otherwise the first matching
