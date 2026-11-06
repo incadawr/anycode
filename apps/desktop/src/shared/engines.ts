@@ -348,6 +348,8 @@ export interface EngineProcessRegistration {
   generation: number;
   enginePid: number;
   pgid: number;
+  /** Runtime scope within one host generation; absent denotes the original boot. */
+  runtimeId?: string;
 }
 
 export type EngineProcessRegistrationMessage =

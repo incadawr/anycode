@@ -8685,3 +8685,57 @@ it("forwards redirected Windows output using the default handle check", () => {
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+describe("TabHostManager — engine switch process custody", () => {
+  function rig() {
+    const { fork, hosts } = liveForkRig();
+    const reaped: number[] = [];
+    const commit = vi.fn();
+    const manager = new TabHostManager({
+      fork, hostEntry: "/fake/host.js", createChannel: fakeChannel, getWindow: () => windowRig().window,
+      engineReady: () => true, engineEnv: (engine) => ({ ANYCODE_ENGINE: engine }),
+      engineSwitchEnabled: () => true,
+      prepareEngineSwitch: async target => ({ launch: { target, env: {} } }),
+      commitEngineSwitchIdentity: commit,
+      reapEngineProcess: registration => reaped.push(registration.enginePid), logger: silentLogger,
+    });
+    const created = manager.createTab({ workspace: "/ws", sessionId: "switch-session", resume: false, engine: "codex" });
+    if (!created.ok) throw new Error("tab unavailable");
+    const host = hosts[0]!;
+    const send = (phase: string, extra = {}) => host.emit("message", { type: "anycode:engine-switch", generation: 1, requestId: "switch", phase, ...extra });
+    const register = (enginePid: number, runtimeId?: string) => host.emit("message", { type: "anycode:engine-process", generation: 1, hostPid: host.pid, enginePid, pgid: enginePid, ...(runtimeId ? { runtimeId } : {}) });
+    return { manager, tab: created.tab, host, reaped, commit, send, register };
+  }
+
+  it("tracks source, candidate and retiring groups and rejects stale runtime registration", async () => {
+    const h = rig();
+    h.register(101);
+    h.register(999, "unprepared");
+    h.send("prepare", { target: { engine: "claude", model: "chosen" } });
+    await vi.waitFor(() => expect(h.tab.switchCoordinator?.acceptsCandidate("switch")).toBe(true));
+    h.register(202, "switch");
+    expect(h.tab.engineProcess?.enginePid).toBe(101);
+    expect(h.tab.candidateEngineProcesses?.get("switch")?.[0]?.enginePid).toBe(202);
+    h.send("commit", { identity: { model: "chosen", mode: "read-only", externalSessionRef: "native-ref" } });
+    await vi.waitFor(() => expect(h.tab.engine).toBe("claude"));
+    expect(h.commit).toHaveBeenCalledTimes(1);
+    expect(h.tab.engineProcess?.enginePid).toBe(202);
+    expect(h.tab.retiringEngineProcesses?.map(item => item.enginePid)).toEqual([101]);
+    h.register(998);
+    expect(h.tab.engineProcess?.enginePid).toBe(202);
+    h.host.emit("exit", 1);
+    expect(h.reaped.sort()).toEqual([101, 202]);
+  });
+
+  it("reaps the candidate and source if the host dies before commit", async () => {
+    const h = rig();
+    h.register(101);
+    h.send("prepare", { target: { engine: "claude", model: "chosen" } });
+    await vi.waitFor(() => expect(h.tab.switchCoordinator?.acceptsCandidate("switch")).toBe(true));
+    h.register(202, "switch");
+    h.host.emit("exit", 1);
+    expect(h.reaped.sort()).toEqual([101, 202]);
+    expect(h.commit).not.toHaveBeenCalled();
+    expect(h.tab.engine).toBe("codex");
+  });
+});

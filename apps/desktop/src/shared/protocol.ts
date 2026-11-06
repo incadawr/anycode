@@ -520,7 +520,7 @@ export type UiToHostMessage =
   // honored only between turns (busy/child-attached refusals get an
   // `engine_switch_failed` reply — the switch surface is non-silent, mirror of
   // rewind_request's discipline).
-  | { type: "engine_switch_request"; requestId: string; engine: EngineId; model: string }
+  | { type: "engine_switch_request"; requestId: string; engine: EngineId; model: string; generation?: number; connectionId?: string; codexProfileId?: string }
   // Slice 5.7 (design slice-5.7-cut.md §2.1): one user-initiated git command.
   // Untrusted -> validated by `gitCommandMessageSchema` below (fail-closed). NO
 
@@ -1306,8 +1306,12 @@ export const engineSwitchRequestSchema = z
     requestId: z.string().min(1).max(128),
     engine: z.enum(ENGINE_IDS),
     model: z.string().min(1).max(128).refine(value => value.trim().length > 0),
+    generation: z.number().int().positive().optional(),
+    connectionId: z.string().min(1).max(128).optional(),
+    codexProfileId: z.string().min(1).max(128).optional(),
   })
-  .strict();
+  .strict()
+  .refine(value => (value.engine === "core" || value.connectionId === undefined) && (value.engine === "codex" || value.codexProfileId === undefined));
 
 // ── git (slice 5.7): untrusted UiToHostMessage side; semantics FROZEN incl. caps.
 // DRIFT-LOCK: GIT_DIFF_TARGETS is the single source of truth for the diff.target

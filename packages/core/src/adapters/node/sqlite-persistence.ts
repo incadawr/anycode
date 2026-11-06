@@ -1462,6 +1462,28 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     return { deletedSessionIds, externalSessionRefs, counts };
   }
 
+  /** Commit the active identity without changing transcript, title or workspace ownership. */
+  commitEngineIdentity(id: string, expectedEngine: string, identity: {
+    engine: string; model: string; mode: string; externalSessionRef?: string;
+    connectionId?: string; codexProfileId?: string; workspace?: string;
+  }): void {
+    const db = this.open();
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      if (expectedEngine === "claude" && identity.workspace && !db.prepare("SELECT 1 FROM sessions WHERE id = ?").get(id)) {
+        this.createSessionInDb(db, { id, workspace: identity.workspace, model: identity.model, mode: "plan", engineId: "claude" });
+      }
+      const result = db.prepare(`UPDATE sessions SET engine_id = ?, model = ?, mode = ?,
+        external_session_ref = ?, connection_id = ?, codex_profile_id = ?, codex_fast = NULL, updated_at = ?
+        WHERE id = ? AND parent_session_id IS NULL AND COALESCE(engine_id, 'core') = ?`).run(
+          identity.engine, identity.model, identity.mode, identity.externalSessionRef ?? null,
+          identity.connectionId ?? null, identity.codexProfileId ?? null, Date.now(), id, expectedEngine,
+        );
+      if (Number(result.changes) !== 1) throw new Error("Source session identity changed or is unavailable");
+      db.exec("COMMIT");
+    } catch (error) { this.failTransaction(db, error); }
+  }
+
   async touchSession(id: string, patch?: SessionMetaPatch): Promise<void> {
     const db = this.open();
     const sets: string[] = ["updated_at = ?"];

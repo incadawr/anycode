@@ -1,3 +1,4 @@
+import type { EngineSwitchIdentity } from "../shared/engine-switch-control.js";
 import { manualCompactionUnavailableReason } from "../shared/manual-compaction.js";
 import { PresentationJournal } from "./presentation-journal.js";
 import type { CompactionRecordSeam } from "./compaction-records.js";
@@ -792,6 +793,9 @@ export function summarizeProviderUsage(steps: ProviderUsageRecord[]): {
 export interface SwitchRuntime {
   engine: SessionEngine;
   engineSettings?: EngineSettingsSeam;
+  identity?: EngineSwitchIdentity;
+  backgroundChildren?: SessionOptions["backgroundChildren"];
+  onOrchestrateChanged?: SessionOptions["onOrchestrateChanged"];
 }
 
 export interface SessionOptions {
@@ -800,6 +804,13 @@ export interface SessionOptions {
   engine: SessionEngine;
   /** Prepare a replacement without changing session-owned services. */
   switchEngineFactory?: (engine: EngineId, model: string) => Promise<SessionEngine | SwitchRuntime>;
+  engineSwitchCoordinator?: {
+    generation: number;
+    prepare(request: Extract<UiToHostMessage, { type: "engine_switch_request" }>): Promise<NonNullable<SessionOptions["switchEngineFactory"]>>;
+    commit(requestId: string, identity: EngineSwitchIdentity): Promise<void>;
+    abort(requestId: string): Promise<void>;
+    retire(requestId: string): Promise<void>;
+  };
   /**
    * the engine's own model catalog + permission presets. Absent for
    * core (and for any engine without native controls) -> `set_engine_preset` is
@@ -1283,6 +1294,8 @@ export class Session {
    * Injected by the composition root; absent -> the message is refused with
    * reason "engine switch is not available in this host".
    */
+  private readonly engineSwitchCoordinator: SessionOptions["engineSwitchCoordinator"];
+  private readonly engineSwitchRequestIds = new Set<string>();
   private readonly switchEngineFactory: ((engine: EngineId, model: string) => Promise<SessionEngine | SwitchRuntime>) | undefined;
   /**
    * engine-native model/preset controls; undefined -> the engine has
@@ -1350,9 +1363,9 @@ export class Session {
   /** the renderer's own read cursor per background task (see pushTaskOutput). */
   private readonly uiTaskOutputCursors = new Map<string, number>();
   /** срез 3 §2/§3: see SessionOptions.backgroundChildren's own doc. */
-  private readonly backgroundChildren: SessionOptions["backgroundChildren"];
+  private backgroundChildren: SessionOptions["backgroundChildren"];
   /** §3.7: host callback on every orchestrate transition (loop-config copy). */
-  private readonly onOrchestrateChanged: SessionOptions["onOrchestrateChanged"];
+  private onOrchestrateChanged: SessionOptions["onOrchestrateChanged"];
   /** §3.6: turn-start orchestrator-route health check (host-owned health cache). */
   private readonly orchestratorRouteCheck: SessionOptions["orchestratorRouteCheck"];  /** see SessionOptions.supervisorIdle's own doc. */
   private readonly supervisorIdle: SessionOptions["supervisorIdle"];
@@ -1822,6 +1835,7 @@ export class Session {
     });
     this.engine = options.engine;
     this.switchEngineFactory = options.switchEngineFactory;
+    this.engineSwitchCoordinator = options.engineSwitchCoordinator;
     this.engineSettings = options.engineSettings;
     this.broker = options.broker;
     this.broker.observeActivity(() => this.publishActivity());
@@ -4216,6 +4230,9 @@ export class Session {
     const fail = (reason: string) => {
       this.outbound.sendDirect({ type: "engine_switch_failed", requestId: message.requestId, reason });
     };
+    if (this.engineSwitchCoordinator && message.generation !== this.engineSwitchCoordinator.generation) return fail("stale host generation");
+    if (this.engineSwitchRequestIds.has(message.requestId) || this.engineSwitchRequestIds.size >= 1024) return fail("duplicate engine switch request");
+    this.engineSwitchRequestIds.add(message.requestId);
     if (this.busy || this.currentTurn !== null || this.relocating || this.broker.pendingCount > 0 || this.continuationPending) return fail("a turn is running");
     if (this.child !== undefined) return fail("a child session is attached");
     if ((this.backgroundChildren?.list().length ?? 0) > 0) return fail("children are running");
@@ -4227,7 +4244,10 @@ export class Session {
     this.currentTurn = op;
     let candidate: SessionEngine | undefined;
     let candidateSettingsUnsubscribe: (() => void) | undefined;
+    let candidateChildrenUnsubscribe: (() => void) | undefined;
     let committed = false;
+    let prepared = false;
+    let nextRuntime: SwitchRuntime | undefined;
     try {
       const previousEngine = this.engine;
       const generation = this.boundGeneration;
@@ -4252,7 +4272,10 @@ export class Session {
       let next: SessionEngine;
       let nextSettings: EngineSettingsSeam | undefined;
       try {
-        const runtime = await this.switchEngineFactory(message.engine, message.model);
+        prepared = this.engineSwitchCoordinator !== undefined;
+        const factory = this.engineSwitchCoordinator ? await this.engineSwitchCoordinator.prepare(message) : this.switchEngineFactory;
+        const runtime = await factory(message.engine, message.model);
+        nextRuntime = "engine" in runtime ? runtime : { engine: runtime };
         next = "engine" in runtime ? runtime.engine : runtime;
         nextSettings = "engine" in runtime ? runtime.engineSettings : undefined;
         candidate = next;
@@ -4323,6 +4346,12 @@ export class Session {
       }
       // Subscribe before committing so a broken settings seam leaves the source active.
       candidateSettingsUnsubscribe = this.subscribeEngineSettings(nextSettings);
+      candidateChildrenUnsubscribe = nextRuntime?.backgroundChildren?.onChange?.(() => this.pushBackgroundChildren());
+      const nextHistory = buildSessionHistory(canonical, this.historyMaxItems);
+      const nextMode = next.mode();
+      const previousMode = previousEngine.mode();
+      if (invalid()) throw new Error("session changed during engine switch");
+      await this.engineSwitchCoordinator?.commit(message.requestId, nextRuntime?.identity ?? { model: message.model, mode: nextMode });
       this.pendingEngineEffort = undefined;
       this.inFlightEngineEffort = undefined;
       this.settingsGeneration++;
@@ -4330,6 +4359,13 @@ export class Session {
       this.settingsBarrierActive = false;
       this.updateContextUsage(null);
       this.engine = next;
+      this.backgroundChildrenUnsubscribe?.();
+      if (nextRuntime?.backgroundChildren) {
+        this.backgroundChildren = nextRuntime.backgroundChildren;
+        this.backgroundChildrenUnsubscribe = candidateChildrenUnsubscribe;
+        candidateChildrenUnsubscribe = undefined;
+      } else if (this.engineSwitchCoordinator) { this.backgroundChildren = undefined; this.backgroundChildrenUnsubscribe = undefined; }
+      if (nextRuntime?.onOrchestrateChanged) this.onOrchestrateChanged = nextRuntime.onOrchestrateChanged;
       committed = true;
       candidate = undefined;
       this.engineSwitchImportPending = pendingImport;
@@ -4356,7 +4392,7 @@ export class Session {
         this.presentationJournal.clear();
         this.outbound.clear();
       }
-      this.sessionHistory = buildSessionHistory(canonical, this.historyMaxItems);
+      this.sessionHistory = nextHistory;
       this.outbound.emit({
         type: "agent_event",
         turnId: ENGINE_SWITCH_TURN_ID,
@@ -4369,16 +4405,18 @@ export class Session {
               : `Session switched from the "${previousEngine.id}" engine to the "${next.id}" engine. Native engine context was not transferred and no conversation history could be imported; the new engine starts without prior context.`,
         },
       });
-      if (next.mode() !== previousEngine.mode()) {
-        this.outbound.emit({ type: "mode_changed", mode: next.mode() });
+      if (nextMode !== previousMode) {
+        this.outbound.emit({ type: "mode_changed", mode: nextMode });
       }
       // Dispose ONLY after the new engine is live and the notice emitted.
       await previousEngine.dispose("session-close").catch((error) =>
         console.error(`[host] previous engine dispose threw: ${error instanceof Error ? error.message : String(error)}`),
       );
+      await this.engineSwitchCoordinator?.retire(message.requestId).catch(error => console.error(`[host] engine retirement acknowledgement failed: ${describeError(error)}`));
       this.outbound.sendDirect({ type: "engine_switched", requestId: message.requestId, engine: next.id, previousEngine: previousEngine.id });
     } catch (error) {
       candidateSettingsUnsubscribe?.();
+      candidateChildrenUnsubscribe?.();
       if (candidate !== undefined) {
         await candidate.dispose("session-close").catch((disposeError) =>
           console.error(`[host] candidate engine disposal failed: ${describeError(disposeError)}`),
@@ -4387,6 +4425,8 @@ export class Session {
       if (!committed) fail(`engine switch failed: ${describeError(error)}`);
       else console.error(`[host] committed engine switch cleanup failed: ${describeError(error)}`);
     } finally {
+      if (prepared && !committed) await this.engineSwitchCoordinator?.abort(message.requestId).catch(() => {});
+      if (committed && this.shuttingDown) await this.engine.dispose("host-shutdown").catch(() => {});
       release();
       if (this.currentTurn === op) this.currentTurn = null;
       // a pick queued during the switch was made against the

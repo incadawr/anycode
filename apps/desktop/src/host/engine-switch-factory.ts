@@ -1,5 +1,5 @@
 import { engineSwitchRequestSchema } from "../shared/protocol.js";
-import type { SessionOptions } from "./session.js";
+import type { SessionOptions, SwitchRuntime } from "./session.js";
 import type { CoreEngineOptions } from "./engines/core-engine.js";
 import type { CodexLaunchOptions, ClaudeLaunchOptions } from "./engine-launch-options.js";
 import { prepareSwitchRuntime, type SwitchRuntimeConfig } from "./engine-switch-runtime.js";
@@ -15,9 +15,9 @@ export interface SwitchEngineFactoryContext {
   engineSwitchEnabled?: boolean;
   workspace: string;
   sessionId: string;
-  resolveCore(request: SwitchEngineRequestContext): Promise<{ model: string; options: CoreEngineOptions } | undefined>;
-  resolveCodex(request: SwitchEngineRequestContext): Promise<{ options: CodexLaunchOptions; cleanup?: () => void } | undefined>;
-  resolveClaude(request: SwitchEngineRequestContext): Promise<{ options: ClaudeLaunchOptions; cleanup?: () => void } | undefined>;
+  resolveCore(request: SwitchEngineRequestContext): Promise<{ model: string; options: CoreEngineOptions; cleanup?: () => void | Promise<void>; configure?: (runtime: SwitchRuntime) => void } | undefined>;
+  resolveCodex(request: SwitchEngineRequestContext): Promise<{ options: CodexLaunchOptions; cleanup?: () => void | Promise<void>; configure?: (runtime: SwitchRuntime) => void } | undefined>;
+  resolveClaude(request: SwitchEngineRequestContext): Promise<{ options: ClaudeLaunchOptions; cleanup?: () => void | Promise<void>; configure?: (runtime: SwitchRuntime) => void } | undefined>;
 }
 
 export function createSwitchEngineFactory(ctx: SwitchEngineFactoryContext): SessionOptions["switchEngineFactory"] {
@@ -31,7 +31,7 @@ export function createSwitchEngineFactory(ctx: SwitchEngineFactoryContext): Sess
       case "core": {
         const resolved = await ctx.resolveCore(request);
         if (!resolved || resolved.model !== request.model) throw new Error(`Requested model ${request.model} is unavailable for core`);
-        config = { engine, options: resolved.options };
+        config = { engine, options: resolved.options, cleanup: resolved.cleanup, configure: resolved.configure };
         break;
       }
       case "codex": {
@@ -47,6 +47,8 @@ export function createSwitchEngineFactory(ctx: SwitchEngineFactoryContext): Sess
         break;
       }
     }
-    return prepareSwitchRuntime(config);
+    const runtime = await prepareSwitchRuntime(config);
+    if (engine === "core") runtime.identity = { model: request.model, mode: runtime.engine.mode() };
+    return runtime;
   };
 }

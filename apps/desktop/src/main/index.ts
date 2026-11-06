@@ -2667,6 +2667,18 @@ void app.whenReady().then(async () => {
   const createSessionForAgent = (request: CreateSessionRequest) =>
     createSessionForAgentImpl(request, createSessionDeps);
 
+  const validateChildModel = (model: string, connectionId: string | undefined): string | void => {
+      const current = currentSettings();
+      const connection = connectionId === undefined ? activeConnection(current) : connectionById(current, connectionId);
+      const custom = current.provider.custom?.find(entry => entry.id === connection?.providerId);
+      const catalog = getBuiltinCatalog().providers.find(entry => entry.id === connection?.providerId);
+      const models = connectionChildModels(connection, custom?.models ?? [], catalog?.models.map(item => item.id) ?? [], connection?.id === current.provider.activeConnectionId ? bootEnv.ANYCODE_MODEL : undefined, !!bootEnv.ANYCODE_BASE_URL?.trim() || !!bootEnv.ANYCODE_PROVIDER_TRANSPORT?.trim());
+      try { assertChildModel(model, models); }
+      catch {
+        const result = resolveCoreConnectionForModel({ provider: { ...current.provider, connections: connection ? [{ ...connection, models }] : [] } }, model);
+        return result.ok ? `Model ${JSON.stringify(model)} is unavailable on this connection.` : result.detail;
+      }
+    };
   manager = new TabHostManager({
     diagnosticsRing: mainDiagnosticsRing,
     agentTitleOf: (sessionId) => agentSessionTitles.get(sessionId),
@@ -2752,18 +2764,7 @@ void app.whenReady().then(async () => {
     // to the pure policy in shared/settings.ts. This dep was previously
     // ABSENT here, so every explicit cross-connection child spawn was
     // rejected with `not_ready` in the built app regardless of policy.
-    validateChildModel: (model, connectionId) => {
-      const current = currentSettings();
-      const connection = connectionId === undefined ? activeConnection(current) : connectionById(current, connectionId);
-      const custom = current.provider.custom?.find(entry => entry.id === connection?.providerId);
-      const catalog = getBuiltinCatalog().providers.find(entry => entry.id === connection?.providerId);
-      const models = connectionChildModels(connection, custom?.models ?? [], catalog?.models.map(item => item.id) ?? [], connection?.id === current.provider.activeConnectionId ? bootEnv.ANYCODE_MODEL : undefined, !!bootEnv.ANYCODE_BASE_URL?.trim() || !!bootEnv.ANYCODE_PROVIDER_TRANSPORT?.trim());
-      try { assertChildModel(model, models); }
-      catch {
-        const result = resolveCoreConnectionForModel({ provider: { ...current.provider, connections: connection ? [{ ...connection, models }] : [] } }, model);
-        return result.ok ? `Model ${JSON.stringify(model)} is unavailable on this connection.` : result.detail;
-      }
-    },
+    validateChildModel,
     resolveChildRoute: (value) => resolveCoreConnectionForModel(connectionRoutingSettings(currentSettings(), currentSettings().provider.activeConnectionId, bootEnv.ANYCODE_MODEL, !!bootEnv.ANYCODE_BASE_URL?.trim() || !!bootEnv.ANYCODE_PROVIDER_TRANSPORT?.trim()), value),
     resolveProviderConnection: (provider) =>
       settings === null ? undefined : resolveProviderConnection(settings, provider)?.id,
@@ -2811,6 +2812,37 @@ void app.whenReady().then(async () => {
     // tab goes through — instead of silently falling back to the ambient
     // `~/.codex` plan.
     resolveDefaultCodexProfile: () => resolveCodexProfileForTab(undefined),
+    engineSwitchEnabled: () => bootEnv.ANYCODE_ENGINE_SWITCH_ENABLED === "1",
+    prepareEngineSwitch: async (target, tab) => {
+      let release: (() => void) | undefined;
+      try {
+        let codexProfile: { id?: string; home?: string; authLink?: string } | undefined;
+        if (target.engine === "core") {
+          if (!connectionById(currentSettings(), target.connectionId)) throw new Error("Connection unavailable");
+          pinReservations.reserve(target.connectionId);
+          release = () => pinReservations.release(target.connectionId);
+          await ensurePinnedEnv(target.connectionId);
+          if (!connectionById(currentSettings(), target.connectionId)) throw new Error("Connection unavailable");
+          const reason = validateChildModel(target.model, target.connectionId);
+          if (reason) throw new Error(reason);
+        } else if (target.engine === "codex") {
+          const profileId = target.codexProfileId ?? settings?.codex?.activeProfileId ?? SYSTEM_PROFILE_ID;
+          const resolved = await resolveCodexProfileForTab(profileId);
+          if (!resolved.ok || !(codexOnboarding?.readyFor(profileId) ?? false) || !(await codexOnboarding?.verifySpawnFreshness(profileId))) throw new Error("Codex unavailable");
+          codexProfile = resolved.codexProfile;
+        } else if (!(claudeOnboarding?.readyFor() ?? false)) throw new Error("Claude unavailable");
+        const env = hostEnvForConnection(target.engine === "core" ? target.connectionId : tab.connectionId) ?? (target.engine !== "core" ? currentHostEnv : undefined);
+        if (!env) throw new Error("Connection environment unavailable");
+        return { launch: { target: target.engine === "codex" ? { ...target, codexProfileId: codexProfile?.id ?? SYSTEM_PROFILE_ID } : target, env: { ...env, ANYCODE_ENGINE: target.engine, ANYCODE_MODEL: target.model }, ...(codexProfile ? { codexProfile } : {}) }, release };
+      } catch (error) { release?.(); throw error; }
+    },
+    commitEngineSwitchIdentity: (sessionId, expectedEngine, target, identity, workspace) => {
+      if (!persistence) throw new Error("Persistence unavailable");
+      persistence.commitEngineIdentity(sessionId, expectedEngine, { ...identity, workspace, engine: target.engine,
+        ...(target.engine === "core" ? { connectionId: target.connectionId } : {}),
+        ...(target.engine === "codex" ? { codexProfileId: target.codexProfileId ?? settings?.codex?.activeProfileId } : {}),
+      });
+    },
     // Both validated binary paths ride EVERY host's env, regardless of which
     // engine this particular session runs on: a core/codex session's Agent
     // tool can spawn a Claude subagent (and a claude/core session a Codex

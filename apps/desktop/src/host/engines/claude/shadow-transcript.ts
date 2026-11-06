@@ -1,3 +1,4 @@
+import { projectClaudeHistory } from "./history-projection.js";
 /**
  * Host-owned fire-and-forget sink of a Claude turn's already-translated
  * `AgentEvent` stream into the additive `claude_transcript_items` SQLite
@@ -220,6 +221,10 @@ export class ClaudeShadowTranscriptEngine implements SessionEngine {
 
   historyItems(): readonly HistoryItem[] {
     return this.bootHistory;
+  }
+
+  async readTranscript(): Promise<readonly HistoryItem[]> {
+    return projectClaudeHistory(await this.sink.list(this.sessionRef));
   }
 
   async *runTurn(input: string, options: RunTurnOptions): AsyncIterable<AgentEvent> {

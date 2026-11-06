@@ -1,3 +1,8 @@
+import { createEngineSwitchClient } from "./engine-switch-client.js";
+import type { EngineSwitchLaunch } from "../shared/engine-switch-control.js";
+import type { SwitchRuntime, SessionOptions } from "./session.js";
+import type { CodexEngine } from "./engines/codex/codex-engine.js";
+import type { ClaudeEngine } from "./engines/claude/claude-engine.js";
 import { parseRecognizerEnv, recognizerEndpointFromFields, recognizerLiveWindow } from "./recognizer-env.js";
 import { resolveGoBootModel } from "./go-boot-model.js";
 import { logHookConfigFailure } from "./hook-config-diagnostics.js";
@@ -1250,6 +1255,75 @@ function buildChildSessionOptions(
   };
 }
 
+const engineSwitchEnabled = process.env.ANYCODE_ENGINE_SWITCH_ENABLED === "1";
+const switchHostGeneration = Number(process.env.ANYCODE_HOST_GENERATION);
+const switchClient = engineSwitchEnabled ? createEngineSwitchClient(switchHostGeneration, message => process.parentPort.postMessage(message)) : undefined;
+
+function hostSwitchCoordinator(sessionId: string, broker: IpcPermissionBroker, rules: SessionPermissionRules, secrets: McpSecretResolver): SessionOptions["engineSwitchCoordinator"] {
+  if (!switchClient) return undefined;
+  return {
+    generation: switchHostGeneration,
+    prepare: async request => {
+      const target = request.engine === "core"
+        ? { engine: request.engine, model: request.model, connectionId: request.connectionId ?? "" }
+        : request.engine === "codex" ? { engine: request.engine, model: request.model, ...(request.codexProfileId ? { codexProfileId: request.codexProfileId } : {}) }
+        : { engine: request.engine, model: request.model };
+      const result = await switchClient.request({ phase: "prepare", requestId: request.requestId, target });
+      if (!result.ok || !result.launch) throw new Error(result.reason ?? "Target is unavailable");
+      return hostSwitchFactory(sessionId, broker, rules, secrets, undefined, result.launch, request.requestId)!;
+    },
+    commit: async (requestId, identity) => {
+      let result;
+      try { result = await switchClient.request({ phase: "commit", requestId, identity }); }
+      catch {
+        try { result = await switchClient.request({ phase: "status", requestId }); }
+        catch {
+          // An unknown durable outcome cannot safely resume the source runtime.
+          // Main owns all process groups and resumes the persisted identity.
+          process.exit(1);
+        }
+      }
+      if (!result.ok) throw new Error(result.reason ?? "Engine identity commit failed");
+    },
+    abort: async requestId => { await switchClient.request({ phase: "abort", requestId }); },
+    retire: async requestId => { await switchClient.request({ phase: "retire", requestId }); },
+  };
+}
+
+/** The routing ledger is session-owned; ports, bridge callbacks and subscriptions belong to the candidate. */
+async function candidateRouting(sessionId: string, broker: IpcPermissionBroker, env: NodeJS.ProcessEnv, home: string) {
+  let runtime: SwitchRuntime | undefined;
+  const subscriptions: (() => void)[] = [];
+  const settingsPath = env[ENV_SETTINGS_PATH] ?? defaultSettingsPath();
+  const readSettings = () => { try { const parsed = parseSettings(JSON.parse(readFileSync(settingsPath, "utf8"))); return parsed.status === "ok" ? parsed.settings : undefined; } catch { return undefined; } };
+  const profiles = async () => (await discoverAgentProfiles(new NodeFileSystemAdapter(), buildAgentProfileRoots(workspace, home, []))).profiles;
+  const routed = createRoutedChildComposition({
+    health: roleHealth, describeError, resolve: () => null, prepare: request => request, record: () => {},
+    report: (id, text, meta) => childReportQueue.add(id, text, meta), deliver: deliverDetachedChildReport,
+  });
+  const foreign = createForeignOrchestrationComposition({ settings: readSettings, profiles, projectRoot: workspace, health: roleHealth, routed, env,
+    preset: () => runtime?.engineSettings?.snapshot().activePresetId ?? "read-only" });
+  const port = createChildSessionPort({
+    parentSessionId: sessionId, getPermissionMode: foreign.childMode,
+    send: sendChildSessionMessage,
+    subscribe: listener => { const stop = subscribeChildRunEvents(listener); subscriptions.push(stop); return stop; },
+    onDetachedTerminal: routed.onTerminal, onDetachedStall: deliverDetachedChildStall,
+    onDetachedApproval: deliverDetachedChildApproval, onDetachedApprovalSettled: retractDetachedChildApprovalNotice,
+    onDetachedTurnBudget: deliverDetachedTurnBudgetNotice,
+    maxDetachedChildren: () => readChildSessionsPerParentMax(settingsPath, workspace),
+  });
+  routed.attach(port);
+  const browser = createEngineBrowserBridge({ preview: previewPort, fullAccess: () => browserAccess.get(), broker, cwd: workspace,
+    imageInputEnabled: () => runtime?.engine.id === "codex" ? (runtime.engine as CodexEngine).imageInputEnabled() : runtime !== undefined });
+  const catalog = await foreign.catalog().catch(error => { port.cancelAllBackgroundChildren(); subscriptions.splice(0).forEach(stop => stop()); throw error; });
+  const backgroundChildren = { list: () => port.listBackgroundChildren(), cancel: (id: string) => port.cancelBackgroundChild(id), cancelAll: () => port.cancelAllBackgroundChildren(), onChange: (listener: () => void) => port.onBackgroundChildrenChanged(listener) };
+  return {
+    port, browser, catalog, foreign, profiles,
+    configure(next: SwitchRuntime) { runtime = next; next.backgroundChildren = backgroundChildren; next.onOrchestrateChanged = enabled => { if (enabled) foreign.captureBaseAuthority(next.engineSettings?.snapshot().activePresetId ?? "read-only"); else foreign.clearBaseAuthority(); }; },
+    cleanup() { port.cancelAllBackgroundChildren(); subscriptions.splice(0).forEach(stop => stop()); },
+  };
+}
+
 /** Capture trusted boot inputs once; foreign hosts need an explicit core resolver. */
 function hostSwitchFactory(
   sessionId: string,
@@ -1257,14 +1331,23 @@ function hostSwitchFactory(
   rules: SessionPermissionRules,
   mcpSecrets: McpSecretResolver,
   resolveCore: SwitchEngineFactoryContext["resolveCore"] = async () => undefined,
+  launch?: EngineSwitchLaunch,
+  runtimeId?: string,
 ) {
   // One opt-in for all real-engine boots. Keep unavailable-host refusal by default.
-  if (process.env.ANYCODE_ENGINE_SWITCH_ENABLED !== "1") return undefined;
-  const sourceEnv: NodeJS.ProcessEnv = { ...process.env, PATH: hostMcpLoginPath ?? process.env.PATH };
-  const home = hostProfileHome();
-  const settingsPath = hostSettingsPathOverride();
+  if (!engineSwitchEnabled) return undefined;
+  const trustedEnv = launch?.env ?? process.env;
+  const sourceEnv: NodeJS.ProcessEnv = { ...trustedEnv, PATH: hostMcpLoginPath ?? trustedEnv.PATH };
+  const home = resolveExtensionsHomeOverride(sourceEnv) ?? homedir();
+  const settingsPath = sourceEnv[ENV_SETTINGS_PATH];
   const platform = process.platform;
-  const argv = process.argv.slice(2);
+  const argv = launch ? [
+    ...(launch.codexProfile?.id ? ["--codex-profile", launch.codexProfile.id] : []),
+    ...(launch.codexProfile?.home ? ["--codex-home", launch.codexProfile.home] : []),
+    ...(launch.codexProfile?.authLink ? ["--codex-auth-link", launch.codexProfile.authLink] : []),
+  ] : process.argv.slice(2);
+  const ownership = runtimeId ? readHostProcessOwnership(sourceEnv, process.pid, message => process.parentPort.postMessage({ ...message, runtimeId })) ?? undefined : undefined;
+  const database = persistence!;
   const projectTrusted = hostWorkspaceTrust.projectTrusted;
   const fs = new NodeFileSystemAdapter();
   const classifier = parseAskClassifierEnvKind(sourceEnv[ENV_PERMISSION_CLASSIFIER]);
@@ -1279,7 +1362,34 @@ function hostSwitchFactory(
     loginPath: sourceEnv.PATH, projectTrusted, secrets: mcpSecrets,
   });
   return createSwitchEngineFactory({
-    engineSwitchEnabled: true, workspace, sessionId, resolveCore,
+    engineSwitchEnabled: true, workspace, sessionId,
+    resolveCore: launch?.target.engine === "core" ? async ({ model }) => {
+      const envConfig = loadEnvConfig(sourceEnv);
+      if (envConfig.model !== model) return undefined;
+      const routing = await candidateRouting(sessionId, broker, sourceEnv, home);
+      const exec = new NodeExecutionAdapter();
+      const registry = createDefaultToolRegistry({ agent: { sessionTier: true } });
+      const hooks = new InMemoryHookRunner();
+      for (const declaration of await loadHookConfigs(fs, workspace, home, { projectTrusted }).catch(() => [])) hooks.register(createCommandHook(exec, declaration, workspace));
+      const loaded = await loadMcpServerSpecs(fs, workspace, home, { projectTrusted, loginPath: sourceEnv.PATH, secrets: mcpSecrets });
+      const manager = new McpManager({ registry, transports: new NodeMcpTransportFactory() });
+      try {
+        await manager.start(loaded.specs);
+        const entry = getBuiltinCatalog().providers.find(item => item.id === envConfig.providerId) ?? matchCatalogEntryByBaseUrl(getBuiltinCatalog(), envConfig.baseUrl);
+        const resolveApiKey = buildResolveApiKey({ authMode: sourceEnv[ENV_AUTH_MODE], send: sendCredentialRequest, subscribe: subscribeCredentialResponses, fallbackApiKey: envConfig.apiKey });
+        const modelPort = new AiSdkModelPort({ transport: envConfig.providerTransport ?? entry?.defaultTransport ?? "anthropic-messages", baseUrl: envConfig.baseUrl, apiKey: envConfig.apiKey, model, providerId: envConfig.providerId, ...(resolveApiKey ? { resolveApiKey } : {}) }, hostDiagnosticSink);
+        const config: AgentLoopConfig = withSubagents({ modelPort, registry, hooks,
+          permissionEngine: new RuleAwarePermissionEngine(new SafeCommandPermissionEngine(new ModePermissionEngine()), rules), permissionBroker: broker,
+          mode: "plan", cwd: workspace, ports: { fs, exec, http: new NodeHttpAdapter(), todos: new InMemoryTodoStore() },
+          sessionSubagents: routing.port, history: new ConversationHistory(),
+          systemPrompt: buildSystemPrompt({ toolNames: registry.list(), env: { workingDirectory: workspace, platform, date: new Date().toISOString().slice(0, 10), modelId: model } }),
+          ...(envConfig.maxOutputTokens ? { maxOutputTokens: envConfig.maxOutputTokens } : {}),
+        }, { profiles: await routing.profiles() });
+        const loop = new AgentLoop(config);
+        return { model, options: buildCoreLaunchOptions({ config, loop }),
+          configure: routing.configure, cleanup: async () => { routing.cleanup(); await manager.dispose(); } };
+      } catch (error) { routing.cleanup(); await manager.dispose(); throw error; }
+    } : resolveCore,
     resolveCodex: async () => {
       const binaryPath = sourceEnv[ENV_CODEX_BIN];
       if (!binaryPath?.trim()) return undefined;
@@ -1289,30 +1399,43 @@ function hostSwitchFactory(
         if (reason !== null) throw new Error(`Codex profile home rejected: ${reason}`);
       }
       const mcp = await forward("codex");
+      const routing = await candidateRouting(sessionId, broker, sourceEnv, home).catch(error => { mcp.cleanupFile(); throw error; });
+      const agentBridge = new CodexDynamicToolBridge(routing.catalog, routing.port, new SqliteCodexAgentCardLog(database, sessionId), routing.foreign.catalog, routing.browser, routing.foreign.call);
       return { options: {
         ...buildCodexLaunchOptions({
-          workspace, binaryPath, sourceEnv, broker: engineBroker, fs, rules,
+          workspace, binaryPath, sourceEnv, broker: engineBroker, fs, rules, agentBridge, processOwnership: ownership,
           profile: profile === null ? null : { home: profile.home, homeTrust: () => assertCodexProfileHome(profile) },
           binaryTrust: path => checkCodexBinaryTrustOnDisk(path, platform, readTrustedBinaryConsentsSync(settingsPath)),
-          shadowLog: new SqliteCodexShadowLog(persistence!),
+          shadowLog: new SqliteCodexShadowLog(database),
           forwardOptions: { mcpForward: { ...(mcp.codexServers !== null ? { servers: mcp.codexServers } : {}), notices: mcp.notices } },
         }),
         selection: { presetId: "read-only", origin: "draft" },
-      }, cleanup: mcp.cleanupFile };
+      }, configure: runtime => { routing.configure(runtime); bindCodexUsage(runtime.engine as CodexEngine, foreignUsageAudit(sessionId).sink, () => session); },
+      cleanup: () => { routing.cleanup(); mcp.cleanupFile(); } };
     },
     resolveClaude: async () => {
       const binaryPath = sourceEnv[ENV_CLAUDE_BIN];
       if (!binaryPath?.trim()) return undefined;
       const mcp = await forward("claude");
+      const routing = await candidateRouting(sessionId, broker, sourceEnv, home).catch(error => { mcp.cleanupFile(); throw error; });
+      let raw: ClaudeEngine | undefined;
+      const stamp = createBridgePresentationStamp({ catalog: routing.catalog, resolveCallCatalog: routing.foreign.catalog, port: routing.port, browser: routing.browser, onEvent: event => raw?.pushBridgeEvent(event) });
+      const mcpBridge = new ClaudeMcpBridge({ serverName: "anycode", version: "1", listTools: stamp.listTools, callTool: stamp.callTool });
       return { options: {
         ...buildClaudeLaunchOptions({
           workspace, binaryPath, sourceEnv, broker: engineBroker, projectTrusted,
           profileDir: resolveClaudeConfigDir(), mcpConfigPath: mcp.claudeConfigPath,
-          bootNotices: mcp.notices, agentCatalogNonEmpty: false,
+          bootNotices: mcp.notices, agentCatalogNonEmpty: routing.catalog.length > 0, mcpBridge, stamp, processOwnership: ownership,
+          browserToolNames: new Set(routing.browser.specs.map(spec => `mcp__anycode__${spec.claudeName}`)),
           binaryTrust: path => checkClaudeBinaryTrustOnDisk(path, platform, readTrustedBinaryConsentsSync(settingsPath)),
         }),
         selection: { presetId: "read-only", origin: "draft" },
-      }, cleanup: mcp.cleanupFile };
+      }, configure: runtime => {
+        raw = runtime.engine as ClaudeEngine;
+        routing.configure(runtime);
+        bindClaudeUsage(raw, foreignUsageAudit(sessionId).sink, () => session, runtime.identity!.model);
+        runtime.engine = new ClaudeShadowTranscriptEngine(raw, new SqliteClaudeShadowTranscript(database), runtime.identity!.externalSessionRef!, []);
+      }, cleanup: () => { routing.cleanup(); mcp.cleanupFile(); } };
     },
   });
 }
@@ -1848,6 +1971,7 @@ async function bootCodexSession(
   bindCodexUsage(connected.engine, codexUsageAudit.sink, () => session);
   session = new Session({
     switchEngineFactory: hostSwitchFactory(connected.sessionMeta.id, broker, rules, mcpSecrets),
+    engineSwitchCoordinator: hostSwitchCoordinator(connected.sessionMeta.id, broker, rules, mcpSecrets),
     workspaceTrustRequired: workspaceTrustRequiredMessage,
     outbound,
     engine: booted.engine,
@@ -2596,6 +2720,7 @@ async function bootClaudeSession(
   bindClaudeUsage(claudeEngine, claudeUsageAudit.sink, () => session, connected.model);
   session = new Session({
     switchEngineFactory: hostSwitchFactory(rowId, broker, rules, mcpSecrets),
+    engineSwitchCoordinator: hostSwitchCoordinator(rowId, broker, rules, mcpSecrets),
     workspaceTrustRequired: workspaceTrustRequiredMessage,
     usageAudit: claudeUsageAudit,
     saveTurnError: async (record, input) => {
@@ -4602,6 +4727,7 @@ async function boot(): Promise<void> {
       return undefined;
     });
     session = new Session({
+      engineSwitchCoordinator: hostSwitchCoordinator(sessionId, broker, rules, mcpSecrets),
       switchEngineFactory: hostSwitchFactory(sessionId, broker, rules, mcpSecrets, async ({ model }) => {
         // This resolver owns the boot connection. Never infer one in a foreign host.
         if (model !== currentModel && !entryFor(model)?.models.some(item => item.id === model)) return undefined;
@@ -5161,6 +5287,7 @@ async function handleShutdown(): Promise<void> {
 }
 
 process.parentPort.on("message", (event) => {
+  if (switchClient?.handle(event.data)) return;
   const port = event.ports[0];
   if (port) {
     // Two channels carry a port: the term-channel is disambiguated by its init

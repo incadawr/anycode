@@ -16,6 +16,7 @@ export function createForeignOrchestrationComposition(options: {
   settings(): AnycodeSettings | undefined;
   profiles(): Promise<readonly PersonaDefinition[]>;
   projectRoot: string;
+  env?: NodeJS.ProcessEnv;
   preset(): string;
   health: RoleHealthCache;
   routed: ReturnType<typeof createRoutedChildComposition>;
@@ -27,7 +28,7 @@ export function createForeignOrchestrationComposition(options: {
   async function catalog(): Promise<AgentBridgeCatalogEntry[]> {
     const [profiles, settings] = await Promise.all([options.profiles(), Promise.resolve(options.settings())]);
     const claimed = new Set(profiles.filter(p => !isReservedPersonaName(p.name)).map(p => p.name));
-    const env = process.env.ANYCODE_SUBAGENT_MAX_TURNS;
+    const env = (options.env ?? process.env).ANYCODE_SUBAGENT_MAX_TURNS;
     const configured = env !== undefined && env.trim() !== "" ? Number(env) : settings?.tools.subagentMaxTurns;
     if (configured !== undefined && !Number.isInteger(configured)) throw new Error("Invalid ANYCODE_SUBAGENT_MAX_TURNS: not an integer");
     const entries = roleCatalog(profiles, settings ? resolveProfileRoles(settings, options.projectRoot) : undefined).map(entry => {
