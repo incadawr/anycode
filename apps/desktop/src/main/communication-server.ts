@@ -1,10 +1,12 @@
 /** Production, opt-in, local-only MCP. Independent of automation and CDP. */
 import { createServer } from "node:http";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { readFile, writeFile, rename, mkdir, rm, realpath } from "node:fs/promises";
-import { dirname, isAbsolute } from "node:path";
+import { readFile, rm, realpath } from "node:fs/promises";
+import { isAbsolute } from "node:path";
 import { Server, StreamableHTTPServerTransport, CallToolRequestSchema, ListToolsRequestSchema } from "@anycode/core/communication-mcp";
 import { z } from "zod";
+import { createCommunicationLedger, writePrivateFile, type CommunicationRecord } from "./communication-ledger.js";
+export { writePrivateFile } from "./communication-ledger.js";
 import type { AgentDelivery, AgentEnvelope, SessionActivityState } from "../shared/communication.js";
 
 export interface CommunicationManager {
@@ -143,15 +145,6 @@ const tools = [
   { name: "close_session", description: "Close a shared tab opened by create_session, through the same path as closing it in the UI. A running turn must be stopped with cancel_turn first. Errors start with a code: not_allowed (including env-file mode), not_found (unknown, closing or not shared), not_agent_opened (user tab), busy (running turn or host not ready), last_tab (open another tab first).", inputSchema: { type: "object", properties: { sessionId: { type: "string", minLength: 1 } }, required: ["sessionId"], additionalProperties: false } },
 ];
 
-/** Atomic private write (mode 0600, temp file + rename); the default ledger and discovery writer. */
-export async function writePrivateFile(path: string, text: string): Promise<void> {
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporary, text, { mode: 0o600, flag: "wx" });
-    await rename(temporary, path);
-  } finally { await rm(temporary, { force: true }); }
-}
-
 export interface CommunicationServerOptions {
   manager: CommunicationManager;
   userData: string;
@@ -286,35 +279,8 @@ export async function startCommunicationServer(options: CommunicationServerOptio
   const token = randomBytes(32).toString("hex");
   // This credential represents one supervisor, not an arbitrary client-asserted agent/session.
   const sender = "authenticated-local-supervisor";
-  type Record = AgentDelivery & { idempotencyKey?: string; workspace?: string; hostPid?: number | null };
-  const messages = new Map<string, Record>();
-  try {
-    const prior = JSON.parse(await readFile(ledgerFile, "utf8")) as Record[];
-    for (const record of prior) {
-      // GitHub #19: a renderer reload never restarts this server, and an app
-      // restart must NOT downgrade a settled delivery merely because the
-      // runtime restarted — acknowledged/rejected/unknown (and their detail)
-      // survive unchanged. Only a LOST host generation downgrades a still-
-      // queued record later, in `reconcile` (no automatic model replay).
-      if (record.envelope?.messageId) {
-        if (record.detail === "Dispatch pending") { record.state = "unknown"; record.detail = "Host response unavailable; do not blindly resend"; }
-        messages.set(record.envelope.messageId, record);
-      }
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-  await mkdir(dirname(discoveryFile), { recursive: true, mode: 0o700 });
-  const writeLedger = options.writeLedger ?? writePrivateFile;
-  let writes = Promise.resolve();
-  const persist = () => {
-    const snapshot = JSON.stringify([...messages.values()]);
-    writes = writes.catch(() => {}).then(async () => {
-      await writeLedger(ledgerFile, snapshot);
-    });
-    return writes;
-  };
-  await persist();
+  const ledger = await createCommunicationLedger(ledgerFile, options.writeLedger);
+  const { messages, persist } = ledger;
   /**
    * GitHub #21: ids whose dispatch is not settled yet — the record exists (its
    * write may even be still open), but the envelope has not reached the host or
@@ -338,7 +304,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
    * pending for a caller. `createdAt` is the envelope's, so the deadline does not
    * drift with how long the ledger write or the post takes.
    */
-  const scheduleExpiry = (record: Record) => {
+  const scheduleExpiry = (record: CommunicationRecord) => {
     const messageId = record.envelope.messageId;
     clearExpiry(messageId);
     const due = Date.parse(record.envelope.createdAt) + dispatchTimeoutMs - Date.now();
@@ -352,7 +318,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     timer.unref();
     expiryTimers.set(messageId, timer);
   };
-  const markLostGeneration = async (record: Record) => {
+  const markLostGeneration = async (record: CommunicationRecord) => {
     if (record.state !== "queued") return false;
     const tab = options.manager.listTabs().find((t) => t.sessionId === record.envelope.recipientSessionId);
     if (tab && tab.state === "running" && tab.pid != null && tab.pid === record.hostPid) return false;
@@ -457,20 +423,20 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     try { return schema.parse(raw); } catch (error) { if (error instanceof z.ZodError) throw new Error(hint); throw error; }
   };
   /** Shared by `send_message` and `create_session`'s firstMessage: idempotency -> ledger -> persist -> deliver -> persist. */
-  const sendMessage = async (input: z.infer<typeof messageSchema>): Promise<Record> => {
+  const sendMessage = async (input: z.infer<typeof messageSchema>): Promise<CommunicationRecord> => {
     const recipient = await requireSession(input.sessionId);
     const workspace = await resolvePath(recipient.workspace);
     if (input.idempotencyKey) {
-      const existing = [...messages.values()].find((m) => m.idempotencyKey === input.idempotencyKey);
+      const existing = ledger.findByIdempotencyKey(input.idempotencyKey);
       if (existing) {
         const e = existing.envelope;
         if (e.recipientSessionId !== input.sessionId || e.payload !== input.payload || e.mode !== input.mode || e.kind !== input.kind || e.correlationId !== input.correlationId || e.replyTo !== input.replyTo) throw new Error("Idempotency key reused with different input");
         return existing;
       }
     }
-    if (messages.size >= 10000) throw new Error("Message ledger full; restart with a new discovery file after archiving ledger");
+    if (ledger.isFull()) throw new Error("Message ledger full; restart with a new discovery file after archiving ledger");
     const envelope: AgentEnvelope = { messageId: randomUUID(), sender, recipientSessionId: input.sessionId, payload: input.payload, mode: input.mode, kind: input.kind, correlationId: input.correlationId, replyTo: input.replyTo, createdAt: new Date().toISOString() };
-    const record: Record = { envelope, state: "unknown", detail: "Dispatch pending", idempotencyKey: input.idempotencyKey, workspace, hostPid: recipient.pid };
+    const record: CommunicationRecord = { envelope, state: "unknown", detail: "Dispatch pending", idempotencyKey: input.idempotencyKey, workspace, hostPid: recipient.pid };
     messages.set(envelope.messageId, record);
     // In flight from the moment the record exists until the post settles: the
     // window the ledger write and the host request open is exactly when
@@ -500,17 +466,17 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     signal.addEventListener("abort", onAbort, { once: true });
   });
   /** Resolves the target ledger record for a wait; only records addressed to this session qualify. */
-  const resolveWaitTarget = (input: z.infer<typeof waitSchema>): Record | undefined => {
+  const resolveWaitTarget = (input: z.infer<typeof waitSchema>): CommunicationRecord | undefined => {
     if (input.messageId !== undefined) {
       const record = messages.get(input.messageId);
       return record && record.envelope.recipientSessionId === input.sessionId ? record : undefined;
     }
     // Newest wins: the ledger is in creation order, so the last match is the newest.
-    let found: Record | undefined;
+    let found: CommunicationRecord | undefined;
     for (const record of messages.values()) if (record.envelope.recipientSessionId === input.sessionId && record.envelope.correlationId === input.correlationId) found = record;
     return found;
   };
-  const waitForResult = async (input: z.infer<typeof waitSchema>, target: Record, workspace: string, signal: AbortSignal): Promise<unknown> => {
+  const waitForResult = async (input: z.infer<typeof waitSchema>, target: CommunicationRecord, workspace: string, signal: AbortSignal): Promise<unknown> => {
     const messageId = target.envelope.messageId;
     const deadline = Date.now() + input.timeoutMs;
     for (;;) {
@@ -736,7 +702,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
       const workspace = await resolvePath(tab.workspace);
       const existing = messages.get(delivery.envelope.messageId);
       if (existing && delivery.detail !== "Dispatch pending") { existing.state = delivery.state; existing.detail = delivery.detail; }
-      else if (!existing && messages.size < 10000) { messages.set(delivery.envelope.messageId, { ...delivery, workspace, hostPid: tab.pid }); }
+      else if (!existing && !ledger.isFull()) { messages.set(delivery.envelope.messageId, { ...delivery, workspace, hostPid: tab.pid }); }
       await persist();
     })().catch(() => { /* closing or no longer authorized */ });
   });
@@ -755,7 +721,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
    */
   const deferredRestores = new Map<string, Set<string>>();
   /** A record with no settled host outcome yet: see the eligibility comment below. */
-  const settled = (record: Record) => record.detail !== "Dispatch pending" && !inFlight.has(record.envelope.messageId);
+  const settled = (record: CommunicationRecord) => record.detail !== "Dispatch pending" && !inFlight.has(record.envelope.messageId);
   let reconciling = false;
   const reconcile = async () => {
     if (reconciling) return;
@@ -836,5 +802,5 @@ export async function startCommunicationServer(options: CommunicationServerOptio
   const reconcileTimer = setInterval(() => { void reconcile(); }, 1000);
   reconcileTimer.unref();
   let closed = false;
-  return { url, discoveryFile, async close() { if (closed) return; closed = true; closing = true; for (const waiter of waiters) waiter.abort(); unsubscribe?.(); clearInterval(reconcileTimer); for (const messageId of [...expiryTimers.keys()]) clearExpiry(messageId); http.closeAllConnections(); await new Promise<void>((resolve) => http.close(() => resolve())); await writes; try { const current = JSON.parse(await readFile(discoveryFile, "utf8")); if (current.token === token) await rm(discoveryFile, { force: true }); } catch { /* already removed or replaced */ } } };
+  return { url, discoveryFile, async close() { if (closed) return; closed = true; closing = true; for (const waiter of waiters) waiter.abort(); unsubscribe?.(); clearInterval(reconcileTimer); for (const messageId of [...expiryTimers.keys()]) clearExpiry(messageId); http.closeAllConnections(); await new Promise<void>((resolve) => http.close(() => resolve())); await ledger.flush(); try { const current = JSON.parse(await readFile(discoveryFile, "utf8")); if (current.token === token) await rm(discoveryFile, { force: true }); } catch { /* already removed or replaced */ } } };
 }
