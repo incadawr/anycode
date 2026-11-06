@@ -51,6 +51,12 @@
   gap: var(--sp-2);
 }
 
+.welcome-brand-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
 .welcome-paths {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));

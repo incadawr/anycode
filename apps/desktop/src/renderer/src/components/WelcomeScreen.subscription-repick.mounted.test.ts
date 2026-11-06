@@ -151,10 +151,14 @@ it("lays out the actual connection buttons in order without clipping", async () 
   try {
     const css = ["tokens.css", "accents.css", "ui/ui.css", "app.css", "settings.css"].map(f => readFileSync(resolve(import.meta.dirname, "..", f), "utf8")).join("\n");
     const file = resolve(dir, "index.html");
-    writeFileSync(file, `<!doctype html><style>${css} body { margin:0 } .welcome-screen { height:100vh }</style>${container.innerHTML}<pre id="result"></pre><script>const b=[...document.querySelectorAll('.welcome-paths button')]; document.querySelector('#result').textContent=JSON.stringify(b.map(e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,right:r.right,bottom:r.bottom,scroll:e.scrollWidth,client:e.clientWidth}}));</script>`);
+    writeFileSync(file, `<!doctype html><style>${css} body { margin:0 } .welcome-screen { height:100vh }</style>${container.innerHTML}<pre id="header-result"></pre><pre id="result"></pre><script>const logo=document.querySelector('.welcome-mark').getBoundingClientRect(), name=document.querySelector('.welcome-wordmark').getBoundingClientRect(), dots=document.querySelector('.welcome-ramp').getBoundingClientRect(); document.querySelector('#header-result').textContent=JSON.stringify({logoRight:logo.right,logoCenter:logo.y+logo.height/2,nameLeft:name.left,nameCenter:name.y+name.height/2,dotsTop:dots.y,logoBottom:logo.bottom}); const b=[...document.querySelectorAll('.welcome-paths button')]; document.querySelector('#result').textContent=JSON.stringify(b.map(e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,right:r.right,bottom:r.bottom,scroll:e.scrollWidth,client:e.clientWidth}}));</script>`);
     for (const width of [720, 360]) {
       const run = spawnSync(chrome, ["--headless", "--no-sandbox", "--disable-gpu", "--disable-background-networking", `--user-data-dir=${dir}/profile`, `--window-size=${width},900`, "--dump-dom", `file://${file}`], { encoding: "utf8", timeout: 30000 });
       expect(run.status, run.stderr).toBe(0);
+      const header = JSON.parse(run.stdout.match(/<pre id="header-result">([^<]+)<\/pre>/)![1]!) as {logoRight:number; logoCenter:number; nameLeft:number; nameCenter:number; dotsTop:number; logoBottom:number};
+      expect(header.nameLeft).toBeGreaterThan(header.logoRight);
+      expect(header.nameCenter).toBeCloseTo(header.logoCenter, 0);
+      expect(header.dotsTop).toBeGreaterThanOrEqual(header.logoBottom);
       const rows = JSON.parse(run.stdout.match(/<pre id="result">([^<]+)<\/pre>/)![1]!) as Array<{x:number;y:number;right:number;bottom:number;scroll:number;client:number}>;
       for (const [i, a] of rows.entries()) {
         expect(a.scroll).toBeLessThanOrEqual(a.client + 1);

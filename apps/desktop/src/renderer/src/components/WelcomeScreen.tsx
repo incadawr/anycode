@@ -194,10 +194,12 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
     <div className="welcome-screen">
       <div className={`welcome-screen-card${activePath ? " welcome-screen-card-setup" : ""}`} ref={cardRef}>
         <header className="welcome-brand">
-          <BrandMark className="welcome-mark" />
-          <h1 className="welcome-wordmark">
-            <span className="welcome-wordmark-any">Any</span>Code
-          </h1>
+          <div className="welcome-brand-heading">
+            <BrandMark className="welcome-mark" />
+            <h1 className="welcome-wordmark">
+              <span className="welcome-wordmark-any">Any</span>Code
+            </h1>
+          </div>
           {/* The mode-ramp motif: plan → build → edit → auto → yolo, quoting
               the mode chip's escalation colors. Decorative — aria-hidden. */}
           <div className="welcome-ramp" aria-hidden="true">
