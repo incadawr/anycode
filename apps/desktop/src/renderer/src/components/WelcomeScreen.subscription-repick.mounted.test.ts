@@ -100,6 +100,11 @@ async function pickProvider(value: string): Promise<void> {
   });
 }
 
+it("focuses the Codex path on first launch", async () => {
+  await mount();
+  expect(document.activeElement).toBe(container.querySelector('[data-welcome-path="codex"]'));
+});
+
 describe("subscription re-pick keeps the key link and the form on the same provider", () => {
   it("opens a single Go form with the Kimi default and no automatic transport selector", async () => {
     await mount();

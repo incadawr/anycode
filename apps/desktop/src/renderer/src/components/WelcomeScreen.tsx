@@ -186,7 +186,7 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
   // "land on the one actionable control" rationale as the original mount-only
   // steal.
   useEffect(() => {
-    cardRef.current?.querySelector<HTMLElement>(".welcome-setup select, .welcome-setup input, .welcome-setup button, .welcome-paths button")?.focus();
+    cardRef.current?.querySelector<HTMLElement>(".welcome-setup select, .welcome-setup input, .welcome-setup button, [data-welcome-path=\"codex\"]")?.focus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resolved.key, activePath, subscription, pick]);
 
