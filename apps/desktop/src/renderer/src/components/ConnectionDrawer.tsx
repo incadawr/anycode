@@ -1,3 +1,4 @@
+import { goModelMatchesTransport } from "../../../shared/provider-models.js";
 /**
  * ConnectionDrawer (W12, cut §"Add/Edit flow"): the compact add/edit
  * surface for ONE provider connection — template → label → model → transport
@@ -1825,8 +1826,7 @@ export function ConnectionDrawerFields({
   ).filter(item => {
     if (automaticIds) return automaticIds.includes(item.id);
     if (!manualGo) return true;
-    const route = resolveOpenCodeGoEndpointPolicy(providerId, item.id, targetConnection?.modelRoutes);
-    return route.kind === "route" && route.route.transport === (transport || selectedEntry?.defaultTransport);
+    return goModelMatchesTransport(providerId, item.id, transport || selectedEntry?.defaultTransport, targetConnection?.modelRoutes);
   });
   const modelSuggestions = automaticGo ? prioritizeGoDefault(mergedSuggestions) : mergedSuggestions;
   // The ids the catalog itself offers for this provider — a selected one of

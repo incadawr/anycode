@@ -1,6 +1,12 @@
-import { openCodeGoModelIds } from "@anycode/core/opencode-go";
+import { openCodeGoModelIds, resolveOpenCodeGoEndpointPolicy } from "@anycode/core/opencode-go";
 import type { CatalogSummary, CustomProviderRecord, ProviderConnection, ProviderTransportId } from "./settings.js";
 import { mergeModelIds } from "./settings.js";
+
+export function goModelMatchesTransport(providerId: string, model: string, transport: ProviderTransportId | undefined, snapshot?: ProviderConnection["modelRoutes"]): boolean {
+  if (!transport) return model !== "gemini-4-argon";
+  const route = resolveOpenCodeGoEndpointPolicy(providerId, model, snapshot);
+  return route.kind === "route" && route.route.transport === transport;
+}
 
 export function providerModelsFor(
   providerId: string | undefined,
@@ -21,7 +27,13 @@ export function providerModelsFor(
     const selected = visibleModels === undefined ? available : visibleModels.filter(id => available.includes(id));
     return selected.map(id => ({ id }));
   }
-  const catalogHit = providerId === "opencode-openai" && transport === "openai-responses" ? [] : catalog?.find((entry) => entry.id === providerId)?.models;
+  const catalogEntry = catalog?.find((entry) => entry.id === providerId);
+  const goProvider = providerId === "opencode" || providerId === "opencode-openai";
+  const effectiveTransport = transport ?? connection?.transport ?? catalogEntry?.defaultTransport;
+  const eligible = (id: string) => !goProvider || goModelMatchesTransport(providerId, id, effectiveTransport, connection?.modelRoutes);
+  const catalogHit = catalogEntry?.models.filter(model => eligible(model.id));
+  connectionModels = connectionModels?.filter(eligible);
+  visibleModels = visibleModels?.filter(eligible);
   const customHit = custom?.find((entry) => entry.id === providerId);
   const baseHints: readonly { id: string; name?: string }[] | undefined =
     catalogHit ?? (customHit !== undefined ? customHit.models.map((id) => ({ id })) : undefined);
@@ -41,6 +53,7 @@ export function providerModelsFor(
       return hint?.name !== undefined ? { id, name: hint.name } : { id };
     });
   }
+  if (goProvider && connectionModels !== undefined) return [];
   if (catalogHit !== undefined) {
     return catalogHit;
   }
