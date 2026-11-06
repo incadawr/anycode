@@ -74,7 +74,7 @@ it.each(["codex", "claude"] as const)("hides Go quota for a reconnected %s runti
   useSettingsStore.setState({ snapshot: { settings, readOnly: false, secrets: [], envOverrides: [], providerReady: true, catalog: [] } });
   const store = createDesktopStore();
   store.getState().setPinnedConnection({ connectionId: "a", providerId: "opencode" });
-  store.getState().applyHostMessage({ type: "host_ready", workspace: "/w", mode: "build", model: "m", sessionId: "s", engine, contextUsage: { estimatedTokens: 25, budgetTokens: 100, source: "provider" } });
+  store.getState().applyHostMessage({ type: "host_ready", workspace: "/w", mode: "build", model: "m", sessionId: "s", engine: { id: engine, capabilities: { supportsCorePermissions: false, supportsRewind: false, supportsWorkflow: false, supportsGitMutations: false, supportsContextUsage: true, supportsContextBreakdown: false, supportsInteractiveApprovals: false, costAccounting: false, supportsModelSelection: true, supportsReasoningEffort: true, supportsImages: true, supportsTasks: false, supportsFileSnapshots: false, supportsManualCompact: true } }, contextUsage: { estimatedTokens: 25, budgetTokens: 100, source: "provider" } });
   const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
   const element = document.createElement("div"); document.body.append(element); const root = createRoot(element);
   try {

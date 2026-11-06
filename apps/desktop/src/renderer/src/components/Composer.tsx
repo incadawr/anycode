@@ -1057,7 +1057,7 @@ function CtxPopover({
     return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", visible); };
   }, [open]);
   const runtimeEngine = useTabStore((state) => state.engine);
-  const goConnection = runtimeEngine === null ? snapshot?.settings.provider.connections.find(item => item.id === pinnedConnection?.connectionId) : undefined;
+  const goConnection = (runtimeEngine === null || runtimeEngine.id === "core") ? snapshot?.settings.provider.connections.find(item => item.id === pinnedConnection?.connectionId) : undefined;
   const [anchor, setAnchor] = useState<{ left: number; bottom: number; maxHeight: number } | null>(null);
   const [timedOut, setTimedOut] = useState(false);
   /** Per-step list starts collapsed and returns to collapsed on every close. */
