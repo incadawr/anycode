@@ -31,7 +31,7 @@ import { useEffect, useReducer, useRef, useState, type ReactNode } from "react";
 import { useStore } from "zustand";
 import { findKnownModel, isGatewayProvider } from "@anycode/core/model-dictionary";
 import { getBuiltinCatalog } from "@anycode/core/catalog";
-import { openCodeGoModelIds } from "@anycode/core/opencode-go";
+import { openCodeGoModelIds, resolveOpenCodeGoEndpointPolicy } from "@anycode/core/opencode-go";
 import type {
   CatalogSummary,
   CatalogSummaryEntry,
@@ -1817,11 +1817,17 @@ export function ConnectionDrawerFields({
   const automaticGo = (providerId === "opencode" || providerId === "opencode-openai") && !baseUrl.trim() && !transport.trim() && !proxySnapshot?.envOverrides.some(key => key === "ANYCODE_BASE_URL" || key === "ANYCODE_PROVIDER_TRANSPORT");
   const automaticIds = automaticGo ? openCodeGoModelIds(providerId, targetConnection?.modelRoutes) : undefined;
   if (automaticIds?.includes("kimi-k3")) automaticIds.unshift(...automaticIds.splice(automaticIds.indexOf("kimi-k3"), 1));
+  const manualGo = !automaticGo && (providerId === "opencode" || providerId === "opencode-openai");
   const mergedSuggestions = liveModelSuggestions(
     isCustomRecordConnection ? null : fetchedModels,
     automaticGo ? undefined : targetConnection?.models,
     automaticIds ? automaticIds.map(id => ({ id })) : providerId === "opencode-openai" && (transport || selectedEntry?.defaultTransport) === "openai-responses" ? [] : selectedEntry?.models ?? [],
-  ).filter(item => !automaticIds || automaticIds.includes(item.id));
+  ).filter(item => {
+    if (automaticIds) return automaticIds.includes(item.id);
+    if (!manualGo) return true;
+    const route = resolveOpenCodeGoEndpointPolicy(providerId, item.id, targetConnection?.modelRoutes);
+    return route.kind === "route" && route.route.transport === (transport || selectedEntry?.defaultTransport);
+  });
   const modelSuggestions = automaticGo ? prioritizeGoDefault(mergedSuggestions) : mergedSuggestions;
   // The ids the catalog itself offers for this provider — a selected one of
   // these needs no entry in the connection's own list (see
@@ -2550,12 +2556,14 @@ export function ConnectionDrawerFields({
                 const normalizeUrl = (url: string) => url.trim().replace(/\/+$/, "").replace(/\/v1$/, "");
                 const actualUrl = baseUrl.trim() || provider?.baseUrl || "";
                 const catalogPrice = proxySnapshot !== null && !proxySnapshot.envOverrides.includes("ANYCODE_BASE_URL") && provider && actualUrl && normalizeUrl(actualUrl) === normalizeUrl(provider.baseUrl) && (pricingMode === "catalog" || (pricingMode === "unset" && !sharedBillingEndpoint)) ? provider.models.find(item => item.id === id)?.pricing : undefined;
-                const livePrice = pricingMode !== "rates" && pricingMode !== "subscription" ? targetConnection?.modelCapabilities?.[id]?.pricing : undefined;
+                const goRoute = automaticGo ? resolveOpenCodeGoEndpointPolicy(providerId, id, targetConnection?.modelRoutes) : undefined;
+                const goPrice = goRoute?.kind === "route" ? goRoute.route.metadata.pricing as typeof catalogPrice : undefined;
+                const livePrice = !automaticGo && pricingMode !== "rates" && pricingMode !== "subscription" ? targetConnection?.modelCapabilities?.[id]?.pricing : undefined;
                 const fallback = pricingMode === "rates" ? pricingPayload() : undefined;
-                const inherited = livePrice ?? (fallback && fallback.mode === "rates" ? fallback : undefined) ?? catalogPrice;
+                const inherited = livePrice ?? (fallback && fallback.mode === "rates" ? fallback : undefined) ?? goPrice ?? catalogPrice;
                 const inheritedDraft = inherited ? { input: String(inherited.input), cachedInput: inherited.cachedInput === undefined ? "" : String(inherited.cachedInput), output: String(inherited.output), cacheWrite: inherited.cacheWrite === undefined ? "" : String(inherited.cacheWrite) } : empty;
                 const draft = ownRateDraft(modelRates, id) ?? inheritedDraft;
-                const source = pricingMode === "subscription" ? "Subscription" : livePrice ? "Provider price" : fallback && fallback.mode === "rates" ? "Connection fallback" : catalogPrice?.tariff ? `Catalog peak: ${catalogPrice.tariff.peakUtcDays.map(day => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day]).join(", ")} ${catalogPrice.tariff.peakUtcHours.map(([start, end]) => `${String(start).padStart(2, "0")}–${String(end).padStart(2, "0")}`).join(", ")} UTC; other times ×${catalogPrice.tariff.offPeakMultiplier}` : catalogPrice ? "Catalog price" : "Unknown";
+                const source = pricingMode === "subscription" ? "Subscription" : livePrice ? "Provider price" : fallback && fallback.mode === "rates" ? "Connection fallback" : goPrice ? (goPrice.tariff || goPrice.tiers?.length ? "Go reference price · conditional rates" : "Go reference price") : catalogPrice?.tariff ? `Catalog peak: ${catalogPrice.tariff.peakUtcDays.map(day => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][day]).join(", ")} ${catalogPrice.tariff.peakUtcHours.map(([start, end]) => `${String(start).padStart(2, "0")}–${String(end).padStart(2, "0")}`).join(", ")} UTC; other times ×${catalogPrice.tariff.offPeakMultiplier}` : catalogPrice ? "Catalog price" : "Unknown";
                 return <tr key={id}><th scope="row">{id}<small>{pricingMode === "subscription" ? (custom ? "Subscription · custom rate inactive" : "Subscription") : custom ? "Custom" : source}</small><button type="button" className="settings-button connection-drawer-rate-mode" disabled={readOnly || saving || pricingMode === "subscription"} aria-label={`${id} ${custom ? "use inherited price" : "set custom price"}`} onClick={() => { setModelRates(previous => { const next = { ...previous }; if (custom) delete next[id]; else next[id] = { ...inheritedDraft }; return next; }); setDirtyRates(previous => new Set(previous).add(id)); }}>{custom ? "Use inherited" : "Customize"}</button></th>
                   {([ ["input", "Input"], ["cachedInput", "Cached input"], ["output", "Output"], ["cacheWrite", "Cache write (optional)"] ] as const).map(([key, label]) => <td key={key}><input aria-label={`${id} ${label}`} className="settings-field-input" type="number" min="0" step="any" placeholder={key === "cacheWrite" ? "Not set" : "—"} value={pricingMode === "subscription" ? "" : draft[key]} disabled={readOnly || saving || pricingMode === "subscription" || !custom} onChange={(e) => { const value = e.target.value; setModelRates((previous) => ({ ...previous, [id]: { ...draft, [key]: value } })); setDirtyRates((previous) => new Set(previous).add(id)); }} /></td>)}
                 </tr>;

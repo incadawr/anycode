@@ -113,3 +113,13 @@ it("projects exact model metadata without inventing effort levels or an output c
   expect(hy.effortLevels).toEqual(["off", "high"]);
   expect(openCodeGoCatalogEntry(entry, "muse-spark-1.2-contributor").models[0]!.effortLevels?.[0]).toBe("minimal");
 });
+
+it("catalog projects the supported fixture with the stable default and prices", async () => {
+  const { getBuiltinCatalog } = await import("./catalog-data.js");
+  const entry = getBuiltinCatalog().providers.find(provider => provider.id === "opencode")!;
+  expect(entry.models[0]?.id).toBe("minimax-m3");
+  expect(entry.models).toHaveLength(28);
+  expect(entry.models.find(model => model.id === "grok-4.7")?.pricing?.tiers?.[0]?.gt).toBe(200000);
+  expect(entry.models.find(model => model.id === "deepseek-v4-pro")?.pricing?.tariff).toBeDefined();
+  expect(entry.models.some(model => model.id === "gemini-4-argon")).toBe(false);
+});
