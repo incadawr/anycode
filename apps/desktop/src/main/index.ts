@@ -2716,6 +2716,8 @@ void app.whenReady().then(async () => {
   let peerReplies: ReturnType<typeof createSessionPeerReplies> | undefined;
   let peerBroker: Awaited<ReturnType<CommunicationController["broker"]>> | undefined;
   if (peerEnabled) app.once("before-quit", () => peerDrain?.dispose());
+  const fileActivity = createFileActivityIngress(peerEnabled, tabId => manager?.peerHost(tabId));
+  if (fileActivity) app.on("before-quit", () => fileActivity.dispose());
   const peerHandler = peerEnabled ? createSessionPeersHandler({
     files: fileActivity?.index,
     send: async (caller, input, authorize) => {
