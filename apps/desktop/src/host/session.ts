@@ -6500,9 +6500,10 @@ export class Session {
     if (this.orchestrationRestore) return this.orchestrationRestore;
     const state = this.runtimeHistory!.state();
     const saved = state.segments.find(segment => segment.id === state.activeSegmentId)?.applied.orchestration;
+    const engine = this.engine;
+    let nativeAuthority: {mode:PermissionMode} | undefined;
     this.orchestrationRestore = (async () => {
       if (!saved?.enabled) return;
-      const engine = this.engine;
       if (!this.runtimeCompositionReady(engine) || !this.runtimePolicyAvailable(engine)) throw new Error("Saved orchestration requires a verified runtime policy and routing");
       await this.engineSettings?.waitForSettingsChanges?.();
       if (!this.ownsRuntime(engine)) throw new Error("Runtime changed during orchestration restore");
@@ -6510,7 +6511,7 @@ export class Session {
         engine.setMode!("plan");
         if (engine.mode() !== "plan" || !engine.setCoreOrchestrate?.(true)) throw new Error("Core orchestration restore was not confirmed");
       } else {
-        const authority = {mode:saved.baseMode};
+        const authority = nativeAuthority = {mode:saved.baseMode};
         const result = await engine.orchestrationPolicy!.apply(true,authority);
         if (!this.ownsRuntime(engine) || !result.enabled || result.baseAuthority !== authority) throw new Error("Orchestration restore was not confirmed");
       }
@@ -6518,7 +6519,24 @@ export class Session {
       this.preOrchestrateMode = saved.baseMode;
       this.orchestrate = true;
       this.onOrchestrateChanged?.(true);
-    })().catch(error => { this.orchestrationPosture = "quarantined"; throw error; });
+    })().catch(async error => {
+      if (!this.ownsRuntime(engine)) return;
+      console.warn("[host] saved orchestration could not be restored",error);
+      // Restore is optional session setup. A stale overlay must never deny
+      // ordinary conversation admission or prevent the initial handshake.
+      this.orchestrate = false;
+      this.preOrchestrateMode = null;
+      this.orchestrationPosture = "stable";
+      try {
+        if (engine.id === "core") { engine.setCoreOrchestrate?.(false); engine.setMode?.(saved!.baseMode); }
+        else if (nativeAuthority) await engine.orchestrationPolicy?.apply(false,nativeAuthority);
+        engine.orchestrationComposition?.clear();
+        this.onOrchestrateChanged?.(false);
+      } catch (rollbackError) { console.warn("[host] orchestration restore cleanup failed",rollbackError); }
+      try { this.persistRuntimeSettings(); }
+      catch (writeError) { console.error("[host] could not clear saved orchestration",writeError); }
+      this.outbound.emit({type:"agent_event",turnId:ENGINE_SWITCH_TURN_ID,event:{type:"engine_notice",level:"warning",message:"Orchestration could not be restored and was turned off. You can continue this conversation."}});
+    });
     return this.orchestrationRestore;
   }
 

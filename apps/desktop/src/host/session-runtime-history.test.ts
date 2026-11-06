@@ -1,5 +1,5 @@
 import { bindRuntimeOrchestration } from "./runtime-orchestration.js";
-import { describe,expect,it } from "vitest";
+import { describe,expect,it,vi } from "vitest";
 import { createHash } from "node:crypto";
 import { SqlitePersistenceAdapter,type RuntimeSwitchCommit } from "@anycode/core";
 import { RuntimeSessionHistory, createRuntimeSessionHistory } from "./runtime-session-history.js";
@@ -23,6 +23,36 @@ async function switchedStore() {
   return store;
 }
 describe("canonical reconnect hydration", () => {
+  it("turns a failed saved orchestration restore off, hydrates, and serves the next turn across restart", async () => {
+    const store = await switchedStore();
+    const state = store.loadRuntimeSession("test-session")!;
+    const saved = {model:"scripted-model",mode:"plan",orchestration:{enabled:true as const,baseMode:"edit" as const}};
+    store.updateRuntimeSettings("test-session",state.activeSegmentId,saved,saved);
+    const h = createHarness({steps:[finishStep()],runtimeHistory:new RuntimeSessionHistory(store,"test-session")});
+    bindRuntimeOrchestration(h.engine,{ownerSessionId:"test-session",port:{hasRunningChildren:() => false,cancelAllBackgroundChildren:() => {}},baseMode:() => h.engine.mode()});
+    h.engine.setCoreOrchestrate = enabled => { h.config.orchestrate = enabled; return !enabled; };
+    const log = vi.spyOn(console,"warn").mockImplementation(() => {});
+    try {
+      h.send({type:"ui_ready",orchestrationProtocol:1});
+      const ready = await h.waitFor(m => m.type === "host_ready");
+      expect(ready).toMatchObject({orchestration:{enabled:false}});
+      expect(h.config.orchestrate).toBe(false); expect(h.engine.mode()).toBe("edit");
+      await h.waitFor(m => m.type === "session_history");
+      expect(h.received.some(m => m.type === "fatal")).toBe(false);
+      expect(h.received.some(m => m.type === "agent_event" && m.event.type === "engine_notice" && m.event.message.includes("turned off"))).toBe(true);
+      expect(log).toHaveBeenCalled();
+      const active = store.loadRuntimeSession("test-session")!.segments.at(-1)!;
+      expect(active.selected.orchestration).toBeUndefined(); expect(active.applied.orchestration).toBeUndefined();
+      h.send({type:"user_message",requestId:"after-restore-failure",text:"continue"});
+      await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && m.event.type === "loop_end"));
+    } finally { await h.session.shutdown(); h.close(); log.mockRestore(); }
+    const reopened = createHarness({steps:[],runtimeHistory:new RuntimeSessionHistory(store,"test-session")});
+    try {
+      reopened.send({type:"ui_ready"});
+      expect(await reopened.waitFor(m => m.type === "host_ready")).toMatchObject({orchestration:{enabled:false}});
+      expect(reopened.received.some(m => m.type === "fatal")).toBe(false);
+    } finally { await reopened.session.shutdown(); reopened.close(); await store.close(); }
+  });
   it("does not fence the next ordinary turn behind an unrelated uncertain delivery", async () => {
     const store = await switchedStore();
     const history = new RuntimeSessionHistory(store,"test-session");
