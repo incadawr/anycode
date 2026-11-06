@@ -1,3 +1,7 @@
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
 // @vitest-environment jsdom
 /**
  * Mounted regression gate for the subscription key link (jsdom — see
@@ -132,3 +136,37 @@ describe("subscription re-pick keeps the key link and the form on the same provi
     expect(providerSelect().value).toBe("z-ai");
   });
 });
+
+
+it("lays out the actual connection buttons in order without clipping", async () => {
+  await mount();
+  const buttons = [...container.querySelectorAll<HTMLButtonElement>(".welcome-paths button")];
+  expect(buttons.map(b => b.querySelector("strong")?.textContent)).toEqual([
+    "GLM Coding Plan", "MiniMax M Plan", "Kimi (kimi.com)", "OpenCode Go",
+    "API key or local model", "ChatGPT / Codex", "Claude Code",
+  ]);
+  const chrome = process.env.CHROME_BIN ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+  if (!existsSync(chrome)) throw new Error("Chrome is required for welcome layout verification");
+  const dir = mkdtempSync(resolve(tmpdir(), "welcome-layout-"));
+  try {
+    const css = ["tokens.css", "accents.css", "ui/ui.css", "app.css", "settings.css"].map(f => readFileSync(resolve(import.meta.dirname, "..", f), "utf8")).join("\n");
+    const file = resolve(dir, "index.html");
+    writeFileSync(file, `<!doctype html><style>${css} body { margin:0 } .welcome-screen { height:100vh }</style>${container.innerHTML}<pre id="result"></pre><script>const b=[...document.querySelectorAll('.welcome-paths button')]; document.querySelector('#result').textContent=JSON.stringify(b.map(e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,right:r.right,bottom:r.bottom,scroll:e.scrollWidth,client:e.clientWidth}}));</script>`);
+    for (const width of [720, 360]) {
+      const run = spawnSync(chrome, ["--headless", "--no-sandbox", "--disable-gpu", "--disable-background-networking", `--user-data-dir=${dir}/profile`, `--window-size=${width},900`, "--dump-dom", `file://${file}`], { encoding: "utf8", timeout: 30000 });
+      expect(run.status, run.stderr).toBe(0);
+      const rows = JSON.parse(run.stdout.match(/<pre id="result">([^<]+)<\/pre>/)![1]!) as Array<{x:number;y:number;right:number;bottom:number;scroll:number;client:number}>;
+      for (const [i, a] of rows.entries()) {
+        expect(a.scroll).toBeLessThanOrEqual(a.client + 1);
+        for (const b of rows.slice(i + 1)) expect(a.right <= b.x + 1 || b.right <= a.x + 1 || a.bottom <= b.y + 1 || b.bottom <= a.y + 1).toBe(true);
+      }
+      if (width === 720) {
+        expect(rows[0]!.y).toBe(rows[2]!.y);
+        expect(rows[3]!.y).toBe(rows[4]!.y);
+        expect(rows[5]!.y).toBe(rows[6]!.y);
+        expect(rows[2]!.bottom).toBeLessThanOrEqual(rows[3]!.y);
+        expect(rows[4]!.bottom).toBeLessThanOrEqual(rows[5]!.y);
+      }
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 60000);
