@@ -2205,8 +2205,10 @@ it("restores native thinking and completed, cancelled, and empty failed turn foo
       supportsFileSnapshots: false, supportsManualCompact: false,
     },
     mode: () => "build", reasoningEffort: () => undefined, setReasoningEffort: () => {},
-    async *runTurn(): AsyncIterable<AgentEvent> {
+    async *runTurn(_input, options): AsyncIterable<AgentEvent> {
       const index = count++;
+      options.onInputDispatched?.();
+      options.onInputAccepted?.();
       if (index < 2) {
         yield { type: "reasoning_start", id: "reused" };
         yield { type: "reasoning_delta", id: "reused", text: `thought ${index}` };

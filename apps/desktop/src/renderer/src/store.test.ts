@@ -9620,3 +9620,29 @@ describe("direct orchestration delivery reconciliation", () => {
   const quota = providerQuotaToWire({ primary: { usedPercent: 1, family: "tokens" }, sources: ["x-ratelimit-limit-tokens"] });
   expect(formatQuotaWindowLine(quota.primary, quota.limitName, 0)).toBe("tokens · 99% left");
 });
+
+
+describe("Claude ordinary pending echoes", () => {
+  function pendingEcho() {
+    const store = createDesktopStore();
+    store.setState({ engine: { id: "claude" } as NonNullable<ReturnType<typeof store.getState>["engine"]> });
+    store.getState().recordSentMessage("hello", [], "ordinary");
+    store.getState().appendUserText("ordinary", "hello");
+    return store;
+  }
+
+  it("does not create a steer delivery on ordinary turn_started", () => {
+    const store = pendingEcho();
+    store.getState().applyHostMessage({ type: "turn_started", requestId: "ordinary", turnId: "turn" });
+    expect(store.getState().orchestrationDeliveries).toEqual([]);
+  });
+
+  it("automatically returns an ordinary rejected echo to the paused queue", () => {
+    const store = pendingEcho();
+    store.getState().applyHostMessage({ type: "turn_rejected", requestId: "ordinary", reason: "not_ready" });
+    expect(store.getState().promptQueue).toMatchObject([{ id: "ordinary", text: "hello" }]);
+    expect(store.getState().queuePaused).toBe(true);
+    expect(store.getState().pendingSteers).toEqual([]);
+    expect(store.getState().orchestrationDeliveries).toEqual([]);
+  });
+});

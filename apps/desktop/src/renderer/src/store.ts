@@ -1178,7 +1178,7 @@ function startedDeliveries(state: DesktopState, requestId: string, turnId: strin
   const existing = state.orchestrationDeliveries.find(item => item.requestId === requestId);
   if (existing) return state.orchestrationDeliveries.map(item => item.requestId === requestId ? deliveryStarted(item, turnId) : item);
   const steer = state.pendingSteers.find(item => item.requestId === requestId);
-  if (!steer || state.uiSteerPending.includes(requestId)) return state.orchestrationDeliveries;
+  if (!steer || steer.pendingEcho || state.uiSteerPending.includes(requestId)) return state.orchestrationDeliveries;
   return [...state.orchestrationDeliveries, { requestId, text: steer.sentMessage.text, images: steer.sentMessage.images.map(image => ({ ...image, attachment: { ...image.attachment } })), status: "started", turnId, restored: false, reviewed: false, childSteer: true }];
 }
 
@@ -1579,9 +1579,11 @@ export interface DesktopState {
    * not yet seen). Shown outside stream order in the composer queue area;
    * appended as a `user_text` block ONLY on a matching `turn_started`
    * (delivery position), removed by a matching `turn_rejected` without
-   * appending. Part of the session slice — cleared by reset()/respawn.
+   * appending. Ordinary Claude sends use pendingEcho until native acceptance
+   * or terminal resolution; they do not create steer delivery records.
+   * Part of the session slice — cleared by reset()/respawn.
    */
-  pendingSteers: { requestId: string; text: string; images?: readonly ImageAttachment[]; sentMessage: LastSentMessage }[];
+  pendingSteers: { requestId: string; text: string; images?: readonly ImageAttachment[]; sentMessage: LastSentMessage; pendingEcho?: true }[];
   /**
    * rework (Opus defects 1+2): requestIds of the entries in
    * `pendingSteers` this tab's own core-engine `steer_message` path owns (a
@@ -1903,7 +1905,7 @@ interface SessionSlice {
    */
   pendingPrompt: { turnId: string; requestId: string; text: string; images?: ImageAttachment[] } | null;
   /** see DesktopState.pendingSteers. Part of the session slice. */
-  pendingSteers: { requestId: string; text: string; images?: readonly ImageAttachment[]; sentMessage: LastSentMessage }[];
+  pendingSteers: { requestId: string; text: string; images?: readonly ImageAttachment[]; sentMessage: LastSentMessage; pendingEcho?: true }[];
   /** see DesktopState.uiSteerPending. Part of the session slice. */
   uiSteerPending: string[];
   /**
@@ -4271,6 +4273,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             return;
           }
           loopEndEmitted.add(onceKey);
+          const echo = get().pendingSteers.find(entry => entry.pendingEcho && entry.requestId === get().turn.requestId);
+          if (echo) get().applyHostMessage({ type: "user_message_accepted", requestId: echo.requestId, turnId });
           flushDeltas();
           const loopEndId = `loop_end:${turnId}`;
           const startedAt = turnStartedAt.get(turnId);
@@ -5401,7 +5405,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // original sent content as lastSentMessage. Unrelated/repeated
             // starts match nothing and leave other entries pending.
             const steer = get().pendingSteers.find((entry) => entry.requestId === message.requestId);
-            if (steer !== undefined) {
+            if (steer !== undefined && get().engine?.id !== "claude") {
               appendBlock({ kind: "user_text", id: steer.requestId, text: steer.text, ...(steer.images?.length ? { images: steer.images } : {}), at: Date.now() });
               set((state) => ({
                 pendingSteers: state.pendingSteers.filter((entry) => entry.requestId !== steer.requestId),
@@ -5409,6 +5413,19 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                 lastSentMessage: steer.sentMessage,
               }));
             }
+            return;
+          }
+          case "user_message_accepted": {
+            if (get().engine?.id !== "claude") return;
+            const pending = get().pendingSteers.find(entry => entry.requestId === message.requestId);
+            if (!pending) return;
+            if (!get().transcript.some(block => block.id === pending.requestId)) {
+              appendBlock({ kind: "user_text", id: pending.requestId, text: pending.text, ...(pending.images?.length ? { images: pending.images } : {}), at: Date.now() });
+            }
+            set(state => ({
+              pendingSteers: state.pendingSteers.filter(entry => entry.requestId !== pending.requestId),
+              lastSentMessage: pending.sentMessage,
+            }));
             return;
           }
           case "runtime_input_recovery": {
@@ -5431,12 +5448,12 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
             // HEAD of the queue and pause so it isn't re-sent silently. The
             // existing notice explains the pause.
             const { queueInFlight, promptQueue } = get();
-            const direct = pendingSentMessages.get(message.requestId);
+            const direct = pendingSentMessages.get(message.requestId) ?? get().pendingSteers.find(item => item.requestId === message.requestId && item.pendingEcho)?.sentMessage;
             const delivery = get().orchestrationDeliveries.find(item => item.requestId === message.requestId);
             const atomicRejected = delivery?.orchestrate === "enable" && delivery.status === "pending" && get().orchestration.pendingSubmit === message.requestId;
             const rejectedSteer = get().pendingSteers.find(item => item.requestId === message.requestId);
             const rejectedSystem = queueInFlight?.requestId === message.requestId && queueInFlight.item.origin === "system" ? queueInFlight.item : undefined;
-            const restoreDirect = delivery === undefined && rejectedSteer === undefined && queueInFlight?.requestId !== message.requestId && direct !== undefined && !promptQueue.some(item => item.id === message.requestId)
+            const restoreDirect = delivery === undefined && (!rejectedSteer || rejectedSteer.pendingEcho) && queueInFlight?.requestId !== message.requestId && direct !== undefined && !promptQueue.some(item => item.id === message.requestId)
               ? { promptQueue: [{ id: message.requestId, ...direct }, ...promptQueue], queuePaused: true, queuePauseReason: "rejected" as const }
               : null;
             const restore =
@@ -5448,7 +5465,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                     queueInFlight: null,
                   }
                 : null;
-            const updatedDeliveries = delivery ? get().orchestrationDeliveries.map(item => item.requestId === message.requestId ? deliveryRejected(item) : item) : rejectedSystem ? [...get().orchestrationDeliveries,{requestId:message.requestId,text:rejectedSystem.text,images:rejectedSystem.images,origin:"system" as const,...(rejectedSystem.originId ? {originId:rejectedSystem.originId} : {}),status:"rejected" as const,restored:false,reviewed:false}] : rejectedSteer ? [...get().orchestrationDeliveries,{requestId:message.requestId,text:rejectedSteer.sentMessage.text,images:rejectedSteer.sentMessage.images.map(image => ({...image,attachment:{...image.attachment}})),status:"rejected" as const,restored:false,reviewed:false}] : get().orchestrationDeliveries;
+            const updatedDeliveries = delivery ? get().orchestrationDeliveries.map(item => item.requestId === message.requestId ? deliveryRejected(item) : item) : rejectedSystem ? [...get().orchestrationDeliveries,{requestId:message.requestId,text:rejectedSystem.text,images:rejectedSystem.images,origin:"system" as const,...(rejectedSystem.originId ? {originId:rejectedSystem.originId} : {}),status:"rejected" as const,restored:false,reviewed:false}] : rejectedSteer && !rejectedSteer.pendingEcho ? [...get().orchestrationDeliveries,{requestId:message.requestId,text:rejectedSteer.sentMessage.text,images:rejectedSteer.sentMessage.images.map(image => ({...image,attachment:{...image.attachment}})),status:"rejected" as const,restored:false,reviewed:false}] : get().orchestrationDeliveries;
             const enabledAfterRejection = get().orchestration.observedEnabled ?? get().orchestrateActive;
             set({
               ...(atomicRejected ? { orchestrateActive: enabledAfterRejection, orchestration: { ...get().orchestration, posture: enabledAfterRejection ? "on" as const : "off" as const, pendingSubmit: null, observedEnabled: null }, queuePaused: true, queuePauseReason: "rejected" as const } : {}),
@@ -6421,6 +6438,15 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       },
 
       appendUserText(id: string, text: string, images?: readonly ImageAttachment[], origin?: "system"): void {
+        // Native Claude may still be releasing its previous stream reader.
+        // Keep the echo pending until the CLI confirms acceptance.
+        if (get().engine?.id === "claude" && origin !== "system") {
+          if (get().pendingSteers.some(entry => entry.requestId === id) || get().transcript.some(block => block.id === id)) return;
+          const sent = pendingSentMessages.get(id) ?? get().queueInFlight?.item ?? { text, images: [] };
+          get().recordPendingSteer(id, text, images, sent);
+          set(state => ({ pendingSteers: state.pendingSteers.map(entry => entry.requestId === id ? { ...entry, pendingEcho: true as const } : entry) }));
+          return;
+        }
         appendBlock({ kind: "user_text", id, text, ...(images?.length ? { images } : {}), ...(origin !== undefined ? { origin } : {}), at: Date.now() });
       },
 

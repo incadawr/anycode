@@ -4678,7 +4678,10 @@ export class Session {
       // chain rather than losing them. 4730 xfix D3: the entry carries its
       // `origin` so a system-origin message (agent-inbox delivery, detached
       // report) drained later is still not recorded as human context.
-      if (this.child !== undefined) {
+      if (this.child !== undefined || (this.engine.id === "claude" && this.turnId !== null)) {
+        // Claude can yield loop_end before its final context read settles.
+        // Retain a prompt arriving in that window until the reader is released.
+        if (this.steerQueue.some(entry => entry.requestId === requestId)) return;
         this.enqueueSteerMessage(requestId, text, images, origin);
         return;
       }
@@ -5028,6 +5031,12 @@ export class Session {
         // throw into the turn (the bridge coalesces + swallows failures internally).
         this.git?.refreshAfterTurn();
         if (this.engine.capabilities.supportsTasks) this.pushTaskList();
+        // Stream ownership and turn-local state are now released. Drain before
+        // the first teardown await so a new owner cannot overtake queued input.
+        if (this.child === undefined && this.engine.id === "claude" && this.steerQueue.length > 0) {
+          if (this.shuttingDown) this.rejectQueuedSteerMessages();
+          else this.startNextQueuedSteerTurn();
+        }
         // Codex-P2 fix (slice P7.8): wait for in-flight telemetry appends to
         // settle before reading written/dropped counters, otherwise the panel
         // shows the previous turn's counts (fail-soft: a flush error/timeout
@@ -5762,6 +5771,21 @@ export class Session {
       if (this.engineSwitchImportPending !== null && text !== undefined && origin !== "system") {
         text = `${this.engineSwitchImportPending.prompt}\n\n# user (current message)\n${text}`;
         this.engineSwitchImportPending = null;
+      }
+      if (this.engine.id === "claude" && text !== undefined) {
+        const notSent = deliveryHooks.onInputNotSent;
+        deliveryHooks.onInputNotSent = () => {
+          notSent?.();
+          this.outbound.emit({ type: "turn_rejected", requestId, reason: "not_ready" });
+        };
+        const accepted = deliveryHooks.onInputAccepted;
+        let reported = false;
+        deliveryHooks.onInputAccepted = () => {
+          accepted?.();
+          if (reported) return;
+          reported = true;
+          this.outbound.emit({ type: "user_message_accepted", requestId, turnId });
+        };
       }
       const options = {
         signal: controller.signal,

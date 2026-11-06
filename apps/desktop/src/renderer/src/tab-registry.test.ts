@@ -768,6 +768,23 @@ describe("tab-registry — child-session registration (CUT-S2 §2.5, slice S2c C
 });
 
 describe("tab-registry — queueInitialPrompt (slice P7.12 §4.2)", () => {
+  it("restores Claude initial prompt attachments after rejection", () => {
+    const { registry } = createTestRegistry(createTabsStore());
+    const port = new FakeMessagePort();
+    registry.registerPort("tab-a", "/ws/a", asPort(port));
+    const ready = CODEX_HOST_READY("/ws/a", "sess-a", { imageInput: true });
+    if (ready.type !== "host_ready" || !ready.engine) throw new Error("expected engine");
+    port.emit({ ...ready, engine: { ...ready.engine, id: "claude" } });
+    const image = { name: "a.png", sizeBytes: 10, attachment: { mediaType: "image/png" as const, data: "AA==" } };
+    registry.queueInitialPrompt("tab-a", "hello", undefined, undefined, undefined, [image]);
+    const store = registry.getStore("tab-a")!;
+    const pending = store.getState().pendingSteers[0]!;
+    expect(pending.sentMessage.images).toEqual([image]);
+    port.emit({ type: "turn_rejected", requestId: pending.requestId, reason: "not_ready" });
+    expect(store.getState().orchestrationDeliveries).toMatchObject([{ status: "rejected", text: "hello", images: [image] }]);
+    expect(store.getState().pendingSteers).toEqual([]);
+  });
+
   it("shows omitted attachment warning after the host handshake", () => {
     const saved = JSON.stringify({ promptQueue: [{ id: "draft", text: "draft", images: [], attachmentsOmitted: true, requiresRestore: true }], orchestrationDeliveries: [] });
     vi.stubGlobal("sessionStorage", { getItem: (key: string) => key.endsWith(":tab-a") ? saved : null, setItem: () => {}, removeItem: () => {} });

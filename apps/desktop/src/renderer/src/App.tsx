@@ -293,8 +293,8 @@ export function dispatchTryAgain(
     return "queued";
   }
   const requestId = crypto.randomUUID();
-  state.appendUserText(requestId, offer.text, offer.images.length > 0 ? offer.images.map((image) => image.attachment) : undefined);
   state.recordSentMessage(offer.text, offer.images, requestId);
+  state.appendUserText(requestId, offer.text, offer.images.length > 0 ? offer.images.map((image) => image.attachment) : undefined);
   sendToHost({
     type: "user_message",
     requestId,

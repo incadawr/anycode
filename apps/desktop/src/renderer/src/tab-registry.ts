@@ -415,10 +415,10 @@ export function createTabRegistry(
     const requestId = initialRequestId ?? crypto.randomUUID();
     const connectionId = orchestrate ? entry.store.getState().beginOrchestrationSubmit(requestId) : null;
     if (orchestrate && !connectionId) { holdInitial(entry, { text, images, orchestrate, ...picks }, "Session policy is unavailable. Restore the draft before sending."); return; }
-    entry.store.getState().appendUserText(requestId, text, deliveredImages.length > 0 ? deliveredImages.map((image) => image.attachment) : undefined);
     // W8: snapshot what actually went on the wire so a later terminal
     // retryable failure can offer to replay this same content.
     entry.store.getState().recordSentMessage(text, deliveredImages, requestId, orchestrate ? "enable" : undefined, picks ?? {});
+    entry.store.getState().appendUserText(requestId, text, deliveredImages.length > 0 ? deliveredImages.map((image) => image.attachment) : undefined);
     const connection = liveConnection(entry);
     try {
       if (!connection || (orchestrate && !saveRecovery(tabId, entry.store.getState()))) throw new Error("connection or recovery storage unavailable");

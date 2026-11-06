@@ -1341,11 +1341,18 @@ export class ClaudeEngine implements SessionEngine {
 
   async *runTurn(input: string, options: RunTurnOptions): AsyncIterable<AgentEvent> {
     let inputDispatched = false;
+    let notSentReported = false;
+    const reportNotSent = (): void => {
+      if (!inputDispatched && !notSentReported) {
+        notSentReported = true;
+        options.onInputNotSent?.();
+      }
+    };
     const turn = ++this.turnNumber;
     if ((this.replacement !== null || this.orchestrationState === "transitioning") && this.terminalError === null && !this.disposed) {
       // No transport owns this input yet. Keep it recoverable without marking
       // the live engine dead or interfering with its replacement.
-      options.onInputNotSent?.();
+      reportNotSent();
       yield { type: "turn_start", turn };
       yield warning("Claude transport is restarting. The message was not sent; retry after the restart completes.");
       yield { type: "turn_end", turn, finishReason: "other" };
@@ -1353,7 +1360,7 @@ export class ClaudeEngine implements SessionEngine {
       return;
     }
     if (this.orchestrationState === "quarantined") {
-      options.onInputNotSent?.();
+      reportNotSent();
       yield { type: "turn_start", turn };
       yield warning("Claude recovery is quarantined. Repair the configuration and reopen the session before sending messages.");
       yield { type: "turn_end", turn, finishReason: "other" };
@@ -1361,7 +1368,7 @@ export class ClaudeEngine implements SessionEngine {
       return;
     }
     if (this.terminalError !== null || this.disposed) {
-      options.onInputNotSent?.();
+      reportNotSent();
       yield* this.terminalEvents(turn, this.terminalError ?? new Error("Claude engine is closed"));
       return;
     }
@@ -1518,6 +1525,7 @@ export class ClaudeEngine implements SessionEngine {
             this.absorbIdleFrame(raced.value.value); // a result here resolves foreignTurn
           }
           if (waitWhy === "dispose") {
+            reportNotSent();
             for (const event of translator.finishTerminal("cancelled")) yield event;
             return;                                    // finally still runs: turnActive=false, etc.
           }
@@ -1577,6 +1585,7 @@ export class ClaudeEngine implements SessionEngine {
               // below is unchanged; this is additive, never an error terminal).
               yield { type: "error", error: settledError, safe: engineDeathSafe(settledError) };
             }
+            reportNotSent();
             for (const event of translator.finishTerminal("cancelled")) yield event;
             return; // finally still runs: turnActive=false, reader restart guard, etc.
           }
@@ -1615,6 +1624,7 @@ export class ClaudeEngine implements SessionEngine {
         break barrier;
       }
       if (sendCancelled) {
+        reportNotSent();
         for (const event of translator.finishTerminal("cancelled")) yield event;
         return; // finally still runs: turnActive=false, reader restart guard, etc.
       }
@@ -1682,6 +1692,7 @@ export class ClaudeEngine implements SessionEngine {
             };
             // additive death signal — see the foreign-turn branch above.
             yield { type: "error", error: settledError, safe: engineDeathSafe(settledError) };
+            reportNotSent();
             for (const event of translator.finishTerminal("cancelled")) yield event;
             return;
           }
@@ -1696,6 +1707,7 @@ export class ClaudeEngine implements SessionEngine {
           // Transport closed under a pending Stop (e.g. Stop then tab close):
           // that is the cancellation the user asked for, not an engine error.
           if (abortObserved) {
+            reportNotSent();
             for (const event of translator.finishTerminal("cancelled")) yield event;
             return;
           }
@@ -1718,7 +1730,9 @@ export class ClaudeEngine implements SessionEngine {
         }
         const frame = raced.value.value;
         const ownerSession = frame.session_id === undefined || frame.session_id === this.sessionRef;
-        if (inputDispatched && ownerSession && ((frame.type === "assistant" && frame.parent_tool_use_id == null) || (frame.type === "system" && frame.subtype === "init"))) options.onInputAccepted?.();
+        if (inputDispatched && ownerSession && frame.parent_tool_use_id == null &&
+          (frame.type === "stream_event" || frame.type === "assistant" || (frame.type === "system" && frame.subtype === "init"))) options.onInputAccepted?.();
+        reportNotSent();
         for (const event of translator.onMessage(raced.value.value)) {
           if (event.type === "loop_end") terminal = true;
           yield event;
@@ -1772,10 +1786,11 @@ export class ClaudeEngine implements SessionEngine {
       // A turn that lost its transport releases the child.
       void this.client.close().catch(() => {});
       yield { type: "error", error: terminalError, safe: engineDeathSafe(terminalError) };
+      reportNotSent();
       yield* this.terminalEvents(turn, terminalError, false);
     } finally {
       this.turnActive = false;
-      if (!inputDispatched) options.onInputNotSent?.();
+      if (!inputDispatched) reportNotSent();
       cancelSettle();
       abort.dispose();
       // cross-review P1: a turn that terminalized without the

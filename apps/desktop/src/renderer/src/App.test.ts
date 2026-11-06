@@ -168,6 +168,23 @@ describe("dispatchTryAgain (W8 one-shot Try-again — normal send/queue/busy pat
     store.setState({ retry: offer, connection: "ready" });
   }
 
+  it("restores Claude retry attachments after rejection", () => {
+    const store = createDesktopStore();
+    const image = { name: "a.png", sizeBytes: 10, attachment: { mediaType: "image/png" as const, data: "AA==" } };
+    store.setState({ engine: { id: "claude" } as NonNullable<ReturnType<typeof store.getState>["engine"]> });
+    armRetry(store, { loopEndBlockId: "loop_end:t1", text: "hello", images: [image] });
+    const sent: UiToHostMessage[] = [];
+    dispatchTryAgain(store, message => sent.push(message));
+    const request = sent[0]!;
+    if (request.type !== "user_message") throw new Error("expected user message");
+    expect(store.getState().pendingSteers[0]?.sentMessage.images).toEqual([image]);
+    store.getState().applyHostMessage({ type: "turn_rejected", requestId: request.requestId, reason: "not_ready" });
+    expect(store.getState().promptQueue).toMatchObject([{ text: "hello", images: [image] }]);
+    expect(store.getState().queuePaused).toBe(true);
+    expect(store.getState().pendingSteers).toEqual([]);
+    expect(store.getState().orchestrationDeliveries).toEqual([]);
+  });
+
   it("no-op when nothing is armed (stale/double click) — sendToHost never called", () => {
     const store = createDesktopStore();
     const sent: UiToHostMessage[] = [];

@@ -22,6 +22,7 @@ import type { AgentEvent, ToolResultPresentation } from "@anycode/core";
 import { claudeUsageRecord } from "../../claude-usage.js";
 import { bindClaudeUsage } from "../../native-usage.js";
 import { createHarness } from "../../test-harness.js";
+import { createDesktopStore } from "../../../renderer/src/store.js";
 import { summarizeProviderUsage } from "../../session.js";
 import {
   CLAUDE_ENGINE_CAPABILITIES,
@@ -1174,6 +1175,115 @@ describe("ClaudeEngine — cancellation and disposal", () => {
     const events = await collect(engine.runTurn("hi", { signal: new AbortController().signal }));
     expect(types(events)).toEqual(["error", "turn_end", "loop_end"]);
     expect(transport.sent).toEqual([]);
+  });
+});
+
+describe("Claude session — messages racing the final context read", () => {
+  it.each(["transport death", "cancel after write", "cancel before write", "input not sent"])("resolves pending echo on %s", async mode => {
+    const transport = new FakeTransport({ rejectStreamOnce: new Error("transport gone") });
+    const engine = engineWith(transport, { timeouts: { postInterruptSettleMs: 30 } });
+    if (mode === "cancel before write") {
+      const runTurn = engine.runTurn.bind(engine);
+      vi.spyOn(engine, "runTurn").mockImplementation((input, options) => {
+        const controller = new AbortController();
+        controller.abort();
+        return runTurn(input, { ...options, signal: controller.signal });
+      });
+    }
+    const h = createHarness({ steps: [], engine });
+    const store = createDesktopStore({ schedule: fn => fn() });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(m => m.type === "host_ready");
+      for (const message of h.received) store.getState().applyHostMessage(message);
+      store.getState().recordSentMessage("hello", [], "pending");
+      store.getState().appendUserText("pending", "hello");
+      const offset = h.received.length;
+      if (mode === "input not sent") await engine.dispose("session-close");
+      h.send({ type: "user_message", requestId: "pending", text: "hello" });
+      if (mode !== "input not sent" && mode !== "cancel before write") {
+        await h.waitUntil(() => transport.sent.length === 1);
+        if (mode === "cancel after write") h.send({ type: "cancel_turn" });
+        transport.releaseStreamReject();
+      }
+      await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && m.event.type === "loop_end"));
+      for (const message of h.received.slice(offset)) store.getState().applyHostMessage(message);
+      expect(store.getState().pendingSteers).toEqual([]);
+      expect(store.getState().orchestrationDeliveries).toEqual([]);
+      if (mode === "input not sent" || mode === "cancel before write") {
+        expect(transport.sent).toEqual([]);
+        expect(store.getState().promptQueue).toMatchObject([{ id: "pending", text: "hello" }]);
+        expect(store.getState().queuePaused).toBe(true);
+        expect(store.getState().transcript.some(block => block.id === "pending")).toBe(false);
+      } else {
+        expect(transport.sent).toEqual(["hello"]);
+        expect(store.getState().transcript.filter(block => block.id === "pending")).toHaveLength(1);
+      }
+    } finally { h.close(); await engine.dispose("session-close"); }
+  });
+
+  it("keeps a late prompt pending and delivers it once after the previous turn settles", async () => {
+    const usage = deferredUsage();
+    const transport = new FakeTransport({
+      frames: streamFrames("w0-02-control-writeprobe.jsonl").map(frame => ({ ...frame, session_id: "session-ref-1" })),
+      contextUsageSequence: () => usage.promise,
+    });
+    const engine = engineWith(transport);
+    const h = createHarness({ steps: [], engine });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(m => m.type === "host_ready");
+      h.send({ type: "user_message", requestId: "first", text: "first prompt" });
+      await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && m.event.type === "loop_end"));
+      expect(transport.sent).toEqual(["first prompt"]);
+      const store = createDesktopStore({ schedule: fn => fn() });
+      for (const message of h.received) store.getState().applyHostMessage(message);
+      store.getState().recordSentMessage("follow up", [], "late");
+      store.getState().appendUserText("late", "follow up");
+      expect(store.getState().pendingSteers.map(entry => entry.requestId)).toEqual(["late"]);
+      expect(store.getState().transcript.filter(block => block.id === "late")).toEqual([]);
+      h.send({ type: "user_message", requestId: "late", text: "follow up" });
+      h.send({ type: "user_message", requestId: "late", text: "follow up" });
+      // A subsequent inbound frame is a deterministic barrier for admission.
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.filter(m => m.type === "host_ready").length === 2);
+      expect(h.received.filter(m => m.type === "turn_rejected" && m.requestId === "late")).toEqual([]);
+      expect(h.received.filter(m => m.type === "turn_started" && m.requestId === "late")).toEqual([]);
+      expect(transport.sent).toEqual(["first prompt"]);
+      const offset = h.received.length;
+      usage.resolve({ totalTokens: 1, maxTokens: 2 });
+      await h.waitUntil(() => h.received.some(m => m.type === "turn_started" && m.requestId === "late"));
+      await h.waitUntil(() => transport.sent.length === 2);
+      for (const message of h.received.slice(offset)) store.getState().applyHostMessage(message);
+      expect(store.getState().pendingSteers.map(entry => entry.requestId)).toEqual(["late"]);
+      expect(store.getState().transcript.filter(block => block.id === "late")).toEqual([]);
+      const acceptedOffset = h.received.length;
+      const endedBefore = h.received.filter(m => m.type === "agent_event" && m.event.type === "loop_end").length;
+      // Replay only the final text response: ordinary subsequent turns have
+      // neither init nor an earlier full assistant tool-call frame.
+      const replay = streamFrames("w0-02-control-writeprobe.jsonl");
+      const textStart = replay.map(frame => frame.type === "stream_event" && frame.event.type === "message_start").lastIndexOf(true);
+      for (const frame of replay.slice(textStart)) transport.push({ ...frame, session_id: "session-ref-1" });
+      await h.waitUntil(() => h.received.filter(m => m.type === "agent_event" && m.event.type === "loop_end").length > endedBefore);
+      expect(h.received.filter(m => m.type === "user_message_accepted" && m.requestId === "late")).toHaveLength(1);
+      const replies = h.received.slice(acceptedOffset);
+      const acceptance = replies.findIndex(message => message.type === "user_message_accepted");
+      const firstDelta = replies.findIndex(message => message.type === "agent_event" && message.event.type === "text_delta");
+      expect(firstDelta).toBeGreaterThan(acceptance);
+      for (const message of replies) store.getState().applyHostMessage(message);
+      expect(store.getState().pendingSteers).toEqual([]);
+      expect(store.getState().transcript.filter(block => block.id === "late")).toHaveLength(1);
+      const transcript = store.getState().transcript;
+      const echoIndex = transcript.findIndex(block => block.id === "late");
+      expect(transcript.slice(echoIndex + 1).some(block => block.kind === "assistant_text")).toBe(true);
+      expect(store.getState().orchestrationDeliveries).toEqual([]);
+      expect(transport.sent).toEqual(["first prompt", "follow up"]);
+      expect(h.received.filter(m => m.type === "turn_started" && m.requestId === "late")).toHaveLength(1);
+    } finally {
+      usage.resolve({});
+      h.close();
+      await engine.dispose("session-close");
+    }
   });
 });
 

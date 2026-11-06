@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Messages sent as Claude finishes a reply stay pending and run automatically in the next turn, without duplicate message bubbles.
+
 ## [0.0.84] - 2026-11-06
 
 ### Changed
