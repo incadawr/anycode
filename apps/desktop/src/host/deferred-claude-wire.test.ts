@@ -26,7 +26,8 @@ class Transport implements ClaudeTransport {
   acceptControl(): void {
     const control = this.pendingControls.shift();
     if (!control) throw new Error("no control request");
-    if (control.request?.effortLevel !== undefined) this.effort = control.request.effortLevel as string;
+    const settings = control.request?.settings as { effortLevel?: string } | undefined;
+    if (settings?.effortLevel !== undefined) this.effort = settings.effortLevel;
     control.resolve({});
   }
   rejectControl(): void {
@@ -82,7 +83,7 @@ it("waits for Claude's acknowledged effort control before sending the next input
     expect(received).toContainEqual(expect.objectContaining({ type: "engine_settings_changed", state: "pending", effort: "xhigh" }));
     transport.finish();
     await settle();
-    expect(transport.controls).toEqual([{ subtype: "apply_flag_settings", request: { effortLevel: "xhigh" } }]);
+    expect(transport.controls).toEqual([{ subtype: "apply_flag_settings", request: { settings: { effortLevel: "xhigh" } } }]);
     send({ type: "ui_ready" });
     send({ type: "user_message", requestId: "b", text: "second" });
     await settle();
@@ -174,7 +175,7 @@ it.each([true, false])("waits for a pending model change before applying deferre
     if (accepted) transport.acceptControl(); else transport.rejectControl();
     await settle();
     if (accepted) {
-      expect(transport.controls.at(-1)).toEqual({ subtype: "apply_flag_settings", request: { effortLevel: "high" } });
+      expect(transport.controls.at(-1)).toEqual({ subtype: "apply_flag_settings", request: { settings: { effortLevel: "high" } } });
       expect(transport.inputs).toHaveLength(1);
       transport.acceptControl();
       await settle();

@@ -11,6 +11,7 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 - Responses gateway streams preserve initial answer and reasoning segments carried in content parts and no longer create empty answer bubbles.
 - Native provider errors show sanitized provider explanations, and OpenCode Go output limits stay above zero.
+- Claude sessions correctly apply reasoning effort when opened through the Sessions API or changed in a tab.
 
 ### Changed
 

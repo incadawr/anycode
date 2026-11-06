@@ -886,8 +886,17 @@ describe("ClaudeEngine.selectModel — validate host-side, THEN set_model", () =
 
     const opus = engineWith(transport, { model: "opus[1m]" });
     await expect(opus.selectEffort("high")).resolves.toEqual({ ok: true, effort: "high" });
-    expect(transport.controls).toEqual([{ subtype: "apply_flag_settings", request: { effortLevel: "high" } }]);
+    expect(transport.controls).toEqual([{ subtype: "apply_flag_settings", request: { settings: { effortLevel: "high" } } }]);
     expect(opus.snapshot().effort).toBe("high");
+  });
+
+  it("applies xhigh to an Opus session using the CLI settings envelope", async () => {
+    const transport = new FakeTransport();
+    const catalog = ClaudeModelCatalog.fromInitialize([{ value: "opus", displayName: "Opus", supportsEffort: true, supportedEffortLevels: ["high", "xhigh"] }]);
+    const engine = engineWith(transport, { model: "opus", catalog });
+    await expect(engine.selectEffort("xhigh")).resolves.toEqual({ ok: true, effort: "xhigh" });
+    expect(transport.controls).toEqual([{ subtype: "apply_flag_settings", request: { settings: { effortLevel: "xhigh" } } }]);
+    expect(engine.snapshot().effort).toBe("xhigh");
   });
 
   it("does not publish an effort whose restore ACK failed, and retains the choice for retry", async () => {
@@ -916,7 +925,7 @@ describe("ClaudeEngine.selectModel — validate host-side, THEN set_model", () =
     await expect(engine.selectModel("opus[1m]")).resolves.toEqual({ ok: true, model: "opus[1m]" });
     expect(engine.snapshot().effort).toBe("high");
     // Restoring re-asserts it live too, not just in the local record.
-    expect(transport.controls.at(-1)).toEqual({ subtype: "apply_flag_settings", request: { effortLevel: "high" } });
+    expect(transport.controls.at(-1)).toEqual({ subtype: "apply_flag_settings", request: { settings: { effortLevel: "high" } } });
   });
 });
 

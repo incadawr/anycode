@@ -183,7 +183,7 @@ export class ClaudeModelCatalog {
     return entry.resolvedModel === reportedModel || entry.value === reportedModel;
   }
 
-  /** Effort levels this model accepts, for the `apply_flag_settings{effortLevel}` path. */
+  /** Effort levels this model accepts, for the `apply_flag_settings{settings:{effortLevel}}` path. */
   effortsFor(value: string): string[] {
     const entry = this.get(value);
     return entry === undefined || !entry.supportsEffort ? [] : entry.supportedEffortLevels;

@@ -48,6 +48,7 @@ import { ClaudeTurnTranslator } from "./event-translator.js";
 import type { ClaudeMcpBridge } from "./mcp-bridge.js";
 import { ClaudeModelCatalog, isClaudeEffortLevel } from "./models.js";
 import {
+  buildFlagSettings,
   permissionModeToFlag,
   type ClaudeResultMessage,
   type ClaudeStreamMessage,
@@ -1266,7 +1267,7 @@ export class ClaudeEngine implements SessionEngine {
     } else {
       delete settings.effort;
       try {
-        await this.client.controlRequest("apply_flag_settings", { effortLevel: effort });
+        await this.client.controlRequest("apply_flag_settings", buildFlagSettings(effort));
         if (generation !== this.transportGeneration || this.disposed) return { ok: false, reason: "Claude transport retired." };
         settings.effort = effort;
       } catch {
@@ -1331,7 +1332,7 @@ export class ClaudeEngine implements SessionEngine {
     return { ok: true, presetId: preset.id };
   }
 
-  /** Mid-session effort change via `apply_flag_settings{effortLevel}` (live-accepted, $0 — probe #14). */
+  /** Mid-session effort change via `apply_flag_settings{settings:{effortLevel}}` (live-accepted, $0 — probe #14). */
   async selectEffort(effort: string): Promise<{ ok: true; effort: string } | { ok: false; reason: string }> {
     const generation = this.transportGeneration;
     const settings = this.settings;
@@ -1341,7 +1342,7 @@ export class ClaudeEngine implements SessionEngine {
       return { ok: false, reason: `Claude effort "${effort}" is not available for model "${settings.model}".` };
     }
     try {
-      await this.client.controlRequest("apply_flag_settings", { effortLevel: effort });
+      await this.client.controlRequest("apply_flag_settings", buildFlagSettings(effort));
       if (generation !== this.transportGeneration || this.disposed) return { ok: false, reason: "Claude transport retired." };
     } catch (error) {
       return { ok: false, reason: error instanceof Error ? error.message : "Claude refused the effort change." };

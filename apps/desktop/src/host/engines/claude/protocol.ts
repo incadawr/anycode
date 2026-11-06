@@ -300,3 +300,8 @@ export function buildControlRequest(requestId: string, subtype: string, request?
 export function unhandledControlError(requestId: string, message = "AnyCode Claude transport has no handler for this control request"): ClaudeControlResponseEnvelope {
   return { type: "control_response", response: { subtype: "error", request_id: requestId, error: message } };
 }
+
+/** The CLI requires a settings object even when no flag is specified. */
+export function buildFlagSettings(effort?: string): { settings: { effortLevel?: string } } {
+  return { settings: effort === undefined ? {} : { effortLevel: effort } };
+}

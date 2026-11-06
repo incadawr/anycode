@@ -44,8 +44,10 @@ describe("provider-usage recording (host writers)", () => {
       expect(row.priceBasisId).toBe("go+gt-100");
       expect(row.costUsd).toBeCloseTo(26 / 1_000_000);
     }
-    const unknown = sessionUsageRow({ turnId: "t", step: 2, finishReason: "stop", transportRetries: 0, inputTokens: 101, outputTokens: 1 }, options, "s");
-    expect(unknown.costUsd).toBeUndefined();
+    const fresh = sessionUsageRow({ turnId: "t", step: 2, finishReason: "stop", transportRetries: 0, inputTokens: 101, outputTokens: 1 }, options, "s");
+    expect(fresh.costUsd).toBeCloseTo(206 / 1_000_000);
+    const childFresh = subagentUsageRow({ inputTokens: 101, outputTokens: 1 }, options, { subagentId: "c", sessionId: "s", step: 2 });
+    expect(childFresh.costUsd).toBe(fresh.costUsd);
   });
   it("prices both the session and the subagent row off the step clock, and the summary survives a reopen", async () => {
     const mainRow = sessionUsageRow(

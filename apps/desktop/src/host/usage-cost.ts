@@ -28,11 +28,12 @@ export function calculateUsageCost(
   price: ModelPricing | undefined,
   timestampMs?: number,
 ): { costUsd: number; cacheSavingsUsd: number; priceBasisId: string } | undefined {
-  const { inputTokens: input, cachedInputTokens: cached, outputTokens: output } = usage;
+  const { inputTokens: input, outputTokens: output } = usage;
+  const cached = usage.cachedInputTokens ?? 0;
   const write = usage.cacheWriteTokens ?? 0;
   const tier = input === undefined ? undefined : price?.tiers?.filter((item) => input > item.gt).sort((a, b) => b.gt - a.gt)[0];
   if (price && tier) price = { ...price, ...tier, basisId: `${price.basisId}+gt-${tier.gt}` };
-  if (price === undefined || input === undefined || cached === undefined || output === undefined ||
+  if (price === undefined || input === undefined || output === undefined ||
       ![input, cached, write, output, price.input, price.output].every((n) => Number.isFinite(n) && n >= 0) ||
       (cached > 0 && (price.cachedInput === undefined || !Number.isFinite(price.cachedInput) || price.cachedInput < 0)) || cached + write > input || (write > 0 && (price.cacheWrite === undefined || !Number.isFinite(price.cacheWrite) || price.cacheWrite < 0))) return undefined;
   const offPeak = price.tariff !== undefined && timestampMs !== undefined && Number.isFinite(timestampMs) &&

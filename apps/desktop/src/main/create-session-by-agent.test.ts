@@ -986,11 +986,11 @@ describe("create_session — effort preparation before publication", () => {
     expect(r.hosts).toHaveLength(1);
   });
 
-  it("waits for Claude effort acknowledgement before publication", async () => {
+  it.each(["high", "xhigh"])("waits for Claude %s effort acknowledgement before publication", async (effort) => {
     const r = rig({
       respond: (operation) => {
-        if (operation === "get_session_status") return { result: { ...IDLE_STATUS, engine: "claude", model: "claude-1" } };
-        if (operation === "set_session_model") return { result: { ok: true, status: { ...IDLE_STATUS, engine: "claude", model: "claude-1" } } };
+        if (operation === "get_session_status") return { result: { ...IDLE_STATUS, engine: "claude", model: "opus" } };
+        if (operation === "set_session_model") return { result: { ok: true, status: { ...IDLE_STATUS, engine: "claude", model: "opus" } } };
         // Hold the acknowledgement, exactly like a control request still in flight.
         if (operation === "set_session_effort") return { defer: true };
         return undefined;
@@ -999,16 +999,16 @@ describe("create_session — effort preparation before publication", () => {
     const delivered = vi.fn();
     vi.spyOn(r.manager, "deliverTabPort").mockImplementation(delivered);
 
-    const creation = createSessionForAgent({ workspace: "/ws", engine: "claude", model: "claude-1", effort: "high" }, r.deps());
+    const creation = createSessionForAgent({ workspace: "/ws", engine: "claude", model: "opus", effort }, r.deps());
     await vi.waitFor(() => expect(r.deferredReplies).toHaveLength(1));
 
     // While the CLI has not acknowledged, the session does not exist for anyone.
-    expect(r.deferredReplies[0]!.payload).toEqual({ effort: "high" });
+    expect(r.deferredReplies[0]!.payload).toEqual({ effort });
     expect(r.manager.listTabs()).toEqual([]);
     expect(r.sessions.isExposed("sess-0")).toBe(false);
     expect(delivered).not.toHaveBeenCalled();
 
-    r.deferredReplies[0]!.answer({ ok: true, status: { ...IDLE_STATUS, effort: "high" } });
+    r.deferredReplies[0]!.answer({ ok: true, status: { ...IDLE_STATUS, effort } });
     const outcome = await creation;
 
     expect(outcome.ok).toBe(true);

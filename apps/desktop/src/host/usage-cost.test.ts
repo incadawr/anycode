@@ -16,6 +16,15 @@ it("prices known rates only when unknown cache pricing is not needed", () => {
   expect(calculateUsageCost({ inputTokens: 1000000, cachedInputTokens: 1, outputTokens: 1000000 }, resolved.price)).toBeUndefined();
 });
 
+it.each([undefined, 0, 200_000])("treats omitted cache usage as zero (%s)", (cachedInputTokens) => {
+  const usage = { inputTokens: 1_000_000, outputTokens: 100_000, ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }) };
+  expect(calculateUsageCost(usage, price)).toEqual({
+    costUsd: cachedInputTokens ? 0.3612 : 0.42,
+    cacheSavingsUsd: cachedInputTokens ? 0.0588 : 0,
+    priceBasisId: "test",
+  });
+});
+
 describe("usage cost snapshots", () => {
   it("prices cache hits separately and reports their savings", () => {
     expect(calculateUsageCost({ inputTokens: 1_000_000, cachedInputTokens: 800_000, outputTokens: 100_000 }, price))
@@ -25,8 +34,8 @@ describe("usage cost snapshots", () => {
   it("does not persist non-finite results when finite counts and rates overflow", () => {
     expect(calculateUsageCost({ inputTokens: Number.MAX_VALUE, cachedInputTokens: 0, outputTokens: 0 }, { ...price, input: Number.MAX_VALUE })).toBeUndefined();
   });
-  it("does not invent a price or cache usage", () => {
-    expect(calculateUsageCost({ inputTokens: 100, outputTokens: 1 }, price)).toBeUndefined();
+  it("rejects unavailable prices and invalid cache usage", () => {
+    expect(calculateUsageCost({ inputTokens: 100, outputTokens: 1 }, price)?.costUsd).toBeCloseTo(0.0000312);
     expect(calculateUsageCost({ inputTokens: 100, cachedInputTokens: 101, outputTokens: 1 }, price)).toBeUndefined();
     expect(calculateUsageCost({ inputTokens: 100, cachedInputTokens: 0, outputTokens: 1 }, undefined)).toBeUndefined();
   });
@@ -290,8 +299,8 @@ describe("context pricing tiers", () => {
   });
 });
 
-it("does not price a tier when a usage count is missing", () => {
+it("prices a tier without cache usage but requires an input count", () => {
   const price = { basisId: "tier", input: 1, cachedInput: .1, output: 2, tiers: [{ gt: 100, input: 2, cachedInput: .2, output: 4 }] };
-  expect(calculateUsageCost({ inputTokens: 101, outputTokens: 1 }, price)).toBeUndefined();
+  expect(calculateUsageCost({ inputTokens: 101, outputTokens: 1 }, price)?.priceBasisId).toBe("tier+gt-100");
   expect(calculateUsageCost({ cachedInputTokens: 0, outputTokens: 1 }, price)).toBeUndefined();
 });

@@ -61,6 +61,19 @@ vi.mock("./provider-ipc.js", async importOriginal => {
   }};
 });
 
+// Boot and mutation hooks can outlive the assertion that triggered them.
+// Keep real persistence, but join every in-flight write before removing its directory.
+const pendingSettingsWrites = vi.hoisted(() => new Set<Promise<void>>());
+vi.mock("../settings/files.js", async importOriginal => {
+  const actual = await importOriginal<typeof import("../settings/files.js")>();
+  return { ...actual, saveSettings: (...args: Parameters<typeof actual.saveSettings>) => {
+    const write = actual.saveSettings(...args);
+    pendingSettingsWrites.add(write);
+    void write.then(() => pendingSettingsWrites.delete(write), () => pendingSettingsWrites.delete(write));
+    return write;
+  } };
+});
+
 type IpcHandler = (event: unknown, ...args: unknown[]) => unknown;
 
 // `vi.hoisted` so the capturing collections exist before vi.mock's hoisted
@@ -275,6 +288,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  while (pendingSettingsWrites.size > 0) await Promise.all([...pendingSettingsWrites]);
   delete process.env.ANYCODE_AUTOMATION;
   delete process.env.ANYCODE_SETTINGS_PATH;
   delete process.env.ANYCODE_SECRETS_PATH;
