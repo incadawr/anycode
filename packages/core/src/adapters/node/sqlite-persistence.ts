@@ -16,12 +16,12 @@
  * PersistencePort without ever blocking or throwing into the turn.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { HistorySink } from "../../context/history.js";
-import type { RuntimeSegment, RuntimeSessionSnapshot, RuntimeSegmentStore } from "../../ports/runtime-segments.js";
+import type { RuntimeSegment, RuntimeSessionSnapshot, RuntimeSegmentStore, RuntimeSwitchCommit } from "../../ports/runtime-segments.js";
 import { scopeRuntimeHistory } from "../../context/runtime-history.js";
 import type {
   CheckpointMeta,
@@ -1181,6 +1181,30 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       const insert = db.prepare("INSERT INTO history_items(session_id,item_id,data) VALUES(?,?,?)");
       for (const item of items) insert.run(sessionId,item.id,JSON.stringify(item));
       this.mergeRuntimeHistoryInDb(db,sessionId,segmentId,items);
+    },"immediate");
+  }
+
+  /** One durable boundary: source snapshot, archived ref, fresh target and handoff commit together. */
+  commitRuntimeSwitch(sessionId: string, expectedEngine: string, record: RuntimeSwitchCommit): void {
+    this.transaction(db => {
+      const source = db.prepare("SELECT * FROM sessions WHERE id=? AND parent_session_id IS NULL").get(sessionId) as unknown as (SessionRow & {active_runtime_segment:string;runtime_revision:number}) | undefined;
+      if (!source || source.active_runtime_segment !== record.sourceSegmentId || source.runtime_revision !== record.expectedRevision || (source.engine_id ?? "core") !== expectedEngine) throw new Error("Source runtime revision changed");
+      const next = record.segment;
+      if (next.id === record.sourceSegmentId || next.id !== record.boundary.segmentId || next.id !== record.handoff.segmentId || record.handoff.state !== "pending" || next.nativeState !== "fresh") throw new Error("Invalid runtime boundary");
+      if (Buffer.byteLength(record.handoff.payload,"utf8") > 65536 || createHash("sha256").update(record.handoff.payload).digest("hex") !== record.handoff.digest) throw new Error("Invalid handoff payload");
+      this.mergeRuntimeHistoryInDb(db,sessionId,record.sourceSegmentId,record.sourceItems);
+      db.prepare(`UPDATE runtime_segments SET ended_at=?,applied_json=?,native_ref=COALESCE(?,native_ref)
+        WHERE session_id=? AND segment_id=?`).run(next.startedAt,JSON.stringify({model:source.model,mode:source.mode}),source.external_session_ref,sessionId,record.sourceSegmentId);
+      const ordinal = (db.prepare("SELECT COALESCE(MAX(ordinal),-1)+1 AS ordinal FROM runtime_segments WHERE session_id=?").get(sessionId) as {ordinal:number}).ordinal;
+      db.prepare("INSERT INTO runtime_segments VALUES(?,?,?,?,?,?,?,?,?,?,?,?,NULL,?)").run(sessionId,next.id,ordinal,next.engine,next.connectionId ?? null,next.profileId ?? null,next.accountScope,next.nativeRef ?? null,next.nativeState,JSON.stringify(next.selected),JSON.stringify(next.applied),next.startedAt,next.coverage);
+      db.prepare("INSERT INTO runtime_boundaries VALUES(?,?,?,?)").run(sessionId,next.id,record.boundary.id,JSON.stringify(record.boundary));
+      db.prepare("INSERT INTO runtime_handoffs VALUES(?,?,?,?)").run(sessionId,next.id,record.handoff.id,JSON.stringify(record.handoff));
+      // Context belongs only to the new segment. The canonical display rows above remain intact.
+      db.prepare("DELETE FROM history_items WHERE session_id=? AND COALESCE(json_extract(data,'$.kind'),'')!='turn_error'").run(sessionId);
+      const changed = db.prepare(`UPDATE sessions SET engine_id=?,model=?,mode=?,external_session_ref=?,connection_id=?,codex_profile_id=?,codex_fast=NULL,
+        active_runtime_segment=?,runtime_revision=runtime_revision+1,updated_at=? WHERE id=? AND runtime_revision=? AND active_runtime_segment=?`).run(
+        next.engine,next.selected.model,next.applied.mode,next.nativeRef ?? null,next.connectionId ?? null,next.profileId ?? null,next.id,next.startedAt,sessionId,record.expectedRevision,record.sourceSegmentId);
+      if (changed.changes !== 1) throw new Error("Source runtime revision changed");
     },"immediate");
   }
 

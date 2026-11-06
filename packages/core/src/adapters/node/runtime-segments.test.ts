@@ -3,9 +3,17 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { createHash } from "node:crypto";
+import type { RuntimeSwitchCommit } from "../../ports/runtime-segments.js";
 import { RuntimeHistorySink, SqlitePersistenceAdapter } from "./sqlite-persistence.js";
 
 const roots: string[] = [];
+function switchRecord(id="next",revision=0,source="legacy"): RuntimeSwitchCommit {
+  return {expectedRevision:revision,sourceSegmentId:source,sourceItems:[{id:"live",createdAt:2,message:{role:"user",content:"latest complete text"}}],
+    segment:{id,engine:"claude",accountScope:"",nativeRef:`native-${id}`,nativeState:"fresh",selected:{model:"chosen",mode:"read-only"},applied:{model:"chosen",mode:"read-only"},startedAt:3,coverage:"available_history"},
+    boundary:{id,segmentId:id,afterItemId:`segment:${source}:live`,text:"Conversation text will be imported; native context was not transferred.",createdAt:3},
+    handoff:{id,segmentId:id,sourceWatermark:`segment:${source}:live`,payload:"bounded excerpt",digest:createHash("sha256").update("bounded excerpt").digest("hex"),state:"pending"}};
+}
 afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root,{recursive:true,force:true}); });
 async function legacyDatabase() {
   const root = mkdtempSync(join(tmpdir(),"runtime-segments-")); roots.push(root);
@@ -90,6 +98,63 @@ describe("segment model history custody", () => {
     await expect(sink.flushChecked()).rejects.toThrow("persistence failed");
     expect(store.loadRuntimeSession("s")?.items).toEqual([]);
     expect(() => store.mergeRuntimeTranscript("s","retired",[])).toThrow("Stale");
+    await store.close();
+  });
+});
+
+describe("atomic runtime switch transaction", () => {
+  it("commits canonical history, archived identity, marker and handoff together with a fresh context", async () => {
+    const path = await legacyDatabase();
+    const store = new SqlitePersistenceAdapter(path);
+    store.ensureRuntimeSession("s");
+    store.commitRuntimeSwitch("s","codex",switchRecord());
+    const state = store.loadRuntimeSession("s")!;
+    expect(state).toMatchObject({revision:1,activeSegmentId:"next",handoff:{state:"pending",id:"next"}});
+    expect(state.segments[0]).toMatchObject({nativeRef:"old-thread",profileId:"account",endedAt:3});
+    expect(state.segments[1]).toMatchObject({nativeRef:"native-next",nativeState:"fresh"});
+    expect(state.items.map(item => item.sourceItemId)).toEqual(["original","live"]);
+    expect(state.boundaries).toHaveLength(1);
+    expect(await store.getRootSession("s")).toMatchObject({engineId:"claude",externalSessionRef:"native-next",model:"chosen"});
+    expect(await store.loadHistory("s")).toEqual([]);
+    await store.close();
+    const reopened = new SqlitePersistenceAdapter(path);
+    expect(reopened.loadRuntimeSession("s")).toEqual(state);
+    await reopened.close();
+  });
+  it.each(["runtime_segments","runtime_boundaries","runtime_handoffs","sessions","history_items"])("rolls back every fact when %s fails", async table => {
+    const path = await legacyDatabase();
+    const store = new SqlitePersistenceAdapter(path);
+    const before = store.ensureRuntimeSession("s");
+    const raw = new DatabaseSync(path);
+    const operation = table === "sessions" ? "UPDATE" : table === "history_items" ? "DELETE" : "INSERT";
+    raw.exec(`CREATE TRIGGER switch_fault BEFORE ${operation} ON ${table} BEGIN SELECT RAISE(ABORT,'injected switch fault'); END`);
+    expect(() => store.commitRuntimeSwitch("s","codex",switchRecord())).toThrow("injected switch fault");
+    expect(store.loadRuntimeSession("s")).toEqual(before);
+    expect((await store.getRootSession("s"))?.externalSessionRef).toBe("old-thread");
+    expect((await store.loadHistory("s"))[0]?.id).toBe("original");
+    raw.close();await store.close();
+  });
+  it("rejects stale revision, duplicate id and invalid digest without adding history", async () => {
+    const path = await legacyDatabase();const store = new SqlitePersistenceAdapter(path);
+    store.ensureRuntimeSession("s");
+    expect(() => store.commitRuntimeSwitch("s","codex",switchRecord("bad",1))).toThrow("revision changed");
+    const bad = switchRecord();bad.handoff.digest="0".repeat(64);
+    expect(() => store.commitRuntimeSwitch("s","codex",bad)).toThrow("handoff payload");
+    store.commitRuntimeSwitch("s","codex",switchRecord());
+    const before=store.loadRuntimeSession("s");
+    expect(() => store.commitRuntimeSwitch("s","codex",switchRecord())).toThrow("revision changed");
+    expect(store.loadRuntimeSession("s")).toEqual(before);
+    await store.close();
+  });
+  it("repeated switches without turns keep each marker once without synthetic-message growth", async () => {
+    const path=await legacyDatabase();const store=new SqlitePersistenceAdapter(path);store.ensureRuntimeSession("s");
+    store.commitRuntimeSwitch("s","codex",switchRecord());
+    const back=switchRecord("back",1,"next");back.segment.engine="core";delete back.segment.nativeRef;back.sourceItems=[];
+    store.commitRuntimeSwitch("s","claude",back);
+    const state=store.loadRuntimeSession("s")!;
+    expect(state.items.map(item=>item.sourceItemId)).toEqual(["original","live"]);
+    expect(state.segments).toHaveLength(3);expect(state.boundaries).toHaveLength(2);
+    expect(state.handoff?.id).toBe("back");expect(await store.loadHistory("s")).toEqual([]);
     await store.close();
   });
 });

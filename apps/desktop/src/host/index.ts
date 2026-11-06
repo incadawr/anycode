@@ -1,4 +1,5 @@
 import { commitEngineSwitch, createEngineSwitchClient } from "./engine-switch-client.js";
+import { RuntimeSessionHistory } from "./runtime-session-history.js";
 import type { EngineSwitchLaunch } from "../shared/engine-switch-control.js";
 import type { SwitchRuntime, SessionOptions } from "./session.js";
 import type { CodexEngine } from "./engines/codex/codex-engine.js";
@@ -222,6 +223,7 @@ import {
   SqlitePersistenceAdapter,
   SwitchableModelPort,
   WriteBehindHistorySink,
+  RuntimeHistorySink,
   PREVIEW_BUILTIN_SKILLS,
   SUBAGENT_BUILTIN_SKILLS,
   WORKTREE_BUILTIN_SKILLS,
@@ -1373,7 +1375,7 @@ function hostSwitchFactory(
         const config: AgentLoopConfig = withSubagents({ modelPort, registry, hooks,
           permissionEngine: new RuleAwarePermissionEngine(new SafeCommandPermissionEngine(new ModePermissionEngine()), rules), permissionBroker: broker,
           mode: "plan", cwd: workspace, ports: { fs, exec, http: new NodeHttpAdapter(), todos: new InMemoryTodoStore() },
-          sessionSubagents: routing.port, history: new ConversationHistory(),
+          sessionSubagents: routing.port, history: new ConversationHistory({ sink: new RuntimeHistorySink(database,sessionId,runtimeId!) }),
           systemPrompt: buildSystemPrompt({ toolNames: registry.list(), env: { workingDirectory: workspace, platform, date: new Date().toISOString().slice(0, 10), modelId: model } }),
           ...(envConfig.maxOutputTokens ? { maxOutputTokens: envConfig.maxOutputTokens } : {}),
         }, { profiles: await routing.profiles() });
@@ -1968,6 +1970,7 @@ async function bootCodexSession(
   session = new Session({
     switchEngineFactory: hostSwitchFactory(connected.sessionMeta.id, broker, rules, mcpSecrets),
     engineSwitchCoordinator: hostSwitchCoordinator(connected.sessionMeta.id, broker, rules, mcpSecrets),
+    runtimeHistory: engineSwitchEnabled && args.child === undefined ? new RuntimeSessionHistory(persistence!,connected.sessionMeta.id) : undefined,
     workspaceTrustRequired: workspaceTrustRequiredMessage,
     outbound,
     engine: booted.engine,
@@ -2717,6 +2720,7 @@ async function bootClaudeSession(
   session = new Session({
     switchEngineFactory: hostSwitchFactory(rowId, broker, rules, mcpSecrets),
     engineSwitchCoordinator: hostSwitchCoordinator(rowId, broker, rules, mcpSecrets),
+    runtimeHistory: engineSwitchEnabled && args.child === undefined ? new RuntimeSessionHistory(persistence!,rowId) : undefined,
     workspaceTrustRequired: workspaceTrustRequiredMessage,
     usageAudit: claudeUsageAudit,
     saveTurnError: async (record, input) => {
@@ -3533,7 +3537,9 @@ async function boot(): Promise<void> {
     // the dispatcher; swept by main at app start; removed on hard delete.
     const artifactStore = new NodeArtifactStore(artifactsRootFor(dbPath, hostProfileHome()));
 
-    historySink = new WriteBehindHistorySink(persistence, sessionMeta.id);
+    historySink = engineSwitchEnabled && !isChildSessionBoot(args,sessionMeta)
+      ? new RuntimeHistorySink(persistence,sessionMeta.id,persistence.ensureRuntimeSession(sessionMeta.id).activeSegmentId)
+      : new WriteBehindHistorySink(persistence, sessionMeta.id);
     const tokenizer = await createDefaultTokenizer();
     const bootContextInfo = connectionModelSettings.contextFor(envConfig.model);
     const bootContextWindow: number | undefined = bootContextInfo.tokens;
@@ -4724,6 +4730,7 @@ async function boot(): Promise<void> {
     });
     session = new Session({
       engineSwitchCoordinator: hostSwitchCoordinator(sessionId, broker, rules, mcpSecrets),
+      runtimeHistory: engineSwitchEnabled && !isChildSession ? new RuntimeSessionHistory(persistence!,sessionId) : undefined,
       switchEngineFactory: hostSwitchFactory(sessionId, broker, rules, mcpSecrets, async ({ model }) => {
         // This resolver owns the boot connection. Never infer one in a foreign host.
         if (model !== currentModel && !entryFor(model)?.models.some(item => item.id === model)) return undefined;

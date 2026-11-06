@@ -1,4 +1,5 @@
 import type { EngineSwitchIdentity } from "../shared/engine-switch-control.js";
+import type { RuntimeSessionHistory } from "./runtime-session-history.js";
 import { manualCompactionUnavailableReason } from "../shared/manual-compaction.js";
 import { PresentationJournal } from "./presentation-journal.js";
 import type { CompactionRecordSeam } from "./compaction-records.js";
@@ -812,6 +813,7 @@ export interface SessionOptions {
     abort(requestId: string): Promise<void>;
     retire(requestId: string): Promise<void>;
   };
+  runtimeHistory?: RuntimeSessionHistory;
   /**
    * the engine's own model catalog + permission presets. Absent for
    * core (and for any engine without native controls) -> `set_engine_preset` is
@@ -1296,6 +1298,7 @@ export class Session {
    * reason "engine switch is not available in this host".
    */
   private readonly engineSwitchCoordinator: SessionOptions["engineSwitchCoordinator"];
+  private readonly runtimeHistory: SessionOptions["runtimeHistory"];
   private readonly engineSwitchRequestIds = new Set<string>();
   private readonly switchEngineFactory: ((engine: EngineId, model: string) => Promise<SessionEngine | SwitchRuntime>) | undefined;
   /**
@@ -1839,6 +1842,7 @@ export class Session {
     this.engine = options.engine;
     this.switchEngineFactory = options.switchEngineFactory;
     this.engineSwitchCoordinator = options.engineSwitchCoordinator;
+    this.runtimeHistory = options.runtimeHistory;
     this.engineSettings = options.engineSettings;
     this.broker = options.broker;
     this.broker.observeActivity(() => this.publishActivity());
@@ -4276,7 +4280,8 @@ export class Session {
           return;
         }
       }
-      const canonical: HistoryItem[] = [...this.switchCarriedHistory, ...liveItems];
+      const durableSource = this.runtimeHistory?.snapshot(liveItems);
+      const canonical: HistoryItem[] = durableSource?.items ?? [...this.switchCarriedHistory, ...liveItems];
       let next: SessionEngine;
       let nextSettings: EngineSettingsSeam | undefined;
       try {
@@ -4358,6 +4363,9 @@ export class Session {
       const nextHistory = buildSessionHistory(canonical, this.historyMaxItems);
       const nextMode = next.mode();
       const previousMode = previousEngine.mode();
+      const boundaryText = plan.items.length > 0
+        ? `Session switched from the "${previousEngine.id}" engine to the "${next.id}" engine. Native engine context was not transferred; the next turn receives a text import of this conversation.`
+        : `Session switched from the "${previousEngine.id}" engine to the "${next.id}" engine. Native engine context was not transferred and no conversation history could be imported; the new engine starts without prior context.`;
       const preparedPresentation = nextRuntime?.presentation;
       const projection = {
         engine: enginePresentation(next, nextSettings) ?? null, shell: next.id === "core" ? null : preparedPresentation?.shell ?? null,
@@ -4371,7 +4379,13 @@ export class Session {
         pinnedConnection: preparedPresentation?.pinnedConnection ?? null,
       };
       if (invalid()) throw new Error("session changed during engine switch");
-      await this.engineSwitchCoordinator?.commit(message.requestId, nextRuntime?.identity ?? { model: message.model, mode: nextMode });
+      const identity = nextRuntime?.identity ?? { model: message.model, mode: nextMode };
+      await this.engineSwitchCoordinator?.commit(message.requestId, { ...identity, ...(durableSource ? {runtime:{
+        expectedRevision:durableSource.revision,sourceSegmentId:durableSource.activeSegmentId,sourceItems:liveItems,
+        segment:{id:message.requestId,engine:next.id,accountScope:"",nativeState:"fresh",...(identity.externalSessionRef ? {nativeRef:identity.externalSessionRef} : {}),selected:{model:identity.model,mode:identity.mode},applied:{model:identity.model,mode:identity.mode},startedAt:Date.now(),coverage:"available_history"},
+        boundary:{id:message.requestId,segmentId:message.requestId,...(canonical.at(-1) ? {afterItemId:canonical.at(-1)!.id} : {}),text:boundaryText,createdAt:Date.now()},
+        handoff:{id:message.requestId,segmentId:message.requestId,sourceWatermark:canonical.at(-1)?.id ?? null,payload:pendingImport.prompt,digest:createHash("sha256").update(pendingImport.prompt).digest("hex"),state:"pending"},
+      }} : {}) });
       committed = true;
       candidate = undefined;
       this.engine = next;
@@ -4430,10 +4444,7 @@ export class Session {
         event: {
           type: "engine_notice",
           level: "info",
-          message:
-            plan.items.length > 0
-              ? `Session switched from the "${previousEngine.id}" engine to the "${next.id}" engine. Native engine context was not transferred; the next turn receives a text import of this conversation.`
-              : `Session switched from the "${previousEngine.id}" engine to the "${next.id}" engine. Native engine context was not transferred and no conversation history could be imported; the new engine starts without prior context.`,
+          message: boundaryText,
         },
       };
       this.switchBoundaries.push(boundary);

@@ -79,6 +79,7 @@ export class EngineSwitchCoordinator {
     }
     if (lease.state !== "prepared" || !this.deps.admissible()) return reply(false, "switch is not prepared");
     if (message.identity.model !== lease.target.model || (lease.target.engine !== "core" && !message.identity.externalSessionRef)) return reply(false, "invalid target identity");
+    if (message.identity.runtime && message.identity.runtime.segment.id !== message.requestId) return reply(false,"invalid runtime transaction");
     try {
       this.deps.commit(lease.target, message.identity, lease.requestId);
       lease.state = "committed";

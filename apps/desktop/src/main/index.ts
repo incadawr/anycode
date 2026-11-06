@@ -2839,10 +2839,13 @@ void app.whenReady().then(async () => {
     },
     commitEngineSwitchIdentity: (sessionId, expectedEngine, target, identity, workspace) => {
       if (!persistence) throw new Error("Persistence unavailable");
-      persistence.commitEngineIdentity(sessionId, expectedEngine, { ...identity, workspace, engine: target.engine,
-        ...(target.engine === "core" ? { connectionId: target.connectionId } : {}),
-        ...(target.engine === "codex" ? { codexProfileId: target.codexProfileId ?? settings?.codex?.activeProfileId } : {}),
-      });
+      const runtime = identity.runtime;
+      if (!runtime || runtime.segment.engine !== target.engine || runtime.segment.selected.model !== identity.model || runtime.segment.nativeRef !== identity.externalSessionRef) throw new Error("Runtime transaction identity mismatch");
+      const profileId = target.engine === "codex" ? target.codexProfileId ?? SYSTEM_PROFILE_ID : undefined;
+      persistence.commitRuntimeSwitch(sessionId,expectedEngine,{...runtime,segment:{...runtime.segment,
+        connectionId:target.engine === "core" ? target.connectionId : undefined,
+        profileId,accountScope:profileId ?? "",
+      }});
     },
     // Both validated binary paths ride EVERY host's env, regardless of which
     // engine this particular session runs on: a core/codex session's Agent
