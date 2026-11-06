@@ -570,49 +570,33 @@ describe("OpenCode Go subscription entries", () => {
     }
   });
 
-  it("lists only Messages models for the Anthropic door", () => {
-    const anthropic = findCatalogEntry("opencode")!;
-    expect(anthropic.models.map((model) => model.id)).toEqual([
-      "minimax-m3",
-      "qwen3.8-max",
-      "qwen3.8-flash",
-      "qwen3.7-plus",
-      "claude-haiku-5-5",
-    ]);
-    expect(anthropic.models.map((model) => model.name)).toEqual([
-      "MiniMax M3",
-      "Qwen3.8 Max",
-      "Qwen3.8 Flash",
-      "Qwen3.7 Plus",
-      "Claude Haiku 5.5",
-    ]);
-    // Chat Completions is the Kimi family's native protocol on this
-    // endpoint: the OpenAI door keeps Kimi first.
-    expect(findCatalogEntry("opencode-openai")!.models.map((model) => model.id)).toEqual([
-      "kimi-k3",
-      "kimi-k3.1-pro",
-      "kimi-k2.7-code",
-    ]);
+  it("offers the same complete routed inventory through both Go entries", async () => {
+    const { OPENCODE_GO_MODELS } = await import("./opencode-go.js");
+    const expected = Object.keys(OPENCODE_GO_MODELS.models);
+    expect(expected).toHaveLength(28);
+    for (const id of ["opencode", "opencode-openai"]) {
+      const models = findCatalogEntry(id)!.models;
+      expect(models[0]?.id).toBe("minimax-m3");
+      expect(new Set(models.map(model => model.id))).toEqual(new Set(expected));
+      expect(models.some(model => model.id === "gemini-4-argon")).toBe(false);
+    }
   });
 
-  it("keeps every row unpriced, with the context windows the live models list declares", () => {
+  it("projects Go context, capabilities and reference prices from the declared routes", async () => {
+    const { OPENCODE_GO_MODELS } = await import("./opencode-go.js");
     for (const id of ["opencode", "opencode-openai"]) {
-      const entry = findCatalogEntry(id)!;
-      for (const model of entry.models) {
-        // Subscription tariff: no invented per-token rates (kimi.com precedent).
-        expect(model.pricing).toBeUndefined();
-        // Unverified through this app's own request mapping: no capability claims.
-        expect(model.imageInput).toBeUndefined();
-        expect(model.reasoning).toBeUndefined();
+      const models = findCatalogEntry(id)!.models;
+      for (const model of models) {
+        const route = OPENCODE_GO_MODELS.models[model.id as keyof typeof OPENCODE_GO_MODELS.models].route;
+        expect(model.contextWindow, model.id).toBe(route.metadata.limit.context);
+        expect(model.pricing, model.id).toEqual(route.metadata.pricing);
+        expect(model.pricing, model.id).toBeDefined();
+        expect(model.imageInput, model.id).toBe(route.metadata.modalities.input.some(m => m.startsWith("image/")));
       }
+      expect(models.find(model => model.id === "grok-4.7")?.contextWindow).toBe(500_000);
+      expect(models.find(model => model.id === "kimi-k2.7-code")?.maxOutputTokens).toBeUndefined();
+      expect(models.find(model => model.id === "grok-4.7")?.pricing?.input).toBe(2);
     }
-    // kimi-k3 / kimi-k3.1-pro declare the full 1,048,576-token window on the
-    // endpoint's own models list, not the smaller pre-fetch hint.
-    expect(findCatalogEntry("opencode-openai")!.models.map((model) => model.contextWindow)).toEqual([
-      1_048_576,
-      1_048_576,
-      262_144,
-    ]);
   });
 });
 
@@ -738,9 +722,9 @@ describe("model pricing", () => {
     }
   });
 
-  it("prices exactly the listed models — a new rate or a new unpriced row is a deliberate edit", () => {
+  it("prices exactly the listed non-Go models — Go rates are checked against routes above", () => {
     const priced = getBuiltinCatalog().providers.flatMap((entry) =>
-      entry.models.filter((model) => model.pricing !== undefined).map((model) => `${entry.id}/${model.id}`),
+      entry.models.filter((model) => model.pricing !== undefined && entry.id !== "opencode" && entry.id !== "opencode-openai").map((model) => `${entry.id}/${model.id}`),
     );
     expect(priced).toEqual(
       Object.entries(PRICED).flatMap(([providerId, ids]) => ids.map((id) => `${providerId}/${id}`)),
