@@ -309,13 +309,11 @@ describe("archived reference ownership and deletion", () => {
     store.commitRuntimeSwitch("s","codex",switchRecord());
     store.prepareRuntimeInput("s","turn","text","text",true);
     await store.recordClaudeTranscriptItem("native-next",{turnOrdinal:0,positionInTurn:0,itemId:"item",data:{id:"item",createdAt:1,message:{role:"user",content:"text"}}});
-    expect(store.runtimeNativeReferenceOwners("codex","account","archived")).toEqual(["s"]);
-    expect(store.runtimeNativeReferenceOwners("codex","another-account","archived")).toEqual([]);
+    expect(store.loadRuntimeSession("s")!.segments[0]).toMatchObject({engine:"codex",accountScope:"account",nativeRef:"archived"});
     const deleted = await store.deleteSessionTree("s");
     expect(deleted.externalSessionRefs.sort()).toEqual(["archived","native-next"]);
     expect(await store.listCodexThreadItems("archived")).toEqual([]);
     expect(await store.listClaudeTranscriptItems("native-next")).toEqual([]);
-    expect(store.listRuntimeNativeReferences()).toEqual([]);
     expect(store.loadRuntimeSession("s")).toBeNull();
     await store.close();
   });
@@ -329,7 +327,7 @@ describe("archived reference ownership and deletion", () => {
     await store.recordClaudeTranscriptItem("shared",{turnOrdinal:0,positionInTurn:0,itemId:"item",data:{id:"item",createdAt:1,message:{role:"user",content:"shared"}}});
     await store.deleteSessionTree("deleted");
     expect(await store.listClaudeTranscriptItems("shared")).toHaveLength(1);
-    expect(store.runtimeNativeReferenceOwners("claude","b","shared")).toEqual(["surviving"]);
+    expect(store.loadRuntimeSession("surviving")!.segments[0]).toMatchObject({engine:"claude",accountScope:"b",nativeRef:"shared"});
     await store.deleteSessionTree("surviving");
     expect(await store.listClaudeTranscriptItems("shared")).toEqual([]);
     await store.close();

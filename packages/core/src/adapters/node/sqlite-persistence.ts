@@ -1609,20 +1609,6 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
    * id in a real parent chain is already distinct, so there is nothing for
    * dedup to remove).
    */
-  /** Archived references remain owned metadata, never evidence of an open process. */
-  listRuntimeNativeReferences(sessionId?: string): {sessionId:string;engine:string;accountScope:string;nativeRef:string}[] {
-    return this.open().prepare(`SELECT DISTINCT session_id AS sessionId,engine,
-        CASE WHEN account_scope='system' THEN '' ELSE account_scope END AS accountScope,native_ref AS nativeRef
-        FROM runtime_segments WHERE native_ref IS NOT NULL AND (? IS NULL OR session_id=?)
-      UNION SELECT id,COALESCE(engine_id,'core'),CASE WHEN codex_profile_id='system' THEN '' ELSE COALESCE(codex_profile_id,'') END,external_session_ref
-        FROM sessions WHERE external_session_ref IS NOT NULL AND (? IS NULL OR id=?)`).all(sessionId ?? null,sessionId ?? null,sessionId ?? null,sessionId ?? null) as unknown as {sessionId:string;engine:string;accountScope:string;nativeRef:string}[];
-  }
-
-  runtimeNativeReferenceOwners(engine: string, accountScope: string, nativeRef: string): string[] {
-    const scope = accountScope === "system" ? "" : accountScope;
-    return [...new Set(this.listRuntimeNativeReferences().filter(ref => ref.engine === engine && ref.accountScope === scope && ref.nativeRef === nativeRef).map(ref => ref.sessionId))];
-  }
-
   async deleteSessionTree(rootId: string): Promise<{ deletedSessionIds: string[]; externalSessionRefs: string[] }> {
     return this.transaction((db) => {
       const { deletedSessionIds, externalSessionRefs } = this.deleteSessionTreeInTx(db, rootId);
