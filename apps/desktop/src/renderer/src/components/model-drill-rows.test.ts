@@ -50,6 +50,13 @@ describe("buildSessionDrillRows (cut-2 §D4 — every connection, the TAB's pair
     const { groups } = buildSessionDrillRows({ connections: [conn], catalog, custom: undefined, currentConnectionId: conn.id, currentModelId: conn.model!, recentModelIds: [] });
     expect(groups[0]?.items.map(m => m.id)).toEqual(["gpt-6-luna", "manual-unknown"]);
   });
+  it("uses environment overrides when building Go groups", () => {
+    const conn = connection({ id: "go", providerId: "opencode" });
+    const catalog: CatalogSummary = [{ id: "opencode", name: "Go", authKind: "api_key", defaultTransport: "anthropic-messages", models: [{ id: "minimax-m3" }, { id: "hy4" }] }];
+    const args = { connections: [conn], catalog, custom: undefined, currentConnectionId: conn.id, currentModelId: "minimax-m3", recentModelIds: [] };
+    expect(buildSessionDrillRows(args).groups[0]!.items.length).toBe(28);
+    expect(buildSessionDrillRows({ ...args, envOverrides: ["ANYCODE_BASE_URL"] }).groups[0]!.items.map(item => item.id)).toEqual(["minimax-m3"]);
+  });
   it("groups every connected connection, current one first, with the tab's model checkmarked", () => {
     const { groups } = buildSessionDrillRows({
       connections: CONNECTIONS,

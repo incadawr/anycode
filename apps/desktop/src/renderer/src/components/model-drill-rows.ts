@@ -109,7 +109,7 @@ export function buildSessionDrillRows(args: SessionDrillArgs): SessionDrillRows 
   const groups = buildStartModelGroups(args.connections, args.catalog, args.custom, {
     connectionId: args.currentConnectionId,
     modelId: args.currentModelId,
-  });
+  }, args.envOverrides);
   const popular = buildStartModelPopularRows(groups, args.recentModelIds, args.currentConnectionId);
   const currentConnection = args.connections.find((connection) => connection.id === args.currentConnectionId);
   // a model the catalog does not know falls back to the
