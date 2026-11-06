@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Subagents now start in the background by default on desktop and deliver their reports in a new turn. Explicit session calls also run in the background; select the inline tier or set detach to false when you need to wait for a result.
+
 ## [0.0.82] - 2026-11-06
 
 ### Fixed

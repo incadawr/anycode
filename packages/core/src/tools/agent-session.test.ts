@@ -702,8 +702,7 @@ describe("agentTool handler — SessionSubagentRequest forwarding (CUT-S2 §2.1/
       spawnToolCallId: "call-1",
       provider: "second-connection",
       model: "glm-4.6",
-      // GitHub #17 slice C: an omitted detach on a session-tier call is now
-      // background by default.
+      // Explicit session calls preserve their background default.
       detach: true,
     });
   });
@@ -1034,7 +1033,18 @@ describe("agentTool handler — engine-profile routing (CUT-S4 §2.2)", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("tier omitted (default inline) on an engine profile also upgrades to a session run", async () => {
+  it("rejects explicit inline with detach true before spawning an engine child", async () => {
+    const run = vi.fn();
+    const result = await full.handler(
+      { description: "d", prompt: "p", agent_type: "claude-worker", tier: "inline", detach: true },
+      makeCtx({ subagents: enginePort("claude-worker", ENGINE_PROFILE), sessionSubagents: { run, send: async () => ({ ok: true }) } }),
+    );
+    expect(result.errorKind).toBe("invalid_input");
+    expect(result.error).toContain('"detach" is only valid with tier "session"');
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("tier omitted on an engine profile starts a background session", async () => {
     let ran = false;
     const port: SessionSubagentPort = {
       run: async (req) => {
@@ -1335,7 +1345,7 @@ describe("agentTool handler — detach forwarding onto SessionSubagentRequest (�
     expect(seen?.detach).toBe(true);
   });
 
-  it("an ordinary session Agent omitting detach requests background (GitHub #17 slice C)", async () => {
+  it("an explicit session without detach starts in the background", async () => {
     const seen: SessionSubagentRequest[] = [];
     const port: SessionSubagentPort = {
       run: async (req) => {
@@ -1346,6 +1356,7 @@ describe("agentTool handler — detach forwarding onto SessionSubagentRequest (�
     };
     await full.handler({ description: "d", prompt: "p", tier: "session" }, makeCtx({ sessionSubagents: port }));
     expect(seen[0]?.detach).toBe(true);
+    expect(seen[0]?.allowBackgroundHandoff).toBeUndefined();
   });
 
   it("an explicit detach:false still joins — no `detach:false` rides the wire", async () => {
@@ -1657,7 +1668,7 @@ describe("agentTool handler — orchestrate default-detach (§2.3)", () => {
     };
   }
 
-  it("falls back to inline when a default session is refused at capacity", async () => {
+  it("does not silently join inline when a default background session is refused at capacity", async () => {
     const order: string[] = [];
     const inline: SubagentPort = { run: async () => {
       order.push("inline");
@@ -1667,16 +1678,16 @@ describe("agentTool handler — orchestrate default-detach (§2.3)", () => {
       send: async () => ({ ok: true }),
       run: async (req) => {
         order.push("session refused");
-        expect(req.fallbackAtCapacity).toBe(true);
+        expect(req.fallbackAtCapacity).toBeUndefined();
         return { ...BASE_SESSION_OUTCOME, status: "error", capacityRefused: true, spawnToolCallId: req.spawnToolCallId };
       },
     };
     const result = await full.handler({ description: "d", prompt: "p" }, makeCtx({ sessionSubagents: port, subagents: inline }));
-    expect(result.ok).toBe(true);
-    expect(order).toEqual(["session refused", "inline"]);
+    expect(result.ok).toBe(false);
+    expect(order).toEqual(["session refused"]);
   });
 
-  it.each(["explore", "custom-reviewer"])("defaults %s to inline with its profile", async (agentType) => {
+  it.each(["explore", "custom-reviewer"])("keeps explicit inline available for %s with its profile", async (agentType) => {
     const calls: string[] = [];
     const inline: SubagentPort = {
       listAgentTypes: () => [agentType],
@@ -1689,7 +1700,7 @@ describe("agentTool handler — orchestrate default-detach (§2.3)", () => {
       send: async () => ({ ok: true }),
       run: async () => { throw new Error("restricted profile reached session"); },
     };
-    const result = await full.handler({ description: "d", prompt: "p", agent_type: agentType }, makeCtx({ subagents: inline, sessionSubagents: session }));
+    const result = await full.handler({ description: "d", prompt: "p", agent_type: agentType, tier: "inline" }, makeCtx({ subagents: inline, sessionSubagents: session }));
     expect(result.ok).toBe(true);
     expect(calls).toEqual([agentType]);
     if (agentType === "explore") {
@@ -1814,21 +1825,37 @@ describe("agentTool handler — orchestrate default-detach (§2.3)", () => {
     expect(seen()).toMatchObject({ provider: "provider-b", detach: true });
   });
 
-  it("an omitted tier starts a joining session", async () => {
+  it.each(["general-purpose", "explore", "planner", "executor", "reviewer"])("defaults %s to a background session", async (agent_type) => {
     const { port, seen } = capturingPort();
-    const result = await full.handler({ description: "d", prompt: "p" }, makeCtx({ sessionSubagents: port }));
+    const result = await full.handler({ description: "d", prompt: "p", agent_type }, makeCtx({ sessionSubagents: port }));
     expect(result.ok).toBe(true);
+    expect(seen()).toMatchObject({ agentType: agent_type, detach: true });
+    expect(seen()?.allowBackgroundHandoff).toBeUndefined();
+  });
+
+  it("an omitted tier with detach false waits", async () => {
+    const { port, seen } = capturingPort();
+    await full.handler({ description: "d", prompt: "p", detach: false }, makeCtx({ sessionSubagents: port }));
     expect(seen()).toMatchObject({ allowBackgroundHandoff: true });
     expect(seen()?.detach).toBeUndefined();
   });
 
-  it("orchestrate + tier session + no detach => request carries detach:true", async () => {
+  it("an omitted tier starts a background session", async () => {
+    const { port, seen } = capturingPort();
+    const result = await full.handler({ description: "d", prompt: "p" }, makeCtx({ sessionSubagents: port }));
+    expect(result.ok).toBe(true);
+    expect(seen()).toMatchObject({ detach: true });
+    expect(seen()?.allowBackgroundHandoff).toBeUndefined();
+  });
+
+  it("explicit session starts in the background in orchestrate mode", async () => {
     const { port, seen } = capturingPort();
     await full.handler(
       { description: "d", prompt: "p", tier: "session" },
       makeCtx({ orchestrate: true, sessionSubagents: port }),
     );
     expect(seen()?.detach).toBe(true);
+    expect(seen()?.allowBackgroundHandoff).toBeUndefined();
   });
 
   it("an explicit detach:false is honored — no detach key rides the wire", async () => {
@@ -1840,13 +1867,14 @@ describe("agentTool handler — orchestrate default-detach (§2.3)", () => {
     expect(seen() !== undefined && "detach" in seen()!).toBe(false);
   });
 
-  it("a NON-orchestrate session tier also defaults to background (GitHub #17 slice C: no orchestrate gate)", async () => {
+  it("explicit session starts in the background outside orchestrate mode", async () => {
     const { port, seen } = capturingPort();
     await full.handler(
       { description: "d", prompt: "p", tier: "session" },
       makeCtx({ sessionSubagents: port }),
     );
     expect(seen()?.detach).toBe(true);
+    expect(seen()?.allowBackgroundHandoff).toBeUndefined();
   });
 
   it("inline tier is unaffected by the orchestrate flag", async () => {
@@ -1891,7 +1919,7 @@ describe("agentTool handler — orchestrate default-detach (§2.3)", () => {
     expect(delivered).toBe(true);
   });
 
-  it("a continued session defaults to background too — continue_session IS a session run (GitHub #17 slice C)", async () => {
+  it("an explicitly selected session continuation starts in the background", async () => {
     const { port, seen } = capturingPort();
     await full.handler(
       { description: "d", prompt: "p", tier: "session", continue_session: "child-9" },
@@ -1899,6 +1927,7 @@ describe("agentTool handler — orchestrate default-detach (§2.3)", () => {
     );
     expect(seen()?.resumeChildSessionId).toBe("child-9");
     expect(seen()?.detach).toBe(true);
+    expect(seen()?.allowBackgroundHandoff).toBeUndefined();
   });
 });
 

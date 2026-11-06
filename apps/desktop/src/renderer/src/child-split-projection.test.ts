@@ -22,7 +22,7 @@ import { formatSubagentCounters } from "./components/ToolCallCard.js";
 
 const PARENT = "parent-1";
 
-function agentBlock(toolCallId: string, card: SubagentSubStatus | null, input: unknown = {}): TranscriptBlock {
+function agentBlock(toolCallId: string, card: SubagentSubStatus | null, input: unknown = {}): Extract<TranscriptBlock, { kind: "tool_call" }> {
   return {
     kind: "tool_call",
     id: `b-${toolCallId}`,
@@ -185,6 +185,34 @@ describe("detached continuation counters (supervisor correction 5, defect 1/2/3)
       workflow: null,
     };
   }
+
+  it.each([false, true])("uses live counters and remembers a completed background child with explicit detach %s", (explicit) => {
+    const id = `dispatch-live-${explicit}`;
+    const relations = createChildRelationStore();
+    relations.getState().registerChild(PARENT, id, "tab", "child");
+    const block = { ...agentBlock(id, null, explicit ? { detach: true } : { prompt: "p" }), status: "success" as const,
+      ...(!explicit ? { subagentDispatched: true as const } : {}) };
+    const live = fakeLiveStore({ transcript: [childToolCall("read"), { kind: "loop_end", id: "end", reason: "completed", turns: 2, durationMs: 25 }], modelTurns: 2, running: false });
+    const input = deps(relations.getState().relations, [block]);
+    const rows = projectChildSplitRows([id], { ...input, liveChildStores: new Map([[id, live]]) });
+    expect(rows[0]!.card.turns).toBe(2);
+    expect(rows[0]!.card.toolCalls).toBe(1);
+    expect(rows[0]!.badge).toBe("done");
+    const reaped = projectChildSplitRows([id], input);
+    expect(reaped[0]!.card).toEqual(rows[0]!.card);
+  });
+
+  it.each([false, true])("settles a background row from its report without live telemetry, explicit detach %s", (explicit) => {
+    const id = `dispatch-report-${explicit}`;
+    const relations = createChildRelationStore();
+    relations.getState().registerChild(PARENT, id, "tab", "child");
+    const block = { ...agentBlock(id, null, explicit ? { detach: true } : { prompt: "p" }), status: "success" as const,
+      ...(!explicit ? { subagentDispatched: true as const } : {}) };
+    const transcript: TranscriptBlock[] = [block, { kind: "user_text", id: "report", text: `<task-notification><tool-use-id>${id}</tool-use-id><status>completed</status></task-notification>` }];
+    const rows = projectChildSplitRows([id], deps(relations.getState().relations, transcript));
+    expect(rows[0]!.badge).toBe("done");
+    expect(rows[0]!.card.final).toEqual({ status: "completed", durationMs: -1 });
+  });
 
   it("defect 1: prior REMEMBERED counters are resolved when the parent cards carry no progress (native detached calls)", () => {
     const relationStore = createChildRelationStore();

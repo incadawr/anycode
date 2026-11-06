@@ -15,6 +15,7 @@ import type { SubagentSubStatus } from "./store.js";
 import type { ChildSplitRow } from "./components/ChildSplitPane.js";
 import {
   childBadgeKind,
+  isBackgroundAgent,
   continuationSiblingSpawnIds,
   detachedOutcomeFromParent,
   lastLiveChildCard,
@@ -92,7 +93,7 @@ export function resolveChildRowCard(
   if (!lastBlock || lastBlock.kind !== "tool_call") {
     return baseCard;
   }
-  const detached = (lastBlock.input as { detach?: unknown } | null)?.detach === true;
+  const detached = isBackgroundAgent(lastBlock);
   if (childStore !== undefined) {
     const state = childStore.getState();
     // A LIVE store exists only for the EFFECTIVE (latest) spawn — the child

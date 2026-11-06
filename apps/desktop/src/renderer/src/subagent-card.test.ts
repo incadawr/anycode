@@ -1,3 +1,4 @@
+import { isSubagentHandoff } from "./subagent-card.js";
 /**
  * Tests for the S1 persisted-card decode/project pair (slice S1 W4,
  * CUT-S1 §3 W4). `decodeSubagentCardSnapshot` is the LAST line of defense
@@ -434,3 +435,18 @@ describe("constant parity (CUT-S1 §5 anti-facade #2: a silent renderer/core cap
  * from a persisted/live tool result. It must fail closed on anything that is
  * not an Agent result carrying nonempty session ids bound to THIS call.
  */
+
+
+describe("background handoff validation", () => {
+  const target = { kind: "session", childSessionId: "child", parentSessionId: "parent", spawnToolCallId: "call" };
+  it("accepts background admission and join handoff only for the matching Agent call", () => {
+    for (const reason of ["requested", "join_budget"]) {
+      expect(isSubagentHandoff({ target, reason }, "call", "Agent")).toBe(true);
+      expect(isSubagentHandoff({ target, reason }, "other", "Agent")).toBe(false);
+      expect(isSubagentHandoff({ target, reason }, "call", "Bash")).toBe(false);
+    }
+  });
+  it.each([null, {}, { reason: "requested", target: { kind: "inline" } }, { reason: "other", target }, { reason: "requested", target: { ...target, childSessionId: "" } }])("rejects malformed handoff %j", (raw) => {
+    expect(isSubagentHandoff(raw, "call", "Agent")).toBe(false);
+  });
+});

@@ -308,8 +308,8 @@ export const agentInputSchema = z.object({
     .enum(["inline", "session"])
     .optional()
     .describe(
-      '"inline": lightweight in-process subagent for short lookups. When tier is omitted, general-purpose defaults to a joining session in the desktop; explore and other profiles default to inline. ' +
-        '"session": a full child session in its own process. Profiles with restrictions require inline unless they select their own connection or engine. The user can open it, watch the live transcript and steer it; ' +
+      '"inline": lightweight in-process subagent for short lookups. When tier is omitted, all profiles default to a background session in the desktop; the call returns immediately with the child id. ' +
+        '"session": a full child session in its own process. Core session children preserve profile restrictions. Session calls start in the background by default; detach false waits, with automatic background handoff after a long wait. The user can open it, watch the live transcript and steer it; ' +
         "its transcript persists with this conversation. Use \"session\" for long or complex build/debug work, " +
         "when the user should be able to inspect or steer the delegation, or to run it on a different provider connection.",
     ),
@@ -330,8 +330,8 @@ export const agentInputSchema = z.object({
   /**
    * срез 1: session-tier-only, mirrors the `provider` field's
    * "invalid for inline tier" discipline exactly (handler-level check,
-   * agent.ts). GitHub #17 slice C: a session-tier call is now
-   * background BY DEFAULT (an omitted detach means true); false opts into a
+   * agent.ts). Session calls start in the
+   * background by default; false opts into a
    * short synchronous join. Either way the child runs as a child session and
    * its report arrives later as a separate message.
    */
@@ -339,7 +339,7 @@ export const agentInputSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      'Session tier only: an explicitly selected session tier defaults to background, while an omitted tier joins. A detached child ' +
+      'Session tier only: both omitted tier and explicit session tier default to background; detach false waits. A detached child ' +
         "returns once the session starts; its report arrives later as a new " +
         "message in this conversation. Pass false only for a short lookup whose result you need in this step; " +
         "a joining call is handed over to the background after 120 seconds and its report arrives as a message. " +

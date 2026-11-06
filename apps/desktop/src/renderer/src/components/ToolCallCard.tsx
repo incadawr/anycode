@@ -40,7 +40,7 @@ import { useStore } from "zustand";
 import { focusExistingPreview } from "../dock/dock-store.js";
 import { isPreviewableDocPath } from "../../../shared/previewable.js";
 import { useTabsStore } from "../tabs-store.js";
-import { childBadgeKind, childLayoutStore, type ChildBadgeKind } from "../child-layout.js";
+import { childBadgeKind, childLayoutStore, isBackgroundAgent, type ChildBadgeKind } from "../child-layout.js";
 import { childRelationStore, hasOpenableChild, sameChildPredicate, type ChildRelation } from "../child-sessions.js";
 import { Button } from "../ui/index.js";
 import { DiffView } from "./DiffView.js";
@@ -1283,7 +1283,7 @@ export function childActionBadge(
 }
 
 /**
- * A detached (`detach: true`) Agent call succeeds the moment the child is
+ * A background Agent admission succeeds the moment the child is
  * spawned — the child's own work is still ahead. "Success" on that card read
  * as "the delegated work is done"; "Dispatched" says what actually happened,
  * and the child badge beside it carries the child's live state.
@@ -1298,10 +1298,9 @@ export function childActionBadge(
  */
 export function statusLabel(
   block: Pick<ToolCallBlock, "toolName" | "status" | "input"> &
-    Partial<Pick<ToolCallBlock, "subagent">>,
+    Partial<Pick<ToolCallBlock, "subagent" | "subagentDispatched">>,
 ): string {
-  const input = block.input as { detach?: unknown } | null | undefined;
-  if (block.toolName === "Agent" && block.status === "success" && input?.detach === true) {
+  if (block.status === "success" && isBackgroundAgent(block)) {
     return "Dispatched";
   }
   if (block.toolName === "Agent") {

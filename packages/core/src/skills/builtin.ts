@@ -171,12 +171,15 @@ way you read what comes back.
   together in one response and they run
   concurrently — fan out disjoint searches, never split one coherent
   investigation.
-- **session** is the desktop default for general-purpose; explore and other profiles default to inline to preserve their restrictions. A session child is a full session, and the
-  parent waits for its result. The user can move it to the background; after a
-  long wait it is handed off automatically and its report arrives as a new
-  turn. Explicit \`tier: "session"\` defaults to detach; pass \`detach: false\`
-  to wait, or \`detach: true\` to dispatch immediately. Restricted hosts
-  default to inline. Limits are typically 3
+- **session** is the desktop default for every profile, including explore.
+  With no \`tier\`, Agent returns immediately with the background child's id.
+  Continue useful independent work or end your turn; the report arrives as a
+  new turn. You can inspect progress with AgentStatus. Core session children
+  preserve profile restrictions. Explicit \`tier: "session"\` also starts in
+  the background by default. Set \`detach: false\` to wait, with automatic
+  background handoff after a long wait, whether tier is omitted or session.
+  Use \`tier: "inline"\` for short explore/lookups whose results you need in
+  this turn. Restricted hosts default to inline. Limits are typically 3
   children per parent and 8 per app. A core session child can spawn INLINE
   grandchildren only (its own Agent tool has no session tier) — a chain never
   recurses. Engine children do not receive AnyCode skills or the Agent bridge.

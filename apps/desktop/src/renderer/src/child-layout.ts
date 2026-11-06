@@ -76,7 +76,14 @@
  * and writes nothing but the `ChildLayoutView` it is handed.
  */
 import { create } from "zustand";
-import type { SubagentSubStatus, TranscriptBlock } from "./store.js";
+import type { SubagentSubStatus, ToolCallBlock, TranscriptBlock } from "./store.js";
+
+/** Background admission is distinct from the child's eventual completion. */
+export function isBackgroundAgent(block: Pick<ToolCallBlock, "toolName" | "status" | "input"> &
+  Partial<Pick<ToolCallBlock, "subagentDispatched">>): boolean {
+  return block.toolName === "Agent" &&
+    (block.subagentDispatched === true || (block.input as { detach?: unknown } | null)?.detach === true);
+}
 
 // ── layout view + reducer set ──
 

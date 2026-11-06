@@ -314,9 +314,8 @@ function detachAdmitMessage(childSessionId: string): string {
 }
 
 /**
- * GitHub #17 slice D: how long a native Agent call that ASKED
- * to join (explicit `detach:false`, or an omitted detach that reached a
- * handoff-eligible request) waits for its child before handing it over to
+ * How long a native Agent call with explicit `detach:false` and
+ * background handoff eligibility waits for its child before handing it over to
  * background mode. Measured from the child's own `accepted` event — a request
  * merely queued for admission is not running and spends none of this budget.
  * Not a user setting and not model input: Workflow dependency joins never

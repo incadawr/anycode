@@ -95,6 +95,13 @@ function decodeTarget(raw: unknown, toolCallId: string): SubagentCardTarget | nu
   return null;
 }
 
+/** A durable background admission must name this call and a real session target. */
+export function isSubagentHandoff(raw: unknown, toolCallId: string, toolName: string): boolean {
+  if (toolName !== "Agent" || !isPlainObject(raw)) return false;
+  if (raw.reason !== "requested" && raw.reason !== "join_budget") return false;
+  return decodeTarget(raw.target, toolCallId)?.kind === "session";
+}
+
 function decodeIdentity(raw: unknown): SubagentCardSnapshotV1["identity"] | null {
   if (!isPlainObject(raw)) {
     return null;

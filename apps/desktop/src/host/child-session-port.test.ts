@@ -3390,3 +3390,63 @@ describe("detached continuation card events", () => {
     expect(events.map(e => [e.id, e.progress.kind])).toEqual([["call-a", "start"], ["call-a", "progress"], ["call-a", "end"], ["call-b", "start"], ["call-b", "progress"], ["call-b", "end"]]);
   });
 });
+
+
+describe("default Agent background sessions", () => {
+  it.each([1, 2])("admits %i default children before completion and delivers each report once", async (count) => {
+    const sent: SentMessage[] = [];
+    const reports: SessionSubagentOutcome[] = [];
+    let listener: ((event: ChildRunEvent) => void) | undefined;
+    let nextId = 0;
+    const port = createChildSessionPort({
+      parentSessionId: PARENT_SESSION_ID,
+      getPermissionMode: () => "build",
+      send: (message) => sent.push(message),
+      subscribe: (cb) => { listener = cb; return () => {}; },
+      createRequestId: () => `default-${++nextId}`,
+      onDetachedTerminal: (outcome) => reports.push(outcome),
+    });
+    const tool = createAgentTool({ sessionTier: true });
+    const abort = new AbortController();
+    const pending = Array.from({ length: count }, (_, i) => tool.handler(
+      { description: `child ${i}`, prompt: "inspect", agent_type: "explore" },
+      { toolCallId: `call-${i}`, abortSignal: abort.signal, cwd: "/work", ports: {} as ToolContext["ports"], sessionSubagents: port },
+    ));
+    const requests = spawns(sent);
+    expect(requests).toHaveLength(count);
+    requests.forEach((request, i) => {
+      expect(request.detach).toBe(true);
+      expect(request.restrictions).toMatchObject({ readOnly: true });
+      listener?.({ type: CHILD_RUN_EVENT_TYPE, requestId: request.requestId, kind: "accepted", childSessionId: `child-${i}`, childTabId: `tab-${i}`, model: "m" });
+    });
+    const admitted = await Promise.all(pending);
+    admitted.forEach((result, i) => {
+      expect(result.ok).toBe(true);
+      expect(result.output?.finalText).toContain(`child-${i}`);
+      expect(result.output?.finalText).toContain("background");
+      expect(result.output?.turns).toBe(0);
+    });
+    expect(reports).toHaveLength(0);
+    expect(port.listBackgroundChildren()).toHaveLength(count);
+    // Ending the parent's turn leaves admitted background work alive.
+    abort.abort();
+    expect(cancels(sent)).toHaveLength(0);
+    if (count === 2) {
+      expect(port.cancelBackgroundChild("child-0")).toBe(true);
+      expect(cancels(sent).map((cancel) => cancel.requestId)).toEqual([requests[0]!.requestId]);
+    }
+    requests.forEach((request, i) => {
+      const event = terminalEvent(request.requestId, {
+        childSessionId: `child-${i}`,
+        status: count === 2 && i === 0 ? "cancelled" : "completed",
+        finalText: `report ${i}`,
+      });
+      listener?.(event);
+      listener?.(event);
+    });
+    expect(reports.map((report) => [report.childSessionId, report.status, report.finalText])).toEqual(
+      requests.map((_, i) => [`child-${i}`, count === 2 && i === 0 ? "cancelled" : "completed", `report ${i}`]),
+    );
+    expect(port.listBackgroundChildren()).toHaveLength(0);
+  });
+});

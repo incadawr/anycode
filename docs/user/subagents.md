@@ -99,8 +99,10 @@ line is split on separators with the pattern applied to every segment, so one
 entry covers a whole pipeline only when every segment matches it. A `Write` or
 `Edit` allowed here still has to land inside the session workspace.
 
-These lists apply to in-process children, the default tier. A session-tier
-child (`tier: "session"`) is its own session and keeps that session's rules.
+These lists apply to in-process children (`tier: "inline"`), the default on
+CLI and child-session hosts. On desktop, every profile defaults to a
+background session child. A session-tier child is its own session and keeps
+that session's rules.
 
 The settings pane does not edit these lists. Edit them in the file — and note
 that a save from that pane rewrites the profile from its own fields, so it does

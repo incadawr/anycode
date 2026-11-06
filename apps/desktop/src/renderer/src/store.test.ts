@@ -9343,7 +9343,7 @@ describe("desktop store — Agent background handoff (GitHub #17 slice D)", () =
     store.getState().applyHostMessage({ type: "turn_started", requestId: "r1", turnId: "t1" });
     const send = (event: Record<string, unknown>) =>
       store.getState().applyHostMessage({ type: "agent_event", turnId: "t1", event: event as never });
-    send({ type: "tool_call", toolCall: { id: "call-17", name: "Agent", input: { description: "review", prompt: "go", tier: "session" } } });
+    send({ type: "tool_call", toolCall: { id: "call-17", name: "Agent", input: { description: "review", prompt: "go" } } });
     send({ type: "tool_execution_start", toolCallId: "call-17", toolName: "Agent", input: {} });
     // A live child card exists while the call is joining.
     send({
@@ -9374,6 +9374,7 @@ describe("desktop store — Agent background handoff (GitHub #17 slice D)", () =
 
     const block = findBlock(store.getState().transcript, "tool_call");
     expect(block?.status).toBe("success");
+    expect(block?.subagentDispatched).toBe(true);
     expect(block?.subagent).toMatchObject({ agentType: "executor", final: null });
     expect(block?.modelText).toContain("still running");
   });
@@ -9390,7 +9391,7 @@ describe("desktop store — Agent background handoff (GitHub #17 slice D)", () =
         createdAt: 2,
         message: {
           role: "assistant",
-          content: [{ type: "tool_call", toolCallId: "call-17", toolName: "Agent", input: { description: "review", prompt: "go", tier: "session" } }],
+          content: [{ type: "tool_call", toolCallId: "call-17", toolName: "Agent", input: { description: "review", prompt: "go" } }],
         },
       },
       {
@@ -9413,6 +9414,7 @@ describe("desktop store — Agent background handoff (GitHub #17 slice D)", () =
     const block = blocks.find((b) => b.kind === "tool_call");
     expect(block?.kind === "tool_call" && block.subagent).toBeNull();
     expect(block?.kind === "tool_call" && block.status).toBe("success");
+    expect(block?.kind === "tool_call" && block.subagentDispatched).toBe(true);
   });
 });
 

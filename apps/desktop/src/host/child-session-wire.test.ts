@@ -755,13 +755,8 @@ describe("one handshake, one session_history (CUT-S1 §9.2 / CUT-S2 §10.4, B5's
   });
 });
 
-/**
- * GitHub #17 slice C: an ordinary session-tier Agent call with
- * NO detach argument is background by default, so "run 3 reviews" finishes the
- * spawning step while every child is still alive and each child's report
- * arrives later as its own message.
- */
-describe("three default session Agent calls release the spawning step (GitHub #17 slice C)", () => {
+/** Default desktop delegations release the spawning step before completion. */
+describe("three default Agent calls release the spawning step", () => {
   it("the step finishes before any child terminal, then one report per child arrives in a different order", async () => {
     const channel = fakeParentPort();
     const reports: SessionSubagentOutcome[] = [];
@@ -791,7 +786,7 @@ describe("three default session Agent calls release the spawning step (GitHub #1
       { type: "start" },
       ...calls.map((id) => ({
         type: "tool_call" as const,
-        toolCall: { id, name: "Agent", input: { description: `review ${id}`, prompt: "review the change", tier: "session" } },
+        toolCall: { id, name: "Agent", input: { description: `review ${id}`, prompt: "review the change" } },
       })),
       { type: "finish", finishReason: "tool_calls" as const, usage: {} },
     ];
@@ -809,11 +804,11 @@ describe("three default session Agent calls release the spawning step (GitHub #1
       events.push(event);
     }
 
-    // Every call reached main WITHOUT a detach field (the model omitted it) and
+    // Every call reached main with the resolved background default and
     // was admitted — and the parent's step completed while all three children
     // are still alive (no terminal was ever sent).
     expect(main.spawns.map((s) => s.spawnToolCallId)).toEqual(calls);
-    for (const spawn of main.spawns) expect("detach" in spawn === false || spawn.detach === true).toBe(true);
+    for (const spawn of main.spawns) expect(spawn.detach).toBe(true);
     expect(adopted).toHaveLength(3);
     for (const id of calls) {
       const result = events.find(isToolResult(id))!;

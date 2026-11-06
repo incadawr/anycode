@@ -142,7 +142,7 @@ import type {
 import { stripReminderBlocks } from "./transcript-sanitize.js";
 import { type UsageLimitNotice } from "./provider-notices.js";
 import { saveConnectionSwitch, type ConnectionSwitchRecord } from "./provider-switch-log.js";
-import { decodeSubagentCardSnapshot, projectSubagentCard } from "./subagent-card.js";
+import { decodeSubagentCardSnapshot, isSubagentHandoff, projectSubagentCard } from "./subagent-card.js";
 import { decodeWorkflowCardSnapshot, projectWorkflowCard } from "./workflow-card.js";
 // the global settings-store (NOT part of DesktopState) — the
 // provider_quota case projects the observation onto its snapshot's matching
@@ -501,6 +501,8 @@ export type TranscriptBlock =
       snapshots: { before: ToolCallSnapshot | null; after: ToolCallSnapshot | null };
       /** Null until a `subagent_start` for this toolCallId arrives (only ever set for the Agent tool). */
       subagent: SubagentSubStatus | null;
+      /** Reconstructed from the durable background admission presentation. */
+      subagentDispatched?: true;
       /** Null until a `workflow_start` for this toolCallId arrives (only ever set for the Workflow tool). */
       workflow: WorkflowSubStatus | null;
     }
@@ -2165,6 +2167,8 @@ export function projectHistoryToBlocks(items: readonly WireHistoryItem[]): Trans
         modelText: result ? stripReminderBlocks(result.text) : null,
         snapshots: { before: null, after: null },
         subagent: snap !== null ? projectSubagentCard(snap) : null,
+        ...(isSubagentHandoff(result?.presentation?.subagentHandoff, part.toolCallId, part.toolName)
+          ? { subagentDispatched: true as const } : {}),
         workflow: workflowSnap !== null ? projectWorkflowCard(workflowSnap) : null,
       });
     });
@@ -4243,6 +4247,8 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
           patchToolCall(event.outcome.toolCallId, {
             status: event.outcome.status,
             modelText: event.outcome.modelText,
+            ...(isSubagentHandoff(event.outcome.result?.presentation?.subagentHandoff, event.outcome.toolCallId, event.outcome.toolName)
+              ? { subagentDispatched: true as const } : {}),
             ...(decodedSubagent !== null ? { subagent: projectSubagentCard(decodedSubagent) } : {}),
             ...(decodedWorkflow !== null ? { workflow: projectWorkflowCard(decodedWorkflow) } : {}),
           });

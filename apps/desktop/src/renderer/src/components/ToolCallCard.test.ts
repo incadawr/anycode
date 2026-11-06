@@ -2941,6 +2941,16 @@ describe("detached / engine-tab Agent cards (orchestration lab F3/F4)", () => {
     expect(statusLabel({ toolName: "Bash", status: "success", input: { detach: true } })).toBe("Success");
   });
 
+  it("labels a durable background admission without tier or detach as Dispatched", () => {
+    const block = mkAgentBlock({ status: "success", subagent: null, input: { prompt: "p" }, subagentDispatched: true });
+    expect(statusLabel(block)).toBe("Dispatched");
+    expect(statusLabel({ ...block, subagent: mkSubagent({ final: null }) })).toBe("Dispatched");
+    expect(statusLabel({ ...block, status: "error" })).toBe("Error");
+    expect(statusLabel({ ...block, toolName: "Bash" })).toBe("Success");
+    // A delivery acknowledgement without a spawn remains an ordinary success.
+    expect(statusLabel(mkAgentBlock({ status: "success", subagent: null, input: { send_to: "child", prompt: "p" } }))).toBe("Success");
+  });
+
   it("an engine-tab Agent card (no subagent sub-status) takes its child badge from the relation", () => {
     expect(childActionBadge(null, undefined)).toBeUndefined();
     expect(childActionBadge(null, { childTabId: "t", childSessionId: "c", live: true })).toBe("running");

@@ -37,7 +37,7 @@
  * finished.
  *
  * CUT-S2 §2.1/§3 B1 widens this into a FACTORY, `createAgentTool`.
- * A single handler now branches on `tier`: "inline" (default, unchanged
+ * A single handler now branches on `tier`: "inline" (explicit on session hosts, unchanged
  * behavior above) runs through `ctx.subagents` (SubagentPort, in-process
  * child loop); "session" runs through `ctx.sessionSubagents`
  * (SessionSubagentPort, a full child session in its own process — CUT-S2
@@ -94,7 +94,7 @@ const BASE_DESCRIPTION =
   'Delegate a task to a subagent. agent_type "explore" = read-only recon that can read files and Git history with Git, but cannot run commands; use general-purpose for work needing Bash; "general-purpose" = the subtask needs write/exec tools. Independent Agent calls issued together in one response run concurrently — fan out disjoint searches. Use AgentStatus to inspect your children’s live progress. For a single known-file fact, Read/Grep it yourself; once delegated, do not redo the search.';
 
 const SESSION_TIER_DESCRIPTION_SUFFIX =
-  ' By default general-purpose runs as a session child while you wait; explore and other profiles default to inline to preserve their restrictions. Session children enforce profile restrictions on core connections. The user can move a session to the background, and a long wait is handed off automatically with a later report as a new turn. Use tier "inline" for lightweight short lookups. send_to delivers a follow-up to your own still-running session child.';
+  ' By default, starts a session child in the background and returns immediately with its id. Continue useful work or end your turn; the report arrives as a new turn. AgentStatus can inspect progress. Session children enforce profile restrictions on core connections. Use tier "inline" for short lookups whose result you need in this turn. Explicit tier "session" also starts in the background by default. Set detach false to wait, with automatic background handoff after a long wait. send_to delivers a follow-up to your own still-running session child.';
 
 // Restricted hosts (CLI, child sessions) can never honor a connection/engine
 // routing decision, so the description says so up front — a caller that reads
@@ -173,7 +173,7 @@ function buildMetadata(sessionTier: boolean): ToolMetadata {
 /**
  * Builds the Agent tool. `sessionTier:false` (default) is the RESTRICTED
  * declaration; `sessionTier:true` is the FULL one (CUT-S2 §2.1). Both share
- * ONE handler — the branch on `input.tier` below, not a second copy of the
+ * ONE handler — the branch on the resolved tier below, not a second copy of the
  * outcome-mapping logic.
  */
 export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<AgentInput, AgentOutput> {
@@ -191,7 +191,10 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
     inputSchema,
     handler: async (input, ctx) => {
       const agentType = input.agent_type ?? DEFAULT_AGENT_TYPE;
-      const tier = input.tier ?? (sessionTier && agentType === DEFAULT_AGENT_TYPE ? "session" : "inline");
+      const engineProfile = ctx.subagents?.engineProfile?.(agentType) ?? null;
+      const tier = engineProfile !== null ? "session" : input.tier ?? (sessionTier ? "session" : "inline");
+      const detach = tier === "session" && input.send_to === undefined &&
+        (input.detach ?? true);
 
       // Hosts without inline route discovery can only select providers for session children.
       if (input.provider !== undefined && tier !== "session" && !ctx.subagents?.supportsInlineProvider) {
@@ -209,7 +212,7 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
       // (or absent) is a no-op on any tier, so it is never rejected here —
       // only an ACTUAL request for background semantics can conflict with
       // the tier.
-      if (input.detach === true && tier !== "session") {
+      if (input.detach === true && (input.tier === "inline" || tier !== "session")) {
         return {
           ok: false,
           errorKind: "invalid_input",
@@ -273,23 +276,8 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
       // bare one-shot foreign CLI call (the permission-gate hole S4 closes) —
       // it always runs as a child SESSION instead, through the exact same
       // SessionSubagentPort contract as an explicit `tier:"session"` call.
-      const engineProfile = ctx.subagents?.engineProfile?.(agentType) ?? null;
       const restricted = (ctx.subagents?.hasSessionRestrictions?.(agentType) ?? false) ||
         (ctx.subagents?.sessionRestrictions?.(agentType)?.readOnly ?? ["explore", "planner", "reviewer"].includes(agentType));
-      // GitHub #17 slice C: detach-by-default is MECHANICAL and
-      // no longer gated on an orchestrate session. A session-tier Agent call
-      // explicitly requesting session (and an engine profile, which always runs as a child session) with no
-      // explicit detach and no send_to defaults to detach:true — it reports
-      // back as a message instead of joining the parent's turn for minutes.
-      // An explicit detach:false is honored (the spread in runSessionTier keys
-      // on === true, so a false never rides). A continue_session IS a real
-      // session run, so it takes the same default; send_to is an ordinary
-      // delivery acknowledgement and stays a plain call. Inline keeps its
-      // synchronous default.
-      const defaultDetach =
-        (input.tier === "session" || engineProfile !== null) &&
-        input.detach === undefined &&
-        input.send_to === undefined;
       if (engineProfile !== null) {
         // provider is a core-connect concept; a foreign-engine child runs on
         // its own CLI account, so the field is meaningless here — even though
@@ -351,12 +339,12 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
                 ? formatRoleDegradeNotice(agentType, engineRoute.skipped)
                 : formatRoleFallbackNotice(agentType, engineRoute.skipped),
           };
-          return runSessionTier(input, ctx, agentType, undefined, undefined, engineRoute, defaultDetach, degrade);
+          return runSessionTier(input, ctx, agentType, undefined, undefined, engineRoute, detach, degrade);
         }
         // tier is IGNORED for an engine profile: it always runs as a session,
         // a silent inline->session upgrade rather than a tier:"inline" refusal
         // — the migration this slice performs.
-        return runSessionTier(input, ctx, agentType, engineProfile, undefined, undefined, defaultDetach);
+        return runSessionTier(input, ctx, agentType, engineProfile, undefined, undefined, detach);
       }
 
       // Profile connection routing. A routed md-profile declares
@@ -424,9 +412,9 @@ export function createAgentTool(opts?: CreateAgentToolOptions): ToolDefinition<A
           undefined,
           routing ?? undefined,
           roleRoute ?? undefined,
-          defaultDetach,
+          detach,
           undefined,
-          input.tier === undefined && input.provider === undefined && input.detach !== true && input.continue_session === undefined && input.send_to === undefined && routing === null && !(roleRoute?.entries[0]?.connection || roleRoute?.entries[0]?.engine || roleRoute?.entries[0]?.provider),
+          input.tier === undefined && input.provider === undefined && !detach && input.continue_session === undefined && input.send_to === undefined && routing === null && !(roleRoute?.entries[0]?.connection || roleRoute?.entries[0]?.engine || roleRoute?.entries[0]?.provider),
         );
       }
       return runInlineTier(input, ctx, agentType);
@@ -537,7 +525,7 @@ async function runSessionTier(
   engineProfile?: EngineProfileInfo,
   routing?: { provider?: string; connection?: string },
   roleRoute?: RoleRouteResolution,
-  defaultDetach?: boolean,
+  detach = false,
   degrade?: { systemPrompt: string; notice: string },
   fallbackAtCapacity = false,
 ): Promise<ToolResult<AgentOutput>> {
@@ -691,18 +679,7 @@ async function runSessionTier(
           degraded: degrade !== undefined,
         })
       : {}),
-    // срез 1: only ever `true` here — the validation check above
-    // already refused `detach:true` on any tier but "session", and `false`/
-    // absent is dropped rather than riding the wire as an explicit `false`
-    // (byte-compatible default, same discipline as every other optional
-    // field on this request). §2.3: an orchestrate session's
-    // default-detach ALSO lands here (mechanical, not prose).
-    // GitHub #17 slice D: a session request that will actually
-    // JOIN carries the host's internal handoff eligibility — when the child
-    // outlives the join budget, the host hands the same child to background
-    // mode instead of holding this turn open. Never model input, never a wire
-    // field; Workflow engine steps never carry it.
-    ...(input.detach === true || defaultDetach === true ? { detach: true } : { allowBackgroundHandoff: true }),
+    ...(detach ? { detach: true } : { allowBackgroundHandoff: true }),
     ...(fallbackAtCapacity ? { fallbackAtCapacity: true as const } : {}),
   };
 
