@@ -2037,6 +2037,10 @@ export class TabHostManager {
     // GitHub #18: record the wire SHAPE (type/kind only) for the diagnostics
     // export. Never the payload — noteWireMessage reads those two fields.
     noteWireMessage(this.deps.diagnosticsRing, "in", message);
+    if (data.type === "file_activity") {
+      if (tab.proc === child) this.deps.onFileActivity?.(tab.tabId, child, message);
+      return;
+    }
     if (data.type === "session_peer_turn" || data.type === "session_peer_terminal") {
       if (!this.deps.onSessionPeerRequest) return;
       const event = this.peerTurns.accept({ proc: tab.proc, generation: tab.hostGeneration }, child, message);

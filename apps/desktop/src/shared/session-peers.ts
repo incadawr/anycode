@@ -8,77 +8,11 @@ export function takeNativeSessionsCarrier(env: Record<string, string | undefined
   return enabled;
 }
 
+import { z } from "zod";
+export { parseSessionPeerRequest, parseSessionPeerResponse } from "@anycode/core";
+export type { SessionPeerRequest, SessionPeerCall, SessionPeerResponse } from "@anycode/core";
+
 const id = z.string().min(1).max(200);
-const payload = z.string().min(1).max(32000);
-const reply = z.enum(["explicit", "on_turn_end"]);
-
-/** Tool data only. Identity, generation and causal authority belong to main. */
-const requestSchema = z.discriminatedUnion("operation", [
-  z.strictObject({
-    requestId: id,
-    operation: z.literal("list"),
-    input: z.strictObject({
-      cursor: id.optional(), limit: z.number().int().min(1).max(50).optional(),
-      scope: z.enum(["workspace", "granted"]).optional(), ownMessageId: id.optional(),
-    }),
-  }),
-  z.strictObject({
-    requestId: id,
-    operation: z.literal("open"),
-    input: z.strictObject({
-      workspace: z.string().min(1).max(4096).optional(),
-      engine: z.enum(["core", "claude", "codex"]).optional(),
-      model: id.optional(), effort: id.optional(), handle: id.optional(),
-      firstMessage: payload.optional(), reply: reply.optional(),
-    }),
-  }),
-  z.strictObject({
-    requestId: id,
-    operation: z.literal("send"),
-    input: z.strictObject({
-      sessionId: id.optional(), payload,
-      mode: z.enum(["next_turn", "steer"]).optional(),
-      idempotencyKey: id.optional(), correlationId: id.optional(), replyTo: id.optional(),
-      reply: reply.optional(),
-    }).refine(input => input.sessionId !== undefined || input.replyTo !== undefined),
-  }),
-  z.strictObject({
-    requestId: id,
-    operation: z.literal("who_edits"),
-    input: z.strictObject({ path: z.string().min(1).max(4096) }),
-  }),
-]);
-
-export type SessionPeerRequest = z.infer<typeof requestSchema>;
-
-/** Parsing is structural only; it never grants workspace or reply access. */
-export function parseSessionPeerRequest(value: unknown): SessionPeerRequest | null {
-  const parsed = requestSchema.safeParse(value);
-  return parsed.success ? parsed.data : null;
-}
-
-const peerSummary = z.strictObject({
-  sessionId: id, tabId: id, workspace: z.string().max(4096),
-  engine: z.enum(["core", "claude", "codex"]),
-  activity: z.enum(["idle", "running", "waiting_approval", "closing"]),
-  addressable: z.boolean(), title: z.string().max(200).optional(),
-  model: z.string().max(200).optional(), effort: z.string().max(200).optional(),
-});
-const responseSchema = z.discriminatedUnion("status", [
-  z.strictObject({ status: z.literal("sent"), messageId: id, state: z.enum(["queued", "acknowledged", "rejected", "unknown"]) }),
-  z.strictObject({ status: z.literal("ok"), sessions: z.array(peerSummary).max(50) }),
-  z.strictObject({ status: z.literal("refused"), reason: z.literal("loop_limited").optional() }),
-  z.strictObject({ status: z.enum(["unavailable", "unknown"]) }),
-]);
-export type SessionPeerResponse = z.infer<typeof responseSchema>;
-export type SessionPeerCall = SessionPeerRequest extends infer R
-  ? R extends SessionPeerRequest ? Omit<R, "requestId"> : never : never;
-export function parseSessionPeerResponse(value: unknown): SessionPeerResponse {
-  const parsed = responseSchema.safeParse(value);
-  return parsed.success ? parsed.data : { status: "unknown" };
-}
-
-
 const turnContext = { sequence: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), turnId: id, requestId: id, deliveredMessageIds: z.array(id).max(32) };
 const publicResult = z.strictObject({
   source: z.literal("live_turn"), turnId: id, requestId: id,

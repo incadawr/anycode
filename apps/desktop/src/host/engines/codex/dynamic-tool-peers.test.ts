@@ -15,7 +15,7 @@ function fixture() {
   const target: PeerHost = { ...caller, tabId: "b", sessionId: "b" };
   const access = createSessionPeerAccess({ enabled: () => true, isTrusted: () => true,
     realpathSync: p => p, statSync: () => ({ isDirectory: () => true }),
-    policy: { isNativeEnabled: () => true, hasPairGrant: () => false, setNativeEnabled: () => false, setPairGrant: () => false } });
+    policy: { projectKeys: () => [], isNativeEnabled: () => true, hasPairGrant: () => false, setNativeEnabled: () => false, setPairGrant: () => false } });
   const prepare = vi.fn(async () => {});
   const main = createSessionPeersHandler({ current: () => caller, targets: () => [target], access, prepare });
   const sent: any[] = [];
