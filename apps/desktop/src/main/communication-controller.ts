@@ -1,6 +1,6 @@
 /**
  * Live lifecycle of the Sessions API. Owns at most ONE running
- * communication server and is driven by the `communication` settings block
+ * communication server plus a lazy app-owned broker, and is driven by the `communication` settings block
  * (or by the legacy env override, which wins and makes the UI read-only).
  *
  * Every mutation (apply, regenerate, dispose) goes through a single promise
@@ -9,7 +9,8 @@
  * FIXED-vocabulary detail, and the app keeps running. Neither the status nor the
  * log ever carries the bearer token or the discovery-file contents.
  */
-import { startCommunicationServer, type CloseSessionOutcome, type CommunicationManager, type CommunicationServerOptions, type CreateSessionOutcome, type CreateSessionRequest, type LiveCommunicationConfig } from "./communication-server.js";
+import { communicationDiscoveryFile, startCommunicationServer, type CloseSessionOutcome, type CommunicationManager, type CommunicationServerOptions, type CreateSessionOutcome, type CreateSessionRequest, type LiveCommunicationConfig } from "./communication-server.js";
+import { createCommunicationBroker, type CommunicationBroker } from "./communication-broker.js";
 import type { CommunicationStatus } from "../shared/communication-config.js";
 
 export type { CommunicationStatus };
@@ -70,6 +71,19 @@ function classifyStartFailure(error: unknown): CommunicationStartFailureDetail {
 
 export function createCommunicationController(deps: CommunicationControllerDeps) {
   const startServer: StartFn = deps.startServer ?? (startCommunicationServer as StartFn);
+  const bootEnv = deps.env() || undefined;
+  let shared: Promise<CommunicationBroker> | undefined;
+  let disposed = false;
+  const getBroker = () => {
+    if (disposed) return Promise.reject(new Error("Communication broker closed"));
+    if (!shared) shared = (async () => {
+      const manager = deps.manager();
+      if (!manager) throw new Error("Host not ready");
+      const file = await communicationDiscoveryFile(deps.userData, bootEnv);
+      return createCommunicationBroker({ manager, ledgerFile: `${file}.messages` });
+    })().catch((error) => { shared = undefined; throw error; });
+    return shared;
+  };
   let running: CommunicationServerHandle | null = null;
   let mode: "off" | "settings" | "env" = "off";
   let settingsInput: CommunicationApplyInput | null = null;
@@ -103,7 +117,7 @@ export function createCommunicationController(deps: CommunicationControllerDeps)
     if (!manager) return { state: "error", reason: "start_failed", detail: "host not ready", workspaces: input.workspaces.length, sessions: sessionCount() };
     try {
       running = await startServer({
-        manager,
+        manager, getBroker,
         userData: deps.userData,
         config: { workspaces: input.workspaces, port: input.port ?? 0 },
         ...(warn ? { warn } : {}),
@@ -131,7 +145,7 @@ export function createCommunicationController(deps: CommunicationControllerDeps)
         const manager = deps.manager();
         if (!manager) return failed(new Error("host not ready"), 0);
         try {
-          running = await startServer({ manager, userData: deps.userData, configFile: envConfig, ...(warn ? { warn } : {}), handleOf: deps.handleOf ? (sessionId) => deps.handleOf?.(sessionId) : undefined });
+          running = await startServer({ manager, getBroker, userData: deps.userData, configFile: envConfig, ...(warn ? { warn } : {}), handleOf: deps.handleOf ? (sessionId) => deps.handleOf?.(sessionId) : undefined });
           mode = "env";
           current = listening("env", running, 0);
         } catch (error) {
@@ -155,6 +169,7 @@ export function createCommunicationController(deps: CommunicationControllerDeps)
   }
 
   return {
+    broker: getBroker,
     /** Applies the settings block (or the env override) and returns the resulting status. Never throws. */
     apply(input: CommunicationApplyInput): Promise<CommunicationStatus> {
       return enqueue(() => applyNow(input));
@@ -178,10 +193,12 @@ export function createCommunicationController(deps: CommunicationControllerDeps)
     discoveryFile(): string | undefined {
       return running?.discoveryFile;
     },
-    /** Closes the running server on quit. Idempotent. */
+    /** Closes the adapter and shared broker on quit. Idempotent. */
     dispose(): Promise<void> {
       return enqueue(async () => {
+        disposed = true;
         await stopRunning();
+        if (shared) { const broker = await shared.catch(() => undefined); await broker?.dispose(); }
         mode = "off";
         settingsInput = null;
         current = { state: "off", workspaces: 0, sessions: 0 };

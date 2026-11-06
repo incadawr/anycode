@@ -116,7 +116,7 @@ describe("communication controller — settings-driven live server", () => {
     const { d, server } = deps({ env: () => "/abs/config.json" });
     const c = createCommunicationController(d);
     const status = await c.apply({ enabled: true, workspaces: ["/abs/settings"], port: 9 });
-    expect(server.starts).toEqual([{ manager: expect.anything(), userData: "/abs/userData", configFile: "/abs/config.json" }]);
+    expect(server.starts).toEqual([{ manager: expect.anything(), userData: "/abs/userData", configFile: "/abs/config.json", getBroker: expect.any(Function), handleOf: undefined }]);
     expect(status.state).toBe("env");
     expect(await c.regenerateToken()).toEqual({ ok: false, reason: "env_controlled" });
   });
@@ -235,4 +235,14 @@ describe("close_session hook wiring", () => {
     await createCommunicationController(env.d).apply({ enabled: true, workspaces: [] });
     expect(env.server.starts[0]).not.toHaveProperty("closeSessionByAgent");
   });
+});
+
+it("exposes a lazy broker without starting the HTTP adapter", async () => {
+  const { d, server } = deps();
+  const controller = createCommunicationController(d);
+  expect(controller.broker).toBeTypeOf("function");
+  await controller.apply({ enabled: false, workspaces: [] });
+  await controller.dispose();
+  expect(server.start).not.toHaveBeenCalled();
+  await expect(controller.broker()).rejects.toThrow("closed");
 });

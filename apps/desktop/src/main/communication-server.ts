@@ -5,8 +5,8 @@ import { readFile, rm, realpath } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { Server, StreamableHTTPServerTransport, CallToolRequestSchema, ListToolsRequestSchema } from "@anycode/core/communication-mcp";
 import { z } from "zod";
-import { createCommunicationLedger, writePrivateFile, type CommunicationRecord } from "./communication-ledger.js";
-import { createCommunicationDispatch } from "./communication-dispatch.js";
+import { writePrivateFile, type CommunicationRecord } from "./communication-ledger.js";
+import { createCommunicationBroker, type CommunicationBroker } from "./communication-broker.js";
 export { writePrivateFile } from "./communication-ledger.js";
 import type { AgentDelivery, SessionActivityState } from "../shared/communication.js";
 
@@ -147,6 +147,7 @@ const tools = [
 ];
 
 export interface CommunicationServerOptions {
+  getBroker?: (discoveryFile: string) => Promise<CommunicationBroker>;
   manager: CommunicationManager;
   userData: string;
   /** Per-session exposure gate, read on every request (live switch changes need no restart). Absent = every session. */
@@ -206,6 +207,14 @@ const isMissingFolder = (error: unknown): boolean =>
 
 /** Exactly one source: an env config FILE (legacy) or a live config OBJECT (Settings). */
 export type CommunicationServerSource = { configFile: string } | { config: LiveCommunicationConfig };
+
+export async function communicationDiscoveryFile(userData: string, configFile?: string): Promise<string> {
+  const config = configFile ? configSchema.parse(JSON.parse(await readFile(configFile, "utf8"))) : undefined;
+  if (config && (!config.workspaces.length || config.workspaces.some((path) => !isAbsolute(path)))) throw new Error("Invalid communication workspaces");
+  const file = config?.discoveryFile ?? `${userData}/communication.json`;
+  if (!isAbsolute(file)) throw new Error("Communication discoveryFile must be absolute");
+  return file;
+}
 
 export async function startCommunicationServer(options: CommunicationServerOptions & CommunicationServerSource): Promise<{ close(): Promise<void>; url: string; discoveryFile: string }> {
   const hasFile = "configFile" in options;
@@ -278,17 +287,9 @@ export async function startCommunicationServer(options: CommunicationServerOptio
   if (!isAbsolute(discoveryFile)) throw new Error("Communication discoveryFile must be absolute");
   const ledgerFile = `${discoveryFile}.messages`;
   const token = randomBytes(32).toString("hex");
-  const ledger = await createCommunicationLedger(ledgerFile, options.writeLedger);
+  const broker = options.getBroker ? await options.getBroker(discoveryFile) : await createCommunicationBroker({ ...options, ledgerFile });
+  const { ledger, markLostGeneration } = broker;
   const { messages, persist } = ledger;
-  const markLostGeneration = async (record: CommunicationRecord) => {
-    if (record.state !== "queued") return false;
-    const tab = options.manager.listTabs().find((t) => t.sessionId === record.envelope.recipientSessionId);
-    if (tab && tab.state === "running" && tab.pid != null && tab.pid === record.hostPid) return false;
-    record.state = "unknown";
-    record.detail = "Host restarted before queued delivery could be confirmed; no automatic model replay";
-    await persist();
-    return true;
-  };
   /**
    * `retryMissing` is set by request-time authorisation checks only: the 1 s
    * reconciliation timer passes false, so an idle server never resolves a
@@ -384,14 +385,7 @@ export async function startCommunicationServer(options: CommunicationServerOptio
   const parseOr = <T>(schema: z.ZodType<T>, raw: unknown, hint: string): T => {
     try { return schema.parse(raw); } catch (error) { if (error instanceof z.ZodError) throw new Error(hint); throw error; }
   };
-  const dispatch = createCommunicationDispatch({
-    ledger, authorize: requireSession, resolvePath, markLostGeneration,
-    dispatchTimeoutMs: options.dispatchTimeoutMs,
-    post: (sessionId, envelope, workspace) => options.manager.communicationRequest(sessionId, "send_message", envelope, workspace),
-  });
-  const { inFlight } = dispatch;
-  // The HTTP supervisor and create_session firstMessage use the same dispatch.
-  const sendMessage = (input: z.infer<typeof messageSchema>, signal?: AbortSignal) => dispatch.send({ kind: "external" }, input, signal);
+  const sendMessage = (input: z.infer<typeof messageSchema>, signal?: AbortSignal) => broker.send({ kind: "external" }, input, requireSession, signal);
   // Every in-flight wait, so close() can abort them all (no leaked timers or hosts polled after close).
   const waiters = new Set<AbortController>();
   let closing = false;
@@ -633,75 +627,6 @@ export async function startCommunicationServer(options: CommunicationServerOptio
       default: throw new Error("Unknown tool");
     }
   };
-  const unsubscribe = options.manager.onCommunicationDelivery?.((sessionId, delivery) => {
-    void (async () => {
-      const tab = await requireSession(sessionId);
-      const workspace = await resolvePath(tab.workspace);
-      const existing = messages.get(delivery.envelope.messageId);
-      if (existing && delivery.detail !== "Dispatch pending") { existing.state = delivery.state; existing.detail = delivery.detail; }
-      else if (!existing && !ledger.isFull()) { messages.set(delivery.envelope.messageId, { ...delivery, workspace, hostPid: tab.pid }); }
-      await persist();
-    })().catch(() => { /* closing or no longer authorized */ });
-  });
-
-  // Rehydrate visible envelopes only, never replay payloads to the model.
-  const restoredHosts = new Set<string>();
-  /**
-   * GitHub #21 follow-up: a generation's restore is decided once, but the
-   * records it had to leave out are retried instead of being dropped with it.
-   * An excluded record (its dispatch or its pre-dispatch ledger write still
-   * open) becomes restorable a moment later — the dispatch settles, or the
-   * write fails and its own dispatch deadline settles the detail — and it must
-   * still reach the host, otherwise an undelivered message never shows up in
-   * the feed. Keyed by host generation, holding the ids that generation's
-   * restore still owes; an id leaves the set only once it is restored.
-   */
-  const deferredRestores = new Map<string, Set<string>>();
-  /** A record with no settled host outcome yet: see the eligibility comment below. */
-  const settled = (record: CommunicationRecord) => record.detail !== "Dispatch pending" && !inFlight.has(record.envelope.messageId);
-  let reconciling = false;
-  const reconcile = async () => {
-    if (reconciling) return;
-    reconciling = true;
-    try {
-      for (const record of messages.values()) await markLostGeneration(record);
-      // Forget bookkeeping for host generations that are gone (a new pid replaces them).
-      const liveGenerations = new Set(options.manager.listTabs().map((tab) => `${tab.sessionId}:${tab.pid}`));
-      for (const key of [...restoredHosts]) if (!liveGenerations.has(key)) restoredHosts.delete(key);
-      for (const key of [...deferredRestores.keys()]) if (!liveGenerations.has(key)) deferredRestores.delete(key);
-      for (const tab of await tabs(false)) {
-        const key = `${tab.sessionId}:${tab.pid}`;
-        const records = [...messages.values()].filter((r) => r.envelope.recipientSessionId === tab.sessionId);
-        if (!records.length) continue;
-        // GitHub #21: a record still in flight (and any record still reading
-        // "Dispatch pending", e.g. one whose pre-dispatch write failed) carries no
-        // settled host outcome to display; restoring it would make the host treat
-        // the real envelope as a duplicate and never start the turn.
-        const waiting = deferredRestores.get(key) ?? new Set<string>();
-        for (const record of records) if (!settled(record)) waiting.add(record.envelope.messageId);
-        const eligible = records.filter(settled);
-        if (!restoredHosts.has(key)) {
-          if (eligible.length) {
-            await options.manager.communicationRequest(tab.sessionId, "restore_agent_messages", eligible, tab.workspace);
-            restoredHosts.add(key);
-            for (const record of eligible) waiting.delete(record.envelope.messageId);
-          }
-        } else {
-          const retry = eligible.filter((r) => waiting.has(r.envelope.messageId));
-          if (retry.length) {
-            await options.manager.communicationRequest(tab.sessionId, "restore_agent_messages", retry, tab.workspace);
-            for (const record of retry) waiting.delete(record.envelope.messageId);
-          }
-        }
-        if (waiting.size) deferredRestores.set(key, waiting); else deferredRestores.delete(key);
-        for (const record of eligible.filter((r) => r.state === "queued")) {
-          const current = await options.manager.communicationRequest(tab.sessionId, "get_message_status", record.envelope.messageId, tab.workspace) as AgentDelivery | undefined;
-          if (record.state === "queued" && !await markLostGeneration(record) && current && (current.state !== record.state || current.detail !== record.detail)) { record.state = current.state; record.detail = current.detail; await persist(); }
-        }
-      }
-    } catch { /* a closing/crashed host cannot authorize replay */ }
-    finally { reconciling = false; }
-  };
   const http = createServer(async (req, res) => {
     const deny = (status: number) => { res.writeHead(status); res.end(); };
     // Browser origins are deliberately disallowed, including localhost browser apps.
@@ -728,16 +653,14 @@ export async function startCommunicationServer(options: CommunicationServerOptio
     } catch { if (!res.headersSent) deny(400); else res.end(); }
   });
   http.requestTimeout = 30000;
-  await new Promise<void>((resolve, reject) => { http.once("error", reject); http.listen(config.port, "127.0.0.1", resolve); });
+  try { await new Promise<void>((resolve, reject) => { http.once("error", reject); http.listen(config.port, "127.0.0.1", resolve); }); }
+  catch (error) { if (!options.getBroker) await broker.dispose(); throw error; }
   const address = http.address();
   if (!address || typeof address === "string") throw new Error("Communication listener unavailable");
   const url = `http://127.0.0.1:${address.port}/mcp`;
   try { await writePrivateFile(discoveryFile, JSON.stringify({ url, token, workspaces: [...allowed] })); }
-  catch (error) { http.closeAllConnections(); http.close(); throw error; }
-  // Each record carries its own dispatch deadline (see communication-dispatch), so
-  // expiry never waits for reconciliation's host requests to finish.
-  const reconcileTimer = setInterval(() => { void reconcile(); }, 1000);
-  reconcileTimer.unref();
+  catch (error) { http.closeAllConnections(); http.close(); if (!options.getBroker) await broker.dispose(); throw error; }
+  const stopObserving = broker.observe({ tabs, requireSession });
   let closed = false;
-  return { url, discoveryFile, async close() { if (closed) return; closed = true; closing = true; for (const waiter of waiters) waiter.abort(); unsubscribe?.(); clearInterval(reconcileTimer); dispatch.dispose(); http.closeAllConnections(); await new Promise<void>((resolve) => http.close(() => resolve())); await ledger.flush(); try { const current = JSON.parse(await readFile(discoveryFile, "utf8")); if (current.token === token) await rm(discoveryFile, { force: true }); } catch { /* already removed or replaced */ } } };
+  return { url, discoveryFile, async close() { if (closed) return; closed = true; closing = true; for (const waiter of waiters) waiter.abort(); stopObserving(); http.closeAllConnections(); await new Promise<void>((resolve) => http.close(() => resolve())); if (!options.getBroker) await broker.dispose(); else await ledger.flush(); try { const current = JSON.parse(await readFile(discoveryFile, "utf8")); if (current.token === token) await rm(discoveryFile, { force: true }); } catch { /* already removed or replaced */ } } };
 }

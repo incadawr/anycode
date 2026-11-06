@@ -4282,7 +4282,6 @@ void app.whenReady().then(async () => {
     await controller.apply(applyInputFromBlock(settings?.communication));
     // the first Sessions-API state is known now — services may start with it.
     reconcileServices();
-    app.on("before-quit", () => { void controller.dispose(); }); // dispose is idempotent
   }
 
   // Dev-only automation channel: the compile-time gate is false in a release
@@ -4385,6 +4384,7 @@ async function shutdownEverything(): Promise<void> {
       },
     );
   }
+  await communicationController?.dispose().catch(() => { console.error("[main] communication shutdown failed"); });
   await Promise.allSettled([
     activeManager !== null && activeManager.count() > 0 ? activeManager.shutdownAllTabHosts() : Promise.resolve(),
     activeOnboarding?.shutdown() ?? Promise.resolve(),

@@ -39,9 +39,9 @@ export function createCommunicationDispatch(options: {
     timer.unref(); expiryTimers.set(messageId, timer);
   };
   const checkAbort = (signal?: AbortSignal) => { if (signal?.aborted) throw new Error("Send aborted"); };
-  const send = async (principal: CommunicationPrincipal, input: CommunicationSendInput, signal?: AbortSignal): Promise<CommunicationRecord> => {
+  const send = async (principal: CommunicationPrincipal, input: CommunicationSendInput, signal?: AbortSignal, authorize = options.authorize): Promise<CommunicationRecord> => {
     checkAbort(signal);
-    const recipient = await options.authorize(input.sessionId);
+    const recipient = await authorize(input.sessionId);
     const workspace = await options.resolvePath(recipient.workspace);
     checkAbort(signal);
     // Reservation is synchronous after authorization: a second caller sees the

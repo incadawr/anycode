@@ -1,3 +1,4 @@
+import { createCommunicationController } from "./communication-controller.js";
 import { mkdtemp, mkdir, writeFile, readFile, stat, rm, realpath } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -2077,4 +2078,35 @@ describe("Sessions API create_session", () => {
     expect(text).toMatch(/next_turn/);
     expect(text.startsWith("[")).toBe(false);
   });
+});
+
+it("HTTP rotation and disable leave the native broker observer and ledger alive", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "communication-shared-"));
+  cleanups.push(() => rm(dir, { recursive: true, force: true }));
+  const tab = { sessionId: "peer", workspace: dir, state: "running", pid: 1 };
+  const listeners = new Set<unknown>();
+  const manager = { listTabs: () => [tab],
+    onCommunicationDelivery: (fn: unknown) => { listeners.add(fn); return () => { listeners.delete(fn); }; },
+    communicationRequest: vi.fn(async (_id: string, op: string) => op === "send_message" ? { state: "acknowledged" } : undefined),
+  };
+  const controller = createCommunicationController({ manager: () => manager, userData: dir, env: () => undefined,
+    isSessionExposed: () => true, logger: { error: vi.fn() } });
+  cleanups.push(() => controller.dispose());
+  const broker = await controller.broker();
+  broker.observe({ tabs: async () => [tab], requireSession: async () => tab });
+  await controller.apply({ enabled: true, workspaces: [] });
+  expect(controller.status().state).toBe("listening");
+  const client = await reconnect(controller.discoveryFile()!);
+  await client.callTool({ name: "send_message", arguments: { sessionId: "peer", payload: "http", mode: "next_turn" } });
+  expect((await controller.regenerateToken()).ok).toBe(true);
+  await controller.apply({ enabled: true, workspaces: [dir], port: 0 });
+  expect(listeners.size).toBe(2);
+  await controller.apply({ enabled: false, workspaces: [] });
+  expect(listeners.size).toBe(1);
+  await broker.send({ kind: "session", sessionId: "sender", tabId: "sender-tab" },
+    { sessionId: "peer", payload: "native", mode: "next_turn", kind: "agent_message" }, async () => tab);
+  const records = JSON.parse(await readFile(join(dir, "communication.json.messages"), "utf8"));
+  expect(records.map((r: AgentDelivery) => r.envelope.payload)).toEqual(["http", "native"]);
+  await controller.dispose();
+  expect(listeners.size).toBe(0);
 });
