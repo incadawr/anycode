@@ -844,3 +844,29 @@ it("uses saved Go reasoning and image modalities over stale live facts", async (
     expect(image!.options[0]!.textContent).not.toContain("vision");
   } finally { await act(async () => root.unmount()); container.remove(); }
 });
+
+it("previews saved Go route reasoning when a model override is reset to Auto", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { parseOpenCodeGoSnapshot } = await import("@anycode/core/model-route");
+  const { getBuiltinCatalog } = await import("@anycode/core/catalog");
+  const fixture = JSON.parse(await readFile(new URL("../../../../../../packages/core/src/provider/__fixtures__/opencode-go-models.json", import.meta.url), "utf8"));
+  const grok = fixture.data.find((row: { id: string }) => row.id === "grok-4.7");
+  grok.id = "future-grok";
+  const parsed = parseOpenCodeGoSnapshot(fixture, "2026-11-05T00:00:00Z");
+  if (!parsed.ok) throw new Error("invalid fixture");
+  const provider = getBuiltinCatalog().providers.find(p => p.id === "opencode")!;
+  const catalog = [{ ...provider, authKind: "api_key" as const, catalogBaseUrl: provider.baseUrl }];
+  const connection = { id: "go", providerId: "opencode", model: "future-grok", modelRoutes: parsed.snapshot, modelOverrides: { "future-grok": { reasoningSupported: false } } };
+  const snapshot = { settings: cloneDefaults(), readOnly: false, secrets: [], envOverrides: [], providerReady: true, catalog };
+  const store = createStore(() => ({ snapshot, oauthPendingProviderId: null, load: vi.fn() })) as unknown as SettingsStoreApi;
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(createElement(ConnectionDrawerFields, { mode: "edit", editConnection: connection, catalog, connections: [connection], secrets: [], readOnly: false, store })));
+    const support = container.querySelector<HTMLSelectElement>('select[aria-label="Reasoning support"]')!;
+    expect(support.value).toBe("off");
+    await act(async () => { support.value = "auto"; support.dispatchEvent(new Event("change", { bubbles: true })); });
+    const effort = container.querySelector<HTMLSelectElement>('select[aria-label="Reasoning effort"]')!;
+    expect([...effort.options].map(option => option.value).filter(Boolean)).toEqual(["low", "medium", "high", "xhigh"]);
+  } finally { await act(async () => root.unmount()); container.remove(); }
+});

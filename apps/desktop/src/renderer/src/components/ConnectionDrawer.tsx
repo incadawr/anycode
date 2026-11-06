@@ -1894,7 +1894,7 @@ export function ConnectionDrawerFields({
     catalog.find((entry) => entry.id === effectiveProviderId)?.models.some((entry) => entry.id === effectiveFormModel.trim()) === true;
   const reasoningLevels = startModelEffortLevels(
     effectiveProviderId, effectiveFormModel.trim(), catalog.filter((entry) => !entry.id.startsWith("custom:")),
-    applyModelReasoningOverride(automaticGo ? modelCapabilitiesFor({ ...targetConnection, providerId, baseUrl, transport: transport || undefined }, effectiveFormModel.trim(), proxySnapshot?.envOverrides) : targetConnection?.modelCapabilities?.[effectiveFormModel.trim()], reasoningSupported),
+    applyModelReasoningOverride(automaticGo ? modelCapabilitiesFor({ ...targetConnection, modelOverrides: undefined, providerId, baseUrl, transport: transport || undefined }, effectiveFormModel.trim(), proxySnapshot?.envOverrides) : targetConnection?.modelCapabilities?.[effectiveFormModel.trim()], reasoningSupported),
   );
   const dictionaryActive = !catalogMatchDisabled ? dictionaryMatch : undefined;
   if (dictionaryActive && !automaticGo) {
