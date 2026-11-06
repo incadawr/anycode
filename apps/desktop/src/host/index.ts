@@ -474,7 +474,7 @@ function hostProfileHome(): string {
 import { buildCheckpointService } from "./checkpoints.js";
 import { GitBridge } from "./git-bridge.js";
 import { createConnectionModelSettings } from "./connection-model-settings.js";
-import { buildCoreRuntime, buildCodexRuntime, buildClaudeRuntime } from "./engine-switch-runtime.js";
+import { buildCoreRuntime, buildCodexRuntime, buildClaudeRuntime, persistedCoreMode } from "./engine-switch-runtime.js";
 import { createCoreRuntimeControls } from "./core-runtime-controls.js";
 import { buildCoreLaunchOptions, buildCodexLaunchOptions, buildClaudeLaunchOptions } from "./engine-launch-options.js";
 import { createSwitchEngineFactory, type SwitchEngineFactoryContext } from "./engine-switch-factory.js";
@@ -1408,7 +1408,7 @@ function hostSwitchFactory(
         const modelPort = portFor(model);
         const config: AgentLoopConfig = withSubagents({ modelPort, registry, hooks,
           permissionEngine: new RuleAwarePermissionEngine(new SafeCommandPermissionEngine(new ModePermissionEngine()), rules), permissionBroker: broker,
-          ...planExit, mode: "plan", cwd: workspace, ports: { fs, exec, http: new NodeHttpAdapter(), todos: new InMemoryTodoStore() },
+          ...planExit, mode: persistedCoreMode(database.loadRuntimeSession(sessionId)), cwd: workspace, ports: { fs, exec, http: new NodeHttpAdapter(), todos: new InMemoryTodoStore() },
           sessionSubagents: routing.port, history: new ConversationHistory({ sink: new RuntimeHistorySink(database,sessionId,runtimeId!) }),
           systemPrompt: buildSystemPrompt({ toolNames: registry.list(), env: { workingDirectory: workspace, platform, date: new Date().toISOString().slice(0, 10), modelId: model } }),
           ...(envConfig.maxOutputTokens ? { maxOutputTokens: envConfig.maxOutputTokens } : {}),
@@ -4816,7 +4816,7 @@ async function boot(): Promise<void> {
         const candidateConfig: AgentLoopConfig = {
           ...config, modelPort: modelPortFactory(model),
           history: new ConversationHistory({ tokenizer }),
-          mode: "plan", orchestrate: false,
+          mode: persistedCoreMode(persistence!.loadRuntimeSession(sessionId)), orchestrate: false,
         };
         return { model, options: buildCoreLaunchOptions({ config: candidateConfig, loop: new AgentLoop(candidateConfig) }) };
       }),

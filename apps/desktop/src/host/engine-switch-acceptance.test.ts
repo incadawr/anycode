@@ -9,6 +9,9 @@ import { ENGINE_SWITCH_CONTROL, type EngineSwitchControl } from "../shared/engin
 import { EngineSwitchCoordinator } from "../main/engine-switch-coordinator.js";
 import { createEngineSwitchClient } from "./engine-switch-client.js";
 import { CORE_ENGINE_CAPABILITIES } from "./engines/session-engine.js";
+import { CODEX_ENGINE_CAPABILITIES } from "./engines/codex/codex-engine.js";
+import { CLAUDE_ENGINE_CAPABILITIES } from "./engines/claude/claude-engine.js";
+import { persistedCoreMode } from "./engine-switch-runtime.js";
 import type { RunTurnOptions, SessionEngine } from "./engines/session-engine.js";
 import type { SessionOptions, SwitchRuntime } from "./session.js";
 import { createHarness } from "./test-harness.js";
@@ -16,12 +19,12 @@ import { createHarness } from "./test-harness.js";
 const engines = ["core", "codex", "claude"] as const;
 const pairs = engines.flatMap(source => engines.filter(target => source !== target).map(target => ({ source, target })));
 class Runtime implements SessionEngine {
-  readonly capabilities = { ...CORE_ENGINE_CAPABILITIES, supportsCorePermissions: false };
+  get capabilities() { return this.id === "core" ? CORE_ENGINE_CAPABILITIES : this.id === "codex" ? CODEX_ENGINE_CAPABILITIES : CLAUDE_ENGINE_CAPABILITIES; }
   readonly inputs: string[] = [];
   readonly dispose = vi.fn(async () => {});
   park?: Promise<void>;
   constructor(readonly id: EngineId) {}
-  mode(): PermissionMode { return "plan"; }
+  mode(): PermissionMode { return this.id === "core" ? "build" : "plan"; }
   reasoningEffort() { return undefined; }
   setReasoningEffort() {}
   historyItems(): readonly HistoryItem[] { return [{ id: "old-text", createdAt: 1, message: { role: "user", content: "original conversation" } }]; }
@@ -83,22 +86,27 @@ describe("engine-switch refusal and rollback acceptance", () => {
     } finally { await h.session.shutdown(); h.client.close(); h.close(); }
   });
 
-  it("commits the mode applied to the core loop after preserving a different source mode", async () => {
+  it.each(["codex","claude"] as const)("restores the persisted core mode through %s with production capabilities", async native => {
     const store = new SqlitePersistenceAdapter(":memory:");
-    await store.createSession({id:"test-session",workspace:"/workspace",engineId:"codex",externalSessionRef:"source-thread",model:"old",mode:"auto"});
-    const h = transaction("codex","core",undefined,undefined,new RuntimeSessionHistory(store,"test-session"));
-    const core = createHarness({steps:[],mode:"plan"});
-    Object.defineProperty(h.old,"capabilities",{value:{...h.old.capabilities,supportsCorePermissions:true}});
-    h.old.mode = () => "auto";
+    await store.createSession({id:"test-session",workspace:"/workspace",model:"old",mode:"build"});
+    const outbound = transaction("core",native,undefined,undefined,new RuntimeSessionHistory(store,"test-session"));
+    outbound.old.mode = () => "build";
+    outbound.send({type:"engine_switch_request",requestId:"to-native",generation:7,engine:native,model:"chosen"});
+    await outbound.waitUntil(() => outbound.received.some(message => message.type === "engine_switched"));
+    await outbound.session.shutdown(); outbound.client.close(); outbound.close();
+    const h = transaction(native,"core",undefined,undefined,new RuntimeSessionHistory(store,"test-session"));
+    const core = createHarness({steps:[],mode:persistedCoreMode(store.loadRuntimeSession("test-session"))});
+    expect(h.old.capabilities.supportsCorePermissions).toBe(false);
     h.setFactory(async () => ({engine:core.engine,identity:{model:"chosen",mode:"plan"}}));
     try {
       h.send({type:"engine_switch_request",requestId:"preserve-mode",generation:7,engine:"core",model:"chosen",connectionId:"connection"});
       await h.waitUntil(() => h.received.some(message => message.type === "engine_switched"));
-      expect(core.engine.mode()).toBe("auto");
-      expect(h.durableCommit.mock.calls[0]?.[1].mode).toBe("auto");
-      expect((await store.getRootSession("test-session"))?.mode).toBe("auto");
-      expect(store.loadRuntimeSession("test-session")?.segments.at(-1)).toMatchObject({selected:{mode:"auto"},applied:{mode:"auto"}});
-      expect(h.received.find(message => message.type === "engine_switched")).toMatchObject({projection:{mode:"auto"}});
+      expect(core.engine.mode()).toBe("build");
+      expect(h.durableCommit.mock.calls[0]?.[1].mode).toBe("build");
+      expect((await store.getRootSession("test-session"))?.mode).toBe("build");
+      expect(store.loadRuntimeSession("test-session")?.segments.at(-1)).toMatchObject({selected:{mode:"build"},applied:{mode:"build"}});
+      expect(h.received.find(message => message.type === "engine_switched")).toMatchObject({projection:{mode:"build"}});
+      expect(persistedCoreMode(store.loadRuntimeSession("test-session"))).toBe("build");
     } finally { await h.session.shutdown(); h.client.close(); h.close(); await core.session.shutdown(); core.close(); await store.close(); }
   });
 

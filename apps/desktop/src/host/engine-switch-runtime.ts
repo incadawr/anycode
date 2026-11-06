@@ -1,4 +1,12 @@
 import type { SwitchRuntime } from "./session.js";
+import { PERMISSION_MODES, type PermissionMode, type RuntimeSessionSnapshot } from "@anycode/core";
+
+/** Native presets are separate authority domains; restore the last core posture. */
+export function persistedCoreMode(state: RuntimeSessionSnapshot | null): PermissionMode {
+  const core = state?.segments.findLast(segment => segment.engine === "core");
+  const mode = core?.applied.orchestration?.baseMode ?? core?.applied.mode;
+  return PERMISSION_MODES.includes(mode as PermissionMode) ? mode as PermissionMode : "plan";
+}
 /** Construction of runtime-owned engine and settings objects without creating a session row. */
 import { beginEngineBootstrap } from "./engines/bootstrap.js";
 import { getEnginePlugin } from "./engines/registry.js";
