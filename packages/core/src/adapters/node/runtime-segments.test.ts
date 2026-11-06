@@ -28,6 +28,22 @@ async function legacyDatabase() {
   return path;
 }
 describe("runtime segment schema", () => {
+  it("keeps the provider connection pin through native switches and changes it only on an explicit core target", async () => {
+    const store = new SqlitePersistenceAdapter(":memory:");
+    await store.createSession({id:"s",workspace:"/w",model:"m",mode:"build",connectionId:"pinned"});
+    store.ensureRuntimeSession("s");
+    for (const engine of ["codex","claude","core"] as const) {
+      const state = store.loadRuntimeSession("s")!;
+      const record = switchRecord(engine,state.revision,state.activeSegmentId);
+      record.segment = {...record.segment,engine,...(engine === "core" ? {connectionId:"explicit"} : {})};
+      store.commitRuntimeSwitch("s",state.segments.at(-1)!.engine,record);
+      expect((await store.getRootSession("s"))?.connectionId).toBe(engine === "core" ? "explicit" : "pinned");
+      // Native execution has no core connection of its own, while the logical
+      // session retains its pin for child forks and a later core return.
+      expect(store.loadRuntimeSession("s")!.segments.at(-1)?.connectionId).toBe(engine === "core" ? "explicit" : undefined);
+    }
+    await store.close();
+  });
   it("rolls back both settings projections when the session mirror write fails", async () => {
     const path = await legacyDatabase();
     const store = new SqlitePersistenceAdapter(path);

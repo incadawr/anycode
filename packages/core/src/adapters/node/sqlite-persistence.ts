@@ -1321,7 +1321,7 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
       db.prepare("INSERT INTO runtime_handoffs VALUES(?,?,?,?)").run(sessionId,next.id,record.handoff.id,JSON.stringify(record.handoff));
       // Context belongs only to the new segment. The canonical display rows above remain intact.
       db.prepare("DELETE FROM history_items WHERE session_id=? AND COALESCE(json_extract(data,'$.kind'),'')!='turn_error'").run(sessionId);
-      const changed = db.prepare(`UPDATE sessions SET engine_id=?,model=?,mode=?,external_session_ref=?,connection_id=?,codex_profile_id=?,codex_fast=NULL,
+      const changed = db.prepare(`UPDATE sessions SET engine_id=?,model=?,mode=?,external_session_ref=?,connection_id=COALESCE(?,connection_id),codex_profile_id=?,codex_fast=NULL,
         active_runtime_segment=?,runtime_revision=runtime_revision+1,updated_at=? WHERE id=? AND runtime_revision=? AND active_runtime_segment=?`).run(
         next.engine,next.selected.model,next.applied.mode,next.nativeRef ?? null,next.connectionId ?? null,next.profileId ?? null,next.id,next.startedAt,sessionId,record.expectedRevision,record.sourceSegmentId);
       if (changed.changes !== 1) throw new Error("Source runtime revision changed");
