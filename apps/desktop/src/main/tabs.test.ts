@@ -8703,7 +8703,7 @@ describe("TabHostManager — engine switch process custody", () => {
     if (!created.ok) throw new Error("tab unavailable");
     const host = hosts[0]!;
     const send = (phase: string, extra = {}) => host.emit("message", { type: "anycode:engine-switch", generation: 1, requestId: "switch", phase, ...extra });
-    const register = (enginePid: number, runtimeId?: string) => host.emit("message", { type: "anycode:engine-process", generation: 1, hostPid: host.pid, enginePid, pgid: enginePid, ...(runtimeId ? { runtimeId } : {}) });
+    const register = (enginePid: number, runtimeId?: string, extra = {}) => host.emit("message", { type: "anycode:engine-process", generation: 1, hostPid: host.pid, enginePid, pgid: enginePid, ...(runtimeId ? { runtimeId } : {}), ...extra });
     return { manager, tab: created.tab, host, reaped, commit, send, register };
   }
 
@@ -8737,5 +8737,36 @@ describe("TabHostManager — engine switch process custody", () => {
     expect(h.reaped.sort()).toEqual([101, 202]);
     expect(h.commit).not.toHaveBeenCalled();
     expect(h.tab.engine).toBe("codex");
+  });
+
+  it("reaps a candidate version preflight when its host dies during preparation", async () => {
+    const h = rig();
+    h.register(101);
+    h.send("prepare", { target: { engine: "claude", model: "chosen" } });
+    await vi.waitFor(() => expect(h.tab.switchCoordinator?.acceptsCandidate("switch")).toBe(true));
+    h.register(201, "switch");
+    h.host.emit("exit", 1);
+    expect(h.reaped.sort()).toEqual([101, 201]);
+    expect(h.commit).not.toHaveBeenCalled();
+  });
+
+  it("forgets exited preflight groups, ignores stale exit reports and refuses a dead candidate", async () => {
+    const h = rig();
+    h.register(100);
+    h.register(100, undefined, { exited: true });
+    expect(h.tab.engineProcess).toBeNull();
+    h.register(101);
+    h.register(101, undefined, { exited: true, generation: 2 });
+    expect(h.tab.engineProcess?.enginePid).toBe(101);
+    h.send("prepare", { target: { engine: "claude", model: "chosen" } });
+    await vi.waitFor(() => expect(h.tab.switchCoordinator?.acceptsCandidate("switch")).toBe(true));
+    h.register(201, "switch");
+    h.register(201, "switch", { exited: true });
+    h.send("commit", { identity: { model: "chosen", mode: "plan", externalSessionRef: "native-ref" } });
+    expect(h.commit).not.toHaveBeenCalled();
+    expect(h.tab.engine).toBe("codex");
+    h.register(202, "switch");
+    h.host.emit("exit", 1);
+    expect(h.reaped).toEqual([101]);
   });
 });

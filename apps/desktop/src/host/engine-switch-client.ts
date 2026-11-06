@@ -1,4 +1,4 @@
-import { ENGINE_SWITCH_CONTROL, ENGINE_SWITCH_RESPONSE, type EngineSwitchControl, type EngineSwitchResponse } from "../shared/engine-switch-control.js";
+import { ENGINE_SWITCH_CONTROL, ENGINE_SWITCH_RESPONSE, type EngineSwitchControl, type EngineSwitchIdentity, type EngineSwitchResponse } from "../shared/engine-switch-control.js";
 
 /** A separate, generation-correlated RPC namespace on the authenticated host channel. */
 export function createEngineSwitchClient(generation: number, send: (message: EngineSwitchControl) => void, timeoutMs = 20000) {
@@ -26,4 +26,18 @@ export function createEngineSwitchClient(generation: number, send: (message: Eng
     },
     close() { for (const waiter of pending.values()) { clearTimeout(waiter.timer); waiter.reject(new Error("host is shutting down")); } pending.clear(); },
   };
+}
+
+/** Reconcile a lost commit acknowledgement before allowing either runtime to serve. */
+export async function commitEngineSwitch(client: ReturnType<typeof createEngineSwitchClient>, requestId: string, identity: EngineSwitchIdentity, onUnknown: () => never): Promise<void> {
+  let result: EngineSwitchResponse;
+  try { result = await client.request({ phase: "commit", requestId, identity }); }
+  catch {
+    try { result = await client.request({ phase: "status", requestId }); }
+    catch {
+      // Main reaps both process groups and resumes the durable identity after host exit.
+      return onUnknown();
+    }
+  }
+  if (!result.ok) throw new Error(result.reason ?? "Engine identity commit failed");
 }

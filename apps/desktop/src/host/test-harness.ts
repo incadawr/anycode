@@ -532,6 +532,7 @@ export interface HarnessOptions {
    * wiring (every pre-existing test unaffected).
    */
   switchEngineFactory?: SessionOptions["switchEngineFactory"];
+  engineSwitchCoordinator?: SessionOptions["engineSwitchCoordinator"];
   backgroundChildren?: SessionOptions["backgroundChildren"];
   /**
    * a SkillPort + skills prompt-section text threaded into
@@ -796,6 +797,7 @@ export function createHarness(options: HarnessOptions): Harness {
         ? { onOrchestrateChanged: (enabled: boolean) => spawnModeCell.onOrchestrateChanged(enabled) }
         : {}),
     ...(options.orchestratorRouteCheck !== undefined ? { orchestratorRouteCheck: options.orchestratorRouteCheck } : {}),
+    ...(options.engineSwitchCoordinator ? { engineSwitchCoordinator: options.engineSwitchCoordinator } : {}),
     ...(options.switchEngineFactory !== undefined ? { switchEngineFactory: options.switchEngineFactory } : {}),
     ...(options.backgroundChildren !== undefined ? { backgroundChildren: options.backgroundChildren } : {}),
     broker,

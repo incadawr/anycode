@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentLoop, ConversationHistory, SessionPermissionRules } from "@anycode/core";
 import { createSwitchEngineFactory, type SwitchEngineFactoryContext } from "./engine-switch-factory.js";
 import { buildClaudeLaunchOptions, buildCodexLaunchOptions, buildCoreLaunchOptions } from "./engine-launch-options.js";
+import type { EngineProcessRegistrationMessage } from "../shared/engines.js";
+import { readHostProcessOwnership } from "./engines/codex/process-ownership.js";
 import { IpcPermissionBroker } from "./permission-broker.js";
 import { createHarness, finishStep, MemFs, ScriptedModelPort } from "./test-harness.js";
 
@@ -17,9 +19,11 @@ function context() {
   const dir = mkdtempSync(join(tmpdir(), "engine-switch-"));
   directories.push(dir);
   const broker = new IpcPermissionBroker(() => {});
+  const registrations: EngineProcessRegistrationMessage[] = [];
   const common = {
     workspace: dir, binaryPath: process.execPath, sourceEnv: { HOME: dir },
     binaryTrust: () => null, broker,
+    processOwnership: readHostProcessOwnership({ ANYCODE_HOST_GENERATION: "9" }, process.pid, message => registrations.push(message)) ?? undefined,
   };
   const cleanup = vi.fn();
   const ctx: SwitchEngineFactoryContext = {
@@ -36,7 +40,7 @@ function context() {
       selection: { presetId: "read-only", origin: "draft" as const },
     }, cleanup })),
   };
-  return { ctx, dir, cleanup };
+  return { ctx, dir, cleanup, registrations };
 }
 
 describe("host switch engine factory", () => {
@@ -114,6 +118,53 @@ describe("host switch engine factory", () => {
     const { ctx, cleanup } = context();
     await expect(createSwitchEngineFactory(ctx)!(engine, "unsupported")).rejects.toThrow(/unavailable/);
     expect(cleanup).toHaveBeenCalledTimes(engine === "core" ? 0 : 1);
+  });
+
+  const engines = ["core", "codex", "claude"] as const;
+  it.each(engines.flatMap(source => engines.filter(target => source !== target).map(target => ({ source, target }))))("production transports: $source → $target runs the imported turn and the next clean turn", async ({ source, target }) => {
+    const { ctx, dir, registrations } = context();
+    const base = createHarness({ steps: [] });
+    const ports: ScriptedModelPort[] = [];
+    ctx.resolveCore = async ({ model }) => {
+      const modelPort = new ScriptedModelPort([finishStep(), finishStep(), finishStep()]);
+      ports.push(modelPort);
+      const config = { ...base.config, modelPort, history: new ConversationHistory() };
+      return { model, options: buildCoreLaunchOptions({ config, loop: new AgentLoop(config) }) };
+    };
+    const factory = createSwitchEngineFactory(ctx)!;
+    const sourceRuntime = await factory(source, "model-chosen");
+    if (!("engine" in sourceRuntime)) throw new Error("missing runtime");
+    const sourceDispose = vi.spyOn(sourceRuntime.engine, "dispose");
+    const h = createHarness({ steps: [], engine: sourceRuntime.engine, switchEngineFactory: factory });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitUntil(() => h.received.some(message => message.type === "host_ready"));
+      h.send({ type: "user_message", requestId: "source", text: "source text" });
+      await h.waitUntil(() => h.received.filter(message => message.type === "agent_event" && message.event.type === "loop_end").length === 1);
+      await (h.session as unknown as { currentTurn: Promise<void> | null }).currentTurn;
+      h.send({ type: "engine_switch_request", requestId: "switch", engine: target, model: "model-chosen" });
+      await h.waitUntil(() => h.received.some(message => message.type === "engine_switched"));
+      expect(sourceDispose).toHaveBeenCalledTimes(1);
+      h.send({ type: "user_message", requestId: "import", text: "first candidate turn" });
+      await h.waitUntil(() => h.received.filter(message => message.type === "agent_event" && message.event.type === "loop_end").length === 2);
+      await (h.session as unknown as { currentTurn: Promise<void> | null }).currentTurn;
+      h.send({ type: "user_message", requestId: "clean", text: "clean candidate turn" });
+      await h.waitUntil(() => h.received.filter(message => message.type === "agent_event" && message.event.type === "loop_end").length === 3);
+      expect(h.received.filter(message => message.type === "engine_switched")).toHaveLength(1);
+      expect(registrations.filter(message => !message.exited)).toHaveLength(2 * ((source === "core" ? 0 : 1) + (target === "core" ? 0 : 1)));
+      for (const registration of registrations) expect(registration).toMatchObject({ hostPid: process.pid, generation: 9 });
+      if (target !== "core") {
+        const messages = readFileSync(join(dir, `${target}.log`), "utf8").trim().split("\n").map(line => JSON.parse(line));
+        const inputs = target === "codex" ? messages.filter(message => message.method === "turn/start").map(message => message.params.input[0].text) : messages.filter(message => message.type === "user").map(message => message.message.content);
+        expect(inputs.at(-1)).toBe("clean candidate turn");
+        expect(inputs.at(-2)).toContain("first candidate turn");
+      } else expect(ports.at(-1)?.requests).toHaveLength(2);
+    } finally { await h.session.shutdown(); h.close(); base.close(); }
+    await vi.waitFor(() => {
+      for (const registration of registrations.filter(message => !message.exited)) {
+        expect(registrations.some(message => message.exited && message.enginePid === registration.enginePid)).toBe(true);
+      }
+    });
   });
 
   it("rejects malformed selections before privileged resolution", async () => {

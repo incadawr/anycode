@@ -4253,6 +4253,9 @@ export class Session {
     let committed = false;
     let prepared = false;
     let nextRuntime: SwitchRuntime | undefined;
+    const unsubscribe = (callback: (() => void) | undefined) => {
+      try { callback?.(); } catch (error) { console.error(`[host] engine switch subscription cleanup failed: ${describeError(error)}`); }
+    };
     try {
       const previousEngine = this.engine;
       const generation = this.boundGeneration;
@@ -4369,13 +4372,15 @@ export class Session {
       };
       if (invalid()) throw new Error("session changed during engine switch");
       await this.engineSwitchCoordinator?.commit(message.requestId, nextRuntime?.identity ?? { model: message.model, mode: nextMode });
+      committed = true;
+      candidate = undefined;
+      this.engine = next;
       this.pendingEngineEffort = undefined;
       this.inFlightEngineEffort = undefined;
       this.settingsGeneration++;
       this.settingsBarrier = Promise.resolve();
       this.settingsBarrierActive = false;
       this.updateContextUsage(null);
-      this.engine = next;
       this.model = nextRuntime?.identity?.model ?? message.model;
       this.availableEffortLevels = undefined;
       const presentation = nextRuntime?.presentation;
@@ -4385,15 +4390,13 @@ export class Session {
       this.contextWindowAssumed = presentation?.contextWindowAssumed ?? (() => false);
       this.modelSettingsConnectionId = presentation?.modelSettingsConnectionId ?? null;
       this.switchedPin = presentation?.pinnedConnection ?? null;
-      this.backgroundChildrenUnsubscribe?.();
+      unsubscribe(this.backgroundChildrenUnsubscribe);
       if (nextRuntime?.backgroundChildren) {
         this.backgroundChildren = nextRuntime.backgroundChildren;
         this.backgroundChildrenUnsubscribe = candidateChildrenUnsubscribe;
         candidateChildrenUnsubscribe = undefined;
       } else if (this.engineSwitchCoordinator) { this.backgroundChildren = undefined; this.backgroundChildrenUnsubscribe = undefined; }
       if (nextRuntime?.onOrchestrateChanged) this.onOrchestrateChanged = nextRuntime.onOrchestrateChanged;
-      committed = true;
-      candidate = undefined;
       this.engineSwitchImportPending = pendingImport;
       this.orchestrationController?.invalidate();
       this.orchestrationController = undefined;
@@ -4403,7 +4406,7 @@ export class Session {
       this.outbound.clearContextUsage();
       this.engineSwitched = true;
       this.switchCarriedHistory = canonical;
-      this.engineSettingsUnsubscribe?.();
+      unsubscribe(this.engineSettingsUnsubscribe);
       this.engineSettings = nextSettings;
       this.engineSettingsUnsubscribe = candidateSettingsUnsubscribe;
       candidateSettingsUnsubscribe = undefined;
@@ -4439,17 +4442,17 @@ export class Session {
         this.outbound.emit({ type: "mode_changed", mode: nextMode });
       }
       // Dispose ONLY after the new engine is live and the notice emitted.
-      await previousEngine.dispose("session-close").catch((error) =>
-        console.error(`[host] previous engine dispose threw: ${error instanceof Error ? error.message : String(error)}`),
-      );
-      await this.engineSwitchCoordinator?.retire(message.requestId).catch(error => console.error(`[host] engine retirement acknowledgement failed: ${describeError(error)}`));
+      try { await previousEngine.dispose("session-close"); }
+      catch (error) { console.error(`[host] previous engine dispose threw: ${describeError(error)}`); }
+      try { await this.engineSwitchCoordinator?.retire(message.requestId); }
+      catch (error) { console.error(`[host] engine retirement acknowledgement failed: ${describeError(error)}`); }
       this.outbound.sendDirect({ type: "engine_switched", requestId: message.requestId, engine: next.id, previousEngine: previousEngine.id,
         ...(this.engineSwitchCoordinator ? { generation: this.engineSwitchCoordinator.generation } : {}),
         projection,
       });
     } catch (error) {
-      candidateSettingsUnsubscribe?.();
-      candidateChildrenUnsubscribe?.();
+      unsubscribe(candidateSettingsUnsubscribe);
+      unsubscribe(candidateChildrenUnsubscribe);
       if (candidate !== undefined) {
         await candidate.dispose("session-close").catch((disposeError) =>
           console.error(`[host] candidate engine disposal failed: ${describeError(disposeError)}`),

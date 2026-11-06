@@ -33,10 +33,12 @@ export class EngineSwitchCoordinator {
     if (!parsed.success) return;
     const message = parsed.data;
     if (!this.deps.current()) return;
-    const reply = (ok: boolean, reason?: string, launch?: EngineSwitchLaunch) => this.deps.send({
-      type: ENGINE_SWITCH_RESPONSE, requestId: message.requestId, generation: this.deps.generation,
-      phase: message.phase, ok, ...(reason ? { reason } : {}), ...(launch ? { launch } : {}),
-    });
+    const reply = (ok: boolean, reason?: string, launch?: EngineSwitchLaunch) => {
+      try {
+        this.deps.send({ type: ENGINE_SWITCH_RESPONSE, requestId: message.requestId, generation: this.deps.generation,
+          phase: message.phase, ok, ...(reason ? { reason } : {}), ...(launch ? { launch } : {}) });
+      } catch { /* A transport failure cannot change the durable transaction outcome. */ }
+    };
     if (message.generation !== this.deps.generation) return reply(false, "stale host generation");
     if (message.phase === "prepare") {
       if (this.seen.has(message.requestId) || this.seen.size >= 1024) return reply(false, "duplicate request");

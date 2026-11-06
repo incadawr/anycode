@@ -76,6 +76,22 @@ describe("main-owned engine switch transaction", () => {
     expect(h.release).toHaveBeenCalledTimes(1);
   });
 
+  it("retains the committed outcome when posting its acknowledgement throws", async () => {
+    const h = harness();
+    h.deps.send = response => {
+      if (response.phase === "commit") throw new Error("host transport closed");
+      return h.responses.push(response);
+    };
+    await h.coordinator.handle(message("prepare"));
+    await h.coordinator.handle(message("commit"));
+    await h.coordinator.handle(message("status"));
+    expect(h.responses.at(-1)).toMatchObject({ phase: "status", ok: true });
+    expect(h.deps.commit).toHaveBeenCalledTimes(1);
+    expect(h.deps.abort).not.toHaveBeenCalled();
+    await h.coordinator.handle(message("retire"));
+    expect(h.release).toHaveBeenCalledTimes(1);
+  });
+
   it("rechecks child admission after target resolution", async () => {
     const h = harness();
     let checks = 0;

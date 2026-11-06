@@ -344,6 +344,8 @@ export const ENGINE_PROCESS_REGISTRATION_TYPE = "anycode:engine-process";
 
 /** Exact process ownership facts reported from a host to main. */
 export interface EngineProcessRegistration {
+  /** Removes a completed temporary or native process from the authenticated custody ledger. */
+  exited?: true;
   hostPid: number;
   generation: number;
   enginePid: number;

@@ -3876,13 +3876,21 @@ export class TabHostManager {
       Number.isInteger(data.pgid) &&
       data.hostPid > 0 &&
       data.enginePid > 0 &&
-      data.pgid > 0;
+      data.pgid > 0 && data.pgid === data.enginePid && data.enginePid !== data.hostPid && (data.exited === undefined || data.exited === true);
     if (!valid || tab.proc !== child || child.pid !== data.hostPid || tab.hostGeneration !== data.generation) {
       this.logger.warn(`[main] rejected stale or malformed engine-process registration for tab ${tab.tabId}`);
       return;
     }
     if (data.runtimeId !== undefined && (typeof data.runtimeId !== "string" || !data.runtimeId || data.runtimeId.length > 128)) return;
     const runtimeId = data.runtimeId ?? "boot";
+    if (data.exited) {
+      const matches = (item: EngineProcessRegistration) => item.runtimeId === runtimeId && item.enginePid === data.enginePid && item.pgid === data.pgid;
+      if (tab.engineProcess && matches(tab.engineProcess)) tab.engineProcess = null;
+      tab.retiringEngineProcesses = tab.retiringEngineProcesses?.filter(item => !matches(item));
+      const candidates = tab.candidateEngineProcesses?.get(runtimeId);
+      if (candidates) tab.candidateEngineProcesses!.set(runtimeId, candidates.filter(item => !matches(item)));
+      return;
+    }
     const registration = { hostPid: data.hostPid!, generation: data.generation!, enginePid: data.enginePid!, pgid: data.pgid!, runtimeId };
     if (runtimeId === (tab.activeRuntimeId ?? "boot")) {
       if (tab.engineProcess && tab.engineProcess.enginePid !== registration.enginePid) (tab.retiringEngineProcesses ??= []).push(tab.engineProcess);

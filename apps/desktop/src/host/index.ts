@@ -1,4 +1,4 @@
-import { createEngineSwitchClient } from "./engine-switch-client.js";
+import { commitEngineSwitch, createEngineSwitchClient } from "./engine-switch-client.js";
 import type { EngineSwitchLaunch } from "../shared/engine-switch-control.js";
 import type { SwitchRuntime, SessionOptions } from "./session.js";
 import type { CodexEngine } from "./engines/codex/codex-engine.js";
@@ -1272,19 +1272,7 @@ function hostSwitchCoordinator(sessionId: string, broker: IpcPermissionBroker, r
       if (!result.ok || !result.launch) throw new Error(result.reason ?? "Target is unavailable");
       return hostSwitchFactory(sessionId, broker, rules, secrets, undefined, result.launch, request.requestId)!;
     },
-    commit: async (requestId, identity) => {
-      let result;
-      try { result = await switchClient.request({ phase: "commit", requestId, identity }); }
-      catch {
-        try { result = await switchClient.request({ phase: "status", requestId }); }
-        catch {
-          // An unknown durable outcome cannot safely resume the source runtime.
-          // Main owns all process groups and resumes the persisted identity.
-          process.exit(1);
-        }
-      }
-      if (!result.ok) throw new Error(result.reason ?? "Engine identity commit failed");
-    },
+    commit: (requestId, identity) => commitEngineSwitch(switchClient, requestId, identity, () => process.exit(1)),
     abort: async requestId => { await switchClient.request({ phase: "abort", requestId }); },
     retire: async requestId => { await switchClient.request({ phase: "retire", requestId }); },
   };

@@ -9,7 +9,7 @@ import { createMiniMaxQuotaService } from "./minimax-quota.js";
 import { createGlmQuotaService } from "./glm-quota.js";
 import { protectMainNavigation } from "./main-navigation.js";
 import { resolveCoreConnectionForModel } from "../shared/core-model-connection.js";
-import { initializeIsolatedSmoke, isolatedSmokeStorage } from "./isolated-smoke.js";
+import { initializeIsolatedSmoke, isolatedNativeBinaryFs, isolatedSmokeStorage } from "./isolated-smoke.js";
 import { closeSessionForAgent } from "./communication-close-session.js";
 import { TAB_CLOSED_ENVELOPE_TYPE } from "../shared/envelopes.js";
 import { applyInputFromBlock, createCommunicationController, type CommunicationController } from "./communication-controller.js";
@@ -490,6 +490,7 @@ function resolveCodexProfilesHome(env: NodeJS.ProcessEnv, isPackaged: boolean): 
  * leaves every consumer on its real `homedir()` default.
  */
 const isolatedSmoke = initializeIsolatedSmoke(app, process.env);
+const nativeFixtureFs = isolatedSmoke && process.env.ANYCODE_ISOLATED_NATIVE_FIXTURES === "1" ? isolatedNativeBinaryFs(process.env.ANYCODE_ISOLATED_ROOT!) : undefined;
 if (isolatedSmoke && process.argv.includes("--self-check")) throw new Error("Incompatible automation modes");
 const selfCheckProfile = createSelfCheckProfile(process.argv);
 if (selfCheckProfile !== undefined) {
@@ -3470,7 +3471,7 @@ void app.whenReady().then(async () => {
   const codexRefusalRefresh = selfCheckProfile === undefined && !isolatedSmoke ? createCodexManifestRefusalRefresh({ cacheFile: codexManifestCacheFile }) : null;
   codexOnboarding = registerCodexIpc({
     bootEnv,
-    ...(selfCheckProfile !== undefined || isolatedSmoke ? { fs: selfCheckBinaryFs } : {}),
+    ...(selfCheckProfile !== undefined || isolatedSmoke ? { fs: nativeFixtureFs ?? selfCheckBinaryFs } : {}),
     onDeviceCode: (progress) => sendToMainWindow(win, CODEX_LOGIN_PROGRESS_CHANNEL, progress),
     // the doctor and `codex login` are children main spawns itself, so
     // they get the engine proxy through the same carrier the tab children use.
@@ -3563,7 +3564,7 @@ void app.whenReady().then(async () => {
   // scope for this track (profile CRUD, quotas, install/manifest — CC-E).
   claudeOnboarding = registerClaudeIpc({
     bootEnv,
-    ...(selfCheckProfile !== undefined || isolatedSmoke ? { fs: selfCheckBinaryFs } : {}),
+    ...(selfCheckProfile !== undefined || isolatedSmoke ? { fs: nativeFixtureFs ?? selfCheckBinaryFs } : {}),
     // mirror of the codex dep above. The claude doctor makes no network
     // call of its own, so this buys parity rather than function — but the doctor
     // env builder declares itself a mirror of the session child's builder, and
