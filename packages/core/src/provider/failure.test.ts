@@ -325,6 +325,21 @@ describe("provider explanations", () => {
     captureProviderMessage(error, key);
     return { error, result: classifyProviderFailure(error) };
   }
+  it.each([["/", ""], ["/+", "="], ["/_-", "=="]])("redacts encoded secrets containing %s", (separator, padding) => {
+    const secret = ["Ab9".repeat(8), "Cd7".repeat(8)].join(separator) + padding;
+    const { result } = captured({ message: `Rejected ${secret}` }, 400);
+    expect(result.safe.message).toBe("request failed: Rejected [redacted]");
+  });
+  it("preserves paths and URLs beside an encoded secret", () => {
+    const path = "/usr/local/lib/diagnostic-resource-name/file.json packages/core/src/ProviderV2/diagnostic-file";
+    const url = "https://example.invalid/diagnostics/a-long-resource-name?model=small";
+    const secret = "Ab9".repeat(12) + "/" + "Cd7".repeat(8);
+    const { result } = captured({ message: `${path} ${url} ${secret}` }, 400);
+    expect(result.safe.message).toBe(`request failed: ${path} ${url} [redacted]`);
+  });
+  it.each(["authentication failed", "authentication failed: please retry"])("does not duplicate the repeated hint %s", message => {
+    expect(captured({ message }).result.safe.message).toBe(message);
+  });
   it("keeps the auth category beside the OpenCode expired-key explanation", () => {
     const { result } = captured({ error: { type: "authentication_error", code: "api_key_expired", message: expired } });
     expect(result.safe).toEqual({ code: "auth", statusCode: 401, message: `authentication failed: ${expired}` });

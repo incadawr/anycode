@@ -77,7 +77,11 @@ export function scrubFailureText(text: string): string {
     .replace(/\b(?:sk|pk|ghp|gho|xox[abp])[-_][A-Za-z0-9_-]+/g, REDACTED)
     .replace(/[A-Za-z0-9+/=_.~-]+/g, (token) => {
       const slash = token.indexOf("/");
-      const isPath = slash > 0 || (slash === 0 && token.indexOf("/", 1) !== -1);
+      // Encoded credentials can contain slashes too. Keep rooted paths and
+      // dotted path/URL components, but do not exempt a base64-like blob.
+      const encoded = /^[A-Za-z0-9+_-][A-Za-z0-9+/_-]*={0,2}$/.test(token) &&
+        (/[+=]/.test(token) || token.split("/").every(part => part.length >= 16));
+      const isPath = !encoded && (slash > 0 || (slash === 0 && token.indexOf("/", 1) !== -1));
       const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token);
       return token.length >= 32 && !isPath && !isUuid ? REDACTED : token;
     });

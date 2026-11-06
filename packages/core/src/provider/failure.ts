@@ -235,11 +235,13 @@ export function classifyProviderFailure(error: unknown): ProviderFailureClassifi
 
   const original = unwrapMiniMaxFailure(error);
   const providerMessage = original && typeof original === "object" ? providerMessages.get(original) : undefined;
-  const build = (code: ProviderFailureCode, retryable: boolean): ProviderFailureClassification => ({
-    code,
-    retryable,
-    safe: { code, message: providerMessage ? `${SAFE_MESSAGES[code]}: ${providerMessage}` : SAFE_MESSAGES[code], ...(statusCode !== undefined ? { statusCode } : {}) },
-  });
+  const build = (code: ProviderFailureCode, retryable: boolean): ProviderFailureClassification => {
+    const hint = SAFE_MESSAGES[code];
+    const repeatsHint = providerMessage?.toLowerCase() === hint.toLowerCase() ||
+      providerMessage?.toLowerCase().startsWith(`${hint.toLowerCase()}:`);
+    const message = providerMessage ? (repeatsHint ? providerMessage : `${hint}: ${providerMessage}`) : hint;
+    return { code, retryable, safe: { code, message, ...(statusCode !== undefined ? { statusCode } : {}) } };
+  };
 
   const networkConfiguration = classifyNetworkConfigurationFailure(error);
   if (networkConfiguration !== undefined) return build(networkConfiguration, false);
