@@ -541,3 +541,23 @@ it("preserves live capabilities for manual Go connections and environment overri
   expect(modelCapabilitiesFor(connection, "grok-4.7")?.reasoning).toBe(true);
   expect(modelCapabilitiesFor({ ...connection, baseUrl: "https://proxy.test", modelCapabilities: { removed: { imageInput: true as const } } }, "removed")?.imageInput).toBe(true);
 });
+
+it("uses saved Go effort vocabulary and defaults, and manual Responses denial", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { parseOpenCodeGoSnapshot } = await import("@anycode/core/model-route");
+  const { getBuiltinCatalog } = await import("@anycode/core/catalog");
+  const { modelCapabilitiesFor } = await import("../../../shared/model-overrides.js");
+  const fixture = JSON.parse(await readFile(new URL("../../../../../../packages/core/src/provider/__fixtures__/opencode-go-models.json", import.meta.url), "utf8"));
+  fixture.data.find((row: { id: string }) => row.id === "grok-4.7").capabilities.reasoning.effort = ["low"];
+  fixture.data.find((row: { id: string }) => row.id === "kimi-k3.1-pro").capabilities.reasoning.default = { type: "effort", value: "low" };
+  const parsed = parseOpenCodeGoSnapshot(fixture, "2026-11-05T00:00:00Z");
+  if (!parsed.ok) throw new Error("invalid fixture");
+  const catalog = getBuiltinCatalog().providers as unknown as CatalogSummary;
+  const connection = { providerId: "opencode", modelRoutes: parsed.snapshot };
+  const grok = modelCapabilitiesFor(connection, "grok-4.7");
+  expect(startModelEffortLevels("opencode", "grok-4.7", catalog, grok)).toEqual(["low"]);
+  const kimi = modelCapabilitiesFor(connection, "kimi-k3.1-pro");
+  expect(startModelDefaultEffort("opencode", "kimi-k3.1-pro", catalog, kimi)).toBe("low");
+  const manual = { providerId: "opencode-openai", transport: "openai-responses" as const, modelCapabilities: { "grok-4.7": { reasoning: false } } };
+  expect(startModelEffortLevels(manual.providerId, "grok-4.7", catalog, modelCapabilitiesFor(manual, "grok-4.7"))).toBeUndefined();
+});
