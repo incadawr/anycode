@@ -521,6 +521,7 @@ export type UiToHostMessage =
   // `engine_switch_failed` reply — the switch surface is non-silent, mirror of
   // rewind_request's discipline).
   | { type: "engine_switch_request"; requestId: string; engine: EngineId; model: string; generation?: number; connectionId?: string; codexProfileId?: string }
+  | { type: "runtime_input_discard"; turnId: string }
   // Slice 5.7 (design slice-5.7-cut.md §2.1): one user-initiated git command.
   // Untrusted -> validated by `gitCommandMessageSchema` below (fail-closed). NO
 
@@ -717,6 +718,7 @@ export type HostToUiMessage =
   /** `startedAt` (epoch ms, host clock): when the turn really began — a re-asserted or replayed copy carries the original, so a footer's duration survives a reconnect. Absent from older hosts. */
   | { type: "turn_started"; requestId: string; turnId: string; startedAt?: number }
   | { type: "turn_rejected"; requestId: string; reason: "busy" | "not_ready" | "unsupported_images" }
+  | { type: "runtime_input_recovery"; turnId: string; text: string; status: "pending" | "uncertain" }
   | { type: "user_message_invalid"; requestId: string }
   /** Diagnostic for this frame only; requestId may already name an accepted turn. */
   | { type: "user_message_unavailable"; requestId: string; reason: "orchestrate_unavailable" | "posture_unavailable" }
@@ -1529,6 +1531,7 @@ export const uiToHostMessageSchema = z.discriminatedUnion("type", [
   setEngineEffortSchema,
   z.object({ type: z.literal("set_engine_fast"), fast: z.boolean() }).strict(),
   engineSwitchRequestSchema,
+  z.object({ type: z.literal("runtime_input_discard"), turnId: z.string().min(1).max(128) }).strict(),
   gitCommandMessageSchema,
   lspStatusRequestSchema,
   lspRestartRequestSchema,

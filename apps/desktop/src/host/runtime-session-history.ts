@@ -25,14 +25,21 @@ export class RuntimeSessionHistory {
     return engine.readTranscript?.() ?? engine.historyItems();
   }
   async hydrate(engine: SessionEngine): Promise<RuntimeSessionSnapshot> {
-    try { return this.snapshot(await this.readTranscript(engine)); }
+    try {
+      this.snapshot(await this.readTranscript(engine));
+      const state = this.state();
+      for (const input of this.store.runtimeInputRecoveries(this.sessionId,state.activeSegmentId)) {
+        if (input.state !== "pending" && await engine.verifyInputAbsent?.(input.input)) this.store.resetRuntimeInput(this.sessionId,state.activeSegmentId,input.turnId);
+      }
+      return this.state();
+    }
     catch (error) {
       const state = this.state();
       this.store.reconcileRuntimeInputs(this.sessionId,state.activeSegmentId,[]);
       throw error;
     }
   }
-  prepare(turnId: string, original: string, input: string, genuineUser: boolean, budgetBytes?: number): { text: string; hooks: Pick<RunTurnOptions,"onInputDispatched" | "onInputAccepted"> } {
+  prepare(turnId: string, original: string, input: string, genuineUser: boolean, budgetBytes?: number): { text: string; hooks: Pick<RunTurnOptions,"onInputDispatched" | "onInputAccepted" | "onInputNotSent"> } {
     const state = this.state();
     const payload = genuineUser && state.handoff?.state === "pending" && budgetBytes !== undefined
       ? capImportPrompt(state.handoff.payload,budgetBytes - Buffer.byteLength(input,"utf8") - 32) : undefined;
@@ -40,8 +47,11 @@ export class RuntimeSessionHistory {
     return { text, hooks: {
       onInputDispatched: () => this.store.transitionRuntimeInput(this.sessionId,state.activeSegmentId,turnId,"dispatching"),
       onInputAccepted: nativeId => this.store.transitionRuntimeInput(this.sessionId,state.activeSegmentId,turnId,"accepted",nativeId),
+      onInputNotSent: () => this.store.resetRuntimeInput(this.sessionId,state.activeSegmentId,turnId),
     } };
   }
+  recoveries() { const state = this.state(); return this.store.runtimeInputRecoveries(this.sessionId,state.activeSegmentId); }
+  discard(turnId: string): void { const state = this.state(); this.store.resetRuntimeInput(this.sessionId,state.activeSegmentId,turnId,true); }
   assertSettled(): void {
     const state = this.state();
     if (this.store.runtimeInputRecoveryNeeded(this.sessionId,state.activeSegmentId)) throw new Error("Conversation import acceptance is uncertain. Recovery is required.");

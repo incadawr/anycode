@@ -1142,6 +1142,15 @@ export class CodexEngine implements SessionEngine {
     });
   }
 
+  async verifyInputAbsent(input: string): Promise<boolean> {
+    const raw = await this.client.request<unknown>("thread/read",{threadId:this.threadId,includeTurns:true},{timeoutMs:this.bounds.bootRpcMs});
+    const read = asThreadRead(raw,this.threadId);
+    // Do not infer absence from the capped display projection or from a partial read.
+    if (!Array.isArray(read.thread.turns) || read.thread.turns.some(turn => !Array.isArray(turn.items))) return false;
+    const items = projectCodexHistory(read,[],{nativeTurnIds:true,maxItems:Number.MAX_SAFE_INTEGER});
+    return !items.some(item => item.message.role === "user" && item.message.content === input);
+  }
+
   /**
    * The latest merged quota snapshot (codex-profiles cut §6.1): the boot pull
    * plus every live push folded in. Session reads this into
@@ -1693,6 +1702,10 @@ export class CodexEngine implements SessionEngine {
       // intercepted it) and released from the finally, after the cancelled
       // children's real outcomes have been joined and flushed.
     } catch (error) {
+      if (options.signal.aborted && this.activeTurn === null) {
+        heldTerminal = [...this.cancelledEvents(turn)];
+        return;
+      }
       const terminalError = this.terminalError ?? (error instanceof Error ? error : new Error(String(error)));
       this.terminalError = terminalError;
       this.approvals?.denyAll("Codex app-server failed", "turn_cancelled");

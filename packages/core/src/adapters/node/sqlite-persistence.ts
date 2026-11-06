@@ -1186,6 +1186,30 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     return !!this.open().prepare("SELECT 1 FROM runtime_inputs WHERE session_id=? AND segment_id=? AND state IN ('dispatching','uncertain')").get(sessionId,segmentId);
   }
 
+  runtimeInputRecoveries(sessionId: string, segmentId: string): {turnId:string; text:string; input:string; state:string}[] {
+    return this.open().prepare("SELECT turn_id,original_text,input_text,state FROM runtime_inputs WHERE session_id=? AND segment_id=? AND state!='accepted'").all(sessionId,segmentId)
+      .map(row => ({turnId:row.turn_id as string,text:row.original_text as string,input:row.input_text as string,state:row.state as string}));
+  }
+
+  /** Only a checked native absence permits a resend. An unavailable mirror proves nothing. */
+  resetRuntimeInput(sessionId: string, segmentId: string, turnId: string, discard = false): void {
+    this.transaction(db => {
+      if (db.prepare("SELECT active_runtime_segment FROM sessions WHERE id=?").get(sessionId)?.active_runtime_segment !== segmentId) throw new Error("Stale runtime input recovery");
+      const input = db.prepare("SELECT state FROM runtime_inputs WHERE session_id=? AND segment_id=? AND turn_id=?").get(sessionId,segmentId,turnId);
+      if (!input || input.state === "accepted" || (discard && input.state !== "pending")) return;
+      if (discard) db.prepare("DELETE FROM runtime_inputs WHERE session_id=? AND segment_id=? AND turn_id=?").run(sessionId,segmentId,turnId);
+      else db.prepare("UPDATE runtime_inputs SET state='pending' WHERE session_id=? AND segment_id=? AND turn_id=?").run(sessionId,segmentId,turnId);
+      const raw = db.prepare("SELECT data FROM runtime_handoffs WHERE session_id=? AND segment_id=?").get(sessionId,segmentId);
+      if (raw) {
+        const handoff = JSON.parse(raw.data as string);
+        if (handoff.turnId === turnId) {
+          delete handoff.turnId; delete handoff.originalText; delete handoff.injectedText;
+          db.prepare("UPDATE runtime_handoffs SET data=? WHERE session_id=? AND segment_id=?").run(JSON.stringify({...handoff,state:"pending"}),sessionId,segmentId);
+        }
+      }
+    },"immediate");
+  }
+
   prepareRuntimeInput(sessionId: string, turnId: string, originalText: string, input: string, importConversation: boolean, importPayload?: string): string {
     return this.transaction(db => {
       const row = db.prepare("SELECT active_runtime_segment FROM sessions WHERE id=?").get(sessionId);

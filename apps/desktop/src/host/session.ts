@@ -2815,14 +2815,24 @@ export class Session {
           event:{type:"engine_notice" as const,level:"info" as const,message:boundary.text},
         })));
         this.route(raw,true);
-        try { this.runtimeHistory!.assertSettled(); }
-        catch (error) { this.outbound.sendDirect({type:"fatal",message:describeError(error)}); }
+        this.pushRuntimeInputRecovery();
       }).catch(error => {
-        if (!this.shuttingDown && sequence === this.runtimeHydrationSequence && generation === this.boundGeneration) this.outbound.sendDirect({type:"fatal",message:`Could not restore conversation: ${describeError(error)}`});
+        if (!this.shuttingDown && sequence === this.runtimeHydrationSequence && generation === this.boundGeneration) {
+          // A native read may be unavailable after Stop or transport close. Keep
+          // the durable conversation usable and expose the unresolved delivery.
+          const state = this.runtimeHistory!.state();
+          this.sessionHistory = buildSessionHistory(state.items,this.historyMaxItems,this.bootTurnErrors);
+          this.route(raw,true);
+          this.pushRuntimeInputRecovery();
+          this.outbound.sendDirect({type:"agent_event",turnId:ENGINE_SWITCH_TURN_ID,event:{type:"engine_notice",level:"warning",message:`Could not refresh native history: ${describeError(error)}`}});
+        }
       });
       return;
     }
     switch (message.type) {
+      case "runtime_input_discard":
+        if (!this.busy) this.runtimeHistory?.discard(message.turnId);
+        return;
       case "ui_ready":
 
         // status pushes are safe from here on. Set BEFORE the snapshot cascade
@@ -4585,6 +4595,11 @@ export class Session {
   }
 
   private onUserMessage(requestId: string, text: string, images?: ImageAttachment[], origin?: "system"): void {
+    if (this.runtimeHistory?.recoveries().some(input => input.state !== "pending")) {
+      this.pushRuntimeInputRecovery();
+      this.outbound.sendDirect({type:"turn_rejected",requestId,reason:"not_ready"});
+      return;
+    }
     if (this.child === undefined && this.presentationJournal.snapshot().turns.some(turn => turn.requestId === requestId)) {
       this.outbound.sendDirect({ type: "user_message_unavailable", requestId, reason: "posture_unavailable" });
       return;
@@ -5667,7 +5682,7 @@ export class Session {
       // engine call; nothing else carries the user's message to the engine,
       // so replacing it would silently drop what the user just asked. Only on
       // the text branch (a continueTurn has no fresh user frame).
-      let deliveryHooks: Pick<import("./engines/session-engine.js").RunTurnOptions,"onInputDispatched" | "onInputAccepted"> = {};
+      let deliveryHooks: Pick<import("./engines/session-engine.js").RunTurnOptions,"onInputDispatched" | "onInputAccepted" | "onInputNotSent"> = {};
       if (this.runtimeHistory && text !== undefined) {
         const prepared = this.runtimeHistory.prepare(turnId,pendingTurnIdHolder?.originalText ?? text,text,origin !== "system",this.engine.importBudgetBytes?.());
         text = prepared.text;
@@ -5991,10 +6006,17 @@ export class Session {
       this.outbound.emit({ type: "fatal", message: `turn failed: ${describeError(error)}` });
     } finally {
       if (this.runtimeHistory) {
-        try { await this.runtimeHistory.hydrate(this.engine); this.runtimeHistory.assertSettled(); }
-        catch (error) { this.outbound.emit({type:"fatal",message:`Conversation recovery required: ${describeError(error)}`}); }
+        try { await this.runtimeHistory.hydrate(this.engine); }
+        catch { /* An unavailable native mirror is unresolved delivery, not session death. */ }
+        this.pushRuntimeInputRecovery();
       }
     }
+  }
+
+  private pushRuntimeInputRecovery(): void {
+    for (const input of this.runtimeHistory?.recoveries() ?? []) this.outbound.sendDirect({
+      type:"runtime_input_recovery",turnId:input.turnId,text:input.text,status:input.state === "pending" ? "pending" : "uncertain",
+    });
   }
 
   private async startContinuation(): Promise<void> {

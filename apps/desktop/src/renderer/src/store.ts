@@ -1002,6 +1002,7 @@ export interface QueuedPrompt {
   orchestrate?: "enable";
   /** The whole draft needs a user's explicit recovery before sending. */
   requiresRestore?: boolean;
+  runtimeRecoveryTurnId?: string;
   initialPicks?: { model?: string; mode?: PermissionMode; effort?: string; reasoningEffort?: string };
   /** Queue identity for edit/delete; a refused steer retains its request id. */
   id: string;
@@ -5412,6 +5413,20 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
                 lastSentMessage: steer.sentMessage,
               }));
             }
+            return;
+          }
+          case "runtime_input_recovery": {
+            const state = get();
+            const id = `runtime-recovery:${message.turnId}`;
+            set({
+              ...(message.status === "pending" && !state.promptQueue.some(item => item.id === id) ? {
+                promptQueue:[...state.promptQueue,{id,text:message.text,images:[],requiresRestore:true,runtimeRecoveryTurnId:message.turnId}],
+                queuePaused:true,queuePauseReason:"cancelled" as const,
+              } : {}),
+              notice:{kind:"turn_rejected",text:message.status === "pending"
+                ? "Message was not accepted. Restore the draft to send again, or delete it."
+                : "Message delivery is unconfirmed. Reconnect to check native history before sending again."},
+            });
             return;
           }
           case "turn_rejected": {

@@ -1501,6 +1501,7 @@ export class ClaudeEngine implements SessionEngine {
       yield* this.terminalEvents(turn, terminalError, false);
     } finally {
       this.turnActive = false;
+      if (!inputDispatched) options.onInputNotSent?.();
       cancelSettle();
       abort.dispose();
       // cross-review P1: a turn that terminalized without the

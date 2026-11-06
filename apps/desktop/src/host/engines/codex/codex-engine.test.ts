@@ -593,6 +593,30 @@ describe("CodexEngine — subscription quota (cut §6)", () => {
 });
 
 describe("CodexEngine — Stop (blocker)", () => {
+  it("settles Stop plus a rejected start RPC as cancelled without an engine error", async () => {
+    const server = new FakeAppServer();
+    const original = server.request.bind(server);
+    let rejectStart!: (error: Error) => void;
+    server.request = (method,params,options) => method === "turn/start" ? new Promise((_resolve,reject) => { rejectStart = reject; }) : original(method,params,options);
+    const engine = new CodexEngine(server,THREAD);
+    const controller = new AbortController();
+    const turn = drive(engine,"cancelled draft",controller.signal);
+    await tick(); controller.abort(); rejectStart(new Error("app-server closed"));
+    await turn.done;
+    expect(turn.events.at(-1)).toMatchObject({type:"loop_end",reason:"cancelled"});
+    expect(turn.events.some(event => event.type === "error")).toBe(false);
+  });
+
+  it("proves absence only from a complete uncapped native read", async () => {
+    const server = new FakeAppServer();
+    const engine = new CodexEngine(server,THREAD);
+    server.threadReadResult = {thread:{id:THREAD,turns:[{id:"old",items:[{id:"user",type:"userMessage",content:[{type:"text",text:"accepted"}]}]}]}};
+    expect(await engine.verifyInputAbsent("accepted")).toBe(false);
+    expect(await engine.verifyInputAbsent("rejected")).toBe(true);
+    server.threadReadResult = {thread:{id:THREAD,turns:[{id:"partial"}]}};
+    expect(await engine.verifyInputAbsent("rejected")).toBe(false);
+    await engine.dispose("session-close");
+  });
   it("interrupts EXACTLY ONCE when the abort lands on a parked iterator, with no notification before it", async () => {
     const server = new FakeAppServer();
     const engine = new CodexEngine(server, THREAD);

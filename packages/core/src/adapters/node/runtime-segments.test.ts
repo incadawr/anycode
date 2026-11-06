@@ -190,6 +190,22 @@ describe("atomic runtime switch transaction", () => {
 });
 
 describe("durable input delivery", () => {
+  it("persists verified absence as pending and fences discard of an unknown delivery", async () => {
+    const {store,path} = await target();
+    store.prepareRuntimeInput("s","lost","draft","draft",true);
+    store.transitionRuntimeInput("s","next","lost","dispatching");
+    store.resetRuntimeInput("s","next","lost",true);
+    expect(store.runtimeInputRecoveryNeeded("s","next")).toBe(true);
+    store.resetRuntimeInput("s","next","lost");
+    await store.close();
+    const reopened = new SqlitePersistenceAdapter(path);
+    expect(reopened.loadRuntimeSession("s")?.handoff).toMatchObject({state:"pending"});
+    expect(reopened.runtimeInputRecoveries("s","next")).toMatchObject([{turnId:"lost",state:"pending",text:"draft"}]);
+    reopened.resetRuntimeInput("s","next","lost",true);
+    expect(reopened.runtimeInputRecoveries("s","next")).toEqual([]);
+    expect(reopened.prepareRuntimeInput("s","next","new text","new text",true)).toContain("bounded excerpt");
+    await reopened.close();
+  });
   async function target() {
     const root = mkdtempSync(join(tmpdir(),"runtime-delivery-")); roots.push(root);
     const path = join(root,"db.sqlite");

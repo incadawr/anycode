@@ -23,6 +23,48 @@ async function switchedStore() {
   return store;
 }
 describe("canonical reconnect hydration", () => {
+  it("recovers a lost acceptance signal after a checked absence and serves the next turn", async () => {
+    const store = await switchedStore();
+    const history = new RuntimeSessionHistory(store,"test-session");
+    history.prepare("lost","keep my draft","keep my draft",true).hooks.onInputDispatched!();
+    const source = createHarness({steps:[finishStep()]});
+    source.engine.verifyInputAbsent = async () => true;
+    const h = createHarness({steps:[],engine:source.engine,runtimeHistory:history});
+    try {
+      h.send({type:"ui_ready"});
+      await h.waitUntil(() => h.received.some(m => m.type === "runtime_input_recovery" && m.turnId === "lost" && m.status === "pending"));
+      expect(history.state().handoff?.state).toBe("pending");
+      const renderer = createDesktopStore({schedule:fn => fn()});
+      for (const message of h.received) renderer.getState().applyHostMessage(message);
+      expect(renderer.getState().promptQueue).toContainEqual(expect.objectContaining({text:"keep my draft",requiresRestore:true}));
+      h.send({type:"runtime_input_discard",turnId:"lost"});
+      await h.flush();
+      expect(history.recoveries()).toEqual([]);
+      h.send({type:"user_message",requestId:"next",text:"next input"});
+      await h.waitUntil(() => h.received.some(m => m.type === "agent_event" && m.event.type === "loop_end"));
+      await h.flush();
+      expect(history.state().handoff?.state,JSON.stringify(h.received.slice(-8))).toBe("accepted");
+      expect(h.received.some(m => m.type === "fatal")).toBe(false);
+      expect(history.state().items.some(item => item.message.content === "next input")).toBe(true);
+    } finally { await h.session.shutdown(); h.close(); source.close(); await store.close(); }
+  });
+
+  it("keeps an unavailable acceptance check visible without killing reconnect", async () => {
+    const store = await switchedStore();
+    const history = new RuntimeSessionHistory(store,"test-session");
+    history.prepare("lost","typed","typed",true).hooks.onInputDispatched!();
+    const source = createHarness({steps:[]});
+    source.engine.readTranscript = async () => { throw new Error("app-server closed"); };
+    const h = createHarness({steps:[],engine:source.engine,runtimeHistory:history});
+    try {
+      h.send({type:"ui_ready"}); await h.waitFor(m => m.type === "host_ready");
+      await h.waitUntil(() => h.received.some(m => m.type === "runtime_input_recovery" && m.status === "uncertain"));
+      expect(h.received.some(m => m.type === "fatal")).toBe(false);
+      h.send({type:"user_message",requestId:"held",text:"do not duplicate"});
+      await h.waitUntil(() => h.received.some(m => m.type === "turn_rejected" && m.requestId === "held"));
+      expect(history.state().handoff?.state).toBe("uncertain");
+    } finally { await h.session.shutdown(); h.close(); source.close(); await store.close(); }
+  });
   it("restores only a verified orchestration overlay with its captured base authority", async () => {
     const store = await switchedStore();
     const state = store.loadRuntimeSession("test-session")!;

@@ -78,6 +78,8 @@ export interface RunTurnOptions {
   turnId?: string;
   onInputDispatched?(): void;
   onInputAccepted?(nativeTurnId?: string): void;
+  /** The transport proved that no input was written. */
+  onInputNotSent?(): void;
 }
 
 /**
@@ -86,6 +88,8 @@ export interface RunTurnOptions {
  * before waiting for its active turn during host shutdown.
  */
 export interface SessionEngine {
+  /** A complete native read may prove absence; a shadow mirror must never do so. */
+  verifyInputAbsent?(input: string): Promise<boolean>;
   readonly id: EngineId;
   readonly capabilities: EngineCapabilities;
   /** Optional engine-owned orchestration overlay; absent means unavailable. */
