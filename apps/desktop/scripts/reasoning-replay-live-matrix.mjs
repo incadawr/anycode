@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
-const secretDir = '/Users/dev/projects/tools/anycode/.smoke-secrets';
+const secretDir = resolve(root, '.smoke-secrets');
 // Fail closed: error bodies can contain echoed prompts, reasoning or credentials.
 export function redact(value, secrets = []) {
   let text = String(value);
