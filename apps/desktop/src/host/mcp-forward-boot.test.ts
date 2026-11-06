@@ -11,9 +11,10 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { FileSystemPort } from "@anycode/core";
+import { loadMcpServerSpecs, type FileSystemPort } from "@anycode/core";
 import { makeTrustedScratchDir } from "../shared/test-scratch.js";
 import { prepareEngineMcpForward } from "./engines/mcp-forward-boot.js";
+import { mcpProblemStatuses, forwardProblemStatuses, codexMcpStatus, claudeMcpStatuses } from "./mcp-login-path.js";
 
 type NoticeEvent = Extract<import("@anycode/core").AgentEvent, { type: "engine_notice" }>;
 function noticeMessage(event: import("@anycode/core").AgentEvent): string {
@@ -145,6 +146,45 @@ describe("prepareEngineMcpForward — resolved values reach both serializers", (
 });
 
 describe("prepareEngineMcpForward — empty/disabled sets and controlled failures", () => {
+  it.each(["core", "codex", "claude"] as const)("converts %s boot diagnostics without reporting disabled servers as failures", async (engine) => {
+    const fs = memFs({
+      "/ws/.anycode/config.json": JSON.stringify({ mcpServers: {
+        off: { command: "node", enabled: false },
+        broken: { command: "node", env: { VALUE: 123 } },
+      } }),
+    });
+    const loaded = engine === "core"
+      ? await loadMcpServerSpecs(fs, "/ws", "/home/u", { reportDisabled: true })
+      : await prepareEngineMcpForward({ fs, workspace: "/ws", home: "/home/u", tmpDir: freshTmp(), pid: process.pid, engines: [engine] });
+    const problems = "loaderProblems" in loaded ? loaded.loaderProblems : loaded.problems;
+    expect(problems.some((problem) => problem.includes("disabled — server skipped"))).toBe(true);
+    expect(mcpProblemStatuses(problems)).toEqual([expect.objectContaining({ name: "broken", state: "failed" })]);
+    if ("cleanupFile" in loaded) loaded.cleanupFile();
+  });
+
+  it("retains genuine diagnostics and runtime failures mentioning disabled", () => {
+    const problems = ["Invalid JSON in MCP config /ws/config.json", "MCP server 'bad' in /ws: env var 'disabled' is not set — server skipped"];
+    expect(mcpProblemStatuses(problems).map((row) => row.error)).toEqual(problems);
+    expect(forwardProblemStatuses([{ kind: "unusable-entry", server: "bad" }])[0]?.state).toBe("failed");
+    const spec = { kind: "stdio" as const, name: "bad", command: "node", args: [], env: {} };
+    expect(codexMcpStatus({ method: "mcpServer/startupStatus/updated", params: { name: "bad", status: "failed", error: "disabled by remote" } }, [spec])?.state).toBe("failed");
+    expect(claudeMcpStatuses([{ name: "bad", status: "failed" }], [], [spec])[0]?.state).toBe("failed");
+  });
+
+  it.each(["core", "codex", "claude"] as const)("preserves parse and trust failures in %s boot diagnostics", async (engine) => {
+    for (const trusted of [true, false]) {
+      const fs = memFs({ "/ws/.anycode/config.json": "{invalid json" });
+      const loaded = engine === "core"
+        ? await loadMcpServerSpecs(fs, "/ws", "/home/u", { reportDisabled: true, projectTrusted: trusted })
+        : await prepareEngineMcpForward({ fs, workspace: "/ws", home: "/home/u", tmpDir: freshTmp(), pid: process.pid, engines: [engine], projectTrusted: trusted });
+      const problems = "loaderProblems" in loaded ? loaded.loaderProblems : loaded.problems;
+      expect(mcpProblemStatuses(problems)).toEqual([expect.objectContaining({
+        name: "MCP config", state: "failed", error: expect.stringContaining(trusted ? "Invalid JSON" : "not trusted"),
+      })]);
+      if ("cleanupFile" in loaded) loaded.cleanupFile();
+    }
+  });
+
   it("disabled and empty configs create no file and no config", async () => {
     const files: Record<string, string> = {
       "/ws-e/.anycode/config.json": JSON.stringify({ mcpServers: { off: { ...stdioEntry("npx", {}), enabled: false } } }),

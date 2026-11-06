@@ -152,6 +152,13 @@ export interface PluginsSnapshot {
   };
 }
 
+export interface PluginsListRequest {
+  /** Omitted (also in {}) preserves the legacy Settings catalog using main's
+   * default workspace resolver. Session callers must supply tabId; an unknown
+   * tab rejects rather than falling back to that default workspace. */
+  tabId?: string;
+}
+
 // ── two-phase install (design §6/§7) ──
 
 export type PluginInstallSource =

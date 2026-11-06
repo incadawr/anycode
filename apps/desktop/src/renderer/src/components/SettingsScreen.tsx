@@ -61,10 +61,8 @@ import { Badge, Button, Select, Switch } from "../ui/index.js";
  * NOT on the settings-store snapshot above. `SettingsDialog`/`SettingsScreen`
  * are mounted by App.tsx as a SIBLING of the active tab's subtree (outside its
  * `<TabContext.Provider>`) — so unlike the migrated per-tab components
- * (`useTabStore`/`tab-context.tsx`), `useActiveMcpServers` below resolves the
- * active tab id directly off the shell-level tabs-store and looks up its store
- * via `tabRegistry`, the same two primitives App.tsx itself already uses to
- * pick `activeStore` — no new prop/context plumbing needed.
+ * (`useTabStore`/`tab-context.tsx`), `useMcpServers` receives the selected
+ * runtime tab id and subscribes to its store via `tabRegistry`.
  */
 import { AccentPicker } from "./AccentPicker.js";
 import { ACCENT_KEY, applyAccent, type Accent } from "../accent.js";
@@ -134,6 +132,7 @@ import { VisionPane } from "./VisionPane.js";
 import { KeyboardShortcutsPane } from "./KeyboardShortcutsPane.js";
 import { BrandMark, Check, Chevron, Code, Cube, FileIcon, Gear, Globe, ImageIcon, Info, Keyboard, Package, Person, Plug, Plus, Robot, Route, Search, ServerStack, Sliders, Sparkle, Terminal, X } from "./icons.js";
 import { nextRovingIndex } from "./ModeMenu.js";
+import { parseSettingsPaneSelection, type SettingsPaneRequest } from "./settings-extensions-navigation.js";
 import { SETTINGS_ADD_CONNECTION_EVENT, SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
 import { readTurnNotifyEnabled, TURN_NOTIFY_KEY } from "../notifications.js";
 import { applyDensity, DENSITY_KEY, readDensity, type Density } from "../density.js";
@@ -870,34 +869,20 @@ export function describeRepoMapRow(s: WireRepoMapStatus | null): { text: string;
   };
 }
 
-/**
- * Subscribes to the ACTIVE tab's `mcpServers` slice (design §6, task 3.2.4).
- * `SettingsScreen`/`SettingsDialog` are mounted outside any
- * `<TabContext.Provider>` (see the file-header note above), so this can't use
- * `useTabStore` like the migrated per-tab components do — instead it reads
- * the active tab id off the shell-level tabs-store and looks up that tab's
- * `DesktopStore` via `tabRegistry` directly, subscribing manually since the
- * underlying store INSTANCE itself changes whenever the active tab changes
- * (or there is none yet, e.g. WelcomeScreen's embed pre-configuration — []).
- */
-function useActiveMcpServers(): McpServerStatus[] {
-  const activeTabId = useStore(useTabsStore, (state) => state.activeTabId);
-  const [servers, setServers] = useState<McpServerStatus[]>([]);
-
-  useEffect(() => {
-    const tabStore = activeTabId ? tabRegistry.getStore(activeTabId) : undefined;
-    if (!tabStore) {
-      setServers([]);
-      return;
-    }
-    setServers(tabStore.getState().mcpServers);
-    return tabStore.subscribe((state) => setServers(state.mcpServers));
-  }, [activeTabId]);
-
-  return servers;
+/** Subscribe to the selected runtime directly, including an inactive navigation origin. */
+function useMcpServers(tabId: string | null): McpServerStatus[] {
+  const tabStore = tabId ? tabRegistry.getStore(tabId) : undefined;
+  return useStore(tabStore ?? emptyMcpStore, (state) => state.mcpServers);
 }
 
-/** Byte-for-byte mirror of `useActiveMcpServers` above, over `envStatus` instead (slice P7.8 §3.5). */
+const emptyMcpStore = {
+  getState: () => emptyMcpState,
+  getInitialState: () => emptyMcpState,
+  subscribe: () => () => {},
+};
+const emptyMcpState = { mcpServers: [] as McpServerStatus[] };
+
+/** Environment status follows the active tab independently of MCP navigation. */
 function useActiveEnvStatus(): WireEnvStatus | null {
   const activeTabId = useStore(useTabsStore, (state) => state.activeTabId);
   const [envStatus, setEnvStatus] = useState<WireEnvStatus | null>(null);
@@ -1435,6 +1420,9 @@ export interface SettingsScreenProps {
    * ALREADY open still switches panes).
    */
   initialPane?: SettingsPaneId;
+  /** Retained scoped navigation; consumed by token after applying or cancelling it. */
+  paneRequest?: SettingsPaneRequest;
+  onPaneRequestConsumed?: (token: number) => void;
   /**
    * an add-connection REQUEST TOKEN forwarded from
    * `SettingsDialog`'s always-mounted listener (0 = none, N = the Nth
@@ -1467,6 +1455,8 @@ export function SettingsScreen({
   store = useSettingsStore,
   onClose,
   initialPane,
+  paneRequest,
+  onPaneRequestConsumed,
   addConnectionRequest = 0,
   onAddConnectionConsumed,
   scopeBridge,
@@ -1476,15 +1466,7 @@ export function SettingsScreen({
   const snapshot = useStore(store, (s) => s.snapshot);
   const notice = useStore(store, (s) => s.notice);
   const updateStatus = useStore(store, (s) => s.updateStatus);
-  // Slice 3.2 §6 (task 3.2.4): the active tab's MCP status, independent of
-  // `store` above (that's the settings-store; MCP status lives on the
-  // per-tab desktop store instead — see the hook's own doc comment).
-  const mcpServers = useActiveMcpServers();
-  // P7.19/F22 W3 (design/slice-P7.19-cut.md §4 W3): the active tab id, so
-  // McpServersPane's bridge calls resolve a project-scope workspace
-  // main-side (the renderer never supplies a filesystem path — tabId only,
-  // design §3 trust boundary). Read directly off the shell-level tabs-store,
-  // same primitive `useActiveMcpServers` above already uses internally.
+  // Legacy navigation and environment details follow the active tab.
   const activeTabId = useStore(useTabsStore, (state) => state.activeTabId);
   // Slice P7.8 §3.5: same per-tab data source as mcpServers above, mirrored.
   const envStatus = useActiveEnvStatus();
@@ -1556,6 +1538,14 @@ export function SettingsScreen({
   const scopeSelectionRef = useRef<ScopeSelection>(USER_SCOPE);
   const [scopeEntries, setScopeEntries] = useState<ScopeWorkspaceEntry[]>([]);
   const [scopeLoading, setScopeLoading] = useState(false);
+  const [scopeReadTabsKey, setScopeReadTabsKey] = useState<string | null>(null);
+  const scopeLoadGeneration = useRef(0);
+  const [scopeTabsKey, setScopeTabsKey] = useState("");
+  const [scopeTabWorkspaces, setScopeTabWorkspaces] = useState<Record<string, string>>({});
+  const handledPaneToken = useRef<number | undefined>(undefined);
+  const [navigationContext, setNavigationContext] = useState<SettingsPaneRequest>();
+  const latestNavigation = useRef({ paneRequest, scopeEntries, scopeTabsKey, tabs: useTabsStore.getState().tabs });
+  latestNavigation.current = { paneRequest, scopeEntries, scopeTabsKey, tabs: useTabsStore.getState().tabs };
   const [scopeFellBackNote, setScopeFellBackNote] = useState<string | null>(null);
   // The active pane's count for the scope chip (null while its snapshot loads).
   const [paneCount, setPaneCount] = useState<number | null>(null);
@@ -1569,7 +1559,10 @@ export function SettingsScreen({
   // exists, the scope falls back to User once, with a note.
   const refreshScopeEntries = useCallback(async (): Promise<void> => {
     const bridge = scopeBridge ?? defaultScopeBridge();
-    if (bridge === undefined) return;
+    const generation = ++scopeLoadGeneration.current;
+    const listTabs = useTabsStore.getState().tabs;
+    const listTabsKey = listTabs.map((tab) => `${tab.tabId}\u0000${tab.workspace}`).sort().join("\n");
+    if (bridge === undefined) { setScopeReadTabsKey(listTabsKey); return; }
     setScopeLoading(true);
     let result: ScopeWorkspacesListResult;
     try {
@@ -1577,8 +1570,12 @@ export function SettingsScreen({
     } catch {
       result = { ok: false, reason: "failed" };
     }
+    if (generation !== scopeLoadGeneration.current) return;
     setScopeLoading(false);
+    setScopeReadTabsKey(listTabsKey);
     if (!result.ok) return;
+    setScopeTabsKey(listTabsKey);
+    setScopeTabWorkspaces(Object.fromEntries(listTabs.map(tab => [tab.tabId, tab.workspace])));
     setScopeEntries(result.workspaces);
     const resolved = resolveScopeSelection(scopeSelectionRef.current, result.workspaces);
     if (resolved.fellBack) {
@@ -1597,7 +1594,7 @@ export function SettingsScreen({
   // React skips the re-render when the new state equals the old.
   useEffect(() => {
     if (initialPane !== undefined && addConnectionRequest === 0) {
-      if (initialPane !== requestedPane) guardRoleLeave(() => setRequestedPane(initialPane), onPaneRequestCancelled);
+      if (initialPane !== requestedPane || navigationContext) guardRoleLeave(() => { setNavigationContext(undefined); setRequestedPane(initialPane); }, onPaneRequestCancelled);
     }
   }, [initialPane]);
 
@@ -1619,7 +1616,7 @@ export function SettingsScreen({
   // effect as a no-op and does not re-navigate.
   useEffect(() => {
     if (addConnectionRequest > 0) {
-      guardRoleLeave(() => { setRequestedPane("provider"); setSearchQuery(""); }, () => { onAddConnectionConsumed?.(); onPaneRequestCancelled?.(); });
+      guardRoleLeave(() => { setNavigationContext(undefined); setRequestedPane("provider"); setSearchQuery(""); }, () => { onAddConnectionConsumed?.(); onPaneRequestCancelled?.(); });
     }
   }, [addConnectionRequest]);
 
@@ -1643,7 +1640,27 @@ export function SettingsScreen({
   const tabsKey = tabs.map((tab) => `${tab.tabId}\u0000${tab.workspace}`).sort().join("\n");
   useEffect(() => {
     void refreshScopeEntries();
+    return () => { scopeLoadGeneration.current++; };
   }, [tabsKey, refreshScopeEntries]);
+
+  useEffect(() => {
+    if (!paneRequest || scopeReadTabsKey !== tabsKey || scopeLoading || handledPaneToken.current === paneRequest.token) return;
+    handledPaneToken.current = paneRequest.token;
+    const consume = () => onPaneRequestConsumed?.(paneRequest.token);
+    guardRoleLeave(() => {
+      const latest = latestNavigation.current;
+      if (latest.paneRequest?.token !== paneRequest.token) return;
+      const entry = latest.scopeEntries.find((entry) => entry.exists && entry.tabIds.includes(paneRequest.tabId));
+      const available = entry && latest.tabs.some((tab) => tab.tabId === paneRequest.tabId)
+        && latest.scopeTabsKey === latest.tabs.map((tab) => `${tab.tabId}\u0000${tab.workspace}`).sort().join("\n");
+      applyScope(paneRequest.scope === "project" && available ? { kind: "workspace", id: entry.id } : USER_SCOPE);
+      setScopeFellBackNote(paneRequest.scope === "project" && !available ? "That project is no longer available, showing User." : null);
+      setNavigationContext(paneRequest);
+      setSearchQuery("");
+      setRequestedPane(paneRequest.pane);
+      consume();
+    }, consume);
+  }, [paneRequest, scopeReadTabsKey, tabsKey, scopeLoading, scopeEntries, onPaneRequestConsumed]);
 
   const scopeResolution = resolveScopeSelection(scopeSelection, scopeEntries);
   const scopeRef = scopeResolution.ref;
@@ -1659,6 +1676,15 @@ export function SettingsScreen({
   }, [scopeRef, scopeEntry?.tabIds.join("|")]);
   // MCP runtime status dots only for the folder whose tab is the active tab.
   const mcpLive = mcpStatusActive(scopeEntry, activeTabId);
+  const originTabId = navigationContext?.tabId;
+  const originPresent = originTabId !== undefined && tabs.some((tab) => tab.tabId === originTabId
+    && tab.workspace === scopeTabWorkspaces[originTabId]);
+  const originAvailable = originPresent
+    && scopeEntry?.tabIds.includes(originTabId);
+  const mcpRuntimeTabId = navigationContext
+    ? (navigationContext.scope === "project" && originAvailable ? originTabId! : null)
+    : (mcpLive ? activeTabId : null);
+  const mcpServers = useMcpServers(mcpRuntimeTabId);
   // Language servers' live section needs a real tab (never a workspace id): the
   // active tab when it is in the folder, else the folder's first open tab.
   const lspLiveTabId = mcpLive ? activeTabId : (scopeEntry?.tabIds[0] ?? null);
@@ -1681,7 +1707,7 @@ export function SettingsScreen({
     }
     event.preventDefault();
     const target = visiblePanes[next]!.id;
-    const navigate = () => { setRequestedPane(target); navRefs.current[next]?.focus(); };
+    const navigate = () => { setNavigationContext(undefined); setRequestedPane(target); navRefs.current[next]?.focus(); };
     if (target !== activePane) guardRoleLeave(navigate); else navigate();
   }
 
@@ -1877,7 +1903,7 @@ export function SettingsScreen({
                       aria-controls={active ? `settings-pane-${pane.id}` : undefined}
                       tabIndex={active ? 0 : -1}
                       className="settings-nav-item"
-                      onClick={() => { const navigate = () => setRequestedPane(pane.id); if (pane.id !== activePane) guardRoleLeave(navigate); else navigate(); }}
+                      onClick={() => { const navigate = () => { setNavigationContext(undefined); setRequestedPane(pane.id); }; if (pane.id !== activePane) guardRoleLeave(navigate); else navigate(); }}
                     >
                       <PaneIcon />
                       <span>{pane.label}</span>
@@ -1931,7 +1957,7 @@ export function SettingsScreen({
                     void refreshScopeEntries();
                   }}
                   onSelect={(next) => {
-                    const change = () => { setScopeFellBackNote(null); applyScope(next); };
+                    const change = () => { setNavigationContext(undefined); setScopeFellBackNote(null); applyScope(next); };
                     if (activePane === "roles" && roleGuardRef.current) roleGuardRef.current(change); else change();
                   }}
                   countLabel={countLabel(activePane ?? "", paneCount)}
@@ -1940,6 +1966,7 @@ export function SettingsScreen({
                 />
               </div>
             )}
+            {navigationContext && scopeFellBackNote && !paneHasScope(activePane) && <p role="status">{scopeFellBackNote}</p>}
             {activePane === "profile" && <ProfilePane />}
 
             {activePane === "provider" && (
@@ -2107,7 +2134,10 @@ export function SettingsScreen({
               the MCP join gets no runtime statuses (neutral details, never
               another tab's live dots); Project mode passes the chosen tab. */}
           {activePane === "mcp" && (
-            <McpServersPane servers={mcpLive ? mcpServers : []} tabId={scopeRef} onCountChange={setPaneCount} />
+            <>
+              {navigationContext && !mcpRuntimeTabId && <p role="status">Live status is unavailable for this scope or the original session.</p>}
+              <McpServersPane servers={mcpServers} tabId={scopeRef} onCountChange={setPaneCount} />
+            </>
           )}
 
           {/* language servers take the same scope; the live
@@ -2132,11 +2162,9 @@ export function SettingsScreen({
               Global mode the active tab still answers "will my route apply in
               the project I have open". */}
           {activePane === "roles" && (scopeRef && !rolesScopeRoot ? <p className="settings-field-hint">{rolesScope?.ref === scopeRef ? "Project unavailable." : "Loading project…"}</p> : <RolesPane tabId={scopeRef ?? activeTabId ?? undefined} projectRoot={rolesScopeRoot} registerGuard={registerRoleGuard} />)}
-          {/* S1-C: the Plugins pane — NOT scope-bar-dependent (it
-              shows every tier at once: managed installs + project plugins of
-              the active workspace + legacy dirs); main resolves the workspace
-              itself, so the pane takes no props beyond its bridge. */}
-          {activePane === "plugins" && <PluginsPane />}
+          {/* Catalog reads follow the navigation origin; plugin mutations remain global. */}
+          {activePane === "plugins" && <PluginsPane key={navigationContext?.tabId ?? "default"} catalogTabId={navigationContext?.tabId}
+            catalogOriginUnavailable={!!navigationContext && !originPresent} onCatalogReset={() => setNavigationContext(undefined)} />}
           {activePane === "sessions-api" && <SessionsApiPane />}
 
           {activePane === "environment" && (
@@ -2430,6 +2458,8 @@ export function OAuthCredentialBlock({ entry, status, pending, readOnly, onSignI
 }
 
 export interface SettingsDialogProps {
+  /** Injectable screen for isolated dialog/navigation tests. */
+  screenComponent?: ComponentType<SettingsScreenProps>;
   open: boolean;
   onClose(): void;
   store?: SettingsStoreApi;
@@ -2495,7 +2525,7 @@ function UpdateNoticeBanner({ status, store }: { status: UpdateStatus; store: Se
  * wrapper) is a harmless second listener when both happen to be mounted at
  * once — same idempotent `set()`.
  */
-export function SettingsDialog({ open, onClose, store = useSettingsStore }: SettingsDialogProps) {
+export function SettingsDialog({ open, onClose, store = useSettingsStore, screenComponent: Screen = SettingsScreen }: SettingsDialogProps) {
   useProviderQuotaPoll(open);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const leaveGuardRef = useRef<((action: () => void, onCancel?: () => void) => void) | null>(null);
@@ -2511,6 +2541,11 @@ export function SettingsDialog({ open, onClose, store = useSettingsStore }: Sett
   // its own not-yet-mounted effect and drop the pane. Anchoring the listener
   // here guarantees it's already registered before any such pair can fire.
   const [selectedPane, setSelectedPane] = useState<SettingsPaneId | null>(null);
+  const paneRequestSequence = useRef(0);
+  const [paneRequest, setPaneRequest] = useState<SettingsPaneRequest>();
+  const consumePaneRequest = useCallback((token: number) => {
+    setPaneRequest((pending) => pending?.token === token ? undefined : pending);
+  }, []);
   // an outstanding "add connection" request, as a monotonic TOKEN
   // (0 = none). Held HERE (like `selectedPane` above) because this component is
   // unconditionally mounted while `ProviderSettings` only exists once the
@@ -2526,9 +2561,16 @@ export function SettingsDialog({ open, onClose, store = useSettingsStore }: Sett
 
   useEffect(() => {
     function onSelectPane(event: Event): void {
-      const detail = (event as CustomEvent<string>).detail;
-      if (SETTINGS_PANES.some((pane) => pane.id === detail)) {
-        setSelectedPane(detail as SettingsPaneId);
+      const detail = parseSettingsPaneSelection((event as CustomEvent<unknown>).detail, SETTINGS_PANES.map((pane) => pane.id));
+      if (detail === null) return;
+      const token = ++paneRequestSequence.current;
+      if (typeof detail === "string") {
+        setPaneRequest(undefined);
+        setSelectedPane(detail);
+      } else {
+        setAddConnectionRequest(0);
+        setSelectedPane(null);
+        setPaneRequest({ ...detail, token });
       }
     }
     window.addEventListener(SETTINGS_SELECT_PANE_EVENT, onSelectPane);
@@ -2543,6 +2585,7 @@ export function SettingsDialog({ open, onClose, store = useSettingsStore }: Sett
   // on an already-mounted `SettingsScreen`.
   useEffect(() => {
     function onAddConnection(): void {
+      setPaneRequest(undefined);
       applyAddConnectionRequest(setSelectedPane, () => setAddConnectionRequest((n) => n + 1));
     }
     window.addEventListener(SETTINGS_ADD_CONNECTION_EVENT, onAddConnection);
@@ -2626,8 +2669,10 @@ export function SettingsDialog({ open, onClose, store = useSettingsStore }: Sett
           if (leaveGuardRef.current) leaveGuardRef.current(onClose); else onClose();
         }}
       >
-        <SettingsScreen
+        <Screen
           store={store}
+          paneRequest={paneRequest}
+          onPaneRequestConsumed={consumePaneRequest}
           onClose={onClose}
           registerLeaveGuard={registerLeaveGuard}
           initialPane={selectedPane ?? undefined}

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cloneElement, useState, type ButtonHTMLAttributes, type ReactElement } from "react";
+import { cloneElement, createRef, useState, type ButtonHTMLAttributes, type ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { Badge, Banner, Button, Chip, ContextRing, Drawer, EmptyState, Field, IconButton, Input, Menu, MenuItem, Modal, Popover, SearchInput, SegmentedControl, Select, Switch, Textarea, Toast, ToastStack, ToolCard } from "./index.js";
 import { accessibleName, byRole, click, createElement as h, key, mount } from "./ui.test-utils.js";
@@ -107,4 +107,26 @@ it("single segmented control roves and selects with arrows", () => {
   expect(onChange).toHaveBeenCalledExactlyOnceWith("c"); expect(document.activeElement).toBe(radios[2]);
   render(h(SegmentedControl, {label:"Mode", value:"c", onChange, options:[{value:"a",label:"A"},{value:"b",label:"B",disabled:true},{value:"c",label:"C"}]}));
   expect(radios.map(r => r.tabIndex)).toEqual([-1,-1,0]);
+});
+
+it("Button exposes its native element for composite focus and roving tabindex", () => {
+  const ref = createRef<HTMLButtonElement>();
+  const onKeyDown = vi.fn();
+  const { container, render, unmount } = mount(h(Button, {
+    ref, tabIndex: -1, "aria-expanded": false, "aria-controls": "details", onKeyDown,
+  }, "Category"));
+  const button = byRole(container, "button", "Category");
+  expect(ref.current).toBe(button);
+  expect(button.tabIndex).toBe(-1);
+  expect(button.getAttribute("aria-controls")).toBe("details");
+  ref.current!.focus();
+  expect(document.activeElement).toBe(button);
+  key("ArrowRight");
+  expect(onKeyDown).toHaveBeenCalledTimes(1);
+  render(h(Button, { ref, tabIndex: 0, "aria-expanded": true }, "Category"));
+  expect(ref.current).toBe(button);
+  expect(button.tabIndex).toBe(0);
+  expect(button.getAttribute("aria-expanded")).toBe("true");
+  unmount();
+  expect(ref.current).toBeNull();
 });

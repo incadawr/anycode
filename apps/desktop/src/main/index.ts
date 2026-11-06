@@ -3773,6 +3773,8 @@ void app.whenReady().then(async () => {
   registerPathRootsIpc();
 
   registerMcpConfigIpc({
+    openPath: (path) => shell.openPath(path),
+    reveal: (path) => shell.showItemInFolder(path),
     home: () => (selfCheckProfile ?? resolveMcpImportHome(process.env, app.isPackaged)) ?? homedir(),
     pluginHome: () => (selfCheckProfile ?? resolveSkillsProfileHome(process.env, app.isPackaged) ?? resolveMcpImportHome(process.env, app.isPackaged)) ?? homedir(),
     workspaceForTab: (ref) => scopeRegistry.resolve(ref, (tabId) => manager?.getTab(tabId)?.workspace),
@@ -3990,6 +3992,7 @@ void app.whenReady().then(async () => {
       // here), resolved per scan; home when no tab exists.
       workspace: pluginsHome,
       activeWorkspace: () => activePluginsWorkspace(manager?.listTabs() ?? [], pluginsHome),
+      workspaceForTab: (tabId) => manager?.getTab(tabId)?.workspace,
       settings: {
         getPlugins: async () => {
           const current = settings ?? (await loadSettings(settingsPath, fileLogger)).settings;

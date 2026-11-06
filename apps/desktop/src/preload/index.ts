@@ -23,6 +23,9 @@ import { TAB_CLOSED_ENVELOPE_TYPE, HOST_EXITED_ENVELOPE_TYPE, PORT_ENVELOPE_TYPE
 import {
   MCP_CONFIG_DELETE_CHANNEL,
   MCP_CONFIG_GET_CHANNEL,
+  MCP_CONFIG_OPEN_FILE_CHANNEL,
+  type McpConfigOpenFileRequest,
+  type McpConfigOpenFileResult,
   MCP_CONFIG_PROMOTE_COMPAT_CHANNEL,
   MCP_CONFIG_SET_ENABLED_CHANNEL,
   MCP_CONFIG_UPSERT_CHANNEL,
@@ -123,6 +126,7 @@ import {
   type PluginsChangedReason,
   type PluginsMutationResult,
   type PluginsSnapshot,
+  type PluginsListRequest,
   type PluginServiceView,
 } from "../shared/plugins-config.js";
 import type {
@@ -982,8 +986,8 @@ contextBridge.exposeInMainWorld("anycode", {
     },
   },
   plugins: {
-    list: (): Promise<PluginsSnapshot> =>
-      ipcRenderer.invoke(PLUGINS_LIST_CHANNEL) as Promise<PluginsSnapshot>,
+    list: (req?: PluginsListRequest): Promise<PluginsSnapshot> =>
+      ipcRenderer.invoke(PLUGINS_LIST_CHANNEL, req) as Promise<PluginsSnapshot>,
     checkUpdates: (): Promise<PluginsSnapshot> =>
       ipcRenderer.invoke(PLUGINS_CHECK_UPDATES_CHANNEL) as Promise<PluginsSnapshot>,
     installPrepare: (source: PluginInstallSource): Promise<PluginInstallPrepareResult> =>
@@ -1160,6 +1164,8 @@ contextBridge.exposeInMainWorld("anycode", {
   // only travels in via upsert/edit `entry` payloads (write-only) or the
   // import-apply consent flag (values copied main-side, foreign file -> ours).
   mcpConfig: {
+    openFile: (req: McpConfigOpenFileRequest): Promise<McpConfigOpenFileResult> =>
+      ipcRenderer.invoke(MCP_CONFIG_OPEN_FILE_CHANNEL, req) as Promise<McpConfigOpenFileResult>,
     get: (req: McpConfigGetRequest = {}): Promise<McpConfigSnapshot> =>
       ipcRenderer.invoke(MCP_CONFIG_GET_CHANNEL, req) as Promise<McpConfigSnapshot>,
     upsert: (req: McpConfigUpsertRequest): Promise<McpConfigMutationResult> =>

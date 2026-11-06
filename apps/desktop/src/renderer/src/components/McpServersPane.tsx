@@ -70,6 +70,7 @@ import type {
   McpTransport,
 } from "../../../shared/mcp-config.js";
 import { describeMcpServer, type McpRowKind } from "./SettingsScreen.js";
+import { countConfiguredMcp } from "./extensions-model.js";
 import { Pencil, Search, Trash, X } from "./icons.js";
 import { RUN_ACTION_EVENT, SETTINGS_SELECT_PANE_EVENT } from "../slash-menu.js";
 import type { McpSecretMutationResult, McpSecretsListResult } from "../../../shared/mcp-secrets.js";
@@ -734,8 +735,8 @@ export function McpServersPane({ servers, tabId, bridge = window.anycode.mcpConf
   const filtered = filterMcpRows(rows, searchQuery);
   const { configured, compat } = partitionMcpRows(filtered);
   const allConfigured = partitionMcpRows(rows).configured;
-  // the scope chip's count = configured rows (compat excluded).
-  const configuredCount = snapshot ? allConfigured.length : null;
+  // Count effective config and plugin entries, independently of search.
+  const configuredCount = snapshot ? countConfiguredMcp(snapshot) : null;
   useEffect(() => {
     onCountChange?.(configuredCount);
   }, [configuredCount, onCountChange]);

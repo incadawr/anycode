@@ -34,6 +34,7 @@ import { useTabsStore } from "../tabs-store.js";
 import type { ConnectionPhase, TurnState } from "../store.js";
 import { Collapse, Dot, Globe, Orchestrate, TaskList, Terminal } from "./icons.js";
 import { EnvironmentMenu } from "./EnvironmentMenu.js";
+import { SessionExtensionsMenu } from "./SessionExtensionsMenu.js";
 import { browserAccessChipVisible, useBrowserAccessState } from "./BrowserAccessRow.js";
 import { usePreviewStore } from "../preview/preview-store.js";
 import { useDockStore } from "../dock/dock-store.js";
@@ -317,6 +318,7 @@ export function SessionHeader({ sidebarCollapsed, onToggleSidebar, onToast }: Se
       )}
 
       {!isNewSession && <EnvironmentMenu placement="header" />}
+      {!isNewSession && workspace && <SessionExtensionsMenu />}
 
       <span
         className={`session-header-connection session-header-connection-${connection}`}

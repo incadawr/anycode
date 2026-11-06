@@ -224,11 +224,10 @@ export const FOCUS_MODEL_PILL_EVENT = "anycode:focus-model-pill";
 export const RUN_ACTION_EVENT = "anycode:run-action";
 
 /**
- * Settings pane-select seam (cut §4.6): `CustomEvent<string>` carrying a
- * `SettingsPaneId`. `SettingsDialog` (unconditionally mounted by App.tsx,
- * SettingsScreen.tsx:1276 note) listens so the seam is already wired before
- * any "settings.open" + pane-select pair can fire, guarding the value
- * against `SETTINGS_PANES` before forwarding it into `SettingsScreen`.
+ * Settings pane-select seam: detail is a legacy SettingsPaneId string or
+ * SettingsPaneSelection ({pane, tabId, scope}) from settings-extensions-navigation.
+ * The always-mounted SettingsDialog validates against the rail's pane allowlist
+ * and retains scoped requests with a fresh token before SettingsScreen mounts.
  */
 export const SETTINGS_SELECT_PANE_EVENT = "anycode:settings-select-pane";
 

@@ -140,6 +140,8 @@ import type {
 import type {
   McpConfigDeleteRequest,
   McpConfigGetRequest,
+  McpConfigOpenFileRequest,
+  McpConfigOpenFileResult,
   McpConfigMutationResult,
   McpConfigPromoteCompatRequest,
   McpConfigSetEnabledRequest,
@@ -192,7 +194,7 @@ import type {
 import type {
   PluginInstallSourceRequest,
   PluginsApproveMcpRequest,
-  PluginsChangedPayload,
+  PluginsChangedReason,
   PluginsCheckUpdatesRequest,
   PluginsCheckUpdatesResult,
   PluginsInstallCommitRequest,
@@ -631,6 +633,7 @@ declare global {
       // importApply drive the explicit-trust import from foreign harness
       // configs. Every mutator resolves a fresh snapshot on success.
       mcpConfig: {
+        openFile(req: McpConfigOpenFileRequest): Promise<McpConfigOpenFileResult>;
         get(req?: McpConfigGetRequest): Promise<McpConfigSnapshot>;
         upsert(req: McpConfigUpsertRequest): Promise<McpConfigMutationResult>;
         delete(req: McpConfigDeleteRequest): Promise<McpConfigMutationResult>;
@@ -728,7 +731,7 @@ declare global {
       // PATH never crosses in a request — file/folder sources take no
       // argument (main opens its own picker) and every per-plugin action
       // identifies by `name` alone (path custody, design §4).
-      // `onPluginsChanged` returns an unsubscribe, same shape as
+      // `onChanged` returns an unsubscribe, same shape as
       // `updates.onUpdateStatus`.
       accountSources: {
         get(): Promise<{ snapshot: import("../../shared/account-sources.js").AccountSourcesSnapshot; candidates: import("../../shared/account-sources.js").AccountSourceCandidateView[] }>;
@@ -748,7 +751,7 @@ declare global {
         update(req: PluginsUpdateRequest): Promise<PluginsMutationResult>;
         rollback(req: PluginsRollbackRequest): Promise<PluginsMutationResult>;
         setPinned(req: PluginsSetPinnedRequest): Promise<PluginsMutationResult>;
-        setEnabled(req: PluginsSetEnabledRequest): Promise<PluginsMutationResult>;
+        setEnabled(name: string, value: boolean): Promise<PluginsMutationResult>;
         remove(req: PluginsRemoveRequest): Promise<PluginsMutationResult>;
         approveMcp(req: PluginsApproveMcpRequest): Promise<PluginsMutationResult>;
         /** name only — main computes the current servicesHash itself. */
@@ -760,7 +763,7 @@ declare global {
         serviceRestart(plugin: string, name: string): Promise<PluginsMutationResult>;
         reveal(req: PluginsRevealRequest): Promise<PluginsRevealResult>;
         setAutoUpdate(req: PluginsSetAutoUpdateRequest): Promise<PluginsMutationResult>;
-        onPluginsChanged(callback: (payload: PluginsChangedPayload) => void): () => void;
+        onChanged(callback: (payload: PluginsChangedReason) => void): () => void;
       };
       // P7.22/F19 (design/slice-P7.22-cut.md §2-D5 W2-W3): Profile-stats
       // invoke-API. `getStats`/`revealDir` take no argument at all — main

@@ -30,6 +30,19 @@
 
 // ── invoke channels (6, additive — independent registrations, no union exhaustiveness) ──
 
+/** Opens or reveals a fixed configuration source after main-side custody checks. */
+export const MCP_CONFIG_OPEN_FILE_CHANNEL = "anycode:mcp-config-open-file";
+
+export interface McpConfigOpenFileRequest {
+  tabId?: string;
+  source: McpConfigSource;
+  action?: "open" | "reveal";
+}
+
+export type McpConfigOpenFileResult =
+  | { ok: true }
+  | { ok: false; reason: "invalid" | "no_workspace" | "not_found" | "unsafe_path" | "open_failed" };
+
 /** invoke channel: read the joined project/user/compat McpConfigSnapshot. */
 export const MCP_CONFIG_GET_CHANNEL = "anycode:mcp-config-get";
 

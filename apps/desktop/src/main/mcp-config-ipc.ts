@@ -26,11 +26,13 @@
  * from a renderer-supplied string.
  */
 
+import { registerMcpConfigOpenFileIpc } from "./mcp-config-open-file-ipc.js";
+import { projectConfigPath, userConfigPath, compatConfigPath } from "./mcp-config-paths.js";
 import { guardedIpcHandle } from "./ipc-guard.js";
 import * as fsp from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
-import { discoverPlugins } from "@anycode/core/plugins";
+import { discoverPlugins, hasMcpConsent, pluginManifestSchema, serversHash } from "@anycode/core/plugins";
 import { defaultPluginStatePath } from "@anycode/core/plugins-admin";
 import {
   applyMcpImport,
@@ -85,6 +87,8 @@ export interface McpConfigFs {
   mkdir(path: string): Promise<void>;
   readdir(path: string): Promise<string[]>;
   rename?(from: string, to: string): Promise<void>;
+  lstat?(path: string): Promise<Awaited<ReturnType<McpConfigFs["stat"]>> & { isSymbolicLink?: boolean }>;
+  realpath?(path: string): Promise<string>;
   /** Sets POSIX mode bits — config-write uses it to keep a secrets config private across tmp+rename (W5-FIX, finding 4). */
   chmod?(path: string, mode: number): Promise<void>;
 }
@@ -110,6 +114,13 @@ export class NodeMcpConfigFs implements McpConfigFs {
     const s = await fsp.stat(path);
     return { size: s.size, mtimeMs: s.mtimeMs, isFile: s.isFile(), isDirectory: s.isDirectory(), mode: s.mode };
   }
+  async realpath(path: string): Promise<string> {
+    return fsp.realpath(path);
+  }
+  async lstat(path: string) {
+    const s = await fsp.lstat(path);
+    return { size: s.size, mtimeMs: s.mtimeMs, isFile: s.isFile(), isDirectory: s.isDirectory(), isSymbolicLink: s.isSymbolicLink() };
+  }
   async mkdir(path: string): Promise<void> {
     await fsp.mkdir(path, { recursive: true });
   }
@@ -133,6 +144,8 @@ export interface McpConfigIpcDeps {
   /** Scope reference resolver: a tab id (legacy) or a workspace id `ws_<16 hex>`, resolved main-side — never a renderer-supplied path. */
   workspaceForTab(tabId: string): string | undefined;
   fs: McpConfigFs;
+  openPath?(path: string): Promise<string>;
+  reveal?(path: string): void;
   /**
    * xfix H1: the plugin MCP consent list from settings.json
    * `plugins.mcpConsent` (undefined keeps the honest-default `false` the pane
@@ -199,22 +212,6 @@ const importApplySchema = z.object({
 });
 
 // ── path resolution helpers ──
-
-function stripTrailingSep(base: string): string {
-  return base.replace(/[/\\]+$/, "");
-}
-
-function projectConfigPath(workspace: string): string {
-  return `${stripTrailingSep(workspace)}/.anycode/config.json`;
-}
-
-function userConfigPath(home: string): string {
-  return `${stripTrailingSep(home)}/.anycode/config.json`;
-}
-
-function compatConfigPath(workspace: string): string {
-  return `${stripTrailingSep(workspace)}/.mcp.json`;
-}
 
 /** Resolves a request's workspace: undefined tabId or an unknown tab yields undefined (fail-soft, not a throw). */
 function resolveWorkspace(deps: McpConfigIpcDeps, tabId: string | undefined): string | undefined {
@@ -393,17 +390,8 @@ async function buildSnapshot(deps: McpConfigIpcDeps, tabId: string | undefined):
 
 // ── plugin-contributed rows (S1-C, design 4732 §6 "Elsewhere") ──
 
-/**
- * Projects the plugin-contributed MCP servers into READ-ONLY pane rows. This
- * rides the SAME discovery the host runtime uses (`discoverPlugins` over
- * `<ws>/.anycode/plugins` then `~/.anycode/plugins`, renames
- * `plugin_<plugin>_<server>`, explicit config always winning a collision), so
- * what the pane shows is exactly what the runtime would start — minus the
- * consent gate, which is NOT re-derived here (stage 1: `consentGranted` reads
- * false until S1-B's settings mirror lands; the Plugins pane owns the true
- * consent state). `shadowed` mirrors the runtime rule against this snapshot's
- * `claimed` set. Fail-soft throughout: discovery problems append to the
- * shared problems[] and the rows degrade to [].
+/** Configured plugin rows include disabled declarations and pending consent.
+ * Discovery still owns plugin identity/precedence; this projection never starts servers.
  */
 async function collectPluginServers(
   deps: McpConfigIpcDeps,
@@ -414,6 +402,7 @@ async function collectPluginServers(
   problems: string[],
 ): Promise<McpPluginServerView[]> {
   try {
+    const consent = deps.readMcpConsent ? (await deps.readMcpConsent()) ?? [] : [];
     const discovery = await discoverPlugins(deps.fs, {
       workspace: workspace ?? home,
       home,
@@ -423,37 +412,35 @@ async function collectPluginServers(
       // nothing here either — the MCP pane never listed an installed
       // plugin's servers while the runtime (post-host-fix) starts them.
       pluginStatePath: defaultPluginStatePath(home),
-      // H1: consent-gate the rows the same way the host runtime does, so the
-      // pane's "Needs approval" badge reflects the settings.json truth.
+      // Keep runtime discovery consent-aware; configured rows below are
+      // projected separately with their saved approval state.
       ...(deps.readMcpConsent !== undefined
-        ? { mcpConsent: (await deps.readMcpConsent()) ?? [] }
+        ? { mcpConsent: consent }
         : {}),
     });
     problems.push(...discovery.problems);
-    // With the consent gate enabled (readMcpConsent wired) discovery admits a
-    // plugin's servers ONLY when a current grant matches their serversHash, so
-    // every row built here is a granted row. Non-consented servers are not
-    // listed (the Plugins pane shows "needs approval" for them).
-    const consentGateOn = deps.readMcpConsent !== undefined;
+    const candidates = [...discovery.pluginInfo.entries()].map(([name, info]) => ({ name, root: info.root }));
+    for (const skipped of discovery.skipped) {
+      if (skipped.reason === "disabled" && skipped.name && !candidates.some(candidate => candidate.name === skipped.name))
+        candidates.push({ name: skipped.name, root: skipped.dir });
+    }
     const rows: McpPluginServerView[] = [];
-    for (const spec of discovery.mcpServerSpecs) {
-      // Runtime name is `plugin_<plugin>_<server>`; the owner plugin is the
-      // segment between the fixed prefix and the final server segment.
-      const pluginName = spec.name.startsWith("plugin_")
-        ? spec.name.slice("plugin_".length, spec.name.lastIndexOf("_"))
-        : spec.name;
-      rows.push({
-        name: spec.name,
-        pluginName,
-        transport: spec.kind === "http" ? "http" : "stdio",
-        commandLine:
-          spec.kind === "http"
-            ? spec.url
-            : [spec.command, ...spec.args].filter((part) => part !== "").join(" "),
-        consentGranted: consentGateOn,
-        shadowed: configClaimedNames.has(spec.name),
-        pluginRoot: spec.kind === "stdio" ? spec.cwd ?? "" : "",
-      });
+    for (const plugin of candidates) {
+      try {
+        const manifest = pluginManifestSchema.parse(JSON.parse(await deps.fs.readFile(`${plugin.root}/.anycode-plugin/plugin.json`)));
+        if (manifest.name !== plugin.name) continue;
+        const consentGranted = hasMcpConsent(consent, plugin.name, serversHash(manifest.mcpServers ?? {}));
+        for (const [server, entry] of Object.entries(manifest.mcpServers ?? {})) {
+          // Invalid transport declarations cannot form a configured server row.
+          if (Boolean(entry.command) === Boolean(entry.url)) continue;
+          const name = `plugin_${plugin.name}_${server}`;
+          rows.push({ name, pluginName: plugin.name, transport: entry.url ? "http" : "stdio",
+            commandLine: entry.url ?? [entry.command, ...(entry.args ?? [])].join(" "),
+            consentGranted, shadowed: configClaimedNames.has(name), pluginRoot: entry.url ? "" : plugin.root });
+        }
+      } catch {
+        problems.push("A plugin's configured MCP entries could not be loaded.");
+      }
     }
     return rows;
   } catch {
@@ -746,6 +733,7 @@ export async function handleMcpImportApply(deps: McpConfigIpcDeps, raw: unknown)
 
 /** Wires the five channels onto ipcMain. A payload the handler cannot validate is answered with a safe negative. */
 export function registerMcpConfigIpc(deps: McpConfigIpcDeps): void {
+  registerMcpConfigOpenFileIpc(deps);
   guardedIpcHandle(MCP_CONFIG_GET_CHANNEL, (_event, raw: unknown) => handleMcpConfigGet(deps, raw));
   guardedIpcHandle(MCP_CONFIG_UPSERT_CHANNEL, (_event, raw: unknown) => handleMcpUpsert(deps, raw));
   guardedIpcHandle(MCP_CONFIG_DELETE_CHANNEL, (_event, raw: unknown) => handleMcpDelete(deps, raw));

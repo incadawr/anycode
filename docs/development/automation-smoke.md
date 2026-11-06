@@ -348,3 +348,18 @@ log paths. Discovery sees those two binaries and their directory metadata only;
 all ordinary isolation, ownership, worktree and packaged-app refusals still apply.
 The feature remains off by default. Screenshots and failure logs stay in the
 per-run temporary profile printed by the script.
+
+## Extensions menu fixture smoke
+
+Run `node apps/desktop/scripts/extensions-ui-smoke.mjs` from the repository.
+It uses a fresh HOME/userData, loopback provider and the native doubles above.
+Real CDP key input checks arrows, Tab/Shift+Tab, Back and Escape focus handling.
+Light/dark PNGs exercise 720px and 1100px renderer viewports via CDP emulation;
+native OS window resizing is not checked. No viewport below the window minimum
+is emulated. Native legs check catalog counts, unreported startup status,
+consent-pending read-only MCP entries and unavailable LSP controls without writes.
+The companion mounted tests hold a native configuration write pending and reject
+it, checking duplicate activation and the unchanged saved switch state.
+These doubles do not prove real native MCP connections or hot application.
+The printed private temporary profile contains `result.json` and PNG evidence;
+launch/ownership failures are INCOMPLETE, assertion failures are FAIL.

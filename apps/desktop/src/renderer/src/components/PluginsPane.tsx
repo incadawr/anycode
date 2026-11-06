@@ -31,7 +31,7 @@ import type {
   PluginInstallSource,
   PluginRowView,
   PluginServiceView,
-  PluginsChangedPayload,
+  PluginsChangedReason,
   PluginsMutationResult,
   PluginsSnapshot,
 } from "../../../shared/plugins-config.js";
@@ -71,7 +71,7 @@ import { PluginInstallDialog, type InstallDialogStage } from "./PluginInstallShe
  * drives, injectable so tests never touch a real `window`.
  */
 export interface PluginsBridge {
-  list(): Promise<PluginsSnapshot>;
+  list(request?: { tabId?: string }): Promise<PluginsSnapshot>;
   checkUpdates(): Promise<PluginsSnapshot>;
   installPrepare(source: PluginInstallSource): Promise<{ ok: true; token: string; preview: PluginInstallPreview } | { ok: false; reason: Parameters<typeof pluginsRefusalMessage>[0]; detail?: string }>;
   installCommit(token: string, source: PluginInstallSource, allowMcp?: boolean, allowServices?: boolean): Promise<{ ok: true; snapshot: PluginsSnapshot } | { ok: false; reason: Parameters<typeof pluginsRefusalMessage>[0]; detail?: string }>;
@@ -90,7 +90,7 @@ export interface PluginsBridge {
   reveal(name: string): Promise<PluginsMutationResult>;
   setAutoUpdate(value: boolean): Promise<PluginsMutationResult>;
   /** Push subscription: main fires it after any plugin-set change (reason only). */
-  onPluginsChanged(callback: (payload: PluginsChangedPayload) => void): () => void;
+  onChanged(callback: (payload: PluginsChangedReason) => void): () => void;
 }
 
 /** The pane's load state: `loading` until the first bridge answer, `unavailable` on rejection. */
@@ -113,6 +113,9 @@ export function isPluginsServiceUnavailable(state: PluginsLoadState, snapshot: P
 }
 
 export interface PluginsPaneProps {
+  catalogTabId?: string;
+  catalogOriginUnavailable?: boolean;
+  onCatalogReset?: () => void;
   /** Injectable for tests / isolation; defaults to `window.anycode.plugins`. */
   bridge?: PluginsBridge;
   /** the Sessions-API state for the services hint; defaults to `communication.get()`. */
@@ -122,7 +125,11 @@ export interface PluginsPaneProps {
 export function PluginsPane({
   bridge = window.anycode.plugins,
   sessionsApiStateOf = defaultSessionsApiState,
+  catalogTabId,
+  catalogOriginUnavailable = false,
+  onCatalogReset,
 }: PluginsPaneProps) {
+  const [reloadToken, setReloadToken] = useState(0);
   const [loadState, setLoadState] = useState<PluginsLoadState>("loading");
   const [snapshot, setSnapshot] = useState<PluginsSnapshot | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -145,49 +152,33 @@ export function PluginsPane({
   const [logLines, setLogLines] = useState<Record<string, string[]>>({});
 
   useEffect(() => {
+    if (catalogOriginUnavailable) return;
     let cancelled = false;
-    bridge
-      .list()
-      .then((snap) => {
-        if (!cancelled) {
-          setSnapshot(snap);
-          setLoadState("ready");
-        }
-      })
-      .catch(() => {
-        // No main handlers → honest unavailable state (never a crash).
-        if (!cancelled) {
-          setLoadState("unavailable");
-        }
-      });
-    return () => {
-      cancelled = true;
+    let generation = 0;
+    setSnapshot(null);
+    const load = () => {
+      const request = ++generation;
+      setLoadState("loading");
+      void bridge.list(catalogTabId === undefined ? undefined : { tabId: catalogTabId })
+        .then((snap) => {
+          if (!cancelled && request === generation) {
+            setSnapshot(snap);
+            setLoadState("ready");
+          }
+        }).catch(() => {
+          if (!cancelled && request === generation) setLoadState("unavailable");
+        });
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bridge]);
-
-  // plugins-changed push: subscribe once per bridge; a mid-session channel
-  // loss just stops the banner (never a crash).
-  useEffect(() => {
-    if (typeof bridge.onPluginsChanged !== "function") {
-      return undefined;
-    }
+    load();
+    let unsubscribe: (() => void) | undefined;
     try {
-      return bridge.onPluginsChanged((payload) => {
-        setChangedNotice(`Plugins changed (${payload.reason}) — applies to newly started tasks.`);
-        // The push is the ONLY signal for changes this pane did not make
-        // (auto-update in the background, another window's Plugins pane) —
-        // refetch so the rows stay truthful.
-        bridge
-          .list()
-          .then((snap) => setSnapshot(snap))
-          .catch(() => setLoadState("unavailable"));
+      unsubscribe = bridge.onChanged?.((payload) => {
+        setChangedNotice(`Plugins changed (${payload}) — applies to newly started tasks.`);
+        load();
       });
-    } catch {
-      return undefined;
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bridge]);
+    } catch { /* The catalog can still be read without push notifications. */ }
+    return () => { cancelled = true; unsubscribe?.(); };
+  }, [bridge, catalogTabId, catalogOriginUnavailable, reloadToken]);
 
   // Services are polled while the pane is open (2 s); a missing bridge method just leaves the list empty.
   useEffect(() => {
@@ -216,7 +207,7 @@ export function PluginsPane({
       clearInterval(handle);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bridge]);
+  }, [bridge, catalogTabId]);
 
   async function restartService(plugin: string, name: string): Promise<void> {
     if (typeof bridge.serviceRestart !== "function") return;
@@ -264,7 +255,7 @@ export function PluginsPane({
       const result = await run();
       if (result.ok) {
         try {
-          setSnapshot(await bridge.list());
+          setSnapshot(await bridge.list(catalogTabId === undefined ? undefined : { tabId: catalogTabId }));
         } catch {
           setLoadState("unavailable");
         }
@@ -284,7 +275,8 @@ export function PluginsPane({
     setActionError(null);
     try {
       // check-updates resolves with the fresh snapshot itself (S1-B).
-      setSnapshot(await bridge.checkUpdates());
+      const updated = await bridge.checkUpdates();
+      setSnapshot(catalogTabId === undefined ? updated : await bridge.list({ tabId: catalogTabId }));
     } catch {
       setLoadState("unavailable");
     } finally {
@@ -357,7 +349,7 @@ export function PluginsPane({
       // lines when true; unchecked = servers stay off until Approve MCP).
       const result = await bridge.installCommit(token, pendingSource, allowMcp, allowServices);
       if (result.ok) {
-        setSnapshot(result.snapshot);
+        setSnapshot(catalogTabId === undefined ? result.snapshot : await bridge.list({ tabId: catalogTabId }));
         setInstallOpen(false);
         setInstallStage({ phase: "source" });
         setPendingSource(null);
@@ -384,8 +376,14 @@ export function PluginsPane({
     }
   }
 
+  if (catalogOriginUnavailable) {
+    return <section className="settings-section plugins-pane" data-plugins-state="no-origin">
+      <p role="status">The original session is no longer available. Reload to view the current plugins catalog.</p>
+      <Button className="settings-button" onClick={onCatalogReset}>Reload plugins</Button>
+    </section>;
+  }
   if (isPluginsServiceUnavailable(loadState, snapshot)) {
-    return <PluginsUnavailableCard />;
+    return <PluginsUnavailableCard onRetry={() => setReloadToken(value => value + 1)} />;
   }
 
   return (
@@ -494,7 +492,7 @@ export function PluginsPane({
 // ── hook-FREE presentational pieces (directly callable in the no-jsdom tests) ──
 
 /** The honest degraded card (never a crash when main handlers are absent). */
-export function PluginsUnavailableCard() {
+export function PluginsUnavailableCard({ onRetry }: { onRetry?: () => void } = {}) {
   return (
     <section className="settings-section plugins-pane" data-plugins-state="unavailable">
       <div className="settings-section-title">Plugins</div>
@@ -503,6 +501,7 @@ export function PluginsUnavailableCard() {
         channels yet. Hand-placed plugin directories under <code>~/.anycode/plugins</code> and
         <code> .anycode/plugins</code> keep working as before.
       </div>
+      {onRetry && <Button className="settings-button" onClick={onRetry}>Retry</Button>}
     </section>
   );
 }

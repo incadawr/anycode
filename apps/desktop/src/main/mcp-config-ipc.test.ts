@@ -9,6 +9,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { serversHash } from "@anycode/core/plugins";
 import {
   handleMcpConfigGet,
   handleMcpDelete,
@@ -261,6 +262,20 @@ describe("handleMcpDelete", () => {
 // handleMcpSetEnabled: lossless enabled-only patch (W3-FIX)
 
 describe("handleMcpSetEnabled", () => {
+  it("preserves HTTP headers, unknown fields and unrelated configuration during enabled patches", async () => {
+    const original = { unrelated: { keep: true }, mcpServers: {
+      http: { url: "https://example.test/mcp", headers: { Authorization: SENTINEL }, custom: { keep: 1 }, enabled: true },
+      other: { command: "node", args: ["a b", "c"], env: { KEY: SENTINEL } },
+    } };
+    const { deps, files } = makeDeps({ [PROJECT_CONFIG]: JSON.stringify(original) });
+    const result = await handleMcpSetEnabled(deps, { tabId: TAB_ID, scope: "project", name: "http", enabled: false });
+    expect(result.ok).toBe(true);
+    expect(JSON.parse(files[PROJECT_CONFIG]!)).toEqual({ ...original, mcpServers: {
+      ...original.mcpServers, http: { ...original.mcpServers.http, enabled: false },
+    } });
+    expect(JSON.stringify(result)).not.toContain(SENTINEL);
+  });
+
   it("toggles enabled while preserving cwd and secret env values verbatim", async () => {
     const { deps, files } = makeDeps({
       [PROJECT_CONFIG]: JSON.stringify({
@@ -580,6 +595,35 @@ describe("handleMcpConfigGet pluginServers (S1-C)", () => {
     expect(snapshot.entries.map((e) => e.name)).not.toContain("plugin_acme-tools_api");
   });
 
+  it("lists pending-consent and disabled declarations without granting consent", async () => {
+    const { deps } = pluginWorld(pluginManifestJson({ api: { command: "node", enabled: false } }));
+    deps.readMcpConsent = async () => [];
+    const snapshot = await handleMcpConfigGet(deps, {});
+    expect(snapshot.pluginServers).toEqual([expect.objectContaining({ name: "plugin_acme-tools_api", consentGranted: false })]);
+  });
+
+  it("lists enabled declarations while approval is pending", async () => {
+    const { deps } = pluginWorld(pluginManifestJson({ api: { command: "node" } }));
+    deps.readMcpConsent = async () => [];
+    const snapshot = await handleMcpConfigGet(deps, {});
+    expect(snapshot.pluginServers).toEqual([expect.objectContaining({ name: "plugin_acme-tools_api", consentGranted: false })]);
+  });
+
+  it("keeps globally disabled plugin declarations in the configured catalog", async () => {
+    const { deps } = pluginWorld(pluginManifestJson({ api: { command: "node" } }));
+    await deps.fs.writeFile(`${USER_PLUGINS_ROOT}/state.json`, JSON.stringify({ version: 1, plugins: {}, disabled: ["acme-tools"] }));
+    const snapshot = await handleMcpConfigGet(deps, {});
+    expect(snapshot.pluginServers).toEqual([expect.objectContaining({ name: "plugin_acme-tools_api", consentGranted: false })]);
+  });
+
+  it.each([true, false])("reflects only a current consent hash (current=%s)", async current => {
+    const entries = { api: { command: "node" } };
+    const { deps } = pluginWorld(pluginManifestJson(entries));
+    deps.readMcpConsent = async () => [{ plugin: "acme-tools", serversHash: current ? serversHash(entries) : "stale", grantedAt: "fixture" }];
+    const snapshot = await handleMcpConfigGet(deps, {});
+    expect(snapshot.pluginServers?.[0]?.consentGranted).toBe(current);
+  });
+
   it("projects an http server's url as its command line", async () => {
     const { deps } = pluginWorld(pluginManifestJson({ web: { url: "https://example.com/mcp" } }));
     const snapshot = await handleMcpConfigGet(deps, {});
@@ -590,7 +634,7 @@ describe("handleMcpConfigGet pluginServers (S1-C)", () => {
     });
   });
 
-  it("drops a plugin row whose runtime name an explicit config row claims (config wins at runtime — nothing to shadow)", async () => {
+  it("keeps a shadowed plugin declaration when explicit config owns its runtime name", async () => {
     const { deps } = makeDeps(
       {
         [`${USER_PLUGINS_ROOT}/acme-tools/.anycode-plugin/plugin.json`]: pluginManifestJson({ api: { command: "node", args: ["api.js"] } }),
@@ -600,10 +644,7 @@ describe("handleMcpConfigGet pluginServers (S1-C)", () => {
       { [USER_PLUGINS_ROOT]: ["acme-tools"], [`${USER_PLUGINS_ROOT}/acme-tools`]: [".anycode-plugin"] },
     );
     const snapshot = await handleMcpConfigGet(deps, {});
-    // Core's resolver drops plugin servers whose renamed name is already
-    // claimed by explicit config, so the pane shows exactly the config row —
-    // the runtime precedence, mirrored read-only.
-    expect(snapshot.pluginServers).toEqual([]);
+    expect(snapshot.pluginServers).toEqual([expect.objectContaining({ name: "plugin_acme-tools_api", shadowed: true })]);
     expect(snapshot.entries.map((e) => e.name)).toContain("plugin_acme-tools_api");
   });
 

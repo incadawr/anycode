@@ -105,7 +105,9 @@ export async function discoverLoginPath(env: NodeJS.ProcessEnv = process.env): P
  * JSON parse diagnostic is deliberately content-free, and refs fail closed).
  */
 export function mcpProblemStatuses(problems: readonly string[]): McpServerStatus[] {
-  return problems.map((problem) => ({
+  // Match the loader's complete controlled skip message, not arbitrary errors
+  // that happen to mention disabled servers.
+  return problems.filter((problem) => !/^MCP server '[\s\S]*' in [\s\S]+: disabled — server skipped$/.test(problem)).map((problem) => ({
     name: /^MCP server '([^']+)'/.exec(problem)?.[1] ?? "MCP config",
     transport: "stdio",
     state: "failed",

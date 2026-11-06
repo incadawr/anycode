@@ -130,6 +130,8 @@ export interface PluginsIpcDeps {
    * so the pane follows the live tab workspace; see activePluginsWorkspace.
    */
   activeWorkspace?(): string | undefined;
+  /** Resolve a live tab to its workspace for scoped reads. */
+  workspaceForTab?(tabId: string): string | undefined;
   /**
    * Test/embedder seam for the whole index check. Receives the persisted
    * anti-rollback floor exactly as the production path passes it to
@@ -237,10 +239,10 @@ function servicePreviewOf(services: readonly PluginServiceSpec[] | undefined): N
 
 // ── snapshot builder ──
 
-async function buildSnapshot(deps: PluginsIpcDeps, indexCheck?: { status: string; index?: PluginIndex; detail?: string }): Promise<PluginsSnapshot> {
+async function buildSnapshot(deps: PluginsIpcDeps, indexCheck?: { status: string; index?: PluginIndex; detail?: string }, workspace?: string): Promise<PluginsSnapshot> {
   const settings = await deps.settings.getPlugins();
   const scan = await scanPluginsAdmin(deps.fs, {
-    workspace: workspaceOf(deps),
+    workspace: workspace ?? workspaceOf(deps),
     home: deps.home,
     pluginStatePath: statePath(deps.home),
     appVersion: deps.appVersion,
@@ -858,8 +860,15 @@ export function registerPluginsIpc(deps: PluginsIpcDeps): PluginsIpc {
 
   // ── channel registration ──
 
-  guardedIpcHandle(PLUGINS_LIST_CHANNEL, async (): Promise<PluginsSnapshot> => {
-    return buildSnapshot(deps);
+  guardedIpcHandle(PLUGINS_LIST_CHANNEL, async (_event, payload: unknown): Promise<PluginsSnapshot> => {
+    const parsed = z.object({ tabId: z.string().min(1).optional() }).strict().safeParse(payload ?? {});
+    if (!parsed.success) throw new Error("Invalid plugins list request");
+    // No tabId (including {}) is the legacy unscoped Settings read. Only an
+    // explicit tabId selects a session workspace; its resolution must not fall back.
+    if (parsed.data.tabId === undefined) return buildSnapshot(deps);
+    const workspace = deps.workspaceForTab?.(parsed.data.tabId);
+    if (!workspace) throw new Error("Tab workspace unavailable");
+    return buildSnapshot(deps, undefined, workspace);
   });
 
   guardedIpcHandle(PLUGINS_CHECK_UPDATES_CHANNEL, async (): Promise<PluginsSnapshot> => {

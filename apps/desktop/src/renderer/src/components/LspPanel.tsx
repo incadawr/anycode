@@ -261,7 +261,7 @@ export function LspPanel() {
         <button type="button" className="git-btn lsp-panel-refresh" onClick={refresh}>
           Refresh
         </button>
-        <button type="button" className="lsp-panel-close" aria-label="Close LSP status" onClick={close}>
+        <button type="button" className="lsp-panel-close" autoFocus aria-label="Close LSP status" onClick={close}>
           <X />
         </button>
       </div>

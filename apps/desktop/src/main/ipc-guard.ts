@@ -114,14 +114,20 @@ function ipcGuardRefusal(channel: string): Error {
 /**
  * `ipcMain.handle` behind the guard: untrusted sender, non-top frame or a
  * missing event THROWS (the renderer's invoke rejects); a trusted main-frame
- * call reaches `handler` unchanged.
+ * call reaches `handler` unchanged. `mainWindowOnly` excludes all auxiliary windows.
  */
 export function guardedIpcHandle(
   channel: string,
   handler: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown,
+  options: { mainWindowOnly?: boolean } = {},
 ): void {
   ipcMain.handle(channel, (event, ...args) => {
     if (!isTrustedTopFrameIpcEvent(event, channel)) throw ipcGuardRefusal(channel);
+    if (options.mainWindowOnly) {
+      let main: unknown;
+      try { main = mainWindowSource?.(); } catch { throw ipcGuardRefusal(channel); }
+      if (event.sender !== main) throw ipcGuardRefusal(channel);
+    }
     return handler(event, ...args);
   });
 }

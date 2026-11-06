@@ -732,6 +732,27 @@ describe("install preview and provenance (xfix M7, L3)", () => {
 });
 
 describe("the pane scans the live tab workspace (xfix M6)", () => {
+  it("lists the requested live tab workspace without changing the legacy default", async () => {
+    const scaffold = makeDeps();
+    for (const [workspace, name] of [["/a", "alpha"], ["/b", "beta"]]) {
+      await scaffold.fs.mkdir(`${workspace}/.anycode/plugins/${name}`);
+      scaffold.storeFiles.set(`${workspace}/.anycode/plugins/${name}/.anycode-plugin/plugin.json`, JSON.stringify({ manifestVersion: 1, name, version: "0.1.0" }));
+    }
+    scaffold.deps.activeWorkspace = () => "/a";
+    scaffold.deps.workspaceForTab = (tabId) => ({ a: "/a", b: "/b" } as Record<string, string>)[tabId];
+    const checkIndex = vi.fn();
+    scaffold.deps.checkIndex = checkIndex;
+    registerPluginsIpc(scaffold.deps);
+    const names = (snapshot: { plugins: { name: string }[] }) => snapshot.plugins.map((p) => p.name);
+    expect(names(await invoke(PLUGINS_LIST_CHANNEL, { tabId: "b" }))).toEqual(["beta"]);
+    expect(names(await invoke(PLUGINS_LIST_CHANNEL, { tabId: "a" }))).toEqual(["alpha"]);
+    expect(names(await invoke(PLUGINS_LIST_CHANNEL))).toEqual(["alpha"]);
+    expect(names(await invoke(PLUGINS_LIST_CHANNEL, {}))).toEqual(["alpha"]);
+    await expect(invoke(PLUGINS_LIST_CHANNEL, { tabId: "closed" })).rejects.toThrow("Tab workspace unavailable");
+    await expect(invoke(PLUGINS_LIST_CHANNEL, { tabId: "" })).rejects.toThrow("Invalid plugins list request");
+    expect(checkIndex).not.toHaveBeenCalled();
+  });
+
   it("activePluginsWorkspace picks the first tab workspace, else the fallback", () => {
     expect(activePluginsWorkspace([{ workspace: "" }, { workspace: "/repo" }], "/home/x")).toBe("/repo");
     expect(activePluginsWorkspace([], "/home/x")).toBe("/home/x");

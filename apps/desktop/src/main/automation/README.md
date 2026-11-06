@@ -1869,3 +1869,23 @@ curl "${A[@]}" "${J[@]}" -X POST $B/tabs/$TAB/replay/disarm -d '{}'
 - renderer facade: `apps/desktop/src/renderer/src/automation.ts` — installed
   DEV-only from `main.tsx`; a snapshot projection over the live zustand stores +
   mirrors of the real UI actions.
+
+### Isolated Extensions acceptance
+
+From the repository root, with dependencies installed:
+
+```sh
+node apps/desktop/scripts/extensions-ui-smoke.mjs
+node --test apps/desktop/scripts/extensions-ui-smoke.test.mjs
+```
+
+The driver starts development Electron with the shared isolated launcher and
+verified CDP ownership checks (currently macOS). It creates a temporary HOME,
+userData and workspaces, uses a loopback model and the stdio MCP fixture, and
+accepts no attach/profile arguments. No provider credentials are needed.
+It checks category counts, scopes, closed-menu failures, lossless disables,
+retained tools in the current host, saved settings in a new host, and A/B tab
+isolation. PNGs and safe `result.json` evidence stay in the printed temporary
+profile. `INCOMPLETE` means launch/ownership verification did not finish;
+`FAIL` means an acceptance check failed. Both exit nonzero. Keyboard/layout/
+theme, native engines and external editor acceptance are separate checks.

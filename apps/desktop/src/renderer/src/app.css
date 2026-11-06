@@ -1445,6 +1445,8 @@ body {
 /* ── session header (design §2.1/§2.4) ── */
 
 .session-header {
+  container-type: inline-size;
+  container-name: session-header;
   display: flex;
   align-items: center;
   gap: var(--sp-3);
@@ -1455,6 +1457,96 @@ body {
   border-bottom: 1px solid var(--border);
   /* drag region — any new interactive child MUST set -webkit-app-region: no-drag */
   -webkit-app-region: drag;
+}
+
+.session-extensions-trigger, .session-extensions-panel {
+  -webkit-app-region: no-drag;
+  color: var(--text-1);
+  font-size: 12px;
+}
+.session-extensions-trigger {
+  height: auto;
+  font-weight: normal;
+  line-height: normal;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+  padding: var(--sp-1);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  cursor: pointer;
+}
+.session-extensions-panel {
+  position: fixed;
+  z-index: 1000;
+  width: min(280px, calc(100vw - 16px));
+  max-width: 520px;
+  max-height: calc(100vh - 16px);
+  overflow: auto;
+  box-sizing: border-box;
+  padding: var(--sp-2);
+  background: var(--bg-overlay);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  box-shadow: var(--shadow-menu);
+}
+.session-extensions-heading { padding: var(--sp-2); color: var(--text-2); }
+.session-extensions-category {
+  height: auto;
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  padding: var(--sp-2);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: inherit;
+  font: inherit;
+  -webkit-app-region: no-drag;
+}
+.session-extensions-panel.has-details { width: min(520px, calc(100vw - 16px)); }
+.session-extensions-body { min-height: 0; max-height: calc(100vh - 80px); overflow: auto; }
+.has-details .session-extensions-body { display: grid; grid-template-columns: 160px minmax(0, 1fr); overflow: hidden; }
+.session-extensions-categories, .session-extensions-details { min-width: 0; overflow: auto; }
+.session-extensions-category > span:first-child { flex: 1; text-align: left; }
+.session-extensions-category > span:last-child { margin-left: var(--sp-2); }
+.session-extensions-category[aria-expanded="true"] { background: var(--bg-hover); }
+.session-extensions-details { padding: var(--sp-2); border-left: 1px solid var(--border); }
+.session-extensions-details h3 { margin: var(--sp-2) 0; font-size: inherit; }
+.session-extensions-details p { color: var(--text-2); }
+.session-extensions-details button:not(.ak-switch) {
+  display: inline-block;
+  height: auto;
+  font-weight: normal;
+  line-height: normal;
+  white-space: normal;
+  -webkit-app-region: no-drag;
+  color: var(--text-1);
+  background: var(--bg-overlay);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: var(--sp-1) var(--sp-2);
+  cursor: pointer;
+}
+.session-extensions-details .ak-btn:focus-visible { outline-offset: 1px; }
+.session-extensions-list { margin: 0; padding: 0; list-style: none; }
+.session-extensions-list li { padding: var(--sp-2) 0; border-bottom: 1px solid var(--border); }
+.session-extensions-name, .session-extensions-source { display: block; overflow-wrap: anywhere; }
+.session-extensions-source { color: var(--text-2); }
+@media (width < 600px) {
+  .has-details .session-extensions-body { display: block; overflow: auto; }
+  .session-extensions-details { border-left: 0; }
+}
+.session-extensions-trigger:hover, .session-extensions-category:hover { background: var(--bg-hover); }
+.session-extensions-trigger:focus-visible, .session-extensions-category:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+@container session-header (width < 720px) {
+  .session-extensions-label { display: none; }
 }
 
 /* Custom titlebar (design/ui-track custom-titlebar §2): macOS-only traffic-
@@ -8855,3 +8947,10 @@ dialog.role-picker-dialog {
 .ctx-popover .go-quota-row { display: flex; flex-wrap: wrap; gap: 0 6px; }
 .ctx-popover .go-quota-warning { color: var(--warning); }
 .ctx-popover .go-quota-danger { color: var(--danger); }
+
+.session-extensions-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin: 0 4px; background: var(--text-2); }
+.session-extensions-dot.tone-success { background: var(--success); }
+.session-extensions-dot.tone-warning { background: var(--warning); }
+.session-extensions-dot.tone-danger { background: var(--danger); }
+.session-extensions-warning { position: absolute; top: 0; right: 0; margin: 0; }
+.session-extensions-sr { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

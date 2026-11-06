@@ -1,10 +1,10 @@
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import type { ComponentPropsWithRef, ReactNode } from "react";
 import { IconSpinner } from "./icons.js";
 
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 export type ButtonSize = "sm" | "md" | "lg";
 
-export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "disabled"> {
+export interface ButtonProps extends Omit<ComponentPropsWithRef<"button">, "disabled"> {
   variant?: ButtonVariant;
   size?: ButtonSize;
   /** Показывает спиннер, aria-busy=true; ширина кнопки сохраняется. */

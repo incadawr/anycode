@@ -7,6 +7,10 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- A session Extensions menu in the header shows MCP servers, plugins, skills and language servers for the current session, lets you switch MCP servers, skills and plugins on or off, and opens the matching Settings pane or config file.
+
 ### Changed
 
 - Subagents now start in the background by default on desktop and deliver their reports in a new turn. Explicit session calls also run in the background; select the inline tier or set detach to false when you need to wait for a result.
