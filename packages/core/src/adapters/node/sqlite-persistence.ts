@@ -1559,6 +1559,20 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
    * id in a real parent chain is already distinct, so there is nothing for
    * dedup to remove).
    */
+  /** Archived references remain owned metadata, never evidence of an open process. */
+  listRuntimeNativeReferences(sessionId?: string): {sessionId:string;engine:string;accountScope:string;nativeRef:string}[] {
+    return this.open().prepare(`SELECT DISTINCT session_id AS sessionId,engine,
+        CASE WHEN account_scope='system' THEN '' ELSE account_scope END AS accountScope,native_ref AS nativeRef
+        FROM runtime_segments WHERE native_ref IS NOT NULL AND (? IS NULL OR session_id=?)
+      UNION SELECT id,COALESCE(engine_id,'core'),CASE WHEN codex_profile_id='system' THEN '' ELSE COALESCE(codex_profile_id,'') END,external_session_ref
+        FROM sessions WHERE external_session_ref IS NOT NULL AND (? IS NULL OR id=?)`).all(sessionId ?? null,sessionId ?? null,sessionId ?? null,sessionId ?? null) as unknown as {sessionId:string;engine:string;accountScope:string;nativeRef:string}[];
+  }
+
+  runtimeNativeReferenceOwners(engine: string, accountScope: string, nativeRef: string): string[] {
+    const scope = accountScope === "system" ? "" : accountScope;
+    return [...new Set(this.listRuntimeNativeReferences().filter(ref => ref.engine === engine && ref.accountScope === scope && ref.nativeRef === nativeRef).map(ref => ref.sessionId))];
+  }
+
   async deleteSessionTree(rootId: string): Promise<{ deletedSessionIds: string[]; externalSessionRefs: string[] }> {
     return this.transaction((db) => {
       const { deletedSessionIds, externalSessionRefs } = this.deleteSessionTreeInTx(db, rootId);
@@ -1595,9 +1609,10 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     if (deletedSessionIds.length === 0) {
       return { deletedSessionIds, externalSessionRefs: [], counts };
     }
-    const externalSessionRefs = treeRows
-      .map((row) => row.external_session_ref)
-      .filter((ref): ref is string => typeof ref === "string" && ref.length > 0);
+    const archivedRefs = db.prepare(`SELECT session_id AS id,engine AS engine_id,native_ref AS external_session_ref
+      FROM runtime_segments WHERE session_id IN (${deletedSessionIds.map(() => "?").join(",")}) AND native_ref IS NOT NULL`).all(...deletedSessionIds) as unknown as typeof treeRows;
+    const ownedRefs = [...treeRows,...archivedRefs];
+    const externalSessionRefs = [...new Set(ownedRefs.map(row => row.external_session_ref).filter((ref): ref is string => typeof ref === "string" && ref.length > 0))];
 
     const idPlaceholders = deletedSessionIds.map(() => "?").join(", ");
     counts.historyItems = Number(db.prepare(`DELETE FROM history_items WHERE session_id IN (${idPlaceholders})`).run(...deletedSessionIds).changes);
@@ -1623,10 +1638,10 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
     // touched by this cascade. A ref can also be shared by multiple sessions
     // of the same engine. Remove its rows only when no owner survives this
     // subtree; the owner check and deletion share the same transaction.
-    const codexRefs = treeRows
+    const codexRefs = ownedRefs
       .filter((row) => row.engine_id === "codex" && typeof row.external_session_ref === "string" && row.external_session_ref.length > 0)
       .map((row) => row.external_session_ref as string);
-    const claudeRefs = treeRows
+    const claudeRefs = ownedRefs
       .filter((row) => row.engine_id === "claude" && typeof row.external_session_ref === "string" && row.external_session_ref.length > 0)
       .map((row) => row.external_session_ref as string);
 
@@ -1637,7 +1652,8 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
           WHERE thread_id IN (${refPlaceholders})
             AND thread_id NOT IN (SELECT s.external_session_ref FROM sessions s
               WHERE s.engine_id = 'codex' AND s.external_session_ref IS NOT NULL
-                AND s.id NOT IN (${idPlaceholders}))`).run(...codexRefs, ...deletedSessionIds).changes,
+                AND s.id NOT IN (${idPlaceholders})
+              UNION SELECT r.native_ref FROM runtime_segments r WHERE r.engine='codex' AND r.native_ref IS NOT NULL AND r.session_id NOT IN (${idPlaceholders}))`).run(...codexRefs, ...deletedSessionIds, ...deletedSessionIds).changes,
       );
     }
     if (claudeRefs.length > 0) {
@@ -1647,10 +1663,16 @@ export class SqlitePersistenceAdapter implements PersistencePort, CheckpointStor
           WHERE session_ref IN (${refPlaceholders})
             AND session_ref NOT IN (SELECT s.external_session_ref FROM sessions s
               WHERE s.engine_id = 'claude' AND s.external_session_ref IS NOT NULL
-                AND s.id NOT IN (${idPlaceholders}))`).run(...claudeRefs, ...deletedSessionIds).changes,
+                AND s.id NOT IN (${idPlaceholders})
+              UNION SELECT r.native_ref FROM runtime_segments r WHERE r.engine='claude' AND r.native_ref IS NOT NULL AND r.session_id NOT IN (${idPlaceholders}))`).run(...claudeRefs, ...deletedSessionIds, ...deletedSessionIds).changes,
       );
     }
 
+    // Legacy shadow tables have no account column: retain a shared literal ref
+    // conservatively even when its surviving owner uses another account.
+    for (const table of ["runtime_inputs","runtime_handoffs","runtime_boundaries","runtime_transcript","runtime_segments"]) {
+      db.prepare(`DELETE FROM ${table} WHERE session_id IN (${idPlaceholders})`).run(...deletedSessionIds);
+    }
     db.prepare(`DELETE FROM sessions WHERE id IN (${idPlaceholders})`).run(...deletedSessionIds);
 
     return { deletedSessionIds, externalSessionRefs, counts };
