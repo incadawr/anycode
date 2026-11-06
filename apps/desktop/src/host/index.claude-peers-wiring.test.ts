@@ -5,6 +5,7 @@ import { Session } from "./session.js";
 import { createSessionPeerBridge } from "./engines/session-peer-bridge.js";
 import { claudeAgentPermissionMode } from "./engines/child-permission-map.js";
 import { createBridgePresentationStamp } from "./engines/claude/bridge-presentation-stamp.js";
+import { createConnectionTargetsBridge } from "./engines/connection-targets-bridge.js";
 import { ClaudeMcpBridge } from "./engines/claude/mcp-bridge.js";
 import { ClaudeShadowTranscriptEngine, SqliteClaudeShadowTranscript } from "./engines/claude/shadow-transcript.js";
 
@@ -34,6 +35,9 @@ async function fixture() {
     createSwitchEngineFactory: (context: any) => context,
     ENV_CLAUDE_BIN: "CLAUDE_BIN", candidateRouting: async () => routing,
     sessionPeersPort: { request }, createBridgePresentationStamp,
+    nativeConnectionBridge: () => createConnectionTargetsBridge(() => ({
+      current: { engine: "claude", routeKind: "native_cli", model: "native-model" }, connections: [],
+    })),
     createSessionPeerBridge: (options: Parameters<typeof createSessionPeerBridge>[0]) => {
       authority = options.authority;
       return createSessionPeerBridge(options);
@@ -59,6 +63,10 @@ it("switched Claude peers use the engine adopted by Session, and lose authority 
     expect(f.runtime.engine).toBeInstanceOf(ClaudeShadowTranscriptEngine);
     expect(f.runtime.engine).not.toBe(f.raw);
     expect(f.authority().root).toBe(true);
+    const catalog = await f.call("list_connections");
+    expect(catalog.isError).toBe(false);
+    expect(JSON.parse(catalog.text)).toMatchObject({ current: { engine: "claude", model: "native-model" } });
+    expect(f.request).not.toHaveBeenCalled();
     expect((await f.call()).isError).toBe(false);
     expect(f.request).toHaveBeenCalledOnce();
     f.session.engine = {}; // Child/non-owned runtime cannot act as the root.
