@@ -15,6 +15,9 @@ export interface SessionPeerAccessDeps {
   enabled(): boolean;
   policy: SessionPeerPolicyStore;
   isTrusted(key: string): boolean;
+  /** Must return the same case representation used by pinned keys and trust.
+   * Darwin preserves case: inject a stable realpath spelling for case aliases;
+   * mismatched spellings fail closed rather than merging case-sensitive paths. */
   realpathSync(path: string): string;
   statSync(path: string): { isDirectory(): boolean };
   platform?: NodeJS.Platform;
@@ -50,9 +53,9 @@ export function createSessionPeerAccess(deps: SessionPeerAccessDeps) {
   }
   return {
     canAccessWorkspace,
-    canAccess(caller: PeerSessionFacts, target: PeerSessionFacts, operation: PeerOperation): boolean {
+    canAccess(caller: PeerSessionFacts, target: PeerSessionFacts, operation: PeerOperation, targetAllowsOpen = false): boolean {
       return target.live && target.root && !target.restricted &&
-        canAccessWorkspace(caller, target.workspace, target.workspaceKey, operation);
+        canAccessWorkspace(caller, target.workspace, target.workspaceKey, operation, targetAllowsOpen);
     },
   };
 }

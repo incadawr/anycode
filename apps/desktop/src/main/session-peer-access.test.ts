@@ -47,6 +47,8 @@ it("requires symmetric grants and both trust decisions; revoke applies immediate
     expect(access.canAccess(facts(from), facts(to), "open")).toBe(false);
   }
   expect(access.canAccessWorkspace(facts(), b, b, "open", true)).toBe(true);
+  expect(access.canAccess(facts(), facts(b), "open", true)).toBe(true);
+  expect(access.canAccess(facts(), facts(b), "open", false)).toBe(false);
   trusted.delete(b);
   expect(access.canAccess(facts(), facts(b), "send")).toBe(false);
   trusted.add(b);
@@ -169,4 +171,51 @@ it("does not merge Windows drives or UNC shares without an exact pair grant", ()
   expect(access.canAccess(caller, target, "send")).toBe(true);
   expect(access.canAccess(caller, { ...target, workspace: "d:\\repo", workspaceKey: "d:\\repo" }, "send")).toBe(false);
   expect(normalizePeerWorkspaceKey("/repo\\", "darwin")).toBe("/repo\\");
+});
+
+it.each(["/nested", "-sibling"])("rejects a changed workspace sharing the pinned prefix: %s", suffix => {
+  const { access, trusted, policy } = setup();
+  const target = a + suffix;
+  mkdirSync(target);
+  const key = realpathSync(target);
+  trusted.add(key);
+  expect(policy.setPairGrant(a, key, true)).toBe(true);
+  // Consent is present: only the generation's pinned path must deny access.
+  expect(access.canAccess(facts(), facts(target), "send")).toBe(true);
+  const moved = { ...facts(target), workspaceKey: a };
+  for (const operation of ["list", "send"] as const) {
+    expect(access.canAccess(facts(), moved, operation)).toBe(false);
+    expect(access.canAccess(moved, facts(), operation)).toBe(false);
+  }
+});
+it.each([
+  "{",
+  JSON.stringify({ version: 2, off: [], grants: [] }),
+  JSON.stringify({ version: 1, off: [], grants: [], unknown: true }),
+])("preserves invalid policy bytes when mutators are called: %s", contents => {
+  writeFileSync(file, contents);
+  const before = readFileSync(file);
+  const policy = createSessionPeerPolicyStore({ file });
+  expect(policy.setNativeEnabled(a, true)).toBe(false);
+  expect(readFileSync(file)).toEqual(before);
+  expect(policy.setPairGrant(a, b, true)).toBe(false);
+  expect(readFileSync(file)).toEqual(before);
+  // Repairing storage does not recover this instance; the UI must request restart.
+  writeFileSync(file, JSON.stringify({ version: 1, off: [], grants: [] }));
+  expect(policy.setNativeEnabled(a, true)).toBe(false);
+  expect(policy.isNativeEnabled(a)).toBe(false);
+  expect(createSessionPeerPolicyStore({ file }).isNativeEnabled(a)).toBe(true);
+});
+it("requires stable realpath case matching pinned and trusted keys on darwin", () => {
+  const key = "/Work/Repo", alias = "/work/repo";
+  const policy = createSessionPeerPolicyStore({ file, platform: "darwin" });
+  const deps = { policy, platform: "darwin" as const, enabled: () => true,
+    isTrusted: (p: string) => p === key, statSync: () => ({ isDirectory: () => true }) };
+  const caller = { ...facts(), workspace: key, workspaceKey: key };
+  const target = { ...caller, workspace: alias };
+  const preserving = createSessionPeerAccess({ ...deps, realpathSync: p => p });
+  expect(preserving.canAccess(caller, target, "send")).toBe(false);
+  // The adapter may resolve verified aliases to the spelling shared by trust and pins.
+  const stable = createSessionPeerAccess({ ...deps, realpathSync: p => p === alias ? key : p });
+  expect(stable.canAccess(caller, target, "send")).toBe(true);
 });

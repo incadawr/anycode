@@ -33,7 +33,9 @@ export interface SessionPeerPolicyStore {
   setPairGrant(a: string, b: string, granted: boolean): boolean;
 }
 
-/** Missing file uses trusted-workspace defaults; corrupt/unreadable storage disables access. */
+/** Missing file uses trusted-workspace defaults; corrupt/unreadable storage disables access.
+ * After a corrupt/unreadable start all mutators return false until restart,
+ * even if storage is repaired. The policy UI must surface this restart requirement. */
 export function createSessionPeerPolicyStore(deps: { file: string; platform?: NodeJS.Platform }): SessionPeerPolicyStore {
   const validKey = (key: string) => normalizePeerWorkspaceKey(key, deps.platform) === key;
   let state: Policy = { version: 1, off: [], grants: [] };
