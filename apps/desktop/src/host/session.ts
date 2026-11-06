@@ -2710,6 +2710,9 @@ export class Session {
       if (raw !== null && typeof raw === "object" && "type" in raw && raw.type === "user_message" && "requestId" in raw && typeof raw.requestId === "string" && raw.requestId.length > 0 && raw.requestId.length <= 128) {
         this.outbound.sendDirect({ type: "user_message_invalid", requestId: raw.requestId });
       }
+      if (raw !== null && typeof raw === "object" && "type" in raw && raw.type === "engine_switch_request" && "requestId" in raw && typeof raw.requestId === "string" && raw.requestId.length > 0 && raw.requestId.length <= 128) {
+        this.failEngineSwitch(raw.requestId,"Invalid engine switch selection.");
+      }
       // Fail-closed: garbage can never grant a permission or start a turn.
       console.warn("[host] dropped invalid UI message:", parsed.error.issues);
       return;
@@ -2725,6 +2728,9 @@ export class Session {
     // attached to a dying host — replies to informational requests are moot).
     if (this.shuttingDown) {
       switch (message.type) {
+        case "engine_switch_request":
+          this.failEngineSwitch(message.requestId,"The session is closing. Reconnect and try again.");
+          break;
         case "steer_message":
         // 4110 rework: core gets an honest re-queue reply — the dying host
         // can no longer inject; the renderer keeps the text in its prompt
@@ -3316,7 +3322,7 @@ export class Session {
         void this.onCompact();
         break;
       case "engine_switch_request":
-        if (this.postureBlocked()) { this.outbound.sendDirect({ type: "engine_switch_failed", requestId: message.requestId, reason: "Session posture unavailable" }); break; }
+        if (this.postureBlocked()) { this.failEngineSwitch(message.requestId,"Session posture unavailable"); break; }
         // async handler holds `busy` across the factory await —
         // the exact rewind pattern (route() itself never awaits). The handler
         // re-checks its own gates (messages route synchronously, but this
@@ -4237,6 +4243,10 @@ export class Session {
     }
   }
 
+  private failEngineSwitch(requestId: string, reason: string): void {
+    this.outbound.sendDirect({type:"engine_switch_failed",requestId,reason,...(this.engineSwitchCoordinator ? {generation:this.engineSwitchCoordinator.generation} : {})});
+  }
+
   /**
    * (review 23.08 narrowing): swap the active
    * SessionEngine BETWEEN turns — in place, no session respawn, no N×N
@@ -4258,9 +4268,7 @@ export class Session {
    * finally — never between the factory await and the dispose.
    */
   private async onEngineSwitch(message: Extract<UiToHostMessage, { type: "engine_switch_request" }>): Promise<void> {
-    const fail = (reason: string) => {
-      this.outbound.sendDirect({ type: "engine_switch_failed", requestId: message.requestId, reason, ...(this.engineSwitchCoordinator ? { generation: this.engineSwitchCoordinator.generation } : {}) });
-    };
+    const fail = (reason: string) => this.failEngineSwitch(message.requestId,reason);
     if (this.engineSwitchCoordinator && message.generation !== this.engineSwitchCoordinator.generation) return fail("stale host generation");
     if (this.engineSwitchRequestIds.has(message.requestId) || this.engineSwitchRequestIds.size >= 1024) return fail("duplicate engine switch request");
     this.engineSwitchRequestIds.add(message.requestId);

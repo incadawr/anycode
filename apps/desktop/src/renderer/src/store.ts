@@ -6354,16 +6354,16 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
       },
 
       setAwaitingPort(): void {
-        set({ connection: "awaiting_port" });
+        set({ connection: "awaiting_port", pendingEngineSwitch: null });
       },
 
       setPortClosed(): void {
-        set((state) => ({connection:"awaiting_port",...holdInFlightUnknown(state),
+        set((state) => ({connection:"awaiting_port",pendingEngineSwitch:null,...holdInFlightUnknown(state),
           ...(state.promptQueue.some(item => !item.retryOf) ? {queuePaused:true,queuePauseReason:"error" as const} : {})}));
       },
 
       setAwaitingHostReady(): void {
-        set((state) => ({ connection: "awaiting_host_ready", hostFailure: null, orchestrationDeliveries: state.orchestrationDeliveries.map(deliveryUnknown) }));
+        set((state) => ({ connection: "awaiting_host_ready", pendingEngineSwitch: null, hostFailure: null, orchestrationDeliveries: state.orchestrationDeliveries.map(deliveryUnknown) }));
       },
 
       setPinnedConnection(pinnedConnection: { connectionId: string; providerId: string }): void {
@@ -6386,6 +6386,7 @@ export function createDesktopStore(scheduler: FrameScheduler = defaultScheduler,
         set((state) => {
           return {
             connection: "host_exited",
+            pendingEngineSwitch: null,
             ...holdInFlightUnknown(state),
             // GitHub #6: only the missing-folder refusal is terminal; every other
             // exit keeps the reconnecting path open, so the flag follows the call.

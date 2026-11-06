@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { SqlitePersistenceAdapter, writeTool } from "@anycode/core";
 import { RuntimeSessionHistory } from "./runtime-session-history.js";
 import type { EngineSwitchIdentity } from "../shared/engine-switch-control.js";
-import type { EngineSwitchTarget } from "../shared/protocol.js";
+import type { UiToHostMessage, EngineSwitchTarget } from "../shared/protocol.js";
 import type { AgentEvent, HistoryItem, PermissionMode } from "@anycode/core";
 import type { EngineId } from "../shared/engines.js";
 import { ENGINE_SWITCH_CONTROL, type EngineSwitchControl } from "../shared/engine-switch-control.js";
@@ -70,6 +70,19 @@ function transaction(source: EngineId, target: EngineId, stage?: "resolve" | "fa
 }
 
 describe("engine-switch refusal and rollback acceptance", () => {
+  it("answers a malformed selection with a correlated failure and allows a valid retry", async () => {
+    const h = transaction("codex","core");
+    try {
+      h.send({type:"engine_switch_request",requestId:"malformed",generation:7,engine:"core",model:"chosen",connectionId:""} as UiToHostMessage);
+      await h.waitUntil(() => h.received.some(message => message.type === "engine_switch_failed"));
+      expect(h.received.find(message => message.type === "engine_switch_failed")).toMatchObject({requestId:"malformed",generation:7,reason:"Invalid engine switch selection."});
+      expect(h.durableCommit).not.toHaveBeenCalled();
+      h.send({type:"engine_switch_request",requestId:"retry",generation:7,engine:"core",model:"chosen",connectionId:"connection"});
+      await h.waitUntil(() => h.received.some(message => message.type === "engine_switched" && message.requestId === "retry"));
+      expect(h.durableCommit).toHaveBeenCalledOnce();
+    } finally { await h.session.shutdown(); h.client.close(); h.close(); }
+  });
+
   it("commits the mode applied to the core loop after preserving a different source mode", async () => {
     const store = new SqlitePersistenceAdapter(":memory:");
     await store.createSession({id:"test-session",workspace:"/workspace",engineId:"codex",externalSessionRef:"source-thread",model:"old",mode:"auto"});

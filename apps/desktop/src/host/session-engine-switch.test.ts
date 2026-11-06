@@ -564,7 +564,7 @@ describe("Session — engine switch", () => {
     }
   });
 
-  it("schema: engine_switch_request without requestId is dropped by zod before route()", async () => {
+  it("schema: malformed switches fail closed and only bounded request ids receive a reply", async () => {
     const oldEngine = new SwitchableFakeEngine(seededHistory());
     const next = new NextFakeEngine();
     const h = createHarness({
@@ -582,10 +582,10 @@ describe("Session — engine switch", () => {
       h.send({ type: "engine_switch_request", requestId: "", engine: "codex", model: "test-model" } as unknown as UiToHostMessage);
       h.send({ type: "engine_switch_request", requestId: "r", engine: "gpt", model: "test-model" } as unknown as UiToHostMessage);
 
-      // Inversion of the usual waitUntil: nothing may arrive within a short window.
-      await new Promise<void>((resolve) => setTimeout(resolve, 150));
+      await h.waitFor(isEngineSwitchFailed);
+      await h.flush();
       const arrivals = h.received.slice(before).filter((m) => isEngineSwitched(m) || isEngineSwitchFailed(m));
-      expect(arrivals).toEqual([]);
+      expect(arrivals).toEqual([{type:"engine_switch_failed",requestId:"r",reason:"Invalid engine switch selection."}]);
       expect((h.session as unknown as { engine: SessionEngine }).engine.id).toBe("core");
       expect(oldEngine.disposeReasons).toEqual([]);
     } finally {

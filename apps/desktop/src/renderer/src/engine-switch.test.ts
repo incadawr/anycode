@@ -11,6 +11,30 @@ function ready() {
 }
 
 describe("correlated engine selection", () => {
+  it.each(["setHostExited","setAwaitingPort","setPortClosed","setAwaitingHostReady"] as const)("releases pending selection on %s and permits a retry after reconnect", transition => {
+    const store = ready();
+    const target = {engine:"codex" as const,model:"chosen"};
+    store.getState().beginEngineSwitch("pick",target);
+    store.getState()[transition]();
+    expect(store.getState().pendingEngineSwitch).toBeNull();
+    expect(store.getState().model).toBe("old");
+    store.getState().applyHostMessage({type:"engine_switched",engine:"codex",previousEngine:"core",requestId:"pick",generation:4,projection});
+    expect(store.getState().model).toBe("old");
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/workspace",sessionId:"session",model:"old",mode:"build",engineSwitch:{enabled:true,generation:5}});
+    expect(store.getState().beginEngineSwitch("retry",target)).toBe(5);
+  });
+
+  it("releases the old generation and ignores its replies after a new request", () => {
+    const store = ready();
+    const target = {engine:"codex" as const,model:"chosen"};
+    store.getState().beginEngineSwitch("pick",target);
+    store.getState().applyHostMessage({type:"host_ready",workspace:"/workspace",sessionId:"session",model:"old",mode:"build",engineSwitch:{enabled:true,generation:5}});
+    expect(store.getState().pendingEngineSwitch).toBeNull();
+    expect(store.getState().beginEngineSwitch("pick",target)).toBe(5);
+    store.getState().applyHostMessage({type:"engine_switch_failed",requestId:"pick",generation:4,reason:"stale host generation"});
+    expect(store.getState().pendingEngineSwitch?.generation).toBe(5);
+  });
+
   it("keeps the old selection pending and rejects unrelated acknowledgements", () => {
     const store = ready();
     expect(store.getState().beginEngineSwitch("pick", { engine: "codex", model: "chosen" })).toBe(4);
