@@ -503,3 +503,17 @@ describe("connectionTileSelectHint", () => {
     expect(connectionTileSelectHint(true)).toBe("This is the default connection for new sessions");
   });
 });
+
+it("renders the connection provider icon in the tile header", async () => {
+  const { createElement } = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { ConnectionTile } = await import("./ConnectionTile.js");
+  const noop = () => {};
+  const html = renderToStaticMarkup(createElement(ConnectionTile, {
+    connection: conn(), catalogEntry: undefined, displayName: "Long connection name", credentialStatus: undefined,
+    selected: true, checking: false, readOnly: false, tabIndex: 0,
+    onSelect: noop, onEdit: noop, onReplaceKey: noop, onCheck: noop, onDelete: noop, onKeyDownRoving: noop,
+  }));
+  expect(html).toContain('data-provider-icon="zai"');
+  expect(html).toContain('connection-tile-provider-label');
+});

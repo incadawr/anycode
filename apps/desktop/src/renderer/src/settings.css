@@ -1053,6 +1053,9 @@
 }
 
 .connection-tile-provider {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1062,6 +1065,13 @@
   text-transform: uppercase;
   letter-spacing: var(--track-label);
   color: var(--text-3);
+}
+
+.connection-tile-provider-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .connection-tile-selected-marker {
