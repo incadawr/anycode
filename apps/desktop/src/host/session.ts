@@ -4615,6 +4615,7 @@ export class Session {
       // PREVIOUS engine, so it must not be replayed onto the new one.
       this.clearPendingModelSelection();
       this.busy = false;
+      this.drainAgentInbox();
     }
   }
 

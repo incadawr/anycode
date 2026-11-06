@@ -163,6 +163,41 @@ function seededHistory(): HistoryItem[] {
 }
 
 describe("Session — engine switch", () => {
+  it.each(["success", "failure"] as const)("drains an authenticated next-turn message after switch %s", async outcome => {
+    const old = new SwitchableFakeEngine(seededHistory());
+    const next = new NextFakeEngine();
+    let entered!: () => void;
+    let finish!: () => void;
+    const factoryEntered = new Promise<void>(resolve => { entered = resolve; });
+    const candidate = new Promise<SessionEngine>((resolve, reject) => {
+      finish = () => outcome === "success" ? resolve(next) : reject(new Error("candidate unavailable"));
+    });
+    const h = createHarness({ steps: [], engine: old, switchEngineFactory: async () => { entered(); return candidate; } });
+    try {
+      h.send({ type: "ui_ready" });
+      await h.waitFor(isHostReady);
+      h.send({ type: "engine_switch_request", requestId: "switch", engine: "codex", model: "test-model" });
+      await factoryEntered;
+      const delivery = await h.session.receiveAgentMessage({
+        messageId: "inbox-during-switch", sender: "authenticated-supervisor", recipientSessionId: h.session.communicationStatus().sessionId,
+        kind: "agent_message", payload: "Continue the queued supervisor task", mode: "next_turn", createdAt: new Date().toISOString(),
+      });
+      expect(delivery.state).toBe("queued");
+      expect(old.inputs).toEqual([]);
+      expect(next.inputs).toEqual([]);
+      finish();
+      if (outcome === "success") await h.waitFor(isEngineSwitched);
+      else await h.waitFor(isEngineSwitchFailed);
+      const serving = outcome === "success" ? next : old;
+      const idle = outcome === "success" ? old : next;
+      await h.waitUntil(() => serving.inputs.length === 1);
+      expect(serving.inputs[0]).toContain("Continue the queued supervisor task");
+      expect(idle.inputs).toEqual([]);
+      expect(h.session.agentMessageStatus("inbox-during-switch")?.state).toBe("acknowledged");
+      expect(old.disposeReasons).toEqual(outcome === "success" ? ["session-close"] : []);
+    } finally { finish(); h.close(); }
+  });
+
   it("keeps a bounded duplicate window without refusing all requests after 1024 attempts", async () => {
     const old = new SwitchableFakeEngine([]);
     const next = new NextFakeEngine();
