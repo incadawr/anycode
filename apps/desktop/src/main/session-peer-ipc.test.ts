@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -7,8 +7,8 @@ vi.mock("electron", () => ({ ipcMain: { handle: (key: string, fn: (...args: any[
 import { createSessionPeerPolicyStore } from "./session-peer-policy.js";
 import { createSessionPeerAccess } from "./session-peer-access.js";
 import { createSessionPeerIpc, registerSessionPeerIpc } from "./session-peer-ipc.js";
-import { setIpcGuardMainWindow, resetIpcGuardForTests } from "./ipc-guard.js";
-import { SESSION_PEER_SET_CHANNEL } from "../shared/session-peer-view.js";
+import { addIpcGuardTrustedWindow, setIpcGuardMainWindow, resetIpcGuardForTests } from "./ipc-guard.js";
+import { SESSION_PEER_VIEW_CHANNEL, SESSION_PEER_SET_CHANNEL } from "../shared/session-peer-view.js";
 const roots: string[] = [];
 afterEach(() => { roots.forEach(p => rmSync(p, { recursive: true, force: true })); roots.length = 0; resetIpcGuardForTests(); handlers.clear(); });
 function fixture() {
@@ -29,6 +29,14 @@ it("default, project Off and exact symmetric grant change the access policy", as
   await ipc.set({ tabId: "a", projectKey: "/alpha", enabled: true });
   await ipc.set({ tabId: "a", projectKey: "/alpha", peerKey: "/beta", enabled: false }); expect(allowed()).toBe(false);
 });
+it("persisted peers remain visible and revocable after their tab closes", async () => {
+  const { ipc, deps, policy } = fixture();
+  await ipc.set({ tabId: "a", projectKey: "/alpha", peerKey: "/beta", enabled: true });
+  deps.tabs = () => [{ tabId: "a", workspace: "/alpha" }];
+  expect(await ipc.get({ tabId: "a" })).toMatchObject({ ok: true, view: { peers: [{ key: "/beta", granted: true }] } });
+  expect((await ipc.set({ tabId: "a", projectKey: "/alpha", peerKey: "/beta", enabled: false })).ok).toBe(true);
+  expect(policy.hasPairGrant("/alpha", "/beta")).toBe(false);
+});
 it("refuses unknown keys, forged fields, untrusted and disabled feature writes", async () => {
   const { ipc, deps, policy } = fixture();
   for (const raw of [{ tabId: "a", projectKey: "/moved", enabled: true }, { tabId: "a", projectKey: "/alpha", enabled: true, peerKey: "/unknown" }, { tabId: "a", projectKey: "/alpha", enabled: true, sender: "owner" }, { tabId: "missing", enabled: true }]) expect((await ipc.set(raw)).ok).toBe(false);
@@ -48,6 +56,11 @@ it("failed persistence retains the previous grant", async () => {
 it("registered IPC refuses forged senders and subframes before writes", async () => {
   const { deps, policy } = fixture(); const main = { mainFrame: {} }; setIpcGuardMainWindow(() => main);
   registerSessionPeerIpc(deps); const invoke = handlers.get(SESSION_PEER_SET_CHANNEL)!;
+  const other = { mainFrame: {} };
+  addIpcGuardTrustedWindow(other, [SESSION_PEER_VIEW_CHANNEL, SESSION_PEER_SET_CHANNEL]);
+  for (const channel of [SESSION_PEER_VIEW_CHANNEL, SESSION_PEER_SET_CHANNEL]) {
+    expect(() => handlers.get(channel)!({ sender: other, senderFrame: other.mainFrame }, { tabId: "a", projectKey: "/alpha", enabled: false })).toThrow("refused");
+  }
   const raw = { tabId: "a", projectKey: "/alpha", enabled: false };
   expect(() => invoke({ sender: { mainFrame: {} }, senderFrame: main.mainFrame }, raw)).toThrow("refused");
   expect(() => invoke({ sender: main, senderFrame: {} }, raw)).toThrow("refused");
@@ -68,6 +81,8 @@ it("the external approvals handler never creates a native grant", async () => {
   const { createSessionAccessStore } = await import("./communication-sessions.js");
   const { createAgentProjectsStore } = await import("./communication-agent-projects.js");
   const { root, policy } = fixture();
+  expect(policy.setNativeEnabled("/alpha", false)).toBe(true);
+  const before = readFileSync(join(root, "policy.json"), "utf8");
   const sessions = createSessionAccessStore({ file: join(root, "sessions.json"), defaultOn: () => true });
   const approvals = createSessionAccessStore({ file: join(root, "approvals.json"), defaultOn: () => false });
   sessions.register({ sessionId: "session" }); approvals.register({ sessionId: "session" });
@@ -81,5 +96,6 @@ it("the external approvals handler never creates a native grant", async () => {
     homedir: () => root, offerEmptyFolderTrust: async folder => ({ folder }), stat: async () => ({ isDirectory: () => true }),
   }, { tabId: "a", enabled: true });
   expect(result.ok).toBe(true); expect(approvals.isExposed("session")).toBe(true);
+  expect(readFileSync(join(root, "policy.json"), "utf8")).toBe(before);
   expect(policy.hasPairGrant("/alpha", "/beta")).toBe(false);
 });

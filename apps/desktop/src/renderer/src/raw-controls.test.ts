@@ -46,6 +46,7 @@ const BASELINE: Record<string, number> = {
   "components/MessageList.tsx": 9,
   "components/ModeMenu.tsx": 4,
   "components/ModelPill.tsx": 2,
+  "components/NativeSessionAccess.tsx": 2,
   "components/NoticeToast.tsx": 1,
   "components/PermissionModal.tsx": 7,
   "components/PermissionsEditor.tsx": 8,
