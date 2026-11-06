@@ -5184,7 +5184,7 @@ process.parentPort.on("message", (event) => {
           // published. An id this account does not offer is a structured
           // `invalid_model` result, so the code survives the IPC boundary.
           case "set_session_model": result = await session.communicationSetModel(communication.payload); break;
-          case "send_message": result = await session.receiveAgentMessage(communication.payload as import("../shared/communication.js").AgentEnvelope); break;
+          case "send_message": result = await session.receiveAgentMessage(communication.payload as import("../shared/communication.js").AgentEnvelope, nativeSessionsEnabled && communication.peerDrainRegistered === true); break;
           case "restore_agent_display": if (nativeSessionsEnabled) session.restoreAgentDisplay(communication.payload as import("../shared/communication.js").AgentDisplayCard[]); result = {}; break;
           case "restore_agent_messages": session.restoreAgentMessages(communication.payload as import("../shared/communication.js").AgentDelivery[]); result = {}; break;
           case "get_message_status": result = session.agentMessageStatus(String(communication.payload)); break;

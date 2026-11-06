@@ -1,3 +1,4 @@
+import { registerAgentMessageLinks } from "./agent-message-links.js";
 import { createSessionPeerDrain } from "./session-peer-drain.js";
 import { createSessionPeerReplyCoordinator } from "./session-peer-reply-coordinator.js";
 import { createSessionPeerReplies } from "./session-peer-replies.js";

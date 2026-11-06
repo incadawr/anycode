@@ -5,6 +5,7 @@ import type { RuntimeSessionHistory } from "./runtime-session-history.js";
 import { manualCompactionUnavailableReason } from "../shared/manual-compaction.js";
 import { PresentationJournal } from "./presentation-journal.js";
 import type { CompactionRecordSeam } from "./compaction-records.js";
+import type { SessionPeerTurnPublication } from "../shared/session-peers.js";
 import { agentMessageText, type AgentEnvelope, type AgentDelivery, type AgentDisplayCard, type SessionPublicResult, type SessionStatus, type SessionActivityState, type SetSessionEffortOutcome, type SetSessionFastOutcome, type SetSessionModelOutcome } from "../shared/communication.js";
 import { normalizeEffortLevels, validateSessionEffort } from "../shared/session-effort.js";
 import { safeFailureMessage } from "./safe-failure.js";

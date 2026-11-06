@@ -157,7 +157,7 @@ export async function createCommunicationBroker(options: {
     return tab;
   } });
   const reconcile = () => {
-    const task = Promise.all([...observers].map((observer) => observer.reconcile())).then(reconcileDisplay);
+    const task = Promise.all([...[...messages.values()].map(markLostGeneration), ...[...lifecycles, ...observers].map(observer => observer.reconcile())]).then(reconcileDisplay).catch(() => {});
     pending.add(task); void task.finally(() => pending.delete(task)); return task;
   };
   const timer = setInterval(() => { void reconcile(); }, 1000);
