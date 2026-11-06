@@ -24,8 +24,8 @@ async function fixture() {
   const access = { canAccess: vi.fn(() => true) };
   const handler = createSessionPeersHandler({ current: id => hosts.find(h => h.tabId === id), targets: () => hosts,
     access, prepare: async () => {}, send: (caller, input, authorize) => replies.send(caller, input, async id => {
-      authorize(id); return tabs.find(t => t.sessionId === id)!;
-    }, authorize) });
+      await authorize(id); return tabs.find(t => t.sessionId === id)!;
+    }) });
   const call = (id: string, input: Record<string, unknown>) => handler(id, hosts.find(h => h.sessionId === id)!.proc!, {
     requestId: crypto.randomUUID(), operation: "send", input,
   });

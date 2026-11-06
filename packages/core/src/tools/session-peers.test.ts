@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { createSessionPeerTools, parseSessionPeerRequest } from "./session-peers.js";
+import { createSessionPeerTools, parseSessionPeerRequest, parseSessionPeerResponse } from "./session-peers.js";
 import { executeToolCall, type DispatchContext } from "../dispatch/dispatcher.js";
 import { ToolRegistry, createDefaultToolRegistry } from "./registry.js";
 import { buildChildConfig } from "../subagents/runner.js";
@@ -51,4 +51,13 @@ it("default registry exposes no peers, and inline children inherit neither tools
   expect(child.sessionPeers).toBeUndefined();
   expect(child.registry.has("SessionSend")).toBe(false);
   expect(child.registry.has("SessionsList")).toBe(false);
+});
+
+it("preserves reply receipts and loop refusal through the shared response parser", () => {
+  for (const state of ["queued", "acknowledged", "rejected", "unknown"]) {
+    const receipt = { status: "sent", messageId: "message", state };
+    expect(parseSessionPeerResponse(receipt)).toEqual(receipt);
+  }
+  expect(parseSessionPeerResponse({ status: "refused", reason: "loop_limited" })).toEqual({ status: "refused", reason: "loop_limited" });
+  expect(parseSessionPeerResponse({ status: "sent", messageId: "message", state: "forged" })).toEqual({ status: "unknown" });
 });

@@ -148,12 +148,12 @@ async function createAdmittedSession(request: CreateSessionRequest, deps: Create
     key = policy.kind === "native" ? deps.realpathSync(request.workspace) : canonicalWorkspaceKey(request.workspace, deps.realpathSync);
   } catch { return { ok: false, reason: "folder_not_found" }; }
   const peerKey = normalizePeerWorkspaceKey(key, deps.platform);
-  const authorized = () => {
+  const authorized = async () => {
     try {
-      return policy.kind === "native" ? peerKey !== null && policy.authorize(request.workspace, peerKey, projects.isAllowed(key)) : projects.isAllowed(key);
+      return policy.kind === "native" ? peerKey !== null && await policy.authorize(request.workspace, peerKey, projects.isAllowed(key)) : projects.isAllowed(key);
     } catch { return false; }
   };
-  if (!authorized()) return { ok: false, reason: "not_allowed" };
+  if (!await authorized()) return { ok: false, reason: "not_allowed" };
   const trust = await deps.readTrustStore();
   if (trust.folders[key]?.decision !== "trusted") return { ok: false, reason: "not_trusted" };
   if (tabs.atCapacity()) return { ok: false, reason: "too_many" };
@@ -242,7 +242,7 @@ async function createAdmittedSession(request: CreateSessionRequest, deps: Create
       : { ok: false, reason: "not_ready", detail: pin.detail };
   }
   const releasePin = pin.release;
-  if (!authorized()) {
+  if (!await authorized()) {
     releasePin();
     return { ok: false, reason: "not_allowed" };
   }
@@ -452,7 +452,7 @@ async function createAdmittedSession(request: CreateSessionRequest, deps: Create
     // Delivery may wait on a host indefinitely; it must not retain the creation slot.
     afterCreation(async () => {
       try {
-        return authorized() && policy.deliverFirstMessage
+        return await authorized() && policy.deliverFirstMessage
           ? await policy.deliverFirstMessage(sessionId, payload) : { state: "rejected" };
       } catch { return { state: "unknown" }; }
     });

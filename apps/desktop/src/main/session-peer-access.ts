@@ -14,7 +14,7 @@ export interface PeerSessionFacts {
 export interface SessionPeerAccessDeps {
   enabled(): boolean;
   policy: SessionPeerPolicyStore;
-  isTrusted(key: string): boolean;
+  isTrusted(key: string): boolean | Promise<boolean>;
   /** Must return the same case representation used by pinned keys and trust.
    * Darwin preserves case: inject a stable realpath spelling for case aliases;
    * mismatched spellings fail closed rather than merging case-sensitive paths. */
@@ -38,13 +38,15 @@ export function createSessionPeerAccess(deps: SessionPeerAccessDeps) {
     caller.live && caller.root && !caller.restricted &&
     (!(operation === "send" || operation === "open") || !caller.readOnly);
   /** Re-run before dispatch/drain; no decision here is a reusable permit. */
-  function canAccessWorkspace(caller: PeerSessionFacts, workspace: string, pinnedKey: string,
-    operation: PeerOperation, targetAllowsOpen = false): boolean {
+  async function canAccessWorkspace(caller: PeerSessionFacts, workspace: string, pinnedKey: string,
+    operation: PeerOperation, targetAllowsOpen = false): Promise<boolean> {
     try {
       if (!deps.enabled() || !callerAllowed(caller, operation)) return false;
       const from = strictKey(caller.workspace, caller.workspaceKey);
       const to = strictKey(workspace, pinnedKey);
-      if (!from || !to || !deps.isTrusted(from) || !deps.isTrusted(to)) return false;
+      if (!from || !to || !await deps.isTrusted(from) || !await deps.isTrusted(to)) return false;
+      if (!deps.enabled() || !callerAllowed(caller, operation)) return false;
+      if (strictKey(caller.workspace, caller.workspaceKey) !== from || strictKey(workspace, pinnedKey) !== to) return false;
       if (!deps.policy.isNativeEnabled(from) || !deps.policy.isNativeEnabled(to)) return false;
       if (from === to) return true;
       if (operation === "who_edits" || !deps.policy.hasPairGrant(from, to)) return false;
@@ -53,7 +55,7 @@ export function createSessionPeerAccess(deps: SessionPeerAccessDeps) {
   }
   return {
     canAccessWorkspace,
-    canAccess(caller: PeerSessionFacts, target: PeerSessionFacts, operation: PeerOperation, targetAllowsOpen = false): boolean {
+    async canAccess(caller: PeerSessionFacts, target: PeerSessionFacts, operation: PeerOperation, targetAllowsOpen = false): Promise<boolean> {
       return target.live && target.root && !target.restricted &&
         canAccessWorkspace(caller, target.workspace, target.workspaceKey, operation, targetAllowsOpen);
     },

@@ -51,7 +51,7 @@ function createCreationAdmission(owned: Set<string>, listTabs: () => ReadonlyArr
 export type CreatorAdmissionPolicy = { kind: "external" } | {
   kind: "native";
   openerSessionId: string;
-  authorize(workspace: string, canonicalKey: string, targetAllowsOpen: boolean): boolean;
+  authorize(workspace: string, canonicalKey: string, targetAllowsOpen: boolean): boolean | Promise<boolean>;
   /** Uses the shared broker's session principal and message admission. */
   deliverFirstMessage?(sessionId: string, payload: string): Promise<{ state: string; messageId?: string }>;
 };

@@ -1287,7 +1287,7 @@ describe("shared creation admission", () => {
     const access = createSessionPeerAccess({ platform: "win32", enabled: () => true,
       isTrusted: candidate => candidate === key, realpathSync: p => p,
       statSync: () => ({ isDirectory: () => true }),
-      policy: { isNativeEnabled: () => true, hasPairGrant: () => false,
+      policy: { projectKeys: () => [], isNativeEnabled: () => true, hasPairGrant: () => false,
         setNativeEnabled: () => false, setPairGrant: () => false } });
     const caller = { workspace, workspaceKey: key, live: true, root: true, restricted: false, readOnly: false };
     const outcome = await createSessionForAgent({ workspace }, r.deps({ platform: "win32",
@@ -1353,7 +1353,7 @@ it("cross-workspace native creation needs both pair grant and target opt-in", as
   const access = createSessionPeerAccess({
     enabled: () => true, isTrusted: () => true, realpathSync: p => p,
     statSync: () => ({ isDirectory: () => true }),
-    policy: { isNativeEnabled: () => true, hasPairGrant: () => grant,
+    policy: { projectKeys: () => [], isNativeEnabled: () => true, hasPairGrant: () => grant,
       setNativeEnabled: () => false, setPairGrant: () => false },
   });
   const caller = { workspace: "/source", workspaceKey: "/source", live: true, root: true, restricted: false, readOnly: false };

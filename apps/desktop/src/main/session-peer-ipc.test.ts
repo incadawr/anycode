@@ -22,12 +22,12 @@ it("default, project Off and exact symmetric grant change the access policy", as
   const access = createSessionPeerAccess({ policy, enabled: () => true, isTrusted: () => true, realpathSync: p => p, statSync: () => ({ isDirectory: () => true }) });
   const caller = { workspace: "/alpha", workspaceKey: "/alpha", live: true, root: true, restricted: false, readOnly: false };
   const allowed = () => access.canAccessWorkspace(caller, "/beta", "/beta", "send");
-  expect(policy.isNativeEnabled("/alpha")).toBe(true); expect(allowed()).toBe(false);
+  expect(policy.isNativeEnabled("/alpha")).toBe(true); expect(await allowed()).toBe(false);
   expect((await ipc.set({ tabId: "a", projectKey: "/alpha", peerKey: "/beta", enabled: true })).ok).toBe(true);
-  expect(allowed()).toBe(true); expect(policy.hasPairGrant("/beta", "/alpha")).toBe(true);
-  await ipc.set({ tabId: "a", projectKey: "/alpha", enabled: false }); expect(allowed()).toBe(false);
+  expect(await allowed()).toBe(true); expect(policy.hasPairGrant("/beta", "/alpha")).toBe(true);
+  await ipc.set({ tabId: "a", projectKey: "/alpha", enabled: false }); expect(await allowed()).toBe(false);
   await ipc.set({ tabId: "a", projectKey: "/alpha", enabled: true });
-  await ipc.set({ tabId: "a", projectKey: "/alpha", peerKey: "/beta", enabled: false }); expect(allowed()).toBe(false);
+  await ipc.set({ tabId: "a", projectKey: "/alpha", peerKey: "/beta", enabled: false }); expect(await allowed()).toBe(false);
 });
 it("persisted peers remain visible and revocable after their tab closes", async () => {
   const { ipc, deps, policy } = fixture();
@@ -98,4 +98,29 @@ it("the external approvals handler never creates a native grant", async () => {
   expect(result.ok).toBe(true); expect(approvals.isExposed("session")).toBe(true);
   expect(readFileSync(join(root, "policy.json"), "utf8")).toBe(before);
   expect(policy.hasPairGrant("/alpha", "/beta")).toBe(false);
+});
+
+it("registered UI grant, revoke and Off change live port admission", async () => {
+  const { root, deps, policy } = fixture();
+  const main = { mainFrame: {} }; setIpcGuardMainWindow(() => main);
+  registerSessionPeerIpc(deps);
+  const write = (enabled: boolean, peerKey?: string) => handlers.get(SESSION_PEER_SET_CHANNEL)!(
+    { sender: main, senderFrame: main.mainFrame }, { tabId: "a", projectKey: "/alpha", enabled, peerKey });
+  const access = createSessionPeerAccess({ policy, enabled: deps.enabled, isTrusted: deps.isTrusted,
+    realpathSync: deps.realpath, statSync: () => ({ isDirectory: () => true }) });
+  const caller = { workspace: "/alpha", workspaceKey: "/alpha", live: true, root: true, restricted: false, readOnly: false };
+  const { createSessionPeersHandler } = await import("./session-peers.js");
+  const host = { ...caller, tabId: "a", sessionId: "a", proc: {}, generation: 1, engine: "core" as const, activity: "idle" as const };
+  const peer = { ...host, workspace: "/beta", workspaceKey: "/beta", tabId: "b", sessionId: "b" };
+  const port = createSessionPeersHandler({ access, current: () => host, targets: () => [peer], prepare: async () => {} });
+  const admitted = async () => (await port("a", host.proc, { requestId: "r", operation: "list", input: { scope: "granted" } }));
+  expect(await admitted()).toMatchObject({ status: "ok", sessions: [] });
+  expect((await write(true, "/beta")).ok).toBe(true);
+  expect(await admitted()).toMatchObject({ status: "ok", sessions: [{ sessionId: "b" }] });
+  expect((await write(false, "/beta")).ok).toBe(true);
+  expect(await admitted()).toMatchObject({ status: "ok", sessions: [] });
+  expect((await write(true, "/beta")).ok).toBe(true);
+  expect((await write(false)).ok).toBe(true);
+  expect(await admitted()).toEqual({ status: "refused" });
+  expect(readFileSync(join(root, "policy.json"), "utf8")).toContain("/alpha");
 });

@@ -122,7 +122,7 @@ it("keeps a joining retry independent of the first caller aborting during accept
   const retry = f.send(external, input, new AbortController().signal);
   const outcomes = Promise.allSettled([first, retry]);
   await new Promise<void>((resolve) => setImmediate(resolve));
-  expect(f.authorize).toHaveBeenCalledTimes(2);
+  expect(f.authorize).toHaveBeenCalledTimes(4);
   firstCaller.abort(); hold.resolve();
   const [a, b] = await outcomes;
   expect(a).toMatchObject({ status: "rejected", reason: new Error("Send aborted") });
@@ -141,7 +141,7 @@ it("checks a joining caller's own abort after the shared dispatch settles", asyn
   const retry = f.send(external, input, joining.signal);
   const outcomes = Promise.allSettled([first, retry]);
   await new Promise<void>((resolve) => setImmediate(resolve));
-  expect(f.authorize).toHaveBeenCalledTimes(2);
+  expect(f.authorize).toHaveBeenCalledTimes(4);
   joining.abort(); hold.resolve();
   const [a, b] = await outcomes;
   expect(a.status).toBe("fulfilled");

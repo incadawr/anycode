@@ -1,5 +1,5 @@
 import { parseSessionPeerRequest, parseSessionPeerResponse, type SessionPeerRequest, type SessionPeerResponse } from "../shared/session-peers.js";
-import type { PeerSessionFacts, createSessionPeerAccess } from "./session-peer-access.js";
+import type { PeerSessionFacts } from "./session-peer-access.js";
 
 export interface PeerHost extends PeerSessionFacts {
   title?: string; model?: string; effort?: string;
@@ -11,9 +11,9 @@ export interface PeerHost extends PeerSessionFacts {
 export function createSessionPeersHandler(deps: {
   current(tabId: string): PeerHost | undefined;
   targets(): PeerHost[];
-  access: Pick<ReturnType<typeof createSessionPeerAccess>, "canAccess">;
+  access: { canAccess(caller: PeerHost, target: PeerHost, operation: SessionPeerRequest["operation"]): boolean | Promise<boolean> };
   prepare(): Promise<void>;
-  send?(caller: PeerHost, input: Extract<SessionPeerRequest, { operation: "send" }>["input"], authorize: (id: string) => PeerHost): Promise<{ envelope: { messageId: string }; state: "queued" | "acknowledged" | "rejected" | "unknown" }>;
+  send?(caller: PeerHost, input: Extract<SessionPeerRequest, { operation: "send" }>["input"], authorize: (id: string) => Promise<PeerHost>): Promise<{ envelope: { messageId: string }; state: "queued" | "acknowledged" | "rejected" | "unknown" }>;
 }) {
   const pending = new Map<object, Set<string>>();
   return async (tabId: string, proc: object, raw: unknown): Promise<SessionPeerResponse | null> => {
@@ -36,14 +36,18 @@ export function createSessionPeersHandler(deps: {
       const now = current();
       if (!now) return null;
       if (now.workspace !== caller.workspace || now.workspaceKey !== caller.workspaceKey ||
-          !deps.access.canAccess(now, now, request.operation)) return { status: "refused" };
+          !await deps.access.canAccess(now, now, request.operation)) return { status: "refused" };
+      if (!current()) return null;
       if (request.operation === "send" && deps.send) {
         if (request.input.reply === "on_turn_end" || request.input.mode === "steer") return { status: "unavailable" };
-        const authorize = (id: string) => {
+        const authorize = async (id: string) => {
           const sender = current();
           const target = deps.targets().find(t => t.sessionId === id);
           if (!sender || sender.workspace !== caller.workspace || sender.workspaceKey !== caller.workspaceKey ||
-              !target || !deps.access.canAccess(sender, target, "send")) throw new Error("Peer access refused");
+              !target || !await deps.access.canAccess(sender, target, "send")) throw new Error("Peer access refused");
+          const latest = deps.targets().find(t => t.sessionId === id);
+          const liveSender = current();
+          if (!liveSender || !liveSender.root || liveSender.restricted || liveSender.readOnly || liveSender.workspace !== caller.workspace || liveSender.workspaceKey !== caller.workspaceKey || !latest?.live || !latest.root || latest.restricted || latest.proc !== target.proc || latest.generation !== target.generation || latest.workspaceKey !== target.workspaceKey) throw new Error("Peer generation changed");
           return target;
         };
         try {
@@ -56,9 +60,12 @@ export function createSessionPeersHandler(deps: {
       }
       // Other mutations and file queries retain their dedicated admission boundary.
       if (request.operation !== "list" || request.input.cursor || request.input.ownMessageId) return { status: "unavailable" };
-      const sessions = deps.targets().filter(target =>
+      const candidates = deps.targets();
+      const allowed = await Promise.all(candidates.map(target =>
         (request.input.scope === "granted" || target.workspaceKey === now.workspaceKey) &&
-        deps.access.canAccess(now, target, "list"))
+        deps.access.canAccess(now, target, "list")));
+      if (!current()) return null;
+      const sessions = candidates.filter((_, index) => allowed[index])
         .slice(0, request.input.limit ?? 20).map(target => ({
           sessionId: target.sessionId, tabId: target.tabId, workspace: target.workspace,
           title: target.title?.slice(0, 200), model: target.model?.slice(0, 200), effort: target.effort?.slice(0, 200),

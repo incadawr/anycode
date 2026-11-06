@@ -43,6 +43,7 @@ export function createCommunicationDispatch(options: {
     checkAbort(signal);
     const recipient = await authorize(input.sessionId);
     const workspace = await options.resolvePath(recipient.workspace);
+    await authorize(input.sessionId);
     checkAbort(signal);
     // Reservation is synchronous after authorization: a second caller sees the
     // first record before any disk or host await can open a duplicate dispatch.

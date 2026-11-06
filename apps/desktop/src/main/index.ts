@@ -74,7 +74,7 @@ import {
   registerWorkspaceTrustIpc,
   workspaceTrustOnceFor,
 } from "./workspace-trust-ipc.js";
-import { canonicalWorkspaceKey, defaultTrustStorePath, migrateTrustStoreKeys, readTrustStore } from "@anycode/core/workspace-trust";
+import { canonicalWorkspaceKey, defaultTrustStorePath, migrateTrustStoreKeys, readTrustStore, resolveWorkspaceTrust } from "@anycode/core/workspace-trust";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
@@ -2697,27 +2697,30 @@ void app.whenReady().then(async () => {
       }
     };
   const peerEnabled = nativeSessionsEnabledForBoot(bootEnv, app.isPackaged);
-  let peerTrust: Awaited<ReturnType<typeof readTrustStore>> = { version: 1, folders: {} };
+  const peerPolicy = createSessionPeerPolicyStore({ file: join(app.getPath("userData"), "session-peer-policy.json") });
+  const peerTrusted = async (workspace: string) => (await resolveWorkspaceTrust(new NodeLspConfigFs(), {
+    workspace, home: selfCheckProfile ?? resolveSkillsProfileHome(process.env, app.isPackaged) ?? homedir(),
+    storePath: defaultTrustStorePath(selfCheckProfile ?? resolveSkillsProfileHome(process.env, app.isPackaged) ?? homedir()),
+    realpathSync, onceHash: workspaceTrustOnceFor(workspaceTrustOnceApprovals, workspace, realpathSync),
+  })).projectTrusted;
   const peerHandler = peerEnabled ? createSessionPeersHandler({
     send: async (caller, input, authorize) => {
       const broker = await communicationController!.broker();
       return createSessionPeerReplies(broker).send(caller, input, async id => {
-        const host = authorize(id);
+        const host = await authorize(id);
         const tab = manager?.listTabs().find(t => t.sessionId === id && t.tabId === host.tabId);
         if (!tab) throw new Error("Peer unavailable");
         return tab;
-      }, authorize);
+      });
     },
     current: tabId => manager?.peerHost(tabId),
     targets: () => (manager?.listTabs() ?? []).flatMap(tab => {
       const host = manager?.peerHost(tab.tabId); return host ? [host] : [];
     }),
-    prepare: async () => {
-      peerTrust = await readTrustStore(nodeTrustStoreFs, defaultTrustStorePath(selfCheckProfile ?? resolveSkillsProfileHome(process.env, app.isPackaged) ?? homedir()));
-    },
+    prepare: async () => {},
     access: createSessionPeerAccess({ enabled: () => peerEnabled,
-      policy: createSessionPeerPolicyStore({ file: join(app.getPath("userData"), "session-peer-access.json") }),
-      isTrusted: key => peerTrust.folders[key]?.decision === "trusted", realpathSync, statSync }),
+      policy: peerPolicy,
+      isTrusted: peerTrusted, realpathSync, statSync }),
   }) : undefined;
   const fileActivity = createFileActivityIngress(peerEnabled, tabId => manager?.peerHost(tabId));
   manager = new TabHostManager({
@@ -3855,14 +3858,12 @@ void app.whenReady().then(async () => {
   });
 
   registerSessionPeerIpc({
-    policy: createSessionPeerPolicyStore({ file: join(app.getPath("userData"), "session-peer-policy.json") }),
+    policy: peerPolicy,
     enabled: () => nativeSessionsEnabledForBoot(bootEnv, app.isPackaged),
     tabs: () => manager?.listTabs() ?? [],
     realpath: realpathSync,
     isDirectory: path => statSync(path).isDirectory(),
-    isTrusted: workspace => isWorkspaceTrustedFor(new NodeLspConfigFs(),
-      selfCheckProfile ?? resolveSkillsProfileHome(process.env, app.isPackaged) ?? homedir(), workspace,
-      workspaceTrustOnceFor(workspaceTrustOnceApprovals, workspace, realpathSync)),
+    isTrusted: peerTrusted,
   });
 
   // Language-server config management control plane: same
