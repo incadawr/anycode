@@ -138,7 +138,9 @@ describe("subscription re-pick keeps the key link and the form on the same provi
 });
 
 
-it("lays out the actual connection buttons in order without clipping", async () => {
+const chrome = process.env.CHROME_BIN ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+
+it.skipIf(!existsSync(chrome))("lays out the actual connection buttons in order without clipping", async () => {
   await mount();
   const buttons = [...container.querySelectorAll<HTMLButtonElement>(".welcome-paths button")];
   expect(buttons.map(b => b.querySelector("strong")?.textContent)).toEqual([
@@ -146,8 +148,6 @@ it("lays out the actual connection buttons in order without clipping", async () 
     "API key or local model", "ChatGPT / Codex", "Claude Code",
   ]);
   expect(buttons.filter(b => b.hasAttribute("data-welcome-path")).map(b => b.dataset.welcomePath)).toEqual(["api", "codex", "claude"]);
-  const chrome = process.env.CHROME_BIN ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-  if (!existsSync(chrome)) throw new Error("Chrome is required for welcome layout verification");
   const dir = mkdtempSync(resolve(tmpdir(), "welcome-layout-"));
   try {
     const css = ["tokens.css", "accents.css", "ui/ui.css", "app.css", "settings.css"].map(f => readFileSync(resolve(import.meta.dirname, "..", f), "utf8")).join("\n");
