@@ -74,10 +74,10 @@ describe("orderModelsByCatalog (D4 — catalog order, not the provider's alphabe
 
 describe("connectionOfferedModels (D4)", () => {
   it("keeps manual ids and excludes chat hints for a Responses connection", () => {
-    const conn = connection({ id: "responses", providerId: "opencode-openai", transport: "openai-responses", model: "gpt-6-luna", models: ["gpt-6-luna", "manual-unknown"] });
+    const conn = connection({ id: "responses", providerId: "opencode-openai", transport: "openai-responses", model: "gpt-6-luna", models: ["gpt-6-luna"] });
     const catalog: CatalogSummary = [{ id: "opencode-openai", name: "OpenCode Go", authKind: "api_key", models: [{ id: "kimi-k3" }] }];
-    expect(connectionOfferedModels(conn, catalog, undefined)?.map(m => m.id)).toEqual(["gpt-6-luna", "manual-unknown"]);
-    expect(buildStartModelGroups([conn], catalog, undefined, { connectionId: conn.id, modelId: conn.model! })[0]?.items.map(m => m.id)).toEqual(["gpt-6-luna", "manual-unknown"]);
+    expect(connectionOfferedModels(conn, catalog, undefined)?.map(m => m.id)).toEqual(["gpt-6-luna"]);
+    expect(buildStartModelGroups([conn], catalog, undefined, { connectionId: conn.id, modelId: conn.model! })[0]?.items.map(m => m.id)).toEqual(["gpt-6-luna"]);
   });
   it("resolves via providerModelsFor (connection ids UNIONED with catalog hints) and orders catalog-first", () => {
     const conn = connection({ id: "c1", providerId: "z-ai", models: ["glm-4.7", "glm-5.3"] });
@@ -530,4 +530,14 @@ it("does not mutate live capabilities when applying off and honors a manual deni
   expect(modelCapabilitiesFor(connection, "unknown")?.thinkingAlwaysOn).toBe(false);
   expect(live.thinkingAlwaysOn).toBe(true);
   expect(modelCapabilitiesFor({ ...connection, modelOverrides: { "vendor/glm-5.3-fp8": { reasoningSupported: false } } }, "vendor/glm-5.3-fp8")?.reasoning).toBe(false);
+});
+
+it("preserves live capabilities for manual Go connections and environment overrides", async () => {
+  const { modelCapabilitiesFor } = await import("../../../shared/model-overrides.js");
+  const connection = { providerId: "opencode-openai", modelCapabilities: { "grok-4.7": { reasoning: false as const } } };
+  expect(modelCapabilitiesFor({ ...connection, baseUrl: "https://proxy.test" }, "grok-4.7")?.reasoning).toBe(false);
+  expect(modelCapabilitiesFor({ ...connection, transport: "openai-responses" }, "grok-4.7")?.reasoning).toBe(false);
+  expect(modelCapabilitiesFor(connection, "grok-4.7", ["ANYCODE_BASE_URL"])?.reasoning).toBe(false);
+  expect(modelCapabilitiesFor(connection, "grok-4.7")?.reasoning).toBe(true);
+  expect(modelCapabilitiesFor({ ...connection, baseUrl: "https://proxy.test", modelCapabilities: { removed: { imageInput: true as const } } }, "removed")?.imageInput).toBe(true);
 });

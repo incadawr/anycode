@@ -1,3 +1,4 @@
+import { isAutomaticGo } from "./provider-models.js";
 import { resolveOpenCodeGoEndpointPolicy } from "@anycode/core/opencode-go";
 import { findKnownModel, isGatewayProvider } from "@anycode/core/model-dictionary";
 import type { ModelCapabilitiesDto, ModelOverrides, ProviderConnection } from "./settings.js";
@@ -54,8 +55,9 @@ export function applyModelReasoningOverride(live: ModelCapabilitiesDto | undefin
 }
 
 export function modelCapabilitiesFor(
-  connection: (ConnectionOverrides & Pick<ProviderConnection, "modelCapabilities" | "providerId"> & Partial<Pick<ProviderConnection, "reasoningEffort" | "modelRoutes">>) | undefined,
+  connection: (ConnectionOverrides & Pick<ProviderConnection, "modelCapabilities" | "providerId"> & Partial<Pick<ProviderConnection, "reasoningEffort" | "modelRoutes" | "baseUrl" | "transport">>) | undefined,
   model: string,
+  envOverrides?: readonly string[],
 ): ModelCapabilitiesDto | undefined {
   const live = connection?.modelCapabilities !== undefined && Object.hasOwn(connection.modelCapabilities, model)
     ? connection.modelCapabilities[model] : undefined;
@@ -70,7 +72,7 @@ export function modelCapabilitiesFor(
     ...(known.thinkingAlwaysOn !== undefined ? { thinkingAlwaysOn: known.thinkingAlwaysOn } : {}),
     ...(known.imageInput ? { imageInput: true as const } : {}),
   } : undefined;
-  const go = provider === "opencode" || provider === "opencode-openai" ? resolveOpenCodeGoEndpointPolicy(provider, model, connection?.modelRoutes) : undefined;
+  const go = isAutomaticGo(provider, connection?.baseUrl, connection?.transport, envOverrides) ? resolveOpenCodeGoEndpointPolicy(provider!, model, connection?.modelRoutes) : undefined;
   const policy = go?.kind === "route" ? go.route.policy : undefined;
   const reasoning = policy?.capabilities?.reasoning;
   const goCaps: ModelCapabilitiesDto | undefined = policy ? {

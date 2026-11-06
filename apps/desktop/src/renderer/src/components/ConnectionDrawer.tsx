@@ -1,4 +1,4 @@
-import { goModelMatchesTransport } from "../../../shared/provider-models.js";
+import { goModelMatchesTransport, isAutomaticGo } from "../../../shared/provider-models.js";
 /**
  * ConnectionDrawer (W12, cut §"Add/Edit flow"): the compact add/edit
  * surface for ONE provider connection — template → label → model → transport
@@ -1815,7 +1815,7 @@ export function ConnectionDrawerFields({
   // record's session-only fetch result is NOT offered on its own: its checkbox
   // list is the selector's authority, so an unticked id must not reappear here
   // before it is saved.
-  const automaticGo = (providerId === "opencode" || providerId === "opencode-openai") && !baseUrl.trim() && !transport.trim() && !proxySnapshot?.envOverrides.some(key => key === "ANYCODE_BASE_URL" || key === "ANYCODE_PROVIDER_TRANSPORT");
+  const automaticGo = isAutomaticGo(providerId, baseUrl, transport, proxySnapshot?.envOverrides);
   const automaticIds = automaticGo ? openCodeGoModelIds(providerId, targetConnection?.modelRoutes) : undefined;
   if (automaticIds?.includes("kimi-k3")) automaticIds.unshift(...automaticIds.splice(automaticIds.indexOf("kimi-k3"), 1));
   const manualGo = !automaticGo && (providerId === "opencode" || providerId === "opencode-openai");
