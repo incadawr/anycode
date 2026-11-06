@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 
-export const tools = ['Read', 'Glob', 'Grep', 'mcp__anycode__agent', 'mcp__anycode__agent_status'];
+export const tools = ['Read', 'Glob', 'Grep', 'mcp__anycode__agent', 'mcp__anycode__agent_status', 'mcp__anycode__list_connections'];
 const fields = ['authSource', 'provider', 'baseUrl', 'model', 'env', 'apiKeyHelper'];
 const sources = ['user', 'project', 'local', 'plugins'];
 const fixtureURL = new URL('./claude-orchestrate-fixture.json', import.meta.url);

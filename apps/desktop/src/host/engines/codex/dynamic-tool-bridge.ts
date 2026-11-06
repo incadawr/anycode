@@ -7,6 +7,8 @@ import type { ActiveCodexTurn } from "./approval-bridge.js";
 import type { createSessionPeerBridge } from "../session-peer-bridge.js";
 import type { EngineBrowserBridge, EngineBrowserSpec } from "../browser-bridge.js";
 
+import type { ConnectionTargetsBridge } from "../connection-targets-bridge.js";
+
 export const ANYCODE_AGENT_TOOL = "anycode_agent";
 export const ANYCODE_AGENT_STATUS_TOOL = "anycode_agent_status";
 
@@ -36,7 +38,7 @@ export class CodexDynamicToolBridge {
   constructor(readonly catalog: readonly AgentBridgeCatalogEntry[], private readonly port: SessionSubagentPort | undefined, private readonly cardLog?: CodexAgentCardLogPort,
     private readonly resolveCatalog?: () => Promise<readonly AgentBridgeCatalogEntry[]>, private readonly browser?: EngineBrowserBridge,
     private readonly callAgent: (input: AgentBridgeCallInput, deps: AgentBridgeCallDeps) => Promise<AgentBridgeCallResult> = runAgentBridgeCall,
-    private readonly peers?: ReturnType<typeof createSessionPeerBridge>) {}
+    private readonly peers?: ReturnType<typeof createSessionPeerBridge>, private readonly connections?: ConnectionTargetsBridge) {}
 
   declarations(): Record<string, unknown>[] {
     // `detach` is safe to offer here: host/index.ts wires this bridge's port
@@ -55,7 +57,7 @@ export class CodexDynamicToolBridge {
     }));
     const peerDecls = (this.peers?.tools ?? []).map(tool => ({ type: "function",
       name: this.peerName(tool.metadata.name), description: tool.metadata.description, inputSchema: tool.rawInputJsonSchema }));
-    return [...agentDecls, ...browserDecls, ...peerDecls];
+    return [...agentDecls, ...browserDecls, ...peerDecls, ...(this.connections ? [{ ...this.connections.declaration, name: "anycode_list_connections", type: "function" }] : [])];
   }
 
   cancel(): void {
@@ -200,10 +202,11 @@ export class CodexDynamicToolBridge {
     const fail = (text: string): void => respond.result({ success: false, contentItems: [{ type: "inputText", text }] });
     // the validations below run for ALL bridge tools (agent and
     // browser alike); only the tool-name dispatch differs.
+    const connectionCall = p?.tool === "anycode_list_connections" && this.connections !== undefined;
     const browserSpec = typeof p?.tool === "string" ? this.browser?.byCodexName(p.tool) : undefined;
     const peerTool = this.peers?.tools.find(tool => this.peerName(tool.metadata.name) === p?.tool);
     if (!p || !active || p.threadId !== active.threadId || p.turnId !== active.turnId ||
-      (p.tool !== ANYCODE_AGENT_TOOL && p.tool !== ANYCODE_AGENT_STATUS_TOOL && browserSpec === undefined && peerTool === undefined) || (p.namespace !== undefined && p.namespace !== null) ||
+      (p.tool !== ANYCODE_AGENT_TOOL && p.tool !== ANYCODE_AGENT_STATUS_TOOL && browserSpec === undefined && peerTool === undefined && !connectionCall) || (p.namespace !== undefined && p.namespace !== null) ||
       typeof p.callId !== "string" || !p.callId || this.pending.has(p.callId)) {
       fail("AnyCode rejected an unknown, duplicate or out-of-turn agent call");
       return;
@@ -219,6 +222,16 @@ export class CodexDynamicToolBridge {
     }
     if (peerTool !== undefined) {
       await this.handlePeer(peerTool.metadata.name, p, respond, emit);
+      return;
+    }
+    if (connectionCall) {
+      this.seenCalls.add(p.callId);
+      const controller = new AbortController();
+      this.pending.set(p.callId, controller);
+      try {
+        const result = await this.connections!.call(p.arguments, controller.signal);
+        respond.result({ success: !result.isError && !controller.signal.aborted, contentItems: [{ type: "inputText", text: controller.signal.aborted ? "ListConnections: call was cancelled." : result.text }] });
+      } finally { this.pending.delete(p.callId); }
       return;
     }
     if (browserSpec !== undefined) {

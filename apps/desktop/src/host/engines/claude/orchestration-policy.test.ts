@@ -57,7 +57,7 @@ describe("early approval denial", () => {
     expect(success).toHaveBeenCalledWith(expect.objectContaining({ behavior: "deny", toolUseID: "use" }));
     expect(requestPermission).not.toHaveBeenCalled();
   });
-  it.each(["mcp__anycode__agent", "mcp__anycode__agent_status"])("allows only exact owned %s", async tool => {
+  it.each(["mcp__anycode__agent", "mcp__anycode__agent_status", "mcp__anycode__list_connections"])("allows only exact owned %s", async tool => {
     const requestPermission = vi.fn();
     const bridge = new ClaudeApprovalBridge({ broker: { requestPermission, denyAll: vi.fn(), isUnattended: false, isAwaitingApproval: false }, activePresetId: () => "ask", orchestrationRestricted: () => true, bridge: {} as ClaudeMcpBridge });
     const success = vi.fn();

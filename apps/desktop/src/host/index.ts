@@ -23,6 +23,7 @@ import "./sdk-warnings.js";
 import { scrubFailureText } from "@anycode/core";
 import { childBootFailure, sanitizeBootFailure } from "./child-boot-failure.js";
 import { engineChildPrompt } from "./engine-child-prompt.js";
+import { createConnectionTargetsBridge } from "./engines/connection-targets-bridge.js";
 import { listConnectionTargets } from "./list-connections.js";
 import { claudeHistoryOnlyEngine } from "./engines/claude/history-only.js";
 import { SET_SESSION_FAST_OPERATION } from "../shared/communication.js";
@@ -1297,6 +1298,19 @@ function hostSwitchCoordinator(sessionId: string, broker: IpcPermissionBroker, r
 /** The routing ledger is session-owned; ports, bridge callbacks and subscriptions belong to the candidate. */
 const childStatusStore = createChildStatusStore();
 
+function nativeConnectionBridge(engine: "codex" | "claude", snapshot: () => { model: string; effort?: string } | undefined,
+  settingsPath = hostSettingsPathOverride() ?? defaultSettingsPath()) {
+  return createConnectionTargetsBridge(() => {
+    const parsed = parseSettings(JSON.parse(readFileSync(settingsPath, "utf8")));
+    if (parsed.status !== "ok") throw new Error("Invalid settings");
+    const current = snapshot();
+    return listConnectionTargets(parsed.settings, undefined, undefined, false, {
+      engine, routeKind: "native_cli", model: current?.model, effort: current?.effort,
+      provenance: current ? (engine === "codex" ? "applied" : "selected") : "unknown",
+    });
+  });
+}
+
 async function candidateRouting(sessionId: string, broker: IpcPermissionBroker, env: NodeJS.ProcessEnv, home: string) {
   let runtime: SwitchRuntime | undefined;
   const subscriptions: (() => void)[] = [];
@@ -1410,7 +1424,7 @@ function hostSwitchFactory(
       const agentBridge = new CodexDynamicToolBridge(routing.catalog, routing.port, new SqliteCodexAgentCardLog(database, sessionId), routing.foreign.catalog, routing.browser, routing.foreign.call,
         sessionPeersPort ? createSessionPeerBridge({ port: sessionPeersPort, broker, cwd: workspace,
           authority: () => ({ root: candidate !== undefined && session?.ownsRuntime(candidate.engine) === true,
-            mode: routing.foreign.childMode(), orchestrate: routing.foreign.isEnabled() }) }) : undefined);
+            mode: routing.foreign.childMode(), orchestrate: routing.foreign.isEnabled() }) }) : undefined, nativeConnectionBridge("codex", () => (candidate?.engine as CodexEngine | undefined)?.snapshot(), settingsPath));
       return { options: {
         ...buildCodexLaunchOptions({
           workspace, binaryPath, sourceEnv, broker: engineBroker, fs, rules, agentBridge, processOwnership: ownership,
@@ -1437,7 +1451,7 @@ function hostSwitchFactory(
       const routing = await candidateRouting(sessionId, broker, sourceEnv, home);
       let raw: ClaudeEngine | undefined;
       let adopted: SwitchRuntime | undefined;
-      const stamp = createBridgePresentationStamp({ catalog: routing.catalog, resolveCallCatalog: routing.foreign.catalog, ...(launch?.claudeOrchestrateEnabled === true ? { callAgent: routing.foreign.call, restricted: routing.foreign.isEnabled } : {}), port: routing.port, browser: routing.browser,
+      const stamp = createBridgePresentationStamp({ catalog: routing.catalog, resolveCallCatalog: routing.foreign.catalog, ...(launch?.claudeOrchestrateEnabled === true ? { callAgent: routing.foreign.call, restricted: routing.foreign.isEnabled } : {}), port: routing.port, browser: routing.browser, connections: nativeConnectionBridge("claude", () => raw?.snapshot(), settingsPath),
         ...(sessionPeersPort ? { peers: createSessionPeerBridge({ port: sessionPeersPort, broker, cwd: workspace,
           authority: () => ({ root: adopted !== undefined && session?.ownsRuntime(adopted.engine) === true,
             mode: claudeAgentPermissionMode(raw?.snapshot().activePresetId ?? "read-only"), orchestrate: routing.foreign.isEnabled() }) }) } : {}),
@@ -1690,7 +1704,7 @@ async function bootCodexSession(
     codexAgentBridge = new CodexDynamicToolBridge(catalog, port, agentCardLog, resolveCatalog, codexEngineBrowserBridge, foreignComposition.call,
       sessionPeersPort ? createSessionPeerBridge({ port: sessionPeersPort, broker, cwd: workspace,
         authority: () => ({ root: codexParentEngine !== undefined && session?.ownsRuntime(codexParentEngine) === true,
-          mode: foreignComposition.childMode(), orchestrate: foreignComposition.isEnabled() }) }) : undefined);
+          mode: foreignComposition.childMode(), orchestrate: foreignComposition.isEnabled() }) }) : undefined, nativeConnectionBridge("codex", () => codexParentEngine?.snapshot()));
   }
   if (args.child !== undefined) {
     prepareChildPrompt = (prompt) => engineChildPrompt(prompt, codexChildPort !== undefined);
@@ -2390,6 +2404,7 @@ async function bootClaudeSession(
         authority: () => ({ root: claudeParentEngine !== undefined && session?.ownsRuntime(booted.engine) === true,
           mode: claudeAgentPermissionMode(claudeParentEngine?.snapshot().activePresetId ?? "read-only"),
           orchestrate: claudeForeign?.isEnabled() === true }) }) } : {}),
+      connections: nativeConnectionBridge("claude", () => claudeParentEngine?.snapshot()),
       onEvent: (event) => pushBridgeEvent?.(event),
     });
       claudePeerToolNames = door.peerToolNames;

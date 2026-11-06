@@ -3,7 +3,7 @@ import { permissionModeToFlag } from "./protocol.js";
 
 export type ClaudeOrchestrationPosture = "off" | "on" | "transitioning" | "quarantined";
 export const CLAUDE_ORCHESTRATION_TOOLS = Object.freeze([
-  "Read", "Glob", "Grep", "mcp__anycode__agent", "mcp__anycode__agent_status",
+  "Read", "Glob", "Grep", "mcp__anycode__agent", "mcp__anycode__agent_status", "mcp__anycode__list_connections",
 ]);
 const equivalenceFields = ["authSource", "provider", "baseUrl", "model", "env", "apiKeyHelper"] as const;
 const settingSources = ["user", "project", "local", "plugins"] as const;
@@ -69,5 +69,5 @@ export function assertClaudeOrchestrationReadback(init: {
     throw new Error("Claude orchestration posture drift");
 }
 export function claudeOrchestrationDeniesTool(restricted: boolean, tool: string, ownedBridge: boolean): boolean {
-  return restricted && !(ownedBridge && (tool === "mcp__anycode__agent" || tool === "mcp__anycode__agent_status"));
+  return restricted && !(ownedBridge && (tool === "mcp__anycode__agent" || tool === "mcp__anycode__agent_status" || tool === "mcp__anycode__list_connections"));
 }

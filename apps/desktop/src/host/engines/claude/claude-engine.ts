@@ -715,7 +715,7 @@ async function connectClaudeEngine(
     };
     const onAbort = () => { void close(); };
     try {
-      bridge = firstTransport ? options.mcpBridge : options.mcpBridge?.fork(next.orchestrationSpawn ? new Set(["agent", "agent_status", ...[...(options.peerToolNames ?? [])].map(name => name.replace("mcp__anycode__", ""))]) : undefined);
+      bridge = firstTransport ? options.mcpBridge : options.mcpBridge?.fork(next.orchestrationSpawn ? new Set(["agent", "agent_status", "list_connections", ...[...(options.peerToolNames ?? [])].map(name => name.replace("mcp__anycode__", ""))]) : undefined);
       if (firstTransport) initialForward = forward;
       firstTransport = false;
       const approvals = createApprovals(bridge);

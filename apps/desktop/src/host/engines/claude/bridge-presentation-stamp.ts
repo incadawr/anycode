@@ -35,6 +35,8 @@ import { buildAgentBridgeToolDecl, decodeAgentBridgeCallInput, runAgentBridgeCal
 import type { createSessionPeerBridge } from "../session-peer-bridge.js";
 import type { EngineBrowserBridge } from "../browser-bridge.js";
 
+import type { ConnectionTargetsBridge } from "../connection-targets-bridge.js";
+
 export interface BridgePresentationStampDeps {
   /** The boot catalog snapshot the door announced on `tools/list` (also the fail-soft fallback). */
   catalog: readonly AgentBridgeCatalogEntry[];
@@ -60,6 +62,7 @@ export interface BridgePresentationStampDeps {
    */
   browser?: EngineBrowserBridge;
   peers?: ReturnType<typeof createSessionPeerBridge>;
+  connections?: ConnectionTargetsBridge;
 }
 
 /** Builds the door's `listTools`/`callTool` pair over one shared presentation map. */
@@ -84,7 +87,7 @@ export function createBridgePresentationStamp(deps: BridgePresentationStampDeps)
         description: spec.description,
         inputSchema: spec.inputSchema,
       }));
-      return [...agentDecls, ...browserDecls, ...peerDecls];
+      return [...agentDecls, ...browserDecls, ...peerDecls, ...(deps.connections ? [{ ...deps.connections.declaration, name: "list_connections" }] : [])];
     },
     callTool: async (
       name: string,
@@ -99,6 +102,10 @@ export function createBridgePresentationStamp(deps: BridgePresentationStampDeps)
         const result = await deps.peers.call(deps.peers.tools[peerIndex]!.metadata.name, callArgs, signal, meta.toolUseId);
         if (isAborted()) return { text: "Peer operation outcome unknown after cancellation.", isError: true };
         return result.ok ? { text: JSON.stringify(result.output), isError: false } : { text: result.error ?? "Peer operation failed.", isError: true };
+      }
+      if (name === "list_connections" && deps.connections) {
+        if (!meta.toolUseId) return { text: "AnyCode could not correlate this call to a tool_use id", isError: true };
+        return deps.connections.call(callArgs, signal);
       }
       // browser tools route to the shared engine browser bridge.
       // The REAL approval gate lives there (input-aware, through the same
