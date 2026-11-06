@@ -64,3 +64,23 @@ it("expires an open popover and cleans up its clock when closed", async () => {
     useSettingsStore.setState({ snapshot: original }); vi.useRealTimers();
   }
 });
+
+
+it.each(["codex", "claude"] as const)("hides Go quota for a reconnected %s runtime with a retained pin", async (engine) => {
+  Object.defineProperty(window, "anycode", { configurable: true, value: { listSessions: async () => [] } });
+  const settings = cloneDefaults();
+  settings.provider.connections = [{ id: "a", providerId: "opencode", lastGoQuota: { observedAt: new Date().toISOString(), windows: { rolling: { usedPercent: 99 } } } }];
+  const original = useSettingsStore.getState().snapshot;
+  useSettingsStore.setState({ snapshot: { settings, readOnly: false, secrets: [], envOverrides: [], providerReady: true, catalog: [] } });
+  const store = createDesktopStore();
+  store.getState().setPinnedConnection({ connectionId: "a", providerId: "opencode" });
+  store.getState().applyHostMessage({ type: "host_ready", workspace: "/w", mode: "build", model: "m", sessionId: "s", engine, contextUsage: { estimatedTokens: 25, budgetTokens: 100, source: "provider" } });
+  const send = vi.spyOn(tabRegistry, "sendToTab").mockImplementation(() => {});
+  const element = document.createElement("div"); document.body.append(element); const root = createRoot(element);
+  try {
+    await act(async () => root.render(createElement(TabContext.Provider, { value: { tabId: "tab", store } }, createElement(Composer))));
+    await act(async () => element.querySelector<HTMLButtonElement>('[aria-label="Context window usage"]')!.click());
+    expect(store.getState().pinnedConnection?.connectionId).toBe("a");
+    expect(element.querySelector(".go-quota")).toBeNull();
+  } finally { await act(async () => root.unmount()); element.remove(); send.mockRestore(); useSettingsStore.setState({ snapshot: original }); }
+});
