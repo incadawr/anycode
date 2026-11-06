@@ -490,8 +490,7 @@ jobs:
           else
             gh release create "$tag" --draft --title "${tag#v}" --notes-file "$RUNNER_TEMP/notes.md"
           fi
-          # An array, not a glob: one asset ("AnyCode Setup 0.0.1.exe") has
-          # spaces in its name, and word-splitting would upload it as two.
+          # Preserve each asset path as a single argument to gh.
           shopt -s nullglob
           files=(assets/*)
           gh release upload "$tag" "${files[@]}" --clobber
