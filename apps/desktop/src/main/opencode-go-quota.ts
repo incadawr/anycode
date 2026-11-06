@@ -1,7 +1,6 @@
-import { findCatalogEntry } from "@anycode/core/catalog";
 import { loadSettings, saveSettings, withSettingsFileLock } from "../settings/files.js";
 import type { AnycodeSettings, ProviderConnection, SecretKey } from "../shared/settings.js";
-import type { GoQuotaSnapshot } from "../shared/opencode-go-quota.js";
+import { isOpenCodeGoConnection, type GoQuotaSnapshot } from "../shared/opencode-go-quota.js";
 import type { SystemProxyResolver } from "../shared/proxy.js";
 import { prepareModelFetchContext } from "./model-fetch-guard.js";
 import type { ProxyRoute } from "./provider-proxy-fetch.js";
@@ -15,13 +14,7 @@ export function targetGoConnection(settings: AnycodeSettings, id: string): Provi
   const connection = settings.provider.connections.find(item => item.id === id);
   if (!connection || !["opencode", "opencode-openai"].includes(connection.providerId)) return undefined;
   if (settings.provider.custom?.some(item => item.id === connection.providerId)) return undefined;
-  const base = connection.baseUrl?.trim() || findCatalogEntry(connection.providerId)?.baseUrl;
-  if (!base) return undefined;
-  try {
-    const url = new URL(base);
-    if (url.protocol !== "https:" || url.username || url.password || url.port || url.hostname !== "opencode.ai" || url.search || url.hash || !/^\/inference\/go\/(?:anthropic(?:\/v1)?|openai\/v1)\/?$/.test(url.pathname)) return undefined;
-    return connection;
-  } catch { return undefined; }
+  return isOpenCodeGoConnection(connection) ? connection : undefined;
 }
 
 export function createOpenCodeGoQuotaPoller(deps: {

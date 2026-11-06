@@ -2,7 +2,7 @@
 import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { useProviderQuotaPoll } from "./provider-quota-poll";
+import { useProviderQuotaPoll } from "./provider-quota-poll.js";
 
 it("polls all or the pinned connection only while visible and cleans up", () => {
   vi.useFakeTimers();

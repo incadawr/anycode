@@ -13,7 +13,7 @@ const response = (value: unknown = body) => new Response(JSON.stringify(value));
 describe("Go quota polling", () => {
   it("uses fixed Bearer GET, deduplicates and throttles failures through the boundary", async () => {
     let now = 0; let release!: (r: Response) => void;
-    const fetch = vi.fn(() => new Promise<Response>(resolve => { release = resolve; }));
+    const fetch = vi.fn((_url: string, _init: RequestInit) => new Promise<Response>(resolve => { release = resolve; }));
     const record = vi.fn(async () => {});
     const poller = createOpenCodeGoQuotaPoller({ resolve: async () => ({ apiKey: "key", guard: "guard", route }), fetch: () => fetch, record, now: () => now });
     const a = poller.refresh("a"); const b = poller.refresh("a");

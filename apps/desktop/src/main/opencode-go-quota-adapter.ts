@@ -1,4 +1,4 @@
-import type { GoQuotaSnapshot, GoQuotaWindow } from "../shared/opencode-go-quota";
+import type { GoQuotaSnapshot, GoQuotaWindow } from "../shared/opencode-go-quota.js";
 
 function object(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== "object") return false;

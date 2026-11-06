@@ -199,3 +199,17 @@ describe("preload narrow bridge for the detached md popout", () => {
     expect(Object.keys(api).length).toBeGreaterThan(10);
   });
 });
+
+
+it("forwards the Go quota refresh connection ID", async () => {
+  const { contextBridge, ipcRenderer } = await import("electron");
+  vi.mocked(contextBridge.exposeInMainWorld).mockClear();
+  vi.mocked(ipcRenderer.invoke).mockClear();
+  vi.resetModules();
+  vi.stubGlobal("window", { location: { href: "file:///app/index.html" } });
+  vi.stubGlobal("process", { ...process, argv: ["--anycode-renderer-url=file:///app/index.html"] });
+  await import("./index.js");
+  const [, api] = vi.mocked(contextBridge.exposeInMainWorld).mock.calls[0] as unknown as [string, { settings: { refreshOpenCodeGoQuota(id?: string): Promise<void> } }];
+  await api.settings.refreshOpenCodeGoQuota("connection-a");
+  expect(ipcRenderer.invoke).toHaveBeenCalledWith("anycode:opencode-go-quota-refresh", "connection-a");
+});

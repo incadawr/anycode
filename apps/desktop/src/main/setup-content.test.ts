@@ -34,6 +34,14 @@ describe("setup content", () => {
     expect(id).not.toBe("conn-original");
     expect(result.roleProfiles!.profiles[0]!.roles.planner).toEqual({ primary: { connection: id, model: "model" }, fallbacks: [{ connection: id }] });
   });
+  it("omits and clears the Go quota cache on import update", () => {
+    const settings = fixture();
+    settings.provider.connections[0]!.lastGoQuota = { observedAt: "2026-01-01T00:00:00Z", windows: { monthly: { usedPercent: 4 } } };
+    const content = buildSetupContent(settings, selection);
+    expect(JSON.stringify(content)).not.toContain("lastGoQuota");
+    const updated = applySetupImport(planSetupImport(content, settings), choices);
+    expect(updated.provider.connections[0]?.lastGoQuota).toBeUndefined();
+  });
   it("updates idempotently and preserves unrelated shared connections", () => {
     const content = buildSetupContent(fixture(), selection);
     const initial = applySetupImport(planSetupImport(content, cloneDefaults()), { connections: {}, roleProfiles: {} });
