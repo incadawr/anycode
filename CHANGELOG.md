@@ -10,6 +10,8 @@ and version numbers follow [Semantic Versioning](https://semver.org/).
 ### Added
 
 - OpenCode Go connections show 5-hour, weekly, and monthly subscription usage with reset times and high-usage warnings.
+- Provider icons in connection settings and the welcome screen.
+
 ### Fixed
 
 - Complete OpenCode Go catalog hints, reference prices, and request limits for supported models.

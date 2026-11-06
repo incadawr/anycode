@@ -133,3 +133,13 @@ describe("WELCOME_SUBSCRIPTIONS", () => {
     }
   });
 });
+
+it("renders icons on connection choices", async () => {
+  const { createElement } = await import("react");
+  const { renderToStaticMarkup } = await import("react-dom/server");
+  const { WelcomeScreen } = await import("./WelcomeScreen.js");
+  const html = renderToStaticMarkup(createElement(WelcomeScreen));
+  for (const name of ["openai", "anthropic", "fallback", "zai", "minimax", "kimi", "opencode"]) {
+    expect(html).toContain(`data-provider-icon="${name}"`);
+  }
+});

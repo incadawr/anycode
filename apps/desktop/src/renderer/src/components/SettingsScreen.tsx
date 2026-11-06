@@ -2337,7 +2337,7 @@ export function SettingsScreen({
                 <div className="settings-section-title">Acknowledgements</div>
                 <p className="settings-about-ack">
                   Built with Electron, React, the Vercel AI SDK, the Model Context Protocol SDK,
-                  zustand, marked, Shiki, xterm.js, and node-pty.
+                  zustand, marked, Shiki, xterm.js, node-pty, and Lobe Icons (MIT).
                 </p>
               </section>
             </>

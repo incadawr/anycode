@@ -1,3 +1,4 @@
+import { ProviderIcon } from "./ProviderIcon.js";
 /**
  * First-run setup: choose ChatGPT/Codex, Claude Code, a coding subscription
  * (key paste into the API form, not OAuth), or API/local models.
@@ -241,7 +242,7 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
               if (path !== id || subscription !== null) setSubscription(null);
               onSelectEngine?.(id === "api" ? "core" : id);
             }}>
-              <strong>{title}</strong><span>{description}</span>
+              <strong className="welcome-path-title"><ProviderIcon id={id === "codex" ? "openai" : id === "claude" ? "anthropic" : "custom"} />{title}</strong><span>{description}</span>
             </button>
           ))}
         </div>
@@ -260,7 +261,7 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
               setViewOverride({ mode: "add" });
               onSelectEngine?.("core");
             }}>
-              <strong>{sub.title}</strong><span>{sub.description}</span>
+              <strong className="welcome-path-title"><ProviderIcon id={sub.id} />{sub.title}</strong><span>{sub.description}</span>
             </button>
           ))}
         </div>
@@ -314,7 +315,7 @@ export function WelcomeScreen({ store = useSettingsStore, onOpenSettings, settin
                       setSubscription(null);
                     }}
                   >
-                    <span className="welcome-connection-row-provider">{catalogEntry?.name ?? "Custom"}</span>
+                    <span className="welcome-connection-row-provider"><ProviderIcon id={connection.providerId} />{catalogEntry?.name ?? "Custom"}</span>
                     <span className="welcome-connection-row-name">{displayName}</span>
                     <span className={`connection-tile-status connection-tile-status-${described.tone}`}>
                       <span className="connection-tile-status-dot" aria-hidden="true" />

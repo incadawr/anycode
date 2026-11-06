@@ -69,6 +69,12 @@
   cursor: pointer;
 }
 
+.welcome-path-title, .welcome-connection-row-provider {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
 .welcome-path[aria-pressed="true"], .welcome-path:hover {
   border-color: var(--accent);
 }
@@ -950,7 +956,17 @@
 .connection-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
+  grid-auto-rows: 1fr;
   gap: 0.6rem;
+}
+
+.connection-grid > [role="listitem"] {
+  display: flex;
+}
+
+.connection-grid > [role="listitem"] > .connection-tile {
+  flex: 1;
+  min-width: 0;
 }
 
 /* Responsive fallback to a single column (design §"Компактная сетка": keyboard
@@ -1053,6 +1069,9 @@
 }
 
 .connection-tile-provider {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1062,6 +1081,13 @@
   text-transform: uppercase;
   letter-spacing: var(--track-label);
   color: var(--text-3);
+}
+
+.connection-tile-provider-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .connection-tile-selected-marker {

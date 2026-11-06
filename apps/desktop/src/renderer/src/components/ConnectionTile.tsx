@@ -14,6 +14,7 @@
  */
 import { OpenCodeGoQuota } from "./OpenCodeGoQuota.js";
 import { isOpenCodeGoConnection } from "../../../shared/opencode-go-quota.js";
+import { ProviderIcon } from "./ProviderIcon.js";
 import { Button } from "../ui/index.js";
 import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
@@ -443,7 +444,7 @@ export function ConnectionTile({
       >
         <span className="visually-hidden">{selected ? "Default for new sessions. " : "Make default for new sessions. "}</span>
         <div className="connection-tile-header">
-          <span className="connection-tile-provider" title={providerLabel}>{providerLabel}</span>
+          <span className="connection-tile-provider" title={providerLabel}><ProviderIcon id={connection.providerId} /><span className="connection-tile-provider-label">{providerLabel}</span></span>
           <span className="connection-tile-selected-marker" title={selected ? "Default for new sessions" : undefined}>
             {selected && <Check className="connection-tile-selected-icon" aria-hidden="true" />}
           </span>

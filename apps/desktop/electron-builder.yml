@@ -31,6 +31,8 @@ files:
 # (host/anycode-setup-docs.ts). `from` is relative to this project directory
 # (apps/desktop); the tree is copied as plain files, not packed into asar.
 extraResources:
+  - from: ../../THIRD-PARTY-NOTICES.md
+    to: THIRD-PARTY-NOTICES.md
   - from: ../../docs/user
     to: docs/user
   # the stdio adapter the Sessions API copies to userData (main/communication-adapter.ts).
