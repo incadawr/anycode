@@ -14,6 +14,7 @@ import type { AgentDelivery, SessionActivityState } from "../shared/communicatio
 
 export interface CommunicationManager {
   listTabs(): ReadonlyArray<{ sessionId: string; workspace: string; state: string; activityState?: SessionActivityState; engine?: string; missingWorkspace?: boolean; hostFailure?: import("../shared/host-failure.js").HostFailure; pid?: number | null; childOf?: { parentTabId: string; requestId?: string } }>;
+  onSessionPeerTerminal?(listener: (sessionId: string, event: import("../shared/session-peers.js").SessionPeerTurnEvent) => void): () => void;
   onCommunicationDelivery?(listener: (sessionId: string, delivery: AgentDelivery) => void): () => void;
   communicationStatusDetails?(sessionId: string): Record<string, unknown>;
   communicationRequest(sessionId: string, operation: string, payload?: unknown, expectedWorkspace?: string, requestOptions?: { timeoutMs?: number }): Promise<unknown>;

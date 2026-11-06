@@ -40,8 +40,8 @@ export function createSessionPeersHandler(deps: {
           !await deps.access.canAccess(now, now, request.operation)) return { status: "refused" };
       if (!current()) return null;
       if (request.operation === "send" && deps.send) {
-        if (request.input.reply === "on_turn_end" || request.input.mode === "steer") return { status: "unavailable" };
-        const authorize = async (id: string) => {
+        if (request.input.mode === "steer") return { status: "unavailable" };
+        const authorize = (id: string) => {
           const sender = current();
           const target = deps.targets().find(t => t.sessionId === id);
           if (!sender || sender.workspace !== caller.workspace || sender.workspaceKey !== caller.workspaceKey ||

@@ -8,7 +8,7 @@ const namespace = (principal: CommunicationPrincipal) => principal.kind === "ext
 
 export interface PeerMessageBudget { chainId: string; startedAt: number; hop: number; acceptedAt: number; senderWorkspace: string }
 
-export type CommunicationRecord = AgentDelivery & { peer?: PeerMessageBudget; idempotencyKey?: string; principal?: CommunicationPrincipal; workspace?: string; hostPid?: number | null };
+export type CommunicationRecord = AgentDelivery & { subscription?: { state: "pending" | "explicit" | "auto" | "unknown"; messageId?: string }; peer?: PeerMessageBudget; idempotencyKey?: string; principal?: CommunicationPrincipal; workspace?: string; hostPid?: number | null };
 
 /** Atomic private write (mode 0600, temp file + rename); the default ledger and discovery writer. */
 export async function writePrivateFile(path: string, text: string): Promise<void> {
@@ -35,6 +35,7 @@ export async function createCommunicationLedger(
       // queued record later, in `reconcile` (no automatic model replay).
       if (record.envelope?.messageId) {
         if (record.detail === "Dispatch pending") { record.state = "unknown"; record.detail = "Host response unavailable; do not blindly resend"; }
+        if (record.subscription?.state === "pending") record.subscription.state = "unknown";
         messages.set(record.envelope.messageId, record);
       }
     }
@@ -50,7 +51,11 @@ export async function createCommunicationLedger(
     writes = writes.catch(() => {}).then(async () => {
       // Preserve snapshot ordering; omit peer reservations whose acceptance failed.
       const retained = snapshot.filter(entry => !entry.peer || messages.has(entry.id));
-      await writeLedger(ledgerFile, `[${retained.map(entry => entry.text).join(",")}]`);
+      await writeLedger(ledgerFile, `[${retained.map(entry => {
+        const record = JSON.parse(entry.text) as CommunicationRecord;
+        if (record.subscription?.messageId && !messages.has(record.subscription.messageId)) record.subscription = { state: "pending" };
+        return JSON.stringify(record);
+      }).join(",")}]`);
     });
     return writes;
   };

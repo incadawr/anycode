@@ -27,6 +27,7 @@ export async function createCommunicationBroker(options: {
   };
   let closed = false;
   const pending = new Set<Promise<unknown>>();
+  const lifecycles = new Set<{ reconcile(): Promise<void>; dispose(): Promise<void> }>();
   const observers = new Set<{ reconcile(): Promise<void>; stop(): void }>();
   const dispatch = createCommunicationDispatch({ ledger, resolvePath: async (path) => {
       const resolved = await resolvePath(path);
@@ -103,13 +104,24 @@ export async function createCommunicationBroker(options: {
     return observer.stop;
   };
   const reconcile = () => {
-    const task = Promise.all([...observers].map((observer) => observer.reconcile())).then(() => {});
+    const task = Promise.all([...[...messages.values()].map(markLostGeneration), ...[...lifecycles, ...observers].map(observer => observer.reconcile())]).then(() => {}, () => {});
     pending.add(task); void task.finally(() => pending.delete(task)); return task;
   };
   const timer = setInterval(() => { void reconcile(); }, 1000);
   timer.unref();
   let disposal: Promise<void> | undefined;
   return { ledger, markLostGeneration, observe, reconcile,
+    onPeerTerminal: (listener: Parameters<NonNullable<CommunicationManager["onSessionPeerTerminal"]>>[0]) => manager.onSessionPeerTerminal?.(listener) ?? (() => {}),
+    onPeerDelivery: () => manager.onCommunicationDelivery?.((sessionId, delivery) => {
+      const record = messages.get(delivery.envelope.messageId);
+      const tab = manager.listTabs().find(t => t.sessionId === sessionId);
+      if (closed || !record?.peer || record.envelope.recipientSessionId !== sessionId || tab?.pid !== record.hostPid ||
+          JSON.stringify(record.envelope) !== JSON.stringify(delivery.envelope) || delivery.detail === "Dispatch pending") return;
+      record.state = delivery.state; record.detail = delivery.detail;
+      const task = persist().catch(() => {});
+      pending.add(task); void task.finally(() => pending.delete(task));
+    }) ?? (() => {}),
+    lifecycle: (hook: { reconcile(): Promise<void>; dispose(): Promise<void> }) => { lifecycles.add(hook); },
     send(principal: CommunicationPrincipal, input: CommunicationSendInput, authorize: Access["requireSession"], signal?: AbortSignal, admit?: (record: CommunicationRecord) => void) {
       if (closed) return Promise.reject(new Error("Communication broker closed"));
       const task = dispatch.send(principal, input, signal, async (id) => {
@@ -124,7 +136,9 @@ export async function createCommunicationBroker(options: {
       return disposal ??= (async () => {
         closed = true; clearInterval(timer);
         for (const observer of [...observers]) observer.stop();
-        dispatch.dispose(); await Promise.allSettled([...pending]); await ledger.flush();
+        dispatch.dispose(); await Promise.allSettled([...pending]);
+        for (const hook of lifecycles) await hook.dispose();
+        lifecycles.clear(); await ledger.flush();
       })();
     },
   };

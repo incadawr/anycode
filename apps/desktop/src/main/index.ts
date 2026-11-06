@@ -1,4 +1,5 @@
 import { createSessionPeerDrain } from "./session-peer-drain.js";
+import { createSessionPeerReplyCoordinator } from "./session-peer-reply-coordinator.js";
 import { createSessionPeerReplies } from "./session-peer-replies.js";
 import { createFileActivityIngress } from "./file-activity-ingress.js";
 import { createSessionPeersHandler } from "./session-peers.js";
@@ -2711,6 +2712,7 @@ void app.whenReady().then(async () => {
   };
   const peerSnapshots = new WeakMap<object, { sender: import("./session-peers.js").PeerHost; recipient: import("./session-peers.js").PeerHost }>();
   let peerDrain: ReturnType<typeof createSessionPeerDrain> | undefined;
+  let peerReplies: ReturnType<typeof createSessionPeerReplies> | undefined;
   let peerBroker: Awaited<ReturnType<CommunicationController["broker"]>> | undefined;
   if (peerEnabled) app.once("before-quit", () => peerDrain?.dispose());
   const peerHandler = peerEnabled ? createSessionPeersHandler({
@@ -2719,12 +2721,33 @@ void app.whenReady().then(async () => {
       peerBroker = broker;
       peerDrain ??= createSessionPeerDrain({ lookup: id => broker.ledger.messages.get(id), current: currentPeer,
         prepare: preparePeerTrust, access: peerAccess! });
-      return createSessionPeerReplies(broker).send(caller, input, async id => {
-        const host = await authorize(id);
+      const pin = (record: import("./communication-ledger.js").CommunicationRecord, sender: import("./session-peers.js").PeerHost, recipient: import("./session-peers.js").PeerHost) => {
+        peerSnapshots.set(record, { sender: { ...sender }, recipient: { ...recipient } });
+      };
+      if (!peerReplies) {
+        const coordinator = createSessionPeerReplyCoordinator(broker, { current: currentPeer, sendAuto: async (sender, source, payload) => {
+          await preparePeerTrust();
+          const authorizeAuto = (id: string) => {
+            const now = currentPeer(sender.sessionId), target = currentPeer(id);
+            if (!now || now.proc !== sender.proc || now.generation !== sender.generation || now.workspace !== sender.workspace ||
+                now.workspaceKey !== sender.workspaceKey || !target || !peerAccess!.canAccess(now, target, "send")) throw new Error("Peer access refused");
+            return target;
+          };
+          return peerReplies!.auto(sender, source, payload, async id => {
+            const host = authorizeAuto(id);
+            const tab = manager?.listTabs().find(t => t.sessionId === id && t.tabId === host.tabId);
+            if (!tab) throw new Error("Peer unavailable");
+            return tab;
+          }, authorizeAuto, record => pin(record, sender, authorizeAuto(record.envelope.recipientSessionId)));
+        } });
+        peerReplies = createSessionPeerReplies(broker, Date.now, coordinator);
+      }
+      return peerReplies.send(caller, input, async id => {
+        const host = authorize(id);
         const tab = manager?.listTabs().find(t => t.sessionId === id && t.tabId === host.tabId);
         if (!tab) throw new Error("Peer unavailable");
         return tab;
-      }, authorize, record => { peerSnapshots.set(record, { sender: { ...caller }, recipient: { ...authorize(record.envelope.recipientSessionId) } }); });
+      }, authorize, record => pin(record, caller, authorize(record.envelope.recipientSessionId)));
     },
     current: tabId => manager?.peerHost(tabId),
     targets: () => (manager?.listTabs() ?? []).flatMap(tab => {

@@ -1242,3 +1242,48 @@ it.each([false, true])("settled real child rejects registered peers before latch
     }
   } finally { await child.shutdown(); f.h.close(); }
 });
+
+it.each(["idle", "busy", "revoked"])("terminal auto delivery through the real Session drain: %s", async mode => {
+  const { createCommunicationBroker } = await import("../main/communication-broker.js");
+  const { createSessionPeerReplies } = await import("../main/session-peer-replies.js");
+  const { createSessionPeerReplyCoordinator } = await import("../main/session-peer-reply-coordinator.js");
+  const { createSessionPeerDrain } = await import("../main/session-peer-drain.js");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const dir = await mkdtemp("/tmp/terminal-drain-");
+  const f = fixture(), id = f.make("x").recipientSessionId;
+  const hosts = [id, "b"].map(sessionId => ({ sessionId, tabId: sessionId, proc: {}, generation: 1, workspace: dir,
+    workspaceKey: dir, live: true, root: true, restricted: false, readOnly: false, engine: "core" as const, activity: "idle" as const }));
+  const tabs = hosts.map(h => ({ sessionId: h.sessionId, workspace: dir, state: "running", pid: 1 }));
+  let terminal!: (id: string, event: import("../shared/session-peers.js").SessionPeerTurnEvent) => void;
+  let allowed = true;
+  const broker = await createCommunicationBroker({ ledgerFile: `${dir}/ledger`, realpath: async path => path, manager: { listTabs: () => tabs,
+    onSessionPeerTerminal: fn => { terminal = fn; return () => {}; }, communicationRequest: async (recipient, operation, payload) => {
+      if (recipient === "b") return { state: "acknowledged" };
+      const record = broker.ledger.messages.get((payload as AgentEnvelope).messageId)!;
+      expect(registry.register(record, hosts[1]!, hosts[0]!)).toBe(true);
+      return f.h.session.receiveAgentMessage(payload as AgentEnvelope, true);
+    } } });
+  const registry = createSessionPeerDrain({ lookup: key => broker.ledger.messages.get(key), current: key => hosts.find(h => h.sessionId === key),
+    prepare: async () => {}, access: { canAccess: () => allowed } });
+  f.h.session.configurePeerDrain({ request: messageId => registry.request(hosts[0]!.proc, { type: "session_peer_drain_request",
+    messageId, nonce: "permit", recipientSessionId: id, generation: 1 }), consume: () => true, discard: () => true });
+  const authorize = async (key: string) => tabs.find(t => t.sessionId === key)!;
+  const coordinator = createSessionPeerReplyCoordinator(broker, { current: key => hosts.find(h => h.sessionId === key),
+    sendAuto: (caller, source, payload) => replies.auto(caller, source, payload, authorize) });
+  const replies = createSessionPeerReplies(broker, Date.now, coordinator);
+  try {
+    if (mode !== "idle") await f.h.session.receiveAgentMessage(f.make("human"));
+    const source = await replies.send(hosts[0]!, { sessionId: "b", payload: "question", reply: "on_turn_end" }, authorize);
+    const event = { type: "session_peer_terminal" as const, generation: 1, sequence: 1, turnId: "turn", requestId: source.envelope.messageId,
+      deliveredMessageIds: [source.envelope.messageId], result: { source: "live_turn" as const, turnId: "turn", requestId: source.envelope.messageId,
+        nativeTurnId: null, terminalReason: "completed" as const, publicAnswer: "answer", truncated: false, completedAt: 1 } };
+    terminal("b", event); terminal("b", event);
+    await vi.waitFor(() => expect([...broker.ledger.messages.values()].some(r => r.envelope.kind === "task_result" && r.detail !== "Dispatch pending")).toBe(true));
+    const auto = [...broker.ledger.messages.values()].find(r => r.envelope.kind === "task_result")!;
+    if (mode !== "idle") { allowed = mode !== "revoked"; f.finishes.shift()!(); }
+    await vi.waitFor(() => expect(f.h.session.agentMessageStatus(auto.envelope.messageId)?.state).toBe(mode === "revoked" ? "rejected" : "acknowledged"));
+    expect(f.inputs).toHaveLength(mode === "busy" ? 2 : 1);
+    if (mode !== "revoked") f.finishes.shift()!();
+    await f.h.flush();
+  } finally { registry.dispose(); await broker.dispose(); f.h.close(); await rm(dir, { recursive: true, force: true }); }
+});

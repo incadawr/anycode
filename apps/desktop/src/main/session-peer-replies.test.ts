@@ -45,7 +45,7 @@ it("derives reply destination and correlation, coalesces retries into one inbox 
   expect(record.envelope).toMatchObject({ recipientSessionId: "a", correlationId: "thread", replyTo: first.messageId });
   expect(record.peer).toMatchObject({ hop: 1, chainId: first.messageId });
   expect(await f.call("b", { ...input, payload: "changed" })).toEqual({ status: "refused" });
-  expect(await f.call("b", { ...input, reply: "on_turn_end" })).toEqual({ status: "unavailable" });
+  expect(await f.call("b", { ...input, reply: "on_turn_end" })).toEqual({ status: "refused" });
 });
 it("rejects guesses, outsiders, mismatched targets, legacy sources, self sends and revoked access", async () => {
   const f = await fixture();
